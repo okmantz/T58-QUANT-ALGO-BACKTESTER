@@ -1,0 +1,52 @@
+# --- Secrets / credentials -------------------------------------------------
+# app.data.alpaca_credentials / app.ai.ollama_settings / app.forward_test.mt5_settings
+# all prefer the OS keyring, but every one of them falls back to a local file
+# under data/config/ if keyring isn't available (headless env, minimal Linux
+# install, etc). Nothing here should ever reach a commit -- without this file,
+# it silently would (see data/config/mt5_settings.json and
+# data/config/mt5_password.txt, which were already committed prior to this
+# fix; they only happened to be harmless demo placeholders).
+data/config/alpaca_credentials.json
+data/config/ollama_settings.json
+data/config/mt5_settings.json
+data/config/mt5_password.txt
+*.env
+.env.*
+
+# --- Generated reports / run output -----------------------------------------
+# app/ui/main_window.py's OUTPUT_DIR is reports/ -- every backtest, Full
+# Pipeline, Speed Run, Search Lab, and Evolution Lab run writes its own
+# timestamped HTML/JSON report tree here. These are per-user run artifacts,
+# not source -- keep the folder structure (and the one example report) but
+# not the generated churn.
+reports/search/*
+!reports/search/.gitkeep
+reports/*/
+data/run_history.json
+data/logs/
+
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# --- Virtual environments ------------------------------------------------------
+.venv/
+venv/
+env/
+
+# --- Build artifacts (PyInstaller) -------------------------------------------
+build/
+dist/
+*.spec.bak
+
+# --- OS / editor cruft ---------------------------------------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
