@@ -218,6 +218,7 @@ From your phone's browser:
   Wi-Fi (e.g. over cellular data) isn't supported.
 
 ## Workflow (Steps 1-5 — the core loop)
+<img width="1927" height="1038" alt="image" src="https://github.com/user-attachments/assets/ef78c799-b48f-4fb8-8b1c-6d2f7c8f8e9a" />
 
 1. **Upload Market Data** — CSV import with auto column-mapping, timestamp/OHLC
    validation, duplicate & gap detection (`app/data/importer.py`). A sample
