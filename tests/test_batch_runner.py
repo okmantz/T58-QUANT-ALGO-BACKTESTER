@@ -212,6 +212,62 @@ def test_run_search_progress_callback_is_invoked(tmp_path, small_family_space):
     assert "Stage 5" in joined or "Search complete" in joined or "search complete" in joined
 
 
+def _stock_priced_trending_df(n=1500, seed=7, base_price=150.0, drift=0.02):
+    """Whole-dollar-priced instrument (like AAPL), unlike _trending_df's
+    FX-style ~1.10 price -- used to reproduce the pip_size/instrument-
+    scale mismatch bug: a fixed-pips stop computed with the default FX
+    pip_size (0.0001) against a $150 instrument is a few thousandths of a
+    cent, an obviously-broken stop distance."""
+    rng = np.random.default_rng(seed)
+    ts = pd.date_range("2024-01-01", periods=n, freq="15min")
+    price = base_price
+    rows = []
+    for i in range(n):
+        step = drift + rng.normal(0, 0.05)
+        o = price
+        c = o + step
+        h = max(o, c) + abs(rng.normal(0, 0.03))
+        l = min(o, c) - abs(rng.normal(0, 0.03))
+        rows.append((ts[i], o, h, l, c, 1_000_000.0))
+        price = c
+    return pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
+
+
+def test_run_search_surfaces_pip_scale_mismatch_as_the_likely_root_cause(tmp_path):
+    """Reproduces the reported bug: Speed Run/Search Lab on a whole-dollar
+    instrument (AAPL) with the default FX pip_size finds 0 survivors and
+    gives no clue why, because execution.py's pip_scale_mismatch warning
+    is raised with plain warnings.warn() *inside a Stage 1 worker
+    subprocess* and never reaches the run's log. Every candidate here
+    uses a fixed-pips stop (20 pips = $0.002 against a ~$150 price), so
+    Stage 1 should flag every one of them and the log should call out
+    the mismatch as the likely root cause -- not just report generic
+    'profit factor too low' reasons."""
+    cfg = {
+        "name": "sma cross (fixed pips)",
+        "indicators": [
+            {"type": "sma", "period": 5, "column": "close", "as": "sma_fast"},
+            {"type": "sma", "period": 20, "column": "close", "as": "sma_slow"},
+        ],
+        "long_entry": "sma_fast > sma_slow",
+        "long_exit": "sma_fast < sma_slow",
+        "risk_management": {"stop_type": "fixed", "stop_value": 20, "target_type": "fixed", "target_value": 40},
+    }
+    space = generate_search_space(mode="single", single_config=cfg)
+    df = _stock_priced_trending_df()
+    logs = []
+    stage_cfg = _fast_stage_cfg(min_trades=1, min_profit_factor=0.0, max_drawdown_buffer_mult=10.0)
+    run_search(
+        df, RiskConfig(), PropRules(), space, stage_cfg,
+        db_path=str(tmp_path / "search.db"), instrument="AAPL_TEST", timeframe="15m",
+        progress_cb=logs.append,
+    )
+    joined = "\n".join(logs)
+    assert "pip_size" in joined or "pip-size" in joined
+    assert "LIKELY ROOT CAUSE" in joined
+    assert "detect pip size from data" in joined
+
+
 def test_run_search_lookahead_bug_excludes_a_candidate_regardless_of_profit():
     """A candidate flagged by the lookahead detector must never pass Stage 3,
     even if its raw stats look excellent -- this is the whole reason the

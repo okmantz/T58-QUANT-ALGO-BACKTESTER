@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from app.web.launcher import _qr_image_path, get_lan_ip
+from app.web.network_info import is_running_under_wine, startup_banner_lines
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
@@ -17,6 +18,56 @@ def test_get_lan_ip_returns_a_plausible_ipv4_address():
     parts = ip.split(".")
     assert len(parts) == 4
     assert all(part.isdigit() and 0 <= int(part) <= 255 for part in parts)
+
+
+def test_is_running_under_wine_is_false_on_a_real_non_windows_platform():
+    """On the real Linux/macOS CI running this test (not Windows-through-
+    Wine), this must be False -- it should never fire on a genuine
+    native install of this cross-platform Python app."""
+    if not sys.platform.startswith("win"):
+        assert is_running_under_wine() is False
+
+
+def test_is_running_under_wine_detects_wineprefix_env_var(monkeypatch):
+    """Reproduces the reported bug's actual environment: the Windows
+    .exe build running under Wine on Linux. Wine sets WINEPREFIX (or
+    WINELOADER) in the process environment it launches Windows binaries
+    in -- this is the cheap, reliable signal checked before falling back
+    to the ctypes probe."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("WINEPREFIX", "/home/owen/.wine")
+    assert is_running_under_wine() is True
+
+
+def test_is_running_under_wine_false_without_any_wine_signal(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delenv("WINEPREFIX", raising=False)
+    monkeypatch.delenv("WINELOADER", raising=False)
+    # No real ntdll.wine_get_version on this non-Windows test box either,
+    # so the ctypes probe should also cleanly fail closed (False), never
+    # raise.
+    assert is_running_under_wine() is False
+
+
+def test_startup_banner_warns_and_recommends_running_natively_under_wine(monkeypatch):
+    """The two symptoms reported together -- a blank/broken QR code image
+    and the phone getting 'site can't be reached' -- both trace back to
+    running the Windows .exe through Wine instead of natively. The
+    banner must call this out explicitly and point at the actual fix
+    (`python3 run_web.py`, no Wine/.exe needed) rather than leaving it
+    looking like an unexplained app bug."""
+    monkeypatch.setattr("app.web.network_info.is_running_under_wine", lambda: True)
+    lines = startup_banner_lines("http://192.168.1.23:5000", qr_path=None)
+    joined = "\n".join(lines)
+    assert "Wine" in joined
+    assert "python3 run_web.py" in joined
+
+
+def test_startup_banner_has_no_wine_warning_on_a_native_run(monkeypatch):
+    monkeypatch.setattr("app.web.network_info.is_running_under_wine", lambda: False)
+    lines = startup_banner_lines("http://192.168.1.23:5000", qr_path=None)
+    joined = "\n".join(lines)
+    assert "Wine" not in joined
 
 
 class _FakeQRImage:
