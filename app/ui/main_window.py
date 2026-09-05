@@ -4277,6 +4277,7 @@ class MainWindow:
             anchor="w", padx=18, pady=(0, 16)
         )
 
+    def _current_session(self) -> tuple[str, str]:
         start = self.s_session_start.get_str().strip() or "08:30"
         end = self.s_session_end.get_str().strip() or "15:00"
         return start, end
