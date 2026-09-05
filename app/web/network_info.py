@@ -31,10 +31,46 @@ from __future__ import annotations
 
 import base64
 import io
+import os
 import socket
+import sys
 from pathlib import Path
 
 PORT = 5000
+
+
+def is_running_under_wine() -> bool:
+    """Best-effort detection of Wine (running the Windows .exe build on
+    Linux/macOS through a Windows-compatibility layer, rather than a real
+    Windows machine).
+
+    Why this matters here specifically: this app has exactly two
+    Windows-only behaviors that get exercised in the phone-access flow --
+    os.startfile() to pop open the QR code image, and the LAN-IP-guessing
+    UDP-socket trick in get_lan_ip(). Under Wine, os.startfile() routes
+    through whatever Wine has configured as the default handler for that
+    file type, which on a bare/minimal Wine prefix (no real image viewer
+    installed) can fall through to a legacy IE stub that shows a blank or
+    garbled page instead of the image -- indistinguishable, from the
+    outside, from "the QR code doesn't generate." Separately, Wine's own
+    virtualized network stack can report a different local address than
+    the host machine's real Wi-Fi interface, which would make the
+    "LAN address" this module hands to the phone unreachable from any
+    other device even though the server itself is listening correctly.
+    Neither of those is a bug in this app's own code -- but silently
+    failing with no explanation looks exactly like one, so callers use
+    this to print a specific, actionable note instead.
+    """
+    if not sys.platform.startswith("win"):
+        return False
+    if os.environ.get("WINEPREFIX") or os.environ.get("WINELOADER"):
+        return True
+    try:
+        import ctypes
+
+        return hasattr(ctypes.cdll.ntdll, "wine_get_version")
+    except Exception:
+        return False
 
 
 def get_lan_ip() -> str:
@@ -112,6 +148,21 @@ def startup_banner_lines(url: str, qr_path: Path | None) -> list[str]:
         "=" * 64,
         "  T58 QUANT ALGO BACKTESTER -- now running as a website",
         "=" * 64,
+    ]
+    if is_running_under_wine():
+        lines += [
+            "  ** You're running this through Wine (a Windows-compatibility",
+            "  layer), not a real Windows machine. That's very likely why the",
+            "  QR code looked blank/broken and why your phone can't reach the",
+            "  address below: Wine's own virtual network usually isn't the",
+            "  same one your phone connects to, and Wine has no real image",
+            "  viewer to show the QR code in. This app is plain cross-platform",
+            "  Python -- run it NATIVELY on Linux instead (no Wine, no .exe):",
+            "      python3 run_web.py",
+            "  from inside the repo folder, and use the address it prints.",
+            "",
+        ]
+    lines += [
         f"  On THIS computer, it just opened at:\n      {url}",
         "",
         "  On your PHONE (same Wi-Fi as this computer), open EXACTLY this",

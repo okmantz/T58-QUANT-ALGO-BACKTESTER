@@ -29,7 +29,7 @@ import time
 import webbrowser
 from pathlib import Path
 
-from app.web.network_info import PORT, get_lan_ip, print_startup_banner, qr_code_file
+from app.web.network_info import PORT, get_lan_ip, is_running_under_wine, print_startup_banner, qr_code_file
 
 
 def _qr_image_path(url: str) -> Path | None:
@@ -58,8 +58,24 @@ def _qr_image_path(url: str) -> Path | None:
 
 
 def _open_qr_image(path) -> None:
-    """Open the QR code image with whatever the OS uses for PNGs."""
+    """Open the QR code image with whatever the OS uses for PNGs.
+
+    Best-effort only -- the real, reliable way to see the QR code is the
+    /mobile-access page opened by _open_things_once_server_is_up below
+    (rendered inline in a browser tab that's already known to work, no
+    OS file-association guesswork involved). This is kept only as an
+    extra convenience for people who'd rather have a standalone image
+    window; if it fails or opens something broken (e.g. Wine falling
+    back to a stub IE with no real PNG support), the browser tab still
+    shows the same code, so nothing is actually lost.
+    """
     try:
+        if is_running_under_wine():
+            # Wine has no real image viewer configured on a bare prefix
+            # -- os.startfile() here reliably produces the blank/garbled
+            # window this bug was reported as. Skip it; the banner
+            # already explains why and points at running natively.
+            return
         if sys.platform.startswith("win"):
             import os
 
@@ -73,7 +89,7 @@ def _open_qr_image(path) -> None:
 
             subprocess.run(["xdg-open", str(path)], check=False)
     except Exception:
-        # Non-fatal -- the console message with the raw URL is enough.
+        # Non-fatal -- the /mobile-access browser tab is enough.
         pass
 
 
@@ -101,7 +117,14 @@ def main() -> None:
 
     def _open_things_once_server_is_up() -> None:
         time.sleep(1.0)
-        webbrowser.open(f"http://127.0.0.1:{PORT}")
+        # /mobile-access renders the QR code inline as a data: URI in the
+        # SAME browser tab flow that's already known to work (see Image 3
+        # in the bug report -- the plain app page opened here just fine),
+        # instead of depending on the OS's file-association for PNGs the
+        # way the old file-based popup did. That file-based popup is kept
+        # below too (some people like a standalone image window), but the
+        # browser tab is now the primary, always-reliable path.
+        webbrowser.open(f"http://127.0.0.1:{PORT}/mobile-access")
         if qr_path is not None:
             _open_qr_image(qr_path)
 

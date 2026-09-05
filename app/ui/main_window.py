@@ -2408,7 +2408,29 @@ class MainWindow:
 
     def _refresh_dashboard(self):
         """Reloads run_history and repaints every dashboard widget. Called
-        when the tab is opened, and right after any run/search completes."""
+        when the tab is opened, and right after any run/search completes.
+
+        Thread-safety: Batch Test's own pipeline already learned the hard
+        way that Tkinter widgets are only safe to touch from the main
+        thread (see its `_refresh_after_run` closure) and routes its own
+        calls through `root.after` -- but Search Lab, Full Pipeline,
+        Speed Run, and the single-strategy backtest run each call this
+        method directly from their own background worker thread once
+        they finish, with no such wrapping. Touching Tk widgets off the
+        main thread doesn't always crash outright; it can also just
+        stall/freeze the whole window ("app not responding") depending on
+        timing, which matches exactly what gets reported after a long
+        run finishes. Rather than relying on every call site to
+        remember to wrap itself, this method now guards itself: if it's
+        not running on the main thread, it re-schedules itself onto the
+        mainloop and returns immediately without touching any widget.
+        """
+        if threading.current_thread() is not threading.main_thread():
+            try:
+                self.root.after(0, self._refresh_dashboard)
+            except Exception:
+                pass
+            return
         try:
             data = run_history.dashboard_data()
         except Exception:
@@ -4385,6 +4407,16 @@ class MainWindow:
         return save_strategy_bytes(content, new_name, strategy_type, overwrite=False)
 
     def _refresh_strategy_library(self):
+        # Same cross-thread hazard as _refresh_dashboard (see its
+        # docstring) -- this is called both from UI event handlers (safe)
+        # and directly from several pipelines' background worker threads
+        # right after they finish (not safe). Self-guard the same way.
+        if threading.current_thread() is not threading.main_thread():
+            try:
+                self.root.after(0, self._refresh_strategy_library)
+            except Exception:
+                pass
+            return
         mode = self.strategy_mode.get()
         self.strategy_library_listbox.delete(0, END)
         self._strategy_library_items = []

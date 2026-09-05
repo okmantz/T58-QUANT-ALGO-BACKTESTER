@@ -297,8 +297,28 @@ def _stage1_task(candidate_id: str, spec: dict, filters: dict) -> dict:
         return {**base, "error": str(exc), "passed_stage1": False}
 
     stats = bt.statistics.to_dict()
+    # bt.warnings (from app.backtest.engine.run_backtest's own
+    # warnings.catch_warnings capture) carries execution.py's
+    # pip_scale_mismatch / atr_scale_mismatch / fallback_stop warnings.
+    # Those are the single most useful diagnostic when an ENTIRE search
+    # comes back with 0 survivors -- e.g. an FX-default pip_size (0.0001)
+    # applied to a whole-dollar stock or an index makes every fixed-pip
+    # stop nonsensically tiny, so literally every family and parameter
+    # combination fails the same way and it looks like "nothing works"
+    # rather than "one setting is wrong." Before this, these warnings
+    # were raised with plain warnings.warn() *inside a Stage 1 worker
+    # subprocess* and never made it back to the run's log at all --
+    # invisible to the very diagnosis that most needed them.
+    scale_mismatch = any(
+        "pip_scale_mismatch" in w or "pip size" in w.lower() or "atr_scale_mismatch" in w
+        or ("instrument" in w.lower() and "scale" in w.lower())
+        for w in (bt.warnings or [])
+    )
     if not bt.trades:
-        return {**base, "statistics": stats, "error": "no trades generated on this data", "passed_stage1": False}
+        return {
+            **base, "statistics": stats, "error": "no trades generated on this data",
+            "passed_stage1": False, "scale_mismatch_warning": scale_mismatch,
+        }
 
     pf = stats.get("profit_factor", 0.0)
     pf_val = 10.0 if pf == float("inf") else float(pf or 0.0)
@@ -320,6 +340,7 @@ def _stage1_task(candidate_id: str, spec: dict, filters: dict) -> dict:
     return {
         **base, "statistics": stats,
         "quick_score": quick_score, "sharpe": sharpe, "passed_stage1": bool(passed),
+        "scale_mismatch_warning": scale_mismatch,
     }
 
 
@@ -670,6 +691,19 @@ def run_search(
             )
             for line in stage1_triage.format_log_lines():
                 log(line)
+            mismatch_count = sum(1 for r in stage1_records if r.get("scale_mismatch_warning"))
+            if stage1_records and mismatch_count / len(stage1_records) >= 0.25:
+                log(
+                    f"  ** LIKELY ROOT CAUSE: {mismatch_count}/{len(stage1_records)} candidate(s) "
+                    f"({100.0 * mismatch_count / len(stage1_records):.0f}%) triggered a pip-size / "
+                    f"instrument-scale mismatch warning during execution (configured pip_size = "
+                    f"{risk.pip_size}). "
+                    "This almost always means every family failed for the SAME underlying reason -- "
+                    "not that no strategy has an edge. Go to the Data tab and click \"detect pip size "
+                    "from data\" (or set it manually: ~0.01 for stocks/indices/JPY pairs/gold, 0.0001 "
+                    "for most other FX pairs) and run Speed Run again before trusting a 'no winner' "
+                    "result on this instrument."
+                )
             if not survivors1:
                 # Auto-relax: the original filters found nothing to work
                 # with at all, which throws away the whole search rather
