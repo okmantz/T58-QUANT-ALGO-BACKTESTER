@@ -841,6 +841,70 @@ class _AdaptiveRuleDialog(Toplevel):
         return dialog.result
 
 
+class _ChoiceListDialog(Toplevel):
+    """Small modal single-select picker: a title, a prompt, a scrollable
+    list of string choices, and OK/Cancel. Used wherever a quick "pick one
+    of these saved items" step is needed without spinning up a whole tab
+    (e.g. Multi-Asset Portfolio / Multi-Strategy Ensemble's ADD ... MANUAL
+    buttons, which need to pick one saved Manual Strategy Builder config
+    by name)."""
+
+    def __init__(self, parent, title: str, prompt: str, choices: list[str]):
+        super().__init__(parent)
+        self.title(title)
+        self.configure(bg=PANEL)
+        self.resizable(False, False)
+        self.transient(parent)
+        self.result: str | None = None
+
+        Label(
+            self, text=prompt, bg=PANEL, fg=TEXT_MUTED, font=_safe_font(9),
+            wraplength=340, justify="left", anchor="w",
+        ).pack(fill="x", padx=14, pady=(14, 6))
+
+        list_frame = Frame(self, bg=PANEL)
+        list_frame.pack(fill="both", expand=True, padx=14)
+        self.listbox = Listbox(
+            list_frame, height=min(10, max(4, len(choices))), selectmode=SINGLE, exportselection=False,
+            bg=PANEL_3, fg=TEXT, selectbackground=BORDER_LIGHT, selectforeground=METAL_BRIGHT,
+            activestyle="none", relief="flat", bd=0, highlightthickness=1, highlightbackground=BORDER,
+            font=(MONO, 9), width=44,
+        )
+        self.listbox.pack(side="left", fill="both", expand=True)
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.listbox.yview, style="T58.Vertical.TScrollbar")
+        scrollbar.pack(side="right", fill="y")
+        self.listbox.config(yscrollcommand=scrollbar.set)
+        for c in choices:
+            self.listbox.insert(END, c)
+        if choices:
+            self.listbox.selection_set(0)
+        self.listbox.bind("<Double-Button-1>", lambda _e: self._confirm())
+
+        btn_row = Frame(self, bg=PANEL)
+        btn_row.pack(fill="x", padx=14, pady=14)
+        Button(btn_row, text="Cancel", command=self._cancel).pack(side="right", padx=(8, 0))
+        Button(btn_row, text="OK", command=self._confirm).pack(side="right")
+
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+
+    def _confirm(self):
+        sel = self.listbox.curselection()
+        if sel:
+            self.result = self.listbox.get(sel[0])
+        self.destroy()
+
+    def _cancel(self):
+        self.result = None
+        self.destroy()
+
+    @classmethod
+    def ask(cls, parent, title: str, prompt: str, choices: list[str]) -> str | None:
+        dialog = cls(parent, title, prompt, choices)
+        parent.wait_window(dialog)
+        return dialog.result
+
+
 class MainWindow:
     def __init__(self, root: Tk):
         self.root = root
@@ -1172,6 +1236,7 @@ class MainWindow:
 
         self.tab_dashboard = Frame(self.content, bg=BG)
         self.tab_manual = Frame(self.content, bg=BG)
+        self.tab_strategyconfig = Frame(self.content, bg=BG)
         self.tab_data = Frame(self.content, bg=BG)
         self.tab_strategy = Frame(self.content, bg=BG)
         self.tab_prop = Frame(self.content, bg=BG)
@@ -1199,7 +1264,7 @@ class MainWindow:
         self.tab_family_diversity = Frame(self.content, bg=BG)
 
         for f in (
-            self.tab_dashboard, self.tab_manual, self.tab_data, self.tab_strategy, self.tab_prop,
+            self.tab_dashboard, self.tab_manual, self.tab_strategyconfig, self.tab_data, self.tab_strategy, self.tab_prop,
             self.tab_risk, self.tab_run, self.tab_payout, self.tab_refine, self.tab_search,
             self.tab_wfo, self.tab_cpcv, self.tab_sensitivity, self.tab_portfolio,
             self.tab_multiobj, self.tab_wfga, self.tab_ensemble, self.tab_fullpipeline,
@@ -1239,11 +1304,12 @@ class MainWindow:
             ("researchagent", "", "Research Agent", self.tab_researchagent, NEON_VIOLET),
 
             (None, None, "\u2461 TEST", None, None),
-            ("data", "", "1  Market Data", self.tab_data, NEON_CYAN),
-            ("prop", "", "2  Prop-Firm Rules", self.tab_prop, NEON_CYAN),
-            ("risk", "", "3  Risk & Execution", self.tab_risk, NEON_CYAN),
-            ("run", "", "4  Run & Report", self.tab_run, NEON_CYAN),
-            ("payout", "", "5  Payout Probability", self.tab_payout, NEON_CYAN),
+            ("strategyconfig", "", "1  Strategy Configuration", self.tab_strategyconfig, NEON_CYAN),
+            ("data", "", "2  Market Data", self.tab_data, NEON_CYAN),
+            ("prop", "", "3  Prop-Firm Rules", self.tab_prop, NEON_CYAN),
+            ("risk", "", "4  Risk & Execution", self.tab_risk, NEON_CYAN),
+            ("run", "", "5  Run & Report", self.tab_run, NEON_CYAN),
+            ("payout", "", "6  Payout Probability", self.tab_payout, NEON_CYAN),
 
             (None, None, "\u2462 OPTIMIZE", None, None),
             ("refine", "", "Iterative Refinement", self.tab_refine, BLUE),
@@ -1279,6 +1345,7 @@ class MainWindow:
             ("Dashboard", self._build_dashboard_tab),
             ("Manual builder", self._build_manual_tab),
             ("Speed Run", self._build_speedrun_tab),
+            ("Strategy Configuration", self._build_strategy_config_tab),
             ("Data", self._build_data_tab),
             ("Strategy", self._build_strategy_tab),
             ("Prop rules", self._build_prop_tab),
@@ -1853,7 +1920,7 @@ class MainWindow:
             elif result.kind == "dataset" and result.path:
                 self._show_text_viewer(
                     result.title,
-                    f"Dataset file: {result.path}\n\nUse Step 1 (Data) to load this file for a run.",
+                    f"Dataset file: {result.path}\n\nUse Step 2 (Data) to load this file for a run.",
                 )
             elif result.kind == "run" and result.experiment_id:
                 from app.ai.experiment_memory import get_experiment_by_id
@@ -2314,7 +2381,9 @@ class MainWindow:
         style.map("T58.Treeview", background=[("selected", PANEL_3)])
 
         columns = ("strategy", "instrument", "trades", "net", "win", "sharpe", "dd", "runs", "result")
-        self._dash_tree = ttk.Treeview(table_wrap, columns=columns, show="headings", style="T58.Treeview", height=8)
+        tree_frame = Frame(table_wrap, bg=PANEL)
+        tree_frame.pack(fill="both", expand=True, padx=14, pady=(0, 14))
+        self._dash_tree = ttk.Treeview(tree_frame, columns=columns, show="headings", style="T58.Treeview", height=8)
         headings = {
             "strategy": "Strategy", "instrument": "Instrument", "trades": "Trades", "net": "Net P/L",
             "win": "Win %", "sharpe": "Sharpe", "dd": "Max DD", "runs": "Runs", "result": "Result",
@@ -2322,7 +2391,18 @@ class MainWindow:
         for col, text in headings.items():
             self._dash_tree.heading(col, text=text)
             self._dash_tree.column(col, width=100, anchor="w")
-        self._dash_tree.pack(fill="both", expand=True, padx=14, pady=(0, 14))
+        self._dash_tree.pack(side="left", fill="both", expand=True)
+        # Scorecard often holds more strategies than the fixed 8-row height
+        # shows at once -- without its own scrollbar, anything past row 8
+        # was simply unreachable (the page's own scroll just moves the
+        # whole card, it doesn't reveal more tree rows). A dedicated
+        # vertical scrollbar tied to the treeview's yview fixes that.
+        dash_tree_scrollbar = ttk.Scrollbar(
+            tree_frame, orient="vertical", command=self._dash_tree.yview, style="T58.Vertical.TScrollbar",
+        )
+        dash_tree_scrollbar.pack(side="right", fill="y")
+        self._dash_tree.configure(yscrollcommand=dash_tree_scrollbar.set)
+        self._bind_isolated_wheel(self._dash_tree)
 
         self._refresh_dashboard()
 
@@ -2892,7 +2972,7 @@ class MainWindow:
             "difference obvious: this one just runs your strategy once, as-is. The 15 FULL PIPELINE tab "
             "(Step 9 in this guide) automatically searches for a better configuration and validates it out-"
             "of-sample before giving you a verdict. For a first pass, most people skip straight to Step 9. "
-            "If you're testing several strategies at once, use the batch queue on 02 Strategy instead of "
+            "If you're testing several strategies at once, use the batch queue on 01 Strategy Configuration instead of "
             "either single-strategy button."
         )
         body("A few things this report checks automatically, every single run:")
@@ -2927,7 +3007,7 @@ class MainWindow:
             "report — your normal 05 Run & Report result is never touched unless you apply the winner back."
         )
         tip("Found a good configuration? Use APPLY BEST CONFIG TO STRATEGY TAB to carry it straight back to "
-            "02 Strategy without retyping any parameter by hand.")
+            "01 Strategy Configuration without retyping any parameter by hand.")
         rule()
 
         h2("STEP 7 — Search Lab (OPTIMIZE → Search Lab, optional)")
@@ -3212,6 +3292,41 @@ class MainWindow:
         """
         for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
             widget.bind(seq, lambda e, w=widget: self._generic_text_wheel(w, e))
+
+    def _bind_isolated_wheel_tree(self, root_widget, scroll_widget=None):
+        """Like _bind_isolated_wheel, but also walks every CURRENT child
+        (and grandchild, etc.) of root_widget and binds each one the same
+        way, redirecting the scroll to `scroll_widget` (defaults to
+        root_widget itself).
+
+        _bind_isolated_wheel alone only intercepts the wheel while the
+        cursor is directly over the container widget -- e.g. the empty
+        margin of a canvas. A canvas fully packed with child widgets (a
+        checkbox per row, a label per row, etc., as in Evolution Lab's
+        Families-to-include list) means the cursor is almost always over
+        one of those CHILDREN instead, which have no such binding and no
+        "break", so the event falls through to the page-level bind_all
+        dispatcher and scrolls the whole page underneath instead of the
+        list the cursor is actually sitting on. Binding every child closes
+        that gap. Only covers children that already exist at call time --
+        fine for a list built once up front (like Families-to-include),
+        not meant for a box whose children keep changing afterward.
+        """
+        target = scroll_widget if scroll_widget is not None else root_widget
+
+        def _apply(widget):
+            for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                widget.bind(seq, lambda e, w=target: self._generic_text_wheel(w, e))
+            for child in widget.winfo_children():
+                _apply(child)
+
+        _apply(root_widget)
+
+    def _ask_choice_from_list(self, title: str, prompt: str, choices: list[str]) -> str | None:
+        """Shows a small modal single-select list (see _ChoiceListDialog)
+        and returns the chosen string, or None if cancelled / nothing
+        picked."""
+        return _ChoiceListDialog.ask(self.root, title, prompt, choices)
 
     # -----------------------------------------------------------------------
     # Tab 1 — Market Data
@@ -3657,15 +3772,17 @@ class MainWindow:
     # Tab 2 — Strategy
     # -----------------------------------------------------------------------
 
-    def _build_strategy_tab(self):
-        f = self._scrollable(self.tab_strategy)
+    def _build_strategy_config_tab(self):
+        f = self._scrollable(self.tab_strategyconfig)
 
         self._page_header(
             f,
-            "CREATE / Strategy",
+            "TEST / Strategy Configuration",
             "Strategy Configuration",
-            "Build a complete strategy visually — no code required — or bring your own "
-            "Python / PineScript / MQL5 file.",
+            "Choose your strategy source -- Manual, Python, PineScript, or MQL5 -- manage "
+            "the strategy library, and stage strategies for batch testing. Manual mode is "
+            "built out visually on the Strategy Builder tab (CREATE section); Python / "
+            "PineScript / MQL5 files are browsed in below.",
         )
 
         section = self._section(
@@ -4012,32 +4129,19 @@ class MainWindow:
         self._strategy_library_items: list = []
         self._refresh_strategy_library()
 
-        # ------------------------------------------------------------
-        # Manual Strategy Builder -- a clear, visible section start so
-        # it doesn't just blend into the library controls above it. Only
-        # relevant when MANUAL mode is selected above (Python/PineScript/
-        # MQL5 users can ignore everything below this point).
-        # ------------------------------------------------------------
-        manual_header = Frame(f, bg=BG)
-        manual_header.pack(fill="x", padx=24, pady=(22, 4))
-        manual_eyebrow_row = Frame(manual_header, bg=BG)
-        manual_eyebrow_row.pack(anchor="w")
-        Frame(manual_eyebrow_row, bg=NEON_VIOLET, width=14, height=2).pack(side="left", pady=(4, 0))
-        Label(
-            manual_eyebrow_row, text="CREATE / NO-CODE BUILDER", bg=BG, fg=NEON_VIOLET,
-            font=_safe_font(8, "bold"),
-        ).pack(side="left", padx=(7, 0))
-        Label(
-            manual_header, text="Manual Strategy Builder", bg=BG, fg=METAL_BRIGHT,
-            font=_safe_font(16, "bold"),
-        ).pack(anchor="w", pady=(5, 3))
-        Label(
-            manual_header,
-            text="Only used when MANUAL is the selected strategy source above -- define indicators and "
-                 "entry/exit rules visually here, no code required. Python / PineScript / MQL5 users can "
-                 "skip everything below.",
-            bg=BG, fg=TEXT_DIM, font=_safe_font(8), wraplength=820, justify="left",
-        ).pack(anchor="w", pady=(0, 4))
+    def _build_strategy_tab(self):
+        f = self._scrollable(self.tab_strategy)
+
+        self._page_header(
+            f,
+            "CREATE / Strategy Builder",
+            "Strategy Builder",
+            "Build a complete strategy visually -- no code required. Define indicators and "
+            "entry/exit rules below; when you're ready to test it, head to Strategy "
+            "Configuration (Step 1, TEST section) and make sure MANUAL is the selected "
+            "strategy source there. Bringing your own Python / PineScript / MQL5 file? "
+            "Skip this tab entirely -- that's all handled on Strategy Configuration too.",
+        )
 
         # ------------------------------------------------------------
         # 24.1  Strategy information
@@ -4173,7 +4277,6 @@ class MainWindow:
             anchor="w", padx=18, pady=(0, 16)
         )
 
-    def _current_session(self) -> tuple[str, str]:
         start = self.s_session_start.get_str().strip() or "08:30"
         end = self.s_session_end.get_str().strip() or "15:00"
         return start, end
@@ -4452,7 +4555,7 @@ class MainWindow:
     def _load_library_item_into_active_slot(self, item):
         """Loads a StoredStrategy (from the main library list OR the Batch
         test queue) into the single 'active strategy' slot at the top of
-        Step 02 Strategy -- the slot Full Pipeline (15), Refinement (06),
+        Step 01 Strategy Configuration -- the slot Full Pipeline (15), Refinement (06),
         Walk-Forward Opt (08), Sensitivity (10), and Multi-Objective (12)
         all read via _build_strategy(). Switches the STRATEGY SOURCE mode
         too, so loading a PineScript item while Python is the active tab
@@ -4863,7 +4966,7 @@ class MainWindow:
             )
             return
         if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 1 before testing strategies.")
+            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2 before testing strategies.")
             return
         win, append = self._open_progress_window(f"Testing {len(items)} strategy(ies)...")
         threading.Thread(
@@ -4968,7 +5071,7 @@ class MainWindow:
             )
             return
         if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data file in Step 1 before optimizing.")
+            messagebox.showwarning("Missing data", "Please select a market data file in Step 2 before optimizing.")
             return
         win, append = self._open_progress_window(f"Optimizing {len(items)} strategy(ies)...")
         threading.Thread(
@@ -5043,7 +5146,7 @@ class MainWindow:
             )
             return
         if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 1 before testing strategies.")
+            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2 before testing strategies.")
             return
         proceed = messagebox.askokcancel(
             "Run Full Pipeline on multiple strategies?",
@@ -5622,7 +5725,7 @@ class MainWindow:
         )
 
     def _detect_pip_size_from_data(self):
-        """Suggests a pip_size from whatever's currently selected in Step 1
+        """Suggests a pip_size from whatever's currently selected in Step 2
         (Market Data), rather than leaving pip_size at its FX default
         (0.0001) for non-FX instruments -- the single most common cause of
         a strategy's fixed-pips stop translating into a nonsensical
@@ -5630,7 +5733,7 @@ class MainWindow:
         still confirms it by seeing it land in the field."""
         if not self.csv_paths:
             self.pip_detect_status.config(
-                text="Select a market data CSV in Step 1 first.", fg=AMBER,
+                text="Select a market data CSV in Step 2 first.", fg=AMBER,
             )
             return
         try:
@@ -5836,7 +5939,7 @@ class MainWindow:
         if not self.csv_paths:
             messagebox.showwarning(
                 "Missing data",
-                "Please select a market data CSV in Step 1.",
+                "Please select a market data CSV in Step 2.",
             )
             return
         self.refine_output.delete("1.0", END)
@@ -5907,8 +6010,9 @@ class MainWindow:
             messagebox.showwarning(
                 "Mode mismatch",
                 "This refinement result was optimized for a Manual Strategy Builder "
-                "strategy. Switch the Strategy tab to Manual mode to apply it, or "
-                "re-run Iterative Refinement against whatever strategy is currently selected.",
+                "strategy. Switch to MANUAL mode on the Strategy Configuration tab "
+                "(Step 1) to apply it, or re-run Iterative Refinement against whatever "
+                "strategy is currently selected.",
             )
             return
 
@@ -5951,7 +6055,7 @@ class MainWindow:
 
         messagebox.showinfo(
             "Applied",
-            "The optimized parameters have been loaded into the Strategy tab (Step 2). "
+            "The optimized parameters have been loaded into the Strategy Builder tab. "
             "Switch tabs to review them, then re-run the normal pipeline (Step 5) to "
             "confirm the result with a fresh, non-search report.",
         )
@@ -5959,9 +6063,10 @@ class MainWindow:
     def _apply_best_code_strategy(self, result, source_type: str):
         """
         For Python/PineScript/MQL5 strategies, "applying" the winner means
-        pointing the Strategy tab's file selector at the already-written
-        patched source file (its logic is identical to the original -- only
-        the numeric parameter values changed), so the next run uses it.
+        pointing the Strategy Configuration tab's file selector at the
+        already-written patched source file (its logic is identical to the
+        original -- only the numeric parameter values changed), so the next
+        run uses it.
         """
         path = getattr(self, "_last_refinement_best_strategy_path", None)
         if not path:
@@ -5982,7 +6087,7 @@ class MainWindow:
         messagebox.showinfo(
             "Applied",
             f"The optimized {FITNESS_METRICS.get(result.fitness_metric, result.fitness_metric)}-tuned "
-            f"strategy file has been selected on the Strategy tab (Step 2):\n\n{path}\n\n"
+            f"strategy file has been selected on the Strategy Configuration tab (Step 1):\n\n{path}\n\n"
             "Re-run the normal pipeline (Step 5) to confirm the result with a fresh, "
             "non-search report.",
         )
@@ -6002,7 +6107,7 @@ class MainWindow:
             "with no GA search -- for batch-testing several queued strategies at once, or for the "
             "full walk-forward-aware GA search (baseline -> GA -> re-validated Monte Carlo -> "
             "out-of-sample check -> holdout check -> verdict), use RUN FULL PIPELINE (BATCH) on "
-            "02 Strategy's batch queue, or 15 Full Pipeline for a single strategy.",
+            "01 Strategy Configuration's batch queue, or 15 Full Pipeline for a single strategy.",
         )
 
         section = self._section(
@@ -6046,8 +6151,8 @@ class MainWindow:
             font=_safe_font(8),
         ).pack(side="left")
         self._button(
-            batch_row, "GO TO BATCH QUEUE (02 Strategy)",
-            lambda: self._show_page("strategy"),
+            batch_row, "GO TO BATCH QUEUE (01 Strategy Configuration)",
+            lambda: self._show_page("strategyconfig"),
         ).pack(side="left", padx=8)
 
         self.progress = NeuralProgress(f)
@@ -6092,7 +6197,7 @@ class MainWindow:
         if not self.csv_paths:
             messagebox.showwarning(
                 "Missing data",
-                "Please select a market data CSV in Step 1.",
+                "Please select a market data CSV in Step 2.",
             )
             return
 
@@ -6414,7 +6519,7 @@ class MainWindow:
 
     def _payout_run_clicked(self):
         if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 1.")
+            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
             return
         self.payout_output.delete("1.0", END)
         self.payout_progress.start(10)
@@ -6580,10 +6685,33 @@ class MainWindow:
         self._bind_isolated_wheel(self.bulk_strategy_listbox)
 
         bulk_btn_row = Frame(bulk_section, bg=BG)
-        bulk_btn_row.pack(fill="x", padx=18, pady=(0, 12))
-        self._button(bulk_btn_row, "ADD STRATEGY FILES...", self._bulk_add_files).pack(side="left")
-        self._button(bulk_btn_row, "REMOVE SELECTED", self._bulk_remove_selected).pack(side="left", padx=8)
-        self._button(bulk_btn_row, "CLEAR ALL", self._bulk_clear_files).pack(side="left")
+        bulk_btn_row.pack(fill="x", padx=18, pady=(4, 2))
+        Label(
+            bulk_btn_row, text="Add by type:", bg=BG, fg=TEXT_DIM, font=_safe_font(8, "bold"),
+        ).pack(side="left", padx=(0, 8))
+        self._button(bulk_btn_row, "MANUAL", lambda: self._bulk_add_files_by_type("manual"), primary=True).pack(side="left")
+        self._button(bulk_btn_row, "PYTHON", lambda: self._bulk_add_files_by_type("python"), primary=True).pack(side="left", padx=8)
+        self._button(bulk_btn_row, "PINESCRIPT", lambda: self._bulk_add_files_by_type("pinescript"), primary=True).pack(side="left")
+        self._button(bulk_btn_row, "MQL5", lambda: self._bulk_add_files_by_type("mql5"), primary=True).pack(side="left", padx=8)
+
+        bulk_btn_row_2 = Frame(bulk_section, bg=BG)
+        bulk_btn_row_2.pack(fill="x", padx=18, pady=(0, 12))
+        self._button(bulk_btn_row_2, "ADD MIXED FILES...", self._bulk_add_files).pack(side="left")
+        self._button(bulk_btn_row_2, "ADD FROM STRATEGY LIBRARY", self._bulk_add_from_library).pack(side="left", padx=8)
+        self._button(bulk_btn_row_2, "REMOVE SELECTED", self._bulk_remove_selected).pack(side="left", padx=8)
+        self._button(bulk_btn_row_2, "CLEAR ALL", self._bulk_clear_files).pack(side="left")
+        Label(
+            bulk_section,
+            text="MANUAL picks a saved strategy config (.json) -- easiest is ADD FROM STRATEGY "
+            "LIBRARY instead, which lists every saved Manual/Python/PineScript/MQL5 strategy by "
+            "name. PYTHON/PINESCRIPT/MQL5 browse directly to a source file of that type. ADD "
+            "MIXED FILES lets you multi-select across types in one dialog.",
+            bg=PANEL, fg=TEXT_DIM, font=_safe_font(8), wraplength=820, justify="left",
+        ).pack(anchor="w", padx=18, pady=(0, 4))
+        self.bulk_upload_status = Label(
+            bulk_section, text="", bg=PANEL, fg=TEXT_DIM, font=_safe_font(8),
+        )
+        self.bulk_upload_status.pack(anchor="w", padx=18, pady=(0, 10))
 
         self._bulk_strategy_paths: list[Path] = []
 
@@ -6735,6 +6863,63 @@ class MainWindow:
                 self._bulk_strategy_paths.append(Path(p))
                 self.bulk_strategy_listbox.insert(END, f"  {Path(p).name}")
 
+    # Per-type file dialog filters shared by the Search Lab bulk uploader
+    # and the Portfolio / Ensemble "add leg/member by type" buttons -- one
+    # definition instead of four near-duplicate filedialog calls scattered
+    # across those three features.
+    _STRATEGY_TYPE_FILEDIALOG = {
+        "manual": ("Add a Manual Strategy Builder config", [("Manual strategy config", "*.json"), ("All files", "*.*")]),
+        "python": ("Add a Python strategy", [("Python strategies", "*.py"), ("All files", "*.*")]),
+        "pinescript": ("Add a PineScript strategy", [("PineScript strategies", "*.pine *.pinescript *.txt"), ("All files", "*.*")]),
+        "mql5": ("Add an MQL5 strategy", [("MQL5 strategies", "*.mq5 *.mqh"), ("All files", "*.*")]),
+    }
+
+    def _bulk_add_files_by_type(self, strategy_type: str):
+        """MANUAL / PYTHON / PINESCRIPT / MQL5 quick-add buttons -- same
+        destination list as ADD MIXED FILES, just pre-filtered to one
+        format so a Manual .json isn't lost in a generic 'All files' pick."""
+        title, filetypes = self._STRATEGY_TYPE_FILEDIALOG[strategy_type]
+        paths = filedialog.askopenfilenames(title=title, filetypes=filetypes)
+        if not paths:
+            return
+        existing = {str(p) for p in self._bulk_strategy_paths}
+        added = 0
+        for p in paths:
+            if p not in existing:
+                self._bulk_strategy_paths.append(Path(p))
+                self.bulk_strategy_listbox.insert(END, f"  [{strategy_type}] {Path(p).name}")
+                added += 1
+        if added:
+            self.bulk_upload_status.config(
+                text=f"Added {added} {strategy_type} file(s).", fg=TEXT_DIM,
+            )
+
+    def _bulk_add_from_library(self):
+        """Adds the currently-selected Strategy Library row(s) (Step 1
+        Strategy Configuration) straight into the bulk-upload list -- lets
+        Manual Strategy Builder configs (which normally aren't loose files
+        on disk) join the same batch as Python/PineScript/MQL5 files."""
+        items = self._selected_library_items()
+        if not items:
+            messagebox.showinfo(
+                "No selection",
+                "Select one or more saved strategies in the Strategy Library "
+                "(01 Strategy Configuration) first, then click ADD FROM STRATEGY LIBRARY.",
+            )
+            return
+        existing = {str(p) for p in self._bulk_strategy_paths}
+        added = 0
+        for item in items:
+            p = str(item.path)
+            if p not in existing:
+                self._bulk_strategy_paths.append(Path(p))
+                self.bulk_strategy_listbox.insert(END, f"  [{item.strategy_type}] {item.name}")
+                existing.add(p)
+                added += 1
+        self.bulk_upload_status.config(
+            text=f"Added {added} strategy(ies) from the library.", fg=TEXT_DIM,
+        )
+
     def _bulk_remove_selected(self):
         sel = list(self.bulk_strategy_listbox.curselection())
         for i in reversed(sel):
@@ -6832,7 +7017,7 @@ class MainWindow:
         if not self.csv_paths:
             messagebox.showwarning(
                 "Missing data",
-                "Please select a market data CSV in Step 1.",
+                "Please select a market data CSV in Step 2.",
             )
             return
 
@@ -7195,12 +7380,12 @@ class MainWindow:
     # -----------------------------------------------------------------------
 
     def _load_df_for_page(self, log_fn) -> "pd.DataFrame | None":
-        """Loads (and, if multiple files are selected on Step 1, merges) the
+        """Loads (and, if multiple files are selected on Step 2, merges) the
         currently-selected market data the exact same way every other tab
         does. Returns None (after logging why) if nothing usable is
         selected -- callers should stop rather than proceed with no data."""
         if not self.csv_paths:
-            log_fn("Please select a market data CSV in Step 1 (Market Data) first.")
+            log_fn("Please select a market data CSV in Step 2 (Market Data) first.")
             return None
         per_file_results = []
         for p in self.csv_paths:
@@ -7474,7 +7659,7 @@ class MainWindow:
 
     def _wfo_run_clicked(self):
         if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 1.")
+            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
             return
         if not self._try_start_heavy_job(JOB_WFO):
             return
@@ -7625,7 +7810,7 @@ class MainWindow:
 
     def _cpcv_run_clicked(self):
         if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 1.")
+            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
             return
         if not self._try_start_heavy_job(JOB_CPCV):
             return
@@ -7672,7 +7857,7 @@ class MainWindow:
 
     def _pbo_run_clicked(self):
         if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 1.")
+            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
             return
         if not self._try_start_heavy_job(JOB_CPCV):
             return
@@ -7843,7 +8028,7 @@ class MainWindow:
 
     def _sens_run_clicked(self):
         if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 1.")
+            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
             return
         if not self._try_start_heavy_job(JOB_SENSITIVITY):
             return
@@ -7904,22 +8089,25 @@ class MainWindow:
             f,
             "CHAMPION / Multi-Asset Portfolio",
             "Multi-Asset Portfolio",
-            "Applies the strategy currently configured on Step 2 to every instrument "
-            "listed below, computes the correlation matrix of their daily returns, "
-            "re-weights each instrument's risk (correlated instruments get sized "
-            "down), and merges every instrument's trades into one shared account "
-            "equity curve -- the way trading a portfolio out of one prop account "
-            "actually works.",
+            "Applies a strategy to every instrument listed below, computes the correlation "
+            "matrix of their daily returns, re-weights each instrument's risk (correlated "
+            "instruments get sized down), and merges every instrument's trades into one "
+            "shared account equity curve -- the way trading a portfolio out of one prop "
+            "account actually works.",
         )
 
         legs_section = self._section(
             f, "Instrument legs (at least 2 required)",
-            "Each leg can use a DIFFERENT strategy -- select one or more saved strategies in the "
-            "Strategy Library (Step 7) first, then ADD LEG FROM LIBRARY, or ADD LEG (CSV) to use "
-            "whatever strategy is currently configured on Step 2 for that leg instead. Running several "
-            "genuinely different, uncorrelated strategies together as one portfolio raises the combined "
-            "account's own probability of passing more reliably than pushing any single strategy's pass "
-            "probability higher alone -- see PORTFOLIO PASS PROBABILITY below once you run it.",
+            "Each leg can use a DIFFERENT strategy. Use one of the ADD LEG: MANUAL / PYTHON / "
+            "PINESCRIPT / MQL5 buttons to pick a strategy of that type directly (a Manual pick "
+            "opens the Strategy Library filtered to saved Manual configs, since Manual "
+            "strategies aren't loose files); ADD LEG FROM LIBRARY works the same way but lets "
+            "you multi-select across saved strategies of any type at once; ADD LEG (CSV, current config) reuses "
+            "whatever strategy is currently configured on Strategy Configuration / Strategy "
+            "Builder (Step 1) instead. Running several genuinely different, uncorrelated "
+            "strategies together as one portfolio raises the combined account's own probability "
+            "of passing more reliably than pushing any single strategy's pass probability higher "
+            "alone -- see PORTFOLIO PASS PROBABILITY below once you run it.",
             emphasize=True,
         )
         legs_frame = Frame(legs_section, bg=PANEL)
@@ -7937,13 +8125,24 @@ class MainWindow:
         self.portfolio_leg_listbox.config(yscrollcommand=leg_scroll.set)
         self._bind_isolated_wheel(self.portfolio_leg_listbox)
 
+        leg_type_row = Frame(legs_section, bg=PANEL)
+        leg_type_row.pack(anchor="w", padx=18, pady=(0, 4))
+        Label(
+            leg_type_row, text="Add leg by type:", bg=PANEL, fg=TEXT_DIM, font=_safe_font(8, "bold"),
+        ).pack(side="left", padx=(0, 8))
+        self._button(leg_type_row, "MANUAL", lambda: self._portfolio_add_leg_by_type("manual"), primary=True).pack(side="left")
+        self._button(leg_type_row, "PYTHON", lambda: self._portfolio_add_leg_by_type("python"), primary=True).pack(side="left", padx=8)
+        self._button(leg_type_row, "PINESCRIPT", lambda: self._portfolio_add_leg_by_type("pinescript"), primary=True).pack(side="left")
+        self._button(leg_type_row, "MQL5", lambda: self._portfolio_add_leg_by_type("mql5"), primary=True).pack(side="left", padx=8)
+
         leg_btn_row = Frame(legs_section, bg=PANEL)
         leg_btn_row.pack(anchor="w", padx=18, pady=(0, 12))
-        self._button(leg_btn_row, "ADD LEG (CSV)", self._portfolio_add_leg, primary=True).pack(side="left")
-        self._button(leg_btn_row, "ADD LEG FROM LIBRARY", self._portfolio_add_leg_from_library, primary=True).pack(side="left", padx=8)
+        self._button(leg_btn_row, "ADD LEG FROM LIBRARY", self._portfolio_add_leg_from_library, primary=True).pack(side="left")
+        self._button(leg_btn_row, "ADD LEG (CSV, current config)", self._portfolio_add_leg).pack(side="left", padx=8)
         self._button(leg_btn_row, "REMOVE SELECTED LEG", self._portfolio_remove_leg).pack(side="left", padx=8)
 
         self._portfolio_legs: list[dict] = []
+
 
         settings = self._section(f, "Portfolio settings", "")
         self.portfolio_balance = LabeledEntry(settings, "Shared initial account balance ($)", 100000)
@@ -8005,42 +8204,105 @@ class MainWindow:
         )
         if weight is None:
             return
-        self._portfolio_legs.append({"path": path, "weight": weight, "library_item": None})
-        self.portfolio_leg_listbox.insert(END, f"{os.path.basename(path)}  (weight={weight:g}, strategy=Step 2 current)")
+        self._portfolio_legs.append({"path": path, "weight": weight, "library_item": None, "strategy_path": None})
+        self.portfolio_leg_listbox.insert(END, f"{os.path.basename(path)}  (weight={weight:g}, strategy=current Strategy Configuration)")
+
+    def _portfolio_add_leg_by_type(self, strategy_type: str):
+        """ADD LEG: MANUAL / PYTHON / PINESCRIPT / MQL5 -- picks a strategy of
+        exactly that type directly, then a market-data CSV to pair it with,
+        without first needing to select anything in the Strategy Library
+        listbox (that's what ADD LEG FROM LIBRARY is for). MANUAL strategies
+        aren't loose files on disk, so that case is delegated to the same
+        library-selection flow filtered down to Manual-type saved configs.
+        """
+        if strategy_type == "manual":
+            manual_items = [
+                i for i in getattr(self, "_strategy_library_items", []) if i.strategy_type == "manual"
+            ]
+            if not manual_items:
+                messagebox.showinfo(
+                    "No saved Manual strategies",
+                    "No Manual Strategy Builder configs are saved to the library yet. Build one "
+                    "on the Strategy Builder tab, save it from Strategy Configuration (Step 1), "
+                    "then come back here.",
+                )
+                return
+            names = [i.name for i in manual_items]
+            choice = self._ask_choice_from_list(
+                "Choose Manual strategy", "Select a saved Manual strategy for this leg:", names,
+            )
+            if choice is None:
+                return
+            item = manual_items[names.index(choice)]
+            self._portfolio_add_leg_for_library_item(item)
+            return
+
+        title, filetypes = self._STRATEGY_TYPE_FILEDIALOG[strategy_type]
+        strategy_path = filedialog.askopenfilename(title=title, filetypes=filetypes)
+        if not strategy_path:
+            return
+        csv_path = filedialog.askopenfilename(
+            title=f"Select market data CSV for '{os.path.basename(strategy_path)}'",
+            filetypes=[("Market data", "*.csv *.tsv *.txt *.parquet *.zip *.7z"), ("All files", "*.*")],
+        )
+        if not csv_path:
+            return
+        weight = simpledialog.askfloat(
+            "Instrument weight",
+            f"Nominal (pre-correlation) risk weight for {os.path.basename(csv_path)}:",
+            initialvalue=1.0, minvalue=0.01, maxvalue=10.0,
+        )
+        if weight is None:
+            return
+        self._portfolio_legs.append({
+            "path": csv_path, "weight": weight, "library_item": None, "strategy_path": strategy_path,
+        })
+        self.portfolio_leg_listbox.insert(
+            END,
+            f"{os.path.basename(csv_path)}  (weight={weight:g}, strategy=[{strategy_type}] "
+            f"{os.path.basename(strategy_path)})",
+        )
+
+    def _portfolio_add_leg_for_library_item(self, item):
+        """Shared tail end of adding a leg once a specific Strategy Library
+        item has been chosen -- used by both ADD LEG FROM LIBRARY (multi
+        select) and the ADD LEG: MANUAL quick button (single pick)."""
+        path = filedialog.askopenfilename(
+            title=f"Select market data CSV for '{item.name}'",
+            filetypes=[("Market data", "*.csv *.tsv *.txt *.parquet *.zip *.7z"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        weight = simpledialog.askfloat(
+            "Instrument weight",
+            f"Nominal (pre-correlation) risk weight for '{item.name}' on {os.path.basename(path)}:",
+            initialvalue=1.0, minvalue=0.01, maxvalue=10.0,
+        )
+        if weight is None:
+            return
+        self._portfolio_legs.append({"path": path, "weight": weight, "library_item": item, "strategy_path": None})
+        self.portfolio_leg_listbox.insert(
+            END, f"{os.path.basename(path)}  (weight={weight:g}, strategy=[{item.strategy_type}] {item.name})",
+        )
 
     def _portfolio_add_leg_from_library(self):
-        """Adds one leg per currently-selected Strategy Library row (Step 7),
-        each paired with a market-data file the user picks right after --
-        this is what lets a portfolio combine genuinely DIFFERENT strategies
-        (e.g. a trend-follower and a mean-reversion strategy) into one
-        shared-account book, instead of every leg being forced to reuse
-        whatever strategy happens to be configured on Step 2."""
+        """Adds one leg per currently-selected Strategy Library row (Step 1
+        Strategy Configuration), each paired with a market-data file the
+        user picks right after -- this is what lets a portfolio combine
+        genuinely DIFFERENT strategies (e.g. a trend-follower and a
+        mean-reversion strategy) into one shared-account book, instead of
+        every leg being forced to reuse whatever strategy happens to be
+        configured on Strategy Configuration / Strategy Builder."""
         items = self._selected_library_items()
         if not items:
             messagebox.showinfo(
                 "No selection",
-                "Select one or more saved strategies in the Strategy Library (Step 7) first, "
-                "then click ADD LEG FROM LIBRARY.",
+                "Select one or more saved strategies in the Strategy Library "
+                "(01 Strategy Configuration) first, then click ADD LEG FROM LIBRARY.",
             )
             return
         for item in items:
-            path = filedialog.askopenfilename(
-                title=f"Select market data CSV for '{item.name}'",
-                filetypes=[("Market data", "*.csv *.tsv *.txt *.parquet *.zip *.7z"), ("All files", "*.*")],
-            )
-            if not path:
-                continue
-            weight = simpledialog.askfloat(
-                "Instrument weight",
-                f"Nominal (pre-correlation) risk weight for '{item.name}' on {os.path.basename(path)}:",
-                initialvalue=1.0, minvalue=0.01, maxvalue=10.0,
-            )
-            if weight is None:
-                continue
-            self._portfolio_legs.append({"path": path, "weight": weight, "library_item": item})
-            self.portfolio_leg_listbox.insert(
-                END, f"{os.path.basename(path)}  (weight={weight:g}, strategy={item.name})",
-            )
+            self._portfolio_add_leg_for_library_item(item)
 
     def _portfolio_remove_leg(self):
         sel = self.portfolio_leg_listbox.curselection()
@@ -8054,8 +8316,9 @@ class MainWindow:
         if len(self._portfolio_legs) < 2:
             messagebox.showwarning(
                 "Not enough legs",
-                "Portfolio backtesting requires at least 2 instrument legs -- use ADD LEG (CSV) "
-                "or ADD LEG FROM LIBRARY above.",
+                "Portfolio backtesting requires at least 2 instrument legs -- use one of the "
+                "ADD LEG: MANUAL/PYTHON/PINESCRIPT/MQL5 buttons, ADD LEG FROM LIBRARY, or "
+                "ADD LEG (CSV, current config) above.",
             )
             return
         self.portfolio_output.delete("1.0", END)
@@ -8074,6 +8337,7 @@ class MainWindow:
                 self._log_portfolio(f"Loaded {len(result.dataframe)} bars from {os.path.basename(stored_path)}")
 
                 library_item = leg_spec.get("library_item")
+                strategy_path = leg_spec.get("strategy_path")
                 if library_item is not None:
                     try:
                         leg_strategy = self._load_bulk_strategy(library_item.path)
@@ -8081,6 +8345,13 @@ class MainWindow:
                         self._log_portfolio(f"  Could not load strategy '{library_item.name}': {exc}")
                         return
                     leg_name = library_item.name
+                elif strategy_path:
+                    try:
+                        leg_strategy = self._load_bulk_strategy(Path(strategy_path))
+                    except Exception as exc:
+                        self._log_portfolio(f"  Could not load strategy '{os.path.basename(strategy_path)}': {exc}")
+                        return
+                    leg_name = Path(strategy_path).stem
                 else:
                     leg_strategy = self._build_strategy()
                     leg_name = Path(stored_path).stem
@@ -8218,7 +8489,7 @@ class MainWindow:
 
     def _multiobj_run_clicked(self):
         if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 1.")
+            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
             return
         selected = [name for name, var in self._multiobj_vars.items() if var.get()]
         if len(selected) < 2:
@@ -8338,7 +8609,7 @@ class MainWindow:
 
     def _wfga_run_clicked(self):
         if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 1.")
+            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
             return
         if not self._try_start_heavy_job(JOB_WFGA):
             return
@@ -8412,14 +8683,19 @@ class MainWindow:
             "independently at a correlation-adjusted share of the account's risk budget "
             "(reuses the Portfolio feature's own math); Vote combines every strategy's "
             "signal into one entry, taken only once enough of them agree on direction. "
-            "Uses the market data currently selected on Step 1.",
+            "Uses the market data currently selected on Step 2.",
         )
 
         legs_section = self._section(
             f, "Strategy legs (at least 2 required)",
-            "Python (.py), PineScript (.pine), or MQL5 (.mq5) files -- mixing types in "
-            "the same ensemble is fine, each is detected by extension. Each leg trades "
-            "the SAME instrument, using the SAME base risk settings from Step 4.",
+            "Manual Strategy Builder configs, Python (.py), PineScript (.pine), or MQL5 "
+            "(.mq5) strategies -- mixing types in the same ensemble is fine, each is "
+            "detected by extension. Use the ADD LEG: MANUAL/PYTHON/PINESCRIPT/MQL5 buttons "
+            "to pick one strategy of that type at a time (MANUAL opens the Strategy Library "
+            "filtered to saved Manual configs), ADD FROM STRATEGY LIBRARY to multi-select "
+            "across any saved type at once, or ADD FILES... to browse multiple Python / "
+            "PineScript / MQL5 files in one dialog. Each leg trades the SAME instrument, "
+            "using the SAME base risk settings from Step 4.",
             emphasize=True,
         )
         legs_frame = Frame(legs_section, bg=PANEL)
@@ -8437,13 +8713,25 @@ class MainWindow:
         self.ensemble_leg_listbox.config(yscrollcommand=leg_scroll.set)
         self._bind_isolated_wheel(self.ensemble_leg_listbox)
 
+        leg_type_row = Frame(legs_section, bg=PANEL)
+        leg_type_row.pack(anchor="w", padx=18, pady=(0, 4))
+        Label(
+            leg_type_row, text="Add leg by type:", bg=PANEL, fg=TEXT_DIM, font=_safe_font(8, "bold"),
+        ).pack(side="left", padx=(0, 8))
+        self._button(leg_type_row, "MANUAL", lambda: self._ensemble_add_leg_by_type("manual"), primary=True).pack(side="left")
+        self._button(leg_type_row, "PYTHON", lambda: self._ensemble_add_leg_by_type("python"), primary=True).pack(side="left", padx=8)
+        self._button(leg_type_row, "PINESCRIPT", lambda: self._ensemble_add_leg_by_type("pinescript"), primary=True).pack(side="left")
+        self._button(leg_type_row, "MQL5", lambda: self._ensemble_add_leg_by_type("mql5"), primary=True).pack(side="left", padx=8)
+
         leg_btn_row = Frame(legs_section, bg=PANEL)
         leg_btn_row.pack(anchor="w", padx=18, pady=(0, 12))
-        self._button(leg_btn_row, "ADD STRATEGY FILES...", self._ensemble_add_legs, primary=True).pack(side="left")
+        self._button(leg_btn_row, "ADD FROM STRATEGY LIBRARY", self._ensemble_add_from_library, primary=True).pack(side="left")
+        self._button(leg_btn_row, "ADD FILES...", self._ensemble_add_legs).pack(side="left", padx=8)
         self._button(leg_btn_row, "REMOVE SELECTED", self._ensemble_remove_legs).pack(side="left", padx=8)
         self._button(leg_btn_row, "CLEAR ALL", self._ensemble_clear_legs).pack(side="left")
 
         self._ensemble_leg_paths: list[Path] = []
+
 
         settings = self._section(f, "Ensemble settings", "")
         self.ensemble_mode = LabeledCombo(
@@ -8512,6 +8800,60 @@ class MainWindow:
                 self._ensemble_leg_paths.append(Path(p))
                 self.ensemble_leg_listbox.insert(END, f"  {Path(p).name}")
 
+    def _ensemble_add_leg_by_type(self, strategy_type: str):
+        """ADD LEG: MANUAL / PYTHON / PINESCRIPT / MQL5 -- mirrors Multi-Asset
+        Portfolio's per-type quick-add. MANUAL strategies aren't loose files,
+        so that case picks from the Strategy Library instead of a file
+        dialog; the other three browse directly to a source file."""
+        if strategy_type == "manual":
+            manual_items = [
+                i for i in getattr(self, "_strategy_library_items", []) if i.strategy_type == "manual"
+            ]
+            if not manual_items:
+                messagebox.showinfo(
+                    "No saved Manual strategies",
+                    "No Manual Strategy Builder configs are saved to the library yet. Build one "
+                    "on the Strategy Builder tab, save it from Strategy Configuration (Step 1), "
+                    "then come back here.",
+                )
+                return
+            names = [i.name for i in manual_items]
+            choice = self._ask_choice_from_list(
+                "Choose Manual strategy", "Select a saved Manual strategy for this leg:", names,
+            )
+            if choice is None:
+                return
+            item = manual_items[names.index(choice)]
+            self._ensemble_add_leg_path(Path(item.path))
+            return
+
+        title, filetypes = self._STRATEGY_TYPE_FILEDIALOG[strategy_type]
+        path = filedialog.askopenfilename(title=title, filetypes=filetypes)
+        if not path:
+            return
+        self._ensemble_add_leg_path(Path(path))
+
+    def _ensemble_add_from_library(self):
+        """Adds one leg per currently-selected Strategy Library row (Step 1
+        Strategy Configuration) -- lets an ensemble combine already-saved
+        strategies of any mix of types without re-browsing for their files."""
+        items = self._selected_library_items()
+        if not items:
+            messagebox.showinfo(
+                "No selection",
+                "Select one or more saved strategies in the Strategy Library "
+                "(01 Strategy Configuration) first, then click ADD FROM STRATEGY LIBRARY.",
+            )
+            return
+        for item in items:
+            self._ensemble_add_leg_path(Path(item.path))
+
+    def _ensemble_add_leg_path(self, path: Path):
+        if str(path) in {str(p) for p in self._ensemble_leg_paths}:
+            return
+        self._ensemble_leg_paths.append(path)
+        self.ensemble_leg_listbox.insert(END, f"  {path.name}")
+
     def _ensemble_remove_legs(self):
         sel = list(self.ensemble_leg_listbox.curselection())
         for i in reversed(sel):
@@ -8526,11 +8868,12 @@ class MainWindow:
         if len(self._ensemble_leg_paths) < 2:
             messagebox.showwarning(
                 "Not enough legs",
-                "An ensemble requires at least 2 strategy legs -- use ADD STRATEGY FILES above.",
+                "An ensemble requires at least 2 strategy legs -- use one of the ADD LEG: "
+                "MANUAL/PYTHON/PINESCRIPT/MQL5 buttons, ADD FROM STRATEGY LIBRARY, or ADD FILES... above.",
             )
             return
         if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 1.")
+            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
             return
         self.ensemble_output.delete("1.0", END)
         self.open_ensemble_report_btn.config(state="disabled")
@@ -8746,7 +9089,7 @@ class MainWindow:
         self.genstrat_save_btn.config(state="disabled")
         self.genstrat_save_btn.pack(side="left")
         Label(
-            output_section, text="Saved strategies land in the Strategy Library (02 Strategy) tagged "
+            output_section, text="Saved strategies land in the Strategy Library (01 Strategy Configuration) tagged "
             "DRAFT -- open that tab, LOAD SELECTED (or ADD TO BATCH QUEUE), and run it through "
             "05 Run & Report / 15 Full Pipeline like anything else before trusting it.",
             bg=PANEL, fg=TEXT_DIM, font=_safe_font(8), wraplength=900, justify="left",
@@ -8867,7 +9210,7 @@ class MainWindow:
         except Exception:
             pass
         self.genstrat_status.config(
-            text=f"Saved as {saved_path.name}  [DRAFT]. Open 02 Strategy to load and test it.", fg=GREEN,
+            text=f"Saved as {saved_path.name}  [DRAFT]. Open 01 Strategy Configuration to load and test it.", fg=GREEN,
         )
         self._refresh_strategy_library()
 
@@ -8905,7 +9248,7 @@ class MainWindow:
 
         cfg_section = self._section(
             f, "Run configuration",
-            "Uses whatever market data is loaded in 01 Data and whatever's set on 03 Prop Rules / "
+            "Uses whatever market data is loaded in 02 Data and whatever's set on 03 Prop Rules / "
             "04 Risk at the moment you click START -- changing those tabs after starting has no "
             "effect on an already-running Evolution Lab run.",
             emphasize=True,
@@ -8992,6 +9335,14 @@ class MainWindow:
                 ).pack(fill="x", anchor="w")
         except Exception:
             pass
+        # _bind_isolated_wheel above only catches the wheel over the
+        # canvas's own empty margin -- with every row now packed full of
+        # Checkbuttons, the cursor is almost always over one of THOSE
+        # instead, which had no such binding and let the scroll fall
+        # through to the whole page underneath. Binding every checkbutton
+        # too (now that they all exist) is what actually makes this list
+        # scroll independently of the page.
+        self._bind_isolated_wheel_tree(families_inner, families_canvas)
 
         btn_row = Frame(cfg_section, bg=PANEL)
         btn_row.pack(anchor="w", padx=18, pady=(10, 6))
@@ -9150,7 +9501,7 @@ class MainWindow:
             )
             return
         if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data file in 01 Data before starting the Evolution Lab.")
+            messagebox.showwarning("Missing data", "Please select a market data file in 02 Data before starting the Evolution Lab.")
             return
         if not self._try_start_heavy_job(JOB_EVOLUTION_LAB):
             return
@@ -9721,7 +10072,7 @@ class MainWindow:
 
     def _fullpipeline_run_clicked(self):
         if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 1.")
+            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
             return
         if not self._try_start_heavy_job(JOB_FULL_PIPELINE):
             return
@@ -9824,8 +10175,8 @@ class MainWindow:
     # Every setting this module exposes is a speed/thoroughness tradeoff,
     # never a correctness one -- see app.orchestration.speed_run's module
     # docstring. This is the one tab in the app that discovers its OWN
-    # strategy rather than testing one you already configured on Step 02,
-    # so it only needs Steps 01 (Data), 03 (Prop Rules), and 04 (Risk).
+    # strategy rather than testing one you already configured on Step 01,
+    # so it only needs Steps 02 (Data), 03 (Prop Rules), and 04 (Risk).
     # -----------------------------------------------------------------------
 
     def _build_speedrun_tab(self):
@@ -9844,8 +10195,8 @@ class MainWindow:
             "of them to spend less time per candidate, and every existing safeguard "
             "(lookahead detection, pip-scale mismatch, stop-fill honesty, the account-blown "
             "circuit breaker) still runs exactly as it does everywhere else in this app. "
-            "Uses the data, prop rules, and risk settings from Steps 01/03/04 -- it finds "
-            "its own strategy, so Step 02 (Strategy) is skipped entirely. Depending on your "
+            "Uses the data, prop rules, and risk settings from Steps 02/03/04 -- it finds "
+            "its own strategy, so Step 01 (Strategy Configuration) is skipped entirely. Depending on your "
             "data size and machine, a run typically takes anywhere from several minutes to "
             "an hour or more; use the settings below to trade thoroughness for speed.",
         )
@@ -10099,7 +10450,7 @@ class MainWindow:
 
     def _speedrun_run_clicked(self):
         if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 1.")
+            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
             return
         if not self._try_start_heavy_job(JOB_SPEED_RUN):
             return
@@ -10382,7 +10733,7 @@ class MainWindow:
 
     def _research_loop_run_clicked(self):
         if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 1.")
+            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
             return
         self.loop_output.delete("1.0", END)
         self.loop_summary_label.config(text="Running...", fg=TEXT_DIM)
@@ -10519,7 +10870,7 @@ class MainWindow:
             messagebox.showinfo("Ask a question first", "Type a research question in the box above.")
             return
         if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 1.")
+            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
             return
         settings = self._build_ollama_settings(prefix="ra_ai")
         if not settings.is_usable:
@@ -10550,7 +10901,7 @@ class MainWindow:
 
             # Zero-arg builder consistent with every other tab's "always
             # build fresh" convention (see app.search.robustness /
-            # app.validation.regime_testing) -- rereads current Step 02
+            # app.validation.regime_testing) -- rereads current Step 01
             # strategy config on every call, exactly like Full Pipeline's
             # own strategy_builder does.
             strategy_snapshot = self._build_strategy()
@@ -10651,7 +11002,7 @@ class MainWindow:
 
         strat_section = self._section(
             f, "Strategy",
-            "Pulled from your Strategy Library (Step 02) -- Python, PineScript, and MQL5 "
+            "Pulled from your Strategy Library (Step 01) -- Python, PineScript, and MQL5 "
             "strategies all work here since they share the same signal interface.",
             emphasize=True,
         )
@@ -11936,95 +12287,6 @@ class MainWindow:
         self._dl_session = None
 
 
-class _SplashScreen(Toplevel):
-    """Dark, borderless boot splash shown while MainWindow builds its ~17
-    tabs' worth of widgets. Without this, the very first thing the user
-    sees is the real window rendering itself piece by piece (sidebar, then
-    each tab's frame, then charts) which reads as glitchy -- the splash
-    covers exactly that window with something intentional instead, and
-    disappears the instant the real UI is fully built and ready to show."""
-
-    WIDTH, HEIGHT = 520, 320
-
-    def __init__(self, parent: Tk):
-        super().__init__(parent)
-        self.overrideredirect(True)
-        try:
-            self.attributes("-topmost", True)
-        except Exception:
-            pass
-        bg = "#05060A"  # deliberately darker/more "ominous" than the app's own BG
-        self.configure(bg=bg)
-        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        x, y = (sw - self.WIDTH) // 2, (sh - self.HEIGHT) // 2
-        self.geometry(f"{self.WIDTH}x{self.HEIGHT}+{x}+{y}")
-
-        self._canvas = Canvas(self, width=self.WIDTH, height=self.HEIGHT, bg=bg, highlightthickness=0)
-        self._canvas.pack(fill="both", expand=True)
-        self._glow_color = NEON_CYAN
-        self._bg = bg
-        self._tick = 0
-        self._status = "Booting T58 Quant Algo Backtester..."
-        self._draw()
-        self._animate()
-
-    def set_status(self, text: str) -> None:
-        self._status = text
-        self._draw()
-
-    def _draw(self) -> None:
-        c = self._canvas
-        c.delete("all")
-        cx, cy = self.WIDTH / 2, self.HEIGHT / 2 - 20
-
-        # Pulsing neon-blue glow halo behind the wordmark -- several
-        # progressively larger, more transparent rings, the same
-        # "layered outline" trick GlowCard uses elsewhere in this app,
-        # with the pulse driven by a slow sine wave instead of a fixed
-        # radius so it reads as alive rather than static.
-        import math
-        pulse = 0.5 + 0.5 * math.sin(self._tick / 14.0)
-        for i, base_alpha in ((5, 0.04), (4, 0.07), (3, 0.11), (2, 0.16), (1, 0.24)):
-            alpha = base_alpha * (0.6 + 0.4 * pulse)
-            r = 70 + i * 16
-            c.create_oval(
-                cx - r, cy - r, cx + r, cy + r,
-                outline=_blend_hex(self._bg, self._glow_color, alpha), width=3,
-            )
-
-        c.create_text(
-            cx, cy, text="T58", fill=_blend_hex(self._bg, self._glow_color, 0.85 + 0.15 * pulse),
-            font=_safe_font(46, "bold"),
-        )
-        c.create_text(
-            cx, cy + 44, text="QUANT ALGO BACKTESTER", fill=self._glow_color,
-            font=_safe_font(11, "bold"),
-        )
-        c.create_text(
-            cx, self.HEIGHT - 34, text=self._status, fill="#5C6472",
-            font=_safe_font(9),
-        )
-        # Small horizontal "loading" tick marching left-to-right, since a
-        # real determinate percentage isn't available for widget
-        # construction -- just enough motion to read as "working," not
-        # "frozen."
-        bar_w = 220
-        bx0, by = cx - bar_w / 2, self.HEIGHT - 54
-        c.create_line(bx0, by, bx0 + bar_w, by, fill="#1E232E", width=3)
-        pos = (self._tick * 6) % (bar_w + 60) - 30
-        c.create_line(
-            max(bx0, bx0 + pos - 30), by, min(bx0 + bar_w, bx0 + pos + 30), by,
-            fill=self._glow_color, width=3,
-        )
-
-    def _animate(self) -> None:
-        self._tick += 1
-        try:
-            self._draw()
-            self.after(60, self._animate)
-        except Exception:
-            pass  # splash already destroyed
-
 
 def _make_dpi_aware() -> None:
     """Tell Windows this process handles its own DPI scaling.
@@ -12298,23 +12560,10 @@ def launch():
     root = Tk()
     _apply_tk_scaling(root)
     _force_dwm_composition(root)
-    root.withdraw()  # hidden while the real window builds, splash covers that gap
-    splash = None
-    try:
-        splash = _SplashScreen(root)
-        root._t58_splash = splash
-        root.update()
-    except Exception:
-        splash = None  # never let a cosmetic splash failure block the real app
+    root.withdraw()  # hidden while the real window builds -- avoids showing a half-built window
 
     window = MainWindow(root)
 
-    if splash is not None:
-        try:
-            del root._t58_splash
-            splash.destroy()
-        except Exception:
-            pass
     root.deiconify()
     try:
         root.lift()
