@@ -1,9 +1,9 @@
 # T58 Trading — Quant Algo Backtester
 
-Tutorial:
+Full Tutorial:
 https://drive.google.com/file/d/1sgmIN7Q5vTkf8PESkHDFuSnRRUq1TYFp/view?usp=drive_link
 
-
+Web Version:
 https://github.com/user-attachments/assets/a8a5fa7d-a95a-437e-9146-ff7ac05143b5
 
 
