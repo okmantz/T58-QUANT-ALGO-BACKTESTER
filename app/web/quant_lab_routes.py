@@ -49,8 +49,16 @@ def _field(name, label, kind="text", value="", placeholder="", extra=""):
         checked = "checked" if value else ""
         return (f'<div class="checkbox-row"><input type="checkbox" id="{name}" name="{name}" {checked}>'
                 f'<label for="{name}" style="margin:0;">{label}</label></div>')
+    # NOTE: no space before the closing '>' when extra is empty (the
+    # common case) -- every call site below that turns this into a
+    # <select> via .replace(old_str, new_str) matches against this exact
+    # plain-text-input string, and a stray trailing space here made every
+    # one of those replacements silently no-op, leaving a broken free-text
+    # input where a dropdown (regime dimension, option type, factor
+    # frequency, translator target, ...) was intended.
+    extra_attr = f" {extra}" if extra else ""
     return (f'<label for="{name}">{label}</label>'
-            f'<input type="{kind}" id="{name}" name="{name}" value="{value}" placeholder="{placeholder}" {extra}>')
+            f'<input type="{kind}" id="{name}" name="{name}" value="{value}" placeholder="{placeholder}"{extra_attr}>')
 
 
 def _alpaca_fields() -> str:
@@ -92,17 +100,6 @@ def _load_ohlcv_upload(form_file_key: str):
         errors = "; ".join(i.message for i in result.issues if i.level == "error")
         raise ValueError(f"Could not load '{upload.filename}' as OHLCV data: {errors}")
     return result.dataframe
-
-
-def _library_strategy_options(strategy_type: str | None = None) -> str:
-    from app.strategy.library import list_saved_strategies
-
-    options = []
-    for s in list_saved_strategies(strategy_type=strategy_type, status="validated"):
-        options.append(f'<option value="{s.name}">{s.name} ({s.strategy_type})</option>')
-    if not options:
-        return '<option value="">No validated Strategy Library entries found</option>'
-    return "".join(options)
 
 
 def _pre(text: str) -> str:
@@ -151,34 +148,64 @@ def index():
 # 1. Universal Strategy Translator
 # ---------------------------------------------------------------------------
 
+def _all_strategy_options() -> str:
+    """Every saved strategy across all four types (manual/python/
+    pinescript/mql5), regardless of status -- translation is a pre-
+    validation authoring/porting tool, not a live-trading gate, so
+    requiring "validated" here (the old behavior) meant a strategy saved
+    straight from the builder -- which defaults to "draft" until someone
+    deliberately promotes it -- could never be found here at all."""
+    from app.strategy.library import list_saved_strategies
+
+    options = []
+    for t in ("manual", "python", "pinescript", "mql5"):
+        for s in list_saved_strategies(strategy_type=t):
+            options.append(f'<option value="{t}:{s.name}">{s.name} ({t}, {s.status_display})</option>')
+    if not options:
+        return '<option value="">No saved strategies found -- save one first (Manual Strategy Builder, Python, PineScript, or MQL5)</option>'
+    return "".join(options)
+
+
 @quant_lab_bp.route("/translator", methods=["GET", "POST"])
 def translator():
-    from app.strategy.library import list_saved_strategies, load_strategy_text
-    from app.strategy.translator import TranslationError, to_mql5, to_pinescript
+    from app.strategy.library import load_strategy_text
+    from app.strategy.translator import TranslationError, translate_strategy
 
     form_html = (
-        '<label for="strategy_name">Manual Strategy Builder entry</label>'
-        f'<select id="strategy_name" name="strategy_name">{_library_strategy_options("manual")}</select>'
+        '<label for="strategy_choice">Source strategy</label>'
+        f'<select id="strategy_choice" name="strategy_choice">{_all_strategy_options()}</select>'
         + _field("target", "Target language").replace(
             '<input type="text" id="target" name="target" value="" placeholder="">',
             '<select id="target" name="target"><option value="pinescript">PineScript v5</option>'
-            '<option value="mql5">MQL5</option></select>',
+            '<option value="mql5">MQL5</option><option value="python">Python</option></select>',
         )
     )
     result_html, error = None, None
     if request.method == "POST":
         try:
-            name = request.form["strategy_name"]
+            choice = request.form.get("strategy_choice") or ""
+            if ":" not in choice:
+                raise ValueError("Choose a source strategy.")
+            source_type, name = choice.split(":", 1)
             target = request.form["target"]
-            text = load_strategy_text("manual", name)
-            config = json.loads(text)
-            code = to_pinescript(config) if target == "pinescript" else to_mql5(config)
+            if source_type == "manual":
+                source = json.loads(load_strategy_text("manual", name))
+            else:
+                source = load_strategy_text(source_type, name)
+            code = translate_strategy(source_type, source, target)
             result_html = _pre(code)
-        except (TranslationError, json.JSONDecodeError, KeyError, FileNotFoundError) as exc:
+        except (TranslationError, json.JSONDecodeError, KeyError, FileNotFoundError, ValueError) as exc:
             error = str(exc)
-    return _render("Universal Strategy Translator",
-                    "Convert a saved Manual Strategy Builder config into clean, standalone PineScript or MQL5.",
-                    form_html, result_html, error)
+    return _render(
+        "Universal Strategy Translator",
+        "Convert any saved strategy -- Manual Strategy Builder config, Python, PineScript, or MQL5 "
+        "-- into any of the other code targets. A file this tool generated (or one manually "
+        "annotated with its round-trip directive) translates perfectly; a hand-written Pine/MQL5 "
+        "file translates via a real parse of its supported subset; hand-written Python has no safe "
+        "general reduction back to structured conditions and can only be translated if it carries "
+        "that same directive.",
+        form_html, result_html, error,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -201,12 +228,32 @@ def regime_selector():
     if request.method == "POST":
         try:
             from app.strategy.auto_regime_selector import select_regime_strategies
-            from app.strategy.library_loader import load_validated_candidates
+            from app.strategy.library import list_saved_strategies
+            from app.strategy.library_loader import load_strategy_object
 
             df = _load_ohlcv_upload("data_csv")
-            candidates = load_validated_candidates()
+            # Every saved strategy is a candidate EXCEPT one explicitly
+            # marked tested_failed -- requiring "validated" here (the old
+            # behavior) meant this tool could never find anything at all
+            # unless a strategy had been through the full pipeline's
+            # promote-to-validated step, which most manually-saved or
+            # freshly-built strategies never go through. Each candidate's
+            # own eval-pass-probability score (computed per regime below)
+            # is still the real gate on whether it's actually USED --
+            # this only widens the pool it's chosen FROM.
+            candidates = {}
+            for s in list_saved_strategies():
+                if s.status == "tested_failed":
+                    continue
+                try:
+                    candidates[s.name] = load_strategy_object(s)
+                except Exception:  # noqa: BLE001 -- one bad library file must not block the rest
+                    continue
             if not candidates:
-                raise ValueError("No validated Strategy Library entries found to consider.")
+                raise ValueError(
+                    "No saved Strategy Library entries found to consider -- save a strategy first "
+                    "(Manual Strategy Builder, Python, PineScript, or MQL5)."
+                )
             result = select_regime_strategies(
                 df, candidates, request.form["dimension"], min_trades_per_cell=int(request.form["min_trades"]),
             )
@@ -214,7 +261,10 @@ def regime_selector():
         except Exception as exc:  # noqa: BLE001
             error = str(exc)
     return _render("Auto Regime Selector",
-                    "Auto-assigns the best validated strategy per market regime into a ready-to-run router.",
+                    "Auto-assigns the best-scoring saved strategy per market regime into a ready-to-run "
+                    "router. Considers every saved strategy except one explicitly marked failed; each "
+                    "candidate must still clear the minimum-trades/eval-pass-probability bar per regime "
+                    "below to actually be assigned.",
                     form_html, result_html, error)
 
 
@@ -270,14 +320,21 @@ def strategy_health():
 def portfolio_composer():
     from app.strategy.library import list_saved_strategies
 
-    validated = list_saved_strategies(status="validated")
+    # Same reasoning as the Auto Regime Selector above: every saved
+    # strategy is offered here except one explicitly marked
+    # tested_failed. Requiring "validated" (the old behavior) meant this
+    # list was empty for anyone who hadn't run a strategy through the
+    # full pipeline's promote step -- i.e. almost every freshly-built or
+    # manually-saved strategy -- so the tool never had anything to show.
+    candidates_list = [s for s in list_saved_strategies() if s.status != "tested_failed"]
     checkboxes = "".join(
         f'<div class="checkbox-row"><input type="checkbox" name="strategy_names" value="{s.name}" id="cb_{i}">'
-        f'<label for="cb_{i}" style="margin:0;">{s.name} ({s.strategy_type})</label></div>'
-        for i, s in enumerate(validated)
-    ) or '<p class="help">No validated Strategy Library entries found.</p>'
+        f'<label for="cb_{i}" style="margin:0;">{s.name} ({s.strategy_type}, {s.status_display})</label></div>'
+        for i, s in enumerate(candidates_list)
+    ) or '<p class="help">No saved Strategy Library entries found -- save a strategy first.</p>'
     form_html = (
-        '<p class="help">Choose 2+ validated strategies to search combinations of (all will be backtested on the SAME uploaded data below).</p>'
+        '<p class="help">Choose 2+ strategies to search combinations of (all will be backtested on the SAME '
+        'uploaded data below). Every saved strategy is listed except one explicitly marked failed.</p>'
         + checkboxes
         + '<label for="data_csv">Market data for every leg (CSV)</label><input type="file" id="data_csv" name="data_csv" accept=".csv">'
         + _field("min_legs", "Min legs", "number", "2") + _field("max_legs", "Max legs", "number", "4")
@@ -295,7 +352,7 @@ def portfolio_composer():
             if len(names) < 2:
                 raise ValueError("Choose at least 2 strategies.")
             df = _load_ohlcv_upload("data_csv")
-            by_name = {s.name: s for s in validated}
+            by_name = {s.name: s for s in candidates_list}
             legs = [InstrumentLeg(name=n, df=df, strategy=load_strategy_object(by_name[n]), risk=RiskConfig()) for n in names]
             result = compose_portfolio(
                 legs, min_legs=int(request.form["min_legs"]), max_legs=int(request.form["max_legs"]),
@@ -305,7 +362,8 @@ def portfolio_composer():
         except Exception as exc:  # noqa: BLE001
             error = str(exc)
     return _render("Automated Portfolio Composer",
-                    "Searches your validated Strategy Library for the N-strategy combination that maximizes combined performance.",
+                    "Searches your saved Strategy Library for the N-strategy combination that maximizes "
+                    "combined performance.",
                     form_html, result_html, error)
 
 
@@ -464,11 +522,15 @@ def sentiment_price():
     result_html, error = None, None
     if request.method == "POST":
         try:
-            from app.quant_lab.sentiment_price import correlate_sentiment_with_price, fetch_headlines, score_headlines
+            from app.quant_lab.sentiment_price import (
+                aggregate_sentiment, correlate_sentiment_with_price, fetch_headlines, score_headlines,
+            )
 
             headlines = fetch_headlines(request.form["query"], max_results=int(request.form["max_results"]))
             sentiment_df = score_headlines(headlines)
-            lines = [f"{row.label:<9} {row.sentiment:+.2f}  {row.title}" for row in sentiment_df.itertuples()]
+            overall = aggregate_sentiment(sentiment_df)
+            lines = [overall.render_summary(), ""]
+            lines += [f"{row.label:<9} {row.sentiment:+.2f}  {row.title}" for row in sentiment_df.itertuples()]
             price_upload = request.files.get("price_csv")
             if price_upload and price_upload.filename:
                 price_df = _load_ohlcv_upload("price_csv")
