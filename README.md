@@ -1,5 +1,7 @@
 # T58 Trading — Quant Algo Backtester
 
+
+
 The one-stop shop for taking a trading idea from "here's a script" to
 "here's a validated, prop-firm-ready strategy" — without leaving one app.
 Import or write a strategy in any of four formats, validate it against
