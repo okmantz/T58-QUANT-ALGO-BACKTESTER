@@ -1,253 +1,66 @@
-//+------------------------------------------------------------------+
-//|                                 VWAP_Trend_Continuation_EA.mq5    |
-//| Long : EMA(294) > EMA(58)  AND Close > RollingVWAP(4) AND RSI(18) < 57.6102629644959
-//| Short: EMA(35) < EMA(159)  AND Close < RollingVWAP(3) AND RSI(42) > 66.008585331847
-//| Exit : RSI(5) crosses exit threshold, ATR stop/target, opposite  |
-//|        signal, or max bars in trade.                             |
-//+------------------------------------------------------------------+
-#property copyright "T58 Trading"
-#property version   "1.00"
-#property strict
+// VWAP Trend Continuation (ema 50/100, rsi7)
+//
+// IMPORTANT -- written for the T58 Quant Algo Backtester's MQL5 importer
+// (app/strategy/mql5.py), which parses a narrow SUBSET of MQL5: direct-
+// value iMA(...)/iRSI(...) calls with LITERAL integer periods (not named
+// input variables -- the parser cannot resolve a variable name to a
+// number), C-style boolean conditions, and trade.Buy()/trade.Sell()/
+// trade.PositionClose() calls guarded by an `if`. It does NOT support
+// indicator handles + CopyBuffer(), OrderSend() with an MqlTradeRequest
+// struct, or OnInit()/OnTick() event structure -- the previous version
+// used all three, so the parser found zero recognizable Buy/Sell calls
+// and produced no trades.
+//
+// VWAP SUBSTITUTION: this engine's own manual/JSON VWAP indicator ignores
+// the "period" field entirely and uses a session-anchored cumulative
+// VWAP -- not expressible in this parser's supported function list (only
+// iMA/iRSI on the close price, plus +-*/ arithmetic over already-defined
+// series; no volume-weighted cumulative sum, and iMA here always reads
+// the close price regardless of the PRICE_* argument). iMA(..., MODE_SMA,
+// ...) below is used as the closest available stand-in.
+//
+// ATR PERIOD LIMIT: this parser supports only ONE T58_ATR_PERIOD shared by
+// both the stop and target multipliers (the JSON spec's stop_atr_period=16
+// and target_atr_period=11 can't both be expressed here) -- 16 is used
+// below for both.
+//
+// EXIT SCOPE LIMIT: this parser combines every trade.PositionClose(...)
+// guard into a SINGLE exit condition applied to whichever side is open
+// (there's no separate long-exit/short-exit distinction like the Pine
+// adapter's "Long"/"Short" trade IDs) -- both RSI-exit guards below are
+// therefore each capable of closing either a long or a short.
+//
+// MAX-BARS-IN-TRADE: this parser has no max_bars_in_trade equivalent
+// (only the "manual" JSON adapter supports it) -- not represented here.
 
-input int    EmaLongSlowLen     = 294;
-input int    EmaLongFastLen     = 58;
-input int    EmaShortFastLen    = 35;
-input int    EmaShortSlowLen    = 159;
+// T58_SL_ATR_MULT=4.806786275425379
+// T58_TP_ATR_MULT=5.054720923946611
+// T58_ATR_PERIOD=16
 
-input int    RsiLongLen         = 18;
-input double RsiLongThresh      = 57.6102629644959;
-input int    RsiShortLen        = 42;
-input double RsiShortThresh     = 66.008585331847;
+double emaLongSlow  = iMA(_Symbol, PERIOD_CURRENT, 294, 0, MODE_EMA, PRICE_CLOSE);
+double emaLongFast  = iMA(_Symbol, PERIOD_CURRENT, 58,  0, MODE_EMA, PRICE_CLOSE);
+double emaShortFast = iMA(_Symbol, PERIOD_CURRENT, 35,  0, MODE_EMA, PRICE_CLOSE);
+double emaShortSlow = iMA(_Symbol, PERIOD_CURRENT, 159, 0, MODE_EMA, PRICE_CLOSE);
 
-input int    RsiExitLen         = 5;
-input double RsiExitLongThresh  = 66.68737207001313;
-input double RsiExitShortThresh = 64.42442560822603;
+double vwapLong  = iMA(_Symbol, PERIOD_CURRENT, 4, 0, MODE_SMA, PRICE_CLOSE);
+double vwapShort = iMA(_Symbol, PERIOD_CURRENT, 3, 0, MODE_SMA, PRICE_CLOSE);
 
-input int    VwapLongLen        = 4;
-input int    VwapShortLen       = 3;
+double rsiLong  = iRSI(_Symbol, PERIOD_CURRENT, 18, PRICE_CLOSE);
+double rsiShort = iRSI(_Symbol, PERIOD_CURRENT, 42, PRICE_CLOSE);
+double rsiExit  = iRSI(_Symbol, PERIOD_CURRENT, 5,  PRICE_CLOSE);
 
-input int    AtrStopLen         = 16;
-input double AtrStopMult        = 4.806786275425379;
-input int    AtrTargetLen       = 11;
-input double AtrTargetMult      = 5.054720923946611;
-
-input int    MaxBarsInTrade     = 63;
-input bool   OppositeSignalExit = true;
-
-input double LotSize            = 0.10;
-input ulong  MagicNumber        = 580058;
-
-int hEmaLongSlow, hEmaLongFast, hEmaShortFast, hEmaShortSlow;
-int hRsiLong, hRsiShort, hRsiExit;
-int hAtrStop, hAtrTarget;
-
-datetime lastBarTime = 0;
-int      barsInTrade = 0;
-
-//+------------------------------------------------------------------+
-int OnInit()
-{
-   hEmaLongSlow  = iMA(_Symbol, _Period, EmaLongSlowLen,  0, MODE_EMA, PRICE_CLOSE);
-   hEmaLongFast  = iMA(_Symbol, _Period, EmaLongFastLen,  0, MODE_EMA, PRICE_CLOSE);
-   hEmaShortFast = iMA(_Symbol, _Period, EmaShortFastLen, 0, MODE_EMA, PRICE_CLOSE);
-   hEmaShortSlow = iMA(_Symbol, _Period, EmaShortSlowLen, 0, MODE_EMA, PRICE_CLOSE);
-
-   hRsiLong  = iRSI(_Symbol, _Period, RsiLongLen,  PRICE_CLOSE);
-   hRsiShort = iRSI(_Symbol, _Period, RsiShortLen, PRICE_CLOSE);
-   hRsiExit  = iRSI(_Symbol, _Period, RsiExitLen,  PRICE_CLOSE);
-
-   hAtrStop   = iATR(_Symbol, _Period, AtrStopLen);
-   hAtrTarget = iATR(_Symbol, _Period, AtrTargetLen);
-
-   if(hEmaLongSlow == INVALID_HANDLE || hEmaLongFast == INVALID_HANDLE ||
-      hEmaShortFast == INVALID_HANDLE || hEmaShortSlow == INVALID_HANDLE ||
-      hRsiLong == INVALID_HANDLE || hRsiShort == INVALID_HANDLE || hRsiExit == INVALID_HANDLE ||
-      hAtrStop == INVALID_HANDLE || hAtrTarget == INVALID_HANDLE)
-   {
-      Print("Failed to create one or more indicator handles");
-      return(INIT_FAILED);
-   }
-   return(INIT_SUCCEEDED);
+if (emaLongSlow > emaLongFast && close > vwapLong && rsiLong < 57.6102629644959) {
+    trade.Buy(0.10, _Symbol);
 }
 
-//+------------------------------------------------------------------+
-void OnDeinit(const int reason)
-{
-   IndicatorRelease(hEmaLongSlow);
-   IndicatorRelease(hEmaLongFast);
-   IndicatorRelease(hEmaShortFast);
-   IndicatorRelease(hEmaShortSlow);
-   IndicatorRelease(hRsiLong);
-   IndicatorRelease(hRsiShort);
-   IndicatorRelease(hRsiExit);
-   IndicatorRelease(hAtrStop);
-   IndicatorRelease(hAtrTarget);
+if (emaShortFast < emaShortSlow && close < vwapShort && rsiShort > 66.008585331847) {
+    trade.Sell(0.10, _Symbol);
 }
 
-//+------------------------------------------------------------------+
-//| Non-anchored, `len`-bar rolling VWAP, evaluated at `shift`        |
-//+------------------------------------------------------------------+
-double RollingVWAP(int len, int shift)
-{
-   double sumPV = 0.0;
-   double sumV  = 0.0;
-   for(int i = shift; i < shift + len; i++)
-   {
-      double typical = (iHigh(_Symbol, _Period, i) + iLow(_Symbol, _Period, i) + iClose(_Symbol, _Period, i)) / 3.0;
-      long   vol     = iVolume(_Symbol, _Period, i);
-      sumPV += typical * (double)vol;
-      sumV  += (double)vol;
-   }
-   if(sumV == 0.0) return(0.0);
-   return(sumPV / sumV);
+if (rsiExit > 66.68737207001313) {
+    trade.PositionClose(_Symbol);
 }
 
-//+------------------------------------------------------------------+
-double GetBuf(int handle, int shift)
-{
-   double buf[];
-   ArraySetAsSeries(buf, true);
-   if(CopyBuffer(handle, 0, shift, 1, buf) <= 0) return(EMPTY_VALUE);
-   return(buf[0]);
+if (rsiExit < 64.42442560822603) {
+    trade.PositionClose(_Symbol);
 }
-
-//+------------------------------------------------------------------+
-bool HasOpenPosition(long &type)
-{
-   if(PositionSelect(_Symbol) && PositionGetInteger(POSITION_MAGIC) == (long)MagicNumber)
-   {
-      type = PositionGetInteger(POSITION_TYPE);
-      return(true);
-   }
-   return(false);
-}
-
-//+------------------------------------------------------------------+
-void OpenTrade(ENUM_ORDER_TYPE type, double price, double sl, double tp)
-{
-   MqlTradeRequest request;
-   MqlTradeResult  result;
-   ZeroMemory(request);
-   ZeroMemory(result);
-
-   request.action    = TRADE_ACTION_DEAL;
-   request.symbol     = _Symbol;
-   request.volume     = LotSize;
-   request.type       = type;
-   request.price      = price;
-   request.sl         = sl;
-   request.tp         = tp;
-   request.deviation  = 10;
-   request.magic      = MagicNumber;
-   request.comment    = "VWAP_Trend_Continuation";
-
-   if(!OrderSend(request, result))
-      Print("OrderSend (open) failed: ", GetLastError());
-}
-
-//+------------------------------------------------------------------+
-void ClosePosition()
-{
-   if(!PositionSelect(_Symbol)) return;
-
-   MqlTradeRequest request;
-   MqlTradeResult  result;
-   ZeroMemory(request);
-   ZeroMemory(result);
-
-   long   type = PositionGetInteger(POSITION_TYPE);
-   double vol  = PositionGetDouble(POSITION_VOLUME);
-
-   request.action    = TRADE_ACTION_DEAL;
-   request.symbol     = _Symbol;
-   request.volume     = vol;
-   request.type       = (type == POSITION_TYPE_BUY) ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;
-   request.position   = PositionGetInteger(POSITION_TICKET);
-   request.price      = (type == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
-                                                       : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   request.deviation  = 10;
-   request.magic       = MagicNumber;
-
-   if(!OrderSend(request, result))
-      Print("OrderSend (close) failed: ", GetLastError());
-}
-
-//+------------------------------------------------------------------+
-void ManagePosition(bool longCondition, bool shortCondition,
-                     bool longExitSignal, bool shortExitSignal,
-                     double atrStop, double atrTarget)
-{
-   long posType;
-   bool hasPos = HasOpenPosition(posType);
-
-   if(hasPos)
-   {
-      barsInTrade++;
-      bool isLong = (posType == POSITION_TYPE_BUY);
-
-      bool exitNow = false;
-      if(isLong  && longExitSignal)                          exitNow = true;
-      if(!isLong && shortExitSignal)                          exitNow = true;
-      if(OppositeSignalExit && isLong  && shortCondition)     exitNow = true;
-      if(OppositeSignalExit && !isLong && longCondition)      exitNow = true;
-      if(barsInTrade >= MaxBarsInTrade)                       exitNow = true;
-
-      if(exitNow) ClosePosition();
-      return; // SL/TP already attached to the position at open time
-   }
-
-   barsInTrade = 0;
-
-   double ask    = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   double bid    = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   int    digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
-
-   if(longCondition)
-   {
-      double sl = NormalizeDouble(ask - AtrStopMult   * atrStop,   digits);
-      double tp = NormalizeDouble(ask + AtrTargetMult * atrTarget, digits);
-      OpenTrade(ORDER_TYPE_BUY, ask, sl, tp);
-   }
-   else if(shortCondition)
-   {
-      double sl = NormalizeDouble(bid + AtrStopMult   * atrStop,   digits);
-      double tp = NormalizeDouble(bid - AtrTargetMult * atrTarget, digits);
-      OpenTrade(ORDER_TYPE_SELL, bid, sl, tp);
-   }
-}
-
-//+------------------------------------------------------------------+
-void OnTick()
-{
-   // Evaluate once per newly closed bar, using shift=1 (last closed bar) values
-   // to avoid repainting/look-ahead on the still-forming bar.
-   datetime curBarTime = iTime(_Symbol, _Period, 0);
-   if(curBarTime == lastBarTime) return;
-   lastBarTime = curBarTime;
-
-   double emaLongSlow  = GetBuf(hEmaLongSlow, 1);
-   double emaLongFast  = GetBuf(hEmaLongFast, 1);
-   double emaShortFast = GetBuf(hEmaShortFast, 1);
-   double emaShortSlow = GetBuf(hEmaShortSlow, 1);
-
-   double rsiLong  = GetBuf(hRsiLong, 1);
-   double rsiShort = GetBuf(hRsiShort, 1);
-   double rsiExit  = GetBuf(hRsiExit, 1);
-
-   double atrStop   = GetBuf(hAtrStop, 1);
-   double atrTarget = GetBuf(hAtrTarget, 1);
-
-   double vwapLong  = RollingVWAP(VwapLongLen, 1);
-   double vwapShort = RollingVWAP(VwapShortLen, 1);
-
-   double closeBar1 = iClose(_Symbol, _Period, 1);
-
-   bool longCondition  = (emaLongSlow > emaLongFast) && (closeBar1 > vwapLong) && (rsiLong < RsiLongThresh);
-   bool shortCondition = (emaShortFast < emaShortSlow) && (closeBar1 < vwapShort) && (rsiShort > RsiShortThresh);
-
-   bool longExitSignal  = (rsiExit > RsiExitLongThresh);
-   bool shortExitSignal = (rsiExit < RsiExitShortThresh);
-
-   ManagePosition(longCondition, shortCondition, longExitSignal, shortExitSignal, atrStop, atrTarget);
-}
-//+------------------------------------------------------------------+
