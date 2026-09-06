@@ -63,6 +63,7 @@ FAMILY_GROUPS: dict[str, str] = {
     "pullback": "A temporary counter-trend move inside a larger trend.",
     "statistical_arbitrage": "A relationship between two or more instruments.",
     "relative_strength": "One instrument is expected to outperform another.",
+    "order_flow": "Real size (participation/imbalance) is actively pushing price, not just a price pattern.",
     # Not a single-strategy hypothesis like the others -- populated by
     # COMPOSING several families behind a live regime classifier (see
     # app.validation.regime_matrix, whose whole point is deciding which
@@ -111,6 +112,8 @@ _SKELETON_TO_GROUP: dict[str, str] = {
     "volume_confirmed_breakout": "breakout",
     "wma_sma_divergence_trend": "trend_following",
     "higher_low_structure_continuation": "pullback",
+    # New order-flow-specific family (Sep 2026 expansion)
+    "order_flow_absorption": "order_flow",
 }
 
 # Path 2a: app.strategy.dna active_tags() -> canonical group. Checked in
@@ -140,6 +143,7 @@ _KEYWORD_GROUPS: dict[str, list[str]] = {
     "volatility_contraction": ["compression", "squeeze", "narrow range", "nr7", "inside bar", "contraction"],
     "statistical_arbitrage": ["pair_zscore", "pairs trade", "stat arb", "relative value", "cointegrat"],
     "relative_strength": ["relative strength", "outperform", "underperform", "ratio spread"],
+    "order_flow": ["order flow", "orderflow", "order-flow", "absorption", "relative_volume", "delta imbalance", "tape reading", "footprint"],
 }
 _KEYWORD_WEIGHT = 1
 
