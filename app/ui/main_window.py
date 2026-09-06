@@ -120,7 +120,9 @@ from app.quant_lab.order_book import LimitOrderBook
 from app.quant_lab.options_pricing import black_scholes_greeks, black_scholes_price, compare_to_market
 from app.quant_lab.pairs_trading import fetch_universe, run_pairs_backtest, screen_pairs
 from app.quant_lab.portfolio_optimizer import fetch_and_build_inputs, optimize_for_risk_level
-from app.quant_lab.sentiment_price import correlate_sentiment_with_price, fetch_headlines, score_headlines
+from app.quant_lab.sentiment_price import (
+    aggregate_sentiment, correlate_sentiment_with_price, fetch_headlines, score_headlines,
+)
 from app.quant_lab.vol_surface import build_iv_surface, export_surface_html, fetch_option_chain, synthetic_demo_chain
 from app.quant_lab.factor_model import compute_factor_exposures, compute_returns_from_prices, fetch_fama_french_factors
 from app.ui.condition_builder import ConditionList
@@ -3487,7 +3489,13 @@ class MainWindow:
         self.alp_api_key = LabeledEntry(section, "Alpaca API key", prefill_key, secret=True, width=32)
         self.alp_secret_key = LabeledEntry(section, "Alpaca secret key", prefill_secret, secret=True, width=32)
         self.alp_save_keys = LabeledCheckbox(
-            section, "Save these keys on this computer for next time", default=bool(saved)
+            # Defaults to checked even on a first-ever entry (not just
+            # bool(saved)) -- an unchecked-by-default box meant the very
+            # first time someone typed their key here, it silently wasn't
+            # saved, so every later fetch AND every Quant Lab tool that
+            # falls back to the saved key (see _ql_resolve_alpaca_keys)
+            # prompted for it all over again.
+            section, "Save these keys on this computer for next time", default=True
         )
 
         self.alp_asset_class = LabeledCombo(section, "Asset class", ASSET_CLASSES, default=ASSET_CLASSES[0])
@@ -10843,11 +10851,21 @@ class MainWindow:
         return creds.api_key, creds.secret_key
 
     def _ql_validated_manual_names(self) -> list[str]:
-        names = [s.name for s in list_saved_strategies(strategy_type="manual", status="validated")]
+        # Was status="validated" -- a manual strategy saved directly from
+        # the builder (rather than promoted through Evolution Lab/Full
+        # Pipeline) defaults to "draft" and stays there until someone
+        # deliberately promotes it, so this list was empty for most
+        # saved strategies. Translation doesn't require prior validation
+        # (it's a pre-validation authoring/porting tool), so every saved
+        # manual strategy is offered here now, regardless of status.
+        names = [s.name for s in list_saved_strategies(strategy_type="manual")]
         return names or ["(none found)"]
 
     def _ql_validated_names(self) -> list[str]:
-        names = [s.name for s in list_saved_strategies(status="validated")]
+        # Same reasoning as above, for the Auto Regime Selector/Portfolio
+        # Composer: every saved strategy is a candidate except one
+        # explicitly marked failed, not only ones marked "validated".
+        names = [s.name for s in list_saved_strategies() if s.status != "tested_failed"]
         return names or ["(none found)"]
 
     def _build_quant_lab_tab(self):
@@ -11037,7 +11055,7 @@ class MainWindow:
 
         def work():
             if name == "(none found)":
-                raise ValueError("No validated Manual Strategy Builder entries found in the Strategy Library.")
+                raise ValueError("No Manual Strategy Builder entries found in the Strategy Library.")
             text = load_strategy_text("manual", name)
             config = json.loads(text)
             return to_pinescript(config) if target == "pinescript" else to_mql5(config)
@@ -11052,9 +11070,23 @@ class MainWindow:
             df = self._load_df_for_page(log_lines.append)
             if df is None:
                 raise ValueError("\n".join(log_lines) or "No market data loaded.")
-            candidates = load_validated_candidates()
+            # Every saved strategy is a candidate except one explicitly
+            # marked failed -- see _ql_validated_names's own note above;
+            # load_validated_candidates()'s default (status="validated"
+            # only) meant this was empty unless a strategy had been
+            # promoted through the full pipeline.
+            candidates = {}
+            for s in list_saved_strategies():
+                if s.status == "tested_failed":
+                    continue
+                try:
+                    candidates[s.name] = load_strategy_object(s)
+                except Exception:
+                    continue
             if not candidates:
-                raise ValueError("No validated Strategy Library entries found to consider.")
+                raise ValueError(
+                    "No saved Strategy Library entries found to consider -- save a strategy first."
+                )
             result = select_regime_strategies(df, candidates, dimension, min_trades_per_cell=min_trades)
             return result.render_table()
         self._quant_lab_run_async(self.ql_rs_btn, work, "Auto Regime Selector")
@@ -11094,7 +11126,9 @@ class MainWindow:
             if df is None:
                 raise ValueError("\n".join(log_lines) or "No market data loaded.")
             risk = self._build_risk_config()
-            by_name = {s.name: s for s in list_saved_strategies(status="validated")}
+            # Same broadened pool as the listbox itself (_ql_validated_names) --
+            # everything except a strategy explicitly marked failed.
+            by_name = {s.name: s for s in list_saved_strategies() if s.status != "tested_failed"}
             legs = [InstrumentLeg(name=n, df=df, strategy=load_strategy_object(by_name[n]), risk=risk) for n in names]
             result = compose_portfolio(legs, min_legs=min_legs, max_legs=max_legs, max_evaluations=max_evals,
                                         portfolio_config=PortfolioConfig())
@@ -11181,7 +11215,9 @@ class MainWindow:
         def work():
             headlines = fetch_headlines(query, max_results=max_results)
             sentiment_df = score_headlines(headlines)
-            lines = [f"{row.label:<9} {row.sentiment:+.2f}  {row.title}" for row in sentiment_df.itertuples()]
+            overall = aggregate_sentiment(sentiment_df)
+            lines = [overall.render_summary(), ""]
+            lines += [f"{row.label:<9} {row.sentiment:+.2f}  {row.title}" for row in sentiment_df.itertuples()]
             if use_price:
                 log_lines = []
                 df = self._load_df_for_page(log_lines.append)
