@@ -1,35 +1,44 @@
+// VWAP Trend Continuation (ema 50/100, rsi7)
+//
+// IMPORTANT -- written for the T58 Quant Algo Backtester's PineScript
+// importer (app/strategy/pinescript.py), which parses a narrow SUBSET of
+// Pine: only ta.sma/ema/wma/rsi, ta.crossover/crossunder, plain
+// comparisons, and strategy.entry()/strategy.close(). It does NOT support
+// ta.atr, ta.vwap, or custom functions -- the previous version used both
+// and the parser had nothing it could turn into an entry/exit condition,
+// hence zero trades.
+//
+// VWAP SUBSTITUTION: this engine's own manual/JSON VWAP indicator ignores
+// the "period" field entirely and uses a session-anchored cumulative VWAP
+// -- something this parser's supported-function list simply cannot
+// express (no volume-weighted cumulative sum available). ta.sma(hlc3, N)
+// is used below as the closest available stand-in (a short-lookback
+// average of the typical price). If you paste this into real TradingView
+// and want a true VWAP, swap vwapLong/vwapShort for ta.vwap(hlc3).
+//
+// ATR PERIOD LIMIT: this parser only supports ONE T58_ATR_PERIOD shared by
+// both the stop and target multipliers (the JSON spec's stop_atr_period=16
+// and target_atr_period=11 can't both be expressed here) -- 16 is used
+// below for both.
+//
+// MAX-BARS-IN-TRADE: this parser has no max_bars_in_trade equivalent
+// (only the "manual" JSON adapter supports it) -- not represented here.
+
 //@version=5
-strategy("VWAP Trend Continuation (EMA 294/58 & 35/159, RSI)", overlay=true,
-     initial_capital=10000, default_qty_type=strategy.percent_of_equity,
-     default_qty_value=100, calc_on_every_tick=false, process_orders_on_close=true)
+strategy("VWAP Trend Continuation (ema 50/100, rsi7)", overlay=true, initial_capital=100000)
 
-// ============================== Inputs =====================================
-emaLongSlowLen  = input.int(294, "Long: EMA Slow Period")
-emaLongFastLen  = input.int(58,  "Long: EMA Fast Period")
-emaShortFastLen = input.int(35,  "Short: EMA Fast Period")
-emaShortSlowLen = input.int(159, "Short: EMA Slow Period")
+emaLongSlowLen  = input.int(294, "Long EMA Slow")
+emaLongFastLen  = input.int(58,  "Long EMA Fast")
+emaShortFastLen = input.int(35,  "Short EMA Fast")
+emaShortSlowLen = input.int(159, "Short EMA Slow")
 
-rsiLongLen     = input.int(18, "Long: RSI Period")
-rsiLongThresh  = input.float(57.6102629644959, "Long: RSI Threshold (<)")
-rsiShortLen    = input.int(42, "Short: RSI Period")
-rsiShortThresh = input.float(66.008585331847, "Short: RSI Threshold (>)")
+rsiLongLen  = input.int(18, "RSI Long Period")
+rsiShortLen = input.int(42, "RSI Short Period")
+rsiExitLen  = input.int(5,  "RSI Exit Period")
 
-rsiExitLen         = input.int(5, "Exit: RSI Period")
-rsiExitLongThresh  = input.float(66.68737207001313, "Exit Long: RSI Threshold (>)")
-rsiExitShortThresh = input.float(64.42442560822603, "Exit Short: RSI Threshold (<)")
+vwapLongLen  = input.int(4, "VWAP-proxy SMA Period (Long)")
+vwapShortLen = input.int(3, "VWAP-proxy SMA Period (Short)")
 
-vwapLongLen  = input.int(4, "Long: Rolling VWAP Period")
-vwapShortLen = input.int(3, "Short: Rolling VWAP Period")
-
-atrStopLen    = input.int(16, "ATR Stop Period")
-atrStopMult   = input.float(4.806786275425379, "ATR Stop Multiplier")
-atrTargetLen  = input.int(11, "ATR Target Period")
-atrTargetMult = input.float(5.054720923946611, "ATR Target Multiplier")
-
-maxBarsInTrade   = input.int(63, "Max Bars In Trade")
-useOppositeExit  = input.bool(true, "Exit On Opposite Signal")
-
-// ============================== Indicators ==================================
 emaLongSlow  = ta.ema(close, emaLongSlowLen)
 emaLongFast  = ta.ema(close, emaLongFastLen)
 emaShortFast = ta.ema(close, emaShortFastLen)
@@ -39,59 +48,24 @@ rsiLong  = ta.rsi(close, rsiLongLen)
 rsiShort = ta.rsi(close, rsiShortLen)
 rsiExit  = ta.rsi(close, rsiExitLen)
 
-// Non-anchored, N-bar rolling VWAP (ta.vwap() resets by session, which the
-// spec's fixed "period" fields do not call for).
-rollingVWAP(len) =>
-    math.sum(hlc3 * volume, len) / math.sum(volume, len)
+vwapLong  = ta.sma(hlc3, vwapLongLen)
+vwapShort = ta.sma(hlc3, vwapShortLen)
 
-vwapLong  = rollingVWAP(vwapLongLen)
-vwapShort = rollingVWAP(vwapShortLen)
+longCondition = emaLongSlow > emaLongFast and close > vwapLong and rsiLong < 57.6102629644959
+shortCondition = emaShortFast < emaShortSlow and close < vwapShort and rsiShort > 66.008585331847
 
-atrStop   = ta.atr(atrStopLen)
-atrTarget = ta.atr(atrTargetLen)
+exitLongCondition = rsiExit > 66.68737207001313
+exitShortCondition = rsiExit < 64.42442560822603
 
-// ============================== Signals ======================================
-longCondition  = emaLongSlow > emaLongFast and close > vwapLong and rsiLong < rsiLongThresh
-shortCondition = emaShortFast < emaShortSlow and close < vwapShort and rsiShort > rsiShortThresh
-
-longExitSignal  = rsiExit > rsiExitLongThresh
-shortExitSignal = rsiExit < rsiExitShortThresh
-
-// ============================== Bars-in-trade tracking =======================
-var int barsInTrade = 0
-barsInTrade := strategy.position_size != 0 ? barsInTrade + 1 : 0
-maxBarsHit = barsInTrade >= maxBarsInTrade
-
-// ============================== Entries =======================================
-if longCondition and strategy.position_size <= 0
+if longCondition
     strategy.entry("Long", strategy.long)
 
-if shortCondition and strategy.position_size >= 0
+if shortCondition
     strategy.entry("Short", strategy.short)
 
-// ============================== ATR stop / target =============================
-longStopPrice    = strategy.position_avg_price - atrStopMult   * atrStop
-longTargetPrice  = strategy.position_avg_price + atrTargetMult * atrTarget
-shortStopPrice   = strategy.position_avg_price + atrStopMult   * atrStop
-shortTargetPrice = strategy.position_avg_price - atrTargetMult * atrTarget
+strategy.close("Long", when=exitLongCondition)
+strategy.close("Short", when=exitShortCondition)
 
-if strategy.position_size > 0
-    strategy.exit("Long Exit", from_entry="Long", stop=longStopPrice, limit=longTargetPrice)
-
-if strategy.position_size < 0
-    strategy.exit("Short Exit", from_entry="Short", stop=shortStopPrice, limit=shortTargetPrice)
-
-// ============================== Signal-based exits ============================
-if strategy.position_size > 0 and (longExitSignal or maxBarsHit or (useOppositeExit and shortCondition))
-    strategy.close("Long", comment="cond_exit")
-
-if strategy.position_size < 0 and (shortExitSignal or maxBarsHit or (useOppositeExit and longCondition))
-    strategy.close("Short", comment="cond_exit")
-
-// ============================== Plots ==========================================
-plot(emaLongSlow, "EMA Long Slow (294)", color=color.new(color.blue, 0))
-plot(emaLongFast, "EMA Long Fast (58)",  color=color.new(color.aqua, 0))
-plot(emaShortFast, "EMA Short Fast (35)", color=color.new(color.orange, 0))
-plot(emaShortSlow, "EMA Short Slow (159)", color=color.new(color.maroon, 0))
-plot(vwapLong,  "Rolling VWAP Long (4)",  color=color.new(color.green, 0), style=plot.style_circles)
-plot(vwapShort, "Rolling VWAP Short (3)", color=color.new(color.red, 0),   style=plot.style_circles)
+// T58_SL_ATR_MULT=4.806786275425379
+// T58_TP_ATR_MULT=5.054720923946611
+// T58_ATR_PERIOD=16
