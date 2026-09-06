@@ -19,6 +19,13 @@ py7zr>=0.20.0
 # (.txt/.md papers still work with no extra dependency at all) rather than
 # the app failing to start.
 pypdf>=4.0.0
+# Portfolio Optimizer's long-only Markowitz solve (app/quant_lab/portfolio_optimizer.py)
+# and any other constrained-optimization use. Optional in spirit: the
+# unconstrained (short-selling-allowed) closed-form solver needs no
+# external library at all, and the long-only path falls back to a
+# clip-and-renormalize approximation (clearly labeled as such) if scipy
+# isn't installed, rather than failing.
+scipy>=1.11.0
 # Live Market's "open chart" button: opens a chromeless native window
 # instead of a browser tab when available, since Tkinter itself has no
 # way to run the real JavaScript/Canvas content Lightweight Charts needs.
