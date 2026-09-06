@@ -37,6 +37,7 @@ from flask import (
 
 from app.ai.ollama_settings import OllamaSettings
 from app.web.network_info import lan_url, print_startup_banner, qr_code_data_uri, qr_code_file
+from app.web.quant_lab_routes import quant_lab_bp
 from app.ai.ollama_settings import load_settings as load_ollama_settings
 from app.ai.ollama_settings import save_settings as save_ollama_settings
 from app.ai.research_agent import ResearchAgentContext, ResearchAgent
@@ -151,6 +152,10 @@ SPEEDRUN_REPORTS_DIR = SPEEDRUN_DIR / "speed_run"
 SPEEDRUN_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
+# Quant Lab (translator, auto regime selector, strategy health, portfolio
+# composer, and the app/quant_lab/ toolkit) lives in its own Blueprint --
+# see app/web/quant_lab_routes.py's module docstring for why.
+app.register_blueprint(quant_lab_bp)
 # Belt-and-suspenders alongside run_web.py's own call (this module can also
 # be run directly via `python -m app.web.server`, which never goes through
 # run_web.py) -- idempotent either way. See app.reports.crash_log.
