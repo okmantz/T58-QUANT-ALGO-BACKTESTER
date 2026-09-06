@@ -2026,6 +2026,84 @@ _HIGHER_LOW_STRUCTURE_CONTINUATION = SkeletonSpec(
 )
 
 
+# ---------------------------------------------------------------------------
+# Family AI: Order Flow Absorption
+#   A genuinely distinct order-flow hypothesis from Family F (Volume
+#   Imbalance) above: THIS family requires an above-average PARTICIPATION
+#   spike (relative_volume clearing a threshold -- real size trading
+#   through right now, not just an ordinary bar) to occur AT THE SAME TIME
+#   as a strong directional signed-volume imbalance (volume_delta clearing
+#   its own threshold in the same direction) -- i.e. real size is actively
+#   absorbing one side of the order book right now, not merely an
+#   ordinary up/down-close bar with nothing unusual behind it. Exits as
+#   soon as EITHER signal fades (participation drops back toward normal,
+#   OR the imbalance itself flips back through zero), since either one
+#   fading on its own means the order-flow conviction behind the move is
+#   gone even if price hasn't reversed yet. Requires real volume data --
+#   like Family F, degrades to zero trades (not an error) on volume-less
+#   feeds where app.strategy.indicators.relative_volume/volume_delta both
+#   fall back to their flat default series.
+# ---------------------------------------------------------------------------
+
+def _build_order_flow_absorption(p: dict) -> dict:
+    vol_period, imbalance_period = p["vol_period"], p["imbalance_period"]
+    rel_vol_threshold, imbalance_threshold = p["rel_vol_threshold"], p["imbalance_threshold"]
+    return {
+        "name": f"Order Flow Absorption (relvol>{rel_vol_threshold}, imb>{imbalance_threshold})",
+        "entry_conditions": {
+            "long": [
+                _cond({"type": "relative_volume", "period": vol_period}, ">", _val(rel_vol_threshold)),
+                _cond({"type": "volume_delta", "period": imbalance_period}, ">", _val(imbalance_threshold)),
+            ],
+            "long_connectors": ["AND"],
+            "short": [
+                _cond({"type": "relative_volume", "period": vol_period}, ">", _val(rel_vol_threshold)),
+                _cond({"type": "volume_delta", "period": imbalance_period}, "<", _val(-imbalance_threshold)),
+            ],
+            "short_connectors": ["AND"],
+        },
+        "exit_conditions": {
+            "long": [
+                _cond({"type": "relative_volume", "period": vol_period}, "<", _val(1.0)),
+                _cond({"type": "volume_delta", "period": imbalance_period}, "<", _val(0.0)),
+            ],
+            "long_connectors": ["OR"],
+            "short": [
+                _cond({"type": "relative_volume", "period": vol_period}, "<", _val(1.0)),
+                _cond({"type": "volume_delta", "period": imbalance_period}, ">", _val(0.0)),
+            ],
+            "short_connectors": ["OR"],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_ORDER_FLOW_ABSORPTION = SkeletonSpec(
+    name="order_flow_absorption",
+    label="Order Flow Absorption (participation spike + signed imbalance)",
+    description=(
+        "Trades in the direction of a signed-volume imbalance ONLY when it coincides with an "
+        "above-average participation spike -- relative_volume clearing a threshold at the same "
+        "time volume_delta clears its own directional threshold -- i.e. real size actively "
+        "absorbing one side of the book right now, not an ordinary up/down-close bar. Exits as "
+        "soon as EITHER the participation spike fades back toward normal or the imbalance itself "
+        "flips, since either one fading alone means the order-flow conviction behind the move is "
+        "gone. A distinct hypothesis from Family F (Volume Imbalance), which trades the imbalance "
+        "alone with no participation-spike confirmation requirement at all."
+    ),
+    param_grid={
+        "vol_period": [10, 20],
+        "imbalance_period": [10, 20],
+        "rel_vol_threshold": [1.5, 2.0, 2.5],
+        "imbalance_threshold": [0.2, 0.35],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [1.5, 2.5],
+        "max_bars": [24, 48],
+    },
+    build=_build_order_flow_absorption,
+)
+
+
 FAMILIES: dict[str, SkeletonSpec] = {
     _TREND_BREAKOUT.name: _TREND_BREAKOUT,
     _MTF_PULLBACK.name: _MTF_PULLBACK,
@@ -2082,6 +2160,10 @@ FAMILIES: dict[str, SkeletonSpec] = {
     _VOLUME_CONFIRMED_BREAKOUT.name: _VOLUME_CONFIRMED_BREAKOUT,
     _WMA_SMA_DIVERGENCE_TREND.name: _WMA_SMA_DIVERGENCE_TREND,
     _HIGHER_LOW_STRUCTURE_CONTINUATION.name: _HIGHER_LOW_STRUCTURE_CONTINUATION,
+    # -- New: a genuinely order-flow-specific family (participation spike
+    # AND directional imbalance required together, not either alone) --
+    # see its own comment block above for how it differs from Family F.
+    _ORDER_FLOW_ABSORPTION.name: _ORDER_FLOW_ABSORPTION,
 }
 
 # Families that need something beyond the plain OHLCV df -- checked by
