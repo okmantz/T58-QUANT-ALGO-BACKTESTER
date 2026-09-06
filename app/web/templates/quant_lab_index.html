@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>T58 Quant Lab</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="stylesheet" href="/static/theme.css">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .qlab-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+  .qlab-card {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 16px;
+    text-decoration: none; color: var(--text); display: block; transition: border-color .15s;
+  }
+  .qlab-card:hover { border-color: var(--teal); }
+  .qlab-card h3 { margin: 0 0 6px; font-size: 14px; color: var(--teal); }
+  .qlab-card p { margin: 0; font-size: 12.5px; color: var(--text-muted); line-height: 1.5; }
+  .qlab-badge {
+    display: inline-block; font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--text-dim); border: 1px solid var(--border-light); border-radius: 4px; padding: 1px 6px; margin-bottom: 8px;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p.lede { color: var(--text-muted); font-size: 13px; margin: 0 0 20px; }
+</style>
+</head>
+<body>
+{% set active_page = 'quant_lab' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+  <h1>Quant Lab</h1>
+  <p class="lede">Standalone quant-finance tools -- each one a real, tested backend module, wired up here for direct use without the desktop app or a script.</p>
+  <div class="qlab-grid">
+    {% for tool in tools %}
+    <a class="qlab-card" href="{{ tool.url }}">
+      <div class="qlab-badge">{{ tool.badge }}</div>
+      <h3>{{ tool.title }}</h3>
+      <p>{{ tool.description }}</p>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+</div>
+<script src="/static/t58-chrome.js" defer></script>
+</body>
+</html>
