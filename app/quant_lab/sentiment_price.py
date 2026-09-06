@@ -193,6 +193,58 @@ def score_headlines(headlines: list[Headline]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+_BIAS_THRESHOLD = 0.15  # same +/-0.15 cutoff SentimentScore.label already uses per-headline
+
+
+@dataclass
+class OverallSentiment:
+    """Rolls every scored headline up into one overall score and a
+    bullish/bearish/neutral market-bias verdict, so the tool's output
+    ends with a single answer to "so what does the news say overall"
+    instead of only a per-headline list."""
+    mean_score: float
+    median_score: float
+    n_headlines: int
+    n_positive: int
+    n_negative: int
+    n_neutral: int
+    bias: str  # "bullish" | "bearish" | "neutral"
+
+    def render_summary(self) -> str:
+        return (
+            f"OVERALL SCORE: {self.mean_score:+.3f}  (median {self.median_score:+.3f}) "
+            f"across {self.n_headlines} headlines\n"
+            f"Bullish: {self.n_positive}   Bearish: {self.n_negative}   Neutral: {self.n_neutral}\n"
+            f"MARKET BIAS: {self.bias.upper()}"
+        )
+
+
+def aggregate_sentiment(sentiment_df: pd.DataFrame) -> OverallSentiment:
+    """Aggregates score_headlines()'s per-headline output into one
+    overall score (mean and median, since a handful of extreme headlines
+    can otherwise dominate a plain mean) and a bullish/bearish/neutral
+    market-bias verdict, using the SAME +/-0.15 cutoff
+    SentimentScore.label already applies per-headline -- applied here to
+    the aggregate instead of a single score."""
+    if sentiment_df.empty:
+        raise SentimentPriceError("No scored headlines to aggregate an overall score from.")
+    scores = sentiment_df["sentiment"].astype(float)
+    mean_score = float(scores.mean())
+    n_positive = int((scores > _BIAS_THRESHOLD).sum())
+    n_negative = int((scores < -_BIAS_THRESHOLD).sum())
+    n_neutral = len(scores) - n_positive - n_negative
+    if mean_score > _BIAS_THRESHOLD:
+        bias = "bullish"
+    elif mean_score < -_BIAS_THRESHOLD:
+        bias = "bearish"
+    else:
+        bias = "neutral"
+    return OverallSentiment(
+        mean_score=mean_score, median_score=float(scores.median()), n_headlines=len(scores),
+        n_positive=n_positive, n_negative=n_negative, n_neutral=n_neutral, bias=bias,
+    )
+
+
 @dataclass
 class SentimentPriceCorrelation:
     merged: pd.DataFrame            # one row per day: date, avg_sentiment, headline_count, close, daily_return
