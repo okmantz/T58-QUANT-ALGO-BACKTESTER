@@ -1,26 +1,37 @@
 """
-VWAP Trend Continuation Strategy
----------------------------------
-Long:  EMA(294) > EMA(58)  AND  Close > RollingVWAP(4)  AND  RSI(18) < 57.6102629644959
-Short: EMA(35)  < EMA(159) AND  Close < RollingVWAP(3)  AND  RSI(42) > 66.008585331847
+VWAP Trend Continuation (ema 50/100, rsi7)
+--------------------------------------------
+Written for the T58 Quant Algo Backtester's Python strategy adapter
+(app/strategy/python.py), which requires a top-level
+`generate_signals(df) -> pd.Series` of -1/0/1 values.
 
-Exit (signal-based, checked in addition to stop/target):
-Long:  RSI(5) > 66.68737207001313
-Short: RSI(5) < 64.42442560822603
+This mirrors app/strategy/manual.py + app/strategy/indicators.py exactly,
+so it reproduces the same trades as the "manual" JSON version of this
+strategy that already ran through your Full Pipeline report:
 
-Risk management: ATR-based stop and target, opposite-signal exit, max bars in trade.
-
-Note: "RollingVWAP(n)" here is a non-anchored, n-bar rolling volume-weighted
-average price (typical price * volume, summed over the last n bars) since the
-spec calls for a fixed lookback "period" rather than a session anchor.
+- VWAP ignores the "period" field in your engine -- it's a SESSION-
+  ANCHORED cumulative VWAP that resets every calendar day, not a rolling
+  N-bar average. (This is the #1 reason the previous version produced no
+  trades: it used a rolling window, which is a different indicator.)
+- "close" operands ignore their "period"/"field" -- they're just the raw
+  close price.
+- RSI/EMA/ATR use Wilder-style smoothing (ewm alpha=1/period), same as
+  your indicators.py.
+- Entries/exits run through the same stateful long/flat/short loop as
+  app.strategy.base.signals_from_conditions (opposite-signal flip is
+  always on, matching risk_management.opposite_signal_exit=true), plus
+  the same max-bars-in-trade flattening as
+  ManualStrategy._apply_signal_exits.
+- ATR-based stop/target distances are attached via .attrs so the engine
+  sizes and protects each trade exactly as risk_management specifies.
 """
+from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
-# ---------------------------------------------------------------------------
-# Strategy parameters (verbatim from spec)
-# ---------------------------------------------------------------------------
+STRATEGY_NAME = "VWAP Trend Continuation (ema 50/100, rsi7)"
+
 PARAMS = dict(
     ema_long_slow=294,
     ema_long_fast=58,
@@ -33,192 +44,173 @@ PARAMS = dict(
     rsi_exit_period=5,
     rsi_exit_long_thresh=66.68737207001313,
     rsi_exit_short_thresh=64.42442560822603,
-    vwap_long_period=4,
-    vwap_short_period=3,
     atr_stop_period=16,
     atr_stop_mult=4.806786275425379,
     atr_target_period=11,
     atr_target_mult=5.054720923946611,
     max_bars_in_trade=63,
-    opposite_signal_exit=True,
 )
 
 
 # ---------------------------------------------------------------------------
-# Indicators
+# Indicators -- deliberately identical to app/strategy/indicators.py
 # ---------------------------------------------------------------------------
-def ema(series: pd.Series, period: int) -> pd.Series:
-    return series.ewm(span=period, adjust=False).mean()
+def _ema(series: pd.Series, period: int) -> pd.Series:
+    p = max(int(period), 1)
+    return series.ewm(span=p, adjust=False, min_periods=p).mean()
 
 
-def rsi(series: pd.Series, period: int) -> pd.Series:
+def _rsi(series: pd.Series, period: int) -> pd.Series:
+    p = max(int(period), 1)
     delta = series.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
-    avg_gain = gain.ewm(alpha=1 / period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1 / period, adjust=False).mean()
+    avg_gain = gain.ewm(alpha=1 / p, adjust=False, min_periods=p).mean()
+    avg_loss = loss.ewm(alpha=1 / p, adjust=False, min_periods=p).mean()
     rs = avg_gain / avg_loss.replace(0, np.nan)
-    out = 100 - (100 / (1 + rs))
-    return out.fillna(100)  # avg_loss == 0 -> RSI saturates at 100
+    result = 100 - (100 / (1 + rs))
+    result = result.where(avg_loss.ne(0), 100)
+    return result.fillna(50)
 
 
-def rolling_vwap(df: pd.DataFrame, period: int) -> pd.Series:
-    """Non-anchored, `period`-bar rolling volume-weighted average price."""
-    typical = (df["high"] + df["low"] + df["close"]) / 3.0
-    pv = typical * df["volume"]
-    return pv.rolling(period).sum() / df["volume"].rolling(period).sum()
-
-
-def atr(df: pd.DataFrame, period: int) -> pd.Series:
-    high, low, close = df["high"], df["low"], df["close"]
-    prev_close = close.shift(1)
-    tr = pd.concat(
+def _true_range(df: pd.DataFrame) -> pd.Series:
+    prev_close = df["close"].shift(1)
+    return pd.concat(
         [
-            high - low,
-            (high - prev_close).abs(),
-            (low - prev_close).abs(),
+            df["high"] - df["low"],
+            (df["high"] - prev_close).abs(),
+            (df["low"] - prev_close).abs(),
         ],
         axis=1,
     ).max(axis=1)
-    return tr.ewm(alpha=1 / period, adjust=False).mean()
 
 
-# ---------------------------------------------------------------------------
-# Signal construction
-# ---------------------------------------------------------------------------
-def build_indicators(df: pd.DataFrame, p: dict = PARAMS) -> pd.DataFrame:
-    df = df.copy()
-    df["ema_long_slow"] = ema(df["close"], p["ema_long_slow"])
-    df["ema_long_fast"] = ema(df["close"], p["ema_long_fast"])
-    df["ema_short_fast"] = ema(df["close"], p["ema_short_fast"])
-    df["ema_short_slow"] = ema(df["close"], p["ema_short_slow"])
-
-    df["rsi_long"] = rsi(df["close"], p["rsi_long_period"])
-    df["rsi_short"] = rsi(df["close"], p["rsi_short_period"])
-    df["rsi_exit"] = rsi(df["close"], p["rsi_exit_period"])
-
-    df["vwap_long"] = rolling_vwap(df, p["vwap_long_period"])
-    df["vwap_short"] = rolling_vwap(df, p["vwap_short_period"])
-
-    df["atr_stop"] = atr(df, p["atr_stop_period"])
-    df["atr_target"] = atr(df, p["atr_target_period"])
-    return df
+def _atr(df: pd.DataFrame, period: int) -> pd.Series:
+    p = max(int(period), 1)
+    return _true_range(df).ewm(alpha=1 / p, adjust=False, min_periods=p).mean()
 
 
-def generate_signals(df: pd.DataFrame, p: dict = PARAMS) -> pd.DataFrame:
-    df = build_indicators(df, p)
-
-    df["long_entry"] = (
-        (df["ema_long_slow"] > df["ema_long_fast"])
-        & (df["close"] > df["vwap_long"])
-        & (df["rsi_long"] < p["rsi_long_thresh"])
-    )
-    df["short_entry"] = (
-        (df["ema_short_fast"] < df["ema_short_slow"])
-        & (df["close"] < df["vwap_short"])
-        & (df["rsi_short"] > p["rsi_short_thresh"])
-    )
-    df["long_exit_signal"] = df["rsi_exit"] > p["rsi_exit_long_thresh"]
-    df["short_exit_signal"] = df["rsi_exit"] < p["rsi_exit_short_thresh"]
-    return df
-
-
-# ---------------------------------------------------------------------------
-# Bar-by-bar backtest
-# ---------------------------------------------------------------------------
-def backtest(df: pd.DataFrame, p: dict = PARAMS, starting_equity: float = 10000.0) -> pd.DataFrame:
+def _session_vwap(df: pd.DataFrame) -> pd.Series:
+    """Cumulative, day-anchored VWAP -- resets at the start of each
+    calendar day, exactly like app.strategy.indicators.vwap(). The
+    strategy JSON's "period" field on the VWAP operand is not used by
+    your engine at all, for either side, so long/short share one series.
     """
-    df must have columns: open, high, low, close, volume (chronological order).
+    typical = (df["high"] + df["low"] + df["close"]) / 3.0
+    volume = df["volume"] if "volume" in df.columns else pd.Series(1.0, index=df.index)
+    ts = pd.to_datetime(df["timestamp"])
+    day = ts.dt.normalize()
+    pv = typical * volume
+    return pv.groupby(day).cumsum() / volume.groupby(day).cumsum().replace(0, np.nan)
 
-    Signals are evaluated on the *previous, fully closed* bar and filled at the
-    current bar's open (no look-ahead). Stops/targets are checked intrabar via
-    high/low. Only one position is held at a time.
-    """
-    df = generate_signals(df, p).reset_index(drop=True)
 
-    trades = []
-    position = None  # dict: side, entry_bar, entry_price, stop, target
-    equity = starting_equity
+# ---------------------------------------------------------------------------
+# Signal state machine -- mirrors app.strategy.base.signals_from_conditions
+# ---------------------------------------------------------------------------
+def _signals_from_conditions(
+    index: pd.Index,
+    long_entry: pd.Series,
+    long_exit: pd.Series,
+    short_entry: pd.Series,
+    short_exit: pd.Series,
+    allow_opposite_signal_flip: bool = True,
+) -> pd.Series:
+    le, lx = long_entry.to_numpy(), long_exit.to_numpy()
+    se, sx = short_entry.to_numpy(), short_exit.to_numpy()
 
-    for i in range(1, len(df)):
-        row = df.iloc[i]
-        prev = df.iloc[i - 1]
+    position = 0
+    out = np.zeros(len(index), dtype=int)
+    for i in range(len(index)):
+        if position == 0:
+            if le[i]:
+                position = 1
+            elif se[i]:
+                position = -1
+        elif position == 1:
+            if lx[i]:
+                position = 0
+            elif allow_opposite_signal_flip and se[i]:
+                position = -1
+        elif position == -1:
+            if sx[i]:
+                position = 0
+            elif allow_opposite_signal_flip and le[i]:
+                position = 1
+        out[i] = position
 
-        if position is not None:
-            bars_held = i - position["entry_bar"]
-            exit_price, exit_reason = None, None
+    return pd.Series(out, index=index)
 
-            if position["side"] == "long":
-                if row["low"] <= position["stop"]:
-                    exit_price, exit_reason = position["stop"], "stop"
-                elif row["high"] >= position["target"]:
-                    exit_price, exit_reason = position["target"], "target"
-                elif prev["long_exit_signal"]:
-                    exit_price, exit_reason = row["open"], "rsi_exit"
-                elif p["opposite_signal_exit"] and prev["short_entry"]:
-                    exit_price, exit_reason = row["open"], "opposite_signal"
-                elif bars_held >= p["max_bars_in_trade"]:
-                    exit_price, exit_reason = row["open"], "max_bars"
-            else:  # short
-                if row["high"] >= position["stop"]:
-                    exit_price, exit_reason = position["stop"], "stop"
-                elif row["low"] <= position["target"]:
-                    exit_price, exit_reason = position["target"], "target"
-                elif prev["short_exit_signal"]:
-                    exit_price, exit_reason = row["open"], "rsi_exit"
-                elif p["opposite_signal_exit"] and prev["long_entry"]:
-                    exit_price, exit_reason = row["open"], "opposite_signal"
-                elif bars_held >= p["max_bars_in_trade"]:
-                    exit_price, exit_reason = row["open"], "max_bars"
 
-            if exit_price is not None:
-                pnl = (
-                    (exit_price - position["entry_price"])
-                    if position["side"] == "long"
-                    else (position["entry_price"] - exit_price)
-                )
-                equity += pnl
-                trades.append(
-                    {
-                        **position,
-                        "exit_bar": i,
-                        "exit_price": exit_price,
-                        "exit_reason": exit_reason,
-                        "pnl": pnl,
-                        "equity_after": equity,
-                    }
-                )
-                position = None
+def _apply_max_bars(signals: pd.Series, max_bars: int) -> pd.Series:
+    """Mirrors ManualStrategy._apply_signal_exits's max_bars_in_trade block:
+    once a position has been held for `max_bars` bars, flatten it."""
+    vals = signals.to_numpy(copy=True)
+    position = 0
+    bars = 0
+    for i in range(len(vals)):
+        if position == 0 and vals[i] != 0:
+            position = vals[i]
+            bars = 0
+        elif position != 0:
+            if vals[i] != position:
+                position = vals[i]
+                bars = 0
+            else:
+                bars += 1
+                if bars >= max_bars:
+                    vals[i] = 0
+                    position = 0
+                    bars = 0
+    return pd.Series(vals, index=signals.index)
 
-        if position is None:
-            if prev["long_entry"]:
-                entry_price = row["open"]
-                position = dict(
-                    side="long",
-                    entry_bar=i,
-                    entry_price=entry_price,
-                    stop=entry_price - p["atr_stop_mult"] * prev["atr_stop"],
-                    target=entry_price + p["atr_target_mult"] * prev["atr_target"],
-                )
-            elif prev["short_entry"]:
-                entry_price = row["open"]
-                position = dict(
-                    side="short",
-                    entry_bar=i,
-                    entry_price=entry_price,
-                    stop=entry_price + p["atr_stop_mult"] * prev["atr_stop"],
-                    target=entry_price - p["atr_target_mult"] * prev["atr_target"],
-                )
 
-    return pd.DataFrame(trades)
+# ---------------------------------------------------------------------------
+# Public entry point required by app/strategy/python.py
+# ---------------------------------------------------------------------------
+def generate_signals(df: pd.DataFrame, p: dict = PARAMS) -> pd.Series:
+    work = df.copy()
+
+    ema_long_slow = _ema(work["close"], p["ema_long_slow"])
+    ema_long_fast = _ema(work["close"], p["ema_long_fast"])
+    ema_short_fast = _ema(work["close"], p["ema_short_fast"])
+    ema_short_slow = _ema(work["close"], p["ema_short_slow"])
+
+    rsi_long = _rsi(work["close"], p["rsi_long_period"])
+    rsi_short = _rsi(work["close"], p["rsi_short_period"])
+    rsi_exit = _rsi(work["close"], p["rsi_exit_period"])
+
+    vwap = _session_vwap(work)  # same series feeds both long and short sides
+
+    long_entry = (ema_long_slow > ema_long_fast) & (work["close"] > vwap) & (rsi_long < p["rsi_long_thresh"])
+    short_entry = (ema_short_fast < ema_short_slow) & (work["close"] < vwap) & (rsi_short > p["rsi_short_thresh"])
+    long_exit = rsi_exit > p["rsi_exit_long_thresh"]
+    short_exit = rsi_exit < p["rsi_exit_short_thresh"]
+
+    long_entry = long_entry.fillna(False)
+    short_entry = short_entry.fillna(False)
+    long_exit = long_exit.fillna(False)
+    short_exit = short_exit.fillna(False)
+
+    raw_signals = _signals_from_conditions(
+        work.index, long_entry, long_exit, short_entry, short_exit,
+        allow_opposite_signal_flip=True,  # risk_management.opposite_signal_exit = true
+    )
+    signals = _apply_max_bars(raw_signals, p["max_bars_in_trade"])
+
+    atr_stop = _atr(work, p["atr_stop_period"])
+    atr_target = _atr(work, p["atr_target_period"])
+    stop_loss_distance = atr_stop * p["atr_stop_mult"]
+    take_profit_distance = atr_target * p["atr_target_mult"]
+
+    signals.attrs["stop_loss_distance"] = stop_loss_distance
+    signals.attrs["take_profit_distance"] = take_profit_distance
+
+    return signals
 
 
 if __name__ == "__main__":
-    # Example usage:
-    # df = pd.read_csv("your_ohlcv.csv", parse_dates=["timestamp"])
-    # df = df.rename(columns=str.lower)  # ensure open/high/low/close/volume
-    # trades = backtest(df)
-    # print(trades)
-    # print("Win rate:", (trades["pnl"] > 0).mean())
-    print("Import this module and call backtest(df) with an OHLCV DataFrame "
-          "(columns: open, high, low, close, volume).")
+    print(
+        "This module is meant to be uploaded to the T58 Backtester's Python "
+        "strategy slot. It exposes generate_signals(df) per app/strategy/python.py's "
+        "contract; it isn't meant to be run standalone."
+    )
