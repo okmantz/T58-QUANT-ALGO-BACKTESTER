@@ -62,7 +62,8 @@ supported rather than silently emit code that looks right and isn't):
 
   Supported operand kinds: price fields (open/high/low/close), numeric
   constants, sma/ema/wma/rsi/atr, macd/macd_signal/macd_histogram,
-  bollinger_mid/upper/lower, highest_high/lowest_low, candle_direction --
+  bollinger_mid/upper/lower, highest_high/lowest_low, vwap,
+  candle_direction --
   i.e. exactly the indicator kinds app/strategy/indicators.py's
   build_indicator_series() can compute from a single native platform
   function call, so the emitted code isn't secretly re-implementing
@@ -125,7 +126,7 @@ class TranslationError(Exception):
 
 
 _PRICE_FIELDS = {"open", "high", "low", "close", "volume"}
-_SIMPLE_INDICATOR_KINDS = {"sma", "ema", "wma", "rsi", "atr", "highest_high", "lowest_low"}
+_SIMPLE_INDICATOR_KINDS = {"sma", "ema", "wma", "rsi", "atr", "highest_high", "lowest_low", "vwap"}
 _MULTI_OUTPUT_KINDS = {"macd", "macd_signal", "macd_histogram", "bollinger_mid", "bollinger_upper", "bollinger_lower"}
 _SUPPORTED_INDICATOR_KINDS = _SIMPLE_INDICATOR_KINDS | _MULTI_OUTPUT_KINDS | {"candle_direction"}
 
@@ -420,7 +421,7 @@ def _pine_declare_indicators(indicators: dict[tuple, _Operand]) -> tuple[list[st
         if op.kind in ("macd", "macd_signal", "macd_histogram", "bollinger_mid", "bollinger_upper", "bollinger_lower"):
             continue
         src = _pine_source(op.field)
-        name = f"{op.kind}_{op.period}_{op.field}"
+        name = f"vwap_{op.field}" if op.kind == "vwap" else f"{op.kind}_{op.period}_{op.field}"
         if op.kind == "sma":
             lines.append(f"{name} = ta.sma({src}, {op.period})")
         elif op.kind == "ema":
@@ -435,6 +436,15 @@ def _pine_declare_indicators(indicators: dict[tuple, _Operand]) -> tuple[list[st
             lines.append(f"{name} = ta.highest(high, {op.period})")
         elif op.kind == "lowest_low":
             lines.append(f"{name} = ta.lowest(low, {op.period})")
+        elif op.kind == "vwap":
+            # Session VWAP, matching app.strategy.indicators.vwap()'s own
+            # formula exactly: cumulative (H+L+C)/3 * volume, divided by
+            # cumulative volume, reset at the start of each new day. Pine's
+            # built-in ta.vwap() does the same daily reset by default, so
+            # this is a true single-native-call match (not a hand-rolled
+            # approximation) -- ignores op.field since VWAP's typical price
+            # is always (H+L+C)/3, same as the app's own indicator.
+            lines.append(f"{name} = ta.vwap(hlc3)")
         elif op.kind == "candle_direction":
             lines.append(f"{name} = close > open ? 1 : close < open ? -1 : 0")
         else:  # pragma: no cover -- guarded by _SUPPORTED_INDICATOR_KINDS
@@ -631,6 +641,8 @@ def _mql5_declare_indicators(indicators: dict[tuple, _Operand]) -> tuple[list[st
             continue  # rendered inline from price calls, no handle needed
         if op.kind in ("highest_high", "lowest_low"):
             continue  # rendered inline via ArrayMaximum/ArrayMinimum over price calls
+        if op.kind == "vwap":
+            continue  # rendered inline via the ComputeVWAP() helper (see to_mql5)
         fn, mode = _MQL5_KIND_INFO[op.kind]
         handle = f"h_{op.kind}_{op.period}_{op.field}"
         arr = f"{handle}_buf"
@@ -662,6 +674,8 @@ def _mql5_render_scalar(op: _Operand, var_map: dict[tuple, str], shift: str = "0
         return f"iHigh(_Symbol, PERIOD_CURRENT, iHighest(_Symbol, PERIOD_CURRENT, MODE_HIGH, {op.period}, {shift}))"
     if op.kind == "lowest_low":
         return f"iLow(_Symbol, PERIOD_CURRENT, iLowest(_Symbol, PERIOD_CURRENT, MODE_LOW, {op.period}, {shift}))"
+    if op.kind == "vwap":
+        return f"ComputeVWAP({shift})"
     return f"{var_map[op.key()]}[{shift}]"
 
 
@@ -827,6 +841,31 @@ def to_mql5(config: dict) -> str:
     lines.append("   }")
     lines.append("}")
     lines.append("")
+    if any(op.kind == "vwap" for op in indicators.values()):
+        lines.append("// Session VWAP, matching app.strategy.indicators.vwap()'s own formula")
+        lines.append("// exactly: cumulative (H+L+C)/3 * volume divided by cumulative volume,")
+        lines.append("// reset at the start of each new day. Standard MQL5 has no built-in VWAP")
+        lines.append("// indicator (unlike Pine's ta.vwap()), so this reproduces it directly from")
+        lines.append("// historical rates rather than approximating with a moving average.")
+        lines.append("double ComputeVWAP(int shift)")
+        lines.append("{")
+        lines.append("   MqlDateTime startDt;")
+        lines.append("   TimeToStruct(iTime(_Symbol, PERIOD_CURRENT, shift), startDt);")
+        lines.append("   double sumPV = 0.0, sumV = 0.0;")
+        lines.append("   int total = Bars(_Symbol, PERIOD_CURRENT);")
+        lines.append("   for (int i = shift; i < total; i++)")
+        lines.append("   {")
+        lines.append("      MqlDateTime dt;")
+        lines.append("      TimeToStruct(iTime(_Symbol, PERIOD_CURRENT, i), dt);")
+        lines.append("      if (dt.day != startDt.day || dt.mon != startDt.mon || dt.year != startDt.year) break;")
+        lines.append("      double typical = (iHigh(_Symbol, PERIOD_CURRENT, i) + iLow(_Symbol, PERIOD_CURRENT, i) + iClose(_Symbol, PERIOD_CURRENT, i)) / 3.0;")
+        lines.append("      double vol = (double)iVolume(_Symbol, PERIOD_CURRENT, i);")
+        lines.append("      sumPV += typical * vol;")
+        lines.append("      sumV += vol;")
+        lines.append("   }")
+        lines.append("   return sumV > 0.0 ? sumPV / sumV : 0.0;")
+        lines.append("}")
+        lines.append("")
     lines.extend(_risk_todo_lines(parsed, "//"))
     lines.extend(_config_directive_lines(config, "//"))
     return "\n".join(lines).rstrip() + "\n"
@@ -1114,6 +1153,7 @@ def _config_from_groups(
 
 _PINE_ASSIGN_RE = re.compile(r"^\s*(?:var\s+)?([A-Za-z_]\w*)\s*=\s*(.+?)\s*$")
 _PINE_TA_CALL_RE = re.compile(r"ta\.(sma|ema|wma|rsi)\s*\(\s*([^,()]+)\s*,\s*([^()]+)\s*\)")
+_PINE_VWAP_CALL_RE = re.compile(r"ta\.vwap\s*\(\s*[^()]*\s*\)")
 _PINE_CROSS_CALL_RE = re.compile(r"ta\.(crossover|crossunder)\s*\(\s*([^,()]+)\s*,\s*([^()]+)\s*\)")
 _PINE_INPUT_RE = re.compile(r"input\.(?:int|float)\s*\(\s*([-\d.]+)")
 _PINE_IF_RE = re.compile(r"^(\s*)if\s+(.+?)\s*$")
@@ -1242,6 +1282,18 @@ def _parse_pinescript_from_code(source: str) -> dict:
                 right = _resolve_operand_token(b_tok, var_defs)
                 op = "crosses_above" if func == "crossover" else "crosses_below"
                 group_defs[var_name] = _ConditionGroup((_Condition(left, op, right),), ())
+                continue
+
+            vwap_match = _PINE_VWAP_CALL_RE.search(rhs)
+            if vwap_match:
+                # ta.vwap()'s argument is always an averaged/typical price
+                # source (hlc3 in this tool's own output, sometimes close
+                # in hand-written scripts) -- that's normal for VWAP
+                # specifically and doesn't hit the "averaged price source"
+                # rejection below, since VWAP's own manual-config operand
+                # (see app.strategy.indicators.vwap) always uses (H+L+C)/3
+                # regardless of what's written here.
+                var_defs[var_name] = _Operand(kind="vwap", field="close", period=14)
                 continue
 
             ta_match = _PINE_TA_CALL_RE.search(rhs)
@@ -1570,7 +1622,7 @@ def parse_mql5(source: str) -> dict:
 
 _PYTHON_IMPORTS = (
     "from app.strategy.indicators import (\n"
-    "    atr, bollinger, crossover, crossunder, ema, highest_high, lowest_low, macd, rsi, sma, wma,\n"
+    "    atr, bollinger, crossover, crossunder, ema, highest_high, lowest_low, macd, rsi, sma, vwap, wma,\n"
     ")"
 )
 
@@ -1602,7 +1654,7 @@ def _python_declare_indicators(indicators: dict[tuple, _Operand]) -> tuple[list[
     for key, op in indicators.items():
         if op.kind in ("macd", "macd_signal", "macd_histogram", "bollinger_mid", "bollinger_upper", "bollinger_lower"):
             continue
-        name = f"{op.kind}_{op.period}_{op.field}"
+        name = f"vwap_{op.field}" if op.kind == "vwap" else f"{op.kind}_{op.period}_{op.field}"
         if op.kind == "sma":
             lines.append(f"{name} = sma({src(op.field)}, {op.period})")
         elif op.kind == "ema":
@@ -1617,6 +1669,11 @@ def _python_declare_indicators(indicators: dict[tuple, _Operand]) -> tuple[list[
             lines.append(f"{name} = highest_high(work['high'], {op.period})")
         elif op.kind == "lowest_low":
             lines.append(f"{name} = lowest_low(work['low'], {op.period})")
+        elif op.kind == "vwap":
+            # Ignores op.field -- app.strategy.indicators.vwap() always
+            # derives typical price from H/L/C and needs the whole frame
+            # (for its timestamp-based daily reset), not a single column.
+            lines.append(f"{name} = vwap(work)")
         elif op.kind == "candle_direction":
             lines.append(f"{name} = (work['close'] - work['open']).apply(lambda d: 1 if d > 0 else (-1 if d < 0 else 0))")
         else:  # pragma: no cover -- guarded by _SUPPORTED_INDICATOR_KINDS
