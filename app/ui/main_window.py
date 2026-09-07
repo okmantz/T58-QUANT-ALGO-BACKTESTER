@@ -111,7 +111,7 @@ from app.strategy.manual import ManualStrategy
 from app.strategy.mql5 import MQL5Strategy
 from app.strategy.pinescript import PineScriptStrategy
 from app.strategy.python import PythonStrategy
-from app.strategy.translator import TranslationError, to_mql5, to_pinescript
+from app.strategy.translator import SUPPORTED_LANGUAGES as TRANSLATOR_LANGUAGES, TranslationError, translate_strategy
 from app.strategy.auto_regime_selector import select_regime_strategies
 from app.strategy.library_loader import load_validated_candidates, load_strategy_object
 from app.monitoring.strategy_health import check_strategy_health
@@ -1249,6 +1249,7 @@ class MainWindow:
         self.content.pack(side="left", fill="both", expand=True, padx=(14, 0))
 
         self.tab_dashboard = Frame(self.content, bg=BG)
+        self.tab_ai_assistant = Frame(self.content, bg=BG)
         self.tab_manual = Frame(self.content, bg=BG)
         self.tab_strategyconfig = Frame(self.content, bg=BG)
         self.tab_data = Frame(self.content, bg=BG)
@@ -1277,16 +1278,17 @@ class MainWindow:
         self.tab_regime_matrix = Frame(self.content, bg=BG)
         self.tab_family_diversity = Frame(self.content, bg=BG)
         self.tab_quantlab = Frame(self.content, bg=BG)
+        self.tab_options_outlook = Frame(self.content, bg=BG)
 
         for f in (
-            self.tab_dashboard, self.tab_manual, self.tab_strategyconfig, self.tab_data, self.tab_strategy, self.tab_prop,
+            self.tab_dashboard, self.tab_ai_assistant, self.tab_manual, self.tab_strategyconfig, self.tab_data, self.tab_strategy, self.tab_prop,
             self.tab_risk, self.tab_run, self.tab_payout, self.tab_refine, self.tab_search,
             self.tab_wfo, self.tab_cpcv, self.tab_sensitivity, self.tab_portfolio,
             self.tab_multiobj, self.tab_wfga, self.tab_ensemble, self.tab_fullpipeline,
             self.tab_speedrun,
             self.tab_forwardtest, self.tab_deploylive, self.tab_livemarket, self.tab_genstrat,
             self.tab_evolution, self.tab_researchagent, self.tab_regime_matrix, self.tab_family_diversity,
-            self.tab_quantlab,
+            self.tab_quantlab, self.tab_options_outlook,
         ):
             f.place(in_=self.content, x=0, y=0, relwidth=1, relheight=1)
 
@@ -1311,6 +1313,7 @@ class MainWindow:
         self._nav_items = [
             (None, None, "OVERVIEW", None, None),
             ("dashboard", "", "Dashboard", self.tab_dashboard, NEON_VIOLET),
+            ("aiassistant", "", "AI Assistant", self.tab_ai_assistant, NEON_CYAN),
             ("manual", "", "User Manual", self.tab_manual, METAL_BRIGHT),
 
             (None, None, "\u2460 CREATE", None, None),
@@ -1352,7 +1355,10 @@ class MainWindow:
             ("deploylive", "", "Deploy Live", self.tab_deploylive, RED),
             ("livemarket", "", "Monitor (Live Market)", self.tab_livemarket, NEON_CYAN),
 
-            (None, None, "\u2466 QUANT LAB", None, None),
+            (None, None, "\u2466 OPTIONS", None, None),
+            ("optionsoutlook", "", "Options Outlook (calls & puts)", self.tab_options_outlook, NEON_LIME),
+
+            (None, None, "\u2467 QUANT LAB", None, None),
             ("quantlab", "", "Quant Lab (translator, stat arb, options, more)", self.tab_quantlab, METAL_BRIGHT),
         ]
         self._tab_frame_by_key = {k: frame for k, _icon, _label, frame, _color in self._nav_items if k}
@@ -1362,6 +1368,7 @@ class MainWindow:
 
         for label, builder in (
             ("Dashboard", self._build_dashboard_tab),
+            ("AI Assistant", self._build_ai_assistant_tab),
             ("Manual builder", self._build_manual_tab),
             ("Speed Run", self._build_speedrun_tab),
             ("Strategy Configuration", self._build_strategy_config_tab),
@@ -1390,6 +1397,7 @@ class MainWindow:
             ("Live Market", self._build_live_market_tab),
             ("Research Agent", self._build_research_agent_tab),
             ("Quant Lab", self._build_quant_lab_tab),
+            ("Options Outlook", self._build_options_outlook_tab),
         ):
             self._pump_splash(f"Loading {label}...")
             builder()
@@ -10120,6 +10128,277 @@ class MainWindow:
 
         threading.Thread(target=run, daemon=True).start()
 
+    # ------------------------------------------------------------------
+    # AI Assistant tab -- chat + chart/trade screenshot analysis, backed
+    # by app.ai.trading_assistant.TradingAssistantClient (the same
+    # Ollama-based client the web app's /assistant page uses) reasoning
+    # over Owen's exact strategy documents (see PERSONAL_STRATEGY_PROMPT /
+    # PERSONAL_ASSISTANT_PROMPT in that module).
+    # ------------------------------------------------------------------
+
+    def _build_ai_assistant_tab(self):
+        f = self._scrollable(self.tab_ai_assistant)
+        self._page_header(
+            f, "AI ASSISTANT", "Owen AI",
+            "Chat against Owen's exact strategy hierarchy (macro -> HTF structure -> 50/200 EMA -> "
+            "location -> liquidity -> sweep -> supply/demand -> premium/discount -> M15 confirmation), "
+            "or upload a chart/trade screenshot below for an image-based read. Requires a local Ollama "
+            "install (https://ollama.com). Plain chat works with any pulled text model; screenshot "
+            "analysis needs a vision-capable model pulled separately (e.g. `ollama pull llava` or "
+            "`ollama pull llama3.2-vision`).",
+        )
+
+        self._build_ai_assist_section(f, prefix="aiassistant")
+
+        vision_section = self._section(
+            f, "Vision model (screenshot analysis only)",
+            "Separate from the chat model above -- screenshot analysis needs a multimodal model.",
+        )
+        saved = ollama_settings_module.load_settings()
+        self.aiassistant_vision_model = LabeledEntry(
+            vision_section, "Vision model (must already be pulled)", getattr(saved, "vision_model", "llava"),
+        )
+
+        shot_section = self._section(
+            f, "Screenshot Analysis",
+            "Upload a chart screenshot for an exact trading plan in Owen's format, or a trade/PnL "
+            "screenshot for a Session-Review-style breakdown of what went right or wrong.",
+        )
+        self.aiassistant_shot_notes = LabeledEntry(
+            shot_section, "Optional notes (symbol, timeframe, what happened)", "",
+        )
+        shot_btn_row = Frame(shot_section, bg=PANEL)
+        shot_btn_row.pack(anchor="w", padx=18, pady=(4, 14))
+        self.aiassistant_chart_btn = self._button(
+            shot_btn_row, "UPLOAD CHART SCREENSHOT -> TRADING PLAN", self._ai_analyze_chart_screenshot, primary=True,
+        )
+        self.aiassistant_chart_btn.pack(side="left")
+        self.aiassistant_trade_btn = self._button(
+            shot_btn_row, "UPLOAD TRADE SCREENSHOT -> SESSION REVIEW", self._ai_analyze_trade_screenshot,
+        )
+        self.aiassistant_trade_btn.pack(side="left", padx=(8, 0))
+
+        chat_section = self._section(f, "Chat", "Ask about a market, request the daily brief, or discuss a trade.")
+        chat_out_frame = Frame(chat_section, bg=PANEL)
+        self.aiassistant_output = Text(
+            chat_out_frame, height=22, wrap="word", bg=LOG_BG, fg=TEXT,
+            insertbackground=TEXT, relief="flat", bd=0, highlightthickness=1,
+            highlightbackground=BORDER, font=(MONO, 9),
+        )
+        chat_out_scroll = ttk.Scrollbar(
+            chat_out_frame, orient="vertical", command=self.aiassistant_output.yview, style="T58.Vertical.TScrollbar",
+        )
+        self.aiassistant_output.configure(yscrollcommand=chat_out_scroll.set)
+        self.aiassistant_output.pack(side="left", fill="both", expand=True)
+        chat_out_scroll.pack(side="right", fill="y")
+        chat_out_frame.pack(fill="both", expand=True, padx=18, pady=(3, 10))
+        self._bind_isolated_wheel(self.aiassistant_output)
+        self.aiassistant_output.configure(state="disabled")
+
+        self.aiassistant_question = LabeledEntry(chat_section, "Ask Owen AI", "")
+        btn_row2 = Frame(chat_section, bg=PANEL)
+        btn_row2.pack(anchor="w", padx=18, pady=(0, 16))
+        self.aiassistant_send_btn = self._button(btn_row2, "SEND", self._ai_send_chat, primary=True)
+        self.aiassistant_send_btn.pack(side="left")
+        self._button(btn_row2, "DAILY BRIEF", self._ai_daily_brief).pack(side="left", padx=(8, 0))
+
+        self._ai_chat_history: list[dict] = []
+
+    def _ai_append_output(self, label: str, text: str) -> None:
+        self.aiassistant_output.configure(state="normal")
+        self.aiassistant_output.insert(END, f"[{label}]\n{text}\n\n")
+        self.aiassistant_output.see(END)
+        self.aiassistant_output.configure(state="disabled")
+        self.root.update_idletasks()
+
+    def _ai_client(self) -> "TradingAssistantClient":
+        from app.ai.trading_assistant import TradingAssistantClient
+        settings = self._build_ollama_settings("aiassistant")
+        # vision_model isn't part of _build_ollama_settings' saved fields
+        # (that helper mirrors the "AI Assist" section's own save/load,
+        # shared by every tab that embeds it) -- overlay it here from this
+        # tab's own field before use, and persist it alongside the rest.
+        settings.vision_model = self.aiassistant_vision_model.get_str().strip() or settings.vision_model
+        ollama_settings_module.save_settings(settings)
+        return TradingAssistantClient(settings)
+
+    def _ai_market_context(self) -> dict:
+        """Best-effort market intelligence (rankings + news) for chat/
+        screenshot context -- degrades to an empty context (no rankings,
+        no news) rather than failing the whole request if MT5/Alpaca/the
+        news feed aren't reachable from the desktop app."""
+        from app.ai import market_scanner, news_forexfactory, trading_assistant as ta_module
+        try:
+            news_result = news_forexfactory.fetch_calendar()
+            events = news_result.events if not news_result.error else []
+        except Exception:
+            events = []
+        return ta_module.build_context(rankings=[], news_events=events)
+
+    def _ai_run_async(self, button, work_fn, on_success):
+        original_text = button.cget("text")
+        button.config(state="disabled", text="WORKING...")
+
+        def _worker():
+            try:
+                result = work_fn()
+            except Exception as exc:  # noqa: BLE001 -- surfaced to the user
+                def _err():
+                    button.config(state="normal", text=original_text)
+                    messagebox.showerror("AI Assistant", str(exc))
+                self.root.after(0, _err)
+                return
+
+            def _ok():
+                button.config(state="normal", text=original_text)
+                on_success(result)
+            self.root.after(0, _ok)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _ai_send_chat(self):
+        question = self.aiassistant_question.get_str().strip()
+        if not question:
+            return
+        self.aiassistant_question.var.set("")
+        self._ai_append_output("Owen", question)
+
+        def work():
+            client = self._ai_client()
+            context = self._ai_market_context()
+            reply, error = client.ask(question, context, mode="personal", history=self._ai_chat_history)
+            if error:
+                raise RuntimeError(error)
+            return reply
+
+        def done(reply):
+            self._ai_append_output("Owen AI", reply)
+            self._ai_chat_history.append({"role": "user", "content": question})
+            self._ai_chat_history.append({"role": "assistant", "content": reply})
+
+        self._ai_run_async(self.aiassistant_send_btn, work, done)
+
+    def _ai_daily_brief(self):
+        self._ai_append_output("Owen", "[Daily Brief]")
+
+        def work():
+            client = self._ai_client()
+            context = self._ai_market_context()
+            reply, error = client.daily_brief(context)
+            if error:
+                raise RuntimeError(error)
+            return reply
+
+        self._ai_run_async(self.aiassistant_send_btn, work, lambda reply: self._ai_append_output("Owen AI", reply))
+
+    def _ai_analyze_chart_screenshot(self):
+        path = filedialog.askopenfilename(
+            title="Select a chart screenshot",
+            filetypes=[("Images", "*.png *.jpg *.jpeg *.webp *.bmp"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        notes = self.aiassistant_shot_notes.get_str().strip()
+        self._ai_append_output("Owen", f"[Chart screenshot uploaded: {Path(path).name}]" + (f" notes: {notes}" if notes else ""))
+
+        def work():
+            import base64
+            client = self._ai_client()
+            context = self._ai_market_context()
+            image_b64 = base64.b64encode(Path(path).read_bytes()).decode("ascii")
+            reply, error = client.analyze_chart_screenshot(image_b64, context=context, extra_notes=notes)
+            if error:
+                raise RuntimeError(error)
+            return reply
+
+        self._ai_run_async(self.aiassistant_chart_btn, work, lambda reply: self._ai_append_output("Owen AI -- Trading Plan", reply))
+
+    def _ai_analyze_trade_screenshot(self):
+        path = filedialog.askopenfilename(
+            title="Select a trade/PnL screenshot",
+            filetypes=[("Images", "*.png *.jpg *.jpeg *.webp *.bmp"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        notes = self.aiassistant_shot_notes.get_str().strip()
+        self._ai_append_output("Owen", f"[Trade screenshot uploaded: {Path(path).name}]" + (f" notes: {notes}" if notes else ""))
+
+        def work():
+            import base64
+            client = self._ai_client()
+            image_b64 = base64.b64encode(Path(path).read_bytes()).decode("ascii")
+            reply, error = client.analyze_trade_screenshot(image_b64, extra_notes=notes)
+            if error:
+                raise RuntimeError(error)
+            return reply
+
+        self._ai_run_async(self.aiassistant_trade_btn, work, lambda reply: self._ai_append_output("Owen AI -- Session Review", reply))
+
+    # ------------------------------------------------------------------
+    # Options Outlook tab -- deterministic call/put candidates (Black-
+    # Scholes, app.ai.options_outlook) ranked and explained by Ollama
+    # (app.ai.trading_assistant.options_outlook). Every strike/premium/
+    # delta shown is computed by the app; the model only ranks/explains.
+    # ------------------------------------------------------------------
+
+    def _build_options_outlook_tab(self):
+        f = self._scrollable(self.tab_options_outlook)
+        self._page_header(
+            f, "OPTIONS", "Options Outlook",
+            "Deterministic call/put candidates around target deltas (~50/25/10), priced with the "
+            "same from-scratch Black-Scholes engine as the Options Pricing Calculator, then ranked "
+            "and explained by Owen AI for the horizon you pick. Every strike, premium, and delta is "
+            "computed by the app -- the model never invents a number.",
+        )
+
+        sec = self._section(
+            f, "Scenario",
+            "Enter the underlying's spot price and an implied/estimated volatility (annualized, "
+            "decimal -- e.g. 0.25 for 25%). Use the Options Pricing Calculator's implied-vol solver "
+            "on the Quant Lab tab if you have a market option price to back it out from.",
+        )
+        self.oo_symbol = LabeledEntry(sec, "Symbol", "SPY")
+        self.oo_spot = LabeledEntry(sec, "Spot price", 100)
+        self.oo_iv = LabeledEntry(sec, "Implied/estimated volatility (decimal)", 0.25)
+        self.oo_rate = LabeledEntry(sec, "Risk-free rate (decimal)", 0.045)
+        self.oo_horizon = LabeledCombo(sec, "Horizon", ["today", "this_week"], default="today")
+        self.oo_notes = LabeledEntry(sec, "Directional/context notes (optional)", "")
+        btn_row = Frame(sec, bg=PANEL); btn_row.pack(anchor="w", padx=18, pady=(4, 12))
+        self.oo_btn = self._button(btn_row, "GENERATE OPTIONS OUTLOOK", self._options_outlook_clicked, primary=True)
+        self.oo_btn.pack(side="left")
+
+    def _options_outlook_clicked(self):
+        symbol = self.oo_symbol.get_str().strip() or "SYMBOL"
+        spot = self.oo_spot.get_float()
+        iv = self.oo_iv.get_float()
+        rate = self.oo_rate.get_float()
+        horizon = self.oo_horizon.get_str()
+        notes = self.oo_notes.get_str().strip()
+
+        def work():
+            from app.ai import options_outlook as options_outlook_module
+            from app.ai.trading_assistant import TradingAssistantClient
+
+            dte_days = options_outlook_module.HORIZON_PRESETS.get(horizon, 1)
+            candidates = options_outlook_module.build_candidates(spot=spot, iv=iv, dte_days=dte_days, r=rate)
+            candidate_dicts = options_outlook_module.candidates_to_dicts(candidates)
+
+            client = TradingAssistantClient(ollama_settings_module.load_settings())
+            reply, error = client.options_outlook(symbol, horizon, candidate_dicts, notes=notes)
+            if error:
+                raise RuntimeError(error)
+
+            lines = [f"OPTIONS OUTLOOK -- {symbol} -- {horizon}", "", reply, "", "--- Raw candidate data ---"]
+            for c in candidate_dicts:
+                lines.append(
+                    f"{c['option_type'].upper():4} K={c['strike']:<10} delta={c['delta']:<8} "
+                    f"premium={c['premium']:<8} breakeven={c['breakeven']:<10} "
+                    f"theta/day={c['theta_per_day']:<8} dte={c['dte_days']}"
+                )
+            return "\n".join(lines)
+
+        self._quant_lab_run_async(self.oo_btn, work, f"Options Outlook -- {symbol}")
+
     def _log_fullpipeline(self, msg: str):
         self.fullpipeline_output.insert(END, msg + "\n")
         self.fullpipeline_output.see(END)
@@ -10868,6 +11147,18 @@ class MainWindow:
         names = [s.name for s in list_saved_strategies() if s.status != "tested_failed"]
         return names or ["(none found)"]
 
+    def _ql_all_translator_options(self) -> list[str]:
+        """Every saved strategy across all four types (manual/python/
+        pinescript/mql5), regardless of status -- translation is a
+        pre-validation authoring/porting tool, not a live-trading gate.
+        Mirrors app.web.quant_lab_routes._all_strategy_options() exactly
+        so the desktop and web translators offer the same source list."""
+        options = []
+        for t in ("manual", "python", "pinescript", "mql5"):
+            for s in list_saved_strategies(strategy_type=t):
+                options.append(f"{t}:{s.name}")
+        return options or ["(none found)"]
+
     def _build_quant_lab_tab(self):
         f = self._scrollable(self.tab_quantlab)
         self._page_header(
@@ -10886,11 +11177,16 @@ class MainWindow:
         # -- 1. Universal Strategy Translator --------------------------------
         sec = self._section(
             f, "Universal Strategy Translator",
-            "Converts a saved Manual Strategy Builder config into clean, standalone PineScript v5 "
-            "or MQL5 -- ready for TradingView or a live/demo MT5 account.",
+            "Converts ANY saved strategy -- Manual Strategy Builder config, Python, PineScript, or "
+            "MQL5 -- into any of the other three. A file this tool generated (or one hand-annotated "
+            "with its round-trip T58_MANUAL_CONFIG_JSON directive) translates perfectly; a "
+            "hand-written PineScript/MQL5 file translates via a real parse of its supported subset "
+            "(sma/ema/wma/rsi, crossover/crossunder, basic comparisons); hand-written Python has no "
+            "safe general reduction back to structured conditions and can only be translated if it "
+            "carries that same directive.",
         )
-        self.ql_tr_strategy = LabeledCombo(sec, "Manual strategy", self._ql_validated_manual_names())
-        self.ql_tr_target = LabeledCombo(sec, "Target language", ["pinescript", "mql5"], default="pinescript")
+        self.ql_tr_strategy = LabeledCombo(sec, "Source strategy", self._ql_all_translator_options())
+        self.ql_tr_target = LabeledCombo(sec, "Target language", ["pinescript", "mql5", "python"], default="pinescript")
         btn_row = Frame(sec, bg=PANEL); btn_row.pack(anchor="w", padx=18, pady=(4, 12))
         self.ql_tr_btn = self._button(btn_row, "TRANSLATE", self._ql_translator_clicked, primary=True)
         self.ql_tr_btn.pack(side="left")
@@ -11050,16 +11346,20 @@ class MainWindow:
     # a zero-arg closure to _quant_lab_run_async to do the real work off-thread.
 
     def _ql_translator_clicked(self):
-        name = self.ql_tr_strategy.get_str()
+        choice = self.ql_tr_strategy.get_str()
         target = self.ql_tr_target.get_str()
 
         def work():
-            if name == "(none found)":
-                raise ValueError("No Manual Strategy Builder entries found in the Strategy Library.")
-            text = load_strategy_text("manual", name)
-            config = json.loads(text)
-            return to_pinescript(config) if target == "pinescript" else to_mql5(config)
-        self._quant_lab_run_async(self.ql_tr_btn, work, f"Translated: {name} -> {target}")
+            if choice == "(none found)" or ":" not in choice:
+                raise ValueError(
+                    "No saved strategies found -- save one first (Manual Strategy Builder, "
+                    "Python, PineScript, or MQL5)."
+                )
+            source_type, name = choice.split(":", 1)
+            text = load_strategy_text(source_type, name)
+            source = json.loads(text) if source_type == "manual" else text
+            return translate_strategy(source_type, source, target)
+        self._quant_lab_run_async(self.ql_tr_btn, work, f"Translated: {choice} -> {target}")
 
     def _ql_regime_selector_clicked(self):
         dimension = self.ql_rs_dimension.get_str()
