@@ -27,6 +27,7 @@ column as technical-only until you do.
 """
 from __future__ import annotations
 
+import base64
 import time
 
 import pandas as pd
@@ -119,6 +120,7 @@ def dashboard():
         "ai_assistant.html",
         active_page="ai_assistant",
         ollama_enabled=saved_ai.enabled, ollama_host=saved_ai.host, ollama_model=saved_ai.model,
+        ollama_vision_model=getattr(saved_ai, "vision_model", "llava"),
     )
 
 
@@ -186,11 +188,15 @@ def api_settings():
             host=(data.get("host") or "").strip() or OllamaSettings().host,
             model=(data.get("model") or "").strip() or OllamaSettings().model,
             api_key=(data.get("api_key") or "").strip(),
+            vision_model=(data.get("vision_model") or "").strip() or OllamaSettings().vision_model,
         )
         save_ollama_settings(settings)
         return jsonify({"ok": True})
     settings = load_ollama_settings()
-    return jsonify({"enabled": settings.enabled, "host": settings.host, "model": settings.model})
+    return jsonify({
+        "enabled": settings.enabled, "host": settings.host, "model": settings.model,
+        "vision_model": getattr(settings, "vision_model", "llava"),
+    })
 
 
 @ai_assistant_bp.route("/api/chat", methods=["POST"])
@@ -233,6 +239,40 @@ def api_watchlist():
     client = trading_assistant.TradingAssistantClient(load_ollama_settings())
     reply, error = client.watchlist(context)
     return jsonify({"reply": reply, "error": error})
+
+
+@ai_assistant_bp.route("/api/analyze-screenshot", methods=["POST"])
+def api_analyze_screenshot():
+    """Chart screenshot -> exact trading plan, or trade screenshot ->
+    session-review breakdown. Expects multipart/form-data: `image` (the
+    file), `kind` ("chart" or "trade"), optional `notes`. Requires a
+    vision-capable Ollama model (see OllamaSettings.vision_model) --
+    the default text model can't see the image at all."""
+    kind = (request.form.get("kind") or "chart").strip().lower()
+    notes = (request.form.get("notes") or "").strip()
+    image_file = request.files.get("image")
+    if image_file is None or not image_file.filename:
+        return jsonify({"error": "No image uploaded."}), 400
+    if kind not in ("chart", "trade"):
+        return jsonify({"error": "kind must be 'chart' or 'trade'."}), 400
+
+    image_bytes = image_file.read()
+    if not image_bytes:
+        return jsonify({"error": "Uploaded image was empty."}), 400
+    image_b64 = base64.b64encode(image_bytes).decode("ascii")
+
+    client = trading_assistant.TradingAssistantClient(load_ollama_settings())
+    if kind == "chart":
+        rankings, _errors = _cached("rankings", _CACHE_TTL_RANKINGS, _compute_rankings)
+        news_result = _cached("news", _CACHE_TTL_NEWS, _compute_news)
+        context = trading_assistant.build_context(rankings, news_result.events)
+        reply, error = client.analyze_chart_screenshot(image_b64, context=context, extra_notes=notes)
+    else:
+        reply, error = client.analyze_trade_screenshot(image_b64, extra_notes=notes)
+
+    if error:
+        return jsonify({"reply": "", "error": error})
+    return jsonify({"reply": reply, "error": None})
 
 
 @ai_assistant_bp.route("/api/pre-trade-check", methods=["POST"])
