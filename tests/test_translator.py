@@ -5,7 +5,9 @@ import pandas as pd
 import pytest
 
 from app.strategy.pinescript import PineScriptStrategy
-from app.strategy.translator import TranslationError, to_mql5, to_pinescript
+from app.strategy.translator import (
+    TranslationError, parse_pinescript, to_mql5, to_pinescript, to_python, translate_strategy,
+)
 
 BASIC_CONFIG = {
     "name": "EMA Cross RSI Filter",
@@ -155,3 +157,55 @@ def test_unsupported_operator_raises():
     }
     with pytest.raises(TranslationError):
         to_pinescript(config)
+
+
+VWAP_CONFIG = {
+    "name": "VWAP Reclaim",
+    "market": {"direction": "long"},
+    "entry_conditions": {
+        "long": [{"left": "close", "operator": "crosses above", "right": {"type": "vwap"}}],
+    },
+    "exit_conditions": {
+        "long": [{"left": "close", "operator": "crosses below", "right": {"type": "vwap"}}],
+    },
+    "risk_management": {},
+}
+
+
+def test_vwap_renders_native_call_in_every_target():
+    pine = to_pinescript(VWAP_CONFIG)
+    assert "ta.vwap(hlc3)" in pine
+
+    mql5 = to_mql5(VWAP_CONFIG)
+    assert "ComputeVWAP" in mql5
+    # helper should only be emitted when a strategy actually uses VWAP
+    assert "ComputeVWAP" not in to_mql5(BASIC_CONFIG)
+
+    python_code = to_python(VWAP_CONFIG)
+    assert "vwap(work)" in python_code
+    assert "    atr, bollinger, crossover, crossunder, ema, highest_high, lowest_low, macd, rsi, sma, vwap, wma,\n" in python_code
+
+
+def test_vwap_round_trips_through_every_direction():
+    pine = translate_strategy("manual", VWAP_CONFIG, "pinescript")
+    mql5 = translate_strategy("pinescript", pine, "mql5")  # uses the embedded round-trip directive
+    python_code = translate_strategy("mql5", mql5, "python")
+    pine_again = translate_strategy("python", python_code, "pinescript")
+    assert "ta.vwap(hlc3)" in pine_again
+
+
+def test_hand_written_pine_vwap_parses_via_real_symbolic_parse():
+    hand_written = (
+        '//@version=5\n'
+        'strategy("Hand VWAP", overlay=true)\n'
+        'vw = ta.vwap(hlc3)\n'
+        'longCond = close > vw\n'
+        'if longCond\n'
+        '    strategy.entry("Long", strategy.long)\n'
+        'strategy.close("Long", when=close < vw)\n'
+    )
+    config = parse_pinescript(hand_written)
+    assert config["entry_conditions"]["long"][0]["right"]["type"] == "vwap"
+    # and it keeps translating onward from there
+    mql5 = translate_strategy("manual", config, "mql5")
+    assert "ComputeVWAP" in mql5
