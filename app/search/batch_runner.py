@@ -64,7 +64,8 @@ import pandas as pd
 
 from app.backtest.engine import run_backtest, run_holdout_comparison
 from app.backtest.risk import RiskConfig
-from app.backtest.statistics import compute_cost_ladder
+from app.backtest.statistics import compute_cost_ladder, compute_statistics
+from app.backtest.vectorized_fastpath import VectorizedCandidate, is_vectorizable, run_vectorized_batch
 from app.monte_carlo.engine import MonteCarloConfig, run_monte_carlo
 from app.orchestration.resource_guard import safe_worker_count
 from app.optimize.parameter_space import RefinementError
@@ -285,36 +286,17 @@ def _passes_stage1_filters(stats: dict, min_trades: int, min_profit_factor: floa
     return bool(n_trades >= min_trades and pf_val >= min_profit_factor and max_dd <= max_dd_limit and net_ok)
 
 
-def _stage1_task(candidate_id: str, spec: dict, filters: dict) -> dict:
-    """Stage 1: one fast backtest, no Monte Carlo. Runs in a worker process."""
-    df, risk, prop_rules = _WORKER["df"], _WORKER["risk"], _WORKER["prop_rules"]
-    tmp_dir = _WORKER.get("tmp_dir")
-    base = {"candidate_id": candidate_id, **_record_fields_from_spec(spec)}
-    try:
-        strategy = build_strategy_from_spec(spec, tmp_dir)
-        bt = run_backtest(df, strategy, risk)
-    except Exception as exc:  # noqa: BLE001 -- a bad generated config must not kill the whole search
-        return {**base, "error": str(exc), "passed_stage1": False}
-
-    stats = bt.statistics.to_dict()
-    # bt.warnings (from app.backtest.engine.run_backtest's own
-    # warnings.catch_warnings capture) carries execution.py's
-    # pip_scale_mismatch / atr_scale_mismatch / fallback_stop warnings.
-    # Those are the single most useful diagnostic when an ENTIRE search
-    # comes back with 0 survivors -- e.g. an FX-default pip_size (0.0001)
-    # applied to a whole-dollar stock or an index makes every fixed-pip
-    # stop nonsensically tiny, so literally every family and parameter
-    # combination fails the same way and it looks like "nothing works"
-    # rather than "one setting is wrong." Before this, these warnings
-    # were raised with plain warnings.warn() *inside a Stage 1 worker
-    # subprocess* and never made it back to the run's log at all --
-    # invisible to the very diagnosis that most needed them.
-    scale_mismatch = any(
-        "pip_scale_mismatch" in w or "pip size" in w.lower() or "atr_scale_mismatch" in w
-        or ("instrument" in w.lower() and "scale" in w.lower())
-        for w in (bt.warnings or [])
-    )
-    if not bt.trades:
+def _stage1_score(
+    base: dict, stats: dict, has_trades: bool, filters: dict, prop_rules: PropRules,
+    scale_mismatch: bool = False,
+) -> dict:
+    """The Stage 1 pass/fail + quick_score definition, factored out so
+    the scalar path (_stage1_task) and the vectorized fast path
+    (_stage1_task_batch / app.backtest.vectorized_fastpath) can never
+    silently drift apart on what counts as a Stage 1 survivor -- both
+    call this one function instead of each keeping its own copy of the
+    scoring logic."""
+    if not has_trades:
         return {
             **base, "statistics": stats, "error": "no trades generated on this data",
             "passed_stage1": False, "scale_mismatch_warning": scale_mismatch,
@@ -342,6 +324,106 @@ def _stage1_task(candidate_id: str, spec: dict, filters: dict) -> dict:
         "quick_score": quick_score, "sharpe": sharpe, "passed_stage1": bool(passed),
         "scale_mismatch_warning": scale_mismatch,
     }
+
+
+def _stage1_task(candidate_id: str, spec: dict, filters: dict) -> dict:
+    """Stage 1: one fast backtest, no Monte Carlo. Runs in a worker
+    process. This is the scalar fallback path -- always correct for
+    every strategy shape, used directly for anything the vectorized
+    fast path can't handle (see app.backtest.vectorized_fastpath) and
+    as the safety-net if a vectorized batch itself raises."""
+    df, risk, prop_rules = _WORKER["df"], _WORKER["risk"], _WORKER["prop_rules"]
+    tmp_dir = _WORKER.get("tmp_dir")
+    base = {"candidate_id": candidate_id, **_record_fields_from_spec(spec)}
+    try:
+        strategy = build_strategy_from_spec(spec, tmp_dir)
+        bt = run_backtest(df, strategy, risk)
+    except Exception as exc:  # noqa: BLE001 -- a bad generated config must not kill the whole search
+        return {**base, "error": str(exc), "passed_stage1": False}
+
+    stats = bt.statistics.to_dict()
+    # bt.warnings (from app.backtest.engine.run_backtest's own
+    # warnings.catch_warnings capture) carries execution.py's
+    # pip_scale_mismatch / atr_scale_mismatch / fallback_stop warnings.
+    # Those are the single most useful diagnostic when an ENTIRE search
+    # comes back with 0 survivors -- e.g. an FX-default pip_size (0.0001)
+    # applied to a whole-dollar stock or an index makes every fixed-pip
+    # stop nonsensically tiny, so literally every family and parameter
+    # combination fails the same way and it looks like "nothing works"
+    # rather than "one setting is wrong." Before this, these warnings
+    # were raised with plain warnings.warn() *inside a Stage 1 worker
+    # subprocess* and never made it back to the run's log at all --
+    # invisible to the very diagnosis that most needed them.
+    scale_mismatch = any(
+        "pip_scale_mismatch" in w or "pip size" in w.lower() or "atr_scale_mismatch" in w
+        or ("instrument" in w.lower() and "scale" in w.lower())
+        for w in (bt.warnings or [])
+    )
+    return _stage1_score(base, stats, bool(bt.trades), filters, prop_rules, scale_mismatch)
+
+
+def _stage1_task_batch(items: list[tuple[str, dict]], filters: dict) -> list[dict]:
+    """Stage 1 for a CHUNK of candidates at once (the vectorized fast
+    path -- see app.backtest.vectorized_fastpath for why this exists and
+    exactly what it does and doesn't simulate). Builds every candidate's
+    strategy and signals, routes anything eligible (fixed-pips stop/
+    target only) through ONE vectorized pass over the bars, and falls
+    back to the exact same per-candidate scalar path (_stage1_task) for
+    everything else -- including, defensively, every candidate in this
+    chunk if the vectorized batch call itself raises for any reason.
+    Runs in a worker process, same as _stage1_task."""
+    df, risk, prop_rules = _WORKER["df"], _WORKER["risk"], _WORKER["prop_rules"]
+    tmp_dir = _WORKER.get("tmp_dir")
+
+    results: list[dict] = []
+    vec_batch: list[VectorizedCandidate] = []
+    vec_bases: dict[str, dict] = {}
+    spec_by_id: dict[str, dict] = {}
+
+    for candidate_id, spec in items:
+        spec_by_id[candidate_id] = spec
+        base = {"candidate_id": candidate_id, **_record_fields_from_spec(spec)}
+        try:
+            strategy = build_strategy_from_spec(spec, tmp_dir)
+            strat_result = strategy.generate(df)
+        except Exception as exc:  # noqa: BLE001 -- a bad generated config must not kill the whole search
+            results.append({**base, "error": str(exc), "passed_stage1": False})
+            continue
+
+        if is_vectorizable(strat_result):
+            vec_batch.append(VectorizedCandidate(
+                candidate_id=candidate_id,
+                signals=strat_result.signals.to_numpy(),
+                stop_loss_pips=strat_result.stop_loss_pips,
+                take_profit_pips=strat_result.take_profit_pips,
+            ))
+            vec_bases[candidate_id] = base
+        else:
+            # Dynamic stop/target, trailing, or breakeven -- not
+            # something the fast path can honestly approximate. Exact
+            # same treatment this candidate would have gotten before
+            # this function existed.
+            results.append(_stage1_task(candidate_id, spec, filters))
+
+    if vec_batch:
+        try:
+            outcomes = run_vectorized_batch(df, vec_batch, risk)
+        except Exception:  # noqa: BLE001 -- a batch-level bug must never silently drop candidates; fall back to the trusted scalar path for all of them
+            for cand in vec_batch:
+                results.append(_stage1_task(cand.candidate_id, spec_by_id[cand.candidate_id], filters))
+        else:
+            for cand in vec_batch:
+                base = vec_bases[cand.candidate_id]
+                outcome = outcomes.get(cand.candidate_id)
+                trades = outcome.trades if outcome else []
+                stats = (
+                    compute_statistics(trades, outcome.equity_curve, risk.initial_balance).to_dict()
+                    if trades else {}
+                )
+                mismatch = bool(outcome.scale_mismatch) if outcome else False
+                results.append(_stage1_score(base, stats, bool(trades), filters, prop_rules, scale_mismatch=mismatch))
+
+    return results
 
 
 def _stage2_task(
@@ -651,22 +733,36 @@ def run_search(
             mp_context=multiprocessing.get_context("spawn"),
         ) as pool:
             # ---------------- Stage 1: cheap filter ----------------
-            log(f"Stage 1/5: cheap filter across {len(space.candidates)} candidate(s) on {workers} worker(s)...")
-            futures = {
-                pool.submit(_stage1_task, cid, spec, filters): cid
-                for cid, spec in space.candidates.items()
-            }
-            done = 0
+            # Candidates are submitted in chunks, each evaluated by
+            # _stage1_task_batch: eligible ones (fixed-pips stop/target
+            # only) run through one vectorized pass over the bars per
+            # chunk instead of one full Python bar-loop per candidate --
+            # see app.backtest.vectorized_fastpath. Anything ineligible
+            # (or any chunk that itself errors) falls back to the exact
+            # same per-candidate scalar path this used before. Chunk size
+            # is capped so the vectorized pass's per-chunk memory
+            # footprint (roughly bars x chunk_size) stays bounded even on
+            # very large candidate pools.
+            items = list(space.candidates.items())
+            chunk_size = max(1, min(40, -(-len(items) // max(workers * 4, 1))))
+            chunks = [items[i:i + chunk_size] for i in range(0, len(items), chunk_size)]
+            log(
+                f"Stage 1/5: cheap filter across {len(items)} candidate(s) "
+                f"({len(chunks)} batch(es) of up to {chunk_size}) on {workers} worker(s)..."
+            )
+            futures = {pool.submit(_stage1_task_batch, chunk, filters): i for i, chunk in enumerate(chunks)}
+            done_batches = 0
             log_every = max(1, len(futures) // 10)
             for fut in as_completed(futures):
                 check_cancelled(pool)
-                rec = fut.result()
-                rec["family"] = space.meta.get(rec["candidate_id"], {}).get("family", space.family or "single")
-                stage1_records.append(rec)
-                db.insert_candidate(run_id, rec["candidate_id"], "stage1", rec)
-                done += 1
-                if done % log_every == 0 or done == len(futures):
-                    log(f"  Stage 1: {done}/{len(futures)} evaluated...")
+                recs = fut.result()
+                for rec in recs:
+                    rec["family"] = space.meta.get(rec["candidate_id"], {}).get("family", space.family or "single")
+                    stage1_records.append(rec)
+                    db.insert_candidate(run_id, rec["candidate_id"], "stage1", rec)
+                done_batches += 1
+                if done_batches % log_every == 0 or done_batches == len(futures):
+                    log(f"  Stage 1: {done_batches}/{len(futures)} batch(es) evaluated ({len(stage1_records)}/{len(items)} candidates)...")
             check_cancelled(pool)
 
             passed_stage1 = [r for r in stage1_records if r.get("passed_stage1")]
