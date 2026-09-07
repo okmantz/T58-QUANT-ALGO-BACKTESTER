@@ -203,6 +203,95 @@ def run_execution(
 
     force_closed_count = 0
 
+    # ------------------------------------------------------------------
+    # ORDER/BROKER-STYLE FILL SETTLEMENT (single code path)
+    # ------------------------------------------------------------------
+    # Before this refactor, three separate call sites -- the normal
+    # stop/take/signal exit, the daily-loss-limit forced close, and the
+    # final end-of-data close -- each carried their OWN hand-copied
+    # version of "apply spread/slippage, deduct commission, clamp the
+    # loss, update equity, build the Trade, update adaptive-risk/day
+    # bookkeeping". That triplication is exactly how a fix (e.g. the
+    # asymmetric-cost and stop-fill-honesty bugs previously found here)
+    # can get applied to one or two of the three paths and silently
+    # missed on the third. `_settle_exit` is now the ONE place any exit,
+    # of any kind, turns into a settled trade -- mirroring a
+    # broker/order-fill abstraction rather than three independent ad hoc
+    # blocks. This also fixes one such latent inconsistency: a
+    # non-finite pnl on the daily-loss-forced-close or end-of-data path
+    # used to be silently zeroed without the "_invalid_pnl_skipped"
+    # suffix the normal exit path already applied -- now every path
+    # gets the same treatment.
+    def _settle_exit(open_pos: dict, raw_exit_price: float, reason: str, direction_: int, i: int) -> float:
+        nonlocal equity, gap_loss_count
+        filled_exit_price = raw_exit_price - (spread_price + slip_price) * direction_
+        pnl = (filled_exit_price - open_pos["entry_price"]) * open_pos["size"] * direction_
+        pnl -= risk.commission_per_trade
+        if not math.isfinite(pnl):
+            # Guard against a runaway/degenerate trade (e.g. an entry
+            # sized off a near-zero ATR-based stop distance) ever
+            # corrupting the equity curve with NaN/inf.
+            pnl = 0.0
+            reason = f"{reason}_invalid_pnl_skipped"
+        if (
+            reason == "stop_loss"
+            and open_pos["initial_risk"]
+            and abs(pnl) > 3 * open_pos["initial_risk"] * open_pos["size"]
+        ):
+            # The stop fired, but the fill was still several times worse
+            # than the risk this trade was sized for -- almost always a
+            # genuine price gap jumping straight past the resting stop
+            # in one bar, not a bug. Surfaced as a warning below so a
+            # handful of outsized losses in an otherwise-sane backtest
+            # don't get mistaken for a broken engine.
+            gap_loss_count += 1
+        pnl = _clamp_loss(pnl, open_pos["equity_at_entry"])
+        equity += pnl
+        trades.append(Trade(
+            entry_time=open_pos["entry_time"],
+            exit_time=pd.Timestamp(ts[i]),
+            direction=direction_,
+            entry_price=open_pos["entry_price"],
+            exit_price=filled_exit_price,
+            size=open_pos["size"],
+            pnl=pnl,
+            pnl_pct=(pnl / open_pos["equity_at_entry"]) * 100 if open_pos["equity_at_entry"] else 0.0,
+            exit_reason=reason,
+            commission=risk.commission_per_trade,
+            equity_after=equity,
+            initial_risk=open_pos["initial_risk"],
+            adaptive_risk_multiplier=open_pos["adaptive_multiplier"],
+            adaptive_risk_rules_active=tuple(open_pos["adaptive_rules_active"]),
+        ))
+        bar_date_ = day_idx[i]
+        adaptive_state.record_trade_close(pnl, is_new_day=not day_has_pnl[bar_date_])
+        pnl_today_sum[bar_date_] += pnl
+        day_has_pnl[bar_date_] = True
+        return pnl
+
+    def _resolve_intrabar_exit(
+        direction_: int, stop: float | None, take: float | None,
+        low: float, high: float, open_: float,
+    ) -> tuple[float | None, str | None]:
+        """Pure fill-resolution logic, extracted so it's independently
+        testable: does this bar's high/low trigger the resting stop or
+        target, and if so, at what honest price? A resting stop that the
+        bar gapped straight through does NOT fill at the stop level --
+        it fills at the open, which is worse. Filling every stop at its
+        exact level is one of the most common sources of a fake
+        backtest edge."""
+        if direction_ == 1:
+            if stop is not None and low <= stop:
+                return min(stop, open_), "stop_loss"
+            if take is not None and high >= take:
+                return take, "take_profit"
+        else:
+            if stop is not None and high >= stop:
+                return max(stop, open_), "stop_loss"
+            if take is not None and low <= take:
+                return take, "take_profit"
+        return None, None
+
     # UPGRADE (speed): equity_curve used to be a plain Python list that
     # every one of n bars appended a (timestamp, equity) tuple to, then fed
     # to pd.DataFrame(list_of_tuples, columns=[...]) at the end --
@@ -247,32 +336,7 @@ def run_execution(
                 # Force-close at the adverse extreme (the point the real
                 # account would have been liquidated at), paying the same
                 # round-turn cost as any other exit.
-                filled_exit_price = adverse_extreme - (spread_price + slip_price) * direction
-                pnl = (filled_exit_price - open_trade["entry_price"]) * open_trade["size"] * direction
-                pnl -= risk.commission_per_trade
-                if not math.isfinite(pnl):
-                    pnl = 0.0
-                pnl = _clamp_loss(pnl, open_trade["equity_at_entry"])
-                equity += pnl
-                trades.append(Trade(
-                    entry_time=open_trade["entry_time"],
-                    exit_time=pd.Timestamp(ts[i]),
-                    direction=direction,
-                    entry_price=open_trade["entry_price"],
-                    exit_price=filled_exit_price,
-                    size=open_trade["size"],
-                    pnl=pnl,
-                    pnl_pct=(pnl / open_trade["equity_at_entry"]) * 100 if open_trade["equity_at_entry"] else 0.0,
-                    exit_reason="daily_loss_limit_forced_close",
-                    commission=risk.commission_per_trade,
-                    equity_after=equity,
-                    initial_risk=open_trade["initial_risk"],
-                    adaptive_risk_multiplier=open_trade["adaptive_multiplier"],
-                    adaptive_risk_rules_active=tuple(open_trade["adaptive_rules_active"]),
-                ))
-                adaptive_state.record_trade_close(pnl, is_new_day=not day_has_pnl[bar_date])
-                pnl_today_sum[bar_date] += pnl
-                day_has_pnl[bar_date] = True
+                _settle_exit(open_trade, adverse_extreme, "daily_loss_limit_forced_close", direction, i)
                 open_trade = None
                 force_closed_count += 1
                 equity_arr[i] = equity
@@ -302,24 +366,7 @@ def run_execution(
 
             open_trade["stop_price"] = stop
             take = open_trade["take_price"]
-            exit_price = None
-            reason = None
-
-            if direction == 1:
-                if stop is not None and lows[i] <= stop:
-                    # Honest fill: a resting stop that the bar gapped
-                    # straight through does NOT fill at the stop price —
-                    # it fills at the open, which is worse. Filling every
-                    # stop at its exact level is one of the most common
-                    # sources of a fake backtest edge.
-                    exit_price, reason = min(stop, opens[i]), "stop_loss"
-                elif take is not None and highs[i] >= take:
-                    exit_price, reason = take, "take_profit"
-            else:
-                if stop is not None and highs[i] >= stop:
-                    exit_price, reason = max(stop, opens[i]), "stop_loss"
-                elif take is not None and lows[i] <= take:
-                    exit_price, reason = take, "take_profit"
+            exit_price, reason = _resolve_intrabar_exit(direction, stop, take, lows[i], highs[i], opens[i])
 
             # signal-driven exit (flat or reversal) takes effect at close if no SL/TP hit
             if exit_price is None and sig[i] != direction:
@@ -330,52 +377,10 @@ def run_execution(
                 # round-turn cost the entry did — crediting a stop/take/
                 # signal exit at its exact quoted level (with no spread or
                 # slippage) flatters every single trade by that amount.
-                filled_exit_price = exit_price - (spread_price + slip_price) * direction
-                pnl = (filled_exit_price - open_trade["entry_price"]) * open_trade["size"] * direction
-                pnl -= risk.commission_per_trade
-                if not math.isfinite(pnl):
-                    # Guard against a runaway/degenerate trade (e.g. an
-                    # entry sized off a near-zero ATR-based stop distance)
-                    # ever corrupting the equity curve with NaN/inf. This
-                    # should be rare; if you see it often, your stop
-                    # distance or pip size for this instrument is almost
-                    # certainly misconfigured.
-                    pnl = 0.0
-                    reason = f"{reason}_invalid_pnl_skipped"
-                if (
-                    reason == "stop_loss"
-                    and open_trade["initial_risk"]
-                    and abs(pnl) > 3 * open_trade["initial_risk"] * open_trade["size"]
-                ):
-                    # The stop fired, but the fill was still several times
-                    # worse than the risk this trade was sized for -- almost
-                    # always a genuine price gap jumping straight past the
-                    # resting stop in one bar, not a bug. Surfaced as a
-                    # warning below so a handful of outsized losses in an
-                    # otherwise-sane backtest don't get mistaken for a
-                    # broken engine.
-                    gap_loss_count += 1
-                pnl = _clamp_loss(pnl, open_trade["equity_at_entry"])
-                equity += pnl
-                trades.append(Trade(
-                    entry_time=open_trade["entry_time"],
-                    exit_time=pd.Timestamp(ts[i]),
-                    direction=direction,
-                    entry_price=open_trade["entry_price"],
-                    exit_price=filled_exit_price,
-                    size=open_trade["size"],
-                    pnl=pnl,
-                    pnl_pct=(pnl / open_trade["equity_at_entry"]) * 100 if open_trade["equity_at_entry"] else 0.0,
-                    exit_reason=reason,
-                    commission=risk.commission_per_trade,
-                    equity_after=equity,
-                    initial_risk=open_trade["initial_risk"],
-                    adaptive_risk_multiplier=open_trade["adaptive_multiplier"],
-                    adaptive_risk_rules_active=tuple(open_trade["adaptive_rules_active"]),
-                ))
-                adaptive_state.record_trade_close(pnl, is_new_day=not day_has_pnl[bar_date])
-                pnl_today_sum[bar_date] += pnl
-                day_has_pnl[bar_date] = True
+                # See _settle_exit for the shared fill/cost/bookkeeping
+                # logic every exit path (this one, the daily-loss forced
+                # close, and the end-of-data close) now goes through.
+                _settle_exit(open_trade, exit_price, reason, direction, i)
                 open_trade = None
 
         # --- mark-to-market equity curve point for this bar ---
@@ -533,30 +538,7 @@ def run_execution(
     if open_trade is not None:
         i = n - 1
         direction = open_trade["direction"]
-        exit_price = closes[i] - (spread_price + slip_price) * direction
-        pnl = (exit_price - open_trade["entry_price"]) * open_trade["size"] * direction
-        pnl -= risk.commission_per_trade
-        if not math.isfinite(pnl):
-            pnl = 0.0
-        pnl = _clamp_loss(pnl, open_trade["equity_at_entry"])
-        equity += pnl
-        trades.append(Trade(
-            entry_time=open_trade["entry_time"],
-            exit_time=pd.Timestamp(ts[i]),
-            direction=direction,
-            entry_price=open_trade["entry_price"],
-            exit_price=exit_price,
-            size=open_trade["size"],
-            pnl=pnl,
-            pnl_pct=(pnl / open_trade["equity_at_entry"]) * 100 if open_trade["equity_at_entry"] else 0.0,
-            exit_reason="end_of_data",
-            commission=risk.commission_per_trade,
-            equity_after=equity,
-            initial_risk=open_trade["initial_risk"],
-            adaptive_risk_multiplier=open_trade["adaptive_multiplier"],
-            adaptive_risk_rules_active=tuple(open_trade["adaptive_rules_active"]),
-        ))
-        adaptive_state.record_trade_close(pnl, is_new_day=not day_has_pnl[day_idx[i]])
+        _settle_exit(open_trade, closes[i], "end_of_data", direction, i)
 
     # UPGRADE (speed): building the DataFrame straight from the two
     # already-columnar numpy arrays (the original `ts` array + the
