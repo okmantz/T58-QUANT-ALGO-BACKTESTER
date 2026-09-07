@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Owen AI -- T58 Trading Intelligence</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="stylesheet" href="/static/theme.css">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p.lede { color: var(--text-muted); font-size: 13px; margin: 0 0 16px; }
+
+  .oai-grid {
+    display: grid;
+    grid-template-columns: 1.1fr 1.4fr;
+    grid-template-rows: auto auto;
+    gap: 14px;
+  }
+  @media (max-width: 980px) { .oai-grid { grid-template-columns: 1fr; } }
+
+  .oai-panel {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px; display: flex; flex-direction: column; min-height: 0;
+  }
+  .oai-panel h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted);
+    margin: 0 0 10px; display: flex; align-items: center; justify-content: space-between;
+  }
+  .oai-panel h2 .refresh { cursor: pointer; color: var(--teal); font-size: 11px; font-weight: 600; }
+
+  #news-panel, #rankings-panel { max-height: 420px; overflow-y: auto; }
+
+  .news-row { border-bottom: 1px solid var(--border); padding: 8px 0; font-size: 12.5px; }
+  .news-row:last-child { border-bottom: none; }
+  .news-row .top { display: flex; justify-content: space-between; gap: 8px; }
+  .news-row .title { color: var(--text); font-weight: 600; }
+  .news-row .meta { color: var(--text-dim); font-size: 11px; margin-top: 2px; }
+  .impact-High { color: var(--coral); }
+  .impact-Medium { color: #e0b035; }
+  .impact-Low { color: var(--text-dim); }
+  .countdown { font-variant-numeric: tabular-nums; color: var(--teal); }
+
+  table.rank-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.rank-table th { text-align: left; color: var(--text-dim); font-weight: 500; padding: 4px 6px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--panel-2); }
+  table.rank-table td { padding: 5px 6px; border-bottom: 1px solid var(--border); }
+  .status-READY { color: var(--teal); font-weight: 700; }
+  .status-DEVELOPING { color: #e0b035; }
+  .status-WAIT { color: var(--text-dim); }
+  .status-EXTENDED { color: var(--violet); }
+  .status-PASS { color: var(--coral); }
+  .dir-long { color: var(--teal); }
+  .dir-short { color: var(--coral); }
+
+  .oai-chat { grid-column: 1 / -1; }
+  #chat-log { flex: 1; min-height: 260px; max-height: 420px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; }
+  .msg { max-width: 80%; padding: 8px 11px; border-radius: 10px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+  .msg.user { align-self: flex-end; background: var(--teal-dim); color: var(--text); }
+  .msg.assistant { align-self: flex-start; background: var(--panel-3); border: 1px solid var(--border); }
+  .msg.error { align-self: flex-start; background: var(--coral-dim); border: 1px solid var(--coral); }
+
+  .chat-input-row { display: flex; gap: 8px; margin-top: 10px; }
+  .chat-input-row textarea {
+    flex: 1; resize: none; min-height: 44px; background: var(--panel); border: 1px solid var(--border-light);
+    border-radius: 8px; color: var(--text); padding: 10px; font-size: 13px; font-family: inherit;
+  }
+  .chat-input-row textarea:focus { outline: none; border-color: var(--teal); }
+  button.btn {
+    background: var(--teal); color: #06110d; border: none; border-radius: 8px; padding: 0 16px;
+    font-weight: 700; font-size: 13px; cursor: pointer;
+  }
+  button.btn.secondary { background: var(--panel-3); color: var(--text); border: 1px solid var(--border-light); font-weight: 600; }
+  button.btn:disabled { opacity: .5; cursor: default; }
+
+  .chat-toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .mode-toggle { display: flex; gap: 4px; background: var(--panel); border: 1px solid var(--border-light); border-radius: 8px; padding: 2px; }
+  .mode-toggle button { background: transparent; border: none; color: var(--text-muted); font-size: 11px; padding: 5px 10px; border-radius: 6px; cursor: pointer; }
+  .mode-toggle button.active { background: var(--teal-dim); color: var(--text); }
+
+  details.settings { margin-top: 14px; font-size: 12px; }
+  details.settings summary { cursor: pointer; color: var(--text-muted); }
+  .settings-row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+  .settings-row input[type=text] { background: var(--panel); border: 1px solid var(--border-light); border-radius: 6px; color: var(--text); padding: 6px 8px; font-size: 12px; }
+  .settings-row label { display: flex; align-items: center; gap: 4px; color: var(--text-muted); }
+  .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); margin-right: 6px; }
+  .status-dot.ok { background: var(--teal); }
+  .status-dot.off { background: var(--coral); }
+  small.err { color: var(--coral); }
+</style>
+</head>
+<body>
+{% set active_page = 'ai_assistant' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+  <h1>Owen AI -- Trading Intelligence</h1>
+  <p class="lede">
+    News, best-markets ranking, and chat, all reasoning over Owen's exact strategy hierarchy.
+    The macro/EMA/liquidity/location/confirmation facts below are computed by this app, not the model --
+    Ollama only explains and answers questions against them.
+  </p>
+
+  <div class="oai-grid">
+    <div class="oai-panel">
+      <h2>News <span class="refresh" onclick="loadNews()">refresh</span></h2>
+      <div id="news-panel"><div class="news-row">Loading...</div></div>
+    </div>
+
+    <div class="oai-panel">
+      <h2>Best Markets <span class="refresh" onclick="loadRankings()">refresh</span></h2>
+      <div id="rankings-panel" style="overflow-x:auto;"><div>Loading...</div></div>
+      <small id="rankings-note" style="color:var(--text-dim); margin-top:6px; display:block;"></small>
+    </div>
+
+    <div class="oai-panel oai-chat">
+      <h2>
+        <span><span id="ollama-dot" class="status-dot"></span>Owen AI</span>
+      </h2>
+      <div class="chat-toolbar">
+        <div class="mode-toggle">
+          <button id="mode-personal" class="active" onclick="setMode('personal')">Personal</button>
+          <button id="mode-t58" onclick="setMode('t58')">T58 Group</button>
+        </div>
+        <button class="btn secondary" onclick="runDailyBrief()">Daily Brief</button>
+        <button class="btn secondary" onclick="runWatchlist()">Watchlist</button>
+      </div>
+      <div id="chat-log"></div>
+      <div class="chat-input-row">
+        <textarea id="chat-input" placeholder="Ask about a market, request the daily brief, review a trade..."></textarea>
+        <button class="btn" id="send-btn" onclick="sendChat()">Send</button>
+      </div>
+
+      <details class="settings">
+        <summary>Ollama settings</summary>
+        <div class="settings-row">
+          <label><input type="checkbox" id="ai-enabled" {{ 'checked' if ollama_enabled else '' }}> Enabled</label>
+          <label>Host <input type="text" id="ai-host" value="{{ ollama_host }}"></label>
+          <label>Model <input type="text" id="ai-model" value="{{ ollama_model }}"></label>
+          <button class="btn secondary" onclick="saveSettings()">Save</button>
+          <small id="settings-status"></small>
+        </div>
+      </details>
+    </div>
+  </div>
+</div>
+</div>
+<script src="/static/t58-chrome.js" defer></script>
+<script>
+let mode = 'personal';
+let history = [];
+
+function escapeHtml(s) {
+  return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function fmtCountdown(mins) {
+  if (mins === null || mins === undefined) return '';
+  if (mins < 0) return 'released';
+  const h = Math.floor(mins / 60), m = Math.round(mins % 60);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+async function loadNews() {
+  const panel = document.getElementById('news-panel');
+  try {
+    const res = await fetch('/assistant/api/news');
+    const data = await res.json();
+    if (data.error) { panel.innerHTML = `<div class="news-row"><small class="err">${escapeHtml(data.error)}</small></div>`; return; }
+    if (!data.events.length) { panel.innerHTML = '<div class="news-row">No upcoming events this week.</div>'; return; }
+    panel.innerHTML = data.events.map(e => `
+      <div class="news-row">
+        <div class="top">
+          <span class="title">${escapeHtml(e.currency)} -- ${escapeHtml(e.title)}</span>
+          <span class="impact-${e.impact}">${e.impact}</span>
+        </div>
+        <div class="meta">
+          ${e.when ? new Date(e.when).toLocaleString() : 'TBD'}
+          ${e.minutes_until !== null ? ` &middot; <span class="countdown">${fmtCountdown(e.minutes_until)}</span>` : ''}
+          ${e.affected_symbols.length ? ` &middot; affects ${e.affected_symbols.slice(0,5).join(', ')}` : ''}
+        </div>
+      </div>`).join('');
+  } catch (err) {
+    panel.innerHTML = `<div class="news-row"><small class="err">Failed to load news: ${escapeHtml(String(err))}</small></div>`;
+  }
+}
+
+async function loadRankings() {
+  const panel = document.getElementById('rankings-panel');
+  try {
+    const res = await fetch('/assistant/api/rankings');
+    const data = await res.json();
+    document.getElementById('rankings-note').textContent = data.macro_note || '';
+    if (!data.rankings.length) {
+      const errs = (data.errors || []).slice(0, 3).join(' | ');
+      panel.innerHTML = `<div>No market data available yet. ${escapeHtml(errs || 'Connect MT5 on the Forward Test tab, or Alpaca for crypto.')}</div>`;
+      return;
+    }
+    const rows = data.rankings.map(r => `
+      <tr>
+        <td>${escapeHtml(r.symbol)}</td>
+        <td>${escapeHtml(r.asset_class)}</td>
+        <td>${r.score}</td>
+        <td class="status-${r.status}">${r.status}</td>
+        <td class="dir-${r.direction}">${r.direction}</td>
+        <td>${r.momentum_pct > 0 ? '+' : ''}${r.momentum_pct}%</td>
+        <td>${r.atr_normalized_move} ATR</td>
+        <td>${escapeHtml(r.zone)}</td>
+      </tr>`).join('');
+    panel.innerHTML = `<table class="rank-table">
+      <thead><tr><th>Sym</th><th>Class</th><th>Score</th><th>Status</th><th>Dir</th><th>Move</th><th>ATR</th><th>Zone</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+  } catch (err) {
+    panel.innerHTML = `<div><small class="err">Failed to load rankings: ${escapeHtml(String(err))}</small></div>`;
+  }
+}
+
+function addMsg(role, text) {
+  const log = document.getElementById('chat-log');
+  const div = document.createElement('div');
+  div.className = `msg ${role}`;
+  div.textContent = text;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('mode-personal').classList.toggle('active', m === 'personal');
+  document.getElementById('mode-t58').classList.toggle('active', m === 't58');
+}
+
+async function postJson(url, body) {
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  return res.json();
+}
+
+async function sendChat() {
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  addMsg('user', text);
+  document.getElementById('send-btn').disabled = true;
+  try {
+    const data = await postJson('/assistant/api/chat', { message: text, mode, history });
+    if (data.error) { addMsg('error', data.error); }
+    else {
+      addMsg('assistant', data.reply);
+      history.push({ role: 'user', content: text });
+      history.push({ role: 'assistant', content: data.reply });
+    }
+  } catch (err) {
+    addMsg('error', 'Request failed: ' + err);
+  } finally {
+    document.getElementById('send-btn').disabled = false;
+  }
+}
+document.getElementById('chat-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+});
+
+async function runDailyBrief() {
+  addMsg('user', '[Daily Brief]');
+  const data = await (await fetch('/assistant/api/daily-brief')).json();
+  addMsg(data.error ? 'error' : 'assistant', data.error || data.reply);
+}
+async function runWatchlist() {
+  const panel = await (await fetch('/assistant/api/rankings')).json();
+  const symbols = (panel.rankings || []).slice(0, 6).map(r => r.symbol);
+  addMsg('user', '[Watchlist: ' + symbols.join(', ') + ']');
+  const data = await postJson('/assistant/api/watchlist', { symbols });
+  addMsg(data.error ? 'error' : 'assistant', data.error || data.reply);
+}
+
+async function saveSettings() {
+  const body = {
+    enabled: document.getElementById('ai-enabled').checked,
+    host: document.getElementById('ai-host').value,
+    model: document.getElementById('ai-model').value,
+  };
+  const data = await postJson('/assistant/api/settings', body);
+  document.getElementById('settings-status').textContent = data.ok ? 'Saved.' : 'Failed to save.';
+  document.getElementById('ollama-dot').className = 'status-dot ' + (body.enabled ? 'ok' : 'off');
+  setTimeout(() => { document.getElementById('settings-status').textContent = ''; }, 2000);
+}
+
+document.getElementById('ollama-dot').className = 'status-dot ' + ('{{ "ok" if ollama_enabled else "off" }}');
+loadNews();
+loadRankings();
+setInterval(loadNews, 5 * 60 * 1000);
+setInterval(loadRankings, 60 * 1000);
+</script>
+</body>
+</html>
