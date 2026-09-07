@@ -114,6 +114,17 @@
       <small id="rankings-note" style="color:var(--text-dim); margin-top:6px; display:block;"></small>
     </div>
 
+    <div class="oai-panel oai-chat" style="grid-column: 1 / -1;">
+      <h2>Screenshot Analysis</h2>
+      <div class="chat-toolbar">
+        <input type="file" id="shot-file" accept="image/*" style="color:var(--text-muted); font-size:12px;">
+        <input type="text" id="shot-notes" placeholder="Optional notes (symbol, timeframe, what happened)" style="flex:1; min-width:180px; background:var(--panel); border:1px solid var(--border-light); border-radius:8px; color:var(--text); padding:8px 10px; font-size:13px;">
+        <button class="btn" onclick="analyzeScreenshot('chart')">Chart -&gt; Trading Plan</button>
+        <button class="btn secondary" onclick="analyzeScreenshot('trade')">Trade -&gt; Session Review</button>
+      </div>
+      <small style="color:var(--text-dim);">Requires a vision-capable Ollama model (set below, e.g. `llava` or `llama3.2-vision`) -- the default chat model can't see images.</small>
+    </div>
+
     <div class="oai-panel oai-chat">
       <h2>
         <span><span id="ollama-dot" class="status-dot"></span>Owen AI</span>
@@ -137,7 +148,8 @@
         <div class="settings-row">
           <label><input type="checkbox" id="ai-enabled" {{ 'checked' if ollama_enabled else '' }}> Enabled</label>
           <label>Host <input type="text" id="ai-host" value="{{ ollama_host }}"></label>
-          <label>Model <input type="text" id="ai-model" value="{{ ollama_model }}"></label>
+          <label>Model (chat) <input type="text" id="ai-model" value="{{ ollama_model }}"></label>
+          <label>Vision model (screenshots) <input type="text" id="ai-vision-model" value="{{ ollama_vision_model }}"></label>
           <button class="btn secondary" onclick="saveSettings()">Save</button>
           <small id="settings-status"></small>
         </div>
@@ -225,6 +237,26 @@ function addMsg(role, text) {
   log.scrollTop = log.scrollHeight;
 }
 
+async function analyzeScreenshot(kind) {
+  const fileInput = document.getElementById('shot-file');
+  const notes = document.getElementById('shot-notes').value;
+  const file = fileInput.files[0];
+  if (!file) { alert('Choose an image first.'); return; }
+  const label = kind === 'chart' ? 'Chart screenshot' : 'Trade screenshot';
+  addMsg('user', `[${label} uploaded: ${file.name}]` + (notes ? ` notes: ${notes}` : ''));
+  const form = new FormData();
+  form.append('image', file);
+  form.append('kind', kind);
+  form.append('notes', notes);
+  try {
+    const res = await fetch('/assistant/api/analyze-screenshot', { method: 'POST', body: form });
+    const data = await res.json();
+    addMsg(data.error ? 'error' : 'assistant', data.error || data.reply);
+  } catch (err) {
+    addMsg('error', 'Request failed: ' + err);
+  }
+}
+
 function setMode(m) {
   mode = m;
   document.getElementById('mode-personal').classList.toggle('active', m === 'personal');
@@ -279,6 +311,7 @@ async function saveSettings() {
     enabled: document.getElementById('ai-enabled').checked,
     host: document.getElementById('ai-host').value,
     model: document.getElementById('ai-model').value,
+    vision_model: document.getElementById('ai-vision-model').value,
   };
   const data = await postJson('/assistant/api/settings', body);
   document.getElementById('settings-status').textContent = data.ok ? 'Saved.' : 'Failed to save.';

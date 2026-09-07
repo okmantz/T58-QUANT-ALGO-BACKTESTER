@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Options Outlook -- T58 Trading</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="stylesheet" href="/static/theme.css">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p.lede { color: var(--text-muted); font-size: 13px; margin: 0 0 16px; }
+
+  .oo-grid { display: grid; grid-template-columns: 1fr 1.6fr; gap: 14px; }
+  @media (max-width: 980px) { .oo-grid { grid-template-columns: 1fr; } }
+
+  .oo-panel {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px; display: flex; flex-direction: column; min-height: 0;
+  }
+  .oo-panel h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted);
+    margin: 0 0 10px;
+  }
+
+  .oo-field { margin-bottom: 10px; }
+  .oo-field label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+  .oo-field input, .oo-field select {
+    width: 100%; background: var(--panel); border: 1px solid var(--border-light); border-radius: 8px;
+    color: var(--text); padding: 8px 10px; font-size: 13px; font-family: inherit;
+  }
+  .oo-field input:focus, .oo-field select:focus { outline: none; border-color: var(--teal); }
+
+  button.btn {
+    background: var(--teal); color: #06110d; border: none; border-radius: 8px; padding: 10px 16px;
+    font-weight: 700; font-size: 13px; cursor: pointer; width: 100%;
+  }
+  button.btn:disabled { opacity: .5; cursor: default; }
+
+  .horizon-toggle { display: flex; gap: 4px; background: var(--panel); border: 1px solid var(--border-light); border-radius: 8px; padding: 2px; margin-bottom: 10px; }
+  .horizon-toggle button { flex: 1; background: transparent; border: none; color: var(--text-muted); font-size: 12px; padding: 7px 10px; border-radius: 6px; cursor: pointer; }
+  .horizon-toggle button.active { background: var(--teal-dim); color: var(--text); }
+
+  table.oo-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 14px; }
+  table.oo-table th { text-align: left; color: var(--text-dim); font-weight: 500; padding: 5px 6px; border-bottom: 1px solid var(--border); }
+  table.oo-table td { padding: 5px 6px; border-bottom: 1px solid var(--border); }
+  .oo-type-call { color: var(--teal); font-weight: 700; }
+  .oo-type-put { color: var(--coral); font-weight: 700; }
+
+  #oo-reply { white-space: pre-wrap; font-size: 13px; line-height: 1.55; background: var(--panel-3); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+  small.err { color: var(--coral); }
+  small.note { color: var(--text-dim); display: block; margin: 4px 0 10px; }
+</style>
+</head>
+<body>
+{% set active_page = 'options_outlook' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+  <h1>Options Outlook</h1>
+  <p class="lede">
+    Best calls and puts for a symbol, ranked around target deltas (~50/25/10) and priced with the
+    same from-scratch Black-Scholes engine as the Quant Lab options calculator. Owen AI ranks and
+    explains the candidates below -- every strike, premium, and delta shown is computed by the app,
+    never invented by the model.
+  </p>
+
+  <div class="oo-grid">
+    <div class="oo-panel">
+      <h2>Scenario</h2>
+      <div class="horizon-toggle">
+        <button id="h-today" class="active" onclick="setHorizon('today')">Today</button>
+        <button id="h-week" onclick="setHorizon('this_week')">This Week</button>
+      </div>
+      <div class="oo-field"><label>Symbol</label><input id="oo-symbol" value="SPY"></div>
+      <div class="oo-field"><label>Spot price</label><input id="oo-spot" type="number" step="any" value="100"></div>
+      <div class="oo-field"><label>Implied/estimated volatility (decimal, e.g. 0.25)</label><input id="oo-iv" type="number" step="any" value="0.25"></div>
+      <div class="oo-field"><label>Risk-free rate (decimal)</label><input id="oo-rate" type="number" step="any" value="0.045"></div>
+      <div class="oo-field"><label>Directional/context notes (optional)</label><input id="oo-notes" placeholder="e.g. bullish macro, earnings Thursday"></div>
+      <button class="btn" id="oo-btn" onclick="runOutlook()">Generate Options Outlook</button>
+      <small class="note" id="oo-status"></small>
+    </div>
+
+    <div class="oo-panel">
+      <h2>Candidates &amp; Outlook</h2>
+      <div id="oo-meta" class="note" style="color:var(--text-dim); font-size:12px; margin-bottom:8px;"></div>
+      <div id="oo-table-wrap" style="overflow-x:auto;"></div>
+      <div id="oo-reply">Fill in the scenario and click Generate Options Outlook.</div>
+    </div>
+  </div>
+</div>
+</div>
+<script src="/static/t58-chrome.js" defer></script>
+<script>
+let horizon = 'today';
+function setHorizon(h) {
+  horizon = h;
+  document.getElementById('h-today').classList.toggle('active', h === 'today');
+  document.getElementById('h-week').classList.toggle('active', h === 'this_week');
+}
+
+function escapeHtml(s) {
+  return (s || '').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function renderTable(candidates) {
+  if (!candidates || !candidates.length) { document.getElementById('oo-table-wrap').innerHTML = ''; return; }
+  const rows = candidates.map(c => `
+    <tr>
+      <td class="oo-type-${c.option_type}">${c.option_type.toUpperCase()}</td>
+      <td>${c.strike}</td>
+      <td>${c.delta}</td>
+      <td>${c.premium}</td>
+      <td>${c.breakeven}</td>
+      <td>${c.theta_per_day}</td>
+      <td>${c.prob_itm_proxy}</td>
+    </tr>`).join('');
+  document.getElementById('oo-table-wrap').innerHTML = `
+    <table class="oo-table">
+      <thead><tr><th>Type</th><th>Strike</th><th>Delta</th><th>Premium</th><th>Breakeven</th><th>Theta/day</th><th>~Prob ITM</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+async function runOutlook() {
+  const btn = document.getElementById('oo-btn');
+  const status = document.getElementById('oo-status');
+  const body = {
+    symbol: document.getElementById('oo-symbol').value || 'SYMBOL',
+    spot: parseFloat(document.getElementById('oo-spot').value),
+    iv: parseFloat(document.getElementById('oo-iv').value),
+    rate: parseFloat(document.getElementById('oo-rate').value),
+    horizon,
+    notes: document.getElementById('oo-notes').value,
+  };
+  btn.disabled = true;
+  status.textContent = 'Generating...';
+  document.getElementById('oo-reply').textContent = '';
+  try {
+    const res = await fetch('/options-outlook/api/outlook', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (data.error && !data.candidates) {
+      document.getElementById('oo-reply').innerHTML = `<small class="err">${escapeHtml(data.error)}</small>`;
+      status.textContent = '';
+      return;
+    }
+    renderTable(data.candidates);
+    document.getElementById('oo-meta').textContent =
+      `Expected move (~1 std dev, ${data.dte_days}d): ±${data.expected_move}`;
+    if (data.error) {
+      document.getElementById('oo-reply').innerHTML =
+        `<small class="err">${escapeHtml(data.error)}</small><br>Candidates above are still valid (Black-Scholes-only, no Ollama needed).`;
+    } else {
+      document.getElementById('oo-reply').textContent = data.reply;
+    }
+  } catch (err) {
+    document.getElementById('oo-reply').innerHTML = `<small class="err">Request failed: ${escapeHtml(String(err))}</small>`;
+  } finally {
+    btn.disabled = false;
+    status.textContent = '';
+  }
+}
+</script>
+</body>
+</html>
