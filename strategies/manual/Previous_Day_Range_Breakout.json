@@ -1,0 +1,46 @@
+{
+  "name": "Previous-Day Range Breakout",
+  "entry_conditions": {
+    "long": [
+      {
+        "left": {
+          "type": "close",
+          "period": 1,
+          "field": "close"
+        },
+        "operator": "cross above",
+        "right": {
+          "type": "previous_day_high"
+        }
+      }
+    ],
+    "short": [
+      {
+        "left": {
+          "type": "close",
+          "period": 1,
+          "field": "close"
+        },
+        "operator": "cross below",
+        "right": {
+          "type": "previous_day_low"
+        }
+      }
+    ]
+  },
+  "exit_conditions": {
+    "long": [],
+    "short": []
+  },
+  "risk_management": {
+    "stop_type": "atr",
+    "stop_value": 1.5,
+    "stop_atr_period": 14,
+    "target_type": "atr",
+    "target_value": 1.5,
+    "target_atr_period": 14,
+    "opposite_signal_exit": true,
+    "max_bars_in_trade": 96
+  }
+}
+

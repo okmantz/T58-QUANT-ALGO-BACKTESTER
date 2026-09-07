@@ -1,0 +1,74 @@
+{
+  "name": "Pure RSI Extreme Reversion (rsi21, 20/80)",
+  "entry_conditions": {
+    "long": [
+      {
+        "left": {
+          "type": "rsi",
+          "period": 21,
+          "field": "close"
+        },
+        "operator": "<",
+        "right": {
+          "type": "value",
+          "value": 20.0
+        }
+      }
+    ],
+    "short": [
+      {
+        "left": {
+          "type": "rsi",
+          "period": 21,
+          "field": "close"
+        },
+        "operator": ">",
+        "right": {
+          "type": "value",
+          "value": 80.49777459697636
+        }
+      }
+    ]
+  },
+  "exit_conditions": {
+    "long": [
+      {
+        "left": {
+          "type": "rsi",
+          "period": 21,
+          "field": "close"
+        },
+        "operator": ">",
+        "right": {
+          "type": "value",
+          "value": 47.96331518490367
+        }
+      }
+    ],
+    "short": [
+      {
+        "left": {
+          "type": "rsi",
+          "period": 10,
+          "field": "close"
+        },
+        "operator": "<",
+        "right": {
+          "type": "value",
+          "value": 61.639327330932886
+        }
+      }
+    ]
+  },
+  "risk_management": {
+    "stop_type": "atr",
+    "stop_value": 1.5,
+    "stop_atr_period": 14,
+    "target_type": "atr",
+    "target_value": 1.5,
+    "target_atr_period": 14,
+    "opposite_signal_exit": true,
+    "max_bars_in_trade": 24
+  }
+}
+
