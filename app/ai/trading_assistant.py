@@ -171,6 +171,115 @@ up to 3 specific things to improve, and themes/levels to watch tomorrow."""
 T58_GROUP_SYSTEM_PROMPT = PERSONAL_STRATEGY_PROMPT
 PERSONAL_MODE_SYSTEM_PROMPT = PERSONAL_STRATEGY_PROMPT + "\n\n" + PERSONAL_ASSISTANT_PROMPT
 
+# ---------------------------------------------------------------------------
+# Screenshot analysis instructions -- appended to PERSONAL_MODE_SYSTEM_PROMPT
+# for the two image-based features (chart -> trading plan, trade -> session
+# review). The model is looking at a picture, not app-computed facts, so
+# these are explicit about reading only what's actually visible and saying
+# so when something needed by the framework isn't legible in the image.
+# ---------------------------------------------------------------------------
+
+CHART_SCREENSHOT_INSTRUCTION = """\
+IMAGE TASK: Owen has uploaded a screenshot of a price chart. Read directly
+off the image -- candles/price action, any visible EMAs (identify which is
+which if labeled or inferable from color/period, otherwise say "EMA not
+labeled -- treat 50/200 EMA confluence as unknown"), visible highs/lows,
+any drawn zones or levels, the visible timeframe, and the instrument if
+shown. Do not invent macro bias, news, or any level not visible in the
+image -- if Owen's macro bias for this instrument isn't stated in his
+question or in the market intelligence context, say "macro bias not
+provided -- treat as unknown" rather than guessing one.
+
+Produce Owen's exact trading plan for this chart using the IDEAL PERSONAL
+RESPONSE FORMAT from the strategy above:
+[MARKET] (from the image or Owen's notes)
+Macro / H4-H1 / 200 EMA / 50 EMA / EMA Alignment / Location / Liquidity /
+Sweep / Supply-Demand / Premium-Discount / M15 Confirmation / Target
+Liquidity / Event Risk -- marking each "not visible in screenshot" where
+the image doesn't show it, rather than fabricating a value.
+Then Status (READY / DEVELOPING / WAIT / EXTENDED / PASS), "What Owen
+Needs Next", and "What Invalidates It". Never call it READY purely off a
+single screenshot if location, sweep, or confirmation aren't clearly
+visible -- default to DEVELOPING or WAIT and say exactly what additional
+timeframe or confirmation Owen should check before entering."""
+
+TRADE_SCREENSHOT_INSTRUCTION = """\
+IMAGE TASK: Owen has uploaded a screenshot of a trade he took (a broker/
+platform ticket, position, or closed-trade summary -- entry, exit, P&L,
+and/or the chart at the time of the trade). Read directly off the image:
+instrument, direction, entry price, exit price / current price, P&L if
+shown, and any visible chart context (structure, EMAs, zones) at entry.
+
+Produce Owen's Session Review breakdown for this single trade using the
+PERSONAL TRADING ASSISTANT's Trade Journal + Session Review structure:
+Market / Direction / Entry thesis (inferred from what's visible -- state
+plainly what you can and can't determine from the image alone) / Result
+(win/loss/breakeven, from the visible P&L) / What worked / What failed /
+Did the trade fit Owen's framework (macro -> liquidity -> location ->
+confirmation) or not, and specifically which step -- if any -- was
+missing or violated / Was this a good process even if it lost, or a bad
+process even if it won (separate PROCESS QUALITY from PNL explicitly,
+per the strategy's core rule) / Lesson.
+Only name a recurring behavioral issue (chasing, entering before the
+sweep, ignoring poor location, FOMO, revenge trading, etc.) if the image
+or Owen's notes actually show evidence of it -- never accuse without
+evidence. If the screenshot doesn't show enough to assess a step (e.g. no
+visible chart, so location/liquidity can't be judged), say so rather than
+guessing."""
+
+# ---------------------------------------------------------------------------
+# Options outlook -- a distinct system prompt (not Owen's futures/forex
+# strategy above). Reuses the same macro-first, no-forced-signal discipline
+# but adapted to options-specific vocabulary (strikes, expiries, premium
+# decay, delta) since Owen's BSL/SSL/EMA framework is written for
+# directional futures/forex trades, not options structuring.
+# ---------------------------------------------------------------------------
+
+OPTIONS_SYSTEM_PROMPT = """\
+You are Owen's options-outlook assistant for T58 Trading.
+
+Every strike, price, delta, and premium figure in the "candidates" data
+below was computed deterministically by the app's own Black-Scholes
+pricing (app.quant_lab.options_pricing) -- your job is to explain, rank,
+and recommend from those numbers, never to invent a strike, premium, or
+delta of your own.
+
+For the requested horizon (today / this week), produce:
+
+OPTIONS OUTLOOK -- [SYMBOL] -- [HORIZON]
+
+Directional Bias
+State bullish / bearish / neutral / mixed and the reasoning, using
+whatever macro/technical context Owen provided. If no directional
+context was given, say so and present both call and put ideas as
+scenario-dependent rather than a single-sided call.
+
+Best Calls
+Rank up to 3 call candidates from the data by risk/reward and likelihood
+of the move happening within the horizon (favor moderate delta, e.g.
+~0.25-0.45, over deep-OTM lottery strikes unless Owen explicitly asked
+for a high-risk/high-reward play). For each: strike, expiry/DTE, premium
+estimate, delta, breakeven, and one line on why.
+
+Best Puts
+Same structure, for put candidates.
+
+Avoid / Low Priority
+Which candidates in the data are poor risk/reward right now (too far
+OTM for the horizon, too expensive relative to expected move, IV rank
+unfavorable) and why.
+
+Risk Notes
+Time decay (theta) exposure for this horizon, any major event risk if
+provided, and the key level that would invalidate the bias.
+
+Never present a play as high-confidence purely because it's cheap
+(far-OTM lottery strikes always look "cheap" and are usually poor
+expected value) -- weigh premium against actual probability of reaching
+the strike, using the delta/expected-move figures provided."""
+
+OPTIONS_MODE_SYSTEM_PROMPT = OPTIONS_SYSTEM_PROMPT
+
 
 def _jsonable(obj):
     """Recursively converts dataclasses (T58Assessment, MarketSnapshot,
@@ -256,6 +365,100 @@ class TradingAssistantClient:
             return "", f"Ollama at {host} didn't respond in time."
         except Exception as exc:
             return "", f"Ollama request failed: {exc}"
+
+    def _chat_vision(
+        self, system_prompt: str, user_message: str, image_b64: str, model: str | None = None,
+    ) -> tuple[str, str | None]:
+        """Same as _chat, but attaches one base64-encoded image to the user
+        turn via Ollama's `images` field (the standard way Ollama's
+        /api/chat accepts an image for a multimodal model -- see
+        https://github.com/ollama/ollama/blob/main/docs/api.md#chat-request-with-images).
+        `model` overrides self.settings.model for this call only -- vision
+        needs a separate, explicitly multimodal model (e.g. llava,
+        llama3.2-vision); the default text model can't see the image at
+        all and most will simply ignore the `images` field or error."""
+        import requests
+
+        if not self.settings.is_usable:
+            return "", "Ollama isn't enabled/configured yet. Turn it on and set a host in AI Assistant settings."
+
+        host = (self.settings.host or "").rstrip("/")
+        vision_model = model or getattr(self.settings, "vision_model", "") or "llava"
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message, "images": [image_b64]},
+        ]
+        try:
+            resp = requests.post(
+                f"{host}/api/chat",
+                headers=self._headers(),
+                json={"model": vision_model, "messages": messages, "stream": False},
+                timeout=self.timeout,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            reply = (data.get("message") or {}).get("content", "")
+            return reply, None
+        except requests.exceptions.ConnectionError:
+            return "", f"Couldn't reach Ollama at {host} (is `ollama serve` running?)."
+        except requests.exceptions.Timeout:
+            return "", f"Ollama at {host} didn't respond in time (vision models can be slow -- try a smaller model)."
+        except Exception as exc:
+            return "", (
+                f"Ollama vision request failed: {exc}. Make sure `{vision_model}` is a vision-capable "
+                f"model that's actually been pulled (e.g. `ollama pull llava`)."
+            )
+
+    def analyze_chart_screenshot(self, image_b64: str, context: dict | None = None, extra_notes: str = "") -> tuple[str, str | None]:
+        """Chart screenshot -> exact trading plan in Owen's format. `context`
+        (from build_context) is optional extra market intelligence (macro
+        bias, news) the deterministic scanner already knows about the
+        instrument, if Owen's provided one; the image itself is the
+        primary source of truth for what's actually on the chart."""
+        import json
+
+        system_prompt = PERSONAL_MODE_SYSTEM_PROMPT + "\n\n" + CHART_SCREENSHOT_INSTRUCTION
+        parts = []
+        if context:
+            parts.append(
+                "Additional market intelligence computed by the app (may or may not cover this "
+                f"instrument):\n{json.dumps(_jsonable(context), indent=2)}"
+            )
+        if extra_notes.strip():
+            parts.append(f"Owen's notes: {extra_notes.strip()}")
+        parts.append("Analyze the attached chart screenshot and produce the trading plan now.")
+        user_message = "\n\n".join(parts)
+        return self._chat_vision(system_prompt, user_message, image_b64)
+
+    def analyze_trade_screenshot(self, image_b64: str, extra_notes: str = "") -> tuple[str, str | None]:
+        """Trade/PnL screenshot -> Session-Review-style breakdown of what
+        went right or wrong, per PERSONAL_ASSISTANT_PROMPT's Trade Journal
+        rules (process quality kept separate from PnL)."""
+        system_prompt = PERSONAL_MODE_SYSTEM_PROMPT + "\n\n" + TRADE_SCREENSHOT_INSTRUCTION
+        parts = []
+        if extra_notes.strip():
+            parts.append(f"Owen's notes on this trade: {extra_notes.strip()}")
+        parts.append("Analyze the attached trade screenshot and produce the review now.")
+        user_message = "\n\n".join(parts)
+        return self._chat_vision(system_prompt, user_message, image_b64)
+
+    def options_outlook(self, symbol: str, horizon: str, candidates: list[dict], notes: str = "") -> tuple[str, str | None]:
+        """`candidates` is the deterministic call/put strike list from
+        app.ai.options_outlook.build_candidates (spot, strikes, premiums,
+        deltas, breakevens already computed) -- the model ranks and
+        explains them, it never invents its own strikes or prices.
+        `horizon` is a free label, e.g. "today" or "this week"."""
+        import json
+
+        user_message = (
+            f"Symbol: {symbol}\nHorizon: {horizon}\n"
+            f"Candidate calls/puts (all figures computed by Black-Scholes, not by you):\n"
+            f"{json.dumps(_jsonable(candidates), indent=2)}\n"
+        )
+        if notes.strip():
+            user_message += f"\nOwen's directional/context notes: {notes.strip()}\n"
+        user_message += "\nProduce the Options Outlook now in the exact format specified."
+        return self._chat(OPTIONS_MODE_SYSTEM_PROMPT, user_message)
 
     def ask(self, question: str, context: dict, mode: str = "personal", history: list[dict] | None = None) -> tuple[str, str | None]:
         system_prompt = PERSONAL_MODE_SYSTEM_PROMPT if mode == "personal" else T58_GROUP_SYSTEM_PROMPT

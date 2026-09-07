@@ -27,6 +27,11 @@ KEYRING_USERNAME = "ollama"
 
 DEFAULT_HOST = "http://localhost:11434"
 DEFAULT_MODEL = "llama3.1"
+# Chart/trade screenshot analysis needs a vision-capable model -- a plain
+# text model like the DEFAULT_MODEL above can't see the image at all.
+# llava is the smallest/most commonly-pulled Ollama vision model; anything
+# multimodal Ollama supports (e.g. llama3.2-vision, bakllava) also works.
+DEFAULT_VISION_MODEL = "llava"
 
 
 @dataclass
@@ -35,6 +40,7 @@ class OllamaSettings:
     host: str = DEFAULT_HOST
     model: str = DEFAULT_MODEL
     api_key: str = ""  # optional -- only needed for a remote Ollama behind auth
+    vision_model: str = DEFAULT_VISION_MODEL  # used only for screenshot analysis (chart/trade images)
 
     @property
     def is_usable(self) -> bool:
@@ -84,6 +90,7 @@ def save_settings(settings: OllamaSettings) -> None:
         "enabled": bool(settings.enabled),
         "host": (settings.host or DEFAULT_HOST).strip(),
         "model": (settings.model or DEFAULT_MODEL).strip(),
+        "vision_model": (settings.vision_model or DEFAULT_VISION_MODEL).strip(),
     }
     _settings_path().write_text(json.dumps(payload), encoding="utf-8")
 
@@ -115,13 +122,14 @@ def load_settings() -> OllamaSettings:
     been saved yet -- never raises, so callers never need a try/except
     just to read config."""
     path = _settings_path()
-    enabled, host, model = False, DEFAULT_HOST, DEFAULT_MODEL
+    enabled, host, model, vision_model = False, DEFAULT_HOST, DEFAULT_MODEL, DEFAULT_VISION_MODEL
     if path.exists():
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             enabled = bool(data.get("enabled", False))
             host = data.get("host") or DEFAULT_HOST
             model = data.get("model") or DEFAULT_MODEL
+            vision_model = data.get("vision_model") or DEFAULT_VISION_MODEL
         except Exception:
             pass
 
@@ -140,4 +148,4 @@ def load_settings() -> OllamaSettings:
             except Exception:
                 api_key = ""
 
-    return OllamaSettings(enabled=enabled, host=host, model=model, api_key=api_key)
+    return OllamaSettings(enabled=enabled, host=host, model=model, api_key=api_key, vision_model=vision_model)
