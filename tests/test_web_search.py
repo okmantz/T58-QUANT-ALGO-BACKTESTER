@@ -17,6 +17,7 @@ import pytest
 
 import app.web.server as server_module
 from app.web.server import _SEARCH_JOBS, app
+from app.orchestration.resource_guard import HEAVY_JOB_GUARD, JOB_EVOLUTION_LAB, JOB_SEARCH_LAB
 
 SAMPLE_CSV = Path(__file__).resolve().parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv"
 
@@ -197,7 +198,82 @@ def test_search_promote_requires_candidate_id():
         r = client.post("/search/start", data=data, content_type="multipart/form-data")
     job_id = r.headers["Location"].rstrip("/").split("/")[-1]
     _poll_until_done(client, job_id)
-
     promo = client.post(f"/search/job/{job_id}/promote", data={})
     assert promo.status_code == 400
     assert promo.get_json()["ok"] is False
+
+
+class _FakeEvolutionRunner:
+    """Minimal stand-in for EvolutionRunner -- only .is_running matters
+    for HEAVY_JOB_GUARD's registered health check."""
+    def __init__(self, is_running: bool):
+        self.is_running = is_running
+
+
+@pytest.fixture
+def _isolated_heavy_job_guard(monkeypatch):
+    """HEAVY_JOB_GUARD is a process-wide singleton shared with every other
+    heavy-job route in the app (Evolution Lab, Full Pipeline, Speed Run,
+    Search Lab). Force it clear before and after each test here so a
+    failure in one of these tests can't leave the slot stuck for the rest
+    of the suite."""
+    HEAVY_JOB_GUARD.release(JOB_EVOLUTION_LAB)
+    HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
+    yield
+    HEAVY_JOB_GUARD.release(JOB_EVOLUTION_LAB)
+    HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
+    monkeypatch.setattr(server_module, "_EVOLUTION_RUNNER", None, raising=False)
+
+
+def test_search_blocked_while_evolution_lab_genuinely_running(monkeypatch, _isolated_heavy_job_guard):
+    """End-to-end reproduction of the reported bug's second half: Evolution
+    Lab holds the shared HEAVY_JOB_GUARD slot while genuinely still
+    running -- Search Lab must be refused with a clear message (not fail
+    silently, hang, or crash)."""
+    monkeypatch.setattr(server_module, "_EVOLUTION_RUNNER", _FakeEvolutionRunner(is_running=True))
+    assert HEAVY_JOB_GUARD.try_acquire(JOB_EVOLUTION_LAB)
+
+    client = app.test_client()
+    with open(SAMPLE_CSV, "rb") as f:
+        data = {
+            "csv_file": (f, "EURUSD_5M_sample.csv"),
+            "search_mode": "family_named", "family": "trend_breakout",
+            **_LOOSE_STAGE_FIELDS,
+        }
+        r = client.post("/search/start", data=data, content_type="multipart/form-data")
+    assert r.status_code == 409
+    assert b"Evolution Lab is already running" in r.data
+
+
+def test_search_self_heals_after_evolution_lab_left_a_stale_guard_slot(monkeypatch, _isolated_heavy_job_guard):
+    """Regression test for the actual reported bug: Owen's Evolution Lab
+    run stopped progressing and showed RUNNING with a STOP button that did
+    nothing; Search Lab then wouldn't start at all. Root cause traced to
+    HEAVY_JOB_GUARD's Evolution Lab slot only ever being released by the
+    web app's /evolution/status.json poll noticing is_running had gone
+    False -- if the run loop never got there (wedged, or the page/tab
+    stopped polling), the slot stayed held forever and every other heavy
+    job -- Search Lab included -- was refused indefinitely with no
+    recovery short of restarting the server.
+
+    This simulates exactly that stale state (guard held for Evolution Lab,
+    but the runner itself reports not running) and confirms Search Lab's
+    own try_acquire now self-heals the slot via HeavyJobGuard's registered
+    health check and runs normally end to end."""
+    monkeypatch.setattr(server_module, "_EVOLUTION_RUNNER", _FakeEvolutionRunner(is_running=False))
+    assert HEAVY_JOB_GUARD.try_acquire(JOB_EVOLUTION_LAB)  # simulate the stale hold
+
+    client = app.test_client()
+    with open(SAMPLE_CSV, "rb") as f:
+        data = {
+            "csv_file": (f, "EURUSD_5M_sample.csv"),
+            "search_mode": "family_named", "family": "trend_breakout",
+            **_LOOSE_STAGE_FIELDS,
+        }
+        r = client.post("/search/start", data=data, content_type="multipart/form-data")
+    assert r.status_code == 302  # redirected to the job status page -- it actually started
+    job_id = r.headers["Location"].rstrip("/").split("/")[-1]
+
+    status = _poll_until_done(client, job_id)
+    assert status["error"] is None
+    assert HEAVY_JOB_GUARD.active_name is None  # Search Lab released its own slot on completion

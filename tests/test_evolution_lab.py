@@ -350,3 +350,66 @@ def test_evolution_runner_adaptive_risk_disabled_by_default(tmp_path):
     cfg = EvolutionConfig(knowledge_graph_path=str(tmp_path / "kg.jsonl"))
     runner = EvolutionRunner(_trending_df(n=500), RiskConfig(), PropRules(), cfg)
     assert runner.adaptive_risk is None
+
+
+def test_drain_futures_stops_promptly_on_a_hung_future(tmp_path):
+    """Regression test for a real bug: the generation loop used to consume
+    worker-pool results via `for f in as_completed(futures)`, which blocks
+    until the NEXT future completes with no timeout -- so one candidate
+    that hangs (a wedged worker process, a pathological config, anything)
+    made the whole run, and the STOP button along with it, hang
+    indefinitely (a real overnight run reported exactly this: stopped
+    progressing after a couple of generations, still showed RUNNING, and
+    clicking Stop did nothing). _drain_futures replaces that with a
+    polling wait so the stop flag is checked about once a second
+    regardless of how long any one future takes. This test proves that
+    directly: one future is deliberately never completed, and stopping
+    must return in well under the old unbounded hang."""
+    import time
+    from concurrent.futures import Future
+
+    cfg = EvolutionConfig(knowledge_graph_path=str(tmp_path / "kg.jsonl"))
+    runner = EvolutionRunner(pd.DataFrame(), RiskConfig(), PropRules(), cfg, progress_cb=None)
+
+    hung_future: Future = Future()  # deliberately never set -- simulates a wedged worker
+    finished_future: Future = Future()
+    finished_future.set_result("ok")
+    futures = {hung_future: "hung", finished_future: "finished"}
+
+    results = []
+
+    def _on_result(label, future):
+        results.append((label, future.result()))
+        if label == "finished":
+            runner._stop_flag.set()  # simulate STOP being clicked mid-run
+
+    t0 = time.time()
+    runner._drain_futures(futures, _on_result)
+    elapsed = time.time() - t0
+
+    assert ("finished", "ok") in results
+    assert elapsed < 3.0  # must not have blocked waiting on the hung future
+    assert not hung_future.running()  # cancel() was attempted on the abandoned future
+
+
+def test_evolution_runner_stop_and_wait_returns_true_once_thread_exits(tmp_path):
+    """stop_and_wait() is what the web /evolution/stop route relies on to
+    reflect STOPPED immediately instead of waiting for the next status
+    poll -- confirms it actually blocks until the background thread has
+    exited and reports that accurately."""
+    df = _trending_df(n=500)
+    cfg = EvolutionConfig(
+        population_size=5, elite_keep=1, max_generations=1,
+        min_trades=3, min_profit_factor=0.0, max_drawdown_buffer_mult=20.0,
+        mc_sims=20, robustness_neighbors=1, walk_forward_folds=2,
+        cpcv_top_n=2, cpcv_max_paths=3, cpcv_n_groups=3,
+        save_to_library=False, knowledge_graph_path=str(tmp_path / "kg.jsonl"),
+        checkpoint_path=str(tmp_path / "checkpoint.json"),
+        tested_log_path=str(tmp_path / "tested_candidates.jsonl"),
+        parallel_workers=1,
+    )
+    runner = EvolutionRunner(df, RiskConfig(), PropRules(), cfg, progress_cb=None)
+    runner.start()
+    stopped = runner.stop_and_wait(timeout=15.0)
+    assert stopped
+    assert not runner.is_running
