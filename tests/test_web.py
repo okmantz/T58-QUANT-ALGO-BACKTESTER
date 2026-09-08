@@ -18,6 +18,25 @@ def test_manifest_served():
     assert r.content_type == "application/manifest+json"
 
 
+def test_mobile_access_page_loads_without_tailscale(monkeypatch):
+    """On a box with no Tailscale installed (the normal CI/dev sandbox),
+    the page must still render cleanly with setup instructions -- never
+    500 just because the optional Tailscale card has nothing to show."""
+    monkeypatch.setattr("app.web.server.tailscale_url", lambda: None)
+    client = app.test_client()
+    r = client.get("/mobile-access")
+    assert r.status_code == 200
+    assert b"tailscale.com/download" in r.data
+
+
+def test_mobile_access_page_shows_tailscale_address_when_present(monkeypatch):
+    monkeypatch.setattr("app.web.server.tailscale_url", lambda: "http://100.64.0.1:5000")
+    client = app.test_client()
+    r = client.get("/mobile-access")
+    assert r.status_code == 200
+    assert b"100.64.0.1" in r.data
+
+
 def test_full_pipeline_via_manual_strategy(tmp_path):
     client = app.test_client()
     sample_csv = Path(__file__).resolve().parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv"

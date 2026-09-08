@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from app.web.launcher import _qr_image_path, get_lan_ip
-from app.web.network_info import is_running_under_wine, startup_banner_lines
+from app.web.network_info import get_tailscale_ip, is_running_under_wine, startup_banner_lines, tailscale_url
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
@@ -68,6 +68,73 @@ def test_startup_banner_has_no_wine_warning_on_a_native_run(monkeypatch):
     lines = startup_banner_lines("http://192.168.1.23:5000", qr_path=None)
     joined = "\n".join(lines)
     assert "Wine" not in joined
+
+
+def test_get_tailscale_ip_returns_none_when_tailscale_absent(monkeypatch):
+    """On a box with no Tailscale CLI and no Tailscale interface (the CI
+    sandbox this test runs in), lookup must degrade cleanly to None --
+    never raise, never hang, never fall back to some other address."""
+    monkeypatch.setattr("app.web.network_info._tailscale_binary", lambda: None)
+    monkeypatch.setattr(
+        "socket.getaddrinfo",
+        lambda *a, **k: [(2, 1, 6, "", ("192.168.1.23", 0))],  # a plain LAN addr, not CGNAT
+    )
+    assert get_tailscale_ip() is None
+
+
+def test_get_tailscale_ip_reads_the_cli_output(monkeypatch):
+    """When the `tailscale` CLI is found and reports an address in
+    Tailscale's own 100.64.0.0/10 CGNAT range, that address is used."""
+    monkeypatch.setattr("app.web.network_info._tailscale_binary", lambda: "/usr/bin/tailscale")
+
+    class _FakeCompletedProcess:
+        stdout = "100.101.102.103\n"
+
+    monkeypatch.setattr(
+        "subprocess.run", lambda *a, **k: _FakeCompletedProcess()
+    )
+    assert get_tailscale_ip() == "100.101.102.103"
+
+
+def test_get_tailscale_ip_ignores_cli_output_outside_the_cgnat_range(monkeypatch):
+    """A defensive check: if something odd is on PATH and prints a normal
+    address instead of a real Tailscale one, don't hand that out as if it
+    were a working anywhere-access address."""
+    monkeypatch.setattr("app.web.network_info._tailscale_binary", lambda: "/usr/bin/tailscale")
+
+    class _FakeCompletedProcess:
+        stdout = "192.168.1.5\n"
+
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: _FakeCompletedProcess())
+    monkeypatch.setattr(
+        "socket.getaddrinfo",
+        lambda *a, **k: [(2, 1, 6, "", ("192.168.1.23", 0))],
+    )
+    assert get_tailscale_ip() is None
+
+
+def test_tailscale_url_wraps_the_ip_when_present(monkeypatch):
+    monkeypatch.setattr("app.web.network_info.get_tailscale_ip", lambda: "100.64.0.1")
+    assert tailscale_url() == "http://100.64.0.1:5000"
+
+
+def test_tailscale_url_is_none_when_ip_absent(monkeypatch):
+    monkeypatch.setattr("app.web.network_info.get_tailscale_ip", lambda: None)
+    assert tailscale_url() is None
+
+
+def test_startup_banner_mentions_tailscale_setup_when_not_detected(monkeypatch):
+    monkeypatch.setattr("app.web.network_info.get_tailscale_ip", lambda: None)
+    lines = startup_banner_lines("http://192.168.1.23:5000", qr_path=None)
+    joined = "\n".join(lines)
+    assert "tailscale.com/download" in joined
+
+
+def test_startup_banner_shows_tailscale_address_when_detected(monkeypatch):
+    monkeypatch.setattr("app.web.network_info.get_tailscale_ip", lambda: "100.64.0.1")
+    lines = startup_banner_lines("http://192.168.1.23:5000", qr_path=None)
+    joined = "\n".join(lines)
+    assert "100.64.0.1" in joined
 
 
 class _FakeQRImage:
