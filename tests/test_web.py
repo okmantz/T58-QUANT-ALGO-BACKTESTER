@@ -18,6 +18,25 @@ def test_manifest_served():
     assert r.content_type == "application/manifest+json"
 
 
+def test_resources_page_loads():
+    """The Resources tab is a static page (no engine dependency) linking
+    out to the T58 30-Day Trading Quickstart Guide plus a few other free
+    beginner resources -- just confirms it renders and links to the real
+    guide, not that any particular external site is reachable."""
+    client = app.test_client()
+    r = client.get("/resources")
+    assert r.status_code == 200
+    assert b"30-Day Trading Quickstart Guide" in r.data
+    assert b"docs.google.com/document/d/17tdRY_tzpHOdw8_a1EpAgOmradTbu02Dlo6BOAnK0Wg" in r.data
+
+
+def test_resources_link_appears_in_sidebar():
+    client = app.test_client()
+    r = client.get("/dashboard")
+    assert r.status_code == 200
+    assert b'href="/resources"' in r.data
+
+
 def test_mobile_access_page_loads_without_tailscale(monkeypatch):
     """On a box with no Tailscale installed (the normal CI/dev sandbox),
     the page must still render cleanly with setup instructions -- never
