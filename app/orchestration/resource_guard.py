@@ -55,7 +55,7 @@ from __future__ import annotations
 
 import os
 import threading
-from typing import Optional
+from typing import Callable, Optional
 
 import pandas as pd
 
@@ -146,9 +146,35 @@ class HeavyJobGuard:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._active_name: Optional[str] = None
+        self._health_checks: dict[str, Callable[[], bool]] = {}
+
+    def register_health_check(self, name: str, check_fn: Callable[[], bool]) -> None:
+        """Registers a zero-arg callable that reports whether job `name`
+        is genuinely still active right now. try_acquire() consults this
+        to auto-clear a stale slot if the job holding it stopped without
+        ever calling release() itself. This exists because at least one
+        job (Evolution Lab) only releases its slot when its own web
+        status endpoint gets polled and notices the job has stopped --
+        if nothing polls it (a backgrounded/closed browser tab, or the
+        job's own thread getting wedged so it never even reaches
+        "stopped"), every OTHER heavy job was refused indefinitely with
+        no way to recover short of restarting the server. A name with no
+        registered check behaves exactly as before (first-come lock,
+        cleared only by an explicit release())."""
+        with self._lock:
+            self._health_checks[name] = check_fn
 
     def try_acquire(self, name: str) -> bool:
         with self._lock:
+            if self._active_name is not None:
+                check = self._health_checks.get(self._active_name)
+                if check is not None:
+                    try:
+                        still_active = bool(check())
+                    except Exception:
+                        still_active = True  # a broken health check must never falsely free the slot
+                    if not still_active:
+                        self._active_name = None
             if self._active_name is not None:
                 return False
             self._active_name = name
