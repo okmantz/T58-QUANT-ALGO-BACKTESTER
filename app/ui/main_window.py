@@ -314,6 +314,82 @@ MONO = "Consolas"
 # if the custom one ever misbehaves on a particular machine/Windows build.
 USE_CUSTOM_TITLEBAR = True
 
+# ---------------------------------------------------------------------------
+# BUGFIX (Sep 2026): "clicked RUN and it said RUNNING... but nothing
+# happened" / "can't type in the AI Assistant chatbox" turned out to be ONE
+# root cause, not two.
+#
+# Every async action in this app (AI Assistant chat/daily-brief, Options
+# Outlook, every Quant Lab tool, etc.) runs its work on a background thread
+# and reports success/failure back via `self.root.after(0, callback)` (see
+# _ai_run_async / _quant_lab_run_async). That callback runs on the Tk main
+# thread, so calling messagebox.showerror() from it is normally safe -- BUT
+# on Windows, a new top-level window can only be promoted to the foreground
+# by a process that is already the foreground process AND is responding to
+# real user input (a click, a keypress). A `root.after(...)`-driven callback
+# is a TIMER callback, not a live input event, so Windows silently refuses
+# the foreground-window request Tk makes when the error dialog is created.
+# Combined with this app's custom borderless main window
+# (root.overrideredirect(True), see MainWindow.__init__/_build_custom_titlebar),
+# the dialog opens fully hidden BEHIND the main window instead of merely
+# losing focus -- there's no native title bar/taskbar affordance left to
+# reveal it. Since messagebox.showerror() is modal (grab_set()), that
+# invisible dialog also silently swallows ALL further keyboard/mouse input
+# to the whole app until it's dismissed -- which is exactly why a
+# perfectly-typed AI Assistant question can appear to do nothing: an
+# earlier failed/errored async action (e.g. a chat send or Options Outlook
+# run before Ollama was configured) already left an invisible modal dialog
+# eating every keystroke.
+#
+# Fix: monkeypatch tkinter.messagebox's show*/ask* functions so every call
+# in this file (133+ call sites -- far too many to touch individually)
+# briefly forces the root window `-topmost` immediately before showing the
+# dialog. `-topmost` uses SetWindowPos(HWND_TOPMOST, ...) under the hood,
+# which is a z-order change, not a foreground-activation request, so it is
+# NOT subject to the same Windows restriction -- it reliably pulls the
+# root (and its transient dialog, which Tk stacks above its owner
+# regardless of activation state) above every other window. Reset right
+# after so the app doesn't stay pinned above everything else afterward.
+# ---------------------------------------------------------------------------
+def _patch_messagebox_for_overrideredirect_focus() -> None:
+    import tkinter as _tk
+
+    def _wrap(fn):
+        def _wrapped(*args, **kwargs):
+            root = kwargs.get("parent") or _tk._default_root
+            if root is not None:
+                try:
+                    root.deiconify()
+                except Exception:
+                    pass
+                try:
+                    root.attributes("-topmost", True)
+                    root.update_idletasks()
+                except Exception:
+                    pass
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                if root is not None:
+                    try:
+                        root.attributes("-topmost", False)
+                    except Exception:
+                        pass
+        return _wrapped
+
+    for _name in (
+        "showerror", "showwarning", "showinfo",
+        "askyesno", "askokcancel", "askretrycancel", "askquestion", "askyesnocancel",
+    ):
+        original = getattr(messagebox, _name, None)
+        if original is not None and not getattr(original, "_t58_focus_patched", False):
+            wrapped = _wrap(original)
+            wrapped._t58_focus_patched = True
+            setattr(messagebox, _name, wrapped)
+
+
+_patch_messagebox_for_overrideredirect_focus()
+
 # NOTE: the condition-row vocabulary (sources/operators/kind mapping) used
 # to live here, but now lives in app.ui.condition_builder alongside the
 # widget that uses it, so there's a single source of truth.
@@ -10150,6 +10226,100 @@ class MainWindow:
 
         self._build_ai_assist_section(f, prefix="aiassistant")
 
+        # ------------------------------------------------------------
+        # Market Intelligence -- News window + Best Trades window, plus
+        # one "GENERATE BASIC OUTLOOK" button that refreshes both and
+        # writes a combined macro + best-forex/crypto/futures summary
+        # below. Backed by app.ai.market_intelligence (ForexFactory's
+        # public calendar feed + the same MT5/Alpaca-driven scanner the
+        # web app's dashboard already uses) -- see that module's
+        # docstring. Works with Ollama off (deterministic summary from
+        # app.ai.trading_assistant.build_deterministic_outlook); if
+        # Ollama IS on, the model's narrative read is appended after it.
+        # ------------------------------------------------------------
+        mi_section = self._section(
+            f, "Market Intelligence",
+            "News from ForexFactory's calendar feed, and the same forex/crypto/futures 'what "
+            "moved best' scanner the web dashboard uses. REFRESH pulls fresh data (needs MT5 "
+            "connected on the Forward Test tab, or saved Alpaca keys on the Data tab, for the "
+            "Best Trades side -- News works with neither).",
+            emphasize=True,
+        )
+        mi_btn_row = Frame(mi_section, bg=PANEL)
+        mi_btn_row.pack(anchor="w", padx=18, pady=(4, 4))
+        self.aiassistant_outlook_btn = self._button(
+            mi_btn_row, "GENERATE BASIC OUTLOOK", self._ai_generate_outlook, primary=True,
+        )
+        self.aiassistant_outlook_btn.pack(side="left")
+        self.aiassistant_refresh_news_btn = self._button(mi_btn_row, "REFRESH NEWS", self._ai_refresh_news)
+        self.aiassistant_refresh_news_btn.pack(side="left", padx=(8, 0))
+        self.aiassistant_refresh_trades_btn = self._button(mi_btn_row, "REFRESH BEST TRADES", self._ai_refresh_rankings)
+        self.aiassistant_refresh_trades_btn.pack(side="left", padx=(8, 0))
+
+        mi_windows_row = Frame(mi_section, bg=PANEL)
+        mi_windows_row.pack(fill="both", expand=True, padx=18, pady=(4, 14))
+
+        news_win = Frame(mi_windows_row, bg=PANEL_2, highlightthickness=1, highlightbackground=BORDER)
+        news_win.pack(side="left", fill="both", expand=True, padx=(0, 6))
+        Label(news_win, text="NEWS", bg=PANEL_2, fg=TEXT_MUTED, font=_safe_font(8, "bold")).pack(
+            anchor="w", padx=10, pady=(8, 2)
+        )
+        news_list_frame = Frame(news_win, bg=PANEL_2)
+        news_list_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.aiassistant_news_list = Listbox(
+            news_list_frame, height=10, bg=PANEL_3, fg=TEXT, selectbackground=BORDER_LIGHT,
+            activestyle="none", relief="flat", bd=0, highlightthickness=1, highlightbackground=BORDER,
+            font=(MONO, 9),
+        )
+        self.aiassistant_news_list.pack(side="left", fill="both", expand=True)
+        news_scroll = ttk.Scrollbar(
+            news_list_frame, orient="vertical", command=self.aiassistant_news_list.yview, style="T58.Vertical.TScrollbar",
+        )
+        news_scroll.pack(side="right", fill="y")
+        self.aiassistant_news_list.configure(yscrollcommand=news_scroll.set)
+        self._bind_isolated_wheel(self.aiassistant_news_list)
+        # Not auto-fetched at launch on purpose -- every tab in this app is
+        # built eagerly at startup (see the builder loop near _build_ui),
+        # and this needs a live network call to ForexFactory's calendar
+        # feed. Auto-running it here would add unpredictable network
+        # latency to every app launch; REFRESH NEWS / GENERATE BASIC
+        # OUTLOOK fetch it on demand instead, same as every other
+        # network-backed tool in this app.
+        self.aiassistant_news_list.insert(END, "Click REFRESH NEWS or GENERATE BASIC OUTLOOK to load.")
+
+        trades_win = Frame(mi_windows_row, bg=PANEL_2, highlightthickness=1, highlightbackground=BORDER)
+        trades_win.pack(side="left", fill="both", expand=True, padx=(6, 0))
+        Label(trades_win, text="BEST TRADES (FOREX / CRYPTO / FUTURES)", bg=PANEL_2, fg=TEXT_MUTED, font=_safe_font(8, "bold")).pack(
+            anchor="w", padx=10, pady=(8, 2)
+        )
+        trades_tree_frame = Frame(trades_win, bg=PANEL_2)
+        trades_tree_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        trades_columns = ("symbol", "class", "status", "direction", "move", "score")
+        self.aiassistant_trades_tree = ttk.Treeview(
+            trades_tree_frame, columns=trades_columns, show="headings", style="T58.Treeview", height=10,
+        )
+        trades_headings = {
+            "symbol": "Symbol", "class": "Class", "status": "Status",
+            "direction": "Dir", "move": "Move %", "score": "Score",
+        }
+        for col, text in trades_headings.items():
+            self.aiassistant_trades_tree.heading(col, text=text)
+            self.aiassistant_trades_tree.column(col, width=80, anchor="w")
+        self.aiassistant_trades_tree.pack(side="left", fill="both", expand=True)
+        trades_scroll = ttk.Scrollbar(
+            trades_tree_frame, orient="vertical", command=self.aiassistant_trades_tree.yview, style="T58.Vertical.TScrollbar",
+        )
+        trades_scroll.pack(side="right", fill="y")
+        self.aiassistant_trades_tree.configure(yscrollcommand=trades_scroll.set)
+        self._bind_isolated_wheel(self.aiassistant_trades_tree)
+
+        self.aiassistant_outlook_status = Label(
+            mi_section, text="", bg=PANEL, fg=TEXT_DIM, font=_safe_font(8), anchor="w",
+        )
+        self.aiassistant_outlook_status.pack(anchor="w", padx=18, pady=(0, 10))
+
+        self._ai_last_rankings = None
+
         vision_section = self._section(
             f, "Vision model (screenshot analysis only)",
             "Separate from the chat model above -- screenshot analysis needs a multimodal model.",
@@ -10222,18 +10392,37 @@ class MainWindow:
         ollama_settings_module.save_settings(settings)
         return TradingAssistantClient(settings)
 
-    def _ai_market_context(self) -> dict:
+    def _ai_market_context(self, include_rankings: bool = True) -> dict:
         """Best-effort market intelligence (rankings + news) for chat/
         screenshot context -- degrades to an empty context (no rankings,
         no news) rather than failing the whole request if MT5/Alpaca/the
-        news feed aren't reachable from the desktop app."""
-        from app.ai import market_scanner, news_forexfactory, trading_assistant as ta_module
+        news feed aren't reachable from the desktop app.
+
+        BUGFIX (Sep 2026): this used to hardcode rankings=[] -- see
+        app.ai.market_intelligence's module docstring for why that meant
+        Daily Brief/chat never saw "best markets" data on desktop even
+        though the identical web app feature already did. `include_rankings
+        =False` is used by _ai_send_chat/_ai_daily_brief when the News/Best
+        Trades panels on this tab already have fresh data cached, so a
+        chat message doesn't also re-scan every symbol synchronously."""
+        from app.ai import market_intelligence, trading_assistant as ta_module
         try:
-            news_result = news_forexfactory.fetch_calendar()
+            news_result = market_intelligence.compute_news()
             events = news_result.events if not news_result.error else []
         except Exception:
+            news_result = None
             events = []
-        return ta_module.build_context(rankings=[], news_events=events)
+        rankings = []
+        if include_rankings:
+            cached = getattr(self, "_ai_last_rankings", None)
+            if cached is not None:
+                rankings = cached
+            else:
+                try:
+                    rankings, _errors = market_intelligence.compute_rankings(news_result=news_result)
+                except Exception:
+                    rankings = []
+        return ta_module.build_context(rankings=rankings, news_events=events)
 
     def _ai_run_async(self, button, work_fn, on_success):
         original_text = button.cget("text")
@@ -10290,6 +10479,91 @@ class MainWindow:
             return reply
 
         self._ai_run_async(self.aiassistant_send_btn, work, lambda reply: self._ai_append_output("Owen AI", reply))
+
+    # -- Market Intelligence: News window + Best Trades window + Basic
+    # Outlook button (see the section built in _build_ai_assistant_tab). --
+
+    def _ai_populate_news_list(self, events) -> None:
+        self.aiassistant_news_list.delete(0, END)
+        if not events:
+            self.aiassistant_news_list.insert(END, "No upcoming events (calendar unavailable or nothing scheduled).")
+            return
+        for e in events[:60]:
+            when = e.when.strftime("%a %H:%M UTC") if getattr(e, "when", None) else "TBD"
+            self.aiassistant_news_list.insert(END, f"[{e.impact:<6}] {e.currency:<3} {when}  {e.title}")
+
+    def _ai_populate_trades_tree(self, rankings) -> None:
+        from app.ai import market_scanner
+        for row in self.aiassistant_trades_tree.get_children():
+            self.aiassistant_trades_tree.delete(row)
+        if not rankings:
+            return
+        for r in rankings[:40]:
+            d = market_scanner.ranking_to_dict(r)
+            self.aiassistant_trades_tree.insert("", END, values=(
+                d["symbol"], d["asset_class"], d["status"], d["direction"],
+                f"{d['momentum_pct']:+.2f}", d["score"],
+            ))
+
+    def _ai_refresh_news(self):
+        def work():
+            from app.ai import market_intelligence
+            result = market_intelligence.compute_news()
+            if result.error:
+                raise RuntimeError(result.error)
+            return result.events
+
+        self._ai_run_async(self.aiassistant_refresh_news_btn, work, self._ai_populate_news_list)
+
+    def _ai_refresh_rankings(self):
+        def work():
+            from app.ai import market_intelligence
+            rankings, errors = market_intelligence.compute_rankings()
+            self._ai_last_rankings = rankings
+            if not rankings and errors:
+                raise RuntimeError("No symbols scanned: " + "; ".join(errors[:3]))
+            return rankings
+
+        self._ai_run_async(self.aiassistant_refresh_trades_btn, work, self._ai_populate_trades_tree)
+
+    def _ai_generate_outlook(self):
+        """Refreshes both Market Intelligence windows, then writes a
+        combined macro + best-forex/crypto/futures-trades summary to the
+        chat log below. Works with Ollama off (falls back to
+        build_deterministic_outlook -- every figure it uses was already
+        computed by the app) or on (appends the model's narrative read
+        after the deterministic facts)."""
+        self.aiassistant_outlook_status.config(text="Fetching news + scanning markets...", fg=TEXT_DIM)
+        self._ai_append_output("Owen", "[Generate Basic Outlook]")
+
+        def work():
+            from app.ai import market_intelligence, trading_assistant as ta_module
+
+            news_result = market_intelligence.compute_news()
+            events = news_result.events if not news_result.error else []
+            rankings, errors = market_intelligence.compute_rankings(news_result=news_result)
+            self._ai_last_rankings = rankings
+            context = ta_module.build_context(rankings=rankings, news_events=events)
+
+            deterministic = ta_module.build_deterministic_outlook(context)
+            settings = self._build_ollama_settings("aiassistant")
+            if not settings.is_usable:
+                note = "\n\n(Ollama isn't enabled -- showing deterministic data only. Turn on AI Assist above for a narrative read too.)"
+                return context, events, rankings, deterministic + note
+            client = ta_module.TradingAssistantClient(settings)
+            reply, error = client.market_outlook(context)
+            if error:
+                return context, events, rankings, deterministic + f"\n\n(Ollama narrative unavailable: {error})"
+            return context, events, rankings, deterministic + "\n\n--- Owen AI's read ---\n" + reply
+
+        def done(result):
+            context, events, rankings, text = result
+            self._ai_populate_news_list(events)
+            self._ai_populate_trades_tree(rankings)
+            self._ai_append_output("Owen AI -- Basic Outlook", text)
+            self.aiassistant_outlook_status.config(text="", fg=TEXT_DIM)
+
+        self._ai_run_async(self.aiassistant_outlook_btn, work, done)
 
     def _ai_analyze_chart_screenshot(self):
         path = filedialog.askopenfilename(
