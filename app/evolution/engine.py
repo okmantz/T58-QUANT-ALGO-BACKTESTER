@@ -65,7 +65,8 @@ import tempfile
 import threading
 import time
 import traceback
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor
+from concurrent.futures import wait as futures_wait
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -571,6 +572,22 @@ class EvolutionRunner:
                 self._pool.shutdown(wait=False, cancel_futures=True)
             except Exception:
                 pass
+            # cancel_futures=True above only cancels futures that hadn't
+            # started yet -- a worker already executing a candidate (e.g.
+            # one that's hung, or just slow) keeps running until it
+            # finishes on its own unless explicitly killed here. Without
+            # this, STOP could mark the run as stopped while an orphaned
+            # worker process kept chewing CPU/RAM in the background, and
+            # a genuinely wedged worker would never go away at all until
+            # the whole server restarted. Best-effort: `_processes` is a
+            # private ProcessPoolExecutor attribute, not public API, so
+            # this is wrapped defensively rather than relied on.
+            try:
+                for proc in list(getattr(self._pool, "_processes", {}).values()):
+                    if proc.is_alive():
+                        proc.terminate()
+            except Exception:
+                pass
             self._pool = None
         if self._pool_tmp_dir is not None:
             try:
@@ -657,6 +674,19 @@ class EvolutionRunner:
     def stop(self) -> None:
         self._stop_flag.set()
 
+    def stop_and_wait(self, timeout: float = 5.0) -> bool:
+        """Signals stop and blocks up to `timeout` seconds for the
+        background thread to actually exit, so a caller (the web STOP
+        route) can reflect the real state in its own response instead of
+        the page still showing RUNNING until the next status poll.
+        Returns True once the thread has genuinely stopped (now
+        realistic within a second or two thanks to _drain_futures'
+        polling, where it previously could hang indefinitely)."""
+        self.stop()
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+        return not self.is_running
+
     def status(self) -> dict:
         return {
             "running": self.is_running,
@@ -677,6 +707,33 @@ class EvolutionRunner:
     def _log(self, msg: str) -> None:
         if self.progress_cb:
             self.progress_cb(msg)
+
+    def _drain_futures(self, futures: dict, on_result) -> None:
+        """Consumes a {future: label} dict as futures complete, calling
+        on_result(label, future) for each one -- used by both _prefilter
+        and _full_eval instead of Python's `for f in as_completed(futures)`.
+
+        as_completed() with no timeout blocks until the NEXT future
+        completes, however long that takes, and the STOP button only
+        works by setting a flag this loop checks between iterations --
+        so one hung candidate (a pathological generated config, a wedged
+        worker process, anything) used to make the whole generation --
+        and STOP along with it -- block indefinitely. This polls with a
+        short timeout instead, so the stop flag gets checked roughly
+        once a second regardless of how long any individual candidate
+        takes, and abandons the remaining futures immediately (rather
+        than waiting on them) the moment a stop is requested; the actual
+        worker processes are then force-terminated by _shutdown_pool.
+        """
+        pending = set(futures.keys())
+        while pending:
+            if self._stop_flag.is_set():
+                for fut in pending:
+                    fut.cancel()  # only frees futures that hadn't started yet; see _shutdown_pool for the rest
+                return
+            done, pending = futures_wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+            for fut in done:
+                on_result(futures[fut], fut)
 
     def _run_loop(self) -> None:
         gen = self.generation
@@ -1057,16 +1114,17 @@ class EvolutionRunner:
                 ): (cid, spec, meta)
                 for cid, spec, meta in population
             }
-            for future in as_completed(futures):
-                if self._stop_flag.is_set():
-                    break
-                cid, spec, meta = futures[future]
+
+            def _on_result(label, future):
+                cid, spec, meta = label
                 try:
                     _, _, _, bt, reasons, error, stats = future.result()
                 except Exception as exc:  # noqa: BLE001 -- a dead worker must not kill the generation
                     _consume(cid, spec, meta, None, ["build_or_backtest_error"], str(exc)[:300], None)
-                    continue
+                    return
                 _consume(cid, spec, meta, bt, reasons, error, stats)
+
+            self._drain_futures(futures, _on_result)
 
         evo_checkpoint.append_tested_rows(tested_rows, Path(self.cfg.tested_log_path))
         near_misses.sort(key=lambda t: t[0], reverse=True)
@@ -1149,14 +1207,14 @@ class EvolutionRunner:
                 eval_pool.submit(_evo_full_eval_task, cid, spec, meta, bt, *args): cid
                 for cid, spec, meta, bt in stage1_survivors
             }
-            for future in as_completed(futures):
-                if self._stop_flag.is_set():
-                    break
-                cid = futures[future]
+
+            def _on_result(cid, future):
                 try:
                     records.append(future.result())
                 except Exception:  # noqa: BLE001 -- a dead worker must not kill the generation
                     self._log(f"  full-eval error on {cid}:\n" + traceback.format_exc())
+
+            self._drain_futures(futures, _on_result)
         return records
 
     # -- CPCV / PBO ---------------------------------------------------------
