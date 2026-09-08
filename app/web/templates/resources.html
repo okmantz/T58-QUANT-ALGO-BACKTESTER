@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>T58 — Resources</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+
+  .guide-card {
+    position: relative;
+    background: linear-gradient(155deg, var(--panel-2) 0%, var(--panel) 100%);
+    border: 1px solid var(--border-light);
+    border-radius: 16px;
+    padding: 28px 24px;
+    margin-bottom: 22px;
+    overflow: hidden;
+  }
+  .guide-card::before {
+    content: "";
+    position: absolute; inset: -40% -20% auto auto; width: 340px; height: 340px;
+    background: radial-gradient(circle, rgba(var(--teal-rgb), 0.16) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .guide-eyebrow {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--teal); border: 1px solid var(--teal-dim); background: rgba(var(--teal-rgb), 0.08);
+    border-radius: 999px; padding: 4px 10px; margin-bottom: 14px;
+  }
+  .guide-title {
+    font-size: 22px; font-weight: 700; margin: 0 0 8px; color: var(--text);
+    position: relative;
+  }
+  .guide-sub {
+    font-size: 13.5px; color: var(--text-muted); line-height: 1.6; margin: 0 0 20px; max-width: 640px;
+    position: relative;
+  }
+
+  .mslsd-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 22px; position: relative; }
+  .mslsd-chip {
+    display: flex; align-items: center; gap: 7px;
+    background: var(--panel-3); border: 1px solid var(--border-light); border-radius: 10px;
+    padding: 8px 12px; font-size: 12px; color: #ccc;
+  }
+  .mslsd-chip .letter {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; border-radius: 6px; font-size: 11px; font-weight: 700;
+    color: #04120e;
+  }
+  .mslsd-chip:nth-child(1) .letter { background: var(--neon-cyan, var(--teal)); }
+  .mslsd-chip:nth-child(2) .letter { background: var(--neon-lime, #b6ff3c); }
+  .mslsd-chip:nth-child(3) .letter { background: var(--neon-amber, #ffb547); }
+  .mslsd-chip:nth-child(4) .letter { background: var(--neon-violet, #8a5cff); color: #fff; }
+
+  .week-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px; margin-bottom: 24px; position: relative;
+  }
+  .week-cell {
+    background: var(--panel-3); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 12px; text-align: left;
+  }
+  .week-num {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); margin-bottom: 6px;
+  }
+  .week-label { font-size: 13px; color: var(--text); line-height: 1.4; font-weight: 600; }
+
+  .guide-cta {
+    display: inline-flex; align-items: center; gap: 10px;
+    background: var(--teal); color: #04120e; font-weight: 700; font-size: 14.5px;
+    padding: 13px 22px; border-radius: 10px; text-decoration: none;
+    box-shadow: 0 0 24px rgba(var(--teal-rgb), 0.35);
+    position: relative;
+  }
+  .guide-cta:hover { filter: brightness(1.05); }
+  .guide-cta .arrow { transition: transform .15s; }
+  .guide-cta:hover .arrow { transform: translateX(3px); }
+  .guide-meta {
+    margin-top: 12px; font-size: 11.5px; color: var(--text-dim); position: relative;
+  }
+
+  .section-label {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted);
+    margin: 26px 0 12px;
+  }
+
+  .more-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+  .more-card {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 15px;
+    text-decoration: none; color: var(--text); display: block; transition: border-color .15s;
+  }
+  .more-card:hover { border-color: var(--border-light); }
+  .more-card .badge {
+    display: inline-block; font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--text-dim); border: 1px solid var(--border-light); border-radius: 4px;
+    padding: 1px 6px; margin-bottom: 8px;
+  }
+  .more-card h3 { margin: 0 0 5px; font-size: 13.5px; color: var(--text); }
+  .more-card p { margin: 0; font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+
+  .disclaimer {
+    margin-top: 26px; font-size: 11.5px; color: var(--text-dim); line-height: 1.6;
+    border-top: 1px solid var(--border); padding-top: 14px;
+  }
+</style>
+</head>
+<body>
+{% set active_page = 'resources' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Resources</h1>
+  <p>A running start on trading fundamentals before you backtest your first strategy — no engine, no upload, just reading.</p>
+</div>
+
+<div class="guide-card">
+  <div class="guide-eyebrow">&#9733; T58 guide</div>
+  <div class="guide-title">30-Day Trading Quickstart Guide</div>
+  <p class="guide-sub">
+    From zero to sim trading in 30 days. Built around T58's own MS-LSD framework —
+    the same market-reading model behind this app's Manual Strategy Builder's
+    advanced conditions (Break of Structure, Liquidity Sweep, Fair Value Gap,
+    Order Block, and the rest).
+  </p>
+
+  <div class="mslsd-row">
+    <div class="mslsd-chip"><span class="letter">M</span> Market Structure</div>
+    <div class="mslsd-chip"><span class="letter">L</span> Liquidity</div>
+    <div class="mslsd-chip"><span class="letter">S</span> Supply &amp; Demand</div>
+    <div class="mslsd-chip"><span class="letter">D</span> Entry Models</div>
+  </div>
+
+  <div class="week-grid">
+    <div class="week-cell">
+      <div class="week-num">Week 1</div>
+      <div class="week-label">Setup &amp; Market Structure</div>
+    </div>
+    <div class="week-cell">
+      <div class="week-num">Week 2</div>
+      <div class="week-label">Liquidity</div>
+    </div>
+    <div class="week-cell">
+      <div class="week-num">Week 3</div>
+      <div class="week-label">Supply &amp; Demand</div>
+    </div>
+    <div class="week-cell">
+      <div class="week-num">Week 4</div>
+      <div class="week-label">Entry Models &amp; Sim Trading</div>
+    </div>
+  </div>
+
+  <a class="guide-cta" href="https://docs.google.com/document/d/17tdRY_tzpHOdw8_a1EpAgOmradTbu02Dlo6BOAnK0Wg/edit?usp=drivesdk" target="_blank" rel="noopener">
+    Open the guide <span class="arrow">&#8594;</span>
+  </a>
+  <div class="guide-meta">Opens in Google Docs, in a new tab.</div>
+</div>
+
+<div class="section-label">More free places to build your foundation</div>
+<div class="more-grid">
+  <a class="more-card" href="https://www.babypips.com/learn/forex" target="_blank" rel="noopener">
+    <div class="badge">Course</div>
+    <h3>BabyPips — School of Pipsology</h3>
+    <p>The standard free, self-paced forex course — starts from absolute basics and builds up.</p>
+  </a>
+  <a class="more-card" href="https://www.investopedia.com/trading-4689660" target="_blank" rel="noopener">
+    <div class="badge">Reference</div>
+    <h3>Investopedia — Trading</h3>
+    <p>A reliable reference for looking up any term, order type, or concept as it comes up.</p>
+  </a>
+  <a class="more-card" href="https://www.cmegroup.com/education.html" target="_blank" rel="noopener">
+    <div class="badge">Education</div>
+    <h3>CME Group Education</h3>
+    <p>Free courses on futures, options, and risk management from a major exchange operator.</p>
+  </a>
+</div>
+
+<p class="disclaimer">
+  Educational content only, not financial advice — the same disclaimer that applies to every
+  simulated result elsewhere in this app applies here too. External links go to third-party
+  sites this app doesn't control.
+</p>
+
+</div>
+</div>
+<script src="/static/t58-chrome.js" defer></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+  }
+</script>
+</body>
+</html>
