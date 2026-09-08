@@ -280,6 +280,59 @@ the strike, using the delta/expected-move figures provided."""
 
 OPTIONS_MODE_SYSTEM_PROMPT = OPTIONS_SYSTEM_PROMPT
 
+# ---------------------------------------------------------------------------
+# Basic Outlook -- a deliberately lighter, faster read than the full Daily
+# Trading Plan (PERSONAL_ASSISTANT_PROMPT): just "what's the macro picture,
+# and what's actually worth looking at right now across forex/crypto/
+# futures". Meant for the AI Assistant tab's one-click "GENERATE BASIC
+# OUTLOOK" button -- context is the same build_context() dict already used
+# everywhere else (best_markets from app.ai.market_scanner, upcoming_news
+# from app.ai.news_forexfactory), so every symbol/score/event named below
+# was computed by the app, never invented by the model.
+# ---------------------------------------------------------------------------
+
+MARKET_OUTLOOK_SYSTEM_PROMPT = """\
+You are Owen's quick market-outlook assistant for T58 Trading, covering
+forex, crypto, and futures/indices in one pass.
+
+You will be given `best_markets` (every scanned symbol's momentum %,
+ATR-normalized move, T58 status/direction/score -- see the strategy
+hierarchy rules below for what status/direction mean) and `upcoming_news`
+(ForexFactory calendar events with impact/currency/timing). Both are
+computed by the app -- never invent a symbol, price move, score, or news
+item that isn't in the data provided.
+
+Keep this SHORT and skimmable -- this is a quick check-in, not the full
+Daily Trading Plan. Produce exactly these sections:
+
+MACRO UPDATE
+2-4 sentences: what the upcoming high/medium-impact news events mean for
+risk sentiment and which currencies/assets are in focus in the next
+session. If no notable news is upcoming, say so plainly.
+
+BEST TO TRADE -- FOREX
+Up to 3 symbols from best_markets with asset_class "forex", ranked by
+score then move size. For each: direction, one-line reason (status +
+what moved), and the event that would invalidate it.
+
+BEST TO TRADE -- CRYPTO
+Same structure, asset_class "crypto". If none scanned or none show a
+real setup (status WAIT/PASS on all), say so rather than forcing a pick.
+
+BEST TO TRADE -- FUTURES/INDICES
+Same structure, asset_class "futures".
+
+WATCH OUT FOR
+Any symbol with imminent high-impact news risk (news_risk field) or an
+EXTENDED status -- these are cautions, not trade ideas.
+
+Never recommend a trade that lacks the confirmation this framework
+requires just because it "moved the most" -- a big move with a WAIT or
+PASS status still gets reported factually but flagged as not tradeable
+yet, per Owen's exact strategy hierarchy below.
+
+""" + PERSONAL_STRATEGY_PROMPT
+
 
 def _jsonable(obj):
     """Recursively converts dataclasses (T58Assessment, MarketSnapshot,
@@ -320,6 +373,66 @@ def build_context(rankings: list, news_events: list, watchlist_symbols: list[str
             for e in news_events[:15]
         ],
     }
+
+
+def build_deterministic_outlook(context: dict, top_n: int = 3) -> str:
+    """A plain-text Basic Outlook built directly from `context` (see
+    build_context()) with no Ollama call at all -- every figure is one the
+    app already computed. Used as the AI Assistant tab's "GENERATE BASIC
+    OUTLOOK" result when Ollama is off/unreachable (rather than the whole
+    button failing), and as the first part of the reply even when Ollama
+    IS available, so a config/network hiccup with the model never means
+    the button "does nothing" -- Owen asked for a `simple button` here, and
+    a simple button should still work with zero setup."""
+    lines: list[str] = []
+
+    news = context.get("upcoming_news") or []
+    high_impact = [e for e in news if (e.get("impact") or "").lower() == "high"]
+    lines.append("MACRO UPDATE (deterministic -- ForexFactory calendar)")
+    if high_impact:
+        for e in high_impact[:5]:
+            when = e.get("when") or "TBD"
+            mins = e.get("minutes_until")
+            countdown = f", in {int(mins)}m" if isinstance(mins, (int, float)) and mins >= 0 else ""
+            lines.append(f"  - [{e.get('currency')}] {e.get('title')} -- {when}{countdown}")
+    elif news:
+        lines.append("  No high-impact events on the calendar right now -- lower-impact events only.")
+    else:
+        lines.append("  No upcoming events returned (calendar feed unavailable or nothing scheduled).")
+    lines.append("")
+
+    best_markets = context.get("best_markets") or []
+    by_class: dict[str, list[dict]] = {}
+    for m in best_markets:
+        by_class.setdefault(m.get("asset_class", "other"), []).append(m)
+
+    for asset_class in ("forex", "crypto", "futures"):
+        rows = by_class.get(asset_class, [])
+        lines.append(f"BEST TO TRADE -- {asset_class.upper()} (deterministic ranking)")
+        if not rows:
+            lines.append("  No data scanned for this asset class (check MT5/Alpaca connection).")
+        else:
+            tradeable = [r for r in rows if r.get("status") not in ("WAIT", "PASS")]
+            shown = (tradeable or rows)[:top_n]
+            for r in shown:
+                flag = "" if r in tradeable else "  (not yet tradeable -- status below)"
+                lines.append(
+                    f"  - {r.get('symbol')}: {r.get('direction', 'n/a')} | status {r.get('status')} | "
+                    f"score {r.get('score')} | moved {r.get('momentum_pct')}% "
+                    f"({r.get('atr_normalized_move')} ATR){flag}"
+                )
+        lines.append("")
+
+    at_risk = [m for m in best_markets if m.get("news_risk") and m.get("news_risk") != "none"]
+    extended = [m for m in best_markets if m.get("status") == "EXTENDED"]
+    if at_risk or extended:
+        lines.append("WATCH OUT FOR")
+        for m in at_risk:
+            lines.append(f"  - {m.get('symbol')}: news risk ({m.get('news_risk')})")
+        for m in extended:
+            lines.append(f"  - {m.get('symbol')}: EXTENDED -- avoid chasing")
+
+    return "\n".join(lines).rstrip()
 
 
 class TradingAssistantClient:
@@ -482,6 +595,18 @@ class TradingAssistantClient:
             "in watchlist_symbols and best_markets.",
             context, mode="personal",
         )
+
+    def market_outlook(self, context: dict) -> tuple[str, str | None]:
+        """Backs the AI Assistant tab's "GENERATE BASIC OUTLOOK" button --
+        see MARKET_OUTLOOK_SYSTEM_PROMPT. Lighter/faster than daily_brief();
+        doesn't require `mode` since there's only one outlook format."""
+        import json
+        user_message = (
+            "Current market intelligence (all facts below were computed by the app, not by you -- "
+            f"treat them as ground truth):\n{json.dumps(_jsonable(context), indent=2)}\n\n"
+            "Produce the Basic Outlook now in the exact format specified."
+        )
+        return self._chat(MARKET_OUTLOOK_SYSTEM_PROMPT, user_message)
 
     def pre_trade_check(self, context: dict, symbol: str) -> tuple[str, str | None]:
         return self.ask(
