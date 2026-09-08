@@ -220,9 +220,51 @@ From your phone's browser:
 - This is designed to run entirely on your own home/office Wi-Fi, for
   free, with nothing to sign up for and nothing to pay for: your PC does
   the actual work and your phone is just a screen for it, the same way
-  the `T58-Web-App.exe` flow above works. There's no hosted/cloud version
-  of this app and no plan to add one — accessing it from outside your own
-  Wi-Fi (e.g. over cellular data) isn't supported.
+  the `T58-Web-App.exe` flow above works.
+
+### Away from home? Use Tailscale (works from anywhere)
+
+The plain LAN address above only works while your phone is on the same
+Wi-Fi as this computer. [Tailscale](https://tailscale.com) is a free,
+private VPN mesh ("tailnet") that lets your phone reach this app from
+**any network** — cellular data, a coffee shop, another country — with
+no port forwarding, no public server, and nothing exposed to the open
+internet. It's the recommended way to use this app remotely.
+
+Setup (one-time, a few minutes):
+
+1. On **this computer**, install Tailscale from
+   [tailscale.com/download](https://tailscale.com/download) and sign in
+   (a Google/Microsoft/GitHub/email account works — free for personal use).
+2. On **your phone**, install the Tailscale app (App Store / Play Store)
+   and sign in with the **same account**.
+3. Start the backtester's web app as usual (`python run_web.py`,
+   `T58-Web-App.exe`, or the desktop app's own web server). The console
+   banner now shows a *second* address (a `100.x.x.x` one) alongside the
+   LAN address — that's the one that works from anywhere. The running
+   app's **Phone access** page (`/mobile-access`) shows the same address
+   with its own QR code any time, and gives setup instructions inline if
+   Tailscale isn't detected yet.
+4. On your phone, open that `100.x.x.x` address (or scan its QR code) —
+   works whether you're on the same Wi-Fi or a thousand miles away.
+
+Nothing here duplicates or replaces the LAN/QR flow above — it keeps
+working exactly as before on the same network. Tailscale is purely
+additive and entirely optional: if it isn't installed, the app behaves
+exactly as it did before, just without the second address.
+
+**Want the actual desktop app (Tkinter), not the web version, on your
+phone?** That's not something this app can add code for — Tkinter
+windows can't be streamed to a phone browser — but Tailscale also makes
+this possible via ordinary remote-desktop tools once both devices are on
+the same tailnet: Windows' built-in Remote Desktop (Settings → System →
+Remote Desktop → turn it on, then connect from a Remote Desktop app on
+your phone using the PC's Tailscale address), or a cross-platform option
+like [Tailscale's own SSH](https://tailscale.com/kb/1193/tailscale-ssh)
+plus a VNC server. This gives you the literal desktop window on your
+phone's screen, at the cost of being noticeably less responsive than the
+purpose-built web app above — the web app remains the recommended way to
+use this on a phone.
 
 ## Workflow (Steps 1-5 — the core loop)
 <img width="1927" height="1038" alt="image" src="https://github.com/user-attachments/assets/ef78c799-b48f-4fb8-8b1c-6d2f7c8f8e9a" />
