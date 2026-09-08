@@ -2847,6 +2847,17 @@ def _evolution_log(msg: str) -> None:
     del _EVOLUTION_LOG[:-_EVOLUTION_LOG_MAX]
 
 
+# Lets HEAVY_JOB_GUARD self-heal if Evolution Lab's slot ever gets stuck
+# held (its normal release path is the /evolution/status.json poll below
+# noticing is_running went False -- if nothing polls it, or its thread
+# gets wedged, every other heavy job used to be refused forever). See
+# HeavyJobGuard.register_health_check's docstring for the full reasoning.
+HEAVY_JOB_GUARD.register_health_check(
+    JOB_EVOLUTION_LAB,
+    lambda: _EVOLUTION_RUNNER is not None and _EVOLUTION_RUNNER.is_running,
+)
+
+
 @app.route("/evolution")
 def evolution_form():
     return render_template(
@@ -2909,8 +2920,16 @@ def evolution_start():
 @app.route("/evolution/stop", methods=["POST"])
 def evolution_stop():
     with _EVOLUTION_LOCK:
-        if _EVOLUTION_RUNNER is not None:
-            _EVOLUTION_RUNNER.stop()
+        runner = _EVOLUTION_RUNNER
+    if runner is not None:
+        # Blocks up to 5s for the run loop to actually exit (now realistic
+        # -- see EvolutionRunner._drain_futures -- instead of the old
+        # as_completed()-with-no-timeout loop that could hang indefinitely
+        # on one slow/wedged candidate and make this button look dead).
+        # Releasing the guard here too, not just via the status.json poll,
+        # means the very next page load already reflects STOPPED.
+        if runner.stop_and_wait(timeout=5.0):
+            HEAVY_JOB_GUARD.release(JOB_EVOLUTION_LAB)
     return redirect(url_for("evolution_form"))
 
 
