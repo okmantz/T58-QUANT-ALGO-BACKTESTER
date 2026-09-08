@@ -30,10 +30,9 @@ from __future__ import annotations
 import base64
 import time
 
-import pandas as pd
 from flask import Blueprint, jsonify, render_template, request
 
-from app.ai import market_scanner, news_forexfactory, t58_strategy_engine as t58
+from app.ai import market_intelligence, market_scanner, news_forexfactory, t58_strategy_engine as t58
 from app.ai import trading_assistant
 from app.ai.ollama_settings import OllamaSettings, load_settings as load_ollama_settings, save_settings as save_ollama_settings
 
@@ -55,62 +54,30 @@ def _cached(key: str, ttl: float, compute):
 
 
 def _bar_fetcher(symbol: str, timeframe_minutes: int, count: int):
-    """Adapts the app's existing data sources to app.ai.market_scanner's
-    BarFetcher shape. Tries the shared MT5 connection first, then Alpaca
-    (crypto/US-listed only) if MT5 has nothing for this symbol."""
-    from app.web import live_market
-
-    bars = live_market.fetch_mt5_bars(symbol, timeframe_minutes, count)
-    if not bars:
-        bars = live_market.fetch_alpaca_bars(symbol, "Crypto", timeframe_minutes, count)
-    if not bars:
-        return None
-    df = pd.DataFrame(bars)
-    df["timestamp"] = pd.to_datetime(df["time"], unit="s", utc=True)
-    return df[["timestamp", "open", "high", "low", "close", "volume"]]
+    return market_intelligence.bar_fetcher(symbol, timeframe_minutes, count)
 
 
 def _daily_trend_bias(symbol: str) -> str:
-    """Technical PROXY for macro_bias -- see module docstring's caveat.
-    Daily EMA50 above EMA200 -> 'bullish', below -> 'bearish', otherwise
-    'neutral'. Deliberately simple and explainable, not a claim of real
-    fundamental analysis."""
-    try:
-        df = _bar_fetcher(symbol, 1440, 260)
-        if df is None or len(df) < 210:
-            return "neutral"
-        from app.strategy.indicators import ema
-        e50, e200 = ema(df["close"], 50), ema(df["close"], 200)
-        if float(e50.iloc[-1]) > float(e200.iloc[-1]):
-            return "bullish"
-        if float(e50.iloc[-1]) < float(e200.iloc[-1]):
-            return "bearish"
-        return "neutral"
-    except Exception:
-        return "neutral"
+    return market_intelligence.daily_trend_bias(symbol)
 
 
 def _get_universe() -> dict[str, list[str]]:
-    return market_scanner.DEFAULT_UNIVERSE
+    return market_intelligence.get_universe()
 
 
 def _compute_news():
-    result = news_forexfactory.fetch_calendar()
-    return result
+    return market_intelligence.compute_news()
 
 
 def _compute_rankings():
-    universe = _get_universe()
-    all_symbols = [s for symbols in universe.values() for s in symbols]
-    macro_bias = {s: _daily_trend_bias(s) for s in all_symbols}
-
+    # BUGFIX (Sep 2026): this used to duplicate app.ai.market_intelligence's
+    # logic inline -- see that module's docstring for why it was pulled out
+    # (the desktop AI Assistant tab needed the exact same scan and had
+    # drifted, always sending empty rankings). Delegating here means this
+    # blueprint and the desktop tab can no longer disagree about what
+    # "best markets" means.
     news_result = _cached("news", _CACHE_TTL_NEWS, _compute_news)
-    news_risk = {s: news_forexfactory.news_risk_for_symbol(news_result, s) for s in all_symbols}
-
-    rankings, errors = market_scanner.rank_markets(
-        universe, bar_fetcher=_bar_fetcher, macro_bias_by_symbol=macro_bias, news_risk_by_symbol=news_risk,
-    )
-    return rankings, errors
+    return market_intelligence.compute_rankings(news_result=news_result)
 
 
 @ai_assistant_bp.route("/")
@@ -239,6 +206,34 @@ def api_watchlist():
     client = trading_assistant.TradingAssistantClient(load_ollama_settings())
     reply, error = client.watchlist(context)
     return jsonify({"reply": reply, "error": error})
+
+
+@ai_assistant_bp.route("/api/outlook")
+def api_outlook():
+    """Backs the page's "Generate Basic Outlook" button -- see
+    app.ai.trading_assistant.MARKET_OUTLOOK_SYSTEM_PROMPT /
+    build_deterministic_outlook(). Always returns deterministic text (every
+    figure already computed by app.ai.market_scanner/news_forexfactory);
+    appends Ollama's narrative read on top only if it's enabled/reachable,
+    same fallback behavior as the desktop AI Assistant tab's identical
+    button."""
+    rankings, _errors = _cached("rankings", _CACHE_TTL_RANKINGS, _compute_rankings)
+    news_result = _cached("news", _CACHE_TTL_NEWS, _compute_news)
+    context = trading_assistant.build_context(rankings, news_result.events)
+
+    deterministic = trading_assistant.build_deterministic_outlook(context)
+    settings = load_ollama_settings()
+    if not settings.is_usable:
+        text = deterministic + "\n\n(Ollama isn't enabled -- showing deterministic data only. Turn it on in Ollama settings below for a narrative read too.)"
+        return jsonify({"text": text, "error": None})
+
+    client = trading_assistant.TradingAssistantClient(settings)
+    reply, error = client.market_outlook(context)
+    if error:
+        text = deterministic + f"\n\n(Ollama narrative unavailable: {error})"
+    else:
+        text = deterministic + "\n\n--- Owen AI's read ---\n" + reply
+    return jsonify({"text": text, "error": None})
 
 
 @ai_assistant_bp.route("/api/analyze-screenshot", methods=["POST"])
