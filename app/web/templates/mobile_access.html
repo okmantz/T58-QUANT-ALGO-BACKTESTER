@@ -60,6 +60,48 @@
     to connect), and it is not <code>127.0.0.1</code> (that address only ever means
     "this computer itself" — it's unreachable from any other device, including your phone).
   </p>
+  <p class="note">This address only works while your phone is on the <strong>same Wi-Fi</strong>
+    as this computer. See the "Away from home" card below for anywhere-access.</p>
+</div>
+
+<div class="card">
+  <h2>Away from home (Tailscale) — works from anywhere</h2>
+  {% if tailscale_url %}
+    <div class="qr-wrap">
+      {% if tailscale_qr_data_uri %}
+        <img src="{{ tailscale_qr_data_uri }}" alt="Tailscale QR code for {{ tailscale_url }}">
+      {% else %}
+        <p class="warn">
+          Tailscale is running, but a QR code couldn't be generated on this machine —
+          just type the address below into your phone's browser instead.
+        </p>
+      {% endif %}
+      <div class="url-box">{{ tailscale_url }}</div>
+    </div>
+    <p class="note">
+      This works on <strong>any network</strong> — cellular data, a different Wi-Fi
+      entirely, another building or country — as long as the same Tailscale account is
+      signed in on your phone's Tailscale app too. No port forwarding, nothing exposed
+      to the public internet.
+    </p>
+  {% else %}
+    <p class="note">
+      Tailscale isn't detected as running on this computer. Tailscale is a free, private
+      VPN mesh that lets your phone reach this app from anywhere — not just this Wi-Fi —
+      with no port forwarding and nothing exposed publicly. To set it up:
+    </p>
+    <ol>
+      <li>Install Tailscale on <strong>this computer</strong> from
+        <a href="https://tailscale.com/download" target="_blank" rel="noopener">tailscale.com/download</a>
+        and sign in (any Google/Microsoft/GitHub/email account works — it's free for
+        personal use).</li>
+      <li>Install the Tailscale app on <strong>your phone</strong> (App Store / Play
+        Store) and sign in with the <strong>same account</strong>.</li>
+      <li>Reload this page — a QR code and address will appear here that work from
+        anywhere your phone has a signal, and this same address will also show up in the
+        console banner the next time you start this app.</li>
+    </ol>
+  {% endif %}
 </div>
 
 <div class="card">
@@ -78,6 +120,9 @@
       by default.</li>
     <li>Temporarily disable any VPN on either device — a VPN can hide LAN traffic from the
       other device even when both are on the same physical Wi-Fi.</li>
+    <li>Not actually at home / not on this Wi-Fi at all? That's expected — this address
+      only works on the same network as this computer. Use the "Away from home
+      (Tailscale)" card above instead.</li>
   </ol>
   <p class="note">
     This computer needs to stay on and this app needs to keep running for your phone to
