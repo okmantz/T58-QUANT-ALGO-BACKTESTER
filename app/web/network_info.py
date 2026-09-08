@@ -31,12 +31,21 @@ from __future__ import annotations
 
 import base64
 import io
+import ipaddress
 import os
+import shutil
 import socket
+import subprocess
 import sys
 from pathlib import Path
 
 PORT = 5000
+
+# Tailscale hands out addresses from this carrier-grade-NAT block to every
+# device on a user's "tailnet" -- used both to validate the tailscale CLI's
+# own output and, as a fallback, to spot a Tailscale interface on this host
+# even when the CLI itself isn't on PATH.
+TAILSCALE_CGNAT_RANGE = ipaddress.ip_network("100.64.0.0/10")
 
 
 def is_running_under_wine() -> bool:
@@ -92,6 +101,95 @@ def get_lan_ip() -> str:
 
 def lan_url(port: int = PORT) -> str:
     return f"http://{get_lan_ip()}:{port}"
+
+
+def _tailscale_binary() -> str | None:
+    """Locate the `tailscale` CLI. Checked on PATH first, then the
+    standard per-OS install locations -- Tailscale's own installers don't
+    always put the CLI on PATH (notably its Windows and macOS GUI-app
+    installs), so a PATH-only `shutil.which` would wrongly report
+    "not installed" on a machine that actually has it running."""
+    found = shutil.which("tailscale")
+    if found:
+        return found
+    if sys.platform.startswith("win"):
+        candidates = [
+            r"C:\Program Files\Tailscale\tailscale.exe",
+            r"C:\Program Files (x86)\Tailscale\tailscale.exe",
+        ]
+    elif sys.platform == "darwin":
+        candidates = [
+            "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+            "/usr/local/bin/tailscale",
+            "/opt/homebrew/bin/tailscale",
+        ]
+    else:
+        candidates = ["/usr/bin/tailscale", "/usr/local/bin/tailscale"]
+    for candidate in candidates:
+        if Path(candidate).exists():
+            return candidate
+    return None
+
+
+def is_tailscale_installed() -> bool:
+    return _tailscale_binary() is not None
+
+
+def get_tailscale_ip() -> str | None:
+    """Best-effort lookup of this machine's Tailscale address (the
+    100.x.x.x address in Tailscale's CGNAT range) -- unlike the LAN
+    address above, this one is reachable from a phone on ANY network
+    (cellular data, a different Wi-Fi entirely, another country), as
+    long as the same Tailscale account is signed in on both devices.
+
+    Returns None if Tailscale isn't installed, isn't running/logged in,
+    or the lookup fails for any other reason -- every caller treats that
+    as "just don't show this section," never as an error, since
+    Tailscale is an optional, opt-in extra on top of the existing plain
+    LAN/QR flow (which keeps working exactly as before either way).
+    """
+    binary = _tailscale_binary()
+    if binary:
+        try:
+            result = subprocess.run(
+                [binary, "ip", "-4"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            first_line = next(
+                (line.strip() for line in result.stdout.splitlines() if line.strip()), ""
+            )
+            if first_line:
+                try:
+                    if ipaddress.ip_address(first_line) in TAILSCALE_CGNAT_RANGE:
+                        return first_line
+                except ValueError:
+                    pass
+        except Exception:
+            pass
+    # Fallback if the CLI isn't found/reachable but the Tailscale network
+    # interface might still be up: scan this host's own resolved
+    # addresses for one already in Tailscale's CGNAT range, rather than
+    # shelling out to OS-specific tools like ipconfig/ifconfig.
+    try:
+        for family, _, _, _, sockaddr in socket.getaddrinfo(socket.gethostname(), None):
+            if family != socket.AF_INET:
+                continue
+            addr = sockaddr[0]
+            try:
+                if ipaddress.ip_address(addr) in TAILSCALE_CGNAT_RANGE:
+                    return addr
+            except ValueError:
+                continue
+    except Exception:
+        pass
+    return None
+
+
+def tailscale_url(port: int = PORT) -> str | None:
+    ip = get_tailscale_ip()
+    return f"http://{ip}:{port}" if ip else None
 
 
 def qr_code_data_uri(url: str) -> str | None:
@@ -181,6 +279,26 @@ def startup_banner_lines(url: str, qr_path: Path | None) -> list[str]:
             "",
             "  (Could not generate a QR code image -- just type the",
             "   address above into your phone's browser instead.)",
+        ]
+    ts_addr = get_tailscale_ip()
+    if ts_addr:
+        lines += [
+            "",
+            "  AWAY FROM HOME? Tailscale is running on this computer, so",
+            "  your phone can reach this app from ANYWHERE -- any Wi-Fi, or",
+            "  cellular data -- as long as the SAME Tailscale account is",
+            "  signed in on your phone's Tailscale app too. Use this",
+            "  address instead of the one above once you're off this Wi-Fi:",
+            f"      http://{ts_addr}:{PORT}",
+        ]
+    else:
+        lines += [
+            "",
+            "  AWAY FROM HOME (not on this Wi-Fi)? Install Tailscale (free,",
+            "  tailscale.com/download) on this computer AND your phone, sign",
+            "  in with the same account on both -- no port forwarding, no",
+            "  public server -- and this banner (and the /mobile-access",
+            "  page) will show a second address that works from anywhere.",
         ]
     lines += [
         "",

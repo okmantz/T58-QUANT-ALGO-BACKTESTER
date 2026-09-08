@@ -36,7 +36,7 @@ from flask import (
 )
 
 from app.ai.ollama_settings import OllamaSettings
-from app.web.network_info import lan_url, print_startup_banner, qr_code_data_uri, qr_code_file
+from app.web.network_info import lan_url, print_startup_banner, qr_code_data_uri, qr_code_file, tailscale_url
 from app.web.quant_lab_routes import quant_lab_bp
 from app.web.ai_assistant_routes import ai_assistant_bp
 from app.web.options_outlook_routes import options_outlook_bp
@@ -488,8 +488,14 @@ def mobile_access():
     only from the separate run_web.py launcher's popped-open image."""
     url = lan_url()
     qr_data_uri = qr_code_data_uri(url)
+    # Tailscale address is optional -- reachable from anywhere (not just
+    # this Wi-Fi), shown as a second card only when Tailscale is actually
+    # installed and signed in on this machine. See app.web.network_info.
+    ts_url = tailscale_url()
+    ts_qr_data_uri = qr_code_data_uri(ts_url) if ts_url else None
     return render_template(
         "mobile_access.html", active_page="mobile_access", url=url, qr_data_uri=qr_data_uri,
+        tailscale_url=ts_url, tailscale_qr_data_uri=ts_qr_data_uri,
     )
 
 
