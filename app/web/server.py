@@ -499,6 +499,17 @@ def mobile_access():
     )
 
 
+@app.route("/resources")
+def resources():
+    """A static, no-engine-dependency page for the T58 30-Day Trading
+    Quickstart Guide (Owen's own Google Doc) plus a short list of other
+    free, well-known beginner trading resources -- purely educational,
+    for anyone using this app who wants a running start on trading
+    fundamentals before backtesting their first strategy. No form, no
+    job, no report; just links out."""
+    return render_template("resources.html", active_page="resources")
+
+
 @app.route("/dashboard")
 def dashboard():
     current = strategy_state.get_current_strategy()
