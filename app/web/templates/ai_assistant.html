@@ -115,6 +115,15 @@
     </div>
 
     <div class="oai-panel oai-chat" style="grid-column: 1 / -1;">
+      <h2>Basic Outlook</h2>
+      <div class="chat-toolbar">
+        <button class="btn" id="outlook-btn" onclick="generateOutlook()">Generate Basic Outlook</button>
+        <small style="color:var(--text-dim);">Macro update from ForexFactory news + best forex/crypto/futures trades from the panels above -- works with Ollama off (deterministic facts only) or on (adds a narrative read).</small>
+      </div>
+      <div id="outlook-reply" style="white-space:pre-wrap; font-size:13px; line-height:1.55; background:var(--panel-3); border:1px solid var(--border); border-radius:10px; padding:12px; display:none;"></div>
+    </div>
+
+    <div class="oai-panel oai-chat" style="grid-column: 1 / -1;">
       <h2>Screenshot Analysis</h2>
       <div class="chat-toolbar">
         <input type="file" id="shot-file" accept="image/*" style="color:var(--text-muted); font-size:12px;">
@@ -304,6 +313,26 @@ async function runWatchlist() {
   addMsg('user', '[Watchlist: ' + symbols.join(', ') + ']');
   const data = await postJson('/assistant/api/watchlist', { symbols });
   addMsg(data.error ? 'error' : 'assistant', data.error || data.reply);
+}
+
+async function generateOutlook() {
+  const btn = document.getElementById('outlook-btn');
+  const reply = document.getElementById('outlook-reply');
+  btn.disabled = true;
+  btn.textContent = 'Generating...';
+  reply.style.display = 'block';
+  reply.textContent = 'Fetching news + scanning markets...';
+  try {
+    const data = await (await fetch('/assistant/api/outlook')).json();
+    reply.textContent = data.text || data.error || 'No outlook returned.';
+    loadNews();
+    loadRankings();
+  } catch (err) {
+    reply.textContent = 'Request failed: ' + err;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Generate Basic Outlook';
+  }
 }
 
 async function saveSettings() {
