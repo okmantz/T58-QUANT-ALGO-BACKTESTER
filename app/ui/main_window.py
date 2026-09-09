@@ -1355,9 +1355,10 @@ class MainWindow:
         self.tab_family_diversity = Frame(self.content, bg=BG)
         self.tab_quantlab = Frame(self.content, bg=BG)
         self.tab_options_outlook = Frame(self.content, bg=BG)
+        self.tab_resources = Frame(self.content, bg=BG)
 
         for f in (
-            self.tab_dashboard, self.tab_ai_assistant, self.tab_manual, self.tab_strategyconfig, self.tab_data, self.tab_strategy, self.tab_prop,
+            self.tab_dashboard, self.tab_ai_assistant, self.tab_manual, self.tab_resources, self.tab_strategyconfig, self.tab_data, self.tab_strategy, self.tab_prop,
             self.tab_risk, self.tab_run, self.tab_payout, self.tab_refine, self.tab_search,
             self.tab_wfo, self.tab_cpcv, self.tab_sensitivity, self.tab_portfolio,
             self.tab_multiobj, self.tab_wfga, self.tab_ensemble, self.tab_fullpipeline,
@@ -1391,6 +1392,7 @@ class MainWindow:
             ("dashboard", "", "Dashboard", self.tab_dashboard, NEON_VIOLET),
             ("aiassistant", "", "AI Assistant", self.tab_ai_assistant, NEON_CYAN),
             ("manual", "", "User Manual", self.tab_manual, METAL_BRIGHT),
+            ("resources", "", "\U0001F393 Resources", self.tab_resources, METAL_BRIGHT),
 
             (None, None, "\u2460 CREATE", None, None),
             ("strategy", "", "Strategy Builder", self.tab_strategy, NEON_VIOLET),
@@ -1446,6 +1448,7 @@ class MainWindow:
             ("Dashboard", self._build_dashboard_tab),
             ("AI Assistant", self._build_ai_assistant_tab),
             ("Manual builder", self._build_manual_tab),
+            ("Resources", self._build_resources_tab),
             ("Speed Run", self._build_speedrun_tab),
             ("Strategy Configuration", self._build_strategy_config_tab),
             ("Data", self._build_data_tab),
@@ -3384,6 +3387,107 @@ class MainWindow:
         )
 
         text.config(state="disabled")
+
+    def _build_resources_tab(self):
+        """Desktop port of the web app's /resources page (app/web/templates/
+        resources.html) -- purely static educational content (no engine, no
+        upload), so this just mirrors that page's copy and links using the
+        same section/button widgets every other tab uses."""
+        f = self._scrollable(self.tab_resources)
+        self._page_header(
+            f, "GUIDE", "Resources",
+            "A running start on trading fundamentals before you backtest your first strategy -- "
+            "no engine, no upload, just reading.",
+        )
+
+        guide_section = self._section(
+            f, "\u2605 T58 guide -- 30-Day Trading Quickstart Guide",
+            "From zero to sim trading in 30 days. Built around T58's own MS-LSD framework -- the "
+            "same market-reading model behind this app's Manual Strategy Builder's advanced "
+            "conditions (Break of Structure, Liquidity Sweep, Fair Value Gap, Order Block, and "
+            "the rest).",
+            emphasize=True,
+        )
+
+        mslsd_row = Frame(guide_section, bg=PANEL)
+        mslsd_row.pack(anchor="w", padx=18, pady=(0, 10))
+        for letter, label, color in (
+            ("M", "Market Structure", NEON_CYAN),
+            ("L", "Liquidity", NEON_LIME),
+            ("S", "Supply & Demand", NEON_AMBER),
+            ("D", "Entry Models", NEON_VIOLET),
+        ):
+            chip = Frame(mslsd_row, bg=PANEL_3, highlightthickness=1, highlightbackground=BORDER_LIGHT)
+            chip.pack(side="left", padx=(0, 8), pady=(0, 4))
+            Label(chip, text=f" {letter} ", bg=color, fg="#04120e", font=_safe_font(8, "bold")).pack(
+                side="left", padx=(6, 6), pady=5,
+            )
+            Label(chip, text=label, bg=PANEL_3, fg=TEXT, font=_safe_font(8)).pack(side="left", padx=(0, 10))
+
+        week_row = Frame(guide_section, bg=PANEL)
+        week_row.pack(fill="x", padx=18, pady=(0, 10))
+        for num, label in (
+            ("Week 1", "Setup & Market Structure"),
+            ("Week 2", "Liquidity"),
+            ("Week 3", "Supply & Demand"),
+            ("Week 4", "Entry Models & Sim Trading"),
+        ):
+            cell = Frame(week_row, bg=PANEL_3, highlightthickness=1, highlightbackground=BORDER)
+            cell.pack(side="left", fill="both", expand=True, padx=(0, 8))
+            Label(cell, text=num.upper(), bg=PANEL_3, fg=TEXT_DIM, font=_safe_font(7, "bold")).pack(
+                anchor="w", padx=10, pady=(8, 2),
+            )
+            Label(
+                cell, text=label, bg=PANEL_3, fg=TEXT, font=_safe_font(9, "bold"), wraplength=150, justify="left",
+            ).pack(anchor="w", padx=10, pady=(0, 8))
+
+        guide_url = "https://docs.google.com/document/d/17tdRY_tzpHOdw8_a1EpAgOmradTbu02Dlo6BOAnK0Wg/edit?usp=drivesdk"
+        guide_btn_row = Frame(guide_section, bg=PANEL)
+        guide_btn_row.pack(anchor="w", padx=18, pady=(0, 4))
+        self._button(guide_btn_row, "OPEN THE GUIDE \u2192", lambda: webbrowser.open(guide_url), primary=True).pack(
+            side="left",
+        )
+        Label(
+            guide_section, text="Opens in Google Docs, in your default browser.",
+            bg=PANEL, fg=TEXT_DIM, font=_safe_font(8),
+        ).pack(anchor="w", padx=18, pady=(0, 14))
+
+        more_section = self._section(f, "More free places to build your foundation")
+        for label, url, badge, desc in (
+            (
+                "BabyPips \u2014 School of Pipsology", "https://www.babypips.com/learn/forex", "COURSE",
+                "The standard free, self-paced forex course -- starts from absolute basics and builds up.",
+            ),
+            (
+                "Investopedia \u2014 Trading", "https://www.investopedia.com/trading-4689660", "REFERENCE",
+                "A reliable reference for looking up any term, order type, or concept as it comes up.",
+            ),
+            (
+                "CME Group Education", "https://www.cmegroup.com/education.html", "EDUCATION",
+                "Free courses on futures, options, and risk management from a major exchange operator.",
+            ),
+        ):
+            card = Frame(more_section, bg=PANEL_3, highlightthickness=1, highlightbackground=BORDER, cursor="hand2")
+            card.pack(fill="x", padx=18, pady=(0, 8))
+            badge_lbl = Label(card, text=badge, bg=PANEL_3, fg=TEXT_DIM, font=_safe_font(7, "bold"), cursor="hand2")
+            badge_lbl.pack(anchor="w", padx=14, pady=(10, 2))
+            title_lbl = Label(card, text=label, bg=PANEL_3, fg=METAL_BRIGHT, font=_safe_font(10, "bold"), cursor="hand2")
+            title_lbl.pack(anchor="w", padx=14)
+            desc_lbl = Label(
+                card, text=desc, bg=PANEL_3, fg=TEXT_MUTED, font=_safe_font(8), wraplength=820,
+                justify="left", cursor="hand2",
+            )
+            desc_lbl.pack(anchor="w", padx=14, pady=(2, 10))
+            for widget in (card, badge_lbl, title_lbl, desc_lbl):
+                widget.bind("<Button-1>", lambda _e, u=url: webbrowser.open(u))
+
+        Label(
+            f,
+            text="Educational content only, not financial advice -- the same disclaimer that applies to "
+                 "every simulated result elsewhere in this app applies here too. External links open in "
+                 "your default browser to third-party sites this app doesn't control.",
+            bg=BG, fg=TEXT_DIM, font=_safe_font(8), wraplength=900, justify="left",
+        ).pack(anchor="w", padx=24, pady=(4, 24))
 
     def _generic_text_wheel(self, text_widget, event):
         delta = -1 if getattr(event, "delta", 0) > 0 else 1
@@ -10188,6 +10292,15 @@ class MainWindow:
         def run():
             try:
                 ok, message = OllamaClient(settings).test_connection()
+                if ok:
+                    # Best-effort, same background thread -- if this fails
+                    # or times out, the connection test itself still
+                    # succeeded and is reported as such; the first real
+                    # request just pays the normal load cost as before.
+                    try:
+                        OllamaClient(settings).warm_up()
+                    except Exception:
+                        pass
             except Exception as exc:
                 ok, message = False, f"Unexpected error: {exc}"
 
@@ -10349,6 +10462,16 @@ class MainWindow:
         self.aiassistant_trade_btn.pack(side="left", padx=(8, 0))
 
         chat_section = self._section(f, "Chat", "Ask about a market, request the daily brief, or discuss a trade.")
+        mode_row = Frame(chat_section, bg=PANEL)
+        mode_row.pack(anchor="w", padx=18, pady=(0, 8))
+        Label(mode_row, text="Mode:", bg=PANEL, fg=TEXT_DIM, font=_safe_font(8, "bold")).pack(side="left", padx=(0, 8))
+        self.aiassistant_chat_mode = StringVar(value="personal")
+        self.aiassistant_mode_personal_btn = self._button(
+            mode_row, "PERSONAL", lambda: self._ai_set_chat_mode("personal"), primary=True,
+        )
+        self.aiassistant_mode_personal_btn.pack(side="left")
+        self.aiassistant_mode_t58_btn = self._button(mode_row, "T58 GROUP", lambda: self._ai_set_chat_mode("t58"))
+        self.aiassistant_mode_t58_btn.pack(side="left", padx=(6, 0))
         chat_out_frame = Frame(chat_section, bg=PANEL)
         self.aiassistant_output = Text(
             chat_out_frame, height=22, wrap="word", bg=LOG_BG, fg=TEXT,
@@ -10371,8 +10494,31 @@ class MainWindow:
         self.aiassistant_send_btn = self._button(btn_row2, "SEND", self._ai_send_chat, primary=True)
         self.aiassistant_send_btn.pack(side="left")
         self._button(btn_row2, "DAILY BRIEF", self._ai_daily_brief).pack(side="left", padx=(8, 0))
+        self._button(btn_row2, "WATCHLIST", self._ai_watchlist).pack(side="left", padx=(8, 0))
 
         self._ai_chat_history: list[dict] = []
+        self._ai_set_chat_mode("personal")
+        self._ai_warm_up_in_background()
+
+    def _ai_warm_up_in_background(self) -> None:
+        """Best-effort, non-blocking: if Ollama's already enabled and
+        configured, load the model into memory now (on a daemon thread)
+        instead of waiting for the person's first real chat/screenshot/
+        outlook request to pay that cost. Silently does nothing if Ollama
+        is off, unconfigured, or unreachable -- this is purely a speed
+        optimization, never a requirement."""
+        saved = ollama_settings_module.load_settings()
+        if not saved.is_usable:
+            return
+
+        def run():
+            try:
+                from app.ai.ollama_client import OllamaClient
+                OllamaClient(saved).warm_up()
+            except Exception:
+                pass
+
+        threading.Thread(target=run, daemon=True).start()
 
     def _ai_append_output(self, label: str, text: str) -> None:
         self.aiassistant_output.configure(state="normal")
@@ -10445,17 +10591,28 @@ class MainWindow:
 
         threading.Thread(target=_worker, daemon=True).start()
 
+    def _ai_set_chat_mode(self, mode: str) -> None:
+        """Switches the AI Assistant chat between "Personal" (Owen's own
+        strategy hierarchy + assistant persona) and "T58 Group" (market/
+        strategy content only, no personal assistant framing) -- mirrors
+        the web app's mode-toggle buttons in ai_assistant.html."""
+        self.aiassistant_chat_mode.set(mode)
+        personal_active = mode == "personal"
+        self.aiassistant_mode_personal_btn.config(bg=ACCENT if personal_active else PANEL_3)
+        self.aiassistant_mode_t58_btn.config(bg=ACCENT if not personal_active else PANEL_3)
+
     def _ai_send_chat(self):
         question = self.aiassistant_question.get_str().strip()
         if not question:
             return
         self.aiassistant_question.var.set("")
         self._ai_append_output("Owen", question)
+        mode = self.aiassistant_chat_mode.get()
 
         def work():
             client = self._ai_client()
             context = self._ai_market_context()
-            reply, error = client.ask(question, context, mode="personal", history=self._ai_chat_history)
+            reply, error = client.ask(question, context, mode=mode, history=self._ai_chat_history)
             if error:
                 raise RuntimeError(error)
             return reply
@@ -10474,6 +10631,35 @@ class MainWindow:
             client = self._ai_client()
             context = self._ai_market_context()
             reply, error = client.daily_brief(context)
+            if error:
+                raise RuntimeError(error)
+            return reply
+
+        self._ai_run_async(self.aiassistant_send_btn, work, lambda reply: self._ai_append_output("Owen AI", reply))
+
+    def _ai_watchlist(self):
+        """Generates a watchlist from the top symbols in the Best Trades
+        panel (or a fresh scan if that panel hasn't been refreshed yet
+        this session) -- desktop equivalent of the web app's WATCHLIST
+        button (see runWatchlist() in ai_assistant.html)."""
+        cached = getattr(self, "_ai_last_rankings", None)
+        if cached is None:
+            try:
+                from app.ai import market_intelligence
+                cached, _errors = market_intelligence.compute_rankings()
+                self._ai_last_rankings = cached
+                self._ai_populate_trades_tree(cached)
+            except Exception:
+                cached = []
+        from app.ai.market_scanner import ranking_to_dict
+        symbols = [ranking_to_dict(r)["symbol"] for r in (cached or [])[:6]]
+        self._ai_append_output("Owen", f"[Watchlist: {', '.join(symbols)}]")
+
+        def work():
+            client = self._ai_client()
+            context = self._ai_market_context(include_rankings=False)
+            context["watchlist_symbols"] = symbols
+            reply, error = client.watchlist(context)
             if error:
                 raise RuntimeError(error)
             return reply
