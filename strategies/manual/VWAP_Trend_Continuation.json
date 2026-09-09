@@ -1,43 +1,43 @@
 {
-  "name": "VWAP Trend Continuation (ema 50/100, rsi7)",
+  "name": "VWAP Trend Continuation (ema 50/200, rsi7)",
   "entry_conditions": {
     "long": [
       {
         "left": {
           "type": "ema",
-          "period": 294,
+          "period": 20,
           "field": "close"
         },
         "operator": ">",
         "right": {
           "type": "ema",
-          "period": 58,
+          "period": 630,
           "field": "close"
         }
       },
       {
         "left": {
           "type": "close",
-          "period": 5,
+          "period": 1,
           "field": "close"
         },
         "operator": ">",
         "right": {
           "type": "vwap",
-          "period": 4,
+          "period": 1,
           "field": "close"
         }
       },
       {
         "left": {
           "type": "rsi",
-          "period": 18,
+          "period": 4,
           "field": "close"
         },
         "operator": "<",
         "right": {
           "type": "value",
-          "value": 57.6102629644959
+          "value": 39.93618930079105
         }
       }
     ],
@@ -49,39 +49,39 @@
       {
         "left": {
           "type": "ema",
-          "period": 35,
+          "period": 15,
           "field": "close"
         },
         "operator": "<",
         "right": {
           "type": "ema",
-          "period": 159,
+          "period": 551,
           "field": "close"
         }
       },
       {
         "left": {
           "type": "close",
-          "period": 2,
+          "period": 1,
           "field": "close"
         },
         "operator": "<",
         "right": {
           "type": "vwap",
-          "period": 3,
+          "period": 1,
           "field": "close"
         }
       },
       {
         "left": {
           "type": "rsi",
-          "period": 42,
+          "period": 4,
           "field": "close"
         },
         "operator": ">",
         "right": {
           "type": "value",
-          "value": 66.008585331847
+          "value": 56.88073186943971
         }
       }
     ],
@@ -95,13 +95,13 @@
       {
         "left": {
           "type": "rsi",
-          "period": 5,
+          "period": 1,
           "field": "close"
         },
         "operator": ">",
         "right": {
           "type": "value",
-          "value": 66.68737207001313
+          "value": 65.75626192020971
         }
       }
     ],
@@ -109,25 +109,25 @@
       {
         "left": {
           "type": "rsi",
-          "period": 5,
+          "period": 8,
           "field": "close"
         },
         "operator": "<",
         "right": {
           "type": "value",
-          "value": 64.42442560822603
+          "value": 55.83337829657451
         }
       }
     ]
   },
   "risk_management": {
     "stop_type": "atr",
-    "stop_value": 4.806786275425379,
+    "stop_value": 4.064133111929454,
     "stop_atr_period": 16,
     "target_type": "atr",
-    "target_value": 5.054720923946611,
-    "target_atr_period": 11,
+    "target_value": 2.0,
+    "target_atr_period": 3,
     "opposite_signal_exit": true,
-    "max_bars_in_trade": 63
+    "max_bars_in_trade": 48
   }
 }
