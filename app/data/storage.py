@@ -159,20 +159,34 @@ def list_datasets_by_instrument() -> list[dict]:
     raw_dir = get_raw_data_dir()
     groups: dict[str, list[dict]] = {}
     for ds in list_stored_datasets():
-        parts = ds.name.split("/")
-        instrument = parts[0] if len(parts) > 1 else "(ungrouped)"
-        rows = _quick_row_count(ds.path)
-        groups.setdefault(instrument, []).append({
-            "name": parts[-1],
-            "full_name": ds.name,
-            "size_bytes": ds.size_bytes,
-            "rows": rows,
-            # rows == -1 is the "unknown, it's an archive" sentinel from
-            # _quick_row_count -- never treat that as empty just because
-            # it's not a positive count. A genuinely tiny/placeholder file
-            # (archive or not) is still caught by the size_bytes check.
-            "empty": ds.size_bytes <= EMPTY_DATASET_BYTES or rows == 0,
-        })
+        try:
+            parts = ds.name.split("/")
+            instrument = parts[0] if len(parts) > 1 else "(ungrouped)"
+            try:
+                rows = _quick_row_count(ds.path)
+            except Exception:
+                # A single unreadable/locked/mid-write file must never
+                # blank out every other dataset in the list -- every page
+                # that renders "Use a previously stored dataset" depends
+                # on this function returning something for every file
+                # list_stored_datasets() already found on disk.
+                rows = -1
+            groups.setdefault(instrument, []).append({
+                "name": parts[-1],
+                "full_name": ds.name,
+                "size_bytes": ds.size_bytes,
+                "rows": rows,
+                # rows == -1 is the "unknown, it's an archive" sentinel from
+                # _quick_row_count -- never treat that as empty just because
+                # it's not a positive count. A genuinely tiny/placeholder file
+                # (archive or not) is still caught by the size_bytes check.
+                "empty": ds.size_bytes <= EMPTY_DATASET_BYTES or rows == 0,
+            })
+        except Exception:
+            # Same defensive reasoning one level up: whatever went wrong
+            # with this one dataset entry, every other already-discovered
+            # dataset must still show up.
+            continue
 
     result = []
     for instrument in sorted(groups.keys()):
