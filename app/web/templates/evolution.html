@@ -95,6 +95,7 @@
     <label>Use a previously stored dataset</label>
     <select name="existing_dataset">
       <option value="">— none, I'm uploading a new file below —</option>
+      {% if dataset_groups %}
       {% for g in dataset_groups %}
       <optgroup label="{{ g.instrument }}">
         {% for file in g.files %}
@@ -102,6 +103,11 @@
         {% endfor %}
       </optgroup>
       {% endfor %}
+      {% else %}
+      {% for ds in stored_datasets %}
+      <option value="{{ ds.name }}">{{ ds.name }}</option>
+      {% endfor %}
+      {% endif %}
     </select>
     {% endif %}
     <label>Or upload a new CSV</label>
