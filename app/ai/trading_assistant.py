@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
 
+from app.ai import ollama_settings
 from app.ai.ollama_settings import OllamaSettings
 
 DEFAULT_TIMEOUT_SECONDS = 120
@@ -465,7 +466,10 @@ class TradingAssistantClient:
             resp = requests.post(
                 f"{host}/api/chat",
                 headers=self._headers(),
-                json={"model": self.settings.model, "messages": messages, "stream": False},
+                json={
+                    "model": self.settings.model, "messages": messages, "stream": False,
+                    "keep_alive": ollama_settings.INTERACTIVE_KEEP_ALIVE,
+                },
                 timeout=self.timeout,
             )
             resp.raise_for_status()
@@ -505,7 +509,10 @@ class TradingAssistantClient:
             resp = requests.post(
                 f"{host}/api/chat",
                 headers=self._headers(),
-                json={"model": vision_model, "messages": messages, "stream": False},
+                json={
+                    "model": vision_model, "messages": messages, "stream": False,
+                    "keep_alive": ollama_settings.INTERACTIVE_KEEP_ALIVE,
+                },
                 timeout=self.timeout,
             )
             resp.raise_for_status()

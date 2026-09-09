@@ -28,6 +28,7 @@ import json
 import re
 from dataclasses import dataclass, field
 
+from app.ai import ollama_settings as ollama_settings_module
 from app.ai.ollama_settings import OllamaSettings
 
 DEFAULT_TIMEOUT_SECONDS = 90
@@ -215,6 +216,46 @@ class OllamaClient:
             )
         return True, f"Connected to Ollama at {host} -- model '{model}' is ready."
 
+    def warm_up(self, model: str | None = None) -> tuple[bool, str]:
+        """Sends a minimal (empty-prompt, num_predict=1) generate request
+        so Ollama loads the model into memory now, ahead of the person's
+        first real question -- rather than the first real question paying
+        for that load time. Meant to be called once (e.g. from a
+        background thread when the AI Assistant/Research Agent tab opens,
+        or right after a successful TEST CONNECTION), not on every
+        keystroke. Never raises; a failed warm-up just means the first
+        real request pays the load cost as before -- nothing is broken by
+        skipping this."""
+        import requests
+
+        host = (self.settings.host or "").rstrip("/")
+        if not host:
+            return False, "No Ollama host configured."
+        target_model = model or self.settings.model
+        try:
+            resp = requests.post(
+                f"{host}/api/generate",
+                headers=self._headers(),
+                json={
+                    "model": target_model, "prompt": "", "stream": False,
+                    "keep_alive": ollama_settings_module.INTERACTIVE_KEEP_ALIVE,
+                    "options": {"num_predict": 1},
+                },
+                # A cold load of a large model can genuinely take a couple
+                # of minutes on CPU-only hardware -- this call runs on a
+                # background thread wherever it's used, so it's fine to
+                # wait longer than a normal interactive request would.
+                timeout=max(self.timeout, 120),
+            )
+            resp.raise_for_status()
+            return True, f"'{target_model}' is warm."
+        except requests.exceptions.ConnectionError:
+            return False, f"Couldn't reach Ollama at {host} to warm up '{target_model}'."
+        except requests.exceptions.Timeout:
+            return False, f"Timed out warming up '{target_model}' (it may still be loading)."
+        except Exception as exc:
+            return False, f"Warm-up request failed: {exc}"
+
     def suggest_parameter_adjustments(
         self,
         strategy_name: str,
@@ -257,7 +298,10 @@ class OllamaClient:
             resp = requests.post(
                 f"{host}/api/generate",
                 headers=self._headers(),
-                json={"model": self.settings.model, "prompt": prompt, "stream": False},
+                json={
+                    "model": self.settings.model, "prompt": prompt, "stream": False,
+                    "keep_alive": ollama_settings_module.INTERACTIVE_KEEP_ALIVE,
+                },
                 timeout=self.timeout,
             )
             resp.raise_for_status()

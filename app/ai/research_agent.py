@@ -52,6 +52,7 @@ from typing import Callable
 
 import pandas as pd
 
+from app.ai import ollama_settings
 from app.ai.ollama_settings import OllamaSettings
 from app.backtest.engine import BacktestResult, run_backtest
 from app.backtest.risk import RiskConfig
@@ -580,7 +581,10 @@ class ResearchAgent:
             resp = requests.post(
                 f"{host}/api/generate",
                 headers=headers,
-                json={"model": self.settings.model, "prompt": prompt, "stream": False},
+                json={
+                    "model": self.settings.model, "prompt": prompt, "stream": False,
+                    "keep_alive": ollama_settings.INTERACTIVE_KEEP_ALIVE,
+                },
                 timeout=self.timeout,
             )
             resp.raise_for_status()

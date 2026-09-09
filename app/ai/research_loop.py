@@ -57,6 +57,7 @@ import traceback
 import numpy as np
 import pandas as pd
 
+from app.ai import ollama_settings
 from app.ai.experiment_memory import is_dna_tagset_previously_discarded, record_experiment
 from app.ai.ollama_settings import OllamaSettings
 from app.ai.strategy_generator import generate_strategy
@@ -266,6 +267,7 @@ def _ask_ollama_next_hypothesis(
             headers=headers,
             json={
                 "model": settings.model, "prompt": prompt, "stream": False,
+                "keep_alive": ollama_settings.INTERACTIVE_KEEP_ALIVE,
                 "options": {"num_ctx": 2048, "num_predict": 200, "temperature": 0.4},
             },
             timeout=(10, timeout),

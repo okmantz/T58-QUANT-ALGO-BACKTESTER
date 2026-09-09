@@ -33,6 +33,22 @@ DEFAULT_MODEL = "llama3.1"
 # multimodal Ollama supports (e.g. llama3.2-vision, bakllava) also works.
 DEFAULT_VISION_MODEL = "llava"
 
+# How long Ollama keeps a model resident in memory after a request, for
+# every interactive/frequently-called path (chat, screenshot analysis,
+# daily brief, watchlist, outlook, research agent/loop, embeddings).
+# Ollama's own server-side default is 5 minutes -- fine for a one-off
+# generation, but this app's AI Assistant/Research Agent/Research Loop are
+# used in bursts of several calls a few minutes apart (a user reading a
+# reply and typing the next question, or a research loop's own internal
+# multi-step calls), so the model was frequently unloading and reloading
+# from disk between calls -- the actual cause of "the AI model takes a
+# while" on anything past the very first request of a session. Passing
+# this explicitly on every such call keeps the model warm through a
+# realistic gap between turns without pinning it forever (see
+# app.ai.strategy_generator.KEEP_ALIVE for the one deliberately-shorter
+# exception, a single one-shot code-generation call).
+INTERACTIVE_KEEP_ALIVE = "30m"
+
 
 @dataclass
 class OllamaSettings:

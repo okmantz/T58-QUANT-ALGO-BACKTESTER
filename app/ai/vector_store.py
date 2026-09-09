@@ -40,6 +40,7 @@ from pathlib import Path
 
 import numpy as np
 
+from app.ai import ollama_settings
 from app.ai.ollama_settings import OllamaSettings
 from app.data.storage import get_app_base_dir
 
@@ -95,7 +96,10 @@ class OllamaEmbedder:
             resp = requests.post(
                 f"{host}/api/embeddings",
                 headers=self._headers(),
-                json={"model": self.model, "prompt": text},
+                json={
+                    "model": self.model, "prompt": text,
+                    "keep_alive": ollama_settings.INTERACTIVE_KEEP_ALIVE,
+                },
                 timeout=self.timeout,
             )
             resp.raise_for_status()
