@@ -68,6 +68,9 @@
     <form method="post" action="/evolution/reset" onsubmit="return confirm('Discard the saved checkpoint and start completely fresh next time?');">
       <button class="reset-btn" type="submit">Reset checkpoint (start fresh next run)</button>
     </form>
+    <form method="post" action="/evolution/reset-family-health" onsubmit="return confirm('Archive the accumulated family-health history (past Search Lab + Evolution Lab dead-end tracking)? Every family gets a clean slate again -- nothing tested since a fix or a crash will unfairly count against it. This is recoverable (old files are renamed, not deleted), not destructive.');" style="margin-top:6px;">
+      <button class="reset-btn" type="submit">Reset family-health history (clear dead-end blacklist)</button>
+    </form>
     {% endif %}
   </div>
 </div>
@@ -125,6 +128,49 @@
       <div><label>Max generations (blank = run until STOP)</label><input type="number" name="max_generations" value=""></div>
     </div>
     <div><label>Initial account balance</label><input type="number" name="initial_balance" value="100000"></div>
+
+    <div style="margin-top:14px;">
+      <label>Optimization goal</label>
+      <select name="fitness_goal_preset" id="fitness_goal_preset" onchange="t58ToggleCustomGoalWeights()">
+        <option value="balanced">Balanced (default -- pass probability x payout probability x robustness x OOS consistency / drawdown)</option>
+        <option value="eval_pass_rate">Maximize eval pass rate</option>
+        <option value="first_payout">Maximize first payout probability</option>
+        <option value="net_profit">Maximize net profit</option>
+        <option value="robustness">Maximize robustness / OOS consistency</option>
+        <option value="low_drawdown">Minimize drawdown</option>
+        <option value="custom">Custom weights...</option>
+      </select>
+      <p style="font-size:12px;color:#888;margin:4px 0 0;">
+        What the lab ranks/selects candidates by. "Balanced" is the original scoring formula; the others
+        emphasize one thing Owen cares about more than the others without ignoring the rest.
+      </p>
+      <div id="custom-goal-weights" style="display:none;margin-top:8px;">
+        <div class="row">
+          <div><label>Eval pass probability weight</label><input type="number" step="0.1" min="0" name="goal_w_pass_probability" value="1.0"></div>
+          <div><label>First payout probability weight</label><input type="number" step="0.1" min="0" name="goal_w_payout_probability" value="1.0"></div>
+        </div>
+        <div class="row">
+          <div><label>Robustness weight</label><input type="number" step="0.1" min="0" name="goal_w_robustness" value="1.0"></div>
+          <div><label>Walk-forward (OOS) consistency weight</label><input type="number" step="0.1" min="0" name="goal_w_oos_consistency" value="1.0"></div>
+        </div>
+        <div class="row">
+          <div><label>Drawdown penalty weight</label><input type="number" step="0.1" min="0" name="goal_w_drawdown" value="1.0"></div>
+          <div><label>Net profit weight (additive bonus, small e.g. 0.01-0.05)</label><input type="number" step="0.01" min="0" name="goal_w_net_profit" value="0.0"></div>
+        </div>
+        <p style="font-size:12px;color:#888;margin:4px 0 0;">
+          1.0 = default weighting for that factor, 0.0 = ignore it entirely, higher = weight it more heavily
+          than the others. Net profit is additive (raw dollars x weight), not an exponent like the rest,
+          since it has no natural 0..1 ceiling.
+        </p>
+      </div>
+    </div>
+    <script>
+      function t58ToggleCustomGoalWeights() {
+        const sel = document.getElementById('fitness_goal_preset');
+        document.getElementById('custom-goal-weights').style.display = (sel.value === 'custom') ? 'block' : 'none';
+      }
+    </script>
+
     <label style="margin-top:10px;">Strategy families to search (none checked = every family)</label>
     <div class="row" style="margin:2px 0 8px;">
       <button type="button" class="submit-btn" style="padding:6px 10px;font-size:12px;" onclick="t58SetCheckboxes('evo-families-list', true)">Select All</button>

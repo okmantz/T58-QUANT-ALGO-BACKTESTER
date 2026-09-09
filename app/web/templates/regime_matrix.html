@@ -217,6 +217,15 @@
 
   function populateLibrarySelect(mode) {
     const select = document.getElementById('existing_strategy_select');
+    // Named per-mode (existing_strategy_manual / _python / _pinescript /
+    // _mql5) so the backend's per-mode precedence check
+    // (form.get(f"existing_strategy_{mode}") -- see
+    // app.web.server.resolve_strategy_source / _build_strategy) has a
+    // real form field to read even if a library pick's fetched text
+    // somehow never made it into the strategy_code textarea (e.g. JS
+    // fetch failure) -- previously this select had no name attribute
+    // at all, so that fallback path was silently dead for every mode.
+    select.name = 'existing_strategy_' + mode;
     const all = SAVED_STRATEGIES[mode] || [];
     select.innerHTML = '<option value="">— none, paste or upload below —</option>';
     all.forEach(s => {
@@ -249,15 +258,30 @@
     tabs.forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     modeInput.value = btn.dataset.mode;
+    // Manual strategies (including every one the Evolution Lab auto-saves
+    // or promotes -- see app.evolution.engine._maybe_save_to_library) are
+    // saved-library entries too, same as Python/PineScript/MQL5 -- so the
+    // "load from library" dropdown/search/filter panel now shows for
+    // Manual as well, instead of only exposing the quick SMA-crossover
+    // builder fields with no way to load anything previously saved.
+    manualFields.style.display = 'block';
+    codeFields.style.display = 'block';
+    const fileInput = document.getElementById('strategy_file_input');
+    const codeArea = document.getElementById('strategy_code');
     if (btn.dataset.mode === 'manual') {
-      manualFields.style.display = 'block';
-      codeFields.style.display = 'none';
+      if (fileInput) fileInput.setAttribute('accept', '.json');
+      if (codeArea) codeArea.setAttribute('placeholder', 'Optional: paste a manual strategy JSON config here, or pick one below -- leave blank to use the quick SMA builder fields above instead.');
     } else {
-      manualFields.style.display = 'none';
-      codeFields.style.display = 'block';
-      populateLibrarySelect(btn.dataset.mode);
+      if (fileInput) fileInput.setAttribute('accept', '.py,.pine,.mq5');
+      if (codeArea) codeArea.setAttribute('placeholder', 'Paste your Python / PineScript / MQL5 strategy here');
     }
+    populateLibrarySelect(btn.dataset.mode);
   }));
+
+  // Run once on page load for whichever tab starts active (Manual), so
+  // the library dropdown/search/filter panel is populated and visible
+  // immediately instead of only appearing after the user clicks a tab.
+  document.querySelector('#strategy-tabs button.active')?.click();
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/static/sw.js').catch(() => {});
