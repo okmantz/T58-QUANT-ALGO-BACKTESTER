@@ -327,9 +327,22 @@ def run_speed_run(
 
     # -- Phase 1: wide discovery across every family ---------------------
     log("Phase 1/3: Wide discovery search across every strategy family (speed-tuned settings)...")
+    exclude_families = None
+    try:
+        from app.search.family_health import apply_family_exclusions
+        _survivors, _excluded = apply_family_exclusions()
+        if _excluded:
+            log(
+                f"Auto-excluding {len(_excluded)} dead-end famil{'y' if len(_excluded) == 1 else 'ies'} "
+                f"(tested 30+ times across past runs with zero successes): {', '.join(_excluded)}."
+            )
+        if _survivors is not None:
+            exclude_families = set(_excluded)
+    except Exception:  # noqa: BLE001 -- a family-health scan failing must never block a Speed Run
+        pass
     space = generate_search_space(
         mode="family", family="all", max_candidates=cfg.max_candidates,
-        seed=cfg.discovery_random_seed,
+        seed=cfg.discovery_random_seed, exclude_families=exclude_families,
     )
     stage_cfg = SearchStageConfig(
         stage1_top_n=cfg.stage1_top_n,

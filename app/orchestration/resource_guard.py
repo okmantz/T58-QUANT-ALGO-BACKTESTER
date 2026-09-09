@@ -201,9 +201,12 @@ HEAVY_JOB_GUARD = HeavyJobGuard()
 # Human-readable names for the guard's slot, shared by both UIs so the
 # "X is already running" message always names the job consistently.
 JOB_SEARCH_LAB = "Search Lab"
+JOB_MULTI_INSTRUMENT_SEARCH = "Multi-Instrument Search"
 JOB_EVOLUTION_LAB = "Evolution Lab"
+JOB_MULTI_INSTRUMENT_EVOLUTION = "Multi-Instrument Evolution Lab"
 JOB_FULL_PIPELINE = "Full Pipeline"
 JOB_SPEED_RUN = "Speed Run"
+JOB_MULTI_INSTRUMENT_SPEED_RUN = "Multi-Instrument Speed Run"
 
 # UPGRADE (Sep 2026 UI pass, round 2): these five don't spin up their own
 # ProcessPoolExecutor the way the four above do, but Walk-Forward Opt/GA in
