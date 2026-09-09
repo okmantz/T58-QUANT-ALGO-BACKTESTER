@@ -1,0 +1,133 @@
+{
+  "name": "VWAP Trend Continuation (ema 50/200, rsi7)",
+  "entry_conditions": {
+    "long": [
+      {
+        "left": {
+          "type": "ema",
+          "period": 44,
+          "field": "close"
+        },
+        "operator": ">",
+        "right": {
+          "type": "ema",
+          "period": 408,
+          "field": "close"
+        }
+      },
+      {
+        "left": {
+          "type": "close",
+          "period": 1,
+          "field": "close"
+        },
+        "operator": ">",
+        "right": {
+          "type": "vwap",
+          "period": 1,
+          "field": "close"
+        }
+      },
+      {
+        "left": {
+          "type": "rsi",
+          "period": 4,
+          "field": "close"
+        },
+        "operator": "<",
+        "right": {
+          "type": "value",
+          "value": 39.93618930079105
+        }
+      }
+    ],
+    "long_connectors": [
+      "AND",
+      "AND"
+    ],
+    "short": [
+      {
+        "left": {
+          "type": "ema",
+          "period": 15,
+          "field": "close"
+        },
+        "operator": "<",
+        "right": {
+          "type": "ema",
+          "period": 331,
+          "field": "close"
+        }
+      },
+      {
+        "left": {
+          "type": "close",
+          "period": 1,
+          "field": "close"
+        },
+        "operator": "<",
+        "right": {
+          "type": "vwap",
+          "period": 1,
+          "field": "close"
+        }
+      },
+      {
+        "left": {
+          "type": "rsi",
+          "period": 3,
+          "field": "close"
+        },
+        "operator": ">",
+        "right": {
+          "type": "value",
+          "value": 68.3729970010251
+        }
+      }
+    ],
+    "short_connectors": [
+      "AND",
+      "AND"
+    ]
+  },
+  "exit_conditions": {
+    "long": [
+      {
+        "left": {
+          "type": "rsi",
+          "period": 1,
+          "field": "close"
+        },
+        "operator": ">",
+        "right": {
+          "type": "value",
+          "value": 65.75626192020971
+        }
+      }
+    ],
+    "short": [
+      {
+        "left": {
+          "type": "rsi",
+          "period": 5,
+          "field": "close"
+        },
+        "operator": "<",
+        "right": {
+          "type": "value",
+          "value": 41.36065975419515
+        }
+      }
+    ]
+  },
+  "risk_management": {
+    "stop_type": "atr",
+    "stop_value": 2.0883533396801823,
+    "stop_atr_period": 16,
+    "target_type": "atr",
+    "target_value": 2.0,
+    "target_atr_period": 6,
+    "opposite_signal_exit": true,
+    "max_bars_in_trade": 48
+  }
+}
