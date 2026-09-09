@@ -312,9 +312,20 @@ def run_search_cli(
                 grid_points_per_gene=grid_points, max_candidates=max_candidates, seed=seed,
             )
         else:
+            exclude_families = None
+            try:
+                from app.search.family_health import apply_family_exclusions
+                _survivors, _excluded = apply_family_exclusions()
+                if _excluded:
+                    print(f"Auto-excluding {len(_excluded)} dead-end famil{'y' if len(_excluded) == 1 else 'ies'} "
+                          f"(tested 30+ times across past runs with zero successes): {', '.join(_excluded)}.")
+                if _survivors is not None:
+                    exclude_families = set(_excluded)
+            except Exception:  # noqa: BLE001 -- a family-health scan failing must never block a search
+                pass
             space = generate_search_space(
                 mode="family", family=family, max_candidates=max_candidates, seed=seed,
-                has_pair_data=has_pair_data,
+                has_pair_data=has_pair_data, exclude_families=exclude_families,
             )
 
     stage_cfg = SearchStageConfig(
@@ -355,6 +366,140 @@ def run_search_cli(
             print(f"  {k}: {p}")
     elif promote:
         print("\nNo champion to promote -- no candidate passed every Stage 3 gate this run.")
+
+
+def run_multi_instrument_cli(
+    mi_jobs: list[str],
+    output_dir: str,
+    max_concurrent: int = 2,
+    mode: str = "family",
+    family: str | None = "all",
+    grid_points: int = 3,
+    max_candidates: int = 500,
+    workers: int | None = None,
+    min_trades: int = 20,
+    min_profit_factor: float = 1.05,
+    stage1_top_n: int = 40,
+    stage2_top_n: int = 10,
+    ga_population: int = 10,
+    ga_generations: int = 4,
+    full_mc_sims: int = 3000,
+    walk_forward_folds: int = 4,
+    robustness_neighbors: int = 6,
+    fitness_metric: str = "eval_pass_probability",
+    seed: int = 42,
+    promote: bool = True,
+    cost_stress_enabled: bool = True,
+    cost_stress_multiplier: float = 2.0,
+    cost_stress_penalty_weight: float = 0.35,
+) -> None:
+    """Multi-instrument Search Lab: the SAME family/grid search space, run
+    CONCURRENTLY against every `--mi-job` target (see app.orchestration.
+    multi_instrument_search for the underlying orchestration -- this is
+    just the CLI's argument parsing/reporting layer on top of it, same
+    division of labor as run_search_cli above vs. app.search.batch_runner).
+    """
+    from app.orchestration.multi_instrument_search import (
+        InstrumentJob, best_result_across_instruments, run_multi_instrument_search,
+    )
+    from app.search.batch_runner import SearchStageConfig, promote_champion
+    from app.search.search_report import generate_search_report
+    from app.search.strategy_space import generate_search_space, list_families
+
+    if not mi_jobs or len(mi_jobs) < 2:
+        print("--multi-instrument requires at least 2 --mi-job entries (e.g. "
+              "--mi-job 'XAUUSD:15m:data/raw/XAUUSD15.csv' --mi-job 'EURUSD:5m:data/raw/EURUSD5.csv').")
+        sys.exit(1)
+
+    jobs: list[InstrumentJob] = []
+    for raw in mi_jobs:
+        parts = raw.split(":", 2)
+        if len(parts) != 3:
+            print(f"Could not parse --mi-job '{raw}' -- expected 'INSTRUMENT:TIMEFRAME:path/to.csv'.")
+            sys.exit(1)
+        instrument, timeframe, csv_path = parts
+        jobs.append(InstrumentJob(instrument=instrument, timeframe=timeframe, csv_path=str(store_csv_path(csv_path))))
+
+    if family not in (None, "all") and family not in list_families():
+        print(f"Unknown family '{family}'. Known families: {list(list_families())}")
+        sys.exit(1)
+
+    # The search space is candidate specs only, independent of any one
+    # dataset (see app.search.strategy_space's own module docstring) --
+    # generated ONCE and reused across every instrument job, exactly the
+    # contract run_multi_instrument_search expects.
+    exclude_families = None
+    try:
+        from app.search.family_health import apply_family_exclusions
+        _survivors, _excluded = apply_family_exclusions()
+        if _excluded:
+            print(f"Auto-excluding {len(_excluded)} dead-end famil{'y' if len(_excluded) == 1 else 'ies'} "
+                  f"(tested 30+ times across past runs with zero successes): {', '.join(_excluded)}.")
+        if _survivors is not None:
+            exclude_families = set(_excluded)
+    except Exception:  # noqa: BLE001 -- a family-health scan failing must never block a search
+        pass
+    space = generate_search_space(
+        mode=mode, family=family, grid_points_per_gene=grid_points,
+        max_candidates=max_candidates, seed=seed, exclude_families=exclude_families,
+    )
+    stage_cfg = SearchStageConfig(
+        min_trades=min_trades, min_profit_factor=min_profit_factor,
+        stage1_top_n=stage1_top_n, stage2_top_n=stage2_top_n,
+        ga_population=ga_population, ga_generations=ga_generations,
+        full_mc_sims=full_mc_sims, walk_forward_folds=walk_forward_folds,
+        robustness_neighbors=robustness_neighbors, fitness_metric=fitness_metric,
+        workers=workers, random_seed=seed,
+        cost_stress_enabled=cost_stress_enabled, cost_stress_multiplier=cost_stress_multiplier,
+        cost_stress_penalty_weight=cost_stress_penalty_weight,
+    )
+    risk = RiskConfig()
+    rules = PropRules()
+    db_dir = Path(output_dir) / "multi_instrument"
+
+    print(f"Searching {len(jobs)} instrument/timeframe target(s) "
+          f"(up to {max_concurrent} concurrently): {', '.join(j.instrument + '/' + j.timeframe for j in jobs)}")
+    results = run_multi_instrument_search(
+        jobs, space, risk, rules, stage_cfg, db_dir,
+        max_concurrent_instruments=max_concurrent, progress_cb=lambda label, msg: print(f"[{label}] {msg}"),
+    )
+
+    print("\n" + "=" * 72)
+    print("MULTI-INSTRUMENT RESULTS")
+    print("=" * 72)
+    for label, res in sorted(results.items()):
+        if res.error:
+            print(f"  {label:20s}  FAILED: {res.error.splitlines()[0]}")
+        else:
+            s = res.summary
+            print(f"  {label:20s}  {s.total_candidates:5d} tested -> "
+                  f"{s.stage1_survivors:3d}/{s.stage2_survivors:3d}/{s.stage3_survivors:3d} "
+                  f"(stage1/2/3) -> champion: {s.champion_candidate_id or '(none)'}")
+
+    best = best_result_across_instruments(results)
+    if best is None:
+        print("\nNo instrument/timeframe produced a Stage 3 champion this run.")
+        return
+
+    print(f"\nBest result: {best.label} (candidate {best.summary.champion_candidate_id})")
+    report_paths = generate_search_report(
+        output_dir=str(db_dir / best.label.replace("/", "_")), summary=best.summary, space=space,
+        instrument=best.job.instrument, timeframe=best.job.timeframe,
+    )
+    print("Leaderboard written to:")
+    for k, p in report_paths.items():
+        print(f"  {k}: {p}")
+
+    if promote:
+        import_result = import_csv(best.job.csv_path)
+        promo = promote_champion(
+            best.summary.db_path, best.summary.run_id, best.summary.champion_candidate_id,
+            import_result.dataframe, risk, rules,
+            output_dir=str(db_dir / best.label.replace("/", "_") / "champion"),
+        )
+        print("Champion report written to:")
+        for k, p in promo["report_paths"].items():
+            print(f"  {k}: {p}")
 
 
 def run_wfo_cli(
@@ -944,6 +1089,29 @@ def main():
              "Omit to search every other family unaffected; searching --search-family stat_pairs "
              "specifically without this will fail with a clear error.",
     )
+    parser.add_argument(
+        "--multi-instrument", action="store_true",
+        help="run the SAME family/grid search space (see --search-mode/-family/etc. above) "
+             "CONCURRENTLY against several instrument/timeframe CSVs (see --mi-job), instead of "
+             "one CSV at a time -- a real edge is often instrument/timeframe-dependent, so this "
+             "covers more ground per unit wall-clock time than repeated single-instrument runs. "
+             "Uses the same --search-* stage-config flags as --search; --csv is ignored (use "
+             "--mi-job instead). Mutually exclusive with --search and every other mode flag.",
+    )
+    parser.add_argument(
+        "--mi-job", action="append", default=None,
+        help="one instrument/timeframe target, as 'INSTRUMENT:TIMEFRAME:path/to.csv' (e.g. "
+             "'XAUUSD:15m:data/raw/XAUUSD15.csv'). Repeat for each instrument/timeframe to search "
+             "-- at least 2 required. INSTRUMENT/TIMEFRAME are just labels used for logging and "
+             "the results database filename, they don't have to match the CSV's own naming.",
+    )
+    parser.add_argument(
+        "--mi-max-concurrent", type=int, default=2,
+        help="how many instrument/timeframe jobs to run at once (default 2) -- each concurrent "
+             "job still gets its own worker-process pool for Stages 1-3, so the total worker "
+             "count used is roughly (this) x (workers per job); see --search-workers to cap the "
+             "per-job worker count directly instead of relying on the automatic split.",
+    )
 
     parser.add_argument("--ensemble", action="store_true",
                          help="run a multi-strategy ensemble backtest: several DIFFERENT strategies on the "
@@ -1052,7 +1220,23 @@ def main():
 
     args = parser.parse_args()
 
-    if args.search:
+    if args.multi_instrument:
+        run_multi_instrument_cli(
+            args.mi_job or [], args.output, max_concurrent=args.mi_max_concurrent,
+            mode=args.search_mode, family=args.search_family,
+            grid_points=args.search_grid_points, max_candidates=args.search_max_candidates,
+            workers=args.search_workers,
+            min_trades=args.search_min_trades, min_profit_factor=args.search_min_profit_factor,
+            stage1_top_n=args.search_stage1_top_n, stage2_top_n=args.search_stage2_top_n,
+            ga_population=args.search_ga_population, ga_generations=args.search_ga_generations,
+            full_mc_sims=args.search_full_mc_sims, walk_forward_folds=args.search_walk_forward_folds,
+            robustness_neighbors=args.search_robustness_neighbors, fitness_metric=args.search_metric,
+            seed=args.search_seed, promote=not args.search_no_promote,
+            cost_stress_enabled=not args.search_no_cost_stress,
+            cost_stress_multiplier=args.search_cost_stress_multiplier,
+            cost_stress_penalty_weight=args.search_cost_stress_weight,
+        )
+    elif args.search:
         run_search_cli(
             args.csv, args.output,
             mode=args.search_mode, family=args.search_family,
