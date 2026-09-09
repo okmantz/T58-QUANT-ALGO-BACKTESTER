@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>User Manual — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<style>
+  .manual-toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 20px; }
+  .manual-toc a {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px;
+    padding: 6px 14px; font-size: 12px; color: var(--text-muted); text-decoration: none;
+  }
+  .manual-toc a:hover { border-color: var(--teal); color: var(--text); }
+  .manual-section {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-lg);
+    padding: 22px; margin-bottom: 18px;
+  }
+  .manual-section h2 { margin: 0 0 4px; font-size: 18px; }
+  .manual-section .eyebrow { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-dim); font-weight: 700; }
+  .manual-section p { color: var(--text-muted); font-size: 13px; line-height: 1.6; }
+  .manual-section ol, .manual-section ul { color: var(--text-muted); font-size: 13px; line-height: 1.7; padding-left: 20px; }
+  .manual-section li { margin-bottom: 4px; }
+  .manual-section li a { color: var(--teal); }
+  .manual-tip {
+    background: rgba(var(--teal-rgb), .08); border: 1px solid rgba(var(--teal-rgb), .3);
+    border-radius: 10px; padding: 10px 14px; font-size: 12px; color: var(--text); margin-top: 10px;
+  }
+  .manual-warn {
+    background: rgba(255, 140, 60, .08); border: 1px solid rgba(255, 140, 60, .3);
+    border-radius: 10px; padding: 10px 14px; font-size: 12px; color: var(--text); margin-top: 10px;
+  }
+  .quickstart-list { counter-reset: qs; list-style: none; padding-left: 0; }
+  .quickstart-list li { counter-increment: qs; position: relative; padding-left: 34px; margin-bottom: 10px; }
+  .quickstart-list li::before {
+    content: counter(qs); position: absolute; left: 0; top: 0; width: 24px; height: 24px;
+    border-radius: 50%; background: var(--teal); color: #04110d; font-weight: 700; font-size: 12px;
+    display: flex; align-items: center; justify-content: center;
+  }
+</style>
+</head>
+<body>
+{% set active_page = 'user_manual' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+
+<div class="t58-page-header">
+  <h1>User Manual</h1>
+  <p>A start-to-finish walkthrough of the app -- from importing your first candle of data to reading a Full
+  Pipeline verdict and deploying live. Same workflow and section names as the desktop app's own User Manual
+  tab, with links to the actual web page for each step.</p>
+</div>
+
+<div class="manual-toc">
+  <a href="#quickstart">Quick start</a>
+  <a href="#create">① Create</a>
+  <a href="#test">② Test</a>
+  <a href="#optimize">③ Optimize</a>
+  <a href="#validate">④ Validate</a>
+  <a href="#champion">⑤ Champion</a>
+  <a href="#deployment">⑥ Deployment</a>
+  <a href="#quantlab">Quant Lab &amp; Options Outlook</a>
+</div>
+
+<div class="manual-section" id="quickstart">
+  <div class="eyebrow">Quick start</div>
+  <h2>The whole app in five steps</h2>
+  <p>For anyone in a hurry -- if any of these words don't mean anything yet, the sections below explain each
+  one in plain terms.</p>
+  <ol class="quickstart-list">
+    <li><b>Market Data</b> (Test) -- import a CSV, or fetch data with a free Alpaca key, on the
+      <a href="/">Run &amp; Report</a> page.</li>
+    <li><b>Strategy Builder</b> (Create) -- pick Manual / Python / PineScript / MQL5 and set it up, also on
+      <a href="/">Run &amp; Report</a>.</li>
+    <li><b>Prop-Firm Rules &amp; Risk</b> (Test) -- enter your prop firm's account size, targets, drawdown
+      rules, and per-trade risk (defaults are fine to start).</li>
+    <li><b>Full Pipeline</b> (Optimize) -- go to <a href="/full-pipeline">Full Pipeline</a>, click Run, and
+      read the READY / MARGINAL / NOT READY verdict.</li>
+    <li><b>Deploy</b> -- once you're confident, <a href="/deploy-live">Deploy Live</a> or
+      <a href="/forward-test">Forward Test (MT5)</a> first if you want a real-market dry run.</li>
+  </ol>
+  <div class="manual-tip">That's it. Everything under Optimize, Validate, and Champion in the sidebar beyond
+  Full Pipeline is optional extra tooling for later -- you don't need it for a first pass.</div>
+</div>
+
+<div class="manual-section" id="create">
+  <div class="eyebrow">① Create</div>
+  <h2>Building or generating a strategy</h2>
+  <p>Everything under Create is a different way to get a strategy into the Strategy Library so the rest of
+  the app can test it.</p>
+  <ul>
+    <li><b><a href="/">Strategy Builder</a></b> -- the Manual visual builder (indicators + entry/exit rules,
+      no code), or paste/upload Python, PineScript, or MQL5. Every strategy type can be loaded from, and
+      saved to, the Strategy Library from this same page's "Load a saved strategy" dropdown.</li>
+    <li><b><a href="/speed-run">Speed Run</a></b> -- the fastest way to screen a batch of manual strategy
+      families against your data before committing to deeper optimization.</li>
+    <li><b><a href="/generate-strategies">Generate Strategies (AI)</a></b> -- describe a strategy idea in
+      plain English; an AI model (local Ollama) turns it into a runnable Manual config.</li>
+    <li><b><a href="/research-agent">Research Agent</a></b> -- a tool-calling AI agent that can run
+      backtests, Monte Carlo, and walk-forward checks on your behalf and report back what it found.</li>
+    <li><b><a href="/research-loop">Research Loop</a></b> -- an unattended background loop that keeps
+      generating and screening candidate strategies over a long run.</li>
+    <li><b>Evolution Lab</b> also belongs conceptually here (it creates brand-new strategies from scratch via
+      genetic search) but is grouped under Optimize below since that's where it lives in the sidebar.</li>
+  </ul>
+</div>
+
+<div class="manual-section" id="test">
+  <div class="eyebrow">② Test</div>
+  <h2>Running one strategy against your data</h2>
+  <p>The core backtest loop: pick a strategy, pick your market data and rules, run it, read the report.</p>
+  <ul>
+    <li><b><a href="/">Run &amp; Report</a></b> -- the main page: strategy, market data, prop-firm rules, and
+      risk/execution settings all live here, plus the RUN button and the resulting trade-by-trade report.</li>
+    <li><b><a href="/payout-probability">Payout Probability</a></b> -- Monte Carlo resampling of your
+      backtest's trades to estimate the probability of passing an evaluation and of reaching a first payout,
+      not just a single historical outcome.</li>
+  </ul>
+  <div class="manual-tip">Market data, prop-firm rules, and risk settings you enter on this page carry over to
+  every other tool in the app (Optimize, Validate, etc.) for that session -- you only set them up once.</div>
+</div>
+
+<div class="manual-section" id="optimize">
+  <div class="eyebrow">③ Optimize</div>
+  <h2>Tuning or searching for a better strategy</h2>
+  <p>Once a strategy runs cleanly on Test, everything here helps find better parameters -- or better
+  strategies entirely.</p>
+  <ul>
+    <li><b><a href="/optimize">Overview / picker</a></b> -- if you're not sure which optimize tool to reach
+      for, start here.</li>
+    <li><b><a href="/refine">Iterative Refinement</a></b> -- a walk-forward-aware genetic algorithm that
+      tunes one strategy's existing parameters.</li>
+    <li><b><a href="/search">Search Lab</a></b> / <b><a href="/search/multi-instrument">multi-instrument</a></b>
+      -- generates and screens candidates across every registered strategy family (47 as of this update) in
+      three stages: a cheap pre-filter, GA refinement, then a strict validation gate (Monte Carlo,
+      walk-forward, robustness).</li>
+    <li><b><a href="/evolution">Evolution Lab (GA)</a></b> / <b><a href="/evolution/multi-instrument">multi-instrument</a></b>
+      -- an open-ended genetic search that creates, mutates, and re-tests candidates generation after
+      generation, keeping a knowledge graph of what's worked. Set an <b>Optimization goal</b> (balanced, eval
+      pass rate, first payout, net profit, robustness, or custom weights) on the start form to tell it what
+      to actually rank candidates by -- both the single- and multi-instrument pages support this.</li>
+    <li><b><a href="/full-pipeline">Full Pipeline</a></b> -- the recommended one-button path: runs a
+      strategy through every validation stage at once and gives a single READY / MARGINAL / NOT READY
+      verdict.</li>
+    <li><b><a href="/quick-optimize">Quick Optimize</a></b> -- a faster, lighter version of Iterative
+      Refinement for a quick pass.</li>
+    <li><b><a href="/multi-objective">Multi-Objective</a></b> -- optimizes for several competing goals at
+      once (e.g. drawdown vs. net profit) and shows the trade-off frontier instead of a single "best" answer.</li>
+  </ul>
+  <div class="manual-tip">Evolution Lab and Search Lab auto-save promising results to the Strategy Library,
+  tagged <code>evolution-lab</code> -- filter the library's tag dropdown on the Run &amp; Report page to see
+  just those, with their fitness score / eval-pass % / payout % shown right in the picker.</div>
+</div>
+
+<div class="manual-section" id="validate">
+  <div class="eyebrow">④ Validate</div>
+  <h2>Deeper robustness checks (optional)</h2>
+  <p>Everything here is optional and can be safely skipped on a first pass -- Full Pipeline already runs a
+  reasonable validation gate. Reach for these when you want to stress-test a strategy further before
+  committing real capital.</p>
+  <ul>
+    <li><b><a href="/validate">Overview / checklist</a></b> -- a running checklist of what's been validated
+      for your current strategy.</li>
+    <li><b><a href="/walk-forward-opt">Walk-Forward Opt</a></b> -- re-optimizes on a rolling in-sample window
+      and tests on the out-of-sample window that follows, repeated across the whole dataset.</li>
+    <li><b><a href="/walk-forward-ga">Walk-Forward GA</a></b> -- the same idea, using a genetic algorithm for
+      each fold's in-sample optimization instead of a grid search.</li>
+    <li><b><a href="/cpcv">CPCV / PBO</a></b> -- Combinatorial Purged Cross-Validation and Probability of
+      Backtest Overfitting -- the most rigorous (and most expensive) overfitting check in the app.</li>
+    <li><b><a href="/sensitivity">Sensitivity</a></b> -- how much a strategy's results change with small
+      perturbations to its own parameters (a fragile strategy is a red flag even if its base-case result
+      looks good).</li>
+    <li><b><a href="/regime-matrix">Regime Survival Matrix</a></b> -- breaks results down by market regime
+      (trending/ranging, high/low volatility) instead of one blended number.</li>
+    <li><b><a href="/payout-probability">Monte Carlo</a></b> -- same tool listed under Test above; it's
+      cross-listed here too since it's also a validation check.</li>
+  </ul>
+</div>
+
+<div class="manual-section" id="champion">
+  <div class="eyebrow">⑤ Champion</div>
+  <h2>Combining multiple strategies</h2>
+  <p>Once you have more than one validated strategy, these tools help you combine or compare them instead of
+  running just one at a time.</p>
+  <ul>
+    <li><b><a href="/portfolio">Multi-Asset Portfolio</a></b> -- runs and combines strategies across several
+      instruments at once, with portfolio-level risk sizing.</li>
+    <li><b><a href="/ensemble">Multi-Strategy Ensemble</a></b> -- combines several strategies' signals on the
+      same instrument into one blended equity curve.</li>
+    <li><b><a href="/family-diversity">Family Diversity</a></b> -- shows which strategy families a Search Lab
+      or Evolution Lab run actually found winners in, so you're not unknowingly running five near-identical
+      variants of the same underlying edge.</li>
+  </ul>
+</div>
+
+<div class="manual-section" id="deployment">
+  <div class="eyebrow">⑥ Deployment</div>
+  <h2>Going live</h2>
+  <ul>
+    <li><b><a href="/forward-test">Forward Test (MT5)</a></b> -- runs a validated strategy against live,
+      real-time MetaTrader 5 data without risking capital -- a real-market dry run before Deploy Live.</li>
+    <li><b><a href="/deploy-live">Deploy Live</a></b> -- connects a validated strategy to a live account.
+      Real capital -- read every warning on that page first.</li>
+    <li><b><a href="/live-market">Monitor (Live Market)</a></b> -- a live dashboard for a strategy already
+      running, so you can watch it without leaving the app.</li>
+  </ul>
+  <div class="manual-warn">Deploy Live trades with real money. Everything above it in this manual --
+  especially Full Pipeline and, ideally, at least one Validate check -- exists so you reach this step with
+  evidence, not a hunch.</div>
+</div>
+
+<div class="manual-section" id="quantlab">
+  <div class="eyebrow">Also in the sidebar</div>
+  <h2>Quant Lab &amp; Options Outlook</h2>
+  <ul>
+    <li><b><a href="/quant-lab">Quant Lab</a></b> -- a toolbox of standalone quant utilities: a
+      Pine/MQL5-to-Manual translator, statistical arbitrage / pairs tools, options pricing, order book /
+      microstructure tools, factor models, portfolio optimization, and volatility surface tools -- useful
+      independent of the main backtest pipeline.</li>
+    <li><b><a href="/options-outlook">Options Outlook</a></b> -- daily/weekly calls &amp; puts outlook,
+      computed with Black-Scholes.</li>
+  </ul>
+</div>
+
+<div class="manual-section">
+  <div class="eyebrow">Elsewhere in the sidebar</div>
+  <h2>Dashboard, AI Assistant, Resources, phone access</h2>
+  <ul>
+    <li><b><a href="/dashboard">Dashboard</a></b> -- your current strategy's checklist, robustness score, and
+      recent run history at a glance.</li>
+    <li><b><a href="/assistant">AI Assistant</a></b> -- a general-purpose chat assistant with awareness of
+      your strategies, market intelligence, and news, for questions that don't need a specific tool above.</li>
+    <li><b><a href="/resources">Resources</a></b> -- the 30-Day Trading Quickstart Guide and other free
+      educational links, for building trading fundamentals before you backtest your first strategy.</li>
+    <li><b><a href="/mobile-access">Phone access (QR code)</a></b> -- scan to open this same app on your
+      phone over your local network (or Tailscale, if installed).</li>
+  </ul>
+</div>
+
+</div>
+</div>
+<script src="/static/t58-chrome.js" defer></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+  }
+</script>
+</body>
+</html>
