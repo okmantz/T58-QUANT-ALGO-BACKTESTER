@@ -87,6 +87,11 @@ def _search_lab_counts(search_dir: Path) -> dict[str, list[int]]:
                         fam = rec.get("family")
                         if not fam:
                             continue
+                        if rec.get("error"):
+                            # Same reasoning as the Evolution Lab prefilter log
+                            # below: a build/backtest exception is a bug or a
+                            # crash, not a verdict on the family's hypothesis.
+                            continue
                         bucket = counts.setdefault(fam, [0, 0])
                         bucket[0] += 1
                     for rec in db.leaderboard(run_id, stage="stage3", top_n=1_000_000):
@@ -118,6 +123,17 @@ def _evolution_lab_counts(evolution_base_dir: Path) -> dict[str, list[int]]:
         for row in rows:
             fam = row.get("family")
             if not fam or row.get("stage") != "prefilter":
+                continue
+            if row.get("error") or "build_or_backtest_error" in (row.get("reasons") or []):
+                # A build/backtest exception (a bug in that family's config
+                # builder, a since-fixed crash, an out-of-memory hiccup mid-run,
+                # etc.) is evidence something went wrong running the candidate,
+                # not evidence the family's trading hypothesis doesn't work.
+                # Counting it toward n_tested would let a transient or
+                # already-fixed implementation bug permanently blacklist a
+                # family that was never actually given a fair trial -- skip
+                # it entirely (neither tested nor passed) rather than let it
+                # poison this family's health forever.
                 continue
             bucket = counts.setdefault(fam, [0, 0])
             bucket[0] += 1
@@ -170,6 +186,47 @@ def dead_end_families(
     exclusions below, which does that safely)."""
     health = compute_family_health(search_dir, evolution_base_dir, min_samples=min_samples)
     return {fam for fam, h in health.items() if h.is_dead_end}
+
+
+def reset_family_health(
+    search_dir: Path | str | None = None, evolution_base_dir: Path | str | None = None,
+) -> dict:
+    """Wipes the durable history compute_family_health reads from, so
+    every family starts fresh with "no evidence yet" instead of whatever
+    dead-end verdicts accumulated from past runs. Use this after a bug
+    fix (e.g. a crash or an OOM that produced a burst of spurious
+    build_or_backtest_error rows before this module started excluding
+    those from the tested count) or simply to give every family a clean
+    slate on a new instrument/dataset. Renames rather than deletes each
+    file (adds a '.pre-reset' suffix) so this is recoverable, not
+    destructive. Returns {"search_dbs_reset": N, "evolution_logs_reset": N}.
+    """
+    search_dir = Path(search_dir) if search_dir is not None else default_search_dir()
+    evolution_base_dir = Path(evolution_base_dir) if evolution_base_dir is not None else default_evolution_base_dir()
+
+    def _archive(path: Path) -> bool:
+        try:
+            archived = path.with_name(path.name + ".pre-reset")
+            if archived.exists():
+                archived.unlink()
+            path.rename(archived)
+            return True
+        except Exception:  # noqa: BLE001 -- a locked/missing file must not abort the whole reset
+            return False
+
+    n_search = 0
+    if search_dir.exists():
+        for db_path in search_dir.rglob("search_*.db"):
+            if _archive(db_path):
+                n_search += 1
+
+    n_evo = 0
+    if evolution_base_dir.exists():
+        for log_path in evolution_base_dir.rglob("tested_candidates.jsonl"):
+            if _archive(log_path):
+                n_evo += 1
+
+    return {"search_dbs_reset": n_search, "evolution_logs_reset": n_evo}
 
 
 def apply_family_exclusions(

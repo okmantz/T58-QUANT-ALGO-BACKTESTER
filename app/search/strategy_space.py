@@ -2683,18 +2683,68 @@ def generate_search_space(
                     "has_pair_data=True passed here. Merge pair data before searching this family."
                 )
 
-    all_items: list[tuple[str, dict]] = []
-    for fam in families_to_run:
-        for params in FAMILIES[fam].combinations():
-            all_items.append((fam, params))
-
-    total_generated = len(all_items)
+    combos_by_family: dict[str, list[dict]] = {
+        fam: list(FAMILIES[fam].combinations()) for fam in families_to_run
+    }
+    total_generated = sum(len(v) for v in combos_by_family.values())
     sampled = False
     if total_generated == 0:
         raise StrategySpaceError("The requested family/grid produced zero valid parameter combinations.")
-    if total_generated > max_candidates:
-        rng = random.Random(seed)
-        all_items = rng.sample(all_items, max_candidates)
+
+    rng = random.Random(seed)
+    if total_generated <= max_candidates:
+        all_items = [(fam, params) for fam, params_list in combos_by_family.items() for params in params_list]
+    else:
+        # BALANCED per-family sampling ("water-filling"), not a single
+        # pooled random.sample() over every family's combinations
+        # concatenated together. A pooled sample is size-biased: a family
+        # whose grid happens to have 1024 combinations (e.g. it exposes
+        # more tunable parameters) is ~85x more likely to appear in the
+        # sample than a family with only 12, which has nothing to do with
+        # which hypothesis is actually promising -- it's purely an
+        # artifact of how many knobs that family's config happens to
+        # expose. Left uncorrected, this is exactly what starves Evolution
+        # Lab's and Search Lab's random-immigrant/fresh-candidate slots
+        # down to just the two or three biggest-grid families over time
+        # (compounded further by elite/breeding selection, which is
+        # capped separately -- see EvolutionConfig.max_elite_frac_per_family).
+        #
+        # Water-filling: give every family an equal slice of max_candidates;
+        # any family smaller than its slice contributes everything it has
+        # and its leftover slice is redistributed evenly across the
+        # families that still have room, repeated until the budget is
+        # fully assigned or every family is exhausted.
+        fams_sorted = sorted(combos_by_family.keys(), key=lambda f: len(combos_by_family[f]))
+        remaining_quota = max_candidates
+        remaining_fam_count = len(fams_sorted)
+        allocation: dict[str, int] = {}
+        for fam in fams_sorted:
+            share = max(1, remaining_quota // remaining_fam_count)
+            take = min(len(combos_by_family[fam]), share)
+            allocation[fam] = take
+            remaining_quota -= take
+            remaining_fam_count -= 1
+        # Any quota left over (every family capped below its equal share,
+        # or integer-division remainder) goes to the families with the
+        # most untapped combinations left, so the budget is still fully
+        # used rather than silently under-sampling.
+        if remaining_quota > 0:
+            headroom = sorted(
+                ((fam, len(combos_by_family[fam]) - allocation[fam]) for fam in fams_sorted),
+                key=lambda x: x[1], reverse=True,
+            )
+            for fam, room in headroom:
+                if remaining_quota <= 0:
+                    break
+                extra = min(room, remaining_quota)
+                allocation[fam] += extra
+                remaining_quota -= extra
+
+        all_items = []
+        for fam, take in allocation.items():
+            params_list = combos_by_family[fam]
+            chosen = params_list if take >= len(params_list) else rng.sample(params_list, take)
+            all_items.extend((fam, params) for params in chosen)
         sampled = True
 
     candidates: dict[str, dict] = {}
