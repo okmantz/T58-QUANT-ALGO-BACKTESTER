@@ -1,0 +1,99 @@
+{
+  "name": "Volume Climax Reversal (rel-vol14>2.0x, vol-expansion gated)",
+  "entry_conditions": {
+    "long": [
+      {
+        "left": {
+          "type": "relative_volume",
+          "period": 14,
+          "field": "close"
+        },
+        "operator": ">",
+        "right": {
+          "type": "value",
+          "value": 2.0
+        }
+      },
+      {
+        "left": {
+          "type": "volatility_regime",
+          "period": 14
+        },
+        "operator": "==",
+        "right": {
+          "type": "value",
+          "value": 1
+        }
+      },
+      {
+        "left": {
+          "type": "candle_direction",
+          "direction": "bearish"
+        },
+        "operator": "is true",
+        "right": {
+          "type": "value",
+          "value": 1
+        }
+      }
+    ],
+    "long_connectors": [
+      "AND",
+      "AND"
+    ],
+    "short": [
+      {
+        "left": {
+          "type": "relative_volume",
+          "period": 14,
+          "field": "close"
+        },
+        "operator": ">",
+        "right": {
+          "type": "value",
+          "value": 2.0
+        }
+      },
+      {
+        "left": {
+          "type": "volatility_regime",
+          "period": 14
+        },
+        "operator": "==",
+        "right": {
+          "type": "value",
+          "value": 1
+        }
+      },
+      {
+        "left": {
+          "type": "candle_direction",
+          "direction": "bullish"
+        },
+        "operator": "is true",
+        "right": {
+          "type": "value",
+          "value": 1
+        }
+      }
+    ],
+    "short_connectors": [
+      "AND",
+      "AND"
+    ]
+  },
+  "exit_conditions": {
+    "long": [],
+    "short": []
+  },
+  "risk_management": {
+    "stop_type": "atr",
+    "stop_value": 1.0,
+    "stop_atr_period": 14,
+    "target_type": "atr",
+    "target_value": 2.5,
+    "target_atr_period": 14,
+    "opposite_signal_exit": true,
+    "max_bars_in_trade": 12
+  }
+}
