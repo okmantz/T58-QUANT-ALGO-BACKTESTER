@@ -941,12 +941,25 @@ def import_csv(
 def import_csv_bytes(
     content: bytes,
     manual_mapping: Optional[dict[str, str]] = None,
+    filename: Optional[str] = None,
 ) -> ImportResult:
     """
     Convenience wrapper for importing raw bytes.
-    """
 
+    filename should be the original uploaded filename (e.g. from a Flask
+    FileStorage's .filename). A plain io.BytesIO has no .name of its own,
+    so without this, _read_raw_file's extension dispatch (see its
+    docstring) always saw an empty extension and fell through to the
+    CSV/delimiter-guessing reader -- silently mis-parsing (or failing to
+    parse) any uploaded .parquet/.tsv/.txt/.zip/.7z file even though the
+    importer fully supports all of them when given a real path. Setting
+    .name on the buffer lets the same extension-dispatch logic used for
+    on-disk files work for uploaded bytes too.
+    """
+    buffer = io.BytesIO(content)
+    if filename:
+        buffer.name = filename
     return import_csv(
-        io.BytesIO(content),
+        buffer,
         manual_mapping=manual_mapping,
     )
