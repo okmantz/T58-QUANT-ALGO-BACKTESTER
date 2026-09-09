@@ -1,0 +1,70 @@
+{
+  "name": "Wide-Range Bar Exhaustion Fade (atr10)",
+  "entry_conditions": {
+    "long": [
+      {
+        "left": {
+          "type": "candle_range"
+        },
+        "operator": ">",
+        "right": {
+          "type": "atr",
+          "period": 4
+        }
+      },
+      {
+        "left": {
+          "type": "candle_direction",
+          "direction": "bearish"
+        },
+        "operator": "is true",
+        "right": {
+          "type": "value",
+          "value": 0.9416253074701721
+        }
+      }
+    ],
+    "long_connectors": [
+      "AND"
+    ],
+    "short": [
+      {
+        "left": {
+          "type": "candle_range"
+        },
+        "operator": ">",
+        "right": {
+          "type": "atr",
+          "period": 4
+        }
+      },
+      {
+        "left": {
+          "type": "candle_direction",
+          "direction": "bullish"
+        },
+        "operator": "is true",
+        "right": {
+          "type": "value",
+          "value": 0.7752793795522471
+        }
+      }
+    ],
+    "short_connectors": [
+      "AND"
+    ]
+  },
+  "exit_conditions": {
+    "long": [],
+    "short": []
+  },
+  "risk_management": {
+    "stop_type": "atr",
+    "stop_value": 2.7006213524808516,
+    "stop_atr_period": 14,
+    "target_type": "atr",
+    "target_value": 2.090217484969877,
+    "target_atr_period": 14,
+    "opposite_signal_exit": true
+  }
+}
