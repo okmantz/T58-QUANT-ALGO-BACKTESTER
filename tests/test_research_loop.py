@@ -216,3 +216,144 @@ def test_research_loop_iteration_to_dict_is_plain_data():
     d = it.to_dict()
     assert d["iteration"] == 1
     assert d["verdict"] == "KEEP"
+
+
+# ---------------------------------------------------------------------------
+# Unbounded (n_iterations=None) + cancel_event -- the shape that makes this
+# usable as a background/overnight companion instead of only a bounded
+# interactive session.
+# ---------------------------------------------------------------------------
+
+def test_n_iterations_none_runs_until_cancelled(monkeypatch):
+    import threading
+
+    monkeypatch.setattr(rl, "generate_strategy", lambda *a, **k: GenerationResult(code=_SMA_CROSS_CODE))
+    monkeypatch.setattr(rl, "_ask_ollama_next_hypothesis", lambda *a, **k: ("next idea", False))
+    cfg = rl.ResearchLoopConfig(n_iterations=None, mc_sims=20, survival_sims=50, keep_score_threshold=999.0)
+
+    cancel_event = threading.Event()
+    seen = []
+
+    def _log(msg):
+        seen.append(msg)
+        if len(seen) > 30:  # a handful of iterations have logged -- time to stop
+            cancel_event.set()
+
+    result = rl.run_research_loop(_df(500), _risk(), _rules(), _settings(), cfg,
+                                   progress_cb=_log, cancel_event=cancel_event)
+    assert result.stopped_reason == "cancelled"
+    assert len(result.iterations) >= 1
+
+
+def test_cancel_event_set_before_first_iteration_runs_zero_iterations(monkeypatch):
+    import threading
+
+    monkeypatch.setattr(rl, "generate_strategy", lambda *a, **k: GenerationResult(code=_SMA_CROSS_CODE))
+    cfg = rl.ResearchLoopConfig(n_iterations=None, mc_sims=20, survival_sims=50)
+    cancel_event = threading.Event()
+    cancel_event.set()
+
+    result = rl.run_research_loop(_df(500), _risk(), _rules(), _settings(), cfg, cancel_event=cancel_event)
+    assert result.stopped_reason == "cancelled"
+    assert result.iterations == []
+
+
+def test_bounded_n_iterations_still_works_with_a_cancel_event_that_never_fires(monkeypatch):
+    import threading
+
+    monkeypatch.setattr(rl, "generate_strategy", lambda *a, **k: GenerationResult(code=_SMA_CROSS_CODE))
+    monkeypatch.setattr(rl, "_ask_ollama_next_hypothesis", lambda *a, **k: ("next idea", False))
+    cfg = rl.ResearchLoopConfig(n_iterations=2, mc_sims=20, survival_sims=50, keep_score_threshold=999.0)
+    result = rl.run_research_loop(_df(500), _risk(), _rules(), _settings(), cfg, cancel_event=threading.Event())
+    assert result.stopped_reason == "completed"
+    assert len(result.iterations) == 2
+
+
+# ---------------------------------------------------------------------------
+# ResearchLoopRunner -- background-thread wrapper for use as an overnight
+# companion, mirroring EvolutionRunner's start()/stop_and_wait() shape.
+# ---------------------------------------------------------------------------
+
+def test_runner_start_and_stop_and_wait(monkeypatch):
+    monkeypatch.setattr(rl, "generate_strategy", lambda *a, **k: GenerationResult(code=_SMA_CROSS_CODE))
+    monkeypatch.setattr(rl, "_ask_ollama_next_hypothesis", lambda *a, **k: ("next idea", False))
+    cfg = rl.ResearchLoopConfig(n_iterations=None, mc_sims=20, survival_sims=50, keep_score_threshold=999.0)
+    runner = rl.ResearchLoopRunner(_df(500), _risk(), _rules(), _settings(), cfg)
+
+    runner.start()
+    assert runner.is_running
+    stopped = runner.stop_and_wait(timeout=15.0)
+    assert stopped
+    assert not runner.is_running
+    assert runner.stopped_reason == "cancelled"
+    assert len(runner.iterations) >= 1
+
+
+def test_runner_bounded_completes_on_its_own(monkeypatch):
+    monkeypatch.setattr(rl, "generate_strategy", lambda *a, **k: GenerationResult(code=_SMA_CROSS_CODE))
+    monkeypatch.setattr(rl, "_ask_ollama_next_hypothesis", lambda *a, **k: ("next idea", False))
+    cfg = rl.ResearchLoopConfig(n_iterations=1, mc_sims=20, survival_sims=50, keep_score_threshold=999.0)
+    runner = rl.ResearchLoopRunner(_df(500), _risk(), _rules(), _settings(), cfg)
+
+    runner.start()
+    import time
+    deadline = time.time() + 15.0
+    while runner.is_running and time.time() < deadline:
+        time.sleep(0.1)
+    assert not runner.is_running
+    assert runner.stopped_reason == "completed"
+    assert len(runner.iterations) == 1
+
+
+def test_runner_status_reports_progress(monkeypatch):
+    monkeypatch.setattr(rl, "generate_strategy", lambda *a, **k: GenerationResult(code=_SMA_CROSS_CODE))
+    monkeypatch.setattr(rl, "_ask_ollama_next_hypothesis", lambda *a, **k: ("next idea", False))
+    cfg = rl.ResearchLoopConfig(n_iterations=1, mc_sims=20, survival_sims=50, keep_score_threshold=999.0)
+    runner = rl.ResearchLoopRunner(_df(500), _risk(), _rules(), _settings(), cfg)
+    runner.start()
+    runner.stop_and_wait(timeout=15.0)
+    status = runner.status()
+    assert status["running"] is False
+    assert status["n_iterations_run"] == 1
+
+
+def test_on_iteration_fires_incrementally_not_only_at_the_end(monkeypatch):
+    """Regression test: run_research_loop's on_iteration callback must
+    fire the MOMENT each iteration completes, not only once at the very
+    end via the returned ResearchLoopResult -- this is what lets
+    ResearchLoopRunner (and the web status.json poll built on it) show
+    live progress on an unbounded/long-running loop instead of an empty
+    list until it stops."""
+    monkeypatch.setattr(rl, "generate_strategy", lambda *a, **k: GenerationResult(code=_SMA_CROSS_CODE))
+    monkeypatch.setattr(rl, "_ask_ollama_next_hypothesis", lambda *a, **k: ("next idea", False))
+    cfg = rl.ResearchLoopConfig(n_iterations=3, mc_sims=20, survival_sims=50, keep_score_threshold=999.0)
+
+    seen_at_callback_time = []
+
+    def on_iteration(it):
+        # Captured INSIDE the loop, before run_research_loop has returned --
+        # proves the callback isn't just replaying the final list at the end.
+        seen_at_callback_time.append(it.iteration)
+
+    result = rl.run_research_loop(_df(500), _risk(), _rules(), _settings(), cfg, on_iteration=on_iteration)
+    assert seen_at_callback_time == [1, 2, 3]
+    assert len(result.iterations) == 3
+
+
+def test_runner_iterations_populate_while_still_running(monkeypatch):
+    """Direct regression test for the same bug at the ResearchLoopRunner
+    level: .iterations must grow WHILE is_running is still True, not stay
+    empty until the thread exits."""
+    monkeypatch.setattr(rl, "generate_strategy", lambda *a, **k: GenerationResult(code=_SMA_CROSS_CODE))
+    monkeypatch.setattr(rl, "_ask_ollama_next_hypothesis", lambda *a, **k: ("next idea", False))
+    cfg = rl.ResearchLoopConfig(n_iterations=None, mc_sims=20, survival_sims=50, keep_score_threshold=999.0)
+    runner = rl.ResearchLoopRunner(_df(500), _risk(), _rules(), _settings(), cfg)
+
+    runner.start()
+    import time
+    deadline = time.time() + 10.0
+    while runner.is_running and len(runner.iterations) < 1 and time.time() < deadline:
+        time.sleep(0.01)
+    assert runner.is_running  # still running -- we stopped waiting because iterations appeared, not because it finished
+    assert len(runner.iterations) >= 1
+    runner.stop_and_wait(timeout=15.0)

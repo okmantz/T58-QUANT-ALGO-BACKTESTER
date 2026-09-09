@@ -413,3 +413,61 @@ def test_evolution_runner_stop_and_wait_returns_true_once_thread_exits(tmp_path)
     stopped = runner.stop_and_wait(timeout=15.0)
     assert stopped
     assert not runner.is_running
+
+
+def test_auto_excludes_dead_end_families_when_none_pinned(tmp_path, monkeypatch):
+    """EvolutionConfig.auto_exclude_dead_end_families (on by default) must
+    resolve cfg.families to every family EXCEPT a flagged dead end, exactly
+    once at construction, when the caller didn't pin an explicit list."""
+    monkeypatch.setattr("app.search.family_health.get_app_base_dir", lambda: tmp_path / "base")
+    from app.search.results_db import ResultsDB
+    search_dir = tmp_path / "base" / "reports" / "search"
+    with ResultsDB(search_dir / "search_x.db") as db:
+        db.create_run("run1", mode="family", family="mean_reversion_band", instrument="X",
+                       timeframe="Y", total_candidates=40, config={})
+        for i in range(40):
+            db.insert_candidate("run1", f"c{i}", "stage1", {"family": "mean_reversion_band", "passed_stage1": True})
+        db.finish_run("run1")
+
+    cfg = EvolutionConfig(knowledge_graph_path=str(tmp_path / "kg.jsonl"))
+    runner = EvolutionRunner(_trending_df(n=500), RiskConfig(), PropRules(), cfg, progress_cb=None)
+    assert runner.cfg.families is not None
+    assert "mean_reversion_band" not in runner.cfg.families
+    assert "trend_breakout" in runner.cfg.families  # healthy/untested families remain
+
+
+def test_does_not_override_an_explicit_family_list(tmp_path, monkeypatch):
+    """A caller who pinned specific families (even one that happens to be
+    flagged dead-end) is never overridden -- that's a deliberate choice,
+    e.g. to try it on a new instrument."""
+    monkeypatch.setattr("app.search.family_health.get_app_base_dir", lambda: tmp_path / "base")
+    from app.search.results_db import ResultsDB
+    search_dir = tmp_path / "base" / "reports" / "search"
+    with ResultsDB(search_dir / "search_x.db") as db:
+        db.create_run("run1", mode="family", family="mean_reversion_band", instrument="X",
+                       timeframe="Y", total_candidates=40, config={})
+        for i in range(40):
+            db.insert_candidate("run1", f"c{i}", "stage1", {"family": "mean_reversion_band", "passed_stage1": True})
+        db.finish_run("run1")
+
+    cfg = EvolutionConfig(families=["mean_reversion_band"], knowledge_graph_path=str(tmp_path / "kg.jsonl"))
+    runner = EvolutionRunner(_trending_df(n=500), RiskConfig(), PropRules(), cfg, progress_cb=None)
+    assert runner.cfg.families == ["mean_reversion_band"]
+
+
+def test_auto_exclude_can_be_disabled(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.search.family_health.get_app_base_dir", lambda: tmp_path / "base")
+    from app.search.results_db import ResultsDB
+    search_dir = tmp_path / "base" / "reports" / "search"
+    with ResultsDB(search_dir / "search_x.db") as db:
+        db.create_run("run1", mode="family", family="mean_reversion_band", instrument="X",
+                       timeframe="Y", total_candidates=40, config={})
+        for i in range(40):
+            db.insert_candidate("run1", f"c{i}", "stage1", {"family": "mean_reversion_band", "passed_stage1": True})
+        db.finish_run("run1")
+
+    cfg = EvolutionConfig(
+        auto_exclude_dead_end_families=False, knowledge_graph_path=str(tmp_path / "kg.jsonl"),
+    )
+    runner = EvolutionRunner(_trending_df(n=500), RiskConfig(), PropRules(), cfg, progress_cb=None)
+    assert runner.cfg.families is None

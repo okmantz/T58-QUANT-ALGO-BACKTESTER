@@ -373,3 +373,27 @@ def test_grid_family_strategy_argument_ignores_family_argument():
     assert space.family == "mql5_grid"
     for spec in space.candidates.values():
         assert spec["source_type"] == "mql5"
+
+
+def test_exclude_families_drops_them_from_an_all_families_search():
+    space = generate_search_space(mode="family", family="all", max_candidates=5000, seed=1,
+                                   exclude_families={"trend_breakout", "mtf_pullback"})
+    families_seen = {meta["family"] for meta in space.meta.values()}
+    assert "trend_breakout" not in families_seen
+    assert "mtf_pullback" not in families_seen
+    assert len(families_seen) > 0
+
+
+def test_exclude_families_never_overrides_an_explicit_single_family():
+    space = generate_search_space(mode="family", family="trend_breakout", max_candidates=50, seed=1,
+                                   exclude_families={"trend_breakout"})
+    families_seen = {meta["family"] for meta in space.meta.values()}
+    assert families_seen == {"trend_breakout"}
+
+
+def test_exclude_families_falls_back_to_everything_if_it_would_empty_the_space():
+    all_families = set(FAMILIES.keys())
+    space = generate_search_space(mode="family", family="all", max_candidates=5000, seed=1,
+                                   exclude_families=all_families)
+    families_seen = {meta["family"] for meta in space.meta.values()}
+    assert families_seen  # not empty -- backed off to searching everything
