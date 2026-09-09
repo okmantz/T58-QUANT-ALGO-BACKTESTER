@@ -599,8 +599,22 @@ def resources():
     free, well-known beginner trading resources -- purely educational,
     for anyone using this app who wants a running start on trading
     fundamentals before backtesting their first strategy. No form, no
-    job, no report; just links out."""
+    job, no report; just links out.
+    """
     return render_template("resources.html", active_page="resources")
+
+
+@app.route("/user-manual")
+def user_manual():
+    """Web equivalent of the desktop app's User Manual tab (see
+    app.ui.main_window._build_manual_tab) -- a start-to-finish workflow
+    walkthrough (Create / Test / Optimize / Validate / Champion /
+    Deployment), rewritten for the web app's own page names and URLs
+    rather than a verbatim port of the desktop tab's Tkinter text
+    (the two apps' navigation labels differ enough that a literal copy
+    would point at things that don't exist here). No form, no job, no
+    report; just a reading page, same as Resources."""
+    return render_template("user_manual.html", active_page="user_manual")
 
 
 @app.route("/dashboard")
@@ -3003,18 +3017,6 @@ def evolution_start():
         risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000) or 100000))
         rules = PropRules(account_size=float(form.get("initial_balance", 100000) or 100000))
         families_selected = form.getlist("families") or None
-        goal_preset = (form.get("fitness_goal_preset") or "balanced").strip()
-        if goal_preset == "custom":
-            fitness_goal = {
-                "pass_probability": float(form.get("goal_w_pass_probability", 1.0) or 1.0),
-                "payout_probability": float(form.get("goal_w_payout_probability", 1.0) or 1.0),
-                "robustness": float(form.get("goal_w_robustness", 1.0) or 1.0),
-                "oos_consistency": float(form.get("goal_w_oos_consistency", 1.0) or 1.0),
-                "drawdown": float(form.get("goal_w_drawdown", 1.0) or 1.0),
-                "net_profit": float(form.get("goal_w_net_profit", 0.0) or 0.0),
-            }
-        else:
-            fitness_goal = goal_preset
         cfg = EvolutionConfig(
             population_size=int(form.get("population_size", 60) or 60),
             elite_keep=int(form.get("elite_keep", 10) or 10),
@@ -3023,7 +3025,7 @@ def evolution_start():
             max_generations=(int(form["max_generations"]) if form.get("max_generations") else None),
             save_to_library=form.get("save_to_library", "on") == "on",
             resume_from_checkpoint=form.get("resume_from_checkpoint", "on") == "on",
-            fitness_goal=fitness_goal,
+            fitness_goal=_parse_fitness_goal_form(form),
         )
         _EVOLUTION_LOG.clear()
         _EVOLUTION_LOG.append(f"Loaded {len(df)} bars from {active_label}.")
@@ -3051,6 +3053,25 @@ def evolution_stop():
         if runner.stop_and_wait(timeout=5.0):
             HEAVY_JOB_GUARD.release(JOB_EVOLUTION_LAB)
     return redirect(url_for("evolution_form"))
+
+
+def _parse_fitness_goal_form(form) -> "dict | str":
+    """Shared by single- and multi-instrument Evolution Lab start routes:
+    "fitness_goal_preset" is one of app.evolution.prop_fitness.FITNESS_GOAL_PRESETS'
+    keys, or "custom" to build a weight dict from the goal_w_* fields
+    instead (see evolution.html / evolution_multi_instrument.html's
+    "Optimization goal" section for what each maps to)."""
+    goal_preset = (form.get("fitness_goal_preset") or "balanced").strip()
+    if goal_preset != "custom":
+        return goal_preset
+    return {
+        "pass_probability": float(form.get("goal_w_pass_probability", 1.0) or 1.0),
+        "payout_probability": float(form.get("goal_w_payout_probability", 1.0) or 1.0),
+        "robustness": float(form.get("goal_w_robustness", 1.0) or 1.0),
+        "oos_consistency": float(form.get("goal_w_oos_consistency", 1.0) or 1.0),
+        "drawdown": float(form.get("goal_w_drawdown", 1.0) or 1.0),
+        "net_profit": float(form.get("goal_w_net_profit", 0.0) or 0.0),
+    }
 
 
 @app.route("/evolution/reset", methods=["POST"])
@@ -3274,6 +3295,7 @@ def evolution_multi_instrument_start():
             max_generations=(int(form["max_generations"]) if form.get("max_generations") else None),
             save_to_library=form.get("save_to_library", "on") == "on",
             resume_from_checkpoint=form.get("resume_from_checkpoint", "on") == "on",
+            fitness_goal=_parse_fitness_goal_form(form),
         )
 
         group_id = uuid.uuid4().hex[:12]
