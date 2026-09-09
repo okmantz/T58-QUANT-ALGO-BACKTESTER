@@ -2104,6 +2104,276 @@ _ORDER_FLOW_ABSORPTION = SkeletonSpec(
 )
 
 
+# ---------------------------------------------------------------------------
+# Expansion round 3 (multi-instrument search push): 5 more named families,
+# each an established, safely-implemented primitive combined with exactly
+# ONE filter it did not previously have -- the same "take a proven base
+# hypothesis and add one more independently-motivated filter" pattern
+# already used throughout this file (order_flow_absorption on top of
+# volume_imbalance, volume_confirmed_breakout on top of trend_breakout,
+# higher_low_structure_continuation on top of swing_structure_fade), rather
+# than inventing new indicator primitives. Two traps deliberately avoided
+# here that a naive new family could fall into: (1) raw highest_high/
+# lowest_low compared directly to the current bar's own close is a
+# tautology that can never fire, since the rolling window includes the
+# current bar itself -- see the _breakout_flag() docstring above for why
+# every breakout-style family here goes through the shift(1)-based "bos"
+# primitive instead; no family below compares a raw price extreme to
+# close for this reason. (2) Fair Value Gap is a point-in-time event, not
+# a persisting zone (see Family N/Z's own scope notes), so a genuine
+# "price returns later to fill an old gap" hypothesis isn't representable
+# with today's primitive -- nothing below attempts that reading either.
+# ---------------------------------------------------------------------------
+
+def _build_order_block_trend_continuation(p: dict) -> dict:
+    lookback, ema_trend = p["lookback"], p["ema_trend"]
+    return {
+        "name": f"Order Block Trend Continuation (lookback={lookback}, ema{ema_trend} filter)",
+        "entry_conditions": {
+            "long": [
+                _cond({"type": "order_block", "lookback": lookback, "direction": "bullish"}, "is true", _val(1)),
+                _cond(_ind("close", 1), ">", _ind("ema", ema_trend)),
+            ],
+            "long_connectors": ["AND"],
+            "short": [
+                _cond({"type": "order_block", "lookback": lookback, "direction": "bearish"}, "is true", _val(1)),
+                _cond(_ind("close", 1), "<", _ind("ema", ema_trend)),
+            ],
+            "short_connectors": ["AND"],
+        },
+        "exit_conditions": {"long": [], "short": []},
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_ORDER_BLOCK_TREND_CONTINUATION = SkeletonSpec(
+    name="order_block_trend_continuation",
+    label="Order Block Trend Continuation (SMC displacement + EMA filter)",
+    description=(
+        "Family O (order_block_reaction) trades the bare order-block primitive with no trend "
+        "filter at all -- the one remaining SMC primitive here (alongside FVG and CHoCH) without "
+        "a trend-filtered sibling, unlike Family N/AB's fvg_imbalance_continuation. This is that "
+        "sibling: the same displacement-origin-candle signal, only taken in the direction of a "
+        "slower EMA trend, on the theory that an order-block reaction WITH the prevailing trend "
+        "is more likely to actually continue than one taken in isolation."
+    ),
+    param_grid={
+        "lookback": [10, 20, 30],
+        "ema_trend": [50, 100, 200],
+        "stop_atr_mult": [0.75, 1.0, 1.5],
+        "target_atr_mult": [1.5, 2.0, 3.0],
+        "max_bars": [None, 24, 48],
+    },
+    build=_build_order_block_trend_continuation,
+)
+
+
+def _build_volume_confirmed_trend_pullback(p: dict) -> dict:
+    ema_fast, ema_slow = p["ema_fast"], p["ema_slow"]
+    rsi_period, rsi_low, rsi_high = p["rsi_period"], p["rsi_pullback_low"], p["rsi_pullback_high"]
+    vol_period, vol_mult = p["vol_period"], p["vol_mult"]
+    return {
+        "name": f"Volume-Confirmed Trend Pullback (ema {ema_fast}/{ema_slow}, rsi{rsi_period}, relvol{vol_period}>{vol_mult}x)",
+        "entry_conditions": {
+            "long": [
+                _cond(_ind("ema", ema_fast), ">", _ind("ema", ema_slow)),
+                _cond(_ind("rsi", rsi_period), "<", _val(rsi_low)),
+                _cond({"type": "relative_volume", "period": vol_period}, ">", _val(vol_mult)),
+            ],
+            "long_connectors": ["AND", "AND"],
+            "short": [
+                _cond(_ind("ema", ema_fast), "<", _ind("ema", ema_slow)),
+                _cond(_ind("rsi", rsi_period), ">", _val(rsi_high)),
+                _cond({"type": "relative_volume", "period": vol_period}, ">", _val(vol_mult)),
+            ],
+            "short_connectors": ["AND", "AND"],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("rsi", rsi_period), ">", _val(rsi_high))],
+            "short": [_cond(_ind("rsi", rsi_period), "<", _val(rsi_low))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_VOLUME_CONFIRMED_TREND_PULLBACK = SkeletonSpec(
+    name="volume_confirmed_trend_pullback",
+    label="Volume-Confirmed Trend Pullback (EMA trend + RSI dip/pop + relative-volume filter)",
+    description=(
+        "Family B (mtf_pullback) buys any RSI pullback inside an EMA trend, regardless of how "
+        "much real size is behind the resumption bar. This adds ONE more independently-motivated "
+        "filter -- the same relative-volume confirmation Family AI (order_flow_absorption) and "
+        "volume_confirmed_breakout already use elsewhere -- requiring the pullback/resumption bar "
+        "itself to trade on above-average relative volume, on the theory that a low-conviction "
+        "(low-volume) pullback bounce is more likely to fail than one real size is stepping into."
+    ),
+    param_grid={
+        "ema_fast": [20, 50],
+        "ema_slow": [100, 200],
+        "rsi_period": [7, 14],
+        "rsi_pullback_low": [30, 40],
+        "rsi_pullback_high": [60, 70],
+        "vol_period": [14, 20],
+        "vol_mult": [1.25, 1.5],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [2.0, 3.0],
+        "max_bars": [None, 48],
+    },
+    build=_build_volume_confirmed_trend_pullback,
+    valid=lambda p: p["ema_fast"] < p["ema_slow"] and p["rsi_pullback_low"] < p["rsi_pullback_high"],
+)
+
+
+def _build_session_gated_liquidity_sweep(p: dict) -> dict:
+    lookback, start, end, flat_time = p["lookback"], p["session_start"], p["session_end"], p["flat_time"]
+    return {
+        "name": f"Session-Gated Liquidity Sweep ({start}-{end}, lookback={lookback})",
+        "entry_conditions": {
+            "long": [
+                _cond({"type": "liquidity_sweep", "lookback": lookback, "direction": "bullish"}, "is true", _val(1)),
+                _cond({"type": "time_of_day", "session_start": start, "session_end": end}, "is true", _val(1)),
+            ],
+            "long_connectors": ["AND"],
+            "short": [
+                _cond({"type": "liquidity_sweep", "lookback": lookback, "direction": "bearish"}, "is true", _val(1)),
+                _cond({"type": "time_of_day", "session_start": start, "session_end": end}, "is true", _val(1)),
+            ],
+            "short_connectors": ["AND"],
+        },
+        "exit_conditions": {"long": [], "short": []},
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+        "_time_based_exit": flat_time,
+    }
+
+
+_SESSION_GATED_LIQUIDITY_SWEEP = SkeletonSpec(
+    name="session_gated_liquidity_sweep",
+    label="Session-Gated Liquidity Sweep (stop-hunt reclaim, clock-windowed)",
+    description=(
+        "Every session-anchored family here (E, K, Q, AA) is built on a plain price level "
+        "(opening range, previous day's close) -- none of them combine a clock-time window with "
+        "an SMC stop-hunt primitive. This does: Family G's liquidity-sweep-and-reclaim signal, "
+        "restricted to a specific session window and force-flattened by a clock time, betting "
+        "the classic 'stop hunt before the real session move' pattern is time-of-day dependent "
+        "(e.g. a sweep right at a session open reads differently than the same sweep at 3am)."
+    ),
+    param_grid={
+        "lookback": [5, 10, 20],
+        "session_start": ["07:00", "08:30", "13:30"],
+        "session_end": ["09:00", "10:30", "15:00"],
+        "flat_time": ["16:00"],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [1.5, 2.5],
+        "max_bars": [12, 24],
+    },
+    build=lambda p: _apply_time_based_exit(_build_session_gated_liquidity_sweep(p)),
+    valid=lambda p: p["session_start"] < p["session_end"],
+)
+
+
+def _build_macd_histogram_zero_cross_trend(p: dict) -> dict:
+    ema_trend = p["ema_trend"]
+    return {
+        "name": f"MACD Histogram Zero-Cross Trend (ema{ema_trend} filter)",
+        "entry_conditions": {
+            "long": [
+                _cond({"type": "macd_histogram"}, "cross above", _val(0.0)),
+                _cond(_ind("close", 1), ">", _ind("ema", ema_trend)),
+            ],
+            "long_connectors": ["AND"],
+            "short": [
+                _cond({"type": "macd_histogram"}, "cross below", _val(0.0)),
+                _cond(_ind("close", 1), "<", _ind("ema", ema_trend)),
+            ],
+            "short_connectors": ["AND"],
+        },
+        "exit_conditions": {
+            "long": [_cond({"type": "macd_histogram"}, "cross below", _val(0.0))],
+            "short": [_cond({"type": "macd_histogram"}, "cross above", _val(0.0))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_MACD_HISTOGRAM_ZERO_CROSS_TREND = SkeletonSpec(
+    name="macd_histogram_zero_cross_trend",
+    label="MACD Histogram Zero-Cross Trend (histogram-sign flip + EMA filter)",
+    description=(
+        "Family L (macd_cross_trend) triggers on the MACD line crossing its OWN signal line -- a "
+        "different, and usually earlier-or-later, event than the histogram (the distance between "
+        "those two lines) crossing zero, since the histogram can flip sign on a deceleration move "
+        "well before or after the two lines themselves actually cross. This trades that separate "
+        "event instead, still filtered by a slower EMA trend, as an independent crossover-timing "
+        "hypothesis rather than a reparametrization of Family L."
+    ),
+    param_grid={
+        "ema_trend": [50, 100, 200],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [2.0, 3.0],
+        "max_bars": [None, 48],
+    },
+    build=_build_macd_histogram_zero_cross_trend,
+)
+
+
+def _build_atr_regime_trend_pullback(p: dict) -> dict:
+    ema_fast, ema_slow = p["ema_fast"], p["ema_slow"]
+    rsi_period, rsi_low, rsi_high = p["rsi_period"], p["rsi_pullback_low"], p["rsi_pullback_high"]
+    atr_period = p["atr_period"]
+    return {
+        "name": f"ATR-Regime Trend Pullback (ema {ema_fast}/{ema_slow}, rsi{rsi_period}, atr{atr_period} not-contracted)",
+        "entry_conditions": {
+            "long": [
+                _cond(_ind("ema", ema_fast), ">", _ind("ema", ema_slow)),
+                _cond(_ind("rsi", rsi_period), "<", _val(rsi_low)),
+                _cond({"type": "atr_regime", "period": atr_period}, "!=", _val(-1)),
+            ],
+            "long_connectors": ["AND", "AND"],
+            "short": [
+                _cond(_ind("ema", ema_fast), "<", _ind("ema", ema_slow)),
+                _cond(_ind("rsi", rsi_period), ">", _val(rsi_high)),
+                _cond({"type": "atr_regime", "period": atr_period}, "!=", _val(-1)),
+            ],
+            "short_connectors": ["AND", "AND"],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("rsi", rsi_period), ">", _val(rsi_high))],
+            "short": [_cond(_ind("rsi", rsi_period), "<", _val(rsi_low))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_ATR_REGIME_TREND_PULLBACK = SkeletonSpec(
+    name="atr_regime_trend_pullback",
+    label="ATR-Regime Trend Pullback (EMA trend + RSI dip/pop, skips contracted regimes)",
+    description=(
+        "Family B (mtf_pullback) trades every qualifying RSI pullback inside an EMA trend "
+        "regardless of the current volatility regime -- including a flat, choppy market where a "
+        "'trend' reading from two EMAs is closer to noise. This adds an atr_regime primitive gate "
+        "(the same regime primitive Family P/Family V already use, applied here to a continuation "
+        "hypothesis instead of a breakout or fade one): stands down only while ATR reads as "
+        "CONTRACTED relative to its own baseline (atr_regime == -1), trading through both the "
+        "neutral and expansion states -- a deliberately looser gate than requiring active "
+        "expansion outright, since the hypothesis being tested is 'skip the range-bound chop', "
+        "not 'only trade full-blown expansion'."
+    ),
+    param_grid={
+        "ema_fast": [20, 50],
+        "ema_slow": [100, 200],
+        "rsi_period": [7, 14],
+        "rsi_pullback_low": [30, 40],
+        "rsi_pullback_high": [60, 70],
+        "atr_period": [14, 20],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [2.0, 3.0],
+        "max_bars": [None, 48],
+    },
+    build=_build_atr_regime_trend_pullback,
+    valid=lambda p: p["ema_fast"] < p["ema_slow"] and p["rsi_pullback_low"] < p["rsi_pullback_high"],
+)
+
+
 FAMILIES: dict[str, SkeletonSpec] = {
     _TREND_BREAKOUT.name: _TREND_BREAKOUT,
     _MTF_PULLBACK.name: _MTF_PULLBACK,
@@ -2164,6 +2434,14 @@ FAMILIES: dict[str, SkeletonSpec] = {
     # AND directional imbalance required together, not either alone) --
     # see its own comment block above for how it differs from Family F.
     _ORDER_FLOW_ABSORPTION.name: _ORDER_FLOW_ABSORPTION,
+    # -- Expansion round 3 (multi-instrument search push): 5 more families,
+    # each a proven base hypothesis plus exactly one new filter -- see each
+    # SkeletonSpec's own comment block above for what makes it distinct.
+    _ORDER_BLOCK_TREND_CONTINUATION.name: _ORDER_BLOCK_TREND_CONTINUATION,
+    _VOLUME_CONFIRMED_TREND_PULLBACK.name: _VOLUME_CONFIRMED_TREND_PULLBACK,
+    _SESSION_GATED_LIQUIDITY_SWEEP.name: _SESSION_GATED_LIQUIDITY_SWEEP,
+    _MACD_HISTOGRAM_ZERO_CROSS_TREND.name: _MACD_HISTOGRAM_ZERO_CROSS_TREND,
+    _ATR_REGIME_TREND_PULLBACK.name: _ATR_REGIME_TREND_PULLBACK,
 }
 
 # Families that need something beyond the plain OHLCV df -- checked by
@@ -2310,6 +2588,7 @@ def generate_search_space(
     seed: int = 42,
     grid_points_per_gene: int = 3,
     has_pair_data: bool = False,
+    exclude_families: "set[str] | None" = None,
 ) -> SearchSpace:
     """
     mode="single":
@@ -2335,6 +2614,13 @@ def generate_search_space(
     order -- an arbitrary "first N" slice systematically favors whatever
     the first grid dimension happens to be, which biases the search before
     it even starts.
+
+    exclude_families: only ever applied when family is None/"all" (never
+        overrides an explicit single-family request) -- drops any of
+        those names from the "every family" set, e.g. dead-end families
+        from app.search.family_health.apply_family_exclusions(). Falls
+        back to searching everything if excluding these would leave zero
+        families, same safety rule apply_family_exclusions itself uses.
     """
     if mode == "single":
         if strategy is not None:
@@ -2369,6 +2655,18 @@ def generate_search_space(
     for fam in families_to_run:
         if fam not in FAMILIES:
             raise StrategySpaceError(f"Unknown strategy family '{fam}'. Known families: {list(FAMILIES)}")
+
+    if exclude_families and family in (None, "all"):
+        # Only ever applied to an "every family" request, same as the
+        # pair-data skip right below -- an explicit single-family request
+        # is never second-guessed, even if that family happens to be
+        # flagged. Never allowed to empty the space entirely (mirrors
+        # app.search.family_health.apply_family_exclusions' own safety
+        # rule) -- if literally everything would be excluded, search
+        # everything instead of raising "zero valid candidates" below.
+        survivors = [f for f in families_to_run if f not in exclude_families]
+        if survivors:
+            families_to_run = survivors
 
     if not has_pair_data:
         requested_pair_families = [f for f in families_to_run if f in FAMILIES_REQUIRING_PAIR_DATA]
