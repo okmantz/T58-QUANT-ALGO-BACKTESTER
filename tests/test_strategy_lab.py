@@ -39,7 +39,7 @@ def _tiny_spec(**overrides):
     base = dict(
         market="TEST", timeframe_label="5m", trading_window_label="Any",
         goal_metric="first_payout_probability",
-        n_candidates=8, stage1_top_n=6, stage2_top_n=4, walk_forward_top_n=3, monte_carlo_top_n=2,
+        n_candidates=4, stage1_top_n=3, stage2_top_n=2, walk_forward_top_n=2, monte_carlo_top_n=2,
         regime_top_n=2, finalist_count=2,
         ga_population=4, ga_generations=1, ga_search_mc_sims=30, full_mc_sims=60,
         walk_forward_folds=2, survival_mc_sims=60, survival_life_sims=30,
@@ -61,9 +61,9 @@ def test_strategy_lab_runs_end_to_end_and_ranks_finalists():
     df = _trending_df()
     result = run_strategy_lab(df, RiskConfig(), _prop_rules(), _tiny_spec())
 
-    assert result.total_candidates <= 8
-    assert result.stage1_survivors <= 6
-    assert result.stage2_survivors <= 4
+    assert result.total_candidates <= 4
+    assert result.stage1_survivors <= 3
+    assert result.stage2_survivors <= 2
 
     ranks = [f.rank for f in result.finalists]
     assert ranks == sorted(ranks)
