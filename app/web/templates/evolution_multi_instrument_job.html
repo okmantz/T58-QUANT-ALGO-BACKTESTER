@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>T58 Multi-Instrument Evolution Lab — Group</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .badge { font-size: 10px; padding: 3px 8px; border-radius: 6px; }
+  .badge.running { background: #123b1c; color: #7ee08a; }
+  .badge.stopped { background: #262626; color: #999; }
+  .stop-btn { padding: 10px 18px; border-radius: 10px; border: 1px solid #6b2323; background: #3a1616; color: #ffb4b4; font-size: 14px; font-weight: 700; }
+  #log { background: #0d0d0d; border: 1px solid var(--border-light); border-radius: 8px; padding: 10px; font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: #ccc; max-height: 180px; overflow-y: auto; white-space: pre-wrap; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+  th, td { padding: 6px 4px; border-bottom: 1px solid var(--border-light); text-align: left; }
+  th { color: #888; font-weight: 600; text-transform: uppercase; font-size: 10px; }
+  .table-scroll { overflow-x: auto; max-height: 320px; overflow-y: auto; }
+  .lb-promote-btn { font-size: 11px; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border-light); background: var(--panel-3); color: #ccc; }
+  .lb-promote-btn[disabled] { opacity: .5; }
+</style>
+</head>
+<body>
+{% set active_page = 'evolution_multi_instrument' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Multi-instrument evolution lab</h1>
+  <p><a href="/evolution/multi-instrument">&larr; Start another group</a></p>
+</div>
+
+{% if not_found %}
+<div class="error">Group "{{ group_id }}" was not found (the server may have restarted since it ran).</div>
+{% else %}
+
+<div class="card">
+  <h2>Status <span class="badge" id="status-badge">...</span></h2>
+  <form method="post" action="/evolution/multi-instrument/job/{{ group_id }}/stop">
+    <button class="stop-btn" type="submit">Stop all instruments</button>
+  </form>
+</div>
+
+<div id="instrument-cards"></div>
+
+{% endif %}
+</div>
+</div>
+
+{% if not not_found %}
+<script>
+  const groupId = {{ group_id | tojson }};
+  const fmt = (v, d) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d === undefined ? 2 : d);
+  const money = (v) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : '$' + Number(v).toLocaleString(undefined, {maximumFractionDigits: 0});
+
+  function promote(label, candidateId, btn) {
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = '...';
+    const body = new URLSearchParams({ label, candidate_id: candidateId });
+    fetch(`/evolution/multi-instrument/job/${groupId}/promote`, { method: 'POST', body })
+      .then(r => r.json())
+      .then(data => {
+        btn.disabled = false;
+        btn.textContent = data.ok ? 'Promoted' : 'Failed';
+        if (!data.ok) { alert('Could not promote: ' + (data.error || 'unknown error')); btn.textContent = original; }
+      })
+      .catch(() => { btn.disabled = false; btn.textContent = original; alert('Could not reach the server.'); });
+  }
+
+  function renderInstrument(label, inst) {
+    const div = document.createElement('div');
+    div.className = 'card';
+    if (inst.error) {
+      div.innerHTML = `<h2>${label}</h2><p style="color:#ff8f8f;font-size:13px;">${inst.error}</p>`;
+      return div;
+    }
+    const badge = inst.running
+      ? '<span class="badge running">RUNNING</span>' : '<span class="badge stopped">STOPPED</span>';
+    let html = `<h2>${label} ${badge}</h2>`;
+    html += `<p style="font-size:12px;color:#999;">Generation ${inst.generation} — leaderboard: ${inst.leaderboard_size}</p>`;
+    html += `<div id="log-${label.replace('/', '-')}"></div>`;
+    if ((inst.leaderboard || []).length) {
+      html += `<div class="table-scroll"><table><thead><tr><th>#</th><th>Candidate</th><th>Net profit</th><th>PF</th><th>Eval pass %</th><th></th></tr></thead><tbody>`;
+      inst.leaderboard.forEach((c, i) => {
+        const stats = c.stats || {};
+        const mc = c.mc_summary || {};
+        html += `<tr><td>${i + 1}</td><td>${c.candidate_id}</td><td>${money(stats.net_profit)}</td>` +
+          `<td>${fmt(stats.profit_factor)}</td><td>${fmt(mc.evaluation_pass_probability, 1)}%</td>` +
+          `<td><button class="lb-promote-btn" onclick="promote('${label}', '${c.candidate_id}', this)">Promote</button></td></tr>`;
+      });
+      html += `</tbody></table></div>`;
+    }
+    div.innerHTML = html;
+    const logDiv = div.querySelector(`#log-${label.replace('/', '-')}`);
+    if (logDiv) {
+      const pre = document.createElement('div');
+      pre.id = 'log';
+      pre.textContent = (inst.log || []).slice(-40).join('\n') || 'No activity yet.';
+      logDiv.appendChild(pre);
+    }
+    return div;
+  }
+
+  function poll() {
+    fetch(`/evolution/multi-instrument/job/${groupId}/status.json`)
+      .then(r => r.json())
+      .then(data => {
+        if (!data.found) return;
+        const badge = document.getElementById('status-badge');
+        badge.textContent = data.running ? 'RUNNING' : 'STOPPED';
+        badge.className = 'badge ' + (data.running ? 'running' : 'stopped');
+
+        const container = document.getElementById('instrument-cards');
+        container.innerHTML = '';
+        (data.labels || []).forEach(label => {
+          const inst = (data.instruments || {})[label];
+          if (inst) container.appendChild(renderInstrument(label, inst));
+        });
+
+        setTimeout(poll, 3000);
+      })
+      .catch(() => setTimeout(poll, 5000));
+  }
+  poll();
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+  }
+</script>
+{% endif %}
+</body>
+</html>

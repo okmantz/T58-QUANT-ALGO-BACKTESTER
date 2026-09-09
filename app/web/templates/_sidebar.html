@@ -34,9 +34,9 @@
   <div class="t58-nav-divider"></div>
   <div class="t58-nav-section-label">Strategy Lab</div>
 
-  {% set create_pages   = ['speed_run', 'generate_strategies', 'research_agent'] %}
+  {% set create_pages   = ['speed_run', 'speed_run_multi_instrument', 'generate_strategies', 'research_agent', 'research_loop'] %}
   {% set test_pages     = ['run', 'payout_probability'] %}
-  {% set optimize_pages = ['optimize_hub', 'search', 'refine', 'full_pipeline', 'quick_optimize', 'multi_objective', 'evolution'] %}
+  {% set optimize_pages = ['optimize_hub', 'search', 'search_multi_instrument', 'refine', 'full_pipeline', 'quick_optimize', 'multi_objective', 'evolution', 'evolution_multi_instrument'] %}
   {% set validate_pages = ['validate_hub', 'wfo', 'wfga', 'cpcv', 'sensitivity', 'regime_matrix'] %}
   {% set champion_pages = ['family_diversity', 'ensemble', 'portfolio'] %}
 
@@ -47,11 +47,17 @@
       <a href="/speed-run" data-accent="violet" class="t58-nav-item {{ 'active' if active_page == 'speed_run' else '' }}">
         <span class="t58-nav-icon">&#9889;</span><span class="label">Speed run</span>
       </a>
+      <a href="/speed-run/multi-instrument" data-accent="violet" class="t58-nav-item {{ 'active' if active_page == 'speed_run_multi_instrument' else '' }}">
+        <span class="t58-nav-icon">&#9889;</span><span class="label">Multi-instrument speed run</span>
+      </a>
       <a href="/generate-strategies" data-accent="violet" class="t58-nav-item {{ 'active' if active_page == 'generate_strategies' else '' }}">
         <span class="t58-nav-icon">&#10038;</span><span class="label">Generate strategies (AI)</span>
       </a>
       <a href="/research-agent" data-accent="violet" class="t58-nav-item {{ 'active' if active_page == 'research_agent' else '' }}">
         <span class="t58-nav-icon">&#9737;</span><span class="label">Research agent</span>
+      </a>
+      <a href="/research-loop" data-accent="violet" class="t58-nav-item {{ 'active' if active_page == 'research_loop' else '' }}">
+        <span class="t58-nav-icon">&#8635;</span><span class="label">Research loop (background)</span>
       </a>
     </div>
   </details>
@@ -79,6 +85,9 @@
       <a href="/search" data-accent="blue" class="t58-nav-item {{ 'active' if active_page == 'search' else '' }}">
         <span class="t58-nav-icon">&#9636;</span><span class="label">Search lab</span>
       </a>
+      <a href="/search/multi-instrument" data-accent="blue" class="t58-nav-item {{ 'active' if active_page == 'search_multi_instrument' else '' }}">
+        <span class="t58-nav-icon">&#9636;</span><span class="label">Multi-instrument search</span>
+      </a>
       <a href="/refine" data-accent="blue" class="t58-nav-item {{ 'active' if active_page == 'refine' else '' }}">
         <span class="t58-nav-icon">&#9851;</span><span class="label">Iterative refinement</span>
       </a>
@@ -93,6 +102,9 @@
       </a>
       <a href="/evolution" data-accent="blue" class="t58-nav-item {{ 'active' if active_page == 'evolution' else '' }}">
         <span class="t58-nav-icon">&#9860;</span><span class="label">Evolution lab (GA)</span>
+      </a>
+      <a href="/evolution/multi-instrument" data-accent="blue" class="t58-nav-item {{ 'active' if active_page == 'evolution_multi_instrument' else '' }}">
+        <span class="t58-nav-icon">&#9860;</span><span class="label">Multi-instrument evolution</span>
       </a>
     </div>
   </details>

@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>T58 Multi-Instrument Search — Job</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .best-banner { background: #0f2a1c; border: 1px solid #235a32; color: #b4ffcb; padding: 14px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .best-banner a { color: var(--teal); font-weight: 600; }
+  #log { background: #0d0d0d; border: 1px solid var(--border-light); border-radius: 8px; padding: 10px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: #ccc; max-height: 260px; overflow-y: auto; white-space: pre-wrap; }
+  .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border-light); border-top-color: var(--teal); border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+  th, td { padding: 8px 6px; border-bottom: 1px solid var(--border-light); text-align: left; }
+  th { color: #888; font-weight: 600; text-transform: uppercase; font-size: 10px; }
+  tr.best-row { background: rgba(53,224,176,0.08); }
+  tr.failed-row td { color: #ff8f8f; }
+  .badge-best { display: inline-block; font-size: 10px; text-transform: uppercase; background: var(--teal); color: #04120e; border-radius: 4px; padding: 2px 6px; margin-left: 6px; font-weight: 700; }
+</style>
+</head>
+<body>
+{% set active_page = 'search_multi_instrument' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Multi-instrument search — running</h1>
+  <p><a href="/search/multi-instrument">&larr; Start another multi-instrument search</a></p>
+</div>
+
+{% if not_found %}
+<div class="error">Job "{{ job_id }}" was not found (the server may have restarted since it ran).</div>
+{% else %}
+
+<div class="card">
+  <h2 id="status-title"><span class="spinner" id="spinner"></span>Searching every instrument&hellip;</h2>
+  <div id="log">Starting&hellip;</div>
+</div>
+
+<div id="best-container"></div>
+
+<div class="card" id="results-card" style="display:none;">
+  <h2>Results by instrument</h2>
+  <table>
+    <thead><tr><th>Instrument/Timeframe</th><th>Tested</th><th>Stage 1</th><th>Stage 2</th><th>Stage 3</th><th>Champion</th><th></th></tr></thead>
+    <tbody id="results-body"></tbody>
+  </table>
+</div>
+
+<div class="error" id="error-card" style="display:none;"></div>
+
+{% endif %}
+</div>
+</div>
+
+{% if not not_found %}
+<script>
+  const jobId = {{ job_id | tojson }};
+
+  function renderResults(data) {
+    const tbody = document.getElementById('results-body');
+    tbody.innerHTML = '';
+    const labels = data.labels || [];
+    const results = data.results || {};
+    labels.forEach(label => {
+      const r = results[label];
+      const tr = document.createElement('tr');
+      if (label === data.best_label) tr.className = 'best-row';
+      if (!r) {
+        tr.innerHTML = `<td>${label}</td><td colspan="6">pending&hellip;</td>`;
+      } else if (r.error) {
+        tr.className = 'failed-row';
+        tr.innerHTML = `<td>${label}</td><td colspan="5">FAILED: ${r.error}</td><td></td>`;
+      } else {
+        const bestTag = label === data.best_label ? '<span class="badge-best">BEST</span>' : '';
+        const champLink = r.report_html ? `<a href="${r.report_html}" target="_blank">Leaderboard &rarr;</a>` : '';
+        tr.innerHTML = `<td>${label}${bestTag}</td><td>${r.total_candidates}</td><td>${r.stage1_survivors}</td>` +
+          `<td>${r.stage2_survivors}</td><td>${r.stage3_survivors}</td>` +
+          `<td>${r.champion_candidate_id || '(none)'}</td><td>${champLink}</td>`;
+      }
+      tbody.appendChild(tr);
+    });
+    document.getElementById('results-card').style.display = labels.length ? 'block' : 'none';
+
+    const bestContainer = document.getElementById('best-container');
+    if (data.best_label) {
+      bestContainer.innerHTML = `<div class="best-banner">Best result: <strong>${data.best_label}</strong>` +
+        (data.champion_report ? ` — <a href="${data.champion_report}" target="_blank">open its full champion report &rarr;</a>` : '') +
+        `</div>`;
+    } else if (data.done) {
+      bestContainer.innerHTML = `<div class="error">No instrument/timeframe produced a Stage 3 champion this run.</div>`;
+    }
+  }
+
+  function poll() {
+    fetch(`/search/multi-instrument/job/${jobId}/status.json`)
+      .then(r => r.json())
+      .then(data => {
+        if (!data.found) return;
+        document.getElementById('log').textContent = (data.log || []).filter(Boolean).join('\n');
+        document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
+
+        if (data.error) {
+          document.getElementById('spinner').style.display = 'none';
+          document.getElementById('status-title').textContent = 'Multi-instrument search failed';
+          const ec = document.getElementById('error-card');
+          ec.style.display = 'block';
+          ec.textContent = data.error;
+          return;
+        }
+
+        renderResults(data);
+
+        if (data.done) {
+          document.getElementById('spinner').style.display = 'none';
+          document.getElementById('status-title').textContent = 'Multi-instrument search complete';
+          return;
+        }
+        setTimeout(poll, 2000);
+      })
+      .catch(() => setTimeout(poll, 3000));
+  }
+  poll();
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+  }
+</script>
+{% endif %}
+</body>
+</html>

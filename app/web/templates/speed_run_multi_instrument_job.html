@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>T58 Multi-Instrument Speed Run — Job</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .best-banner { background: #1c1533; border: 1px solid #3c3489; color: #cfc3ff; padding: 14px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .best-banner a { color: var(--violet); font-weight: 600; }
+  #log { background: #0d0d0d; border: 1px solid var(--border-light); border-radius: 8px; padding: 10px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: #ccc; max-height: 260px; overflow-y: auto; white-space: pre-wrap; }
+  .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border-light); border-top-color: var(--violet); border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .instrument-card { border-left: 3px solid var(--border-light); padding-left: 12px; margin-bottom: 14px; }
+  .instrument-card.best { border-left-color: var(--violet); }
+  .instrument-card h3 { margin: 0 0 6px; font-size: 14px; }
+  .instrument-card p { margin: 2px 0; font-size: 12.5px; color: #ccc; }
+  .badge-best { display: inline-block; font-size: 10px; text-transform: uppercase; background: var(--violet); color: #0c0620; border-radius: 4px; padding: 2px 6px; margin-left: 6px; font-weight: 700; }
+  .verdict { font-weight: 700; }
+  .verdict.READY { color: var(--teal); }
+  .verdict.MARGINAL { color: var(--amber); }
+  ul.guidance { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: #999; }
+</style>
+</head>
+<body>
+{% set active_page = 'speed_run_multi_instrument' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Multi-instrument speed run — running</h1>
+  <p><a href="/speed-run/multi-instrument">&larr; Start another multi-instrument speed run</a></p>
+</div>
+
+{% if not_found %}
+<div class="error">Job "{{ job_id }}" was not found (the server may have restarted since it ran).</div>
+{% else %}
+
+<div class="card">
+  <h2 id="status-title"><span class="spinner" id="spinner"></span>Running Speed Run on every instrument&hellip;</h2>
+  <div id="log">Starting&hellip;</div>
+</div>
+
+<div id="best-container"></div>
+<div id="results-container"></div>
+
+<div class="error" id="error-card" style="display:none;"></div>
+
+{% endif %}
+</div>
+</div>
+
+{% if not not_found %}
+<script>
+  const jobId = {{ job_id | tojson }};
+  const fmt = (v, d) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d === undefined ? 1 : d);
+
+  function renderResults(data) {
+    const container = document.getElementById('results-container');
+    container.innerHTML = '';
+    const labels = data.labels || [];
+    const results = data.results || {};
+    labels.forEach(label => {
+      const r = results[label];
+      const div = document.createElement('div');
+      div.className = 'card instrument-card' + (label === data.best_label ? ' best' : '');
+      if (!r) {
+        div.innerHTML = `<h3>${label}</h3><p>pending&hellip;</p>`;
+      } else if (r.error) {
+        div.innerHTML = `<h3>${label}</h3><p style="color:#ff8f8f;">FAILED: ${r.error}</p>`;
+      } else if (!r.has_winner) {
+        const guidance = (r.guidance || []).map(g => `<li>${g}</li>`).join('');
+        div.innerHTML = `<h3>${label}</h3><p>No winner found (${fmt(r.elapsed_seconds)}s). ${r.winner_reason || ''}</p>` +
+          (guidance ? `<ul class="guidance">${guidance}</ul>` : '');
+      } else {
+        const w = r.winner;
+        const bestTag = label === data.best_label ? '<span class="badge-best">BEST</span>' : '';
+        const link = w.report_html ? ` — <a href="${w.report_html}" target="_blank">open report &rarr;</a>` : '';
+        div.innerHTML = `<h3>${label}${bestTag}</h3>` +
+          `<p><span class="verdict ${w.verdict}">${w.verdict}</span> — candidate ${w.candidate_id} (${w.family || 'unknown family'})</p>` +
+          `<p>Eval pass probability: ${fmt(w.eval_pass_probability)}% — First payout probability: ${fmt(w.first_payout_probability)}%${link}</p>`;
+      }
+      container.appendChild(div);
+    });
+
+    const bestContainer = document.getElementById('best-container');
+    if (data.best_label) {
+      bestContainer.innerHTML = `<div class="best-banner">Best result: <strong>${data.best_label}</strong> — see its card below.</div>`;
+    } else if (data.done) {
+      bestContainer.innerHTML = `<div class="error">No instrument produced a Speed Run winner this run — see each instrument's card below for what to try next.</div>`;
+    }
+  }
+
+  function poll() {
+    fetch(`/speed-run/multi-instrument/job/${jobId}/status.json`)
+      .then(r => r.json())
+      .then(data => {
+        if (!data.found) return;
+        document.getElementById('log').textContent = (data.log || []).filter(Boolean).join('\n');
+        document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
+
+        if (data.error) {
+          document.getElementById('spinner').style.display = 'none';
+          document.getElementById('status-title').textContent = 'Multi-instrument speed run failed';
+          const ec = document.getElementById('error-card');
+          ec.style.display = 'block';
+          ec.textContent = data.error;
+          return;
+        }
+
+        renderResults(data);
+
+        if (data.done) {
+          document.getElementById('spinner').style.display = 'none';
+          document.getElementById('status-title').textContent = 'Multi-instrument speed run complete';
+          return;
+        }
+        setTimeout(poll, 2500);
+      })
+      .catch(() => setTimeout(poll, 4000));
+  }
+  poll();
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+  }
+</script>
+{% endif %}
+</body>
+</html>

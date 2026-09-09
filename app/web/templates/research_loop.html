@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>T58 Research Loop</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  .card p.help { font-size: 12px; color: #888; margin: 0 0 10px; line-height: 1.5; }
+  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  input[type=text], input[type=number], select, textarea {
+    width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font-size: 15px;
+  }
+  textarea { min-height: 90px; font-family: inherit; font-size: 14px; }
+  .row { display: flex; gap: 10px; }
+  .row > div { flex: 1; }
+  .submit-btn {
+    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--violet); background: var(--violet); color: #0c0620;
+    font-size: 16px; font-weight: 700; margin-top: 6px; box-shadow: 0 0 22px rgba(var(--violet-rgb),0.35);
+  }
+  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .active-jobs a { display: flex; justify-content: space-between; color: var(--violet); font-size: 13px; margin-bottom: 6px; text-decoration: none; }
+  .badge { font-size: 10px; padding: 2px 7px; border-radius: 6px; }
+  .badge.running { background: #1c1533; color: #cfc3ff; }
+  .badge.stopped { background: #262626; color: #999; }
+</style>
+</head>
+<body>
+{% set active_page = 'research_loop' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Research loop</h1>
+  <p>Hypothesis &rarr; Ollama drafts a strategy &rarr; backtest &rarr; Monte Carlo &rarr; prop-survival &rarr; a real computed failure diagnosis &rarr; Ollama refines the hypothesis &rarr; repeat. Leave the iteration count blank to run indefinitely as a background companion -- e.g. alongside a multi-instrument search -- and check back on its leaderboard of KEEP-verdict strategies later. Every verdict comes from the real backtest/Monte Carlo/prop-survival engine, never an AI guess.</p>
+</div>
+
+{% if error %}
+<div class="error">{{ error }}</div>
+{% endif %}
+
+{% if active_jobs %}
+<div class="card active-jobs">
+  <h2>Already-running loops</h2>
+  {% for j in active_jobs %}
+  <a href="/research-loop/job/{{ j.job_id }}">
+    <span>{{ j.job_id }} &mdash; {{ j.n_iterations_run }} iteration(s) so far</span>
+    <span class="badge {{ 'running' if j.running else 'stopped' }}">{{ 'RUNNING' if j.running else 'stopped' }}</span>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+
+<form method="post" action="/research-loop/start" enctype="multipart/form-data">
+  <div class="card">
+    <h2>1. Market Data</h2>
+    {% if stored_datasets %}
+    <label>Use a previously stored dataset</label>
+    <select name="existing_dataset">
+      <option value="">— none, I'm uploading a new file below —</option>
+      {% for ds in stored_datasets %}
+      <option value="{{ ds.name }}">{{ ds.name }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
+    <label>Or upload a new CSV</label>
+    <input type="file" name="csv_file" accept=".csv">
+  </div>
+
+  <div class="card">
+    <h2>2. Starting hypothesis</h2>
+    <label>Describe the idea in plain language (optional -- a reasonable default is used if left blank)</label>
+    <textarea name="initial_idea" placeholder="e.g. A mean-reversion strategy that fades RSI extremes only during the London session"></textarea>
+  </div>
+
+  <div class="card">
+    <h2>3. Loop settings</h2>
+    <div class="row">
+      <div><label>Iterations (blank = run until you click Stop)</label><input type="number" name="n_iterations" value=""></div>
+      <div><label>KEEP score threshold (0-100)</label><input type="number" step="1" name="keep_score_threshold" value="40"></div>
+    </div>
+    <div class="row">
+      <div><label>Monte Carlo sims per iteration</label><input type="number" name="mc_sims" value="500"></div>
+      <div><label>Prop-survival sims per iteration</label><input type="number" name="survival_sims" value="1000"></div>
+    </div>
+    <div class="row">
+      <div><label>Initial account balance</label><input type="number" name="initial_balance" value="100000"></div>
+      <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" value="0.0001"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>4. AI Assist (Ollama)</h2>
+    <p class="help">Requires a reachable Ollama install -- see <a href="/full-pipeline">Full Pipeline</a>'s AI Assist note for setup. This loop cannot run at all without it (Ollama is what drafts each iteration's strategy code).</p>
+    <div class="row">
+      <div><label>Ollama host</label><input type="text" name="ai_host" value="{{ ai_host or 'http://localhost:11434' }}"></div>
+      <div><label>Model</label><input type="text" name="ai_model" value="{{ ai_model or 'llama3.1' }}"></div>
+    </div>
+  </div>
+
+  <button class="submit-btn" type="submit">Start research loop</button>
+</form>
+
+</div>
+</div>
+<script src="/static/t58-chrome.js" defer></script>
+</body>
+</html>

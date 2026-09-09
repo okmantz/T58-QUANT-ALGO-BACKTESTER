@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>T58 Multi-Instrument Evolution Lab</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  .card p.help { font-size: 12px; color: #888; margin: 0 0 10px; line-height: 1.5; }
+  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  input[type=number], select { width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 15px; }
+  .row { display: flex; gap: 10px; }
+  .row > div { flex: 1; }
+  .submit-btn {
+    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--blue); background: var(--blue); color: #04120e;
+    font-size: 16px; font-weight: 700; margin-top: 6px; box-shadow: 0 0 22px rgba(var(--blue-rgb),0.35);
+  }
+  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .dataset-list { max-height: 300px; overflow-y: auto; border: 1px solid var(--border-light); border-radius: 8px; padding: 6px; }
+  .dataset-row { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 6px; }
+  .dataset-row:hover { background: var(--panel-3); }
+  .dataset-row input { width: auto; }
+  .dataset-name { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; color: #ddd; }
+  .dataset-size { margin-left: auto; font-size: 11px; color: var(--text-dim); }
+  .selected-count { font-size: 12px; color: var(--blue); margin-top: 8px; }
+  .empty-note { font-size: 13px; color: #999; padding: 10px; }
+  .checkbox-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+  .checkbox-row input { width: auto; }
+  .active-groups a { display: block; color: var(--blue); font-size: 13px; margin-bottom: 6px; }
+  .badge { font-size: 10px; padding: 2px 7px; border-radius: 6px; margin-left: 6px; }
+  .badge.running { background: #123b1c; color: #7ee08a; }
+</style>
+</head>
+<body>
+{% set active_page = 'evolution_multi_instrument' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Multi-instrument evolution lab</h1>
+  <p>Runs several independent Evolution Lab searches CONCURRENTLY, one per instrument/timeframe, each with its own checkpoint so it resumes independently. A real edge is often instrument-dependent -- leave this running overnight across several instruments instead of one at a time.</p>
+</div>
+
+{% if error %}
+<div class="error">{{ error }}</div>
+{% endif %}
+
+{% if active_groups %}
+<div class="card active-groups">
+  <h2>Already-running groups</h2>
+  {% for g in active_groups %}
+  <a href="/evolution/multi-instrument/job/{{ g.group_id }}">
+    {{ g.labels | join(', ') }}
+    <span class="badge {{ 'running' if g.running else '' }}">{{ 'RUNNING' if g.running else 'stopped' }}</span>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+
+<form method="post" action="/evolution/multi-instrument/start">
+  <div class="card">
+    <h2>1. Instruments (pick 2 or more)</h2>
+    <p class="help">Every dataset you've previously uploaded or fetched shows up here -- upload more from the Run &amp; Report or Search Lab pages first if what you want isn't listed yet.</p>
+    {% if stored_datasets %}
+    <div class="dataset-list">
+      {% for ds in stored_datasets %}
+      <label class="dataset-row" style="margin:0;">
+        <input type="checkbox" name="datasets" value="{{ ds.name }}">
+        <span class="dataset-name">{{ ds.name }}</span>
+        <span class="dataset-size">{{ (ds.size_bytes / 1024) | round(0, 'floor') | int }} KB</span>
+      </label>
+      {% endfor %}
+    </div>
+    <div class="selected-count" id="selected-count">0 selected</div>
+    {% else %}
+    <div class="empty-note">No stored datasets yet -- upload at least two on the Run &amp; Report or Search Lab pages first, then come back here.</div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>2. Evolution settings (applied identically to every instrument)</h2>
+    <div class="row">
+      <div><label>Population size</label><input type="number" name="population_size" value="60"></div>
+      <div><label>Elites kept per generation</label><input type="number" name="elite_keep" value="10"></div>
+    </div>
+    <div class="row">
+      <div><label>Monte Carlo sims (per full eval)</label><input type="number" name="mc_sims" value="1000"></div>
+      <div><label>Max generations (blank = run until STOP)</label><input type="number" name="max_generations" value=""></div>
+    </div>
+    <div><label>Initial account balance</label><input type="number" name="initial_balance" value="100000"></div>
+    <label style="margin-top:10px;">Strategy families to search (none checked = every family)</label>
+    {% for fam in families %}
+    <div class="checkbox-row"><input type="checkbox" name="families" value="{{ fam.name }}" id="mfam_{{ loop.index }}"><label for="mfam_{{ loop.index }}" style="margin:0;">{{ fam.description }} [{{ fam.name }}]</label></div>
+    {% endfor %}
+    <div class="checkbox-row" style="margin-top:10px;"><input type="checkbox" name="save_to_library" checked><label style="margin:0;">Save new elites to the Strategy Library (tagged "draft")</label></div>
+    <div class="checkbox-row"><input type="checkbox" name="resume_from_checkpoint" checked><label style="margin:0;">Resume from checkpoint if one exists for this exact instrument group</label></div>
+  </div>
+
+  <button class="submit-btn" type="submit">Start multi-instrument evolution lab</button>
+</form>
+
+</div>
+</div>
+<script>
+  const checkboxes = document.querySelectorAll('input[name="datasets"]');
+  const counter = document.getElementById('selected-count');
+  function updateCount() {
+    if (!counter) return;
+    const n = document.querySelectorAll('input[name="datasets"]:checked').length;
+    counter.textContent = n + ' selected';
+  }
+  checkboxes.forEach(cb => cb.addEventListener('change', updateCount));
+</script>
+<script src="/static/t58-chrome.js" defer></script>
+</body>
+</html>

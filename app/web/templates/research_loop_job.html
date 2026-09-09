@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>T58 Research Loop — Job</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .best-banner { background: #1c1533; border: 1px solid #3c3489; color: #cfc3ff; padding: 14px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .badge { font-size: 10px; padding: 3px 8px; border-radius: 6px; }
+  .badge.running { background: #1c1533; color: #cfc3ff; }
+  .badge.stopped { background: #262626; color: #999; }
+  .stop-btn { padding: 10px 18px; border-radius: 10px; border: 1px solid #6b2323; background: #3a1616; color: #ffb4b4; font-size: 14px; font-weight: 700; }
+  #log { background: #0d0d0d; border: 1px solid var(--border-light); border-radius: 8px; padding: 10px; font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: #ccc; max-height: 220px; overflow-y: auto; white-space: pre-wrap; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+  th, td { padding: 6px 4px; border-bottom: 1px solid var(--border-light); text-align: left; }
+  th { color: #888; font-weight: 600; text-transform: uppercase; font-size: 10px; }
+  .table-scroll { overflow-x: auto; max-height: 420px; overflow-y: auto; }
+  .verdict-KEEP { color: var(--teal); font-weight: 700; }
+  .verdict-DISCARD { color: #999; }
+  .verdict-NO_TRADES, .verdict-GENERATION_FAILED { color: #ff8f8f; }
+  .verdict-SKIPPED_DUPLICATE { color: var(--amber, #f0b429); }
+</style>
+</head>
+<body>
+{% set active_page = 'research_loop' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Research loop — running</h1>
+  <p><a href="/research-loop">&larr; Start another research loop</a></p>
+</div>
+
+{% if not_found %}
+<div class="error">Job "{{ job_id }}" was not found (the server may have restarted since it ran).</div>
+{% else %}
+
+<div class="card">
+  <h2>Status <span class="badge" id="status-badge">...</span></h2>
+  <div id="log">Starting&hellip;</div>
+  <form method="post" action="/research-loop/job/{{ job_id }}/stop" style="margin-top:10px;">
+    <button class="stop-btn" type="submit">Stop</button>
+  </form>
+</div>
+
+<div id="best-container"></div>
+
+<div class="card" id="iterations-card" style="display:none;">
+  <h2>Iterations (most recent 50)</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>#</th><th>Verdict</th><th>Trades</th><th>Net profit</th><th>Eval pass %</th><th>Survival score</th><th>DNA</th></tr></thead>
+      <tbody id="iterations-body"></tbody>
+    </table>
+  </div>
+</div>
+
+{% endif %}
+</div>
+</div>
+
+{% if not not_found %}
+<script>
+  const jobId = {{ job_id | tojson }};
+  const fmt = (v, d) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d === undefined ? 1 : d);
+  const money = (v) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : '$' + Number(v).toLocaleString(undefined, {maximumFractionDigits: 0});
+
+  function renderIterations(rows) {
+    const tbody = document.getElementById('iterations-body');
+    tbody.innerHTML = '';
+    rows.slice().reverse().forEach(it => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${it.iteration}</td><td class="verdict-${it.verdict}">${it.verdict}</td>` +
+        `<td>${it.trades ?? '—'}</td><td>${money(it.net_profit)}</td>` +
+        `<td>${fmt(it.eval_pass_probability, 1)}%</td><td>${fmt(it.prop_survival_score, 1)}</td>` +
+        `<td>${(it.dna_tags || []).join(', ')}</td>`;
+      tbody.appendChild(tr);
+    });
+    document.getElementById('iterations-card').style.display = rows.length ? 'block' : 'none';
+  }
+
+  function renderBest(best) {
+    const container = document.getElementById('best-container');
+    if (!best) { container.innerHTML = ''; return; }
+    container.innerHTML = `<div class="best-banner">Best so far: iteration ${best.iteration} — ` +
+      `<span class="verdict-${best.verdict}">${best.verdict}</span>, survival score ${fmt(best.prop_survival_score, 1)}, ` +
+      `${fmt(best.eval_pass_probability, 1)}% eval pass probability, ${best.trades} trade(s). ` +
+      `Idea: ${best.idea}</div>`;
+  }
+
+  function poll() {
+    fetch(`/research-loop/job/${jobId}/status.json`)
+      .then(r => r.json())
+      .then(data => {
+        if (!data.found) return;
+        const badge = document.getElementById('status-badge');
+        badge.textContent = data.running ? 'RUNNING' : ('STOPPED' + (data.stopped_reason ? ' (' + data.stopped_reason + ')' : ''));
+        badge.className = 'badge ' + (data.running ? 'running' : 'stopped');
+        document.getElementById('log').textContent = (data.log || []).filter(Boolean).join('\n');
+        document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
+
+        renderBest(data.best_iteration);
+        renderIterations(data.iterations || []);
+
+        if (data.running) setTimeout(poll, 3000);
+      })
+      .catch(() => setTimeout(poll, 5000));
+  }
+  poll();
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+  }
+</script>
+{% endif %}
+</body>
+</html>
