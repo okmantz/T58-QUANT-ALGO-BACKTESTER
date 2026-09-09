@@ -335,7 +335,7 @@ def _resolve_dataset(form, files):
 
     for f in uploaded_files:
         content = f.read()
-        result = import_csv_bytes(content)
+        result = import_csv_bytes(content, filename=f.filename)
         if not result.is_valid:
             failed.append((f.filename, "; ".join(result.errors)))
             continue
@@ -436,7 +436,7 @@ def _alpaca_template_context() -> dict:
 def index():
     return render_template(
         "index.html",
-        stored_datasets=list_stored_datasets(),
+        stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         saved_strategies_json=_saved_strategies_json(),
         strategy_notice=request.args.get("strategy_notice"),
         alpaca_notice=request.args.get("alpaca_notice"),
@@ -783,7 +783,7 @@ def batch_test_saved_strategies_route():
 
     return render_template(
         "index.html",
-        stored_datasets=list_stored_datasets(),
+        stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         saved_strategies_json=_saved_strategies_json(),
         **_alpaca_template_context(),
         batch_result={
@@ -881,7 +881,7 @@ def run_pipeline():
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(request.form, request.files)
         if dataset_error:
-            return render_template("index.html", error=dataset_error, stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
+            return render_template("index.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
 
         form = request.form
         strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
@@ -943,7 +943,7 @@ def run_pipeline():
                 "This usually means the strategy's entry conditions never "
                 "fired for this data/date range rather than an app problem."
             )
-            return render_template("index.html", error=msg, stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
+            return render_template("index.html", error=msg, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
 
         n_sims = int(form.get("n_sims", 5000))
         mc_cfg = MonteCarloConfig(n_simulations=min(n_sims, 50_000), method=form.get("mc_method", "bootstrap"))
@@ -988,7 +988,7 @@ def run_pipeline():
 
         return render_template(
             "index.html",
-            stored_datasets=list_stored_datasets(),
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             saved_strategies_json=_saved_strategies_json(),
             **_alpaca_template_context(),
             result={
@@ -1012,9 +1012,9 @@ def run_pipeline():
             },
         )
     except StrategyError as exc:
-        return render_template("index.html", error=str(exc), stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
+        return render_template("index.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
-        return render_template("index.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 500
+        return render_template("index.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 500
 
 
 @app.route("/reports/<path:filename>")
@@ -1245,7 +1245,7 @@ def _run_refinement_job(
 def refine_form():
     return render_template(
         "refine.html",
-        stored_datasets=list_stored_datasets(),
+        stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         saved_strategies_json=_saved_strategies_json(),
         strategy_statuses=STRATEGY_STATUSES,
     )
@@ -1257,7 +1257,7 @@ def refine_start():
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
-            return render_template("refine.html", error=dataset_error, stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json()), 400
+            return render_template("refine.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 400
 
         strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
 
@@ -1311,9 +1311,9 @@ def refine_start():
         return redirect(url_for("refine_job", job_id=job_id))
 
     except (StrategyError, RefinementError) as exc:
-        return render_template("refine.html", error=str(exc), stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json()), 400
+        return render_template("refine.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 400
     except Exception as exc:  # noqa: BLE001
-        return render_template("refine.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json()), 500
+        return render_template("refine.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 500
 
 
 @app.route("/refine/job/<job_id>")
@@ -1422,7 +1422,7 @@ def full_pipeline_form():
     saved_ai = load_ollama_settings()
     return render_template(
         "full_pipeline.html",
-        stored_datasets=list_stored_datasets(),
+        stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         saved_strategies_json=_saved_strategies_json(),
         strategy_statuses=STRATEGY_STATUSES,
         fitness_metrics=FITNESS_METRICS,
@@ -1443,14 +1443,14 @@ def full_pipeline_start():
                 f"one heavy job (Search Lab / Evolution Lab / Full Pipeline / Speed Run) at the same "
                 f"time can exhaust available memory. Wait for it to finish before starting Full Pipeline."
             ),
-            stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(),
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
             fitness_metrics=FITNESS_METRICS,
         ), 409
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
-            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
 
         strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
 
@@ -1521,11 +1521,11 @@ def full_pipeline_start():
 
     except StrategyError as exc:
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
-        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
         log_crash("Full Pipeline (web, start)", exc=exc)
-        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 500
+        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 500
 
 
 @app.route("/full-pipeline/job/<job_id>")
@@ -1643,7 +1643,7 @@ def _run_wfo_job(
 @app.route("/walk-forward-opt")
 def wfo_form():
     return render_template(
-        "wfo.html", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(),
+        "wfo.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
         strategy_statuses=STRATEGY_STATUSES, fitness_metrics=FITNESS_METRICS,
     )
 
@@ -1652,7 +1652,7 @@ def wfo_form():
 def wfo_start():
     form = request.form
     guard_resp = _try_acquire_heavy_job(
-        JOB_WFO, "wfo.html", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(),
+        JOB_WFO, "wfo.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
         fitness_metrics=FITNESS_METRICS,
     )
     if guard_resp:
@@ -1661,7 +1661,7 @@ def wfo_start():
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_WFO)
-            return render_template("wfo.html", error=dataset_error, stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+            return render_template("wfo.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
 
         strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(
@@ -1707,10 +1707,10 @@ def wfo_start():
         return redirect(url_for("wfo_job", job_id=job_id))
     except (StrategyError, RefinementError) as exc:
         HEAVY_JOB_GUARD.release(JOB_WFO)
-        return render_template("wfo.html", error=str(exc), stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+        return render_template("wfo.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_WFO)
-        return render_template("wfo.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 500
+        return render_template("wfo.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 500
 
 
 @app.route("/walk-forward-opt/job/<job_id>")
@@ -1791,7 +1791,7 @@ def _run_mo_job(job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, m
 @app.route("/multi-objective")
 def mo_form():
     return render_template(
-        "multi_objective.html", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(),
+        "multi_objective.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
         strategy_statuses=STRATEGY_STATUSES, all_objectives=sorted(OBJECTIVE_DIRECTIONS), default_objectives=DEFAULT_OBJECTIVES,
     )
 
@@ -1800,7 +1800,7 @@ def mo_form():
 def mo_start():
     form = request.form
     guard_resp = _try_acquire_heavy_job(
-        JOB_MULTI_OBJECTIVE, "multi_objective.html", stored_datasets=list_stored_datasets(),
+        JOB_MULTI_OBJECTIVE, "multi_objective.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         saved_strategies_json=_saved_strategies_json(), all_objectives=sorted(OBJECTIVE_DIRECTIONS),
         default_objectives=DEFAULT_OBJECTIVES,
     )
@@ -1810,7 +1810,7 @@ def mo_start():
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_MULTI_OBJECTIVE)
-            return render_template("multi_objective.html", error=dataset_error, stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), all_objectives=sorted(OBJECTIVE_DIRECTIONS), default_objectives=DEFAULT_OBJECTIVES), 400
+            return render_template("multi_objective.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), all_objectives=sorted(OBJECTIVE_DIRECTIONS), default_objectives=DEFAULT_OBJECTIVES), 400
 
         strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(
@@ -1849,10 +1849,10 @@ def mo_start():
         return redirect(url_for("mo_job", job_id=job_id))
     except (StrategyError, RefinementError) as exc:
         HEAVY_JOB_GUARD.release(JOB_MULTI_OBJECTIVE)
-        return render_template("multi_objective.html", error=str(exc), stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), all_objectives=sorted(OBJECTIVE_DIRECTIONS), default_objectives=DEFAULT_OBJECTIVES), 400
+        return render_template("multi_objective.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), all_objectives=sorted(OBJECTIVE_DIRECTIONS), default_objectives=DEFAULT_OBJECTIVES), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_MULTI_OBJECTIVE)
-        return render_template("multi_objective.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), all_objectives=sorted(OBJECTIVE_DIRECTIONS), default_objectives=DEFAULT_OBJECTIVES), 500
+        return render_template("multi_objective.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), all_objectives=sorted(OBJECTIVE_DIRECTIONS), default_objectives=DEFAULT_OBJECTIVES), 500
 
 
 @app.route("/multi-objective/job/<job_id>")
@@ -1948,7 +1948,7 @@ def _run_wfga_job(
 @app.route("/walk-forward-ga")
 def wfga_form():
     return render_template(
-        "wfga.html", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(),
+        "wfga.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
         strategy_statuses=STRATEGY_STATUSES, fitness_metrics=FITNESS_METRICS,
     )
 
@@ -1957,7 +1957,7 @@ def wfga_form():
 def wfga_start():
     form = request.form
     guard_resp = _try_acquire_heavy_job(
-        JOB_WFGA, "wfga.html", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(),
+        JOB_WFGA, "wfga.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
         fitness_metrics=FITNESS_METRICS,
     )
     if guard_resp:
@@ -1966,7 +1966,7 @@ def wfga_start():
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_WFGA)
-            return render_template("wfga.html", error=dataset_error, stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+            return render_template("wfga.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
 
         strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(
@@ -2011,10 +2011,10 @@ def wfga_start():
         return redirect(url_for("wfga_job", job_id=job_id))
     except (StrategyError, RefinementError) as exc:
         HEAVY_JOB_GUARD.release(JOB_WFGA)
-        return render_template("wfga.html", error=str(exc), stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+        return render_template("wfga.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_WFGA)
-        return render_template("wfga.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 500
+        return render_template("wfga.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 500
 
 
 @app.route("/walk-forward-ga/job/<job_id>")
@@ -2065,7 +2065,7 @@ def _resolve_leg_dataset(form, files, prefix: str):
     uploaded = files.get(f"{prefix}_csv")
     if uploaded and uploaded.filename:
         content = uploaded.read()
-        result = import_csv_bytes(content)
+        result = import_csv_bytes(content, filename=uploaded.filename)
         if result.is_valid:
             store_csv_bytes(content, uploaded.filename)
             return result.dataframe, uploaded.filename
@@ -2074,7 +2074,10 @@ def _resolve_leg_dataset(form, files, prefix: str):
     if existing_choice:
         candidate = get_raw_data_dir() / existing_choice
         if candidate.exists():
-            result = import_csv_bytes(candidate.read_bytes())
+            # Read via the real path (not raw bytes) so the importer's
+            # extension dispatch sees the actual .parquet/.tsv/etc suffix
+            # instead of losing it the way a bare BytesIO would.
+            result = import_csv(candidate)
             if result.is_valid:
                 return result.dataframe, existing_choice
     return None, None
@@ -2106,7 +2109,7 @@ def _mode_from_filename(filename: str) -> str | None:
 @app.route("/portfolio")
 def portfolio_form():
     return render_template(
-        "portfolio.html", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(),
+        "portfolio.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
         strategy_statuses=STRATEGY_STATUSES,
     )
 
@@ -2114,7 +2117,7 @@ def portfolio_form():
 @app.route("/portfolio/run", methods=["POST"])
 def portfolio_run():
     form = request.form
-    ctx = lambda **kw: dict(stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), **kw)
+    ctx = lambda **kw: dict(stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **kw)
     try:
         strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(
@@ -2201,14 +2204,14 @@ _REGIME_DIMENSIONS = ("trend", "volatility", "session", "environment")
 @app.route("/regime-matrix")
 def regime_matrix_form():
     return render_template(
-        "regime_matrix.html", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(),
+        "regime_matrix.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
     )
 
 
 @app.route("/regime-matrix/run", methods=["POST"])
 def regime_matrix_run():
     form = request.form
-    ctx = lambda **kw: dict(stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), **kw)
+    ctx = lambda **kw: dict(stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **kw)
     guard_resp = _try_acquire_heavy_job(JOB_REGIME_MATRIX, "regime_matrix.html", **ctx())
     if guard_resp:
         return guard_resp
@@ -2318,7 +2321,7 @@ def family_diversity_form():
 @app.route("/payout-probability")
 def payout_probability_form():
     return render_template(
-        "payout_probability.html", stored_datasets=list_stored_datasets(),
+        "payout_probability.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         saved_strategies_json=_saved_strategies_json(),
     )
 
@@ -2326,7 +2329,7 @@ def payout_probability_form():
 @app.route("/payout-probability/run", methods=["POST"])
 def payout_probability_run():
     form = request.form
-    ctx = lambda **kw: dict(stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), **kw)
+    ctx = lambda **kw: dict(stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **kw)
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
@@ -2407,7 +2410,7 @@ def serve_payout_report(filename):
 @app.route("/ensemble")
 def ensemble_form():
     return render_template(
-        "ensemble.html", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(),
+        "ensemble.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
         strategy_statuses=STRATEGY_STATUSES,
     )
 
@@ -2415,7 +2418,7 @@ def ensemble_form():
 @app.route("/ensemble/run", methods=["POST"])
 def ensemble_run():
     form = request.form
-    ctx = lambda **kw: dict(stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), **kw)
+    ctx = lambda **kw: dict(stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **kw)
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
@@ -2550,14 +2553,14 @@ def _run_cpcv_job(job_id: str, df, strategy, risk: RiskConfig, n_groups: int, n_
 
 @app.route("/cpcv")
 def cpcv_form():
-    return render_template("cpcv.html", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), strategy_statuses=STRATEGY_STATUSES)
+    return render_template("cpcv.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), strategy_statuses=STRATEGY_STATUSES)
 
 
 @app.route("/cpcv/start", methods=["POST"])
 def cpcv_start():
     form = request.form
     guard_resp = _try_acquire_heavy_job(
-        JOB_CPCV, "cpcv.html", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(),
+        JOB_CPCV, "cpcv.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
     )
     if guard_resp:
         return guard_resp
@@ -2565,7 +2568,7 @@ def cpcv_start():
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_CPCV)
-            return render_template("cpcv.html", error=dataset_error, stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json()), 400
+            return render_template("cpcv.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 400
         strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000)),
@@ -2595,10 +2598,10 @@ def cpcv_start():
         return redirect(url_for("cpcv_job", job_id=job_id))
     except (StrategyError, CPCVError) as exc:
         HEAVY_JOB_GUARD.release(JOB_CPCV)
-        return render_template("cpcv.html", error=str(exc), stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json()), 400
+        return render_template("cpcv.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_CPCV)
-        return render_template("cpcv.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json()), 500
+        return render_template("cpcv.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 500
 
 
 @app.route("/cpcv/job/<job_id>")
@@ -2684,14 +2687,14 @@ def _run_sensitivity_job(job_id: str, df, strategy, risk: RiskConfig, rules: Pro
 
 @app.route("/sensitivity")
 def sensitivity_form():
-    return render_template("sensitivity.html", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), strategy_statuses=STRATEGY_STATUSES)
+    return render_template("sensitivity.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), strategy_statuses=STRATEGY_STATUSES)
 
 
 @app.route("/sensitivity/start", methods=["POST"])
 def sensitivity_start():
     form = request.form
     guard_resp = _try_acquire_heavy_job(
-        JOB_SENSITIVITY, "sensitivity.html", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(),
+        JOB_SENSITIVITY, "sensitivity.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
     )
     if guard_resp:
         return guard_resp
@@ -2699,7 +2702,7 @@ def sensitivity_start():
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_SENSITIVITY)
-            return render_template("sensitivity.html", error=dataset_error, stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json()), 400
+            return render_template("sensitivity.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 400
         strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000)), pip_size=float(form.get("pip_size", 0.0001)))
         rules = PropRules(account_size=float(form.get("account_size", 100000)))
@@ -2724,10 +2727,10 @@ def sensitivity_start():
         return redirect(url_for("sensitivity_job", job_id=job_id))
     except (StrategyError, RefinementError) as exc:
         HEAVY_JOB_GUARD.release(JOB_SENSITIVITY)
-        return render_template("sensitivity.html", error=str(exc), stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json()), 400
+        return render_template("sensitivity.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_SENSITIVITY)
-        return render_template("sensitivity.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json()), 500
+        return render_template("sensitivity.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 500
 
 
 @app.route("/sensitivity/job/<job_id>")
@@ -2800,7 +2803,7 @@ def _run_quickopt_job(job_id: str, df, strategy, risk: RiskConfig, rules: PropRu
 
 @app.route("/quick-optimize")
 def quickopt_form():
-    return render_template("quick_optimize.html", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), strategy_statuses=STRATEGY_STATUSES, fitness_metrics=FITNESS_METRICS)
+    return render_template("quick_optimize.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), strategy_statuses=STRATEGY_STATUSES, fitness_metrics=FITNESS_METRICS)
 
 
 @app.route("/quick-optimize/start", methods=["POST"])
@@ -2809,7 +2812,7 @@ def quickopt_start():
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
-            return render_template("quick_optimize.html", error=dataset_error, stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+            return render_template("quick_optimize.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
         strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000)), pip_size=float(form.get("pip_size", 0.0001)))
         rules = PropRules(account_size=float(form.get("account_size", 100000)))
@@ -2831,9 +2834,9 @@ def quickopt_start():
         thread.start()
         return redirect(url_for("quickopt_job", job_id=job_id))
     except (StrategyError, RefinementError) as exc:
-        return render_template("quick_optimize.html", error=str(exc), stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+        return render_template("quick_optimize.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
     except Exception as exc:  # noqa: BLE001
-        return render_template("quick_optimize.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 500
+        return render_template("quick_optimize.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 500
 
 
 @app.route("/quick-optimize/job/<job_id>")
@@ -2905,7 +2908,7 @@ HEAVY_JOB_GUARD.register_health_check(
 @app.route("/evolution")
 def evolution_form():
     return render_template(
-        "evolution.html", stored_datasets=list_stored_datasets(),
+        "evolution.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         families=[{"name": n, "description": family_description(n)} for n in list_families()],
         running=(_EVOLUTION_RUNNER is not None and _EVOLUTION_RUNNER.is_running),
     )
@@ -2927,7 +2930,7 @@ def evolution_start():
                 f"exhaust available memory (each spawns its own worker processes, each holding a full "
                 f"copy of the loaded data). Wait for it to finish, or stop it, before starting Evolution Lab."
             ),
-            stored_datasets=list_stored_datasets(),
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             families=[{"name": n, "description": family_description(n)} for n in list_families()],
             running=False,
         ), 409
@@ -2935,7 +2938,7 @@ def evolution_start():
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_EVOLUTION_LAB)
-            return render_template("evolution.html", error=dataset_error, stored_datasets=list_stored_datasets(), families=[{"name": n, "description": family_description(n)} for n in list_families()], running=False), 400
+            return render_template("evolution.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), families=[{"name": n, "description": family_description(n)} for n in list_families()], running=False), 400
 
         risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000) or 100000))
         rules = PropRules(account_size=float(form.get("initial_balance", 100000) or 100000))
@@ -2958,7 +2961,7 @@ def evolution_start():
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_EVOLUTION_LAB)
         log_crash("Evolution Lab (web)", exc=exc)
-        return render_template("evolution.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), families=[{"name": n, "description": family_description(n)} for n in list_families()], running=False), 500
+        return render_template("evolution.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), families=[{"name": n, "description": family_description(n)} for n in list_families()], running=False), 500
 
 
 @app.route("/evolution/stop", methods=["POST"])
@@ -3096,7 +3099,7 @@ def evolution_multi_instrument_form():
         groups = list(_MULTI_EVOLUTION_GROUPS.items())
     return render_template(
         "evolution_multi_instrument.html",
-        stored_datasets=list_stored_datasets(),
+        stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         families=[{"name": n, "description": family_description(n)} for n in list_families()],
         active_groups=[{"group_id": gid, "running": g.is_running, "labels": [j.label for j in g.jobs]} for gid, g in groups],
     )
@@ -3113,7 +3116,7 @@ def evolution_multi_instrument_start():
                 f"one heavy job at the same time can exhaust available memory. Wait for it to finish, "
                 f"or stop it, before starting Multi-Instrument Evolution Lab."
             ),
-            stored_datasets=list_stored_datasets(),
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             families=[{"name": n, "description": family_description(n)} for n in list_families()],
             active_groups=[],
         ), 409
@@ -3125,7 +3128,7 @@ def evolution_multi_instrument_start():
                 "evolution_multi_instrument.html",
                 error="Select at least 2 datasets to run across -- with only 1 selected, use the "
                       "regular Evolution Lab page instead.",
-                stored_datasets=list_stored_datasets(),
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
                 families=[{"name": n, "description": family_description(n)} for n in list_families()],
                 active_groups=[],
             ), 400
@@ -3144,7 +3147,7 @@ def evolution_multi_instrument_start():
             return render_template(
                 "evolution_multi_instrument.html",
                 error="Could not resolve at least 2 of the selected datasets to real files on disk.",
-                stored_datasets=list_stored_datasets(),
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
                 families=[{"name": n, "description": family_description(n)} for n in list_families()],
                 active_groups=[],
             ), 400
@@ -3174,7 +3177,7 @@ def evolution_multi_instrument_start():
         log_crash("Multi-Instrument Evolution Lab (web, start)", exc=exc)
         return render_template(
             "evolution_multi_instrument.html", error=f"Unexpected error: {exc}",
-            stored_datasets=list_stored_datasets(),
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             families=[{"name": n, "description": family_description(n)} for n in list_families()],
             active_groups=[],
         ), 500
@@ -3290,7 +3293,7 @@ def _run_agent_job(job_id: str, question: str, ctx: ResearchAgentContext, settin
 def research_agent_form():
     saved_ai = load_ollama_settings()
     return render_template(
-        "research_agent.html", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(),
+        "research_agent.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
         strategy_statuses=STRATEGY_STATUSES, ai_enabled=saved_ai.enabled, ai_host=saved_ai.host, ai_model=saved_ai.model,
     )
 
@@ -3301,14 +3304,14 @@ def research_agent_start():
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
-            return render_template("research_agent.html", error=dataset_error, stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), ai_enabled=False, ai_host="", ai_model=""), 400
+            return render_template("research_agent.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), ai_enabled=False, ai_host="", ai_model=""), 400
 
         strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000) or 100000), pip_size=float(form.get("pip_size", 0.0001) or 0.0001))
         rules = PropRules(account_size=float(form.get("account_size", 100000) or 100000))
         question = (form.get("question") or "").strip()
         if not question:
-            return render_template("research_agent.html", error="Enter a question for the agent to investigate.", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), ai_enabled=False, ai_host="", ai_model=""), 400
+            return render_template("research_agent.html", error="Enter a question for the agent to investigate.", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), ai_enabled=False, ai_host="", ai_model=""), 400
 
         settings = OllamaSettings(enabled=True, host=form.get("ai_host", "http://localhost:11434") or "http://localhost:11434", model=form.get("ai_model", "llama3.1") or "llama3.1")
         try:
@@ -3328,9 +3331,9 @@ def research_agent_start():
         thread.start()
         return redirect(url_for("research_agent_job", job_id=job_id))
     except StrategyError as exc:
-        return render_template("research_agent.html", error=str(exc), stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), ai_enabled=False, ai_host="", ai_model=""), 400
+        return render_template("research_agent.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), ai_enabled=False, ai_host="", ai_model=""), 400
     except Exception as exc:  # noqa: BLE001
-        return render_template("research_agent.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), saved_strategies_json=_saved_strategies_json(), ai_enabled=False, ai_host="", ai_model=""), 500
+        return render_template("research_agent.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), ai_enabled=False, ai_host="", ai_model=""), 500
 
 
 @app.route("/research-agent/job/<job_id>")
@@ -3398,7 +3401,7 @@ def research_loop_form():
             for jid, j in _RESEARCH_LOOP_JOBS.items()
         ]
     return render_template(
-        "research_loop.html", stored_datasets=list_stored_datasets(),
+        "research_loop.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         ai_enabled=saved_ai.enabled, ai_host=saved_ai.host, ai_model=saved_ai.model,
         active_jobs=active_jobs,
     )
@@ -3411,7 +3414,7 @@ def research_loop_start():
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             return render_template(
-                "research_loop.html", error=dataset_error, stored_datasets=list_stored_datasets(),
+                "research_loop.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
                 ai_enabled=False, ai_host="", ai_model="", active_jobs=[],
             ), 400
 
@@ -3451,7 +3454,7 @@ def research_loop_start():
     except Exception as exc:  # noqa: BLE001
         log_crash("Research Loop (web, start)", exc=exc)
         return render_template(
-            "research_loop.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(),
+            "research_loop.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             ai_enabled=False, ai_host="", ai_model="", active_jobs=[],
         ), 500
 
@@ -3513,7 +3516,7 @@ def deploy_live_info():
 def search_form():
     return render_template(
         "search.html",
-        stored_datasets=list_stored_datasets(),
+        stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         families=[{"name": n, "description": family_description(n)} for n in list_families()],
         saved_strategies_json=_saved_strategies_json(),
         strategy_notice=request.args.get("strategy_notice"),
@@ -3532,7 +3535,7 @@ def search_start():
                 f"one heavy job (Search Lab / Evolution Lab / Full Pipeline / Speed Run) at the same "
                 f"time can exhaust available memory. Wait for it to finish before starting Search Lab."
             ),
-            stored_datasets=list_stored_datasets(),
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             families=[{"name": n, "description": family_description(n)} for n in list_families()],
             saved_strategies_json=_saved_strategies_json(),
         ), 409
@@ -3541,7 +3544,7 @@ def search_start():
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
             return render_template(
-                "search.html", error=dataset_error, stored_datasets=list_stored_datasets(),
+                "search.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
                 families=[{"name": n, "description": family_description(n)} for n in list_families()],
                 saved_strategies_json=_saved_strategies_json(),
             ), 400
@@ -3621,14 +3624,14 @@ def search_start():
     except StrategySpaceError as exc:
         HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
         return render_template(
-            "search.html", error=str(exc), stored_datasets=list_stored_datasets(),
+            "search.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             families=[{"name": n, "description": family_description(n)} for n in list_families()],
             saved_strategies_json=_saved_strategies_json(),
         ), 400
     except StrategyError as exc:
         HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
         return render_template(
-            "search.html", error=str(exc), stored_datasets=list_stored_datasets(),
+            "search.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             families=[{"name": n, "description": family_description(n)} for n in list_families()],
             saved_strategies_json=_saved_strategies_json(),
         ), 400
@@ -3636,7 +3639,7 @@ def search_start():
         HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
         log_crash("Search Lab (web, start)", exc=exc)
         return render_template(
-            "search.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(),
+            "search.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             families=[{"name": n, "description": family_description(n)} for n in list_families()],
             saved_strategies_json=_saved_strategies_json(),
         ), 500
@@ -3828,7 +3831,7 @@ def _run_multi_search_job(
 def search_multi_instrument_form():
     return render_template(
         "search_multi_instrument.html",
-        stored_datasets=list_stored_datasets(),
+        stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         families=[{"name": n, "description": family_description(n)} for n in list_families()],
     )
 
@@ -3844,7 +3847,7 @@ def search_multi_instrument_start():
                 f"one heavy job (Search Lab / Multi-Instrument Search / Evolution Lab / Full Pipeline / "
                 f"Speed Run) at the same time can exhaust available memory. Wait for it to finish first."
             ),
-            stored_datasets=list_stored_datasets(),
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             families=[{"name": n, "description": family_description(n)} for n in list_families()],
         ), 409
     try:
@@ -3855,7 +3858,7 @@ def search_multi_instrument_start():
                 "search_multi_instrument.html",
                 error="Select at least 2 datasets to search across -- with only 1 selected, use the "
                       "regular Search Lab page instead.",
-                stored_datasets=list_stored_datasets(),
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
                 families=[{"name": n, "description": family_description(n)} for n in list_families()],
             ), 400
 
@@ -3884,7 +3887,7 @@ def search_multi_instrument_start():
             return render_template(
                 "search_multi_instrument.html",
                 error="Could not resolve at least 2 of the selected datasets to real files on disk.",
-                stored_datasets=list_stored_datasets(),
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
                 families=[{"name": n, "description": family_description(n)} for n in list_families()],
             ), 400
 
@@ -3939,14 +3942,14 @@ def search_multi_instrument_start():
     except StrategySpaceError as exc:
         HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_SEARCH)
         return render_template(
-            "search_multi_instrument.html", error=str(exc), stored_datasets=list_stored_datasets(),
+            "search_multi_instrument.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             families=[{"name": n, "description": family_description(n)} for n in list_families()],
         ), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_SEARCH)
         log_crash("Multi-Instrument Search (web, start)", exc=exc)
         return render_template(
-            "search_multi_instrument.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(),
+            "search_multi_instrument.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             families=[{"name": n, "description": family_description(n)} for n in list_families()],
         ), 500
 
@@ -4030,7 +4033,7 @@ def _run_speedrun_job(
 @app.route("/speed-run")
 def speed_run_form():
     return render_template(
-        "speed_run.html", stored_datasets=list_stored_datasets(), fitness_metrics=FITNESS_METRICS,
+        "speed_run.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), fitness_metrics=FITNESS_METRICS,
     )
 
 
@@ -4046,14 +4049,14 @@ def speed_run_start():
                 f"time can exhaust available memory -- this is the same failure mode that can freeze "
                 f"or crash the desktop app. Wait for it to finish before starting Speed Run."
             ),
-            stored_datasets=list_stored_datasets(), fitness_metrics=FITNESS_METRICS,
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), fitness_metrics=FITNESS_METRICS,
         ), 409
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_SPEED_RUN)
             return render_template(
-                "speed_run.html", error=dataset_error, stored_datasets=list_stored_datasets(),
+                "speed_run.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
                 fitness_metrics=FITNESS_METRICS,
             ), 400
 
@@ -4102,7 +4105,7 @@ def speed_run_start():
         HEAVY_JOB_GUARD.release(JOB_SPEED_RUN)
         log_crash("Speed Run (web, start)", exc=exc)
         return render_template(
-            "speed_run.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(),
+            "speed_run.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             fitness_metrics=FITNESS_METRICS,
         ), 500
 
@@ -4248,7 +4251,7 @@ def _run_multi_speedrun_job(
 @app.route("/speed-run/multi-instrument")
 def speed_run_multi_instrument_form():
     return render_template(
-        "speed_run_multi_instrument.html", stored_datasets=list_stored_datasets(),
+        "speed_run_multi_instrument.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         fitness_metrics=FITNESS_METRICS,
     )
 
@@ -4263,7 +4266,7 @@ def speed_run_multi_instrument_start():
                 f"{HEAVY_JOB_GUARD.active_name} is already running on this server. Running more than "
                 f"one heavy job at the same time can exhaust available memory. Wait for it to finish first."
             ),
-            stored_datasets=list_stored_datasets(), fitness_metrics=FITNESS_METRICS,
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), fitness_metrics=FITNESS_METRICS,
         ), 409
     try:
         selected = form.getlist("datasets")
@@ -4273,7 +4276,7 @@ def speed_run_multi_instrument_start():
                 "speed_run_multi_instrument.html",
                 error="Select at least 2 datasets to run across -- with only 1 selected, use the "
                       "regular Speed Run page instead.",
-                stored_datasets=list_stored_datasets(), fitness_metrics=FITNESS_METRICS,
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), fitness_metrics=FITNESS_METRICS,
             ), 400
 
         jobs: list[InstrumentJob] = []
@@ -4290,7 +4293,7 @@ def speed_run_multi_instrument_start():
             return render_template(
                 "speed_run_multi_instrument.html",
                 error="Could not resolve at least 2 of the selected datasets to real files on disk.",
-                stored_datasets=list_stored_datasets(), fitness_metrics=FITNESS_METRICS,
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), fitness_metrics=FITNESS_METRICS,
             ), 400
 
         risk = RiskConfig(
@@ -4340,7 +4343,7 @@ def speed_run_multi_instrument_start():
         log_crash("Multi-Instrument Speed Run (web, start)", exc=exc)
         return render_template(
             "speed_run_multi_instrument.html", error=f"Unexpected error: {exc}",
-            stored_datasets=list_stored_datasets(), fitness_metrics=FITNESS_METRICS,
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), fitness_metrics=FITNESS_METRICS,
         ), 500
 
 
