@@ -114,6 +114,12 @@ _SKELETON_TO_GROUP: dict[str, str] = {
     "higher_low_structure_continuation": "pullback",
     # New order-flow-specific family (Sep 2026 expansion)
     "order_flow_absorption": "order_flow",
+    # Expansion round 3 (multi-instrument search push)
+    "order_block_trend_continuation": "market_structure",
+    "volume_confirmed_trend_pullback": "pullback",
+    "session_gated_liquidity_sweep": "liquidity_sweep",
+    "macd_histogram_zero_cross_trend": "trend_following",
+    "atr_regime_trend_pullback": "pullback",
 }
 
 # Path 2a: app.strategy.dna active_tags() -> canonical group. Checked in
