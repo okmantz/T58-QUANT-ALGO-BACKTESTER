@@ -28,6 +28,65 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+# Default weights for every component of the multiplicative PROP FITNESS
+# score below -- this dict, unchanged, reproduces the exact original
+# (unweighted) formula, so a caller that never sets a goal gets identical
+# behavior to before this was made configurable.
+#
+# pass_probability / payout_probability / robustness / oos_consistency /
+# drawdown are EXPONENTS on that component (all are already 0..1, or
+# drawdown_pct clipped to >=1): 1.0 is the original weighting, 0.0 drops
+# that factor out entirely (x**0 == 1, so it stops affecting ranking),
+# and >1.0 makes candidates that score well on it dominate the ranking
+# more than the others do. net_profit is different -- it has no natural
+# 0..1 ceiling to exponentiate, so it's an ADDITIVE bonus instead,
+# proportional to net profit in dollars; 0.0 (the default) leaves it out
+# entirely, matching the original formula, which never considered raw
+# net profit at all.
+DEFAULT_FITNESS_WEIGHTS: dict = {
+    "pass_probability": 1.0,
+    "payout_probability": 1.0,
+    "robustness": 1.0,
+    "oos_consistency": 1.0,
+    "drawdown": 1.0,
+    "net_profit": 0.0,
+}
+
+# A few named presets for the common cases Owen asked for ("let me set
+# the goal -- eval pass %, first payout %, net profit, etc.") -- each is
+# just a DEFAULT_FITNESS_WEIGHTS override, so the UI can offer these as
+# one-click choices and still fall back to a fully custom weight set.
+FITNESS_GOAL_PRESETS: dict[str, dict] = {
+    "balanced": dict(DEFAULT_FITNESS_WEIGHTS),
+    "eval_pass_rate": {**DEFAULT_FITNESS_WEIGHTS, "pass_probability": 2.5, "payout_probability": 0.5},
+    "first_payout": {**DEFAULT_FITNESS_WEIGHTS, "payout_probability": 2.5, "pass_probability": 0.75},
+    "net_profit": {**DEFAULT_FITNESS_WEIGHTS, "net_profit": 0.02, "drawdown": 0.5},
+    "robustness": {**DEFAULT_FITNESS_WEIGHTS, "robustness": 2.5, "oos_consistency": 2.0},
+    "low_drawdown": {**DEFAULT_FITNESS_WEIGHTS, "drawdown": 2.5},
+}
+
+
+def resolve_fitness_weights(weights: "dict | str | None") -> dict:
+    """Normalizes whatever the caller passed (None, a preset name, or a
+    partial/full custom dict) into a complete weights dict with every key
+    DEFAULT_FITNESS_WEIGHTS has, falling back to the default for any key
+    not given. Unknown preset names/keys fall back to 'balanced' /
+    are ignored respectively, rather than raising -- a bad saved config
+    value must not crash a run that's otherwise fine.
+    """
+    if weights is None:
+        return dict(DEFAULT_FITNESS_WEIGHTS)
+    if isinstance(weights, str):
+        return dict(FITNESS_GOAL_PRESETS.get(weights, FITNESS_GOAL_PRESETS["balanced"]))
+    resolved = dict(DEFAULT_FITNESS_WEIGHTS)
+    for k, v in dict(weights).items():
+        if k in resolved:
+            try:
+                resolved[k] = float(v)
+            except (TypeError, ValueError):
+                continue
+    return resolved
+
 
 @dataclass
 class PropFitnessBreakdown:
@@ -81,7 +140,9 @@ def compute_prop_fitness(
     pbo: float | None = None,               # 0..1, from app.validation.cpcv.compute_pbo, pooled per-generation
     cpcv_degradation: float | None = None,  # in-sample minus out-of-sample metric, from app.validation.cpcv.run_cpcv
     min_trades_target: int = 30,
+    weights: "dict | str | None" = None,    # None/"balanced" reproduces the original unweighted formula exactly
 ) -> PropFitnessBreakdown:
+    w = resolve_fitness_weights(weights)
     pass_probability = max(0.0, min(1.0, mc_summary.get("evaluation_pass_probability", 0.0) / 100.0))
     payout_probability = max(0.0, min(1.0, mc_summary.get("first_payout_probability", 0.0) / 100.0))
     robustness = float(robustness_dict["stability_ratio"]) if robustness_dict else 0.5
@@ -95,7 +156,22 @@ def compute_prop_fitness(
         oos_consistency = max(0.0, min(1.0, float(walk_forward_dict.get("walk_forward_efficiency", 0.5))))
     drawdown_pct = max(float(stats.get("max_drawdown_pct", 0.0) or 0.0), 1.0)  # floor at 1 to avoid div-by-~0 blowups
 
-    base_score = (pass_probability * payout_probability * robustness * oos_consistency) / drawdown_pct * 100.0
+    # Each 0..1 factor raised to its own weight/exponent (weight 1.0 ==
+    # the original formula's plain multiplication; weight 0.0 removes
+    # that factor's influence entirely since x**0 == 1); drawdown_pct is
+    # >=1 so raising ITS weight makes candidates get penalized harder for
+    # every extra point of drawdown, same intuition as the others.
+    base_score = (
+        pass_probability ** w["pass_probability"]
+        * payout_probability ** w["payout_probability"]
+        * robustness ** w["robustness"]
+        * oos_consistency ** w["oos_consistency"]
+    ) / (drawdown_pct ** w["drawdown"]) * 100.0
+
+    net_profit_bonus = 0.0
+    if w["net_profit"]:
+        net_profit_bonus = max(0.0, float(stats.get("net_profit", 0.0) or 0.0)) * w["net_profit"]
+    base_score += net_profit_bonus
 
     notes: list[str] = []
     n_trades = int(stats.get("total_trades", 0) or 0)

@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+import gc
 import random
 import tempfile
 import threading
@@ -93,8 +94,48 @@ from app.search.strategy_space import (
     generate_search_space,
     list_families,
 )
-from app.strategy.library import StrategyAlreadyExists, save_strategy_text, set_strategy_status
+from app.strategy.library import (
+    StrategyAlreadyExists, save_strategy_metadata, save_strategy_text, set_strategy_status,
+)
 from app.validation.cpcv import CPCVError, compute_pbo, run_cpcv
+
+def evolution_stats_metadata(record: dict, generation: int | None = None) -> dict:
+    """Builds the \"evolution\" metadata block attached to a strategy's
+    library sidecar (see app.strategy.library.save_strategy_metadata) so
+    the Dashboard / Strategy Library can show what the Evolution Lab
+    actually found -- fitness score, eval-pass/first-payout probability,
+    robustness, walk-forward efficiency -- instead of a strategy that
+    was promoted from the lab looking exactly like any hand-built one
+    with no lab context attached. `record` is one candidate's
+    EvolutionCandidateRecord.to_checkpoint_dict() (or the equivalent
+    dict loaded back from a checkpoint/leaderboard). Used by both the
+    auto-save-every-generation path (_maybe_save_to_library below) and
+    the web/desktop \"Promote to Strategy Library\" button, so both
+    routes into the library carry identical stats.
+    """
+    stats = record.get("stats") or {}
+    mc_summary = record.get("mc_summary") or {}
+    robustness = record.get("robustness") or {}
+    walk_forward = record.get("walk_forward") or {}
+    fitness = record.get("fitness") or {}
+    meta = record.get("meta") or {}
+    return {
+        "source": "evolution_lab",
+        "family": meta.get("family"),
+        "candidate_id": record.get("candidate_id"),
+        "generation": generation,
+        "fitness_score": fitness.get("final_score"),
+        "eval_pass_probability": mc_summary.get("evaluation_pass_probability"),
+        "first_payout_probability": mc_summary.get("first_payout_probability"),
+        "robustness_stability": robustness.get("stability_ratio"),
+        "walk_forward_efficiency": walk_forward.get("walk_forward_efficiency"),
+        "net_profit": stats.get("net_profit"),
+        "max_drawdown_pct": stats.get("max_drawdown_pct"),
+        "total_trades": stats.get("total_trades"),
+        "pbo": record.get("pbo"),
+        "stressed_ok": record.get("stressed_ok"),
+    }
+
 
 ProgressCallback = "Callable[[str], None]"
 
@@ -172,7 +213,7 @@ def _evo_full_eval_task(
     cid: str, spec: dict, meta: dict, bt,
     mc_sims: int, robustness_perturbation_frac: float, robustness_neighbors: int,
     robustness_min_stability: float, walk_forward_folds: int, walk_forward_metric: str,
-    min_trades_target_for_fitness: int, random_seed: int,
+    min_trades_target_for_fitness: int, random_seed: int, fitness_goal: "dict | str | None" = "balanced",
 ):
     """One PRE-FILTER survivor's ROBUSTNESS / OOS / MONTE CARLO / PROP
     SIMULATION scoring, run in a worker process. Mirrors
@@ -231,6 +272,7 @@ def _evo_full_eval_task(
     fitness = compute_prop_fitness(
         stats, mc_summary, robustness_dict, wf_dict, trade_pnls,
         min_trades_target=min_trades_target_for_fitness,
+        weights=fitness_goal,
     )
     return EvolutionCandidateRecord(
         candidate_id=cid, spec=spec, meta=meta, stats=stats, mc_summary=mc_summary,
@@ -321,6 +363,14 @@ class EvolutionConfig:
     max_generations: int | None = None          # None = run until stop() is called
     random_seed: int = 42
 
+    # What to actually optimize for. Either a named preset (see
+    # app.evolution.prop_fitness.FITNESS_GOAL_PRESETS -- "balanced" is the
+    # original, unweighted PROP FITNESS formula), or a custom dict of
+    # per-component weights (any keys omitted fall back to the default
+    # weight for that component). See compute_prop_fitness's own
+    # docstring for exactly what each weight does.
+    fitness_goal: "dict | str | None" = "balanced"
+
     # Same limit-aware risk-throttle preset as Full Pipeline / Quick
     # Optimize (see app.backtest.adaptive_risk.build_limit_aware_preset)
     # -- off by default. When enabled, every candidate's pre-filter
@@ -340,6 +390,15 @@ class EvolutionConfig:
     # once per generation) and reused across generations to avoid paying
     # worker-startup cost repeatedly.
     parallel_workers: int | None = None
+
+    # Every this many generations, the worker pool is torn down and
+    # lazily recreated fresh on the next generation that needs it --
+    # cheap routine upkeep against the slow worker-process memory
+    # fragmentation that a long, many-generation run can otherwise build
+    # up until it eventually throws a MemoryError (see _run_loop's
+    # MemoryError handling for the full rationale). Set to 0/None to
+    # disable and only recycle reactively, after an actual MemoryError.
+    pool_recycle_every_generations: int = 25
 
     save_to_library: bool = True
     library_status: str = "draft"
@@ -784,74 +843,57 @@ class EvolutionRunner:
             while not self._stop_flag.is_set():
                 if self.cfg.max_generations is not None and gen >= self.cfg.max_generations:
                     break
-                self.generation = gen
-                t0 = time.time()
-                self._log(f"===== GENERATION {gen} =====")
-
-                # Breed from real elites once we have any; otherwise breed
-                # from the best near-misses found so far rather than
-                # resampling purely at random every generation (see
-                # self._near_miss_seeds's docstring in __init__).
-                breeding_pool = self._elites or self._near_miss_seeds
-                if not self._elites and self._near_miss_seeds:
-                    self._log(f"  (no true survivor yet -- breeding from the {len(self._near_miss_seeds)} "
-                              f"closest near-misses found so far instead of pure random search)")
-                population = self._generate_population(gen, breeding_pool)
-                self._log(f"GENERATE: {len(population)} candidates.")
-                if self._stop_flag.is_set():
-                    break
-
-                stage1_survivors, rejection_counts, near_miss_top = self._prefilter(population, gen)
-                prefilter_elapsed = time.time() - t0
-                self._log(f"PRE-FILTER + BACKTEST: {len(stage1_survivors)}/{len(population)} survived "
-                          f"(took {prefilter_elapsed:.1f}s).")
-                if not stage1_survivors:
-                    self._handle_empty_prefilter(gen, rejection_counts)
-                    if near_miss_top:
-                        self._near_miss_seeds = near_miss_top
-                if self._stop_flag.is_set() or not stage1_survivors:
-                    self._finish_empty_generation(gen, population, elapsed=time.time() - t0)
+                try:
+                    gen = self._run_one_generation(gen)
+                except MemoryError:
+                    # A long unattended run (this loop has no natural end --
+                    # see max_generations's docstring) can run the OS out of
+                    # memory well after CPU/worker-count sizing looked fine
+                    # at startup: long-lived worker processes doing
+                    # thousands of numpy/pandas allocate/free cycles
+                    # gradually fragment their heap (glibc malloc arenas
+                    # often never hand freed memory back to the OS), so
+                    # "still have plenty of RAM" at generation 1 does not
+                    # mean the same is true at generation 200 -- eventually
+                    # even a small array allocation can fail. Previously
+                    # this propagated straight to the outer except below,
+                    # which logged "Evolution Lab crashed" and stopped the
+                    # run entirely, requiring Owen to notice and manually
+                    # click START again (which does resume from checkpoint,
+                    # but silently ran into the exact same wall on the next
+                    # long run). Instead: recycle the worker pool (a fresh
+                    # pool means fresh worker processes with a clean heap),
+                    # permanently halve the worker count for the rest of
+                    # this run so the same generation doesn't immediately
+                    # hit the same wall again, checkpoint what's already
+                    # been found, and keep going.
+                    self._log(
+                        "  ** Ran out of memory mid-generation. Recycling the worker pool and halving "
+                        "the worker count for the rest of this run (this is usually long-run memory "
+                        "fragmentation in the worker processes, not a sign anything found so far is "
+                        "invalid) -- progress up to this point is saved."
+                    )
+                    log_crash("Evolution Lab", exc=MemoryError(f"generation={gen}"), extra="auto-recovered: pool recycled, workers halved")
+                    self._shutdown_pool()
+                    current_workers = self.cfg.parallel_workers or (os.cpu_count() or 1)
+                    self.cfg.parallel_workers = max(1, current_workers // 2)
                     self._save_checkpoint(next_generation=gen + 1)
                     gen += 1
                     continue
-                self._consecutive_empty_generations = 0
-
-                evaluated = self._full_eval(stage1_survivors)
-                self._log(f"ROBUSTNESS / OOS / MONTE CARLO / PROP SIMULATION: {len(evaluated)} candidates scored.")
-                if self._surrogate is not None:
-                    self._record_surrogate_observations(evaluated)
-                if self._stop_flag.is_set() or not evaluated:
-                    self._finish_empty_generation(gen, population, evaluated, elapsed=time.time() - t0)
-                    self._save_checkpoint(next_generation=gen + 1)
-                    gen += 1
-                    continue
-
-                cpcv_pool = self._cpcv_and_pbo(evaluated)
-                self._log(f"CPCV / PBO: re-scored top {len(cpcv_pool)} candidates.")
-
-                stress_survivors = self._stress_test(cpcv_pool)
-                self._log(f"STRESS TEST ({self.cfg.stress_cost_multiplier:g}x costs): "
-                          f"{len(stress_survivors)}/{len(cpcv_pool)} still fitness-positive.")
-
-                clustered = self._cluster(stress_survivors or cpcv_pool)
-                self._log(f"CLUSTER: {len(clustered)} distinct candidates remain.")
-
-                clustered.sort(key=lambda r: r.fitness.final_score, reverse=True)
-                new_elites = self._diversify_elites(clustered)
-
-                self._record_generation_to_knowledge_graph(evaluated, {r.candidate_id for r in new_elites})
-                self._append_tested_log_full_eval(evaluated, gen)
-                self._update_leaderboard(new_elites)
-                self._maybe_save_to_library(new_elites)
-                self._write_journal_entry(gen, population, stage1_survivors, evaluated, cpcv_pool, stress_survivors, new_elites)
-
-                elapsed = time.time() - t0
-                self._log(f"Generation {gen} complete in {elapsed:.1f}s. Best fitness so far: "
-                          f"{self.leaderboard[0].fitness.final_score:.2f}" if self.leaderboard else f"Generation {gen} complete in {elapsed:.1f}s.")
-
-                self._elites = [(r.spec, r.meta) for r in new_elites]
-                self._save_checkpoint(next_generation=gen + 1)
                 gen += 1
+                # Recycle the pool periodically regardless of errors --
+                # cheap insurance against the same slow fragmentation
+                # described above ever building up far enough to hit a
+                # MemoryError in the first place. Workers are lazily
+                # recreated by the next generation's _ensure_pool() call.
+                if (
+                    self.cfg.pool_recycle_every_generations
+                    and self._pool is not None
+                    and gen % self.cfg.pool_recycle_every_generations == 0
+                ):
+                    self._log(f"  Recycling worker pool after {self.cfg.pool_recycle_every_generations} generations (routine memory upkeep).")
+                    self._shutdown_pool()
+                gc.collect()
         except Exception as exc:
             self._log("Evolution Lab crashed:\n" + traceback.format_exc())
             # Written straight to disk (data/logs/crash_log.txt), independent
@@ -863,6 +905,91 @@ class EvolutionRunner:
             self._shutdown_pool()
             self.is_running = False
             self._log("Evolution Lab stopped. Progress is saved -- clicking START again resumes from here.")
+
+    def _run_one_generation(self, gen: int) -> int:
+        """Runs exactly one generation end to end and returns the same
+        `gen` it was given (the caller increments). Factored out of
+        _run_loop so a MemoryError raised anywhere in here can be caught
+        by _run_loop around a single, well-defined unit of work instead of
+        needing a matching except clause at every one of the loop's four
+        `continue` points -- see _run_loop's MemoryError handling.
+        """
+        self.generation = gen
+        t0 = time.time()
+        self._log(f"===== GENERATION {gen} =====")
+
+        # Breed from real elites once we have any; otherwise breed
+        # from the best near-misses found so far rather than
+        # resampling purely at random every generation (see
+        # self._near_miss_seeds's docstring in __init__).
+        breeding_pool = self._elites or self._near_miss_seeds
+        if not self._elites and self._near_miss_seeds:
+            self._log(f"  (no true survivor yet -- breeding from the {len(self._near_miss_seeds)} "
+                      f"closest near-misses found so far instead of pure random search)")
+        population = self._generate_population(gen, breeding_pool)
+        self._log(f"GENERATE: {len(population)} candidates.")
+        if self._stop_flag.is_set():
+            return gen
+
+        stage1_survivors, rejection_counts, near_miss_top = self._prefilter(population, gen)
+        prefilter_elapsed = time.time() - t0
+        self._log(f"PRE-FILTER + BACKTEST: {len(stage1_survivors)}/{len(population)} survived "
+                  f"(took {prefilter_elapsed:.1f}s).")
+        if not stage1_survivors:
+            self._handle_empty_prefilter(gen, rejection_counts)
+            if near_miss_top:
+                self._near_miss_seeds = near_miss_top
+        if self._stop_flag.is_set() or not stage1_survivors:
+            self._finish_empty_generation(gen, population, elapsed=time.time() - t0)
+            self._save_checkpoint(next_generation=gen + 1)
+            del population
+            return gen
+        self._consecutive_empty_generations = 0
+
+        evaluated = self._full_eval(stage1_survivors)
+        self._log(f"ROBUSTNESS / OOS / MONTE CARLO / PROP SIMULATION: {len(evaluated)} candidates scored.")
+        if self._surrogate is not None:
+            self._record_surrogate_observations(evaluated)
+        if self._stop_flag.is_set() or not evaluated:
+            self._finish_empty_generation(gen, population, evaluated, elapsed=time.time() - t0)
+            self._save_checkpoint(next_generation=gen + 1)
+            del population, stage1_survivors, evaluated
+            return gen
+
+        cpcv_pool = self._cpcv_and_pbo(evaluated)
+        self._log(f"CPCV / PBO: re-scored top {len(cpcv_pool)} candidates.")
+
+        stress_survivors = self._stress_test(cpcv_pool)
+        self._log(f"STRESS TEST ({self.cfg.stress_cost_multiplier:g}x costs): "
+                  f"{len(stress_survivors)}/{len(cpcv_pool)} still fitness-positive.")
+
+        clustered = self._cluster(stress_survivors or cpcv_pool)
+        self._log(f"CLUSTER: {len(clustered)} distinct candidates remain.")
+
+        clustered.sort(key=lambda r: r.fitness.final_score, reverse=True)
+        new_elites = self._diversify_elites(clustered)
+
+        self._record_generation_to_knowledge_graph(evaluated, {r.candidate_id for r in new_elites})
+        self._append_tested_log_full_eval(evaluated, gen)
+        self._update_leaderboard(new_elites)
+        self._maybe_save_to_library(new_elites)
+        self._write_journal_entry(gen, population, stage1_survivors, evaluated, cpcv_pool, stress_survivors, new_elites)
+
+        elapsed = time.time() - t0
+        self._log(f"Generation {gen} complete in {elapsed:.1f}s. Best fitness so far: "
+                  f"{self.leaderboard[0].fitness.final_score:.2f}" if self.leaderboard else f"Generation {gen} complete in {elapsed:.1f}s.")
+
+        self._elites = [(r.spec, r.meta) for r in new_elites]
+        self._save_checkpoint(next_generation=gen + 1)
+        # Every one of these can hold a full backtest's worth of Trade
+        # objects (evaluated/cpcv_pool/stress_survivors/clustered all
+        # reference the SAME EvolutionCandidateRecord instances, so this is
+        # only a handful of distinct objects, not 4x the memory) -- explicit
+        # cleanup here plus the periodic pool recycle in _run_loop is what
+        # keeps a long, many-generation run from accumulating enough
+        # fragmentation to eventually throw a MemoryError (see _run_loop).
+        del population, stage1_survivors, evaluated, cpcv_pool, stress_survivors, clustered, new_elites
+        return gen
 
     def _handle_empty_prefilter(self, gen: int, rejection_counts: dict) -> None:
         """Logs WHY nothing survived (instead of just "0 survived", which
@@ -1231,7 +1358,7 @@ class EvolutionRunner:
         args = (
             self.cfg.mc_sims, self.cfg.robustness_perturbation_frac, self.cfg.robustness_neighbors,
             self.cfg.robustness_min_stability, self.cfg.walk_forward_folds, self.cfg.walk_forward_metric,
-            self.cfg.min_trades_target_for_fitness, self.cfg.random_seed,
+            self.cfg.min_trades_target_for_fitness, self.cfg.random_seed, self.cfg.fitness_goal,
         )
         records: list[EvolutionCandidateRecord] = []
         eval_pool = self._ensure_pool()
@@ -1300,6 +1427,7 @@ class EvolutionRunner:
                 r.stats, r.mc_summary, r.robustness, r.walk_forward, r.trade_pnls,
                 pbo=pbo_value, cpcv_degradation=cpcv_degradation,
                 min_trades_target=self.cfg.min_trades_target_for_fitness,
+                weights=self.cfg.fitness_goal,
             )
         return pool
 
@@ -1385,6 +1513,26 @@ class EvolutionRunner:
                 except StrategyAlreadyExists:
                     continue
                 set_strategy_status("manual", filename, self.cfg.library_status)
+                # Tagged + given a lab-stats sidecar so this appears in the
+                # Strategy Library / Dashboard as a distinguishable
+                # Evolution Lab result, filterable by the existing tag
+                # filter, with fitness/MC/robustness context attached --
+                # not just another anonymous "manual" strategy file that
+                # has to be found and read to know where it came from.
+                save_strategy_metadata(
+                    "manual", filename,
+                    {
+                        "tags": ["evolution-lab"],
+                        "description": (
+                            f"Evolution Lab, generation {self.generation}, family "
+                            f"'{r.meta.get('family', '?')}' -- PROP FITNESS "
+                            f"{r.fitness.final_score:.2f}" if r.fitness else
+                            f"Evolution Lab, generation {self.generation}, family '{r.meta.get('family', '?')}'"
+                        ),
+                        "evolution": evolution_stats_metadata(r.to_checkpoint_dict(), generation=self.generation),
+                    },
+                    merge=True,
+                )
             except Exception:
                 pass
 
