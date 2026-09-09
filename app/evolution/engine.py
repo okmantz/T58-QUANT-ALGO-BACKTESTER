@@ -244,6 +244,18 @@ class EvolutionConfig:
     population_size: int = 60
     elite_keep: int = 10
     families: list[str] | None = None          # None = every family in list_families()
+    # When `families` is None (the caller wants "every family," not a
+    # specific list), auto-excludes any family app.search.family_health
+    # flags as a dead end (tested at least family_health_min_samples times
+    # across every past Search Lab/Evolution Lab run combined, with zero
+    # successes) -- so a fresh run's compute budget goes toward families
+    # that have shown ANY signal instead of re-proving the same negative
+    # result generation after generation. Never overrides an EXPLICIT
+    # `families` list (the caller asked for those specifically), and never
+    # excludes every registered family (see
+    # app.search.family_health.apply_family_exclusions).
+    auto_exclude_dead_end_families: bool = True
+    family_health_min_samples: int = 30
     grid_points_per_gene: int = 3
 
     # Pre-filter (Stage 1, cheap)
@@ -512,6 +524,37 @@ class EvolutionRunner:
         )
 
         self._load_checkpoint_if_compatible()
+        self._apply_family_health_exclusions()
+
+    def _apply_family_health_exclusions(self) -> None:
+        """If the caller didn't pin an explicit family list (cfg.families
+        is None, meaning "search every family"), resolves that ONCE here
+        -- rather than on every generation -- to every family EXCEPT any
+        app.search.family_health flags as a dead end. Mutates
+        self.cfg.families directly so _generate_population's existing
+        "families is None -> every family" logic doesn't need to change
+        at all; it just sees an already-resolved list. A caller who DID
+        pin specific families is never touched, even if one of them is
+        itself flagged dead-end -- that's an explicit choice to keep
+        testing it anyway (e.g. on a new instrument), not a mistake to
+        correct."""
+        if self.cfg.families is not None or not self.cfg.auto_exclude_dead_end_families:
+            return
+        try:
+            from app.search.family_health import apply_family_exclusions
+            survivors, excluded = apply_family_exclusions(min_samples=self.cfg.family_health_min_samples)
+        except Exception:  # noqa: BLE001 -- a family-health scan failing must never block starting a run
+            return
+        if excluded:
+            self._log(
+                f"Auto-excluding {len(excluded)} dead-end famil{'y' if len(excluded) == 1 else 'ies'} "
+                f"(tested {self.cfg.family_health_min_samples}+ times across past runs with zero "
+                f"successes): {', '.join(excluded)}."
+                + ("" if survivors is not None else " (would have excluded every registered family -- "
+                   "searching all of them anyway rather than leaving nothing to search.)")
+            )
+        if survivors is not None:
+            self.cfg.families = survivors
 
     # -- worker pool (PRE-FILTER + full-eval parallelism) ------------------
     def _ensure_pool(self) -> ProcessPoolExecutor | None:
