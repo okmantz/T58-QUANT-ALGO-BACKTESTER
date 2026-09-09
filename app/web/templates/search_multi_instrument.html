@@ -57,12 +57,15 @@
     <p class="help">Every dataset you've previously uploaded or fetched (Alpaca, manual upload, etc.) shows up here -- upload more from the Run &amp; Report or Search Lab pages first if what you want isn't listed yet.</p>
     {% if stored_datasets %}
     <div class="dataset-list">
-      {% for ds in stored_datasets %}
+      {% for g in dataset_groups %}
+      <div class="dataset-group-label" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-dim);margin:10px 0 4px;">{{ g.instrument }}</div>
+      {% for file in g.files %}
       <label class="dataset-row" style="margin:0;">
-        <input type="checkbox" name="datasets" value="{{ ds.name }}">
-        <span class="dataset-name">{{ ds.name }}</span>
-        <span class="dataset-size">{{ (ds.size_bytes / 1024) | round(0, 'floor') | int }} KB</span>
+        <input type="checkbox" name="datasets" value="{{ file.full_name }}">
+        <span class="dataset-name">{{ file.name }}</span>
+        <span class="dataset-size">{{ (file.size_bytes / 1024) | round(0, 'floor') | int }} KB</span>
       </label>
+      {% endfor %}
       {% endfor %}
     </div>
     <div class="selected-count" id="selected-count">0 selected</div>

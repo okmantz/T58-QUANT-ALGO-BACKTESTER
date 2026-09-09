@@ -143,13 +143,17 @@
       <label>Use a previously stored dataset</label>
       <select name="leg{{ i }}_existing_dataset">
         <option value="">— none —</option>
-        {% for ds in stored_datasets %}
-        <option value="{{ ds.name }}">{{ ds.name }}</option>
+        {% for g in dataset_groups %}
+        <optgroup label="{{ g.instrument }}">
+          {% for file in g.files %}
+          <option value="{{ file.full_name }}">{{ file.name }}{{ ' — empty' if file.empty else '' }}</option>
+          {% endfor %}
+        </optgroup>
         {% endfor %}
       </select>
       {% endif %}
       <label>Or upload a CSV for this instrument</label>
-      <input type="file" name="leg{{ i }}_csv" accept=".csv">
+      <input type="file" name="leg{{ i }}_csv" accept=".csv,.tsv,.txt,.parquet,.zip,.7z">
       <label>Nominal weight</label>
       <input type="number" step="0.1" name="leg{{ i }}_weight" value="1.0">
       <label>Strategy for this leg</label>

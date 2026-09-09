@@ -227,7 +227,7 @@
     <p style="font-size:12px;color:#888;margin-top:6px;">{{ stored_datasets|length }} dataset(s) currently in data/raw/.</p>
     {% endif %}
     <label>Or upload new CSV file(s) (timestamp, open, high, low, close, volume)</label>
-    <input type="file" name="csv_file" accept=".csv" multiple>
+    <input type="file" name="csv_file" accept=".csv,.tsv,.txt,.parquet,.zip,.7z" multiple>
     <p style="font-size:12px;color:#888;margin-top:6px;">
       You can select multiple files at once. Each one is validated and automatically saved to
       data/raw/ so it's already there next time you open the app.

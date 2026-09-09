@@ -70,13 +70,17 @@
     <label>Use a previously stored dataset</label>
     <select name="existing_dataset">
       <option value="">— none, I'm uploading a new file below —</option>
-      {% for ds in stored_datasets %}
-      <option value="{{ ds.name }}">{{ ds.name }}</option>
+      {% for g in dataset_groups %}
+      <optgroup label="{{ g.instrument }}">
+        {% for file in g.files %}
+        <option value="{{ file.full_name }}">{{ file.name }}{{ ' — empty' if file.empty else '' }}</option>
+        {% endfor %}
+      </optgroup>
       {% endfor %}
     </select>
     {% endif %}
     <label>Or upload a new CSV</label>
-    <input type="file" name="csv_file" accept=".csv">
+    <input type="file" name="csv_file" accept=".csv,.tsv,.txt,.parquet,.zip,.7z">
   </div>
 
   <div class="card">
