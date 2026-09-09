@@ -117,3 +117,64 @@
     animateNumbers();
   });
 })();
+
+/* Submits a ".mini-form" div (data-action="/some/route", optional
+   data-confirm="...") as a real full-page POST navigation, by building a
+   throwaway <form> directly on document.body and calling .submit() on it.
+   Kept as a plain global (not inside the T58Chrome IIFE above) so it's
+   reachable from inline onclick="" attributes on any page. See the
+   T58SubmitMiniForm block comment in index.html/search.html for why these
+   controls are plain divs instead of nested <form> elements. */
+function t58SubmitMiniForm(wrap) {
+  if (!wrap) return;
+  var action = wrap.getAttribute("data-action");
+  if (!action) return;
+  var confirmMsg = wrap.getAttribute("data-confirm");
+  if (confirmMsg && !window.confirm(confirmMsg)) return;
+
+  var form = document.createElement("form");
+  form.method = "post";
+  form.action = action;
+  form.style.display = "none";
+
+  wrap.querySelectorAll("input[name], select[name], textarea[name]").forEach(function (el) {
+    if (el.type === "checkbox" || el.type === "radio") {
+      if (!el.checked) return;
+      var hidden = document.createElement("input");
+      hidden.type = "hidden";
+      hidden.name = el.name;
+      hidden.value = el.value || "1";
+      form.appendChild(hidden);
+      return;
+    }
+    if (el.tagName === "SELECT" && el.multiple) {
+      Array.prototype.forEach.call(el.selectedOptions, function (opt) {
+        var hidden = document.createElement("input");
+        hidden.type = "hidden";
+        hidden.name = el.name;
+        hidden.value = opt.value;
+        form.appendChild(hidden);
+      });
+      return;
+    }
+    var hidden = document.createElement("input");
+    hidden.type = "hidden";
+    hidden.name = el.name;
+    hidden.value = el.value;
+    form.appendChild(hidden);
+  });
+
+  document.body.appendChild(form);
+  form.submit();
+}
+
+/* Checks or unchecks every checkbox inside the given container id --
+   backs the "Select All" / "Clear All" buttons added to the Evolution
+   Lab (and multi-instrument Evolution Lab) family checklists. */
+function t58SetCheckboxes(containerId, checked) {
+  var container = document.getElementById(containerId);
+  if (!container) return;
+  container.querySelectorAll('input[type=checkbox]').forEach(function (cb) {
+    cb.checked = checked;
+  });
+}
