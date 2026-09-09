@@ -52,6 +52,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
+import traceback
 
 import numpy as np
 import pandas as pd
@@ -284,7 +285,7 @@ def _ask_ollama_next_hypothesis(
 
 @dataclass
 class ResearchLoopConfig:
-    n_iterations: int = 5
+    n_iterations: int | None = 5      # None = run until stopped (cancel_event), for use as an overnight companion
     language: str = "python"          # strategy_generator language -- only "python" backtests today (see run_research_loop)
     initial_idea: str = ""
     mc_sims: int = 500
@@ -340,6 +341,105 @@ def _write_temp_strategy_file(code: str) -> Path:
     return path
 
 
+class ResearchLoopRunner:
+    """Background-thread wrapper around run_research_loop, for use as an
+    overnight/background companion (e.g. alongside a multi-instrument
+    search) rather than only a bounded interactive call -- same start()/
+    stop_and_wait()/is_running shape as app.evolution.engine.EvolutionRunner,
+    deliberately, so the web UI can drive both the same way. Unlike
+    Evolution Lab, this has no checkpoint/resume -- a research loop's
+    "progress" is fully captured by app.ai.experiment_memory (every
+    iteration is already recorded there as it happens), so there is
+    nothing extra to persist across a restart."""
+
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        risk: RiskConfig,
+        prop_rules: PropRules,
+        settings: OllamaSettings,
+        cfg: ResearchLoopConfig | None = None,
+        progress_cb: ProgressCallback | None = None,
+    ):
+        self.df = df
+        self.risk = risk
+        self.prop_rules = prop_rules
+        self.settings = settings
+        self.cfg = cfg or ResearchLoopConfig()
+        self.progress_cb = progress_cb
+
+        import threading
+        self._stop_flag = threading.Event()
+        self._thread: "threading.Thread | None" = None
+        self.is_running = False
+        self.iterations: list[ResearchLoopIteration] = []
+        self.best_iteration: ResearchLoopIteration | None = None
+        self.stopped_reason: str | None = None
+
+    def _log(self, msg: str) -> None:
+        if self.progress_cb:
+            try:
+                self.progress_cb(msg)
+            except Exception:
+                pass
+
+    def _on_iteration(self, it: ResearchLoopIteration) -> None:
+        self.iterations.append(it)
+        if self.best_iteration is None or (it.prop_survival_score or -1) > (self.best_iteration.prop_survival_score or -1):
+            self.best_iteration = it
+
+    def start(self) -> None:
+        if self.is_running:
+            return
+        self._stop_flag.clear()
+        self.is_running = True
+        import threading
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        try:
+            result = run_research_loop(
+                self.df, self.risk, self.prop_rules, self.settings, self.cfg,
+                progress_cb=self._log, cancel_event=self._stop_flag, on_iteration=self._on_iteration,
+            )
+            # self.iterations/self.best_iteration are already fully populated
+            # incrementally via _on_iteration as each one completed -- only
+            # stopped_reason is exclusively available from the final result.
+            self.stopped_reason = result.stopped_reason
+        except Exception as exc:
+            self._log("Research Loop crashed:\n" + traceback.format_exc())
+            self.stopped_reason = "error"
+        finally:
+            self.is_running = False
+            self._log("Research Loop stopped.")
+
+    def stop(self) -> None:
+        self._stop_flag.set()
+
+    def stop_and_wait(self, timeout: float = 10.0) -> bool:
+        """Signals stop and blocks up to `timeout` seconds for the
+        background thread to actually exit -- same reasoning as
+        EvolutionRunner.stop_and_wait (lets the web STOP route reflect
+        the real state in its own response instead of waiting on the
+        next poll). Each iteration involves only bounded, timeout-guarded
+        operations (Ollama calls already have cfg.generation_timeout/
+        cfg.ollama_hypothesis_timeout; the backtest/Monte Carlo/survival
+        calls run in-process with no worker pool to hang in), so a
+        reasonable timeout here is expected to be sufficient in practice."""
+        self.stop()
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+        return not self.is_running
+
+    def status(self) -> dict:
+        return {
+            "running": self.is_running,
+            "n_iterations_run": len(self.iterations),
+            "stopped_reason": self.stopped_reason,
+        }
+
+
 def run_research_loop(
     df: pd.DataFrame,
     risk: RiskConfig,
@@ -347,19 +447,37 @@ def run_research_loop(
     settings: OllamaSettings,
     cfg: ResearchLoopConfig | None = None,
     progress_cb: ProgressCallback | None = None,
+    cancel_event: "threading.Event | None" = None,
+    on_iteration: "Callable[[ResearchLoopIteration], None] | None" = None,
 ) -> ResearchLoopResult:
-    """Runs the closed research loop for up to cfg.n_iterations rounds.
-    Never raises -- every failure mode (Ollama unreachable, generated
-    code that won't parse, a strategy with zero trades) is recorded as a
-    verdict on that iteration and the loop moves on, exactly like a
-    human researcher would just try the next idea rather than stopping
-    the whole session."""
+    """Runs the closed research loop for up to cfg.n_iterations rounds, or
+    indefinitely (cfg.n_iterations=None) until `cancel_event` is set --
+    the shape that makes this usable as a background/overnight companion
+    (e.g. alongside a multi-instrument search), not just a bounded
+    interactive session. Never raises -- every failure mode (Ollama
+    unreachable, generated code that won't parse, a strategy with zero
+    trades) is recorded as a verdict on that iteration and the loop moves
+    on, exactly like a human researcher would just try the next idea
+    rather than stopping the whole session.
+
+    on_iteration, if given, is called with each ResearchLoopIteration the
+    MOMENT it completes (not just once at the very end via the returned
+    ResearchLoopResult) -- this is what lets a caller like
+    ResearchLoopRunner show live progress while an unbounded loop is
+    still running, instead of an empty iteration list until it stops."""
     cfg = cfg or ResearchLoopConfig()
 
     def log(msg: str):
         if progress_cb:
             try:
                 progress_cb(msg)
+            except Exception:
+                pass
+
+    def emit(it: ResearchLoopIteration) -> None:
+        if on_iteration:
+            try:
+                on_iteration(it)
             except Exception:
                 pass
 
@@ -378,16 +496,32 @@ def run_research_loop(
     iterations: list[ResearchLoopIteration] = []
     best: ResearchLoopIteration | None = None
     parent_experiment_id: str | None = None
+    cancelled = False
 
-    for i in range(1, cfg.n_iterations + 1):
-        log(f"\n=== Iteration {i}/{cfg.n_iterations} ===")
+    def record(it: ResearchLoopIteration) -> None:
+        """Appends to the local result list AND fires on_iteration
+        immediately -- the only way a live caller (ResearchLoopRunner)
+        ever sees an iteration before the whole loop finishes, since
+        `iterations` itself is only returned once, at the very end."""
+        iterations.append(it)
+        emit(it)
+
+    i = 0
+    while True:
+        if cancel_event is not None and cancel_event.is_set():
+            cancelled = True
+            break
+        if cfg.n_iterations is not None and i >= cfg.n_iterations:
+            break
+        i += 1
+        log(f"\n=== Iteration {i}{f'/{cfg.n_iterations}' if cfg.n_iterations is not None else ''} ===")
         log(f"Hypothesis: {current_idea}")
 
         gen = generate_strategy(settings, cfg.language, current_idea, timeout=cfg.generation_timeout)
         strategy_name = f"research_loop_iter{i}_{uuid.uuid4().hex[:6]}"
         if gen.error or not gen.code:
             log(f"  Generation failed: {gen.error or 'no code returned'}")
-            iterations.append(ResearchLoopIteration(
+            record(ResearchLoopIteration(
                 iteration=i, idea=current_idea, strategy_name=strategy_name,
                 verdict="GENERATION_FAILED", error=gen.error,
             ))
@@ -406,7 +540,7 @@ def run_research_loop(
                 else f"is {persisted_similarity * 100:.0f}% similar to a pattern that failed in a PAST research loop run"
             )
             log(f"  Skipped -- this strategy's DNA {reason}.")
-            iterations.append(ResearchLoopIteration(
+            record(ResearchLoopIteration(
                 iteration=i, idea=current_idea, strategy_name=strategy_name,
                 verdict="SKIPPED_DUPLICATE", dna_tags=list(dna.active_tags()), code=gen.code,
                 next_hypothesis=current_idea,
@@ -419,7 +553,7 @@ def run_research_loop(
             strategy = PythonStrategy(tmp_path)
         except Exception as exc:
             log(f"  Could not load generated strategy: {exc}")
-            iterations.append(ResearchLoopIteration(
+            record(ResearchLoopIteration(
                 iteration=i, idea=current_idea, strategy_name=strategy_name,
                 verdict="GENERATION_FAILED", error=str(exc), dna_tags=list(signature), code=gen.code,
             ))
@@ -429,7 +563,7 @@ def run_research_loop(
             bt_result = run_backtest(df, strategy, risk)
         except Exception as exc:
             log(f"  Backtest failed: {exc}")
-            iterations.append(ResearchLoopIteration(
+            record(ResearchLoopIteration(
                 iteration=i, idea=current_idea, strategy_name=strategy_name,
                 verdict="GENERATION_FAILED", error=str(exc), dna_tags=list(signature), code=gen.code,
             ))
@@ -448,7 +582,7 @@ def run_research_loop(
                 config={"idea": current_idea, "iteration": i, "dna": dna.active_tags(), "parent_experiment": parent_experiment_id},
                 settings=settings,
             )
-            iterations.append(it)
+            record(it)
             current_idea = f"{current_idea} The previous attempt never triggered any trades -- loosen the entry conditions."
             continue
 
@@ -498,7 +632,7 @@ def run_research_loop(
             },
             settings=settings,
         )
-        iterations.append(it)
+        record(it)
         parent_experiment_id = it.experiment_id
 
         if best is None or (it.prop_survival_score or -1) > (best.prop_survival_score or -1):
@@ -509,7 +643,12 @@ def run_research_loop(
 
         current_idea = next_idea
 
-    stopped_reason = "completed" if len(iterations) >= cfg.n_iterations else (
-        iterations[-1].verdict if iterations else "no_iterations_ran"
-    )
+    if cancelled:
+        stopped_reason = "cancelled"
+    elif cfg.n_iterations is not None and len(iterations) >= cfg.n_iterations:
+        stopped_reason = "completed"
+    elif iterations:
+        stopped_reason = iterations[-1].verdict
+    else:
+        stopped_reason = "no_iterations_ran"
     return ResearchLoopResult(iterations=iterations, best_iteration=best, stopped_reason=stopped_reason)
