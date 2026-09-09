@@ -2374,6 +2374,323 @@ _ATR_REGIME_TREND_PULLBACK = SkeletonSpec(
 )
 
 
+# ---------------------------------------------------------------------------
+# Expansion round 4 (Sep 2026): 6 more families, each built on a
+# primitive this module already supports but had never actually used in
+# any family before -- session_high/session_low (running intraday
+# session extreme, distinct from Family K's FIXED prior-day level and
+# every rolling-N-bar liquidity_sweep/bos family), candle_range (a
+# single bar's own high-low, never yet compared against ATR), and
+# average_volume (never yet compared against itself at two different
+# periods) -- plus two new FILTER combinations (relative-volume gating
+# on the FVG and order-block primitives, which previously only ever had
+# an EMA-filtered or unfiltered sibling) and one new filter pairing
+# (VWAP trend regime gating a Bollinger Band pullback, which previously
+# only ever paired with RSI or with nothing).
+# ---------------------------------------------------------------------------
+
+def _build_session_extreme_fade(p: dict) -> dict:
+    start, end = p["session_start"], p["session_end"]
+    return {
+        "name": f"Session Extreme Fade ({start}-{end})",
+        "entry_conditions": {
+            # A fresh session low PRINTED this bar (low == session_low, exactly --
+            # session_low is literally derived from this bar's own low via a
+            # same-bar expanding cummin, so an == comparison is comparing a
+            # value against itself when it just updated, not a fragile
+            # float-rounding check) but the bar closed back ABOVE that low --
+            # a same-bar rejection off today's running extreme, mirrored for
+            # a fresh session high closing back below it.
+            "long": [
+                _cond(_ind("low", 1), "==", {"type": "session_low", "session_start": start, "session_end": end}),
+                _cond(_ind("close", 1), ">", {"type": "session_low", "session_start": start, "session_end": end}),
+            ],
+            "long_connectors": ["AND"],
+            "short": [
+                _cond(_ind("high", 1), "==", {"type": "session_high", "session_start": start, "session_end": end}),
+                _cond(_ind("close", 1), "<", {"type": "session_high", "session_start": start, "session_end": end}),
+            ],
+            "short_connectors": ["AND"],
+        },
+        "exit_conditions": {"long": [], "short": []},
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_SESSION_EXTREME_FADE = SkeletonSpec(
+    name="session_extreme_fade",
+    label="Session Extreme Fade (running intraday session high/low rejection)",
+    description=(
+        "Fades a same-bar rejection off TODAY's running session high or low -- an expanding "
+        "intraday extreme that resets every session, distinct in both timeframe and mechanism "
+        "from Family K's FIXED prior-day high/low breakout and from every rolling-N-bar "
+        "liquidity_sweep/break_of_structure family here (G, J, AC): those look back a fixed bar "
+        "count regardless of the clock, this looks at 'the extreme so far today,' however many "
+        "bars that is."
+    ),
+    param_grid={
+        "session_start": ["00:00", "08:30"],
+        "session_end": ["23:59", "16:00"],
+        "stop_atr_mult": [1.0, 1.5, 2.0],
+        "target_atr_mult": [1.5, 2.5, 3.5],
+        "max_bars": [None, 24, 48],
+    },
+    build=_build_session_extreme_fade,
+)
+
+
+def _build_vwap_bollinger_pullback(p: dict) -> dict:
+    bb_period, bb_std = p["bb_period"], p["bb_std"]
+    return {
+        "name": f"VWAP-Filtered Bollinger Pullback (bb{bb_period}x{bb_std})",
+        "entry_conditions": {
+            # A bounce back inside the band from below it (a pullback low),
+            # taken only while price is still holding above VWAP (the same
+            # continuation-vs-reversion trend gate Family I/AB already use,
+            # here paired with Bollinger Bands instead of RSI/EMA -- neither
+            # mean_reversion_band (RSI-filtered fade) nor
+            # bollinger_band_walk_continuation (EMA-filtered breakout) pairs
+            # the bands with VWAP).
+            "long": [
+                _cond(_ind("close", 1), "cross above", {"type": "bollinger_lower", "period": bb_period, "field": "close"}),
+                _cond(_ind("close", 1), ">", {"type": "vwap"}),
+            ],
+            "long_connectors": ["AND"],
+            "short": [
+                _cond(_ind("close", 1), "cross below", {"type": "bollinger_upper", "period": bb_period, "field": "close"}),
+                _cond(_ind("close", 1), "<", {"type": "vwap"}),
+            ],
+            "short_connectors": ["AND"],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("close", 1), "<", {"type": "vwap"})],
+            "short": [_cond(_ind("close", 1), ">", {"type": "vwap"})],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_VWAP_BOLLINGER_PULLBACK = SkeletonSpec(
+    name="vwap_bollinger_pullback",
+    label="VWAP-Filtered Bollinger Pullback (band bounce + VWAP trend gate)",
+    description=(
+        "Buys/sells a Bollinger Band pullback bounce, taken only in the direction VWAP already "
+        "confirms (price above VWAP for longs, below for shorts) -- a continuation reading of "
+        "the same band-touch event Family C (mean_reversion_band, RSI-filtered) and Family AC "
+        "(bollinger_band_walk_continuation, EMA-filtered) already use, this time gated by VWAP "
+        "instead, which neither of those pairs it with."
+    ),
+    param_grid={
+        "bb_period": [14, 20],
+        "bb_std": [2.0, 2.5],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [1.5, 2.5],
+        "max_bars": [None, 24, 48],
+    },
+    build=_build_vwap_bollinger_pullback,
+)
+
+
+def _build_volume_confirmed_fvg_continuation(p: dict) -> dict:
+    vol_period, vol_mult = p["vol_period"], p["vol_mult"]
+    return {
+        "name": f"Volume-Confirmed FVG Continuation (relvol{vol_period}>{vol_mult}x)",
+        "entry_conditions": {
+            # Family N (fvg_imbalance_continuation) filters the same FVG
+            # primitive with an EMA trend; this filters it with relative
+            # volume instead -- a genuinely different confirmation signal
+            # (participation, not trend direction) for the same displacement
+            # event.
+            "long": [
+                _cond({"type": "fair_value_gap", "direction": "bullish"}, "is true", _val(1)),
+                _cond({"type": "relative_volume", "period": vol_period}, ">", _val(vol_mult)),
+            ],
+            "long_connectors": ["AND"],
+            "short": [
+                _cond({"type": "fair_value_gap", "direction": "bearish"}, "is true", _val(1)),
+                _cond({"type": "relative_volume", "period": vol_period}, ">", _val(vol_mult)),
+            ],
+            "short_connectors": ["AND"],
+        },
+        "exit_conditions": {"long": [], "short": []},
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_VOLUME_CONFIRMED_FVG_CONTINUATION = SkeletonSpec(
+    name="volume_confirmed_fvg_continuation",
+    label="Volume-Confirmed FVG Continuation (displacement + relative-volume filter)",
+    description=(
+        "The same Fair Value Gap displacement primitive Family N already trades, filtered by "
+        "relative volume (above-average participation on the displacement) instead of Family "
+        "N's EMA trend filter -- a participation-based confirmation rather than a "
+        "trend-direction one for the same underlying event."
+    ),
+    param_grid={
+        "vol_period": [10, 20],
+        "vol_mult": [1.5, 2.0],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [1.5, 2.5],
+        "max_bars": [None, 24, 48],
+    },
+    build=_build_volume_confirmed_fvg_continuation,
+)
+
+
+def _build_volume_confirmed_order_block_reaction(p: dict) -> dict:
+    lookback = p["lookback"]
+    vol_period, vol_mult = p["vol_period"], p["vol_mult"]
+    return {
+        "name": f"Volume-Confirmed Order Block Reaction (lookback={lookback}, relvol{vol_period}>{vol_mult}x)",
+        "entry_conditions": {
+            # Family O (order_block_reaction) trades this primitive bare;
+            # Family AD (order_block_trend_continuation) filters it with an
+            # EMA trend. This is the third, remaining reading: filtered by
+            # relative volume instead, the same "add a participation gate,
+            # not a trend gate" idea volume_confirmed_fvg_continuation above
+            # applies to the FVG primitive.
+            "long": [
+                _cond({"type": "order_block", "lookback": lookback, "direction": "bullish"}, "is true", _val(1)),
+                _cond({"type": "relative_volume", "period": vol_period}, ">", _val(vol_mult)),
+            ],
+            "long_connectors": ["AND"],
+            "short": [
+                _cond({"type": "order_block", "lookback": lookback, "direction": "bearish"}, "is true", _val(1)),
+                _cond({"type": "relative_volume", "period": vol_period}, ">", _val(vol_mult)),
+            ],
+            "short_connectors": ["AND"],
+        },
+        "exit_conditions": {"long": [], "short": []},
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_VOLUME_CONFIRMED_ORDER_BLOCK_REACTION = SkeletonSpec(
+    name="volume_confirmed_order_block_reaction",
+    label="Volume-Confirmed Order Block Reaction (SMC displacement + relative-volume filter)",
+    description=(
+        "The same order-block displacement-origin-candle primitive Families O and AD already "
+        "trade (bare, and EMA-filtered respectively), this time filtered by relative volume -- "
+        "the third and final remaining reading of this primitive's three natural confirmation "
+        "states (none / trend / participation)."
+    ),
+    param_grid={
+        "lookback": [10, 20, 30],
+        "vol_period": [10, 20],
+        "vol_mult": [1.5, 2.0],
+        "stop_atr_mult": [0.75, 1.0, 1.5],
+        "target_atr_mult": [1.5, 2.0, 3.0],
+        "max_bars": [None, 24, 48],
+    },
+    build=_build_volume_confirmed_order_block_reaction,
+)
+
+
+def _build_wide_range_bar_exhaustion_fade(p: dict) -> dict:
+    atr_period = p["atr_period"]
+    return {
+        "name": f"Wide-Range Bar Exhaustion Fade (atr{atr_period})",
+        "entry_conditions": {
+            # A single bar's own high-low range (candle_range -- never yet
+            # used by any family here) exceeding the recent average true
+            # range reads as a climactic, one-bar exhaustion move rather
+            # than the start of a sustained new leg -- fade a down-close
+            # climactic bar long, mirrored for an up-close one short.
+            # Distinct data source from Family Q/volume_climax_reversal,
+            # which reads the same "climax" idea off relative VOLUME
+            # instead of the bar's own price range. (The DSL's condition
+            # engine only supports a direct left-operator-right comparison
+            # between two series -- no per-operand scaling factor -- so the
+            # "how extreme" knob here is the ATR averaging period itself,
+            # not a multiplier on top of it.)
+            "long": [
+                _cond({"type": "candle_range"}, ">", {"type": "atr", "period": atr_period}),
+                _cond({"type": "candle_direction", "direction": "bearish"}, "is true", _val(1)),
+            ],
+            "long_connectors": ["AND"],
+            "short": [
+                _cond({"type": "candle_range"}, ">", {"type": "atr", "period": atr_period}),
+                _cond({"type": "candle_direction", "direction": "bullish"}, "is true", _val(1)),
+            ],
+            "short_connectors": ["AND"],
+        },
+        "exit_conditions": {"long": [], "short": []},
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_WIDE_RANGE_BAR_EXHAUSTION_FADE = SkeletonSpec(
+    name="wide_range_bar_exhaustion_fade",
+    label="Wide-Range Bar Exhaustion Fade (single-bar range climax vs. ATR)",
+    description=(
+        "Fades a single bar whose own high-low range exceeded the recent average true range and "
+        "closed near its extreme -- a price-range reading of the same 'climactic, one-bar "
+        "exhaustion' idea Family Q (volume_climax_reversal) reads off relative volume instead. "
+        "candle_range (a bar's own high-low) is a primitive no other family here uses."
+    ),
+    param_grid={
+        "atr_period": [10, 14, 20, 30],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [1.5, 2.0],
+        "max_bars": [None, 12, 24],
+    },
+    build=_build_wide_range_bar_exhaustion_fade,
+)
+
+
+def _build_volume_trend_breakout_confirmation(p: dict) -> dict:
+    lookback = p["lookback"]
+    vol_fast, vol_slow = p["vol_fast"], p["vol_slow"]
+    return {
+        "name": f"Volume-Trend Breakout Confirmation (lb={lookback}, avgvol {vol_fast}/{vol_slow})",
+        "entry_conditions": {
+            # A Donchian breakout (the same bos primitive Family A/D/C use),
+            # confirmed by a RISING volume trend -- average_volume(fast) >
+            # average_volume(slow), i.e. participation has been building
+            # into the breakout, not just a single loud bar -- rather than
+            # by relative volume on the breakout bar alone (which
+            # volume_confirmed_breakout already covers) or by an ATR
+            # expansion/contraction regime (Families D/C). average_volume
+            # compared against itself at two periods is a primitive
+            # pairing no family here uses yet.
+            "long": [
+                _cond(_breakout_flag(lookback, "bullish"), "is true", _val(1)),
+                _cond({"type": "average_volume", "period": vol_fast}, ">", {"type": "average_volume", "period": vol_slow}),
+            ],
+            "long_connectors": ["AND"],
+            "short": [
+                _cond(_breakout_flag(lookback, "bearish"), "is true", _val(1)),
+                _cond({"type": "average_volume", "period": vol_fast}, ">", {"type": "average_volume", "period": vol_slow}),
+            ],
+            "short_connectors": ["AND"],
+        },
+        "exit_conditions": {"long": [], "short": []},
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"]),
+    }
+
+
+_VOLUME_TREND_BREAKOUT_CONFIRMATION = SkeletonSpec(
+    name="volume_trend_breakout_confirmation",
+    label="Volume-Trend Breakout Confirmation (Donchian + rising average-volume filter)",
+    description=(
+        "The same N-bar Donchian breakout Family A trades, confirmed by a RISING volume trend "
+        "(a fast average-volume above a slow one -- participation building into the move) "
+        "rather than by relative volume on the breakout bar alone (volume_confirmed_breakout) "
+        "or an ATR volatility regime (Families D/C). average_volume compared against itself at "
+        "two different periods is a primitive pairing no family here has used before."
+    ),
+    param_grid={
+        "lookback": [10, 20, 30],
+        "vol_fast": [10, 20],
+        "vol_slow": [30, 50],
+        "stop_atr_mult": [1.0, 1.5, 2.0],
+        "target_atr_mult": [2.0, 3.0],
+    },
+    build=_build_volume_trend_breakout_confirmation,
+    valid=lambda p: p["vol_fast"] < p["vol_slow"],
+)
+
+
 FAMILIES: dict[str, SkeletonSpec] = {
     _TREND_BREAKOUT.name: _TREND_BREAKOUT,
     _MTF_PULLBACK.name: _MTF_PULLBACK,
@@ -2442,6 +2759,15 @@ FAMILIES: dict[str, SkeletonSpec] = {
     _SESSION_GATED_LIQUIDITY_SWEEP.name: _SESSION_GATED_LIQUIDITY_SWEEP,
     _MACD_HISTOGRAM_ZERO_CROSS_TREND.name: _MACD_HISTOGRAM_ZERO_CROSS_TREND,
     _ATR_REGIME_TREND_PULLBACK.name: _ATR_REGIME_TREND_PULLBACK,
+    # -- Expansion round 4: 6 more families, each built on a primitive
+    # this module already supported but no prior family actually used --
+    # see the comment block above these six for the full rationale.
+    _SESSION_EXTREME_FADE.name: _SESSION_EXTREME_FADE,
+    _VWAP_BOLLINGER_PULLBACK.name: _VWAP_BOLLINGER_PULLBACK,
+    _VOLUME_CONFIRMED_FVG_CONTINUATION.name: _VOLUME_CONFIRMED_FVG_CONTINUATION,
+    _VOLUME_CONFIRMED_ORDER_BLOCK_REACTION.name: _VOLUME_CONFIRMED_ORDER_BLOCK_REACTION,
+    _WIDE_RANGE_BAR_EXHAUSTION_FADE.name: _WIDE_RANGE_BAR_EXHAUSTION_FADE,
+    _VOLUME_TREND_BREAKOUT_CONFIRMATION.name: _VOLUME_TREND_BREAKOUT_CONFIRMATION,
 }
 
 # Families that need something beyond the plain OHLCV df -- checked by
