@@ -43,6 +43,7 @@ from app.web.options_outlook_routes import options_outlook_bp
 from app.ai.ollama_settings import load_settings as load_ollama_settings
 from app.ai.ollama_settings import save_settings as save_ollama_settings
 from app.ai.research_agent import ResearchAgentContext, ResearchAgent
+from app.ai.research_loop import ResearchLoopConfig, ResearchLoopRunner
 from app.backtest.engine import run_backtest, run_holdout_comparison
 from app.backtest.risk import RiskConfig
 from app.data import alpaca_credentials
@@ -67,6 +68,14 @@ from app.orchestration.quick_optimize import QuickOptimizeConfig, run_quick_opti
 from app.orchestration.resource_guard import (
     HEAVY_JOB_GUARD, JOB_EVOLUTION_LAB, JOB_FULL_PIPELINE, JOB_SEARCH_LAB, JOB_SPEED_RUN,
     JOB_WFO, JOB_WFGA, JOB_CPCV, JOB_SENSITIVITY, JOB_MULTI_OBJECTIVE, JOB_REGIME_MATRIX,
+    JOB_MULTI_INSTRUMENT_SEARCH, JOB_MULTI_INSTRUMENT_SPEED_RUN, JOB_MULTI_INSTRUMENT_EVOLUTION,
+)
+from app.evolution.multi_instrument import EvolutionInstrumentJob, MultiInstrumentEvolutionGroup
+from app.orchestration.multi_instrument_search import (
+    InstrumentJob, best_result_across_instruments, run_multi_instrument_search,
+)
+from app.orchestration.multi_instrument_speed_run import (
+    best_speed_run_across_instruments, run_multi_instrument_speed_run,
 )
 from app.orchestration.speed_run import SpeedRunConfig, SpeedRunResult, run_speed_run
 from app.orchestration.speed_run import _rank_key as _speedrun_rank_key
@@ -359,6 +368,30 @@ def _resolve_dataset(form, files):
     return active_df, active_label, import_note, None
 
 
+
+
+def _resolve_family_exclusions(log_lines: list | None = None) -> "set[str] | None":
+    """Shared by /search/start and /search/multi-instrument/start: computes
+    which named families app.search.family_health flags as dead ends
+    (30+ tests across every past run, zero successes), for passing
+    straight into generate_search_space's exclude_families -- which
+    itself only ever applies this to an explicit "all families" request,
+    never a single named family. Appends a one-line note to `log_lines`
+    (if given) when anything is actually flagged, so it's visible on the
+    run's own progress log, not just silently different candidate counts.
+    Never raises -- a family-health scan failing must never block a
+    search from starting."""
+    try:
+        from app.search.family_health import apply_family_exclusions
+        survivors, excluded = apply_family_exclusions()
+    except Exception:  # noqa: BLE001
+        return None
+    if excluded and log_lines is not None:
+        log_lines.append(
+            f"Auto-excluding {len(excluded)} dead-end famil{'y' if len(excluded) == 1 else 'ies'} "
+            f"(tested 30+ times across past runs with zero successes): {', '.join(excluded)}."
+        )
+    return set(excluded) if survivors is not None else None
 
 
 def _saved_strategies_json() -> str:
@@ -3037,6 +3070,187 @@ def evolution_status():
 
 
 # ---------------------------------------------------------------------------
+# Multi-Instrument Evolution Lab -- runs several independent Evolution Lab
+# runners CONCURRENTLY, one per instrument/timeframe (see
+# app.evolution.multi_instrument.MultiInstrumentEvolutionGroup for the
+# actual manager this wires up). Same open-ended, resumable, run-until-
+# stopped shape as single-instrument Evolution Lab above, just as a GROUP
+# instead of one global runner -- kept as a fully separate route tree
+# (own dict of groups, own guard slot) rather than generalizing the
+# single-instrument routes above, so this addition can't regress the
+# already-hardened single-instrument stop/hang behavior.
+# ---------------------------------------------------------------------------
+
+_MULTI_EVOLUTION_GROUPS: dict[str, MultiInstrumentEvolutionGroup] = {}
+_MULTI_EVOLUTION_LOCK = threading.Lock()
+
+HEAVY_JOB_GUARD.register_health_check(
+    JOB_MULTI_INSTRUMENT_EVOLUTION,
+    lambda: any(g.is_running for g in _MULTI_EVOLUTION_GROUPS.values()),
+)
+
+
+@app.route("/evolution/multi-instrument")
+def evolution_multi_instrument_form():
+    with _MULTI_EVOLUTION_LOCK:
+        groups = list(_MULTI_EVOLUTION_GROUPS.items())
+    return render_template(
+        "evolution_multi_instrument.html",
+        stored_datasets=list_stored_datasets(),
+        families=[{"name": n, "description": family_description(n)} for n in list_families()],
+        active_groups=[{"group_id": gid, "running": g.is_running, "labels": [j.label for j in g.jobs]} for gid, g in groups],
+    )
+
+
+@app.route("/evolution/multi-instrument/start", methods=["POST"])
+def evolution_multi_instrument_start():
+    form = request.form
+    if not HEAVY_JOB_GUARD.try_acquire(JOB_MULTI_INSTRUMENT_EVOLUTION):
+        return render_template(
+            "evolution_multi_instrument.html",
+            error=(
+                f"{HEAVY_JOB_GUARD.active_name} is already running on this server. Running more than "
+                f"one heavy job at the same time can exhaust available memory. Wait for it to finish, "
+                f"or stop it, before starting Multi-Instrument Evolution Lab."
+            ),
+            stored_datasets=list_stored_datasets(),
+            families=[{"name": n, "description": family_description(n)} for n in list_families()],
+            active_groups=[],
+        ), 409
+    try:
+        selected = form.getlist("datasets")
+        if len(selected) < 2:
+            HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_EVOLUTION)
+            return render_template(
+                "evolution_multi_instrument.html",
+                error="Select at least 2 datasets to run across -- with only 1 selected, use the "
+                      "regular Evolution Lab page instead.",
+                stored_datasets=list_stored_datasets(),
+                families=[{"name": n, "description": family_description(n)} for n in list_families()],
+                active_groups=[],
+            ), 400
+
+        jobs: list[EvolutionInstrumentJob] = []
+        for name in selected:
+            candidate_path = get_raw_data_dir() / name
+            if not candidate_path.exists():
+                continue
+            stem = Path(name).stem
+            instrument = name.split("/")[0] if "/" in name else stem
+            jobs.append(EvolutionInstrumentJob(instrument=instrument, timeframe=stem, csv_path=str(candidate_path)))
+
+        if len(jobs) < 2:
+            HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_EVOLUTION)
+            return render_template(
+                "evolution_multi_instrument.html",
+                error="Could not resolve at least 2 of the selected datasets to real files on disk.",
+                stored_datasets=list_stored_datasets(),
+                families=[{"name": n, "description": family_description(n)} for n in list_families()],
+                active_groups=[],
+            ), 400
+
+        risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000) or 100000))
+        rules = PropRules(account_size=float(form.get("initial_balance", 100000) or 100000))
+        families_selected = form.getlist("families") or None
+        base_cfg = EvolutionConfig(
+            population_size=int(form.get("population_size", 60) or 60),
+            elite_keep=int(form.get("elite_keep", 10) or 10),
+            families=families_selected,
+            mc_sims=int(form.get("mc_sims", 1000) or 1000),
+            max_generations=(int(form["max_generations"]) if form.get("max_generations") else None),
+            save_to_library=form.get("save_to_library", "on") == "on",
+            resume_from_checkpoint=form.get("resume_from_checkpoint", "on") == "on",
+        )
+
+        group_id = uuid.uuid4().hex[:12]
+        group = MultiInstrumentEvolutionGroup(group_id, jobs, risk, rules, base_cfg)
+        group.start_all()
+        with _MULTI_EVOLUTION_LOCK:
+            _MULTI_EVOLUTION_GROUPS[group_id] = group
+        return redirect(url_for("evolution_multi_instrument_job", group_id=group_id))
+
+    except Exception as exc:  # noqa: BLE001
+        HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_EVOLUTION)
+        log_crash("Multi-Instrument Evolution Lab (web, start)", exc=exc)
+        return render_template(
+            "evolution_multi_instrument.html", error=f"Unexpected error: {exc}",
+            stored_datasets=list_stored_datasets(),
+            families=[{"name": n, "description": family_description(n)} for n in list_families()],
+            active_groups=[],
+        ), 500
+
+
+@app.route("/evolution/multi-instrument/job/<group_id>")
+def evolution_multi_instrument_job(group_id):
+    with _MULTI_EVOLUTION_LOCK:
+        group = _MULTI_EVOLUTION_GROUPS.get(group_id)
+    if group is None:
+        return render_template("evolution_multi_instrument_job.html", group_id=group_id, not_found=True), 404
+    return render_template("evolution_multi_instrument_job.html", group_id=group_id, not_found=False)
+
+
+@app.route("/evolution/multi-instrument/job/<group_id>/status.json")
+def evolution_multi_instrument_job_status(group_id):
+    with _MULTI_EVOLUTION_LOCK:
+        group = _MULTI_EVOLUTION_GROUPS.get(group_id)
+    if group is None:
+        return jsonify({"found": False}), 404
+    status = group.status()
+    if not status["running"]:
+        # Same self-heal-on-poll reasoning as single-instrument Evolution
+        # Lab's own /evolution/status.json -- see that route's comment.
+        HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_EVOLUTION)
+    return jsonify({"found": True, **status})
+
+
+@app.route("/evolution/multi-instrument/job/<group_id>/stop", methods=["POST"])
+def evolution_multi_instrument_stop(group_id):
+    with _MULTI_EVOLUTION_LOCK:
+        group = _MULTI_EVOLUTION_GROUPS.get(group_id)
+    if group is not None:
+        # Bounded wait so the very next page load already reflects
+        # STOPPED, same reasoning as single-instrument Evolution Lab's
+        # own stop_and_wait()-backed /evolution/stop route.
+        if group.stop_all(timeout=10.0):
+            HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_EVOLUTION)
+    return redirect(url_for("evolution_multi_instrument_job", group_id=group_id))
+
+
+@app.route("/evolution/multi-instrument/job/<group_id>/promote", methods=["POST"])
+def evolution_multi_instrument_promote(group_id):
+    with _MULTI_EVOLUTION_LOCK:
+        group = _MULTI_EVOLUTION_GROUPS.get(group_id)
+    if group is None:
+        return jsonify({"ok": False, "error": "Group not found."}), 404
+
+    label = (request.form.get("label") or "").strip()
+    candidate_id = (request.form.get("candidate_id") or "").strip()
+    if not label or not candidate_id:
+        return jsonify({"ok": False, "error": "label and candidate_id are required."}), 400
+
+    record = group.promote(label, candidate_id)
+    if record is None:
+        return jsonify({"ok": False, "error": f"Candidate '{candidate_id}' not found on {label}'s leaderboard."}), 404
+
+    config = (record.get("spec") or {}).get("config")
+    if not config:
+        return jsonify({"ok": False, "error": "This candidate has no manual-builder config to promote."}), 400
+
+    family = (record.get("meta") or {}).get("family", "strategy")
+    filename = f"evolab_multi_{label.replace('/', '_')}_{family}_{candidate_id[-8:]}.json"
+    text = json.dumps(config, indent=2)
+    try:
+        try:
+            save_strategy_text(text, filename, "manual", overwrite=False)
+        except StrategyAlreadyExists:
+            save_strategy_text(text, filename, "manual", overwrite=True)
+        set_strategy_status("manual", filename, "validated")
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    return jsonify({"ok": True, "filename": filename})
+
+
+# ---------------------------------------------------------------------------
 # 18. Research Agent -- a ReAct-style tool-calling agent whose tools are
 # 100% read-only calls into the real backtest/prop-sim/Monte Carlo/walk-
 # forward/regime/sensitivity/cost-stress engine (see app.ai.research_agent
@@ -3149,6 +3363,142 @@ def research_agent_job_status(job_id):
     return jsonify({"found": True, "done": job["done"], "error": job["error"], "log": job["log"], "summary": summary})
 
 
+# ---------------------------------------------------------------------------
+# Research Loop -- the closed hypothesis -> generate -> backtest -> Monte
+# Carlo -> prop-survival -> real computed failure diagnosis -> Ollama-
+# refined hypothesis -> repeat loop (see app.ai.research_loop). Unlike the
+# Research Agent above (answers ONE question, then stops), this is meant
+# to run as a background/overnight companion -- start it, leave it running
+# indefinitely (n_iterations left blank) alongside a multi-instrument
+# search, and check back on its leaderboard of KEEP-verdict strategies
+# later. Deliberately NOT gated by HEAVY_JOB_GUARD: it runs one strategy
+# at a time in-process (no worker-process pool like Search Lab/Evolution
+# Lab/Full Pipeline/Speed Run spin up), so it's meant to run CONCURRENTLY
+# alongside those, not compete with them for the same exclusive slot.
+# ---------------------------------------------------------------------------
+
+_RESEARCH_LOOP_JOBS: dict[str, dict] = {}
+_RESEARCH_LOOP_JOBS_LOCK = threading.Lock()
+
+
+def _research_loop_log(job_id: str, msg: str) -> None:
+    with _RESEARCH_LOOP_JOBS_LOCK:
+        job = _RESEARCH_LOOP_JOBS.get(job_id)
+        if job is not None:
+            job["log"].append(msg)
+            del job["log"][:-500]
+
+
+@app.route("/research-loop")
+def research_loop_form():
+    saved_ai = load_ollama_settings()
+    with _RESEARCH_LOOP_JOBS_LOCK:
+        active_jobs = [
+            {"job_id": jid, "running": j["runner"].is_running, "n_iterations_run": len(j["runner"].iterations)}
+            for jid, j in _RESEARCH_LOOP_JOBS.items()
+        ]
+    return render_template(
+        "research_loop.html", stored_datasets=list_stored_datasets(),
+        ai_enabled=saved_ai.enabled, ai_host=saved_ai.host, ai_model=saved_ai.model,
+        active_jobs=active_jobs,
+    )
+
+
+@app.route("/research-loop/start", methods=["POST"])
+def research_loop_start():
+    form = request.form
+    try:
+        df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
+        if dataset_error:
+            return render_template(
+                "research_loop.html", error=dataset_error, stored_datasets=list_stored_datasets(),
+                ai_enabled=False, ai_host="", ai_model="", active_jobs=[],
+            ), 400
+
+        risk = RiskConfig(
+            initial_balance=float(form.get("initial_balance", 100000) or 100000),
+            pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+        )
+        rules = PropRules(account_size=float(form.get("account_size", 100000) or 100000))
+        settings = OllamaSettings(
+            enabled=True,
+            host=form.get("ai_host", "http://localhost:11434") or "http://localhost:11434",
+            model=form.get("ai_model", "llama3.1") or "llama3.1",
+        )
+        try:
+            save_ollama_settings(settings)
+        except Exception:
+            pass
+
+        n_iterations_raw = (form.get("n_iterations") or "").strip()
+        cfg = ResearchLoopConfig(
+            n_iterations=(int(n_iterations_raw) if n_iterations_raw else None),
+            initial_idea=(form.get("initial_idea") or "").strip(),
+            mc_sims=int(form.get("mc_sims", 500) or 500),
+            survival_sims=int(form.get("survival_sims", 1000) or 1000),
+            keep_score_threshold=float(form.get("keep_score_threshold", 40.0) or 40.0),
+        )
+
+        job_id = uuid.uuid4().hex[:12]
+        initial_log = [f"Loaded {len(df)} bars from {active_label}."]
+        if import_note:
+            initial_log.append(import_note)
+        runner = ResearchLoopRunner(df, risk, rules, settings, cfg, progress_cb=lambda msg: _research_loop_log(job_id, msg))
+        with _RESEARCH_LOOP_JOBS_LOCK:
+            _RESEARCH_LOOP_JOBS[job_id] = {"log": initial_log, "runner": runner, "instrument": active_label}
+        runner.start()
+        return redirect(url_for("research_loop_job", job_id=job_id))
+    except Exception as exc:  # noqa: BLE001
+        log_crash("Research Loop (web, start)", exc=exc)
+        return render_template(
+            "research_loop.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(),
+            ai_enabled=False, ai_host="", ai_model="", active_jobs=[],
+        ), 500
+
+
+@app.route("/research-loop/job/<job_id>")
+def research_loop_job(job_id):
+    with _RESEARCH_LOOP_JOBS_LOCK:
+        job = _RESEARCH_LOOP_JOBS.get(job_id)
+    if job is None:
+        return render_template("research_loop_job.html", job_id=job_id, not_found=True), 404
+    return render_template("research_loop_job.html", job_id=job_id, not_found=False)
+
+
+@app.route("/research-loop/job/<job_id>/status.json")
+def research_loop_job_status(job_id):
+    with _RESEARCH_LOOP_JOBS_LOCK:
+        job = _RESEARCH_LOOP_JOBS.get(job_id)
+    if job is None:
+        return jsonify({"found": False}), 404
+    runner: ResearchLoopRunner = job["runner"]
+
+    def _brief(it) -> dict:
+        d = it.to_dict()
+        d.pop("code", None)  # keep the poll payload bounded over a long overnight run
+        return d
+
+    recent = runner.iterations[-50:]
+    return jsonify({
+        "found": True,
+        "running": runner.is_running,
+        "stopped_reason": runner.stopped_reason,
+        "log": job["log"][-200:],
+        "n_iterations_run": len(runner.iterations),
+        "iterations": [_brief(it) for it in recent],
+        "best_iteration": runner.best_iteration.to_dict() if runner.best_iteration else None,
+    })
+
+
+@app.route("/research-loop/job/<job_id>/stop", methods=["POST"])
+def research_loop_stop(job_id):
+    with _RESEARCH_LOOP_JOBS_LOCK:
+        job = _RESEARCH_LOOP_JOBS.get(job_id)
+    if job is not None:
+        job["runner"].stop_and_wait(timeout=15.0)
+    return redirect(url_for("research_loop_job", job_id=job_id))
+
+
 @app.route("/forward-test")
 def forward_test_info():
     return render_template("forward_test.html")
@@ -3200,6 +3550,7 @@ def search_start():
         seed = int(form.get("seed", 42) or 42)
         max_candidates = int(form.get("max_candidates", 200) or 200)
         library_ref = None
+        _family_exclusion_log: list = []
 
         if mode_key == "single":
             strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
@@ -3213,7 +3564,11 @@ def search_start():
             )
         else:
             family_key = form.get("family", "all") or "all"
-            space = generate_search_space(mode="family", family=family_key, max_candidates=max_candidates, seed=seed)
+            exclude_families = _resolve_family_exclusions(_family_exclusion_log)
+            space = generate_search_space(
+                mode="family", family=family_key, max_candidates=max_candidates, seed=seed,
+                exclude_families=exclude_families,
+            )
 
         workers_raw = (form.get("workers") or "").strip()
         stage_cfg = SearchStageConfig(
@@ -3248,6 +3603,7 @@ def search_start():
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
+        initial_log.extend(_family_exclusion_log)
         with _SEARCH_JOBS_LOCK:
             _SEARCH_JOBS[job_id] = {
                 "log": initial_log,
@@ -3381,6 +3737,250 @@ def serve_search_report(filename):
 @app.route("/search_reports_champion/<job_id>/<path:filename>")
 def serve_search_champion_report(job_id, filename):
     return send_from_directory(SEARCH_DIR / "champion" / job_id, filename)
+
+
+# ---------------------------------------------------------------------------
+# Multi-Instrument Search -- runs the SAME family/grid search space
+# CONCURRENTLY against several instrument/timeframe datasets instead of one
+# at a time (see app.orchestration.multi_instrument_search for the actual
+# orchestration this wires up). A real edge is often instrument- and
+# timeframe-dependent, so this covers more ground per unit wall-clock time
+# than repeated single-instrument Search Lab runs. Same background-job/poll
+# shape as Search Lab above, just fanned out across N datasets picked via a
+# multi-select instead of one dataset picker.
+# ---------------------------------------------------------------------------
+
+_MULTI_SEARCH_JOBS: dict[str, dict] = {}
+_MULTI_SEARCH_JOBS_LOCK = threading.Lock()
+
+
+def _multi_job_log(job_id: str, label: str, msg: str) -> None:
+    with _MULTI_SEARCH_JOBS_LOCK:
+        job = _MULTI_SEARCH_JOBS.get(job_id)
+        if job is not None:
+            job["log"].append(f"[{label}] {msg}")
+
+
+def _run_multi_search_job(
+    job_id: str, jobs: list[InstrumentJob], space, risk: RiskConfig, rules: PropRules,
+    stage_cfg: SearchStageConfig, max_concurrent: int,
+) -> None:
+    try:
+        db_dir = SEARCH_DIR / "multi_instrument" / job_id
+        results = run_multi_instrument_search(
+            jobs, space, risk, rules, stage_cfg, db_dir,
+            max_concurrent_instruments=max_concurrent,
+            progress_cb=lambda label, msg: _multi_job_log(job_id, label, msg),
+        )
+        per_instrument = {}
+        for label, res in results.items():
+            if res.error:
+                per_instrument[label] = {"error": res.error.splitlines()[0]}
+                continue
+            s = res.summary
+            report_paths = generate_search_report(
+                output_dir=str(db_dir / label.replace("/", "_")), summary=s, space=space,
+                instrument=res.job.instrument, timeframe=res.job.timeframe,
+            )
+            per_instrument[label] = {
+                "error": None,
+                "total_candidates": s.total_candidates,
+                "stage1_survivors": s.stage1_survivors,
+                "stage2_survivors": s.stage2_survivors,
+                "stage3_survivors": s.stage3_survivors,
+                "champion_candidate_id": s.champion_candidate_id,
+                "report_html": f"/search_reports_multi/{job_id}/{label.replace('/', '_')}/{report_paths['html'].name}",
+            }
+
+        best = best_result_across_instruments(results)
+        best_label = None
+        champion_report = None
+        if best is not None:
+            best_label = best.label
+            try:
+                import_result = import_csv(best.job.csv_path)
+                promo = promote_champion(
+                    best.summary.db_path, best.summary.run_id, best.summary.champion_candidate_id,
+                    import_result.dataframe, risk, rules,
+                    output_dir=str(db_dir / best_label.replace("/", "_") / "champion"),
+                )
+                champion_report = f"/search_reports_multi/{job_id}/{best_label.replace('/', '_')}/champion/{promo['report_paths']['html'].name}"
+            except Exception:  # noqa: BLE001 -- a champion-promotion hiccup must not hide the otherwise-successful search results
+                pass
+
+        with _MULTI_SEARCH_JOBS_LOCK:
+            job = _MULTI_SEARCH_JOBS[job_id]
+            job["done"] = True
+            job["results"] = per_instrument
+            job["best_label"] = best_label
+            job["champion_report"] = champion_report
+    except Exception as exc:  # noqa: BLE001
+        log_crash("Multi-Instrument Search (web)", exc=exc)
+        with _MULTI_SEARCH_JOBS_LOCK:
+            job = _MULTI_SEARCH_JOBS[job_id]
+            job["done"] = True
+            job["error"] = str(exc)
+    finally:
+        HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_SEARCH)
+
+
+@app.route("/search/multi-instrument")
+def search_multi_instrument_form():
+    return render_template(
+        "search_multi_instrument.html",
+        stored_datasets=list_stored_datasets(),
+        families=[{"name": n, "description": family_description(n)} for n in list_families()],
+    )
+
+
+@app.route("/search/multi-instrument/start", methods=["POST"])
+def search_multi_instrument_start():
+    form = request.form
+    if not HEAVY_JOB_GUARD.try_acquire(JOB_MULTI_INSTRUMENT_SEARCH):
+        return render_template(
+            "search_multi_instrument.html",
+            error=(
+                f"{HEAVY_JOB_GUARD.active_name} is already running on this server. Running more than "
+                f"one heavy job (Search Lab / Multi-Instrument Search / Evolution Lab / Full Pipeline / "
+                f"Speed Run) at the same time can exhaust available memory. Wait for it to finish first."
+            ),
+            stored_datasets=list_stored_datasets(),
+            families=[{"name": n, "description": family_description(n)} for n in list_families()],
+        ), 409
+    try:
+        selected = form.getlist("datasets")
+        if len(selected) < 2:
+            HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_SEARCH)
+            return render_template(
+                "search_multi_instrument.html",
+                error="Select at least 2 datasets to search across -- with only 1 selected, use the "
+                      "regular Search Lab page instead.",
+                stored_datasets=list_stored_datasets(),
+                families=[{"name": n, "description": family_description(n)} for n in list_families()],
+            ), 400
+
+        jobs: list[InstrumentJob] = []
+        for name in selected:
+            candidate_path = get_raw_data_dir() / name
+            if not candidate_path.exists():
+                continue
+            # Dataset names are stored as "<instrument-folder>/<file>.csv" or a
+            # bare filename (see StoredDataset.name's own docstring) -- split
+            # on the LAST path separator so a nested "EURUSD/EURUSD5.csv" name
+            # reads as instrument="EURUSD", timeframe=the filename, while a
+            # flat "XAUUSD15.csv" just uses the filename for both labels
+            # (still unique, just less pretty) rather than raising here.
+            stem = Path(name).stem
+            if "/" in name:
+                instrument = name.split("/")[0]
+                timeframe = stem
+            else:
+                instrument = stem
+                timeframe = stem
+            jobs.append(InstrumentJob(instrument=instrument, timeframe=timeframe, csv_path=str(candidate_path)))
+
+        if len(jobs) < 2:
+            HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_SEARCH)
+            return render_template(
+                "search_multi_instrument.html",
+                error="Could not resolve at least 2 of the selected datasets to real files on disk.",
+                stored_datasets=list_stored_datasets(),
+                families=[{"name": n, "description": family_description(n)} for n in list_families()],
+            ), 400
+
+        family_key = form.get("family", "all") or "all"
+        _family_exclusion_log: list = []
+        exclude_families = _resolve_family_exclusions(_family_exclusion_log)
+        space = generate_search_space(
+            mode="family", family=family_key,
+            max_candidates=int(form.get("max_candidates", 300) or 300),
+            seed=int(form.get("seed", 42) or 42),
+            exclude_families=exclude_families,
+        )
+        stage_cfg = SearchStageConfig(
+            min_trades=int(form.get("min_trades", 20) or 20),
+            min_profit_factor=float(form.get("min_profit_factor", 1.05) or 1.05),
+            stage1_top_n=int(form.get("stage1_top_n", 40) or 40),
+            ga_population=int(form.get("ga_population", 10) or 10),
+            ga_generations=int(form.get("ga_generations", 4) or 4),
+            stage2_top_n=int(form.get("stage2_top_n", 10) or 10),
+            full_mc_sims=int(form.get("full_mc_sims", 3000) or 3000),
+            walk_forward_folds=int(form.get("walk_forward_folds", 4) or 4),
+            robustness_neighbors=int(form.get("robustness_neighbors", 6) or 6),
+            fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
+            workers=None, random_seed=int(form.get("seed", 42) or 42),
+        )
+        risk = RiskConfig(
+            initial_balance=float(form.get("initial_balance", 100000) or 100000),
+            pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+        )
+        rules = PropRules(
+            account_size=float(form.get("initial_balance", 100000) or 100000),
+        )
+        max_concurrent = int(form.get("max_concurrent", 2) or 2)
+
+        job_id = uuid.uuid4().hex[:12]
+        with _MULTI_SEARCH_JOBS_LOCK:
+            _MULTI_SEARCH_JOBS[job_id] = {
+                "log": [f"Searching {len(jobs)} instrument/timeframe target(s): " +
+                        ", ".join(f"{j.instrument}/{j.timeframe}" for j in jobs)] + _family_exclusion_log,
+                "done": False, "error": None, "results": None,
+                "best_label": None, "champion_report": None,
+                "labels": [f"{j.instrument}/{j.timeframe}" for j in jobs],
+            }
+        thread = threading.Thread(
+            target=_run_multi_search_job,
+            args=(job_id, jobs, space, risk, rules, stage_cfg, max_concurrent),
+            daemon=True,
+        )
+        thread.start()
+        return redirect(url_for("search_multi_instrument_job", job_id=job_id))
+
+    except StrategySpaceError as exc:
+        HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_SEARCH)
+        return render_template(
+            "search_multi_instrument.html", error=str(exc), stored_datasets=list_stored_datasets(),
+            families=[{"name": n, "description": family_description(n)} for n in list_families()],
+        ), 400
+    except Exception as exc:  # noqa: BLE001
+        HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_SEARCH)
+        log_crash("Multi-Instrument Search (web, start)", exc=exc)
+        return render_template(
+            "search_multi_instrument.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(),
+            families=[{"name": n, "description": family_description(n)} for n in list_families()],
+        ), 500
+
+
+@app.route("/search/multi-instrument/job/<job_id>")
+def search_multi_instrument_job(job_id):
+    with _MULTI_SEARCH_JOBS_LOCK:
+        job = _MULTI_SEARCH_JOBS.get(job_id)
+    if job is None:
+        return render_template("search_multi_instrument_job.html", job_id=job_id, not_found=True), 404
+    return render_template("search_multi_instrument_job.html", job_id=job_id, not_found=False)
+
+
+@app.route("/search/multi-instrument/job/<job_id>/status.json")
+def search_multi_instrument_job_status(job_id):
+    with _MULTI_SEARCH_JOBS_LOCK:
+        job = _MULTI_SEARCH_JOBS.get(job_id)
+    if job is None:
+        return jsonify({"found": False}), 404
+    return jsonify({
+        "found": True,
+        "done": job["done"],
+        "error": job["error"],
+        "log": job["log"][-200:],
+        "labels": job.get("labels", []),
+        "results": job.get("results"),
+        "best_label": job.get("best_label"),
+        "champion_report": job.get("champion_report"),
+    })
+
+
+@app.route("/search_reports_multi/<job_id>/<path:filename>")
+def serve_search_report_multi(job_id, filename):
+    return send_from_directory(SEARCH_DIR / "multi_instrument" / job_id, filename)
 
 
 # ---------------------------------------------------------------------------
@@ -3570,6 +4170,204 @@ def speed_run_job_status(job_id):
 @app.route("/speed_run_reports/<path:filename>")
 def serve_speedrun_report(filename):
     return send_from_directory(SPEEDRUN_REPORTS_DIR, filename)
+
+
+# ---------------------------------------------------------------------------
+# Multi-Instrument Speed Run -- the same "run the SAME config CONCURRENTLY
+# across several instrument/timeframe datasets" idea as Multi-Instrument
+# Search above, applied to Speed Run instead of plain Search Lab (see
+# app.orchestration.multi_instrument_speed_run for the actual orchestration
+# this wires up). Same background-job/poll shape as Speed Run above, just
+# fanned out across a dataset multi-select instead of one dataset picker.
+# ---------------------------------------------------------------------------
+
+_MULTI_SPEEDRUN_JOBS: dict[str, dict] = {}
+_MULTI_SPEEDRUN_JOBS_LOCK = threading.Lock()
+MULTI_SPEEDRUN_DIR = BASE_DIR / "reports" / "speed_run" / "multi_instrument"
+
+
+def _multi_speedrun_log(job_id: str, label: str, msg: str) -> None:
+    with _MULTI_SPEEDRUN_JOBS_LOCK:
+        job = _MULTI_SPEEDRUN_JOBS.get(job_id)
+        if job is not None:
+            job["log"].append(f"[{label}] {msg}")
+
+
+def _run_multi_speedrun_job(
+    job_id: str, jobs: list[InstrumentJob], risk: RiskConfig, rules: PropRules,
+    cfg: SpeedRunConfig, max_concurrent: int,
+) -> None:
+    try:
+        job_dir = MULTI_SPEEDRUN_DIR / job_id
+        results = run_multi_instrument_speed_run(
+            jobs, risk, rules, cfg, job_dir, max_concurrent_instruments=max_concurrent,
+            progress_cb=lambda label, msg: _multi_speedrun_log(job_id, label, msg),
+        )
+        per_instrument = {}
+        for label, res in results.items():
+            if res.error:
+                per_instrument[label] = {"error": res.error.splitlines()[0], "has_winner": False}
+                continue
+            r = res.result
+            winner_ctx = None
+            if r.winner is not None and r.winner.pipeline_result is not None:
+                pr = r.winner.pipeline_result
+                winner_ctx = {
+                    "candidate_id": r.winner.candidate_id, "family": r.winner.family,
+                    "verdict": pr.verdict,
+                    "eval_pass_probability": pr.final_mc.evaluation_pass_probability,
+                    "first_payout_probability": pr.final_mc.first_payout_probability,
+                    "report_html": (
+                        f"/speed_run_reports_multi/{job_id}/{label.replace('/', '_')}/"
+                        f"{Path(pr.report_paths['html']).name}"
+                        if pr.report_paths.get("html") else None
+                    ),
+                }
+            per_instrument[label] = {
+                "error": None, "has_winner": winner_ctx is not None, "winner": winner_ctx,
+                "winner_reason": r.winner_reason, "elapsed_seconds": r.elapsed_seconds,
+                "guidance": r.guidance,
+            }
+
+        best = best_speed_run_across_instruments(results)
+        with _MULTI_SPEEDRUN_JOBS_LOCK:
+            job = _MULTI_SPEEDRUN_JOBS[job_id]
+            job["done"] = True
+            job["results"] = per_instrument
+            job["best_label"] = best.label if best is not None else None
+    except Exception as exc:  # noqa: BLE001
+        log_crash("Multi-Instrument Speed Run (web)", exc=exc)
+        with _MULTI_SPEEDRUN_JOBS_LOCK:
+            job = _MULTI_SPEEDRUN_JOBS[job_id]
+            job["done"] = True
+            job["error"] = str(exc)
+    finally:
+        HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_SPEED_RUN)
+
+
+@app.route("/speed-run/multi-instrument")
+def speed_run_multi_instrument_form():
+    return render_template(
+        "speed_run_multi_instrument.html", stored_datasets=list_stored_datasets(),
+        fitness_metrics=FITNESS_METRICS,
+    )
+
+
+@app.route("/speed-run/multi-instrument/start", methods=["POST"])
+def speed_run_multi_instrument_start():
+    form = request.form
+    if not HEAVY_JOB_GUARD.try_acquire(JOB_MULTI_INSTRUMENT_SPEED_RUN):
+        return render_template(
+            "speed_run_multi_instrument.html",
+            error=(
+                f"{HEAVY_JOB_GUARD.active_name} is already running on this server. Running more than "
+                f"one heavy job at the same time can exhaust available memory. Wait for it to finish first."
+            ),
+            stored_datasets=list_stored_datasets(), fitness_metrics=FITNESS_METRICS,
+        ), 409
+    try:
+        selected = form.getlist("datasets")
+        if len(selected) < 2:
+            HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_SPEED_RUN)
+            return render_template(
+                "speed_run_multi_instrument.html",
+                error="Select at least 2 datasets to run across -- with only 1 selected, use the "
+                      "regular Speed Run page instead.",
+                stored_datasets=list_stored_datasets(), fitness_metrics=FITNESS_METRICS,
+            ), 400
+
+        jobs: list[InstrumentJob] = []
+        for name in selected:
+            candidate_path = get_raw_data_dir() / name
+            if not candidate_path.exists():
+                continue
+            stem = Path(name).stem
+            instrument = name.split("/")[0] if "/" in name else stem
+            jobs.append(InstrumentJob(instrument=instrument, timeframe=stem, csv_path=str(candidate_path)))
+
+        if len(jobs) < 2:
+            HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_SPEED_RUN)
+            return render_template(
+                "speed_run_multi_instrument.html",
+                error="Could not resolve at least 2 of the selected datasets to real files on disk.",
+                stored_datasets=list_stored_datasets(), fitness_metrics=FITNESS_METRICS,
+            ), 400
+
+        risk = RiskConfig(
+            initial_balance=float(form.get("initial_balance", 100000) or 100000),
+            risk_mode=form.get("risk_mode", "percent"),
+            risk_value=float(form.get("risk_value", 1.0) or 1.0),
+            pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+        )
+        rules = PropRules(
+            account_size=float(form.get("account_size", 100000) or 100000),
+            evaluation_profit_target_pct=float(form.get("profit_target", 8) or 8),
+            daily_loss_limit_pct=float(form.get("daily_loss", 5) or 5),
+            max_drawdown_pct=float(form.get("max_dd", 10) or 10),
+        )
+        cfg = SpeedRunConfig(
+            max_candidates=int(form.get("max_candidates", 1200) or 1200),
+            stage1_top_n=int(form.get("stage1_top_n", 24) or 24),
+            ga_population=int(form.get("ga_population", 8) or 8),
+            ga_generations=int(form.get("ga_generations", 3) or 3),
+            top_k_to_validate=int(form.get("top_k_to_validate", 3) or 3),
+            max_concurrent_validations=int(form.get("max_concurrent_validations", 2) or 2),
+            validation_folds=int(form.get("validation_folds", 3) or 3),
+            validation_final_mc_sims=int(form.get("validation_final_mc_sims", 3000) or 3000),
+            fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
+            save_winner_to_library=form.get("save_to_library") == "on",
+            random_seed=int(form.get("random_seed", 42) or 42),
+        )
+        max_concurrent = int(form.get("max_concurrent_instruments", 2) or 2)
+
+        job_id = uuid.uuid4().hex[:12]
+        with _MULTI_SPEEDRUN_JOBS_LOCK:
+            _MULTI_SPEEDRUN_JOBS[job_id] = {
+                "log": [f"Running Speed Run on {len(jobs)} instrument/timeframe target(s): " +
+                        ", ".join(f"{j.instrument}/{j.timeframe}" for j in jobs)],
+                "done": False, "error": None, "results": None, "best_label": None,
+                "labels": [f"{j.instrument}/{j.timeframe}" for j in jobs],
+            }
+        thread = threading.Thread(
+            target=_run_multi_speedrun_job, args=(job_id, jobs, risk, rules, cfg, max_concurrent),
+            daemon=True,
+        )
+        thread.start()
+        return redirect(url_for("speed_run_multi_instrument_job", job_id=job_id))
+
+    except Exception as exc:  # noqa: BLE001
+        HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_SPEED_RUN)
+        log_crash("Multi-Instrument Speed Run (web, start)", exc=exc)
+        return render_template(
+            "speed_run_multi_instrument.html", error=f"Unexpected error: {exc}",
+            stored_datasets=list_stored_datasets(), fitness_metrics=FITNESS_METRICS,
+        ), 500
+
+
+@app.route("/speed-run/multi-instrument/job/<job_id>")
+def speed_run_multi_instrument_job(job_id):
+    with _MULTI_SPEEDRUN_JOBS_LOCK:
+        job = _MULTI_SPEEDRUN_JOBS.get(job_id)
+    if job is None:
+        return render_template("speed_run_multi_instrument_job.html", job_id=job_id, not_found=True), 404
+    return render_template("speed_run_multi_instrument_job.html", job_id=job_id, not_found=False)
+
+
+@app.route("/speed-run/multi-instrument/job/<job_id>/status.json")
+def speed_run_multi_instrument_job_status(job_id):
+    with _MULTI_SPEEDRUN_JOBS_LOCK:
+        job = _MULTI_SPEEDRUN_JOBS.get(job_id)
+    if job is None:
+        return jsonify({"found": False}), 404
+    return jsonify({
+        "found": True, "done": job["done"], "error": job["error"], "log": job["log"][-200:],
+        "labels": job.get("labels", []), "results": job.get("results"), "best_label": job.get("best_label"),
+    })
+
+
+@app.route("/speed_run_reports_multi/<job_id>/<path:filename>")
+def serve_speedrun_report_multi(job_id, filename):
+    return send_from_directory(MULTI_SPEEDRUN_DIR / job_id, filename)
 
 
 # ---------------------------------------------------------------------------
