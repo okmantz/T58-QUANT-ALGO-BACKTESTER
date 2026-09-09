@@ -74,12 +74,15 @@
     <p class="help">Every dataset you've previously uploaded or fetched shows up here -- upload more from the Run &amp; Report or Search Lab pages first if what you want isn't listed yet.</p>
     {% if stored_datasets %}
     <div class="dataset-list">
-      {% for ds in stored_datasets %}
+      {% for g in dataset_groups %}
+      <div class="dataset-group-label" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-dim);margin:10px 0 4px;">{{ g.instrument }}</div>
+      {% for file in g.files %}
       <label class="dataset-row" style="margin:0;">
-        <input type="checkbox" name="datasets" value="{{ ds.name }}">
-        <span class="dataset-name">{{ ds.name }}</span>
-        <span class="dataset-size">{{ (ds.size_bytes / 1024) | round(0, 'floor') | int }} KB</span>
+        <input type="checkbox" name="datasets" value="{{ file.full_name }}">
+        <span class="dataset-name">{{ file.name }}</span>
+        <span class="dataset-size">{{ (file.size_bytes / 1024) | round(0, 'floor') | int }} KB</span>
       </label>
+      {% endfor %}
       {% endfor %}
     </div>
     <div class="selected-count" id="selected-count">0 selected</div>
@@ -100,9 +103,15 @@
     </div>
     <div><label>Initial account balance</label><input type="number" name="initial_balance" value="100000"></div>
     <label style="margin-top:10px;">Strategy families to search (none checked = every family)</label>
+    <div class="row" style="margin:2px 0 8px;">
+      <button type="button" class="submit-btn" style="padding:6px 10px;font-size:12px;" onclick="t58SetCheckboxes('mi-evo-families-list', true)">Select All</button>
+      <button type="button" class="submit-btn" style="padding:6px 10px;font-size:12px;" onclick="t58SetCheckboxes('mi-evo-families-list', false)">Clear All</button>
+    </div>
+    <div id="mi-evo-families-list">
     {% for fam in families %}
     <div class="checkbox-row"><input type="checkbox" name="families" value="{{ fam.name }}" id="mfam_{{ loop.index }}"><label for="mfam_{{ loop.index }}" style="margin:0;">{{ fam.description }} [{{ fam.name }}]</label></div>
     {% endfor %}
+    </div>
     <div class="checkbox-row" style="margin-top:10px;"><input type="checkbox" name="save_to_library" checked><label style="margin:0;">Save new elites to the Strategy Library (tagged "draft")</label></div>
     <div class="checkbox-row"><input type="checkbox" name="resume_from_checkpoint" checked><label style="margin:0;">Resume from checkpoint if one exists for this exact instrument group</label></div>
   </div>

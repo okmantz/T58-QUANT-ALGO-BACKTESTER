@@ -72,8 +72,12 @@
     <label>Use a previously stored dataset</label>
     <select name="existing_dataset">
       <option value="">— none, I'm uploading new file(s) below —</option>
-      {% for ds in stored_datasets %}
-      <option value="{{ ds.name }}">{{ ds.name }} ({{ (ds.size_bytes / 1024) | round(1) }} KB)</option>
+      {% for g in dataset_groups %}
+      <optgroup label="{{ g.instrument }}">
+        {% for file in g.files %}
+        <option value="{{ file.full_name }}">{{ file.name }} ({{ (file.size_bytes / 1024) | round(1) }} KB){{ ' — empty' if file.empty else '' }}</option>
+        {% endfor %}
+      </optgroup>
       {% endfor %}
     </select>
     {% endif %}
@@ -166,7 +170,7 @@
           <p style="font-size:12px;color:#999;margin:0 0 8px;">Managing: <b id="library-manage-name"></b></p>
           <p style="font-size:12px;color:#9ecbff;margin:0 0 8px;white-space:pre-line;" id="library-manage-last-run"></p>
 
-          <form method="post" action="/strategies/status" style="margin-bottom:8px;">
+          <div class="mini-form" data-action="/strategies/status" style="margin-bottom:8px;">
             <input type="hidden" name="strategy_type" id="status_strategy_type">
             <input type="hidden" name="filename" id="status_filename">
             <input type="hidden" name="return_to" value="search">
@@ -176,10 +180,10 @@
               <option value="{{ s }}">{{ s }}</option>
               {% endfor %}
             </select>
-            <button type="submit" class="submit-btn" style="margin-top:8px;padding:10px;font-size:13px;">Set Status</button>
-          </form>
+            <button type="button" class="submit-btn" style="margin-top:8px;padding:10px;font-size:13px;" onclick="t58SubmitMiniForm(this.closest('.mini-form'))">Set Status</button>
+          </div>
 
-          <form method="post" action="/strategies/metadata" style="margin-bottom:8px;">
+          <div class="mini-form" data-action="/strategies/metadata" style="margin-bottom:8px;">
             <input type="hidden" name="strategy_type" id="meta_strategy_type">
             <input type="hidden" name="filename" id="meta_filename">
             <input type="hidden" name="return_to" value="search">
@@ -189,37 +193,37 @@
             <input type="text" name="market" id="meta_market" placeholder="e.g. XAUUSD 15m">
             <label>Tags (comma-separated)</label>
             <input type="text" name="tags" id="meta_tags" placeholder="e.g. fvg, mean-reversion">
-            <button type="submit" class="submit-btn" style="margin-top:8px;padding:10px;font-size:13px;">Save Info</button>
-          </form>
+            <button type="button" class="submit-btn" style="margin-top:8px;padding:10px;font-size:13px;" onclick="t58SubmitMiniForm(this.closest('.mini-form'))">Save Info</button>
+          </div>
 
-          <form method="post" action="/strategies/rename" style="margin-bottom:8px;">
+          <div class="mini-form" data-action="/strategies/rename" style="margin-bottom:8px;">
             <input type="hidden" name="strategy_type" id="rename_strategy_type">
             <input type="hidden" name="old_filename" id="rename_old_filename">
             <input type="hidden" name="return_to" value="search">
             <label>Rename to</label>
             <input type="text" name="new_filename" id="rename_new_filename">
             <label><input type="checkbox" name="overwrite" value="1"> Overwrite if that name is already taken</label>
-            <button type="submit" class="submit-btn" style="margin-top:8px;padding:10px;font-size:13px;">Rename</button>
-          </form>
+            <button type="button" class="submit-btn" style="margin-top:8px;padding:10px;font-size:13px;" onclick="t58SubmitMiniForm(this.closest('.mini-form'))">Rename</button>
+          </div>
 
-          <form method="post" action="/strategies/delete" onsubmit="return confirm('Permanently delete this saved strategy?');">
+          <div class="mini-form" data-action="/strategies/delete" data-confirm="Permanently delete this saved strategy?">
             <input type="hidden" name="strategy_type" id="delete_strategy_type">
             <input type="hidden" name="filename" id="delete_filename">
             <input type="hidden" name="return_to" value="search">
-            <button type="submit" class="submit-btn" style="padding:10px;font-size:13px;background:#3a1616;color:#ffb4b4;">Delete From Library</button>
-          </form>
+            <button type="button" class="submit-btn" style="padding:10px;font-size:13px;background:#3a1616;color:#ffb4b4;" onclick="t58SubmitMiniForm(this.closest('.mini-form'))">Delete From Library</button>
+          </div>
         </div>
 
         <details style="margin-top:10px;">
           <summary>Bulk manage saved strategies</summary>
-          <form method="post" action="/strategies/bulk-delete" onsubmit="return confirm('Permanently delete every checked strategy?');">
+          <div class="mini-form" data-action="/strategies/bulk-delete" data-confirm="Permanently delete every checked strategy?">
             <input type="hidden" name="return_to" value="search">
             <div id="bulk-checklist" style="margin:8px 0;font-size:13px;"></div>
             <div class="row">
-              <button type="submit" class="submit-btn" style="padding:10px;font-size:13px;background:#3a1616;color:#ffb4b4;">Delete Checked</button>
+              <button type="button" class="submit-btn" style="padding:10px;font-size:13px;background:#3a1616;color:#ffb4b4;" onclick="t58SubmitMiniForm(this.closest('.mini-form'))">Delete Checked</button>
               <button type="button" class="submit-btn" style="padding:10px;font-size:13px;" onclick="exportChecked()">Export Checked</button>
             </div>
-          </form>
+          </div>
         </details>
 
         <label style="margin-top:14px;">Or upload a strategy file (from this computer or your phone)</label>

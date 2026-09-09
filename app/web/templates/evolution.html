@@ -95,8 +95,12 @@
     <label>Use a previously stored dataset</label>
     <select name="existing_dataset">
       <option value="">— none, I'm uploading a new file below —</option>
-      {% for ds in stored_datasets %}
-      <option value="{{ ds.name }}">{{ ds.name }}</option>
+      {% for g in dataset_groups %}
+      <optgroup label="{{ g.instrument }}">
+        {% for file in g.files %}
+        <option value="{{ file.full_name }}">{{ file.name }}{{ ' — empty' if file.empty else '' }}</option>
+        {% endfor %}
+      </optgroup>
       {% endfor %}
     </select>
     {% endif %}
@@ -116,9 +120,15 @@
     </div>
     <div><label>Initial account balance</label><input type="number" name="initial_balance" value="100000"></div>
     <label style="margin-top:10px;">Strategy families to search (none checked = every family)</label>
+    <div class="row" style="margin:2px 0 8px;">
+      <button type="button" class="submit-btn" style="padding:6px 10px;font-size:12px;" onclick="t58SetCheckboxes('evo-families-list', true)">Select All</button>
+      <button type="button" class="submit-btn" style="padding:6px 10px;font-size:12px;" onclick="t58SetCheckboxes('evo-families-list', false)">Clear All</button>
+    </div>
+    <div id="evo-families-list">
     {% for fam in families %}
     <div class="checkbox-row"><input type="checkbox" name="families" value="{{ fam.name }}" id="fam_{{ loop.index }}"><label for="fam_{{ loop.index }}" style="margin:0;">{{ fam.description }} [{{ fam.name }}]</label></div>
     {% endfor %}
+    </div>
     <div class="checkbox-row" style="margin-top:10px;"><input type="checkbox" name="save_to_library" checked><label style="margin:0;">Save new elites to the Strategy Library (tagged "draft")</label></div>
     <div class="checkbox-row"><input type="checkbox" name="resume_from_checkpoint" checked><label style="margin:0;">Resume from checkpoint if one exists for this data</label></div>
     <div class="checkbox-row"><input type="checkbox" name="adaptive_risk_enabled"><label style="margin:0;">Enable adaptive, limit-aware position sizing for every candidate evaluated</label></div>
