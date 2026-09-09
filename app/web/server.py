@@ -55,7 +55,7 @@ from app.data.importer import import_csv, import_csv_bytes
 from app.data.storage import get_app_base_dir, get_raw_data_dir, list_datasets_by_instrument, list_stored_datasets, store_csv_bytes
 from app.ensemble.ensemble import EnsembleError, EnsembleVoteConfig, run_ensemble_blend, run_ensemble_vote
 from app.evolution import checkpoint as evo_checkpoint
-from app.evolution.engine import EvolutionConfig, EvolutionRunner
+from app.evolution.engine import EvolutionConfig, EvolutionRunner, evolution_stats_metadata
 from app.monte_carlo.engine import MonteCarloConfig, run_monte_carlo
 from app.optimize.risk_sweep import DEFAULT_RISK_VALUES, run_risk_sweep
 from app.optimize.multi_objective import (    DEFAULT_OBJECTIVES, MultiObjectiveConfig, OBJECTIVE_DIRECTIONS, run_multi_objective_refinement,
@@ -293,6 +293,60 @@ def _build_strategy(mode: str, form, files):
     results back onto that entry's metadata -- or None for manual/one-off
     pasted strategies with no library tie."""
     if mode == "manual":
+        # A saved-library pick (or an uploaded/pasted manual JSON config)
+        # now takes precedence, exactly like the other three strategy
+        # types (see resolve_strategy_source) -- this is what was
+        # missing before: manual mode ignored the library entirely and
+        # always rebuilt a fresh hardcoded SMA-crossover strategy from
+        # the quick-builder fields below, regardless of anything picked
+        # from a "load from library" dropdown (which didn't even exist
+        # for manual before this fix). That made every manually-saved
+        # strategy -- including every one the Evolution Lab auto-saves
+        # or lets you promote off its leaderboard, see
+        # app.evolution.engine._maybe_save_to_library -- completely
+        # unusable anywhere in the web app that runs a strategy (Full
+        # Pipeline, Search Lab, WFO, WFGA, CPCV, Sensitivity,
+        # Multi-Objective, Portfolio, Payout Probability, Research
+        # Agent, Regime Matrix, and the main Run page).
+        #
+        # Falls back to the quick-builder fields (unchanged) only when
+        # no library pick, upload, or pasted JSON was given at all, so
+        # "just type SMA numbers and run" keeps working exactly as
+        # before with zero library interaction required.
+        pasted = (form.get("strategy_code") or "").strip()
+        existing_choice = (form.get("existing_strategy_manual") or "").strip()
+        uploaded = files.get("strategy_file")
+        save_name = (form.get("strategy_save_name") or "").strip()
+
+        code = pasted
+        if uploaded and uploaded.filename:
+            code = uploaded.read().decode("utf-8", errors="replace")
+            if not save_name:
+                save_name = uploaded.filename
+
+        library_ref = None
+        if not code and existing_choice:
+            code = load_strategy_text("manual", existing_choice)
+            library_ref = ("manual", existing_choice)
+
+        if code:
+            try:
+                cfg = json.loads(code)
+            except json.JSONDecodeError as exc:
+                raise StrategyError(
+                    f"Manual strategy JSON is invalid: {exc}. Manual strategies are saved/loaded as a "
+                    "JSON config (indicators + entry/exit rules), not free-form code."
+                ) from exc
+            if not isinstance(cfg, dict):
+                raise StrategyError("Manual strategy JSON must be an object (a JSON dictionary), not a list or scalar.")
+
+            saved_name = maybe_save_strategy_to_library(
+                "manual", code, save_name or (library_ref[1] if library_ref else "manual_strategy.json"), form,
+            )
+            if saved_name:
+                library_ref = ("manual", saved_name)
+            return ManualStrategy(cfg), library_ref
+
         cfg = {
             "name": "Manual Strategy (web)",
             "indicators": [
@@ -396,10 +450,15 @@ def _resolve_family_exclusions(log_lines: list | None = None) -> "set[str] | Non
 
 def _saved_strategies_json() -> str:
     """{"python": [{"name", "description", "market", "tags", "status",
-    "last_run", "lookahead", "last_search"}, ...], "pinescript": [...],
+    "last_run", "lookahead", "last_search", "evolution"}, ...], "pinescript": [...],
     "mql5": [...]} for the page's JS to build the "load from library"
     dropdowns, the client-side search/tag/market/status filters, and to
-    prefill fields when a saved strategy is picked."""
+    prefill fields when a saved strategy is picked. "evolution" is only
+    present for strategies the Evolution Lab produced (auto-saved elites
+    or ones promoted off its leaderboard -- see
+    app.evolution.engine.evolution_stats_metadata) -- None for anything
+    hand-built, uploaded, or AI-generated.
+    """
     return json.dumps({
         t: [
             {
@@ -411,6 +470,7 @@ def _saved_strategies_json() -> str:
                 "last_run": s.metadata.get("last_run"),
                 "lookahead": s.metadata.get("lookahead"),
                 "last_search": s.metadata.get("last_search"),
+                "evolution": s.metadata.get("evolution"),
             }
             for s in list_saved_strategies(t)
         ]
@@ -2943,6 +3003,18 @@ def evolution_start():
         risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000) or 100000))
         rules = PropRules(account_size=float(form.get("initial_balance", 100000) or 100000))
         families_selected = form.getlist("families") or None
+        goal_preset = (form.get("fitness_goal_preset") or "balanced").strip()
+        if goal_preset == "custom":
+            fitness_goal = {
+                "pass_probability": float(form.get("goal_w_pass_probability", 1.0) or 1.0),
+                "payout_probability": float(form.get("goal_w_payout_probability", 1.0) or 1.0),
+                "robustness": float(form.get("goal_w_robustness", 1.0) or 1.0),
+                "oos_consistency": float(form.get("goal_w_oos_consistency", 1.0) or 1.0),
+                "drawdown": float(form.get("goal_w_drawdown", 1.0) or 1.0),
+                "net_profit": float(form.get("goal_w_net_profit", 0.0) or 0.0),
+            }
+        else:
+            fitness_goal = goal_preset
         cfg = EvolutionConfig(
             population_size=int(form.get("population_size", 60) or 60),
             elite_keep=int(form.get("elite_keep", 10) or 10),
@@ -2951,6 +3023,7 @@ def evolution_start():
             max_generations=(int(form["max_generations"]) if form.get("max_generations") else None),
             save_to_library=form.get("save_to_library", "on") == "on",
             resume_from_checkpoint=form.get("resume_from_checkpoint", "on") == "on",
+            fitness_goal=fitness_goal,
         )
         _EVOLUTION_LOG.clear()
         _EVOLUTION_LOG.append(f"Loaded {len(df)} bars from {active_label}.")
@@ -2986,6 +3059,25 @@ def evolution_reset():
         if _EVOLUTION_RUNNER is not None and not _EVOLUTION_RUNNER.is_running:
             _EVOLUTION_RUNNER.reset()
             _EVOLUTION_LOG.clear()
+    return redirect(url_for("evolution_form"))
+
+
+@app.route("/evolution/reset-family-health", methods=["POST"])
+def evolution_reset_family_health():
+    """Archives (renames, does not delete) every search_*.db and
+    tested_candidates.jsonl this app has ever written, so
+    app.search.family_health's dead-end blacklist starts clean. Useful
+    after a bug fix (a burst of build_or_backtest_error rows from a crash
+    could have already tipped a family over its min_samples threshold
+    before this was excluded from the count -- see family_health.py) or
+    just to give a fresh instrument/dataset an unbiased first run."""
+    from app.search.family_health import reset_family_health
+    result = reset_family_health()
+    _EVOLUTION_LOG.append(
+        f"Family-health history reset: archived {result['search_dbs_reset']} Search Lab result "
+        f"database(s) and {result['evolution_logs_reset']} Evolution Lab tested-candidate log(s). "
+        f"Every family starts fresh again."
+    )
     return redirect(url_for("evolution_form"))
 
 
@@ -3034,12 +3126,31 @@ def evolution_promote():
     family = (record.get("meta") or {}).get("family", "strategy")
     filename = f"evolab_promoted_{family}_{candidate_id[-8:]}.json"
     text = json.dumps(config, indent=2)
+    fitness = record.get("fitness") or {}
     try:
         try:
             save_strategy_text(text, filename, "manual", overwrite=False)
         except StrategyAlreadyExists:
             save_strategy_text(text, filename, "manual", overwrite=True)
         set_strategy_status("manual", filename, "validated")  # see main_window.py's matching note
+        # Same lab-stats sidecar the auto-save-every-generation path writes
+        # (app.evolution.engine._maybe_save_to_library) -- a strategy
+        # promoted by hand from the leaderboard deserves the exact same
+        # Dashboard/Strategy Library visibility as one the lab auto-saved,
+        # not a bare config file with no fitness/MC/robustness context.
+        save_strategy_metadata(
+            "manual", filename,
+            {
+                "tags": ["evolution-lab", "promoted"],
+                "description": (
+                    f"Promoted from Evolution Lab leaderboard, family '{family}' -- "
+                    f"PROP FITNESS {fitness.get('final_score'):.2f}" if fitness.get("final_score") is not None else
+                    f"Promoted from Evolution Lab leaderboard, family '{family}'"
+                ),
+                "evolution": evolution_stats_metadata(record),
+            },
+            merge=True,
+        )
     except Exception as exc:  # noqa: BLE001
         return jsonify({"ok": False, "error": str(exc)}), 500
     return jsonify({"ok": True, "filename": filename})
@@ -3242,12 +3353,26 @@ def evolution_multi_instrument_promote(group_id):
     family = (record.get("meta") or {}).get("family", "strategy")
     filename = f"evolab_multi_{label.replace('/', '_')}_{family}_{candidate_id[-8:]}.json"
     text = json.dumps(config, indent=2)
+    fitness = record.get("fitness") or {}
     try:
         try:
             save_strategy_text(text, filename, "manual", overwrite=False)
         except StrategyAlreadyExists:
             save_strategy_text(text, filename, "manual", overwrite=True)
         set_strategy_status("manual", filename, "validated")
+        save_strategy_metadata(
+            "manual", filename,
+            {
+                "tags": ["evolution-lab", "promoted"],
+                "description": (
+                    f"Promoted from Multi-Instrument Evolution Lab ({label}), family '{family}' -- "
+                    f"PROP FITNESS {fitness.get('final_score'):.2f}" if fitness.get("final_score") is not None else
+                    f"Promoted from Multi-Instrument Evolution Lab ({label}), family '{family}'"
+                ),
+                "evolution": evolution_stats_metadata(record),
+            },
+            merge=True,
+        )
     except Exception as exc:  # noqa: BLE001
         return jsonify({"ok": False, "error": str(exc)}), 500
     return jsonify({"ok": True, "filename": filename})
