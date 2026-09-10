@@ -56,6 +56,7 @@ from app.data.storage import get_app_base_dir, get_raw_data_dir, list_datasets_b
 from app.ensemble.ensemble import EnsembleError, EnsembleVoteConfig, run_ensemble_blend, run_ensemble_vote
 from app.evolution import checkpoint as evo_checkpoint
 from app.evolution.engine import EvolutionConfig, EvolutionRunner, evolution_stats_metadata
+from app.orchestration import pipeline_guide
 from app.monte_carlo.engine import MonteCarloConfig, run_monte_carlo
 from app.optimize.risk_sweep import DEFAULT_RISK_VALUES, run_risk_sweep
 from app.optimize.multi_objective import (    DEFAULT_OBJECTIVES, MultiObjectiveConfig, OBJECTIVE_DIRECTIONS, run_multi_objective_refinement,
@@ -63,7 +64,9 @@ from app.optimize.multi_objective import (    DEFAULT_OBJECTIVES, MultiObjective
 from app.optimize.refinement import FITNESS_METRICS, RefinementConfig, RefinementError, run_iterative_refinement
 from app.optimize.walkforward_ga import run_walkforward_aware_refinement
 from app.orchestration.batch_test import BatchTestItem, run_batch_test
-from app.orchestration.full_pipeline import FullPipelineConfig, run_full_pipeline
+from app.orchestration.full_pipeline import (
+    FullPipelineBatchItem, FullPipelineConfig, run_full_pipeline, run_full_pipeline_batch,
+)
 from app.orchestration.quick_optimize import QuickOptimizeConfig, run_quick_optimize
 from app.orchestration.resource_guard import (
     HEAVY_JOB_GUARD, JOB_EVOLUTION_LAB, JOB_FULL_PIPELINE, JOB_SEARCH_LAB, JOB_SPEED_RUN,
@@ -93,7 +96,7 @@ from app.reports.validation_reports import (
 from app.reports import run_history
 from app.reports import strategy_state
 from app.scoring.t58_scorecard import score_from_results
-from app.search.batch_runner import SearchStageConfig, promote_champion, run_search
+from app.search.batch_runner import SearchCancelled, SearchStageConfig, promote_champion, run_search
 from app.search.family_diversity import render_family_report, summarize_family_performance
 from app.search.search_report import generate_search_report
 from app.search.strategy_space import (
@@ -1210,12 +1213,14 @@ def _job_log(job_id: str, msg: str) -> None:
 def _run_search_job(
     job_id: str, df, risk: RiskConfig, rules: PropRules, space, stage_cfg: SearchStageConfig,
     instrument: str, db_path: str, library_ref: tuple[str, str] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> None:
     try:
         summary = run_search(
             df, risk, rules, space, stage_cfg, db_path=db_path,
             instrument=instrument, timeframe="unknown",
             progress_cb=lambda msg: _job_log(job_id, msg),
+            cancel_event=cancel_event,
         )
         report_paths = generate_search_report(
             output_dir=str(SEARCH_DIR), summary=summary, space=space,
@@ -1241,6 +1246,14 @@ def _run_search_job(
             job["rules"] = rules
             job["report_html"] = f"/search_reports/{report_paths['html'].name}"
             job["report_json"] = f"/search_reports/{report_paths['json'].name}"
+    except SearchCancelled:
+        # A deliberate STOP, not a crash -- surface it as a clean "stopped"
+        # state on the job status page instead of the red error banner.
+        with _SEARCH_JOBS_LOCK:
+            job = _SEARCH_JOBS[job_id]
+            job["done"] = True
+            job["cancelled"] = True
+            job["log"].append("Search Lab run stopped by user.")
     except Exception as exc:  # noqa: BLE001 -- a search job must fail visibly on the status page, not crash a thread silently
         log_crash("Search Lab (web)", exc=exc)
         with _SEARCH_JOBS_LOCK:
@@ -1491,6 +1504,221 @@ def _run_fullpipeline_job(
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
 
 
+_FULLPIPELINE_BATCH_JOBS: dict[str, dict] = {}
+_FULLPIPELINE_BATCH_JOBS_LOCK = threading.Lock()
+
+
+def _fullpipeline_batch_job_log(job_id: str, msg: str) -> None:
+    with _FULLPIPELINE_BATCH_JOBS_LOCK:
+        job = _FULLPIPELINE_BATCH_JOBS.get(job_id)
+        if job is not None:
+            job["log"].append(msg)
+
+
+def _load_library_strategy_for_batch(mode: str, name: str):
+    """Loads one Strategy Library entry by (type, filename) into a runnable
+    Strategy object -- the manual-JSON case needs its own branch (it isn't
+    source code, so build_strategy_from_code doesn't handle it), matching
+    how the desktop's Strategy Library batch queue loads items."""
+    code = load_strategy_text(mode, name)
+    if mode == "manual":
+        return ManualStrategy(json.loads(code))
+    return build_strategy_from_code(mode, code)
+
+
+def _run_fullpipeline_batch_job(
+    job_id: str, df, batch_items, risk: RiskConfig, rules: PropRules,
+    cfg: FullPipelineConfig, active_label: str, ollama_settings: OllamaSettings | None,
+) -> None:
+    try:
+        summary = run_full_pipeline_batch(
+            df, batch_items, risk, rules, FULL_PIPELINE_DIR, cfg=cfg,
+            instrument=active_label, ollama_settings=ollama_settings,
+            progress_cb=lambda msg: _fullpipeline_batch_job_log(job_id, msg),
+            max_parallel_strategies=1,
+        )
+        outcomes = [
+            {
+                "label": o.label, "ok": o.ok, "reason": o.reason, "verdict": o.verdict,
+                "trades": o.trades, "net_profit": o.net_profit,
+                "eval_pass_probability": o.eval_pass_probability,
+                "report_html": (
+                    f"/full_pipeline_reports/{Path(o.report_html).name}" if o.report_html else None
+                ),
+            }
+            for o in summary.outcomes
+        ]
+        with _FULLPIPELINE_BATCH_JOBS_LOCK:
+            job = _FULLPIPELINE_BATCH_JOBS[job_id]
+            job["done"] = True
+            job["outcomes"] = outcomes
+            job["elapsed_seconds"] = summary.elapsed_seconds
+    except Exception as exc:  # noqa: BLE001 -- must surface on the status page, not crash the thread silently
+        log_crash("Full Pipeline batch (web)", exc=exc)
+        with _FULLPIPELINE_BATCH_JOBS_LOCK:
+            job = _FULLPIPELINE_BATCH_JOBS[job_id]
+            job["done"] = True
+            job["error"] = f"Unexpected error: {exc}"
+    finally:
+        HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
+
+
+@app.route("/full-pipeline/start-batch", methods=["POST"])
+def full_pipeline_start_batch():
+    """Runs the FULL 7-step Full Pipeline (not the lighter batch_test) on
+    every Strategy Library item the user checked, one after another --
+    the web equivalent of the desktop's "RUN FULL PIPELINE (BATCH)"
+    button (see app.orchestration.full_pipeline.run_full_pipeline_batch).
+    Shares the same dataset/risk/prop-rules/GA-config fields as the
+    single-strategy form above (submitted via this button's `formaction`
+    on the same <form>) -- only the strategy selection differs."""
+    form = request.form
+    if not HEAVY_JOB_GUARD.try_acquire(JOB_FULL_PIPELINE):
+        return render_template(
+            "full_pipeline.html",
+            error=(
+                f"{HEAVY_JOB_GUARD.active_name} is already running on this server. Running more than "
+                f"one heavy job (Search Lab / Evolution Lab / Full Pipeline / Speed Run) at the same "
+                f"time can exhaust available memory. Wait for it to finish before starting Full Pipeline."
+            ),
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
+            fitness_metrics=FITNESS_METRICS,
+        ), 409
+    try:
+        df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
+        if dataset_error:
+            HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
+            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+
+        selected = [s for s in form.getlist("batch_items") if s.strip()]
+        if not selected:
+            HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
+            return render_template(
+                "full_pipeline.html",
+                error="No strategies were selected for the batch. Check one or more strategies in the "
+                      "\"Run on multiple saved strategies\" list before clicking RUN FULL PIPELINE (BATCH).",
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
+                fitness_metrics=FITNESS_METRICS,
+            ), 400
+
+        batch_items = []
+        load_errors = []
+        for ref in selected:
+            mode, _, name = ref.partition("::")
+            try:
+                strategy = _load_library_strategy_for_batch(mode, name)
+            except Exception as exc:  # noqa: BLE001 -- one bad library entry must not block the rest
+                load_errors.append(f"{name} ({mode}): {exc}")
+                continue
+            batch_items.append(FullPipelineBatchItem(label=name, strategy=strategy, library_ref=(mode, name)))
+
+        if not batch_items:
+            HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
+            return render_template(
+                "full_pipeline.html",
+                error="Every selected strategy failed to load: " + "; ".join(load_errors),
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
+                fitness_metrics=FITNESS_METRICS,
+            ), 400
+
+        risk = RiskConfig(
+            initial_balance=float(form.get("initial_balance", 100000)),
+            risk_mode=form.get("risk_mode", "percent"),
+            risk_value=float(form.get("risk_value", 1.0)),
+            max_trades_per_day=int(form.get("max_trades_day", 10)),
+            commission_per_trade=float(form.get("commission", 0)),
+            slippage_pips=float(form.get("slippage_pips", 0.5)),
+            spread_pips=float(form.get("spread_pips", 1.0)),
+            pip_size=float(form.get("pip_size", 0.0001)),
+        )
+        rules = PropRules(
+            account_size=float(form.get("account_size", 100000)),
+            evaluation_profit_target_pct=float(form.get("profit_target", 8)),
+            daily_loss_limit_pct=float(form.get("daily_loss", 5)),
+            max_drawdown_pct=float(form.get("max_dd", 10)),
+        )
+        library_status_raw = (form.get("library_status") or "").strip()
+        cfg = FullPipelineConfig(
+            n_folds=int(form.get("n_folds", 4) or 4),
+            window_mode=form.get("window_mode", "rolling"),
+            ga_population=int(form.get("ga_population", 12) or 12),
+            ga_generations=int(form.get("ga_generations", 6) or 6),
+            ga_search_mc_sims=int(form.get("ga_search_mc_sims", 200) or 200),
+            adaptive_risk_enabled=form.get("adaptive_risk_enabled") == "on",
+            fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
+            final_mc_sims=int(form.get("final_mc_sims", 10000) or 10000),
+            baseline_mc_sims=int(form.get("baseline_mc_sims", 2000) or 2000),
+            holdout_frac=float(form.get("holdout_frac", 0.2) or 0.2),
+            oos_check_folds=int(form.get("oos_check_folds", 4) or 4),
+            random_seed=int(form.get("random_seed", 42) or 42),
+            save_to_library=form.get("save_to_library") == "on",
+            library_status=library_status_raw or None,
+            parallel_search=form.get("parallel_search", "on") == "on",
+        )
+
+        ollama_settings = None
+        if form.get("ai_enabled") == "on":
+            ollama_settings = OllamaSettings(
+                enabled=True,
+                host=form.get("ai_host", "http://localhost:11434") or "http://localhost:11434",
+                model=form.get("ai_model", "llama3.1") or "llama3.1",
+            )
+
+        job_id = uuid.uuid4().hex[:12]
+        initial_log = [f"Loaded {len(df)} bars from {active_label}.", f"Queued {len(batch_items)} strateg{'y' if len(batch_items) == 1 else 'ies'} for the Full Pipeline batch."]
+        if import_note:
+            initial_log.append(import_note)
+        if load_errors:
+            initial_log.append(f"{len(load_errors)} selected strateg{'y' if len(load_errors) == 1 else 'ies'} failed to load and were skipped: " + "; ".join(load_errors))
+        with _FULLPIPELINE_BATCH_JOBS_LOCK:
+            _FULLPIPELINE_BATCH_JOBS[job_id] = {
+                "log": initial_log, "done": False, "error": None, "outcomes": None,
+                "started_at": time.time(), "instrument": active_label, "total": len(batch_items),
+            }
+        thread = threading.Thread(
+            target=_run_fullpipeline_batch_job,
+            args=(job_id, df, batch_items, risk, rules, cfg, active_label, ollama_settings),
+            daemon=True,
+        )
+        thread.start()
+        return redirect(url_for("full_pipeline_batch_job", job_id=job_id))
+
+    except StrategyError as exc:
+        HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
+        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+    except Exception as exc:  # noqa: BLE001
+        HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
+        log_crash("Full Pipeline (web, start-batch)", exc=exc)
+        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 500
+
+
+@app.route("/full-pipeline/batch-job/<job_id>")
+def full_pipeline_batch_job(job_id):
+    with _FULLPIPELINE_BATCH_JOBS_LOCK:
+        job = _FULLPIPELINE_BATCH_JOBS.get(job_id)
+    if job is None:
+        return render_template("full_pipeline_batch_job.html", job_id=job_id, not_found=True), 404
+    return render_template("full_pipeline_batch_job.html", job_id=job_id, not_found=False, total=job["total"])
+
+
+@app.route("/full-pipeline/batch-job/<job_id>/status.json")
+def full_pipeline_batch_job_status(job_id):
+    with _FULLPIPELINE_BATCH_JOBS_LOCK:
+        job = _FULLPIPELINE_BATCH_JOBS.get(job_id)
+    if job is None:
+        return jsonify({"found": False}), 404
+    return jsonify({
+        "found": True,
+        "done": job["done"],
+        "error": job["error"],
+        "log": job["log"],
+        "total": job["total"],
+        "outcomes": job.get("outcomes"),
+        "elapsed_seconds": job.get("elapsed_seconds"),
+        "next_step": pipeline_guide.after_full_pipeline_batch(job["outcomes"]) if job.get("outcomes") else None,
+    })
+
+
 @app.route("/full-pipeline")
 def full_pipeline_form():
     saved_ai = load_ollama_settings()
@@ -1650,6 +1878,10 @@ def full_pipeline_job_status(job_id):
         "log": job["log"],
         "instrument": job.get("instrument"),
         "summary": summary,
+        "next_step": (
+            pipeline_guide.after_full_pipeline(result.verdict, bool(result.saved_library_note))
+            if result is not None else None
+        ),
     })
 
 
@@ -3174,7 +3406,7 @@ def evolution_promote():
         )
     except Exception as exc:  # noqa: BLE001
         return jsonify({"ok": False, "error": str(exc)}), 500
-    return jsonify({"ok": True, "filename": filename})
+    return jsonify({"ok": True, "filename": filename, "next_step": pipeline_guide.after_promote_to_library(filename)})
 
 
 @app.route("/evolution/status.json")
@@ -3201,6 +3433,7 @@ def evolution_status():
         "log": list(_EVOLUTION_LOG),
         "leaderboard": leaderboard,
         "journal": runner.journal[-30:],
+        "next_step": None if status["running"] else pipeline_guide.after_evolution_stop(status["leaderboard_size"]),
     })
 
 
@@ -3397,7 +3630,7 @@ def evolution_multi_instrument_promote(group_id):
         )
     except Exception as exc:  # noqa: BLE001
         return jsonify({"ok": False, "error": str(exc)}), 500
-    return jsonify({"ok": True, "filename": filename})
+    return jsonify({"ok": True, "filename": filename, "next_step": pipeline_guide.after_promote_to_library(filename)})
 
 
 # ---------------------------------------------------------------------------
@@ -3754,15 +3987,17 @@ def search_start():
         if import_note:
             initial_log.append(import_note)
         initial_log.extend(_family_exclusion_log)
+        cancel_event = threading.Event()
         with _SEARCH_JOBS_LOCK:
             _SEARCH_JOBS[job_id] = {
                 "log": initial_log,
-                "done": False, "error": None, "summary": None,
+                "done": False, "error": None, "summary": None, "cancelled": False,
                 "started_at": time.time(), "instrument": active_label, "mode": mode_key,
+                "cancel_event": cancel_event,
             }
         thread = threading.Thread(
             target=_run_search_job,
-            args=(job_id, df, risk, rules, space, stage_cfg, active_label, db_path, library_ref),
+            args=(job_id, df, risk, rules, space, stage_cfg, active_label, db_path, library_ref, cancel_event),
             daemon=True,
         )
         thread.start()
@@ -3801,6 +4036,25 @@ def search_job(job_id):
     return render_template("search_job.html", job_id=job_id, not_found=False)
 
 
+@app.route("/search/job/<job_id>/stop", methods=["POST"])
+def search_job_stop(job_id):
+    """Signals the background Search Lab job to stop at its next
+    between-candidate check (see app.search.batch_runner's own
+    _drain_futures/check_cancelled -- this can take up to ~1s to be
+    noticed, same latency as Evolution Lab's stop button). A no-op,
+    not an error, if the job is already done or was never found."""
+    with _SEARCH_JOBS_LOCK:
+        job = _SEARCH_JOBS.get(job_id)
+        if job is None:
+            return jsonify({"ok": False, "error": "Job not found."}), 404
+        if job.get("done"):
+            return jsonify({"ok": True, "already_done": True})
+        cancel_event = job.get("cancel_event")
+    if cancel_event is not None:
+        cancel_event.set()
+    return jsonify({"ok": True})
+
+
 @app.route("/search/job/<job_id>/status.json")
 def search_job_status(job_id):
     with _SEARCH_JOBS_LOCK:
@@ -3833,6 +4087,7 @@ def search_job_status(job_id):
         "found": True,
         "done": job["done"],
         "error": job["error"],
+        "cancelled": job.get("cancelled", False),
         "log": job["log"],
         "instrument": job.get("instrument"),
         "summary": None if summary is None else {
@@ -3847,6 +4102,10 @@ def search_job_status(job_id):
             "report_json": job.get("report_json"),
         },
         "leaderboard": leaderboard,
+        "next_step": (
+            pipeline_guide.after_search_complete(summary.champion_candidate_id, len(summary.leaderboard or []))
+            if (job["done"] and summary is not None) else None
+        ),
     })
 
 
@@ -3874,7 +4133,15 @@ def search_job_promote(job_id):
                 "html": f"/search_reports_champion/{job_id}/{result['report_paths']['html'].name}",
                 "json": f"/search_reports_champion/{job_id}/{result['report_paths']['json'].name}",
             }
-        return jsonify({"ok": True, "report_html": job["promoted"][candidate_id]["html"]})
+        return jsonify({
+            "ok": True,
+            "report_html": job["promoted"][candidate_id]["html"],
+            "next_step": (
+                "Champion report generated above. Next step: if you want a walk-forward-optimized "
+                "re-validation with a READY/MARGINAL/NOT READY verdict, save this candidate to the "
+                "Strategy Library (Manual Builder / Strategy Library tab) and run it through Full Pipeline."
+            ),
+        })
     except Exception as exc:  # noqa: BLE001
         return jsonify({"ok": False, "error": str(exc)}), 500
 
