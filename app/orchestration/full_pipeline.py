@@ -60,8 +60,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor
+from concurrent.futures import wait as futures_wait
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
@@ -854,6 +856,68 @@ def _finish(
 # backtest) against every strategy in a list, one after another.
 # ---------------------------------------------------------------------------
 
+# How long the parallel batch pool can go with ZERO completions before a
+# still-pending item is treated as stalled (a wedged worker, or one that
+# silently died) rather than just legitimately slow. Generous by design --
+# a real 7-step Full Pipeline run can take a long time per item -- but
+# finite, unlike the bare `as_completed()` this replaced. Module-level (not
+# a literal inline) so tests can shrink it instead of waiting 30 minutes.
+FULL_PIPELINE_BATCH_STALL_TIMEOUT_SECONDS = 1800.0
+
+
+def _drain_batch_pool_futures(
+    pool, futures: dict, cancel_event: "threading.Event | None", on_done, log,
+    stall_timeout: float = FULL_PIPELINE_BATCH_STALL_TIMEOUT_SECONDS,
+) -> None:
+    """Consumes {future: (i, label)} as each item's pipeline run finishes --
+    used by run_full_pipeline_batch's parallel path INSTEAD of Python's
+    `for future in as_completed(futures)`, which blocks until the NEXT
+    future completes with no timeout at all: one wedged worker (a hung GA
+    search inside one item's pipeline, or a worker process that silently
+    died) used to block the WHOLE batch indefinitely, with no way to stop
+    it either -- exactly the "the full pipeline stalled when I tried batch
+    generations" report this fixes. This is the same fix shape already
+    applied to Search Lab's 3 stages and the Evolution Lab (see
+    app.search.batch_runner._drain_futures / app.evolution.engine's
+    version) -- Full Pipeline's batch path had its own separate, still
+    unfixed, copy of the old blocking pattern.
+
+    Polls with a 1s timeout so cancel_event gets checked regardless of how
+    long any individual item's pipeline takes, and raises TimeoutError if
+    stall_timeout passes with zero completions (the caller's existing
+    BrokenProcessPool `except` already falls back to running whatever
+    hadn't finished serially in-process, so a genuine stall recovers via
+    that same path rather than needing a second one)."""
+    pending = set(futures.keys())
+    last_progress = time.time()
+    while pending:
+        if cancel_event is not None and cancel_event.is_set():
+            log("\nStop requested -- cancelling remaining strategy(ies) and shutting down workers...")
+            for fut in pending:
+                fut.cancel()
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise FullPipelineBatchCancelled("Full Pipeline batch stopped by user.")
+        done, pending = futures_wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+        if done:
+            last_progress = time.time()
+            for future in done:
+                on_done(futures[future], future)
+        elif pending and (time.time() - last_progress) > stall_timeout:
+            raise TimeoutError(
+                f"no progress for {int(stall_timeout)}s across {len(pending)} "
+                f"still-running strategy(ies) -- worker pool appears stalled"
+            )
+
+
+class FullPipelineBatchCancelled(Exception):
+    """Raised when the caller sets ``cancel_event`` mid-batch. Not an
+    error -- the UI catches this to report a clean user-requested stop
+    rather than a crash. Every item that had already finished before the
+    stop is still in the returned summary's outcomes (batch_progress.json
+    is also already up to date via _write_progress), so stopping a batch
+    partway through doesn't lose the work it already did."""
+
+
 @dataclass
 class FullPipelineBatchItem:
     label: str                                    # display name (e.g. the library filename)
@@ -923,6 +987,7 @@ def run_full_pipeline_batch(
     ollama_settings: "OllamaSettings | None" = None,
     progress_cb: ProgressCallback | None = None,
     max_parallel_strategies: int = 1,
+    cancel_event: threading.Event | None = None,
 ) -> FullPipelineBatchSummary:
     """Runs app.orchestration.full_pipeline.run_full_pipeline (the full
     baseline -> walk-forward-aware GA -> final validation -> OOS check ->
@@ -1055,6 +1120,12 @@ def run_full_pipeline_batch(
 
     if max_parallel_strategies <= 1 or len(items) <= 1:
         for i, item in enumerate(items, start=1):
+            if cancel_event is not None and cancel_event.is_set():
+                log(
+                    f"\nStop requested -- {len(outcomes_by_index)}/{len(items)} strategy(ies) already "
+                    f"finished and recorded above; the rest of the batch will not run."
+                )
+                raise FullPipelineBatchCancelled("Full Pipeline batch stopped by user.")
             log(f"\n===== [{i}/{len(items)}] Full Pipeline: {item.label} =====")
 
             def item_log(msg: str, _label=item.label) -> None:
@@ -1089,21 +1160,25 @@ def run_full_pipeline_batch(
                     ): (i, item.label)
                     for i, item in enumerate(items, start=1)
                 }
-                for future in as_completed(futures):
-                    i, label = futures[future]
+                def _on_item_done(label_tuple, future):
+                    i, label = label_tuple
                     log(f"\n===== [{i}/{len(items)}] Full Pipeline: {label} (finished) =====")
                     try:
                         _, _, ok, result, reason = future.result()
                     except Exception as exc:  # noqa: BLE001 -- worker crash must not stop the batch
                         ok, result, reason = False, None, str(exc)
                     _record(i, label, ok, result, reason)
-        except Exception as exc:  # noqa: BLE001 -- e.g. BrokenProcessPool: the whole
-            # pool died (a worker OOM'd, segfaulted, or was killed), which
-            # normally surfaces here rather than from an individual
-            # future.result() call. Whatever didn't finish yet falls back
-            # to running serially in THIS process instead of the entire
-            # rest of the batch silently vanishing with no report and no
-            # recorded reason.
+
+                _drain_batch_pool_futures(pool, futures, cancel_event, _on_item_done, log)
+        except FullPipelineBatchCancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 -- e.g. BrokenProcessPool, or the stall
+            # TimeoutError raised above: either way the whole pool is
+            # unusable, which normally surfaces here rather than from an
+            # individual future.result() call. Whatever didn't finish yet
+            # falls back to running serially in THIS process instead of
+            # the entire rest of the batch silently vanishing with no
+            # report and no recorded reason.
             log(f"\nParallel batch pool failed ({exc}) -- finishing the remaining strategy(ies) one at a time...")
             log_crash("Full Pipeline batch (worker pool)", exc=exc, extra=f"{len(outcomes_by_index)}/{len(items)} item(s) had already finished.")
             remaining = [
@@ -1111,6 +1186,12 @@ def run_full_pipeline_batch(
                 if i not in outcomes_by_index
             ]
             for i, item in remaining:
+                if cancel_event is not None and cancel_event.is_set():
+                    log(
+                        f"\nStop requested -- {len(outcomes_by_index)}/{len(items)} strategy(ies) "
+                        f"already finished and recorded above; the rest of the batch will not run."
+                    )
+                    raise FullPipelineBatchCancelled("Full Pipeline batch stopped by user.")
                 log(f"\n===== [{i}/{len(items)}] Full Pipeline: {item.label} =====")
 
                 def item_log(msg: str) -> None:
