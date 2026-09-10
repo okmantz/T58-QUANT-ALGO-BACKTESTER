@@ -5336,12 +5336,32 @@ class MainWindow:
 
     def _open_progress_window(self, title: str):
         """A small Toplevel with a scrolling log -- used for TEST SELECTED
-        (BATCH) so a multi-strategy run has somewhere to show progress
-        without borrowing the Search Lab tab's own console."""
+        (BATCH), OPTIMIZE SELECTED, and RUN FULL PIPELINE (BATCH) so a
+        multi-strategy run has somewhere to show progress without
+        borrowing the Search Lab tab's own console.
+
+        Also builds (but keeps hidden until populated) a per-strategy
+        RESULTS table with an OPEN REPORT button/double-click and an OPEN
+        ALL REPORTS button. Before this, a batch run of several strategies
+        only ever showed a plain text log -- each strategy's own report
+        WAS written to disk (run_batch_test / run_full_pipeline_batch
+        always wrote one full report per strategy, see
+        app.orchestration.batch_test / app.orchestration.full_pipeline),
+        but there was no way to open any of them except the single
+        strategy's report from the last time you happened to run ONE
+        strategy through 05 Run & Report or 15 Full Pipeline directly --
+        which reads exactly like "it only tested one and gave one report"
+        even though every strategy in the batch really was tested
+        individually the whole time. Call the returned `show_results()`
+        with the batch's list of outcome objects/dicts (anything with
+        `label`/`ok`/`verdict`/`eval_pass_probability`/`net_profit`/
+        `trades`/`report_html` attributes or keys -- BatchTestOutcome and
+        FullPipelineBatchOutcome both already match this shape) once the
+        run finishes to reveal it."""
         win = Toplevel(self.root)
         win.title(title)
         win.configure(bg=BG)
-        win.geometry("760x520")
+        win.geometry("820x680")
         try:
             _apply_dark_titlebar(win)
         except Exception:
@@ -5351,12 +5371,73 @@ class MainWindow:
         text_frame.pack(fill="both", expand=True, padx=14, pady=(0, 8))
         text_frame.rowconfigure(0, weight=1)
         text_frame.columnconfigure(0, weight=1)
-        txt = Text(text_frame, wrap="word", bg=PANEL_3, fg=TEXT, font=(MONO, 9), relief="flat", bd=0)
+        txt = Text(text_frame, wrap="word", bg=PANEL_3, fg=TEXT, font=(MONO, 9), relief="flat", bd=0, height=14)
         vs = ttk.Scrollbar(text_frame, orient="vertical", command=txt.yview, style="T58.Vertical.TScrollbar")
         txt.config(yscrollcommand=vs.set)
         self._bind_isolated_wheel(txt)
         txt.grid(row=0, column=0, sticky="nsew")
         vs.grid(row=0, column=1, sticky="ns")
+
+        # Results table -- built now, packed later (by show_results, once
+        # there's at least one outcome to show) so a run that's still in
+        # progress doesn't show an empty table above the CLOSE button.
+        results_frame = Frame(win, bg=BG)
+        Label(
+            results_frame, text="RESULTS -- one row per strategy tested, each with its own report",
+            bg=BG, fg=TEXT_DIM, font=_safe_font(8, "bold"),
+        ).pack(anchor="w", pady=(0, 4))
+        tree_wrap = Frame(results_frame, bg=PANEL, highlightthickness=1, highlightbackground=BORDER)
+        tree_wrap.pack(fill="both", expand=True)
+        columns = ("strategy", "verdict", "eval_pass", "net_profit", "trades")
+        results_tree = ttk.Treeview(
+            tree_wrap, columns=columns, show="headings", style="T58.Treeview", height=7,
+        )
+        for col, text, width in (
+            ("strategy", "Strategy", 220), ("verdict", "Verdict / status", 200),
+            ("eval_pass", "Eval Pass %", 90), ("net_profit", "Net Profit", 110), ("trades", "Trades", 70),
+        ):
+            results_tree.heading(col, text=text)
+            results_tree.column(col, width=width, anchor="w")
+        results_tree.pack(side="left", fill="both", expand=True)
+        results_tree_scroll = ttk.Scrollbar(
+            tree_wrap, orient="vertical", command=results_tree.yview, style="T58.Vertical.TScrollbar",
+        )
+        results_tree_scroll.pack(side="right", fill="y")
+        results_tree.configure(yscrollcommand=results_tree_scroll.set)
+        self._bind_isolated_wheel(results_tree)
+
+        _report_paths_by_row: dict[str, object] = {}
+
+        def _open_selected_report(_evt=None):
+            sel = results_tree.selection()
+            if not sel:
+                messagebox.showinfo("No row selected", "Select a strategy's row above first.")
+                return
+            path = _report_paths_by_row.get(sel[0])
+            if not path:
+                messagebox.showinfo(
+                    "No report", "This strategy didn't produce a report (it failed, was skipped, or "
+                    "generated zero trades).",
+                )
+                return
+            webbrowser.open(f"file://{Path(path).resolve()}")
+
+        results_tree.bind("<Double-1>", _open_selected_report)
+
+        results_btn_row = Frame(results_frame, bg=BG)
+        results_btn_row.pack(fill="x", pady=(6, 0))
+        self._button(results_btn_row, "OPEN REPORT", _open_selected_report, primary=True).pack(side="left")
+
+        def _open_all_reports():
+            paths = [p for p in _report_paths_by_row.values() if p]
+            if not paths:
+                messagebox.showinfo("No reports", "None of these strategies produced a report to open.")
+                return
+            for path in paths:
+                webbrowser.open(f"file://{Path(path).resolve()}")
+
+        self._button(results_btn_row, "OPEN ALL REPORTS", _open_all_reports).pack(side="left", padx=8)
+
         btn_row = Frame(win, bg=BG)
         btn_row.pack(fill="x", padx=14, pady=(0, 12))
         self._button(btn_row, "CLOSE", win.destroy).pack(side="left")
@@ -5370,7 +5451,51 @@ class MainWindow:
             except Exception:
                 pass
 
-        return win, append
+        def show_results(outcomes) -> None:
+            """Populates and reveals the results table -- one row per
+            strategy in `outcomes`, sorted successes-first by eval-pass
+            probability. Safe to call from a background thread (routes
+            through root.after like `append` does)."""
+            def _get(o, name, default=None):
+                return o.get(name, default) if isinstance(o, dict) else getattr(o, name, default)
+
+            def _do():
+                for row in results_tree.get_children():
+                    results_tree.delete(row)
+                _report_paths_by_row.clear()
+
+                ranked = sorted(
+                    outcomes,
+                    key=lambda o: (not _get(o, "ok", True), -(_get(o, "eval_pass_probability") or 0)),
+                )
+                for o in ranked:
+                    label = _get(o, "label", "?")
+                    if _get(o, "ok", True):
+                        verdict = _get(o, "verdict") or "OK"
+                        eval_pass = _get(o, "eval_pass_probability")
+                        net_profit = _get(o, "net_profit")
+                        trades = _get(o, "trades")
+                        values = (
+                            label, verdict,
+                            f"{eval_pass:.1f}" if eval_pass is not None else "--",
+                            f"${net_profit:,.2f}" if net_profit is not None else "--",
+                            trades if trades is not None else "--",
+                        )
+                    else:
+                        reason = _get(o, "reason") or "failed"
+                        values = (label, f"FAILED -- {reason}", "--", "--", "--")
+                    iid = results_tree.insert("", END, values=values)
+                    _report_paths_by_row[iid] = _get(o, "report_html")
+
+                if outcomes and not results_frame.winfo_ismapped():
+                    results_frame.pack(fill="both", expand=True, padx=14, pady=(0, 8), before=btn_row)
+
+            try:
+                self.root.after(0, _do)
+            except Exception:
+                pass
+
+        return win, append, show_results
 
     def _refresh_batch_checklist(self):
         """Rebuilds the Batch selection checkbox panel from every saved
@@ -5460,12 +5585,12 @@ class MainWindow:
         if not self.csv_paths:
             messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2 before testing strategies.")
             return
-        win, append = self._open_progress_window(f"Testing {len(items)} strategy(ies)...")
+        win, append, show_results = self._open_progress_window(f"Testing {len(items)} strategy(ies)...")
         threading.Thread(
-            target=self._run_library_batch_test_pipeline, args=(items, append), daemon=True,
+            target=self._run_library_batch_test_pipeline, args=(items, append, show_results), daemon=True,
         ).start()
 
-    def _run_library_batch_test_pipeline(self, items, log):
+    def _run_library_batch_test_pipeline(self, items, log, show_results=None):
         """Runs every checked Strategy Library item through
         app.orchestration.batch_test.run_batch_test -- the same pipeline
         Bulk Backtest already uses, just sourced from the Batch selection
@@ -5526,6 +5651,8 @@ class MainWindow:
                 log("\nRanked by eval pass probability:")
                 for o in ranked:
                     log(f"  {o.eval_pass_probability:5.1f}%  ${o.net_profit:>12,.2f}   {o.label}")
+            if show_results is not None:
+                show_results(summary.outcomes)
             # This whole method runs on a background thread (see
             # _run_batch_checked_clicked) -- Tkinter widgets can only safely
             # be touched from the main thread, so both refreshes are handed
@@ -5565,7 +5692,7 @@ class MainWindow:
         if not self.csv_paths:
             messagebox.showwarning("Missing data", "Please select a market data file in Step 2 before optimizing.")
             return
-        win, append = self._open_progress_window(f"Optimizing {len(items)} strategy(ies)...")
+        win, append, _show_results = self._open_progress_window(f"Optimizing {len(items)} strategy(ies)...")
         threading.Thread(
             target=self._run_library_quick_optimize, args=(items, append), daemon=True,
         ).start()
@@ -5649,12 +5776,12 @@ class MainWindow:
         )
         if not proceed:
             return
-        win, append = self._open_progress_window(f"Full Pipeline: {len(items)} strategy(ies)...")
+        win, append, show_results = self._open_progress_window(f"Full Pipeline: {len(items)} strategy(ies)...")
         threading.Thread(
-            target=self._run_library_full_pipeline_batch, args=(items, append), daemon=True,
+            target=self._run_library_full_pipeline_batch, args=(items, append, show_results), daemon=True,
         ).start()
 
-    def _run_library_full_pipeline_batch(self, items, log):
+    def _run_library_full_pipeline_batch(self, items, log, show_results=None):
         """Runs every checked Strategy Library item through
         app.orchestration.full_pipeline.run_full_pipeline_batch -- the same
         FULL 7-step pipeline the 15 Full Pipeline tab's single-strategy
@@ -5780,6 +5907,8 @@ class MainWindow:
                         for o in summary.outcomes
                     ])
                 )
+            if show_results is not None:
+                show_results(summary.outcomes)
 
             # Background thread -- see _run_library_batch_test_pipeline for
             # why these refreshes are routed through root.after instead of
