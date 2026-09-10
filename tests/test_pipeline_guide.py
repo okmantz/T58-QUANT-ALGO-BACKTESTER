@@ -78,3 +78,72 @@ def test_after_full_pipeline_batch_all_failed():
     outcomes = [{"label": "a", "ok": False, "verdict": None, "eval_pass_probability": 0.0}]
     msg = pg.after_full_pipeline_batch(outcomes)
     assert "Evolution Lab or Search Lab" in msg
+
+
+def test_after_first_backtest_zero_trades():
+    msg = pg.after_first_backtest({"trade_count": 0})
+    assert "zero trades" in msg.lower()
+
+
+def test_after_first_backtest_too_few_trades():
+    msg = pg.after_first_backtest({"trade_count": 5, "profit_factor": 1.5, "max_drawdown_pct": 5})
+    assert "5 trade" in msg
+    assert "too few" in msg.lower()
+
+
+def test_after_first_backtest_losing():
+    msg = pg.after_first_backtest({"trade_count": 50, "profit_factor": 0.8, "max_drawdown_pct": 5})
+    assert "0.80" in msg
+    assert "loses money" in msg.lower()
+
+
+def test_after_first_backtest_severe_drawdown():
+    msg = pg.after_first_backtest({"trade_count": 50, "profit_factor": 1.4, "max_drawdown_pct": 55})
+    assert "55.0%" in msg
+    assert "drawdown" in msg.lower()
+
+
+def test_after_first_backtest_failed_eval():
+    msg = pg.after_first_backtest(
+        {"trade_count": 50, "profit_factor": 1.4, "max_drawdown_pct": 12}, passed_evaluation=False,
+    )
+    assert "failed the prop-firm simulation" in msg
+
+
+def test_after_first_backtest_looks_good():
+    msg = pg.after_first_backtest(
+        {"trade_count": 80, "profit_factor": 1.6, "max_drawdown_pct": 10}, passed_evaluation=True,
+    )
+    assert "pass probability" in msg.lower()
+    assert "Full Pipeline" in msg
+
+
+def test_strategy_creation_recommendation_with_idea():
+    msg = pg.strategy_creation_recommendation(True)
+    assert "Manual Builder" in msg
+
+
+def test_strategy_creation_recommendation_without_idea():
+    msg = pg.strategy_creation_recommendation(False)
+    assert "Search Lab" in msg
+    assert "Evolution Lab" in msg
+
+
+def test_after_forward_test_with_errors():
+    msg = pg.after_forward_test({"trade_count": 3, "errors": ["symbol not found"]})
+    assert "1 error" in msg
+
+
+def test_after_forward_test_no_trades():
+    msg = pg.after_forward_test({"trade_count": 0, "errors": []})
+    assert "no trades" in msg.lower()
+
+
+def test_after_forward_test_mismatch():
+    msg = pg.after_forward_test({"trade_count": 10, "errors": [], "matched_backtest": False})
+    assert "diverged" in msg.lower()
+
+
+def test_after_forward_test_clean():
+    msg = pg.after_forward_test({"trade_count": 10, "errors": [], "matched_backtest": True})
+    assert "Deploy Live" in msg

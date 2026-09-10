@@ -30,11 +30,37 @@ def test_resources_page_loads():
     assert b"docs.google.com/document/d/17tdRY_tzpHOdw8_a1EpAgOmradTbu02Dlo6BOAnK0Wg" in r.data
 
 
+def test_resources_page_links_mslsd_strategy_doc_instead_of_pasting_it():
+    """The MS-LSD strategy write-up used to be pasted in full on this page
+    -- now it's a clean link-out to the real doc (kept in sync there
+    instead of drifting from a stale copy pasted here)."""
+    client = app.test_client()
+    r = client.get("/resources")
+    assert r.status_code == 200
+    assert b"docs.google.com/document/d/14jubETVbumncdLJrTrw2ke-NxFPXkT34qzH4_Q1BguA" in r.data
+    assert b"Open the MS-LSD strategy doc" in r.data
+    # The old pasted walkthrough paragraphs should be gone.
+    assert b"A valid OB needs" not in r.data
+
+
 def test_resources_link_appears_in_sidebar():
     client = app.test_client()
     r = client.get("/dashboard")
     assert r.status_code == 200
     assert b'href="/resources"' in r.data
+
+
+def test_user_manual_page_loads_with_decision_guide():
+    """The User Manual used to be a purely linear walkthrough with no
+    branching logic. This confirms the new decision-guide section (real
+    "if this happened, do that" branches, not just numbered steps) is
+    present alongside the original step-by-step content."""
+    client = app.test_client()
+    r = client.get("/user-manual")
+    assert r.status_code == 200
+    assert b"Decision guide" in r.data
+    assert b"Zero trades generated" in r.data
+    assert b"Evolution Lab winners pass on its own leaderboard" in r.data
 
 
 def test_mobile_access_page_loads_without_tailscale(monkeypatch):
