@@ -125,6 +125,43 @@ def test_missing_csv_returns_error():
     assert b"CSV" in r.data or b"dataset" in r.data
 
 
+def test_detect_pip_size_against_uploaded_csv():
+    """Web counterpart to the desktop's DETECT PIP SIZE FROM DATA button
+    (see app.ui.main_window._detect_pip_size_from_data): given a freshly
+    uploaded CSV (not yet a stored dataset), the endpoint should return a
+    suggested pip_size derived from the data's own price scale rather than
+    requiring a backtest run first."""
+    client = app.test_client()
+    import io
+    r = client.post(
+        "/data/detect-pip-size",
+        data={"csv_file": (io.BytesIO(_make_bigger_csv(7)), "eurusd.csv")},
+        content_type="multipart/form-data",
+    )
+    assert r.status_code == 200
+    payload = r.get_json()
+    assert payload["pip_size"] == 0.0001  # FX-scale prices (~1.10) in _make_bigger_csv
+    assert "eurusd.csv" in payload["message"]
+
+
+def test_detect_pip_size_against_stored_dataset(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "get_app_base_dir", lambda: tmp_path)
+    storage.store_csv_bytes(_make_bigger_csv(9), "stored_fx.csv")
+    client = app.test_client()
+    r = client.post("/data/detect-pip-size", data={"existing_dataset": "stored_fx.csv"})
+    assert r.status_code == 200
+    payload = r.get_json()
+    assert payload["pip_size"] == 0.0001
+    assert "stored_fx.csv" in payload["message"]
+
+
+def test_detect_pip_size_with_nothing_selected_returns_error():
+    client = app.test_client()
+    r = client.post("/data/detect-pip-size", data={})
+    assert r.status_code == 400
+    assert "error" in r.get_json()
+
+
 _BIGGER_CSV = None
 
 
@@ -477,3 +514,178 @@ def test_full_pipeline_start_batch_with_no_selection_shows_error():
 
     from app.orchestration.resource_guard import HEAVY_JOB_GUARD, JOB_FULL_PIPELINE
     HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
+
+
+def test_full_pipeline_batch_job_can_be_stopped_mid_run():
+    """Regression test for a real gap: there was no way at all to stop a
+    running Full Pipeline batch job once started (see
+    app.orchestration.full_pipeline.run_full_pipeline_batch's cancel_event /
+    FullPipelineBatchCancelled, and the new /full-pipeline/batch-job/<id>/stop
+    route). Starts a 3-strategy batch, hits stop immediately, and confirms
+    the job reports 'cancelled' rather than either hanging or silently
+    finishing the whole batch anyway."""
+    import json as _json
+    import time as _time
+
+    from app.strategy.library import delete_saved_strategy, save_strategy_text
+
+    manual_cfg = {
+        "name": "stop-test-strategy",
+        "indicators": [
+            {"type": "sma", "period": 10, "column": "close", "as": "sma_fast"},
+            {"type": "sma", "period": 30, "column": "close", "as": "sma_slow"},
+        ],
+        "long_entry": "sma_fast > sma_slow", "long_exit": "sma_fast < sma_slow",
+        "short_entry": "sma_fast < sma_slow", "short_exit": "sma_fast > sma_slow",
+        "stop_loss_pips": 20, "take_profit_pips": 40,
+    }
+    names = []
+    for i in range(3):
+        name = f"web_batch_stop_test_strategy_{i}.json"
+        save_strategy_text(_json.dumps(manual_cfg), name, "manual", overwrite=True)
+        names.append(name)
+
+    client = app.test_client()
+    sample_csv = Path(__file__).resolve().parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv"
+
+    try:
+        with open(sample_csv, "rb") as f:
+            data = {
+                "csv_file": (f, "EURUSD_5M_sample.csv"),
+                "batch_items": [f"manual::{n}" for n in names],
+                "n_folds": "2", "window_mode": "rolling",
+                "ga_population": "4", "ga_generations": "1", "ga_search_mc_sims": "20",
+                "final_mc_sims": "50", "baseline_mc_sims": "20",
+                "holdout_frac": "0.2", "oos_check_folds": "2", "random_seed": "42",
+                "account_size": "100000", "profit_target": "8", "daily_loss": "5", "max_dd": "10",
+                "initial_balance": "100000", "risk_mode": "percent", "risk_value": "1.0",
+                "max_trades_day": "10", "commission": "0", "slippage_pips": "0.5",
+                "spread_pips": "1.0", "pip_size": "0.0001",
+                "save_to_library": "off", "parallel_search": "off",
+            }
+            r = client.post("/full-pipeline/start-batch", data=data, content_type="multipart/form-data")
+        assert r.status_code == 302
+        job_id = r.headers["Location"].rstrip("/").split("/")[-1]
+
+        stop_r = client.post(f"/full-pipeline/batch-job/{job_id}/stop")
+        assert stop_r.status_code == 200
+        assert stop_r.get_json()["ok"] is True
+
+        deadline = _time.time() + 90
+        status = {}
+        while _time.time() < deadline:
+            status = client.get(f"/full-pipeline/batch-job/{job_id}/status.json").get_json()
+            if status.get("done"):
+                break
+            _time.sleep(0.5)
+
+        assert status.get("done") is True
+        assert status.get("cancelled") is True
+        # Stopping this early (right after the job starts) should mean the
+        # batch never got through all 3 -- either 0 or 1 outcomes recorded,
+        # never all 3, which would indicate stop had no real effect.
+        assert len(status.get("outcomes") or []) < 3
+
+        # Stopping an already-finished job is a no-op, not an error.
+        again = client.post(f"/full-pipeline/batch-job/{job_id}/stop")
+        assert again.status_code == 200
+        assert again.get_json().get("already_done") is True
+    finally:
+        for n in names:
+            try:
+                delete_saved_strategy("manual", n)
+            except Exception:
+                pass
+        from app.orchestration.resource_guard import HEAVY_JOB_GUARD, JOB_FULL_PIPELINE
+        HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
+
+
+def test_full_pipeline_batch_stop_route_404_for_unknown_job():
+    client = app.test_client()
+    r = client.post("/full-pipeline/batch-job/does-not-exist/stop")
+    assert r.status_code == 404
+    assert r.get_json()["ok"] is False
+
+
+# ---------------------------------------------------------------------------
+# Evolution Lab PROMOTE overfitting-gap guard -- regression coverage for a
+# real report: strategies promoted at a raw "40% pass / 30% payout" coming
+# back 2%/1% out of Full Pipeline. Everything upstream of
+# app.evolution.engine.EvolutionRunner._cpcv_and_pbo scores each candidate
+# against the SAME data the GA searched against, so a big gap between the
+# raw in-sample number and the honest, held-out cpcv_oos_eval_pass_probability
+# is the early warning sign -- this was computed and even logged, but never
+# surfaced anywhere PROMOTE itself would show it before saving.
+# ---------------------------------------------------------------------------
+
+def _fake_checkpoint_with_candidate(record: dict):
+    class _FakeCheckpoint:
+        leaderboard = [record]
+    return _FakeCheckpoint()
+
+
+def test_evolution_promote_requires_confirmation_on_large_overfitting_gap(monkeypatch, tmp_path):
+    from app.evolution import checkpoint as evo_checkpoint
+    from app.strategy import library
+
+    monkeypatch.setattr(library, "get_app_base_dir", lambda: tmp_path)
+    record = {
+        "candidate_id": "gap-test-0001",
+        "spec": {"config": {"name": "Gap Test", "market": {"instrument": "XAUUSD"}}},
+        "meta": {"family": "test_family"},
+        "mc_summary": {"evaluation_pass_probability": 40.0, "first_payout_probability": 30.0},
+        "cpcv_oos_eval_pass_probability": 2.0,  # 38-point gap -- well over the 15-point threshold
+    }
+    monkeypatch.setattr(
+        evo_checkpoint, "load_checkpoint", lambda *a, **k: _fake_checkpoint_with_candidate(record),
+    )
+
+    client = app.test_client()
+    r = client.post("/evolution/promote", data={"candidate_id": "gap-test-0001"})
+    assert r.status_code == 409
+    payload = r.get_json()
+    assert payload["ok"] is False
+    assert payload["needs_confirmation"] is True
+    assert payload["raw_pass_probability"] == 40.0
+    assert payload["cpcv_oos_eval_pass_probability"] == 2.0
+
+    # No file should have been saved yet -- the gate must block the save,
+    # not just warn after the fact.
+    assert not any(
+        i.name.startswith("evolab_promoted_test_family_")
+        for i in library.list_saved_strategies("manual")
+    )
+
+    # force=1 (the client sends this only after the user confirms the
+    # confirm() dialog) bypasses the gate and actually saves.
+    r2 = client.post("/evolution/promote", data={"candidate_id": "gap-test-0001", "force": "1"})
+    assert r2.status_code == 200
+    assert r2.get_json()["ok"] is True
+    assert any(
+        i.name.startswith("evolab_promoted_test_family_")
+        for i in library.list_saved_strategies("manual")
+    )
+
+
+def test_evolution_promote_no_confirmation_needed_when_gap_is_small(monkeypatch, tmp_path):
+    from app.evolution import checkpoint as evo_checkpoint
+    from app.strategy import library
+
+    monkeypatch.setattr(library, "get_app_base_dir", lambda: tmp_path)
+    record = {
+        "candidate_id": "small-gap-0001",
+        "spec": {"config": {"name": "Small Gap", "market": {"instrument": "XAUUSD"}}},
+        "meta": {"family": "test_family_2"},
+        "mc_summary": {"evaluation_pass_probability": 40.0, "first_payout_probability": 30.0},
+        "cpcv_oos_eval_pass_probability": 32.0,  # only an 8-point gap -- under the threshold
+    }
+    monkeypatch.setattr(
+        evo_checkpoint, "load_checkpoint", lambda *a, **k: _fake_checkpoint_with_candidate(record),
+    )
+
+    client = app.test_client()
+    r = client.post("/evolution/promote", data={"candidate_id": "small-gap-0001"})
+    assert r.status_code == 200
+    assert r.get_json()["ok"] is True
+
+

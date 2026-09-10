@@ -336,3 +336,102 @@ def generate_signals(df: pd.DataFrame) -> pd.Series:
     saved = [s for s in library.list_saved_strategies("python") if s.name == filename][0]
     assert saved.metadata.get("last_run") is not None
     assert saved.metadata["last_run"].get("verdict") in ("READY", "MARGINAL", "NOT READY")
+
+
+# ---------------------------------------------------------------------------
+# Batch Full Pipeline -- cancellation / stop button. Regression coverage for
+# two real reports: (1) there was no way at all to stop a running batch, and
+# (2) "the full pipeline stalled when I tried batch generations" -- the
+# parallel path used `for future in as_completed(futures)` with no timeout
+# at all, the same hang class already fixed in Search Lab/Evolution Lab.
+# ---------------------------------------------------------------------------
+
+def test_full_pipeline_batch_stops_between_items_when_cancelled_serial(tmp_path):
+    import threading
+
+    from app.orchestration.full_pipeline import FullPipelineBatchCancelled
+
+    df = _trending_df()
+    items = [
+        FullPipelineBatchItem(label="sma_a", strategy=ManualStrategy(_sma_config(fast=5, slow=15))),
+        FullPipelineBatchItem(label="sma_b", strategy=ManualStrategy(_sma_config(fast=8, slow=21))),
+        FullPipelineBatchItem(label="sma_c", strategy=ManualStrategy(_sma_config(fast=13, slow=34))),
+    ]
+    cancel_event = threading.Event()
+
+    def _log(msg):
+        if "[1/3]" in msg:
+            cancel_event.set()  # simulate STOP being clicked right after item 1 starts
+
+    with pytest.raises(FullPipelineBatchCancelled):
+        run_full_pipeline_batch(
+            df, items, RiskConfig(), PropRules(), tmp_path, cfg=_cfg(),
+            progress_cb=_log, cancel_event=cancel_event,
+        )
+    # item 1 still got to finish and be recorded before the stop took effect;
+    # items 2 and 3 never ran.
+    progress_path = tmp_path / "batch_progress.json"
+    assert progress_path.exists()
+    import json
+    payload = json.loads(progress_path.read_text())
+    assert payload["completed_items"] == 1
+    assert payload["outcomes"][0]["label"] == "sma_a"
+
+
+def test_full_pipeline_batch_pool_futures_stop_promptly_on_cancel():
+    import threading as threading_mod
+    from concurrent.futures import Future
+
+    from app.orchestration.full_pipeline import FullPipelineBatchCancelled, _drain_batch_pool_futures
+
+    hung_future: Future = Future()
+    finished_future: Future = Future()
+    finished_future.set_result((1, "sma_a", True, None, None))
+    futures = {hung_future: (2, "sma_b"), finished_future: (1, "sma_a")}
+
+    cancel_event = threading_mod.Event()
+    shutdown_calls = []
+
+    class _FakePool:
+        def shutdown(self, wait=False, cancel_futures=False):
+            shutdown_calls.append((wait, cancel_futures))
+
+    seen = []
+
+    def _on_done(label_tuple, future):
+        seen.append(label_tuple)
+        cancel_event.set()  # simulate STOP right after the first item finishes
+
+    import time
+
+    t0 = time.time()
+    with pytest.raises(FullPipelineBatchCancelled):
+        _drain_batch_pool_futures(_FakePool(), futures, cancel_event, _on_done, log=lambda msg: None)
+    elapsed = time.time() - t0
+
+    assert seen == [(1, "sma_a")]
+    assert elapsed < 3.0
+    assert shutdown_calls == [(False, True)]
+
+
+def test_full_pipeline_batch_pool_futures_raises_timeout_on_a_genuine_stall():
+    """A wedged worker (never completes, cancel never requested) used to
+    block the whole batch forever via as_completed() with no timeout --
+    this is exactly the "stalled when I tried batch generations" report.
+    _drain_batch_pool_futures should raise TimeoutError well before any
+    unreasonable wait, so the caller's existing BrokenProcessPool fallback
+    recovers instead of hanging."""
+    from concurrent.futures import Future
+
+    from app.orchestration.full_pipeline import _drain_batch_pool_futures
+
+    hung_future: Future = Future()  # never set -- simulates a wedged worker
+    futures = {hung_future: (1, "sma_a")}
+
+    with pytest.raises(TimeoutError):
+        _drain_batch_pool_futures(
+            pool=None, futures=futures, cancel_event=None,
+            on_done=lambda *_: None, log=lambda msg: None, stall_timeout=0.05,
+        )
+
+

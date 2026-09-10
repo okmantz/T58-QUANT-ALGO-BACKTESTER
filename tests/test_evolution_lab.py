@@ -7,7 +7,9 @@ import pandas as pd
 import pytest
 
 from app.backtest.risk import RiskConfig
-from app.evolution.engine import EvolutionCandidateRecord, EvolutionConfig, EvolutionRunner
+from app.evolution.engine import (
+    EvolutionCandidateRecord, EvolutionConfig, EvolutionRunner, evolution_stats_metadata,
+)
 from app.evolution.knowledge_graph import KnowledgeGraph, feature_vector_for_spec
 from app.evolution.prop_fitness import compute_prop_fitness
 from app.prop.simulator import PropRules
@@ -110,6 +112,51 @@ def test_evolution_runner_one_generation_smoke(tmp_path):
     assert (tmp_path / "checkpoint.json").exists()
     tested_rows = runner.tested_candidates()
     assert len(tested_rows) >= 10
+
+
+def test_cpcv_pool_computes_honest_out_of_sample_pass_probability(tmp_path):
+    """Regression coverage for the root cause behind 'I promote strategies
+    with 40%/30% out of Evolution Lab and they come back 2%/1% out of Full
+    Pipeline': every stage up to and including the full eval's own Monte
+    Carlo runs a backtest over the SAME entire dataset the GA has been
+    selecting genomes against for many generations, so the raw
+    eval_pass_probability on the leaderboard is an in-sample number that
+    systematically overstates a genome's real edge. CPCV is the one stage
+    that scores candidates against genuinely held-out folds -- this
+    confirms its honest out-of-sample estimate (mean_oos_metric) actually
+    gets stored on the record and threaded through into the metadata
+    Strategy Library entries carry, instead of being computed and thrown
+    away (which is what was happening before this fix -- only `pbo` and
+    `cpcv_degradation`, a delta, were ever kept)."""
+    df = _trending_df()
+    cfg = EvolutionConfig(
+        population_size=10, elite_keep=2, max_generations=1,
+        min_trades=3, min_profit_factor=0.0, max_drawdown_buffer_mult=20.0,
+        mc_sims=50, robustness_neighbors=1, walk_forward_folds=2,
+        cpcv_top_n=3, cpcv_max_paths=3, cpcv_n_groups=3,
+        save_to_library=False, knowledge_graph_path=str(tmp_path / "kg.jsonl"),
+        checkpoint_path=str(tmp_path / "checkpoint.json"),
+        tested_log_path=str(tmp_path / "tested_candidates.jsonl"),
+    )
+    runner = EvolutionRunner(df, RiskConfig(), PropRules(), cfg, progress_cb=None)
+    runner._run_loop()
+
+    if not runner.leaderboard:
+        pytest.skip("no survivors on this synthetic run -- nothing reached the CPCV pool to check")
+
+    # Every leaderboard entry went through _cpcv_and_pbo (leaderboard is
+    # built from the CPCV pool's clustered survivors), so each should carry
+    # an actual out-of-sample estimate -- not just the delta/pbo scalars.
+    for r in runner.leaderboard:
+        assert r.cpcv_oos_eval_pass_probability is not None
+        assert 0.0 <= r.cpcv_oos_eval_pass_probability <= 100.0
+
+        meta = evolution_stats_metadata(r.to_checkpoint_dict(), generation=0)
+        assert meta["cpcv_oos_eval_pass_probability"] == r.cpcv_oos_eval_pass_probability
+        assert meta["cpcv_degradation"] == r.cpcv_degradation
+        # The raw (in-sample, potentially inflated) number must still be
+        # present too -- this is additive honesty, not a silent swap.
+        assert "eval_pass_probability" in meta
 
 
 def test_evolution_runner_resumes_from_checkpoint(tmp_path):
@@ -471,3 +518,42 @@ def test_auto_exclude_can_be_disabled(tmp_path, monkeypatch):
     )
     runner = EvolutionRunner(_trending_df(n=500), RiskConfig(), PropRules(), cfg, progress_cb=None)
     assert runner.cfg.families is None
+
+
+def test_family_exclusions_never_collapse_active_families_below_the_floor(tmp_path, monkeypatch):
+    """Regression test for the real report this fixes: "every time I run
+    the evolution lab, it creates the same three strategies." Root cause
+    -- family exclusions accumulate across every past session with no
+    decay, and the old safety check only ever guaranteed "not zero
+    families," so the active list could silently shrink down to a
+    stagnant handful over time. Simulates that exact state (all but 3
+    families flagged dead-end) and confirms EvolutionRunner backs off to
+    searching every family instead of locking in on just the 3."""
+    monkeypatch.setattr("app.search.family_health.get_app_base_dir", lambda: tmp_path / "base")
+    from app.search.results_db import ResultsDB
+    from app.search.strategy_space import list_families
+    all_families = list(list_families())
+    assert len(all_families) > 6
+    survivors_to_keep = set(all_families[:3])
+    search_dir = tmp_path / "base" / "reports" / "search"
+    for fam in all_families:
+        if fam in survivors_to_keep:
+            continue
+        with ResultsDB(search_dir / f"search_{fam}.db") as db:
+            db.create_run(f"run_{fam}", mode="family", family=fam, instrument="X",
+                           timeframe="Y", total_candidates=30, config={})
+            for i in range(30):
+                db.insert_candidate(f"run_{fam}", f"{fam}-{i}", "stage1", {"family": fam, "passed_stage1": True})
+            db.finish_run(f"run_{fam}")
+
+    cfg = EvolutionConfig(knowledge_graph_path=str(tmp_path / "kg.jsonl"))
+    runner = EvolutionRunner(_trending_df(n=500), RiskConfig(), PropRules(), cfg, progress_cb=None)
+
+    # Would have collapsed to just the 3 survivors -- below the default
+    # floor of 6 -- so cfg.families must fall back to every family, not
+    # be pinned down to the 3.
+    assert runner.cfg.families is None
+    status = runner.status()
+    assert status["family_health"]["applied"] is True
+    assert status["family_health"]["active_family_count"] == len(all_families)
+    assert set(status["family_health"]["excluded"]) == set(all_families) - survivors_to_keep

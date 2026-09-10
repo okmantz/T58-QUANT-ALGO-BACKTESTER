@@ -162,3 +162,48 @@ def test_apply_family_exclusions_never_excludes_everything(tmp_path, monkeypatch
     families, excluded = apply_family_exclusions(search_dir, evo_dir, min_samples=30)
     assert families is None
     assert set(excluded) == set(list_families())
+
+
+def test_apply_family_exclusions_never_collapses_to_a_handful_of_survivors(tmp_path):
+    """Regression test for a real report: "every time I run the evolution
+    lab, it creates the same three strategies." Root cause -- the OLD
+    safety rule here only ever checked "would this leave zero families,"
+    so on an instrument where most families legitimately fail most of
+    the time, exclusions can accumulate across dozens of sessions until
+    only a small handful of survivor families are ever left in play --
+    which is exactly what happened. This asserts the NEW min_active_families
+    floor kicks in well before that point: excluding all-but-3 of the
+    registered families must back off to searching everything, not hand
+    back a search space collapsed down to 3."""
+    search_dir = tmp_path / "search"
+    evo_dir = tmp_path / "evolution"
+    from app.search.strategy_space import list_families
+    all_families = list_families()
+    assert len(all_families) > 6  # sanity: this test only means something if there ARE more than 6 to collapse from
+    survivors_to_keep = set(list(all_families)[:3])
+    for fam in all_families:
+        if fam not in survivors_to_keep:
+            _make_search_db(search_dir / f"search_{fam}.db", fam, n_tested=30, n_passed=0, run_id=f"run_{fam}")
+
+    families, excluded = apply_family_exclusions(search_dir, evo_dir, min_samples=30, min_active_families=6)
+    # Would have left only 3 families in play -- below the floor -- so
+    # this must back off to searching everything instead.
+    assert families is None
+    assert set(excluded) == set(all_families) - survivors_to_keep
+
+
+def test_apply_family_exclusions_allows_exclusion_when_plenty_of_survivors_remain(tmp_path):
+    """The floor should NOT block a normal, healthy exclusion where
+    plenty of diverse families remain -- only the collapse case."""
+    search_dir = tmp_path / "search"
+    evo_dir = tmp_path / "evolution"
+    from app.search.strategy_space import list_families
+    all_families = list(list_families())
+    # Exclude just one family -- plenty of survivors remain either way.
+    dead_family = all_families[0]
+    _make_search_db(search_dir / "search_dead.db", dead_family, n_tested=30, n_passed=0)
+
+    families, excluded = apply_family_exclusions(search_dir, evo_dir, min_samples=30, min_active_families=6)
+    assert families is not None
+    assert dead_family not in families
+    assert excluded == [dead_family]

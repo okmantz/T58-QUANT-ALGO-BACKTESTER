@@ -506,7 +506,7 @@ def test_drain_futures_stops_promptly_on_a_hung_future():
 
     t0 = time.time()
     with pytest.raises(SearchCancelled):
-        _drain_futures(_FakePool(), futures, cancel_event, _on_result, log=lambda msg: None)
+        _drain_futures([_FakePool()], futures, cancel_event, _on_result, log=lambda msg: None)
     elapsed = time.time() - t0
 
     assert ("finished", "ok") in results
@@ -527,9 +527,93 @@ def test_drain_futures_runs_all_results_to_completion_when_never_cancelled():
         futures[fut] = f"label-{i}"
 
     seen = []
-    _drain_futures(pool=None, futures=futures, cancel_event=None, on_result=lambda label, fut: seen.append((label, fut.result())), log=lambda msg: None)
+    _drain_futures(pool_box=[None], futures=futures, cancel_event=None, on_result=lambda label, fut: seen.append((label, fut.result())), log=lambda msg: None)
 
     assert sorted(seen) == sorted((f"label-{i}", i * 10) for i in range(5))
+
+
+def test_drain_futures_recovers_from_a_genuine_stall_via_pool_respawn():
+    """Regression test for the follow-up bug the STOP-button fix above
+    didn't cover: nobody clicks Stop on an unattended overnight run, so a
+    genuinely wedged worker (not a user-requested cancel) used to hang
+    Search Lab forever with zero further progress ("stalled at 32/40
+    batches" with no recovery). When a pool_factory is supplied and no
+    future completes for stall_timeout seconds, _drain_futures should
+    terminate the stuck pool, spawn a replacement via pool_factory, report
+    the stuck futures to on_result as skipped (fut=None), and return
+    normally instead of hanging."""
+    from concurrent.futures import Future
+
+    from app.search.batch_runner import _drain_futures
+
+    hung_future: Future = Future()  # never set -- simulates a wedged worker forever
+    futures = {hung_future: "stuck-batch"}
+
+    shutdown_calls = []
+    terminated = []
+
+    class _FakeStuckPool:
+        _processes = {}  # empty -- exercises the "no live processes" path too
+
+        def shutdown(self, wait=False, cancel_futures=False):
+            shutdown_calls.append((wait, cancel_futures))
+
+    replacement_pool = object()
+    factory_calls = []
+
+    def _pool_factory():
+        factory_calls.append(1)
+        return replacement_pool
+
+    pool_box = [_FakeStuckPool()]
+    results = []
+
+    _drain_futures(
+        pool_box, futures, cancel_event=None,
+        on_result=lambda label, fut: results.append((label, fut)),
+        log=lambda msg: None,
+        pool_factory=_pool_factory,
+        stall_timeout=0.05,  # near-instant for the test
+    )
+
+    assert results == [("stuck-batch", None)]  # reported as skipped, not crashed
+    assert factory_calls == [1]  # a fresh pool was spawned
+    assert pool_box[0] is replacement_pool  # caller now sees the new pool
+    assert shutdown_calls == [(False, True)]  # old pool was torn down
+    assert hung_future.cancelled()
+
+
+def test_drain_futures_without_pool_factory_still_just_blocks_as_before():
+    """No pool_factory supplied -> old behavior preserved exactly (a real
+    stall with no recovery path surfaces as a hang rather than being
+    silently swallowed, which matters for tests/debugging of a NEW stall
+    class that isn't this one)."""
+    import time
+    from concurrent.futures import Future
+
+    from app.search.batch_runner import _drain_futures
+
+    hung_future: Future = Future()
+    finished_future: Future = Future()
+    finished_future.set_result("ok")
+    futures = {hung_future: "hung", finished_future: "finished"}
+
+    results = []
+
+    def _on_result(label, fut):
+        results.append(label)
+        if label == "finished":
+            hung_future.set_result("late")  # let the loop terminate for the test
+
+    t0 = time.time()
+    _drain_futures(
+        [None], futures, cancel_event=None, on_result=_on_result, log=lambda msg: None,
+        pool_factory=None, stall_timeout=0.05,
+    )
+    elapsed = time.time() - t0
+    assert sorted(results) == ["finished", "hung"]
+    assert elapsed < 3.0
+
 
 
 def test_run_search_stops_promptly_when_cancel_event_set_mid_run(tmp_path, small_family_space):
