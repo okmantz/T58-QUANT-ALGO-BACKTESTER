@@ -45,7 +45,7 @@ from app.ai.ollama_settings import save_settings as save_ollama_settings
 from app.ai.research_agent import ResearchAgentContext, ResearchAgent
 from app.ai.research_loop import ResearchLoopConfig, ResearchLoopRunner
 from app.backtest.engine import run_backtest, run_holdout_comparison
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, suggest_pip_size
 from app.data import alpaca_credentials
 from app.data.alpaca_source import (
     ASSET_CLASSES, ADJUSTMENT_CHOICES, FEED_CHOICES, TIMEFRAME_LABELS,
@@ -65,7 +65,8 @@ from app.optimize.refinement import FITNESS_METRICS, RefinementConfig, Refinemen
 from app.optimize.walkforward_ga import run_walkforward_aware_refinement
 from app.orchestration.batch_test import BatchTestItem, run_batch_test
 from app.orchestration.full_pipeline import (
-    FullPipelineBatchItem, FullPipelineConfig, run_full_pipeline, run_full_pipeline_batch,
+    FullPipelineBatchCancelled, FullPipelineBatchItem, FullPipelineConfig, run_full_pipeline,
+    run_full_pipeline_batch,
 )
 from app.orchestration.quick_optimize import QuickOptimizeConfig, run_quick_optimize
 from app.orchestration.resource_guard import (
@@ -573,6 +574,28 @@ def data_alpaca_fetch():
 def data_alpaca_forget():
     alpaca_credentials.clear_credentials()
     return redirect(url_for("index", alpaca_notice="Saved Alpaca keys removed from this computer.", alpaca_notice_kind="success"))
+
+
+@app.route("/data/detect-pip-size", methods=["POST"])
+def data_detect_pip_size():
+    """AJAX counterpart to the desktop app's "DETECT PIP SIZE FROM DATA"
+    button (Step 4, Risk & Execution). Reuses the exact same dataset
+    resolution as /run (newly-uploaded file(s) win over a selected stored
+    dataset) so a freshly-picked-but-not-yet-run CSV can still be detected
+    against, then app.backtest.risk.suggest_pip_size gives one suggested
+    starting value -- never applied automatically, just returned for the
+    page's JS to drop into the Pip size field for the person to confirm."""
+    try:
+        df, label, _note, err = _resolve_dataset(request.form, request.files)
+        if err:
+            return jsonify({"error": err}), 400
+        suggested = suggest_pip_size(df)
+        return jsonify({
+            "pip_size": suggested,
+            "message": f"Suggested {suggested} from {label} -- confirm this matches the instrument before running a backtest.",
+        })
+    except Exception as exc:
+        return jsonify({"error": f"Couldn't detect: {exc}"}), 400
 
 
 @app.route("/mobile-access")
@@ -1529,6 +1552,7 @@ def _load_library_strategy_for_batch(mode: str, name: str):
 def _run_fullpipeline_batch_job(
     job_id: str, df, batch_items, risk: RiskConfig, rules: PropRules,
     cfg: FullPipelineConfig, active_label: str, ollama_settings: OllamaSettings | None,
+    cancel_event: threading.Event | None = None,
 ) -> None:
     try:
         summary = run_full_pipeline_batch(
@@ -1536,6 +1560,7 @@ def _run_fullpipeline_batch_job(
             instrument=active_label, ollama_settings=ollama_settings,
             progress_cb=lambda msg: _fullpipeline_batch_job_log(job_id, msg),
             max_parallel_strategies=1,
+            cancel_event=cancel_event,
         )
         outcomes = [
             {
@@ -1553,6 +1578,11 @@ def _run_fullpipeline_batch_job(
             job["done"] = True
             job["outcomes"] = outcomes
             job["elapsed_seconds"] = summary.elapsed_seconds
+    except FullPipelineBatchCancelled:
+        with _FULLPIPELINE_BATCH_JOBS_LOCK:
+            job = _FULLPIPELINE_BATCH_JOBS[job_id]
+            job["done"] = True
+            job["cancelled"] = True
     except Exception as exc:  # noqa: BLE001 -- must surface on the status page, not crash the thread silently
         log_crash("Full Pipeline batch (web)", exc=exc)
         with _FULLPIPELINE_BATCH_JOBS_LOCK:
@@ -1671,13 +1701,15 @@ def full_pipeline_start_batch():
         if load_errors:
             initial_log.append(f"{len(load_errors)} selected strateg{'y' if len(load_errors) == 1 else 'ies'} failed to load and were skipped: " + "; ".join(load_errors))
         with _FULLPIPELINE_BATCH_JOBS_LOCK:
+            cancel_event = threading.Event()
             _FULLPIPELINE_BATCH_JOBS[job_id] = {
                 "log": initial_log, "done": False, "error": None, "outcomes": None,
                 "started_at": time.time(), "instrument": active_label, "total": len(batch_items),
+                "cancel_event": cancel_event, "cancelled": False,
             }
         thread = threading.Thread(
             target=_run_fullpipeline_batch_job,
-            args=(job_id, df, batch_items, risk, rules, cfg, active_label, ollama_settings),
+            args=(job_id, df, batch_items, risk, rules, cfg, active_label, ollama_settings, cancel_event),
             daemon=True,
         )
         thread.start()
@@ -1701,6 +1733,29 @@ def full_pipeline_batch_job(job_id):
     return render_template("full_pipeline_batch_job.html", job_id=job_id, not_found=False, total=job["total"])
 
 
+@app.route("/full-pipeline/batch-job/<job_id>/stop", methods=["POST"])
+def full_pipeline_batch_job_stop(job_id):
+    """Signals a running Full Pipeline batch job to stop -- previously
+    there was no way to stop one at all once started (see
+    app.orchestration.full_pipeline.run_full_pipeline_batch's
+    cancel_event / FullPipelineBatchCancelled). Mirrors Search Lab's own
+    /search/job/<id>/stop: a no-op, not an error, if the job is already
+    done or was never found. Between-item in serial mode, or within
+    roughly a second in the parallel pool path (see
+    _drain_batch_pool_futures) -- whichever the batch happens to be
+    running in."""
+    with _FULLPIPELINE_BATCH_JOBS_LOCK:
+        job = _FULLPIPELINE_BATCH_JOBS.get(job_id)
+        if job is None:
+            return jsonify({"ok": False, "error": "Job not found."}), 404
+        if job.get("done"):
+            return jsonify({"ok": True, "already_done": True})
+        cancel_event = job.get("cancel_event")
+    if cancel_event is not None:
+        cancel_event.set()
+    return jsonify({"ok": True})
+
+
 @app.route("/full-pipeline/batch-job/<job_id>/status.json")
 def full_pipeline_batch_job_status(job_id):
     with _FULLPIPELINE_BATCH_JOBS_LOCK:
@@ -1711,6 +1766,7 @@ def full_pipeline_batch_job_status(job_id):
         "found": True,
         "done": job["done"],
         "error": job["error"],
+        "cancelled": job.get("cancelled", False),
         "log": job["log"],
         "total": job["total"],
         "outcomes": job.get("outcomes"),
@@ -3376,6 +3432,33 @@ def evolution_promote():
     if not config:
         return jsonify({"ok": False, "error": "This candidate has no manual-builder config to promote."}), 400
 
+    # Same overfitting-gap check as the desktop app's PROMOTE confirmation
+    # dialog (see main_window.py's _promote_evolution_leader_record) --
+    # real report this addresses: a strategy promoted at a raw "40% pass /
+    # 30% payout" coming back 2%/1% out of Full Pipeline, because
+    # everything upstream of engine.py's _cpcv_and_pbo scores each
+    # candidate against the SAME data the GA searched against. The web UI
+    # already shows a client-side confirm() for this using the leaderboard
+    # data it already has in hand; this is the server-side backstop for
+    # any other caller (curl, another client) that skips the UI.
+    raw_pct = (record.get("mc_summary") or {}).get("evaluation_pass_probability")
+    oos_pct = record.get("cpcv_oos_eval_pass_probability")
+    force = (request.form.get("force") or "").strip() == "1"
+    if (
+        isinstance(raw_pct, (int, float)) and isinstance(oos_pct, (int, float))
+        and (raw_pct - oos_pct) > 15 and not force
+    ):
+        return jsonify({
+            "ok": False,
+            "needs_confirmation": True,
+            "raw_pass_probability": raw_pct,
+            "cpcv_oos_eval_pass_probability": oos_pct,
+            "error": (
+                f"Raw in-sample eval pass probability is {raw_pct:.1f}% but the honest, held-out CPCV "
+                f"estimate is only {oos_pct:.1f}% -- likely overfit. Resend with force=1 to promote anyway."
+            ),
+        }), 409
+
     family = (record.get("meta") or {}).get("family", "strategy")
     filename = f"evolab_promoted_{family}_{candidate_id[-8:]}.json"
     text = json.dumps(config, indent=2)
@@ -3430,6 +3513,7 @@ def evolution_status():
         "generation": status["generation"],
         "leaderboard_size": status["leaderboard_size"],
         "resumed": status["resumed"],
+        "family_health": status.get("family_health"),
         "log": list(_EVOLUTION_LOG),
         "leaderboard": leaderboard,
         "journal": runner.journal[-30:],
