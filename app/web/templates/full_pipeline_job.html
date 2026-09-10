@@ -25,6 +25,7 @@
 <div class="card">
   <h2 id="status-title"><span class="spinner" id="spinner"></span>Full Pipeline running&hellip;</h2>
   <div id="log">Starting&hellip;</div>
+  <p id="next-step" style="display:none; margin-top:10px; padding:10px 12px; border-radius:8px; background:#152615; color:#b7e8b7; font-size:13px;"></p>
 </div>
 
 <div id="verdict-banner-wrap" style="display:none;"><div class="verdict-banner" id="verdict-banner"></div></div>
@@ -78,6 +79,11 @@
         if (data.done) {
           document.getElementById('spinner').style.display = 'none';
           document.getElementById('status-title').textContent = 'Full Pipeline complete';
+          if (data.next_step) {
+            const nextStepEl = document.getElementById('next-step');
+            nextStepEl.textContent = data.next_step;
+            nextStepEl.style.display = 'block';
+          }
           const s = data.summary;
           if (s) {
             const wrap = document.getElementById('verdict-banner-wrap');

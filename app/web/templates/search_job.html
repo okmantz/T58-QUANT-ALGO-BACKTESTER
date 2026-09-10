@@ -9,6 +9,10 @@
 <meta name="theme-color" content="#05070a">
 <link rel="stylesheet" href="/static/theme.css">
 <link rel="stylesheet" href="/static/job-theme.css">
+<style>
+  .stop-btn { padding: 10px 22px; border-radius: 10px; border: 1px solid #6b2323; background: #3a1616; color: #ffb4b4; font-size: 14px; font-weight: 700; cursor: pointer; }
+  .stop-btn:disabled { opacity: 0.5; cursor: default; }
+</style>
 </head>
 <body>
 <header><h1>T58 Quant Algo Backtester — Search Lab</h1></header>
@@ -25,6 +29,10 @@
 <div class="card">
   <h2 id="status-title"><span class="spinner" id="spinner"></span>Search running&hellip;</h2>
   <div id="log">Starting&hellip;</div>
+  <p id="next-step" style="display:none; margin-top:10px; padding:10px 12px; border-radius:8px; background:#152615; color:#b7e8b7; font-size:13px;"></p>
+  <form id="stop-form" method="post" action="/search/job/{{ job_id }}/stop" style="margin-top:10px;" onsubmit="return stopSearch(event)">
+    <button class="stop-btn" type="submit" id="stop-btn">Stop</button>
+  </form>
 </div>
 
 <div class="card" id="summary-card" style="display:none;">
@@ -109,6 +117,15 @@
     document.getElementById('leaderboard-card').style.display = rows.length ? 'block' : 'none';
   }
 
+  function stopSearch(evt) {
+    evt.preventDefault();
+    const btn = document.getElementById('stop-btn');
+    btn.disabled = true;
+    btn.textContent = 'Stopping…';
+    fetch(`/search/job/${jobId}/stop`, {method: 'POST'}).catch(() => {});
+    return false;
+  }
+
   function poll() {
     fetch(`/search/job/${jobId}/status.json`)
       .then(r => r.json())
@@ -120,15 +137,32 @@
         if (data.error) {
           document.getElementById('spinner').style.display = 'none';
           document.getElementById('status-title').textContent = 'Search failed';
+          const sf = document.getElementById('stop-form');
+          if (sf) sf.style.display = 'none';
           const ec = document.getElementById('error-card');
           ec.style.display = 'block';
           ec.textContent = data.error;
           return;
         }
 
+        if (data.cancelled) {
+          document.getElementById('spinner').style.display = 'none';
+          document.getElementById('status-title').textContent = 'Search stopped';
+          const sf = document.getElementById('stop-form');
+          if (sf) sf.style.display = 'none';
+          return;
+        }
+
         if (data.done) {
           document.getElementById('spinner').style.display = 'none';
           document.getElementById('status-title').textContent = 'Search complete';
+          const sf = document.getElementById('stop-form');
+          if (sf) sf.style.display = 'none';
+          if (data.next_step) {
+            const nextStepEl = document.getElementById('next-step');
+            nextStepEl.textContent = data.next_step;
+            nextStepEl.style.display = 'block';
+          }
           const s = data.summary;
           if (s) {
             document.getElementById('summary-card').style.display = 'block';

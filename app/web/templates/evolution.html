@@ -61,6 +61,7 @@
 <div class="card">
   <h2>Status <span class="badge {{ 'running' if running else 'stopped' }}" id="status-badge">{{ 'RUNNING' if running else 'STOPPED' }}</span></h2>
   <div id="log">Loading&hellip;</div>
+  <p id="next-step" style="display:none; margin-top:10px; padding:10px 12px; border-radius:8px; background:#152615; color:#b7e8b7; font-size:13px;"></p>
   <div id="controls" style="margin-top:10px;">
     {% if running %}
     <form method="post" action="/evolution/stop"><button class="stop-btn" type="submit">Stop</button></form>
@@ -283,6 +284,11 @@
         btn.disabled = false;
         btn.textContent = data.ok ? 'Promoted' : 'Failed';
         if (!data.ok) { alert('Could not promote: ' + (data.error || 'unknown error')); btn.textContent = original; }
+        if (data.ok && data.next_step) {
+          const nextStepEl = document.getElementById('next-step');
+          nextStepEl.textContent = data.next_step;
+          nextStepEl.style.display = 'block';
+        }
       })
       .catch(() => { btn.disabled = false; btn.textContent = original; alert('Could not reach the server.'); });
   }
@@ -312,6 +318,13 @@
           document.getElementById('gen-num').textContent = data.generation;
           renderLeaderboard(data.leaderboard || []);
           renderJournal(data.journal || []);
+        }
+        const nextStepEl = document.getElementById('next-step');
+        if (data.next_step) {
+          nextStepEl.textContent = data.next_step;
+          nextStepEl.style.display = 'block';
+        } else {
+          nextStepEl.style.display = 'none';
         }
         // Reload the page if run state flips, so the start form / stop button swap correctly.
         if (window._t58EvoRunning !== undefined && window._t58EvoRunning !== data.running) {

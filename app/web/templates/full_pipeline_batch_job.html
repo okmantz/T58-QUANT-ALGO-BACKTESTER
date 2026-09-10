@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Full Pipeline Batch — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<link rel="stylesheet" href="/static/job-theme.css">
+<style>
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #2a2f3a; }
+  tr.ok { color: #cfe; }
+  tr.failed { color: #e99; }
+  .badge { padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; }
+  .badge.READY { background: #143a1e; color: #7ee89a; }
+  .badge.MARGINAL { background: #3a3414; color: #e8d17e; }
+  .badge.NOTREADY { background: #3a1616; color: #ffb4b4; }
+</style>
+</head>
+<body>
+<header><h1>T58 Quant Algo Backtester — Full Pipeline (Batch)</h1></header>
+<nav>
+  <a href="/">Run &amp; Report</a>
+  <a href="/full-pipeline">New Full Pipeline Run</a>
+</nav>
+<main>
+
+{% if not_found %}
+<div class="error">Job "{{ job_id }}" was not found (the server may have restarted since it ran).</div>
+{% else %}
+
+<div class="card">
+  <h2 id="status-title"><span class="spinner" id="spinner"></span>Running Full Pipeline on {{ total }} strateg{{ 'y' if total == 1 else 'ies' }}&hellip;</h2>
+  <p style="font-size:13px;color:#999;" id="progress-line">Starting&hellip;</p>
+  <div id="log">Starting&hellip;</div>
+  <p id="next-step" style="display:none; margin-top:10px; padding:10px 12px; border-radius:8px; background:#152615; color:#b7e8b7; font-size:13px;"></p>
+</div>
+
+<div class="card" id="results-card" style="display:none;">
+  <h2>Results (ranked by eval pass probability)</h2>
+  <table>
+    <thead><tr><th>Strategy</th><th>Verdict</th><th>Eval Pass %</th><th>Net Profit</th><th>Trades</th><th>Report</th></tr></thead>
+    <tbody id="results-body"></tbody>
+  </table>
+</div>
+
+<div class="error" id="error-card" style="display:none;"></div>
+
+{% endif %}
+</main>
+
+{% if not not_found %}
+<script>
+  const jobId = {{ job_id | tojson }};
+  const fmt = (v, d) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d === undefined ? 2 : d);
+
+  function renderResults(outcomes) {
+    const rows = (outcomes || []).slice().sort((a, b) => {
+      if (a.ok !== b.ok) return a.ok ? -1 : 1;
+      return (b.eval_pass_probability || 0) - (a.eval_pass_probability || 0);
+    });
+    const tbody = document.getElementById('results-body');
+    tbody.innerHTML = '';
+    rows.forEach(o => {
+      const tr = document.createElement('tr');
+      tr.className = o.ok ? 'ok' : 'failed';
+      const verdictCell = o.ok
+        ? `<span class="badge ${(o.verdict || '').replace(/\s+/g, '')}">${o.verdict || '—'}</span>`
+        : `<span title="${(o.reason || '').replace(/"/g, '&quot;')}">FAILED</span>`;
+      const reportCell = o.report_html ? `<a href="${o.report_html}" target="_blank">Open report &rarr;</a>` : '—';
+      tr.innerHTML = `
+        <td>${o.label}</td>
+        <td>${verdictCell}</td>
+        <td>${o.ok ? fmt(o.eval_pass_probability, 1) + '%' : '—'}</td>
+        <td>${o.ok ? '$' + fmt(o.net_profit, 0) : '—'}</td>
+        <td>${o.ok ? fmt(o.trades, 0) : '—'}</td>
+        <td>${reportCell}</td>`;
+      tbody.appendChild(tr);
+    });
+    document.getElementById('results-card').style.display = rows.length ? 'block' : 'none';
+  }
+
+  function poll() {
+    fetch(`/full-pipeline/batch-job/${jobId}/status.json`)
+      .then(r => r.json())
+      .then(data => {
+        if (!data.found) return;
+        document.getElementById('log').textContent = (data.log || []).filter(Boolean).join('\n');
+        document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
+
+        if (data.error) {
+          document.getElementById('spinner').style.display = 'none';
+          document.getElementById('status-title').textContent = 'Batch failed';
+          const ec = document.getElementById('error-card');
+          ec.style.display = 'block';
+          ec.textContent = data.error;
+          return;
+        }
+
+        if (data.done) {
+          document.getElementById('spinner').style.display = 'none';
+          document.getElementById('status-title').textContent = `Batch complete — ${data.total} strateg${data.total === 1 ? 'y' : 'ies'}`;
+          document.getElementById('progress-line').textContent = data.elapsed_seconds
+            ? `Finished in ${fmt(data.elapsed_seconds, 0)}s.` : '';
+          if (data.next_step) {
+            const nextStepEl = document.getElementById('next-step');
+            nextStepEl.textContent = data.next_step;
+            nextStepEl.style.display = 'block';
+          }
+          renderResults(data.outcomes || []);
+          return;  // stop polling
+        }
+        setTimeout(poll, 2000);
+      })
+      .catch(() => setTimeout(poll, 4000));
+  }
+  poll();
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+  }
+</script>
+{% endif %}
+</body>
+</html>

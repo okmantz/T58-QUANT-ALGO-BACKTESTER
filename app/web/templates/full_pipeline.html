@@ -47,6 +47,8 @@
   .checkbox-row { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; }
   .checkbox-row input { width: auto; }
   .checkbox-row label { margin: 0; }
+  .batch-strategy-list { max-height: 260px; overflow-y: auto; border: 1px solid #2a2f3a; border-radius: 8px; padding: 8px 12px; }
+  .batch-item { font-size: 13px; }
 </style>
 </head>
 <body>
@@ -224,7 +226,20 @@
     </div>
   </div>
 
+  <div class="card">
+    <h2>6. Or run on multiple saved strategies (batch)</h2>
+    <p class="ai-note">
+      Runs the SAME full 7-step pipeline (baseline, walk-forward-aware GA search, re-validated Monte
+      Carlo, out-of-sample check, holdout check, ICIR gate, report) against every strategy checked
+      below, one after another -- the web equivalent of the desktop app's "RUN FULL PIPELINE (BATCH)"
+      button. Uses the dataset and settings configured above; the single strategy picked in section 1
+      above is ignored when you click the batch button below.
+    </p>
+    <div id="batch-strategy-list" class="batch-strategy-list"></div>
+  </div>
+
   <button class="submit-btn" type="submit">Run Full Pipeline</button>
+  <button class="submit-btn" type="submit" formaction="/full-pipeline/start-batch" style="margin-top:10px; background:#1b2a1b; border-color:#2f4f2f;">Run Full Pipeline (Batch — Selected Above)</button>
 </form>
 
 </div>
@@ -348,6 +363,34 @@
   // the library dropdown/search/filter panel is populated and visible
   // immediately instead of only appearing after the user clicks a tab.
   document.querySelector('#strategy-tabs button.active')?.click();
+
+  // Section 6 -- batch checkbox list, built from every saved strategy
+  // across all 4 types (unlike the single-strategy picker above, this
+  // isn't filtered to one mode at a time, since a batch run is exactly
+  // for testing several different strategies -- possibly different
+  // source types -- together).
+  (function populateBatchList() {
+    const container = document.getElementById('batch-strategy-list');
+    const types = Object.keys(SAVED_STRATEGIES);
+    let any = false;
+    types.forEach(t => {
+      (SAVED_STRATEGIES[t] || []).forEach(s => {
+        any = true;
+        const label = document.createElement('label');
+        label.className = 'checkbox-row batch-item';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.name = 'batch_items';
+        cb.value = t + '::' + s.name;
+        label.appendChild(cb);
+        label.appendChild(document.createTextNode(' [' + t + '] ' + s.name));
+        container.appendChild(label);
+      });
+    });
+    if (!any) {
+      container.innerHTML = '<p style="font-size:13px;color:#999;">No saved strategies yet -- save one from section 1 above (or run Evolution Lab / Search Lab) before using the batch button.</p>';
+    }
+  })();
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/static/sw.js').catch(() => {});
