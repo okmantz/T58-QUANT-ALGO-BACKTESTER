@@ -18,6 +18,8 @@
   .badge.READY { background: #143a1e; color: #7ee89a; }
   .badge.MARGINAL { background: #3a3414; color: #e8d17e; }
   .badge.NOTREADY { background: #3a1616; color: #ffb4b4; }
+  .stop-btn { padding: 10px 22px; border-radius: 10px; border: 1px solid #6b2323; background: #3a1616; color: #ffb4b4; font-size: 14px; font-weight: 700; cursor: pointer; }
+  .stop-btn:disabled { opacity: 0.5; cursor: default; }
 </style>
 </head>
 <body>
@@ -37,6 +39,9 @@
   <p style="font-size:13px;color:#999;" id="progress-line">Starting&hellip;</p>
   <div id="log">Starting&hellip;</div>
   <p id="next-step" style="display:none; margin-top:10px; padding:10px 12px; border-radius:8px; background:#152615; color:#b7e8b7; font-size:13px;"></p>
+  <form id="stop-form" method="post" action="/full-pipeline/batch-job/{{ job_id }}/stop" style="margin-top:10px;" onsubmit="return stopBatch(event)">
+    <button class="stop-btn" type="submit" id="stop-btn">Stop</button>
+  </form>
 </div>
 
 <div class="card" id="results-card" style="display:none;">
@@ -83,6 +88,15 @@
     document.getElementById('results-card').style.display = rows.length ? 'block' : 'none';
   }
 
+  function stopBatch(evt) {
+    evt.preventDefault();
+    const btn = document.getElementById('stop-btn');
+    btn.disabled = true;
+    btn.textContent = 'Stopping…';
+    fetch(`/full-pipeline/batch-job/${jobId}/stop`, {method: 'POST'}).catch(() => {});
+    return false;
+  }
+
   function poll() {
     fetch(`/full-pipeline/batch-job/${jobId}/status.json`)
       .then(r => r.json())
@@ -94,15 +108,29 @@
         if (data.error) {
           document.getElementById('spinner').style.display = 'none';
           document.getElementById('status-title').textContent = 'Batch failed';
+          const sf = document.getElementById('stop-form');
+          if (sf) sf.style.display = 'none';
           const ec = document.getElementById('error-card');
           ec.style.display = 'block';
           ec.textContent = data.error;
           return;
         }
 
+        if (data.cancelled) {
+          document.getElementById('spinner').style.display = 'none';
+          document.getElementById('status-title').textContent = 'Batch stopped';
+          document.getElementById('progress-line').textContent =
+            'Stopped by request — strategies already finished are shown below.';
+          const sf = document.getElementById('stop-form');
+          if (sf) sf.style.display = 'none';
+          return;
+        }
+
         if (data.done) {
           document.getElementById('spinner').style.display = 'none';
           document.getElementById('status-title').textContent = `Batch complete — ${data.total} strateg${data.total === 1 ? 'y' : 'ies'}`;
+          const sf = document.getElementById('stop-form');
+          if (sf) sf.style.display = 'none';
           document.getElementById('progress-line').textContent = data.elapsed_seconds
             ? `Finished in ${fmt(data.elapsed_seconds, 0)}s.` : '';
           if (data.next_step) {

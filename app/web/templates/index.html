@@ -455,8 +455,10 @@
       </div>
       <div class="row">
         <div><label>Spread (pips)</label><input type="number" step="0.1" name="spread_pips" value="1.0"></div>
-        <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" value="0.0001"></div>
+        <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" id="pip_size_field" value="0.0001"></div>
       </div>
+      <button type="button" onclick="detectPipSize()" style="margin-top:6px;background:none;border:1px solid var(--border-light);color:var(--teal);padding:9px 12px;border-radius:8px;font-size:13px;width:100%;">Detect pip size from data</button>
+      <p id="pip_detect_status" style="font-size:12px;margin-top:6px;"></p>
     </details>
   </div>
 
@@ -483,6 +485,45 @@
 </div>
 
 <script>
+  function detectPipSize() {
+    const statusEl = document.getElementById('pip_detect_status');
+    const fileInput = document.querySelector('input[name="csv_file"]');
+    const datasetSelect = document.querySelector('select[name="existing_dataset"]');
+    const fd = new FormData();
+    let haveSource = false;
+    if (fileInput && fileInput.files && fileInput.files.length) {
+      for (const f of fileInput.files) fd.append('csv_file', f);
+      haveSource = true;
+    }
+    if (datasetSelect && datasetSelect.value) {
+      fd.append('existing_dataset', datasetSelect.value);
+      haveSource = true;
+    }
+    if (!haveSource) {
+      statusEl.style.color = '#ffcf7a';
+      statusEl.textContent = 'Select a market data CSV or a stored dataset in Step 1 first.';
+      return;
+    }
+    statusEl.style.color = '#888';
+    statusEl.textContent = 'Detecting...';
+    fetch('/data/detect-pip-size', { method: 'POST', body: fd })
+      .then(r => r.json().then(data => ({ ok: r.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok || data.error) {
+          statusEl.style.color = '#ff9d9d';
+          statusEl.textContent = data.error || "Couldn't detect pip size.";
+          return;
+        }
+        document.getElementById('pip_size_field').value = data.pip_size;
+        statusEl.style.color = '#b4ffcb';
+        statusEl.textContent = data.message;
+      })
+      .catch(err => {
+        statusEl.style.color = '#ff9d9d';
+        statusEl.textContent = "Couldn't detect: " + err;
+      });
+  }
+
   const tabs = document.querySelectorAll('#strategy-tabs button');
   const modeInput = document.getElementById('strategy_mode');
   const manualFields = document.getElementById('manual-fields');

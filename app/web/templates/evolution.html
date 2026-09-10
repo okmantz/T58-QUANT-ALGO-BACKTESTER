@@ -78,9 +78,10 @@
 
 <div class="card" id="leaderboard-card" style="display:none;">
   <h2>Leaderboard (generation <span id="gen-num">0</span>)</h2>
+  <p id="family-health-note" style="display:none; font-size:12px; margin:0 0 10px;"></p>
   <div class="table-scroll">
     <table>
-      <thead><tr><th>#</th><th>Candidate</th><th>Net profit</th><th>PF</th><th>Eval pass %</th><th>Payout %</th><th></th></tr></thead>
+      <thead><tr><th>#</th><th>Candidate</th><th>Net profit</th><th>PF</th><th>Eval pass %</th><th>Payout %</th><th>OOS %</th><th></th></tr></thead>
       <tbody id="leaderboard-body"></tbody>
     </table>
   </div>
@@ -212,10 +213,16 @@
     rows.forEach((c, i) => {
       const stats = c.stats || {};
       const mc = c.mc_summary || {};
+      const oos = c.cpcv_oos_eval_pass_probability;
+      const rawPass = mc.evaluation_pass_probability;
+      const bigGap = typeof oos === 'number' && typeof rawPass === 'number' && (rawPass - oos) > 15;
+      const oosCell = typeof oos === 'number'
+        ? `<span title="${bigGap ? 'Big gap vs. raw eval pass % -- likely overfit, verify with Full Pipeline' : 'Honest, held-out CPCV estimate'}" style="${bigGap ? 'color:#ff9d9d;font-weight:700;' : ''}">${fmt(oos, 1)}%${bigGap ? ' ⚠' : ''}</span>`
+        : '—';
       const tr = document.createElement('tr');
       tr.innerHTML = `<td>${i + 1}</td><td>${c.candidate_id}</td><td>${money(stats.net_profit)}</td>` +
         `<td>${fmt(stats.profit_factor)}</td><td>${fmt(mc.evaluation_pass_probability, 1)}%</td>` +
-        `<td>${fmt(mc.first_payout_probability, 1)}%</td><td></td>`;
+        `<td>${fmt(mc.first_payout_probability, 1)}%</td><td>${oosCell}</td><td></td>`;
       const actionCell = tr.lastElementChild;
       const detailBtn = document.createElement('button');
       detailBtn.type = 'button';
@@ -256,8 +263,12 @@
       `Net profit: ${money(stats.net_profit)}   Profit factor: ${fmt(stats.profit_factor)}`,
       `Sharpe: ${fmt(stats.sharpe_ratio)}   Max drawdown: ${fmt(stats.max_drawdown_pct, 1)}%`,
       '',
-      `Monte Carlo eval pass probability: ${fmt(mc.evaluation_pass_probability, 1)}%`,
+      `Monte Carlo eval pass probability: ${fmt(mc.evaluation_pass_probability, 1)}% (IN-SAMPLE -- same data the GA searched)`,
       `Monte Carlo first payout probability: ${fmt(mc.first_payout_probability, 1)}%`,
+      `CPCV out-of-sample eval pass probability: ${typeof c.cpcv_oos_eval_pass_probability === 'number' ? fmt(c.cpcv_oos_eval_pass_probability, 1) + '%' : 'n/a'}${
+        typeof c.cpcv_oos_eval_pass_probability === 'number' && typeof mc.evaluation_pass_probability === 'number' && (mc.evaluation_pass_probability - c.cpcv_oos_eval_pass_probability) > 15
+          ? '  <-- big gap vs. in-sample number above; likely overfit, verify with Full Pipeline' : ''
+      }`,
       '',
       'Config:',
       JSON.stringify((c.spec || {}).config || {}, null, 2),
@@ -266,7 +277,7 @@
     tr.className = 'lb-detail-row';
     tr.id = 'lb-detail-' + i;
     const td = document.createElement('td');
-    td.colSpan = 7;
+    td.colSpan = 8;
     td.textContent = lines.join('\n');
     tr.appendChild(td);
     const rows = tbody.querySelectorAll('tr');
@@ -274,10 +285,30 @@
   }
 
   function promoteCandidate(candidateId, btn) {
+    const row = _lbCache.find(c => c.candidate_id === candidateId);
+    let forced = false;
+    if (row) {
+      const rawPass = (row.mc_summary || {}).evaluation_pass_probability;
+      const oos = row.cpcv_oos_eval_pass_probability;
+      if (typeof rawPass === 'number' && typeof oos === 'number' && (rawPass - oos) > 15) {
+        const proceed = confirm(
+          `This candidate's raw (in-sample) eval pass probability is ${rawPass.toFixed(1)}%, but the ` +
+          `honest, held-out CPCV estimate is only ${oos.toFixed(1)}% -- a ${(rawPass - oos).toFixed(1)}-point gap. ` +
+          `That pattern (looks great in-sample, much weaker out-of-sample) is the classic signature of the GA ` +
+          `having fit this dataset's noise rather than a real edge, and is exactly what tends to come back as a ` +
+          `much lower pass/payout rate out of Full Pipeline's stricter walk-forward + holdout validation.\n\n` +
+          `Promote it anyway? (Full Pipeline will still re-validate it properly either way -- this is just an ` +
+          `early warning so you don't have to wait for that run to find out.)`
+        );
+        if (!proceed) return;
+        forced = true;
+      }
+    }
     btn.disabled = true;
     const original = btn.textContent;
     btn.textContent = '...';
     const body = new URLSearchParams({ candidate_id: candidateId });
+    if (forced) body.set('force', '1');
     fetch('/evolution/promote', { method: 'POST', body })
       .then(r => r.json())
       .then(data => {
@@ -318,6 +349,18 @@
           document.getElementById('gen-num').textContent = data.generation;
           renderLeaderboard(data.leaderboard || []);
           renderJournal(data.journal || []);
+        }
+        const fh = data.family_health;
+        const fhEl = document.getElementById('family-health-note');
+        if (fh && fh.applied && (fh.excluded || []).length) {
+          fhEl.textContent =
+            `${fh.excluded.length} famil${fh.excluded.length === 1 ? 'y' : 'ies'} flagged dead-end across past runs ` +
+            `(tested 30+ times, zero successes): ${fh.excluded.join(', ')}. ${fh.active_family_count} famil` +
+            `${fh.active_family_count === 1 ? 'y' : 'ies'} currently active this run.`;
+          fhEl.style.color = '#e8d17e';
+          fhEl.style.display = 'block';
+        } else {
+          fhEl.style.display = 'none';
         }
         const nextStepEl = document.getElementById('next-step');
         if (data.next_step) {
