@@ -127,6 +127,17 @@ def evolution_stats_metadata(record: dict, generation: int | None = None) -> dic
         "fitness_score": fitness.get("final_score"),
         "eval_pass_probability": mc_summary.get("evaluation_pass_probability"),
         "first_payout_probability": mc_summary.get("first_payout_probability"),
+        # The honest, held-out-fold estimate of eval_pass_probability from
+        # CPCV -- only populated for candidates that made the top
+        # cpcv_top_n pool. Prefer THIS over the raw eval_pass_probability
+        # above when deciding whether a candidate is worth promoting: the
+        # raw number is Monte-Carlo-resampled from a single in-sample
+        # backtest over the exact data the GA searched/selected against,
+        # so it systematically overstates a genome's real edge. See
+        # EvolutionCandidateRecord.cpcv_oos_eval_pass_probability's
+        # docstring for the full explanation.
+        "cpcv_oos_eval_pass_probability": record.get("cpcv_oos_eval_pass_probability"),
+        "cpcv_degradation": record.get("cpcv_degradation"),
         "robustness_stability": robustness.get("stability_ratio"),
         "walk_forward_efficiency": walk_forward.get("walk_forward_efficiency"),
         "net_profit": stats.get("net_profit"),
@@ -298,6 +309,14 @@ class EvolutionConfig:
     # app.search.family_health.apply_family_exclusions).
     auto_exclude_dead_end_families: bool = True
     family_health_min_samples: int = 30
+    # Floor on how few families an exclusion pass is allowed to leave in
+    # play -- see app.search.family_health.apply_family_exclusions' own
+    # docstring for the real report this fixes ("every time I run the
+    # evolution lab, it creates the same three strategies"): the old rule
+    # only ever guaranteed "not zero," which let exclusions silently
+    # accumulate over many sessions until just a handful of survivor
+    # families were ever left in play.
+    family_health_min_active_families: int = 6
     grid_points_per_gene: int = 3
 
     # Pre-filter (Stage 1, cheap)
@@ -467,6 +486,18 @@ class EvolutionCandidateRecord:
     walk_forward: dict | None = None
     pbo: float | None = None
     cpcv_degradation: float | None = None
+    # The actual out-of-sample estimate CPCV computed for this candidate's
+    # eval_pass_probability -- as opposed to mc_summary's
+    # "evaluation_pass_probability", which is Monte-Carlo-resampled from a
+    # SINGLE in-sample backtest over the whole dataset the GA searched on.
+    # See _cpcv_and_pbo's docstring note: after many generations of
+    # selection pressure evaluated against that same data, the winning
+    # genome is systematically the one that happened to fit that data's
+    # noise best, not necessarily the one with a real edge -- this field is
+    # the honest number computed on genuinely held-out combinatorial-purged
+    # folds instead, and is what a promoted strategy's Full Pipeline result
+    # should be expected to resemble, not the raw in-sample one.
+    cpcv_oos_eval_pass_probability: float | None = None
     stressed_ok: bool | None = None
     fitness: object = None                     # PropFitnessBreakdown
     trade_pnls: list = field(default_factory=list)
@@ -490,6 +521,7 @@ class EvolutionCandidateRecord:
             "walk_forward": self.walk_forward,
             "pbo": self.pbo,
             "cpcv_degradation": self.cpcv_degradation,
+            "cpcv_oos_eval_pass_probability": self.cpcv_oos_eval_pass_probability,
             "stressed_ok": self.stressed_ok,
             "fitness": self.fitness.to_dict() if self.fitness is not None else None,
             "trade_pnls": self.trade_pnls[:500],
@@ -508,6 +540,7 @@ def _record_from_dict(d: dict) -> EvolutionCandidateRecord:
         walk_forward=d.get("walk_forward"),
         pbo=d.get("pbo"),
         cpcv_degradation=d.get("cpcv_degradation"),
+        cpcv_oos_eval_pass_probability=d.get("cpcv_oos_eval_pass_probability"),
         stressed_ok=d.get("stressed_ok"),
         fitness=fitness,
         trade_pnls=d.get("trade_pnls") or [],
@@ -596,24 +629,47 @@ class EvolutionRunner:
         pin specific families is never touched, even if one of them is
         itself flagged dead-end -- that's an explicit choice to keep
         testing it anyway (e.g. on a new instrument), not a mistake to
-        correct."""
+        correct.
+
+        Also records the outcome onto self.family_health_status (a plain
+        dict, not just a one-time log line) -- real report this addresses:
+        "every time I run the evolution lab, it creates the same three
+        strategies" turned out to be caused by this exact mechanism
+        silently collapsing the active family list over many past
+        sessions, with the only visibility being a console log line that
+        was easy to miss and impossible to check after the fact. status()
+        surfaces this so the UI can show it persistently instead."""
+        self.family_health_status: dict = {"applied": False, "excluded": [], "active_family_count": None}
         if self.cfg.families is not None or not self.cfg.auto_exclude_dead_end_families:
             return
         try:
             from app.search.family_health import apply_family_exclusions
-            survivors, excluded = apply_family_exclusions(min_samples=self.cfg.family_health_min_samples)
+            survivors, excluded = apply_family_exclusions(
+                min_samples=self.cfg.family_health_min_samples,
+                min_active_families=self.cfg.family_health_min_active_families,
+            )
         except Exception:  # noqa: BLE001 -- a family-health scan failing must never block starting a run
             return
+        self.family_health_status["applied"] = True
+        self.family_health_status["excluded"] = excluded
         if excluded:
             self._log(
                 f"Auto-excluding {len(excluded)} dead-end famil{'y' if len(excluded) == 1 else 'ies'} "
                 f"(tested {self.cfg.family_health_min_samples}+ times across past runs with zero "
                 f"successes): {', '.join(excluded)}."
-                + ("" if survivors is not None else " (would have excluded every registered family -- "
-                   "searching all of them anyway rather than leaving nothing to search.)")
+                + (
+                    f" ({len(survivors)} famil{'y' if len(survivors) == 1 else 'ies'} still active.)"
+                    if survivors is not None else
+                    f" Would have left fewer than {self.cfg.family_health_min_active_families} families "
+                    f"active -- searching all {len(list_families())} registered families anyway rather "
+                    f"than collapsing the search space down to a stagnant handful."
+                )
             )
         if survivors is not None:
             self.cfg.families = survivors
+            self.family_health_status["active_family_count"] = len(survivors)
+        else:
+            self.family_health_status["active_family_count"] = len(list_families())
 
     # -- worker pool (PRE-FILTER + full-eval parallelism) ------------------
     def _ensure_pool(self) -> ProcessPoolExecutor | None:
@@ -795,6 +851,7 @@ class EvolutionRunner:
             "generation": self.generation,
             "leaderboard_size": len(self.leaderboard),
             "resumed": self.resumed,
+            "family_health": getattr(self, "family_health_status", None),
         }
 
     def tested_candidates(self, limit: int = 500) -> list[dict]:
@@ -1389,6 +1446,23 @@ class EvolutionRunner:
 
     # -- CPCV / PBO ---------------------------------------------------------
     def _cpcv_and_pbo(self, evaluated: list[EvolutionCandidateRecord]) -> list[EvolutionCandidateRecord]:
+        """Re-scores the top `cpcv_top_n` candidates (by raw fitness) with
+        Combinatorial Purged Cross-Validation + PBO -- this is the ONLY
+        point in the whole Evolution Lab pipeline that evaluates a
+        candidate against data it wasn't itself selected against.
+        Everything upstream (pre-filter, full eval's own Monte Carlo/
+        robustness/walk-forward) all runs the backtest over the SAME
+        entire `self.df` the GA has been searching and selecting against
+        for potentially hundreds of generations -- so a high raw
+        eval_pass_probability there is exactly as likely to mean "this
+        genome happened to fit this dataset's noise well" as "this
+        genome has a real edge." This is precisely why a strategy
+        promoted straight off the raw leaderboard number can look like
+        40%/30% here and come back 2%/1% out of Full Pipeline's much
+        stricter walk-forward-search + genuinely-held-out holdout split:
+        Full Pipeline is measuring something CPCV also measures here
+        (out-of-sample performance) that the rest of this pipeline
+        never does. See cpcv_oos_eval_pass_probability's docstring."""
         pool = sorted(evaluated, key=lambda r: r.fitness.final_score, reverse=True)[: self.cfg.cpcv_top_n]
         if len(pool) < 2:
             return pool
@@ -1409,6 +1483,7 @@ class EvolutionRunner:
             if self._stop_flag.is_set():
                 break
             cpcv_degradation = None
+            oos_metric = None
             try:
                 cpcv_result = run_cpcv(
                     self.df, lambda spec=r.spec: build_strategy_from_spec(spec), self.risk,
@@ -1417,12 +1492,23 @@ class EvolutionRunner:
                     prop_rules=self.prop_rules,
                 )
                 cpcv_degradation = cpcv_result.degradation
+                if self.cfg.cpcv_metric == "eval_pass_probability":
+                    oos_metric = cpcv_result.mean_oos_metric
             except CPCVError:
                 pass
             except Exception:
                 pass
             r.pbo = pbo_value
             r.cpcv_degradation = cpcv_degradation
+            r.cpcv_oos_eval_pass_probability = oos_metric
+            raw_pct = (r.mc_summary or {}).get("evaluation_pass_probability")
+            if oos_metric is not None and raw_pct is not None:
+                flag = " <-- big gap, likely overfit; verify with Full Pipeline before treating as real" \
+                    if raw_pct - oos_metric > 15 else ""
+                self._log(
+                    f"  CPCV [{r.candidate_id}]: raw in-sample eval pass {raw_pct:.1f}% -> "
+                    f"out-of-sample estimate {oos_metric:.1f}%{flag}"
+                )
             r.fitness = compute_prop_fitness(
                 r.stats, r.mc_summary, r.robustness, r.walk_forward, r.trade_pnls,
                 pbo=pbo_value, cpcv_degradation=cpcv_degradation,
