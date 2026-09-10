@@ -9,6 +9,7 @@ integration tests of the actual multiprocessing pipeline, not mocks of it.
 from __future__ import annotations
 
 import math
+import threading
 
 import numpy as np
 import pandas as pd
@@ -463,3 +464,101 @@ def test_promote_champion_works_for_a_python_candidate(tmp_path):
     assert result["candidate_id"] == candidate_id
     assert result["spec"]["source_type"] == "python"
     assert result["report_paths"]["html"].exists()
+
+
+# ---------------------------------------------------------------------------
+# _drain_futures / cancellation -- regression tests for a real bug: Stage 1,
+# 2, and 3 each used to consume worker-pool results via
+# `for f in as_completed(futures)`, which blocks until the NEXT future
+# completes with no timeout -- so one candidate that hangs (a wedged worker
+# process, a pathological config, anything) made the whole stage, and the
+# STOP button along with it, hang indefinitely with no output. This mirrors
+# the same bug (and the same fix shape) already caught once in the
+# Evolution Lab (see tests/test_evolution_lab.py's
+# test_drain_futures_stops_promptly_on_a_hung_future) -- Search Lab had its
+# own separate copy of the pattern that never got the matching fix.
+# ---------------------------------------------------------------------------
+
+def test_drain_futures_stops_promptly_on_a_hung_future():
+    import time
+    from concurrent.futures import Future
+
+    from app.search.batch_runner import SearchCancelled, _drain_futures
+
+    hung_future: Future = Future()  # deliberately never set -- simulates a wedged worker
+    finished_future: Future = Future()
+    finished_future.set_result("ok")
+    futures = {hung_future: "hung", finished_future: "finished"}
+
+    cancel_event = threading.Event()
+    shutdown_calls = []
+
+    class _FakePool:
+        def shutdown(self, wait=False, cancel_futures=False):
+            shutdown_calls.append((wait, cancel_futures))
+
+    results = []
+
+    def _on_result(label, future):
+        results.append((label, future.result()))
+        if label == "finished":
+            cancel_event.set()  # simulate STOP being clicked mid-run
+
+    t0 = time.time()
+    with pytest.raises(SearchCancelled):
+        _drain_futures(_FakePool(), futures, cancel_event, _on_result, log=lambda msg: None)
+    elapsed = time.time() - t0
+
+    assert ("finished", "ok") in results
+    assert elapsed < 3.0  # must not have blocked waiting on the hung future
+    assert not hung_future.running()  # cancel() was attempted on the abandoned future
+    assert shutdown_calls == [(False, True)]
+
+
+def test_drain_futures_runs_all_results_to_completion_when_never_cancelled():
+    from concurrent.futures import Future
+
+    from app.search.batch_runner import _drain_futures
+
+    futures = {}
+    for i in range(5):
+        fut: Future = Future()
+        fut.set_result(i * 10)
+        futures[fut] = f"label-{i}"
+
+    seen = []
+    _drain_futures(pool=None, futures=futures, cancel_event=None, on_result=lambda label, fut: seen.append((label, fut.result())), log=lambda msg: None)
+
+    assert sorted(seen) == sorted((f"label-{i}", i * 10) for i in range(5))
+
+
+def test_run_search_stops_promptly_when_cancel_event_set_mid_run(tmp_path, small_family_space):
+    """End-to-end version of the above: a real run_search() call, with
+    cancel_event set by the progress callback partway through Stage 1 (the
+    same mechanism the web/desktop STOP buttons use), must return via
+    SearchCancelled quickly rather than grinding through every remaining
+    stage."""
+    import time
+
+    from app.search.batch_runner import SearchCancelled
+
+    df = _trending_df()
+    cancel_event = threading.Event()
+    messages = []
+
+    def _progress_cb(msg):
+        messages.append(msg)
+        if "Stage 1" in msg:
+            cancel_event.set()
+
+    t0 = time.time()
+    with pytest.raises(SearchCancelled):
+        run_search(
+            df, RiskConfig(), PropRules(), small_family_space, _fast_stage_cfg(),
+            db_path=str(tmp_path / "search.db"), instrument="TEST", timeframe="5m",
+            progress_cb=_progress_cb, cancel_event=cancel_event,
+        )
+    elapsed = time.time() - t0
+
+    assert elapsed < 30.0  # generous bound for real process-pool startup; must not hang
+    assert any("Stop requested" in m for m in messages)

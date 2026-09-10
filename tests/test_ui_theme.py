@@ -8,6 +8,12 @@ from unittest import mock
 
 import pytest
 
+# This module is GUI-only (theme constants live on app.ui.main_window,
+# which imports tkinter). tkinter isn't installed on every machine --
+# notably many CI runners and headless Linux boxes -- so skip cleanly
+# there instead of failing the whole collection/build.
+pytest.importorskip("tkinter")
+
 from app.ui import main_window as mw
 
 
