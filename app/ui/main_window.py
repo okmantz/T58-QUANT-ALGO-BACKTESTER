@@ -61,6 +61,7 @@ from app.optimize.parameter_space import RefinementError, apply_genome, extract_
 from app.optimize.refinement import FITNESS_METRICS, RefinementConfig, run_iterative_refinement
 from app.optimize.multi_objective import DEFAULT_OBJECTIVES, MultiObjectiveConfig, OBJECTIVE_DIRECTIONS, run_multi_objective_refinement
 from app.optimize.walkforward_ga import run_walkforward_aware_refinement
+from app.orchestration import pipeline_guide
 from app.orchestration.batch_test import BatchTestItem, run_batch_test
 from app.orchestration.resource_guard import (
     HEAVY_JOB_GUARD, JOB_EVOLUTION_LAB, JOB_FULL_PIPELINE, JOB_SEARCH_LAB, JOB_SPEED_RUN,
@@ -1041,13 +1042,15 @@ class MainWindow:
         self.csv_paths: list[str] = []
         self.strategy_py_path: str | None = None
         self._active_library_strategy: tuple[str, str] | None = None
-        # Staged queue for TEST SELECTED (BATCH) -- ADD SELECTED TO BATCH QUEUE
-        # copies highlighted library rows in here instead of running
-        # immediately, so Prop Rules (03) and Risk (04) can be set up
-        # *after* picking strategies but *before* anything actually runs.
-        # Holds StoredStrategy objects (each already carries its own
-        # strategy_type, so mixing Python/PineScript/MQL5 in one queue is fine).
-        self._batch_queue: list = []
+        # Checkbox-style batch selection (mirrors the web app's flat
+        # checkbox list of every saved strategy across all types) --
+        # keyed by (strategy_type, name) -> tk.BooleanVar so the checked
+        # state survives a REFRESH LIST re-population. RUN BATCH TEST
+        # (CHECKED) and RUN FULL PIPELINE (BATCH) (CHECKED) both read
+        # straight off whichever boxes are checked at click time --
+        # there's no separate "add to queue" step to remember.
+        self._batch_checked_vars: dict[tuple[str, str], "BooleanVar"] = {}
+        self._batch_checklist_items: dict[tuple[str, str], object] = {}
         self.strategy_mode = StringVar(value="manual")
 
         self._build_ui()
@@ -2297,6 +2300,77 @@ class MainWindow:
         for var in getattr(self, "evo_family_vars", {}).values():
             var.set(False)
 
+    def _view_family_health(self):
+        """Shows every family's cross-run tested/passed tally (Search Lab
+        + Evolution Lab combined, across every instrument this app has
+        ever run) and flags which ones are currently excluded as dead
+        ends -- the SAME accumulated history that silently narrows which
+        families a NEW run is even allowed to pick from (see
+        EvolutionRunner._apply_family_health_exclusions). This is exactly
+        why a run can keep landing on the same 2-3 families: once enough
+        OTHER families have racked up 30+ zero-success attempts (which
+        adds up fast across a long history on one instrument, or one
+        whose default prefilter thresholds don't suit a family's grid),
+        they're quietly dropped from the pool before population
+        generation even starts, not by GA selection pressure within any
+        one run. RESET FAMILY HEALTH (next to this button) clears that
+        accumulated history so every family gets a clean slate."""
+        try:
+            from app.search.family_health import compute_family_health
+            health = compute_family_health()
+        except Exception as exc:
+            messagebox.showerror("Family Health", f"Couldn't compute family health: {exc}")
+            return
+        win = Toplevel(self.root)
+        win.title("Family Health -- cross-run history")
+        win.configure(bg=PANEL)
+        win.geometry("640x480")
+        Label(
+            win, text="Tested/passed across EVERY Search Lab + Evolution Lab run this app has "
+            "on disk, for every instrument -- not just the current run. A family only shows "
+            "DEAD END once it has 30+ tested with zero passes; a family with no rows at all "
+            "here has simply never been tried yet and isn't shown.",
+            bg=PANEL, fg=TEXT_DIM, font=_safe_font(9), wraplength=600, justify="left",
+        ).pack(anchor="w", padx=12, pady=(12, 8))
+        text = Text(win, bg=PANEL_3, fg=TEXT, font=(MONO, 10), relief="flat", bd=0, wrap="none")
+        text.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        if not health:
+            text.insert("1.0", "No history yet -- every family is still \"no evidence yet.\"")
+        else:
+            rows = sorted(health.values(), key=lambda h: (-h.n_tested))
+            text.insert("1.0", f"{'FAMILY':38s}{'TESTED':>8s}{'PASSED':>8s}   STATUS\n")
+            text.insert(END, "-" * 70 + "\n")
+            for h in rows:
+                status = "DEAD END" if h.is_dead_end else "healthy"
+                text.insert(END, f"{h.family:38s}{h.n_tested:8d}{h.n_passed:8d}   {status}\n")
+        text.config(state="disabled")
+
+    def _reset_family_health(self):
+        proceed = messagebox.askokcancel(
+            "Reset family health?",
+            "This archives (renames, does not delete) every Search Lab result database and "
+            "Evolution Lab tested-candidates log this app has ever written, so every family's "
+            "dead-end tally starts fresh. Use this if you suspect a run keeps landing on the "
+            "same few families because most others were auto-excluded from a long accumulated "
+            "history (see VIEW FAMILY HEALTH), or after a bug fix that could have produced a "
+            "burst of spurious failures. This is recoverable -- old files are renamed with a "
+            "'.pre-reset' suffix, not deleted.",
+        )
+        if not proceed:
+            return
+        try:
+            from app.search.family_health import reset_family_health
+            result = reset_family_health()
+        except Exception as exc:
+            messagebox.showerror("Reset family health", f"Couldn't reset: {exc}")
+            return
+        messagebox.showinfo(
+            "Family health reset",
+            f"Archived {result['search_dbs_reset']} Search Lab result database(s) and "
+            f"{result['evolution_logs_reset']} Evolution Lab tested-candidate log(s). "
+            f"Every family starts fresh again on your next run.",
+        )
+
     def _ring_stat_card(self, parent, label, pct, accent):
         """A KPI tile that shows its value as a glowing ring instead of
         flat text -- the "progress toward a target" donut readout from the
@@ -3050,8 +3124,9 @@ class MainWindow:
                "plain tags, so you can see at a glance what kind of strategy it actually is.")
         bullet("FIND COMMON PATTERNS (ALL) — mines every saved strategy for genes (DNA tags) that show up "
                "together often, surfacing patterns across your whole library rather than one file at a time.")
-        bullet("ADD SELECTED TO BATCH QUEUE, then RUN BATCH TEST or RUN FULL PIPELINE (BATCH) — test several "
-               "library strategies back-to-back, each getting its own separate report, instead of one at a time.")
+        bullet("Check strategies off in the Batch selection panel, then RUN BATCH TEST (CHECKED) or "
+               "RUN FULL PIPELINE (BATCH) (CHECKED) — test several library strategies back-to-back, "
+               "each getting its own separate report, instead of one at a time.")
         bullet("OPTIMIZE SELECTED — runs Quick Optimize: auto-tunes one strategy's parameters toward pass/"
                "win-rate/payout targets using the same search engine as 06 Refinement, and saves the result "
                "back into the library as a new draft — the original file is left untouched.")
@@ -3101,7 +3176,7 @@ class MainWindow:
             "difference obvious: this one just runs your strategy once, as-is. The 15 FULL PIPELINE tab "
             "(Step 9 in this guide) automatically searches for a better configuration and validates it out-"
             "of-sample before giving you a verdict. For a first pass, most people skip straight to Step 9. "
-            "If you're testing several strategies at once, use the batch queue on 01 Strategy Configuration instead of "
+            "If you're testing several strategies at once, use Batch selection on 01 Strategy Configuration instead of "
             "either single-strategy button."
         )
         body("A few things this report checks automatically, every single run:")
@@ -4261,25 +4336,22 @@ class MainWindow:
             lib_btn_row, "REFRESH LIBRARY", self._refresh_strategy_library
         ).pack(side="left", padx=8)
 
+        lib_btn_row_3 = Frame(library_section, bg=PANEL)
+        lib_btn_row_3.pack(anchor="w", padx=18, pady=(0, 6))
+
+        self._button(
+            lib_btn_row_3, "VIEW CODE / CONFIG", self._view_selected_strategy_code, primary=True
+        ).pack(side="left")
+        self._button(
+            lib_btn_row_3, "OPTIMIZE SELECTED", self._optimize_selected_library_strategies
+        ).pack(side="left", padx=8)
+
         self.lib_optimize_adaptive_risk = LabeledCheckbox(
             library_section,
             "OPTIMIZE SELECTED: enable adaptive, limit-aware position sizing on the search "
             "(same engine as 05 Run & Report's Adaptive Risk section)",
             False,
         )
-
-        lib_btn_row_3 = Frame(library_section, bg=PANEL)
-        lib_btn_row_3.pack(anchor="w", padx=18, pady=(0, 6))
-
-        self._button(
-            lib_btn_row_3, "ADD SELECTED TO BATCH QUEUE", self._add_selected_to_batch_queue, primary=True
-        ).pack(side="left")
-        self._button(
-            lib_btn_row_3, "VIEW CODE / CONFIG", self._view_selected_strategy_code
-        ).pack(side="left", padx=8)
-        self._button(
-            lib_btn_row_3, "OPTIMIZE SELECTED", self._optimize_selected_library_strategies
-        ).pack(side="left", padx=8)
 
         lib_btn_row_4 = Frame(library_section, bg=PANEL)
         lib_btn_row_4.pack(anchor="w", padx=18, pady=(0, 6))
@@ -4305,106 +4377,89 @@ class MainWindow:
 
         Label(
             library_section,
-            text="ADD SELECTED TO BATCH QUEUE stages every currently highlighted strategy "
-            "(Ctrl/Cmd or Shift-click for more than one) into the Batch test queue below "
-            "-- it does NOT start a test yet. Queue up strategies from Python, PineScript, "
-            "and MQL5 here (any mix is fine), then go set up 03 Prop Rules and 04 Risk the "
-            "way you want them, and come back here and click RUN BATCH TEST when you're "
-            "ready. VIEW CODE / CONFIG shows the saved source for a selected "
-            "Python/PineScript/MQL5 strategy, or the built config for whatever's currently "
-            "set up in Manual mode. OPTIMIZE SELECTED runs the same walk-forward-aware GA "
-            "Full Pipeline uses (Step 2) against just the highlighted strategy(ies) -- "
-            "quicker than a full Full Pipeline run, and saves each winning configuration "
-            "into the library as a new '<name>_optimized' file (status: draft) without "
-            "touching the original.",
+            text="VIEW CODE / CONFIG shows the saved source for a selected Python/PineScript/MQL5 "
+            "strategy, or the built config for whatever's currently set up in Manual mode. OPTIMIZE "
+            "SELECTED runs the same walk-forward-aware GA Full Pipeline uses (Step 2) against just the "
+            "highlighted strategy(ies) above -- quicker than a full Full Pipeline run, and saves each "
+            "winning configuration into the library as a new '<name>_optimized' file (status: draft) "
+            "without touching the original. For batch-testing several strategies at once, check them "
+            "off in the Batch selection panel below instead of using this list's own selection.",
             bg=PANEL, fg=TEXT_DIM, font=_safe_font(8), wraplength=820, justify="left",
         ).pack(anchor="w", padx=18, pady=(0, 10))
 
         # ------------------------------------------------------------
-        # Batch test queue -- staged strategies waiting on RUN BATCH TEST
+        # Batch selection -- checkbox style (mirrors the web app's
+        # section 6 "batch checkbox list"), replacing the old two-step
+        # "highlight rows -> ADD SELECTED TO BATCH QUEUE -> manage a
+        # separate queue listbox" flow. Every saved strategy across all
+        # four types shows up here as its own checkbox; whichever boxes
+        # are checked at the moment you click RUN BATCH TEST (CHECKED) or
+        # RUN FULL PIPELINE (BATCH) (CHECKED) is exactly what runs -- no
+        # separate staging step, and nothing to forget to add or remove.
         # ------------------------------------------------------------
-        queue_section = self._section(
-            f, "Batch test queue",
-            "Strategies staged here run one after another through the same backtest -> "
-            "prop-sim -> Monte Carlo -> report pipeline as Run & Report, using whatever "
-            "Prop Rules (03) and Risk (04) are set at the moment you click RUN BATCH TEST "
-            "-- one saved report per strategy, all showing up on the Dashboard afterward. "
-            "Highlight a row and click REMOVE SELECTED FROM QUEUE if something got added "
-            "by mistake.",
+        batch_section = self._section(
+            f, "Batch selection",
+            "Check off any strategies below (any mix of Python / PineScript / MQL5 / Manual) "
+            "then click RUN BATCH TEST (CHECKED) or RUN FULL PIPELINE (BATCH) (CHECKED) -- each "
+            "runs the same backtest/prop-sim/Monte Carlo pipeline as Run & Report or Full Pipeline "
+            "using whatever Prop Rules (03) and Risk (04) are set at the moment you click, one saved "
+            "report per strategy, all showing up on the Dashboard afterward. Checked state persists "
+            "if you filter/search the library list above or switch strategy-source tabs.",
         )
-        queue_list_frame = Frame(queue_section, bg=PANEL)
-        queue_list_frame.pack(fill="both", expand=True, padx=18, pady=(2, 8))
+        batch_toolbar = Frame(batch_section, bg=PANEL)
+        batch_toolbar.pack(fill="x", padx=18, pady=(2, 4))
+        self._button(batch_toolbar, "SELECT ALL", self._batch_checklist_select_all).pack(side="left")
+        self._button(batch_toolbar, "CLEAR ALL", self._batch_checklist_clear_all).pack(side="left", padx=(6, 0))
+        self._button(batch_toolbar, "REFRESH LIST", self._refresh_batch_checklist).pack(side="left", padx=(6, 0))
 
-        self.batch_queue_listbox = Listbox(
-            queue_list_frame,
-            height=6,
-            selectmode=EXTENDED,
-            exportselection=False,
-            bg=PANEL_3,
-            fg=TEXT,
-            selectbackground=BORDER_LIGHT,
-            selectforeground=METAL_BRIGHT,
-            activestyle="none",
-            relief="flat",
-            bd=0,
-            highlightthickness=1,
-            highlightbackground=BORDER,
-            font=(MONO, 9),
+        batch_list_outer = Frame(batch_section, bg=PANEL_3, highlightthickness=1, highlightbackground=BORDER)
+        batch_list_outer.pack(fill="both", expand=True, padx=18, pady=(4, 0))
+        batch_canvas = Canvas(batch_list_outer, bg=PANEL_3, highlightthickness=0, height=220)
+        batch_scroll = ttk.Scrollbar(
+            batch_list_outer, orient="vertical", command=batch_canvas.yview, style="T58.Vertical.TScrollbar",
         )
-        self.batch_queue_listbox.pack(side="left", fill="both", expand=True)
-        queue_scrollbar = ttk.Scrollbar(
-            queue_list_frame, orient="vertical", command=self.batch_queue_listbox.yview,
-            style="T58.Vertical.TScrollbar",
-        )
-        queue_scrollbar.pack(side="right", fill="y")
-        self.batch_queue_listbox.config(yscrollcommand=queue_scrollbar.set)
-        self._bind_isolated_wheel(self.batch_queue_listbox)
+        batch_canvas.configure(yscrollcommand=batch_scroll.set)
+        batch_canvas.pack(side="left", fill="both", expand=True)
+        batch_scroll.pack(side="right", fill="y")
 
-        queue_btn_row = Frame(queue_section, bg=PANEL)
-        queue_btn_row.pack(anchor="w", padx=18, pady=(0, 4))
+        self._batch_checklist_inner = Frame(batch_canvas, bg=PANEL_3)
+        batch_window_id = batch_canvas.create_window((0, 0), window=self._batch_checklist_inner, anchor="nw")
+        self._batch_checklist_inner.bind(
+            "<Configure>", lambda _e: batch_canvas.configure(scrollregion=batch_canvas.bbox("all")),
+        )
+        batch_canvas.bind(
+            "<Configure>", lambda e: batch_canvas.itemconfig(batch_window_id, width=e.width),
+        )
+        self._bind_isolated_wheel(batch_canvas)
+        self._bind_isolated_wheel(self._batch_checklist_inner)
+
+        batch_btn_row = Frame(batch_section, bg=PANEL)
+        batch_btn_row.pack(anchor="w", padx=18, pady=(8, 4))
         self._button(
-            queue_btn_row, "LOAD SELECTED FROM QUEUE", self._load_selected_from_batch_queue, primary=True
+            batch_btn_row, "RUN BATCH TEST (CHECKED)", self._run_batch_checked_clicked, primary=True
         ).pack(side="left")
         self._button(
-            queue_btn_row, "REMOVE SELECTED FROM QUEUE", self._remove_selected_from_batch_queue
-        ).pack(side="left", padx=8)
-        self._button(
-            queue_btn_row, "CLEAR QUEUE", self._clear_batch_queue
-        ).pack(side="left", padx=8)
-        self._button(
-            queue_btn_row, "RUN BATCH TEST", self._run_batch_queue_clicked, primary=True
-        ).pack(side="left")
-        self._button(
-            queue_btn_row, "RUN FULL PIPELINE (BATCH)", self._run_full_pipeline_queue_clicked, primary=True
+            batch_btn_row, "RUN FULL PIPELINE (BATCH) (CHECKED)", self._run_full_pipeline_checked_clicked, primary=True
         ).pack(side="left", padx=8)
 
         Label(
-            queue_section, text="RUN BATCH TEST runs every queued strategy through the plain "
-            "backtest -> prop-sim -> Monte Carlo pipeline (fast). RUN FULL PIPELINE (BATCH) runs "
-            "every queued strategy through the FULL 15 Full Pipeline instead (baseline -> "
+            batch_section, text="RUN BATCH TEST (CHECKED) runs every checked strategy through the plain "
+            "backtest -> prop-sim -> Monte Carlo pipeline (fast). RUN FULL PIPELINE (BATCH) (CHECKED) runs "
+            "every checked strategy through the FULL 15 Full Pipeline instead (baseline -> "
             "walk-forward-aware GA search -> re-validated Monte Carlo -> out-of-sample check -> "
             "holdout check -> ICIR gate -> verdict) -- slower per strategy since it includes the "
-            "GA search, but this is how you batch-test hundreds of selected strategies through "
+            "GA search, but this is how you batch-test dozens of checked strategies through "
             "the full validation ladder without opening and running Full Pipeline on each one by "
             "hand. Either way: one saved report per strategy, using whatever settings are "
             "currently configured on 03 Prop Rules / 04 Risk (and, for the Full Pipeline batch, "
             "15 Full Pipeline's own GA/AI Assist settings) at the moment you click.",
             bg=PANEL, fg=TEXT_DIM, font=_safe_font(8), wraplength=820, justify="left",
         ).pack(anchor="w", padx=18, pady=(4, 0))
-        Label(
-            queue_section, text="LOAD SELECTED FROM QUEUE puts one queued strategy into the "
-            "STRATEGY SOURCE slot above -- for the single-strategy tabs (06 Refinement, 08 "
-            "Walk-Forward Opt, 10 Sensitivity, 12 Multi-Objective) that only ever run against ONE "
-            "loaded strategy, so you can step through this same queue one at a time instead of "
-            "re-browsing/re-selecting for each one.",
-            bg=PANEL, fg=TEXT_DIM, font=_safe_font(8), wraplength=820, justify="left",
-        ).pack(anchor="w", padx=18, pady=(4, 0))
 
-        self.batch_queue_status = Label(
-            queue_section, text="Queue is empty -- select strategies above and click "
-            "ADD SELECTED TO BATCH QUEUE.", bg=PANEL, fg=TEXT_DIM, font=_safe_font(8),
+        self.batch_checklist_status = Label(
+            batch_section, text="No saved strategies yet.", bg=PANEL, fg=TEXT_DIM, font=_safe_font(8),
         )
-        self.batch_queue_status.pack(anchor="w", padx=18, pady=(0, 10))
+        self.batch_checklist_status.pack(anchor="w", padx=18, pady=(6, 10))
 
         lib_btn_row_2 = Frame(library_section, bg=PANEL)
         lib_btn_row_2.pack(anchor="w", padx=18, pady=(0, 10))
@@ -4815,6 +4870,8 @@ class MainWindow:
                 fg=TEXT_DIM,
             )
         self._clear_strategy_metadata_panel()
+        if hasattr(self, "_batch_checklist_inner"):
+            self._refresh_batch_checklist()
 
     def _status_color(self, status: str) -> str:
         """Rough color cue for a strategy's lifecycle status, so it reads
@@ -4901,15 +4958,13 @@ class MainWindow:
         self._refresh_strategy_library()
 
     def _load_library_item_into_active_slot(self, item):
-        """Loads a StoredStrategy (from the main library list OR the Batch
-        test queue) into the single 'active strategy' slot at the top of
-        Step 01 Strategy Configuration -- the slot Full Pipeline (15), Refinement (06),
+        """Loads a StoredStrategy (from the main library list) into the
+        single 'active strategy' slot at the top of Step 01 Strategy
+        Configuration -- the slot Full Pipeline (15), Refinement (06),
         Walk-Forward Opt (08), Sensitivity (10), and Multi-Objective (12)
         all read via _build_strategy(). Switches the STRATEGY SOURCE mode
         too, so loading a PineScript item while Python is the active tab
-        still works -- that's what lets you step through a mixed-language
-        Batch test queue and run each one through those single-strategy
-        tabs without re-browsing for the file."""
+        still works."""
         if self.strategy_mode.get() != item.strategy_type:
             self._set_strategy_mode(item.strategy_type)
         self.strategy_py_path = str(item.path)
@@ -4924,20 +4979,6 @@ class MainWindow:
         if item is None:
             messagebox.showinfo("No selection", "Select a saved strategy from the list first.")
             return
-        self._load_library_item_into_active_slot(item)
-
-    def _load_selected_from_batch_queue(self):
-        """LOAD SELECTED FROM QUEUE -- picks the first highlighted row in
-        the Batch test queue and loads it into the top active-strategy
-        slot, so you can build the queue once and then step through it,
-        one strategy at a time, for Full Pipeline / Refinement /
-        Walk-Forward Opt / Sensitivity / Multi-Objective -- the
-        single-strategy tabs that RUN BATCH TEST doesn't cover."""
-        sel = list(self.batch_queue_listbox.curselection())
-        if not sel:
-            messagebox.showinfo("No selection", "Select a row in the Batch test queue below first.")
-            return
-        item = self._batch_queue[sel[0]]
         self._load_library_item_into_active_slot(item)
 
     def _rename_selected_library_strategy(self):
@@ -5245,72 +5286,89 @@ class MainWindow:
 
         return win, append
 
-    def _add_selected_to_batch_queue(self):
-        """Stages the currently highlighted library row(s) into the Batch
-        test queue below, instead of running anything immediately. This is
-        deliberately a separate step from RUN BATCH TEST so Prop Rules (03)
-        and Risk (04) can be configured *after* picking strategies but
-        *before* the run actually starts."""
-        items = self._selected_library_items()
-        if not items:
-            messagebox.showinfo(
-                "No selection",
-                "Select one or more saved Python/PineScript/MQL5 strategies from the list "
-                "above first (Ctrl/Cmd-click or Shift-click for more than one).",
-            )
+    def _refresh_batch_checklist(self):
+        """Rebuilds the Batch selection checkbox panel from every saved
+        strategy across all 4 types (python/pinescript/mql5/manual) --
+        the desktop counterpart to the web app's flat section-6 checkbox
+        list. Existing BooleanVars are re-used by (type, name) key so a
+        checked box survives a refresh (e.g. after a save/delete/rename
+        elsewhere in the library) instead of resetting to unchecked."""
+        if threading.current_thread() is not threading.main_thread():
+            try:
+                self.root.after(0, self._refresh_batch_checklist)
+            except Exception:
+                pass
             return
-        existing = {(s.strategy_type, s.name) for s in self._batch_queue}
-        added = 0
-        skipped_dupe = 0
-        for item in items:
-            key = (item.strategy_type, item.name)
-            if key in existing:
-                skipped_dupe += 1
-                continue
-            self._batch_queue.append(item)
-            existing.add(key)
-            self.batch_queue_listbox.insert(END, f"  [{item.strategy_type}] [{item.status_display}] {item.name}")
-            added += 1
-        self._refresh_batch_queue_status(added=added, skipped_dupe=skipped_dupe)
+        for child in self._batch_checklist_inner.winfo_children():
+            child.destroy()
+        self._batch_checklist_items = {}
+        old_vars = self._batch_checked_vars
+        self._batch_checked_vars = {}
+        total = 0
+        for stype in STRATEGY_TYPES:
+            for item in list_saved_strategies(stype):
+                key = (stype, item.name)
+                self._batch_checklist_items[key] = item
+                var = old_vars.get(key) or BooleanVar(value=False)
+                self._batch_checked_vars[key] = var
+                Checkbutton(
+                    self._batch_checklist_inner,
+                    text=f"[{stype}] [{item.status_display}] {item.name}",
+                    variable=var, bg=PANEL_3, fg=self._status_color(item.status),
+                    selectcolor=PANEL_2, activebackground=PANEL_3, activeforeground=TEXT,
+                    font=(MONO, 9), anchor="w", relief="flat", highlightthickness=0, padx=6, bd=0,
+                    cursor="hand2", command=self._refresh_batch_checklist_status,
+                ).pack(fill="x", anchor="w")
+                total += 1
+        if total == 0:
+            Label(
+                self._batch_checklist_inner,
+                text="No saved strategies yet -- save one from 01 Strategy Configuration "
+                "(or run Evolution Lab / Search Lab) before using batch selection.",
+                bg=PANEL_3, fg=TEXT_DIM, font=_safe_font(9), wraplength=760, justify="left",
+            ).pack(anchor="w", padx=6, pady=6)
+        self._refresh_batch_checklist_status()
 
-    def _refresh_batch_queue_status(self, added: int = 0, skipped_dupe: int = 0):
-        n = len(self._batch_queue)
-        if n == 0:
-            self.batch_queue_status.config(
-                text="Queue is empty -- select strategies above and click "
-                "ADD SELECTED TO BATCH QUEUE.",
+    def _refresh_batch_checklist_status(self):
+        checked = sum(1 for v in self._batch_checked_vars.values() if v.get())
+        total = len(self._batch_checked_vars)
+        if total == 0:
+            self.batch_checklist_status.config(text="No saved strategies yet.", fg=TEXT_DIM)
+        elif checked == 0:
+            self.batch_checklist_status.config(
+                text=f"0 of {total} checked -- check the strategies you want, then click a RUN button below.",
                 fg=TEXT_DIM,
             )
-            return
-        bits = [f"{n} strategy(ies) queued"]
-        if added:
-            bits.append(f"+{added} just added")
-        if skipped_dupe:
-            bits.append(f"{skipped_dupe} already in queue, skipped")
-        self.batch_queue_status.config(text="  •  ".join(bits) + " -- click RUN BATCH TEST when ready.", fg=GREEN)
+        else:
+            self.batch_checklist_status.config(
+                text=f"{checked} of {total} checked -- click RUN BATCH TEST (CHECKED) or "
+                "RUN FULL PIPELINE (BATCH) (CHECKED) when ready.",
+                fg=GREEN,
+            )
 
-    def _remove_selected_from_batch_queue(self):
-        sel = list(self.batch_queue_listbox.curselection())
-        if not sel:
-            messagebox.showinfo("No selection", "Select one or more rows in the queue below first.")
-            return
-        for i in reversed(sel):
-            self.batch_queue_listbox.delete(i)
-            del self._batch_queue[i]
-        self._refresh_batch_queue_status()
+    def _batch_checklist_select_all(self):
+        for var in self._batch_checked_vars.values():
+            var.set(True)
+        self._refresh_batch_checklist_status()
 
-    def _clear_batch_queue(self):
-        self.batch_queue_listbox.delete(0, END)
-        self._batch_queue = []
-        self._refresh_batch_queue_status()
+    def _batch_checklist_clear_all(self):
+        for var in self._batch_checked_vars.values():
+            var.set(False)
+        self._refresh_batch_checklist_status()
 
-    def _run_batch_queue_clicked(self):
-        items = list(self._batch_queue)
+    def _get_checked_batch_items(self) -> list:
+        return [
+            self._batch_checklist_items[key]
+            for key, var in self._batch_checked_vars.items()
+            if var.get() and key in self._batch_checklist_items
+        ]
+
+    def _run_batch_checked_clicked(self):
+        items = self._get_checked_batch_items()
         if not items:
             messagebox.showinfo(
-                "Queue is empty",
-                "Nothing is queued yet. Select one or more saved strategies above and click "
-                "ADD SELECTED TO BATCH QUEUE first.",
+                "Nothing checked",
+                "Check one or more strategies in the Batch selection panel first.",
             )
             return
         if not self.csv_paths:
@@ -5322,10 +5380,10 @@ class MainWindow:
         ).start()
 
     def _run_library_batch_test_pipeline(self, items, log):
-        """Runs every queued Strategy Library item through
+        """Runs every checked Strategy Library item through
         app.orchestration.batch_test.run_batch_test -- the same pipeline
-        Bulk Backtest already uses, just sourced from the Batch test queue
-        instead of a fresh file upload, and recording each result back onto
+        Bulk Backtest already uses, just sourced from the Batch selection
+        checklist instead of a fresh file upload, and recording each result back onto
         that strategy's own library metadata. Prop Rules and Risk are read
         fresh right here, so whatever is set on 03/04 at the moment RUN
         BATCH TEST is clicked is what every queued strategy gets tested
@@ -5383,7 +5441,7 @@ class MainWindow:
                 for o in ranked:
                     log(f"  {o.eval_pass_probability:5.1f}%  ${o.net_profit:>12,.2f}   {o.label}")
             # This whole method runs on a background thread (see
-            # _run_batch_queue_clicked) -- Tkinter widgets can only safely
+            # _run_batch_checked_clicked) -- Tkinter widgets can only safely
             # be touched from the main thread, so both refreshes are handed
             # to the mainloop via root.after instead of being called here
             # directly. Calling them straight from a worker thread is what
@@ -5484,13 +5542,12 @@ class MainWindow:
         except Exception:
             log("\nUnexpected error:\n" + traceback.format_exc())
 
-    def _run_full_pipeline_queue_clicked(self):
-        items = list(self._batch_queue)
+    def _run_full_pipeline_checked_clicked(self):
+        items = self._get_checked_batch_items()
         if not items:
             messagebox.showinfo(
-                "Queue is empty",
-                "Nothing is queued yet. Select one or more saved strategies above and click "
-                "ADD SELECTED TO BATCH QUEUE first.",
+                "Nothing checked",
+                "Check one or more strategies in the Batch selection panel first.",
             )
             return
         if not self.csv_paths:
@@ -5500,8 +5557,8 @@ class MainWindow:
             "Run Full Pipeline on multiple strategies?",
             f"This runs the FULL Full Pipeline (baseline, walk-forward-aware GA search, "
             f"re-validated Monte Carlo, out-of-sample check, holdout check, ICIR gate) for all "
-            f"{len(items)} queued strategy(ies), one after another. This is much slower per "
-            f"strategy than RUN BATCH TEST -- for a large queue (dozens to hundreds) this can "
+            f"{len(items)} checked strategy(ies), one after another. This is much slower per "
+            f"strategy than RUN BATCH TEST -- for a large batch (dozens to hundreds) this can "
             f"run for a long time in the background. Continue?",
         )
         if not proceed:
@@ -5512,11 +5569,11 @@ class MainWindow:
         ).start()
 
     def _run_library_full_pipeline_batch(self, items, log):
-        """Runs every queued Strategy Library item through
+        """Runs every checked Strategy Library item through
         app.orchestration.full_pipeline.run_full_pipeline_batch -- the same
         FULL 7-step pipeline the 15 Full Pipeline tab's single-strategy
         RUN FULL PIPELINE button uses, just looped over every strategy
-        staged in the Batch test queue instead of one loaded strategy.
+        staged in the Batch selection checklist instead of one loaded strategy.
         GA population/generations/etc. and AI Assist settings are read
         fresh from the 15 Full Pipeline tab's own widgets, so whatever is
         configured there (and on 03/04) at the moment this is clicked is
@@ -5628,6 +5685,15 @@ class MainWindow:
                 log("\nFailed / skipped:")
                 for o in summary.failed:
                     log(f"  {o.label}: {o.reason}")
+
+            if summary.outcomes:
+                log(
+                    "\n" + pipeline_guide.after_full_pipeline_batch([
+                        {"label": o.label, "ok": o.ok, "verdict": o.verdict,
+                         "eval_pass_probability": o.eval_pass_probability}
+                        for o in summary.outcomes
+                    ])
+                )
 
             # Background thread -- see _run_library_batch_test_pipeline for
             # why these refreshes are routed through root.after instead of
@@ -6455,7 +6521,7 @@ class MainWindow:
             "with no GA search -- for batch-testing several queued strategies at once, or for the "
             "full walk-forward-aware GA search (baseline -> GA -> re-validated Monte Carlo -> "
             "out-of-sample check -> holdout check -> verdict), use RUN FULL PIPELINE (BATCH) on "
-            "01 Strategy Configuration's batch queue, or 15 Full Pipeline for a single strategy.",
+            "01 Strategy Configuration's Batch selection panel, or 15 Full Pipeline for a single strategy.",
         )
 
         section = self._section(
@@ -6499,7 +6565,7 @@ class MainWindow:
             font=_safe_font(8),
         ).pack(side="left")
         self._button(
-            batch_row, "GO TO BATCH QUEUE (01 Strategy Configuration)",
+            batch_row, "GO TO BATCH SELECTION (01 Strategy Configuration)",
             lambda: self._show_page("strategyconfig"),
         ).pack(side="left", padx=8)
 
@@ -7294,7 +7360,7 @@ class MainWindow:
             # Manual Strategy Builder configs saved to the library (or
             # promoted from the Evolution Lab leaderboard) are JSON, not
             # code -- this is what lets a manual strategy sit in the
-            # Batch test queue / OPTIMIZE SELECTED / the bulk multi-
+            # Batch selection checklist / OPTIMIZE SELECTED / the bulk multi-
             # strategy list alongside Python/PineScript/MQL5 files instead
             # of being the one type those features silently couldn't load.
             cfg = json.loads(path.read_text(encoding="utf-8"))
@@ -7650,6 +7716,11 @@ class MainWindow:
             self._log_search("\nDone. Search leaderboard written to:")
             for k, p in report_paths.items():
                 self._log_search(f"  {k}: {p}")
+            self._log_search(
+                "\n" + pipeline_guide.after_search_complete(
+                    summary.champion_candidate_id, len(summary.leaderboard or [])
+                )
+            )
 
         except SearchCancelled:
             self._log_search(
@@ -9438,7 +9509,7 @@ class MainWindow:
         self.genstrat_save_btn.pack(side="left")
         Label(
             output_section, text="Saved strategies land in the Strategy Library (01 Strategy Configuration) tagged "
-            "DRAFT -- open that tab, LOAD SELECTED (or ADD TO BATCH QUEUE), and run it through "
+            "DRAFT -- open that tab, LOAD SELECTED (or check it in Batch selection), and run it through "
             "05 Run & Report / 15 Full Pipeline like anything else before trusting it.",
             bg=PANEL, fg=TEXT_DIM, font=_safe_font(8), wraplength=900, justify="left",
         ).pack(anchor="w", padx=18, pady=(0, 12))
@@ -9643,6 +9714,8 @@ class MainWindow:
         families_toolbar.pack(fill="x", pady=(2, 0))
         self._button(families_toolbar, "SELECT ALL", self._evo_families_select_all).pack(side="left")
         self._button(families_toolbar, "CLEAR ALL", self._evo_families_clear_all).pack(side="left", padx=(6, 0))
+        self._button(families_toolbar, "VIEW FAMILY HEALTH", self._view_family_health).pack(side="left", padx=(6, 0))
+        self._button(families_toolbar, "RESET FAMILY HEALTH", self._reset_family_health).pack(side="left", padx=(6, 0))
 
         # height=6 -> 10-ish rows visible with a real scrollbar: the family
         # list grew from 11 to 34 (see app.search.strategy_space's
@@ -9716,9 +9789,14 @@ class MainWindow:
             f, "Leaderboard (all-time best seen)",
             "Refreshed after every generation. Sorted by PROP FITNESS, which already accounts for "
             "pass probability, payout probability, robustness, OOS consistency, drawdown, and the "
-            "penalties described above -- not just net profit. Double-click (or select + VIEW "
-            "DETAILS) to see the full stat breakdown and generated code/config for any leader, and "
-            "PROMOTE it straight into the Strategy Library to run it through 15 Full Pipeline.",
+            "penalties described above -- not just net profit. The OOS% column (when present) is "
+            "the honest, held-out CPCV estimate -- a big gap below the raw pass probability shown in "
+            "VIEW DETAILS means the GA likely fit this dataset's noise rather than a real edge, which "
+            "is exactly the pattern behind a strategy looking great here and coming back much weaker "
+            "out of 15 Full Pipeline's stricter validation; PROMOTE will warn you about it directly "
+            "when the gap is large. Double-click (or select + VIEW DETAILS) to see the full stat "
+            "breakdown and generated code/config for any leader, and PROMOTE it straight into the "
+            "Strategy Library to run it through 15 Full Pipeline.",
         )
         lb_frame = Frame(lb_section, bg=PANEL)
         # fill="both", expand=True (not the old fill="x") so this frame --
@@ -9895,6 +9973,7 @@ class MainWindow:
             prefilter_max_bars=prefilter_max_bars,
         )
         self.evo_log_text.delete("1.0", END)
+        self._evo_guide_shown = False
         self._evolution_runner = EvolutionRunner(df, risk, rules, cfg, progress_cb=self._evo_log)
         self._evolution_runner.start()
         self._evo_log(
@@ -9982,9 +10061,20 @@ class MainWindow:
             wr_str = f"{wr:5.1f}% WR" if isinstance(wr, (int, float)) else "   n/a WR"
             trades = stats.get("total_trades")
             trades_str = f"{trades:4d} trades" if isinstance(trades, int) else "   ? trades"
+            # cpcv_oos_eval_pass_probability is the honest, held-out
+            # estimate from engine.py's _cpcv_and_pbo -- shown right on
+            # the leaderboard row (not just buried in VIEW DETAILS) so a
+            # big gap against the raw in-sample number is visible before
+            # PROMOTE is even clicked, not just as a one-time confirmation
+            # dialog at promote time. Real report this fixes: strategies
+            # promoted at a raw "40% pass / 30% payout" coming back 2%/1%
+            # out of 15 Full Pipeline -- this is the number that would
+            # have flagged that in advance.
+            oos_pct = r.get("cpcv_oos_eval_pass_probability")
+            oos_str = f"  OOS:{oos_pct:5.1f}%" if isinstance(oos_pct, (int, float)) else ""
             self.evo_leaderboard_listbox.insert(
                 END,
-                f"  {score:8.2f}   {fam:18s}  {trades_str}  {wr_str}  {r.get('candidate_id', '?')}",
+                f"  {score:8.2f}   {fam:18s}  {trades_str}  {wr_str}{oos_str}  {r.get('candidate_id', '?')}",
             )
 
     def _load_evolution_leaderboard_from_disk(self) -> None:
@@ -10069,7 +10159,7 @@ class MainWindow:
             f"  Max drawdown:         {num(stats.get('max_drawdown_pct'), '{:.1f}')}%",
             f"  Expectancy:           {num(stats.get('expectancy'))}",
             "",
-            "-- Monte Carlo / eval simulation --",
+            "-- Monte Carlo / eval simulation (IN-SAMPLE -- same data the GA searched) --",
             f"  Evaluation pass probability:  {pct_already(mc.get('evaluation_pass_probability'))}",
             f"  First payout probability:     {pct_already(mc.get('first_payout_probability'))}",
             "",
@@ -10083,6 +10173,13 @@ class MainWindow:
             lines.append(f"  PBO (probability of backtest overfitting): {num(record.get('pbo'))}")
         if record.get("cpcv_degradation") is not None:
             lines.append(f"  CPCV degradation: {num(record.get('cpcv_degradation'))}")
+        oos_pct = record.get("cpcv_oos_eval_pass_probability")
+        if oos_pct is not None:
+            raw_pct = mc.get("evaluation_pass_probability")
+            gap_note = ""
+            if isinstance(raw_pct, (int, float)) and isinstance(oos_pct, (int, float)) and (raw_pct - oos_pct) > 15:
+                gap_note = "  <-- big gap vs. raw in-sample number above; likely overfit, verify with Full Pipeline"
+            lines.append(f"  CPCV out-of-sample eval pass probability: {num(oos_pct, '{:.1f}')}%{gap_note}")
 
         win = Toplevel(self.root)
         win.title(f"Leaderboard detail -- {record.get('candidate_id', '?')}")
@@ -10152,6 +10249,36 @@ class MainWindow:
                 "to the Strategy Library.",
             )
             return
+        # Real-report root cause: a strategy promoted straight off the raw
+        # leaderboard number (e.g. 40% pass / 30% payout) can come back
+        # from 15 Full Pipeline at 2%/1% -- because everything upstream of
+        # engine.py's _cpcv_and_pbo evaluates each candidate against the
+        # SAME data the GA searched and selected it against for
+        # potentially hundreds of generations, so a high raw number there
+        # is exactly as likely to be "this genome fit this dataset's noise
+        # well" as a real edge. _cpcv_and_pbo already computes an honest,
+        # held-out estimate (cpcv_oos_eval_pass_probability) for exactly
+        # this reason and logs a warning when the gap is large -- but that
+        # console line was easy to miss, and PROMOTE never checked it
+        # before this. Now it does, right before the save actually
+        # happens, using the same >15-point gap threshold the log warning
+        # already uses.
+        raw_pct = (record.get("mc_summary") or {}).get("evaluation_pass_probability")
+        oos_pct = record.get("cpcv_oos_eval_pass_probability")
+        if isinstance(raw_pct, (int, float)) and isinstance(oos_pct, (int, float)) and (raw_pct - oos_pct) > 15:
+            proceed = messagebox.askyesno(
+                "Large in-sample / out-of-sample gap",
+                f"This candidate's raw (in-sample) eval pass probability is {raw_pct:.1f}%, but the "
+                f"honest, held-out CPCV estimate is only {oos_pct:.1f}% -- a {raw_pct - oos_pct:.1f}-point "
+                f"gap. That pattern (looks great in-sample, much weaker out-of-sample) is the classic "
+                f"signature of the GA having fit this dataset's noise rather than a real edge, and is "
+                f"exactly what tends to come back as a much lower pass/payout rate out of 15 Full "
+                f"Pipeline's stricter walk-forward + holdout validation.\n\n"
+                f"Promote it anyway? (15 Full Pipeline will still re-validate it properly either way -- "
+                f"this is just an early warning so you don't have to wait for that run to find out.)",
+            )
+            if not proceed:
+                return
         family = (record.get("meta") or {}).get("family", "strategy")
         cid = record.get("candidate_id", "unknown")
         filename = f"evolab_promoted_{family}_{cid[-8:]}.json"
@@ -10183,7 +10310,7 @@ class MainWindow:
         messagebox.showinfo(
             "Promoted",
             f"Saved to Strategy Library as '{filename}' (manual, status: validated). "
-            "Find it in 06 Strategy Library / 15 Full Pipeline's batch queue to run it through "
+            "Find it in 06 Strategy Library / 15 Full Pipeline's Batch selection panel to run it through "
             "the full validation pipeline.",
         )
         try:
@@ -10197,10 +10324,25 @@ class MainWindow:
             return
         status = runner.status()
         resumed_note = " (resumed)" if status.get("resumed") else ""
+        fam_health = status.get("family_health") or {}
+        fam_note = ""
+        if fam_health.get("applied") and fam_health.get("excluded"):
+            excluded_n = len(fam_health["excluded"])
+            active_n = fam_health.get("active_family_count")
+            if active_n is not None and active_n >= len(list_families()):
+                fam_note = (
+                    f"  |  {excluded_n} famil{'y' if excluded_n == 1 else 'ies'} flagged dead-end but NOT "
+                    f"excluded (would collapse below the active-family floor) -- searching all {active_n}"
+                )
+            else:
+                fam_note = (
+                    f"  |  {active_n} famil{'y' if active_n == 1 else 'ies'} active "
+                    f"({excluded_n} excluded as dead-end)"
+                )
         self.evo_status_label.config(
             text=(
                 f"{'RUNNING' if status['running'] else 'STOPPED'} -- generation {status['generation']}, "
-                f"leaderboard size {status['leaderboard_size']}{resumed_note}"
+                f"leaderboard size {status['leaderboard_size']}{resumed_note}{fam_note}"
             ),
             fg=GREEN if status["running"] else TEXT_DIM,
         )
@@ -10220,6 +10362,9 @@ class MainWindow:
             # _run_loop finally block) -- either way the heavy-job slot
             # must free up so another tab can start.
             self._release_heavy_job(JOB_EVOLUTION_LAB)
+            if not getattr(self, "_evo_guide_shown", False):
+                self._evo_guide_shown = True
+                self._evo_log("\n" + pipeline_guide.after_evolution_stop(status["leaderboard_size"]))
 
     def _build_full_pipeline_tab(self):
         f = self._scrollable(self.tab_fullpipeline)
@@ -11041,6 +11186,10 @@ class MainWindow:
                 self._log_fullpipeline(f"\n{result.saved_library_note}")
             for w in result.warnings:
                 self._log_fullpipeline(f"WARNING: {w}")
+
+            self._log_fullpipeline(
+                "\n" + pipeline_guide.after_full_pipeline(result.verdict, bool(result.saved_library_note))
+            )
 
             try:
                 self._refresh_dashboard()
