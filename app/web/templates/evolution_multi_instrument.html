@@ -92,7 +92,45 @@
   </div>
 
   <div class="card">
-    <h2>2. Evolution settings (applied identically to every instrument)</h2>
+    <h2>2. Prop account &amp; risk (applied identically to every instrument in this group)</h2>
+    <p class="help">
+      Same field names as the regular Evolution Lab / Full Pipeline / Run &amp; Report pages. Set your
+      real prop-firm numbers here -- leaving these at the defaults evaluates every instrument against a
+      generic $100k / 8% / 5% / 10% / 1%-risk account instead of the one you actually trade. Since one
+      pip size applies to every instrument in the group, only group instruments that share a pip size
+      (e.g. several FX pairs, or several futures contracts) -- otherwise run them separately from the
+      regular Evolution Lab page.
+    </p>
+    <div class="row">
+      <div><label>Account size ($, prop rules)</label><input type="number" name="account_size" value="100000"></div>
+      <div><label>Initial balance ($, backtest engine -- keep equal to account size)</label><input type="number" name="initial_balance" value="100000"></div>
+    </div>
+    <div class="row">
+      <div><label>Evaluation profit target (%)</label><input type="number" step="0.1" name="profit_target" value="8"></div>
+      <div><label>Daily loss limit (%)</label><input type="number" step="0.1" name="daily_loss" value="5"></div>
+    </div>
+    <div class="row">
+      <div><label>Max drawdown (%)</label><input type="number" step="0.1" name="max_dd" value="10"></div>
+      <div><label>Max trades/day</label><input type="number" name="max_trades_day" value="10"></div>
+    </div>
+    <div class="row">
+      <div><label>Risk mode</label>
+        <select name="risk_mode"><option value="percent">% of balance</option><option value="fixed">Fixed $</option></select>
+      </div>
+      <div><label>Risk per trade (% or $, per Risk mode above)</label><input type="number" step="0.1" name="risk_value" value="1.0"></div>
+    </div>
+    <div class="row">
+      <div><label>Commission per trade ($)</label><input type="number" step="0.01" name="commission" value="0"></div>
+      <div><label>Slippage (pips)</label><input type="number" step="0.1" name="slippage_pips" value="0.5"></div>
+    </div>
+    <div class="row">
+      <div><label>Spread (pips)</label><input type="number" step="0.1" name="spread_pips" value="1.0"></div>
+      <div><label>Pip size, all instruments (e.g. ES1! futures = 1.0, FX = 0.0001)</label><input type="number" step="0.0001" name="pip_size" value="0.0001"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>3. Evolution settings (applied identically to every instrument)</h2>
     <div class="row">
       <div><label>Population size</label><input type="number" name="population_size" value="60"></div>
       <div><label>Elites kept per generation</label><input type="number" name="elite_keep" value="10"></div>
@@ -101,7 +139,6 @@
       <div><label>Monte Carlo sims (per full eval)</label><input type="number" name="mc_sims" value="1000"></div>
       <div><label>Max generations (blank = run until STOP)</label><input type="number" name="max_generations" value=""></div>
     </div>
-    <div><label>Initial account balance</label><input type="number" name="initial_balance" value="100000"></div>
 
     <div style="margin-top:14px;">
       <label>Optimization goal</label>

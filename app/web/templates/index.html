@@ -126,6 +126,9 @@
     <a href="{{ result.report_json }}" target="_blank">Download JSON &rarr;</a>
     <a href="{{ result.report_csv }}" target="_blank">Download summary CSV &rarr;</a>
   </div>
+  {% if result.next_step %}
+  <p style="margin-top:14px; padding:10px 12px; border-radius:8px; background:#152615; color:#b7e8b7; font-size:13px;">{{ result.next_step }}</p>
+  {% endif %}
 </div>
 {% endif %}
 

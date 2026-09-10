@@ -68,6 +68,7 @@
   <a href="#champion">⑤ Champion</a>
   <a href="#deployment">⑥ Deployment</a>
   <a href="#quantlab">Quant Lab &amp; Options Outlook</a>
+  <a href="#decision-guide">Decision guide</a>
 </div>
 
 <div class="manual-section" id="quickstart">
@@ -242,6 +243,108 @@
       educational links, for building trading fundamentals before you backtest your first strategy.</li>
     <li><b><a href="/mobile-access">Phone access (QR code)</a></b> -- scan to open this same app on your
       phone over your local network (or Tailscale, if installed).</li>
+  </ul>
+</div>
+
+<div class="manual-section" id="decision-guide">
+  <div class="eyebrow">Decision guide</div>
+  <h2>What to do depending on your results</h2>
+  <p>Everything above is the order to click through the FIRST time. This section is different: it's
+  organized by decision point, not by tab, for when you already have a real result in front of you and
+  want to know what it means. Every branch below also prints live, as a green "Next step:" note, right
+  after the run that produced it (see <code>app.orchestration.pipeline_guide</code> in the codebase --
+  the same logic drives both those live messages and this reference section, so they can never disagree
+  with each other).</p>
+
+  <h3 style="font-size:14px;margin:16px 0 6px;">After your very first backtest (Run &amp; Report)</h3>
+  <ul>
+    <li><b>Zero trades generated</b> — don't touch risk or prop rules yet. Check the strategy's own entry
+      logic first: too strict a condition, a timeframe mismatch, or (Manual Builder) an indicator
+      combination that never actually fires are the usual causes.</li>
+    <li><b>Fewer than ~20 trades</b> — too few for Monte Carlo or a prop simulation to say much with
+      confidence. Try a longer data range, a lower timeframe, or a looser entry condition before trusting
+      any pass-probability number from this run.</li>
+    <li><b>Profit factor below 1.0</b> — this version loses money over this data. Don't chase it with Full
+      Pipeline yet — adjust it by hand, or let Search Lab / Evolution Lab explore variations and other
+      families automatically.</li>
+    <li><b>Max drawdown above ~40%</b> — severe for most prop-firm limits (many cap overall drawdown around
+      8-10%). Tighten the stop-loss or lower risk per trade on Risk &amp; Execution before moving on, even
+      if the profit factor looks fine.</li>
+    <li><b>Failed the prop-firm simulation despite decent trade stats</b> — check the failure reason shown
+      in the report. Daily loss limit and max drawdown are the two most common single-run killers —
+      re-check that Prop-Firm Rules actually matches your real firm's terms.</li>
+    <li><b>None of the above</b> — reasonable first result. Check the eval-pass / first-payout
+      probabilities the same run just computed, then either promote to Full Pipeline directly, or try
+      Search Lab / Evolution Lab first to see if a nearby variant does better.</li>
+  </ul>
+
+  <h3 style="font-size:14px;margin:16px 0 6px;">Choosing where to start creating a strategy</h3>
+  <ul>
+    <li><b>Already have a specific setup in mind</b> (rule-based, an MS-LSD-style structure/liquidity/
+      order-block idea, or existing Python/PineScript/MQL5 source) → Manual Builder or upload it directly.
+      Search Lab and Evolution Lab are for when you DON'T have a specific idea — skip them for now and
+      come back later to see if a variant beats your own design.</li>
+    <li><b>No specific idea yet</b> → Search Lab (bounded, three-stage, faster) or Evolution Lab
+      (open-ended, meant to run for hours unattended) are both better starting points than a blank Manual
+      Builder. Use Search Lab for a quick first pass; use Evolution Lab if you want to leave it running
+      and come back to a leaderboard.</li>
+  </ul>
+
+  <h3 style="font-size:14px;margin:16px 0 6px;">Search Lab / Evolution Lab leaderboard, once you have one</h3>
+  <ul>
+    <li><b>Nothing survived Stage 1 at all</b> (Search Lab) → try a wider family selection, a higher
+      max-candidates count, or looser Stage 1 filters (min trades / min profit factor).</li>
+    <li><b>Some candidates made it partway but none passed every gate</b> → promote the top one and run it
+      through Full Pipeline anyway, or widen the search and try again.</li>
+    <li><b>A clear champion / strong leaderboard</b> → click PROMOTE, then run it through Full Pipeline for
+      a re-validated, walk-forward-optimized verdict before considering a live evaluation.</li>
+  </ul>
+  <div class="manual-warn">Evolution Lab's own leaderboard "eval pass probability" is scored IN-SAMPLE,
+  against the same data the GA searched with — it will usually look better than an honest out-of-sample
+  number. Check the CPCV OOS pass-probability column next to it; a big gap between the two means
+  overfitting, not a strong strategy. Full Pipeline re-checks this properly.</div>
+
+  <h3 style="font-size:14px;margin:16px 0 6px;">Full Pipeline verdict</h3>
+  <ul>
+    <li><b>READY</b> → your strongest evidence yet, but still a backtest. Consider a short Forward Test
+      (MT5) or paper trading before risking real capital on a prop-firm evaluation.</li>
+    <li><b>MARGINAL</b> → not clearly ready or clearly dead. Try Quick Optimize on it, or adjust risk
+      settings (position size, daily-loss limit) and re-run Full Pipeline. Don't take it live as-is.</li>
+    <li><b>NOT READY</b> → doesn't hold up under re-validation. Go back to Evolution Lab or Search Lab for
+      a different candidate rather than trying to rescue this one.</li>
+  </ul>
+
+  <h3 style="font-size:14px;margin:16px 0 6px;">Forward Test (MT5) results</h3>
+  <ul>
+    <li><b>Any errors during the session</b> → almost always broker/connection/symbol-mapping issues, not
+      the strategy. Resolve them and run another session — a session with unresolved errors proves nothing
+      either way.</li>
+    <li><b>Zero trades triggered</b> → can be entirely normal for a low-frequency strategy over a short
+      window. Run a longer session before concluding anything, especially if the backtest also traded
+      infrequently.</li>
+    <li><b>Live fills diverged from what the backtest predicted</b> → check slippage/spread/commission
+      assumptions on Risk &amp; Execution against what the broker actually gave you, then re-run Full
+      Pipeline with updated execution costs.</li>
+    <li><b>Ran cleanly and roughly matched the backtest</b> → this is your strongest evidence yet. Deploy
+      Live is reasonable from here, starting at reduced size if your firm allows it, with Monitor (Live
+      Market) open to watch the first stretch.</li>
+  </ul>
+
+  <h3 style="font-size:14px;margin:16px 0 6px;">Troubleshooting things that have gone wrong before</h3>
+  <ul>
+    <li><b>Evolution Lab winners pass on its own leaderboard but fail almost every Full Pipeline
+      re-check</b> → check that Evolution Lab's own "Prop account &amp; risk" fields (right there on that
+      page) actually match your real numbers. They build the exact same RiskConfig/PropRules Full
+      Pipeline uses, so if either was left at the generic $100k / 8% / 5% / 10% / 1%-risk defaults while
+      you filled in real numbers elsewhere, Evolution Lab was searching under different rules than Full
+      Pipeline checks against — not a bug in either tool, a mismatch between them.</li>
+    <li><b>Search Lab or Evolution Lab appears to stall partway through a batch</b> → STOP and START again;
+      both now detect a genuinely hung worker and recover automatically rather than waiting forever, but a
+      manual restart is always safe if you don't want to wait it out.</li>
+    <li><b>Evolution Lab keeps returning the same 2-3 strategy families every run</b> → click VIEW FAMILY
+      HEALTH — a family that's had many tests with zero successes gets deprioritized, with a floor so it's
+      never fully excluded. RESET FAMILY HEALTH if you've since fixed a bug that was unfairly tanking a
+      family's record.</li>
   </ul>
 </div>
 

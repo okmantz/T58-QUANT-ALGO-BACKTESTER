@@ -120,7 +120,46 @@
   </div>
 
   <div class="card">
-    <h2>2. Evolution settings</h2>
+    <h2>2. Prop account &amp; risk (this run searches and scores against exactly these numbers)</h2>
+    <p class="help">
+      Same field names as Full Pipeline / Run &amp; Report, so a candidate this lab promotes gets checked
+      by Full Pipeline against the same rules it was found under -- set your real prop-firm account size,
+      profit target, drawdown limits, and per-trade risk here before starting. Leaving these at the
+      defaults below silently evaluates every candidate against a generic $100k / 8% / 5% / 10% / 1%-risk
+      account instead of the one you actually trade.
+    </p>
+    <div class="row">
+      <div><label>Account size ($, prop rules)</label><input type="number" name="account_size" value="100000"></div>
+      <div><label>Initial balance ($, backtest engine -- keep equal to account size)</label><input type="number" name="initial_balance" value="100000"></div>
+    </div>
+    <div class="row">
+      <div><label>Evaluation profit target (%)</label><input type="number" step="0.1" name="profit_target" value="8"></div>
+      <div><label>Daily loss limit (%)</label><input type="number" step="0.1" name="daily_loss" value="5"></div>
+    </div>
+    <div class="row">
+      <div><label>Max drawdown (%)</label><input type="number" step="0.1" name="max_dd" value="10"></div>
+      <div><label>Max trades/day</label><input type="number" name="max_trades_day" value="10"></div>
+    </div>
+    <div class="row">
+      <div><label>Risk mode</label>
+        <select name="risk_mode"><option value="percent">% of balance</option><option value="fixed">Fixed $</option></select>
+      </div>
+      <div><label>Risk per trade (% or $, per Risk mode above)</label><input type="number" step="0.1" name="risk_value" value="1.0"></div>
+    </div>
+    <div class="row">
+      <div><label>Commission per trade ($)</label><input type="number" step="0.01" name="commission" value="0"></div>
+      <div><label>Slippage (pips)</label><input type="number" step="0.1" name="slippage_pips" value="0.5"></div>
+    </div>
+    <div class="row">
+      <div><label>Spread (pips)</label><input type="number" step="0.1" name="spread_pips" value="1.0"></div>
+      <div><label>Pip size (e.g. ES1! futures = 1.0, FX = 0.0001)</label><input type="number" step="0.0001" name="pip_size" id="evo_pip_size_field" value="0.0001"></div>
+    </div>
+    <button type="button" onclick="evoDetectPipSize()" style="margin-top:6px;background:none;border:1px solid var(--border-light);color:var(--teal);padding:9px 12px;border-radius:8px;font-size:13px;width:100%;">Detect pip size from data</button>
+    <p id="evo_pip_detect_status" style="font-size:12px;margin-top:6px;"></p>
+  </div>
+
+  <div class="card">
+    <h2>3. Evolution settings</h2>
     <div class="row">
       <div><label>Population size</label><input type="number" name="population_size" value="60"></div>
       <div><label>Elites kept per generation</label><input type="number" name="elite_keep" value="10"></div>
@@ -129,7 +168,6 @@
       <div><label>Monte Carlo sims (per full eval)</label><input type="number" name="mc_sims" value="1000"></div>
       <div><label>Max generations (blank = run until STOP)</label><input type="number" name="max_generations" value=""></div>
     </div>
-    <div><label>Initial account balance</label><input type="number" name="initial_balance" value="100000"></div>
 
     <div style="margin-top:14px;">
       <label>Optimization goal</label>
@@ -194,6 +232,47 @@
 
 </div>
 </div>
+
+<script>
+  function evoDetectPipSize() {
+    const statusEl = document.getElementById('evo_pip_detect_status');
+    const fileInput = document.querySelector('input[name="csv_file"]');
+    const datasetSelect = document.querySelector('select[name="existing_dataset"]');
+    const fd = new FormData();
+    let haveSource = false;
+    if (fileInput && fileInput.files && fileInput.files.length) {
+      for (const f of fileInput.files) fd.append('csv_file', f);
+      haveSource = true;
+    }
+    if (datasetSelect && datasetSelect.value) {
+      fd.append('existing_dataset', datasetSelect.value);
+      haveSource = true;
+    }
+    if (!haveSource) {
+      statusEl.style.color = '#ffcf7a';
+      statusEl.textContent = 'Select a market data CSV or a stored dataset in Step 1 first.';
+      return;
+    }
+    statusEl.style.color = '#888';
+    statusEl.textContent = 'Detecting...';
+    fetch('/data/detect-pip-size', { method: 'POST', body: fd })
+      .then(r => r.json().then(data => ({ ok: r.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok || data.error) {
+          statusEl.style.color = '#ff9d9d';
+          statusEl.textContent = data.error || "Couldn't detect pip size.";
+          return;
+        }
+        document.getElementById('evo_pip_size_field').value = data.pip_size;
+        statusEl.style.color = '#b4ffcb';
+        statusEl.textContent = data.message;
+      })
+      .catch(err => {
+        statusEl.style.color = '#ff9d9d';
+        statusEl.textContent = "Couldn't detect: " + err;
+      });
+  }
+</script>
 
 <script>
   const fmt = (v, d) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d === undefined ? 2 : d);
