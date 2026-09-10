@@ -324,3 +324,156 @@ def test_batch_test_route_produces_one_report_per_checked_strategy(tmp_path, mon
 
     for f in REPORTS_DIR.glob("webbatch_*"):
         f.unlink()
+
+
+def test_search_lab_stop_button_cancels_running_job():
+    """Regression test for a real gap: the Search Lab web job never had a
+    stop endpoint at all (Evolution Lab and the Research Loop did), even
+    though app.search.batch_runner.run_search already supports a
+    cancel_event. Starts a small real Search Lab run, immediately hits the
+    new /search/job/<id>/stop route, and confirms the job actually stops
+    (cancelled, not left running or reported as a crash)."""
+    import time as _time
+
+    client = app.test_client()
+    sample_csv = Path(__file__).resolve().parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv"
+
+    with open(sample_csv, "rb") as f:
+        data = {
+            "csv_file": (f, "EURUSD_5M_sample.csv"),
+            "search_mode": "family_named", "family": "all",
+            "seed": "42", "max_candidates": "10",
+            "min_trades": "5", "min_profit_factor": "1.0", "stage1_top_n": "5",
+            "ga_population": "4", "ga_generations": "1", "stage2_top_n": "2",
+            "full_mc_sims": "50", "walk_forward_folds": "2", "robustness_neighbors": "2",
+            "fitness_metric": "eval_pass_probability",
+            "account_size": "100000", "profit_target": "8", "daily_loss": "5", "max_dd": "10",
+            "initial_balance": "100000", "risk_mode": "percent", "risk_value": "1.0",
+            "pip_size": "0.0001",
+        }
+        r = client.post("/search/start", data=data, content_type="multipart/form-data")
+
+    assert r.status_code == 302
+    job_url = r.headers["Location"]
+    job_id = job_url.rstrip("/").split("/")[-1]
+
+    # Hit the new stop route right away.
+    stop_r = client.post(f"/search/job/{job_id}/stop")
+    assert stop_r.status_code == 200
+    assert stop_r.get_json()["ok"] is True
+
+    deadline = _time.time() + 20
+    status = {}
+    while _time.time() < deadline:
+        status = client.get(f"/search/job/{job_id}/status.json").get_json()
+        if status.get("done"):
+            break
+        _time.sleep(0.5)
+
+    assert status.get("done") is True
+    assert status.get("cancelled") is True
+    assert not status.get("error")
+
+    from app.orchestration.resource_guard import HEAVY_JOB_GUARD, JOB_SEARCH_LAB
+    HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)  # tidy up regardless of guard state at exit
+
+
+def test_search_job_stop_route_on_unknown_job_returns_404():
+    client = app.test_client()
+    r = client.post("/search/job/does-not-exist/stop")
+    assert r.status_code == 404
+
+
+def test_full_pipeline_batch_route_runs_multiple_library_strategies():
+    """Regression test for a real gap: the web app's Full Pipeline only
+    ever ran one strategy at a time, while the desktop app has had a
+    'RUN FULL PIPELINE (BATCH)' button (backed by
+    app.orchestration.full_pipeline.run_full_pipeline_batch) for a while.
+    Saves two manual strategies to the library, submits both to the new
+    /full-pipeline/start-batch route, and confirms the batch job actually
+    runs both and reports a per-strategy outcome for each."""
+    import json as _json
+    import time as _time
+
+    from app.strategy.library import save_strategy_text
+
+    manual_cfg = {
+        "name": "batch-test-strategy",
+        "indicators": [
+            {"type": "sma", "period": 10, "column": "close", "as": "sma_fast"},
+            {"type": "sma", "period": 30, "column": "close", "as": "sma_slow"},
+        ],
+        "long_entry": "sma_fast > sma_slow",
+        "long_exit": "sma_fast < sma_slow",
+        "short_entry": "sma_fast < sma_slow",
+        "short_exit": "sma_fast > sma_slow",
+        "stop_loss_pips": 20,
+        "take_profit_pips": 40,
+    }
+    names = []
+    for i in range(2):
+        name = f"web_batch_test_strategy_{i}.json"
+        save_strategy_text(_json.dumps(manual_cfg), name, "manual", overwrite=True)
+        names.append(name)
+
+    client = app.test_client()
+    sample_csv = Path(__file__).resolve().parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv"
+
+    try:
+        with open(sample_csv, "rb") as f:
+            data = {
+                "csv_file": (f, "EURUSD_5M_sample.csv"),
+                "batch_items": [f"manual::{n}" for n in names],
+                "n_folds": "2", "window_mode": "rolling",
+                "ga_population": "4", "ga_generations": "1", "ga_search_mc_sims": "20",
+                "final_mc_sims": "50", "baseline_mc_sims": "20",
+                "holdout_frac": "0.2", "oos_check_folds": "2", "random_seed": "42",
+                "account_size": "100000", "profit_target": "8", "daily_loss": "5", "max_dd": "10",
+                "initial_balance": "100000", "risk_mode": "percent", "risk_value": "1.0",
+                "max_trades_day": "10", "commission": "0", "slippage_pips": "0.5",
+                "spread_pips": "1.0", "pip_size": "0.0001",
+                "save_to_library": "off", "parallel_search": "off",
+            }
+            r = client.post(
+                "/full-pipeline/start-batch", data=data,
+                content_type="multipart/form-data",
+            )
+
+        assert r.status_code == 302
+        job_id = r.headers["Location"].rstrip("/").split("/")[-1]
+
+        deadline = _time.time() + 90
+        status = {}
+        while _time.time() < deadline:
+            status = client.get(f"/full-pipeline/batch-job/{job_id}/status.json").get_json()
+            if status.get("done"):
+                break
+            _time.sleep(1.0)
+
+        assert status.get("done") is True
+        assert not status.get("error")
+        outcomes = status.get("outcomes") or []
+        assert len(outcomes) == 2
+        assert {o["label"] for o in outcomes} == set(names)
+    finally:
+        from app.strategy.library import delete_saved_strategy
+        for n in names:
+            try:
+                delete_saved_strategy("manual", n)
+            except Exception:
+                pass
+        from app.orchestration.resource_guard import HEAVY_JOB_GUARD, JOB_FULL_PIPELINE
+        HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
+
+
+def test_full_pipeline_start_batch_with_no_selection_shows_error():
+    client = app.test_client()
+    sample_csv = Path(__file__).resolve().parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv"
+    with open(sample_csv, "rb") as f:
+        data = {"csv_file": (f, "EURUSD_5M_sample.csv")}
+        r = client.post("/full-pipeline/start-batch", data=data, content_type="multipart/form-data")
+    assert r.status_code == 400
+    assert b"No strategies were selected" in r.data
+
+    from app.orchestration.resource_guard import HEAVY_JOB_GUARD, JOB_FULL_PIPELINE
+    HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
