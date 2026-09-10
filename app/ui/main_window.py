@@ -412,7 +412,17 @@ def _safe_font(size=10, weight="normal"):
 
 
 class LabeledEntry(Frame):
-    def __init__(self, parent, label, default="", secret=False, width=20):
+    def __init__(self, parent, label, default="", secret=False, width=20, variable=None):
+        """`variable=` optionally takes an existing StringVar (e.g. from
+        another tab's LabeledEntry, via `other_entry.var`) instead of
+        creating a fresh one. Tkinter keeps every Entry pointed at the same
+        StringVar in sync automatically, so two LabeledEntry widgets built
+        this way -- one on each tab -- are the SAME setting shown/edited in
+        two places, not two copies that can quietly drift apart. Used to
+        mirror 03 Prop Rules / 04 Risk fields onto the Evolution Lab tab so
+        a run always uses exactly what's shown there, in either place.
+        `default` is ignored when `variable` is given, since the variable
+        already carries whatever value its original widget set it to."""
         super().__init__(parent, bg=PANEL)
         self.configure(height=36)
 
@@ -426,7 +436,7 @@ class LabeledEntry(Frame):
             font=_safe_font(9),
         ).pack(side="left")
 
-        self.var = StringVar(value=str(default))
+        self.var = variable if variable is not None else StringVar(value=str(default))
 
         entry_kwargs = dict(
             textvariable=self.var,
@@ -3446,6 +3456,111 @@ class MainWindow:
         rule()
 
         # -------------------------------------------------------------
+        # Decision guide -- real branching logic, not just a numbered
+        # list. Everything above walks the tabs in a sensible first-pass
+        # order; this section is organized instead around the decision
+        # points that actually come up once you have real results in
+        # front of you -- "I got X, now what?" -- including the dynamic
+        # "Next step:" messages this app now prints live after Run &
+        # Report, Search Lab, Evolution Lab, and Full Pipeline (see
+        # app.orchestration.pipeline_guide -- the SAME logic drives both
+        # those live messages and this reference section, so they can
+        # never disagree with each other).
+        # -------------------------------------------------------------
+        h1("DECISION GUIDE — what to do depending on your results")
+        body(
+            "Everything above is the order to click through the FIRST time. This section is different: "
+            "it's organized by decision point, not by tab, for when you already have a real result in "
+            "front of you and want to know what it means. Every branch below also prints live, as a "
+            "green 'Next step:' note, right after the run that produced it -- this section exists so you "
+            "can look ahead, or look a decision up again later without re-running anything."
+        )
+
+        h2("After your very first backtest (TEST → Run & Report)")
+        bullet("Zero trades generated → don't touch risk or prop rules yet. Check the strategy's own entry "
+               "logic first — too strict a condition, a timeframe mismatch, or (Manual Builder) an "
+               "indicator combination that never actually fires are the usual causes.")
+        bullet("Fewer than ~20 trades → too few for Monte Carlo or a prop simulation to say much with "
+               "confidence. Try a longer data range, a lower timeframe, or a looser entry condition "
+               "before trusting any pass-probability number from this run.")
+        bullet("Profit factor below 1.0 → this version loses money over this data. Don't chase it with "
+               "Full Pipeline yet — adjust it by hand, or let Search Lab / Evolution Lab explore "
+               "variations and other families automatically.")
+        bullet("Max drawdown above ~40% → severe for most prop-firm limits (many cap overall drawdown "
+               "around 8-10%). Tighten the stop-loss or lower risk per trade on 04 Risk & Execution "
+               "before moving on, even if the profit factor looks fine.")
+        bullet("Failed the prop-firm simulation despite decent trade stats → check the failure reason "
+               "shown in the report. Daily loss limit and max drawdown are the two most common single-run "
+               "killers — re-check that 03 Prop Rules actually matches your real firm's terms.")
+        bullet("None of the above → reasonable first result. Check the eval-pass / first-payout "
+               "probabilities the same run just computed, then either promote to Full Pipeline directly, "
+               "or try Search Lab / Evolution Lab first to see if a nearby variant does better.")
+
+        h2("Choosing where to start creating a strategy")
+        bullet("Already have a specific setup in mind (rule-based, or an MS-LSD-style structure/liquidity/"
+               "order-block idea, or you already have Python/PineScript/MQL5 source) → Manual Builder or "
+               "upload it directly. Search Lab and Evolution Lab are for when you DON'T have a specific "
+               "idea — skip them for now and come back later to see if a variant beats your own design.")
+        bullet("No specific idea yet → Search Lab (bounded, three-stage, faster) or Evolution Lab "
+               "(open-ended, meant to run for hours unattended) are both better starting points than a "
+               "blank Manual Builder. Use Search Lab for a quick first pass; use Evolution Lab if you "
+               "want to leave it running and come back to a leaderboard.")
+
+        h2("Search Lab / Evolution Lab leaderboard, once you have one")
+        bullet("Nothing survived Stage 1 at all (Search Lab) → try a wider family selection, a higher "
+               "max-candidates count, or looser Stage 1 filters (min trades / min profit factor).")
+        bullet("Some candidates made it partway but none passed every gate → promote the top one and run "
+               "it through Full Pipeline anyway, or widen the search and try again.")
+        bullet("A clear champion / strong leaderboard → click PROMOTE, then run it through Full Pipeline "
+               "for a re-validated, walk-forward-optimized verdict before considering a live evaluation.")
+        warn(
+            "Evolution Lab's own leaderboard 'eval pass probability' is scored IN-SAMPLE, against the "
+            "same data the GA searched with — it will usually look better than an honest out-of-sample "
+            "number. Check the CPCV OOS pass-probability column next to it; a big gap between the two "
+            "means overfitting, not a strong strategy. Full Pipeline re-checks this properly."
+        )
+
+        h2("Full Pipeline verdict")
+        bullet("READY → your strongest evidence yet, but still a backtest. Consider a short Forward Test "
+               "(MT5) or paper trading before risking real capital on a prop-firm evaluation.")
+        bullet("MARGINAL → not clearly ready or clearly dead. Try Quick Optimize on it, or adjust risk "
+               "settings (position size, daily-loss limit) and re-run Full Pipeline. Don't take it live "
+               "as-is.")
+        bullet("NOT READY → doesn't hold up under re-validation. Go back to Evolution Lab or Search Lab "
+               "for a different candidate rather than trying to rescue this one.")
+
+        h2("Forward Test (MT5) results")
+        bullet("Any errors during the session → almost always broker/connection/symbol-mapping issues, "
+               "not the strategy. Resolve them and run another session — a session with unresolved "
+               "errors proves nothing either way.")
+        bullet("Zero trades triggered → can be entirely normal for a low-frequency strategy over a short "
+               "window. Run a longer session before concluding anything, especially if the backtest also "
+               "traded infrequently.")
+        bullet("Live fills diverged from what the backtest predicted → check slippage/spread/commission "
+               "assumptions on 04 Risk & Execution against what the broker actually gave you, then "
+               "re-run Full Pipeline with updated execution costs.")
+        bullet("Ran cleanly and roughly matched the backtest → this is your strongest evidence yet. "
+               "Deploy Live is reasonable from here, starting at reduced size if your firm allows it, "
+               "with Monitor (Live Market) open to watch the first stretch.")
+
+        h2("Troubleshooting things that have gone wrong before")
+        bullet("Evolution Lab winners pass on its own leaderboard but fail almost every Full Pipeline "
+               "re-check → check that Evolution Lab's own 'Prop account & risk' fields (right there on "
+               "that tab) actually match your real numbers. They're shared live with 03 Prop Rules / "
+               "04 Risk, so if either was left at the generic $100k/8%/5%/10%/1%-risk defaults while "
+               "you filled in real numbers somewhere else, Evolution Lab was searching under different "
+               "rules than Full Pipeline checks against — not a bug in either tool, a mismatch between "
+               "them.")
+        bullet("Search Lab or Evolution Lab appears to stall partway through a batch → STOP and START "
+               "again; both now detect a genuinely hung worker and recover automatically rather than "
+               "waiting forever, but a manual restart is always safe if you don't want to wait it out.")
+        bullet("Evolution Lab keeps returning the same 2-3 strategy families every run → click VIEW "
+               "FAMILY HEALTH — a family that's had many tests with zero successes gets deprioritized, "
+               "with a floor so it's never fully excluded. RESET FAMILY HEALTH if you've since fixed a "
+               "bug that was unfairly tanking a family's record.")
+        rule()
+
+        # -------------------------------------------------------------
         # Short version recap
         # -------------------------------------------------------------
         h1("SHORT VERSION — RECAP")
@@ -3553,66 +3668,37 @@ class MainWindow:
                 cell, text=label, bg=PANEL_3, fg=TEXT, font=_safe_font(9, "bold"), wraplength=150, justify="left",
             ).pack(anchor="w", padx=10, pady=(0, 8))
 
-        for heading, body in (
-            (
-                "Timeframe alignment -- Bias \u2192 Structure \u2192 Entry",
-                "Daily \u2192 1hr \u2192 5m, or 4hr \u2192 15m \u2192 1m. Always start on the higher "
-                "timeframe and step down.",
+        Label(
+            mslsd_section, text="Timeframe alignment -- Bias \u2192 Structure \u2192 Entry",
+            bg=PANEL, fg=TEXT, font=_safe_font(10, "bold"),
+        ).pack(anchor="w", padx=18, pady=(6, 2))
+        Label(
+            mslsd_section,
+            text="Daily \u2192 1hr \u2192 5m, or 4hr \u2192 15m \u2192 1m. Always start on the higher "
+                 "timeframe and step down.",
+            bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8), wraplength=880, justify="left",
+        ).pack(anchor="w", padx=18, pady=(0, 4))
+
+        Label(
+            mslsd_section,
+            text=(
+                "The full write-up -- how to read market structure, the three types of liquidity, "
+                "what makes a valid order block, and both entry models in detail -- lives in T58's "
+                "strategy doc rather than pasted here, so it always reflects the latest version."
             ),
-            (
-                "Market Structure",
-                "The sequence of swing highs and lows: bullish makes higher highs/higher lows, "
-                "bearish makes lower highs/lower lows, ranging fails to break structure "
-                "consistently. Read it by starting on the HTF, marking clear swings, identifying "
-                "the trend, waiting for a Break of Structure (BOS) or Market Structure Shift "
-                "(MSS/ChoCh) on your trading timeframe, then aligning entries with liquidity + "
-                "supply/demand zones.",
-            ),
-            (
-                "Liquidity",
-                "Price often moves toward clusters of resting orders (stops, pending entries, "
-                "profit targets) to \u201cfill\u201d them before continuing in its intended "
-                "direction. Three types: Trendline liquidity (stops along an obvious diagonal "
-                "swing line), Range liquidity (stops above/below an obvious range), and Equal "
-                "highs/lows liquidity (stops stacked at a repeated level).",
-            ),
-            (
-                "Supply & Demand Zones",
-                "A demand zone is where buying pressure previously overwhelmed sellers; a supply "
-                "zone is where selling pressure overwhelmed buyers. Marked by an order block "
-                "(OB) -- the last candle/cluster before the impulse candle. A valid OB needs: (1) "
-                "an impulse that creates a meaningful BOS with strong displacement, (2) an "
-                "imbalance between the first and third candle, and (3) an unmitigated zone -- "
-                "supply/demand zones are only valid once. Extra confluence: the OB sits inside "
-                "the premium/discount zone of HTF swing structure (50%+ retracement), reacts at "
-                "a significant fibonacci level, and price should only return to it after sweeping "
-                "internal LTF liquidity.",
-            ),
-            (
-                "Entry Models",
-                "Reaction entry: identify 4hr HTF trend \u2192 identify a 15-minute S&D order "
-                "block \u2192 wait for a pullback into the zone after internal LTF liquidity is "
-                "swept \u2192 enter at minimum 1:3 RR (stop just below/above the 15m zone, target "
-                "the previous 15m swing high/low, trail winners). Standard confirmation entry: "
-                "same first three steps, then drop to the 1-minute LTF, wait for a market "
-                "structure shift (ChoCh), identify a 1-minute S&D zone, wait for price to tap in, "
-                "then enter at minimum 1:3 RR. Manage the trade by trailing the stop to breakeven "
-                "once a meaningful 5-minute swing forms, and moving it further into profit with "
-                "each new 5-minute swing -- optionally taking a partial at 1:1 or 1:2 RR.",
-            ),
-        ):
-            Label(
-                mslsd_section, text=heading, bg=PANEL, fg=TEXT, font=_safe_font(10, "bold"),
-            ).pack(anchor="w", padx=18, pady=(6, 2))
-            Label(
-                mslsd_section, text=body, bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8), wraplength=880,
-                justify="left",
-            ).pack(anchor="w", padx=18, pady=(0, 4))
+            bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8), wraplength=880, justify="left",
+        ).pack(anchor="w", padx=18, pady=(2, 10))
+
+        mslsd_doc_url = "https://docs.google.com/document/d/14jubETVbumncdLJrTrw2ke-NxFPXkT34qzH4_Q1BguA/edit?usp=drivesdk"
+        self._button(
+            mslsd_section, "OPEN THE MS-LSD STRATEGY DOC \u2192", lambda: webbrowser.open(mslsd_doc_url), primary=True,
+        ).pack(anchor="w", padx=18, pady=(0, 4))
 
         Label(
             mslsd_section, text="This is T58's own framework -- the same one this app's engine tests "
-            "strategies against.", bg=PANEL, fg=TEXT_DIM, font=_safe_font(8),
-        ).pack(anchor="w", padx=18, pady=(6, 14))
+            "strategies against. Opens in Google Docs, in your default browser.",
+            bg=PANEL, fg=TEXT_DIM, font=_safe_font(8),
+        ).pack(anchor="w", padx=18, pady=(0, 14))
 
         discord_section = self._section(f, "T58 Trading Discord")
         discord_row = Frame(discord_section, bg=PANEL)
@@ -6138,32 +6224,39 @@ class MainWindow:
             pip_size=self.r_pip_size.get_float(0.0001),
         )
 
-    def _detect_pip_size_from_data(self):
+    def _detect_pip_size_from_data(self, status_label=None):
         """Suggests a pip_size from whatever's currently selected in Step 2
         (Market Data), rather than leaving pip_size at its FX default
         (0.0001) for non-FX instruments -- the single most common cause of
         a strategy's fixed-pips stop translating into a nonsensical
         position size. Only ever suggests a starting value; the person
-        still confirms it by seeing it land in the field."""
+        still confirms it by seeing it land in the field.
+
+        `status_label` lets a second "DETECT PIP SIZE FROM DATA" button
+        elsewhere (e.g. Evolution Lab's own copy) show the same result in
+        its own status line, rather than only updating 04 Risk's label
+        which may not be the tab currently visible. Defaults to 04 Risk's
+        label so every existing call site keeps working unchanged."""
+        label = status_label if status_label is not None else self.pip_detect_status
         if not self.csv_paths:
-            self.pip_detect_status.config(
+            label.config(
                 text="Select a market data CSV in Step 2 first.", fg=AMBER,
             )
             return
         try:
             result = import_csv(self.csv_paths[0])
             if not result.is_valid:
-                self.pip_detect_status.config(text="Couldn't read that CSV.", fg=RED)
+                label.config(text="Couldn't read that CSV.", fg=RED)
                 return
             suggested = suggest_pip_size(result.dataframe)
             self.r_pip_size.var.set(str(suggested))
-            self.pip_detect_status.config(
+            label.config(
                 text=f"Suggested {suggested} from {os.path.basename(self.csv_paths[0])} "
                      f"-- confirm this matches the instrument before running a backtest.",
                 fg=GREEN,
             )
         except Exception as exc:
-            self.pip_detect_status.config(text=f"Couldn't detect: {exc}", fg=RED)
+            label.config(text=f"Couldn't detect: {exc}", fg=RED)
 
     # -----------------------------------------------------------------------
     # Iterative Refinement — shared execution helper (used by both the
@@ -6726,16 +6819,7 @@ class MainWindow:
                 # run_monte_carlo(), which correctly raises ValueError, but
                 # that surfaced to the user as an unhandled traceback rather
                 # than a clear, actionable message. Stop here instead.
-                self._log(
-                    "\nNo trades were generated by this strategy over the "
-                    "given data -- there is nothing to run a prop-firm "
-                    "simulation or Monte Carlo simulation on, and no report "
-                    "was produced. This usually means the strategy's entry "
-                    "conditions never fired (too strict for this data/"
-                    "date range) rather than an app problem. Check the "
-                    "strategy's signal logic, or try a longer/different "
-                    "data range."
-                )
+                self._log("\n" + pipeline_guide.after_first_backtest({"trade_count": 0}))
                 return
 
             n_sims = self.mc_sims.get_int(10000)
@@ -6834,6 +6918,12 @@ class MainWindow:
 
             for k, p in paths.items():
                 self._log(f"  {k}: {p}")
+
+            self._log(
+                "\n" + pipeline_guide.after_first_backtest(
+                    bt_result.statistics.to_dict(), passed_evaluation=single_run.passed_evaluation,
+                )
+            )
 
             if getattr(self, "refine_enabled", None) and self.refine_enabled.get():
                 self._log("\n--- Iterative Refinement (optional feature enabled on Step 6) ---")
@@ -9665,11 +9755,66 @@ class MainWindow:
             bg=BG, fg=TEXT_DIM, font=_safe_font(9), wraplength=900, justify="left",
         ).pack(anchor="w", padx=24, pady=(0, 10))
 
+        # UPGRADE (Evolution Lab account/risk override): Evolution Lab used
+        # to have NO account/risk fields of its own -- it silently used
+        # whatever 03 Prop Rules / 04 Risk happened to already hold at the
+        # moment START was clicked. That's an easy way to run a whole
+        # overnight Evolution Lab against the WRONG account size, profit
+        # target, drawdown limits, or risk-per-trade (e.g. the app's
+        # 100k/8%/1% defaults instead of a real $50k/6%/0.5-1% eval), only
+        # to have Full Pipeline re-check the same "winners" against the
+        # rules actually intended and fail almost all of them -- which
+        # looks like a Full Pipeline bug but is really a config mismatch
+        # nobody could see from this tab. Fixed by putting the exact same
+        # fields directly on this tab. These are NOT a separate copy: each
+        # field below shares its StringVar with the matching field on 03
+        # Prop Rules / 04 Risk (see LabeledEntry's `variable=` param), so
+        # editing a value here or there is the same edit, seen in both
+        # places instantly, and Full Pipeline (which also reads 03/04)
+        # always evaluates against the exact numbers shown here.
+        account_section = self._section(
+            f, "Prop account & risk (this run will use exactly these numbers)",
+            "Shared live with 03 Prop Rules and 04 Risk & Execution -- change it here or there, "
+            "it's the same value in both places, and Full Pipeline will check winners against "
+            "these same numbers. Set your real prop-firm account size, profit target, drawdown "
+            "limits, and per-trade risk here before clicking START.",
+            emphasize=True,
+        )
+        acct_row = Frame(account_section, bg=PANEL)
+        acct_row.pack(fill="x")
+        acct_col1 = Frame(acct_row, bg=PANEL)
+        acct_col1.pack(side="left", fill="both", expand=True)
+        acct_col2 = Frame(acct_row, bg=PANEL)
+        acct_col2.pack(side="left", fill="both", expand=True)
+
+        LabeledEntry(acct_col1, "Account size ($)", variable=self.p_account_size.var)
+        LabeledEntry(acct_col1, "Evaluation profit target (%)", variable=self.p_profit_target.var)
+        LabeledEntry(acct_col1, "Daily loss limit (%)", variable=self.p_daily_loss.var)
+        LabeledEntry(acct_col1, "Maximum drawdown (%)", variable=self.p_max_dd.var)
+        LabeledEntry(acct_col1, "Drawdown type (trailing/static)", variable=self.p_dd_type.var)
+
+        LabeledEntry(acct_col2, "Risk mode (percent/fixed)", variable=self.r_risk_mode.var)
+        LabeledEntry(acct_col2, "Risk per trade (% or $)", variable=self.r_risk_value.var)
+        LabeledEntry(acct_col2, "Pip size (e.g. ES1! futures = 1.0, FX = 0.0001)", variable=self.r_pip_size.var)
+        LabeledEntry(acct_col2, "Spread (pips)", variable=self.r_spread.var)
+        LabeledEntry(acct_col2, "Slippage (pips)", variable=self.r_slippage.var)
+
+        pip_row = Frame(account_section, bg=PANEL)
+        pip_row.pack(anchor="w", padx=18, pady=(0, 10))
+        self.evo_pip_detect_status = Label(
+            pip_row, text="", bg=PANEL, fg=TEXT_DIM, font=_safe_font(8),
+        )
+        self._button(
+            pip_row, "DETECT PIP SIZE FROM DATA",
+            lambda: self._detect_pip_size_from_data(self.evo_pip_detect_status),
+        ).pack(side="left")
+        self.evo_pip_detect_status.pack(side="left", padx=(10, 0))
+
         cfg_section = self._section(
             f, "Run configuration",
-            "Uses whatever market data is loaded in 02 Data and whatever's set on 03 Prop Rules / "
-            "04 Risk at the moment you click START -- changing those tabs after starting has no "
-            "effect on an already-running Evolution Lab run.",
+            "Uses whatever market data is loaded in 02 Data and the prop account / risk settings "
+            "above (shared with 03 Prop Rules / 04 Risk) at the moment you click START -- changing "
+            "any of those after starting has no effect on an already-running Evolution Lab run.",
             emphasize=True,
         )
         self.evo_population = LabeledEntry(cfg_section, "Population size per generation", "60")
