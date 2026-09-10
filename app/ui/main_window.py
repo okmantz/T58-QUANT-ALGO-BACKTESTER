@@ -3452,6 +3452,107 @@ class MainWindow:
             bg=PANEL, fg=TEXT_DIM, font=_safe_font(8),
         ).pack(anchor="w", padx=18, pady=(0, 14))
 
+        mslsd_section = self._section(
+            f, "\u2605 T58 strategy -- MS-LSD Strategy (Market Structure + Liquidity + Supply & Demand)",
+            "\"Never predict the markets. Instead, participate in probability.\" Price moves because "
+            "of liquidity and order flow through banks, institutions, and news -- MS-LSD is the "
+            "framework for reading that flow, and it's the same logic wired into this app's Manual "
+            "Strategy Builder's advanced conditions.",
+            emphasize=True,
+        )
+
+        steps_row = Frame(mslsd_section, bg=PANEL)
+        steps_row.pack(fill="x", padx=18, pady=(0, 10))
+        for num, label in (
+            ("STEP 1", "HTF directional bias"),
+            ("STEP 2", "Key liquidity"),
+            ("STEP 3", "Area of interest (S&D zone below liquidity)"),
+            ("STEP 4", "Standard confirmation entry (LTF ChoCh)"),
+        ):
+            cell = Frame(steps_row, bg=PANEL_3, highlightthickness=1, highlightbackground=BORDER)
+            cell.pack(side="left", fill="both", expand=True, padx=(0, 8))
+            Label(cell, text=num, bg=PANEL_3, fg=NEON_CYAN, font=_safe_font(7, "bold")).pack(
+                anchor="w", padx=10, pady=(8, 2),
+            )
+            Label(
+                cell, text=label, bg=PANEL_3, fg=TEXT, font=_safe_font(9, "bold"), wraplength=150, justify="left",
+            ).pack(anchor="w", padx=10, pady=(0, 8))
+
+        for heading, body in (
+            (
+                "Timeframe alignment -- Bias \u2192 Structure \u2192 Entry",
+                "Daily \u2192 1hr \u2192 5m, or 4hr \u2192 15m \u2192 1m. Always start on the higher "
+                "timeframe and step down.",
+            ),
+            (
+                "Market Structure",
+                "The sequence of swing highs and lows: bullish makes higher highs/higher lows, "
+                "bearish makes lower highs/lower lows, ranging fails to break structure "
+                "consistently. Read it by starting on the HTF, marking clear swings, identifying "
+                "the trend, waiting for a Break of Structure (BOS) or Market Structure Shift "
+                "(MSS/ChoCh) on your trading timeframe, then aligning entries with liquidity + "
+                "supply/demand zones.",
+            ),
+            (
+                "Liquidity",
+                "Price often moves toward clusters of resting orders (stops, pending entries, "
+                "profit targets) to \u201cfill\u201d them before continuing in its intended "
+                "direction. Three types: Trendline liquidity (stops along an obvious diagonal "
+                "swing line), Range liquidity (stops above/below an obvious range), and Equal "
+                "highs/lows liquidity (stops stacked at a repeated level).",
+            ),
+            (
+                "Supply & Demand Zones",
+                "A demand zone is where buying pressure previously overwhelmed sellers; a supply "
+                "zone is where selling pressure overwhelmed buyers. Marked by an order block "
+                "(OB) -- the last candle/cluster before the impulse candle. A valid OB needs: (1) "
+                "an impulse that creates a meaningful BOS with strong displacement, (2) an "
+                "imbalance between the first and third candle, and (3) an unmitigated zone -- "
+                "supply/demand zones are only valid once. Extra confluence: the OB sits inside "
+                "the premium/discount zone of HTF swing structure (50%+ retracement), reacts at "
+                "a significant fibonacci level, and price should only return to it after sweeping "
+                "internal LTF liquidity.",
+            ),
+            (
+                "Entry Models",
+                "Reaction entry: identify 4hr HTF trend \u2192 identify a 15-minute S&D order "
+                "block \u2192 wait for a pullback into the zone after internal LTF liquidity is "
+                "swept \u2192 enter at minimum 1:3 RR (stop just below/above the 15m zone, target "
+                "the previous 15m swing high/low, trail winners). Standard confirmation entry: "
+                "same first three steps, then drop to the 1-minute LTF, wait for a market "
+                "structure shift (ChoCh), identify a 1-minute S&D zone, wait for price to tap in, "
+                "then enter at minimum 1:3 RR. Manage the trade by trailing the stop to breakeven "
+                "once a meaningful 5-minute swing forms, and moving it further into profit with "
+                "each new 5-minute swing -- optionally taking a partial at 1:1 or 1:2 RR.",
+            ),
+        ):
+            Label(
+                mslsd_section, text=heading, bg=PANEL, fg=TEXT, font=_safe_font(10, "bold"),
+            ).pack(anchor="w", padx=18, pady=(6, 2))
+            Label(
+                mslsd_section, text=body, bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8), wraplength=880,
+                justify="left",
+            ).pack(anchor="w", padx=18, pady=(0, 4))
+
+        Label(
+            mslsd_section, text="This is T58's own framework -- the same one this app's engine tests "
+            "strategies against.", bg=PANEL, fg=TEXT_DIM, font=_safe_font(8),
+        ).pack(anchor="w", padx=18, pady=(6, 14))
+
+        discord_section = self._section(f, "T58 Trading Discord")
+        discord_row = Frame(discord_section, bg=PANEL)
+        discord_row.pack(fill="x", padx=18, pady=(0, 14))
+        Label(
+            discord_row,
+            text="Join the T58 Trading community to discuss MS-LSD setups, prop-firm evals, and "
+            "get support directly from T58.",
+            bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8), wraplength=620, justify="left",
+        ).pack(side="left", padx=(0, 14))
+        discord_url = "https://whop.com/t58-trading/t58-trading-discord/"
+        self._button(
+            discord_row, "JOIN THE DISCORD \u2192", lambda: webbrowser.open(discord_url), primary=True,
+        ).pack(side="left")
+
         more_section = self._section(f, "More free places to build your foundation")
         for label, url, badge, desc in (
             (
