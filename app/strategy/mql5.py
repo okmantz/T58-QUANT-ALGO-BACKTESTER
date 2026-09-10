@@ -15,9 +15,18 @@ Supported subset
     double fastMA = iMA(_Symbol, PERIOD_CURRENT, 10, 0, MODE_SMA, PRICE_CLOSE);
     double slowMA = iMA(_Symbol, PERIOD_CURRENT, 30, 0, MODE_EMA, PRICE_CLOSE);
     double rsiVal = iRSI(_Symbol, PERIOD_CURRENT, 14, PRICE_CLOSE);
-  (MODE_SMA/MODE_EMA/MODE_LWMA supported; the symbol/timeframe/shift/applied
-  price arguments are accepted but not otherwise used -- this engine always
-  operates on the single imported dataset's close price bar-by-bar.)
+    double atrVal = iATR(_Symbol, PERIOD_CURRENT, 14);
+    double bandTop = iBands(_Symbol, PERIOD_CURRENT, 20, 2, 0, PRICE_CLOSE, MODE_UPPER);
+    double hh = iHighest(_Symbol, PERIOD_CURRENT, MODE_HIGH, 20, 0);
+    double ll = iLowest(_Symbol, PERIOD_CURRENT, MODE_LOW, 20, 0);
+  (MODE_SMA/MODE_EMA/MODE_LWMA supported for iMA; iBands' MODE_UPPER/
+  MODE_LOWER/MODE_MAIN select the Bollinger upper/lower/mid band; the
+  symbol/timeframe/shift/applied price arguments are accepted but not
+  otherwise used -- this engine always operates on the single imported
+  dataset's OHLC bar-by-bar.)
+- Plain arithmetic over previously-defined series/constants, e.g.
+    double stopDist = atrVal * 1.5;
+    double spreadPct = (fastMA - slowMA) / slowMA;
 - Boolean conditions using C-style operators: > < >= <= == != && || !
 - `if (condition) { ... }` and single-statement `if (condition) statement;`
   (brace-depth tracked so nested blocks are handled)
@@ -48,7 +57,8 @@ Supported subset
 
 Not supported (raises StrategyError): CopyBuffer()-based indicator handles,
 custom indicators, arrays/structs, multi-symbol/multi-timeframe logic,
-trailing stops, and any indicator function beyond iMA/iRSI.
+trailing stops, and any indicator function beyond iMA/iRSI/iATR/iBands/
+iHighest/iLowest.
 """
 from __future__ import annotations
 
@@ -59,12 +69,18 @@ import pandas as pd
 
 from app.strategy.base import Strategy, StrategyError, StrategyResult, signals_from_conditions
 from app.strategy.expr import safe_eval_bool, safe_eval_numeric
-from app.strategy.indicators import atr, ema, sma
+from app.strategy.indicators import atr, ema, highest_high, lowest_low, sma
 
 _COMMENT_RE = re.compile(r"//.*$")
 _ASSIGN_RE = re.compile(r"^\s*(?:double|int|bool)?\s*([A-Za-z_]\w*)\s*=\s*(.+?);\s*$")
 _IMA_RE = re.compile(r"iMA\s*\([^,]+,[^,]+,\s*([^,]+),[^,]+,\s*(MODE_\w+)\s*,[^)]*\)")
 _IRSI_RE = re.compile(r"iRSI\s*\([^,]+,[^,]+,\s*([^,]+),[^)]*\)")
+_IATR_RE = re.compile(r"iATR\s*\([^,]+,[^,]+,\s*([^,)]+)\s*\)")
+_IBANDS_RE = re.compile(
+    r"iBands\s*\([^,]+,[^,]+,\s*([^,]+),[^,]+,[^,]+,[^,]+,\s*(MODE_\w+)\s*\)"
+)
+_IHIGHEST_RE = re.compile(r"iHighest\s*\([^,]+,[^,]+,[^,]+,\s*([^,]+),[^)]*\)")
+_ILOWEST_RE = re.compile(r"iLowest\s*\([^,]+,[^,]+,[^,]+,\s*([^,]+),[^)]*\)")
 _IF_BLOCK_RE = re.compile(r"^(\s*)if\s*\((.+)\)\s*\{\s*$")
 _IF_INLINE_RE = re.compile(r"^(\s*)if\s*\((.+?)\)\s*([^\{].*);\s*$")
 _BUY_RE = re.compile(r"trade\.Buy\s*\(|OrderSend\s*\([^)]*(?:ORDER_TYPE_BUY|OP_BUY)")
@@ -218,6 +234,48 @@ class MQL5Strategy(Strategy):
                     work[var_name] = rsi_func(work["close"], period)
                     continue
 
+                iatr_match = _IATR_RE.search(rhs)
+                if iatr_match:
+                    period_tok = iatr_match.group(1)
+                    try:
+                        period = int(float(period_tok.strip()))
+                    except ValueError:
+                        raise StrategyError(f"MQL5: could not resolve iATR period '{period_tok}' to a number.")
+                    work[var_name] = atr(work, period)
+                    continue
+
+                ibands_match = _IBANDS_RE.search(rhs)
+                if ibands_match:
+                    period_tok, mode = ibands_match.groups()
+                    try:
+                        period = int(float(period_tok.strip()))
+                    except ValueError:
+                        raise StrategyError(f"MQL5: could not resolve iBands period '{period_tok}' to a number.")
+                    from app.strategy.indicators import bollinger
+                    mid, upper, lower = bollinger(work["close"], period)
+                    work[var_name] = {"MODE_UPPER": upper, "MODE_LOWER": lower}.get(mode, mid)
+                    continue
+
+                ihigh_match = _IHIGHEST_RE.search(rhs)
+                if ihigh_match:
+                    period_tok = ihigh_match.group(1)
+                    try:
+                        period = int(float(period_tok.strip()))
+                    except ValueError:
+                        raise StrategyError(f"MQL5: could not resolve iHighest period '{period_tok}' to a number.")
+                    work[var_name] = highest_high(work["high"], period)
+                    continue
+
+                ilow_match = _ILOWEST_RE.search(rhs)
+                if ilow_match:
+                    period_tok = ilow_match.group(1)
+                    try:
+                        period = int(float(period_tok.strip()))
+                    except ValueError:
+                        raise StrategyError(f"MQL5: could not resolve iLowest period '{period_tok}' to a number.")
+                    work[var_name] = lowest_low(work["low"], period)
+                    continue
+
                 if any(op in rhs for op in ("<", ">", "==", "!=", "&&", "||")):
                     work[var_name] = safe_eval_bool(work, _c_bool_to_python(rhs), var_name)
                     continue
@@ -251,7 +309,8 @@ class MQL5Strategy(Strategy):
 
                 raise StrategyError(
                     f"MQL5: unsupported expression assigned to '{var_name}': '{rhs}'. "
-                    "Supported: iMA(...) with MODE_SMA/MODE_EMA/MODE_LWMA, iRSI(...), "
+                    "Supported: iMA(...) with MODE_SMA/MODE_EMA/MODE_LWMA, iRSI(...), iATR(...), "
+                    "iBands(...) with MODE_UPPER/MODE_LOWER/MODE_MAIN, iHighest(...), iLowest(...), "
                     "boolean comparisons, and +-*/ arithmetic over previously defined variables."
                 )
 

@@ -17,6 +17,18 @@ Supported subset
   given default value
 - `x = ta.sma(src, len)`, `ta.ema(src, len)`, `ta.wma(src, len)`, `ta.rsi(src, len)`
 - `x = ta.crossover(a, b)`, `ta.crossunder(a, b)`
+- `x = ta.atr(len)`, `ta.vwap()` (or bare `ta.vwap`), `ta.highest(src, len)`,
+  `ta.lowest(src, len)`, `ta.stdev(src, len)` -- these may also appear
+  EMBEDDED inside a larger arithmetic/boolean expression, not just as a
+  standalone assignment, e.g.:
+    stopDist = ta.atr(14) * 1.5
+    longCondition = close > ta.highest(high, 20)[1] * 0.999 and rsiVal < 70
+  (each ta.* call in the expression is evaluated first and swapped for its
+  own series before the surrounding expression is evaluated)
+- `[macdLine, signalLine, histLine] = ta.macd(src, fast, slow, signal)`
+  (3-way tuple destructuring -- the only destructuring form supported)
+- Plain arithmetic assignments over previously-defined series/constants,
+  e.g. `spreadPct = (fastMA - slowMA) / slowMA`
 - Boolean rule variables built from comparisons/and/or/not over the above,
   e.g. `longCondition = ta.crossover(fast, slow) and rsiVal < 70`
 - Entries, either inline or inside an `if` block:
@@ -58,18 +70,33 @@ from pathlib import Path
 import pandas as pd
 
 from app.strategy.base import Strategy, StrategyError, StrategyResult, signals_from_conditions
-from app.strategy.expr import safe_eval_bool
-from app.strategy.indicators import INDICATOR_FUNCS, atr, crossover, crossunder
+from app.strategy.expr import safe_eval_bool, safe_eval_numeric
+from app.strategy.indicators import (
+    INDICATOR_FUNCS, atr, crossover, crossunder, highest_high, lowest_low, stdev, vwap,
+)
 
 _ASSIGN_RE = re.compile(r"^\s*(?:var\s+)?([A-Za-z_]\w*)\s*=\s*(.+?)\s*$")
+_DESTRUCTURE_MACD_RE = re.compile(
+    r"^\s*\[\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\]\s*=\s*"
+    r"ta\.macd\s*\(\s*([^,()]+)\s*,\s*([^,()]+)\s*,\s*([^,()]+)\s*,\s*([^()]+)\s*\)\s*$"
+)
 _TA_CALL_RE = re.compile(r"ta\.(sma|ema|wma|rsi)\s*\(\s*([^,()]+)\s*,\s*([^()]+)\s*\)")
 _CROSS_CALL_RE = re.compile(r"ta\.(crossover|crossunder)\s*\(\s*([^,()]+)\s*,\s*([^()]+)\s*\)")
+# Generic single-purpose ta.* calls that can appear standalone OR embedded
+# inside a larger expression -- see _materialize_ta_generic(). `atr` takes
+# just a length (it always operates on the OHLC of the whole bar, not an
+# arbitrary source series, matching Pine's own ta.atr(length) signature);
+# `vwap` takes no arguments at all (Pine's ta.vwap() resets every session
+# using the bar's own hlc3/volume); the rest take (src, len).
+_TA_ATR_RE = re.compile(r"ta\.atr\s*\(\s*([^()]*)\s*\)")
+_TA_VWAP_RE = re.compile(r"ta\.vwap\s*(\(\s*\))?")
+_TA_HIGHEST_RE = re.compile(r"ta\.highest\s*\(\s*([^,()]+)\s*,\s*([^()]+)\s*\)")
+_TA_LOWEST_RE = re.compile(r"ta\.lowest\s*\(\s*([^,()]+)\s*,\s*([^()]+)\s*\)")
+_TA_STDEV_RE = re.compile(r"ta\.stdev\s*\(\s*([^,()]+)\s*,\s*([^()]+)\s*\)")
 _INPUT_RE = re.compile(r"input\.(?:int|float)\s*\(\s*([-\d.]+)")
 _IF_RE = re.compile(r"^(\s*)if\s+(.+?)\s*$")
-_ENTRY_RE = re.compile(
-    r'strategy\.entry\s*\(\s*"([^"]*)"\s*,\s*strategy\.(long|short)\s*(?:,.*?when\s*=\s*(.+?))?\s*\)'
-)
-_CLOSE_RE = re.compile(r'strategy\.close\s*\(\s*"([^"]*)"\s*(?:,.*?when\s*=\s*(.+?))?\s*\)')
+_ENTRY_ID_RE = re.compile(r'^\s*"([^"]*)"\s*,\s*strategy\.(long|short)\s*(?:,.*?when\s*=\s*(.+))?\s*$')
+_CLOSE_ID_RE = re.compile(r'^\s*"([^"]*)"\s*(?:,.*?when\s*=\s*(.+))?\s*$')
 _SL_DIRECTIVE_RE = re.compile(r"T58_SL_PIPS\s*=\s*([\d.]+)")
 _TP_DIRECTIVE_RE = re.compile(r"T58_TP_PIPS\s*=\s*([\d.]+)")
 _SL_ATR_DIRECTIVE_RE = re.compile(r"T58_SL_ATR_MULT\s*=\s*([\d.]+)")
@@ -132,6 +159,33 @@ def _join_continuation_lines(raw_lines: list[str]) -> list[str]:
     return joined
 
 
+def _extract_balanced_call_args(code: str, prefix: str) -> str | None:
+    """Finds `prefix(` in `code` (e.g. "strategy.entry(") and returns
+    everything between its opening paren and its OWN matching closing
+    paren, tracking depth -- unlike a naive `\\(.+?\\)` regex, this
+    correctly handles a `when=` argument that itself contains a nested
+    function call with its own parens, e.g.
+    `strategy.close("Long", when=ta.crossunder(macdLine, signalLine))`,
+    where the first `)` encountered belongs to `ta.crossunder(...)`, not
+    to `strategy.close(...)` itself. Returns None if `prefix` isn't found
+    or its parens never balance on this line."""
+    idx = code.find(prefix)
+    if idx == -1:
+        return None
+    start = idx + len(prefix)
+    if start >= len(code) or code[start] != "(":
+        return None
+    depth = 0
+    for i in range(start, len(code)):
+        if code[i] == "(":
+            depth += 1
+        elif code[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return code[start + 1:i]
+    return None
+
+
 class PineScriptStrategy(Strategy):
     source_type = "pinescript"
 
@@ -173,6 +227,59 @@ class PineScriptStrategy(Strategy):
             f"PineScript: could not resolve length argument '{token}' to a number. "
             "Only integer literals or input.int()/input.float() variables are supported for lengths."
         )
+
+    def _materialize_ta_generic(self, expr: str, work: pd.DataFrame, df: pd.DataFrame) -> str:
+        """Finds every ta.atr(...)/ta.vwap()/ta.highest(...)/ta.lowest(...)/
+        ta.stdev(...) call anywhere inside `expr` (standalone or embedded in
+        a larger arithmetic/boolean expression), computes each one exactly
+        once into its own `work` column, and returns `expr` with each call
+        substituted by its column name -- so the caller can hand the result
+        straight to safe_eval_numeric/safe_eval_bool as if it had only ever
+        contained plain series names. Uses `df` (not `work`) for ta.atr's
+        true-range/ta.vwap's timestamp+volume math since those need the
+        original OHLCV columns, not whatever intermediate columns this
+        parser has appended to `work` so far."""
+        def _sub_atr(m: re.Match) -> str:
+            len_tok = m.group(1).strip()
+            period = self._resolve_length(len_tok, {}) if len_tok else 14
+            col = f"__ta_atr_{period}"
+            if col not in work.columns:
+                work[col] = atr(df, period)
+            return col
+
+        def _sub_vwap(_m: re.Match) -> str:
+            col = "__ta_vwap"
+            if col not in work.columns:
+                work[col] = vwap(df)
+            return col
+
+        def _sub_highest(m: re.Match) -> str:
+            src_series = self._resolve_operand(m.group(1), work, {})
+            period = self._resolve_length(m.group(2), {})
+            col = f"__ta_highest_{len(work.columns)}"
+            work[col] = highest_high(src_series, period)
+            return col
+
+        def _sub_lowest(m: re.Match) -> str:
+            src_series = self._resolve_operand(m.group(1), work, {})
+            period = self._resolve_length(m.group(2), {})
+            col = f"__ta_lowest_{len(work.columns)}"
+            work[col] = lowest_low(src_series, period)
+            return col
+
+        def _sub_stdev(m: re.Match) -> str:
+            src_series = self._resolve_operand(m.group(1), work, {})
+            period = self._resolve_length(m.group(2), {})
+            col = f"__ta_stdev_{len(work.columns)}"
+            work[col] = stdev(src_series, period)
+            return col
+
+        expr = _TA_ATR_RE.sub(_sub_atr, expr)
+        expr = _TA_VWAP_RE.sub(_sub_vwap, expr)
+        expr = _TA_HIGHEST_RE.sub(_sub_highest, expr)
+        expr = _TA_LOWEST_RE.sub(_sub_lowest, expr)
+        expr = _TA_STDEV_RE.sub(_sub_stdev, expr)
+        return expr
 
     def generate(self, df: pd.DataFrame) -> StrategyResult:
         work = df.copy()
@@ -224,14 +331,30 @@ class PineScriptStrategy(Strategy):
             if if_match:
                 cond_indent = len(if_match.group(1))
                 cond_expr = if_match.group(2).strip()
-                cond_var = self._materialize_condition(cond_expr, work, constants)
+                cond_var = self._materialize_condition(cond_expr, work, constants, df)
                 if_stack.append((cond_indent, cond_var))
+                continue
+
+            # [macdLine, signalLine, histLine] = ta.macd(src, fast, slow, signal)
+            destructure_match = _DESTRUCTURE_MACD_RE.match(code)
+            if destructure_match:
+                line_name, sig_name, hist_name, src_tok, fast_tok, slow_tok, signal_tok = destructure_match.groups()
+                from app.strategy.indicators import macd as macd_fn
+                src_series = self._resolve_operand(src_tok, work, constants)
+                fast = self._resolve_length(fast_tok, constants)
+                slow = self._resolve_length(slow_tok, constants)
+                signal_len = self._resolve_length(signal_tok, constants)
+                line, signal_line, hist = macd_fn(src_series, fast, slow, signal_len)
+                work[line_name] = line
+                work[sig_name] = signal_line
+                work[hist_name] = hist
                 continue
 
             # ta.crossover / ta.crossunder assignment
             assign_match = _ASSIGN_RE.match(code)
             if assign_match:
                 var_name, rhs = assign_match.groups()
+                rhs = self._materialize_ta_generic(rhs, work, df)
 
                 input_match = _INPUT_RE.search(rhs)
                 if input_match and rhs.strip().startswith("input."):
@@ -276,25 +399,39 @@ class PineScriptStrategy(Strategy):
                     work[var_name] = self._resolve_source(rhs.strip(), work)
                     continue
 
+                # plain arithmetic over previously-defined series/constants, e.g.
+                # `stopDist = atrVal * 1.5` or `spreadPct = (fastMA - slowMA) / slowMA`
+                # -- common once ta.atr/ta.highest/etc. are used as inputs to a
+                # derived value rather than directly in a comparison.
+                if any(op in rhs for op in ("+", "-", "*", "/")):
+                    try:
+                        work[var_name] = safe_eval_numeric(work, rhs, var_name)
+                        continue
+                    except StrategyError:
+                        pass
+
                 raise StrategyError(
                     f"PineScript: unsupported expression on right-hand side of '{var_name} = {rhs}'. "
-                    "Supported: input.int/float, ta.sma/ema/wma/rsi, ta.crossover/crossunder, "
-                    "and boolean comparisons over previously defined series."
+                    "Supported: input.int/float, ta.sma/ema/wma/rsi/atr/vwap/highest/lowest/stdev/macd, "
+                    "ta.crossover/crossunder, boolean comparisons, and +-*/ arithmetic over "
+                    "previously defined series."
                 )
 
             # strategy.entry(...)
-            entry_match = _ENTRY_RE.search(code)
+            entry_args = _extract_balanced_call_args(code, "strategy.entry")
+            entry_match = _ENTRY_ID_RE.match(entry_args) if entry_args is not None else None
             if entry_match:
                 _, direction, when_expr = entry_match.groups()
-                cond_var = self._condition_for_statement(when_expr, if_stack, work, constants)
+                cond_var = self._condition_for_statement(when_expr, if_stack, work, constants, df)
                 (long_conditions if direction == "long" else short_conditions).append(cond_var)
                 continue
 
             # strategy.close(...)
-            close_match = _CLOSE_RE.search(code)
+            close_args = _extract_balanced_call_args(code, "strategy.close")
+            close_match = _CLOSE_ID_RE.match(close_args) if close_args is not None else None
             if close_match:
                 trade_id, when_expr = close_match.groups()
-                cond_var = self._condition_for_statement(when_expr, if_stack, work, constants)
+                cond_var = self._condition_for_statement(when_expr, if_stack, work, constants, df)
                 tid = (trade_id or "").lower()
                 if "short" in tid:
                     short_exit_conditions.append(cond_var)
@@ -356,8 +493,9 @@ class PineScriptStrategy(Strategy):
             pass
         return self._resolve_source(token, work)
 
-    def _materialize_condition(self, expr: str, work: pd.DataFrame, constants: dict[str, float]) -> str:
+    def _materialize_condition(self, expr: str, work: pd.DataFrame, constants: dict[str, float], df: pd.DataFrame) -> str:
         """Evaluate/store a boolean condition expression as a temp column, return its name."""
+        expr = self._materialize_ta_generic(expr, work, df)
         cross_match = _CROSS_CALL_RE.search(expr)
         if cross_match and expr.strip() == cross_match.group(0):
             func, a_tok, b_tok = cross_match.groups()
@@ -372,9 +510,9 @@ class PineScriptStrategy(Strategy):
         work[col] = safe_eval_bool(work, expr, "if-condition")
         return col
 
-    def _condition_for_statement(self, when_expr, if_stack, work, constants) -> str:
+    def _condition_for_statement(self, when_expr, if_stack, work, constants, df) -> str:
         if when_expr:
-            return self._materialize_condition(when_expr, work, constants)
+            return self._materialize_condition(when_expr, work, constants, df)
         if if_stack:
             return if_stack[-1][1]
         raise StrategyError(

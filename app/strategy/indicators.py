@@ -69,6 +69,13 @@ def macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> 
     return line, signal_line, histogram
 
 
+def stdev(series: pd.Series, period: int = 20) -> pd.Series:
+    """Rolling (population, ddof=0) standard deviation -- Pine's ta.stdev()
+    and a common building block for custom volatility filters/normalized
+    thresholds that aren't already one of the named indicators above."""
+    return series.rolling(_period(period), min_periods=_period(period)).std(ddof=0)
+
+
 def bollinger(series: pd.Series, period: int = 20, std_mult: float = 2.0) -> tuple[pd.Series, pd.Series, pd.Series]:
     p = _period(period)
     mid = sma(series, p)
@@ -194,6 +201,8 @@ def _build_indicator_series_uncached(frame: pd.DataFrame, kind: str, period: int
         return vwap(frame)
     if kind == "atr":
         return atr(frame, p)
+    if kind == "stdev":
+        return stdev(source, p)
     if kind == "macd":
         return macd(source)[0]
     if kind == "macd_signal":
