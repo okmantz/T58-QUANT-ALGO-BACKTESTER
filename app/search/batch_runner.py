@@ -638,7 +638,18 @@ class SearchCancelled(Exception):
     written to the results DB, so a stopped run isn't a wasted one."""
 
 
-def _drain_futures(pool, futures: dict, cancel_event: threading.Event | None, on_result, log) -> None:
+class StageStalled(Exception):
+    """Internal signal from _drain_futures: raised only when no
+    pool_factory was supplied to recover from a stall, so the caller can
+    decide how to handle it. When a pool_factory IS supplied, _drain_futures
+    recovers on its own (terminates the wedged worker(s), respawns a fresh
+    pool, marks the stuck batch(es) skipped) and never raises this."""
+
+
+def _drain_futures(
+    pool_box: list, futures: dict, cancel_event: threading.Event | None, on_result, log,
+    pool_factory=None, stall_timeout: float = 240.0,
+) -> None:
     """Consumes a {future: label} dict as futures complete, calling
     on_result(label, future) for each one -- used by every Search Lab
     stage INSTEAD of Python's `for f in as_completed(futures)`.
@@ -657,11 +668,33 @@ def _drain_futures(pool, futures: dict, cancel_event: threading.Event | None, on
     polls with a short timeout instead, so cancel_event gets checked
     roughly once a second regardless of how long any individual candidate
     takes, and abandons the remaining futures immediately (rather than
-    waiting on them) the moment a stop is requested; module-level (not a
-    closure) so it can be unit-tested directly without a real process pool.
+    waiting on them) the moment a stop is requested.
+
+    That earlier fix only made the STOP BUTTON responsive during a stall
+    -- it did nothing for a stall nobody notices in time to click Stop for
+    (an overnight/unattended run), which is exactly the "stalled again at
+    stage 1, N/M batches done, never any further" report this second fix
+    targets. `pool_box` is a mutable [pool] (not a bare pool) so this
+    function can swap in a freshly-spawned pool mid-stage: if
+    `stall_timeout` seconds pass with ZERO futures completing while at
+    least one is still pending, the remaining pending futures are assumed
+    wedged (a worker stuck on one pathological candidate, or a worker
+    process that silently died and will never report back). Every
+    still-alive worker process backing this pool is terminated outright
+    (cancel_futures=True alone only drops futures that hadn't STARTED yet
+    -- it does not stop a worker already inside a hung call), a fresh pool
+    is spawned via `pool_factory()` for the caller to keep using, and the
+    stuck batch(es) are reported to `on_result` with `fut=None` (skipped,
+    not scored) so the stage can finish with everything else instead of
+    hanging forever. Only engages when `pool_factory` is supplied --
+    without one this behaves exactly as before (a genuine stall with no
+    caller-provided recovery path still surfaces, rather than silently
+    swallowing a real bug during testing/debugging).
     """
     pending = set(futures.keys())
+    last_progress = time.monotonic()
     while pending:
+        pool = pool_box[0]
         if cancel_event is not None and cancel_event.is_set():
             log("\nStop requested -- cancelling remaining candidates and shutting down workers...")
             for fut in pending:
@@ -669,8 +702,37 @@ def _drain_futures(pool, futures: dict, cancel_event: threading.Event | None, on
             pool.shutdown(wait=False, cancel_futures=True)
             raise SearchCancelled("Search Lab run stopped by user.")
         done, pending = futures_wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
-        for fut in done:
-            on_result(futures[fut], fut)
+        if done:
+            last_progress = time.monotonic()
+            for fut in done:
+                on_result(futures[fut], fut)
+            continue
+        if not pending:
+            break
+        stalled_for = time.monotonic() - last_progress
+        if pool_factory is None or stalled_for < stall_timeout:
+            continue
+        stuck_labels = [futures[f] for f in pending]
+        log(
+            f"\nNo progress for {int(stalled_for)}s -- {len(pending)} batch(es) appear stuck "
+            f"(a worker likely hung on one pathological candidate, or its process died silently): "
+            f"{stuck_labels}. Terminating the stuck worker process(es), marking those batch(es) as "
+            f"skipped, and continuing with a freshly-spawned worker pool instead of hanging forever."
+        )
+        for fut in list(pending):
+            fut.cancel()
+        try:
+            for proc in list(getattr(pool, "_processes", {}).values()):
+                if proc.is_alive():
+                    proc.terminate()
+        except Exception as exc:
+            log(f"  (couldn't terminate a stuck worker process cleanly: {exc})")
+        pool.shutdown(wait=False, cancel_futures=True)
+        pool_box[0] = pool_factory()
+        for fut in pending:
+            on_result(futures[fut], None)  # None fut == skipped, never scored
+        pending = set()
+
 
 
 # ---------------------------------------------------------------------------
@@ -703,11 +765,11 @@ def run_search(
             pool.shutdown(wait=False, cancel_futures=True)
             raise SearchCancelled("Search Lab run stopped by user.")
 
-    def drain_futures(pool, futures: dict, on_result) -> None:
+    def drain_futures(pool_box: list, futures: dict, on_result, pool_factory=None) -> None:
         """Thin wrapper binding this run's cancel_event/log into the
         module-level _drain_futures (see its docstring for why this
         exists instead of `for f in as_completed(futures)`)."""
-        _drain_futures(pool, futures, cancel_event, on_result, log)
+        _drain_futures(pool_box, futures, cancel_event, on_result, log, pool_factory=pool_factory)
 
     run_id = uuid.uuid4().hex[:12]
     t0 = time.time()
@@ -758,8 +820,8 @@ def run_search(
     survivors2: list[dict] = []
     stage3_records: list[dict] = []
 
-    try:
-        with ProcessPoolExecutor(
+    def _make_pool():
+        return ProcessPoolExecutor(
             max_workers=workers, initializer=_init_worker,
             initargs=(str(df_path), risk_kwargs, prop_kwargs, str(tmp_dir)),
             # Explicit "spawn" rather than the platform default (fork on
@@ -773,7 +835,19 @@ def run_search(
             # the hazard entirely at the cost of slightly slower worker
             # startup, which is negligible next to a Stage 1-3 run.
             mp_context=multiprocessing.get_context("spawn"),
-        ) as pool:
+        )
+
+    pool_box = [_make_pool()]
+    try:
+        # NOTE: this used to be `with ProcessPoolExecutor(...) as pool:`.
+        # It's now a plain owned-and-shut-down-in-finally pool, held in a
+        # 1-element list (`pool_box`) rather than a bare local, because
+        # _drain_futures can replace it mid-stage (kills a wedged pool and
+        # spawns a fresh one) when it detects a real stall -- see
+        # _drain_futures' docstring. The `if True:` below is just keeping
+        # the original with-block's indentation so this diff stays
+        # reviewable; it has no effect on control flow.
+        if True:
             # ---------------- Stage 1: cheap filter ----------------
             # Candidates are submitted in chunks, each evaluated by
             # _stage1_task_batch: eligible ones (fixed-pips stop/target
@@ -792,12 +866,22 @@ def run_search(
                 f"Stage 1/5: cheap filter across {len(items)} candidate(s) "
                 f"({len(chunks)} batch(es) of up to {chunk_size}) on {workers} worker(s)..."
             )
-            futures = {pool.submit(_stage1_task_batch, chunk, filters): i for i, chunk in enumerate(chunks)}
+            futures = {pool_box[0].submit(_stage1_task_batch, chunk, filters): i for i, chunk in enumerate(chunks)}
             done_batches = 0
             log_every = max(1, len(futures) // 10)
 
             def _on_stage1_done(_label, fut):
                 nonlocal done_batches
+                if fut is None:
+                    # Stall recovery skipped this whole batch -- see
+                    # _drain_futures. These candidates are simply left out
+                    # of stage1_records (not scored, not passed) rather
+                    # than crashing the run; the log line the recovery
+                    # itself emits already explains why.
+                    skipped_ids = [cid for cid, _spec in chunks[_label]]
+                    log(f"  Stage 1: batch {_label} skipped ({len(skipped_ids)} candidate(s) not scored).")
+                    done_batches += 1
+                    return
                 recs = fut.result()
                 for rec in recs:
                     rec["family"] = space.meta.get(rec["candidate_id"], {}).get("family", space.family or "single")
@@ -807,8 +891,8 @@ def run_search(
                 if done_batches % log_every == 0 or done_batches == len(futures):
                     log(f"  Stage 1: {done_batches}/{len(futures)} batch(es) evaluated ({len(stage1_records)}/{len(items)} candidates)...")
 
-            drain_futures(pool, futures, _on_stage1_done)
-            check_cancelled(pool)
+            drain_futures(pool_box, futures, _on_stage1_done, pool_factory=_make_pool)
+            check_cancelled(pool_box[0])
 
             passed_stage1 = [r for r in stage1_records if r.get("passed_stage1")]
             diversity_dropped = 0
@@ -930,7 +1014,7 @@ def run_search(
                 "cost_stress_penalty_weight": stage_cfg.cost_stress_penalty_weight,
             }
             futures = {
-                pool.submit(
+                pool_box[0].submit(
                     _stage2_task, r["candidate_id"], _spec_from_record(r), refine_kwargs,
                     stage_cfg.ga_search_sims, stage_cfg.fitness_metric, stage_cfg.random_seed,
                 ): r["candidate_id"]
@@ -940,6 +1024,10 @@ def run_search(
 
             def _on_stage2_done(_label, fut):
                 nonlocal done
+                if fut is None:
+                    log(f"  Stage 2: candidate {_label} skipped (stall recovery -- see log above).")
+                    done += 1
+                    return
                 rec = fut.result()
                 rec["family"] = space.meta.get(rec["candidate_id"], {}).get("family", space.family or "single")
                 stage2_records.append(rec)
@@ -947,8 +1035,8 @@ def run_search(
                 done += 1
                 log(f"  Stage 2: {done}/{len(survivors1)} skeleton(s) refined...")
 
-            drain_futures(pool, futures, _on_stage2_done)
-            check_cancelled(pool)
+            drain_futures(pool_box, futures, _on_stage2_done, pool_factory=_make_pool)
+            check_cancelled(pool_box[0])
 
             survivors2 = sorted(
                 (r for r in stage2_records if r.get("passed_stage2") and math.isfinite(r.get("fitness", float("-inf")))),
@@ -983,21 +1071,25 @@ def run_search(
                 "robustness_min_stability": stage_cfg.robustness_min_stability,
             }
             futures = {
-                pool.submit(_stage3_task, r["candidate_id"], _spec_from_record(r), stage3_cfg): r["candidate_id"]
+                pool_box[0].submit(_stage3_task, r["candidate_id"], _spec_from_record(r), stage3_cfg): r["candidate_id"]
                 for r in survivors2
             }
             done = 0
 
             def _on_stage3_done(_label, fut):
                 nonlocal done
+                if fut is None:
+                    log(f"  Stage 3: candidate {_label} skipped (stall recovery -- see log above).")
+                    done += 1
+                    return
                 rec = fut.result()
                 rec["family"] = space.meta.get(rec["candidate_id"], {}).get("family", space.family or "single")
                 stage3_records.append(rec)
                 done += 1
                 log(f"  Stage 3: {done}/{len(survivors2)} candidate(s) validated...")
 
-            drain_futures(pool, futures, _on_stage3_done)
-            check_cancelled(pool)
+            drain_futures(pool_box, futures, _on_stage3_done, pool_factory=_make_pool)
+            check_cancelled(pool_box[0])
             stage3_triage = aggregate_failure_reasons(
                 stage3_records, "Stage 3", "passed_stage3_gate",
                 min_trades=stage_cfg.stage3_min_trades, min_profit_factor=stage_cfg.stage3_min_profit_factor,
@@ -1009,6 +1101,10 @@ def run_search(
         db.close()
         raise
     finally:
+        try:
+            pool_box[0].shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     # ---------------- Stage 4: deflate, rank, persist ----------------

@@ -231,15 +231,16 @@ def reset_family_health(
 
 def apply_family_exclusions(
     search_dir: Path | str | None = None, evolution_base_dir: Path | str | None = None,
-    min_samples: int = 30,
+    min_samples: int = 30, min_active_families: int = 6,
 ) -> tuple[list[str] | None, list[str]]:
     """The actual safe-to-call-anywhere helper: computes the dead-end set
     and returns (families_to_search, excluded_families).
 
     families_to_search is None when nothing should be excluded (either
     nothing is dead-end yet, or excluding everything flagged would leave
-    zero families to search -- in which case this backs off to searching
-    everything rather than returning an empty, useless search space).
+    fewer than `min_active_families` families to search -- in which case
+    this backs off to searching everything rather than returning a
+    search space that's collapsed down to a small, stagnant handful).
     None is exactly the value app.search.strategy_space.generate_search_space
     and app.evolution.engine.EvolutionConfig already treat as "every
     family," so callers can pass this straight through unchanged.
@@ -247,11 +248,27 @@ def apply_family_exclusions(
     when families_to_search is None, if excluding it all would have been
     unsafe) so callers can still log what was FOUND dead-end, distinct
     from what was actually excluded this run.
+
+    min_active_families exists because "leaves at least one family" was
+    the ONLY floor this used to enforce -- real report this fixes: on an
+    instrument (gold) where most strategy families legitimately fail most
+    of the time, it's entirely plausible for MOST registered families to
+    individually cross the min_samples/zero-successes bar over dozens of
+    sessions, leaving only 2-3 survivor families in play -- which is
+    exactly "every time I run the evolution lab, it creates the same
+    three strategies." A family that's been excluded is gone forever
+    (this has no re-trial/decay mechanism yet -- see the module
+    docstring), so as more families cross the bar over the app's
+    lifetime, the search space only ever shrinks, never recovers. A
+    non-empty-but-collapsed result was technically "safe" by the old
+    zero-families check but not a search space anyone would actually
+    want the GA restricted to; this raises the floor from 1 to a
+    genuinely diverse minimum instead.
     """
     dead = dead_end_families(search_dir, evolution_base_dir, min_samples=min_samples)
     if not dead:
         return None, []
     survivors = [f for f in list_families() if f not in dead]
-    if not survivors:
+    if len(survivors) < min(min_active_families, len(list_families())):
         return None, sorted(dead)
     return survivors, sorted(dead)
