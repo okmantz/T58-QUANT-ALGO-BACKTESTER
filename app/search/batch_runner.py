@@ -55,7 +55,8 @@ import tempfile
 import threading
 import time
 import uuid
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor
+from concurrent.futures import wait as futures_wait
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -637,6 +638,41 @@ class SearchCancelled(Exception):
     written to the results DB, so a stopped run isn't a wasted one."""
 
 
+def _drain_futures(pool, futures: dict, cancel_event: threading.Event | None, on_result, log) -> None:
+    """Consumes a {future: label} dict as futures complete, calling
+    on_result(label, future) for each one -- used by every Search Lab
+    stage INSTEAD of Python's `for f in as_completed(futures)`.
+
+    as_completed() with no timeout blocks until the NEXT future completes,
+    however long that takes -- and a cancel check placed only BETWEEN loop
+    iterations never gets a chance to run until a future actually
+    completes. One hung/wedged candidate (a pathological generated
+    config, a stuck worker process, anything) therefore made the whole
+    stage -- and the STOP button along with it -- block indefinitely. This
+    is the exact same bug class already fixed once in the Evolution Lab
+    (see app.evolution.engine.EvolutionRunner._drain_futures); Search Lab
+    had its own separate copy of the pattern in 3 places (Stage 1, 2, 3)
+    that never got the same fix, which is why it can still be reported as
+    freshly "stalling with no output" even after that fix shipped. This
+    polls with a short timeout instead, so cancel_event gets checked
+    roughly once a second regardless of how long any individual candidate
+    takes, and abandons the remaining futures immediately (rather than
+    waiting on them) the moment a stop is requested; module-level (not a
+    closure) so it can be unit-tested directly without a real process pool.
+    """
+    pending = set(futures.keys())
+    while pending:
+        if cancel_event is not None and cancel_event.is_set():
+            log("\nStop requested -- cancelling remaining candidates and shutting down workers...")
+            for fut in pending:
+                fut.cancel()  # only frees futures that hadn't started yet
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise SearchCancelled("Search Lab run stopped by user.")
+        done, pending = futures_wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+        for fut in done:
+            on_result(futures[fut], fut)
+
+
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
@@ -666,6 +702,12 @@ def run_search(
             log("\nStop requested -- cancelling remaining candidates and shutting down workers...")
             pool.shutdown(wait=False, cancel_futures=True)
             raise SearchCancelled("Search Lab run stopped by user.")
+
+    def drain_futures(pool, futures: dict, on_result) -> None:
+        """Thin wrapper binding this run's cancel_event/log into the
+        module-level _drain_futures (see its docstring for why this
+        exists instead of `for f in as_completed(futures)`)."""
+        _drain_futures(pool, futures, cancel_event, on_result, log)
 
     run_id = uuid.uuid4().hex[:12]
     t0 = time.time()
@@ -753,8 +795,9 @@ def run_search(
             futures = {pool.submit(_stage1_task_batch, chunk, filters): i for i, chunk in enumerate(chunks)}
             done_batches = 0
             log_every = max(1, len(futures) // 10)
-            for fut in as_completed(futures):
-                check_cancelled(pool)
+
+            def _on_stage1_done(_label, fut):
+                nonlocal done_batches
                 recs = fut.result()
                 for rec in recs:
                     rec["family"] = space.meta.get(rec["candidate_id"], {}).get("family", space.family or "single")
@@ -763,6 +806,8 @@ def run_search(
                 done_batches += 1
                 if done_batches % log_every == 0 or done_batches == len(futures):
                     log(f"  Stage 1: {done_batches}/{len(futures)} batch(es) evaluated ({len(stage1_records)}/{len(items)} candidates)...")
+
+            drain_futures(pool, futures, _on_stage1_done)
             check_cancelled(pool)
 
             passed_stage1 = [r for r in stage1_records if r.get("passed_stage1")]
@@ -892,14 +937,17 @@ def run_search(
                 for r in survivors1
             }
             done = 0
-            for fut in as_completed(futures):
-                check_cancelled(pool)
+
+            def _on_stage2_done(_label, fut):
+                nonlocal done
                 rec = fut.result()
                 rec["family"] = space.meta.get(rec["candidate_id"], {}).get("family", space.family or "single")
                 stage2_records.append(rec)
                 db.insert_candidate(run_id, rec["candidate_id"], "stage2", rec)
                 done += 1
                 log(f"  Stage 2: {done}/{len(survivors1)} skeleton(s) refined...")
+
+            drain_futures(pool, futures, _on_stage2_done)
             check_cancelled(pool)
 
             survivors2 = sorted(
@@ -939,13 +987,17 @@ def run_search(
                 for r in survivors2
             }
             done = 0
-            for fut in as_completed(futures):
-                check_cancelled(pool)
+
+            def _on_stage3_done(_label, fut):
+                nonlocal done
                 rec = fut.result()
                 rec["family"] = space.meta.get(rec["candidate_id"], {}).get("family", space.family or "single")
                 stage3_records.append(rec)
                 done += 1
                 log(f"  Stage 3: {done}/{len(survivors2)} candidate(s) validated...")
+
+            drain_futures(pool, futures, _on_stage3_done)
+            check_cancelled(pool)
             stage3_triage = aggregate_failure_reasons(
                 stage3_records, "Stage 3", "passed_stage3_gate",
                 min_trades=stage_cfg.stage3_min_trades, min_profit_factor=stage_cfg.stage3_min_profit_factor,
