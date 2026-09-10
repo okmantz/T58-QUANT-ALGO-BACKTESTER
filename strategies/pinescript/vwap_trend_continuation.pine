@@ -27,17 +27,17 @@
 //@version=5
 strategy("VWAP Trend Continuation (ema 50/100, rsi7)", overlay=true, initial_capital=100000)
 
-emaLongSlowLen  = input.int(294, "Long EMA Slow")
-emaLongFastLen  = input.int(58,  "Long EMA Fast")
-emaShortFastLen = input.int(35,  "Short EMA Fast")
-emaShortSlowLen = input.int(159, "Short EMA Slow")
+emaLongSlowLen  = input.int(179, "Long EMA Slow")
+emaLongFastLen  = input.int(169,  "Long EMA Fast")
+emaShortFastLen = input.int(44,  "Short EMA Fast")
+emaShortSlowLen = input.int(346, "Short EMA Slow")
 
-rsiLongLen  = input.int(18, "RSI Long Period")
-rsiShortLen = input.int(42, "RSI Short Period")
-rsiExitLen  = input.int(5,  "RSI Exit Period")
+rsiLongLen  = input.int(13, "RSI Long Period")
+rsiShortLen = input.int(34, "RSI Short Period")
+rsiExitLen  = input.int(2,  "RSI Exit Period")
 
-vwapLongLen  = input.int(4, "VWAP-proxy SMA Period (Long)")
-vwapShortLen = input.int(3, "VWAP-proxy SMA Period (Short)")
+vwapLongLen  = input.int(5, "VWAP-proxy SMA Period (Long)")
+vwapShortLen = input.int(1, "VWAP-proxy SMA Period (Short)")
 
 emaLongSlow  = ta.ema(close, emaLongSlowLen)
 emaLongFast  = ta.ema(close, emaLongFastLen)
