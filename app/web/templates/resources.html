@@ -112,6 +112,30 @@
     margin-top: 26px; font-size: 11.5px; color: var(--text-dim); line-height: 1.6;
     border-top: 1px solid var(--border); padding-top: 14px;
   }
+
+  .mslsd-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 18px; position: relative; }
+  .mslsd-step { background: var(--panel-3); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+  .mslsd-step .num { font-size: 10px; color: var(--teal); font-weight: 700; letter-spacing: .05em; margin-bottom: 4px; }
+  .mslsd-step .lbl { font-size: 12.5px; color: var(--text); font-weight: 600; line-height: 1.4; }
+
+  .mslsd-detail { margin-bottom: 16px; position: relative; }
+  .mslsd-detail h4 { margin: 0 0 6px; font-size: 13.5px; color: var(--text); }
+  .mslsd-detail p, .mslsd-detail li { font-size: 12.5px; color: var(--text-muted); line-height: 1.65; }
+  .mslsd-detail ul { margin: 4px 0 0; padding-left: 18px; }
+
+  .discord-card {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+    background: linear-gradient(155deg, var(--panel-2) 0%, var(--panel) 100%);
+    border: 1px solid var(--border-light); border-radius: 16px; padding: 22px 24px; margin-bottom: 22px;
+  }
+  .discord-card .txt h3 { margin: 0 0 4px; font-size: 16px; color: var(--text); }
+  .discord-card .txt p { margin: 0; font-size: 12.5px; color: var(--text-muted); max-width: 480px; line-height: 1.5; }
+  .discord-cta {
+    display: inline-flex; align-items: center; gap: 8px; white-space: nowrap;
+    background: #5865F2; color: #fff; font-weight: 700; font-size: 13.5px;
+    padding: 11px 20px; border-radius: 10px; text-decoration: none;
+  }
+  .discord-cta:hover { filter: brightness(1.08); }
 </style>
 </head>
 <body>
@@ -164,6 +188,67 @@
     Open the guide <span class="arrow">&#8594;</span>
   </a>
   <div class="guide-meta">Opens in Google Docs, in a new tab.</div>
+</div>
+
+<div class="guide-card">
+  <div class="guide-eyebrow">&#9733; T58 strategy</div>
+  <div class="guide-title">MS-LSD Strategy (Market Structure + Liquidity + Supply &amp; Demand)</div>
+  <p class="guide-sub">
+    "Never predict the markets. Instead, participate in probability." Price moves because of
+    liquidity and order flow through banks, institutions, and news — MS-LSD is the framework for
+    reading that flow, and it's the same logic wired into this app's Manual Strategy Builder's
+    advanced conditions.
+  </p>
+
+  <div class="mslsd-steps">
+    <div class="mslsd-step"><div class="num">STEP 1</div><div class="lbl">HTF directional bias</div></div>
+    <div class="mslsd-step"><div class="num">STEP 2</div><div class="lbl">Key liquidity</div></div>
+    <div class="mslsd-step"><div class="num">STEP 3</div><div class="lbl">Area of interest (S&amp;D zone below liquidity)</div></div>
+    <div class="mslsd-step"><div class="num">STEP 4</div><div class="lbl">Standard confirmation entry (LTF ChoCh)</div></div>
+  </div>
+
+  <div class="mslsd-detail">
+    <h4>Timeframe alignment — Bias &rarr; Structure &rarr; Entry</h4>
+    <p>Daily &rarr; 1hr &rarr; 5m, or 4hr &rarr; 15m &rarr; 1m. Always start on the higher timeframe and step down.</p>
+  </div>
+
+  <div class="mslsd-detail">
+    <h4>Market Structure</h4>
+    <p>The sequence of swing highs and lows: bullish makes higher highs/higher lows, bearish makes lower highs/lower lows, ranging fails to break structure consistently. Read it by starting on the HTF, marking clear swings, identifying the trend, waiting for a Break of Structure (BOS) or Market Structure Shift (MSS/ChoCh) on your trading timeframe, then aligning entries with liquidity + supply/demand zones.</p>
+  </div>
+
+  <div class="mslsd-detail">
+    <h4>Liquidity</h4>
+    <p>Price often moves toward clusters of resting orders (stops, pending entries, profit targets) to "fill" them before continuing in its intended direction. Three types:</p>
+    <ul>
+      <li><strong>Trendline liquidity</strong> — stops resting along an obvious diagonal swing line</li>
+      <li><strong>Range liquidity</strong> — stops resting above/below an obvious range</li>
+      <li><strong>Equal highs/lows liquidity</strong> — stops stacked at a repeated level</li>
+    </ul>
+  </div>
+
+  <div class="mslsd-detail">
+    <h4>Supply &amp; Demand Zones</h4>
+    <p>A demand zone is where buying pressure previously overwhelmed sellers; a supply zone is where selling pressure overwhelmed buyers. Marked by an order block (OB) — the last candle/cluster before the impulse candle. A valid OB needs: (1) an impulse that creates a meaningful BOS with strong displacement, (2) an imbalance between the first and third candle, and (3) an unmitigated zone — supply/demand zones are only valid once. Extra confluence: the OB sits inside the premium/discount zone of HTF swing structure (50%+ retracement), reacts at a significant fibonacci level, and price should only return to it after sweeping internal LTF liquidity.</p>
+  </div>
+
+  <div class="mslsd-detail">
+    <h4>Entry Models</h4>
+    <p><strong>Reaction entry:</strong> identify 4hr HTF trend &rarr; identify a 15-minute S&amp;D order block &rarr; wait for a pullback into the zone after internal LTF liquidity is swept &rarr; enter at minimum 1:3 RR (stop just below/above the 15m zone, target the previous 15m swing high/low, trail winners).</p>
+    <p><strong>Standard confirmation entry:</strong> same first three steps, then drop to the 1-minute LTF, wait for a market structure shift (ChoCh), identify a 1-minute S&amp;D zone, wait for price to tap in, then enter at minimum 1:3 RR. Manage the trade by trailing the stop to breakeven once a meaningful 5-minute swing forms, and moving it further into profit with each new 5-minute swing — optionally taking a partial at 1:1 or 1:2 RR.</p>
+  </div>
+
+  <div class="guide-meta">This is T58's own framework — the same one this app's engine tests strategies against.</div>
+</div>
+
+<div class="discord-card">
+  <div class="txt">
+    <h3>T58 Trading Discord</h3>
+    <p>Join the T58 Trading community to discuss MS-LSD setups, prop-firm evals, and get support directly from T58.</p>
+  </div>
+  <a class="discord-cta" href="https://whop.com/t58-trading/t58-trading-discord/" target="_blank" rel="noopener">
+    Join the Discord &#8594;
+  </a>
 </div>
 
 <div class="section-label">More free places to build your foundation</div>
