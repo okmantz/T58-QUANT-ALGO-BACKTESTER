@@ -27,7 +27,14 @@ from app.prop.simulator import PropRules, simulate_account
 from app.reports.generator import generate_full_report
 from app.reports.refinement_report import generate_refinement_report
 from app.strategy.manual import ManualStrategy
-from app.ui.main_window import launch
+
+# NOTE: app.ui.main_window is intentionally NOT imported at module level.
+# It pulls in tkinter, which is not installed on every machine (notably:
+# many CI runners, headless Linux boxes, and some minimal Python builds).
+# This module is explicitly meant to also work headlessly (--cli,
+# --full-pipeline, --refine, etc. and every test that imports app.main),
+# so the GUI is imported lazily -- only in the one branch that actually
+# launches it, below.
 
 DEFAULT_MANUAL_STRATEGY = {
     "name": "SMA 20/50 Cross",
@@ -1319,6 +1326,8 @@ def main():
             adaptive_risk_rules_json=args.adaptive_risk_rules,
         )
     else:
+        from app.ui.main_window import launch  # lazy: only needed for the GUI path
+
         launch()
 
 
