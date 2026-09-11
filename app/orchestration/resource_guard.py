@@ -207,6 +207,7 @@ JOB_MULTI_INSTRUMENT_EVOLUTION = "Multi-Instrument Evolution Lab"
 JOB_FULL_PIPELINE = "Full Pipeline"
 JOB_SPEED_RUN = "Speed Run"
 JOB_MULTI_INSTRUMENT_SPEED_RUN = "Multi-Instrument Speed Run"
+JOB_FORGE = "Forge Strategy"
 
 # UPGRADE (Sep 2026 UI pass, round 2): these five don't spin up their own
 # ProcessPoolExecutor the way the four above do, but Walk-Forward Opt/GA in
