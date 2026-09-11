@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Parameter Stability / Robustness Map Job — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<link rel="stylesheet" href="/static/job-theme.css">
+<style>
+  .verdict-badge { display:inline-block; padding:6px 14px; border-radius:999px; font-weight:700; font-size:14px; letter-spacing:.03em; }
+  .verdict-ROBUST { background:#142a1a; color:#b4ffcb; border:1px solid #235a32; }
+  .verdict-WATCH { background:#2a2414; color:#ffe1a8; border:1px solid #5a4a23; }
+  .verdict-FRAGILE { background:#2a1414; color:#ffb4b4; border:1px solid #6b2323; }
+  .score-hero { display:flex; align-items:baseline; gap:14px; margin:8px 0 14px; }
+  .score-hero .num { font-size:44px; font-weight:800; }
+  .heatmap-grid { border-collapse:collapse; font-size:12px; }
+  .heatmap-grid td, .heatmap-grid th { padding:6px 9px; text-align:center; border:1px solid rgba(255,255,255,0.08); }
+  .heatmap-grid th { color:#999; font-weight:600; }
+  .heatmap-grid td.base-cell { outline:2px solid #35e0b0; outline-offset:-2px; font-weight:700; }
+</style>
+</head>
+<body>
+<header><h1>T58 Quant Algo Backtester — Parameter Stability / Robustness Map</h1></header>
+<nav>
+  <a href="/">Run &amp; Report</a>
+  <a href="/parameter-robustness">New Run</a>
+</nav>
+<main>
+
+{% if not_found %}
+<div class="error">Job "{{ job_id }}" was not found (the server may have restarted since it ran).</div>
+{% else %}
+
+<div class="card">
+  <h2 id="status-title"><span class="spinner" id="spinner"></span>Robustness map running&hellip;</h2>
+  <div id="log">Starting&hellip;</div>
+</div>
+
+<div class="card" id="summary-card" style="display:none;">
+  <h2>Parameter Robustness Score</h2>
+  <div class="score-hero">
+    <div class="num" id="score-num">—</div>
+    <div>/ 100</div>
+    <span class="verdict-badge" id="verdict-badge"></span>
+  </div>
+  <p id="score-note" style="font-size:13px;color:#ccc;line-height:1.6;"></p>
+  <ul id="notes-list" style="font-size:13px;color:#ccc;line-height:1.7;"></ul>
+</div>
+
+<div class="card" id="params-card" style="display:none;">
+  <h2>Per-parameter 1D sweep</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Parameter</th><th>Current value</th><th>Current metric</th><th>Max adjacent-step drop</th><th>Cliff?</th></tr></thead>
+      <tbody id="params-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card" id="heatmap-card" style="display:none;">
+  <h2>Neighborhood heatmap(s)</h2>
+  <p style="font-size:12px;color:#888;">The highlighted cell is your current setting. A "mountain" of good values around it is what you want; a lone peak surrounded by weak neighbors is the "sweet spot" pattern that usually means overfitting, not a real edge.</p>
+  <div id="heatmaps"></div>
+</div>
+
+<div class="error" id="error-card" style="display:none;"></div>
+
+{% endif %}
+</main>
+
+{% if not not_found %}
+<script>
+  const jobId = {{ job_id | tojson }};
+  const fmt = (v, d) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d === undefined ? 3 : d);
+
+  function verdictFor(score) {
+    if (score >= 70) return 'ROBUST';
+    if (score >= 40) return 'WATCH';
+    return 'FRAGILE';
+  }
+
+  function renderHeatmap(container, pair) {
+    const hm = pair.heatmap;
+    const wrap = document.createElement('div');
+    wrap.style.marginBottom = '18px';
+    wrap.style.overflowX = 'auto';
+    const title = document.createElement('div');
+    title.style.fontSize = '13px';
+    title.style.color = '#ccc';
+    title.style.marginBottom = '6px';
+    const tag = pair.is_cliff ? '<span style="color:#ffb4b4;">needle (cliff)</span>' : (pair.is_plateau ? '<span style="color:#b4ffcb;">plateau</span>' : 'mixed');
+    title.innerHTML = `<strong>${hm.gene_a_label}</strong> &times; <strong>${hm.gene_b_label}</strong> — grid pass rate ${fmt(pair.fraction_of_grid_passing, 0)}% — ${tag}`;
+    wrap.appendChild(title);
+
+    const table = document.createElement('table');
+    table.className = 'heatmap-grid';
+    const aVals = hm.a_values, bVals = hm.b_values;
+    // The sweep is centered on each parameter's current value (see
+    // app.validation.sensitivity._sweep_values), so the middle grid index
+    // is "the winning combination" -- same convention parameter_robustness.py
+    // itself uses to pick the base cell (see _summarize_pair).
+    const baseA = Math.floor(aVals.length / 2), baseB = Math.floor(bVals.length / 2);
+    let thead = '<tr><th></th>' + bVals.map((b, j) => `<th>${fmt(b, 2)}${j === baseB ? ' &#9733;' : ''}</th>`).join('') + '</tr>';
+    table.innerHTML = thead;
+    aVals.forEach((a, i) => {
+      const tr = document.createElement('tr');
+      let row = `<th>${fmt(a, 2)}${i === baseA ? ' &#9733;' : ''}</th>`;
+      bVals.forEach((b, j) => {
+        const cell = hm.grid && hm.grid[i] ? hm.grid[i][j] : null;
+        const val = (cell === null || cell === undefined) ? null : cell;
+        const isBase = (i === baseA && j === baseB);
+        const color = (val === null) ? '#555' : (val >= 60 ? '#b4ffcb' : (val >= 30 ? '#ffe1a8' : '#ffb4b4'));
+        row += `<td class="${isBase ? 'base-cell' : ''}" style="color:${color};">${val === null ? '—' : fmt(val, 0)}</td>`;
+      });
+      tr.innerHTML = row;
+      table.appendChild(tr);
+    });
+    wrap.appendChild(table);
+    container.appendChild(wrap);
+  }
+
+  function poll() {
+    fetch(`/parameter-robustness/job/${jobId}/status.json`)
+      .then(r => r.json())
+      .then(data => {
+        if (!data.found) return;
+        document.getElementById('log').textContent = data.log.filter(Boolean).join('\n');
+        document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
+
+        if (data.error) {
+          document.getElementById('spinner').style.display = 'none';
+          document.getElementById('status-title').textContent = 'Robustness map failed';
+          const ec = document.getElementById('error-card');
+          ec.style.display = 'block';
+          ec.textContent = data.error;
+          return;
+        }
+
+        if (data.done) {
+          document.getElementById('spinner').style.display = 'none';
+          document.getElementById('status-title').textContent = 'Robustness map complete';
+          const s = data.summary;
+          if (s) {
+            document.getElementById('summary-card').style.display = 'block';
+            const score = s.parameter_robustness_score;
+            document.getElementById('score-num').textContent = fmt(score, 1);
+            const verdict = verdictFor(score);
+            const badge = document.getElementById('verdict-badge');
+            badge.textContent = verdict;
+            badge.className = 'verdict-badge verdict-' + verdict;
+            document.getElementById('score-note').textContent =
+              `${s.n_parameters_checked} parameter(s) checked against ${s.metric}, pass threshold ${fmt(s.pass_threshold_pct, 0)}% -- `
+              + (verdict === 'ROBUST' ? 'the current setting sits in a real neighborhood of good results, not an isolated spike.'
+                 : verdict === 'WATCH' ? 'mixed picture -- some parameters hold up nearby, at least one does not. Worth a closer look before trusting this at face value.'
+                 : 'the current setting looks fragile -- nearby values perform meaningfully worse, which is the classic sign of fitting this exact historical window rather than finding a durable edge.');
+            const notesList = document.getElementById('notes-list');
+            notesList.innerHTML = '';
+            (s.notes || []).forEach(n => {
+              const li = document.createElement('li');
+              li.textContent = n;
+              notesList.appendChild(li);
+            });
+
+            const pBody = document.getElementById('params-body');
+            pBody.innerHTML = '';
+            (s.per_parameter || []).forEach(r => {
+              const tr = document.createElement('tr');
+              const cliff = r.cliff_detected ? '<span style="color:#ffb4b4;">yes</span>' : 'no';
+              tr.innerHTML = `<td>${r.gene_label}</td><td>${fmt(r.base_value, 2)}</td><td>${fmt(r.base_metric)}</td>` +
+                `<td>${fmt(r.max_pct_drop_between_adjacent_steps, 1)}%</td><td>${cliff}</td>`;
+              pBody.appendChild(tr);
+            });
+            document.getElementById('params-card').style.display = (s.per_parameter || []).length ? 'block' : 'none';
+
+            const hmContainer = document.getElementById('heatmaps');
+            hmContainer.innerHTML = '';
+            (s.pair_heatmaps || []).forEach(pair => renderHeatmap(hmContainer, pair));
+            document.getElementById('heatmap-card').style.display = (s.pair_heatmaps || []).length ? 'block' : 'none';
+          }
+          return;
+        }
+        setTimeout(poll, 2000);
+      })
+      .catch(() => setTimeout(poll, 3000));
+  }
+  poll();
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+  }
+</script>
+{% endif %}
+</body>
+</html>

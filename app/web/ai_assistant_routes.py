@@ -30,7 +30,7 @@ from __future__ import annotations
 import base64
 import time
 
-from flask import Blueprint, jsonify, render_template, request
+from flask import Blueprint, Response, jsonify, render_template, request
 
 from app.ai import market_intelligence, market_scanner, news_forexfactory, t58_strategy_engine as t58
 from app.ai import trading_assistant
@@ -184,6 +184,37 @@ def api_chat():
     if error:
         return jsonify({"reply": "", "error": error})
     return jsonify({"reply": reply, "error": None})
+
+
+@ai_assistant_bp.route("/api/chat/stream", methods=["POST"])
+def api_chat_stream():
+    """Streaming twin of /api/chat -- same context/history handling, but
+    the Ollama reply is forwarded to the browser as it's generated
+    (newline-delimited JSON chunks: {"text": "..."} per piece, then one
+    final {"done": true} or {"error": "..."}) instead of only after the
+    whole reply is ready. This is the real fix for "the AI assistant
+    takes forever": total local-model generation time is unchanged, but
+    the person sees the first words almost immediately instead of a
+    spinner for the full duration. /api/chat is left in place unchanged
+    for any other caller that still wants one blocking JSON response."""
+    data = request.get_json(force=True, silent=True) or {}
+    message = (data.get("message") or "").strip()
+    mode = data.get("mode") or "personal"
+    history = data.get("history") or []
+    if not message:
+        return jsonify({"error": "Empty message."}), 400
+
+    rankings, _errors = _cached("rankings", _CACHE_TTL_RANKINGS, _compute_rankings)
+    news_result = _cached("news", _CACHE_TTL_NEWS, _compute_news)
+    context = trading_assistant.build_context(rankings, news_result.events)
+    client = trading_assistant.TradingAssistantClient(load_ollama_settings())
+
+    def generate():
+        import json as _json
+        for chunk in client.ask_stream(message, context, mode=mode, history=history):
+            yield _json.dumps(chunk) + "\n"
+
+    return Response(generate(), mimetype="application/x-ndjson")
 
 
 @ai_assistant_bp.route("/api/daily-brief")

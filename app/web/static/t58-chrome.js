@@ -46,7 +46,7 @@
     { name: "Create", href: "/speed-run", paths: ["/speed-run", "/generate-strategies", "/research-agent"] },
     { name: "Test", href: "/", paths: ["/", "/payout-probability"] },
     { name: "Optimize", href: "/search", paths: ["/search", "/refine", "/full-pipeline", "/quick-optimize", "/multi-objective", "/evolution"] },
-    { name: "Validate", href: "/walk-forward-opt", paths: ["/walk-forward-opt", "/walk-forward-ga", "/cpcv", "/sensitivity", "/regime-matrix"] },
+    { name: "Validate", href: "/walk-forward-opt", paths: ["/walk-forward-opt", "/walk-forward-ga", "/cpcv", "/sensitivity", "/parameter-robustness", "/regime-matrix"] },
     { name: "Champion", href: "/portfolio", paths: ["/portfolio", "/ensemble", "/family-diversity"] },
     { name: "Forward Test", href: "/forward-test", paths: ["/forward-test"] },
     { name: "Deploy", href: "/deploy-live", paths: ["/deploy-live"] },

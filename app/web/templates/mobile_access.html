@@ -84,6 +84,18 @@
       signed in on your phone's Tailscale app too. No port forwarding, nothing exposed
       to the public internet.
     </p>
+    <p class="warn" style="margin-top:10px;">
+      <strong>Already added this app to your phone's home screen?</strong> If you tapped
+      "Add to Home Screen" using the address in the card ABOVE this one (the one that
+      only works on this Wi-Fi), that icon is permanently tied to that address — a
+      home-screen shortcut always opens the exact address it was created from, and
+      nothing in this app can change that after the fact. That's the actual reason
+      turning Wi-Fi off breaks it, even with Tailscale connected on both devices:
+      Tailscale can't help an address it was never asked to reach.
+      <strong>Delete that shortcut and create a new one from the Tailscale address
+      above instead</strong> — the same app, but the one shortcut will then work at
+      home AND on cellular, with nothing further to configure.
+    </p>
   {% else %}
     <p class="note">
       Tailscale isn't detected as running on this computer. Tailscale is a free, private

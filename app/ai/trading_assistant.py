@@ -447,6 +447,24 @@ class TradingAssistantClient:
             headers["Authorization"] = f"Bearer {self.settings.api_key}"
         return headers
 
+    # Capped so a chatty local model can't run on for minutes -- 600 tokens
+    # is comfortably enough for even a long Owen AI answer, and a hard
+    # ceiling here is a genuine (not just perceived) speed fix: the single
+    # biggest source of "the AI assistant takes forever" on CPU-only Ollama
+    # is generation length, since every extra token costs the same
+    # per-token time as the first one. Previously no num_predict was set at
+    # all, so a rambling local model was free to generate indefinitely
+    # (bounded only by the 120s request timeout, which then surfaced as a
+    # bare timeout error instead of a slow-but-working reply).
+    DEFAULT_NUM_PREDICT = 600
+
+    def _build_messages(self, system_prompt: str, user_message: str, history: list[dict] | None) -> list[dict]:
+        messages = [{"role": "system", "content": system_prompt}]
+        for turn in (history or [])[-10:]:  # keep the last 10 turns -- plenty of context, bounded prompt size
+            messages.append(turn)
+        messages.append({"role": "user", "content": user_message})
+        return messages
+
     def _chat(self, system_prompt: str, user_message: str, history: list[dict] | None = None) -> tuple[str, str | None]:
         """Calls Ollama's /api/chat (non-streaming). Returns (reply, error)
         -- reply is "" and error is set on any failure, mirroring
@@ -457,10 +475,7 @@ class TradingAssistantClient:
             return "", "Ollama isn't enabled/configured yet. Turn it on and set a host in AI Assistant settings."
 
         host = (self.settings.host or "").rstrip("/")
-        messages = [{"role": "system", "content": system_prompt}]
-        for turn in (history or [])[-10:]:  # keep the last 10 turns -- plenty of context, bounded prompt size
-            messages.append(turn)
-        messages.append({"role": "user", "content": user_message})
+        messages = self._build_messages(system_prompt, user_message, history)
 
         try:
             resp = requests.post(
@@ -469,6 +484,7 @@ class TradingAssistantClient:
                 json={
                     "model": self.settings.model, "messages": messages, "stream": False,
                     "keep_alive": ollama_settings.INTERACTIVE_KEEP_ALIVE,
+                    "options": {"num_predict": self.DEFAULT_NUM_PREDICT},
                 },
                 timeout=self.timeout,
             )
@@ -482,6 +498,63 @@ class TradingAssistantClient:
             return "", f"Ollama at {host} didn't respond in time."
         except Exception as exc:
             return "", f"Ollama request failed: {exc}"
+
+    def _chat_stream(self, system_prompt: str, user_message: str, history: list[dict] | None = None):
+        """Generator form of _chat: yields reply text incrementally as
+        Ollama produces it (stream=True against /api/chat, one JSON object
+        per line -- see https://github.com/ollama/ollama/blob/main/docs/api.md#chat-request-streaming),
+        instead of blocking until the full reply is generated.
+
+        This is the actual fix for "the AI assistant takes forever": total
+        generation time on a CPU-only local model doesn't change, but the
+        person sees the first words within a second or two instead of
+        staring at a spinner for the entire reply -- the same reason every
+        modern chat UI (ChatGPT, Claude.ai, etc.) streams. On any error,
+        yields nothing and instead yields one final dict
+        {"error": "..."} so the caller (see api_chat's streaming route)
+        can distinguish "stream ended normally" from "stream failed
+        partway through" without raising out of a generator mid-response.
+        """
+        import json as _json
+        import requests
+
+        if not self.settings.is_usable:
+            yield {"error": "Ollama isn't enabled/configured yet. Turn it on and set a host in AI Assistant settings."}
+            return
+
+        host = (self.settings.host or "").rstrip("/")
+        messages = self._build_messages(system_prompt, user_message, history)
+
+        try:
+            resp = requests.post(
+                f"{host}/api/chat",
+                headers=self._headers(),
+                json={
+                    "model": self.settings.model, "messages": messages, "stream": True,
+                    "keep_alive": ollama_settings.INTERACTIVE_KEEP_ALIVE,
+                    "options": {"num_predict": self.DEFAULT_NUM_PREDICT},
+                },
+                timeout=self.timeout, stream=True,
+            )
+            resp.raise_for_status()
+            for line in resp.iter_lines():
+                if not line:
+                    continue
+                try:
+                    chunk = _json.loads(line)
+                except ValueError:
+                    continue
+                piece = (chunk.get("message") or {}).get("content", "")
+                if piece:
+                    yield {"text": piece}
+                if chunk.get("done"):
+                    break
+        except requests.exceptions.ConnectionError:
+            yield {"error": f"Couldn't reach Ollama at {host} (is `ollama serve` running?)."}
+        except requests.exceptions.Timeout:
+            yield {"error": f"Ollama at {host} didn't respond in time."}
+        except Exception as exc:
+            yield {"error": f"Ollama request failed: {exc}"}
 
     def _chat_vision(
         self, system_prompt: str, user_message: str, image_b64: str, model: str | None = None,
@@ -589,6 +662,20 @@ class TradingAssistantClient:
             f"Owen's question: {question}"
         )
         return self._chat(system_prompt, user_message, history=history)
+
+    def ask_stream(self, question: str, context: dict, mode: str = "personal", history: list[dict] | None = None):
+        """Streaming twin of ask() -- see _chat_stream's docstring. Same
+        system prompt / user-message construction, so a streamed reply and
+        a non-streamed reply to the same question are never built
+        differently, only delivered differently."""
+        system_prompt = PERSONAL_MODE_SYSTEM_PROMPT if mode == "personal" else T58_GROUP_SYSTEM_PROMPT
+        import json
+        user_message = (
+            f"Current market intelligence (all facts below were computed by the app, not by you -- "
+            f"treat them as ground truth):\n{json.dumps(_jsonable(context), indent=2)}\n\n"
+            f"Owen's question: {question}"
+        )
+        yield from self._chat_stream(system_prompt, user_message, history=history)
 
     def daily_brief(self, context: dict) -> tuple[str, str | None]:
         return self.ask(

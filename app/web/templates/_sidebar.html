@@ -33,11 +33,15 @@
   {% set create_pages   = ['speed_run', 'speed_run_multi_instrument', 'generate_strategies', 'research_agent', 'research_loop'] %}
   {% set test_pages     = ['run', 'payout_probability'] %}
   {% set optimize_pages = ['optimize_hub', 'search', 'search_multi_instrument', 'refine', 'full_pipeline', 'quick_optimize', 'multi_objective', 'evolution', 'evolution_multi_instrument'] %}
-  {% set validate_pages = ['validate_hub', 'wfo', 'wfga', 'cpcv', 'sensitivity', 'regime_matrix'] %}
+  {% set validate_pages = ['validate_hub', 'wfo', 'wfga', 'cpcv', 'sensitivity', 'parameter_robustness', 'regime_matrix'] %}
   {% set champion_pages = ['family_diversity', 'ensemble', 'portfolio'] %}
 
+  <!-- All groups launch condensed/closed by default, regardless of which
+       page is active -- t58-chrome.js only re-opens a group if the person
+       has explicitly opened it before (remembered per-browser). -->
+
   <!-- (1) Create -- accent: violet, matches desktop's NEON_VIOLET for this section -->
-  <details class="t58-nav-group" {{ 'open' if active_page in create_pages else '' }}>
+  <details class="t58-nav-group">
     <summary><span class="t58-num">&#9312;</span> Create <span class="chev">&#9656;</span></summary>
     <div class="t58-nav-group-items">
       <a href="/speed-run" data-accent="violet" class="t58-nav-item {{ 'active' if active_page == 'speed_run' else '' }}">
@@ -59,7 +63,7 @@
   </details>
 
   <!-- (2) Test -- accent: cyan, matches desktop's NEON_CYAN for this section -->
-  <details class="t58-nav-group" {{ 'open' if active_page in test_pages else '' }}>
+  <details class="t58-nav-group">
     <summary><span class="t58-num">&#9313;</span> Test <span class="chev">&#9656;</span></summary>
     <div class="t58-nav-group-items">
       <a href="/" data-accent="cyan" class="t58-nav-item {{ 'active' if active_page == 'run' else '' }}">
@@ -72,7 +76,7 @@
   </details>
 
   <!-- (3) Optimize -- accent: blue, matches desktop's BLUE for this section -->
-  <details class="t58-nav-group" {{ 'open' if active_page in optimize_pages else '' }}>
+  <details class="t58-nav-group">
     <summary><span class="t58-num">&#9314;</span> Optimize <span class="chev">&#9656;</span></summary>
     <div class="t58-nav-group-items">
       <a href="/optimize" data-accent="blue" class="t58-nav-item {{ 'active' if active_page == 'optimize_hub' else '' }}" style="font-weight:600;">
@@ -106,7 +110,7 @@
   </details>
 
   <!-- (4) Validate -- accent: amber, matches desktop's NEON_AMBER for this section -->
-  <details class="t58-nav-group" {{ 'open' if active_page in validate_pages else '' }}>
+  <details class="t58-nav-group">
     <summary><span class="t58-num">&#9315;</span> Validate <span class="chev">&#9656;</span></summary>
     <div class="t58-nav-group-items">
       <a href="/validate" data-accent="amber" class="t58-nav-item {{ 'active' if active_page == 'validate_hub' else '' }}" style="font-weight:600;">
@@ -124,6 +128,9 @@
       <a href="/sensitivity" data-accent="amber" class="t58-nav-item {{ 'active' if active_page == 'sensitivity' else '' }}">
         <span class="t58-nav-icon">&#8862;</span><span class="label">Sensitivity</span>
       </a>
+      <a href="/parameter-robustness" data-accent="amber" class="t58-nav-item {{ 'active' if active_page == 'parameter_robustness' else '' }}">
+        <span class="t58-nav-icon">&#8862;</span><span class="label">Parameter stability / robustness map</span>
+      </a>
       <a href="/regime-matrix" data-accent="amber" class="t58-nav-item {{ 'active' if active_page == 'regime_matrix' else '' }}">
         <span class="t58-nav-icon">&#9737;</span><span class="label">Regime survival matrix</span>
       </a>
@@ -134,7 +141,7 @@
   </details>
 
   <!-- (5) Champion -- accent: magenta, matches desktop's NEON_MAGENTA for this section -->
-  <details class="t58-nav-group" {{ 'open' if active_page in champion_pages else '' }}>
+  <details class="t58-nav-group">
     <summary><span class="t58-num">&#9316;</span> Champion <span class="chev">&#9656;</span></summary>
     <div class="t58-nav-group-items">
       <a href="/portfolio" data-accent="magenta" class="t58-nav-item {{ 'active' if active_page == 'portfolio' else '' }}">
@@ -150,33 +157,47 @@
   </details>
 
   <div class="t58-nav-divider"></div>
-  <div class="t58-nav-section-label">&#9317; Deployment</div>
 
-  <!-- Deployment row accents match desktop's per-row mix exactly:
+  <!-- (6) Deployment -- accents match desktop's per-row mix exactly:
        forward test = NEON_LIME, deploy live = RED, monitor = NEON_CYAN. -->
-  <a href="/forward-test" data-accent="lime" class="t58-nav-item {{ 'active' if active_page == 'forward_test' else '' }}">
-    <span class="t58-nav-icon">&#9711;</span><span class="label">Forward test (MT5)</span>
-  </a>
-  <a href="/deploy-live" data-accent="red" class="t58-nav-item {{ 'active' if active_page == 'deploy_live' else '' }}">
-    <span class="t58-nav-icon">&#9888;</span><span class="label">Deploy live</span>
-  </a>
-  <a href="/live-market" data-accent="cyan" class="t58-nav-item {{ 'active' if active_page == 'live_market' else '' }}">
-    <span class="t58-nav-icon">&#9679;</span><span class="label">Monitor (live market)</span>
-  </a>
+  <details class="t58-nav-group">
+    <summary><span class="t58-num">&#9317;</span> Deployment <span class="chev">&#9656;</span></summary>
+    <div class="t58-nav-group-items">
+      <a href="/forward-test" data-accent="lime" class="t58-nav-item {{ 'active' if active_page == 'forward_test' else '' }}">
+        <span class="t58-nav-icon">&#9711;</span><span class="label">Forward test (MT5)</span>
+      </a>
+      <a href="/deploy-live" data-accent="red" class="t58-nav-item {{ 'active' if active_page == 'deploy_live' else '' }}">
+        <span class="t58-nav-icon">&#9888;</span><span class="label">Deploy live</span>
+      </a>
+      <a href="/live-market" data-accent="cyan" class="t58-nav-item {{ 'active' if active_page == 'live_market' else '' }}">
+        <span class="t58-nav-icon">&#9679;</span><span class="label">Monitor (live market)</span>
+      </a>
+    </div>
+  </details>
 
   <div class="t58-nav-divider"></div>
-  <div class="t58-nav-section-label">&#9318; Options</div>
 
-  <a href="/options-outlook" data-accent="lime" class="t58-nav-item {{ 'active' if active_page == 'options_outlook' else '' }}">
-    <span class="t58-nav-icon">&#9707;</span><span class="label">Options outlook</span>
-  </a>
+  <!-- (7) Options -->
+  <details class="t58-nav-group">
+    <summary><span class="t58-num">&#9318;</span> Options <span class="chev">&#9656;</span></summary>
+    <div class="t58-nav-group-items">
+      <a href="/options-outlook" data-accent="lime" class="t58-nav-item {{ 'active' if active_page == 'options_outlook' else '' }}">
+        <span class="t58-nav-icon">&#9707;</span><span class="label">Options outlook</span>
+      </a>
+    </div>
+  </details>
 
   <div class="t58-nav-divider"></div>
-  <div class="t58-nav-section-label">&#9319; Quant Lab</div>
 
-  <a href="/quant-lab" class="t58-nav-item top-level {{ 'active' if active_page == 'quant_lab' else '' }}">
-    <span class="t58-nav-icon">&#9878;</span><span class="label">Quant Lab (translator, stat arb, options, more)</span>
-  </a>
+  <!-- (8) Quant Lab -->
+  <details class="t58-nav-group">
+    <summary><span class="t58-num">&#9319;</span> Quant Lab <span class="chev">&#9656;</span></summary>
+    <div class="t58-nav-group-items">
+      <a href="/quant-lab" class="t58-nav-item {{ 'active' if active_page == 'quant_lab' else '' }}">
+        <span class="t58-nav-icon">&#9878;</span><span class="label">Quant Lab (translator, stat arb, options, more)</span>
+      </a>
+    </div>
+  </details>
 
   <div class="t58-nav-spacer"></div>
 </div>

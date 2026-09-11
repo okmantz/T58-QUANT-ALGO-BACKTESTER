@@ -72,6 +72,7 @@ from app.orchestration.quick_optimize import QuickOptimizeConfig, run_quick_opti
 from app.orchestration.resource_guard import (
     HEAVY_JOB_GUARD, JOB_EVOLUTION_LAB, JOB_FULL_PIPELINE, JOB_SEARCH_LAB, JOB_SPEED_RUN,
     JOB_WFO, JOB_WFGA, JOB_CPCV, JOB_SENSITIVITY, JOB_MULTI_OBJECTIVE, JOB_REGIME_MATRIX,
+    JOB_PARAMETER_ROBUSTNESS,
     JOB_MULTI_INSTRUMENT_SEARCH, JOB_MULTI_INSTRUMENT_SPEED_RUN, JOB_MULTI_INSTRUMENT_EVOLUTION,
 )
 from app.evolution.multi_instrument import EvolutionInstrumentJob, MultiInstrumentEvolutionGroup
@@ -106,6 +107,7 @@ from app.search.strategy_space import (
 from app.search.results_db import ResultsDB
 from app.strategy.base import StrategyError
 from app.validation.cpcv import CPCVError, run_cpcv
+from app.validation.parameter_robustness import compute_parameter_robustness
 from app.validation.regime_matrix import run_regime_matrix
 from app.validation.sensitivity import compute_1d_sensitivity
 from app.validation.walk_forward_opt import run_walk_forward_optimization
@@ -3121,6 +3123,155 @@ def sensitivity_job_status(job_id):
 @app.route("/sensitivity_reports/<path:filename>")
 def serve_sensitivity_report(filename):
     return send_from_directory(SENSITIVITY_DIR, filename)
+
+
+# ---------------------------------------------------------------------------
+# Parameter Stability / Robustness Map -- "did I discover a robust edge, or
+# the exact historical combination that happened to work?" Reuses
+# app.validation.parameter_robustness.compute_parameter_robustness
+# (which itself reuses compute_1d_sensitivity + compute_2d_heatmap
+# UNMODIFIED) rather than recomputing any sweep logic here -- this route is
+# purely the job-queue/rendering wiring, same shape as Sensitivity above.
+# ---------------------------------------------------------------------------
+
+_PARAM_ROBUSTNESS_JOBS: dict[str, dict] = {}
+_PARAM_ROBUSTNESS_JOBS_LOCK = threading.Lock()
+
+
+def _param_robustness_job_log(job_id: str, msg: str) -> None:
+    with _PARAM_ROBUSTNESS_JOBS_LOCK:
+        job = _PARAM_ROBUSTNESS_JOBS.get(job_id)
+        if job is not None:
+            job["log"].append(msg)
+
+
+def _run_param_robustness_job(
+    job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, mc_cfg: MonteCarloConfig,
+    metric: str, pass_threshold_pct: float, pct_range: float, n_steps_1d: int, n_steps_2d: int,
+    max_params: int, n_heatmap_pairs: int, strategy_name: str = "", instrument: str = "",
+) -> None:
+    try:
+        _param_robustness_job_log(
+            job_id,
+            f"Sweeping up to {max_params} tunable parameter(s) individually, then heatmapping the "
+            f"{n_heatmap_pairs} most sensitive pair(s), metric={metric}, pass threshold={pass_threshold_pct:g}%...",
+        )
+        result = compute_parameter_robustness(
+            df, strategy, risk, rules, mc_cfg, metric=metric, pass_threshold_pct=pass_threshold_pct,
+            max_params=max_params, pct_range=pct_range, n_steps_1d=n_steps_1d, n_steps_2d=n_steps_2d,
+            n_heatmap_pairs=n_heatmap_pairs,
+        )
+        _param_robustness_job_log(
+            job_id,
+            f"Done: {result.n_parameters_checked} parameter(s) checked, {result.n_cliffs_detected} "
+            f"cliff(s) detected. Parameter Robustness Score: {result.parameter_robustness_score:.1f}/100.",
+        )
+        with _PARAM_ROBUSTNESS_JOBS_LOCK:
+            job = _PARAM_ROBUSTNESS_JOBS[job_id]
+            job["done"] = True
+            job["result"] = result
+        # Diagnostic, not pass/fail on its own -- passed=None records that it ran, same convention
+        # as Sensitivity's own record_validation call above.
+        strategy_state.record_validation(
+            strategy_name, instrument, "parameter_robustness",
+            passed=None, summary=f"Parameter Robustness Score {result.parameter_robustness_score:.1f}/100",
+        )
+    except RefinementError as exc:
+        with _PARAM_ROBUSTNESS_JOBS_LOCK:
+            job = _PARAM_ROBUSTNESS_JOBS[job_id]
+            job["done"] = True
+            job["error"] = str(exc)
+    except Exception as exc:  # noqa: BLE001
+        with _PARAM_ROBUSTNESS_JOBS_LOCK:
+            job = _PARAM_ROBUSTNESS_JOBS[job_id]
+            job["done"] = True
+            job["error"] = f"Unexpected error: {exc}"
+    finally:
+        HEAVY_JOB_GUARD.release(JOB_PARAMETER_ROBUSTNESS)
+
+
+@app.route("/parameter-robustness")
+def parameter_robustness_form():
+    return render_template(
+        "parameter_robustness.html", stored_datasets=list_stored_datasets(),
+        dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
+        strategy_statuses=STRATEGY_STATUSES,
+    )
+
+
+@app.route("/parameter-robustness/start", methods=["POST"])
+def parameter_robustness_start():
+    form = request.form
+    guard_resp = _try_acquire_heavy_job(
+        JOB_PARAMETER_ROBUSTNESS, "parameter_robustness.html", stored_datasets=list_stored_datasets(),
+        dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
+    )
+    if guard_resp:
+        return guard_resp
+    try:
+        df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
+        if dataset_error:
+            HEAVY_JOB_GUARD.release(JOB_PARAMETER_ROBUSTNESS)
+            return render_template(
+                "parameter_robustness.html", error=dataset_error, stored_datasets=list_stored_datasets(),
+                dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
+            ), 400
+        strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
+        risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000)), pip_size=float(form.get("pip_size", 0.0001)))
+        rules = PropRules(account_size=float(form.get("account_size", 100000)))
+        mc_cfg = MonteCarloConfig(n_simulations=int(form.get("mc_sims", 500) or 500))
+
+        job_id = uuid.uuid4().hex[:12]
+        initial_log = [f"Loaded {len(df)} bars from {active_label}."]
+        if import_note:
+            initial_log.append(import_note)
+        with _PARAM_ROBUSTNESS_JOBS_LOCK:
+            _PARAM_ROBUSTNESS_JOBS[job_id] = {"log": initial_log, "done": False, "error": None, "result": None, "started_at": time.time(), "instrument": active_label}
+        thread = threading.Thread(
+            target=_run_param_robustness_job,
+            args=(
+                job_id, df, strategy, risk, rules, mc_cfg, form.get("metric", "eval_pass_probability"),
+                float(form.get("pass_threshold_pct", 50.0) or 50.0), float(form.get("pct_range", 0.5) or 0.5),
+                int(form.get("n_steps_1d", 9) or 9), int(form.get("n_steps_2d", 7) or 7),
+                int(form.get("max_params", 6) or 6), int(form.get("n_heatmap_pairs", 1) or 1),
+            ),
+            kwargs={"strategy_name": getattr(strategy, "name", "Strategy"), "instrument": active_label},
+            daemon=True,
+        )
+        thread.start()
+        return redirect(url_for("parameter_robustness_job", job_id=job_id))
+    except (StrategyError, RefinementError) as exc:
+        HEAVY_JOB_GUARD.release(JOB_PARAMETER_ROBUSTNESS)
+        return render_template(
+            "parameter_robustness.html", error=str(exc), stored_datasets=list_stored_datasets(),
+            dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
+        ), 400
+    except Exception as exc:  # noqa: BLE001
+        HEAVY_JOB_GUARD.release(JOB_PARAMETER_ROBUSTNESS)
+        return render_template(
+            "parameter_robustness.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(),
+            dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
+        ), 500
+
+
+@app.route("/parameter-robustness/job/<job_id>")
+def parameter_robustness_job(job_id):
+    with _PARAM_ROBUSTNESS_JOBS_LOCK:
+        job = _PARAM_ROBUSTNESS_JOBS.get(job_id)
+    if job is None:
+        return render_template("parameter_robustness_job.html", job_id=job_id, not_found=True), 404
+    return render_template("parameter_robustness_job.html", job_id=job_id, not_found=False)
+
+
+@app.route("/parameter-robustness/job/<job_id>/status.json")
+def parameter_robustness_job_status(job_id):
+    with _PARAM_ROBUSTNESS_JOBS_LOCK:
+        job = _PARAM_ROBUSTNESS_JOBS.get(job_id)
+    if job is None:
+        return jsonify({"found": False}), 404
+    result = job.get("result")
+    summary = result.to_dict() if result is not None else None
+    return jsonify({"found": True, "done": job["done"], "error": job["error"], "log": job["log"], "instrument": job.get("instrument"), "summary": summary})
 
 
 # ---------------------------------------------------------------------------

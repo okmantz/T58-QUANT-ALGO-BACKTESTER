@@ -168,6 +168,16 @@ def _evo_init_worker(df_pickle_path: str, risk_kwargs: dict, prop_kwargs: dict, 
     _EVO_WORKER["adaptive_risk"] = adaptive_risk
 
 
+def _evo_worker_ready_ping() -> bool:
+    """No-op task -- see app.search.batch_runner._worker_ready_ping (the
+    same fix, ported here for the exact same reason: a ProcessPoolExecutor
+    only runs _evo_init_worker's full-dataset unpickling lazily, on each
+    worker's FIRST real task, so without this it silently eats into
+    _drain_futures' stall-timeout budget on a large dataset instead of
+    being its own visible, accounted-for step."""
+    return True
+
+
 def _evo_prefilter_task(
     cid: str, spec: dict, meta: dict,
     min_trades: int, min_profit_factor: float, max_drawdown_pct: float, max_drawdown_buffer_mult: float,
@@ -714,6 +724,7 @@ class EvolutionRunner:
                 # same reasoning as app.search.batch_runner's own pool.
                 mp_context=multiprocessing.get_context("spawn"),
             )
+            self._warm_up_pool(self._pool, workers, len(self.df))
             return self._pool
         except Exception:
             self._log(
@@ -723,6 +734,39 @@ class EvolutionRunner:
             )
             self._shutdown_pool()
             return None
+
+    def _warm_up_pool(self, pool: ProcessPoolExecutor, workers: int, n_bars: int) -> None:
+        """Forces every worker's one-time _evo_init_worker (full-dataset
+        unpickle) to run and complete before this pool is handed any real
+        candidates -- see app.search.batch_runner._warm_up_pool's
+        docstring for the full "why" (same fix, same bug, ported here for
+        this runner's own separate pool/drain_futures pair). Without this,
+        a large dataset's per-worker unpickling time silently counted
+        against _drain_futures' stall-timeout with zero real progress to
+        show for it, which is a very plausible explanation for "loaded
+        2,353,209 bars ... generation 1 ... never continued": every
+        worker was likely still loading that dataset, not wedged on a
+        candidate, when the stall-timeout fired and started skip-and-
+        respawn cycling -- paying the same large unpickling cost again
+        on every respawn, without ever actually reaching generation 2.
+        """
+        t0 = time.monotonic()
+        futures = [pool.submit(_evo_worker_ready_ping) for _ in range(max(1, workers))]
+        try:
+            done, pending = futures_wait(set(futures), timeout=max(60.0, n_bars / 2000.0))
+        except Exception:
+            return
+        elapsed = time.monotonic() - t0
+        if pending:
+            self._log(
+                f"  ** Worker pool warm-up: {len(pending)}/{len(futures)} worker(s) still hadn't "
+                f"finished loading this {n_bars:,}-bar dataset after {elapsed:.0f}s. Continuing anyway "
+                f"-- if this generation immediately reports every candidate as stalled/skipped, this "
+                f"dataset is too large for this machine to hold {workers} full in-memory copies of "
+                f"comfortably; try fewer parallel workers or a smaller/downsampled dataset."
+            )
+        elif elapsed > 5.0:
+            self._log(f"  Worker pool ready ({workers} worker(s) loaded {n_bars:,} bars in {elapsed:.0f}s).")
 
     def _shutdown_pool(self) -> None:
         if self._pool is not None:
@@ -867,7 +911,7 @@ class EvolutionRunner:
         if self.progress_cb:
             self.progress_cb(msg)
 
-    def _drain_futures(self, futures: dict, on_result) -> None:
+    def _drain_futures(self, futures: dict, on_result, stall_timeout: float = 240.0) -> None:
         """Consumes a {future: label} dict as futures complete, calling
         on_result(label, future) for each one -- used by both _prefilter
         and _full_eval instead of Python's `for f in as_completed(futures)`.
@@ -883,16 +927,70 @@ class EvolutionRunner:
         takes, and abandons the remaining futures immediately (rather
         than waiting on them) the moment a stop is requested; the actual
         worker processes are then force-terminated by _shutdown_pool.
+
+        That alone only makes the STOP BUTTON responsive during a stall --
+        it does nothing for a stall nobody notices in time to click Stop
+        for (an unattended overnight run), which is exactly the "loaded
+        2,353,209 bars ... generation 1 ... and never continued" report
+        this second half addresses: one wedged worker (or a worker that
+        silently died) left the remaining futures pending forever, and
+        with nothing left to become newly "done", the loop above just
+        polled quietly forever. This mirrors the stall-timeout-then-
+        pool-respawn fix already shipped for Search Lab
+        (app.search.batch_runner._drain_futures): if `stall_timeout`
+        seconds pass with ZERO futures completing while at least one is
+        still pending, every remaining pending future is assumed wedged.
+        The pool's still-alive worker processes are terminated outright
+        (cancel_futures=True alone only drops futures that hadn't
+        STARTED yet -- it doesn't stop a worker already inside a hung
+        call), a fresh pool is spawned via _ensure_pool() for the rest of
+        this run, and the stuck candidate(s) are reported to on_result
+        with fut=None (skipped, never scored) so the generation can
+        finish with everything else instead of hanging forever.
         """
         pending = set(futures.keys())
+        last_progress = time.monotonic()
         while pending:
             if self._stop_flag.is_set():
                 for fut in pending:
                     fut.cancel()  # only frees futures that hadn't started yet; see _shutdown_pool for the rest
                 return
             done, pending = futures_wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
-            for fut in done:
-                on_result(futures[fut], fut)
+            if done:
+                last_progress = time.monotonic()
+                for fut in done:
+                    on_result(futures[fut], fut)
+                continue
+            if not pending:
+                break
+            stalled_for = time.monotonic() - last_progress
+            if stalled_for < stall_timeout:
+                continue
+            stuck_labels = [futures[f] for f in pending]
+            self._log(
+                f"  ** No progress for {int(stalled_for)}s -- {len(pending)} candidate(s) appear stuck "
+                f"(a worker likely hung on one pathological candidate, or its process died silently): "
+                f"{stuck_labels}. Terminating the stuck worker process(es), marking those candidate(s) "
+                f"as skipped, and continuing with a freshly-spawned worker pool instead of hanging forever."
+            )
+            for fut in list(pending):
+                fut.cancel()
+            try:
+                for proc in list(getattr(self._pool, "_processes", {}).values()):
+                    if proc.is_alive():
+                        proc.terminate()
+            except Exception:
+                pass
+            try:
+                if self._pool is not None:
+                    self._pool.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
+            self._pool = None
+            self._ensure_pool()  # respawn a fresh pool for the caller to keep submitting to
+            for fut in pending:
+                on_result(futures[fut], None)  # None fut == skipped, never scored
+            pending = set()
 
     def _run_loop(self) -> None:
         gen = self.generation
@@ -1344,6 +1442,13 @@ class EvolutionRunner:
 
             def _on_result(label, future):
                 cid, spec, meta = label
+                if future is None:
+                    # Stall-recovery skip (see _drain_futures) -- the worker
+                    # handling this candidate was terminated as wedged, not
+                    # actually evaluated. Recorded honestly as an error, not
+                    # as a pass/fail on the strategy itself.
+                    _consume(cid, spec, meta, None, ["build_or_backtest_error"], "skipped: worker pool stalled", None)
+                    return
                 try:
                     _, _, _, bt, reasons, error, stats = future.result()
                 except Exception as exc:  # noqa: BLE001 -- a dead worker must not kill the generation
@@ -1436,6 +1541,12 @@ class EvolutionRunner:
             }
 
             def _on_result(cid, future):
+                if future is None:
+                    # Stall-recovery skip (see _drain_futures) -- this
+                    # candidate's worker was terminated as wedged; it never
+                    # produced a scored record.
+                    self._log(f"  full-eval skipped {cid}: worker pool stalled (stall recovery).")
+                    return
                 try:
                     records.append(future.result())
                 except Exception:  # noqa: BLE001 -- a dead worker must not kill the generation

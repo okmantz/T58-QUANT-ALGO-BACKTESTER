@@ -271,6 +271,20 @@ def _init_worker(df_pickle_path: str, risk_kwargs: dict, prop_kwargs: dict, tmp_
     _WORKER["tmp_dir"] = Path(tmp_dir_path)
 
 
+def _worker_ready_ping() -> bool:
+    """No-op task with one job: a ProcessPoolExecutor never runs a
+    worker's initializer eagerly at spawn time -- it only runs
+    _init_worker (which unpickles the FULL dataset, one copy per worker;
+    see _make_pool) lazily, the first time that worker is actually handed
+    a task. Submitting this trivial ping to every worker right after
+    (re)spawning a pool -- see _warm_up_pool -- and waiting on it forces
+    that one-time initialization to happen and complete before any real
+    candidate is dispatched, so its cost is measured and logged on its
+    own instead of silently eating into the first batch's stall-timeout
+    budget (see _warm_up_pool's docstring for the bug this fixes)."""
+    return True
+
+
 def _passes_stage1_filters(stats: dict, min_trades: int, min_profit_factor: float,
                             max_dd_limit: float, require_positive_net: bool = True) -> bool:
     """The Stage 1 pass/fail test, factored out so it can be re-applied
@@ -638,6 +652,55 @@ class SearchCancelled(Exception):
     written to the results DB, so a stopped run isn't a wasted one."""
 
 
+def _warm_up_pool(pool, workers: int, n_bars: int, log) -> None:
+    """Forces every worker's one-time initializer (_init_worker -- which
+    unpickles a FULL COPY of the dataset in each worker process) to run
+    and complete before this pool is handed any real candidates, and
+    times/logs how long that took.
+
+    This fixes a real, previously-unexplained failure mode: a
+    ProcessPoolExecutor does not run its `initializer` eagerly when the
+    pool is created -- it only runs lazily, in each worker, the first
+    time that worker is actually handed a task. On a small dataset that
+    cost is a few milliseconds and genuinely was negligible. On a large
+    one (millions of bars -- the exact "loaded 2,353,209 bars" scale
+    this app now regularly runs against) unpickling that dataframe
+    `workers` times over, all starting at once and competing for the
+    same disk/CPU, can easily take minutes. Since that unpickling
+    happened to count as "time since the first real candidate future was
+    submitted" with zero completions, _drain_futures' stall-timeout
+    (see its docstring) could not tell that apart from a genuinely
+    wedged worker -- it would fire, terminate the "stuck" workers, spawn
+    a fresh pool, and immediately pay the exact same unpickling cost
+    again, over and over, every batch getting marked skipped without a
+    single candidate ever actually running. That is precisely the
+    "candidates: 200, Stage 1: 0, ... 0/0 survived" shape this addresses:
+    the strategies were never the problem, nothing was ever scored.
+
+    Warming up here moves that one-time cost into its own clearly-logged
+    step, outside the stall-detection window entirely, for every pool
+    this run creates -- both the initial one and any stall-recovery
+    respawn (`_make_pool` is used as both, see run_search).
+    """
+    t0 = time.monotonic()
+    futures = [pool.submit(_worker_ready_ping) for _ in range(max(1, workers))]
+    try:
+        done, pending = futures_wait(set(futures), timeout=max(60.0, n_bars / 2000.0))
+    except Exception:
+        return
+    elapsed = time.monotonic() - t0
+    if pending:
+        log(
+            f"  ** Worker pool warm-up: {len(pending)}/{len(futures)} worker(s) still hadn't finished "
+            f"loading this {n_bars:,}-bar dataset after {elapsed:.0f}s. Continuing anyway -- if Stage 1 "
+            f"immediately reports every batch as stalled/skipped, this dataset is too large for this "
+            f"machine to hold {workers} full in-memory copies of comfortably; try fewer parallel workers "
+            f"or a smaller/downsampled dataset."
+        )
+    elif elapsed > 5.0:
+        log(f"  Worker pool ready ({workers} worker(s) loaded {n_bars:,} bars in {elapsed:.0f}s).")
+
+
 class StageStalled(Exception):
     """Internal signal from _drain_futures: raised only when no
     pool_factory was supplied to recover from a stall, so the caller can
@@ -821,7 +884,7 @@ def run_search(
     stage3_records: list[dict] = []
 
     def _make_pool():
-        return ProcessPoolExecutor(
+        pool = ProcessPoolExecutor(
             max_workers=workers, initializer=_init_worker,
             initargs=(str(df_path), risk_kwargs, prop_kwargs, str(tmp_dir)),
             # Explicit "spawn" rather than the platform default (fork on
@@ -832,10 +895,13 @@ def run_search(
             # minutes. forking a multi-threaded process is documented as
             # unsafe (can deadlock if another thread held a lock at fork
             # time) and Python 3.12+ warns about exactly this. spawn avoids
-            # the hazard entirely at the cost of slightly slower worker
-            # startup, which is negligible next to a Stage 1-3 run.
+            # the hazard entirely -- see _warm_up_pool below for why its
+            # startup cost is NOT "negligible" on a large dataset, contrary
+            # to what this comment used to say.
             mp_context=multiprocessing.get_context("spawn"),
         )
+        _warm_up_pool(pool, workers, len(df), log)
+        return pool
 
     pool_box = [_make_pool()]
     try:

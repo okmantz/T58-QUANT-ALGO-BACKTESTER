@@ -244,6 +244,7 @@ function addMsg(role, text) {
   div.textContent = text;
   log.appendChild(div);
   log.scrollTop = log.scrollHeight;
+  return div;
 }
 
 async function analyzeScreenshot(kind) {
@@ -284,16 +285,65 @@ async function sendChat() {
   input.value = '';
   addMsg('user', text);
   document.getElementById('send-btn').disabled = true;
+  // Streams the reply so it appears word-by-word instead of only after
+  // the whole thing is generated -- see /assistant/api/chat/stream's
+  // docstring. Falls back to the old one-shot /api/chat if the browser's
+  // fetch response body somehow isn't readable as a stream (very old
+  // browsers / some in-app webviews), so chat still works either way.
+  const log = document.getElementById('chat-log');
+  const replyDiv = addMsg('assistant', '');
+  let fullReply = '';
+  let sawError = null;
   try {
-    const data = await postJson('/assistant/api/chat', { message: text, mode, history });
-    if (data.error) { addMsg('error', data.error); }
-    else {
-      addMsg('assistant', data.reply);
+    const res = await fetch('/assistant/api/chat/stream', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text, mode, history }),
+    });
+    if (!res.body || !res.body.getReader) throw new Error('no-stream-support');
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let lines = buf.split('\n');
+      buf = lines.pop();  // last (possibly incomplete) line stays buffered
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let chunk;
+        try { chunk = JSON.parse(line); } catch (e) { continue; }
+        if (chunk.error) { sawError = chunk.error; break; }
+        if (chunk.text) {
+          fullReply += chunk.text;
+          replyDiv.textContent = fullReply;
+          log.scrollTop = log.scrollHeight;
+        }
+      }
+      if (sawError) break;
+    }
+    if (sawError) {
+      replyDiv.remove();
+      addMsg('error', sawError);
+    } else {
       history.push({ role: 'user', content: text });
-      history.push({ role: 'assistant', content: data.reply });
+      history.push({ role: 'assistant', content: fullReply });
     }
   } catch (err) {
-    addMsg('error', 'Request failed: ' + err);
+    // Fallback: the older blocking endpoint, for browsers that can't
+    // stream a fetch response body.
+    replyDiv.remove();
+    try {
+      const data = await postJson('/assistant/api/chat', { message: text, mode, history });
+      if (data.error) { addMsg('error', data.error); }
+      else {
+        addMsg('assistant', data.reply);
+        history.push({ role: 'user', content: text });
+        history.push({ role: 'assistant', content: data.reply });
+      }
+    } catch (err2) {
+      addMsg('error', 'Request failed: ' + err2);
+    }
   } finally {
     document.getElementById('send-btn').disabled = false;
   }
