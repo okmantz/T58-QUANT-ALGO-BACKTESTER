@@ -77,6 +77,7 @@ from app.orchestration.resource_guard import (
     JOB_MULTI_INSTRUMENT_SEARCH, JOB_MULTI_INSTRUMENT_SPEED_RUN, JOB_MULTI_INSTRUMENT_EVOLUTION,
 )
 from app.orchestration.forge import ForgeConfig, run_forge
+from app.research import director as research_director
 from app.evolution.multi_instrument import EvolutionInstrumentJob, MultiInstrumentEvolutionGroup
 from app.orchestration.multi_instrument_search import (
     InstrumentJob, best_result_across_instruments, run_multi_instrument_search,
@@ -4496,6 +4497,110 @@ def _run_forge_job(
             job["error"] = str(exc)
     finally:
         HEAVY_JOB_GUARD.release(JOB_FORGE)
+
+
+@app.route("/research")
+def research_form():
+    return render_template(
+        "research.html",
+        stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+        manual_strategies=list_saved_strategies("manual"),
+        active_page="research",
+    )
+
+
+@app.route("/research/run", methods=["POST"])
+def research_run():
+    form = request.form
+
+    def _rerender(error, status=400):
+        return render_template(
+            "research.html", error=error,
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+            manual_strategies=list_saved_strategies("manual"),
+            selected_dataset=(form.get("existing_dataset") or ""),
+            selected_strategy=(form.get("strategy_file") or ""),
+            active_page="research",
+        ), status
+
+    df, active_label, _import_note, dataset_error = _resolve_dataset(form, request.files)
+    if dataset_error:
+        return _rerender(dataset_error)
+
+    strategy_file = (form.get("strategy_file") or "").strip()
+    if not strategy_file:
+        return _rerender("Pick a saved Manual Strategy Builder strategy in Step 2 first.")
+    try:
+        spec = {"source_type": "manual", "config": json.loads(load_strategy_text("manual", strategy_file))}
+    except Exception as exc:
+        return _rerender(f"Couldn't load strategy '{strategy_file}': {exc}")
+
+    try:
+        risk = RiskConfig(
+            initial_balance=float(form.get("account_size", 100000) or 100000),
+            risk_value=float(form.get("risk_value", 1.0) or 1.0),
+            pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+        )
+        rules = PropRules(
+            account_size=float(form.get("account_size", 100000) or 100000),
+            evaluation_profit_target_pct=float(form.get("profit_target", 8) or 8),
+            daily_loss_limit_pct=float(form.get("daily_loss", 5) or 5),
+            max_drawdown_pct=float(form.get("max_dd", 10) or 10),
+        )
+        window_trading_days = int(form.get("window_trading_days", 30) or 30)
+
+        full_bt = research_director._run_spec(spec, df, risk)
+        if full_bt is None or not full_bt.trades:
+            return _rerender(
+                "This strategy produced zero trades on the selected dataset with the current risk/prop "
+                "settings -- nothing to analyze. Check the strategy's conditions and the pip size above."
+            )
+        target_row = research_director._row(strategy_file, full_bt, rules, window_trading_days)
+
+        results = {}
+        if form.get("run_decomposition") == "on":
+            try:
+                results["decomposition"] = research_director.edge_decomposition(spec, df, risk, rules, window_trading_days)
+            except Exception as exc:
+                results["decomposition"] = {"steps": [], "verdict": f"Couldn't run: {exc}"}
+        if form.get("run_ablation") == "on":
+            try:
+                results["ablation"] = research_director.ablation_test(spec, df, risk, rules, window_trading_days)
+            except Exception as exc:
+                results["ablation"] = {"rows": [], "verdict": f"Couldn't run: {exc}"}
+        if form.get("run_null") == "on":
+            try:
+                results["null_baselines"] = research_director.null_baselines(df, risk, rules, target_row, window_trading_days)
+            except Exception as exc:
+                results["null_baselines"] = {"baselines": [], "target": target_row, "verdict": f"Couldn't run: {exc}"}
+        if form.get("run_degradation") == "on":
+            try:
+                results["degradation"] = research_director.signal_degradation(spec, df, risk, rules, window_trading_days)
+            except Exception as exc:
+                results["degradation"] = {"baseline": target_row, "stress_tests": [], "verdict": f"Couldn't run: {exc}"}
+        if form.get("run_contribution") == "on":
+            results["contribution"] = research_director.trade_contribution(full_bt.trades, risk.initial_balance)
+        if form.get("run_conditional") == "on":
+            results["conditional"] = research_director.conditional_expectancy(full_bt.trades, df)
+        if form.get("run_regime") == "on":
+            n = len(df)
+            holdout_df = df.iloc[int(n * 0.85):].reset_index(drop=True)
+            try:
+                results["regime"] = research_director.regime_discovery(full_bt.trades, df, risk, rules, spec, holdout_df, window_trading_days)
+            except Exception as exc:
+                results["regime"] = {"hypothesis": None, "next_step": f"Couldn't run: {exc}"}
+
+        return render_template(
+            "research.html", results=results,
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+            manual_strategies=list_saved_strategies("manual"),
+            selected_dataset=(form.get("existing_dataset") or ""),
+            selected_strategy=strategy_file,
+            active_page="research",
+        )
+    except Exception as exc:  # noqa: BLE001
+        log_crash("Research Director (web)", exc=exc)
+        return _rerender(f"Unexpected error: {exc}", status=500)
 
 
 @app.route("/forge")
