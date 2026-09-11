@@ -60,13 +60,12 @@ renders it as a table under "The safety valve."
   historical data you upload -- there is no path from this tab to a real
   or demo account. If that's ever wanted, it's a new, separate, and much
   more carefully reviewed piece of work, not an extension of this one.
-- **Web form always uses the bootstrap view generator.** The
-  strategy-signal view generator (`research.strategy_signal_view`) is
-  fully implemented and tested, but the per-asset "use one of my saved
-  strategies" picker UI (the same pattern `portfolio.html` already has
-  for its legs) isn't wired into `hedge_fund.html` yet. Usable today from
-  Python: `run_hedge_fund_manager(price_data, config,
-  strategies={"AAPL": my_strategy})`.
+- **Web form always uses the bootstrap view generator.** ~~Not yet
+  wired.~~ **Now wired**: each asset slot has a "View source" picker
+  (statistical bootstrap, or load a saved Python/PineScript/MQL5
+  strategy from your Strategy Library) exactly matching the pattern
+  `portfolio.html` already uses for its per-leg strategy picker. The
+  results panel labels which method each asset actually used.
 - **Market-cap weights default to equal-weight.** This app has no
   market-cap data source, so the Black-Litterman equilibrium prior uses
   an equal-weight proxy -- a documented approximation, same spirit as
@@ -104,6 +103,7 @@ New:
 - `tests/test_hedge_fund_black_litterman.py`
 - `tests/test_hedge_fund_rebalancer.py`
 - `tests/test_hedge_fund_oversight.py`
+- `tests/test_hedge_fund_web_routes.py`
 
 Changed:
 - `app/web/server.py` (2 lines: import + `register_blueprint`)
