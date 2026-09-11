@@ -76,6 +76,9 @@
 <div class="card">
   <h2>Result</h2>
   <p class="help">Book: {{ result.assets | join(', ') }} &middot; {{ result.num_cycles }} rebalance cycles</p>
+  {% if result.assets_using_library_strategy %}
+  <p class="help">Using a saved strategy as the view generator for: {{ result.assets_using_library_strategy | join(', ') }} (everything else used the statistical bootstrap).</p>
+  {% endif %}
   <div class="headline">
     <div class="stat"><div class="label">Total return</div><div class="value">{{ '%.1f' % result.stats.total_return_pct }}%</div></div>
     <div class="stat"><div class="label">CAGR</div><div class="value">{{ '%.1f' % result.stats.cagr_pct }}%</div></div>
@@ -93,9 +96,9 @@
   {% if result.last_cycle %}
   <p class="help" style="margin-top:14px;">Most recent rebalance ({{ result.last_cycle.timestamp }}) -- target weights:</p>
   <table class="sweep">
-    <tr><th>Asset</th><th>Weight</th><th>Prior &micro;</th><th>Posterior &micro;</th></tr>
+    <tr><th>Asset</th><th>Weight</th><th>Prior &micro;</th><th>Posterior &micro;</th><th>View source</th></tr>
     {% for asset, w in result.last_cycle.target_weights.items() %}
-    <tr><td>{{ asset }}</td><td>{{ '%+.1f' % (w * 100) }}%</td><td>{{ '%+.1f' % (result.last_cycle.prior_mu.get(asset, 0) * 100) }}%</td><td>{{ '%+.1f' % (result.last_cycle.posterior_mu.get(asset, 0) * 100) }}%</td></tr>
+    <tr><td>{{ asset }}</td><td>{{ '%+.1f' % (w * 100) }}%</td><td>{{ '%+.1f' % (result.last_cycle.prior_mu.get(asset, 0) * 100) }}%</td><td>{{ '%+.1f' % (result.last_cycle.posterior_mu.get(asset, 0) * 100) }}%</td><td>{{ result.view_methods.get(asset, '—') }}</td></tr>
     {% endfor %}
   </table>
   {% endif %}
@@ -142,18 +145,27 @@
       <input type="file" name="asset{{ i }}_csv" accept=".csv,.tsv,.txt,.parquet,.zip,.7z">
       <label>Label (optional -- defaults to the dataset/file name)</label>
       <input type="text" name="asset{{ i }}_label" placeholder="e.g. SPY">
+      <label>View source for this asset</label>
+      <select name="asset{{ i }}_library_mode" class="asset-strategy-mode" data-asset="{{ i }}" onchange="populateAssetLibrarySelect({{ i }})">
+        <option value="">— statistical bootstrap (no edge assumed, calibrates uncertainty only) —</option>
+        <option value="python">Load from library: Python</option>
+        <option value="pinescript">Load from library: PineScript</option>
+        <option value="mql5">Load from library: MQL5</option>
+      </select>
+      <select name="asset{{ i }}_library_name" id="asset{{ i }}_library_name" style="display:none;"></select>
+      <p class="help" style="margin:4px 0 0;">Pick a saved strategy to let ITS current signal and historical hit rate drive this asset's view instead of the bootstrap -- this is how the research desk becomes your own T58 strategies rather than a generic forecaster.</p>
     </div>
     {% endfor %}
   </div>
 
   <div class="card">
     <h2>2. Research desk (view generation)</h2>
-    <p class="help">Samples many resampled paths per asset and uses the mean as the view, the dispersion as the confidence fed to the portfolio desk -- the same architecture the source article uses Kronos for, without vendoring an unproven forecasting model. (Per-asset "use one of my saved strategies as its view" is available from the Python API; this form always uses the statistical bootstrap for now.)</p>
+    <p class="help">Default (no strategy picked above): samples many resampled paths per asset and uses the mean as the view, the dispersion as the confidence fed to the portfolio desk -- the same architecture the source article uses Kronos for, without vendoring an unproven forecasting model. Assets with a Strategy Library pick above use that strategy's current signal and historical same-direction hit rate instead.</p>
     <div class="row">
       <div><label>Lookback (bars)</label><input type="number" name="lookback_bars" value="100"></div>
       <div><label>Forecast horizon (bars)</label><input type="number" name="horizon_bars" value="5"></div>
     </div>
-    <label>Sampled paths per asset</label>
+    <label>Sampled paths per asset (bootstrap-view assets only)</label>
     <input type="number" name="n_samples" value="32">
   </div>
 
@@ -196,5 +208,28 @@
 
 </div>
 </div>
+<script>
+  const SAVED_STRATEGIES = {{ saved_strategies_json | safe }};
+
+  function populateAssetLibrarySelect(assetIndex) {
+    const modeSelect = document.querySelector(`select[name="asset${assetIndex}_library_mode"]`);
+    const nameSelect = document.getElementById(`asset${assetIndex}_library_name`);
+    const mode = modeSelect.value;
+    if (!mode) {
+      nameSelect.style.display = 'none';
+      nameSelect.innerHTML = '';
+      return;
+    }
+    const all = SAVED_STRATEGIES[mode] || [];
+    nameSelect.innerHTML = '<option value="">— choose a saved strategy —</option>';
+    all.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.name;
+      opt.textContent = s.description ? `${s.name} — ${s.description}` : s.name;
+      nameSelect.appendChild(opt);
+    });
+    nameSelect.style.display = 'block';
+  }
+</script>
 </body>
 </html>
