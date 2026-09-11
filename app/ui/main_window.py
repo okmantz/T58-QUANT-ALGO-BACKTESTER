@@ -126,6 +126,8 @@ from app.quant_lab.sentiment_price import (
 )
 from app.quant_lab.vol_surface import build_iv_surface, export_surface_html, fetch_option_chain, synthetic_demo_chain
 from app.quant_lab.factor_model import compute_factor_exposures, compute_returns_from_prices, fetch_fama_french_factors
+from app.quant_lab.market_structure import calculate_hh_ll_structure, calculate_wyckoff_events, summarize_market_structure
+from app.strategy.composite_thresholds import cross_level, hold_level, in_range, mix_thresholds, preview_signal
 from app.ui.condition_builder import ConditionList
 from app.validation.cpcv import CPCVError, compute_pbo, run_cpcv
 from app.validation.regime_matrix import run_regime_matrix
@@ -11088,7 +11090,14 @@ class MainWindow:
                     rankings, _errors = market_intelligence.compute_rankings(news_result=news_result)
                 except Exception:
                     rankings = []
-        return ta_module.build_context(rankings=rankings, news_events=events)
+        structure_notes = {}
+        if rankings:
+            try:
+                top_symbols = [r.symbol for r in rankings[:5]]
+                structure_notes = market_intelligence.compute_market_structure_notes(top_symbols)
+            except Exception:
+                structure_notes = {}
+        return ta_module.build_context(rankings=rankings, news_events=events, market_structure_by_symbol=structure_notes)
 
     def _ai_run_async(self, button, work_fn, on_success):
         original_text = button.cget("text")
@@ -11249,7 +11258,11 @@ class MainWindow:
             events = news_result.events if not news_result.error else []
             rankings, errors = market_intelligence.compute_rankings(news_result=news_result)
             self._ai_last_rankings = rankings
-            context = ta_module.build_context(rankings=rankings, news_events=events)
+            try:
+                structure_notes = market_intelligence.compute_market_structure_notes([r.symbol for r in rankings[:5]])
+            except Exception:
+                structure_notes = {}
+            context = ta_module.build_context(rankings=rankings, news_events=events, market_structure_by_symbol=structure_notes)
 
             deterministic = ta_module.build_deterministic_outlook(context)
             settings = self._build_ollama_settings("aiassistant")
@@ -12321,6 +12334,48 @@ class MainWindow:
         self.ql_fm_btn = self._button(btn_row, "RUN FACTOR MODEL", self._ql_factor_model_clicked, primary=True)
         self.ql_fm_btn.pack(side="left")
 
+        # -- 13. Market Structure (Wyckoff + BOS/ChoCH) ------------------------------
+        sec = self._section(
+            f, "Market Structure (Wyckoff + BOS/ChoCH)",
+            "Deterministic swing structure (HH/HL/LH/LL, break of structure / change of character) and Wyckoff "
+            "spring/upthrust/SOS/SOW + phase detection on Step 2's currently loaded market data -- the same "
+            "facts app.ai.market_intelligence now feeds Owen AI instead of the old EMA-only proxy.",
+        )
+        self.ql_ms_swing_left = LabeledEntry(sec, "Fractal swing bars, left", 5)
+        self.ql_ms_swing_right = LabeledEntry(sec, "Fractal swing bars, right", 5)
+        self.ql_ms_wyckoff_window = LabeledEntry(sec, "Wyckoff consolidation window (bars)", 40)
+        self.ql_ms_wyckoff_width = LabeledEntry(sec, "Wyckoff max range width (fraction)", 0.15)
+        self.ql_ms_wyckoff_lookforward = LabeledEntry(sec, "Wyckoff lookforward (bars)", 30)
+        self.ql_ms_wyckoff_vol_mult = LabeledEntry(sec, "Wyckoff SOS/SOW volume multiple", 1.2)
+        btn_row = Frame(sec, bg=PANEL); btn_row.pack(anchor="w", padx=18, pady=(4, 12))
+        self.ql_ms_btn = self._button(btn_row, "ANALYZE MARKET STRUCTURE", self._ql_market_structure_clicked, primary=True)
+        self.ql_ms_btn.pack(side="left")
+
+        # -- 14. Composite Signal Builder --------------------------------------------
+        sec = self._section(
+            f, "Composite Signal Builder",
+            "Combine two threshold signals (crossLevel, inRange, holdLevel) via AND/OR into one first-class "
+            "composite signal on Step 2's currently loaded market data -- e.g. 'RSI oversold AND price above "
+            "the 200 EMA' as a single signal, instead of hand-rolling the combination per strategy.",
+        )
+        SIGNAL_TYPES = ["cross_level_above", "cross_level_below", "in_range", "hold_level_above", "hold_level_below"]
+        self.ql_cs_a_kind = LabeledEntry(sec, "Signal A: indicator", "rsi")
+        self.ql_cs_a_period = LabeledEntry(sec, "Signal A: period", 14)
+        self.ql_cs_a_type = LabeledCombo(sec, "Signal A: type", SIGNAL_TYPES, default="cross_level_above")
+        self.ql_cs_a_level = LabeledEntry(sec, "Signal A: level / lower bound", 30)
+        self.ql_cs_a_level2 = LabeledEntry(sec, "Signal A: upper bound (in_range only)", 70)
+        self.ql_cs_a_min_bars = LabeledEntry(sec, "Signal A: min consecutive bars (hold_level only)", 3)
+        self.ql_cs_b_kind = LabeledEntry(sec, "Signal B: indicator", "ema")
+        self.ql_cs_b_period = LabeledEntry(sec, "Signal B: period", 200)
+        self.ql_cs_b_type = LabeledCombo(sec, "Signal B: type", SIGNAL_TYPES, default="in_range")
+        self.ql_cs_b_level = LabeledEntry(sec, "Signal B: level / lower bound", 0)
+        self.ql_cs_b_level2 = LabeledEntry(sec, "Signal B: upper bound (in_range only)", 1000000)
+        self.ql_cs_b_min_bars = LabeledEntry(sec, "Signal B: min consecutive bars (hold_level only)", 3)
+        self.ql_cs_mode = LabeledCombo(sec, "Combine mode", ["and", "or"], default="and")
+        btn_row = Frame(sec, bg=PANEL); btn_row.pack(anchor="w", padx=18, pady=(4, 12))
+        self.ql_cs_btn = self._button(btn_row, "BUILD COMPOSITE SIGNAL", self._ql_composite_signal_clicked, primary=True)
+        self.ql_cs_btn.pack(side="left")
+
     def _ql_browse_into(self, entry: "LabeledEntry", filetypes) -> None:
         path = filedialog.askopenfilename(filetypes=filetypes + [("All files", "*.*")])
         if path:
@@ -12574,6 +12629,95 @@ class MainWindow:
             result = compute_factor_exposures(returns, factors, periods_per_year=252 if frequency == "daily" else 12)
             return result.render_summary()
         self._quant_lab_run_async(self.ql_fm_btn, work, "Factor Model")
+
+    def _ql_market_structure_clicked(self):
+        swing_left = self.ql_ms_swing_left.get_int(5)
+        swing_right = self.ql_ms_swing_right.get_int(5)
+        wyckoff_window = self.ql_ms_wyckoff_window.get_int(40)
+        wyckoff_width = self.ql_ms_wyckoff_width.get_float(0.15)
+        wyckoff_lookforward = self.ql_ms_wyckoff_lookforward.get_int(30)
+        wyckoff_vol_mult = self.ql_ms_wyckoff_vol_mult.get_float(1.2)
+
+        def work():
+            log_lines = []
+            df = self._load_df_for_page(log_lines.append)
+            if df is None:
+                raise ValueError("\n".join(log_lines) or "No market data loaded.")
+            summary = summarize_market_structure(
+                df, swing_left=swing_left, swing_right=swing_right, wyckoff_window=wyckoff_window,
+                wyckoff_max_width_pct=wyckoff_width, wyckoff_lookforward=wyckoff_lookforward,
+                wyckoff_volume_mult=wyckoff_vol_mult,
+            )
+            lines = [summary.render_summary(), ""]
+
+            hh_ll = calculate_hh_ll_structure(df, left=swing_left, right=swing_right)
+            lines.append(f"Swing structure: {len(hh_ll)} swing(s) found.")
+            events_only = hh_ll[hh_ll["event"].notna()].tail(20)
+            if not events_only.empty:
+                lines.append("Most recent BOS/ChoCH events:")
+                lines += [
+                    f"  {row.timestamp}  {row.event.upper():<5} ({row.structure}, trend={row.trend}, price={row.price:.5f})"
+                    for row in events_only.itertuples()
+                ]
+
+            wyckoff = calculate_wyckoff_events(
+                df, window=wyckoff_window, max_width_pct=wyckoff_width,
+                lookforward=wyckoff_lookforward, volume_mult=wyckoff_vol_mult,
+            )
+            lines.append("")
+            lines.append(f"Wyckoff events: {len(wyckoff)} found.")
+            if not wyckoff.empty:
+                lines.append("Most recent Wyckoff events:")
+                lines += [
+                    f"  {row.timestamp}  {row.event.upper():<9} phase={row.phase:<13} price={row.price:.5f}"
+                    for row in wyckoff.tail(20).itertuples()
+                ]
+            return "\n".join(lines)
+        self._quant_lab_run_async(self.ql_ms_btn, work, "Market Structure")
+
+    def _ql_build_signal(self, df, kind, period, sig_type, level, level2, min_bars):
+        if sig_type == "cross_level_above":
+            return cross_level(df, kind, period, level, direction="above")
+        if sig_type == "cross_level_below":
+            return cross_level(df, kind, period, level, direction="below")
+        if sig_type == "in_range":
+            return in_range(df, kind, period, level, level2)
+        if sig_type == "hold_level_above":
+            return hold_level(df, kind, period, level, direction="above", min_bars=min_bars)
+        if sig_type == "hold_level_below":
+            return hold_level(df, kind, period, level, direction="below", min_bars=min_bars)
+        raise ValueError(f"Unknown signal type '{sig_type}'.")
+
+    def _ql_composite_signal_clicked(self):
+        a_kind = self.ql_cs_a_kind.get_str().strip().lower()
+        a_period = self.ql_cs_a_period.get_int(14)
+        a_type = self.ql_cs_a_type.get_str()
+        a_level = self.ql_cs_a_level.get_float(30)
+        a_level2 = self.ql_cs_a_level2.get_float(70)
+        a_min_bars = self.ql_cs_a_min_bars.get_int(3)
+        b_kind = self.ql_cs_b_kind.get_str().strip().lower()
+        b_period = self.ql_cs_b_period.get_int(200)
+        b_type = self.ql_cs_b_type.get_str()
+        b_level = self.ql_cs_b_level.get_float(0)
+        b_level2 = self.ql_cs_b_level2.get_float(1000000)
+        b_min_bars = self.ql_cs_b_min_bars.get_int(3)
+        mode = self.ql_cs_mode.get_str() or "and"
+
+        def work():
+            log_lines = []
+            df = self._load_df_for_page(log_lines.append)
+            if df is None:
+                raise ValueError("\n".join(log_lines) or "No market data loaded.")
+            signal_a = self._ql_build_signal(df, a_kind, a_period, a_type, a_level, a_level2, a_min_bars)
+            signal_b = self._ql_build_signal(df, b_kind, b_period, b_type, b_level, b_level2, b_min_bars)
+            combo = mix_thresholds([signal_a, signal_b], mode=mode)
+            lines = [
+                "== Signal A ==", preview_signal(df, signal_a).render_summary(), "",
+                "== Signal B ==", preview_signal(df, signal_b).render_summary(), "",
+                f"== Combined ({mode.upper()}) ==", preview_signal(df, combo).render_summary(),
+            ]
+            return "\n".join(lines)
+        self._quant_lab_run_async(self.ql_cs_btn, work, "Composite Signal Builder")
 
     def _log_research_loop(self, msg: str):
         self.loop_output.insert(END, msg + "\n")

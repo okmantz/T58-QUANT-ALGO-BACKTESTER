@@ -3041,15 +3041,33 @@ def generate_search_space(
         # families that still have room, repeated until the budget is
         # fully assigned or every family is exhausted.
         fams_sorted = sorted(combos_by_family.keys(), key=lambda f: len(combos_by_family[f]))
+        allocation: dict[str, int] = {fam: 0 for fam in fams_sorted}
         remaining_quota = max_candidates
-        remaining_fam_count = len(fams_sorted)
-        allocation: dict[str, int] = {}
-        for fam in fams_sorted:
-            share = max(1, remaining_quota // remaining_fam_count)
-            take = min(len(combos_by_family[fam]), share)
-            allocation[fam] = take
-            remaining_quota -= take
-            remaining_fam_count -= 1
+        if remaining_quota < len(fams_sorted):
+            # BUGFIX: the budget can't afford even one candidate per family.
+            # The old code below (`share = max(1, remaining_quota //
+            # remaining_fam_count)`) forced every remaining family to get AT
+            # LEAST 1 regardless of how small max_candidates was, which
+            # silently blew straight through the cap whenever there were
+            # more families than budget -- e.g. max_candidates=4 across 45
+            # registered families returned 45 candidates (one per family,
+            # every one of them ignoring the caller's cap), not 4. Instead,
+            # pick a random (seeded, reproducible) subset of exactly
+            # `remaining_quota` families and give each of those one
+            # candidate, so the total never exceeds max_candidates.
+            chosen_fams = rng.sample(fams_sorted, remaining_quota)
+            for fam in chosen_fams:
+                allocation[fam] = 1
+            remaining_quota = 0
+            remaining_fam_count = 0
+        else:
+            remaining_fam_count = len(fams_sorted)
+            for fam in fams_sorted:
+                share = max(1, remaining_quota // remaining_fam_count)
+                take = min(len(combos_by_family[fam]), share)
+                allocation[fam] = take
+                remaining_quota -= take
+                remaining_fam_count -= 1
         # Any quota left over (every family capped below its equal share,
         # or integer-division remainder) goes to the families with the
         # most untapped combinations left, so the budget is still fully

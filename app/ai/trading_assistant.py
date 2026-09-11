@@ -350,18 +350,26 @@ def _jsonable(obj):
     return obj
 
 
-def build_context(rankings: list, news_events: list, watchlist_symbols: list[str] | None = None) -> dict:
+def build_context(rankings: list, news_events: list, watchlist_symbols: list[str] | None = None, market_structure_by_symbol: dict[str, str] | None = None) -> dict:
     """Assembles the one structured object handed to the model each turn
     -- rankings from app.ai.market_scanner, events from
     app.ai.news_forexfactory, both already-computed facts. Kept small and
     flat on purpose: send the ranked table and the next few news events,
     not raw bar data -- see app.ai.ollama_client's sibling docstring on
-    why local models do better with pre-digested facts than raw series."""
+    why local models do better with pre-digested facts than raw series.
+
+    `market_structure_by_symbol` (see app.ai.market_intelligence.
+    compute_market_structure_notes) is optional and additive: real,
+    deterministic BOS/ChoCH/Wyckoff facts for a handful of symbols,
+    alongside (not replacing) each ranking's own EMA-cross macro_bias
+    proxy -- so the model has computed structure to reason from instead
+    of eyeballing it from price alone."""
     from app.ai.market_scanner import ranking_to_dict
 
     return {
         "best_markets": [ranking_to_dict(r) for r in rankings],
         "watchlist_symbols": watchlist_symbols or [],
+        "market_structure": market_structure_by_symbol or {},
         "upcoming_news": [
             {
                 "title": e.title,

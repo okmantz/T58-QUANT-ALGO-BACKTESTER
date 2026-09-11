@@ -136,6 +136,10 @@ _TOOLS = [
      "description": "Builds and exports an interactive 3D implied-volatility surface across strikes and expirations."},
     {"url": "/quant-lab/factor-model", "badge": "Factors", "title": "Factor Model",
      "description": "Decomposes returns into market/size/value (Fama-French 3-factor) exposure and tests if alpha is real."},
+    {"url": "/quant-lab/market-structure", "badge": "SMC", "title": "Market Structure (Wyckoff + BOS/ChoCH)",
+     "description": "Deterministic swing structure (HH/HL/LH/LL, break of structure / change of character) and Wyckoff spring/upthrust/SOS/SOW + phase detection."},
+    {"url": "/quant-lab/composite-signal", "badge": "Signals", "title": "Composite Signal Builder",
+     "description": "Combine two threshold signals (crossLevel, crossLines, inRange, holdLevel, and more) via AND/OR into one first-class composite signal."},
 ]
 
 
@@ -637,3 +641,159 @@ def factor_model():
             error = str(exc)
     return _render("Factor Model", "Fama-French 3-factor decomposition -- tests whether apparent outperformance is real alpha or just factor exposure.",
                     form_html, result_html, error)
+
+
+# ---------------------------------------------------------------------------
+# 13. Market Structure (Wyckoff + BOS/ChoCH)
+# ---------------------------------------------------------------------------
+
+@quant_lab_bp.route("/market-structure", methods=["GET", "POST"])
+def market_structure():
+    form_html = (
+        '<label for="ohlcv_csv">Market data (CSV)</label><input type="file" id="ohlcv_csv" name="ohlcv_csv" accept=".csv">'
+        + _field("swing_left", "Fractal swing bars, left", "number", "5")
+        + _field("swing_right", "Fractal swing bars, right", "number", "5")
+        + _field("wyckoff_window", "Wyckoff consolidation window (bars)", "number", "40")
+        + _field("wyckoff_max_width_pct", "Wyckoff max range width (fraction, e.g. 0.15)", "number", "0.15")
+        + _field("wyckoff_lookforward", "Wyckoff lookforward (bars)", "number", "30")
+        + _field("wyckoff_volume_mult", "Wyckoff SOS/SOW volume multiple", "number", "1.2")
+    )
+    result_html, error = None, None
+    if request.method == "POST":
+        try:
+            from app.quant_lab.market_structure import (
+                calculate_hh_ll_structure, calculate_wyckoff_events, summarize_market_structure,
+            )
+
+            df = _load_ohlcv_upload("ohlcv_csv")
+            swing_left = int(request.form.get("swing_left", 5) or 5)
+            swing_right = int(request.form.get("swing_right", 5) or 5)
+            wyckoff_window = int(request.form.get("wyckoff_window", 40) or 40)
+            wyckoff_max_width_pct = float(request.form.get("wyckoff_max_width_pct", 0.15) or 0.15)
+            wyckoff_lookforward = int(request.form.get("wyckoff_lookforward", 30) or 30)
+            wyckoff_volume_mult = float(request.form.get("wyckoff_volume_mult", 1.2) or 1.2)
+
+            summary = summarize_market_structure(
+                df, swing_left=swing_left, swing_right=swing_right, wyckoff_window=wyckoff_window,
+                wyckoff_max_width_pct=wyckoff_max_width_pct, wyckoff_lookforward=wyckoff_lookforward,
+                wyckoff_volume_mult=wyckoff_volume_mult,
+            )
+            lines = [summary.render_summary(), ""]
+
+            hh_ll = calculate_hh_ll_structure(df, left=swing_left, right=swing_right)
+            lines.append(f"Swing structure: {len(hh_ll)} swing(s) found.")
+            events_only = hh_ll[hh_ll["event"].notna()].tail(20)
+            if not events_only.empty:
+                lines.append("Most recent BOS/ChoCH events:")
+                lines += [
+                    f"  {row.timestamp}  {row.event.upper():<5} ({row.structure}, trend={row.trend}, price={row.price:.5f})"
+                    for row in events_only.itertuples()
+                ]
+
+            wyckoff = calculate_wyckoff_events(
+                df, window=wyckoff_window, max_width_pct=wyckoff_max_width_pct,
+                lookforward=wyckoff_lookforward, volume_mult=wyckoff_volume_mult,
+            )
+            lines.append("")
+            lines.append(f"Wyckoff events: {len(wyckoff)} found.")
+            if not wyckoff.empty:
+                lines.append("Most recent Wyckoff events:")
+                lines += [
+                    f"  {row.timestamp}  {row.event.upper():<9} phase={row.phase:<13} price={row.price:.5f}"
+                    for row in wyckoff.tail(20).itertuples()
+                ]
+            result_html = _pre("\n".join(lines))
+        except Exception as exc:  # noqa: BLE001
+            error = str(exc)
+    return _render(
+        "Market Structure (Wyckoff + BOS/ChoCH)",
+        "Deterministic swing structure (HH/HL/LH/LL, break of structure / change of character) and Wyckoff "
+        "spring/upthrust/SOS/SOW + phase detection -- the same facts app.ai.market_intelligence now feeds Owen AI.",
+        form_html, result_html, error,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 14. Composite Signal Builder
+# ---------------------------------------------------------------------------
+
+_SIGNAL_TYPE_OPTIONS = (
+    '<option value="cross_level_above">Cross above a level</option>'
+    '<option value="cross_level_below">Cross below a level</option>'
+    '<option value="in_range">In range [lower, upper]</option>'
+    '<option value="hold_level_above">Held above a level (N+ bars)</option>'
+    '<option value="hold_level_below">Held below a level (N+ bars)</option>'
+)
+
+
+def _signal_fields(prefix: str, label: str) -> str:
+    return (
+        f'<p class="help"><strong>{label}</strong></p>'
+        + _field(f"{prefix}_kind", "Indicator", "text", "rsi", "rsi, ema, sma, macd, atr, stdev, ...")
+        + _field(f"{prefix}_period", "Period", "number", "14")
+        + f'<label for="{prefix}_type">Signal type</label><select id="{prefix}_type" name="{prefix}_type">{_SIGNAL_TYPE_OPTIONS}</select>'
+        + _field(f"{prefix}_level", "Level / lower bound", "number", "30")
+        + _field(f"{prefix}_level2", "Upper bound (only used for 'in range')", "number", "70")
+        + _field(f"{prefix}_min_bars", "Min consecutive bars (only used for 'held' types)", "number", "3")
+    )
+
+
+def _build_signal_from_form(prefix: str, form) -> "object":
+    from app.strategy.composite_thresholds import cross_level, hold_level, in_range
+
+    kind = (form.get(f"{prefix}_kind") or "rsi").strip().lower()
+    period = int(form.get(f"{prefix}_period", 14) or 14)
+    sig_type = form.get(f"{prefix}_type", "cross_level_above")
+    level = float(form.get(f"{prefix}_level", 30) or 30)
+    level2 = float(form.get(f"{prefix}_level2", 70) or 70)
+    min_bars = int(form.get(f"{prefix}_min_bars", 3) or 3)
+
+    df = form["_df"]  # stashed by the caller -- see market_structure/composite_signal route below
+    if sig_type == "cross_level_above":
+        return cross_level(df, kind, period, level, direction="above")
+    if sig_type == "cross_level_below":
+        return cross_level(df, kind, period, level, direction="below")
+    if sig_type == "in_range":
+        return in_range(df, kind, period, level, level2)
+    if sig_type == "hold_level_above":
+        return hold_level(df, kind, period, level, direction="above", min_bars=min_bars)
+    if sig_type == "hold_level_below":
+        return hold_level(df, kind, period, level, direction="below", min_bars=min_bars)
+    raise ValueError(f"Unknown signal type '{sig_type}'.")
+
+
+@quant_lab_bp.route("/composite-signal", methods=["GET", "POST"])
+def composite_signal():
+    form_html = (
+        '<label for="ohlcv_csv">Market data (CSV)</label><input type="file" id="ohlcv_csv" name="ohlcv_csv" accept=".csv">'
+        + _signal_fields("a", "Signal A")
+        + _signal_fields("b", "Signal B")
+        + '<label for="mode">Combine mode</label><select id="mode" name="mode"><option value="and">AND (both must fire)</option><option value="or">OR (either fires)</option></select>'
+    )
+    result_html, error = None, None
+    if request.method == "POST":
+        try:
+            from app.strategy.composite_thresholds import mix_thresholds, preview_signal
+
+            df = _load_ohlcv_upload("ohlcv_csv")
+            form = request.form.to_dict()
+            form["_df"] = df  # threaded through to _build_signal_from_form without changing its signature
+            signal_a = _build_signal_from_form("a", form)
+            signal_b = _build_signal_from_form("b", form)
+            mode = form.get("mode", "and")
+            combo = mix_thresholds([signal_a, signal_b], mode=mode)
+
+            lines = [
+                "== Signal A ==", preview_signal(df, signal_a).render_summary(), "",
+                "== Signal B ==", preview_signal(df, signal_b).render_summary(), "",
+                f"== Combined ({mode.upper()}) ==", preview_signal(df, combo).render_summary(),
+            ]
+            result_html = _pre("\n".join(lines))
+        except Exception as exc:  # noqa: BLE001
+            error = str(exc)
+    return _render(
+        "Composite Signal Builder",
+        "Combine two threshold signals (crossLevel, crossLines, inRange, holdLevel, and more) via AND/OR into "
+        "one first-class composite signal -- e.g. 'RSI oversold AND price above the 200 EMA' as a single signal.",
+        form_html, result_html, error,
+    )

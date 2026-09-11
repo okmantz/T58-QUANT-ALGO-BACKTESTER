@@ -40,6 +40,7 @@ ai_assistant_bp = Blueprint("ai_assistant", __name__, url_prefix="/assistant")
 
 _CACHE_TTL_NEWS = 300      # seconds -- the calendar doesn't change second to second
 _CACHE_TTL_RANKINGS = 60   # seconds -- bounds how often we hammer the MT5/Alpaca connection
+_CACHE_TTL_STRUCTURE = 300  # seconds -- daily-bar BOS/ChoCH/Wyckoff facts don't change within a minute
 _cache: dict = {}
 
 
@@ -78,6 +79,18 @@ def _compute_rankings():
     # "best markets" means.
     news_result = _cached("news", _CACHE_TTL_NEWS, _compute_news)
     return market_intelligence.compute_rankings(news_result=news_result)
+
+
+def _structure_notes_for(rankings) -> dict:
+    """Real, deterministic BOS/ChoCH/Wyckoff facts for the top-ranked
+    symbols -- see app.ai.market_intelligence's module docstring. Cached
+    separately from rankings (longer TTL: these come from DAILY bars, so
+    they can't meaningfully change within the rankings' own 60s window)
+    so a chat message doesn't pay for a fresh structure analysis every
+    time rankings happen to refresh."""
+    top_symbols = tuple(r.symbol for r in rankings[:5])
+    return _cached(f"structure:{top_symbols}", _CACHE_TTL_STRUCTURE,
+                   lambda: market_intelligence.compute_market_structure_notes(list(top_symbols)))
 
 
 @ai_assistant_bp.route("/")
@@ -177,7 +190,8 @@ def api_chat():
 
     rankings, _errors = _cached("rankings", _CACHE_TTL_RANKINGS, _compute_rankings)
     news_result = _cached("news", _CACHE_TTL_NEWS, _compute_news)
-    context = trading_assistant.build_context(rankings, news_result.events)
+    structure_notes = _structure_notes_for(rankings)
+    context = trading_assistant.build_context(rankings, news_result.events, market_structure_by_symbol=structure_notes)
 
     client = trading_assistant.TradingAssistantClient(load_ollama_settings())
     reply, error = client.ask(message, context, mode=mode, history=history)
@@ -206,7 +220,8 @@ def api_chat_stream():
 
     rankings, _errors = _cached("rankings", _CACHE_TTL_RANKINGS, _compute_rankings)
     news_result = _cached("news", _CACHE_TTL_NEWS, _compute_news)
-    context = trading_assistant.build_context(rankings, news_result.events)
+    structure_notes = _structure_notes_for(rankings)
+    context = trading_assistant.build_context(rankings, news_result.events, market_structure_by_symbol=structure_notes)
     client = trading_assistant.TradingAssistantClient(load_ollama_settings())
 
     def generate():
@@ -221,7 +236,8 @@ def api_chat_stream():
 def api_daily_brief():
     rankings, _errors = _cached("rankings", _CACHE_TTL_RANKINGS, _compute_rankings)
     news_result = _cached("news", _CACHE_TTL_NEWS, _compute_news)
-    context = trading_assistant.build_context(rankings, news_result.events)
+    structure_notes = _structure_notes_for(rankings)
+    context = trading_assistant.build_context(rankings, news_result.events, market_structure_by_symbol=structure_notes)
     client = trading_assistant.TradingAssistantClient(load_ollama_settings())
     reply, error = client.daily_brief(context)
     return jsonify({"reply": reply, "error": error})
@@ -250,7 +266,8 @@ def api_outlook():
     button."""
     rankings, _errors = _cached("rankings", _CACHE_TTL_RANKINGS, _compute_rankings)
     news_result = _cached("news", _CACHE_TTL_NEWS, _compute_news)
-    context = trading_assistant.build_context(rankings, news_result.events)
+    structure_notes = _structure_notes_for(rankings)
+    context = trading_assistant.build_context(rankings, news_result.events, market_structure_by_symbol=structure_notes)
 
     deterministic = trading_assistant.build_deterministic_outlook(context)
     settings = load_ollama_settings()

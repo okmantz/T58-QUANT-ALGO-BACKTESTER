@@ -21,13 +21,22 @@ importing it from the desktop side here is not a new dependency.
 Macro bias caveat (same one the web dashboard surfaces in `macro_note`):
 this app has no fundamentals/rates/positioning data source, so
 macro_bias_by_symbol is a plain technical PROXY (daily EMA50 vs EMA200
-trend), not a true fundamental read.
+trend), not a true fundamental read. compute_market_structure_notes()
+below is a SEPARATE, complementary signal -- real, deterministic
+BOS/ChoCH (break of structure / change of character) and Wyckoff
+spring/upthrust/SOS/SOW + phase detection (app.quant_lab.market_structure,
+ported from the HyperTA project's Structures module) -- fed into Owen
+AI's chat context (see app.ai.trading_assistant.build_context) so the
+model has real computed structure facts for its top-ranked symbols
+instead of only an EMA-cross proxy, or having to eyeball structure from
+price alone.
 """
 from __future__ import annotations
 
 import pandas as pd
 
 from app.ai import market_scanner, news_forexfactory
+from app.quant_lab.market_structure import MarketStructureError, summarize_market_structure
 from app.strategy.indicators import ema
 
 
@@ -88,3 +97,36 @@ def compute_rankings(news_result=None) -> tuple[list, list[str]]:
     return market_scanner.rank_markets(
         universe, bar_fetcher=bar_fetcher, macro_bias_by_symbol=macro_bias, news_risk_by_symbol=news_risk,
     )
+
+
+def market_structure_note_for_symbol(symbol: str) -> str:
+    """One-line, plain-language BOS/ChoCH/Wyckoff summary for `symbol` on
+    daily bars -- see this module's docstring for why this exists
+    alongside (not instead of) daily_trend_bias()'s EMA-cross proxy.
+    Returns a short "no data" note rather than raising, matching
+    daily_trend_bias()'s own fail-safe convention (a chat context should
+    degrade gracefully for one bad symbol, not break the whole context)."""
+    try:
+        df = bar_fetcher(symbol, 1440, 260)
+        if df is None or len(df) < 50:
+            return "not enough daily bars for structure analysis"
+        summary = summarize_market_structure(df)
+        note = f"trend={summary.latest_trend}, bias={summary.bias}"
+        if summary.latest_structure_event:
+            note += f", last event={summary.latest_structure_event}"
+        if summary.latest_wyckoff_phase:
+            note += f", wyckoff={summary.latest_wyckoff_phase}"
+        return note
+    except MarketStructureError as exc:
+        return f"structure analysis unavailable: {exc}"
+    except Exception:
+        return "structure analysis unavailable"
+
+
+def compute_market_structure_notes(symbols: list[str], max_symbols: int = 5) -> dict[str, str]:
+    """Computes market_structure_note_for_symbol() for up to `max_symbols`
+    of `symbols` -- capped because this fetches+analyzes daily bars per
+    symbol, and the chat context only needs this for the handful of
+    symbols actually relevant to the current conversation (typically the
+    top-ranked markets), not the whole universe on every message."""
+    return {s: market_structure_note_for_symbol(s) for s in symbols[:max_symbols]}

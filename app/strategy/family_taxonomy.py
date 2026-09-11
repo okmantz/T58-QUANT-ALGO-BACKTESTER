@@ -120,6 +120,16 @@ _SKELETON_TO_GROUP: dict[str, str] = {
     "session_gated_liquidity_sweep": "liquidity_sweep",
     "macd_histogram_zero_cross_trend": "trend_following",
     "atr_regime_trend_pullback": "pullback",
+    # Expansion round 4 (Sep 2026) -- BUGFIX: these 6 were added to
+    # app.search.strategy_space.FAMILIES but never given a mapping here,
+    # which test_family_taxonomy.py::test_every_skeleton_family_maps_to_a_known_canonical_group
+    # catches (it asserts the two key-sets match exactly).
+    "session_extreme_fade": "mean_reversion",
+    "volume_confirmed_order_block_reaction": "market_structure",
+    "wide_range_bar_exhaustion_fade": "mean_reversion",
+    "vwap_bollinger_pullback": "pullback",
+    "volume_trend_breakout_confirmation": "breakout",
+    "volume_confirmed_fvg_continuation": "liquidity_sweep",
 }
 
 # Path 2a: app.strategy.dna active_tags() -> canonical group. Checked in
