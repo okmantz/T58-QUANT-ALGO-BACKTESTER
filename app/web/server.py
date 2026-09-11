@@ -71,11 +71,12 @@ from app.orchestration.full_pipeline import (
 )
 from app.orchestration.quick_optimize import QuickOptimizeConfig, run_quick_optimize
 from app.orchestration.resource_guard import (
-    HEAVY_JOB_GUARD, JOB_EVOLUTION_LAB, JOB_FULL_PIPELINE, JOB_SEARCH_LAB, JOB_SPEED_RUN,
+    HEAVY_JOB_GUARD, JOB_EVOLUTION_LAB, JOB_FORGE, JOB_FULL_PIPELINE, JOB_SEARCH_LAB, JOB_SPEED_RUN,
     JOB_WFO, JOB_WFGA, JOB_CPCV, JOB_SENSITIVITY, JOB_MULTI_OBJECTIVE, JOB_REGIME_MATRIX,
     JOB_PARAMETER_ROBUSTNESS,
     JOB_MULTI_INSTRUMENT_SEARCH, JOB_MULTI_INSTRUMENT_SPEED_RUN, JOB_MULTI_INSTRUMENT_EVOLUTION,
 )
+from app.orchestration.forge import ForgeConfig, run_forge
 from app.evolution.multi_instrument import EvolutionInstrumentJob, MultiInstrumentEvolutionGroup
 from app.orchestration.multi_instrument_search import (
     InstrumentJob, best_result_across_instruments, run_multi_instrument_search,
@@ -103,7 +104,7 @@ from app.search.batch_runner import SearchCancelled, SearchStageConfig, promote_
 from app.search.family_diversity import render_family_report, summarize_family_performance
 from app.search.search_report import generate_search_report
 from app.search.strategy_space import (
-    StrategySpaceError, family_description, generate_search_space, list_families,
+    StrategySpaceError, family_description, generate_search_space, hypothesis_question, list_families,
 )
 from app.search.results_db import ResultsDB
 from app.strategy.base import StrategyError
@@ -138,6 +139,8 @@ REPORTS_DIR = BASE_DIR / "reports"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 SEARCH_DIR = BASE_DIR / "reports" / "search"
 SEARCH_DIR.mkdir(parents=True, exist_ok=True)
+FORGE_DIR = BASE_DIR / "reports" / "forge"
+FORGE_DIR.mkdir(parents=True, exist_ok=True)
 REFINEMENT_DIR = BASE_DIR / "reports" / "refinement"
 REFINEMENT_DIR.mkdir(parents=True, exist_ok=True)
 FULL_PIPELINE_DIR = BASE_DIR / "reports" / "full_pipeline"
@@ -4440,6 +4443,207 @@ def serve_search_report(filename):
 @app.route("/search_reports_champion/<job_id>/<path:filename>")
 def serve_search_champion_report(job_id, filename):
     return send_from_directory(SEARCH_DIR / "champion" / job_id, filename)
+
+
+# ---------------------------------------------------------------------------
+# Forge Strategy -- the literal one-button "generate, screen, validate"
+# tab. See app.orchestration.forge for the actual funnel this wires up
+# (hypothesis generation across every named market-hypothesis family ->
+# fast screen -> prop survival screen -> neighbor testing -> walk-forward
+# -> CPCV/PBO + regime testing -> deeper Monte Carlo -> rolling prop
+# evaluation -> locked OOS holdout). Same background-job/poll shape as
+# Search Lab above.
+# ---------------------------------------------------------------------------
+
+_FORGE_JOBS: dict[str, dict] = {}
+_FORGE_JOBS_LOCK = threading.Lock()
+
+
+def _forge_job_log(job_id: str, msg: str) -> None:
+    with _FORGE_JOBS_LOCK:
+        job = _FORGE_JOBS.get(job_id)
+        if job is not None:
+            job["log"].append(msg)
+
+
+def _run_forge_job(
+    job_id: str, df, risk: RiskConfig, rules: PropRules, config: ForgeConfig,
+    instrument: str, db_path: str, graveyard_path: str,
+    cancel_event: threading.Event | None = None,
+) -> None:
+    try:
+        result = run_forge(
+            df, risk, rules, config, db_path=db_path,
+            instrument=instrument, timeframe="unknown", graveyard_path=graveyard_path,
+            progress_cb=lambda msg: _forge_job_log(job_id, msg),
+            cancel_event=cancel_event,
+        )
+        with _FORGE_JOBS_LOCK:
+            job = _FORGE_JOBS[job_id]
+            job["done"] = True
+            job["result"] = result
+    except SearchCancelled:
+        with _FORGE_JOBS_LOCK:
+            job = _FORGE_JOBS[job_id]
+            job["done"] = True
+            job["cancelled"] = True
+            job["log"].append("Forge Strategy run stopped by user.")
+    except Exception as exc:  # noqa: BLE001 -- must fail visibly on the status page, not crash the thread silently
+        log_crash("Forge Strategy (web)", exc=exc)
+        with _FORGE_JOBS_LOCK:
+            job = _FORGE_JOBS[job_id]
+            job["done"] = True
+            job["error"] = str(exc)
+    finally:
+        HEAVY_JOB_GUARD.release(JOB_FORGE)
+
+
+@app.route("/forge")
+def forge_form():
+    return render_template(
+        "forge.html",
+        stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+        families=[{"name": n, "hypothesis": hypothesis_question(n)} for n in list_families()],
+        active_page="forge",
+    )
+
+
+@app.route("/forge/start", methods=["POST"])
+def forge_start():
+    form = request.form
+    if not HEAVY_JOB_GUARD.try_acquire(JOB_FORGE):
+        return render_template(
+            "forge.html",
+            error=(
+                f"{HEAVY_JOB_GUARD.active_name} is already running on this server. Running more than "
+                f"one heavy job at the same time can exhaust available memory. Wait for it to finish "
+                f"before starting Forge Strategy."
+            ),
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+            active_page="forge",
+        ), 409
+    try:
+        df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
+        if dataset_error:
+            HEAVY_JOB_GUARD.release(JOB_FORGE)
+            return render_template(
+                "forge.html", error=dataset_error,
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+                active_page="forge",
+            ), 400
+
+        seed = int(form.get("seed", 42) or 42)
+        workers_raw = (form.get("workers") or "").strip()
+        advanced = (form.get("advanced_mode") or "") == "on"
+
+        config = ForgeConfig(
+            n_hypotheses=int(form.get("n_hypotheses", 10_000) or 10_000),
+            seed=seed,
+            min_trades=int(form.get("min_trades", 20) or 20) if advanced else 20,
+            min_profit_factor=float(form.get("min_profit_factor", 1.05) or 1.05) if advanced else 1.05,
+            stage1_top_n=int(form.get("stage1_top_n", 1000) or 1000) if advanced else 1000,
+            ga_population=int(form.get("ga_population", 12) or 12) if advanced else 12,
+            ga_generations=int(form.get("ga_generations", 4) or 4) if advanced else 4,
+            stage2_top_n=int(form.get("stage2_top_n", 200) or 200) if advanced else 200,
+            stage3_mc_sims=int(form.get("stage3_mc_sims", 2000) or 2000) if advanced else 2000,
+            cpcv_pool_size=int(form.get("cpcv_pool_size", 30) or 30) if advanced else 30,
+            cpcv_survivors=int(form.get("cpcv_survivors", 10) or 10) if advanced else 10,
+            final_mc_sims=int(form.get("final_mc_sims", 10_000) or 10_000) if advanced else 10_000,
+            mc_survivors=int(form.get("mc_survivors", 5) or 5) if advanced else 5,
+            eval_window_days=int(form.get("eval_window_days", 60) or 60) if advanced else 60,
+            rolling_survivors=int(form.get("rolling_survivors", 2) or 2) if advanced else 2,
+            locked_holdout_frac=float(form.get("locked_holdout_frac", 0.15) or 0.15) if advanced else 0.15,
+            workers=int(workers_raw) if workers_raw else None,
+            random_seed=seed,
+        )
+        risk = RiskConfig(
+            initial_balance=float(form.get("initial_balance", 100000) or 100000),
+            risk_mode=form.get("risk_mode", "percent"),
+            risk_value=float(form.get("risk_value", 1.0) or 1.0),
+            pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+        )
+        rules = PropRules(
+            account_size=float(form.get("account_size", 100000) or 100000),
+            evaluation_profit_target_pct=float(form.get("profit_target", 8) or 8),
+            daily_loss_limit_pct=float(form.get("daily_loss", 5) or 5),
+            max_drawdown_pct=float(form.get("max_dd", 10) or 10),
+        )
+
+        job_id = uuid.uuid4().hex[:12]
+        db_path = str(FORGE_DIR / f"forge_{job_id}.db")
+        graveyard_path = str(FORGE_DIR / f"forge_{job_id}_graveyard.jsonl")
+        initial_log = [f"Loaded {len(df)} bars from {active_label}."]
+        if import_note:
+            initial_log.append(import_note)
+        cancel_event = threading.Event()
+        with _FORGE_JOBS_LOCK:
+            _FORGE_JOBS[job_id] = {
+                "log": initial_log,
+                "done": False, "error": None, "result": None, "cancelled": False,
+                "started_at": time.time(), "instrument": active_label,
+                "cancel_event": cancel_event, "graveyard_path": graveyard_path,
+            }
+        thread = threading.Thread(
+            target=_run_forge_job,
+            args=(job_id, df, risk, rules, config, active_label, db_path, graveyard_path, cancel_event),
+            daemon=True,
+        )
+        thread.start()
+        return redirect(url_for("forge_job", job_id=job_id))
+
+    except Exception as exc:  # noqa: BLE001
+        HEAVY_JOB_GUARD.release(JOB_FORGE)
+        log_crash("Forge Strategy (web, start)", exc=exc)
+        return render_template(
+            "forge.html", error=f"Unexpected error: {exc}",
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+            active_page="forge",
+        ), 500
+
+
+@app.route("/forge/job/<job_id>")
+def forge_job(job_id):
+    with _FORGE_JOBS_LOCK:
+        job = _FORGE_JOBS.get(job_id)
+    if job is None:
+        return render_template("forge_job.html", job_id=job_id, not_found=True), 404
+    return render_template("forge_job.html", job_id=job_id, not_found=False)
+
+
+@app.route("/forge/job/<job_id>/stop", methods=["POST"])
+def forge_job_stop(job_id):
+    with _FORGE_JOBS_LOCK:
+        job = _FORGE_JOBS.get(job_id)
+        if job is None:
+            return jsonify({"ok": False, "error": "Job not found."}), 404
+        cancel_event = job.get("cancel_event")
+    if cancel_event is not None:
+        cancel_event.set()
+    return jsonify({"ok": True})
+
+
+@app.route("/forge/job/<job_id>/status.json")
+def forge_job_status(job_id):
+    with _FORGE_JOBS_LOCK:
+        job = _FORGE_JOBS.get(job_id)
+    if job is None:
+        return jsonify({"found": False}), 404
+
+    result = job.get("result")
+    return jsonify({
+        "found": True,
+        "done": job["done"],
+        "error": job["error"],
+        "cancelled": job.get("cancelled", False),
+        "log": job["log"],
+        "instrument": job.get("instrument"),
+        "funnel": [s.to_dict() for s in result.funnel] if result else None,
+        "leaderboard": [r.to_dict() for r in result.leaderboard] if result else None,
+        "diagnoses": [d.to_dict() for d in result.diagnoses] if result else None,
+        "champion_candidate_id": result.champion_candidate_id if result else None,
+        "cohort_pbo": result.cohort_pbo if result else None,
+        "elapsed_seconds": result.elapsed_seconds if result else None,
+    })
 
 
 # ---------------------------------------------------------------------------
