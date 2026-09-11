@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Forge Strategy — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  .card p.help { font-size: 12px; color: #888; margin: 0 0 10px; line-height: 1.5; }
+  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  input[type=text], input[type=number], select, textarea {
+    width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font-size: 15px;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(53,224,176,0.15); }
+  .row { display: flex; gap: 10px; }
+  .row > div { flex: 1; }
+  input[type=file] { width: 100%; color: #ccc; }
+  input[type=checkbox] { width: auto; }
+  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  details summary { font-size: 13px; color: #999; cursor: pointer; margin: 6px 0; }
+  .hypothesis-list { max-height: 260px; overflow-y: auto; font-size: 12px; color: #aaa; line-height: 1.6; margin-top: 8px; }
+  .hypothesis-list div { padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+  .hypothesis-list b { color: #ddd; }
+  .funnel-preview { font-size: 12px; color: #888; line-height: 1.8; margin-top: 6px; }
+  .forge-btn {
+    width: 100%; padding: 24px; border-radius: 14px; border: 2px solid var(--teal); background: var(--teal);
+    color: #04120e; font-size: 22px; font-weight: 800; letter-spacing: .03em; margin-top: 10px; cursor: pointer;
+    box-shadow: 0 0 34px rgba(53,224,176,0.45);
+  }
+  .forge-btn:active { transform: scale(0.99); }
+  .forge-sub { text-align: center; font-size: 12px; color: #888; margin-top: 10px; }
+</style>
+</head>
+<body>
+{% set active_page = 'forge' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Forge Strategy</h1>
+  <p>One button: generate thousands of distinct market-hypothesis strategies, screen them hard, and validate the survivors for prop-firm survival -- not raw profit.</p>
+</div>
+
+{% if error %}
+<div class="error">{{ error }}</div>
+{% endif %}
+
+<form method="post" action="/forge/start" enctype="multipart/form-data">
+
+  <div class="card">
+    <h2>1. Market data</h2>
+    {% if stored_datasets %}
+    <label>Use a previously stored dataset</label>
+    <select name="existing_dataset">
+      <option value="">— none, I'm uploading new file(s) below —</option>
+      {% for g in dataset_groups %}
+      <optgroup label="{{ g.instrument }}">
+        {% for file in g.files %}
+        <option value="{{ file.full_name }}">{{ file.name }} ({{ (file.size_bytes / 1024) | round(1) }} KB){{ ' — empty' if file.empty else '' }}</option>
+        {% endfor %}
+      </optgroup>
+      {% endfor %}
+    </select>
+    {% endif %}
+    <label>Or upload new CSV file(s) (timestamp, open, high, low, close, volume)</label>
+    <input type="file" name="csv_file" accept=".csv,.tsv,.txt,.parquet,.zip,.7z" multiple>
+  </div>
+
+  <div class="card">
+    <h2>2. Prop firm rules</h2>
+    <div class="row">
+      <div><label>Account size ($)</label><input type="number" name="account_size" value="100000"></div>
+      <div><label>Profit target (%)</label><input type="number" step="0.1" name="profit_target" value="8"></div>
+    </div>
+    <div class="row">
+      <div><label>Daily loss limit (%)</label><input type="number" step="0.1" name="daily_loss" value="5"></div>
+      <div><label>Max drawdown (%)</label><input type="number" step="0.1" name="max_dd" value="10"></div>
+    </div>
+    <div class="row">
+      <div><label>Risk per trade (%)</label><input type="number" step="0.1" name="risk_value" value="1.0"></div>
+      <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" value="0.0001"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>3. What Forge Strategy will do</h2>
+    <p class="help">
+      Generates strategy hypotheses across every named market-hypothesis family below (a deliberate
+      "after X, does Y tend to happen?" question each -- not a random parameter mutation), then runs
+      the full funnel: fast screen &rarr; prop survival screen &rarr; neighbor testing &rarr; walk-forward
+      &rarr; CPCV/PBO + regime testing &rarr; deeper Monte Carlo &rarr; rolling prop evaluation &rarr;
+      a locked out-of-sample holdout that no earlier stage ever sees. Ranked the whole way through by
+      Prop Survival Score (pass rate &rarr; payout rate &rarr; drawdown safety &rarr; consistency &rarr;
+      profitability), not net profit or Sharpe.
+    </p>
+    <details>
+      <summary>See all {{ families | length }} hypothesis families this run will test</summary>
+      <div class="hypothesis-list">
+        {% for f in families %}
+        <div><b>{{ f.name }}</b> — {{ f.hypothesis }}</div>
+        {% endfor %}
+      </div>
+    </details>
+  </div>
+
+  <details class="card">
+    <summary>Advanced settings (optional — sensible defaults are used otherwise)</summary>
+    <input type="hidden" name="advanced_mode" value="on">
+    <div class="row">
+      <div><label>Hypotheses to generate</label><input type="number" name="n_hypotheses" value="10000"></div>
+      <div><label>Fast-screen survivors</label><input type="number" name="stage1_top_n" value="1000"></div>
+    </div>
+    <div class="row">
+      <div><label>Prop survival screen survivors</label><input type="number" name="stage2_top_n" value="200"></div>
+      <div><label>CPCV/regime pool size</label><input type="number" name="cpcv_pool_size" value="30"></div>
+    </div>
+    <div class="row">
+      <div><label>CPCV/regime survivors</label><input type="number" name="cpcv_survivors" value="10"></div>
+      <div><label>Final Monte Carlo survivors</label><input type="number" name="mc_survivors" value="5"></div>
+    </div>
+    <div class="row">
+      <div><label>Rolling evaluation survivors</label><input type="number" name="rolling_survivors" value="2"></div>
+      <div><label>Locked OOS holdout (% of data)</label><input type="number" step="0.01" name="locked_holdout_frac" value="0.15"></div>
+    </div>
+    <div class="row">
+      <div><label>GA population</label><input type="number" name="ga_population" value="12"></div>
+      <div><label>GA generations</label><input type="number" name="ga_generations" value="4"></div>
+    </div>
+    <div class="row">
+      <div><label>Stage 3 Monte Carlo sims</label><input type="number" name="stage3_mc_sims" value="2000"></div>
+      <div><label>Final Monte Carlo sims</label><input type="number" name="final_mc_sims" value="10000"></div>
+    </div>
+    <div class="row">
+      <div><label>Rolling eval window (trading days)</label><input type="number" name="eval_window_days" value="60"></div>
+      <div><label>Worker processes (blank = auto)</label><input type="number" name="workers"></div>
+    </div>
+    <label>Random seed</label><input type="number" name="seed" value="42">
+  </details>
+
+  <button class="forge-btn" type="submit">FORGE STRATEGY</button>
+  <p class="forge-sub">This can take a while (minutes to hours, depending on hypothesis count and data size). You'll see a live funnel and leaderboard once it starts.</p>
+
+</form>
+
+</div>
+</div>
+</body>
+</html>

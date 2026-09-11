@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Forge Strategy Job — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<link rel="stylesheet" href="/static/job-theme.css">
+<style>
+  .stop-btn { padding: 10px 22px; border-radius: 10px; border: 1px solid #6b2323; background: #3a1616; color: #ffb4b4; font-size: 14px; font-weight: 700; cursor: pointer; }
+  .stop-btn:disabled { opacity: 0.5; cursor: default; }
+  .funnel { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+  .funnel-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+  .funnel-row .fname { flex: 1; color: var(--text-muted); }
+  .funnel-row .fcount { font-weight: 700; color: var(--text); white-space: nowrap; }
+  .funnel-row .fbar { flex: 2; height: 8px; border-radius: 4px; background: var(--panel-3); border: 1px solid var(--border); overflow: hidden; }
+  .funnel-row .fbar-fill { height: 100%; background: linear-gradient(90deg, var(--teal), var(--violet)); }
+  .diag-card { border-left: 3px solid var(--coral); background: var(--panel-3); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; font-size: 12px; }
+  .diag-card .verdict { color: var(--coral); font-weight: 700; margin-bottom: 4px; }
+  .diag-card .field { color: var(--text-muted); margin-top: 2px; }
+  .diag-card .field b { color: var(--text); font-weight: 600; }
+  .hypothesis-cell { font-size: 11px; color: var(--text-muted); max-width: 220px; }
+</style>
+</head>
+<body>
+<header><h1><span class="mark"></span>T58 — Forge Strategy</h1></header>
+<nav>
+  <a href="/">Run &amp; Report</a>
+  <a href="/forge">New Forge Run</a>
+</nav>
+<main>
+
+{% if not_found %}
+<div class="error">Job "{{ job_id }}" was not found (the server may have restarted since it ran).</div>
+{% else %}
+
+<div class="card">
+  <h2 id="status-title"><span class="spinner" id="spinner"></span>Forging strategies&hellip;</h2>
+  <div id="log">Starting&hellip;</div>
+  <form id="stop-form" method="post" action="/forge/job/{{ job_id }}/stop" style="margin-top:10px;" onsubmit="return stopForge(event)">
+    <button class="stop-btn" type="submit" id="stop-btn">Stop</button>
+  </form>
+</div>
+
+<div class="card" id="funnel-card" style="display:none;">
+  <h2>Funnel</h2>
+  <div class="funnel" id="funnel-body"></div>
+</div>
+
+<div class="card" id="pbo-card" style="display:none;">
+  <h2>Cohort overfitting check</h2>
+  <p class="status-msg" id="pbo-text"></p>
+</div>
+
+<div class="card" id="leaderboard-card" style="display:none;">
+  <h2>Leaderboard — ranked by Prop Survival Score</h2>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>#</th><th>Candidate</th><th>Family</th><th>Hypothesis</th>
+          <th>Pass Rate</th><th>Payout Rate</th><th>Median Pass</th><th>Max DD</th>
+          <th>Score</th><th>Locked OOS</th>
+        </tr>
+      </thead>
+      <tbody id="leaderboard-body"></tbody>
+    </table>
+  </div>
+  <p class="note">Pass/payout rates and median days-to-pass come from a rolling evaluation across every real historical starting day, not a single backtest. Max DD is the historical max drawdown in dollars at this account size. Score is the composite Prop Survival Score (pass rate &rarr; payout rate &rarr; drawdown safety &rarr; consistency &rarr; profitability).</p>
+</div>
+
+<div class="card" id="diagnosis-card" style="display:none;">
+  <h2>Why did the rest fail? (<span id="diag-count">0</span> diagnosed rejections)</h2>
+  <div id="diagnosis-body"></div>
+</div>
+
+<div class="error" id="error-card" style="display:none;"></div>
+
+{% endif %}
+</main>
+
+{% if not not_found %}
+<script>
+  const jobId = {{ job_id | tojson }};
+  const fmt = (v, d) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d === undefined ? 1 : d);
+
+  function renderFunnel(stages) {
+    const body = document.getElementById('funnel-body');
+    body.innerHTML = '';
+    const maxIn = stages.length ? Math.max(...stages.map(s => s.n_in || 1)) : 1;
+    stages.forEach(s => {
+      const pct = maxIn ? Math.max(4, (s.n_out / maxIn) * 100) : 0;
+      const row = document.createElement('div');
+      row.className = 'funnel-row';
+      row.innerHTML = `
+        <div class="fname">${s.name}</div>
+        <div class="fbar"><div class="fbar-fill" style="width:${pct}%"></div></div>
+        <div class="fcount">${s.n_in.toLocaleString()} &rarr; ${s.n_out.toLocaleString()}</div>`;
+      body.appendChild(row);
+    });
+    document.getElementById('funnel-card').style.display = stages.length ? 'block' : 'none';
+  }
+
+  function renderLeaderboard(rows) {
+    const tbody = document.getElementById('leaderboard-body');
+    tbody.innerHTML = '';
+    rows.forEach((row, i) => {
+      const tr = document.createElement('tr');
+      const oosBadge = row.locked_oos_status === 'PASSED'
+        ? '<span class="badge pass">PASSED</span>'
+        : row.locked_oos_status === 'FAILED'
+          ? '<span class="badge fail">FAILED</span>'
+          : '<span class="badge">NOT TESTED</span>';
+      tr.innerHTML = `
+        <td>${i + 1}</td>
+        <td>${row.candidate_id}</td>
+        <td>${row.family_label}</td>
+        <td class="hypothesis-cell">${row.hypothesis || ''}</td>
+        <td>${fmt(row.pass_rate_pct)}%</td>
+        <td>${fmt(row.payout_rate_pct)}%</td>
+        <td>${row.median_days_to_pass !== null ? fmt(row.median_days_to_pass, 0) + 'd' : '—'}</td>
+        <td>$${fmt(row.max_drawdown_dollars, 0)}</td>
+        <td>${fmt(row.prop_survival_score)}</td>
+        <td>${oosBadge}</td>`;
+      tbody.appendChild(tr);
+    });
+    document.getElementById('leaderboard-card').style.display = rows.length ? 'block' : 'none';
+  }
+
+  function renderDiagnoses(diagnoses) {
+    const body = document.getElementById('diagnosis-body');
+    body.innerHTML = '';
+    document.getElementById('diag-count').textContent = diagnoses.length;
+    diagnoses.slice(0, 60).forEach(d => {
+      const div = document.createElement('div');
+      div.className = 'diag-card';
+      let html = `<div class="verdict">Strategy ${d.candidate_id} — ${d.verdict}</div>`;
+      html += `<div class="field"><b>Primary failure:</b> ${d.primary_failure}</div>`;
+      if (d.secondary_failure) html += `<div class="field"><b>Secondary failure:</b> ${d.secondary_failure}</div>`;
+      if (d.strength) html += `<div class="field"><b>Strength:</b> ${d.strength}</div>`;
+      if (d.weakness) html += `<div class="field"><b>Weakness:</b> ${d.weakness}</div>`;
+      if (d.suggested_mutation) html += `<div class="field"><b>Potential mutation:</b> ${d.suggested_mutation}</div>`;
+      if (d.related_successful_family) html += `<div class="field"><b>Related successful family:</b> ${d.related_successful_family}</div>`;
+      div.innerHTML = html;
+      body.appendChild(div);
+    });
+    document.getElementById('diagnosis-card').style.display = diagnoses.length ? 'block' : 'none';
+  }
+
+  function stopForge(evt) {
+    evt.preventDefault();
+    const btn = document.getElementById('stop-btn');
+    btn.disabled = true;
+    btn.textContent = 'Stopping…';
+    fetch(`/forge/job/${jobId}/stop`, {method: 'POST'}).catch(() => {});
+    return false;
+  }
+
+  function poll() {
+    fetch(`/forge/job/${jobId}/status.json`)
+      .then(r => r.json())
+      .then(data => {
+        if (!data.found) return;
+        document.getElementById('log').textContent = (data.log || []).filter(Boolean).join('\n');
+        document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
+
+        if (data.funnel) renderFunnel(data.funnel);
+
+        if (data.cohort_pbo !== null && data.cohort_pbo !== undefined) {
+          document.getElementById('pbo-card').style.display = 'block';
+          document.getElementById('pbo-text').textContent =
+            `Probability of Backtest Overfitting across the CPCV shortlist: ${(data.cohort_pbo * 100).toFixed(0)}%` +
+            (data.cohort_pbo > 0.5 ? ' — the selection process itself may be overfit; treat the leaderboard with extra caution.' : '.');
+        }
+
+        if (data.error) {
+          document.getElementById('spinner').style.display = 'none';
+          document.getElementById('status-title').textContent = 'Forge run failed';
+          const sf = document.getElementById('stop-form');
+          if (sf) sf.style.display = 'none';
+          const ec = document.getElementById('error-card');
+          ec.style.display = 'block';
+          ec.textContent = data.error;
+          return;
+        }
+
+        if (data.cancelled) {
+          document.getElementById('spinner').style.display = 'none';
+          document.getElementById('status-title').textContent = 'Forge run stopped';
+          const sf = document.getElementById('stop-form');
+          if (sf) sf.style.display = 'none';
+          return;
+        }
+
+        if (data.done) {
+          document.getElementById('spinner').style.display = 'none';
+          document.getElementById('status-title').textContent = 'Forge run complete';
+          const sf = document.getElementById('stop-form');
+          if (sf) sf.style.display = 'none';
+          renderLeaderboard(data.leaderboard || []);
+          renderDiagnoses(data.diagnoses || []);
+          if (!(data.leaderboard || []).length) {
+            const ec = document.getElementById('error-card');
+            ec.style.display = 'block';
+            ec.className = 'notice';
+            ec.textContent = 'Run complete. Nothing survived all the way to the leaderboard this run -- see the diagnoses above for what to try next (family, filter, or risk-model changes).';
+          }
+          return;
+        }
+        setTimeout(poll, 2000);
+      })
+      .catch(() => setTimeout(poll, 3000));
+  }
+  poll();
+</script>
+{% endif %}
+</body>
+</html>
