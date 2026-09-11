@@ -57,11 +57,36 @@ class GraveyardEntry:
     param_signature: str | None = None            # coarse "same neighborhood" fingerprint
     notes: list = field(default_factory=list)
 
+    # -- "Why Did This Strategy Fail?" engine (see app.search.failure_diagnosis) --
+    # Populated by Forge Strategy (app.orchestration.forge) for candidates that
+    # got far enough to be worth a structured diagnosis, not just a reason
+    # string. All optional/None for entries written by older callers (Search
+    # Lab, Evolution Lab) that don't build a full diagnosis -- this is a
+    # strictly additive extension of the existing entry shape.
+    primary_failure: str | None = None             # e.g. "daily loss limit"
+    secondary_failure: str | None = None           # e.g. "excessive losing streak"
+    strength: str | None = None                    # e.g. "excellent target achievement"
+    weakness: str | None = None                    # e.g. "losses cluster during high-volatility periods"
+    suggested_mutation: str | None = None          # e.g. "add a volatility filter"
+    related_successful_family: str | None = None   # the best-performing family in this same run, if different
+
     def to_dict(self) -> dict:
         return dict(self.__dict__)
 
     def render(self) -> str:
         lines = [f"{self.candidate_id}", "FAILED", "", f"Reason:\n{self.reason}", ""]
+        if self.primary_failure is not None:
+            lines += [f"Primary failure:\n{self.primary_failure}", ""]
+        if self.secondary_failure is not None:
+            lines += [f"Secondary failure:\n{self.secondary_failure}", ""]
+        if self.strength is not None:
+            lines += [f"Strength:\n{self.strength}", ""]
+        if self.weakness is not None:
+            lines += [f"Weakness:\n{self.weakness}", ""]
+        if self.suggested_mutation is not None:
+            lines += [f"Potential mutation:\n{self.suggested_mutation}", ""]
+        if self.related_successful_family is not None:
+            lines += [f"Related successful family:\n{self.related_successful_family}", ""]
         if self.oos_result is not None:
             lines += [f"OOS:\n{self.oos_result}", ""]
         if self.neighbor_robustness_pct is not None:

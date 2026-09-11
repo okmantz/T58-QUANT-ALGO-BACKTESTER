@@ -2789,6 +2789,85 @@ def family_description(name: str) -> str:
     return FAMILIES[name].description
 
 
+# ---------------------------------------------------------------------------
+# Hypothesis questions -- Forge Strategy (app.orchestration.forge) surfaces
+# these verbatim so every candidate a run generates is traceable back to a
+# plain-English, falsifiable market question ("after X, does Y tend to
+# happen?"), not just a family label. Every family above was already built
+# around exactly this kind of question (see each SkeletonSpec's
+# `description` and the comment block above it) -- this dict just phrases
+# that same intent as an explicit question for the UI/report, instead of
+# requiring a person to infer it from the family's descriptive prose.
+#
+# Deliberately hand-written per family (not derived from `description`
+# programmatically): a good hypothesis question names the SETUP and the
+# EXPECTED behavior in one sentence, which the prose descriptions don't
+# consistently do in a mechanically-extractable way. Falls back to
+# `family_description` for any family not yet given an explicit entry here
+# (e.g. a family added later) -- see `hypothesis_question` below -- so this
+# dict is safe to extend incrementally and never raises for a valid family.
+# ---------------------------------------------------------------------------
+HYPOTHESIS_QUESTIONS: dict[str, str] = {
+    "trend_breakout": "When price breaks an N-bar range in the direction of a slower EMA trend, does it continue?",
+    "mtf_pullback": "When price pulls back (RSI dip/pop) inside an established EMA trend, does it resume the trend?",
+    "mean_reversion_band": "When price closes outside a mean-reversion band, does it revert back toward the mean?",
+    "volatility_breakout": "When an N-bar range breaks while ATR is expanding, does the move continue?",
+    "session_time_effect": "Does price behave differently (directionally) during a specific session/time window?",
+    "volume_imbalance": "When volume imbalance confirms a directional move, does price continue in that direction?",
+    "stat_pairs": "When the spread between two correlated instruments diverges, does it revert?",
+    "liquidity_sweep_reversal": "After a liquidity sweep (a stop-hunt through a swing high/low that reclaims), does price reverse?",
+    "momentum_continuation": "When RSI extremity is confirmed by MACD histogram agreement, does the momentum persist?",
+    "vwap_reversion": "When price stretches far from VWAP, does it revert back toward VWAP?",
+    "market_structure_shift": "After a break of market structure (higher-high/lower-low shift), does the new direction persist?",
+    "prev_day_range_breakout": "When price breaks yesterday's high or low, does it continue in that direction?",
+    "macd_cross_trend": "When MACD crosses its signal line in the direction of a slower EMA trend, does price follow through?",
+    "swing_structure_fade": "When price makes a failed swing-structure attempt, does it fade back the other way?",
+    "fvg_imbalance_continuation": "When price returns to fill a fair-value gap within a trend, does the trend continue?",
+    "order_block_reaction": "When price returns to an order block, does it react (reverse) from that level?",
+    "volatility_contraction_squeeze": "After a volatility squeeze (ATR contraction), does the eventual breakout continue?",
+    "overnight_gap_fade": "When price gaps away from the prior close at the session open, does the gap tend to fade?",
+    "wma_ribbon_trend": "When a WMA ribbon aligns in one direction, does price continue trending with it?",
+    "pct_change_momentum_burst": "After a sharp percentage-change burst, does price continue in that direction?",
+    "rsi_extreme_reversion": "When RSI reaches an extreme reading, does price mean-revert?",
+    "liquidity_sweep_quick_reclaim": "After a fast liquidity sweep with an immediate reclaim, does price reverse quickly?",
+    "range_midpoint_fade": "When price is stretched away from a range's midpoint, does it fade back toward the midpoint?",
+    "opening_range_retest_confirmation": "After a breakout of the opening range retests and confirms the level, does it continue?",
+    "micro_pullback_continuation": "During an active trend, does a shallow micro-pullback resolve back in the trend's direction?",
+    "change_of_character_reversal_scalp": "After a short-term change of character (CHoCH), does price reverse for a quick scalp?",
+    "fvg_quick_fill_fade": "When price quickly fills a fair-value gap against the prevailing move, does it fade?",
+    "relative_strength_momentum": "When one instrument shows relative strength versus its pair, does that strength persist?",
+    "volume_climax_reversal": "After a volume climax (exhaustion spike), does price reverse?",
+    "vwap_trend_continuation": "When price holds above/below VWAP in a trend, does the trend continue?",
+    "bollinger_band_walk_continuation": "When price 'walks the band' (repeated closes near a Bollinger band), does the trend persist?",
+    "gap_and_go_continuation": "When price gaps at the open and immediately continues in the gap's direction, does it keep going?",
+    "volume_confirmed_breakout": "When a breakout is confirmed by above-average volume, does it continue further than an unconfirmed one?",
+    "wma_sma_divergence_trend": "When a fast WMA diverges from a slower SMA, does price continue in the direction of the divergence?",
+    "higher_low_structure_continuation": "During an uptrend/downtrend, does a higher-low (or lower-high) structure event predict continuation?",
+    "order_flow_absorption": "When aggressive volume is absorbed at a level without price breaking through, does price reverse?",
+    "order_block_trend_continuation": "When price reacts off an order block that aligns with the prevailing trend, does the trend continue?",
+    "volume_confirmed_trend_pullback": "When a trend pullback is confirmed by volume, does the trend resume?",
+    "session_gated_liquidity_sweep": "Does a liquidity-sweep reversal work better when it's gated to a specific trading session?",
+    "macd_histogram_zero_cross_trend": "When the MACD histogram crosses zero in the direction of a slower trend, does price follow through?",
+    "atr_regime_trend_pullback": "Does a trend-pullback entry perform differently depending on the prevailing ATR (volatility) regime?",
+    "session_extreme_fade": "When price reaches a session's high/low extreme, does it fade back toward the session's range?",
+    "vwap_bollinger_pullback": "When price pulls back to VWAP inside a Bollinger band, does it resume the prevailing trend?",
+    "volume_confirmed_fvg_continuation": "When a fair-value-gap fill is confirmed by volume, does the underlying trend continue?",
+    "volume_confirmed_order_block_reaction": "When an order-block reaction is confirmed by volume, is the reversal more reliable?",
+    "wide_range_bar_exhaustion_fade": "After an unusually wide-range bar (exhaustion), does price fade back against that bar's direction?",
+    "volume_trend_breakout_confirmation": "Does a trend breakout confirmed by a volume surge outperform one without volume confirmation?",
+}
+
+
+def hypothesis_question(name: str) -> str:
+    """Plain-English 'does X tend to happen after Y' question for a family
+    -- falls back to that family's `description` (never raises for any
+    valid family name) so a newly-added family without an explicit entry
+    above still renders something sensible instead of a KeyError."""
+    if name not in FAMILIES:
+        raise StrategySpaceError(f"Unknown strategy family '{name}'. Known families: {list(FAMILIES)}")
+    return HYPOTHESIS_QUESTIONS.get(name) or family_description(name)
+
+
 def family_grid_size(name: str) -> int:
     """Full (pre-sampling) candidate count for one family -- lets the UI show a preview count."""
     if name not in FAMILIES:
