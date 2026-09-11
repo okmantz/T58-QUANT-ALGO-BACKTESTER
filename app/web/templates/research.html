@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Research Director — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  .card p.help { font-size: 12px; color: #888; margin: 0 0 10px; line-height: 1.5; }
+  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  input[type=text], input[type=number], select, textarea {
+    width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font-size: 15px;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(53,224,176,0.15); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 160px; }
+  .checkline { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+  input[type=checkbox] { width: auto; }
+  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .run-btn {
+    width: 100%; padding: 20px; border-radius: 14px; border: 2px solid var(--teal); background: var(--teal);
+    color: #04120e; font-size: 20px; font-weight: 800; letter-spacing: .03em; margin-top: 10px; cursor: pointer;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 8px 0 4px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--text-muted); font-weight: 600; text-transform: uppercase; font-size: 11px; }
+  .verdict { background: var(--panel-3); border-left: 3px solid var(--teal); padding: 10px 12px; border-radius: 6px; font-size: 13px; margin: 8px 0 14px; line-height: 1.5; }
+  .section-title { font-size: 16px; font-weight: 700; margin: 22px 0 6px; color: var(--teal); }
+  .tag { display: inline-block; background: var(--panel-3); border-radius: 6px; padding: 2px 8px; font-size: 11px; margin: 2px; color: #ccc; }
+</style>
+</head>
+<body>
+{% set active_page = 'research' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Research Director</h1>
+  <p>Turns a strategy (winner or failure) into information: which rule creates the edge, which destroys it, whether it beats a dumb baseline, how fragile it is, and what T58 has learned across every strategy tested so far.</p>
+</div>
+
+{% if error %}
+<div class="error">{{ error }}</div>
+{% endif %}
+
+<form method="post" action="/research/run" enctype="multipart/form-data">
+
+  <div class="card">
+    <h2>1. Market data</h2>
+    {% if stored_datasets %}
+    <label>Use a previously stored dataset</label>
+    <select name="existing_dataset" onchange="researchDetectPipSize()">
+      <option value="">— none, I'm uploading new file(s) below —</option>
+      {% for g in dataset_groups %}
+      <optgroup label="{{ g.instrument }}">
+        {% for file in g.files %}
+        <option value="{{ file.full_name }}" {{ 'selected' if file.full_name == selected_dataset else '' }}>{{ file.name }} ({{ (file.size_bytes / 1024) | round(1) }} KB)</option>
+        {% endfor %}
+      </optgroup>
+      {% endfor %}
+    </select>
+    {% endif %}
+    <label>Or upload new CSV file(s)</label>
+    <input type="file" name="csv_file" accept=".csv,.tsv,.txt,.parquet,.zip,.7z" multiple onchange="researchDetectPipSize()">
+  </div>
+
+  <div class="card">
+    <h2>2. Strategy to analyze</h2>
+    <p class="help">Edge Decomposition, Ablation, and Signal Degradation need a Manual Strategy Builder config so T58 can identify individually removable rules -- pick one from your library below. Null Baselines, Trade Contribution, Conditional Expectancy, and the Research Director synthesis work on any strategy's trade list, but need one of these picked to generate that trade list.</p>
+    {% if manual_strategies %}
+    <label>Manual Strategy Builder library</label>
+    <select name="strategy_file">
+      {% for s in manual_strategies %}
+      <option value="{{ s.name }}" {{ 'selected' if s.name == selected_strategy else '' }}>{{ s.name }}</option>
+      {% endfor %}
+    </select>
+    {% else %}
+    <p class="help">No saved Manual Strategy Builder strategies found yet -- build and save one first (Manual tab), then come back here.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>3. Risk, prop rules, evaluation window</h2>
+    <div class="row">
+      <div><label>Account size ($)</label><input type="number" name="account_size" value="100000"></div>
+      <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" id="research_pip_size_field" value="0.0001"></div>
+    </div>
+    <button type="button" onclick="researchDetectPipSize()" style="margin-top:6px;background:none;border:1px solid var(--border-light);color:var(--teal);padding:9px 12px;border-radius:8px;font-size:13px;width:100%;">Detect pip size from data</button>
+    <p id="research_pip_detect_status" style="font-size:12px;margin-top:6px;"></p>
+    <div class="row" style="margin-top:10px;">
+      <div><label>Profit target (%)</label><input type="number" step="0.1" name="profit_target" value="8"></div>
+      <div><label>Daily loss limit (%)</label><input type="number" step="0.1" name="daily_loss" value="5"></div>
+      <div><label>Max drawdown (%)</label><input type="number" step="0.1" name="max_dd" value="10"></div>
+    </div>
+    <div class="row">
+      <div><label>Risk per trade (%)</label><input type="number" step="0.1" name="risk_value" value="1.0"></div>
+      <div><label>Rolling eval window (trading days)</label><input type="number" name="window_trading_days" value="30"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>4. Which analyses to run</h2>
+    <div class="checkline"><input type="checkbox" name="run_decomposition" id="cb1" checked><label for="cb1" style="margin:0;">Edge Decomposition (add one rule layer at a time)</label></div>
+    <div class="checkline"><input type="checkbox" name="run_ablation" id="cb2" checked><label for="cb2" style="margin:0;">Ablation Testing (remove one rule at a time)</label></div>
+    <div class="checkline"><input type="checkbox" name="run_null" id="cb3" checked><label for="cb3" style="margin:0;">Null Strategy Benchmark</label></div>
+    <div class="checkline"><input type="checkbox" name="run_degradation" id="cb4" checked><label for="cb4" style="margin:0;">Signal Degradation (Execution Fragility Score)</label></div>
+    <div class="checkline"><input type="checkbox" name="run_contribution" id="cb5" checked><label for="cb5" style="margin:0;">Trade Contribution Analysis (leave-X-out)</label></div>
+    <div class="checkline"><input type="checkbox" name="run_conditional" id="cb6" checked><label for="cb6" style="margin:0;">Conditional Expectancy Maps</label></div>
+    <div class="checkline"><input type="checkbox" name="run_regime" id="cb7" checked><label for="cb7" style="margin:0;">Regime Discovery (winners vs. losers, tested on holdout)</label></div>
+  </div>
+
+  <button class="run-btn" type="submit">RUN RESEARCH DIRECTOR</button>
+  <p style="text-align:center;font-size:12px;color:#888;margin-top:10px;">Runs synchronously -- typically seconds to low minutes, depending on dataset size and how many analyses are checked.</p>
+</form>
+
+{% if results %}
+<div class="section-title">Results</div>
+
+{% if results.decomposition %}
+<h3>Edge Decomposition</h3>
+<div class="verdict">{{ results.decomposition.verdict }}</div>
+<table>
+  <tr><th>Step</th><th>Trades</th><th>Expectancy (R)</th><th>Profit Factor</th><th>Pass Rate %</th><th>Max DD %</th></tr>
+  {% for s in results.decomposition.steps %}
+  <tr><td>{{ s.label }}</td><td>{{ s.row.total_trades }}</td><td>{{ s.row.expectancy_r if s.row.expectancy_r is not none else '—' }}</td><td>{{ s.row.profit_factor if s.row.profit_factor is not none else '—' }}</td><td>{{ s.row.pass_rate_pct if s.row.pass_rate_pct is not none else '—' }}</td><td>{{ s.row.max_drawdown_pct if s.row.max_drawdown_pct is not none else '—' }}</td></tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+{% if results.ablation %}
+<h3>Ablation Testing</h3>
+<div class="verdict">{{ results.ablation.verdict }}{% if results.ablation.simplification_suggestion %}<br>{{ results.ablation.simplification_suggestion }}{% endif %}</div>
+<table>
+  <tr><th>Variant</th><th>Trades</th><th>Pass Rate %</th><th>Expectancy (R)</th></tr>
+  {% for r in results.ablation.rows %}
+  <tr><td>{{ r.label }}</td><td>{{ r.total_trades }}</td><td>{{ r.pass_rate_pct if r.pass_rate_pct is not none else '—' }}</td><td>{{ r.expectancy_r if r.expectancy_r is not none else '—' }}</td></tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+{% if results.null_baselines %}
+<h3>Null Strategy Benchmark</h3>
+<div class="verdict">Edge contribution: <b>{{ results.null_baselines.edge_contribution or 'N/A' }}</b><br>{{ results.null_baselines.verdict }}</div>
+<table>
+  <tr><th>Strategy</th><th>Trades</th><th>Pass Rate %</th><th>Expectancy (R)</th></tr>
+  <tr style="font-weight:700;"><td>YOUR STRATEGY</td><td>{{ results.null_baselines.target.total_trades }}</td><td>{{ results.null_baselines.target.pass_rate_pct if results.null_baselines.target.pass_rate_pct is not none else '—' }}</td><td>{{ results.null_baselines.target.expectancy_r if results.null_baselines.target.expectancy_r is not none else '—' }}</td></tr>
+  {% for r in results.null_baselines.baselines %}
+  <tr><td>{{ r.label }}</td><td>{{ r.total_trades }}</td><td>{{ r.pass_rate_pct if r.pass_rate_pct is not none else '—' }}</td><td>{{ r.expectancy_r if r.expectancy_r is not none else '—' }}</td></tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+{% if results.degradation %}
+<h3>Signal Degradation — Execution Fragility Score</h3>
+<div class="verdict">{{ results.degradation.verdict }}</div>
+<table>
+  <tr><th>Test</th><th>Trades</th><th>Net Profit</th><th>Pass Rate %</th></tr>
+  <tr style="font-weight:700;"><td>{{ results.degradation.baseline.label }}</td><td>{{ results.degradation.baseline.total_trades }}</td><td>{{ results.degradation.baseline.net_profit }}</td><td>{{ results.degradation.baseline.pass_rate_pct if results.degradation.baseline.pass_rate_pct is not none else '—' }}</td></tr>
+  {% for r in results.degradation.stress_tests %}
+  <tr><td>{{ r.label }}</td><td>{{ r.total_trades }}</td><td>{{ r.net_profit if r.net_profit is not none else '—' }}</td><td>{{ r.pass_rate_pct if r.pass_rate_pct is not none else '—' }}</td></tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+{% if results.contribution %}
+<h3>Trade Contribution Analysis</h3>
+{% for f in results.contribution.flags %}<div class="verdict">{{ f }}</div>{% endfor %}
+<table>
+  <tr><th>Scenario</th><th>P&amp;L</th></tr>
+  <tr><td>Total P&amp;L</td><td>{{ results.contribution.total_pnl }}</td></tr>
+  {% for k, v in results.contribution.leave_out_pnl.items() %}
+  <tr><td>{{ k }}</td><td>{{ v }}</td></tr>
+  {% endfor %}
+  <tr><td>Excluding worst month</td><td>{{ results.contribution.pnl_excluding_worst_month }}</td></tr>
+  <tr><td>Excluding worst quarter</td><td>{{ results.contribution.pnl_excluding_worst_quarter }}</td></tr>
+</table>
+{% endif %}
+
+{% if results.conditional %}
+<h3>Conditional Expectancy Maps</h3>
+<p class="help">All trades: {{ results.conditional.all_trades_expectancy_r if results.conditional.all_trades_expectancy_r is not none else '—' }}R</p>
+{% for label, key in [('By hour','by_hour'), ('By day of week','by_day_of_week'), ('By month','by_month'), ('By direction','by_direction'), ('By volatility','by_volatility')] %}
+{% if results.conditional[key] %}
+<b>{{ label }}</b>
+<table>
+  <tr><th>Bucket</th><th>Trades</th><th>Expectancy (R)</th><th>Win %</th></tr>
+  {% for row in results.conditional[key] %}
+  <tr><td>{{ row.bucket }}</td><td>{{ row.n_trades }}</td><td>{{ row.expectancy_r if row.expectancy_r is not none else '—' }}</td><td>{{ row.win_rate_pct }}</td></tr>
+  {% endfor %}
+</table>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if results.regime %}
+<h3>Regime Discovery</h3>
+<div class="verdict">{{ results.regime.hypothesis or 'No strong hypothesis found.' }}<br>{{ results.regime.next_step }}</div>
+{% if results.regime.winning_trade_tendencies %}<p class="help">Winning trades tend to have: {% for t in results.regime.winning_trade_tendencies %}<span class="tag">{{ t }}</span>{% endfor %}</p>{% endif %}
+{% if results.regime.losing_trade_tendencies %}<p class="help">Losing trades tend to have: {% for t in results.regime.losing_trade_tendencies %}<span class="tag">{{ t }}</span>{% endfor %}</p>{% endif %}
+{% endif %}
+
+{% endif %}
+
+</div>
+</div>
+<script>
+  function researchDetectPipSize() {
+    const statusEl = document.getElementById('research_pip_detect_status');
+    const fileInput = document.querySelector('input[name="csv_file"]');
+    const datasetSelect = document.querySelector('select[name="existing_dataset"]');
+    const fd = new FormData();
+    let haveSource = false;
+    if (fileInput && fileInput.files && fileInput.files.length) {
+      for (const f of fileInput.files) fd.append('csv_file', f);
+      haveSource = true;
+    }
+    if (datasetSelect && datasetSelect.value) {
+      fd.append('existing_dataset', datasetSelect.value);
+      haveSource = true;
+    }
+    if (!haveSource) {
+      statusEl.style.color = '#ffcf7a';
+      statusEl.textContent = 'Select a market data CSV or a stored dataset in Step 1 first.';
+      return;
+    }
+    statusEl.style.color = '#888';
+    statusEl.textContent = 'Detecting...';
+    fetch('/data/detect-pip-size', { method: 'POST', body: fd })
+      .then(r => r.json().then(data => ({ ok: r.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok || data.error) {
+          statusEl.style.color = '#ff9d9d';
+          statusEl.textContent = data.error || "Couldn't detect pip size.";
+          return;
+        }
+        document.getElementById('research_pip_size_field').value = data.pip_size;
+        statusEl.style.color = '#b4ffcb';
+        statusEl.textContent = data.message;
+      })
+      .catch(err => {
+        statusEl.style.color = '#ff9d9d';
+        statusEl.textContent = "Couldn't detect: " + err;
+      });
+  }
+</script>
+</body>
+</html>

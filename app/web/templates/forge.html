@@ -63,7 +63,7 @@
     <h2>1. Market data</h2>
     {% if stored_datasets %}
     <label>Use a previously stored dataset</label>
-    <select name="existing_dataset">
+    <select name="existing_dataset" onchange="forgeDetectPipSize()">
       <option value="">— none, I'm uploading new file(s) below —</option>
       {% for g in dataset_groups %}
       <optgroup label="{{ g.instrument }}">
@@ -75,7 +75,8 @@
     </select>
     {% endif %}
     <label>Or upload new CSV file(s) (timestamp, open, high, low, close, volume)</label>
-    <input type="file" name="csv_file" accept=".csv,.tsv,.txt,.parquet,.zip,.7z" multiple>
+    <input type="file" name="csv_file" accept=".csv,.tsv,.txt,.parquet,.zip,.7z" multiple onchange="forgeDetectPipSize()">
+    <p style="font-size:12px;color:#888;margin:6px 0 0;">Pip size is auto-detected from whichever dataset you pick or upload above (Step 2, "Pip size" field) -- confirm it looks right for this instrument before running.</p>
   </div>
 
   <div class="card">
@@ -90,8 +91,10 @@
     </div>
     <div class="row">
       <div><label>Risk per trade (%)</label><input type="number" step="0.1" name="risk_value" value="1.0"></div>
-      <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" value="0.0001"></div>
+      <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" id="forge_pip_size_field" value="0.0001"></div>
     </div>
+    <button type="button" onclick="forgeDetectPipSize()" style="margin-top:6px;background:none;border:1px solid var(--border-light);color:var(--teal);padding:9px 12px;border-radius:8px;font-size:13px;width:100%;">Detect pip size from data</button>
+    <p id="forge_pip_detect_status" style="font-size:12px;margin-top:6px;"></p>
   </div>
 
   <div class="card">
@@ -156,5 +159,45 @@
 
 </div>
 </div>
+<script>
+  function forgeDetectPipSize() {
+    const statusEl = document.getElementById('forge_pip_detect_status');
+    const fileInput = document.querySelector('input[name="csv_file"]');
+    const datasetSelect = document.querySelector('select[name="existing_dataset"]');
+    const fd = new FormData();
+    let haveSource = false;
+    if (fileInput && fileInput.files && fileInput.files.length) {
+      for (const f of fileInput.files) fd.append('csv_file', f);
+      haveSource = true;
+    }
+    if (datasetSelect && datasetSelect.value) {
+      fd.append('existing_dataset', datasetSelect.value);
+      haveSource = true;
+    }
+    if (!haveSource) {
+      statusEl.style.color = '#ffcf7a';
+      statusEl.textContent = 'Select a market data CSV or a stored dataset in Step 1 first.';
+      return;
+    }
+    statusEl.style.color = '#888';
+    statusEl.textContent = 'Detecting...';
+    fetch('/data/detect-pip-size', { method: 'POST', body: fd })
+      .then(r => r.json().then(data => ({ ok: r.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok || data.error) {
+          statusEl.style.color = '#ff9d9d';
+          statusEl.textContent = data.error || "Couldn't detect pip size.";
+          return;
+        }
+        document.getElementById('forge_pip_size_field').value = data.pip_size;
+        statusEl.style.color = '#b4ffcb';
+        statusEl.textContent = data.message;
+      })
+      .catch(err => {
+        statusEl.style.color = '#ff9d9d';
+        statusEl.textContent = "Couldn't detect: " + err;
+      });
+  }
+</script>
 </body>
 </html>
