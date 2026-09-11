@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Hedge Fund Manager — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  .card p.help { font-size: 12px; color: #888; margin: 0 0 10px; line-height: 1.5; }
+  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  input[type=text], input[type=number], select, textarea {
+    width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font-size: 15px;
+  }
+  input:focus, select:focus, textarea:focus {
+    outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(53,224,176,0.15);
+  }
+  .row { display: flex; gap: 10px; }
+  .row > div { flex: 1; }
+  input[type=file] { width: 100%; color: #ccc; }
+  input[type=checkbox] { width: auto; }
+  .checkbox-row { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
+  .checkbox-row label { margin: 0; }
+  .submit-btn {
+    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: #04120e;
+    font-size: 16px; font-weight: 700; margin-top: 6px;
+    box-shadow: 0 0 22px rgba(53,224,176,0.35);
+  }
+  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .notice { background: #142a1a; border: 1px solid #235a32; color: #b4ffcb; padding: 12px; border-radius: 10px; margin-bottom: 10px; font-size: 13px; }
+  .warn { background: #2a2414; border: 1px solid #6b5a23; color: #ffe4b4; padding: 10px; border-radius: 10px; margin-bottom: 8px; font-size: 13px; }
+  .asset-block { border: 1px solid var(--border-light); border-radius: 10px; padding: 10px; margin-bottom: 10px; }
+  .asset-block h3 { font-size: 12px; text-transform: uppercase; color: #999; margin: 0 0 8px; }
+  .headline { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 10px; }
+  .stat { background: var(--panel-3); border: 1px solid var(--border-light); border-radius: 10px; padding: 10px; }
+  .stat .label { font-size: 10px; color: #888; text-transform: uppercase; }
+  .stat .value { font-size: 16px; font-weight: 700; margin-top: 2px; }
+  .desk-flow { display: flex; gap: 6px; flex-wrap: wrap; font-size: 12px; color: #9ecbff; margin-bottom: 10px; }
+  .desk-flow span { background: var(--panel-3); border: 1px solid var(--border-light); border-radius: 999px; padding: 4px 10px; }
+  table.sweep { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
+  table.sweep th, table.sweep td { padding: 6px 8px; border-bottom: 1px solid var(--border-light); text-align: right; }
+  table.sweep th:first-child, table.sweep td:first-child { text-align: left; }
+  .journal { white-space: pre-wrap; font-size: 13px; line-height: 1.6; background: var(--panel-3); border: 1px solid var(--border-light); border-radius: 10px; padding: 12px; }
+  details summary { cursor: pointer; }
+</style>
+</head>
+<body>
+{% set active_page = active_page|default('hedge_fund') %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Hedge Fund Manager</h1>
+  <p>A four-desk pipeline: Research (view generation with uncertainty) &rarr; Portfolio (Black-Litterman blend into weights) &rarr; Execution (weights walked forward into a cost-aware equity curve) &rarr; Oversight (a read-only journal of what happened). Everything runs in paper mode against your uploaded market data -- nothing here places a live order.</p>
+  <div class="desk-flow">
+    <span>1. Research</span><span>&rarr;</span><span>2. Portfolio (Black-Litterman)</span><span>&rarr;</span><span>3. Execution</span><span>&rarr;</span><span>4. Oversight journal</span>
+  </div>
+</div>
+
+{% if error %}
+<div class="error">{{ error }}</div>
+{% endif %}
+
+{% if result %}
+<div class="card">
+  <h2>Result</h2>
+  <p class="help">Book: {{ result.assets | join(', ') }} &middot; {{ result.num_cycles }} rebalance cycles</p>
+  <div class="headline">
+    <div class="stat"><div class="label">Total return</div><div class="value">{{ '%.1f' % result.stats.total_return_pct }}%</div></div>
+    <div class="stat"><div class="label">CAGR</div><div class="value">{{ '%.1f' % result.stats.cagr_pct }}%</div></div>
+    <div class="stat"><div class="label">Max drawdown</div><div class="value">{{ '%.1f' % result.stats.max_drawdown_pct }}%</div></div>
+    <div class="stat"><div class="label">Sharpe</div><div class="value">{{ '%.2f' % result.stats.sharpe_ratio }}</div></div>
+    <div class="stat"><div class="label">Avg turnover / cycle</div><div class="value">{{ '%.1f' % result.stats.avg_turnover_pct }}%</div></div>
+    <div class="stat"><div class="label">Transaction costs</div><div class="value">${{ '%.0f' % result.stats.total_transaction_costs }}</div></div>
+  </div>
+
+  {% if result.equity_svg %}
+  <p class="help" style="margin-top:14px;">Equity curve (${{ '%.0f' % result.equity_start }} &rarr; ${{ '%.0f' % result.equity_end }})</p>
+  {{ result.equity_svg | safe }}
+  {% endif %}
+
+  {% if result.last_cycle %}
+  <p class="help" style="margin-top:14px;">Most recent rebalance ({{ result.last_cycle.timestamp }}) -- target weights:</p>
+  <table class="sweep">
+    <tr><th>Asset</th><th>Weight</th><th>Prior &micro;</th><th>Posterior &micro;</th></tr>
+    {% for asset, w in result.last_cycle.target_weights.items() %}
+    <tr><td>{{ asset }}</td><td>{{ '%+.1f' % (w * 100) }}%</td><td>{{ '%+.1f' % (result.last_cycle.prior_mu.get(asset, 0) * 100) }}%</td><td>{{ '%+.1f' % (result.last_cycle.posterior_mu.get(asset, 0) * 100) }}%</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  {% if result.confidence_sweep %}
+  <p class="help" style="margin-top:14px;">The safety valve: as the confidence dial falls, weights collapse toward equal-weight equilibrium (snapshot using the full data window, illustrative only -- not walk-forward).</p>
+  <table class="sweep">
+    <tr><th>Confidence</th>{% for asset in result.assets %}<th>{{ asset }}</th>{% endfor %}</tr>
+    {% for row in result.confidence_sweep %}
+    <tr><td>{{ '%.2f' % row.confidence }}</td>{% for asset in result.assets %}<td>{{ '%.1f' % (row.weights.get(asset, 0) * 100) }}%</td>{% endfor %}</tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  {% for w in result.run_warnings %}<div class="warn">{{ w }}</div>{% endfor %}
+
+  <p class="help" style="margin-top:14px;">Oversight journal{% if result.journal_note %} <span style="color:#e0a835;">({{ result.journal_note }})</span>{% endif %}</p>
+  <div class="journal">{{ result.journal }}</div>
+</div>
+{% endif %}
+
+<form method="post" action="/hedge-fund/run" enctype="multipart/form-data">
+
+  <div class="card">
+    <h2>1. Assets in the book (at least 2 required, up to {{ max_assets }})</h2>
+    <p class="help">Each slot is one instrument's market data -- the research desk generates an independent view for each, the portfolio desk blends them via Black-Litterman into one set of weights.</p>
+    {% for i in range(1, max_assets + 1) %}
+    <div class="asset-block">
+      <h3>Asset {{ i }}{% if i > 2 %} (optional){% endif %}</h3>
+      {% if stored_datasets %}
+      <label>Use a previously stored dataset</label>
+      <select name="asset{{ i }}_existing_dataset">
+        <option value="">— none —</option>
+        {% for g in dataset_groups %}
+        <optgroup label="{{ g.instrument }}">
+          {% for file in g.files %}
+          <option value="{{ file.full_name }}">{{ file.name }}{{ ' — empty' if file.empty else '' }}</option>
+          {% endfor %}
+        </optgroup>
+        {% endfor %}
+      </select>
+      {% endif %}
+      <label>Or upload a CSV for this instrument</label>
+      <input type="file" name="asset{{ i }}_csv" accept=".csv,.tsv,.txt,.parquet,.zip,.7z">
+      <label>Label (optional -- defaults to the dataset/file name)</label>
+      <input type="text" name="asset{{ i }}_label" placeholder="e.g. SPY">
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="card">
+    <h2>2. Research desk (view generation)</h2>
+    <p class="help">Samples many resampled paths per asset and uses the mean as the view, the dispersion as the confidence fed to the portfolio desk -- the same architecture the source article uses Kronos for, without vendoring an unproven forecasting model. (Per-asset "use one of my saved strategies as its view" is available from the Python API; this form always uses the statistical bootstrap for now.)</p>
+    <div class="row">
+      <div><label>Lookback (bars)</label><input type="number" name="lookback_bars" value="100"></div>
+      <div><label>Forecast horizon (bars)</label><input type="number" name="horizon_bars" value="5"></div>
+    </div>
+    <label>Sampled paths per asset</label>
+    <input type="number" name="n_samples" value="32">
+  </div>
+
+  <div class="card">
+    <h2>3. Portfolio desk (Black-Litterman)</h2>
+    <p class="help">Confidence is the Omega dial: 1.0 trusts the research desk's own measured dispersion exactly; near 0 makes the optimizer ignore the views and fall back to equal-weight equilibrium.</p>
+    <label>Confidence (0.0 - 1.0)</label>
+    <input type="number" step="0.05" min="0" max="1" name="confidence" value="0.5">
+    <div class="checkbox-row">
+      <input type="checkbox" id="long_only" name="long_only" checked>
+      <label for="long_only">Long-only (no short positions)</label>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>4. Execution desk (rebalance + costs)</h2>
+    <div class="row">
+      <div><label>Initial balance</label><input type="number" name="initial_balance" value="100000"></div>
+      <div><label>Rebalance every (bars)</label><input type="number" name="rebalance_every_bars" value="5"></div>
+    </div>
+    <div class="row">
+      <div><label>Max turnover per cycle (0-1, blank = uncapped)</label><input type="number" step="0.05" name="max_turnover" value="0.5"></div>
+      <div><label>Transaction cost (bps, each way)</label><input type="number" step="1" name="transaction_cost_bps" value="10"></div>
+    </div>
+    <label>Minimum trade size (fraction of equity, skips dust trades)</label>
+    <input type="number" step="0.001" name="min_trade_frac" value="0.005">
+  </div>
+
+  <div class="card">
+    <h2>5. Oversight desk (journal)</h2>
+    <div class="checkbox-row">
+      <input type="checkbox" id="write_journal" name="write_journal" checked>
+      <label for="write_journal">Generate a plain-English run journal (uses your configured Ollama, AI Assistant tab; falls back to a deterministic summary if Ollama isn't set up)</label>
+    </div>
+    <p class="help">This desk is read-only by construction -- it summarizes a FINISHED run and cannot place, size, or modify any order.</p>
+  </div>
+
+  <button class="submit-btn" type="submit">Run Hedge Fund Manager</button>
+</form>
+
+</div>
+</div>
+</body>
+</html>
