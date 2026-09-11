@@ -78,6 +78,7 @@ from app.backtest.adaptive_risk import build_limit_aware_preset
 from app.backtest.engine import run_backtest
 from app.backtest.risk import RiskConfig
 from app.evolution import checkpoint as evo_checkpoint
+from app.evolution.family_budget import FamilyBudgetTracker
 from app.evolution.knowledge_graph import DEFAULT_KG_PATH, KnowledgeGraph, feature_vector_for_spec
 from app.evolution.prop_fitness import PropFitnessBreakdown, compute_prop_fitness
 from app.evolution.surrogate import FamilySurrogateBank
@@ -87,6 +88,7 @@ from app.optimize.refinement import _mutate, _stressed_risk_config
 from app.orchestration.resource_guard import safe_worker_count
 from app.prop.simulator import PropRules, simulate_account, summarize_single_run
 from app.reports.crash_log import log_crash
+from app.search.graveyard import GraveyardEntry, param_signature, record_rejections
 from app.search.robustness import parameter_neighborhood_robustness, run_walk_forward
 from app.search.strategy_space import (
     StrategySpaceError,
@@ -333,6 +335,17 @@ class EvolutionConfig:
     min_trades: int = 20
     min_profit_factor: float = 1.05
     max_drawdown_buffer_mult: float = 1.5
+    # FIX (2026-09-11): _handle_empty_prefilter used to multiply this by
+    # 1.25 every auto-relax cycle with NO ceiling -- on a long run stuck
+    # empty for hundreds of generations (see the module-level note on
+    # _handle_empty_prefilter) this compounds to an astronomically large,
+    # physically meaningless number (observed: >10^13x in a real run's
+    # log) that no longer means anything as a risk control. Once the
+    # buffer crosses this cap, any real drawdown is already being
+    # accepted -- capping it doesn't change what passes, it just stops
+    # the number itself from becoming nonsense and misleading anyone
+    # reading the log into thinking drawdown was ever the bottleneck.
+    max_drawdown_buffer_mult_cap: float = 8.0
 
     # Robustness / OOS
     robustness_neighbors: int = 4
@@ -374,6 +387,39 @@ class EvolutionConfig:
     # edges" stays true for the whole run, not just generation 0.
     min_immigrants_per_family: int = 2   # every family gets at least this many fresh candidates, every generation
     max_elite_frac_per_family: float = 0.5   # no single family may hold more than this share of the elite/breeding pool
+
+    # Adaptive family budget -- the graduated, intra-run counterpart to
+    # family_health's binary cross-run exclusion (see
+    # app.evolution.family_budget's module docstring for the full
+    # rationale): every generation, the per-family immigrant count
+    # above is scaled by a rolling multiplier based on THIS run's own
+    # pre-filter/stress survival rate per family, so a family that's
+    # actually converting into survivors gets more of the population
+    # budget and a family that's producing nothing (but hasn't crossed
+    # family_health's much stricter 30-sample dead-end bar) gets less --
+    # never below min_immigrants_per_family, and always recoverable if
+    # the family starts working again later in the run.
+    adaptive_family_budget_enabled: bool = True
+    adaptive_family_budget_window: int = 10
+    adaptive_family_budget_min_frac: float = 0.4
+    adaptive_family_budget_max_frac: float = 2.5
+
+    # Stress-failure stagnation: FIX (2026-09-11) -- the generation loop
+    # used to fall back to `stress_survivors or cpcv_pool` when NOTHING
+    # survived the stress test, which let a candidate that had just
+    # FAILED stress testing at N-x costs get promoted to the leaderboard
+    # as "WINNER," logged into the journal with a confidence label, and
+    # (worst of all) bred from as next generation's elite seed -- see
+    # _run_generation's own comment at the cluster/elite step for the
+    # full explanation. That fallback is now removed; when stress
+    # produces zero survivors, elites for the next generation come from
+    # near-miss seeding instead (same mechanism _handle_empty_prefilter
+    # already uses for an empty pre-filter). This threshold controls how
+    # many CONSECUTIVE stress-failure generations trigger a full,
+    # elites-bypassing random-immigrant reset generation, to break out of
+    # a GA that's stuck refining mutations of an idea that has already
+    # proven it cannot survive realistic costs.
+    stress_failure_stagnation_threshold: int = 5
 
     # Surrogate-model-guided search (replaces blind mutation for elite
     # breeding once enough history exists): a per-family Gaussian Process
@@ -615,6 +661,18 @@ class EvolutionRunner:
         # randomly until a true survivor appears on its own.
         self._near_miss_seeds: list[tuple[dict, dict]] = []
         self._consecutive_empty_generations = 0
+        # FIX (2026-09-11): companion counter to _consecutive_empty_generations,
+        # but for "reached full-eval and even CPCV, but NOTHING survived the
+        # stress test" -- see stress_failure_stagnation_threshold's docstring
+        # and _run_generation's cluster/elite step.
+        self._consecutive_stress_failures = 0
+        self._force_full_immigrant_next = False
+        self._pending_family_counts: dict | None = None
+        self._family_budget = FamilyBudgetTracker(
+            window=self.cfg.adaptive_family_budget_window,
+            min_frac=self.cfg.adaptive_family_budget_min_frac,
+            max_frac=self.cfg.adaptive_family_budget_max_frac,
+        )
         self.resumed = False                                          # set True if a checkpoint was loaded
         self._pool: ProcessPoolExecutor | None = None
         self._pool_tmp_dir: tempfile.TemporaryDirectory | None = None
@@ -896,7 +954,40 @@ class EvolutionRunner:
             "leaderboard_size": len(self.leaderboard),
             "resumed": self.resumed,
             "family_health": getattr(self, "family_health_status", None),
+            # Adaptive family budget (this run's own rolling per-family
+            # survival rate -> immigrant-count multiplier) -- distinct
+            # from family_health above, which is the binary, cross-run
+            # dead-end exclusion. See app.evolution.family_budget.
+            "family_budget": self._family_budget.status(),
+            "consecutive_empty_generations": self._consecutive_empty_generations,
+            "consecutive_stress_failures": self._consecutive_stress_failures,
+            "max_drawdown_buffer_mult": self.cfg.max_drawdown_buffer_mult,
         }
+
+    def graveyard_summary(self, top_n: int = 25) -> list[dict]:
+        """The Strategy Graveyard's 'dead neighborhoods, most-tested
+        first' view for this run -- see app.search.graveyard. Reads the
+        same on-disk log _write_graveyard_entries appends to, so this
+        reflects every stress-test failure from this run AND any prior
+        resumed run against the same checkpoint path."""
+        from app.search.graveyard import load_graveyard, summarize_graveyard
+        path = Path(self.cfg.tested_log_path).with_name("strategy_graveyard.jsonl")
+        rows = load_graveyard(path)
+        return [c.to_dict() for c in summarize_graveyard(rows, top_n=top_n)]
+
+    def finalists_report(self, top_n: int = 10, window_trading_days: int | None = None) -> list[dict]:
+        """Runs the full payout funnel + Pareto frontier (see
+        app.evolution.finalists) on the current leaderboard. Expensive
+        relative to a status() call (a full Monte Carlo survival
+        analysis per finalist, plus an even more expensive Rolling
+        Evaluation Windows scan per finalist if window_trading_days is
+        given) -- call on demand, not every generation."""
+        from app.evolution.finalists import build_finalist_reports, pareto_frontier_for_finalists
+        reports = build_finalist_reports(
+            self.leaderboard, self.prop_rules, top_n=top_n, window_trading_days=window_trading_days,
+        )
+        pareto_frontier_for_finalists(reports)
+        return [r.to_dict() for r in reports]
 
     def tested_candidates(self, limit: int = 500) -> list[dict]:
         """The "what was actually tested" record -- every candidate the
@@ -1090,6 +1181,7 @@ class EvolutionRunner:
         prefilter_elapsed = time.time() - t0
         self._log(f"PRE-FILTER + BACKTEST: {len(stage1_survivors)}/{len(population)} survived "
                   f"(took {prefilter_elapsed:.1f}s).")
+        self._record_family_budget_prefilter(population, stage1_survivors)
         if not stage1_survivors:
             self._handle_empty_prefilter(gen, rejection_counts)
             if near_miss_top:
@@ -1117,24 +1209,80 @@ class EvolutionRunner:
         stress_survivors = self._stress_test(cpcv_pool)
         self._log(f"STRESS TEST ({self.cfg.stress_cost_multiplier:g}x costs): "
                   f"{len(stress_survivors)}/{len(cpcv_pool)} still fitness-positive.")
+        self._record_family_budget_stress(cpcv_pool, stress_survivors)
 
-        clustered = self._cluster(stress_survivors or cpcv_pool)
-        self._log(f"CLUSTER: {len(clustered)} distinct candidates remain.")
+        # FIX (2026-09-11): this used to be `self._cluster(stress_survivors
+        # or cpcv_pool)` -- when NOTHING survives the stress test (which,
+        # per Owen's own multi-hundred-generation log, was true almost
+        # every generation), that fallback quietly promoted a candidate
+        # that had just FAILED stress testing at N-x costs to "WINNER,"
+        # put it on the leaderboard, and -- critically -- fed it into
+        # self._elites below, so the NEXT generation bred mutated children
+        # from a strategy already proven not to survive realistic costs.
+        # Repeated over hundreds of generations, that is exactly the
+        # "100% similarity to previously tested strategies, no novel
+        # component" stagnation pattern in the uploaded log: the GA was
+        # refining a dead neighborhood because nothing ever told it the
+        # neighborhood was dead.
+        #
+        # Now: clustering/elite-seeding only ever draws from GENUINE
+        # stress survivors. Every cpcv_pool candidate that did NOT survive
+        # stress gets a Strategy Graveyard entry (with the actual
+        # robustness/CPCV/Monte Carlo numbers that killed it -- see
+        # _graveyard_entries_for_stress_failures) instead of silently
+        # vanishing or getting mislabeled a winner.
+        stress_failures = [r for r in cpcv_pool if id(r) not in {id(s) for s in stress_survivors}]
+        if stress_failures:
+            self._write_graveyard_entries(stress_failures, gen, stage_died="stress")
 
-        clustered.sort(key=lambda r: r.fitness.final_score, reverse=True)
-        new_elites = self._diversify_elites(clustered)
+        if stress_survivors:
+            self._consecutive_stress_failures = 0
+            clustered = self._cluster(stress_survivors)
+            clustered.sort(key=lambda r: r.fitness.final_score, reverse=True)
+            new_elites = self._diversify_elites(clustered)
+        else:
+            # No genuine survivor this generation -- breed next generation
+            # from the closest near-misses (ranked by fitness, same
+            # mechanism _handle_empty_prefilter already uses) instead of
+            # from a disguised failure. Leaderboard/library are untouched
+            # this generation (nothing here has earned a spot on either).
+            clustered = []
+            new_elites = []
+            ranked_failures = sorted(cpcv_pool, key=lambda r: r.fitness.final_score, reverse=True)
+            self._near_miss_seeds = [(r.spec, r.meta) for r in ranked_failures[: self.cfg.elite_keep]]
+            self._consecutive_stress_failures += 1
+            self._log(
+                f"  No candidate survived the stress test this generation -- breeding next generation "
+                f"from the {len(self._near_miss_seeds)} closest near-misses instead of a disguised failure."
+            )
+            if self._consecutive_stress_failures >= self.cfg.stress_failure_stagnation_threshold:
+                self._log(
+                    f"  STAGNATION: {self._consecutive_stress_failures} generations in a row produced zero "
+                    f"stress-test survivors -- forcing a full random-immigrant generation next round instead "
+                    f"of continuing to refine mutations of ideas that keep failing under realistic costs."
+                )
+                self._force_full_immigrant_next = True
+                self._consecutive_stress_failures = 0
 
         self._record_generation_to_knowledge_graph(evaluated, {r.candidate_id for r in new_elites})
         self._append_tested_log_full_eval(evaluated, gen)
-        self._update_leaderboard(new_elites)
-        self._maybe_save_to_library(new_elites)
+        if new_elites:
+            self._update_leaderboard(new_elites)
+            self._maybe_save_to_library(new_elites)
         self._write_journal_entry(gen, population, stage1_survivors, evaluated, cpcv_pool, stress_survivors, new_elites)
 
         elapsed = time.time() - t0
         self._log(f"Generation {gen} complete in {elapsed:.1f}s. Best fitness so far: "
                   f"{self.leaderboard[0].fitness.final_score:.2f}" if self.leaderboard else f"Generation {gen} complete in {elapsed:.1f}s.")
 
-        self._elites = [(r.spec, r.meta) for r in new_elites]
+        if new_elites:
+            self._elites = [(r.spec, r.meta) for r in new_elites]
+        else:
+            # Nothing genuinely survived -- clear stale elites rather than
+            # keep breeding from last generation's (this run's _generate_
+            # population already falls back to self._near_miss_seeds,
+            # updated above, whenever self._elites is empty).
+            self._elites = []
         self._save_checkpoint(next_generation=gen + 1)
         # Every one of these can hold a full backtest's worth of Trade
         # objects (evaluated/cpcv_pool/stress_survivors/clustered all
@@ -1159,18 +1307,57 @@ class EvolutionRunner:
         self._log(f"  Rejection breakdown -- {breakdown}.")
         self._consecutive_empty_generations += 1
         if self._consecutive_empty_generations >= self.cfg.auto_relax_after_empty_generations:
-            old_trades, old_pf = self.cfg.min_trades, self.cfg.min_profit_factor
+            old_trades, old_pf, old_dd = self.cfg.min_trades, self.cfg.min_profit_factor, self.cfg.max_drawdown_buffer_mult
             self.cfg.min_trades = max(5, int(self.cfg.min_trades * 0.6))
             self.cfg.min_profit_factor = max(1.0, round(self.cfg.min_profit_factor * 0.9, 3))
-            self.cfg.max_drawdown_buffer_mult = round(self.cfg.max_drawdown_buffer_mult * 1.25, 3)
+            # FIX (2026-09-11): capped -- see max_drawdown_buffer_mult_cap's
+            # docstring. Below the cap this behaves exactly as before.
+            self.cfg.max_drawdown_buffer_mult = min(
+                self.cfg.max_drawdown_buffer_mult_cap,
+                round(self.cfg.max_drawdown_buffer_mult * 1.25, 3),
+            )
+            # "Floored" only looks at min_trades/min_profit_factor -- the
+            # two levers that actually gate "unprofitable"/"profit_factor"
+            # rejections, which is what a real stuck run's breakdown
+            # usually shows (see the docstring above). The drawdown
+            # buffer is deliberately excluded from this check: it can
+            # still be climbing toward its own cap for several more
+            # cycles after trades/PF are floored, and waiting for IT to
+            # also cap out before escaping would delay the fix on
+            # exactly the runs that need it soonest.
+            floored = self.cfg.min_trades == old_trades == 5 and self.cfg.min_profit_factor == old_pf == 1.0
             self._log(
                 f"  AUTO-RELAX: {self._consecutive_empty_generations} generations in a row produced zero "
                 f"pre-filter survivors, so the thresholds were automatically loosened -- min trades "
                 f"{old_trades} -> {self.cfg.min_trades}, min profit factor {old_pf:.2f} -> "
-                f"{self.cfg.min_profit_factor:.2f}, drawdown buffer x{self.cfg.max_drawdown_buffer_mult:.2f}. "
+                f"{self.cfg.min_profit_factor:.2f}, drawdown buffer x{self.cfg.max_drawdown_buffer_mult:.2f}"
+                f"{' (capped)' if self.cfg.max_drawdown_buffer_mult >= self.cfg.max_drawdown_buffer_mult_cap else ''}. "
                 f"If generations keep coming back empty even after this, the market data or the selected "
                 f"families likely can't produce a profitable strategy at all on this instrument/timeframe."
             )
+            # FIX (2026-09-11): the block above used to be the ENTIRE
+            # response to "stuck empty," forever -- but min_trades and
+            # min_profit_factor both hit hard floors quickly (5 trades,
+            # PF 1.0), after which every subsequent "AUTO-RELAX" cycle
+            # was a no-op for both of them and only kept inflating the
+            # (now capped) drawdown buffer, a constraint the rejection
+            # breakdown usually shows was never the actual blocker
+            # (see the module-level real-run example: "profit_factor: 91,
+            # unprofitable: 91" -- zero drawdown rejections). Once
+            # thresholds are genuinely floored, relaxing them further
+            # changes nothing; the real fix is to stop breeding
+            # children from whatever's currently seeding this dead
+            # neighborhood and give every family a fresh, full-strength
+            # random trial instead.
+            if floored:
+                self._log(
+                    "  STAGNATION: pre-filter thresholds are already at their floor (min trades 5, "
+                    "min profit factor 1.0) -- further relaxing them will not help. Forcing a full "
+                    "random-immigrant generation (bypassing elite mutation) to give every active family "
+                    "a fresh, full-strength trial instead of continuing to refine whatever seeded this "
+                    "dead neighborhood."
+                )
+                self._force_full_immigrant_next = True
             self._consecutive_empty_generations = 0
 
     def _finish_empty_generation(self, gen, population, evaluated=None, elapsed: float | None = None) -> None:
@@ -1226,14 +1413,40 @@ class EvolutionRunner:
         the entire run instead of only at generation 0.
         """
         seed = self.cfg.random_seed + gen
+
+        # FIX (2026-09-11): when _handle_empty_prefilter's floor-detection
+        # trips (see its docstring), bypass elite mutation entirely for
+        # ONE generation -- pure random stratified immigrants across every
+        # active family at full population size, same as generation 0.
+        # This is what actually breaks a GA that's spent many generations
+        # only ever refining mutations of whatever seeded the current
+        # elite/near-miss pool.
+        force_full_immigrant = self._force_full_immigrant_next
+        if force_full_immigrant:
+            self._force_full_immigrant_next = False
+            self._log(f"  GENERATE: forcing a full random-immigrant generation (elite mutation skipped this round).")
+            elites = []
+
         n_immigrants = self.cfg.population_size if not elites else max(1, int(self.cfg.population_size * self.cfg.random_immigrant_frac))
 
         active_families = list(self.cfg.families) if self.cfg.families else list(list_families().keys())
         n_fam = max(1, len(active_families))
-        per_family = max(self.cfg.min_immigrants_per_family, n_immigrants // n_fam)
+        base_per_family = max(self.cfg.min_immigrants_per_family, n_immigrants // n_fam)
+
+        # Adaptive family budget (see app.evolution.family_budget's module
+        # docstring): scales base_per_family by this run's own rolling
+        # per-family survival rate. A family with no history yet gets
+        # multiplier 1.0 (base_per_family unchanged); disabled entirely
+        # falls back to the plain uniform base_per_family for every family,
+        # identical to behavior before this existed.
+        budget_multipliers = (
+            self._family_budget.multipliers(active_families)
+            if self.cfg.adaptive_family_budget_enabled else {fam: 1.0 for fam in active_families}
+        )
 
         out: list[tuple[str, dict, dict]] = []
         for i, fam in enumerate(active_families):
+            per_family = max(self.cfg.min_immigrants_per_family, round(base_per_family * budget_multipliers.get(fam, 1.0)))
             try:
                 fam_space = generate_search_space(
                     mode="family", family=fam,
@@ -1761,8 +1974,111 @@ class EvolutionRunner:
             lines.append("")
             lines.append(self.knowledge_graph.describe(feature_vector_for_spec(winner.spec, winner.meta)))
         else:
-            lines.append("WINNER: none this generation")
+            # FIX (2026-09-11): previously unreachable in practice --
+            # new_elites used to always contain the best PRE-stress
+            # candidate even when stress_survivors was empty (see
+            # _run_one_generation's old `stress_survivors or cpcv_pool`
+            # fallback), so this branch almost never fired even on a run
+            # where every single generation's "winner" had actually failed
+            # the stress test. Now that new_elites is only ever populated
+            # from genuine stress survivors, this is the honest, common
+            # case for a hard search -- shown with the closest near-miss
+            # for context instead of a bare "none," so the journal still
+            # tells a story (see app.search.graveyard for the full
+            # per-candidate failure detail behind this near-miss).
+            lines.append("WINNER: none this generation (no candidate survived the stress test)")
             lines.append("CONFIDENCE: LOW")
+            near_miss = sorted(cpcv_pool, key=lambda r: r.fitness.final_score, reverse=True)[:1]
+            if near_miss:
+                nm = near_miss[0]
+                lines.append("")
+                lines.append(
+                    f"Closest near-miss: {nm.candidate_id} (PROP FITNESS {nm.fitness.final_score:.2f}) -- "
+                    f"failed the stress test at {self.cfg.stress_cost_multiplier:g}x costs; see the Strategy "
+                    f"Graveyard for full detail on why."
+                )
         entry = "\n".join(lines)
         self.journal.append(entry)
         self._log("\n" + entry + "\n")
+
+    # -- adaptive family budget bookkeeping -----------------------------------
+    def _record_family_budget_prefilter(self, population: list, stage1_survivors: list) -> None:
+        """Tallies this generation's per-family tested/prefilter-passed
+        counts and pre-registers them with the family budget tracker --
+        finished off by _record_family_budget_stress once the stress
+        stage has also run, so both halves of one generation's counts
+        land in the tracker together (see app.evolution.family_budget)."""
+        if not self.cfg.adaptive_family_budget_enabled:
+            return
+        tested: dict[str, int] = {}
+        for _cid, _spec, meta in population:
+            fam = meta.get("family", "?")
+            tested[fam] = tested.get(fam, 0) + 1
+        passed: dict[str, int] = {}
+        for item in stage1_survivors:
+            meta = item[2]  # (cid, spec, meta, bt)
+            fam = meta.get("family", "?")
+            passed[fam] = passed.get(fam, 0) + 1
+        self._pending_family_counts = {
+            fam: {"tested": n, "prefilter_passed": passed.get(fam, 0), "stress_passed": 0}
+            for fam, n in tested.items()
+        }
+
+    def _record_family_budget_stress(self, cpcv_pool: list, stress_survivors: list) -> None:
+        if not self.cfg.adaptive_family_budget_enabled:
+            return
+        pending = getattr(self, "_pending_family_counts", None)
+        if pending is None:
+            return
+        survivor_ids = {id(r) for r in stress_survivors}
+        for r in cpcv_pool:
+            fam = (r.meta or {}).get("family", "?")
+            if fam not in pending:
+                pending[fam] = {"tested": 0, "prefilter_passed": 0, "stress_passed": 0}
+            if id(r) in survivor_ids:
+                pending[fam]["stress_passed"] += 1
+        self._family_budget.record_generation(pending)
+        self._pending_family_counts = None
+
+    # -- strategy graveyard ----------------------------------------------------
+    def _write_graveyard_entries(self, records: list, gen: int, stage_died: str) -> None:
+        """Builds and persists one GraveyardEntry per record that reached
+        full evaluation and CPCV but died at `stage_died` -- see
+        app.search.graveyard's module docstring for why this is separate
+        from the cheap prefilter rejection log."""
+        entries = []
+        for r in records:
+            fam = (r.meta or {}).get("family", "?")
+            config = (r.spec or {}).get("config")
+            robustness = r.robustness or {}
+            stability_pct = None
+            if robustness.get("stability_ratio") is not None:
+                stability_pct = max(0.0, min(1.0, float(robustness["stability_ratio"]))) * 100.0
+            oos_result = None
+            if r.walk_forward is not None:
+                eff = r.walk_forward.get("walk_forward_efficiency")
+                if eff is not None:
+                    oos_result = "negative" if eff < 0 else "positive"
+            raw_pass_pct = (r.mc_summary or {}).get("evaluation_pass_probability")
+            mc_failure_pct = (100.0 - raw_pass_pct) if raw_pass_pct is not None else None
+
+            reason = (r.fitness.notes[0] if (r.fitness and r.fitness.notes) else None) or (
+                f"Failed the stress test at {self.cfg.stress_cost_multiplier:g}x execution costs "
+                "-- net profit went negative once realistic costs were applied."
+            )
+            entries.append(GraveyardEntry(
+                candidate_id=r.candidate_id, family=fam, generation=gen, stage_died=stage_died,
+                reason=reason, oos_result=oos_result,
+                neighbor_robustness_pct=stability_pct,
+                monte_carlo_failure_pct=mc_failure_pct,
+                prop_sim_pass_pct=raw_pass_pct,
+                cpcv_oos_pass_pct=r.cpcv_oos_eval_pass_probability,
+                pbo=r.pbo,
+                fitness_score=r.fitness.final_score if r.fitness else None,
+                param_signature=param_signature(fam, config),
+                notes=list(r.fitness.notes) if r.fitness else [],
+            ))
+        try:
+            record_rejections(entries, Path(self.cfg.tested_log_path).with_name("strategy_graveyard.jsonl"))
+        except Exception:  # noqa: BLE001 -- graveyard logging is diagnostic, never allowed to break a run
+            pass
