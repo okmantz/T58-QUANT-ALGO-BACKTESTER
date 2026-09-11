@@ -40,6 +40,7 @@ from app.web.network_info import lan_url, print_startup_banner, qr_code_data_uri
 from app.web.quant_lab_routes import quant_lab_bp
 from app.web.ai_assistant_routes import ai_assistant_bp
 from app.web.options_outlook_routes import options_outlook_bp
+from app.web.hedge_fund_routes import hedge_fund_bp
 from app.ai.ollama_settings import load_settings as load_ollama_settings
 from app.ai.ollama_settings import save_settings as save_ollama_settings
 from app.ai.research_agent import ResearchAgentContext, ResearchAgent
@@ -181,6 +182,9 @@ app.register_blueprint(ai_assistant_bp)
 # Options Outlook (daily/weekly calls & puts, Black-Scholes-computed) --
 # see app/web/options_outlook_routes.py.
 app.register_blueprint(options_outlook_bp)
+# Hedge Fund Manager (Research -> Black-Litterman portfolio -> execution ->
+# read-only Ollama oversight journal) -- see app/web/hedge_fund_routes.py.
+app.register_blueprint(hedge_fund_bp)
 # Belt-and-suspenders alongside run_web.py's own call (this module can also
 # be run directly via `python -m app.web.server`, which never goes through
 # run_web.py) -- idempotent either way. See app.reports.crash_log.
