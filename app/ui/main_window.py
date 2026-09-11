@@ -65,6 +65,8 @@ from app.orchestration import pipeline_guide
 from app.orchestration.batch_test import BatchTestItem, run_batch_test
 from app.orchestration.resource_guard import (
     HEAVY_JOB_GUARD, JOB_EVOLUTION_LAB, JOB_FULL_PIPELINE, JOB_SEARCH_LAB, JOB_SPEED_RUN,
+    JOB_WFO, JOB_WFGA, JOB_CPCV, JOB_SENSITIVITY, JOB_MULTI_OBJECTIVE, JOB_REGIME_MATRIX,
+    JOB_PARAMETER_ROBUSTNESS,
 )
 from app.orchestration.speed_run import SpeedRunConfig, SpeedRunResult, run_speed_run
 from app.orchestration.speed_run import _rank_key as _speedrun_rank_key
@@ -132,6 +134,7 @@ from app.ui.condition_builder import ConditionList
 from app.validation.cpcv import CPCVError, compute_pbo, run_cpcv
 from app.validation.regime_matrix import run_regime_matrix
 from app.validation.sensitivity import compute_1d_sensitivity, compute_2d_heatmap, list_tunable_parameters
+from app.validation.parameter_robustness import compute_parameter_robustness
 from app.validation.walk_forward_opt import run_walk_forward_optimization
 from app.web import live_market
 import random
@@ -1354,6 +1357,7 @@ class MainWindow:
         self.tab_wfo = Frame(self.content, bg=BG)
         self.tab_cpcv = Frame(self.content, bg=BG)
         self.tab_sensitivity = Frame(self.content, bg=BG)
+        self.tab_param_robustness = Frame(self.content, bg=BG)
         self.tab_portfolio = Frame(self.content, bg=BG)
         self.tab_multiobj = Frame(self.content, bg=BG)
         self.tab_wfga = Frame(self.content, bg=BG)
@@ -1375,7 +1379,7 @@ class MainWindow:
         for f in (
             self.tab_dashboard, self.tab_ai_assistant, self.tab_manual, self.tab_resources, self.tab_strategyconfig, self.tab_data, self.tab_strategy, self.tab_prop,
             self.tab_risk, self.tab_run, self.tab_payout, self.tab_refine, self.tab_search,
-            self.tab_wfo, self.tab_cpcv, self.tab_sensitivity, self.tab_portfolio,
+            self.tab_wfo, self.tab_cpcv, self.tab_sensitivity, self.tab_param_robustness, self.tab_portfolio,
             self.tab_multiobj, self.tab_wfga, self.tab_ensemble, self.tab_fullpipeline,
             self.tab_speedrun,
             self.tab_forwardtest, self.tab_deploylive, self.tab_livemarket, self.tab_genstrat,
@@ -1435,6 +1439,7 @@ class MainWindow:
             ("wfga", "", "Walk-Forward GA", self.tab_wfga, NEON_AMBER),
             ("cpcv", "", "CPCV / PBO", self.tab_cpcv, NEON_AMBER),
             ("sensitivity", "", "Sensitivity", self.tab_sensitivity, NEON_AMBER),
+            ("paramrobustness", "", "Parameter Stability / Robustness Map", self.tab_param_robustness, NEON_AMBER),
             ("regimematrix", "", "Regime Survival Matrix", self.tab_regime_matrix, NEON_AMBER),
             ("montecarlo", "", "Monte Carlo", self.tab_payout, NEON_AMBER),
 
@@ -1477,6 +1482,7 @@ class MainWindow:
             ("Walk-forward", self._build_wfo_tab),
             ("CPCV", self._build_cpcv_tab),
             ("Sensitivity", self._build_sensitivity_tab),
+            ("Parameter Stability / Robustness Map", self._build_param_robustness_tab),
             ("Portfolio", self._build_portfolio_tab),
             ("Multi-objective", self._build_multiobj_tab),
             ("Walk-forward GA", self._build_wfga_tab),
@@ -8717,6 +8723,180 @@ class MainWindow:
         finally:
             self.sens_progress.stop()
             self._release_heavy_job(JOB_SENSITIVITY)
+
+    # -----------------------------------------------------------------------
+    # Tab 10b — Parameter Stability / Robustness Map
+    # -----------------------------------------------------------------------
+
+    def _build_param_robustness_tab(self):
+        f = self._scrollable(self.tab_param_robustness)
+
+        self._page_header(
+            f,
+            "VALIDATE / Robustness Map",
+            "Parameter Stability / Robustness Map",
+            "Answers \"did I discover a robust edge, or the exact historical combination that "
+            "happened to work?\" Sweeps every tunable parameter around its current value, "
+            "heatmaps the most sensitive pair, and rolls it all into one 0-100 Parameter "
+            "Robustness Score with a ROBUST / WATCH / FRAGILE verdict -- reuses the exact same "
+            "app.validation.parameter_robustness engine as the web app's own Robustness Map page.",
+        )
+
+        settings = self._section(
+            f, "Robustness map settings",
+            "Every tunable numeric parameter is swept, then the most sensitive pair gets a "
+            "full 2D heatmap so you can see whether the current setting sits in a mountain "
+            "or on a needle.",
+            emphasize=True,
+        )
+        self.pr_metric = LabeledEntry(settings, "Metric (default: prop eval pass probability)", "eval_pass_probability")
+        self.pr_pass_threshold_pct = LabeledEntry(settings, "Pass threshold (on the metric's own scale, e.g. 50)", 50.0)
+        self.pr_pct_range = LabeledEntry(settings, "Percent range (+/- around each current value)", 0.5)
+        self.pr_n_steps_1d = LabeledEntry(settings, "Steps per parameter (1D sweep)", 9)
+        self.pr_n_steps_2d = LabeledEntry(settings, "Grid size per side (2D heatmap)", 7)
+        self.pr_max_params = LabeledEntry(settings, "Max parameters to check", 6)
+        self.pr_n_heatmap_pairs = LabeledEntry(settings, "Number of parameter pairs to heatmap", 1)
+
+        button_row = Frame(f, bg=BG)
+        button_row.pack(fill="x", padx=24, pady=10)
+        self._button(button_row, "RUN ROBUSTNESS MAP", self._param_robustness_run_clicked, primary=True).pack(side="left")
+
+        self.pr_progress = NeuralProgress(f)
+        self.pr_progress.pack(fill="x", padx=24, pady=(2, 10))
+
+        score_section = self._section(f, "Parameter Robustness Score", "0-100, with a plain verdict.")
+        score_row = Frame(score_section, bg=PANEL)
+        score_row.pack(fill="x", padx=18, pady=(0, 10))
+        self.pr_score_label = Label(
+            score_row, text="Not run yet.", bg=PANEL, fg=TEXT_DIM, font=_safe_font(20, "bold"),
+        )
+        self.pr_score_label.pack(side="left")
+        self.pr_verdict_label = Label(
+            score_row, text="", bg=PANEL, fg=TEXT_DIM, font=_safe_font(12, "bold"),
+        )
+        self.pr_verdict_label.pack(side="left", padx=(14, 0))
+
+        output_section = self._section(f, "Robustness map output", "Per-parameter sweep results, heatmap grid(s), and notes.")
+        _pr_output_frame = Frame(output_section, bg=PANEL)
+        self.pr_output = Text(
+            _pr_output_frame, height=22, wrap="word", bg=LOG_BG, fg=TEXT,
+            insertbackground=TEXT, relief="flat", bd=0, highlightthickness=1,
+            highlightbackground=BORDER, font=(MONO, 9),
+        )
+        _pr_output_scroll = ttk.Scrollbar(
+            _pr_output_frame, orient="vertical", command=self.pr_output.yview, style="T58.Vertical.TScrollbar",
+        )
+        self.pr_output.configure(yscrollcommand=_pr_output_scroll.set)
+        self.pr_output.pack(side="left", fill="both", expand=True)
+        _pr_output_scroll.pack(side="right", fill="y")
+        _pr_output_frame.pack(fill="both", expand=True, padx=18, pady=(3, 16))
+        self._bind_isolated_wheel(self.pr_output)
+
+    def _log_pr(self, msg: str):
+        self.pr_output.insert(END, msg + "\n")
+        self.pr_output.see(END)
+        self.root.update_idletasks()
+
+    @staticmethod
+    def _pr_verdict_for(score: float) -> tuple[str, str]:
+        """Same 70/40 thresholds and verdict labels as the web app's own
+        parameter_robustness_job.html JS, so the two UIs never disagree
+        about what a given score means. Returns (verdict, color-name)."""
+        if score >= 70:
+            return "ROBUST", "GREEN"
+        if score >= 40:
+            return "WATCH", "AMBER"
+        return "FRAGILE", "RED"
+
+    def _param_robustness_run_clicked(self):
+        if not self.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
+            return
+        if not self._try_start_heavy_job(JOB_PARAMETER_ROBUSTNESS):
+            return
+        self.pr_output.delete("1.0", END)
+        self.pr_score_label.config(text="Running...", fg=TEXT_DIM)
+        self.pr_verdict_label.config(text="")
+        self.pr_progress.start(10)
+        threading.Thread(target=self._param_robustness_run_pipeline, daemon=True).start()
+
+    def _param_robustness_run_pipeline(self):
+        try:
+            df = self._load_df_for_page(self._log_pr)
+            if df is None:
+                return
+            strategy = self._build_strategy()
+            risk = self._build_risk_config()
+            rules = self._build_prop_rules()
+            mc_cfg = self._validation_mc_config(n_simulations=min(self.mc_sims.get_int(10000), 1000))
+
+            self._log_pr(
+                f"Sweeping up to {self.pr_max_params.get_int(6)} tunable parameter(s), then "
+                f"heatmapping the {self.pr_n_heatmap_pairs.get_int(1)} most sensitive pair(s)..."
+            )
+            result = compute_parameter_robustness(
+                df, strategy, risk, rules, mc_cfg,
+                metric=self.pr_metric.get_str().strip() or "eval_pass_probability",
+                pass_threshold_pct=self.pr_pass_threshold_pct.get_float(50.0),
+                max_params=self.pr_max_params.get_int(6),
+                pct_range=self.pr_pct_range.get_float(0.5),
+                n_steps_1d=self.pr_n_steps_1d.get_int(9),
+                n_steps_2d=self.pr_n_steps_2d.get_int(7),
+                n_heatmap_pairs=self.pr_n_heatmap_pairs.get_int(1),
+            )
+
+            verdict, color_name = self._pr_verdict_for(result.parameter_robustness_score)
+            color = {"GREEN": GREEN, "AMBER": AMBER, "RED": RED}[color_name]
+            self.pr_score_label.config(text=f"{result.parameter_robustness_score:.1f} / 100", fg=color)
+            self.pr_verdict_label.config(text=verdict, fg=color)
+
+            self._log_pr(
+                f"\n{result.n_parameters_checked} parameter(s) checked against {result.metric}, "
+                f"pass threshold {result.pass_threshold_pct:g}%. {result.n_cliffs_detected} cliff(s) detected."
+            )
+            for note in result.notes:
+                self._log_pr(f"  note: {note}")
+
+            self._log_pr("\nPer-parameter 1D sweep:")
+            for r in result.per_parameter:
+                flag = " <-- CLIFF" if r.cliff_detected else ""
+                self._log_pr(
+                    f"  {r.gene_label}: current={r.base_value:.4g}, current metric={r.base_metric:.2f}, "
+                    f"max adjacent-step drop {r.max_pct_drop_between_adjacent_steps:.0f}%{flag}"
+                )
+
+            if result.pair_heatmaps:
+                self._log_pr("\nNeighborhood heatmap(s) -- the highlighted [*] cell is the current setting:")
+            for pair in result.pair_heatmaps:
+                hm = pair.heatmap
+                tag = "NEEDLE (cliff)" if pair.is_cliff else ("PLATEAU" if pair.is_plateau else "mixed")
+                self._log_pr(
+                    f"\n  {hm.gene_a_label} x {hm.gene_b_label} -- grid pass rate "
+                    f"{pair.fraction_of_grid_passing:.0f}% -- {tag}"
+                )
+                a_vals, b_vals, grid = hm.a_values, hm.b_values, hm.grid
+                base_i, base_j = len(a_vals) // 2, len(b_vals) // 2
+                header = "         " + "".join(f"{b:>9.3g}" for b in b_vals)
+                self._log_pr(f"  {header}")
+                for i, a in enumerate(a_vals):
+                    row_cells = []
+                    for j, _b in enumerate(b_vals):
+                        val = grid[i][j] if grid and i < len(grid) and j < len(grid[i]) else None
+                        cell = "     n/a" if val is None else f"{val:>7.0f}"
+                        marker = "*" if (i == base_i and j == base_j) else " "
+                        row_cells.append(f"{cell}{marker}")
+                    self._log_pr(f"  {a:>7.3g}  " + "".join(row_cells))
+
+            self._log_pr("\nDone.")
+        except StrategyError as exc:
+            self._log_pr(f"\nStrategy error: {exc}")
+        except RefinementError as exc:
+            self._log_pr(f"\nRobustness map error: {exc}")
+        except Exception:
+            self._log_pr("\nUnexpected error:\n" + traceback.format_exc())
+        finally:
+            self.pr_progress.stop()
+            self._release_heavy_job(JOB_PARAMETER_ROBUSTNESS)
 
     # -----------------------------------------------------------------------
     # Tab 11 — Multi-Asset Portfolio
