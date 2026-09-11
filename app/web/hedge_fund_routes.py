@@ -6,18 +6,23 @@ app.web.quant_lab_routes and app.web.ai_assistant_routes -- this whole
 feature area lives in one file and app/web/server.py's own change is a
 single import + one `app.register_blueprint(...)` line.
 
-Scope note (documented, not silently skipped): the underlying pipeline
-(app.hedge_fund.research.generate_views) supports per-asset "use one of
-my saved Strategy Library strategies as this asset's view generator"
-views, not just the statistical bootstrap. This tab's form does not yet
-expose that picker -- it always uses the bootstrap view generator. Wiring
-the same library-strategy-picker UI that app/web/templates/portfolio.html
-already has (see its `leg{i}_library_mode` fields) into this form is a
-natural next increment; in the meantime, the strategy-signal view path is
-fully implemented, tested (tests/test_hedge_fund_research.py), and usable
-directly from Python via `run_hedge_fund_manager(..., strategies={...})`.
+Per-asset Strategy Library picker: each asset slot can optionally load
+one of your saved Python/PineScript/MQL5 strategies to BE that asset's
+research-desk view generator (app.hedge_fund.research.strategy_signal_view)
+instead of the statistical bootstrap -- same "load from library" pattern
+app/web/templates/portfolio.html already uses per-leg (`leg{i}_library_mode`
+/ `leg{i}_library_name`), renamed to `asset{i}_...` here. Strategy loading
+and building is duplicated from app.web.server's `load_strategy_text` /
+`build_strategy_from_code` rather than imported from server.py, for the
+same reason `_resolve_asset_dataset` below duplicates
+`_resolve_leg_dataset` -- server.py imports blueprints, not the reverse.
 """
 from __future__ import annotations
+
+import json
+import tempfile
+import uuid
+from pathlib import Path
 
 from flask import Blueprint, render_template, request
 
@@ -26,11 +31,59 @@ from app.data.storage import get_raw_data_dir, list_datasets_by_instrument, list
 from app.hedge_fund.pipeline import HedgeFundManagerError, run_hedge_fund_manager
 from app.hedge_fund.rebalancer import RebalanceConfig
 from app.hedge_fund.research import EnsembleForecastConfig
-from app.strategy.base import StrategyError
+from app.strategy.base import Strategy, StrategyError
+from app.strategy.library import STRATEGY_TYPES, list_saved_strategies, load_strategy_text
+from app.strategy.mql5 import MQL5Strategy
+from app.strategy.pinescript import PineScriptStrategy
+from app.strategy.python import PythonStrategy
 
 hedge_fund_bp = Blueprint("hedge_fund", __name__, url_prefix="/hedge-fund")
 
 MAX_ASSETS = 6
+LIBRARY_STRATEGY_TYPES = [t for t in STRATEGY_TYPES if t != "manual"]  # manual configs aren't Strategy-Library files with source text
+
+
+def _saved_strategies_json() -> str:
+    """{"python": [{"name", "description"}, ...], "pinescript": [...],
+    "mql5": [...]} -- deliberately a smaller shape than
+    app.web.server's own _saved_strategies_json (this picker only needs
+    enough to label the dropdown, not the full filter/search metadata
+    that page's JS uses)."""
+    return json.dumps({
+        t: [{"name": s.name, "description": s.metadata.get("description", "")} for s in list_saved_strategies(t)]
+        for t in LIBRARY_STRATEGY_TYPES
+    })
+
+
+def _build_strategy_from_code(mode: str, code: str) -> Strategy:
+    """Single source of truth for turning a loaded library file's source
+    text into a Strategy object -- same job app.web.server's own
+    build_strategy_from_code does for the main backtest/portfolio forms,
+    duplicated (not imported) for the reason in this module's docstring."""
+    if mode == "python":
+        tmp = Path(tempfile.mkdtemp()) / f"strategy_{uuid.uuid4().hex}.py"
+        tmp.write_text(code, encoding="utf-8")
+        return PythonStrategy(tmp)
+    if mode == "pinescript":
+        return PineScriptStrategy(code)
+    if mode == "mql5":
+        return MQL5Strategy(code)
+    raise StrategyError(f"Unknown strategy mode: {mode}")
+
+
+def _resolve_asset_view_strategy(form, prefix: str) -> Strategy | None:
+    """Resolves ONE asset slot's optional view-generator strategy from
+    the Strategy Library. Returns None (defer to the bootstrap view) if
+    the slot's library picker was left on "none"."""
+    mode = (form.get(f"{prefix}_library_mode") or "").strip()
+    name = (form.get(f"{prefix}_library_name") or "").strip()
+    if not mode or not name:
+        return None
+    try:
+        code = load_strategy_text(mode, name)
+    except (FileNotFoundError, OSError) as exc:
+        raise StrategyError(f"Could not load saved strategy '{name}' ({mode}): {exc}") from exc
+    return _build_strategy_from_code(mode, code)
 
 
 def _resolve_asset_dataset(form, files, prefix: str):
@@ -92,7 +145,7 @@ def _svg_line_chart(values: list[float], width: int = 680, height: int = 160) ->
 def hedge_fund_form():
     return render_template(
         "hedge_fund.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-        max_assets=MAX_ASSETS,
+        max_assets=MAX_ASSETS, saved_strategies_json=_saved_strategies_json(),
     )
 
 
@@ -101,10 +154,11 @@ def hedge_fund_run():
     form = request.form
     ctx = lambda **kw: dict(
         stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-        max_assets=MAX_ASSETS, **kw,
+        max_assets=MAX_ASSETS, saved_strategies_json=_saved_strategies_json(), **kw,
     )
 
     price_data = {}
+    strategies: dict[str, Strategy] = {}
     try:
         for i in range(1, MAX_ASSETS + 1):
             prefix = f"asset{i}"
@@ -115,6 +169,9 @@ def hedge_fund_run():
             if label in price_data:
                 label = f"{label} ({i})"
             price_data[label] = df
+            view_strategy = _resolve_asset_view_strategy(form, prefix)
+            if view_strategy is not None:
+                strategies[label] = view_strategy
     except StrategyError as exc:
         return render_template("hedge_fund.html", **ctx(error=str(exc))), 400
 
@@ -145,19 +202,23 @@ def hedge_fund_run():
     write_journal = form.get("write_journal", "on") == "on"
 
     try:
-        outcome = run_hedge_fund_manager(price_data, config, strategies=None, write_journal=write_journal)
+        outcome = run_hedge_fund_manager(price_data, config, strategies=strategies or None, write_journal=write_journal)
     except HedgeFundManagerError as exc:
         return render_template("hedge_fund.html", **ctx(error=str(exc))), 400
 
     equity_values = outcome.backtest.equity_curve["equity"].tolist()
+    last_cycle = outcome.backtest.cycles[-1] if outcome.backtest.cycles else None
+    view_methods = {asset: v.method for asset, v in last_cycle.views.items()} if last_cycle else {}
     result = {
         "assets": list(price_data.keys()),
+        "assets_using_library_strategy": sorted(strategies.keys()),
+        "view_methods": view_methods,
         "stats": outcome.backtest.stats,
         "equity_svg": _svg_line_chart(equity_values),
         "equity_start": equity_values[0],
         "equity_end": equity_values[-1],
         "num_cycles": len(outcome.backtest.cycles),
-        "last_cycle": outcome.backtest.cycles[-1] if outcome.backtest.cycles else None,
+        "last_cycle": last_cycle,
         "run_warnings": outcome.backtest.warnings,
         "journal": outcome.journal,
         "journal_note": outcome.journal_note,
