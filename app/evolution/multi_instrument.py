@@ -137,12 +137,22 @@ class MultiInstrumentEvolutionGroup:
             logs_copy = {label: list(v) for label, v in self.logs.items()}
         instruments = {}
         for label, runner in self.runners.items():
+            runner_status = runner.status()
             instruments[label] = {
                 "running": runner.is_running,
                 "generation": runner.generation,
                 "leaderboard_size": len(runner.leaderboard),
                 "leaderboard": [r.to_checkpoint_dict() for r in runner.leaderboard[:10]],
                 "log": logs_copy.get(label, [])[-100:],
+                # Loop mode -- see EvolutionConfig.target_eval_pass_pct. Every
+                # runner in the group shares base_cfg's target settings (they
+                # only differ in checkpoint/tested-log/knowledge-graph paths),
+                # so each stops itself independently the moment ITS OWN
+                # leaderboard clears the shared target -- one instrument
+                # finishing early does not stop the others.
+                "target_eval_pass_pct": runner_status.get("target_eval_pass_pct"),
+                "target_reached": runner_status.get("target_reached", False),
+                "target_reached_candidate_id": runner_status.get("target_reached_candidate_id"),
             }
         for label, err in self.errors.items():
             instruments[label] = {"running": False, "error": err}
