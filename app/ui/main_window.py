@@ -64,6 +64,7 @@ from app.optimize.walkforward_ga import run_walkforward_aware_refinement
 from app.orchestration import pipeline_guide
 from app.orchestration.batch_test import BatchTestItem, run_batch_test
 from app.orchestration.forge import ForgeConfig, run_forge
+from app.orchestration.loop_runner import SearchLoopConfig, run_search_loop
 from app.orchestration.resource_guard import (
     HEAVY_JOB_GUARD, JOB_EVOLUTION_LAB, JOB_FORGE, JOB_FULL_PIPELINE, JOB_SEARCH_LAB, JOB_SPEED_RUN,
     JOB_WFO, JOB_WFGA, JOB_CPCV, JOB_SENSITIVITY, JOB_MULTI_OBJECTIVE, JOB_REGIME_MATRIX,
@@ -7434,6 +7435,23 @@ class MainWindow:
             FITNESS_METRICS["eval_pass_probability"],
         )
 
+        loop_section = self._section(
+            f, "Loop mode",
+            "Only applies to a named-family/all-families search (not Single-strategy or Family "
+            "Grid mode). Repeats Search Lab rounds automatically instead of stopping after one: "
+            "if a round makes no progress for a few rounds in a row, the next round broadens to "
+            "every family (dropping any family Family Health has flagged as a dead end) and "
+            "raises the candidate cap. Stops the moment a candidate clears your target, when the "
+            "round or time budget runs out, or when you hit STOP.",
+        )
+        self.search_loop_mode = LabeledCheckbox(loop_section, "Enable Loop Mode", False)
+        self.search_loop_target = LabeledEntry(loop_section, "Stop once a candidate's eval-pass % reaches", 60)
+        self.search_loop_max_rounds = LabeledEntry(loop_section, "Max rounds", 20)
+        self.search_loop_time_budget_hours = LabeledEntry(
+            loop_section, "Time budget in hours (blank = no limit, rely on rounds/STOP)", "",
+        )
+        self.search_loop_stall_rounds = LabeledEntry(loop_section, "Rounds with no improvement before widening", 2)
+
         button_row = Frame(f, bg=BG)
         button_row.pack(fill="x", padx=24, pady=10)
 
@@ -7703,6 +7721,24 @@ class MainWindow:
         self._search_cancel_event.clear()
         self.stop_search_btn.config(state="normal")
         self.search_progress.start(10)
+
+        if self.search_loop_mode.get():
+            if mode_key not in ("family_named",):
+                self._release_heavy_job(JOB_SEARCH_LAB)
+                self.stop_search_btn.config(state="disabled")
+                self.search_progress.stop()
+                messagebox.showwarning(
+                    "Loop Mode needs a family search",
+                    "Loop Mode repeats a named-family/all-families search across rounds -- it "
+                    "doesn't apply to Single-strategy or Family Grid mode (each of those is "
+                    "already searching one strategy's own grid, with no other family to widen "
+                    "into on a stall). Switch Mode to a named family or All, or turn off Loop "
+                    "Mode, then run again.",
+                )
+                return
+            threading.Thread(target=self._search_run_loop_pipeline, daemon=True).start()
+            return
+
         threading.Thread(target=self._search_run_pipeline, daemon=True).start()
 
     def _search_stop_clicked(self):
@@ -7995,6 +8031,164 @@ class MainWindow:
             log_crash("Search Lab", exc=exc)
         finally:
             self.search_progress.stop()
+            self._release_heavy_job(JOB_SEARCH_LAB)
+
+    def _search_run_loop_pipeline(self):
+        """Loop Mode's desktop counterpart to _search_run_pipeline above --
+        same data-loading/risk/rules setup, but drives
+        app.orchestration.loop_runner.run_search_loop (repeated rounds,
+        widening on stall) instead of a single run_search() call. Reuses
+        the same log box / progress bar / STOP button / heavy-job guard as
+        the normal Stage 1-5 run; the only genuinely new UI state is
+        self._last_search_summary/_space, which are updated after EVERY
+        round (via on_round) so OPEN LEADERBOARD / PROMOTE CHAMPION work
+        against the latest round even while the loop keeps running."""
+        try:
+            self._log_search("Importing market data...")
+            per_file_results = []
+            for p in self.csv_paths:
+                result = import_csv(p)
+                if not result.is_valid:
+                    self._log_search(
+                        f"Import errors ({os.path.basename(p)}):\n" + "\n".join(result.errors)
+                    )
+                    return
+                per_file_results.append((p, result))
+
+            if len(per_file_results) == 1:
+                df = per_file_results[0][1].dataframe
+            else:
+                df, _labels = merge_multi_timeframe([r.dataframe for _, r in per_file_results])
+            self._log_search(f"Loaded {len(df)} bars.")
+
+            has_pair_data = False
+            if self._search_pair_csv_path:
+                pair_result = import_csv(str(store_csv_path(self._search_pair_csv_path)))
+                if not pair_result.is_valid:
+                    self._log_search(
+                        "Pair CSV import errors:\n" + "\n".join(pair_result.errors)
+                    )
+                    return
+                df = merge_pair_series(df, pair_result.dataframe)
+                has_pair_data = True
+                self._log_search(
+                    f"Merged pair instrument from {os.path.basename(self._search_pair_csv_path)} "
+                    "(enables the 'stat_pairs' family)."
+                )
+
+            risk = self._build_risk_config()
+            rules = self._build_prop_rules()
+            stage_cfg = self._build_search_stage_config()
+            instrument = (
+                os.path.basename(self.csv_paths[0]) if len(self.csv_paths) == 1
+                else " + ".join(os.path.basename(p) for p in self.csv_paths)
+            )
+
+            family_label = self.search_family.get_str()
+            family_key = self._search_family_label_to_key.get(family_label, "all")
+            time_budget_raw = self.search_loop_time_budget_hours.get_str().strip()
+            loop_cfg = SearchLoopConfig(
+                target_eval_pass_pct=self.search_loop_target.get_float(60.0),
+                max_rounds=self.search_loop_max_rounds.get_int(20),
+                time_budget_seconds=(float(time_budget_raw) * 3600.0) if time_budget_raw else None,
+                stall_rounds_before_widen=self.search_loop_stall_rounds.get_int(2),
+                starting_family=(None if family_key in (None, "all") else family_key),
+                starting_max_candidates=self.search_max_candidates.get_int(500),
+                seed=self.search_seed.get_int(42),
+            )
+            self._log_search(
+                f"Loop mode ON -- will repeat Search Lab rounds (widening on stall) until a "
+                f"candidate clears {loop_cfg.target_eval_pass_pct:.0f}%, {loop_cfg.max_rounds} "
+                f"rounds run, or the time budget is used up. has_pair_data={has_pair_data}."
+            )
+
+            loop_dir = str(OUTPUT_DIR / "search" / "loop")
+
+            def on_round(round_result) -> None:
+                # Same "directly touch Tk state from the worker thread"
+                # convention _log_search already uses throughout this file
+                # -- not officially thread-safe per Tkinter's own docs, but
+                # consistent with every other background job in this app.
+                self._last_search_summary = round_result.summary
+                self._last_search_space = round_result.space
+                self._last_search_db_path = round_result.summary.db_path
+                self._last_search_df = df
+                self._last_search_risk = risk
+                self._last_search_rules = rules
+                self.open_search_report_btn.config(state="normal")
+                if round_result.summary.champion_candidate_id:
+                    self.promote_champion_btn.config(state="normal")
+                try:
+                    self._refresh_dashboard()
+                except Exception:
+                    pass
+
+            result = run_search_loop(
+                df, risk, rules, stage_cfg, db_dir=loop_dir, loop_cfg=loop_cfg,
+                instrument=instrument, timeframe="unknown", progress_cb=self._log_search,
+                cancel_event=self._search_cancel_event, on_round=on_round,
+                family_health_search_dir=str(OUTPUT_DIR / "search"),
+                family_health_evolution_dir=str(OUTPUT_DIR / "evolution"),
+            )
+
+            if result.stopped_reason == "error":
+                self._log_search(f"\nLoop Mode stopped: a round crashed -- {result.error}")
+                log_crash("Search Lab Loop Mode", exc=RuntimeError(result.error or "unknown"))
+                return
+            if result.stopped_reason == "cancelled":
+                self._log_search(
+                    "\nLoop Mode stopped by user. The latest completed round's results are "
+                    "still on the leaderboard above."
+                )
+                return
+
+            reason_text = {
+                "target_reached": f"Target reached ({loop_cfg.target_eval_pass_pct:.0f}%) -- stopped automatically.",
+                "max_rounds": f"Stopped: all {loop_cfg.max_rounds} rounds completed with no candidate clearing the target.",
+                "time_budget": "Stopped: time budget used up.",
+            }.get(result.stopped_reason, result.stopped_reason)
+            self._log_search(f"\n{reason_text}")
+
+            winner = result.winner_round
+            if winner is not None:
+                self._log_search(f"Winning candidate: {result.winner_candidate_id}")
+                report_paths = generate_search_report(
+                    output_dir=str(OUTPUT_DIR / "search"), summary=winner.summary, space=winner.space,
+                    instrument=instrument, timeframe="unknown",
+                )
+                self._last_search_html_path = report_paths["html"]
+                self._log_search("\nWinning round's leaderboard written to:")
+                for k, p in report_paths.items():
+                    self._log_search(f"  {k}: {p}")
+            elif result.rounds:
+                last = result.rounds[-1]
+                self._log_search(
+                    "No round produced a candidate clearing the target -- the leaderboard above "
+                    "still shows the closest calls from the most recent round."
+                )
+                if last.summary.leaderboard:
+                    report_paths = generate_search_report(
+                        output_dir=str(OUTPUT_DIR / "search"), summary=last.summary, space=last.space,
+                        instrument=instrument, timeframe="unknown",
+                    )
+                    self._last_search_html_path = report_paths["html"]
+
+        except SearchCancelled:
+            self._log_search(
+                "\nSearch Lab Loop Mode stopped. Candidates already scored before the stop are "
+                "still saved in the results DB, even though no leaderboard report was generated "
+                "for the in-progress round."
+            )
+        except StrategySpaceError as exc:
+            self._log_search(f"\nSearch space error: {exc}")
+        except PairDataError as exc:
+            self._log_search(f"\nPair CSV error: {exc}")
+        except Exception as exc:
+            self._log_search("\nUnexpected error:\n" + traceback.format_exc())
+            log_crash("Search Lab Loop Mode", exc=exc)
+        finally:
+            self.search_progress.stop()
+            self.stop_search_btn.config(state="disabled")
             self._release_heavy_job(JOB_SEARCH_LAB)
 
     def _promote_search_champion_clicked(self):
@@ -10143,6 +10337,16 @@ class MainWindow:
         self.evo_population = LabeledEntry(cfg_section, "Population size per generation", "60")
         self.evo_elite_keep = LabeledEntry(cfg_section, "Elite keep (top N)", "10")
         self.evo_max_generations = LabeledEntry(cfg_section, "Max generations (blank = run until stopped)", "")
+        self.evo_loop_target = LabeledEntry(
+            cfg_section,
+            "Loop mode: stop automatically once a candidate clears this eval-pass % (blank = disabled)",
+            "",
+        )
+        self.evo_loop_target_metric = LabeledCombo(
+            cfg_section, "Loop mode target metric",
+            ["CPCV out-of-sample eval-pass % (honest, recommended)", "Raw in-sample eval-pass % (Monte Carlo only)"],
+            "CPCV out-of-sample eval-pass % (honest, recommended)",
+        )
         self.evo_min_trades = LabeledEntry(cfg_section, "Min trades (pre-filter)", "20")
         self.evo_mc_sims = LabeledEntry(cfg_section, "Monte Carlo sims per candidate", "1000")
         self.evo_cpcv_top_n = LabeledEntry(cfg_section, "CPCV / PBO pool size (most expensive stage)", "8")
@@ -10243,6 +10447,10 @@ class MainWindow:
             cfg_section, text="Not running.", bg=PANEL, fg=TEXT_DIM, font=_safe_font(9),
         )
         self.evo_status_label.pack(anchor="w", padx=18, pady=(0, 2))
+        self.evo_loop_status_label = Label(
+            cfg_section, text="", bg=PANEL, fg=TEXT_DIM, font=_safe_font(9), wraplength=900, justify="left",
+        )
+        self.evo_loop_status_label.pack(anchor="w", padx=18, pady=(0, 2))
         Label(
             cfg_section,
             text=(
@@ -10427,6 +10635,13 @@ class MainWindow:
         max_generations = int(max_gen_raw) if max_gen_raw.isdigit() else None
         prefilter_bars_raw = self.evo_prefilter_max_bars.get_str().strip()
         prefilter_max_bars = int(prefilter_bars_raw) if prefilter_bars_raw.isdigit() else None
+        loop_target_raw = self.evo_loop_target.get_str().strip()
+        loop_target = float(loop_target_raw) if loop_target_raw else None
+        loop_metric_key = (
+            "eval_pass_probability"
+            if self.evo_loop_target_metric.get_str().startswith("Raw in-sample")
+            else "cpcv_oos_eval_pass_probability"
+        )
 
         cfg = EvolutionConfig(
             population_size=self.evo_population.get_int(60),
@@ -10439,6 +10654,8 @@ class MainWindow:
             max_generations=max_generations,
             adaptive_risk_enabled=self.evo_adaptive_risk_enabled.var.get(),
             prefilter_max_bars=prefilter_max_bars,
+            target_eval_pass_pct=loop_target,
+            target_metric=loop_metric_key,
         )
         self.evo_log_text.delete("1.0", END)
         self._evo_guide_shown = False
@@ -10448,6 +10665,11 @@ class MainWindow:
             f"Evolution Lab started -- population {cfg.population_size}, elite keep {cfg.elite_keep}, "
             f"{'unlimited generations' if cfg.max_generations is None else f'max {cfg.max_generations} generations'}."
         )
+        if loop_target is not None:
+            self._evo_log(
+                f"Loop mode ON -- will stop automatically once a candidate clears {loop_target:.1f}% "
+                f"on {loop_metric_key}."
+            )
         self._poll_evolution_status()
         self._refresh_evolution_tested()
 
@@ -10814,6 +11036,22 @@ class MainWindow:
             ),
             fg=GREEN if status["running"] else TEXT_DIM,
         )
+        if status.get("target_reached"):
+            self.evo_loop_status_label.config(
+                text=(
+                    f"Loop mode target reached: candidate {status.get('target_reached_candidate_id')} "
+                    f"cleared {status.get('target_eval_pass_pct')}% -- Evolution Lab stopped itself. "
+                    "Review the leaderboard and promote it."
+                ),
+                fg=GREEN,
+            )
+        elif status.get("target_eval_pass_pct") is not None:
+            self.evo_loop_status_label.config(
+                text=f"Loop mode active -- will stop automatically once a candidate clears {status['target_eval_pass_pct']}%.",
+                fg=TEXT_DIM,
+            )
+        else:
+            self.evo_loop_status_label.config(text="")
         try:
             self._refresh_evo_leaderboard_listbox([r.to_checkpoint_dict() for r in runner.leaderboard])
         except Exception:
