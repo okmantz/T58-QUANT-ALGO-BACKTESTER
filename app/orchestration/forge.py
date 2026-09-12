@@ -66,7 +66,7 @@ from app.prop.survival_engine import PropSurvivalConfig, run_prop_survival_analy
 from app.search.batch_runner import SearchCancelled, SearchStageConfig, run_search
 from app.search.family_diversity import summarize_family_performance
 from app.search.failure_diagnosis import CandidateDiagnosis, diagnose_candidate
-from app.search.graveyard import GraveyardEntry, param_signature, record_rejections
+from app.search.graveyard import GraveyardEntry, is_known_dead_neighborhood, load_graveyard, param_signature, record_rejections
 from app.search.results_db import ResultsDB
 from app.search.strategy_space import (
     StrategySpaceError, build_strategy_from_spec, generate_search_space, hypothesis_question,
@@ -117,6 +117,14 @@ class ForgeConfig:
     rolling_survivors: int = 2
     locked_holdout_frac: float = 0.15   # reserved BEFORE any stage runs, never searched over
     locked_oos_min_pass_rate: float = 25.0  # % -- below this, the holdout check kills the candidate
+
+    # Strategy Graveyard feedback loop -- skip hypotheses whose parameter
+    # neighborhood has already been proven dead by a PRIOR run against
+    # this same graveyard file, instead of paying for a full re-evaluation
+    # of something already known not to work. See app.search.graveyard.
+    # is_known_dead_neighborhood. Off entirely (0) means "never skip."
+    graveyard_skip_known_dead: bool = True
+    graveyard_min_attempts: int = 8     # a neighborhood needs this many past failures before being skipped
 
     workers: int | None = None
     random_seed: int = 42
@@ -254,6 +262,60 @@ def run_forge(
         f"named market-hypothesis families (e.g. \"{hypothesis_question(next(iter(space.meta.values()))['family'])}\")."
     )
     funnel.append(FunnelStage("Hypotheses generated", n_in=n_hyp, n_out=n_hyp))
+    check_cancelled()
+
+    # ------------------------------------------------------------------
+    # Strategy Graveyard feedback loop -- before paying for a single
+    # backtest, drop any hypothesis whose parameter neighborhood a PRIOR
+    # run already proved dead (>= config.graveyard_min_attempts past
+    # failures at the same param_signature in this graveyard file). This
+    # is the actual "feed the graveyard back into the machine" loop --
+    # is_known_dead_neighborhood already existed but nothing called it
+    # in production before this. Skips are logged, never silent, and
+    # never touch a hypothesis this graveyard has no history on.
+    # ------------------------------------------------------------------
+    if config.graveyard_skip_known_dead:
+        grave_rows = load_graveyard(graveyard_path)
+        if grave_rows:
+            kept_candidates: dict[str, dict] = {}
+            kept_meta: dict[str, dict] = {}
+            skipped_sigs: dict[str, int] = {}
+            for cid, spec in space.candidates.items():
+                meta = space.meta.get(cid, {})
+                family = meta.get("family", space.family or "single")
+                cfg_dict = spec.get("config") if isinstance(spec, dict) else None
+                is_dead, n_attempts = is_known_dead_neighborhood(
+                    family, cfg_dict, rows=grave_rows, min_attempts=config.graveyard_min_attempts,
+                )
+                if is_dead:
+                    sig = param_signature(family, cfg_dict)
+                    skipped_sigs[sig] = max(skipped_sigs.get(sig, 0), n_attempts)
+                    continue
+                kept_candidates[cid] = spec
+                kept_meta[cid] = meta
+            n_skipped = n_hyp - len(kept_candidates)
+            if n_skipped:
+                space.candidates = kept_candidates
+                space.meta = kept_meta
+                worst = sorted(skipped_sigs.items(), key=lambda kv: kv[1], reverse=True)[:3]
+                worst_str = "; ".join(f"{sig} (tried {n}x)" for sig, n in worst)
+                log(
+                    f"Strategy Graveyard: skipped {n_skipped:,}/{n_hyp:,} hypothesis(es) whose parameter "
+                    f"neighborhood a prior run already proved dead {config.graveyard_min_attempts}+ times "
+                    f"(worst offenders: {worst_str}). This run spends its compute on unexplored or "
+                    f"less-tested territory instead of re-confirming the same dead ends."
+                )
+                funnel.append(FunnelStage(
+                    "Graveyard pre-filter (skip known-dead neighborhoods)",
+                    n_in=n_hyp, n_out=len(kept_candidates),
+                ))
+                n_hyp = len(kept_candidates)
+            else:
+                log(
+                    f"Strategy Graveyard: checked {n_hyp:,} hypothesis(es) against "
+                    f"{len(grave_rows):,} past rejection(s) -- none matched a known-dead neighborhood "
+                    f"({config.graveyard_min_attempts}+ prior failures), so none were skipped."
+                )
     check_cancelled()
 
     # ------------------------------------------------------------------
