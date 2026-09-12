@@ -79,6 +79,7 @@ from app.orchestration.full_pipeline import (
 )
 from app.portfolio.portfolio import InstrumentLeg, PortfolioConfig, PortfolioError, run_portfolio_backtest
 from app.prop.simulator import PropRules, simulate_account
+from app.prop.presets import list_presets as list_prop_firm_presets
 from app.prop.survival_engine import PropSurvivalConfig, ResetEconomics, run_prop_survival_analysis
 from app.reports.generator import generate_full_report
 from app.reports.crash_log import log_crash
@@ -6162,6 +6163,24 @@ class MainWindow:
             "Define the evaluation, drawdown, consistency, payout, and position constraints.",
         )
 
+        preset_section = self._section(
+            f,
+            "Quick-fill from a prop-firm preset",
+            "One-click starting point for a major firm's published rules -- fills in every "
+            "field below, which you can still edit by hand afterward. See each preset's "
+            "'as of' date; firms change these terms often, so treat this as a fast, "
+            "reviewable starting point, not a live feed -- verify against the firm's own "
+            "current rules page before relying on it for a real evaluation.",
+        )
+        preset_labels = ["(Choose a preset...)"] + [p.label for p in list_prop_firm_presets()]
+        self.p_preset_combo = LabeledCombo(preset_section, "Prop-firm preset", preset_labels, default=preset_labels[0])
+        self.p_preset_note = Label(
+            preset_section, text="", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8),
+            anchor="w", justify="left", wraplength=560,
+        )
+        self.p_preset_note.pack(fill="x", padx=18, pady=(0, 6))
+        self.p_preset_combo.combo.bind("<<ComboboxSelected>>", lambda _e: self._apply_prop_firm_preset())
+
         section = self._section(
             f,
             "Account & evaluation",
@@ -6221,6 +6240,27 @@ class MainWindow:
         self.p_max_pos = LabeledEntry(
             section2, "Max position size (units, blank=unlimited)", ""
         )
+
+    def _apply_prop_firm_preset(self):
+        idx = self.p_preset_combo.combo.current()
+        presets = list_prop_firm_presets()
+        if idx <= 0 or idx - 1 >= len(presets):
+            self.p_preset_note.config(text="")
+            return
+        p = presets[idx - 1]
+        self.p_account_size.var.set(str(p.account_size))
+        self.p_profit_target.var.set(str(p.evaluation_profit_target_pct))
+        self.p_daily_loss.var.set(str(p.daily_loss_limit_pct))
+        self.p_max_dd.var.set(str(p.max_drawdown_pct))
+        self.p_dd_type.var.set(p.drawdown_type)
+        self.p_dd_check_mode.var.set(p.drawdown_check_mode)
+        self.p_consistency.var.set(str(p.consistency_rule_pct) if p.consistency_rule_pct is not None else "")
+        self.p_min_days.var.set(str(p.min_trading_days))
+        self.p_payout_threshold.var.set(str(p.payout_threshold_pct))
+        self.p_payout_cap.var.set(str(p.payout_cap_pct) if p.payout_cap_pct is not None else "100")
+        self.p_payout_freq.var.set(str(p.payout_frequency_days))
+        self.p_buffer.var.set(str(p.required_buffer_pct))
+        self.p_preset_note.config(text=f"As of {p.as_of}: {p.source_note}")
 
     def _build_prop_rules(self) -> PropRules:
         cap = self.p_payout_cap.get_str().strip()
