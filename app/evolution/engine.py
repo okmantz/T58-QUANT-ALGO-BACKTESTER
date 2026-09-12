@@ -438,6 +438,26 @@ class EvolutionConfig:
     max_generations: int | None = None          # None = run until stop() is called
     random_seed: int = 42
 
+    # "Loop mode" -- Owen's ask: Evolution Lab already runs generation
+    # after generation until stop() is called or max_generations is hit,
+    # but it never stops ITSELF just because a genuinely good candidate
+    # already showed up; someone has to notice the leaderboard and click
+    # STOP. Setting a target here makes a run stop on its own the first
+    # generation a leaderboard candidate's target_metric clears
+    # target_eval_pass_pct -- checked in _run_loop right after each
+    # generation's leaderboard update. None (the default) preserves the
+    # exact old behavior (run forever / to max_generations regardless of
+    # what's on the leaderboard).
+    target_eval_pass_pct: float | None = None
+    # "cpcv_oos_eval_pass_probability" (the honest held-out estimate) is
+    # the default and strongly recommended metric -- see
+    # EvolutionCandidateRecord's own field comment for why the raw
+    # mc_summary one overstates a genome's real edge. "eval_pass_probability"
+    # (the raw in-sample Monte Carlo number) is offered for a caller that
+    # explicitly wants the old, less trustworthy leaderboard-sort metric
+    # for some other reason.
+    target_metric: str = "cpcv_oos_eval_pass_probability"
+
     # What to actually optimize for. Either a named preset (see
     # app.evolution.prop_fitness.FITNESS_GOAL_PRESETS -- "balanced" is the
     # original, unweighted PROP FITNESS formula), or a custom dict of
@@ -674,6 +694,7 @@ class EvolutionRunner:
             max_frac=self.cfg.adaptive_family_budget_max_frac,
         )
         self.resumed = False                                          # set True if a checkpoint was loaded
+        self._target_reached_by: EvolutionCandidateRecord | None = None
         self._pool: ProcessPoolExecutor | None = None
         self._pool_tmp_dir: tempfile.TemporaryDirectory | None = None
         self._surrogate = (
@@ -921,6 +942,7 @@ class EvolutionRunner:
         self.leaderboard = []
         self.journal = []
         self.resumed = False
+        self._target_reached_by = None
 
     # -- public controls ------------------------------------------------
     def start(self) -> None:
@@ -962,6 +984,12 @@ class EvolutionRunner:
             "consecutive_empty_generations": self._consecutive_empty_generations,
             "consecutive_stress_failures": self._consecutive_stress_failures,
             "max_drawdown_buffer_mult": self.cfg.max_drawdown_buffer_mult,
+            # Loop mode -- see EvolutionConfig.target_eval_pass_pct.
+            "target_eval_pass_pct": self.cfg.target_eval_pass_pct,
+            "target_reached": self._target_reached_by is not None,
+            "target_reached_candidate_id": (
+                self._target_reached_by.candidate_id if self._target_reached_by else None
+            ),
         }
 
     def graveyard_summary(self, top_n: int = 25) -> list[dict]:
@@ -1083,6 +1111,26 @@ class EvolutionRunner:
                 on_result(futures[fut], None)  # None fut == skipped, never scored
             pending = set()
 
+    def _check_target_reached(self) -> "EvolutionCandidateRecord | None":
+        """Loop mode's stop condition -- see EvolutionConfig.target_eval_pass_pct's
+        own comment. Scans the current leaderboard (already sorted by
+        fitness, but a high-fitness candidate is not necessarily the one
+        clearing the target metric, so this checks every leaderboard row,
+        not just [0]) for the first one whose target_metric value already
+        clears the configured threshold. Returns None immediately if no
+        target is configured, so this is a cheap no-op for every existing
+        caller that never sets one."""
+        if self.cfg.target_eval_pass_pct is None:
+            return None
+        for record in self.leaderboard:
+            if self.cfg.target_metric == "cpcv_oos_eval_pass_probability":
+                value = record.cpcv_oos_eval_pass_probability
+            else:
+                value = (record.mc_summary or {}).get("evaluation_pass_probability")
+            if value is not None and value >= self.cfg.target_eval_pass_pct:
+                return record
+        return None
+
     def _run_loop(self) -> None:
         gen = self.generation
         try:
@@ -1127,6 +1175,15 @@ class EvolutionRunner:
                     gen += 1
                     continue
                 gen += 1
+                target_hit = self._check_target_reached()
+                if target_hit is not None:
+                    self._target_reached_by = target_hit
+                    self._log(
+                        f"  Loop mode target reached: candidate {target_hit.candidate_id} cleared "
+                        f"{self.cfg.target_eval_pass_pct:.0f}% on {self.cfg.target_metric} "
+                        f"at generation {gen - 1} -- stopping automatically."
+                    )
+                    break
                 # Recycle the pool periodically regardless of errors --
                 # cheap insurance against the same slow fragmentation
                 # described above ever building up far enough to hit a
