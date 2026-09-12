@@ -2691,6 +2691,324 @@ _VOLUME_TREND_BREAKOUT_CONFIRMATION = SkeletonSpec(
 )
 
 
+# ---------------------------------------------------------------------------
+# Expansion round 5 (indicator-widening push): 7 new families built on 7
+# indicators this module's search space had never used before -- ADX,
+# Stochastic, CCI, OBV, Keltner Channel, Donchian Channel (continuous
+# levels, not just the existing `bos` breakout boolean), and SuperTrend.
+# Each pairs a genuinely distinct indicator with a mechanism (trend-strength
+# gate, oscillator reversion, unbounded-oscillator reversion, volume/price
+# divergence confirmation, ATR-band squeeze, channel-level breakout,
+# flip-based trend-following) not already covered by an existing family --
+# see each SkeletonSpec's own description for the distinction.
+# ---------------------------------------------------------------------------
+
+def _build_adx_trend_strength_breakout(p: dict) -> dict:
+    lookback, ema_fast, ema_slow = p["lookback"], p["ema_fast"], p["ema_slow"]
+    adx_period, adx_min = p["adx_period"], p["adx_min"]
+    return {
+        "name": f"ADX Trend-Strength Breakout (lb={lookback}, adx{adx_period}>={adx_min})",
+        "entry_conditions": {
+            "long": [
+                _cond(_breakout_flag(lookback, "bullish"), "is true", _val(1)),
+                _cond(_ind("ema", ema_fast), ">", _ind("ema", ema_slow)),
+                _cond(_ind("adx", adx_period), ">=", _val(adx_min)),
+            ],
+            "long_connectors": ["AND", "AND"],
+            "short": [
+                _cond(_breakout_flag(lookback, "bearish"), "is true", _val(1)),
+                _cond(_ind("ema", ema_fast), "<", _ind("ema", ema_slow)),
+                _cond(_ind("adx", adx_period), ">=", _val(adx_min)),
+            ],
+            "short_connectors": ["AND", "AND"],
+        },
+        "exit_conditions": {"long": [], "short": []},
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"]),
+    }
+
+
+_ADX_TREND_STRENGTH_BREAKOUT = SkeletonSpec(
+    name="adx_trend_strength_breakout",
+    label="ADX Trend-Strength Breakout (Donchian + EMA + ADX gate)",
+    description=(
+        "The same trend-aligned Donchian breakout as Family A, gated by ADX so it only fires "
+        "when the market is actually trending strongly (ADX above threshold) rather than "
+        "chopping -- ADX is a pure trend-STRENGTH filter (no direction of its own), a primitive "
+        "no prior family used."
+    ),
+    param_grid={
+        "lookback": [10, 20, 40],
+        "ema_fast": [20, 50],
+        "ema_slow": [100, 200],
+        "adx_period": [14],
+        "adx_min": [20, 25, 30],
+        "stop_atr_mult": [1.0, 1.5, 2.0],
+        "target_atr_mult": [2.0, 3.0],
+    },
+    build=_build_adx_trend_strength_breakout,
+    valid=lambda p: p["ema_fast"] < p["ema_slow"],
+)
+
+
+def _build_stochastic_extreme_reversion(p: dict) -> dict:
+    period, smooth, oversold, overbought = p["period"], p["smooth"], p["oversold"], p["overbought"]
+    return {
+        "name": f"Stochastic Extreme Reversion (k{period}, {oversold}/{overbought})",
+        "entry_conditions": {
+            "long": [_cond(_ind("stoch_k", period), "crosses above", _val(oversold))],
+            "long_connectors": [],
+            "short": [_cond(_ind("stoch_k", period), "crosses below", _val(overbought))],
+            "short_connectors": [],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("stoch_k", period), ">", _val(overbought))],
+            "short": [_cond(_ind("stoch_k", period), "<", _val(oversold))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_STOCHASTIC_EXTREME_REVERSION = SkeletonSpec(
+    name="stochastic_extreme_reversion",
+    label="Stochastic Extreme Reversion (%K crossing back from oversold/overbought)",
+    description=(
+        "Enters when the Stochastic %K crosses back above an oversold floor (long) or below an "
+        "overbought ceiling (short) -- a bounded-oscillator reversion trigger distinct from "
+        "rsi_extreme_reversion's RSI-based one (Stochastic and RSI diverge meaningfully on "
+        "range-bound vs trending data)."
+    ),
+    param_grid={
+        "period": [9, 14, 21],
+        "smooth": [3],
+        "oversold": [15, 20],
+        "overbought": [80, 85],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [1.5, 2.0],
+        "max_bars": [16, 32],
+    },
+    build=_build_stochastic_extreme_reversion,
+    valid=lambda p: p["oversold"] < p["overbought"],
+)
+
+
+def _build_cci_extreme_reversion(p: dict) -> dict:
+    period, threshold = p["period"], p["threshold"]
+    return {
+        "name": f"CCI Extreme Reversion (cci{period}, +/-{threshold})",
+        "entry_conditions": {
+            "long": [_cond(_ind("cci", period), "crosses above", _val(-threshold))],
+            "long_connectors": [],
+            "short": [_cond(_ind("cci", period), "crosses below", _val(threshold))],
+            "short_connectors": [],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("cci", period), ">", _val(0))],
+            "short": [_cond(_ind("cci", period), "<", _val(0))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_CCI_EXTREME_REVERSION = SkeletonSpec(
+    name="cci_extreme_reversion",
+    label="CCI Extreme Reversion (unbounded oscillator, +/- threshold)",
+    description=(
+        "Fades a CCI extreme back through zero -- CCI is unbounded (unlike RSI/Stochastic's "
+        "fixed 0-100 scale), so its 'how extreme' reading behaves differently in strongly "
+        "trending regimes; a distinct reversion hypothesis from the two bounded-oscillator "
+        "families above."
+    ),
+    param_grid={
+        "period": [14, 20, 30],
+        "threshold": [100, 150, 200],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [1.5, 2.0],
+        "max_bars": [16, 32],
+    },
+    build=_build_cci_extreme_reversion,
+)
+
+
+def _build_obv_divergence_trend_confirmation(p: dict) -> dict:
+    obv_fast, obv_slow = p["obv_fast"], p["obv_slow"]
+    lookback = p["lookback"]
+    return {
+        "name": f"OBV Divergence Trend Confirmation (obv {obv_fast}/{obv_slow}, lb={lookback})",
+        "entry_conditions": {
+            # A structure breakout (bos) confirmed by OBV's own trend agreeing
+            # (a fast EMA-of-OBV above a slow one) -- i.e. cumulative buying/
+            # selling volume was already leaning the same direction BEFORE the
+            # price breakout, the volume-leads-price idea behind classic OBV
+            # divergence analysis, distinct from volume_confirmed_breakout's
+            # single-bar relative-volume check.
+            "long": [
+                _cond(_breakout_flag(lookback, "bullish"), "is true", _val(1)),
+                _cond(_ind("obv_ema", obv_fast), ">", _ind("obv_ema", obv_slow)),
+            ],
+            "long_connectors": ["AND"],
+            "short": [
+                _cond(_breakout_flag(lookback, "bearish"), "is true", _val(1)),
+                _cond(_ind("obv_ema", obv_fast), "<", _ind("obv_ema", obv_slow)),
+            ],
+            "short_connectors": ["AND"],
+        },
+        "exit_conditions": {"long": [], "short": []},
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"]),
+    }
+
+
+_OBV_DIVERGENCE_TREND_CONFIRMATION = SkeletonSpec(
+    name="obv_divergence_trend_confirmation",
+    label="OBV Divergence Trend Confirmation (structure breakout + OBV trend agreement)",
+    description=(
+        "A structure breakout taken only when On-Balance Volume's own trend (fast EMA-of-OBV "
+        "vs slow) already agrees with the breakout direction -- the classic 'volume leads "
+        "price' idea, distinct from a single-bar relative-volume confirmation."
+    ),
+    param_grid={
+        "lookback": [10, 20, 30],
+        "obv_fast": [10, 20],
+        "obv_slow": [30, 50],
+        "stop_atr_mult": [1.0, 1.5, 2.0],
+        "target_atr_mult": [2.0, 3.0],
+    },
+    build=_build_obv_divergence_trend_confirmation,
+    valid=lambda p: p["obv_fast"] < p["obv_slow"],
+)
+
+
+def _build_keltner_squeeze_breakout(p: dict) -> dict:
+    kc_period, kc_mult, don_period = p["kc_period"], p["kc_mult"], p["don_period"]
+    return {
+        "name": f"Keltner Squeeze Breakout (kc{kc_period}x{kc_mult}, don{don_period})",
+        "entry_conditions": {
+            # An ATR-band (Keltner) squeeze/breakout hypothesis: price clears
+            # the Keltner upper/lower band -- distinct from
+            # volatility_contraction_squeeze, which gates on ATR CONTRACTING
+            # then a plain bos breakout; this instead uses the Keltner band's
+            # own continuous level as the breakout trigger, which widens and
+            # narrows with directional range rather than close-to-close
+            # dispersion (Bollinger), so it disagrees with a Bollinger-based
+            # squeeze on genuinely different bars.
+            "long": [_cond(_ind("close", 1), ">", _ind("keltner_upper", kc_period))],
+            "long_connectors": [],
+            "short": [_cond(_ind("close", 1), "<", _ind("keltner_lower", kc_period))],
+            "short_connectors": [],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("close", 1), "<", _ind("keltner_mid", kc_period))],
+            "short": [_cond(_ind("close", 1), ">", _ind("keltner_mid", kc_period))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"]),
+    }
+
+
+_KELTNER_SQUEEZE_BREAKOUT = SkeletonSpec(
+    name="keltner_squeeze_breakout",
+    label="Keltner Squeeze Breakout (ATR-band breakout, not Bollinger)",
+    description=(
+        "Enters when price clears an ATR-based Keltner Channel band -- an ATR band widens with "
+        "directional range rather than close-to-close dispersion, so it fires on different bars "
+        "than the existing Bollinger/Donchian-based breakout families."
+    ),
+    param_grid={
+        "kc_period": [20, 30],
+        "kc_mult": [1.5, 2.0, 2.5],
+        "don_period": [20],
+        "stop_atr_mult": [1.0, 1.5, 2.0],
+        "target_atr_mult": [2.0, 3.0],
+    },
+    build=_build_keltner_squeeze_breakout,
+)
+
+
+def _build_donchian_channel_turtle_breakout(p: dict) -> dict:
+    entry_period, exit_period = p["entry_period"], p["exit_period"]
+    return {
+        "name": f"Donchian Turtle Breakout (entry={entry_period}, exit={exit_period})",
+        "entry_conditions": {
+            # Classic turtle-trader system: enter on a close beyond the
+            # N-bar Donchian upper/lower level, exit on a close back through
+            # a SHORTER Donchian channel -- distinct from `_breakout_flag`
+            # (`bos`)'s one-shot boolean in that it exposes the actual
+            # channel LEVEL, enabling the asymmetric entry/exit channel
+            # widths this system is defined by (Families A/H/Z all use one
+            # symmetric lookback for both).
+            "long": [_cond(_ind("close", 1), ">", _ind("donchian_upper", entry_period))],
+            "long_connectors": [],
+            "short": [_cond(_ind("close", 1), "<", _ind("donchian_lower", entry_period))],
+            "short_connectors": [],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("close", 1), "<", _ind("donchian_lower", exit_period))],
+            "short": [_cond(_ind("close", 1), ">", _ind("donchian_upper", exit_period))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"]),
+    }
+
+
+_DONCHIAN_CHANNEL_TURTLE_BREAKOUT = SkeletonSpec(
+    name="donchian_channel_turtle_breakout",
+    label="Donchian Turtle Breakout (asymmetric entry/exit channel)",
+    description=(
+        "The original turtle-trader system: enter on a close beyond a longer Donchian channel, "
+        "exit on a close back through a shorter one -- an asymmetric-channel-width hypothesis "
+        "no other breakout family here expresses (they all use one lookback for both)."
+    ),
+    param_grid={
+        "entry_period": [20, 40, 55],
+        "exit_period": [10, 20],
+        "stop_atr_mult": [1.5, 2.0],
+        "target_atr_mult": [3.0, 4.0],
+    },
+    build=_build_donchian_channel_turtle_breakout,
+    valid=lambda p: p["exit_period"] < p["entry_period"],
+)
+
+
+def _build_supertrend_trend_following(p: dict) -> dict:
+    st_period, st_mult = p["st_period"], p["st_mult"]
+    return {
+        "name": f"SuperTrend Trend Following (st{st_period}x{st_mult})",
+        "entry_conditions": {
+            # SuperTrend's own direction series flips exactly at the bar
+            # price closes through the ratcheting trailing-stop line -- a
+            # flip-based trend-following trigger distinct from every
+            # crossover/breakout family above, since the line's position
+            # depends on its own PRIOR value and prior direction (a stateful
+            # ratchet), not a stateless rolling window.
+            "long": [_cond(_ind("supertrend_direction", st_period), "crosses above", _val(0))],
+            "long_connectors": [],
+            "short": [_cond(_ind("supertrend_direction", st_period), "crosses below", _val(0))],
+            "short_connectors": [],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("supertrend_direction", st_period), "<", _val(0))],
+            "short": [_cond(_ind("supertrend_direction", st_period), ">", _val(0))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"]),
+    }
+
+
+_SUPERTREND_TREND_FOLLOWING = SkeletonSpec(
+    name="supertrend_trend_following",
+    label="SuperTrend Trend Following (flip-based ratcheting stop)",
+    description=(
+        "Enters on a SuperTrend direction flip (price closing through its own ratcheting "
+        "trailing-stop line) and stays with the trend until the next flip -- a stateful, "
+        "flip-based trend-following mechanism distinct from every crossover/breakout family "
+        "above."
+    ),
+    param_grid={
+        "st_period": [7, 10, 14],
+        "st_mult": [2.0, 3.0, 4.0],
+        "stop_atr_mult": [1.5, 2.0],
+        "target_atr_mult": [3.0, 4.0],
+    },
+    build=_build_supertrend_trend_following,
+)
+
+
 FAMILIES: dict[str, SkeletonSpec] = {
     _TREND_BREAKOUT.name: _TREND_BREAKOUT,
     _MTF_PULLBACK.name: _MTF_PULLBACK,
@@ -2768,6 +3086,16 @@ FAMILIES: dict[str, SkeletonSpec] = {
     _VOLUME_CONFIRMED_ORDER_BLOCK_REACTION.name: _VOLUME_CONFIRMED_ORDER_BLOCK_REACTION,
     _WIDE_RANGE_BAR_EXHAUSTION_FADE.name: _WIDE_RANGE_BAR_EXHAUSTION_FADE,
     _VOLUME_TREND_BREAKOUT_CONFIRMATION.name: _VOLUME_TREND_BREAKOUT_CONFIRMATION,
+    # -- Expansion round 5 (7 new families, 7 new indicators: ADX, Stochastic,
+    # CCI, OBV, Keltner Channel, Donchian Channel levels, SuperTrend) -- see
+    # each SkeletonSpec's own comment block above for what makes it distinct.
+    _ADX_TREND_STRENGTH_BREAKOUT.name: _ADX_TREND_STRENGTH_BREAKOUT,
+    _STOCHASTIC_EXTREME_REVERSION.name: _STOCHASTIC_EXTREME_REVERSION,
+    _CCI_EXTREME_REVERSION.name: _CCI_EXTREME_REVERSION,
+    _OBV_DIVERGENCE_TREND_CONFIRMATION.name: _OBV_DIVERGENCE_TREND_CONFIRMATION,
+    _KELTNER_SQUEEZE_BREAKOUT.name: _KELTNER_SQUEEZE_BREAKOUT,
+    _DONCHIAN_CHANNEL_TURTLE_BREAKOUT.name: _DONCHIAN_CHANNEL_TURTLE_BREAKOUT,
+    _SUPERTREND_TREND_FOLLOWING.name: _SUPERTREND_TREND_FOLLOWING,
 }
 
 # Families that need something beyond the plain OHLCV df -- checked by
@@ -2855,6 +3183,13 @@ HYPOTHESIS_QUESTIONS: dict[str, str] = {
     "volume_confirmed_order_block_reaction": "When an order-block reaction is confirmed by volume, is the reversal more reliable?",
     "wide_range_bar_exhaustion_fade": "After an unusually wide-range bar (exhaustion), does price fade back against that bar's direction?",
     "volume_trend_breakout_confirmation": "Does a trend breakout confirmed by a volume surge outperform one without volume confirmation?",
+    "adx_trend_strength_breakout": "Does a trend-aligned breakout perform better when ADX confirms the market is actually trending strongly?",
+    "stochastic_extreme_reversion": "When Stochastic %K crosses back from an oversold/overbought extreme, does price revert?",
+    "cci_extreme_reversion": "When CCI reaches an unbounded extreme reading, does price mean-revert?",
+    "obv_divergence_trend_confirmation": "When On-Balance Volume's own trend already agrees with a structure breakout, does the breakout hold up better?",
+    "keltner_squeeze_breakout": "When price clears an ATR-based Keltner Channel band, does the move continue?",
+    "donchian_channel_turtle_breakout": "Does the classic turtle system (enter on a long Donchian channel, exit on a shorter one) still work?",
+    "supertrend_trend_following": "When SuperTrend's ratcheting trailing-stop line flips direction, does the new trend persist?",
 }
 
 

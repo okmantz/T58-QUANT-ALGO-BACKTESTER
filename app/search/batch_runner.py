@@ -75,6 +75,7 @@ from app.prop.simulator import PropRules, simulate_account, summarize_single_run
 from app.reports.generator import generate_full_report
 from app.search.failure_triage import aggregate_failure_reasons
 from app.search.family_diversity import enforce_family_diversity
+from app.search.graveyard import GraveyardEntry, graveyard_path_for, param_signature, record_rejections
 from app.search.results_db import ResultsDB
 from app.search.robustness import (
     deflated_sharpe_ratio, parameter_neighborhood_robustness, run_walk_forward,
@@ -119,6 +120,70 @@ def _record_search_candidates_to_dashboard(
             run_history.record_run(report, {"html": ""})
         except Exception:  # noqa: BLE001 -- dashboard visibility is a convenience, never core output
             continue
+
+
+def _write_search_graveyard_entries(
+    stage3_records: list[dict], instrument: str, timeframe: str,
+) -> Path | None:
+    """Search Lab's counterpart to app.evolution.engine's
+    _write_graveyard_entries -- Evolution Lab has recorded expensive-stage
+    rejections to the strategy graveyard for a while; Search Lab's Stage 3
+    (the same kind of full Monte Carlo / walk-forward / robustness gate)
+    never did, so a candidate this run's Stage 3 already ruled out could
+    still get re-generated and re-tested from scratch by a LATER search
+    or by Forge Strategy against the same instrument+timeframe. Scoped to
+    Stage 3 only (not Stage 1/2) -- see app.search.graveyard's own module
+    docstring for why the cheap-filter rejection log is deliberately kept
+    separate. Uses the same per-instrument path convention as Forge
+    (app.search.graveyard.graveyard_path_for) rather than evolution
+    engine's flat tested_log_path-relative file, so a Search Lab run and a
+    Forge run against the same instrument share and accumulate into one
+    history; returns that path (or None if nothing was written / logging
+    itself failed) purely for surfacing in SearchSummary/the UI -- never
+    allowed to affect the search result.
+    """
+    entries = []
+    for rec in stage3_records:
+        if rec.get("passed_stage3_gate"):
+            continue
+        fam = rec.get("family") or "?"
+        config = rec.get("config")
+        robustness = rec.get("robustness") or {}
+        stability_pct = None
+        if robustness.get("stability_ratio") is not None:
+            stability_pct = max(0.0, min(1.0, float(robustness["stability_ratio"]))) * 100.0
+        wf = rec.get("walk_forward") or {}
+        oos_result = None
+        if wf.get("walk_forward_efficiency") is not None:
+            oos_result = "negative" if wf["walk_forward_efficiency"] < 0 else "positive"
+        mc = rec.get("mc_summary") or {}
+        raw_pass_pct = mc.get("evaluation_pass_probability")
+        mc_failure_pct = (100.0 - raw_pass_pct) if raw_pass_pct is not None else None
+
+        reason = rec.get("gate_notes") or rec.get("error") or (
+            "Failed Stage 3's validation gate (Monte Carlo, walk-forward, lookahead, or "
+            "parameter-neighborhood robustness) after clearing Stages 1 and 2."
+        )
+        entries.append(GraveyardEntry(
+            candidate_id=rec["candidate_id"], family=fam, generation=None, stage_died="search_lab_stage3",
+            reason=reason, oos_result=oos_result,
+            neighbor_robustness_pct=stability_pct,
+            monte_carlo_failure_pct=mc_failure_pct,
+            prop_sim_pass_pct=raw_pass_pct,
+            cpcv_oos_pass_pct=None,
+            pbo=None,
+            fitness_score=rec.get("fitness"),
+            param_signature=param_signature(fam, config),
+            notes=[reason] if reason else [],
+        ))
+    if not entries:
+        return None
+    path = graveyard_path_for(instrument, timeframe)
+    try:
+        record_rejections(entries, path)
+    except Exception:  # noqa: BLE001 -- graveyard logging is diagnostic, never allowed to break a run
+        return None
+    return path
 
 
 def _record_fields_from_spec(spec: dict) -> dict:
@@ -250,6 +315,7 @@ class SearchSummary:
     elapsed_seconds: float
     db_path: str
     leaderboard: list = field(default_factory=list)
+    graveyard_path: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1240,6 +1306,7 @@ def run_search(
     db.close()
 
     _record_search_candidates_to_dashboard(stage3_records, instrument, timeframe, space.family)
+    graveyard_path = _write_search_graveyard_entries(stage3_records, instrument, timeframe)
 
     elapsed = time.time() - t0
     n_passed = sum(1 for r in stage3_records if r.get("passed_stage3_gate"))
@@ -1265,6 +1332,7 @@ def run_search(
         stage1_survivors=len(survivors1), stage2_survivors=len(survivors2), stage3_survivors=len(stage3_records),
         champion_candidate_id=champion["candidate_id"] if champion else None,
         elapsed_seconds=elapsed, db_path=str(db_path), leaderboard=leaderboard,
+        graveyard_path=str(graveyard_path) if graveyard_path else None,
     )
 
 
