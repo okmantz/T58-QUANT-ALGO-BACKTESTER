@@ -101,7 +101,10 @@ class ManualStrategy(Strategy):
                     "adx", "stoch_k", "stoch_d", "cci", "obv", "obv_ema",
                     "keltner_mid", "keltner_upper", "keltner_lower",
                     "donchian_mid", "donchian_upper", "donchian_lower",
-                    "supertrend_line", "supertrend_direction"}:
+                    "supertrend_line", "supertrend_direction",
+                    # Expansion round 6 indicators.
+                    "williams_r", "roc", "awesome_oscillator", "cmf",
+                    "psar_line", "psar_direction"}:
             return build_indicator_series(work, kind, period=period, column=field, lookback=lookback)
 
         if kind == "time_of_day":

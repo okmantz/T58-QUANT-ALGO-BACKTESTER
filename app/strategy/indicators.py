@@ -326,6 +326,108 @@ def supertrend(frame: pd.DataFrame, period: int = 10, atr_mult: float = 3.0) -> 
     return pd.Series(line, index=frame.index), pd.Series(direction, index=frame.index)
 
 
+def williams_r(frame: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Williams %R -- the same trailing high/low range Stochastic uses,
+    scaled -100 (at the range low) to 0 (at the range high) instead of
+    Stochastic's 0-100 -- a pure rescale of the identical raw position,
+    kept as its own indicator since -20/-80 are this scale's conventional
+    overbought/oversold thresholds, not Stochastic's 80/20."""
+    p = _period(period)
+    hh = highest_high(frame["high"], p)
+    ll = lowest_low(frame["low"], p)
+    return (-100 * (hh - frame["close"]) / (hh - ll).replace(0, np.nan)).fillna(-50.0)
+
+
+def roc(frame: pd.DataFrame, period: int = 10, column: str = "close") -> pd.Series:
+    """Rate of Change -- percentage change vs. the close `period` bars ago.
+    A pure momentum measure, distinct from RSI/Stochastic (which measure
+    position within a recent range, not raw percentage change) and from
+    MACD (a difference of two EMAs, not a simple lookback delta)."""
+    p = _period(period)
+    source = frame[column] if column in frame.columns else frame["close"]
+    shifted = source.shift(p)
+    return (100 * (source - shifted) / shifted.replace(0, np.nan)).fillna(0.0)
+
+
+def awesome_oscillator(frame: pd.DataFrame) -> pd.Series:
+    """Awesome Oscillator -- SMA(5) of the midpoint price minus SMA(34) of
+    it, a momentum indicator with FIXED periods (unlike every other
+    indicator in this module) since 5/34 is how it's conventionally
+    defined; zero-line crosses are its standard trigger, distinct from
+    MACD's EMA-based (not SMA-based) fast/slow difference on CLOSE (not
+    midpoint) prices."""
+    midpoint = (frame["high"] + frame["low"]) / 2.0
+    return sma(midpoint, 5) - sma(midpoint, 34)
+
+
+def chaikin_money_flow(frame: pd.DataFrame, period: int = 20) -> pd.Series:
+    """Chaikin Money Flow -- volume-weighted accumulation/distribution
+    over a rolling window, bounded roughly -1 to +1. Distinct from OBV
+    (a running CUMULATIVE total with no window/bound) and from
+    relative_volume (which only measures volume SIZE, not whether that
+    volume traded closer to the bar's high or low)."""
+    p = _period(period)
+    high, low, close = frame["high"], frame["low"], frame["close"]
+    volume = frame["volume"] if "volume" in frame.columns else pd.Series(0.0, index=frame.index)
+    money_flow_mult = ((close - low) - (high - close)) / (high - low).replace(0, np.nan)
+    money_flow_vol = money_flow_mult.fillna(0.0) * volume
+    return (money_flow_vol.rolling(p, min_periods=p).sum() / volume.rolling(p, min_periods=p).sum().replace(0, np.nan)).fillna(0.0)
+
+
+def parabolic_sar(frame: pd.DataFrame, af_start: float = 0.02, af_step: float = 0.02, af_max: float = 0.2) -> tuple[pd.Series, pd.Series]:
+    """Parabolic SAR -- a flip-based, ACCELERATING trailing stop (the step
+    multiplier grows every bar the trend continues, unlike SuperTrend's
+    fixed ATR multiple), the original Wilder trend-following/stop-and-
+    reverse system. Returns (sar, direction) where direction is +1.0
+    while in an uptrend (SAR trails below price) and -1.0 while in a
+    downtrend (SAR trails above price). Implemented as a sequential
+    ratchet for the same reason supertrend() is -- each bar depends on
+    the prior bar's SAR, extreme point, and acceleration factor, not a
+    stateless rolling window."""
+    high, low, close = frame["high"].to_numpy(), frame["low"].to_numpy(), frame["close"].to_numpy()
+    n = len(frame)
+    sar = np.full(n, np.nan)
+    direction = np.full(n, np.nan)
+    if n == 0:
+        return pd.Series(sar, index=frame.index), pd.Series(direction, index=frame.index)
+
+    direction[0] = 1.0
+    sar[0] = low[0]
+    ep = high[0]   # extreme point -- highest high (uptrend) or lowest low (downtrend) since the last flip
+    af = af_start
+    for i in range(1, n):
+        prev_sar = sar[i - 1]
+        if direction[i - 1] == 1.0:
+            candidate = prev_sar + af * (ep - prev_sar)
+            candidate = min(candidate, low[i - 1], low[i - 2] if i >= 2 else low[i - 1])
+            if low[i] < candidate:
+                direction[i] = -1.0
+                sar[i] = ep
+                ep = low[i]
+                af = af_start
+            else:
+                direction[i] = 1.0
+                sar[i] = candidate
+                if high[i] > ep:
+                    ep = high[i]
+                    af = min(af + af_step, af_max)
+        else:
+            candidate = prev_sar + af * (ep - prev_sar)
+            candidate = max(candidate, high[i - 1], high[i - 2] if i >= 2 else high[i - 1])
+            if high[i] > candidate:
+                direction[i] = 1.0
+                sar[i] = ep
+                ep = high[i]
+                af = af_start
+            else:
+                direction[i] = -1.0
+                sar[i] = candidate
+                if low[i] < ep:
+                    ep = low[i]
+                    af = min(af + af_step, af_max)
+    return pd.Series(sar, index=frame.index), pd.Series(direction, index=frame.index)
+
+
 def crossover(a: pd.Series, b: pd.Series) -> pd.Series:
     return (a > b) & (a.shift(1) <= b.shift(1))
 
@@ -425,6 +527,18 @@ def _build_indicator_series_uncached(frame: pd.DataFrame, kind: str, period: int
         return supertrend(frame, p)[0]
     if kind == "supertrend_direction":
         return supertrend(frame, p)[1]
+    if kind == "williams_r":
+        return williams_r(frame, p)
+    if kind == "roc":
+        return roc(frame, p, column)
+    if kind == "awesome_oscillator":
+        return awesome_oscillator(frame)
+    if kind == "cmf":
+        return chaikin_money_flow(frame, p)
+    if kind == "psar_line":
+        return parabolic_sar(frame)[0]
+    if kind == "psar_direction":
+        return parabolic_sar(frame)[1]
     raise KeyError(kind)
 
 

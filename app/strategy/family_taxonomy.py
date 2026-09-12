@@ -138,6 +138,12 @@ _SKELETON_TO_GROUP: dict[str, str] = {
     "keltner_squeeze_breakout": "volatility_contraction",
     "donchian_channel_turtle_breakout": "breakout",
     "supertrend_trend_following": "trend_following",
+    # -- Expansion round 6 (5 more indicator-driven families) --
+    "williams_r_extreme_reversion": "mean_reversion",
+    "roc_momentum_continuation": "momentum",
+    "awesome_oscillator_zero_cross": "momentum",
+    "cmf_volume_confirmation": "order_flow",
+    "parabolic_sar_trend_following": "trend_following",
 }
 
 # Path 2a: app.strategy.dna active_tags() -> canonical group. Checked in
