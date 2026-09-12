@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Strategy Graveyard — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  .card p.help { font-size: 12px; color: #888; margin: 0 0 10px; line-height: 1.5; }
+  select { padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 14px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06); vertical-align: top; }
+  th { color: #999; text-transform: uppercase; font-size: 11px; letter-spacing: .03em; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+  .n-tested { font-weight: 700; color: #ffb454; }
+  .stage-cpcv { color: #ff8a8a; }
+  .stage-stress { color: #ffcf5c; }
+  .stage-not_ranked { color: #888; }
+  .best-pct { color: #35e0b0; font-weight: 600; }
+  .empty { color: #888; font-size: 14px; padding: 20px 0; }
+  .sig { font-family: monospace; font-size: 11px; color: #7dd3fc; word-break: break-all; }
+  .filesel { font-size: 12px; color: #999; }
+</style>
+</head>
+<body>
+{% set active_page = 'graveyard' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Strategy Graveyard</h1>
+  <p>Every rejected strategy that got far enough to be expensive (robustness / Monte Carlo / CPCV / rolling
+     evaluation / locked OOS) before dying, grouped into "dead neighborhoods" -- the biggest, most-tested
+     dead end first. Forge Strategy reads this same file before spending compute on a new run: a parameter
+     neighborhood proven dead here {{ ' ' }}gets skipped automatically instead of re-tested from scratch
+     (see the "Graveyard pre-filter" line in a Forge run's log).</p>
+</div>
+
+{% if not files %}
+<div class="card"><p class="empty">No graveyard file exists yet -- run Forge Strategy (or Evolution Lab) at
+least once and rejections that reach CPCV/stress-testing will start accumulating here.</p></div>
+{% else %}
+
+<div class="card">
+  <h2>Instrument / timeframe</h2>
+  <p class="help">Each instrument+timeframe gets its own persistent graveyard file that every future run
+     against the same data reads from and writes to -- a dead neighborhood on ES futures says nothing about
+     whether the same parameters are dead on EURUSD, so these are kept separate rather than merged into one
+     global file.</p>
+  <form method="get" action="/graveyard" class="row">
+    <select name="path" onchange="this.form.submit()">
+      {% for f in files %}
+      <option value="{{ f.path }}" {{ 'selected' if f.path == selected_path else '' }}>
+        {{ f.instrument }} / {{ f.timeframe }} -- {{ f.n_rows }} rejection(s)
+      </option>
+      {% endfor %}
+    </select>
+    {% if all_families %}
+    <select name="family" onchange="this.form.submit()">
+      <option value="">All families</option>
+      {% for fam in all_families %}
+      <option value="{{ fam }}" {{ 'selected' if fam == family_filter else '' }}>{{ fam }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
+    <span class="filesel">{{ total_rows }} total rejection(s) in this file</span>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Dead neighborhoods ({{ clusters|length }})</h2>
+  {% if not clusters %}
+  <p class="empty">
+    {% if family_filter %}No rejections for family "{{ family_filter }}" in this file.
+    {% else %}This file has entries, but no cluster matched -- nothing has failed here yet, or the file is empty.{% endif %}
+  </p>
+  {% else %}
+  <table>
+    <thead>
+      <tr>
+        <th>Family</th><th>Tested</th><th>Worst stage reached</th><th>Best pass %</th>
+        <th>Most common reason</th><th>Signature</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in clusters %}
+      <tr>
+        <td>{{ c.family }}</td>
+        <td class="n-tested">{{ c.n_tested }}x</td>
+        <td class="stage-{{ c.worst_stage_reached }}">{{ c.worst_stage_reached }}</td>
+        <td>{% if c.best_prop_sim_pass_pct is not none %}<span class="best-pct">{{ '%.0f'|format(c.best_prop_sim_pass_pct) }}%</span>{% else %}--{% endif %}</td>
+        <td>{{ c.most_common_reason }}</td>
+        <td class="sig">{{ c.signature }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endif %}
+
+</div>
+</div>
+</body>
+</html>
