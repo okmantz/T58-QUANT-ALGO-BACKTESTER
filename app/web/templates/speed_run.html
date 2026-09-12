@@ -141,6 +141,20 @@
     <label class="checkbox-row" style="margin-top:12px;"><input type="checkbox" name="save_to_library" checked>Save the winning strategy to the Strategy Library when finished</label>
   </div>
 
+  <div class="card">
+    <h2>Loop mode</h2>
+    <p class="help">Repeats Speed Run automatically: if a round finds no winner, the next round
+    raises the candidate cap and validates more discoveries instead of stopping. Stops the moment a
+    round actually finds a winner, when the round or time budget runs out, or when you hit STOP.</p>
+    <label class="checkbox-row"><input type="checkbox" name="loop_mode">Enable Loop Mode</label>
+    <div class="row">
+      <div><label>Max rounds</label><input type="number" name="loop_max_rounds" value="10"></div>
+      <div><label>Time budget in hours (blank = no limit)</label><input type="number" step="0.1" name="loop_time_budget_hours" value=""></div>
+    </div>
+    <label>Rounds with no winner before widening</label>
+    <input type="number" name="loop_stall_rounds" value="2">
+  </div>
+
   <button class="submit-btn" type="submit">&#9889; Find me a winner</button>
 </form>
 

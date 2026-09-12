@@ -25,6 +25,10 @@
 <div class="card">
   <h2 id="status-title"><span class="spinner" id="spinner"></span>Speed Run running&hellip;</h2>
   <div id="log">Starting&hellip;</div>
+  <p id="loop-status" style="display:none; margin-top:10px; padding:10px 12px; border-radius:8px; background:#1a2530; color:#a8c8e8; font-size:13px;"></p>
+  <form id="stop-form" method="post" action="/speed-run/job/{{ job_id }}/stop" style="display:none; margin-top:10px;" onsubmit="return stopSpeedRun(event)">
+    <button class="stop-btn" type="submit" id="stop-btn">Stop</button>
+  </form>
 </div>
 
 <div id="verdict-banner-wrap" style="display:none;"><div class="verdict-banner" id="verdict-banner"></div></div>
@@ -65,6 +69,12 @@
   const jobId = {{ job_id | tojson }};
   const fmt = (v, d) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d === undefined ? 1 : d);
 
+  function stopSpeedRun(evt) {
+    evt.preventDefault();
+    fetch(`/speed-run/job/${jobId}/stop`, {method: 'POST'}).catch(() => {});
+    return false;
+  }
+
   function poll() {
     fetch(`/speed-run/job/${jobId}/status.json`)
       .then(r => r.json())
@@ -72,6 +82,33 @@
         if (!data.found) return;
         document.getElementById('log').textContent = data.log.filter(Boolean).join('\n');
         document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
+
+        const stopForm = document.getElementById('stop-form');
+        const loopEl = document.getElementById('loop-status');
+        if (data.loop_mode) {
+          stopForm.style.display = data.done ? 'none' : 'block';
+          const lines = [`Loop mode -- round ${data.loop_rounds} completed.`];
+          if (data.loop_result) {
+            const reasonText = {
+              target_reached: 'A round found a winner -- stopped automatically.',
+              max_rounds: 'Stopped: max rounds reached with no winner.',
+              time_budget: 'Stopped: time budget used up.',
+              cancelled: 'Stopped by user.',
+              error: 'Stopped: a round crashed (see error below).',
+            }[data.loop_result.stopped_reason] || data.loop_result.stopped_reason;
+            lines.push(reasonText);
+          }
+          loopEl.textContent = lines.join(' ');
+          loopEl.style.display = 'block';
+        } else {
+          stopForm.style.display = 'none';
+        }
+
+        if (data.cancelled) {
+          document.getElementById('spinner').style.display = 'none';
+          document.getElementById('status-title').textContent = 'Speed Run stopped';
+          return;
+        }
 
         if (data.error) {
           document.getElementById('spinner').style.display = 'none';

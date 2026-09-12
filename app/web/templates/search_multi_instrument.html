@@ -22,6 +22,9 @@
   input[type=number], select { width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 15px; }
   .row { display: flex; gap: 10px; }
   .row > div { flex: 1; }
+  .checkbox-row { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; }
+  .checkbox-row input { width: auto; }
+  .checkbox-row label { margin: 0; }
   .submit-btn {
     width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: #04120e;
     font-size: 16px; font-weight: 700; margin-top: 6px; box-shadow: 0 0 22px rgba(53,224,176,0.35);
@@ -129,6 +132,22 @@
     <label>Max instruments running at once</label>
     <input type="number" name="max_concurrent" value="2">
     <p class="help">Each concurrent instrument gets its own worker-process pool, split from your CPU budget -- 2 is a safe default on most machines; raise it only if you know this machine has CPU/RAM to spare.</p>
+  </div>
+
+  <div class="card">
+    <h2>Loop mode</h2>
+    <p class="help">Each instrument runs its OWN independent loop concurrently -- repeating rounds,
+    widening on stall, until IT clears the target. One instrument finishing early does not stop or
+    affect the others.</p>
+    <label class="checkbox-row"><input type="checkbox" name="loop_mode">Enable Loop Mode</label>
+    <div class="row">
+      <div><label>Stop once a candidate's eval-pass % reaches</label><input type="number" step="0.1" name="loop_target_eval_pass_pct" value="60"></div>
+      <div><label>Max rounds</label><input type="number" name="loop_max_rounds" value="20"></div>
+    </div>
+    <div class="row">
+      <div><label>Time budget in hours (blank = no limit)</label><input type="number" step="0.1" name="loop_time_budget_hours" value=""></div>
+      <div><label>Rounds with no improvement before widening</label><input type="number" name="loop_stall_rounds" value="2"></div>
+    </div>
   </div>
 
   <button class="submit-btn" type="submit">Start multi-instrument search</button>

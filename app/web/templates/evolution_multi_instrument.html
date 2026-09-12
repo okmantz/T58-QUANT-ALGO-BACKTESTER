@@ -139,6 +139,19 @@
       <div><label>Monte Carlo sims (per full eval)</label><input type="number" name="mc_sims" value="1000"></div>
       <div><label>Max generations (blank = run until STOP)</label><input type="number" name="max_generations" value=""></div>
     </div>
+    <div class="row">
+      <div>
+        <label>Loop mode: each instrument stops itself once IT clears (blank = disabled)</label>
+        <input type="number" step="0.1" name="target_eval_pass_pct" value="" placeholder="e.g. 60">
+      </div>
+      <div>
+        <label>Loop mode target metric</label>
+        <select name="target_metric">
+          <option value="cpcv_oos_eval_pass_probability">CPCV out-of-sample eval-pass probability (honest, recommended)</option>
+          <option value="eval_pass_probability">Raw in-sample eval-pass probability (Monte Carlo only)</option>
+        </select>
+      </div>
+    </div>
 
     <div style="margin-top:14px;">
       <label>Optimization goal</label>
