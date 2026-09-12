@@ -74,12 +74,16 @@ from app.orchestration.resource_guard import (
 )
 from app.orchestration.speed_run import SpeedRunConfig, SpeedRunResult, run_speed_run
 from app.orchestration.speed_run import _rank_key as _speedrun_rank_key
+from app.orchestration.overnight_autopilot import AutopilotConfig, run_overnight_autopilot
+from app.orchestration.auto_retune import maybe_trigger_retune
 from app.orchestration.full_pipeline import (
     FullPipelineBatchItem, FullPipelineConfig, run_full_pipeline, run_full_pipeline_batch,
 )
 from app.portfolio.portfolio import InstrumentLeg, PortfolioConfig, PortfolioError, run_portfolio_backtest
 from app.prop.simulator import PropRules, simulate_account
 from app.prop.presets import list_presets as list_prop_firm_presets
+from app.prop.recommender import recommend_prop_firms, render_recommendation_table
+from app.prop.scaling import ScalingPlan, run_scaling_stress_test
 from app.prop.survival_engine import PropSurvivalConfig, ResetEconomics, run_prop_survival_analysis
 from app.reports.generator import generate_full_report
 from app.reports.crash_log import log_crash
@@ -1361,6 +1365,7 @@ class MainWindow:
         self.tab_risk = Frame(self.content, bg=BG)
         self.tab_run = Frame(self.content, bg=BG)
         self.tab_payout = Frame(self.content, bg=BG)
+        self.tab_prop_recommender = Frame(self.content, bg=BG)
         self.tab_refine = Frame(self.content, bg=BG)
         self.tab_search = Frame(self.content, bg=BG)
         self.tab_wfo = Frame(self.content, bg=BG)
@@ -1389,7 +1394,7 @@ class MainWindow:
 
         for f in (
             self.tab_dashboard, self.tab_ai_assistant, self.tab_manual, self.tab_resources, self.tab_strategyconfig, self.tab_data, self.tab_strategy, self.tab_prop,
-            self.tab_risk, self.tab_run, self.tab_payout, self.tab_refine, self.tab_search,
+            self.tab_risk, self.tab_run, self.tab_payout, self.tab_prop_recommender, self.tab_refine, self.tab_search,
             self.tab_wfo, self.tab_cpcv, self.tab_sensitivity, self.tab_param_robustness, self.tab_portfolio,
             self.tab_multiobj, self.tab_wfga, self.tab_ensemble, self.tab_fullpipeline,
             self.tab_forge, self.tab_research_director,
@@ -1440,6 +1445,7 @@ class MainWindow:
             ("risk", "", "4  Risk & Execution", self.tab_risk, NEON_CYAN),
             ("run", "", "5  Run & Report", self.tab_run, NEON_CYAN),
             ("payout", "", "6  Payout Probability", self.tab_payout, NEON_CYAN),
+            ("propfirmrec", "", "7  Prop-Firm Recommender", self.tab_prop_recommender, NEON_CYAN),
 
             (None, None, "\u2462 OPTIMIZE", None, None),
             ("refine", "", "Iterative Refinement", self.tab_refine, BLUE),
@@ -1493,6 +1499,7 @@ class MainWindow:
             ("Risk", self._build_risk_tab),
             ("Run", self._build_run_tab),
             ("Payout Probability", self._build_payout_probability_tab),
+            ("Prop-Firm Recommender", self._build_prop_recommender_tab),
             ("Refinement", self._build_refine_tab),
             ("Search Lab", self._build_search_tab),
             ("Walk-forward", self._build_wfo_tab),
@@ -7180,6 +7187,18 @@ class MainWindow:
         self.payout_profit_split = LabeledEntry(settings, "Trader's profit split (%)", 80)
         self.payout_max_attempts = LabeledEntry(settings, "Max lifetime attempts to fund", 3)
 
+        scaling_section = self._section(
+            f, "Account-scaling stress test (optional)",
+            "Models a funded account scaling up after a run of consecutive payouts -- a common shape "
+            "at several modern prop firms (e.g. +25% account size every 4 payouts, capped at 4x). "
+            "Additive only: leave unchecked to keep the plain (no-scaling) result above; see "
+            "app.prop.scaling's module docstring for the modeling assumptions.",
+        )
+        self.payout_scaling_enabled = LabeledCheckbox(scaling_section, "Enable account-scaling stress test", default=False)
+        self.payout_scale_payouts_per = LabeledEntry(scaling_section, "Consecutive payouts per scale-up", 4)
+        self.payout_scale_multiplier = LabeledEntry(scaling_section, "Scale multiplier (e.g. 1.25 = +25%)", 1.25)
+        self.payout_scale_max_multiple = LabeledEntry(scaling_section, "Max scale multiple (cap, e.g. 4 = never exceed 4x)", 4.0)
+
         button_row = Frame(f, bg=BG)
         button_row.pack(fill="x", padx=24, pady=10)
         self._button(button_row, "RUN PAYOUT PROBABILITY SIMULATION", self._payout_run_clicked, primary=True).pack(side="left")
@@ -7275,6 +7294,25 @@ class MainWindow:
             for note in result.notes:
                 self._log_payout(f"\nNOTE: {note}")
 
+            if self.payout_scaling_enabled.get():
+                try:
+                    plan = ScalingPlan(
+                        payouts_per_scale=self.payout_scale_payouts_per.get_int(4),
+                        scale_multiplier=self.payout_scale_multiplier.get_float(1.25),
+                        max_scale_multiple=self.payout_scale_max_multiple.get_float(4.0),
+                    )
+                    self._log_payout("\nRunning account-scaling stress test...")
+                    scaling_result = run_scaling_stress_test(bt_result.trades, rules, plan)
+                    self._log_payout(
+                        f"  Probability of any scale-up: {scaling_result.probability_any_scale_up:.1f}%\n"
+                        f"  Median final account size: ${scaling_result.median_final_account_size:,.0f}\n"
+                        f"  Expected total payout -- no scaling:   ${scaling_result.expected_total_payout_unscaled:,.0f}\n"
+                        f"  Expected total payout -- with scaling: ${scaling_result.expected_total_payout_scaled:,.0f}\n"
+                        f"  Expected payout uplift: {scaling_result.payout_uplift_pct:.1f}%"
+                    )
+                except ValueError as exc:
+                    self._log_payout(f"\nAccount-scaling stress test skipped: {exc}")
+
             instrument = (
                 os.path.basename(self.csv_paths[0]) if len(self.csv_paths) == 1
                 else " + ".join(os.path.basename(p) for p in self.csv_paths)
@@ -7294,6 +7332,120 @@ class MainWindow:
             self._log_payout("\nUnexpected error:\n" + traceback.format_exc())
         finally:
             self.payout_progress.stop()
+
+    # -----------------------------------------------------------------------
+    # Tab -- Prop-Firm Recommender (reverse of Payout Probability: given a
+    # strategy's own trade sequence, score it against EVERY prop-firm
+    # preset and rank them)
+    # -----------------------------------------------------------------------
+
+    def _build_prop_recommender_tab(self):
+        f = self._scrollable(self.tab_prop_recommender)
+
+        self._page_header(
+            f,
+            "TEST / Prop-Firm Recommender",
+            "Prop-Firm Recommender",
+            "The reverse of Payout Probability: runs your strategy's own trade sequence against "
+            "EVERY prop-firm preset (or a chosen subset) and returns a ranked \"which firm's rules "
+            "does this strategy actually fit best\" table, instead of checking one firm's rules by "
+            "hand, one at a time. Uses the strategy, data, and risk settings already configured in "
+            "Steps 01/02/04 -- prop rules come from the firm checklist below, not from Step 03.",
+        )
+
+        settings = self._section(
+            f, "Firms to score against",
+            "Leave every box unchecked to score against the FULL preset catalog. Check specific "
+            "firms to narrow the comparison. See each preset's \"as of\" date -- verify against the "
+            "firm's own current rules page before relying on this for a real evaluation.",
+            emphasize=True,
+        )
+        self.prop_rec_firm_vars: dict[str, BooleanVar] = {}
+        for p in list_prop_firm_presets():
+            cb = LabeledCheckbox(settings, f"{p.label}  (as of {p.as_of})", default=False)
+            self.prop_rec_firm_vars[p.key] = cb.var
+
+        sim_section = self._section(f, "Simulation settings", "")
+        self.prop_rec_n_sims = LabeledEntry(sim_section, "Simulations per firm", 2000)
+
+        button_row = Frame(f, bg=BG)
+        button_row.pack(fill="x", padx=24, pady=10)
+        self._button(button_row, "RUN PROP-FIRM RECOMMENDER", self._prop_rec_run_clicked, primary=True).pack(side="left")
+
+        self.prop_rec_progress = NeuralProgress(f)
+        self.prop_rec_progress.pack(fill="x", padx=24, pady=(2, 10))
+
+        output_section = self._section(f, "Prop-Firm Recommender output", "Live progress + the ranked table.")
+        _prop_rec_output_frame = Frame(output_section, bg=PANEL)
+        self.prop_rec_output = Text(
+            _prop_rec_output_frame, height=24, wrap="word", bg=LOG_BG, fg=TEXT,
+            insertbackground=TEXT, relief="flat", bd=0, highlightthickness=1,
+            highlightbackground=BORDER, font=(MONO, 9),
+        )
+        _prop_rec_output_scroll = ttk.Scrollbar(
+            _prop_rec_output_frame, orient="vertical", command=self.prop_rec_output.yview, style="T58.Vertical.TScrollbar",
+        )
+        self.prop_rec_output.configure(yscrollcommand=_prop_rec_output_scroll.set)
+        self.prop_rec_output.pack(side="left", fill="both", expand=True)
+        _prop_rec_output_scroll.pack(side="right", fill="y")
+        _prop_rec_output_frame.pack(fill="both", expand=True, padx=18, pady=(3, 16))
+        self._bind_isolated_wheel(self.prop_rec_output)
+
+    def _log_prop_rec(self, msg: str):
+        self.prop_rec_output.insert(END, msg + "\n")
+        self.prop_rec_output.see(END)
+
+    def _prop_rec_run_clicked(self):
+        if not self.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
+            return
+        self.prop_rec_output.delete("1.0", END)
+        self.prop_rec_progress.start(10)
+        threading.Thread(target=self._prop_rec_run_pipeline, daemon=True).start()
+
+    def _prop_rec_run_pipeline(self):
+        try:
+            df = self._load_df_for_page(self._log_prop_rec)
+            if df is None:
+                return
+            strategy = self._build_strategy()
+            risk = self._build_risk_config()
+            adaptive_risk = self._build_adaptive_risk_config()
+
+            self._log_prop_rec("Running historical backtest to obtain a real trade sequence...")
+            bt_result = run_backtest(df, strategy, risk, adaptive_risk=adaptive_risk)
+            if not bt_result.trades:
+                self._log_prop_rec(
+                    "\nNo trades were generated by this strategy over the given data -- there is "
+                    "nothing to score against prop-firm rule sets."
+                )
+                return
+            self._log_prop_rec(f"  {len(bt_result.trades)} trades.")
+
+            selected_keys = [key for key, var in self.prop_rec_firm_vars.items() if var.get()]
+            candidates = None
+            if selected_keys:
+                all_presets = {p.key: p for p in list_prop_firm_presets()}
+                candidates = [all_presets[k] for k in selected_keys if k in all_presets]
+
+            n_sims = self.prop_rec_n_sims.get_int(2000)
+            self._log_prop_rec(
+                f"\nScoring against {len(candidates) if candidates else len(list_prop_firm_presets())} "
+                f"firm preset(s), {n_sims:,} simulations each..."
+            )
+            recommendations = recommend_prop_firms(
+                bt_result.trades, candidates=candidates,
+                mc_cfg=MonteCarloConfig(n_simulations=n_sims),
+                progress_cb=self._log_prop_rec,
+            )
+            self._log_prop_rec("")
+            self._log_prop_rec(render_recommendation_table(recommendations))
+        except StrategyError as exc:
+            self._log_prop_rec(f"\nStrategy error: {exc}")
+        except Exception:
+            self._log_prop_rec("\nUnexpected error:\n" + traceback.format_exc())
+        finally:
+            self.prop_rec_progress.stop()
 
     # -----------------------------------------------------------------------
     # Tab 7 — Search Lab (Stages 1-5: cheap filter -> GA refinement ->
@@ -12752,6 +12904,33 @@ class MainWindow:
         )
         self.sr_loop_stall_rounds = LabeledEntry(loop_section, "Rounds with no winner before widening", 2)
 
+        autopilot_section = self._section(
+            f, "Overnight Autopilot",
+            "One button: runs Speed Run (using the settings above), and if it lands on a "
+            "READY/MARGINAL winner, automatically starts forward-testing it live on your saved "
+            "MT5 demo account (set up on the Forward Test tab first) -- then writes one dated "
+            "report summarizing both. This can't finish a full forward-test evaluation overnight "
+            "(forward testing is a live, ongoing process) -- what you get by morning is a "
+            "completed search AND, if it qualified, a winner already live and trading on your "
+            "demo account, instead of needing to notice the search finished and start the forward "
+            "test yourself. Only Python/PineScript/MQL5 strategies can be forward-tested (same "
+            "restriction as the Forward Test tab); a Manual-config winner still gets a full report, "
+            "just without an auto-started forward test.",
+        )
+        self.autopilot_auto_forward_test = LabeledCheckbox(
+            autopilot_section, "Auto-start a live MT5 demo forward test on a READY/MARGINAL winner", True,
+        )
+        self.autopilot_ft_risk_pct = LabeledEntry(autopilot_section, "Forward test risk per trade (%)", 1.0)
+        self.autopilot_ft_max_trades_per_day = LabeledEntry(autopilot_section, "Forward test max trades/day", 10)
+        autopilot_btn_row = Frame(autopilot_section, bg=PANEL)
+        autopilot_btn_row.pack(anchor="w", padx=18, pady=(4, 12))
+        self.autopilot_run_btn = self._button(autopilot_btn_row, "RUN OVERNIGHT AUTOPILOT", self._autopilot_run_clicked, primary=True)
+        self.autopilot_run_btn.pack(side="left")
+        self.autopilot_open_report_btn = self._button(autopilot_btn_row, "OPEN AUTOPILOT REPORT", self._open_autopilot_report)
+        self.autopilot_open_report_btn.config(state="disabled")
+        self.autopilot_open_report_btn.pack(side="left", padx=8)
+        self._last_autopilot_report_path = None
+
         button_row = Frame(f, bg=BG)
         button_row.pack(fill="x", padx=24, pady=10)
         self._button(button_row, "FIND ME A WINNER", self._speedrun_run_clicked, primary=True).pack(side="left")
@@ -13068,6 +13247,94 @@ class MainWindow:
         finally:
             self.speedrun_progress.stop()
             self.stop_speedrun_btn.config(state="disabled")
+            self._release_heavy_job(JOB_SPEED_RUN)
+
+    def _open_autopilot_report(self):
+        if self._last_autopilot_report_path:
+            webbrowser.open(f"file://{Path(self._last_autopilot_report_path).resolve()}")
+
+    def _autopilot_run_clicked(self):
+        if not self.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
+            return
+        if not self._try_start_heavy_job(JOB_SPEED_RUN):
+            return
+        self.speedrun_output.delete("1.0", END)
+        self.speedrun_candidates_listbox.delete(0, END)
+        self._speedrun_candidates_cache = []
+        self.autopilot_open_report_btn.config(state="disabled")
+        self.speedrun_verdict_label.config(text="Running Overnight Autopilot...", fg=TEXT_DIM)
+        self._speedrun_cancel_event.clear()
+        self.speedrun_progress.start(10)
+        threading.Thread(target=self._autopilot_run_pipeline, daemon=True).start()
+
+    def _autopilot_run_pipeline(self):
+        try:
+            df = self._load_df_for_page(self._log_speedrun)
+            if df is None:
+                return
+            risk = self._build_risk_config()
+            rules = self._build_prop_rules()
+
+            metric_key = self._sr_metric_label_to_key.get(self.sr_metric.get_str(), "eval_pass_probability")
+            speed_run_cfg = SpeedRunConfig(
+                max_candidates=self.sr_max_candidates.get_int(1200),
+                stage1_top_n=self.sr_stage1_top_n.get_int(24),
+                ga_population=self.sr_ga_population.get_int(8),
+                ga_generations=self.sr_ga_generations.get_int(3),
+                top_k_to_validate=self.sr_top_k.get_int(3),
+                max_concurrent_validations=self.sr_max_concurrent.get_int(2),
+                validation_folds=self.sr_validation_folds.get_int(3),
+                validation_final_mc_sims=self.sr_validation_final_mc_sims.get_int(3000),
+                fitness_metric=metric_key,
+                save_winner_to_library=self.sr_save_to_library.get(),
+                random_seed=self.sr_seed.get_int(42),
+            )
+            autopilot_cfg = AutopilotConfig(
+                speed_run_cfg=speed_run_cfg,
+                auto_forward_test=self.autopilot_auto_forward_test.get(),
+                forward_test_risk_value_pct=self.autopilot_ft_risk_pct.get_float(1.0),
+                forward_test_max_trades_per_day=self.autopilot_ft_max_trades_per_day.get_int(10),
+                report_dir=OUTPUT_DIR / "autopilot",
+            )
+
+            instrument = (
+                os.path.basename(self.csv_paths[0])
+                if len(self.csv_paths) == 1
+                else " + ".join(os.path.basename(p) for p in self.csv_paths)
+            )
+            self._log_speedrun(f"Starting Overnight Autopilot on {instrument} ({len(df)} bars)...\n")
+            result = run_overnight_autopilot(
+                df, risk, rules, OUTPUT_DIR / "speed_run", autopilot_cfg,
+                progress_cb=self._log_speedrun, instrument=instrument,
+                cancel_event=self._speedrun_cancel_event,
+            )
+
+            self._render_speedrun_candidates(result.speed_run)
+            self._last_autopilot_report_path = result.report_path
+            self.autopilot_open_report_btn.config(state="normal")
+
+            verdict_color = {"READY": GREEN, "MARGINAL": AMBER}.get(result.winner_verdict, TEXT_DIM if not result.winner_verdict else RED)
+            self.speedrun_verdict_label.config(
+                text=(
+                    f"Autopilot done -- verdict: {result.winner_verdict or 'no winner'}\n"
+                    f"Forward test: {result.forward_test_message}"
+                ),
+                fg=verdict_color,
+            )
+            if result.speed_run is not None and result.speed_run.winner is not None and result.speed_run.winner.pipeline_result is not None:
+                pr = result.speed_run.winner.pipeline_result
+                self._last_speedrun_html_path = pr.report_paths.get("html")
+                self.open_speedrun_report_btn.config(state="normal" if self._last_speedrun_html_path else "disabled")
+
+            self._log_speedrun(f"\nAutopilot report: {result.report_path}")
+            self._log_speedrun(f"Done in {result.elapsed_seconds / 60:.1f} minute(s).")
+        except Exception as exc:
+            self._log_speedrun("\nUnexpected error:\n" + traceback.format_exc())
+            self.speedrun_verdict_label.config(text="Autopilot failed -- see log.", fg=RED)
+            log_crash("Overnight Autopilot", exc=exc)
+        finally:
+            self.speedrun_progress.stop()
             self._release_heavy_job(JOB_SPEED_RUN)
 
     def _speedrun_run_loop_pipeline(self):
@@ -13508,6 +13775,21 @@ class MainWindow:
         mc_btn_row = Frame(sec, bg=PANEL); mc_btn_row.pack(anchor="w", padx=18)
         self._button(mc_btn_row, "BROWSE...", lambda: self._ql_browse_into(self.ql_sh_mc_json, [("JSON", "*.json")])).pack(side="left")
         self.ql_sh_balance = LabeledEntry(sec, "Account balance", 10000)
+        retune_note = Label(
+            sec, bg=PANEL, fg=TEXT_DIM, font=_safe_font(8), wraplength=760, justify="left",
+            text="Optional: pick a Strategy Library entry below to automatically re-tune it with "
+                 "Quick Optimize if this health check finds drift at or above the chosen severity -- "
+                 "uses the market data and risk settings from Steps 02/04. Leave the picker on "
+                 "'(health check only)' to skip this and just see the health report.",
+        )
+        retune_note.pack(anchor="w", padx=18, pady=(6, 2))
+        self.ql_sh_retune_strategy = LabeledCombo(
+            sec, "Strategy to auto re-tune (optional)", ["(health check only)"] + self._ql_validated_names(),
+            default="(health check only)",
+        )
+        self.ql_sh_retune_threshold = LabeledCombo(
+            sec, "Auto re-tune threshold", ["watch", "warning", "critical"], default="warning",
+        )
         btn_row = Frame(sec, bg=PANEL); btn_row.pack(anchor="w", padx=18, pady=(4, 12))
         self.ql_sh_btn = self._button(btn_row, "CHECK STRATEGY HEALTH", self._ql_strategy_health_clicked, primary=True)
         self.ql_sh_btn.pack(side="left")
@@ -13728,6 +14010,8 @@ class MainWindow:
         strategy_label = self.ql_sh_strategy_label.get_str().strip() or "strategy"
         mc_json_path = self.ql_sh_mc_json.get_str().strip()
         balance = self.ql_sh_balance.get_float(0.0)
+        retune_choice = self.ql_sh_retune_strategy.get_str().strip()
+        retune_threshold = self.ql_sh_retune_threshold.get_str().strip() or "warning"
 
         def work():
             if not journal_path or not Path(journal_path).exists():
@@ -13738,8 +14022,48 @@ class MainWindow:
                 mc_data = json.load(f)
             predicted = MonteCarloResult(**mc_data)
             journal = ForwardTestJournal(db_path=Path(journal_path))
-            result = check_strategy_health(journal, session_id, strategy_label, predicted, account_balance=balance)
-            return result.render_table()
+
+            if not retune_choice or retune_choice == "(health check only)":
+                result = check_strategy_health(journal, session_id, strategy_label, predicted, account_balance=balance)
+                return result.render_table()
+
+            by_name = {s.name: s for s in list_saved_strategies() if s.status != "tested_failed"}
+            stored = by_name.get(retune_choice)
+            if stored is None:
+                raise ValueError(f"Could not find saved strategy '{retune_choice}' -- re-select it and try again.")
+            strategy = load_strategy_object(stored)
+            log_lines: list[str] = []
+            df = self._load_df_for_page(log_lines.append)
+            if df is None:
+                raise ValueError("\n".join(log_lines) or "No market data loaded.")
+            risk = self._build_risk_config()
+            rules = self._build_prop_rules()
+
+            outcome = maybe_trigger_retune(
+                journal, session_id, strategy_label, predicted, account_balance=balance,
+                df=df, strategy=strategy, risk=risk, prop_rules=rules,
+                severity_threshold=retune_threshold,
+            )
+            lines = [outcome.health.render_table()]
+            if not outcome.triggered:
+                lines.append(f"\nNo auto re-tune triggered (severity below '{retune_threshold}').")
+            elif outcome.error:
+                lines.append(f"\nAuto re-tune triggered ({outcome.trigger_reason}) but failed: {outcome.error}")
+            else:
+                r = outcome.retune_result
+                lines.append(f"\nAuto re-tune triggered ({outcome.trigger_reason}).")
+                lines.append(
+                    f"  Baseline: eval pass {r.baseline_eval_pass_probability:.1f}%, "
+                    f"payout {r.baseline_payout_probability:.1f}%, win rate {r.baseline_win_rate:.1f}%"
+                )
+                lines.append(
+                    f"  Re-tuned: eval pass {r.optimized_eval_pass_probability:.1f}%, "
+                    f"payout {r.optimized_payout_probability:.1f}%, win rate {r.optimized_win_rate:.1f}%"
+                )
+                lines.append(f"  Improved: {'yes' if r.improved else 'no'}")
+                if r.saved_library_note:
+                    lines.append(f"  {r.saved_library_note}")
+            return "\n".join(lines)
         self._quant_lab_run_async(self.ql_sh_btn, work, "Strategy Health")
 
     def _ql_portfolio_composer_clicked(self):
