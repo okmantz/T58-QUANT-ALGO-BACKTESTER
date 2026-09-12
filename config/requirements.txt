@@ -26,6 +26,12 @@ pypdf>=4.0.0
 # clip-and-renormalize approximation (clearly labeled as such) if scipy
 # isn't installed, rather than failing.
 scipy>=1.11.0
+# ML Classifier strategy family (strategies/python/ml_classifier_direction.py)
+# and any other classical-ML strategy logic. Optional in spirit: importing
+# this strategy file without scikit-learn installed raises one clear
+# "pip install scikit-learn" StrategyError instead of a bare ImportError
+# traceback -- nothing else in the app depends on it.
+scikit-learn>=1.3.0
 # Live Market's "open chart" button: opens a chromeless native window
 # instead of a browser tab when available, since Tkinter itself has no
 # way to run the real JavaScript/Canvas content Lightweight Charts needs.
