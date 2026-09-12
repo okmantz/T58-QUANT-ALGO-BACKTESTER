@@ -91,6 +91,7 @@ from app.orchestration.multi_instrument_speed_run import (
 )
 from app.orchestration.speed_run import SpeedRunConfig, SpeedRunResult, run_speed_run
 from app.orchestration.speed_run import _rank_key as _speedrun_rank_key
+from app.orchestration.overnight_autopilot import AutopilotConfig, run_overnight_autopilot
 from app.portfolio.portfolio import InstrumentLeg, PortfolioConfig, PortfolioError, run_portfolio_backtest
 from app.prop.simulator import PropRules, simulate_account
 from app.prop.presets import get_preset as get_prop_firm_preset, list_presets as list_prop_firm_presets
@@ -6433,6 +6434,189 @@ def serve_speedrun_report_loop(job_id, filename):
     speed_run_job_status's own _report_url helper, which builds the
     matching relative path)."""
     return send_from_directory(SPEEDRUN_DIR / f"loop_{job_id}", filename)
+
+
+# ---------------------------------------------------------------------------
+# Overnight Autopilot -- chains Speed Run discovery straight into a live
+# MT5 demo forward test of the winner (see
+# app.orchestration.overnight_autopilot's module docstring for the full
+# design). Same background-job/poll-for-status shape as Speed Run above,
+# reusing HEAVY_JOB_GUARD/JOB_SPEED_RUN as the concurrency guard since this
+# wraps run_speed_run internally. The forward-test-start step naturally
+# no-ops on a server with no MT5 terminal available -- same restriction the
+# desktop Forward Test tab already documents -- so on the web app this is
+# mainly "Speed Run plus one written report," with the live-forward-test
+# half only actually kicking in when this Flask process happens to be
+# running on the same Windows machine as a logged-in MT5 demo terminal.
+# ---------------------------------------------------------------------------
+
+_AUTOPILOT_JOBS: dict[str, dict] = {}
+_AUTOPILOT_JOBS_LOCK = threading.Lock()
+AUTOPILOT_DIR = BASE_DIR / "reports" / "autopilot"
+AUTOPILOT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _autopilot_job_log(job_id: str, msg: str) -> None:
+    with _AUTOPILOT_JOBS_LOCK:
+        job = _AUTOPILOT_JOBS.get(job_id)
+        if job is not None:
+            job["log"].append(msg)
+
+
+def _run_autopilot_job(job_id: str, df, risk: RiskConfig, rules: PropRules, active_label: str, cfg: AutopilotConfig) -> None:
+    try:
+        result = run_overnight_autopilot(
+            df, risk, rules, SPEEDRUN_DIR, cfg,
+            progress_cb=lambda msg: _autopilot_job_log(job_id, msg), instrument=active_label,
+        )
+        with _AUTOPILOT_JOBS_LOCK:
+            job = _AUTOPILOT_JOBS[job_id]
+            job["done"] = True
+            job["result"] = result
+    except Exception as exc:  # noqa: BLE001 -- must surface on the status page, not crash the thread silently
+        log_crash("Overnight Autopilot (web)", exc=exc)
+        with _AUTOPILOT_JOBS_LOCK:
+            job = _AUTOPILOT_JOBS[job_id]
+            job["done"] = True
+            job["error"] = f"Unexpected error: {exc}"
+    finally:
+        HEAVY_JOB_GUARD.release(JOB_SPEED_RUN)
+
+
+@app.route("/overnight-autopilot")
+def overnight_autopilot_form():
+    return render_template(
+        "overnight_autopilot.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+    )
+
+
+@app.route("/overnight-autopilot/start", methods=["POST"])
+def overnight_autopilot_start():
+    form = request.form
+    if not HEAVY_JOB_GUARD.try_acquire(JOB_SPEED_RUN):
+        return render_template(
+            "overnight_autopilot.html",
+            error=(
+                f"{HEAVY_JOB_GUARD.active_name} is already running on this server. Running more than "
+                f"one heavy job at the same time can exhaust available memory. Wait for it to finish "
+                f"before starting Overnight Autopilot."
+            ),
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+        ), 409
+    try:
+        df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
+        if dataset_error:
+            HEAVY_JOB_GUARD.release(JOB_SPEED_RUN)
+            return render_template(
+                "overnight_autopilot.html", error=dataset_error,
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+            ), 400
+
+        risk = RiskConfig(
+            initial_balance=float(form.get("initial_balance", 100000)),
+            risk_mode=form.get("risk_mode", "percent"),
+            risk_value=float(form.get("risk_value", 1.0)),
+            pip_size=float(form.get("pip_size", 0.0001)),
+        )
+        rules = PropRules(
+            account_size=float(form.get("account_size", 100000)),
+            evaluation_profit_target_pct=float(form.get("profit_target", 8)),
+            daily_loss_limit_pct=float(form.get("daily_loss", 5)),
+            max_drawdown_pct=float(form.get("max_dd", 10)),
+        )
+        speed_run_cfg = SpeedRunConfig(
+            max_candidates=int(form.get("max_candidates", 1200) or 1200),
+            stage1_top_n=int(form.get("stage1_top_n", 24) or 24),
+            ga_population=int(form.get("ga_population", 8) or 8),
+            ga_generations=int(form.get("ga_generations", 3) or 3),
+            top_k_to_validate=int(form.get("top_k_to_validate", 3) or 3),
+            max_concurrent_validations=int(form.get("max_concurrent_validations", 2) or 2),
+            validation_folds=int(form.get("validation_folds", 3) or 3),
+            validation_final_mc_sims=int(form.get("validation_final_mc_sims", 3000) or 3000),
+            save_winner_to_library=form.get("save_to_library") == "on",
+        )
+        autopilot_cfg = AutopilotConfig(
+            speed_run_cfg=speed_run_cfg,
+            auto_forward_test=form.get("auto_forward_test") == "on",
+            forward_test_risk_value_pct=float(form.get("ft_risk_pct", 1.0) or 1.0),
+            forward_test_max_trades_per_day=int(form.get("ft_max_trades_per_day", 10) or 10),
+            report_dir=AUTOPILOT_DIR,
+        )
+
+        job_id = uuid.uuid4().hex[:12]
+        initial_log = [f"Loaded {len(df)} bars from {active_label}."]
+        if import_note:
+            initial_log.append(import_note)
+        with _AUTOPILOT_JOBS_LOCK:
+            _AUTOPILOT_JOBS[job_id] = {
+                "log": initial_log, "done": False, "error": None, "result": None,
+                "started_at": time.time(), "instrument": active_label,
+            }
+        thread = threading.Thread(
+            target=_run_autopilot_job, args=(job_id, df, risk, rules, active_label, autopilot_cfg), daemon=True,
+        )
+        thread.start()
+        return redirect(url_for("overnight_autopilot_job", job_id=job_id))
+    except Exception as exc:  # noqa: BLE001
+        HEAVY_JOB_GUARD.release(JOB_SPEED_RUN)
+        log_crash("Overnight Autopilot (web, start)", exc=exc)
+        return render_template(
+            "overnight_autopilot.html", error=f"Unexpected error: {exc}",
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+        ), 500
+
+
+@app.route("/overnight-autopilot/job/<job_id>")
+def overnight_autopilot_job(job_id):
+    with _AUTOPILOT_JOBS_LOCK:
+        job = _AUTOPILOT_JOBS.get(job_id)
+    if job is None:
+        return render_template("overnight_autopilot_job.html", job_id=job_id, not_found=True), 404
+    return render_template("overnight_autopilot_job.html", job_id=job_id, not_found=False)
+
+
+@app.route("/overnight-autopilot/job/<job_id>/status.json")
+def overnight_autopilot_job_status(job_id):
+    with _AUTOPILOT_JOBS_LOCK:
+        job = _AUTOPILOT_JOBS.get(job_id)
+    if job is None:
+        return jsonify({"found": False}), 404
+
+    result = job.get("result")
+    summary = None
+    if result is not None:
+        winner = None
+        sr = result.speed_run
+        if sr is not None and sr.winner is not None and sr.winner.pipeline_result is not None:
+            pr = sr.winner.pipeline_result
+            report_html = None
+            if pr.report_paths.get("html"):
+                report_html = f"/speed_run_reports/{Path(pr.report_paths['html']).name}"
+            winner = {
+                "candidate_id": sr.winner.candidate_id, "family": sr.winner.family,
+                "verdict": pr.verdict,
+                "eval_pass_probability": pr.final_mc.evaluation_pass_probability,
+                "first_payout_probability": pr.final_mc.first_payout_probability,
+                "report_html": report_html,
+            }
+        summary = {
+            "winner": winner,
+            "winner_verdict": result.winner_verdict,
+            "forward_test_started": result.forward_test_started,
+            "forward_test_message": result.forward_test_message,
+            "elapsed_seconds": result.elapsed_seconds,
+            "report_path": str(result.report_path),
+        }
+
+    return jsonify({
+        "found": True, "done": job["done"], "error": job["error"], "log": job["log"],
+        "instrument": job.get("instrument"), "summary": summary,
+    })
+
+
+@app.route("/autopilot_reports/<path:filename>")
+def serve_autopilot_report(filename):
+    return send_from_directory(AUTOPILOT_DIR, filename)
 
 
 # ---------------------------------------------------------------------------

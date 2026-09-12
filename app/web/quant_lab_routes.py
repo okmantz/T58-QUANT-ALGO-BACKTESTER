@@ -276,6 +276,24 @@ def regime_selector():
 # 3. Strategy Health / Drift Monitor
 # ---------------------------------------------------------------------------
 
+def _retune_strategy_options() -> str:
+    """Every saved strategy except one explicitly marked failed, same
+    pool as the Auto Regime Selector/Portfolio Composer -- for the
+    Strategy Health page's optional 'auto re-tune if drift detected'
+    picker. Value is 'type:name' so the POST handler can look the exact
+    entry back up without a second scan needing name uniqueness across
+    types."""
+    from app.strategy.library import list_saved_strategies
+
+    options = ['<option value="">(health check only)</option>']
+    for t in ("manual", "python", "pinescript", "mql5"):
+        for s in list_saved_strategies(strategy_type=t):
+            if s.status == "tested_failed":
+                continue
+            options.append(f'<option value="{t}:{s.name}">{s.name} ({t})</option>')
+    return "".join(options)
+
+
 @quant_lab_bp.route("/strategy-health", methods=["GET", "POST"])
 def strategy_health():
     form_html = (
@@ -284,6 +302,27 @@ def strategy_health():
         + _field("strategy_label", "Strategy label", "text", "", "e.g. my_strategy.json")
         + '<label for="mc_result_json">Predicted Monte Carlo result (JSON)</label><input type="file" id="mc_result_json" name="mc_result_json" accept=".json">'
         + _field("account_balance", "Account balance", "number", "10000")
+        + '<p class="help" style="margin-top:14px;">Optional: pick a Strategy Library entry below to automatically '
+          're-tune it with Quick Optimize if this health check finds drift at or above the chosen severity -- '
+          'needs the same market data the strategy was backtested on, plus risk/prop-rule settings for the re-tune '
+          "run. Leave the picker on '(health check only)' to skip this and just see the health report."
+        + '</p>'
+        + '<label for="retune_strategy">Strategy to auto re-tune (optional)</label>'
+        + f'<select id="retune_strategy" name="retune_strategy">{_retune_strategy_options()}</select>'
+        + _field("retune_threshold", "Auto re-tune threshold").replace(
+            '<input type="text" id="retune_threshold" name="retune_threshold" value="" placeholder="">',
+            '<select id="retune_threshold" name="retune_threshold">'
+            '<option value="watch">watch</option><option value="warning" selected>warning</option>'
+            '<option value="critical">critical</option></select>',
+        )
+        + '<label for="retune_csv">Market data (.csv) -- only needed if re-tuning</label><input type="file" id="retune_csv" name="retune_csv">'
+        + _field("initial_balance", "Initial balance ($)", "number", "10000")
+        + _field("risk_value", "Risk value (%)", "number", "1.0")
+        + _field("pip_size", "Pip size", "number", "0.0001")
+        + _field("account_size", "Prop account size ($)", "number", "10000")
+        + _field("profit_target", "Eval profit target (%)", "number", "8")
+        + _field("daily_loss", "Daily loss limit (%)", "number", "5")
+        + _field("max_dd", "Max drawdown (%)", "number", "10")
     )
     result_html, error = None, None
     if request.method == "POST":
@@ -304,15 +343,70 @@ def strategy_health():
                 mc_data = json.load(f)
             predicted = MonteCarloResult(**mc_data)
             journal = ForwardTestJournal(db_path=Path(journal_path))
-            result = check_strategy_health(
-                journal, int(request.form["session_id"]), request.form["strategy_label"], predicted,
-                account_balance=float(request.form["account_balance"]),
-            )
-            result_html = _pre(result.render_table())
+            session_id = int(request.form["session_id"])
+            strategy_label = request.form["strategy_label"]
+            account_balance = float(request.form["account_balance"])
+
+            retune_choice = (request.form.get("retune_strategy") or "").strip()
+            if not retune_choice:
+                result = check_strategy_health(journal, session_id, strategy_label, predicted, account_balance=account_balance)
+                result_html = _pre(result.render_table())
+            else:
+                from app.backtest.risk import RiskConfig
+                from app.orchestration.auto_retune import maybe_trigger_retune
+                from app.prop.simulator import PropRules
+                from app.strategy.library import list_saved_strategies
+                from app.strategy.library_loader import load_strategy_object
+
+                strategy_type, _, strategy_name = retune_choice.partition(":")
+                stored = next(
+                    (s for s in list_saved_strategies(strategy_type=strategy_type) if s.name == strategy_name), None,
+                )
+                if stored is None:
+                    raise ValueError(f"Could not find saved strategy '{strategy_name}' -- re-select it and try again.")
+                strategy = load_strategy_object(stored)
+                df = _load_ohlcv_upload("retune_csv")
+                risk = RiskConfig(
+                    initial_balance=float(request.form.get("initial_balance", 10000) or 10000),
+                    risk_value=float(request.form.get("risk_value", 1.0) or 1.0),
+                    pip_size=float(request.form.get("pip_size", 0.0001) or 0.0001),
+                )
+                rules = PropRules(
+                    account_size=float(request.form.get("account_size", 10000) or 10000),
+                    evaluation_profit_target_pct=float(request.form.get("profit_target", 8) or 8),
+                    daily_loss_limit_pct=float(request.form.get("daily_loss", 5) or 5),
+                    max_drawdown_pct=float(request.form.get("max_dd", 10) or 10),
+                )
+                threshold = request.form.get("retune_threshold", "warning") or "warning"
+                outcome = maybe_trigger_retune(
+                    journal, session_id, strategy_label, predicted, account_balance=account_balance,
+                    df=df, strategy=strategy, risk=risk, prop_rules=rules, severity_threshold=threshold,
+                )
+                lines = [outcome.health.render_table()]
+                if not outcome.triggered:
+                    lines.append(f"\nNo auto re-tune triggered (severity below '{threshold}').")
+                elif outcome.error:
+                    lines.append(f"\nAuto re-tune triggered ({outcome.trigger_reason}) but failed: {outcome.error}")
+                else:
+                    r = outcome.retune_result
+                    lines.append(f"\nAuto re-tune triggered ({outcome.trigger_reason}).")
+                    lines.append(
+                        f"  Baseline: eval pass {r.baseline_eval_pass_probability:.1f}%, "
+                        f"payout {r.baseline_payout_probability:.1f}%, win rate {r.baseline_win_rate:.1f}%"
+                    )
+                    lines.append(
+                        f"  Re-tuned: eval pass {r.optimized_eval_pass_probability:.1f}%, "
+                        f"payout {r.optimized_payout_probability:.1f}%, win rate {r.optimized_win_rate:.1f}%"
+                    )
+                    lines.append(f"  Improved: {'yes' if r.improved else 'no'}")
+                    if r.saved_library_note:
+                        lines.append(f"  {r.saved_library_note}")
+                result_html = _pre("\n".join(lines))
         except Exception as exc:  # noqa: BLE001
             error = str(exc)
     return _render("Strategy Health / Drift Monitor",
-                    "Compares a forward-test session's realized results against its strategy's predicted Monte Carlo distribution.",
+                    "Compares a forward-test session's realized results against its strategy's predicted Monte Carlo distribution -- "
+                    "and, optionally, automatically re-tunes the strategy with Quick Optimize if drift crosses a chosen severity.",
                     form_html, result_html, error)
 
 
