@@ -9,7 +9,23 @@ def test_all_passed_reports_no_failures():
     records = [{"passed_stage1": True, "family": "trend_breakout"} for _ in range(5)]
     summary = aggregate_failure_reasons(records, "Stage 1", "passed_stage1")
     assert summary.total_failed == 0
-    assert summary.format_log_lines() == ["  Stage 1: no failures to triage -- everything passed."]
+    assert summary.format_log_lines() == ["  Stage 1: no failures to triage -- all 5 scored candidate(s) passed."]
+
+
+def test_zero_records_is_not_reported_as_everything_passed():
+    """Regression test: a stage that scored NOTHING (every candidate was
+    skipped upstream -- e.g. a worker-pool stall/crash) must be reported
+    distinctly from a stage that scored candidates and all of them passed.
+    Conflating the two previously made a worker crash look identical to
+    'this search space has no viable strategy' in the log."""
+    summary = aggregate_failure_reasons([], "Stage 1", "passed_stage1")
+    assert summary.total_records == 0
+    assert summary.total_failed == 0
+    lines = summary.format_log_lines()
+    assert len(lines) == 1
+    assert "0 candidates were actually scored" in lines[0]
+    assert "NOT the same as everything passing" in lines[0]
+    assert "everything passed" not in lines[0]
 
 
 def test_zero_trades_is_classified_and_counted():

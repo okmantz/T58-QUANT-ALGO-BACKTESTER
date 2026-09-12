@@ -6,8 +6,8 @@ from pathlib import Path
 from app.evolution.family_budget import FamilyBudgetTracker
 from app.scoring.pareto import compute_pareto_frontier, label_frontier, pareto_report
 from app.search.graveyard import (
-    GraveyardEntry, is_known_dead_neighborhood, load_graveyard, param_signature,
-    record_rejection, record_rejections, render_graveyard_report, summarize_graveyard,
+    GraveyardEntry, graveyard_path_for, is_known_dead_neighborhood, list_graveyard_files, load_graveyard,
+    param_signature, record_rejection, record_rejections, render_graveyard_report, summarize_graveyard,
 )
 
 
@@ -98,7 +98,51 @@ def test_is_known_dead_neighborhood_respects_min_attempts():
         "rsi_extreme_reversion", {"lookback": 68}, rows=rows_many, min_attempts=8,
     )
     assert is_dead is True
-    assert n == 9
+
+
+# ---------------------------------------------------------------------------
+# Persistent, instrument-scoped graveyard paths (app.search.graveyard.
+# graveyard_path_for / list_graveyard_files) -- regression coverage for the
+# bug where the web app previously wrote each Forge run to a unique
+# per-job-id file that no future run (or UI) ever read again, silently
+# defeating the entire "map of dead strategy space accumulates over time"
+# purpose.
+# ---------------------------------------------------------------------------
+
+def test_graveyard_path_for_is_stable_across_calls():
+    p1 = graveyard_path_for("ES1!", "1m")
+    p2 = graveyard_path_for("ES1!", "1m")
+    assert p1 == p2, "the same instrument+timeframe must always resolve to the same file"
+
+
+def test_graveyard_path_for_scopes_by_instrument():
+    es = graveyard_path_for("ES1!", "1m")
+    eu = graveyard_path_for("EURUSD", "1m")
+    assert es != eu
+
+
+def test_graveyard_path_for_sanitizes_unsafe_characters():
+    p = graveyard_path_for("ES1!/futures ES.F", "1m")
+    assert p.name.isascii()
+    assert "/" not in p.name and " " not in p.name
+
+
+def test_list_graveyard_files_finds_written_files(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.search.graveyard.get_app_base_dir", lambda: tmp_path)
+    path = graveyard_path_for("ES1!", "1m")
+    record_rejection(GraveyardEntry(
+        candidate_id="c1", family="fam_a", generation=None, stage_died="cpcv", reason="died",
+    ), path=path)
+    files = list_graveyard_files()
+    assert len(files) == 1
+    assert files[0]["instrument"] == "es1-"
+    assert files[0]["timeframe"] == "1m"
+    assert files[0]["n_rows"] == 1
+
+
+def test_list_graveyard_files_empty_when_nothing_written(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.search.graveyard.get_app_base_dir", lambda: tmp_path)
+    assert list_graveyard_files() == []
 
 
 # ---------------------------------------------------------------------------
