@@ -3009,6 +3009,213 @@ _SUPERTREND_TREND_FOLLOWING = SkeletonSpec(
 )
 
 
+# ---------------------------------------------------------------------------
+# Expansion round 6: 5 more families on 5 more indicators this module had
+# never used before -- Williams %R, Rate of Change, Awesome Oscillator,
+# Chaikin Money Flow, Parabolic SAR. Same "one indicator, one distinct
+# mechanism" convention as round 5.
+# ---------------------------------------------------------------------------
+
+def _build_williams_r_extreme_reversion(p: dict) -> dict:
+    period, oversold, overbought = p["period"], p["oversold"], p["overbought"]
+    return {
+        "name": f"Williams %R Extreme Reversion (wr{period}, {oversold}/{overbought})",
+        "entry_conditions": {
+            "long": [_cond(_ind("williams_r", period), "crosses above", _val(oversold))],
+            "long_connectors": [],
+            "short": [_cond(_ind("williams_r", period), "crosses below", _val(overbought))],
+            "short_connectors": [],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("williams_r", period), ">", _val(overbought))],
+            "short": [_cond(_ind("williams_r", period), "<", _val(oversold))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_WILLIAMS_R_EXTREME_REVERSION = SkeletonSpec(
+    name="williams_r_extreme_reversion",
+    label="Williams %R Extreme Reversion (-100..0 scale, distinct thresholds from Stochastic)",
+    description=(
+        "Fades Williams %R back from an extreme on its own -100..0 scale -- the identical "
+        "underlying high/low-range position Stochastic uses, but with that scale's own -20/-80 "
+        "conventional thresholds rather than Stochastic's 80/20."
+    ),
+    param_grid={
+        "period": [10, 14, 21],
+        "oversold": [-85, -80],
+        "overbought": [-20, -15],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [1.5, 2.0],
+        "max_bars": [16, 32],
+    },
+    build=_build_williams_r_extreme_reversion,
+)
+
+
+def _build_roc_momentum_continuation(p: dict) -> dict:
+    period, threshold = p["period"], p["threshold"]
+    return {
+        "name": f"ROC Momentum Continuation (roc{period}, +/-{threshold}%)",
+        "entry_conditions": {
+            # A raw percentage-change momentum trigger -- distinct from
+            # every RSI/Stochastic/CCI-based family above, none of which
+            # measure a simple lookback percentage change.
+            "long": [_cond(_ind("roc", period), "crosses above", _val(threshold))],
+            "long_connectors": [],
+            "short": [_cond(_ind("roc", period), "crosses below", _val(-threshold))],
+            "short_connectors": [],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("roc", period), "<", _val(0))],
+            "short": [_cond(_ind("roc", period), ">", _val(0))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"]),
+    }
+
+
+_ROC_MOMENTUM_CONTINUATION = SkeletonSpec(
+    name="roc_momentum_continuation",
+    label="ROC Momentum Continuation (raw % change, not range-position)",
+    description=(
+        "Enters once the Rate of Change (a raw percentage move over a fixed lookback) clears a "
+        "threshold in either direction -- a pure momentum trigger distinct from every range-"
+        "position oscillator (RSI/Stochastic/Williams %R/CCI) used elsewhere in this module."
+    ),
+    param_grid={
+        "period": [5, 10, 20],
+        "threshold": [1.0, 2.0, 3.0],
+        "stop_atr_mult": [1.0, 1.5, 2.0],
+        "target_atr_mult": [2.0, 3.0],
+    },
+    build=_build_roc_momentum_continuation,
+)
+
+
+def _build_awesome_oscillator_zero_cross(p: dict) -> dict:
+    return {
+        "name": "Awesome Oscillator Zero Cross",
+        "entry_conditions": {
+            # AO's own conventional trigger -- a zero-line cross of
+            # SMA(5)-SMA(34) of midpoint price, fixed periods by
+            # definition (see awesome_oscillator's own docstring).
+            "long": [_cond(_ind("awesome_oscillator", 1), "crosses above", _val(0))],
+            "long_connectors": [],
+            "short": [_cond(_ind("awesome_oscillator", 1), "crosses below", _val(0))],
+            "short_connectors": [],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("awesome_oscillator", 1), "<", _val(0))],
+            "short": [_cond(_ind("awesome_oscillator", 1), ">", _val(0))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"]),
+    }
+
+
+_AWESOME_OSCILLATOR_ZERO_CROSS = SkeletonSpec(
+    name="awesome_oscillator_zero_cross",
+    label="Awesome Oscillator Zero Cross (fixed-period SMA(5)/SMA(34) of midpoint)",
+    description=(
+        "Enters on Awesome Oscillator's own zero-line cross -- SMA(5) minus SMA(34) of the "
+        "bar's own midpoint (high+low)/2, fixed periods by the indicator's own convention -- "
+        "distinct from MACD's EMA-based fast/slow difference computed on CLOSE."
+    ),
+    param_grid={
+        "stop_atr_mult": [1.0, 1.5, 2.0],
+        "target_atr_mult": [2.0, 3.0, 4.0],
+    },
+    build=_build_awesome_oscillator_zero_cross,
+)
+
+
+def _build_cmf_volume_confirmation(p: dict) -> dict:
+    lookback, cmf_period, cmf_threshold = p["lookback"], p["cmf_period"], p["cmf_threshold"]
+    return {
+        "name": f"CMF Volume Confirmation (lb={lookback}, cmf{cmf_period}>={cmf_threshold})",
+        "entry_conditions": {
+            # A structure breakout confirmed by Chaikin Money Flow already
+            # leaning the same direction -- distinct from
+            # volume_confirmed_breakout's single-bar relative-volume check
+            # and from obv_divergence_trend_confirmation's cumulative,
+            # unbounded OBV-EMA trend: CMF is a BOUNDED, WINDOWED measure
+            # of where within each bar's own range the volume traded.
+            "long": [
+                _cond(_breakout_flag(lookback, "bullish"), "is true", _val(1)),
+                _cond(_ind("cmf", cmf_period), ">", _val(cmf_threshold)),
+            ],
+            "long_connectors": ["AND"],
+            "short": [
+                _cond(_breakout_flag(lookback, "bearish"), "is true", _val(1)),
+                _cond(_ind("cmf", cmf_period), "<", _val(-cmf_threshold)),
+            ],
+            "short_connectors": ["AND"],
+        },
+        "exit_conditions": {"long": [], "short": []},
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"]),
+    }
+
+
+_CMF_VOLUME_CONFIRMATION = SkeletonSpec(
+    name="cmf_volume_confirmation",
+    label="CMF Volume Confirmation (bounded windowed accumulation/distribution)",
+    description=(
+        "A structure breakout confirmed by Chaikin Money Flow already leaning the same "
+        "direction -- a bounded, windowed accumulation/distribution measure, distinct from "
+        "OBV's unbounded running total and from a single-bar relative-volume check."
+    ),
+    param_grid={
+        "lookback": [10, 20, 30],
+        "cmf_period": [20],
+        "cmf_threshold": [0.05, 0.1, 0.15],
+        "stop_atr_mult": [1.0, 1.5, 2.0],
+        "target_atr_mult": [2.0, 3.0],
+    },
+    build=_build_cmf_volume_confirmation,
+)
+
+
+def _build_parabolic_sar_trend_following(p: dict) -> dict:
+    af_start, af_step, af_max = p["af_start"], p["af_step"], p["af_max"]
+    return {
+        "name": f"Parabolic SAR Trend Following (af={af_start}/{af_step}/{af_max})",
+        "entry_conditions": {
+            # A flip-based, ACCELERATING trailing stop -- distinct from
+            # SuperTrend's fixed ATR multiple, since the step size itself
+            # grows every bar the trend continues (see parabolic_sar's own
+            # docstring).
+            "long": [_cond(_ind("psar_direction", 1), "crosses above", _val(0))],
+            "long_connectors": [],
+            "short": [_cond(_ind("psar_direction", 1), "crosses below", _val(0))],
+            "short_connectors": [],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("psar_direction", 1), "<", _val(0))],
+            "short": [_cond(_ind("psar_direction", 1), ">", _val(0))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"]),
+    }
+
+
+_PARABOLIC_SAR_TREND_FOLLOWING = SkeletonSpec(
+    name="parabolic_sar_trend_following",
+    label="Parabolic SAR Trend Following (accelerating flip-based stop)",
+    description=(
+        "Enters on a Parabolic SAR flip -- an accelerating trailing stop whose step size grows "
+        "every bar the trend continues, the original Wilder stop-and-reverse system, distinct "
+        "from SuperTrend's fixed ATR-multiple band."
+    ),
+    param_grid={
+        "af_start": [0.01, 0.02],
+        "af_step": [0.01, 0.02],
+        "af_max": [0.1, 0.2, 0.3],
+        "stop_atr_mult": [1.5, 2.0],
+        "target_atr_mult": [3.0, 4.0],
+    },
+    build=_build_parabolic_sar_trend_following,
+)
+
+
 FAMILIES: dict[str, SkeletonSpec] = {
     _TREND_BREAKOUT.name: _TREND_BREAKOUT,
     _MTF_PULLBACK.name: _MTF_PULLBACK,
@@ -3096,6 +3303,13 @@ FAMILIES: dict[str, SkeletonSpec] = {
     _KELTNER_SQUEEZE_BREAKOUT.name: _KELTNER_SQUEEZE_BREAKOUT,
     _DONCHIAN_CHANNEL_TURTLE_BREAKOUT.name: _DONCHIAN_CHANNEL_TURTLE_BREAKOUT,
     _SUPERTREND_TREND_FOLLOWING.name: _SUPERTREND_TREND_FOLLOWING,
+    # -- Expansion round 6 (5 more families, 5 more indicators: Williams %R,
+    # ROC, Awesome Oscillator, CMF, Parabolic SAR).
+    _WILLIAMS_R_EXTREME_REVERSION.name: _WILLIAMS_R_EXTREME_REVERSION,
+    _ROC_MOMENTUM_CONTINUATION.name: _ROC_MOMENTUM_CONTINUATION,
+    _AWESOME_OSCILLATOR_ZERO_CROSS.name: _AWESOME_OSCILLATOR_ZERO_CROSS,
+    _CMF_VOLUME_CONFIRMATION.name: _CMF_VOLUME_CONFIRMATION,
+    _PARABOLIC_SAR_TREND_FOLLOWING.name: _PARABOLIC_SAR_TREND_FOLLOWING,
 }
 
 # Families that need something beyond the plain OHLCV df -- checked by
@@ -3190,6 +3404,11 @@ HYPOTHESIS_QUESTIONS: dict[str, str] = {
     "keltner_squeeze_breakout": "When price clears an ATR-based Keltner Channel band, does the move continue?",
     "donchian_channel_turtle_breakout": "Does the classic turtle system (enter on a long Donchian channel, exit on a shorter one) still work?",
     "supertrend_trend_following": "When SuperTrend's ratcheting trailing-stop line flips direction, does the new trend persist?",
+    "williams_r_extreme_reversion": "When Williams %R reaches an extreme on its own -100..0 scale, does price revert?",
+    "roc_momentum_continuation": "When Rate of Change clears a threshold, does the raw percentage-change momentum continue?",
+    "awesome_oscillator_zero_cross": "When the Awesome Oscillator crosses its zero line, does the new momentum direction continue?",
+    "cmf_volume_confirmation": "Does a breakout confirmed by Chaikin Money Flow already leaning the same direction outperform one without it?",
+    "parabolic_sar_trend_following": "When Parabolic SAR's accelerating trailing stop flips, does the new trend persist?",
 }
 
 
