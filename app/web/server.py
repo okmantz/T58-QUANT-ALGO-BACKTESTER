@@ -81,6 +81,7 @@ from app.research import director as research_director
 from app.evolution.multi_instrument import EvolutionInstrumentJob, MultiInstrumentEvolutionGroup
 from app.orchestration.multi_instrument_search import (
     InstrumentJob, best_result_across_instruments, run_multi_instrument_search,
+    run_multi_instrument_search_loop,
 )
 from app.orchestration.multi_instrument_speed_run import (
     best_speed_run_across_instruments, run_multi_instrument_speed_run,
@@ -102,7 +103,10 @@ from app.reports import run_history
 from app.reports import strategy_state
 from app.scoring.t58_scorecard import score_from_results
 from app.search.batch_runner import SearchCancelled, SearchStageConfig, promote_champion, run_search
-from app.orchestration.loop_runner import SearchLoopConfig, run_search_loop
+from app.orchestration.loop_runner import (
+    ForgeLoopConfig, SearchLoopConfig, SpeedRunLoopConfig, run_forge_loop, run_search_loop, run_speed_run_loop,
+)
+from app.orchestration.prop_autotune import suggest_from_prop_rules
 from app.search.family_diversity import render_family_report, summarize_family_performance
 from app.search.graveyard import (
     graveyard_path_for, list_graveyard_files, load_graveyard, render_graveyard_report, summarize_graveyard,
@@ -3906,6 +3910,15 @@ def evolution_multi_instrument_start():
             save_to_library=form.get("save_to_library", "on") == "on",
             resume_from_checkpoint=form.get("resume_from_checkpoint", "on") == "on",
             fitness_goal=_parse_fitness_goal_form(form),
+            # Loop mode -- see EvolutionConfig.target_eval_pass_pct. Every
+            # runner in the group shares this same target/metric (they only
+            # differ in checkpoint/tested-log/knowledge-graph paths), so
+            # each instrument stops itself independently the moment ITS OWN
+            # leaderboard clears it.
+            target_eval_pass_pct=(
+                float(form["target_eval_pass_pct"]) if form.get("target_eval_pass_pct") else None
+            ),
+            target_metric=form.get("target_metric", "cpcv_oos_eval_pass_probability") or "cpcv_oos_eval_pass_probability",
         )
 
         group_id = uuid.uuid4().hex[:12]
@@ -4267,6 +4280,27 @@ def forward_test_info():
 @app.route("/deploy-live")
 def deploy_live_info():
     return render_template("deploy_live.html")
+
+
+@app.route("/api/suggest-loop-config")
+def api_suggest_loop_config():
+    """Prop-parameter auto-tuning -- reads the prop rule query params a
+    form's own fields already hold (account_size/profit_target/daily_loss/
+    max_dd) and returns app.orchestration.prop_autotune's suggested Loop
+    Mode / risk settings as JSON, for a page's own JS to pre-fill its
+    Loop Mode fields with. See that module's own docstring: this is a
+    heuristic starting point, not an authoritative answer."""
+    try:
+        rules = PropRules(
+            account_size=float(request.args.get("account_size", 100000) or 100000),
+            evaluation_profit_target_pct=float(request.args.get("profit_target", 8) or 8),
+            daily_loss_limit_pct=float(request.args.get("daily_loss", 5) or 5),
+            max_drawdown_pct=float(request.args.get("max_dd", 10) or 10),
+        )
+    except (TypeError, ValueError) as exc:
+        return jsonify({"ok": False, "error": f"Invalid prop rule value: {exc}"}), 400
+    suggestion = suggest_from_prop_rules(rules)
+    return jsonify({"ok": True, "suggestion": suggestion.to_dict()})
 
 
 @app.route("/search")
@@ -4634,6 +4668,69 @@ def _run_forge_job(
         HEAVY_JOB_GUARD.release(JOB_FORGE)
 
 
+def _run_forge_loop_job(
+    job_id: str, df, risk: RiskConfig, rules: PropRules,
+    instrument: str, loop_dir: str, loop_cfg: ForgeLoopConfig,
+    cancel_event: threading.Event | None = None,
+) -> None:
+    """Forge's Loop Mode job -- same background-job/poll-for-status shape
+    as _run_forge_job above, but driving app.orchestration.loop_runner.
+    run_forge_loop (repeated rounds, searching deeper on stall) instead of
+    a single run_forge call. job["result"] is kept updated with the MOST
+    RECENT round's ForgeResult (via on_round) so the existing funnel/
+    leaderboard rendering on the status page works unchanged while a loop
+    is still running across many rounds."""
+    def on_round(round_result) -> None:
+        with _FORGE_JOBS_LOCK:
+            job = _FORGE_JOBS.get(job_id)
+            if job is None:
+                return
+            job["result"] = round_result.result
+            job["loop_rounds"] = job.get("loop_rounds", 0) + 1
+            job["loop_last_round"] = {
+                "round_index": round_result.round_index,
+                "n_hypotheses": round_result.n_hypotheses,
+                "excluded_families": round_result.excluded_families,
+                "champion_pass_rate_pct": round_result.champion_pass_rate_pct,
+                "champion_candidate_id": round_result.champion_candidate_id,
+                "widened_after_this_round": round_result.widened_after_this_round,
+            }
+
+    try:
+        result = run_forge_loop(
+            df, risk, rules, db_dir=loop_dir, loop_cfg=loop_cfg,
+            instrument=instrument, timeframe="unknown",
+            progress_cb=lambda msg: _forge_job_log(job_id, msg),
+            cancel_event=cancel_event, on_round=on_round,
+            family_health_search_dir=str(SEARCH_DIR), family_health_evolution_dir=str(SEARCH_DIR),
+        )
+        with _FORGE_JOBS_LOCK:
+            job = _FORGE_JOBS[job_id]
+            job["done"] = True
+            job["loop_result"] = result
+            # Prefer the WINNING round's result on the status page once the
+            # loop finishes; on_round already kept job["result"] updated to
+            # the latest round throughout the run, so this only matters
+            # when a later (non-winning) round ran after the winner -- it
+            # never does today (the loop breaks immediately on a winner),
+            # but is the more correct choice either way.
+            chosen = result.winner_round or (result.rounds[-1] if result.rounds else None)
+            job["result"] = chosen.result if chosen else job.get("result")
+            job["loop_rounds"] = len(result.rounds)
+            if result.stopped_reason == "cancelled":
+                job["cancelled"] = True
+            elif result.stopped_reason == "error":
+                job["error"] = result.error
+    except Exception as exc:  # noqa: BLE001 -- must fail visibly on the status page, not crash the thread silently
+        log_crash("Forge Strategy Loop Mode (web)", exc=exc)
+        with _FORGE_JOBS_LOCK:
+            job = _FORGE_JOBS[job_id]
+            job["done"] = True
+            job["error"] = str(exc)
+    finally:
+        HEAVY_JOB_GUARD.release(JOB_FORGE)
+
+
 @app.route("/research")
 def research_form():
     return render_template(
@@ -4825,12 +4922,50 @@ def forge_start():
         if import_note:
             initial_log.append(import_note)
         cancel_event = threading.Event()
+
+        loop_mode_on = form.get("loop_mode") == "on"
+        if loop_mode_on:
+            time_budget_raw = (form.get("loop_time_budget_hours") or "").strip()
+            loop_cfg = ForgeLoopConfig(
+                target_pass_rate_pct=float(form.get("loop_target_pass_rate_pct", 60) or 60),
+                require_locked_oos_passed=form.get("loop_require_locked_oos", "on") == "on",
+                max_rounds=int(form.get("loop_max_rounds", 10) or 10),
+                time_budget_seconds=(float(time_budget_raw) * 3600.0) if time_budget_raw else None,
+                stall_rounds_before_widen=int(form.get("loop_stall_rounds", 2) or 2),
+                starting_n_hypotheses=config.n_hypotheses,
+                starting_stage1_top_n=config.stage1_top_n,
+                starting_stage2_top_n=config.stage2_top_n,
+                seed=seed,
+                base_config=config,
+            )
+            loop_dir = str(FORGE_DIR / f"loop_{job_id}")
+            initial_log.append(
+                f"Loop mode ON -- will repeat Forge rounds (searching deeper on stall) until a "
+                f"champion clears {loop_cfg.target_pass_rate_pct:.0f}%, {loop_cfg.max_rounds} rounds "
+                f"run, or the time budget is used up."
+            )
+            with _FORGE_JOBS_LOCK:
+                _FORGE_JOBS[job_id] = {
+                    "log": initial_log,
+                    "done": False, "error": None, "result": None, "cancelled": False,
+                    "started_at": time.time(), "instrument": active_label,
+                    "cancel_event": cancel_event, "graveyard_path": graveyard_path,
+                    "loop_mode": True, "loop_rounds": 0, "loop_last_round": None, "loop_result": None,
+                }
+            thread = threading.Thread(
+                target=_run_forge_loop_job,
+                args=(job_id, df, risk, rules, active_label, loop_dir, loop_cfg, cancel_event),
+                daemon=True,
+            )
+            thread.start()
+            return redirect(url_for("forge_job", job_id=job_id))
+
         with _FORGE_JOBS_LOCK:
             _FORGE_JOBS[job_id] = {
                 "log": initial_log,
                 "done": False, "error": None, "result": None, "cancelled": False,
                 "started_at": time.time(), "instrument": active_label,
-                "cancel_event": cancel_event, "graveyard_path": graveyard_path,
+                "cancel_event": cancel_event, "graveyard_path": graveyard_path, "loop_mode": False,
             }
         thread = threading.Thread(
             target=_run_forge_job,
@@ -4892,6 +5027,17 @@ def forge_job_status(job_id):
         "champion_candidate_id": result.champion_candidate_id if result else None,
         "cohort_pbo": result.cohort_pbo if result else None,
         "elapsed_seconds": result.elapsed_seconds if result else None,
+        "loop_mode": job.get("loop_mode", False),
+        "loop_rounds": job.get("loop_rounds", 0),
+        "loop_last_round": job.get("loop_last_round"),
+        "loop_result": (
+            None if job.get("loop_result") is None else {
+                "stopped_reason": job["loop_result"].stopped_reason,
+                "winner_candidate_id": job["loop_result"].winner_candidate_id,
+                "total_elapsed_seconds": job["loop_result"].total_elapsed_seconds,
+                "n_rounds": len(job["loop_result"].rounds),
+            }
+        ),
     })
 
 
@@ -5013,6 +5159,80 @@ def _run_multi_search_job(
         HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_SEARCH)
 
 
+def _run_multi_search_loop_job(
+    job_id: str, jobs: list[InstrumentJob], loop_cfg: SearchLoopConfig, risk: RiskConfig,
+    rules: PropRules, stage_cfg: SearchStageConfig, max_concurrent: int,
+    cancel_event: threading.Event | None = None,
+) -> None:
+    """Loop Mode's counterpart to _run_multi_search_job above -- drives
+    run_multi_instrument_search_loop (an independent Loop Mode run per
+    instrument, concurrently) instead of a single run_multi_instrument_search
+    call. Deliberately simpler than the non-loop job in one respect: no
+    automatic "promote the best instrument's champion" step -- each
+    instrument's own winning round already has its own report link below,
+    and picking a single best-across-instruments champion the way
+    best_result_across_instruments does would need a loop-aware version of
+    that ranking; left as a manual next step (open that instrument's own
+    report, use the regular Search Lab promote flow) rather than building
+    that ranking helper for this round."""
+    try:
+        db_dir = SEARCH_DIR / "multi_instrument_loop" / job_id
+        results = run_multi_instrument_search_loop(
+            jobs, risk, rules, stage_cfg, loop_cfg, db_dir,
+            max_concurrent_instruments=max_concurrent,
+            progress_cb=lambda label, msg: _multi_job_log(job_id, label, msg),
+            cancel_event=cancel_event,
+        )
+        per_instrument = {}
+        for label, res in results.items():
+            if res.error:
+                per_instrument[label] = {"error": res.error.splitlines()[0]}
+                continue
+            lr = res.loop_result
+            chosen = lr.winner_round or (lr.rounds[-1] if lr.rounds else None)
+            report_html = None
+            if chosen is not None and chosen.summary.leaderboard:
+                try:
+                    report_paths = generate_search_report(
+                        output_dir=str(db_dir / label.replace("/", "_")), summary=chosen.summary, space=chosen.space,
+                        instrument=res.job.instrument, timeframe=res.job.timeframe,
+                    )
+                    report_html = f"/search_reports_multi_loop/{job_id}/{label.replace('/', '_')}/{report_paths['html'].name}"
+                except Exception:  # noqa: BLE001 -- a report-generation hiccup must not hide the otherwise-successful loop result
+                    pass
+            per_instrument[label] = {
+                "error": None,
+                "stopped_reason": lr.stopped_reason,
+                "n_rounds": len(lr.rounds),
+                "winner_candidate_id": lr.winner_candidate_id,
+                "total_candidates": chosen.summary.total_candidates if chosen else None,
+                "stage3_survivors": chosen.summary.stage3_survivors if chosen else None,
+                "report_html": report_html,
+            }
+
+        with _MULTI_SEARCH_JOBS_LOCK:
+            job = _MULTI_SEARCH_JOBS[job_id]
+            job["done"] = True
+            job["results"] = per_instrument
+            job["cancelled"] = any(
+                r.loop_result is not None and r.loop_result.stopped_reason == "cancelled"
+                for r in results.values()
+            )
+    except Exception as exc:  # noqa: BLE001
+        log_crash("Multi-Instrument Search Loop Mode (web)", exc=exc)
+        with _MULTI_SEARCH_JOBS_LOCK:
+            job = _MULTI_SEARCH_JOBS[job_id]
+            job["done"] = True
+            job["error"] = str(exc)
+    finally:
+        HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_SEARCH)
+
+
+@app.route("/search_reports_multi_loop/<job_id>/<path:filename>")
+def serve_search_report_multi_loop(job_id, filename):
+    return send_from_directory(SEARCH_DIR / "multi_instrument_loop" / job_id, filename)
+
+
 @app.route("/search/multi-instrument")
 def search_multi_instrument_form():
     return render_template(
@@ -5109,6 +5329,37 @@ def search_multi_instrument_start():
         max_concurrent = int(form.get("max_concurrent", 2) or 2)
 
         job_id = uuid.uuid4().hex[:12]
+        loop_mode_on = form.get("loop_mode") == "on"
+        if loop_mode_on:
+            time_budget_raw = (form.get("loop_time_budget_hours") or "").strip()
+            loop_cfg = SearchLoopConfig(
+                target_eval_pass_pct=float(form.get("loop_target_eval_pass_pct", 60) or 60),
+                max_rounds=int(form.get("loop_max_rounds", 20) or 20),
+                time_budget_seconds=(float(time_budget_raw) * 3600.0) if time_budget_raw else None,
+                stall_rounds_before_widen=int(form.get("loop_stall_rounds", 2) or 2),
+                starting_family=(None if family_key in (None, "all") else family_key),
+                starting_max_candidates=int(form.get("max_candidates", 300) or 300),
+                seed=int(form.get("seed", 42) or 42),
+            )
+            cancel_event = threading.Event()
+            with _MULTI_SEARCH_JOBS_LOCK:
+                _MULTI_SEARCH_JOBS[job_id] = {
+                    "log": [f"Loop mode ON -- searching {len(jobs)} instrument/timeframe target(s) "
+                            f"independently until each clears {loop_cfg.target_eval_pass_pct:.0f}%: " +
+                            ", ".join(f"{j.instrument}/{j.timeframe}" for j in jobs)] + _family_exclusion_log,
+                    "done": False, "error": None, "results": None,
+                    "best_label": None, "champion_report": None,
+                    "labels": [f"{j.instrument}/{j.timeframe}" for j in jobs],
+                    "cancel_event": cancel_event, "loop_mode": True, "cancelled": False,
+                }
+            thread = threading.Thread(
+                target=_run_multi_search_loop_job,
+                args=(job_id, jobs, loop_cfg, risk, rules, stage_cfg, max_concurrent, cancel_event),
+                daemon=True,
+            )
+            thread.start()
+            return redirect(url_for("search_multi_instrument_job", job_id=job_id))
+
         with _MULTI_SEARCH_JOBS_LOCK:
             _MULTI_SEARCH_JOBS[job_id] = {
                 "log": [f"Searching {len(jobs)} instrument/timeframe target(s): " +
@@ -5116,6 +5367,7 @@ def search_multi_instrument_start():
                 "done": False, "error": None, "results": None,
                 "best_label": None, "champion_report": None,
                 "labels": [f"{j.instrument}/{j.timeframe}" for j in jobs],
+                "loop_mode": False,
             }
         thread = threading.Thread(
             target=_run_multi_search_job,
@@ -5149,6 +5401,23 @@ def search_multi_instrument_job(job_id):
     return render_template("search_multi_instrument_job.html", job_id=job_id, not_found=False)
 
 
+@app.route("/search/multi-instrument/job/<job_id>/stop", methods=["POST"])
+def search_multi_instrument_job_stop(job_id):
+    """Only meaningful for a Loop Mode job -- the non-loop multi-instrument
+    search path has no cancel_event (each instrument's single run_search
+    call has always run to completion). A no-op, not an error, otherwise."""
+    with _MULTI_SEARCH_JOBS_LOCK:
+        job = _MULTI_SEARCH_JOBS.get(job_id)
+        if job is None:
+            return jsonify({"ok": False, "error": "Job not found."}), 404
+        if job.get("done"):
+            return jsonify({"ok": True, "already_done": True})
+        cancel_event = job.get("cancel_event")
+    if cancel_event is not None:
+        cancel_event.set()
+    return jsonify({"ok": True})
+
+
 @app.route("/search/multi-instrument/job/<job_id>/status.json")
 def search_multi_instrument_job_status(job_id):
     with _MULTI_SEARCH_JOBS_LOCK:
@@ -5162,6 +5431,8 @@ def search_multi_instrument_job_status(job_id):
         "log": job["log"][-200:],
         "labels": job.get("labels", []),
         "results": job.get("results"),
+        "loop_mode": job.get("loop_mode", False),
+        "cancelled": job.get("cancelled", False),
         "best_label": job.get("best_label"),
         "champion_report": job.get("champion_report"),
     })
@@ -5208,6 +5479,45 @@ def _run_speedrun_job(
             job["result"] = result
     except Exception as exc:  # noqa: BLE001 -- must surface on the status page, not crash the thread silently
         log_crash("Speed Run (web)", exc=exc)
+        with _SPEEDRUN_JOBS_LOCK:
+            job = _SPEEDRUN_JOBS[job_id]
+            job["done"] = True
+            job["error"] = f"Unexpected error: {exc}"
+    finally:
+        HEAVY_JOB_GUARD.release(JOB_SPEED_RUN)
+
+
+def _run_speedrun_loop_job(
+    job_id: str, df, risk: RiskConfig, rules: PropRules, active_label: str,
+    loop_dir: str, loop_cfg: SpeedRunLoopConfig, cancel_event: threading.Event | None = None,
+) -> None:
+    """Speed Run's Loop Mode job -- same background-job/poll-for-status
+    shape as _run_speedrun_job above, but driving app.orchestration.
+    loop_runner.run_speed_run_loop (repeated rounds until a winner is
+    found) instead of a single run_speed_run call. Unlike the single-shot
+    Speed Run job above, this DOES support cancellation (see the new
+    /speed-run/job/<id>/stop route) -- a loop can run for a long time
+    across many rounds, so being able to stop it partway through matters
+    here in a way it didn't for one bounded discover-then-validate pass."""
+    try:
+        result = run_speed_run_loop(
+            df, risk, rules, output_dir=loop_dir, loop_cfg=loop_cfg,
+            instrument=active_label, progress_cb=lambda msg: _speedrun_job_log(job_id, msg),
+            cancel_event=cancel_event,
+        )
+        chosen = result.winner_round or (result.rounds[-1] if result.rounds else None)
+        with _SPEEDRUN_JOBS_LOCK:
+            job = _SPEEDRUN_JOBS[job_id]
+            job["done"] = True
+            job["loop_result"] = result
+            job["result"] = chosen.result if chosen else None
+            job["loop_rounds"] = len(result.rounds)
+            if result.stopped_reason == "cancelled":
+                job["cancelled"] = True
+            elif result.stopped_reason == "error":
+                job["error"] = result.error
+    except Exception as exc:  # noqa: BLE001 -- must surface on the status page, not crash the thread silently
+        log_crash("Speed Run Loop Mode (web)", exc=exc)
         with _SPEEDRUN_JOBS_LOCK:
             job = _SPEEDRUN_JOBS[job_id]
             job["done"] = True
@@ -5276,10 +5586,45 @@ def speed_run_start():
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
+
+        loop_mode_on = form.get("loop_mode") == "on"
+        if loop_mode_on:
+            time_budget_raw = (form.get("loop_time_budget_hours") or "").strip()
+            loop_cfg = SpeedRunLoopConfig(
+                max_rounds=int(form.get("loop_max_rounds", 10) or 10),
+                time_budget_seconds=(float(time_budget_raw) * 3600.0) if time_budget_raw else None,
+                stall_rounds_before_widen=int(form.get("loop_stall_rounds", 2) or 2),
+                starting_max_candidates=cfg.max_candidates,
+                starting_top_k_to_validate=cfg.top_k_to_validate,
+                seed=cfg.random_seed,
+                base_config=cfg,
+            )
+            loop_dir = str(SPEEDRUN_DIR / f"loop_{job_id}")
+            initial_log.append(
+                f"Loop mode ON -- will repeat Speed Run rounds (raising the candidate cap and "
+                f"validation width on a stall) until a round finds a winner, {loop_cfg.max_rounds} "
+                f"rounds run, or the time budget is used up."
+            )
+            cancel_event = threading.Event()
+            with _SPEEDRUN_JOBS_LOCK:
+                _SPEEDRUN_JOBS[job_id] = {
+                    "log": initial_log, "done": False, "error": None, "result": None,
+                    "started_at": time.time(), "instrument": active_label,
+                    "cancel_event": cancel_event, "loop_mode": True, "loop_rounds": 0,
+                    "loop_result": None, "cancelled": False,
+                }
+            thread = threading.Thread(
+                target=_run_speedrun_loop_job,
+                args=(job_id, df, risk, rules, active_label, loop_dir, loop_cfg, cancel_event),
+                daemon=True,
+            )
+            thread.start()
+            return redirect(url_for("speed_run_job", job_id=job_id))
+
         with _SPEEDRUN_JOBS_LOCK:
             _SPEEDRUN_JOBS[job_id] = {
                 "log": initial_log, "done": False, "error": None, "result": None,
-                "started_at": time.time(), "instrument": active_label,
+                "started_at": time.time(), "instrument": active_label, "loop_mode": False,
             }
         thread = threading.Thread(
             target=_run_speedrun_job, args=(job_id, df, risk, rules, cfg, active_label), daemon=True,
@@ -5305,6 +5650,24 @@ def speed_run_job(job_id):
     return render_template("speed_run_job.html", job_id=job_id, not_found=False)
 
 
+@app.route("/speed-run/job/<job_id>/stop", methods=["POST"])
+def speed_run_job_stop(job_id):
+    """Only meaningful for a Loop Mode job -- the single-shot Speed Run
+    path has no cancel_event at all (one bounded discover-then-validate
+    pass has always run to completion; see _run_speedrun_job above). A
+    no-op, not an error, for a non-loop job or one already finished."""
+    with _SPEEDRUN_JOBS_LOCK:
+        job = _SPEEDRUN_JOBS.get(job_id)
+        if job is None:
+            return jsonify({"ok": False, "error": "Job not found."}), 404
+        if job.get("done"):
+            return jsonify({"ok": True, "already_done": True})
+        cancel_event = job.get("cancel_event")
+    if cancel_event is not None:
+        cancel_event.set()
+    return jsonify({"ok": True})
+
+
 @app.route("/speed-run/job/<job_id>/status.json")
 def speed_run_job_status(job_id):
     with _SPEEDRUN_JOBS_LOCK:
@@ -5313,6 +5676,29 @@ def speed_run_job_status(job_id):
         return jsonify({"found": False}), 404
 
     result: SpeedRunResult | None = job.get("result")
+    is_loop = job.get("loop_mode", False)
+
+    def _report_url(report_paths: dict | None) -> str | None:
+        """A loop-mode round's reports live under
+        SPEEDRUN_DIR/loop_<job_id>/round_NNN/speed_run/..., not the flat
+        SPEEDRUN_REPORTS_DIR a single-shot run's own report always lands
+        in (see run_speed_run's own `output_dir / \"speed_run\"` call) --
+        so a loop-mode job needs a different serving route
+        (serve_speedrun_report_loop, scoped to that job's own
+        SPEEDRUN_DIR/loop_<job_id> subtree) with a path RELATIVE to it,
+        not just the bare filename the flat route uses."""
+        if not report_paths or not report_paths.get("html"):
+            return None
+        html_path = Path(report_paths["html"])
+        if not is_loop:
+            return f"/speed_run_reports/{html_path.name}"
+        loop_root = SPEEDRUN_DIR / f"loop_{job_id}"
+        try:
+            rel = html_path.relative_to(loop_root)
+        except ValueError:
+            return None
+        return f"/speed_run_reports_loop/{job_id}/{rel.as_posix()}"
+
     summary = None
     if result is not None:
         winner = None
@@ -5325,7 +5711,7 @@ def speed_run_job_status(job_id):
                 "eval_pass_probability": pr.final_mc.evaluation_pass_probability,
                 "first_payout_probability": pr.final_mc.first_payout_probability,
                 "saved_library_note": pr.saved_library_note,
-                "report_html": f"/speed_run_reports/{Path(pr.report_paths['html']).name}" if pr.report_paths.get("html") else None,
+                "report_html": _report_url(pr.report_paths),
             }
         candidates = []
         for r in sorted(result.candidates, key=_speedrun_rank_key):
@@ -5335,7 +5721,7 @@ def speed_run_job_status(job_id):
                     "candidate_id": r.candidate_id, "family": r.family, "verdict": pr.verdict,
                     "eval_pass_probability": pr.final_mc.evaluation_pass_probability,
                     "first_payout_probability": pr.final_mc.first_payout_probability,
-                    "report_html": f"/speed_run_reports/{Path(pr.report_paths['html']).name}" if pr.report_paths.get("html") else None,
+                    "report_html": _report_url(pr.report_paths),
                 })
             else:
                 candidates.append({
@@ -5353,12 +5739,33 @@ def speed_run_job_status(job_id):
     return jsonify({
         "found": True, "done": job["done"], "error": job["error"], "log": job["log"],
         "instrument": job.get("instrument"), "summary": summary,
+        "cancelled": job.get("cancelled", False),
+        "loop_mode": is_loop,
+        "loop_rounds": job.get("loop_rounds", 0),
+        "loop_result": (
+            None if job.get("loop_result") is None else {
+                "stopped_reason": job["loop_result"].stopped_reason,
+                "total_elapsed_seconds": job["loop_result"].total_elapsed_seconds,
+                "n_rounds": len(job["loop_result"].rounds),
+            }
+        ),
     })
 
 
 @app.route("/speed_run_reports/<path:filename>")
 def serve_speedrun_report(filename):
     return send_from_directory(SPEEDRUN_REPORTS_DIR, filename)
+
+
+@app.route("/speed_run_reports_loop/<job_id>/<path:filename>")
+def serve_speedrun_report_loop(job_id, filename):
+    """Loop Mode's counterpart to serve_speedrun_report above -- a loop
+    round's own reports live under SPEEDRUN_DIR/loop_<job_id>/round_NNN/
+    speed_run/..., never the flat SPEEDRUN_REPORTS_DIR a single-shot run's
+    report lands in, so this needs its own per-job serving root (see
+    speed_run_job_status's own _report_url helper, which builds the
+    matching relative path)."""
+    return send_from_directory(SPEEDRUN_DIR / f"loop_{job_id}", filename)
 
 
 # ---------------------------------------------------------------------------
