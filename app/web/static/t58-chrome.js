@@ -7,17 +7,46 @@
    - build + inject the persistent stage stepper
    - remember which sidebar groups the person had open/closed
    - a small animateNumber() helper other pages can call for counted-up KPIs
-
-   (The old sticky top bar -- breadcrumb + engine-status pill + light/dark
-   toggle -- was removed per direct feedback that it read as an unwanted
-   banner across the top of every page. The theme toggle isn't currently
-   exposed anywhere else; reintroduce it as a small icon inside the
-   sidebar itself if a light/dark switch is wanted back.)
+   - light/dark theme toggle (see initThemeToggle below) -- the light
+     theme's full CSS palette already existed in theme.css
+     (html[data-theme="light"]), it just had no UI control anywhere; this
+     re-adds that control as a small icon inside the sidebar itself,
+     exactly where the removal note above used to suggest putting it back.
 */
 (function () {
   "use strict";
 
   var GROUP_KEY_PREFIX = "t58-navgroup:";
+  var THEME_KEY = "t58-theme";
+
+  function initThemeToggle() {
+    var btn = document.getElementById("t58-theme-toggle");
+    if (!btn) return;
+    var icon = document.getElementById("t58-theme-icon");
+    var label = document.getElementById("t58-theme-label");
+
+    function apply(theme) {
+      if (theme === "light") {
+        document.documentElement.setAttribute("data-theme", "light");
+        if (icon) icon.innerHTML = "&#9728;"; // sun
+        if (label) label.textContent = "Light theme";
+      } else {
+        document.documentElement.removeAttribute("data-theme");
+        if (icon) icon.innerHTML = "&#9789;"; // moon
+        if (label) label.textContent = "Dark theme";
+      }
+    }
+
+    var current = "dark";
+    try { current = localStorage.getItem(THEME_KEY) || "dark"; } catch (e) {}
+    apply(current);
+
+    btn.addEventListener("click", function () {
+      current = current === "light" ? "dark" : "light";
+      apply(current);
+      try { localStorage.setItem(THEME_KEY, current); } catch (e) {}
+    });
+  }
 
   function restoreNavGroups() {
     document.querySelectorAll(".t58-nav-group").forEach(function (group, idx) {
@@ -115,6 +144,7 @@
     buildStepper();
     restoreNavGroups();
     animateNumbers();
+    initThemeToggle();
   });
 })();
 
