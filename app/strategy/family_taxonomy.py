@@ -130,6 +130,14 @@ _SKELETON_TO_GROUP: dict[str, str] = {
     "vwap_bollinger_pullback": "pullback",
     "volume_trend_breakout_confirmation": "breakout",
     "volume_confirmed_fvg_continuation": "liquidity_sweep",
+    # -- Expansion round 5 (7 new indicator-driven families) --
+    "adx_trend_strength_breakout": "breakout",
+    "stochastic_extreme_reversion": "mean_reversion",
+    "cci_extreme_reversion": "mean_reversion",
+    "obv_divergence_trend_confirmation": "order_flow",
+    "keltner_squeeze_breakout": "volatility_contraction",
+    "donchian_channel_turtle_breakout": "breakout",
+    "supertrend_trend_following": "trend_following",
 }
 
 # Path 2a: app.strategy.dna active_tags() -> canonical group. Checked in

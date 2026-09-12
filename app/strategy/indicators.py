@@ -163,6 +163,169 @@ def pair_zscore(frame: pd.DataFrame, period: int = 50, pair_column: str = "pair_
     return ((ratio - mean) / std.replace(0, np.nan)).fillna(0.0)
 
 
+def _wilder_smooth(series: pd.Series, period: int) -> pd.Series:
+    """Wilder's smoothing (equivalent to an EMA with alpha=1/period) -- the
+    specific averaging method ADX/+DI/-DI and Wilder's own RSI are defined
+    with, kept as a separate helper so adx() below reads as a direct
+    transcription of the standard definition rather than reusing rsi()'s
+    EMA (which already hard-codes the 100/(1+rs) RSI-specific finish)."""
+    p = _period(period)
+    return series.ewm(alpha=1 / p, adjust=False, min_periods=p).mean()
+
+
+def adx(frame: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Average Directional Index (Wilder) -- a trend-STRENGTH filter (0-100,
+    no direction), used to gate entries so a breakout/pullback/trend family
+    only fires when the market is actually trending rather than chopping.
+    Standard definition: +DM/-DM from consecutive high/low deltas (each
+    zeroed out unless it's both positive and larger than the other side),
+    Wilder-smoothed and normalized by smoothed True Range into +DI/-DI, then
+    ADX is the Wilder-smoothed |+DI - -DI| / (+DI + -DI) * 100."""
+    p = _period(period)
+    up_move = frame["high"].diff()
+    down_move = -frame["low"].diff()
+    plus_dm = pd.Series(np.where((up_move > down_move) & (up_move > 0), up_move, 0.0), index=frame.index)
+    minus_dm = pd.Series(np.where((down_move > up_move) & (down_move > 0), down_move, 0.0), index=frame.index)
+    tr_smooth = _wilder_smooth(true_range(frame), p)
+    plus_di = 100 * _wilder_smooth(plus_dm, p) / tr_smooth.replace(0, np.nan)
+    minus_di = 100 * _wilder_smooth(minus_dm, p) / tr_smooth.replace(0, np.nan)
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
+    return _wilder_smooth(dx.fillna(0.0), p)
+
+
+def stochastic(frame: pd.DataFrame, period: int = 14, smooth_k: int = 3, smooth_d: int = 3) -> tuple[pd.Series, pd.Series]:
+    """Stochastic oscillator (%K, %D) -- current close's position within the
+    trailing high/low range, smoothed. Bounded 0-100; standard oversold/
+    overbought reversal reads are <20 / >80."""
+    p = _period(period)
+    hh = highest_high(frame["high"], p)
+    ll = lowest_low(frame["low"], p)
+    raw_k = 100 * (frame["close"] - ll) / (hh - ll).replace(0, np.nan)
+    k = raw_k.rolling(_period(smooth_k), min_periods=_period(smooth_k)).mean()
+    d = k.rolling(_period(smooth_d), min_periods=_period(smooth_d)).mean()
+    return k.fillna(50.0), d.fillna(50.0)
+
+
+def cci(frame: pd.DataFrame, period: int = 20) -> pd.Series:
+    """Commodity Channel Index -- typical price's deviation from its rolling
+    mean, normalized by mean absolute deviation (the standard 0.015 constant
+    makes ~+/-100 the typical range). An extreme reading (>+100 / <-100) is
+    the classic CCI reversion/breakout trigger, distinct from RSI in that it
+    is unbounded rather than clamped to 0-100."""
+    p = _period(period)
+    typical = (frame["high"] + frame["low"] + frame["close"]) / 3.0
+    sma_tp = sma(typical, p)
+    mad = typical.rolling(p, min_periods=p).apply(lambda x: np.abs(x - x.mean()).mean(), raw=True)
+    return ((typical - sma_tp) / (0.015 * mad.replace(0, np.nan))).fillna(0.0)
+
+
+def obv(frame: pd.DataFrame) -> pd.Series:
+    """On-Balance Volume -- cumulative volume, added on up-close bars and
+    subtracted on down-close bars. Used for divergence: price makes a new
+    extreme that OBV doesn't confirm. Falls back to an all-zero series when
+    the data has no volume column, same convention as volume_delta()."""
+    if "volume" not in frame.columns:
+        return pd.Series(0.0, index=frame.index)
+    direction = np.sign(frame["close"].diff().fillna(0.0))
+    return (direction * frame["volume"]).cumsum()
+
+
+def obv_ema(frame: pd.DataFrame, period: int = 20) -> pd.Series:
+    """EMA of On-Balance Volume -- OBV's own short-term TREND (not its raw
+    cumulative level, which is unbounded and non-stationary across a long
+    dataset and therefore useless to compare directly against a threshold
+    or another period's EMA on raw levels would still work, but is kept as
+    its own named indicator here for clarity at the call site)."""
+    return ema(obv(frame), period)
+
+
+def keltner(frame: pd.DataFrame, period: int = 20, atr_mult: float = 2.0) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Keltner Channel (EMA midline +/- ATR multiple) -- an ATR-based
+    volatility band, distinct from Bollinger's stdev-based band: it widens
+    with directional range expansion rather than close-to-close dispersion,
+    so a Keltner squeeze/breakout can disagree with a Bollinger one on the
+    same bar. Returns (mid, upper, lower)."""
+    p = _period(period)
+    mid = ema(frame["close"], p)
+    band = atr(frame, p) * atr_mult
+    return mid, mid + band, mid - band
+
+
+def donchian(frame: pd.DataFrame, period: int = 20) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Donchian Channel (rolling high/low envelope + midline) -- the
+    original turtle-trader breakout band. Distinct from the app's existing
+    `_breakout_flag`/`bos` primitive (which is a one-shot "did price just
+    clear the prior N-bar extreme" boolean): this exposes the band's actual
+    levels as continuous series, e.g. for a midline-fade or band-width
+    filter rather than only a breakout trigger.
+
+    Upper/lower are computed over the PRIOR `period` bars (high/low shifted
+    by 1 before the rolling max/min), same non-lookahead convention as
+    `_breakout_flag`'s own prior_high/prior_low -- a window that includes
+    the current bar's own high/low would make "close > upper" structurally
+    always-false (a bar's close can never exceed its own bar's high).
+    Returns (mid, upper, lower)."""
+    p = _period(period)
+    upper = highest_high(frame["high"].shift(1), p)
+    lower = lowest_low(frame["low"].shift(1), p)
+    return (upper + lower) / 2.0, upper, lower
+
+
+def supertrend(frame: pd.DataFrame, period: int = 10, atr_mult: float = 3.0) -> tuple[pd.Series, pd.Series]:
+    """SuperTrend -- a flip-based trend-following band: the trailing stop
+    line ratchets toward price and only flips side when price closes through
+    it. Returns (line, direction) where direction is +1.0 while price is
+    above the line (uptrend) and -1.0 while below (downtrend). Implemented
+    as a straightforward sequential ratchet (each bar's line depends on the
+    prior bar's line AND prior direction, which is not expressible as a
+    single vectorized rolling op) -- consistent with wma()'s own use of a
+    rolling .apply for the same reason; cost is negligible next to a single
+    backtest's own bar-by-bar simulation loop.
+
+    Bars before ATR has warmed up (the first `period` bars) get NaN/neutral
+    output, same convention as every other indicator here -- the ratchet
+    only starts once ATR itself is defined, since comparing against a NaN
+    band with plain `<`/`>` (both False for NaN) would otherwise freeze the
+    band at NaN forever once it first went undefined.
+    """
+    p = _period(period)
+    atr_series = atr(frame, p)
+    hl2 = (frame["high"] + frame["low"]) / 2.0
+    basic_upper = (hl2 + atr_mult * atr_series).to_numpy()
+    basic_lower = (hl2 - atr_mult * atr_series).to_numpy()
+    atr_values = atr_series.to_numpy()
+    close = frame["close"].to_numpy()
+    n = len(frame)
+    line = np.full(n, np.nan)
+    direction = np.full(n, np.nan)
+    final_upper = basic_upper.copy()
+    final_lower = basic_lower.copy()
+    started = False
+    for i in range(n):
+        if np.isnan(atr_values[i]):
+            continue
+        if not started:
+            # First bar with a defined ATR -- initialize the ratchet fresh
+            # from this bar's own basic bands rather than carrying forward
+            # whatever (NaN) value sat in final_upper/final_lower during
+            # warmup.
+            direction[i] = 1.0
+            line[i] = basic_lower[i]
+            started = True
+            continue
+        if not (basic_upper[i] < final_upper[i - 1] or close[i - 1] > final_upper[i - 1]):
+            final_upper[i] = final_upper[i - 1]
+        if not (basic_lower[i] > final_lower[i - 1] or close[i - 1] < final_lower[i - 1]):
+            final_lower[i] = final_lower[i - 1]
+        prev_direction = direction[i - 1]
+        if prev_direction == 1.0:
+            direction[i] = -1.0 if close[i] < final_lower[i] else 1.0
+        else:
+            direction[i] = 1.0 if close[i] > final_upper[i] else -1.0
+        line[i] = final_lower[i] if direction[i] == 1.0 else final_upper[i]
+    return pd.Series(line, index=frame.index), pd.Series(direction, index=frame.index)
+
+
 def crossover(a: pd.Series, b: pd.Series) -> pd.Series:
     return (a > b) & (a.shift(1) <= b.shift(1))
 
@@ -234,6 +397,34 @@ def _build_indicator_series_uncached(frame: pd.DataFrame, kind: str, period: int
         return pair_ratio(frame)
     if kind == "pair_zscore":
         return pair_zscore(frame, p)
+    if kind == "adx":
+        return adx(frame, p)
+    if kind == "stoch_k":
+        return stochastic(frame, p)[0]
+    if kind == "stoch_d":
+        return stochastic(frame, p)[1]
+    if kind == "cci":
+        return cci(frame, p)
+    if kind == "obv":
+        return obv(frame)
+    if kind == "obv_ema":
+        return obv_ema(frame, p)
+    if kind == "keltner_mid":
+        return keltner(frame, p)[0]
+    if kind == "keltner_upper":
+        return keltner(frame, p)[1]
+    if kind == "keltner_lower":
+        return keltner(frame, p)[2]
+    if kind == "donchian_mid":
+        return donchian(frame, p)[0]
+    if kind == "donchian_upper":
+        return donchian(frame, p)[1]
+    if kind == "donchian_lower":
+        return donchian(frame, p)[2]
+    if kind == "supertrend_line":
+        return supertrend(frame, p)[0]
+    if kind == "supertrend_direction":
+        return supertrend(frame, p)[1]
     raise KeyError(kind)
 
 

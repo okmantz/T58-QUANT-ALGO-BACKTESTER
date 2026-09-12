@@ -96,7 +96,12 @@ class ManualStrategy(Strategy):
         if kind in {"ema", "sma", "wma", "rsi", "vwap", "macd", "macd_signal", "macd_histogram", "atr",
                     "bollinger_mid", "bollinger_upper", "bollinger_lower", "highest_high", "lowest_low",
                     "average_volume", "candle_range", "percentage_change", "relative_volume", "volume_delta",
-                    "pair_ratio", "pair_zscore"}:
+                    "pair_ratio", "pair_zscore",
+                    # Expansion round 5 indicators -- see app.strategy.indicators for the math.
+                    "adx", "stoch_k", "stoch_d", "cci", "obv", "obv_ema",
+                    "keltner_mid", "keltner_upper", "keltner_lower",
+                    "donchian_mid", "donchian_upper", "donchian_lower",
+                    "supertrend_line", "supertrend_direction"}:
             return build_indicator_series(work, kind, period=period, column=field, lookback=lookback)
 
         if kind == "time_of_day":
