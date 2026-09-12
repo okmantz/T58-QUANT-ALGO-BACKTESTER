@@ -229,3 +229,8 @@ JOB_SENSITIVITY = "Sensitivity"
 JOB_MULTI_OBJECTIVE = "Multi-Objective Optimization"
 JOB_REGIME_MATRIX = "Regime Survival Matrix"
 JOB_PARAMETER_ROBUSTNESS = "Parameter Stability / Robustness Map"
+# UI pass (indicators/families/UI-parity round): PBO's own candidate-pool
+# picker shares this same guard slot -- it's exactly as expensive as CPCV
+# (same combinatorial-path machinery), just evaluating several candidates
+# per path instead of one.
+JOB_PBO = "Probability of Backtest Overfitting"
