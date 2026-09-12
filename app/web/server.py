@@ -24,11 +24,13 @@ phone (as opposed to browsing to one) is out of scope for this MVP.
 from __future__ import annotations
 
 import json
+import random
 import re
 import tempfile
 import threading
 import time
 import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from flask import (
@@ -37,6 +39,7 @@ from flask import (
 
 from app.ai.ollama_settings import OllamaSettings
 from app.web.network_info import lan_url, print_startup_banner, qr_code_data_uri, qr_code_file, tailscale_url
+from app.web.notifications import send_job_notification
 from app.web.quant_lab_routes import quant_lab_bp
 from app.web.ai_assistant_routes import ai_assistant_bp
 from app.web.options_outlook_routes import options_outlook_bp
@@ -72,7 +75,7 @@ from app.orchestration.full_pipeline import (
 from app.orchestration.quick_optimize import QuickOptimizeConfig, run_quick_optimize
 from app.orchestration.resource_guard import (
     HEAVY_JOB_GUARD, JOB_EVOLUTION_LAB, JOB_FORGE, JOB_FULL_PIPELINE, JOB_SEARCH_LAB, JOB_SPEED_RUN,
-    JOB_WFO, JOB_WFGA, JOB_CPCV, JOB_SENSITIVITY, JOB_MULTI_OBJECTIVE, JOB_REGIME_MATRIX,
+    JOB_WFO, JOB_WFGA, JOB_CPCV, JOB_SENSITIVITY, JOB_MULTI_OBJECTIVE, JOB_REGIME_MATRIX, JOB_PBO,
     JOB_PARAMETER_ROBUSTNESS,
     JOB_MULTI_INSTRUMENT_SEARCH, JOB_MULTI_INSTRUMENT_SPEED_RUN, JOB_MULTI_INSTRUMENT_EVOLUTION,
 )
@@ -96,7 +99,7 @@ from app.reports.crash_log import install_thread_excepthook, log_crash
 from app.reports.refinement_report import generate_refinement_report
 from app.reports.survival_report import generate_survival_report
 from app.reports.validation_reports import (
-    generate_cpcv_report, generate_multi_objective_report, generate_portfolio_report,
+    generate_cpcv_report, generate_multi_objective_report, generate_pbo_report, generate_portfolio_report,
     generate_sensitivity_report, generate_walk_forward_report, generate_walkforward_ga_report,
 )
 from app.reports import run_history
@@ -114,10 +117,15 @@ from app.search.graveyard import (
 from app.search.search_report import generate_search_report
 from app.search.strategy_space import (
     StrategySpaceError, family_description, generate_search_space, hypothesis_question, list_families,
+    spec_from_strategy,
 )
 from app.search.results_db import ResultsDB
 from app.strategy.base import StrategyError
-from app.validation.cpcv import CPCVError, run_cpcv
+from app.validation.cpcv import CPCVError, compute_pbo, run_cpcv
+from app.validation.sensitivity import compute_2d_heatmap
+from app.optimize.parameter_space import apply_genome, extract_genome
+from app.optimize.code_parameter_space import apply_code_genome, discover_code_genes
+from app.strategy.library_loader import load_strategy_object
 from app.validation.parameter_robustness import compute_parameter_robustness
 from app.validation.regime_matrix import run_regime_matrix
 from app.validation.sensitivity import compute_1d_sensitivity
@@ -165,7 +173,9 @@ PORTFOLIO_DIR.mkdir(parents=True, exist_ok=True)
 ENSEMBLE_DIR = BASE_DIR / "reports" / "ensemble"
 ENSEMBLE_DIR.mkdir(parents=True, exist_ok=True)
 CPCV_DIR = BASE_DIR / "reports" / "cpcv"
+PBO_DIR = BASE_DIR / "reports" / "pbo"
 CPCV_DIR.mkdir(parents=True, exist_ok=True)
+PBO_DIR.mkdir(parents=True, exist_ok=True)
 SENSITIVITY_DIR = BASE_DIR / "reports" / "sensitivity"
 SENSITIVITY_DIR.mkdir(parents=True, exist_ok=True)
 QUICK_OPT_DIR = BASE_DIR / "reports" / "quick_optimize"
@@ -1589,6 +1599,7 @@ def _fullpipeline_job_log(job_id: str, msg: str) -> None:
 def _run_fullpipeline_job(
     job_id: str, df, strategy, risk: RiskConfig, rules: PropRules,
     cfg: FullPipelineConfig, active_label: str, ollama_settings: OllamaSettings | None,
+    notify_webhook_url: str | None = None,
 ) -> None:
     try:
         result = run_full_pipeline(
@@ -1603,12 +1614,18 @@ def _run_fullpipeline_job(
             job["result"] = result
             job["report_html"] = f"/full_pipeline_reports/{Path(result.report_paths['html']).name}"
             job["report_json"] = f"/full_pipeline_reports/{Path(result.report_paths['json']).name}"
+        send_job_notification(
+            notify_webhook_url, "Full Pipeline",
+            f"verdict={getattr(result, 'verdict', '?')}, instrument={active_label}",
+            job_url=f"/full-pipeline/job/{job_id}",
+        )
     except Exception as exc:  # noqa: BLE001 -- must surface on the status page, not crash the thread silently
         log_crash("Full Pipeline (web)", exc=exc)
         with _FULLPIPELINE_JOBS_LOCK:
             job = _FULLPIPELINE_JOBS[job_id]
             job["done"] = True
             job["error"] = f"Unexpected error: {exc}"
+        send_job_notification(notify_webhook_url, "Full Pipeline", f"FAILED -- {exc}", job_url=f"/full-pipeline/job/{job_id}")
     finally:
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
 
@@ -1638,7 +1655,7 @@ def _load_library_strategy_for_batch(mode: str, name: str):
 def _run_fullpipeline_batch_job(
     job_id: str, df, batch_items, risk: RiskConfig, rules: PropRules,
     cfg: FullPipelineConfig, active_label: str, ollama_settings: OllamaSettings | None,
-    cancel_event: threading.Event | None = None,
+    cancel_event: threading.Event | None = None, notify_webhook_url: str | None = None,
 ) -> None:
     try:
         summary = run_full_pipeline_batch(
@@ -1664,17 +1681,25 @@ def _run_fullpipeline_batch_job(
             job["done"] = True
             job["outcomes"] = outcomes
             job["elapsed_seconds"] = summary.elapsed_seconds
+        n_ready = sum(1 for o in outcomes if o["ok"])
+        send_job_notification(
+            notify_webhook_url, "Full Pipeline (batch)",
+            f"{len(outcomes)} strategies run, {n_ready} came back ready, instrument={active_label}",
+            job_url=f"/full-pipeline/batch-job/{job_id}",
+        )
     except FullPipelineBatchCancelled:
         with _FULLPIPELINE_BATCH_JOBS_LOCK:
             job = _FULLPIPELINE_BATCH_JOBS[job_id]
             job["done"] = True
             job["cancelled"] = True
+        send_job_notification(notify_webhook_url, "Full Pipeline (batch)", "Cancelled by user.", job_url=f"/full-pipeline/batch-job/{job_id}")
     except Exception as exc:  # noqa: BLE001 -- must surface on the status page, not crash the thread silently
         log_crash("Full Pipeline batch (web)", exc=exc)
         with _FULLPIPELINE_BATCH_JOBS_LOCK:
             job = _FULLPIPELINE_BATCH_JOBS[job_id]
             job["done"] = True
             job["error"] = f"Unexpected error: {exc}"
+        send_job_notification(notify_webhook_url, "Full Pipeline (batch)", f"FAILED -- {exc}", job_url=f"/full-pipeline/batch-job/{job_id}")
     finally:
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
 
@@ -1796,6 +1821,7 @@ def full_pipeline_start_batch():
         thread = threading.Thread(
             target=_run_fullpipeline_batch_job,
             args=(job_id, df, batch_items, risk, rules, cfg, active_label, ollama_settings, cancel_event),
+            kwargs={"notify_webhook_url": form.get("notify_webhook_url")},
             daemon=True,
         )
         thread.start()
@@ -1808,6 +1834,245 @@ def full_pipeline_start_batch():
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
         log_crash("Full Pipeline (web, start-batch)", exc=exc)
         return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 500
+
+
+# ---------------------------------------------------------------------------
+# Overnight Scheduler -- delay-starts a Full Pipeline batch run at a chosen
+# clock time, so a Windows Task Scheduler-free "queue this before bed,
+# check the result in the morning" workflow doesn't require actually being
+# awake at the moment the run should start. This does NOT attempt a general
+# cron system across every job type (Evolution Lab/Search Lab have their
+# own target/max-generations auto-stop already) -- Full Pipeline batch is
+# the one long-running, no-native-auto-stop job explicitly built for
+# running many strategies unattended, so it's the one this schedules.
+#
+# The dataset, strategy selection, and every config field are all resolved
+# and validated IMMEDIATELY at schedule time (identical validation to the
+# immediate /full-pipeline/start-batch path) -- only the actual HEAVY_JOB_GUARD
+# acquisition and thread start are deferred, so a bad dataset or an empty
+# strategy selection fails right away with a clear error instead of silently
+# failing at 2 AM with no one watching.
+# ---------------------------------------------------------------------------
+
+_SCHEDULED_JOBS: dict[str, dict] = {}
+_SCHEDULED_JOBS_LOCK = threading.Lock()
+
+
+def _seconds_until(target_hour: int, target_minute: int) -> float:
+    """Seconds from now until the next occurrence of HH:MM local time
+    (today if it hasn't passed yet, otherwise tomorrow)."""
+    now = datetime.now()
+    target = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return (target - now).total_seconds()
+
+
+def _run_scheduled_fullpipeline_batch(schedule_id: str, delay_seconds: float, launch_kwargs: dict) -> None:
+    with _SCHEDULED_JOBS_LOCK:
+        entry = _SCHEDULED_JOBS.get(schedule_id)
+        if entry is None:
+            return
+        entry["status"] = "waiting"
+    # Sleep in short increments so a cancellation request is honored
+    # promptly instead of only after the full delay elapses.
+    waited = 0.0
+    while waited < delay_seconds:
+        with _SCHEDULED_JOBS_LOCK:
+            entry = _SCHEDULED_JOBS.get(schedule_id)
+            if entry is None or entry.get("cancelled"):
+                return
+        time.sleep(min(5.0, delay_seconds - waited))
+        waited += 5.0
+
+    # Wait for the resource guard too (another heavy job may still be
+    # running right at the scheduled moment) -- retries for up to an hour
+    # rather than failing the whole scheduled run over ordinary timing.
+    max_guard_wait = 3600.0
+    guard_waited = 0.0
+    while not HEAVY_JOB_GUARD.try_acquire(JOB_FULL_PIPELINE):
+        with _SCHEDULED_JOBS_LOCK:
+            entry = _SCHEDULED_JOBS.get(schedule_id)
+            if entry is None or entry.get("cancelled"):
+                return
+        if guard_waited >= max_guard_wait:
+            with _SCHEDULED_JOBS_LOCK:
+                entry = _SCHEDULED_JOBS.get(schedule_id)
+                if entry is not None:
+                    entry["status"] = "failed"
+                    entry["error"] = f"{HEAVY_JOB_GUARD.active_name} was still running an hour after the scheduled start time -- gave up."
+            return
+        time.sleep(10.0)
+        guard_waited += 10.0
+
+    job_id = uuid.uuid4().hex[:12]
+    with _FULLPIPELINE_BATCH_JOBS_LOCK:
+        cancel_event = threading.Event()
+        _FULLPIPELINE_BATCH_JOBS[job_id] = {
+            "log": launch_kwargs["initial_log"], "done": False, "error": None, "outcomes": None,
+            "started_at": time.time(), "instrument": launch_kwargs["active_label"], "total": len(launch_kwargs["batch_items"]),
+            "cancel_event": cancel_event, "cancelled": False,
+        }
+    with _SCHEDULED_JOBS_LOCK:
+        entry = _SCHEDULED_JOBS.get(schedule_id)
+        if entry is not None:
+            entry["status"] = "started"
+            entry["job_id"] = job_id
+    _run_fullpipeline_batch_job(
+        job_id, launch_kwargs["df"], launch_kwargs["batch_items"], launch_kwargs["risk"], launch_kwargs["rules"],
+        launch_kwargs["cfg"], launch_kwargs["active_label"], launch_kwargs["ollama_settings"], cancel_event,
+        notify_webhook_url=launch_kwargs.get("notify_webhook_url"),
+    )
+
+
+@app.route("/full-pipeline/schedule-batch", methods=["POST"])
+def full_pipeline_schedule_batch():
+    """Same validation/resolution as /full-pipeline/start-batch, but
+    defers the actual run to a chosen clock time instead of starting it
+    immediately -- see the module comment above."""
+    form = request.form
+    try:
+        start_at = (form.get("schedule_start_at") or "").strip()
+        if not start_at or ":" not in start_at:
+            return render_template("full_pipeline.html", error="Give a start time (HH:MM) to schedule the batch run.", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+        hour_str, minute_str = start_at.split(":")[:2]
+        target_hour, target_minute = int(hour_str), int(minute_str)
+
+        df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
+        if dataset_error:
+            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+
+        selected = [s for s in form.getlist("batch_items") if s.strip()]
+        if not selected:
+            return render_template(
+                "full_pipeline.html",
+                error="No strategies were selected to schedule. Check one or more strategies in the "
+                      "\"Run on multiple saved strategies\" list first.",
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
+                fitness_metrics=FITNESS_METRICS,
+            ), 400
+
+        batch_items = []
+        load_errors = []
+        for ref in selected:
+            mode, _, name = ref.partition("::")
+            try:
+                strategy = _load_library_strategy_for_batch(mode, name)
+            except Exception as exc:  # noqa: BLE001
+                load_errors.append(f"{name} ({mode}): {exc}")
+                continue
+            batch_items.append(FullPipelineBatchItem(label=name, strategy=strategy, library_ref=(mode, name)))
+        if not batch_items:
+            return render_template(
+                "full_pipeline.html", error="Every selected strategy failed to load: " + "; ".join(load_errors),
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
+                fitness_metrics=FITNESS_METRICS,
+            ), 400
+
+        risk = RiskConfig(
+            initial_balance=float(form.get("initial_balance", 100000)),
+            risk_mode=form.get("risk_mode", "percent"),
+            risk_value=float(form.get("risk_value", 1.0)),
+            max_trades_per_day=int(form.get("max_trades_day", 10)),
+            commission_per_trade=float(form.get("commission", 0)),
+            slippage_pips=float(form.get("slippage_pips", 0.5)),
+            spread_pips=float(form.get("spread_pips", 1.0)),
+            pip_size=float(form.get("pip_size", 0.0001)),
+        )
+        rules = PropRules(
+            account_size=float(form.get("account_size", 100000)),
+            evaluation_profit_target_pct=float(form.get("profit_target", 8)),
+            daily_loss_limit_pct=float(form.get("daily_loss", 5)),
+            max_drawdown_pct=float(form.get("max_dd", 10)),
+        )
+        library_status_raw = (form.get("library_status") or "").strip()
+        cfg = FullPipelineConfig(
+            n_folds=int(form.get("n_folds", 4) or 4),
+            window_mode=form.get("window_mode", "rolling"),
+            ga_population=int(form.get("ga_population", 12) or 12),
+            ga_generations=int(form.get("ga_generations", 6) or 6),
+            ga_search_mc_sims=int(form.get("ga_search_mc_sims", 200) or 200),
+            adaptive_risk_enabled=form.get("adaptive_risk_enabled") == "on",
+            fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
+            final_mc_sims=int(form.get("final_mc_sims", 10000) or 10000),
+            baseline_mc_sims=int(form.get("baseline_mc_sims", 2000) or 2000),
+            holdout_frac=float(form.get("holdout_frac", 0.2) or 0.2),
+            oos_check_folds=int(form.get("oos_check_folds", 4) or 4),
+            random_seed=int(form.get("random_seed", 42) or 42),
+            save_to_library=form.get("save_to_library") == "on",
+            library_status=library_status_raw or None,
+            parallel_search=form.get("parallel_search", "on") == "on",
+        )
+        ollama_settings = None
+        if form.get("ai_enabled") == "on":
+            ollama_settings = OllamaSettings(
+                enabled=True,
+                host=form.get("ai_host", "http://localhost:11434") or "http://localhost:11434",
+                model=form.get("ai_model", "llama3.1") or "llama3.1",
+            )
+
+        delay_seconds = _seconds_until(target_hour, target_minute)
+        schedule_id = uuid.uuid4().hex[:12]
+        initial_log = [f"Loaded {len(df)} bars from {active_label}.", f"Queued {len(batch_items)} strateg{'y' if len(batch_items) == 1 else 'ies'} for the Full Pipeline batch."]
+        if import_note:
+            initial_log.append(import_note)
+        if load_errors:
+            initial_log.append(f"{len(load_errors)} selected strateg{'y' if len(load_errors) == 1 else 'ies'} failed to load and were skipped: " + "; ".join(load_errors))
+
+        with _SCHEDULED_JOBS_LOCK:
+            _SCHEDULED_JOBS[schedule_id] = {
+                "status": "scheduled", "start_at": f"{target_hour:02d}:{target_minute:02d}",
+                "scheduled_for": (datetime.now() + timedelta(seconds=delay_seconds)).isoformat(),
+                "created_at": time.time(), "cancelled": False, "job_id": None, "error": None,
+                "n_strategies": len(batch_items), "instrument": active_label,
+            }
+        thread = threading.Thread(
+            target=_run_scheduled_fullpipeline_batch,
+            args=(schedule_id, delay_seconds, {
+                "df": df, "batch_items": batch_items, "risk": risk, "rules": rules, "cfg": cfg,
+                "active_label": active_label, "ollama_settings": ollama_settings, "initial_log": initial_log,
+                "notify_webhook_url": form.get("notify_webhook_url"),
+            }),
+            daemon=True,
+        )
+        thread.start()
+        return redirect(url_for("full_pipeline_schedule_status", schedule_id=schedule_id))
+    except StrategyError as exc:
+        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+    except Exception as exc:  # noqa: BLE001
+        log_crash("Full Pipeline (web, schedule-batch)", exc=exc)
+        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 500
+
+
+@app.route("/full-pipeline/schedule/<schedule_id>")
+def full_pipeline_schedule_status(schedule_id):
+    with _SCHEDULED_JOBS_LOCK:
+        entry = _SCHEDULED_JOBS.get(schedule_id)
+    if entry is None:
+        return render_template("full_pipeline_schedule.html", schedule_id=schedule_id, not_found=True), 404
+    return render_template("full_pipeline_schedule.html", schedule_id=schedule_id, not_found=False)
+
+
+@app.route("/full-pipeline/schedule/<schedule_id>/status.json")
+def full_pipeline_schedule_status_json(schedule_id):
+    with _SCHEDULED_JOBS_LOCK:
+        entry = _SCHEDULED_JOBS.get(schedule_id)
+    if entry is None:
+        return jsonify({"found": False}), 404
+    return jsonify({"found": True, **{k: v for k, v in entry.items()}})
+
+
+@app.route("/full-pipeline/schedule/<schedule_id>/cancel", methods=["POST"])
+def full_pipeline_schedule_cancel(schedule_id):
+    with _SCHEDULED_JOBS_LOCK:
+        entry = _SCHEDULED_JOBS.get(schedule_id)
+        if entry is None:
+            return jsonify({"ok": False, "error": "Not found"}), 404
+        if entry["status"] in ("started", "failed"):
+            return jsonify({"ok": False, "error": "Already started (or failed) -- use the batch job's own Stop button instead."}), 400
+        entry["cancelled"] = True
+        entry["status"] = "cancelled"
+    return jsonify({"ok": True})
 
 
 @app.route("/full-pipeline/batch-job/<job_id>")
@@ -1958,6 +2223,7 @@ def full_pipeline_start():
         thread = threading.Thread(
             target=_run_fullpipeline_job,
             args=(job_id, df, strategy, risk, rules, cfg, active_label, ollama_settings),
+            kwargs={"notify_webhook_url": form.get("notify_webhook_url")},
             daemon=True,
         )
         thread.start()
@@ -3082,11 +3348,230 @@ def serve_cpcv_report(filename):
 
 
 # ---------------------------------------------------------------------------
+# PBO (Probability of Backtest Overfitting) -- candidate-pool picker.
+# README's own acknowledged web/desktop-parity gap: compute_pbo() and
+# generate_pbo_report() already existed (used by the --pbo CLI flag), but
+# no web route/UI ever called them. Reuses the exact same job-thread/guard
+# pattern as CPCV above. The candidate pool is built from THREE sources,
+# combined:
+#   1. the strategy configured in the form itself (always candidate 0),
+#   2. any strategies the user checks from the Strategy Library (any of
+#      the 4 source types, loaded via app.strategy.library_loader and
+#      converted to a uniform spec via app.search.strategy_space.spec_from_strategy),
+#   3. N random perturbations of the form strategy's own tunable numeric
+#      parameters (manual-config strategies only -- mirrors app.main.py's
+#      run_pbo_cli, which only ever perturbed the default manual config).
+# PBO is only meaningful for 2+ candidates (see compute_pbo's own
+# docstring), so the route requires at least one pool strategy or
+# perturbed variant on top of the form strategy.
+# ---------------------------------------------------------------------------
+
+_PBO_JOBS: dict[str, dict] = {}
+_PBO_JOBS_LOCK = threading.Lock()
+
+
+def _pbo_job_log(job_id: str, msg: str) -> None:
+    with _PBO_JOBS_LOCK:
+        job = _PBO_JOBS.get(job_id)
+        if job is not None:
+            job["log"].append(msg)
+
+
+def _run_pbo_job(job_id: str, df, specs: list[dict], risk: RiskConfig, n_groups: int, n_test_groups: int, embargo_frac: float, metric: str, max_paths: int, prop_rules=None, strategy_name: str = "", instrument: str = "") -> None:
+    try:
+        _pbo_job_log(job_id, f"Running PBO across {len(specs)} candidate(s): {n_groups} groups, {n_test_groups} held out per path, metric={metric}...")
+        result = compute_pbo(
+            df, specs, risk, n_groups=n_groups, n_test_groups=n_test_groups,
+            embargo_frac=embargo_frac, metric=metric, max_paths=max_paths, prop_rules=prop_rules,
+        )
+        _pbo_job_log(job_id, f"Done: {result.n_paths} paths evaluated, PBO = {result.pbo * 100:.1f}%.")
+        paths = generate_pbo_report(PBO_DIR, result, basename=f"pbo_{job_id}")
+        report_html = f"/pbo_reports/{Path(paths['html']).name}"
+        with _PBO_JOBS_LOCK:
+            job = _PBO_JOBS[job_id]
+            job["done"] = True
+            job["result"] = result
+            job["report_html"] = report_html
+            job["report_json"] = f"/pbo_reports/{Path(paths['json']).name}"
+        # PBO is diagnostic (how likely is picking a winner among these
+        # candidates to be noise), not itself a pass/fail gate -- a LOW
+        # pbo is the good outcome, so "passed" tracks that directly.
+        strategy_state.record_validation(
+            strategy_name, instrument, "pbo",
+            passed=bool(result.pbo < 0.5), summary=f"PBO {result.pbo * 100:.1f}% across {result.n_candidates} candidates", report_html=report_html,
+        )
+    except CPCVError as exc:
+        with _PBO_JOBS_LOCK:
+            job = _PBO_JOBS[job_id]
+            job["done"] = True
+            job["error"] = str(exc)
+    except Exception as exc:  # noqa: BLE001
+        with _PBO_JOBS_LOCK:
+            job = _PBO_JOBS[job_id]
+            job["done"] = True
+            job["error"] = f"Unexpected error: {exc}"
+    finally:
+        HEAVY_JOB_GUARD.release(JOB_PBO)
+
+
+def _pool_strategy_specs(pool_refs: list[str]) -> tuple[list[dict], list[str]]:
+    """pool_refs: 'type:name' strings from the form's checked Strategy
+    Library entries. Returns (specs, warnings) -- a library entry that
+    fails to load (deleted/corrupt file) is skipped with a warning rather
+    than failing the whole PBO run."""
+    specs, warnings = [], []
+    for ref in pool_refs:
+        if ":" not in ref:
+            continue
+        strategy_type, name = ref.split(":", 1)
+        try:
+            matches = [s for s in list_saved_strategies(strategy_type) if s.name == name]
+            if not matches:
+                warnings.append(f"Skipped '{name}': no longer in the {strategy_type} library.")
+                continue
+            strategy = load_strategy_object(matches[0])
+            specs.append(spec_from_strategy(strategy))
+        except (StrategyError, OSError, ValueError) as exc:
+            warnings.append(f"Skipped '{name}': {exc}")
+    return specs, warnings
+
+
+def _perturbed_variant_specs(strategy, n_variants: int, seed: int) -> list[dict]:
+    """N random perturbations of `strategy`'s own tunable numeric
+    parameters, +/-30% of each gene's own range around its base value --
+    identical perturbation logic to app.main.py's run_pbo_cli, generalized
+    from manual-only to any of the 4 source types via the same gene
+    discovery/apply machinery Iterative Refinement's GA already uses."""
+    if n_variants <= 0:
+        return []
+    rng = random.Random(seed)
+    out = []
+    if strategy.source_type == "manual":
+        genes = extract_genome(strategy.config)
+        if not genes:
+            return []
+        for _ in range(n_variants):
+            genome = [max(min(g.base_value + rng.uniform(-0.3, 0.3) * (g.hi - g.lo), g.hi), g.lo) for g in genes]
+            out.append({"source_type": "manual", "config": apply_genome(strategy.config, genes, genome)})
+    else:
+        genes = discover_code_genes(strategy)
+        if not genes:
+            return []
+        base_spec = spec_from_strategy(strategy)
+        for _ in range(n_variants):
+            genome = [max(min(g.base_value + rng.uniform(-0.3, 0.3) * (g.hi - g.lo), g.hi), g.lo) for g in genes]
+            code_text = apply_code_genome(base_spec["code_text"], genes, genome)
+            out.append({"source_type": strategy.source_type, "code_text": code_text, "code_extension": base_spec["code_extension"]})
+    return out
+
+
+@app.route("/pbo")
+def pbo_form():
+    return render_template(
+        "pbo.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+        saved_strategies_json=_saved_strategies_json(), strategy_statuses=STRATEGY_STATUSES,
+    )
+
+
+@app.route("/pbo/start", methods=["POST"])
+def pbo_start():
+    form = request.form
+    guard_resp = _try_acquire_heavy_job(
+        JOB_PBO, "pbo.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
+    )
+    if guard_resp:
+        return guard_resp
+    try:
+        df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
+        if dataset_error:
+            HEAVY_JOB_GUARD.release(JOB_PBO)
+            return render_template("pbo.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 400
+        strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
+
+        pool_refs = [r for r in form.getlist("pool_strategy") if r]
+        n_variants = int(form.get("n_perturbed_variants", 0) or 0)
+        seed = int(form.get("seed", 42) or 42)
+        pool_specs, pool_warnings = _pool_strategy_specs(pool_refs)
+        variant_specs = _perturbed_variant_specs(strategy, n_variants, seed)
+        specs = [spec_from_strategy(strategy)] + pool_specs + variant_specs
+
+        if len(specs) < 2:
+            HEAVY_JOB_GUARD.release(JOB_PBO)
+            return render_template(
+                "pbo.html", error="PBO needs at least 2 candidates -- check one or more Strategy Library entries and/or set 'perturbed variants' above 0.",
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
+            ), 400
+
+        risk = RiskConfig(
+            initial_balance=float(form.get("initial_balance", 100000)),
+            risk_value=float(form.get("risk_value", 1.0)),
+            pip_size=float(form.get("pip_size", 0.0001)),
+        )
+        prop_rules = PropRules(account_size=float(form.get("initial_balance", 100000)))
+        job_id = uuid.uuid4().hex[:12]
+        initial_log = [f"Loaded {len(df)} bars from {active_label}.", f"Candidate pool: {len(specs)} ({1} form strategy + {len(pool_specs)} library + {len(variant_specs)} perturbed)."]
+        if import_note:
+            initial_log.append(import_note)
+        initial_log.extend(pool_warnings)
+        with _PBO_JOBS_LOCK:
+            _PBO_JOBS[job_id] = {"log": initial_log, "done": False, "error": None, "result": None, "started_at": time.time(), "instrument": active_label}
+        thread = threading.Thread(
+            target=_run_pbo_job,
+            args=(
+                job_id, df, specs, risk,
+                int(form.get("n_groups", 6) or 6), int(form.get("n_test_groups", 2) or 2),
+                float(form.get("embargo_frac", 0.01) or 0.01), form.get("metric", "sharpe_ratio"),
+                int(form.get("max_paths", 30) or 30), prop_rules,
+            ),
+            kwargs={"strategy_name": getattr(strategy, "name", "Strategy"), "instrument": active_label},
+            daemon=True,
+        )
+        thread.start()
+        return redirect(url_for("pbo_job", job_id=job_id))
+    except (StrategyError, CPCVError, RefinementError) as exc:
+        HEAVY_JOB_GUARD.release(JOB_PBO)
+        return render_template("pbo.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 400
+    except Exception as exc:  # noqa: BLE001
+        HEAVY_JOB_GUARD.release(JOB_PBO)
+        return render_template("pbo.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 500
+
+
+@app.route("/pbo/job/<job_id>")
+def pbo_job(job_id):
+    with _PBO_JOBS_LOCK:
+        job = _PBO_JOBS.get(job_id)
+    if job is None:
+        return render_template("pbo_job.html", job_id=job_id, not_found=True), 404
+    return render_template("pbo_job.html", job_id=job_id, not_found=False)
+
+
+@app.route("/pbo/job/<job_id>/status.json")
+def pbo_job_status(job_id):
+    with _PBO_JOBS_LOCK:
+        job = _PBO_JOBS.get(job_id)
+    if job is None:
+        return jsonify({"found": False}), 404
+    result = job.get("result")
+    summary = None
+    if result is not None:
+        summary = result.to_dict()
+        summary["report_html"] = job.get("report_html")
+        summary["report_json"] = job.get("report_json")
+    return jsonify({"found": True, "done": job["done"], "error": job["error"], "log": job["log"], "instrument": job.get("instrument"), "summary": summary})
+
+
+@app.route("/pbo_reports/<path:filename>")
+def serve_pbo_report(filename):
+    return send_from_directory(PBO_DIR, filename)
+
+
+# ---------------------------------------------------------------------------
 # Step 14: Parameter Sensitivity -- sweeps every tunable numeric parameter
 # independently across +/- a percent range, holding others fixed, and flags
-# any "cliff" (a narrow-edge parameter rather than a stable plateau). 1D
-# sweeps only for now; the 2D heatmap needs a two-step UI (discover tunable
-# parameter names, then pick 2) not yet built -- see WEB_PARITY_ROADMAP.md.
+# any "cliff" (a narrow-edge parameter rather than a stable plateau). Also
+# supports an on-demand 2D heatmap for any two parameter labels the 1D sweep
+# discovered -- a genuine two-step UI (discover names, then pick 2) rather
+# than the auto-picked-pairs shortcut Parameter Robustness already offers.
 # ---------------------------------------------------------------------------
 
 _SENS_JOBS: dict[str, dict] = {}
@@ -3113,6 +3598,10 @@ def _run_sensitivity_job(job_id: str, df, strategy, risk: RiskConfig, rules: Pro
             job["results"] = results
             job["report_html"] = report_html
             job["report_json"] = f"/sensitivity_reports/{Path(paths['json']).name}"
+            # Kept for an on-demand 2D heatmap requested from the job page --
+            # see _run_sensitivity_heatmap_job below. Not put in the JSON
+            # status payload (df/strategy objects aren't serializable).
+            job["_ctx"] = {"df": df, "strategy": strategy, "risk": risk, "rules": rules, "mc_cfg": mc_cfg, "metric": metric}
         # This tool is diagnostic (flags cliffs vs. stable plateaus per
         # parameter) rather than pass/fail -- passed=None records that it ran.
         strategy_state.record_validation(
@@ -3131,6 +3620,42 @@ def _run_sensitivity_job(job_id: str, df, strategy, risk: RiskConfig, rules: Pro
             job["error"] = f"Unexpected error: {exc}"
     finally:
         HEAVY_JOB_GUARD.release(JOB_SENSITIVITY)
+
+
+def _run_sensitivity_heatmap_job(job_id: str, param_a: str, param_b: str, pct_range: float, n_steps: int) -> None:
+    with _SENS_JOBS_LOCK:
+        job = _SENS_JOBS.get(job_id)
+        ctx = job.get("_ctx") if job else None
+    if job is None or ctx is None:
+        return
+    try:
+        _sens_job_log(job_id, f"Running 2D heatmap for {param_a} x {param_b}...")
+        heatmap = compute_2d_heatmap(
+            ctx["df"], ctx["strategy"], ctx["risk"], ctx["rules"], ctx["mc_cfg"],
+            param_a, param_b, metric=ctx["metric"], pct_range=pct_range, n_steps=n_steps,
+        )
+        results = job.get("results") or []
+        paths = generate_sensitivity_report(SENSITIVITY_DIR, results, heatmap, basename=f"sensitivity_{job_id}")
+        with _SENS_JOBS_LOCK:
+            job = _SENS_JOBS[job_id]
+            job["heatmap_done"] = True
+            job["heatmap_running"] = False
+            job["heatmap_error"] = None
+            job["heatmap"] = heatmap
+            job["report_html"] = f"/sensitivity_reports/{Path(paths['html']).name}"
+        _sens_job_log(job_id, "2D heatmap done.")
+    except RefinementError as exc:
+        with _SENS_JOBS_LOCK:
+            job = _SENS_JOBS[job_id]
+            job["heatmap_done"] = True
+            job["heatmap_running"] = False
+            job["heatmap_error"] = str(exc)
+    except Exception as exc:  # noqa: BLE001
+        with _SENS_JOBS_LOCK:
+            job = _SENS_JOBS[job_id]
+            job["heatmap_done"] = True
+            job["heatmap_running"] = False
+            job["heatmap_error"] = f"Unexpected error: {exc}"
 
 
 @app.route("/sensitivity")
@@ -3161,7 +3686,7 @@ def sensitivity_start():
         if import_note:
             initial_log.append(import_note)
         with _SENS_JOBS_LOCK:
-            _SENS_JOBS[job_id] = {"log": initial_log, "done": False, "error": None, "results": None, "started_at": time.time(), "instrument": active_label}
+            _SENS_JOBS[job_id] = {"log": initial_log, "done": False, "error": None, "results": None, "started_at": time.time(), "instrument": active_label, "heatmap_done": False, "heatmap_error": None, "heatmap": None, "_ctx": None}
         thread = threading.Thread(
             target=_run_sensitivity_job,
             args=(
@@ -3203,8 +3728,48 @@ def sensitivity_job_status(job_id):
             "sweeps": [r.to_dict() for r in results],
             "report_html": job.get("report_html"),
             "report_json": job.get("report_json"),
+            # Parameter labels the 1D sweep actually discovered -- the web
+            # UI's heatmap picker only ever offers a pair from this list, so
+            # it can never request a label compute_2d_heatmap doesn't know.
+            "available_params": [r.gene_label for r in results],
         }
-    return jsonify({"found": True, "done": job["done"], "error": job["error"], "log": job["log"], "instrument": job.get("instrument"), "summary": summary})
+    heatmap = job.get("heatmap")
+    return jsonify({
+        "found": True, "done": job["done"], "error": job["error"], "log": job["log"],
+        "instrument": job.get("instrument"), "summary": summary,
+        "heatmap_available": job.get("_ctx") is not None,
+        "heatmap_running": bool(job.get("heatmap_running")),
+        "heatmap_done": job.get("heatmap_done", False),
+        "heatmap_error": job.get("heatmap_error"),
+        "heatmap": heatmap.to_dict() if heatmap is not None else None,
+    })
+
+
+@app.route("/sensitivity/job/<job_id>/heatmap", methods=["POST"])
+def sensitivity_job_heatmap(job_id):
+    with _SENS_JOBS_LOCK:
+        job = _SENS_JOBS.get(job_id)
+        if job is None or job.get("_ctx") is None:
+            return jsonify({"ok": False, "error": "This job has no data available for a 2D heatmap (still running, or it failed)."}), 400
+        available = {r.gene_label for r in (job.get("results") or [])}
+    form = request.form
+    param_a, param_b = form.get("param_a", ""), form.get("param_b", "")
+    if not param_a or not param_b or param_a == param_b:
+        return jsonify({"ok": False, "error": "Pick two different parameters."}), 400
+    if param_a not in available or param_b not in available:
+        return jsonify({"ok": False, "error": "Unknown parameter label -- pick from the discovered list."}), 400
+    with _SENS_JOBS_LOCK:
+        job["heatmap_done"] = False
+        job["heatmap_error"] = None
+        job["heatmap"] = None
+        job["heatmap_running"] = True
+    thread = threading.Thread(
+        target=_run_sensitivity_heatmap_job,
+        args=(job_id, param_a, param_b, float(form.get("pct_range", 0.5) or 0.5), int(form.get("n_steps", 7) or 7)),
+        daemon=True,
+    )
+    thread.start()
+    return jsonify({"ok": True})
 
 
 @app.route("/sensitivity_reports/<path:filename>")
