@@ -124,6 +124,73 @@ def test_multi_instrument_search_end_to_end(_isolated_raw_data_dir):
     assert HEAVY_JOB_GUARD.active_name is None
 
 
+def test_multi_instrument_search_loop_mode_end_to_end(_isolated_raw_data_dir):
+    """Real POST with loop_mode=on, driving the actual background thread
+    (_run_multi_search_loop_job -> run_multi_instrument_search_loop ->
+    run_search_loop per instrument, real threads, not mocks) through to
+    completion."""
+    _trending_csv(_isolated_raw_data_dir / "eurusd.csv", seed=1)
+    _trending_csv(_isolated_raw_data_dir / "gbpusd.csv", seed=2)
+
+    client = app.test_client()
+    r = client.post(
+        "/search/multi-instrument/start",
+        data={
+            "datasets": ["eurusd.csv", "gbpusd.csv"],
+            "loop_mode": "on", "loop_target_eval_pass_pct": "0",  # trivially easy
+            "loop_max_rounds": "1", "loop_stall_rounds": "1",
+            **_FAST_FIELDS,
+        },
+    )
+    assert r.status_code == 302
+    job_id = r.headers["Location"].rstrip("/").split("/")[-1]
+
+    data = _poll_until_done(client, job_id)
+    assert data["error"] is None
+    assert data["loop_mode"] is True
+    assert set(data["results"].keys()) == {"eurusd/eurusd", "gbpusd/gbpusd"}
+    for label, res in data["results"].items():
+        assert res["error"] is None
+        assert res["stopped_reason"] in {"target_reached", "max_rounds"}
+        assert res["n_rounds"] >= 1
+        # If that instrument's loop found a winner, its report must
+        # actually be servable through the loop-scoped route.
+        if res.get("report_html"):
+            report_resp = client.get(res["report_html"])
+            assert report_resp.status_code == 200
+
+    assert HEAVY_JOB_GUARD.active_name is None
+
+
+def test_multi_instrument_search_loop_mode_can_be_stopped(_isolated_raw_data_dir, monkeypatch):
+    def _slow_run_search(*args, **kwargs):
+        from app.search.batch_runner import run_search as _actual
+        import time as _time
+        _time.sleep(0.5)
+        return _actual(*args, **kwargs)
+
+    monkeypatch.setattr("app.orchestration.loop_runner.run_search", _slow_run_search)
+
+    _trending_csv(_isolated_raw_data_dir / "eurusd.csv", seed=1)
+    _trending_csv(_isolated_raw_data_dir / "gbpusd.csv", seed=2)
+
+    client = app.test_client()
+    r = client.post(
+        "/search/multi-instrument/start",
+        data={
+            "datasets": ["eurusd.csv", "gbpusd.csv"],
+            "loop_mode": "on", "loop_target_eval_pass_pct": "99.9",  # unreachable
+            "loop_max_rounds": "50", "loop_stall_rounds": "1",
+            **_FAST_FIELDS,
+        },
+    )
+    job_id = r.headers["Location"].rstrip("/").split("/")[-1]
+
+    client.post(f"/search/multi-instrument/job/{job_id}/stop")
+    data = _poll_until_done(client, job_id, timeout=30.0)
+    assert data["cancelled"] is True
+
+
 def test_multi_instrument_search_blocked_while_search_lab_running(_isolated_raw_data_dir):
     _trending_csv(_isolated_raw_data_dir / "a.csv", seed=1)
     _trending_csv(_isolated_raw_data_dir / "b.csv", seed=2)

@@ -190,3 +190,103 @@ def test_evolution_lab_tab_builds_with_loop_mode_widgets(root, monkeypatch):
     }
     mw.MainWindow._poll_evolution_status(fake)
     assert fake.evo_loop_status_label.cget("text") == ""
+
+
+def test_forge_tab_builds_with_loop_mode_widgets(root):
+    fake = _FakeMainWindow(root)
+    fake.tab_forge = tk.Frame(root)
+    fake._forge_cancel_event = None
+    fake._last_forge_graveyard_path = None
+    fake._last_forge_result = None
+    _bind_real_methods(
+        fake, *_SHARED_HELPER_METHODS,
+        "_build_forge_tab", "_forge_run_clicked", "_forge_stop_clicked", "_open_forge_graveyard",
+    )
+    fake._build_forge_tab()  # must not raise
+
+    assert fake.forge_loop_mode.get() is False
+    assert fake.forge_loop_target.get_float() == 60.0
+    assert fake.forge_loop_max_rounds.get_int() == 10
+    assert fake.forge_loop_time_budget_hours.get_str() == ""
+    assert fake.forge_loop_stall_rounds.get_int() == 2
+    assert fake.forge_loop_require_locked_oos.get() is True
+
+    fake.forge_loop_mode.var.set(True)
+    assert fake.forge_loop_mode.get() is True
+
+
+def test_forge_run_clicked_starts_the_loop_pipeline_thread_when_enabled(root, monkeypatch):
+    fake = _FakeMainWindow(root)
+    fake.tab_forge = tk.Frame(root)
+    fake._forge_cancel_event = __import__("threading").Event()
+    fake._last_forge_graveyard_path = None
+    fake._last_forge_result = None
+    _bind_real_methods(
+        fake, *_SHARED_HELPER_METHODS,
+        "_build_forge_tab", "_forge_run_clicked", "_forge_stop_clicked", "_open_forge_graveyard",
+        "_forge_run_loop_pipeline",
+    )
+    fake._build_forge_tab()
+    fake.csv_paths = ["dummy.csv"]
+    fake.forge_loop_mode.var.set(True)
+
+    started = {"loop": False, "normal": False}
+    fake._try_start_heavy_job = lambda name: True
+    fake._release_heavy_job = lambda name: None
+    monkeypatch.setattr(mw.threading, "Thread", lambda target, daemon=True: types.SimpleNamespace(
+        start=lambda: started.__setitem__(
+            "loop" if target == fake._forge_run_loop_pipeline else "normal", True
+        )
+    ))
+    fake._forge_run_clicked()
+
+    assert started["loop"] is True
+    assert started["normal"] is False
+
+
+def test_speedrun_tab_builds_with_loop_mode_widgets(root):
+    fake = _FakeMainWindow(root)
+    fake.tab_speedrun = tk.Frame(root)
+    _bind_real_methods(
+        fake, *_SHARED_HELPER_METHODS,
+        "_build_speedrun_tab", "_speedrun_run_clicked", "_speedrun_stop_clicked",
+        "_open_speedrun_winner_report", "_open_speedrun_selected_candidate_report",
+        "_view_speedrun_selected_candidate_code", "_save_speedrun_selected_candidate",
+    )
+    fake._build_speedrun_tab()  # must not raise
+
+    assert fake.sr_loop_mode.get() is False
+    assert fake.sr_loop_max_rounds.get_int() == 10
+    assert fake.sr_loop_time_budget_hours.get_str() == ""
+    assert fake.sr_loop_stall_rounds.get_int() == 2
+
+    fake.sr_loop_mode.var.set(True)
+    assert fake.sr_loop_mode.get() is True
+
+
+def test_speedrun_run_clicked_starts_the_loop_pipeline_thread_when_enabled(root, monkeypatch):
+    fake = _FakeMainWindow(root)
+    fake.tab_speedrun = tk.Frame(root)
+    _bind_real_methods(
+        fake, *_SHARED_HELPER_METHODS,
+        "_build_speedrun_tab", "_speedrun_run_clicked", "_speedrun_stop_clicked",
+        "_open_speedrun_winner_report", "_open_speedrun_selected_candidate_report",
+        "_view_speedrun_selected_candidate_code", "_save_speedrun_selected_candidate",
+        "_speedrun_run_loop_pipeline",
+    )
+    fake._build_speedrun_tab()
+    fake.csv_paths = ["dummy.csv"]
+    fake.sr_loop_mode.var.set(True)
+
+    started = {"loop": False, "normal": False}
+    fake._try_start_heavy_job = lambda name: True
+    fake._release_heavy_job = lambda name: None
+    monkeypatch.setattr(mw.threading, "Thread", lambda target, daemon=True: types.SimpleNamespace(
+        start=lambda: started.__setitem__(
+            "loop" if target == fake._speedrun_run_loop_pipeline else "normal", True
+        )
+    ))
+    fake._speedrun_run_clicked()
+
+    assert started["loop"] is True
+    assert started["normal"] is False
