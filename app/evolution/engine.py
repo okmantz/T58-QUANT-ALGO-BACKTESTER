@@ -1653,7 +1653,23 @@ class EvolutionRunner:
                 for cid, spec, meta in population
             }
 
+            # Periodic "N/total evaluated" progress, logged roughly every
+            # 10% of the batch (at least every candidate on tiny batches).
+            # Without this, a large dataset where each candidate's
+            # backtest genuinely takes tens of seconds produces total
+            # silence between "GENERATE: N candidates" and either the
+            # next generation's log line or a stall warning many minutes
+            # later -- indistinguishable from a real hang even when the
+            # run is working exactly as intended. See _drain_futures'
+            # docstring for the separate, real-stall-recovery half of
+            # this fix; this half is purely about visibility during a
+            # slow-but-healthy run.
+            total = len(futures)
+            log_every = max(1, total // 10)
+            done_count = 0
+
             def _on_result(label, future):
+                nonlocal done_count
                 cid, spec, meta = label
                 if future is None:
                     # Stall-recovery skip (see _drain_futures) -- the worker
@@ -1661,13 +1677,17 @@ class EvolutionRunner:
                     # actually evaluated. Recorded honestly as an error, not
                     # as a pass/fail on the strategy itself.
                     _consume(cid, spec, meta, None, ["build_or_backtest_error"], "skipped: worker pool stalled", None)
-                    return
-                try:
-                    _, _, _, bt, reasons, error, stats = future.result()
-                except Exception as exc:  # noqa: BLE001 -- a dead worker must not kill the generation
-                    _consume(cid, spec, meta, None, ["build_or_backtest_error"], str(exc)[:300], None)
-                    return
-                _consume(cid, spec, meta, bt, reasons, error, stats)
+                else:
+                    try:
+                        _, _, _, bt, reasons, error, stats = future.result()
+                    except Exception as exc:  # noqa: BLE001 -- a dead worker must not kill the generation
+                        _consume(cid, spec, meta, None, ["build_or_backtest_error"], str(exc)[:300], None)
+                        done_count += 1
+                        return
+                    _consume(cid, spec, meta, bt, reasons, error, stats)
+                done_count += 1
+                if done_count % log_every == 0 or done_count == total:
+                    self._log(f"  PRE-FILTER: {done_count}/{total} candidate(s) evaluated...")
 
             self._drain_futures(futures, _on_result)
 
@@ -1753,17 +1773,29 @@ class EvolutionRunner:
                 for cid, spec, meta, bt in stage1_survivors
             }
 
+            # See the matching progress-logging comment in _prefilter --
+            # full-eval's per-candidate robustness/OOS/Monte Carlo/prop-sim
+            # work is more expensive than the pre-filter pass, so silence
+            # here is even more likely to read as a hang than a run.
+            total = len(futures)
+            log_every = max(1, total // 10)
+            done_count = 0
+
             def _on_result(cid, future):
+                nonlocal done_count
                 if future is None:
                     # Stall-recovery skip (see _drain_futures) -- this
                     # candidate's worker was terminated as wedged; it never
                     # produced a scored record.
                     self._log(f"  full-eval skipped {cid}: worker pool stalled (stall recovery).")
-                    return
-                try:
-                    records.append(future.result())
-                except Exception:  # noqa: BLE001 -- a dead worker must not kill the generation
-                    self._log(f"  full-eval error on {cid}:\n" + traceback.format_exc())
+                else:
+                    try:
+                        records.append(future.result())
+                    except Exception:  # noqa: BLE001 -- a dead worker must not kill the generation
+                        self._log(f"  full-eval error on {cid}:\n" + traceback.format_exc())
+                done_count += 1
+                if done_count % log_every == 0 or done_count == total:
+                    self._log(f"  FULL-EVAL: {done_count}/{total} candidate(s) evaluated (robustness/OOS/Monte Carlo/prop-sim)...")
 
             self._drain_futures(futures, _on_result)
         return records
