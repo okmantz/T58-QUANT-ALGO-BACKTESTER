@@ -3216,6 +3216,497 @@ _PARABOLIC_SAR_TREND_FOLLOWING = SkeletonSpec(
 )
 
 
+# ---------------------------------------------------------------------------
+# Expansion round 7 (10 new families, 9 new indicators this module had never
+# used before -- Ichimoku, MFI, Choppiness Index, Heikin-Ashi, Pivot Points,
+# a calendar day-of-week effect, Chandelier Exit, Aroon, Fibonacci
+# retracement, TRIX). Same "one indicator, one distinct mechanism"
+# convention as prior rounds -- see each SkeletonSpec's own comment block.
+# ---------------------------------------------------------------------------
+
+def _build_ichimoku_cloud_trend(p: dict) -> dict:
+    tenkan_p, kijun_p, senkou_b_p = p["tenkan"], p["kijun"], p["senkou_b"]
+    return {
+        "name": f"Ichimoku Cloud Trend (t{tenkan_p}/k{kijun_p}/sb{senkou_b_p})",
+        "entry_conditions": {
+            # Tenkan/Kijun cross (the conventional Ichimoku trigger) taken
+            # only in the direction the cloud itself (senkou A vs B) is
+            # already leaning -- distinct from every EMA/MACD cross family
+            # above, since the cloud filter is itself a forward-projected,
+            # two-line band rather than a single trend MA.
+            "long": [
+                _cond(_ind("ichimoku_tenkan", tenkan_p), "crosses above", _ind("ichimoku_kijun", kijun_p)),
+                _cond(_ind("ichimoku_senkou_a", senkou_b_p), ">", _ind("ichimoku_senkou_b", senkou_b_p)),
+            ],
+            "long_connectors": ["AND"],
+            "short": [
+                _cond(_ind("ichimoku_tenkan", tenkan_p), "crosses below", _ind("ichimoku_kijun", kijun_p)),
+                _cond(_ind("ichimoku_senkou_a", senkou_b_p), "<", _ind("ichimoku_senkou_b", senkou_b_p)),
+            ],
+            "short_connectors": ["AND"],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("ichimoku_tenkan", tenkan_p), "crosses below", _ind("ichimoku_kijun", kijun_p))],
+            "short": [_cond(_ind("ichimoku_tenkan", tenkan_p), "crosses above", _ind("ichimoku_kijun", kijun_p))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"]),
+    }
+
+
+_ICHIMOKU_CLOUD_TREND = SkeletonSpec(
+    name="ichimoku_cloud_trend",
+    label="Ichimoku Cloud Trend (Tenkan/Kijun cross, cloud-filtered)",
+    description=(
+        "Enters on a Tenkan/Kijun cross only in the direction the forward-projected cloud "
+        "(senkou A vs B) is already leaning -- a two-line forward-projected band filter "
+        "distinct from any single EMA/MACD trend filter used elsewhere in this module."
+    ),
+    param_grid={
+        "tenkan": [7, 9],
+        "kijun": [22, 26],
+        "senkou_b": [44, 52],
+        "stop_atr_mult": [1.5, 2.0],
+        "target_atr_mult": [2.5, 3.5],
+    },
+    build=_build_ichimoku_cloud_trend,
+)
+
+
+def _build_mfi_extreme_reversion(p: dict) -> dict:
+    period, oversold, overbought = p["period"], p["oversold"], p["overbought"]
+    return {
+        "name": f"MFI Extreme Reversion (mfi{period}, {oversold}/{overbought})",
+        "entry_conditions": {
+            # MFI is RSI's math applied to VOLUME-weighted typical price
+            # rather than plain close -- a genuinely different extreme
+            # reading from RSI's own oversold/overbought, and distinct from
+            # CMF (which weights by close-within-range, not raw direction).
+            "long": [_cond(_ind("mfi", period), "crosses above", _val(oversold))],
+            "long_connectors": [],
+            "short": [_cond(_ind("mfi", period), "crosses below", _val(overbought))],
+            "short_connectors": [],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("mfi", period), ">", _val(50))],
+            "short": [_cond(_ind("mfi", period), "<", _val(50))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_MFI_EXTREME_REVERSION = SkeletonSpec(
+    name="mfi_extreme_reversion",
+    label="MFI Extreme Reversion (volume-weighted, distinct from RSI/CMF)",
+    description=(
+        "Fades the Money Flow Index back from an extreme -- RSI's math applied to volume-"
+        "weighted typical price, distinct from plain-price RSI and from CMF's close-within-"
+        "range weighting."
+    ),
+    param_grid={
+        "period": [10, 14, 21],
+        "oversold": [20, 15],
+        "overbought": [80, 85],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [1.5, 2.0],
+        "max_bars": [16, 32],
+    },
+    build=_build_mfi_extreme_reversion,
+)
+
+
+def _build_choppiness_regime_trend_pullback(p: dict) -> dict:
+    fast, slow, chop_period, chop_max = p["fast"], p["slow"], p["chop_period"], p["chop_max"]
+    return {
+        "name": f"Choppiness-Regime Trend Pullback (ema{fast}/{slow}, chop<{chop_max})",
+        "entry_conditions": {
+            # An EMA cross trend trigger gated to fire ONLY while the
+            # Choppiness Index confirms the market is actually trending
+            # (low reading) rather than range-bound -- distinct from
+            # adx_trend_strength_breakout, which measures DIRECTIONAL
+            # strength; choppiness measures range-vs-noise regardless of
+            # direction, a different regime signal entirely.
+            "long": [
+                _cond(_ind("ema", fast), "crosses above", _ind("ema", slow)),
+                _cond(_ind("choppiness_index", chop_period), "<", _val(chop_max)),
+            ],
+            "long_connectors": ["AND"],
+            "short": [
+                _cond(_ind("ema", fast), "crosses below", _ind("ema", slow)),
+                _cond(_ind("choppiness_index", chop_period), "<", _val(chop_max)),
+            ],
+            "short_connectors": ["AND"],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("ema", fast), "crosses below", _ind("ema", slow))],
+            "short": [_cond(_ind("ema", fast), "crosses above", _ind("ema", slow))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"]),
+    }
+
+
+_CHOPPINESS_REGIME_TREND_PULLBACK = SkeletonSpec(
+    name="choppiness_regime_trend_pullback",
+    label="Choppiness-Regime Trend Pullback (EMA cross gated by trend-vs-chop regime)",
+    description=(
+        "An EMA cross trend trigger gated to fire only while the Choppiness Index confirms a "
+        "genuinely trending (not range-bound) regime -- a range-vs-noise filter distinct from "
+        "ADX's directional-strength measure."
+    ),
+    param_grid={
+        "fast": [8, 12],
+        "slow": [21, 34],
+        "chop_period": [14],
+        "chop_max": [38.2, 45.0],
+        "stop_atr_mult": [1.5, 2.0],
+        "target_atr_mult": [2.5, 3.0],
+    },
+    build=_build_choppiness_regime_trend_pullback,
+)
+
+
+def _build_heikin_ashi_trend_continuation(p: dict) -> dict:
+    return {
+        "name": "Heikin-Ashi Trend Continuation (no-wick candle)",
+        "entry_conditions": {
+            # A "no lower wick" bullish Heikin-Ashi candle (ha_open ==
+            # ha_low) is the classic strong-trend HA signal -- smoothed
+            # candles that filter noise a raw-price candle_direction check
+            # can't, since HA close/open are themselves running averages
+            # of the real OHLC.
+            "long": [
+                _cond(_ind("heikin_ashi_close", 1), ">", _ind("heikin_ashi_open", 1)),
+                _cond(_ind("heikin_ashi_open", 1), "==", _ind("heikin_ashi_low", 1)),
+            ],
+            "long_connectors": ["AND"],
+            "short": [
+                _cond(_ind("heikin_ashi_close", 1), "<", _ind("heikin_ashi_open", 1)),
+                _cond(_ind("heikin_ashi_open", 1), "==", _ind("heikin_ashi_high", 1)),
+            ],
+            "short_connectors": ["AND"],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("heikin_ashi_close", 1), "<", _ind("heikin_ashi_open", 1))],
+            "short": [_cond(_ind("heikin_ashi_close", 1), ">", _ind("heikin_ashi_open", 1))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_HEIKIN_ASHI_TREND_CONTINUATION = SkeletonSpec(
+    name="heikin_ashi_trend_continuation",
+    label="Heikin-Ashi Trend Continuation (no-wick smoothed candle)",
+    description=(
+        "Enters on a 'no lower/upper wick' Heikin-Ashi candle -- the classic strong-trend "
+        "signal on the smoothed HA candle transform, distinct from every raw-price candle or "
+        "structure primitive used elsewhere."
+    ),
+    param_grid={
+        "stop_atr_mult": [1.0, 1.5, 2.0],
+        "target_atr_mult": [2.0, 3.0],
+        "max_bars": [None, 32],
+    },
+    build=_build_heikin_ashi_trend_continuation,
+)
+
+
+def _build_pivot_point_breakout(p: dict) -> dict:
+    return {
+        "name": "Pivot Point Breakout (classic daily floor pivots)",
+        "entry_conditions": {
+            # Classic floor-trader daily pivots computed from the PRIOR
+            # day's high/low/close -- a fixed, non-rolling daily reference
+            # level distinct from every rolling-window Donchian/session-
+            # high-low primitive used elsewhere.
+            "long": [_cond(_ind("close", 1), "crosses above", _ind("pivot_r1", 1))],
+            "long_connectors": [],
+            "short": [_cond(_ind("close", 1), "crosses below", _ind("pivot_s1", 1))],
+            "short_connectors": [],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("close", 1), "<", _ind("pivot_point", 1))],
+            "short": [_cond(_ind("close", 1), ">", _ind("pivot_point", 1))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_PIVOT_POINT_BREAKOUT = SkeletonSpec(
+    name="pivot_point_breakout",
+    label="Pivot Point Breakout (classic daily floor pivots)",
+    description=(
+        "Enters when price clears the prior day's classic floor-trader R1/S1 pivot level, "
+        "exiting back at the central pivot -- a fixed daily reference level distinct from any "
+        "rolling-window breakout family."
+    ),
+    param_grid={
+        "stop_atr_mult": [1.0, 1.5, 2.0],
+        "target_atr_mult": [2.0, 3.0],
+        "max_bars": [None, 24, 48],
+    },
+    build=_build_pivot_point_breakout,
+)
+
+
+def _build_day_of_week_seasonality(p: dict) -> dict:
+    day, direction = p["day"], p["direction"]
+    long_cond = [_cond({"type": "day_of_week", "day": day}, "is true", _val(1))] if direction == "long" else []
+    short_cond = [_cond({"type": "day_of_week", "day": day}, "is true", _val(1))] if direction == "short" else []
+    return {
+        "name": f"Day-of-Week Seasonality (day={day}, {direction})",
+        "entry_conditions": {
+            # A pure calendar-effect trigger -- trades ONLY on one named
+            # weekday, no price/indicator condition at all -- distinct from
+            # session_time_effect, which bets on an INTRADAY clock window
+            # every day rather than a specific day of the week.
+            "long": long_cond,
+            "long_connectors": [],
+            "short": short_cond,
+            "short_connectors": [],
+        },
+        "exit_conditions": {"long": [], "short": []},
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_DAY_OF_WEEK_SEASONALITY = SkeletonSpec(
+    name="day_of_week_seasonality",
+    label="Day-of-Week Seasonality (calendar effect, no price trigger)",
+    description=(
+        "Trades only on one named weekday with no price or indicator condition at all -- a "
+        "pure calendar effect distinct from session_time_effect's intraday clock window."
+    ),
+    param_grid={
+        "day": [0, 1, 2, 3, 4],
+        "direction": ["long", "short"],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [1.5, 2.0],
+        "max_bars": [8, 16],
+    },
+    build=_build_day_of_week_seasonality,
+)
+
+
+def _build_chandelier_exit_trend_following(p: dict) -> dict:
+    fast, slow, ch_period, ch_mult = p["fast"], p["slow"], p["ch_period"], p["ch_mult"]
+    return {
+        "name": f"Chandelier Exit Trend Following (ema{fast}/{slow}, ch{ch_period}x{ch_mult})",
+        "entry_conditions": {
+            # An ordinary EMA-cross trend trigger, but held via the
+            # Chandelier Exit (highest-high minus an ATR multiple, or the
+            # mirror for shorts) rather than SuperTrend's or Parabolic
+            # SAR's own ratchet -- Chandelier resets its anchor to the
+            # highest high SINCE ENTRY-ELIGIBLE conditions, giving it a
+            # different (typically wider, slower-to-tighten) sensitivity.
+            "long": [_cond(_ind("ema", fast), "crosses above", _ind("ema", slow))],
+            "long_connectors": [],
+            "short": [_cond(_ind("ema", fast), "crosses below", _ind("ema", slow))],
+            "short_connectors": [],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("close", 1), "<", _ind("chandelier_long", ch_period))],
+            "short": [_cond(_ind("close", 1), ">", _ind("chandelier_short", ch_period))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"]),
+    }
+
+
+_CHANDELIER_EXIT_TREND_FOLLOWING = SkeletonSpec(
+    name="chandelier_exit_trend_following",
+    label="Chandelier Exit Trend Following (highest-high-minus-ATR trailing exit)",
+    description=(
+        "An EMA-cross trend entry held via the Chandelier Exit -- highest-high minus an ATR "
+        "multiple (or the mirror for shorts) -- a wider, slower-to-tighten trailing exit than "
+        "SuperTrend's or Parabolic SAR's own ratcheting stop."
+    ),
+    param_grid={
+        "fast": [8, 12],
+        "slow": [21, 34],
+        "ch_period": [14, 22],
+        "ch_mult": [2.5, 3.0],
+        "stop_atr_mult": [2.0, 2.5],
+        "target_atr_mult": [4.0, 5.0],
+    },
+    build=_build_chandelier_exit_trend_following,
+)
+
+
+def _build_aroon_trend_strength_breakout(p: dict) -> dict:
+    lookback, aroon_period, aroon_threshold = p["lookback"], p["aroon_period"], p["aroon_threshold"]
+    return {
+        "name": f"Aroon Trend-Strength Breakout (lb={lookback}, aroon{aroon_period}>={aroon_threshold})",
+        "entry_conditions": {
+            # A Donchian-style breakout confirmed by the Aroon Oscillator
+            # already showing strong directional conviction -- Aroon
+            # measures BARS SINCE the last period-high/low, a genuinely
+            # different mechanism from every magnitude-based oscillator
+            # (RSI/CCI/Williams %R) used elsewhere for trend confirmation.
+            "long": [
+                _cond(_breakout_flag(lookback, "bullish"), "is true", _val(1)),
+                _cond(_ind("aroon_oscillator", aroon_period), ">", _val(aroon_threshold)),
+            ],
+            "long_connectors": ["AND"],
+            "short": [
+                _cond(_breakout_flag(lookback, "bearish"), "is true", _val(1)),
+                _cond(_ind("aroon_oscillator", aroon_period), "<", _val(-aroon_threshold)),
+            ],
+            "short_connectors": ["AND"],
+        },
+        "exit_conditions": {"long": [], "short": []},
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"]),
+    }
+
+
+_AROON_TREND_STRENGTH_BREAKOUT = SkeletonSpec(
+    name="aroon_trend_strength_breakout",
+    label="Aroon Trend-Strength Breakout (bars-since-extreme confirmation)",
+    description=(
+        "A Donchian-style breakout confirmed by the Aroon Oscillator -- which measures bars "
+        "since the last period-high/low rather than any magnitude of move -- a mechanism "
+        "distinct from every magnitude-based confirmation oscillator used elsewhere."
+    ),
+    param_grid={
+        "lookback": [10, 20, 30],
+        "aroon_period": [14, 25],
+        "aroon_threshold": [50, 70],
+        "stop_atr_mult": [1.5, 2.0],
+        "target_atr_mult": [2.5, 3.5],
+    },
+    build=_build_aroon_trend_strength_breakout,
+)
+
+
+def _build_fibonacci_retracement_bounce(p: dict) -> dict:
+    ema_trend, fib_period, fib_level = p["ema_trend"], p["fib_period"], p["fib_level"]
+    fib_kind = {382: "fib_382", 500: "fib_500", 618: "fib_618"}[fib_level]
+    return {
+        "name": f"Fibonacci Retracement Bounce (ema{ema_trend}, {fib_level/10:.1f}%)",
+        "entry_conditions": {
+            # Buys a pullback to a rolling-window Fibonacci retracement
+            # level ONLY while price remains above a slower EMA trend
+            # filter (mirrored for shorts) -- distinct from
+            # range_midpoint_fade and vwap_bollinger_pullback, neither of
+            # which uses a Fibonacci-ratio level.
+            "long": [
+                _cond(_ind("close", 1), ">", _ind("ema", ema_trend)),
+                _cond(_ind("close", 1), "crosses above", _ind(fib_kind, fib_period)),
+            ],
+            "long_connectors": ["AND"],
+            "short": [
+                _cond(_ind("close", 1), "<", _ind("ema", ema_trend)),
+                _cond(_ind("close", 1), "crosses below", _ind(fib_kind, fib_period)),
+            ],
+            "short_connectors": ["AND"],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("close", 1), "<", _ind("ema", ema_trend))],
+            "short": [_cond(_ind("close", 1), ">", _ind("ema", ema_trend))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_FIBONACCI_RETRACEMENT_BOUNCE = SkeletonSpec(
+    name="fibonacci_retracement_bounce",
+    label="Fibonacci Retracement Bounce (rolling-window ratio levels, trend-filtered)",
+    description=(
+        "Buys a pullback to a rolling-window Fibonacci retracement ratio (38.2/50/61.8%) only "
+        "while a slower EMA trend filter still agrees with direction -- a Fibonacci-ratio "
+        "level distinct from any fixed-percent or session-based pullback level."
+    ),
+    param_grid={
+        "ema_trend": [50, 100],
+        "fib_period": [30, 50],
+        "fib_level": [382, 500, 618],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [2.0, 3.0],
+        "max_bars": [None, 32],
+    },
+    build=_build_fibonacci_retracement_bounce,
+)
+
+
+def _build_trix_zero_cross_momentum(p: dict) -> dict:
+    period = p["period"]
+    return {
+        "name": f"TRIX Zero Cross Momentum (trix{period})",
+        "entry_conditions": {
+            # Rate of change of a TRIPLE-smoothed EMA crossing zero --
+            # filters out the minor cycles a single MACD-style EMA
+            # difference still passes through, a distinct smoothing depth
+            # from every other momentum trigger in this module.
+            "long": [_cond(_ind("trix", period), "crosses above", _val(0))],
+            "long_connectors": [],
+            "short": [_cond(_ind("trix", period), "crosses below", _val(0))],
+            "short_connectors": [],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("trix", period), "<", _val(0))],
+            "short": [_cond(_ind("trix", period), ">", _val(0))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"]),
+    }
+
+
+_TRIX_ZERO_CROSS_MOMENTUM = SkeletonSpec(
+    name="trix_zero_cross_momentum",
+    label="TRIX Zero Cross Momentum (triple-smoothed EMA rate-of-change)",
+    description=(
+        "Enters on a zero-line cross of TRIX -- the rate of change of a triple-smoothed EMA -- "
+        "a deeper smoothing than MACD's single EMA difference, filtering out minor cycles MACD "
+        "still passes through."
+    ),
+    param_grid={
+        "period": [12, 15, 20],
+        "stop_atr_mult": [1.5, 2.0],
+        "target_atr_mult": [2.5, 3.5],
+    },
+    build=_build_trix_zero_cross_momentum,
+)
+
+
+def _build_volume_profile_value_area_fade(p: dict) -> dict:
+    period, n_bins = p["period"], p["n_bins"]
+    return {
+        "name": f"Volume Profile Value-Area Fade (vp{period}/{n_bins}bins)",
+        "entry_conditions": {
+            # Fades price back into the value area once it closes outside
+            # the rolling Volume Profile's VAH/VAL -- a genuinely distinct
+            # level type from every other family here: a volume-weighted
+            # price DISTRIBUTION's edge, not a rolling price extreme
+            # (Donchian), a session boundary, or a fixed daily pivot.
+            "long": [_cond(_ind("close", 1), "crosses above", _ind("volume_profile_val", period))],
+            "long_connectors": [],
+            "short": [_cond(_ind("close", 1), "crosses below", _ind("volume_profile_vah", period))],
+            "short_connectors": [],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("close", 1), ">", _ind("volume_profile_poc", period))],
+            "short": [_cond(_ind("close", 1), "<", _ind("volume_profile_poc", period))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_VOLUME_PROFILE_VALUE_AREA_FADE = SkeletonSpec(
+    name="volume_profile_value_area_fade",
+    label="Volume Profile Value-Area Fade (POC/VAH/VAL, rolling window)",
+    description=(
+        "Fades price back into the value area once it closes outside the rolling Volume "
+        "Profile's VAH/VAL, exiting at the POC -- a volume-weighted price DISTRIBUTION level, "
+        "genuinely distinct from any rolling price extreme, session boundary, or fixed pivot "
+        "used elsewhere."
+    ),
+    param_grid={
+        "period": [60, 100],
+        "n_bins": [16, 24],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [1.5, 2.0],
+        "max_bars": [24, 48],
+    },
+    build=_build_volume_profile_value_area_fade,
+)
+
+
 FAMILIES: dict[str, SkeletonSpec] = {
     _TREND_BREAKOUT.name: _TREND_BREAKOUT,
     _MTF_PULLBACK.name: _MTF_PULLBACK,
@@ -3310,6 +3801,20 @@ FAMILIES: dict[str, SkeletonSpec] = {
     _AWESOME_OSCILLATOR_ZERO_CROSS.name: _AWESOME_OSCILLATOR_ZERO_CROSS,
     _CMF_VOLUME_CONFIRMATION.name: _CMF_VOLUME_CONFIRMATION,
     _PARABOLIC_SAR_TREND_FOLLOWING.name: _PARABOLIC_SAR_TREND_FOLLOWING,
+    # -- Expansion round 7 (10 new families, 9 new indicators: Ichimoku,
+    # MFI, Choppiness Index, Heikin-Ashi, Pivot Points, a day-of-week
+    # calendar effect, Chandelier Exit, Aroon, Fibonacci retracement, TRIX).
+    _ICHIMOKU_CLOUD_TREND.name: _ICHIMOKU_CLOUD_TREND,
+    _MFI_EXTREME_REVERSION.name: _MFI_EXTREME_REVERSION,
+    _CHOPPINESS_REGIME_TREND_PULLBACK.name: _CHOPPINESS_REGIME_TREND_PULLBACK,
+    _HEIKIN_ASHI_TREND_CONTINUATION.name: _HEIKIN_ASHI_TREND_CONTINUATION,
+    _PIVOT_POINT_BREAKOUT.name: _PIVOT_POINT_BREAKOUT,
+    _DAY_OF_WEEK_SEASONALITY.name: _DAY_OF_WEEK_SEASONALITY,
+    _CHANDELIER_EXIT_TREND_FOLLOWING.name: _CHANDELIER_EXIT_TREND_FOLLOWING,
+    _AROON_TREND_STRENGTH_BREAKOUT.name: _AROON_TREND_STRENGTH_BREAKOUT,
+    _FIBONACCI_RETRACEMENT_BOUNCE.name: _FIBONACCI_RETRACEMENT_BOUNCE,
+    _TRIX_ZERO_CROSS_MOMENTUM.name: _TRIX_ZERO_CROSS_MOMENTUM,
+    _VOLUME_PROFILE_VALUE_AREA_FADE.name: _VOLUME_PROFILE_VALUE_AREA_FADE,
 }
 
 # Families that need something beyond the plain OHLCV df -- checked by
@@ -3409,6 +3914,17 @@ HYPOTHESIS_QUESTIONS: dict[str, str] = {
     "awesome_oscillator_zero_cross": "When the Awesome Oscillator crosses its zero line, does the new momentum direction continue?",
     "cmf_volume_confirmation": "Does a breakout confirmed by Chaikin Money Flow already leaning the same direction outperform one without it?",
     "parabolic_sar_trend_following": "When Parabolic SAR's accelerating trailing stop flips, does the new trend persist?",
+    "ichimoku_cloud_trend": "When Tenkan crosses Kijun in the direction the Ichimoku cloud already leans, does the trend continue?",
+    "mfi_extreme_reversion": "When the volume-weighted Money Flow Index reaches an extreme, does price revert?",
+    "choppiness_regime_trend_pullback": "Does an EMA-cross trend trigger work better when the Choppiness Index confirms a genuinely trending regime?",
+    "heikin_ashi_trend_continuation": "When a Heikin-Ashi candle prints with no wick against the trend, does that trend continue?",
+    "pivot_point_breakout": "Does price clearing the prior day's classic floor-trader pivot level continue in that direction?",
+    "day_of_week_seasonality": "Does this instrument have a genuine edge on one specific day of the week, independent of any price signal?",
+    "chandelier_exit_trend_following": "Does an EMA-cross trend held via a Chandelier (highest-high-minus-ATR) exit outperform a fixed ATR exit?",
+    "aroon_trend_strength_breakout": "Does a breakout confirmed by Aroon (bars since the last extreme) outperform one without it?",
+    "fibonacci_retracement_bounce": "Does a pullback to a Fibonacci retracement ratio bounce back in the direction of the prevailing trend?",
+    "trix_zero_cross_momentum": "When TRIX (a triple-smoothed EMA's rate of change) crosses zero, does that momentum continue?",
+    "volume_profile_value_area_fade": "When price closes outside the rolling Volume Profile's value area, does it fade back toward the point of control?",
 }
 
 
