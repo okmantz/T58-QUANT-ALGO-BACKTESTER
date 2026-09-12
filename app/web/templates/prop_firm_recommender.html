@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Payout Probability (Monte Carlo) — T58 Quant Algo Backtester</title>
+<title>Prop-Firm Recommender — T58 Quant Algo Backtester</title>
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/static/icon-192.png">
 <link rel="apple-touch-icon" href="/static/icon-192.png">
@@ -44,15 +44,15 @@
 </style>
 </head>
 <body>
-{% set active_page = active_page|default('payout_probability') %}
+{% set active_page = active_page|default('prop_firm_recommender') %}
 <div class="t58-shell">
 {% include '_sidebar.html' %}
 <div class="t58-main">
 <div class="t58-page-header">
-  <h1>Payout probability</h1>
-  <p>Goes beyond a single pass-probability number: simulates thousands of complete account lifecycles
-  (Start &rarr; Evaluation &rarr; Funded &rarr; Payout #1 &rarr; Payout #2 &rarr; ... &rarr; Reset/Continue) and
-  reports the actual funnel -- how many of those simulated accounts made it through EACH stage.</p>
+  <h1>Prop-firm recommender</h1>
+  <p>The reverse of Payout Probability: run your strategy's own trade sequence against EVERY prop-firm
+  preset (or a chosen subset) and get a ranked "which firm's rules does this strategy actually fit best"
+  table, instead of checking one firm's rules by hand, one at a time.</p>
 </div>
 
 {% if error %}
@@ -61,40 +61,41 @@
 
 {% if result %}
 <div class="card">
-  <h2>Result — {{ result.strategy_name }}</h2>
-  <div class="headline">
-    <div class="stat"><div class="label">Prop Survival Score</div><div class="value">{{ '%.0f' % result.score }} / 100</div></div>
-    <div class="stat"><div class="label">Net positive after resets</div><div class="value">{{ '%.1f' % result.net_positive_after_resets }}%</div></div>
-  </div>
-  <h2 style="margin-top:16px;">Account lifecycle funnel ({{ '{:,}'.format(result.funnel.n_accounts) }} simulated accounts)</h2>
-  <div class="funnel-row"><span>Passed Evaluation</span><span>{{ '{:,}'.format(result.funnel.passed_evaluation_count) }} ({{ '%.1f' % result.funnel.passed_evaluation_pct }}%)</span></div>
-  <div class="funnel-row"><span>Reached Funded</span><span>{{ '{:,}'.format(result.funnel.reached_funded_count) }} ({{ '%.1f' % result.funnel.reached_funded_pct }}%)</span></div>
-  {% for count in result.funnel.payout_counts %}
-  <div class="funnel-row"><span>Reached Payout #{{ loop.index }}</span><span>{{ '{:,}'.format(count) }} ({{ '%.1f' % result.funnel.payout_probabilities[loop.index0] }}%)</span></div>
-  {% endfor %}
-  {% for n in result.notes %}<div class="notice" style="margin-top:10px;">{{ n }}</div>{% endfor %}
-  <div class="links">
-    <a href="{{ result.report_html }}" target="_blank">Open full Payout Probability report &rarr;</a>
-  </div>
+  <h2>Results — {{ result.strategy_name }} on {{ result.instrument }}</h2>
+  {% if not result.recommendations %}
+  <p class="help">No candidates could be scored -- check the strategy produced trades and try again.</p>
+  {% else %}
+  <table style="width:100%; border-collapse: collapse; font-size:13px;">
+    <thead>
+      <tr style="text-align:left; border-bottom:1px solid var(--border-light); color:#888; text-transform:uppercase; font-size:10px;">
+        <th style="padding:6px 4px;">Firm / preset</th>
+        <th style="padding:6px 4px;">Score</th>
+        <th style="padding:6px 4px;">Pass %</th>
+        <th style="padding:6px 4px;">Payout %</th>
+        <th style="padding:6px 4px;">Risk of ruin %</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in result.recommendations %}
+      <tr style="border-bottom:1px solid var(--border-light);">
+        <td style="padding:6px 4px;">{{ r.label }}{% if loop.first %} &#11088;{% endif %}</td>
+        <td style="padding:6px 4px; font-weight:700;">{{ '%.1f' % r.composite_score }}</td>
+        <td style="padding:6px 4px;">{{ '%.1f' % r.evaluation_pass_probability }}</td>
+        <td style="padding:6px 4px;">{{ '%.1f' % r.first_payout_probability }}</td>
+        <td style="padding:6px 4px;">{{ '%.1f' % r.risk_of_ruin_pct }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="help" style="margin-top:10px;">Score blends pass probability (50%), first-payout probability (30%), and
+  survival / risk-of-ruin (20%) -- see app.prop.recommender for the exact formula. This ranks rule SHAPES against
+  your strategy's own trade sequence; it does not re-run your strategy at each firm's different account size, so
+  treat this as a starting point for which firm's terms to look at closer, not a final answer.</p>
+  {% endif %}
 </div>
-{% if result.scaling %}
-<div class="card">
-  <h2>Account-scaling stress test</h2>
-  <p class="help">Same trade sequence, resimulated with a funded-account scaling plan layered on top of the
-  plain result above. See app.prop.scaling's module docstring for the modeling assumptions -- this does not
-  change the plain (no-scaling) numbers above, it's a separate what-if.</p>
-  <div class="headline">
-    <div class="stat"><div class="label">Probability of any scale-up</div><div class="value">{{ '%.1f' % result.scaling.probability_any_scale_up }}%</div></div>
-    <div class="stat"><div class="label">Median final account size</div><div class="value">${{ '{:,.0f}'.format(result.scaling.median_final_account_size) }}</div></div>
-    <div class="stat"><div class="label">Expected payout uplift</div><div class="value">{{ '%.1f' % result.scaling.payout_uplift_pct }}%</div></div>
-  </div>
-  <div class="funnel-row"><span>Expected total payout (no scaling)</span><span>${{ '{:,.0f}'.format(result.scaling.expected_total_payout_unscaled) }}</span></div>
-  <div class="funnel-row"><span>Expected total payout (with scaling plan)</span><span>${{ '{:,.0f}'.format(result.scaling.expected_total_payout_scaled) }}</span></div>
-</div>
-{% endif %}
 {% endif %}
 
-<form method="post" action="/payout-probability/run" enctype="multipart/form-data">
+<form method="post" action="/prop-firm-recommender/run" enctype="multipart/form-data">
 
   <div class="card">
     <h2>1. Market data</h2>
@@ -149,63 +150,37 @@
   </div>
 
   <div class="card">
-    <h2>3. Risk &amp; prop rules</h2>
-    <label>Quick-fill from a prop-firm preset</label>
-    <select id="prop_preset_select" onchange="applyPropPreset()">
-      <option value="">— choose a preset, or fill in manually below —</option>
-    </select>
-    <div id="prop_preset_note" class="help" style="margin:4px 0 10px;"></div>
+    <h2>3. Risk (position sizing)</h2>
+    <p class="help">Prop-firm rules themselves come from the firm checklist below, not from fields here --
+    this only sets how the strategy sizes its own positions before its trades get scored against each firm.</p>
     <div class="row">
-      <div><label>Initial balance ($)</label><input type="number" name="initial_balance" id="pp_initial_balance" value="100000"></div>
-      <div><label>Account size ($)</label><input type="number" name="account_size" id="pp_account_size" value="100000"></div>
-    </div>
-    <div class="row">
+      <div><label>Initial balance ($)</label><input type="number" name="initial_balance" value="100000"></div>
       <div><label>Risk value</label><input type="number" step="0.1" name="risk_value" value="1.0"></div>
-      <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" value="0.0001"></div>
     </div>
-    <div class="row">
-      <div><label>Eval profit target (%)</label><input type="number" name="profit_target" id="pp_profit_target" value="8"></div>
-      <div><label>Daily loss limit (%)</label><input type="number" name="daily_loss" id="pp_daily_loss" value="5"></div>
-    </div>
-    <div class="row">
-      <div><label>Max drawdown (%)</label><input type="number" name="max_dd" id="pp_max_dd" value="10"></div>
-    </div>
+    <label>Pip size</label>
+    <input type="number" step="0.0001" name="pip_size" value="0.0001">
   </div>
 
   <div class="card">
-    <h2>4. Lifecycle simulation settings</h2>
-    <p class="help">Reset/retry economics model what it actually costs, out of pocket, to keep re-attempting the
-    evaluation after a failure -- and what you actually keep after the firm's profit split.</p>
-    <div class="row">
-      <div><label>Simulated account lifetimes</label><input type="number" name="n_sims" value="5000"></div>
-      <div><label>Payout milestones to track</label><input type="number" name="max_payouts_tracked" value="5"></div>
-    </div>
-    <label>Funding approval probability (%) — 100 = every eval pass becomes funded immediately</label>
-    <input type="number" name="funding_approval_pct" value="100">
-    <div class="row">
-      <div><label>Evaluation fee ($)</label><input type="number" name="evaluation_fee" value="0"></div>
-      <div><label>Reset fee ($, blank = same as evaluation fee)</label><input type="number" name="reset_fee"></div>
-    </div>
-    <div class="row">
-      <div><label>Trader's profit split (%)</label><input type="number" name="profit_split" value="80"></div>
-      <div><label>Max lifetime attempts</label><input type="number" name="max_attempts" value="3"></div>
-    </div>
+    <h2>4. Prop firms to score against</h2>
+    <p class="help">Leave every box unchecked to score against the FULL preset catalog. Check specific firms
+    to narrow the comparison. See each preset's "as of" date -- verify against the firm's own current rules
+    page before relying on this for a real evaluation.</p>
+    {% for p in all_presets %}
+    <label style="display:flex; align-items:center; gap:8px; margin:4px 0;">
+      <input type="checkbox" name="firms" value="{{ p.key }}" style="width:auto;">
+      <span>{{ p.label }} <span style="color:#888; font-size:11px;">(as of {{ p.as_of }})</span></span>
+    </label>
+    {% endfor %}
   </div>
 
   <div class="card">
-    <h2>5. Account-scaling stress test (optional)</h2>
-    <p class="help">Models a funded account scaling up after a run of consecutive payouts (a common shape at
-    several modern prop firms). Additive only -- leave unchecked for the plain (no-scaling) result above.</p>
-    <label><input type="checkbox" name="enable_scaling" style="width:auto;display:inline-block;margin-right:6px;"> Enable account-scaling stress test</label>
-    <div class="row">
-      <div><label>Consecutive payouts per scale-up</label><input type="number" name="scale_payouts_per" value="4"></div>
-      <div><label>Scale multiplier (e.g. 1.25 = +25%)</label><input type="number" step="0.05" name="scale_multiplier" value="1.25"></div>
-    </div>
-    <label>Max scale multiple (cap, e.g. 4 = never exceed 4x the starting account size)</label>
-    <input type="number" step="0.5" name="scale_max_multiple" value="4.0">
+    <h2>5. Simulation settings</h2>
+    <label>Simulations per firm</label>
+    <input type="number" name="n_sims" value="2000">
   </div>
 
-  <button class="submit-btn" type="submit">Run Payout Probability Simulation</button>
+  <button class="submit-btn" type="submit">Run Prop-Firm Recommender</button>
 </form>
 
 </div>
@@ -217,31 +192,6 @@
   const manualFields = document.getElementById('manual-fields');
   const codeFields = document.getElementById('code-fields');
   const SAVED_STRATEGIES = {{ saved_strategies_json | safe }};
-  const PROP_PRESETS = {{ prop_presets_json | safe }};
-
-  (function populatePropPresets() {
-    const select = document.getElementById('prop_preset_select');
-    PROP_PRESETS.forEach((p, i) => {
-      const opt = document.createElement('option');
-      opt.value = String(i);
-      opt.textContent = p.label;
-      select.appendChild(opt);
-    });
-  })();
-
-  function applyPropPreset() {
-    const select = document.getElementById('prop_preset_select');
-    const note = document.getElementById('prop_preset_note');
-    if (select.value === '') { note.textContent = ''; return; }
-    const p = PROP_PRESETS[parseInt(select.value, 10)];
-    document.getElementById('pp_account_size').value = p.account_size;
-    document.getElementById('pp_initial_balance').value = p.account_size;
-    document.getElementById('pp_profit_target').value = p.evaluation_profit_target_pct;
-    document.getElementById('pp_daily_loss').value = p.daily_loss_limit_pct;
-    document.getElementById('pp_max_dd').value = p.max_drawdown_pct;
-    note.textContent = 'As of ' + p.as_of + ': ' + p.source_note;
-  }
-
 
   function populateLibrarySelect(mode) {
     const select = document.getElementById('existing_strategy_select');
