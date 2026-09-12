@@ -118,3 +118,31 @@ def test_with_prop_safety_defaults_never_overrides_explicit_value():
     rules = PropRules(account_size=50_000.0, max_drawdown_pct=10.0)
     safe_risk = with_prop_safety_defaults(risk, rules)
     assert safe_risk.max_account_drawdown_pct == 4.0
+
+
+def test_with_prop_safety_defaults_also_wires_daily_loss_limit():
+    # FIX (2026-09-12): daily_loss_limit_pct used to be left out of this
+    # function entirely -- see with_prop_safety_defaults' own docstring.
+    risk = RiskConfig(initial_balance=50_000.0)
+    rules = PropRules(account_size=50_000.0, max_drawdown_pct=10.0, daily_loss_limit_pct=5.0)
+    safe_risk = with_prop_safety_defaults(risk, rules)
+    assert safe_risk.daily_loss_limit_pct == 5.0
+    assert safe_risk.max_account_drawdown_pct == 10.0
+    # Original RiskConfig instance must be untouched (returns a copy).
+    assert risk.daily_loss_limit_pct is None
+
+
+def test_with_prop_safety_defaults_never_overrides_explicit_daily_loss_limit():
+    risk = RiskConfig(initial_balance=50_000.0, daily_loss_limit_pct=2.0)
+    rules = PropRules(account_size=50_000.0, daily_loss_limit_pct=5.0)
+    safe_risk = with_prop_safety_defaults(risk, rules)
+    assert safe_risk.daily_loss_limit_pct == 2.0
+
+
+def test_with_prop_safety_defaults_wires_both_fields_independently():
+    risk = RiskConfig(initial_balance=50_000.0, max_account_drawdown_pct=8.0)
+    rules = PropRules(account_size=50_000.0, max_drawdown_pct=10.0, daily_loss_limit_pct=5.0)
+    safe_risk = with_prop_safety_defaults(risk, rules)
+    # explicit value kept for one field, prop-rules default filled for the other
+    assert safe_risk.max_account_drawdown_pct == 8.0
+    assert safe_risk.daily_loss_limit_pct == 5.0
