@@ -64,7 +64,9 @@ from app.optimize.walkforward_ga import run_walkforward_aware_refinement
 from app.orchestration import pipeline_guide
 from app.orchestration.batch_test import BatchTestItem, run_batch_test
 from app.orchestration.forge import ForgeConfig, run_forge
-from app.orchestration.loop_runner import SearchLoopConfig, run_search_loop
+from app.orchestration.loop_runner import (
+    ForgeLoopConfig, SearchLoopConfig, SpeedRunLoopConfig, run_forge_loop, run_search_loop, run_speed_run_loop,
+)
 from app.orchestration.resource_guard import (
     HEAVY_JOB_GUARD, JOB_EVOLUTION_LAB, JOB_FORGE, JOB_FULL_PIPELINE, JOB_SEARCH_LAB, JOB_SPEED_RUN,
     JOB_WFO, JOB_WFGA, JOB_CPCV, JOB_SENSITIVITY, JOB_MULTI_OBJECTIVE, JOB_REGIME_MATRIX,
@@ -11256,6 +11258,24 @@ class MainWindow:
         )
         self.forge_graveyard_min_attempts = LabeledEntry(graveyard_section, "Minimum prior failures before skipping", 8)
 
+        loop_section = self._section(
+            f, "Loop mode",
+            "Repeats Forge Strategy automatically: if a round makes no progress for a few rounds "
+            "in a row, the next round searches DEEPER (more hypotheses, more survivors carried "
+            "forward) instead of stopping. Stops the moment a champion clears your target pass "
+            "rate, when the round or time budget runs out, or when you hit STOP.",
+        )
+        self.forge_loop_mode = LabeledCheckbox(loop_section, "Enable Loop Mode", False)
+        self.forge_loop_target = LabeledEntry(loop_section, "Stop once a champion's pass rate reaches", 60)
+        self.forge_loop_max_rounds = LabeledEntry(loop_section, "Max rounds", 10)
+        self.forge_loop_time_budget_hours = LabeledEntry(
+            loop_section, "Time budget in hours (blank = no limit, rely on rounds/STOP)", "",
+        )
+        self.forge_loop_stall_rounds = LabeledEntry(loop_section, "Rounds with no improvement before searching deeper", 2)
+        self.forge_loop_require_locked_oos = LabeledCheckbox(
+            loop_section, "Only count a champion that also passed the locked holdout check", True,
+        )
+
         button_row = Frame(f, bg=BG)
         button_row.pack(fill="x", padx=24, pady=10)
         self._button(button_row, "RUN FORGE", self._forge_run_clicked, primary=True).pack(side="left")
@@ -11359,7 +11379,10 @@ class MainWindow:
         self._forge_cancel_event.clear()
         self.stop_forge_btn.config(state="normal")
         self.forge_progress.start(10)
-        threading.Thread(target=self._forge_run_pipeline, daemon=True).start()
+        if self.forge_loop_mode.get():
+            threading.Thread(target=self._forge_run_loop_pipeline, daemon=True).start()
+        else:
+            threading.Thread(target=self._forge_run_pipeline, daemon=True).start()
 
     def _forge_stop_clicked(self):
         self._forge_cancel_event.set()
@@ -11463,6 +11486,138 @@ class MainWindow:
         except Exception as exc:
             self._log_forge("\nUnexpected error:\n" + traceback.format_exc())
             log_crash("Forge Strategy (desktop)", exc=exc)
+        finally:
+            self.forge_progress.stop()
+            self.stop_forge_btn.config(state="disabled")
+            self._release_heavy_job(JOB_FORGE)
+
+    def _forge_run_loop_pipeline(self):
+        """Loop Mode's desktop counterpart to _forge_run_pipeline above --
+        same data-loading/config/risk/rules setup, but drives
+        app.orchestration.loop_runner.run_forge_loop (repeated rounds,
+        searching deeper on stall) instead of a single run_forge call.
+        Repaints the funnel/leaderboard/champion display after EVERY
+        round (via on_round), so the tab shows live progress across a
+        loop that can run for a long time, not just a frozen "Running..."
+        state until the whole thing finishes."""
+        try:
+            df = self._load_df_for_page(self._log_forge)
+            if df is None:
+                return
+            risk = self._build_risk_config()
+            rules = self._build_prop_rules()
+
+            base_config = ForgeConfig(
+                min_trades=self.forge_min_trades.get_int(20),
+                min_profit_factor=self.forge_min_pf.get_float(1.05),
+                ga_population=self.forge_ga_population.get_int(12),
+                ga_generations=self.forge_ga_generations.get_int(4),
+                stage3_mc_sims=self.forge_stage3_mc_sims.get_int(2000),
+                cpcv_pool_size=self.forge_cpcv_pool_size.get_int(30),
+                cpcv_survivors=self.forge_cpcv_survivors.get_int(10),
+                final_mc_sims=self.forge_final_mc_sims.get_int(10_000),
+                mc_survivors=self.forge_mc_survivors.get_int(5),
+                eval_window_days=self.forge_eval_window_days.get_int(60),
+                rolling_survivors=self.forge_rolling_survivors.get_int(2),
+                locked_holdout_frac=self.forge_locked_holdout_frac.get_float(0.15),
+                graveyard_skip_known_dead=self.forge_graveyard_skip.var.get(),
+                graveyard_min_attempts=self.forge_graveyard_min_attempts.get_int(8),
+                workers=int(self.forge_workers.get_str().strip()) if self.forge_workers.get_str().strip() else None,
+            )
+            instrument = (
+                os.path.basename(self.csv_paths[0]) if len(self.csv_paths) == 1
+                else " + ".join(os.path.basename(p) for p in self.csv_paths)
+            )
+            graveyard_path = graveyard_path_for(instrument, "unknown")
+            self._last_forge_graveyard_path = graveyard_path
+
+            time_budget_raw = self.forge_loop_time_budget_hours.get_str().strip()
+            loop_cfg = ForgeLoopConfig(
+                target_pass_rate_pct=self.forge_loop_target.get_float(60.0),
+                require_locked_oos_passed=self.forge_loop_require_locked_oos.get(),
+                max_rounds=self.forge_loop_max_rounds.get_int(10),
+                time_budget_seconds=(float(time_budget_raw) * 3600.0) if time_budget_raw else None,
+                stall_rounds_before_widen=self.forge_loop_stall_rounds.get_int(2),
+                starting_n_hypotheses=self.forge_n_hypotheses.get_int(10_000),
+                starting_stage1_top_n=self.forge_stage1_top_n.get_int(1000),
+                starting_stage2_top_n=self.forge_stage2_top_n.get_int(200),
+                seed=self.forge_seed.get_int(42),
+                base_config=base_config,
+            )
+            self._log_forge(
+                f"Loop mode ON -- will repeat Forge rounds (searching deeper on stall) until a "
+                f"champion clears {loop_cfg.target_pass_rate_pct:.0f}%, {loop_cfg.max_rounds} "
+                f"rounds run, or the time budget is used up."
+            )
+
+            def on_round(round_result) -> None:
+                result = round_result.result
+
+                def _paint():
+                    for tree in (self.forge_funnel_tree, self.forge_leaderboard_tree):
+                        for row in tree.get_children():
+                            tree.delete(row)
+                    for stage in result.funnel:
+                        self.forge_funnel_tree.insert("", END, values=(stage.name, stage.n_in, stage.n_out))
+                    for row in result.leaderboard:
+                        self.forge_leaderboard_tree.insert("", END, values=(
+                            row.candidate_id, row.family_label, f"{row.pass_rate_pct:.1f}",
+                            f"{row.payout_rate_pct:.1f}", f"{row.prop_survival_score:.1f}",
+                            row.locked_oos_status, f"{row.max_drawdown_pct:.2f}",
+                            f"${row.net_profit:,.2f}", row.total_trades,
+                        ))
+                    self.forge_champion_label.config(
+                        text=(
+                            f"Loop round {round_result.round_index} -- best champion pass rate so far: "
+                            f"{round_result.champion_pass_rate_pct:.1f}%"
+                            if round_result.champion_pass_rate_pct is not None else
+                            f"Loop round {round_result.round_index} -- no candidate reached a PASSED "
+                            "locked-OOS holdout yet."
+                        ),
+                        fg=GREEN if round_result.champion_pass_rate_pct is not None else AMBER,
+                    )
+                self.root.after(0, _paint)
+                self._last_forge_result = result
+
+            result = run_forge_loop(
+                df, risk, rules, db_dir=str(OUTPUT_DIR / "forge" / "loop"), loop_cfg=loop_cfg,
+                instrument=instrument, timeframe="unknown",
+                progress_cb=self._log_forge, cancel_event=self._forge_cancel_event, on_round=on_round,
+            )
+
+            if result.stopped_reason == "error":
+                self._log_forge(f"\nLoop Mode stopped: a round crashed -- {result.error}")
+                log_crash("Forge Strategy Loop Mode (desktop)", exc=RuntimeError(result.error or "unknown"))
+                return
+            if result.stopped_reason == "cancelled":
+                self._log_forge(
+                    "\nLoop Mode stopped by user. The latest completed round's results are still "
+                    "shown above."
+                )
+                return
+
+            reason_text = {
+                "target_reached": f"Target reached ({loop_cfg.target_pass_rate_pct:.0f}%) -- stopped automatically.",
+                "max_rounds": f"Stopped: all {loop_cfg.max_rounds} rounds completed with no champion clearing the target.",
+                "time_budget": "Stopped: time budget used up.",
+            }.get(result.stopped_reason, result.stopped_reason)
+            self._log_forge(f"\n{reason_text}")
+            self._log_forge(f"Strategy Graveyard for this instrument: {graveyard_path}")
+            if result.winner_round:
+                self._log_forge(f"Winning candidate: {result.winner_candidate_id}")
+            try:
+                self._refresh_dashboard()
+            except Exception:
+                pass
+
+        except SearchCancelled:
+            self._log_forge(
+                "\nForge Strategy Loop Mode stopped. Whatever reached the results DB / graveyard "
+                "before the stop is kept."
+            )
+        except Exception as exc:
+            self._log_forge("\nUnexpected error:\n" + traceback.format_exc())
+            log_crash("Forge Strategy Loop Mode (desktop)", exc=exc)
         finally:
             self.forge_progress.stop()
             self.stop_forge_btn.config(state="disabled")
@@ -12540,6 +12695,20 @@ class MainWindow:
             library_section, "Save every validated candidate to the Strategy Library when finished", True,
         )
 
+        loop_section = self._section(
+            f, "Loop mode",
+            "Repeats Speed Run automatically: if a round finds no winner, the next round raises "
+            "the candidate cap and validates more discoveries instead of stopping. Stops the "
+            "moment a round actually finds a winner, when the round or time budget runs out, or "
+            "when you hit STOP.",
+        )
+        self.sr_loop_mode = LabeledCheckbox(loop_section, "Enable Loop Mode", False)
+        self.sr_loop_max_rounds = LabeledEntry(loop_section, "Max rounds", 10)
+        self.sr_loop_time_budget_hours = LabeledEntry(
+            loop_section, "Time budget in hours (blank = no limit, rely on rounds/STOP)", "",
+        )
+        self.sr_loop_stall_rounds = LabeledEntry(loop_section, "Rounds with no winner before widening", 2)
+
         button_row = Frame(f, bg=BG)
         button_row.pack(fill="x", padx=24, pady=10)
         self._button(button_row, "FIND ME A WINNER", self._speedrun_run_clicked, primary=True).pack(side="left")
@@ -12769,7 +12938,10 @@ class MainWindow:
         self._speedrun_cancel_event.clear()
         self.stop_speedrun_btn.config(state="normal")
         self.speedrun_progress.start(10)
-        threading.Thread(target=self._speedrun_run_pipeline, daemon=True).start()
+        if self.sr_loop_mode.get():
+            threading.Thread(target=self._speedrun_run_loop_pipeline, daemon=True).start()
+        else:
+            threading.Thread(target=self._speedrun_run_pipeline, daemon=True).start()
 
     def _speedrun_stop_clicked(self):
         """Sets the shared cancel event, which run_speed_run() checks between
@@ -12850,6 +13022,111 @@ class MainWindow:
             self._log_speedrun("\nUnexpected error:\n" + traceback.format_exc())
             self.speedrun_verdict_label.config(text="Failed -- see log.", fg=RED)
             log_crash("Speed Run", exc=exc)
+        finally:
+            self.speedrun_progress.stop()
+            self.stop_speedrun_btn.config(state="disabled")
+            self._release_heavy_job(JOB_SPEED_RUN)
+
+    def _speedrun_run_loop_pipeline(self):
+        """Loop Mode's desktop counterpart to _speedrun_run_pipeline above
+        -- same data-loading/config/risk/rules setup, but drives
+        app.orchestration.loop_runner.run_speed_run_loop (repeated rounds
+        until a winner is found) instead of a single run_speed_run call.
+        Repaints the candidates list/verdict after EVERY round (via
+        on_round), so the tab shows live progress across a loop that can
+        run for a long time."""
+        try:
+            df = self._load_df_for_page(self._log_speedrun)
+            if df is None:
+                return
+            risk = self._build_risk_config()
+            rules = self._build_prop_rules()
+
+            metric_key = self._sr_metric_label_to_key.get(self.sr_metric.get_str(), "eval_pass_probability")
+            base_config = SpeedRunConfig(
+                stage1_top_n=self.sr_stage1_top_n.get_int(24),
+                ga_population=self.sr_ga_population.get_int(8),
+                ga_generations=self.sr_ga_generations.get_int(3),
+                max_concurrent_validations=self.sr_max_concurrent.get_int(2),
+                validation_folds=self.sr_validation_folds.get_int(3),
+                validation_final_mc_sims=self.sr_validation_final_mc_sims.get_int(3000),
+                fitness_metric=metric_key,
+                save_winner_to_library=self.sr_save_to_library.get(),
+            )
+            instrument = (
+                os.path.basename(self.csv_paths[0])
+                if len(self.csv_paths) == 1
+                else " + ".join(os.path.basename(p) for p in self.csv_paths)
+            )
+            time_budget_raw = self.sr_loop_time_budget_hours.get_str().strip()
+            loop_cfg = SpeedRunLoopConfig(
+                max_rounds=self.sr_loop_max_rounds.get_int(10),
+                time_budget_seconds=(float(time_budget_raw) * 3600.0) if time_budget_raw else None,
+                stall_rounds_before_widen=self.sr_loop_stall_rounds.get_int(2),
+                starting_max_candidates=self.sr_max_candidates.get_int(1200),
+                starting_top_k_to_validate=self.sr_top_k.get_int(3),
+                seed=self.sr_seed.get_int(42),
+                base_config=base_config,
+            )
+            self._log_speedrun(
+                f"Loop mode ON -- will repeat Speed Run rounds (raising the candidate cap and "
+                f"validation width on a stall) until a round finds a winner, {loop_cfg.max_rounds} "
+                f"rounds run, or the time budget is used up.\n"
+            )
+
+            def on_round(round_result) -> None:
+                result = round_result.result
+
+                def _paint():
+                    self._render_speedrun_candidates(result)
+                    if result.winner is not None and result.winner.pipeline_result is not None:
+                        pr = result.winner.pipeline_result
+                        self._last_speedrun_html_path = pr.report_paths.get("html")
+                        self.open_speedrun_report_btn.config(state="normal" if self._last_speedrun_html_path else "disabled")
+                        verdict_color = {"READY": GREEN, "MARGINAL": AMBER}.get(pr.verdict, TEXT_DIM)
+                        self.speedrun_verdict_label.config(
+                            text=(
+                                f"WINNER: {result.winner.candidate_id} ({result.winner.family or 'unknown family'})\n"
+                                f"  {pr.verdict}  --  eval pass {pr.final_mc.evaluation_pass_probability:.1f}%  --  "
+                                f"payout {pr.final_mc.first_payout_probability:.1f}%"
+                            ),
+                            fg=verdict_color,
+                        )
+                    else:
+                        self.speedrun_verdict_label.config(
+                            text=f"Loop round {round_result.round_index} -- no winner yet.", fg=AMBER,
+                        )
+                self.root.after(0, _paint)
+
+            result = run_speed_run_loop(
+                df, risk, rules, output_dir=OUTPUT_DIR / "speed_run" / "loop", loop_cfg=loop_cfg,
+                instrument=instrument, progress_cb=self._log_speedrun,
+                cancel_event=self._speedrun_cancel_event,
+            )
+
+            if result.stopped_reason == "error":
+                self._log_speedrun(f"\nLoop Mode stopped: a round crashed -- {result.error}")
+                self.speedrun_verdict_label.config(text="Failed -- see log.", fg=RED)
+                log_crash("Speed Run Loop Mode (desktop)", exc=RuntimeError(result.error or "unknown"))
+                return
+
+            reason_text = {
+                "target_reached": "A round found a winner -- stopped automatically.",
+                "max_rounds": f"Stopped: all {loop_cfg.max_rounds} rounds completed with no winner.",
+                "time_budget": "Stopped: time budget used up.",
+                "cancelled": "Stopped by user.",
+            }.get(result.stopped_reason, result.stopped_reason)
+            self._log_speedrun(f"\n{reason_text}")
+            self._log_speedrun(f"\nDone in {result.total_elapsed_seconds / 60:.1f} minute(s) across {len(result.rounds)} round(s).")
+
+            try:
+                self._refresh_dashboard()
+            except Exception:
+                pass
+        except Exception as exc:
+            self._log_speedrun("\nUnexpected error:\n" + traceback.format_exc())
+            self.speedrun_verdict_label.config(text="Failed -- see log.", fg=RED)
+            log_crash("Speed Run Loop Mode (desktop)", exc=exc)
         finally:
             self.speedrun_progress.stop()
             self.stop_speedrun_btn.config(state="disabled")
