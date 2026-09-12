@@ -102,6 +102,7 @@ from app.reports import run_history
 from app.reports import strategy_state
 from app.scoring.t58_scorecard import score_from_results
 from app.search.batch_runner import SearchCancelled, SearchStageConfig, promote_champion, run_search
+from app.orchestration.loop_runner import SearchLoopConfig, run_search_loop
 from app.search.family_diversity import render_family_report, summarize_family_performance
 from app.search.graveyard import (
     graveyard_path_for, list_graveyard_files, load_graveyard, render_graveyard_report, summarize_graveyard,
@@ -1297,8 +1298,79 @@ def _run_search_job(
         HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
 
 
-# ---------------------------------------------------------------------------
-# Iterative Refinement (Step 6 on desktop) -- same "background job, poll for
+def _run_search_loop_job(
+    job_id: str, df, risk: RiskConfig, rules: PropRules, stage_cfg: SearchStageConfig,
+    instrument: str, loop_dir: str, loop_cfg: SearchLoopConfig,
+    cancel_event: threading.Event | None = None, family_health_dir: str | None = None,
+) -> None:
+    """Search Lab's "Loop Mode" job -- the same background-job/poll-for-
+    status shape as _run_search_job above, but driving
+    app.orchestration.loop_runner.run_search_loop (repeated rounds) instead
+    of a single run_search() call. Reuses the SAME _SEARCH_JOBS dict/status
+    page/stop button as a normal Search Lab job so the UI doesn't need a
+    second job-tracking system -- job["loop_result"] and job["loop_rounds"]
+    are the loop-specific additions; job["summary"] is kept updated with
+    the MOST RECENT round's SearchSummary (via on_round) so the existing
+    leaderboard rendering on the status page works unchanged while a loop
+    is still running across many rounds, not just once it fully finishes.
+    """
+    def on_round(round_result) -> None:
+        with _SEARCH_JOBS_LOCK:
+            job = _SEARCH_JOBS.get(job_id)
+            if job is None:
+                return
+            job["summary"] = round_result.summary
+            job["loop_rounds"] = job.get("loop_rounds", 0) + 1
+            job["loop_last_round"] = {
+                "round_index": round_result.round_index,
+                "family": round_result.family or "all",
+                "max_candidates": round_result.max_candidates,
+                "excluded_families": round_result.excluded_families,
+                "best_value": round_result.best_value,
+                "best_candidate_id": round_result.best_candidate_id,
+                "widened_after_this_round": round_result.widened_after_this_round,
+            }
+
+    try:
+        result = run_search_loop(
+            df, risk, rules, stage_cfg, db_dir=loop_dir, loop_cfg=loop_cfg,
+            instrument=instrument, timeframe="unknown",
+            progress_cb=lambda msg: _job_log(job_id, msg),
+            cancel_event=cancel_event, on_round=on_round,
+            # Scoped to this instrument's own search directory (same one
+            # Search Lab's own runs and this loop's own past rounds write
+            # to) rather than app.search.family_health's real machine-wide
+            # default dirs -- keeps this route's family-exclusion decisions
+            # scoped to data this app itself produced, and (as a side
+            # effect) keeps tests that redirect SEARCH_DIR fully hermetic.
+            family_health_search_dir=family_health_dir, family_health_evolution_dir=family_health_dir,
+        )
+        with _SEARCH_JOBS_LOCK:
+            job = _SEARCH_JOBS[job_id]
+            job["done"] = True
+            job["loop_result"] = result
+            job["db_path"] = (
+                result.winner_round.summary.db_path if result.winner_round else
+                (result.rounds[-1].summary.db_path if result.rounds else None)
+            )
+            job["df"] = df
+            job["risk"] = risk
+            job["rules"] = rules
+            if result.stopped_reason == "cancelled":
+                job["cancelled"] = True
+            elif result.stopped_reason == "error":
+                job["error"] = result.error
+    except Exception as exc:  # noqa: BLE001 -- a loop job must fail visibly on the status page, not crash a thread silently
+        log_crash("Search Lab Loop Mode (web)", exc=exc)
+        with _SEARCH_JOBS_LOCK:
+            job = _SEARCH_JOBS[job_id]
+            job["done"] = True
+            job["error"] = str(exc)
+    finally:
+        HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
+
+
+
 # status" shape as Search Lab above, since a multi-generation GA run over a
 # few hundred backtests is too slow for a single request/response cycle.
 # ---------------------------------------------------------------------------
@@ -3503,6 +3575,14 @@ def evolution_start():
             save_to_library=form.get("save_to_library", "on") == "on",
             resume_from_checkpoint=form.get("resume_from_checkpoint", "on") == "on",
             fitness_goal=_parse_fitness_goal_form(form),
+            # Loop mode -- see EvolutionConfig.target_eval_pass_pct's own
+            # comment. Leaving the "Loop mode" field blank on the form
+            # keeps the exact old "run forever / to max_generations
+            # regardless of the leaderboard" behavior.
+            target_eval_pass_pct=(
+                float(form["target_eval_pass_pct"]) if form.get("target_eval_pass_pct") else None
+            ),
+            target_metric=form.get("target_metric", "cpcv_oos_eval_pass_probability") or "cpcv_oos_eval_pass_probability",
         )
         _EVOLUTION_LOG.clear()
         _EVOLUTION_LOG.append(f"Loaded {len(df)} bars from {active_label}.")
@@ -3706,6 +3786,10 @@ def evolution_status():
         "log": list(_EVOLUTION_LOG),
         "leaderboard": leaderboard,
         "journal": runner.journal[-30:],
+        # Loop mode -- see EvolutionConfig.target_eval_pass_pct.
+        "target_eval_pass_pct": status.get("target_eval_pass_pct"),
+        "target_reached": status.get("target_reached", False),
+        "target_reached_candidate_id": status.get("target_reached_candidate_id"),
         "next_step": None if status["running"] else pipeline_guide.after_evolution_stop(status["leaderboard_size"]),
     })
 
@@ -4281,12 +4365,48 @@ def search_start():
             initial_log.append(import_note)
         initial_log.extend(_family_exclusion_log)
         cancel_event = threading.Event()
+
+        loop_mode_on = form.get("loop_mode") == "on"
+        if loop_mode_on:
+            time_budget_raw = (form.get("loop_time_budget_hours") or "").strip()
+            loop_cfg = SearchLoopConfig(
+                target_eval_pass_pct=float(form.get("loop_target_eval_pass_pct", 60) or 60),
+                max_rounds=int(form.get("loop_max_rounds", 20) or 20),
+                time_budget_seconds=(float(time_budget_raw) * 3600.0) if time_budget_raw else None,
+                stall_rounds_before_widen=int(form.get("loop_stall_rounds", 2) or 2),
+                starting_family=(None if family_key in (None, "all") else family_key) if mode_key == "family_named" else None,
+                starting_max_candidates=max_candidates,
+                seed=seed,
+            )
+            loop_dir = str(SEARCH_DIR / f"loop_{job_id}")
+            initial_log.append(
+                f"Loop mode ON -- will repeat Search Lab rounds (widening on stall) until a candidate "
+                f"clears {loop_cfg.target_eval_pass_pct:.0f}%, {loop_cfg.max_rounds} rounds run, or the "
+                f"time budget is used up."
+            )
+            with _SEARCH_JOBS_LOCK:
+                _SEARCH_JOBS[job_id] = {
+                    "log": initial_log,
+                    "done": False, "error": None, "summary": None, "cancelled": False,
+                    "started_at": time.time(), "instrument": active_label, "mode": mode_key,
+                    "cancel_event": cancel_event, "loop_mode": True, "loop_rounds": 0,
+                    "loop_last_round": None, "loop_result": None,
+                }
+            thread = threading.Thread(
+                target=_run_search_loop_job,
+                args=(job_id, df, risk, rules, stage_cfg, active_label, loop_dir, loop_cfg, cancel_event),
+                kwargs={"family_health_dir": str(SEARCH_DIR)},
+                daemon=True,
+            )
+            thread.start()
+            return redirect(url_for("search_job", job_id=job_id))
+
         with _SEARCH_JOBS_LOCK:
             _SEARCH_JOBS[job_id] = {
                 "log": initial_log,
                 "done": False, "error": None, "summary": None, "cancelled": False,
                 "started_at": time.time(), "instrument": active_label, "mode": mode_key,
-                "cancel_event": cancel_event,
+                "cancel_event": cancel_event, "loop_mode": False,
             }
         thread = threading.Thread(
             target=_run_search_job,
@@ -4395,6 +4515,18 @@ def search_job_status(job_id):
             "report_json": job.get("report_json"),
         },
         "leaderboard": leaderboard,
+        "loop_mode": job.get("loop_mode", False),
+        "loop_rounds": job.get("loop_rounds", 0),
+        "loop_last_round": job.get("loop_last_round"),
+        "loop_result": (
+            None if job.get("loop_result") is None else {
+                "stopped_reason": job["loop_result"].stopped_reason,
+                "winner_candidate_id": job["loop_result"].winner_candidate_id,
+                "total_elapsed_seconds": job["loop_result"].total_elapsed_seconds,
+                "graveyard_path": job["loop_result"].graveyard_path,
+                "n_rounds": len(job["loop_result"].rounds),
+            }
+        ),
         "next_step": (
             pipeline_guide.after_search_complete(summary.champion_candidate_id, len(summary.leaderboard or []))
             if (job["done"] and summary is not None) else None
