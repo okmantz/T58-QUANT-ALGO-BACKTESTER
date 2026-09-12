@@ -2112,7 +2112,18 @@ class MainWindow:
 
         Frame(box, bg=BORDER, height=1).pack(fill="x", pady=(14, 0))
 
-    def _button(self, parent, text, command, primary=False, width=None):
+    def _condition_list_buttons(self, parent, clist: "ConditionList", pady):
+        """+ Add Condition / Undo / Redo row for one ConditionList -- shared
+        by all four (long/short entry, long/short exit) condition builders
+        so add/remove/reload mistakes can be reversed in one click."""
+        row = Frame(parent, bg=PANEL)
+        row.pack(anchor="w", padx=18, pady=pady)
+        self._button(row, "+ Add Condition", clist.add_row).pack(side="left")
+        self._button(row, "Undo", clist.undo, width=8).pack(side="left", padx=(6, 0))
+        self._button(row, "Redo", clist.redo, width=8).pack(side="left", padx=(6, 0))
+        return row
+
+
         kwargs = {
             "text": text,
             "command": command,
@@ -4685,9 +4696,7 @@ class MainWindow:
         long_entry_container = Frame(entry_section, bg=PANEL)
         long_entry_container.pack(fill="x", padx=18, pady=(0, 4))
         self.long_entry_conditions = ConditionList(long_entry_container, get_session=self._current_session)
-        self._button(entry_section, "+ Add Condition", self.long_entry_conditions.add_row).pack(
-            anchor="w", padx=18, pady=(0, 14)
-        )
+        self._condition_list_buttons(entry_section, self.long_entry_conditions, (0, 14))
 
         Label(entry_section, text="SHORT ENTRY", bg=PANEL, fg=RED, font=_safe_font(9, "bold")).pack(
             anchor="w", padx=18, pady=(4, 2)
@@ -4695,9 +4704,7 @@ class MainWindow:
         short_entry_container = Frame(entry_section, bg=PANEL)
         short_entry_container.pack(fill="x", padx=18, pady=(0, 4))
         self.short_entry_conditions = ConditionList(short_entry_container, get_session=self._current_session)
-        self._button(entry_section, "+ Add Condition", self.short_entry_conditions.add_row).pack(
-            anchor="w", padx=18, pady=(0, 14)
-        )
+        self._condition_list_buttons(entry_section, self.short_entry_conditions, (0, 14))
 
         # ------------------------------------------------------------
         # 24.3  Exit conditions / risk management
@@ -4764,9 +4771,7 @@ class MainWindow:
         long_exit_container = Frame(exit_section, bg=PANEL)
         long_exit_container.pack(fill="x", padx=18, pady=(0, 4))
         self.long_exit_conditions = ConditionList(long_exit_container, get_session=self._current_session)
-        self._button(exit_section, "+ Add Condition", self.long_exit_conditions.add_row).pack(
-            anchor="w", padx=18, pady=(0, 10)
-        )
+        self._condition_list_buttons(exit_section, self.long_exit_conditions, (0, 10))
 
         Label(exit_section, text="Short exit", bg=PANEL, fg=RED, font=_safe_font(8, "bold")).pack(
             anchor="w", padx=18, pady=(4, 2)
@@ -4774,9 +4779,7 @@ class MainWindow:
         short_exit_container = Frame(exit_section, bg=PANEL)
         short_exit_container.pack(fill="x", padx=18, pady=(0, 4))
         self.short_exit_conditions = ConditionList(short_exit_container, get_session=self._current_session)
-        self._button(exit_section, "+ Add Condition", self.short_exit_conditions.add_row).pack(
-            anchor="w", padx=18, pady=(0, 16)
-        )
+        self._condition_list_buttons(exit_section, self.short_exit_conditions, (0, 16))
 
     def _current_session(self) -> tuple[str, str]:
         start = self.s_session_start.get_str().strip() or "08:30"

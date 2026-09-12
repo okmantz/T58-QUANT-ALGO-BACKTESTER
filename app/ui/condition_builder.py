@@ -348,8 +348,28 @@ class ConditionList:
             bg=container["bg"], fg=TEXT_DIM, font=(FONT, 8, "italic"),
         )
         self._refresh_empty_label()
+        # Structural undo/redo (add/remove rows and full reloads) -- covers
+        # the most common "oops I deleted/reordered a condition" mistake.
+        # Field-level edits within a single row are NOT individually
+        # tracked (would need a trace on every dropdown/entry var in every
+        # ConditionRow); use Undo right after the accidental structural
+        # change for it to be useful.
+        self._undo_stack: list[tuple[list[dict], list[str]]] = []
+        self._redo_stack: list[tuple[list[dict], list[str]]] = []
+        self._max_history = 50
+
+    def _snapshot(self) -> None:
+        try:
+            state = self.to_condition_list()
+        except Exception:  # noqa: BLE001 -- never let history tracking break the builder
+            return
+        self._undo_stack.append((list(state[0]), list(state[1])))
+        if len(self._undo_stack) > self._max_history:
+            self._undo_stack.pop(0)
+        self._redo_stack.clear()
 
     def add_row(self):
+        self._snapshot()
         show_connector = len(self.rows) > 0
         row = ConditionRow(self.container, self._remove_row, show_connector)
         row.pack(fill="x", pady=(0, 6))
@@ -357,8 +377,39 @@ class ConditionList:
         self._refresh_empty_label()
 
     def _remove_row(self, row: ConditionRow):
+        self._snapshot()
         row.destroy()
         self.rows.remove(row)
+        self._refresh_empty_label()
+
+    def undo(self) -> None:
+        if not self._undo_stack:
+            return
+        self._redo_stack.append(self.to_condition_list())
+        conditions, connectors = self._undo_stack.pop()
+        self._restore(conditions, connectors)
+
+    def redo(self) -> None:
+        if not self._redo_stack:
+            return
+        self._undo_stack.append(self.to_condition_list())
+        conditions, connectors = self._redo_stack.pop()
+        self._restore(conditions, connectors)
+
+    def _restore(self, conditions: list[dict], connectors: list[str]) -> None:
+        """Same rebuild as set_from_conditions but WITHOUT pushing another
+        undo snapshot (this restore IS the undo/redo action itself)."""
+        while self.rows:
+            row = self.rows[0]
+            row.destroy()
+            self.rows.remove(row)
+        for i, condition in enumerate(conditions or []):
+            show_connector = len(self.rows) > 0
+            row = ConditionRow(self.container, self._remove_row, show_connector)
+            row.pack(fill="x", pady=(0, 6))
+            self.rows.append(row)
+            connector = connectors[i - 1] if i > 0 and (i - 1) < len(connectors) else "AND"
+            row.load_from(condition, connector if i > 0 else None)
         self._refresh_empty_label()
 
     def _refresh_empty_label(self):
@@ -379,12 +430,20 @@ class ConditionList:
         same shape to_condition_list() produces) plus their AND/OR
         connectors. Used by the "Apply Best Configuration" action after an
         Iterative Refinement run, and generally to load any saved config.
+        Pushes an undo snapshot first, so replacing the whole condition set
+        (e.g. loading a refinement result) can be undone with one click.
         """
+        self._snapshot()
         connectors = connectors or []
         while self.rows:
-            self._remove_row(self.rows[0])
+            row = self.rows[0]
+            row.destroy()
+            self.rows.remove(row)
         for i, condition in enumerate(conditions or []):
-            self.add_row()
-            row = self.rows[-1]
+            show_connector = len(self.rows) > 0
+            row = ConditionRow(self.container, self._remove_row, show_connector)
+            row.pack(fill="x", pady=(0, 6))
+            self.rows.append(row)
             connector = connectors[i - 1] if i > 0 and (i - 1) < len(connectors) else "AND"
             row.load_from(condition, connector if i > 0 else None)
+        self._refresh_empty_label()
