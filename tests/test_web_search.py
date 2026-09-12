@@ -137,6 +137,76 @@ def test_search_named_family_manual_end_to_end():
         assert report_resp.status_code == 200
 
 
+def test_search_loop_mode_end_to_end():
+    """Real POST to /search/start with loop_mode=on, driving the actual
+    background thread (_run_search_loop_job -> run_search_loop ->
+    run_search, real threads, not mocks) through to completion, then
+    checks the loop-specific fields on status.json."""
+    client = app.test_client()
+    with open(SAMPLE_CSV, "rb") as f:
+        data = {
+            "csv_file": (f, "EURUSD_5M_sample.csv"),
+            "search_mode": "family_named", "family": "trend_breakout",
+            "loop_mode": "on",
+            "loop_target_eval_pass_pct": "0",  # trivially easy -- any passer clears it
+            "loop_max_rounds": "2",
+            "loop_stall_rounds": "1",
+            **_LOOSE_STAGE_FIELDS,
+        }
+        r = client.post("/search/start", data=data, content_type="multipart/form-data")
+    assert r.status_code == 302
+    job_id = r.headers["Location"].rstrip("/").split("/")[-1]
+
+    status = _poll_until_done(client, job_id)
+    assert status["error"] is None
+    assert status["loop_mode"] is True
+    assert status["loop_rounds"] >= 1
+    assert status["loop_last_round"] is not None
+    assert status["loop_result"] is not None
+    assert status["loop_result"]["stopped_reason"] in {"target_reached", "max_rounds"}
+    # The status page's leaderboard/summary rendering (unchanged from the
+    # non-loop path) must still be populated with the LATEST round's data.
+    assert status["summary"] is not None
+    assert isinstance(status["leaderboard"], list)
+
+
+def test_search_loop_mode_can_be_stopped(monkeypatch):
+    """The existing /search/job/<id>/stop button must also work for a
+    loop-mode job -- it should cancel the loop between rounds via the same
+    cancel_event a normal job uses."""
+    import app.orchestration.loop_runner as loop_runner_module
+
+    real_run_search = loop_runner_module.run_search
+
+    def _slow_run_search(*args, **kwargs):
+        cancel_event = kwargs.get("cancel_event")
+        # Give the test time to call /stop before this round's run_search
+        # call itself checks cancellation internally.
+        time.sleep(0.5)
+        return real_run_search(*args, **kwargs)
+
+    monkeypatch.setattr(loop_runner_module, "run_search", _slow_run_search)
+
+    client = app.test_client()
+    with open(SAMPLE_CSV, "rb") as f:
+        data = {
+            "csv_file": (f, "EURUSD_5M_sample.csv"),
+            "search_mode": "family_named", "family": "trend_breakout",
+            "loop_mode": "on",
+            "loop_target_eval_pass_pct": "99.9",  # unreachable -- keep looping until stopped
+            "loop_max_rounds": "50",
+            "loop_stall_rounds": "1",
+            **_LOOSE_STAGE_FIELDS,
+        }
+        r = client.post("/search/start", data=data, content_type="multipart/form-data")
+    job_id = r.headers["Location"].rstrip("/").split("/")[-1]
+
+    client.post(f"/search/job/{job_id}/stop")
+    status = _poll_until_done(client, job_id, timeout=30.0)
+    assert status["cancelled"] is True
+    assert status["loop_result"]["stopped_reason"] == "cancelled"
+
+
 def test_search_family_grid_python_end_to_end():
     client = app.test_client()
     with open(SAMPLE_CSV, "rb") as f:
