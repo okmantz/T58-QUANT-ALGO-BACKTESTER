@@ -185,3 +185,115 @@ def best_result_across_instruments(results: dict[str, MultiInstrumentResult]) ->
         return float("-inf")
 
     return max(candidates, key=champion_score)
+
+
+# ---------------------------------------------------------------------------
+# Loop mode -- same idea as app.orchestration.loop_runner.run_search_loop,
+# fanned out across instruments the same way run_multi_instrument_search
+# above fans out a single run_search call. Each instrument gets its own
+# INDEPENDENT loop (own rounds, own stall/widen state, own stop condition)
+# running concurrently with the others, capped at max_concurrent_instruments
+# -- one instrument reaching its target does not stop or affect the others.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class MultiInstrumentLoopResult:
+    job: InstrumentJob
+    loop_result: "SearchLoopResult | None"
+    error: str | None = None
+
+    @property
+    def label(self) -> str:
+        return f"{self.job.instrument}/{self.job.timeframe}"
+
+
+def run_multi_instrument_search_loop(
+    jobs: list[InstrumentJob],
+    risk: RiskConfig,
+    prop_rules: PropRules,
+    stage_cfg: SearchStageConfig,
+    loop_cfg,  # app.orchestration.loop_runner.SearchLoopConfig -- kept untyped here to avoid a hard import cycle risk; see the local import in run_one below
+    db_dir: str | Path,
+    max_concurrent_instruments: int = 2,
+    progress_cb: ProgressCallback | None = None,
+    cancel_event: threading.Event | None = None,
+) -> dict[str, MultiInstrumentLoopResult]:
+    """Loop Mode's multi-instrument counterpart to run_multi_instrument_search
+    above -- runs app.orchestration.loop_runner.run_search_loop (not a
+    single run_search call) independently against every job's own market
+    data, up to `max_concurrent_instruments` at once. Each instrument's
+    loop gets its own `<db_dir>/<instrument>_<timeframe>/` subdirectory for
+    its own rounds' results DBs and its own accumulating graveyard file
+    (via the per-instrument path run_search_loop's own rounds already use),
+    so instruments never share or race on state. Returns
+    {\"INSTRUMENT/TIMEFRAME\": MultiInstrumentLoopResult}. The SAME
+    `loop_cfg` (target, max_rounds, time budget, starting family, etc.) is
+    used for every instrument -- a real edge showing up on one instrument
+    and not another is exactly the point of running them side by side, not
+    a reason to tune the search differently per instrument.
+    """
+    from app.orchestration.loop_runner import run_search_loop  # local import -- avoids a hard import-time cycle
+
+    if not jobs:
+        raise ValueError("run_multi_instrument_search_loop requires at least one InstrumentJob.")
+
+    db_dir = Path(db_dir)
+    db_dir.mkdir(parents=True, exist_ok=True)
+    n_concurrent = max(1, min(int(max_concurrent_instruments), len(jobs)))
+    per_job_workers = _resolved_workers_per_job(stage_cfg, n_concurrent)
+    per_job_stage_cfg = replace(stage_cfg, workers=per_job_workers)
+
+    def log(job: InstrumentJob, msg: str) -> None:
+        if progress_cb:
+            progress_cb(f"{job.instrument}/{job.timeframe}", msg)
+
+    def run_one(job: InstrumentJob) -> MultiInstrumentLoopResult:
+        try:
+            log(job, f"Loading {job.csv_path}...")
+            import_result = import_csv(job.csv_path)
+            if not import_result.is_valid:
+                raise ValueError(
+                    f"Could not import {job.csv_path}: " + "; ".join(import_result.errors)
+                )
+            df = import_result.dataframe
+            job_loop_dir = db_dir / f"{job.instrument}_{job.timeframe}"
+            log(job, f"Starting Loop Mode ({per_job_workers} worker(s))...")
+            result = run_search_loop(
+                df, risk, prop_rules, per_job_stage_cfg, db_dir=job_loop_dir, loop_cfg=loop_cfg,
+                instrument=job.instrument, timeframe=job.timeframe,
+                progress_cb=lambda m: log(job, m),
+                cancel_event=cancel_event,
+            )
+            log(
+                job,
+                f"Loop complete: stopped_reason={result.stopped_reason}, "
+                f"{len(result.rounds)} round(s), winner={result.winner_candidate_id or 'none'}.",
+            )
+            return MultiInstrumentLoopResult(job=job, loop_result=result)
+        except Exception as exc:  # noqa: BLE001 -- one instrument's failure must not sink the others
+            log(job, f"FAILED: {exc}")
+            return MultiInstrumentLoopResult(
+                job=job, loop_result=None,
+                error=f"{exc}\n{traceback.format_exc()}",
+            )
+
+    results: dict[str, MultiInstrumentLoopResult] = {}
+    t0 = time.time()
+    with ThreadPoolExecutor(max_workers=n_concurrent) as pool:
+        futures = {pool.submit(run_one, job): job for job in jobs}
+        for fut in as_completed(futures):
+            res = fut.result()
+            results[res.label] = res
+
+    elapsed = time.time() - t0
+    n_winners = sum(
+        1 for r in results.values()
+        if r.loop_result is not None and r.loop_result.winner_candidate_id
+    )
+    if progress_cb:
+        progress_cb(
+            "multi-instrument",
+            f"All {len(jobs)} instrument/timeframe loop(s) complete in {elapsed:.1f}s "
+            f"({n_winners} found a winner).",
+        )
+    return results
