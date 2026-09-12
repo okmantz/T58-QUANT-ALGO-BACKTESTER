@@ -76,7 +76,7 @@ import numpy as np
 
 from app.backtest.adaptive_risk import build_limit_aware_preset
 from app.backtest.engine import run_backtest
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, with_prop_safety_defaults
 from app.evolution import checkpoint as evo_checkpoint
 from app.evolution.family_budget import FamilyBudgetTracker
 from app.evolution.knowledge_graph import DEFAULT_KG_PATH, KnowledgeGraph, feature_vector_for_spec
@@ -648,7 +648,17 @@ class EvolutionRunner:
         progress_cb=None,
     ):
         self.df = df
-        self.risk = risk
+        # FIX (2026-09-12): Speed Run and Full Pipeline both already wrap
+        # their RiskConfig through with_prop_safety_defaults() so a raw
+        # backtest's own account-blown / daily-loss circuit breakers match
+        # the active PropRules -- Evolution Lab never did this, so every
+        # genome's PRE-FILTER and FULL-EVAL backtest ran with no daily-loss
+        # cutoff and no drawdown-based account-blown floor at all, only
+        # ever getting caught by the post-hoc Monte Carlo/CPCV/prop-
+        # simulation stage. See with_prop_safety_defaults' own docstring
+        # for the full rationale; this never overrides a value the caller
+        # explicitly set on their own RiskConfig.
+        self.risk = with_prop_safety_defaults(risk, prop_rules)
         self.prop_rules = prop_rules
         self.cfg = cfg or EvolutionConfig()
         self.adaptive_risk = build_limit_aware_preset(
