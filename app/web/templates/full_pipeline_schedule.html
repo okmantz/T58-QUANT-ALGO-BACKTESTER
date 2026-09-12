@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Scheduled Full Pipeline Run — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<link rel="stylesheet" href="/static/job-theme.css">
+</head>
+<body>
+<header><h1>T58 Quant Algo Backtester — Scheduled Full Pipeline Run</h1></header>
+<nav>
+  <a href="/">Run &amp; Report</a>
+  <a href="/full-pipeline">Full Pipeline</a>
+</nav>
+<main>
+
+{% if not_found %}
+<div class="error">Schedule "{{ schedule_id }}" was not found (the server may have restarted since it was created).</div>
+{% else %}
+
+<div class="card">
+  <h2 id="status-title"><span class="spinner" id="spinner"></span>Waiting for the scheduled time&hellip;</h2>
+  <div id="detail" style="font-size:14px;color:#ccc;line-height:1.7;"></div>
+  <button id="cancel-btn" style="margin-top:14px;padding:10px 16px;border-radius:8px;border:1px solid #6b2323;background:#2a1414;color:#ffb4b4;cursor:pointer;">Cancel scheduled run</button>
+</div>
+
+<div class="links" id="job-link" style="margin-top:14px;"></div>
+
+{% endif %}
+</main>
+
+{% if not not_found %}
+<script>
+  const scheduleId = {{ schedule_id | tojson }};
+
+  function render(data) {
+    const detail = document.getElementById('detail');
+    const title = document.getElementById('status-title');
+    const spinner = document.getElementById('spinner');
+    const cancelBtn = document.getElementById('cancel-btn');
+    detail.innerHTML =
+      `Scheduled start: <b>${data.start_at}</b> (${new Date(data.scheduled_for).toLocaleString()})<br>` +
+      `Strategies queued: ${data.n_strategies} &middot; Instrument: ${data.instrument}<br>` +
+      `Status: <b>${data.status}</b>`;
+
+    if (data.status === 'scheduled' || data.status === 'waiting') {
+      title.innerHTML = '<span class="spinner" id="spinner"></span>Waiting for the scheduled time&hellip;';
+    } else if (data.status === 'started') {
+      spinner.style.display = 'none';
+      title.textContent = 'Started';
+      cancelBtn.style.display = 'none';
+      document.getElementById('job-link').innerHTML = `<a href="/full-pipeline/batch-job/${data.job_id}">Open the running batch job &rarr;</a>`;
+    } else if (data.status === 'cancelled') {
+      spinner.style.display = 'none';
+      title.textContent = 'Cancelled';
+      cancelBtn.style.display = 'none';
+    } else if (data.status === 'failed') {
+      spinner.style.display = 'none';
+      title.textContent = 'Failed to start';
+      cancelBtn.style.display = 'none';
+      detail.innerHTML += `<div class="error" style="margin-top:10px;">${data.error || 'Unknown error'}</div>`;
+    }
+  }
+
+  function poll() {
+    fetch(`/full-pipeline/schedule/${scheduleId}/status.json`)
+      .then(r => r.json())
+      .then(data => {
+        if (!data.found) return;
+        render(data);
+        if (data.status === 'scheduled' || data.status === 'waiting') setTimeout(poll, 5000);
+      })
+      .catch(() => setTimeout(poll, 5000));
+  }
+  poll();
+
+  document.getElementById('cancel-btn').addEventListener('click', () => {
+    if (!confirm('Cancel this scheduled run before it starts?')) return;
+    fetch(`/full-pipeline/schedule/${scheduleId}/cancel`, { method: 'POST' })
+      .then(r => r.json())
+      .then(data => { if (data.ok) poll(); else alert(data.error || 'Could not cancel.'); });
+  });
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+  }
+</script>
+{% endif %}
+</body>
+</html>

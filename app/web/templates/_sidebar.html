@@ -1,3 +1,13 @@
+<script>
+  // Applied inline (not deferred) so the saved theme takes effect before
+  // first paint, avoiding a dark-then-light (or vice versa) flash.
+  (function () {
+    try {
+      var saved = localStorage.getItem('t58-theme');
+      if (saved === 'light') document.documentElement.setAttribute('data-theme', 'light');
+    } catch (e) {}
+  })();
+</script>
 <div class="t58-sidebar">
   <div class="t58-brand">
     <div class="mark">T5</div>
@@ -45,7 +55,7 @@
   {% set create_pages   = ['speed_run', 'speed_run_multi_instrument', 'generate_strategies', 'research_agent', 'research_loop'] %}
   {% set test_pages     = ['run', 'payout_probability'] %}
   {% set optimize_pages = ['optimize_hub', 'search', 'search_multi_instrument', 'refine', 'full_pipeline', 'quick_optimize', 'multi_objective', 'evolution', 'evolution_multi_instrument'] %}
-  {% set validate_pages = ['validate_hub', 'wfo', 'wfga', 'cpcv', 'sensitivity', 'parameter_robustness', 'regime_matrix'] %}
+  {% set validate_pages = ['validate_hub', 'wfo', 'wfga', 'cpcv', 'pbo', 'sensitivity', 'parameter_robustness', 'regime_matrix'] %}
   {% set champion_pages = ['family_diversity', 'ensemble', 'portfolio'] %}
 
   <!-- All groups launch condensed/closed by default, regardless of which
@@ -137,6 +147,9 @@
       <a href="/cpcv" data-accent="amber" class="t58-nav-item {{ 'active' if active_page == 'cpcv' else '' }}">
         <span class="t58-nav-icon">&#8862;</span><span class="label">CPCV</span>
       </a>
+      <a href="/pbo" data-accent="amber" class="t58-nav-item {{ 'active' if active_page == 'pbo' else '' }}">
+        <span class="t58-nav-icon">&#8862;</span><span class="label">PBO (candidate pool)</span>
+      </a>
       <a href="/sensitivity" data-accent="amber" class="t58-nav-item {{ 'active' if active_page == 'sensitivity' else '' }}">
         <span class="t58-nav-icon">&#8862;</span><span class="label">Sensitivity</span>
       </a>
@@ -224,6 +237,14 @@
   </details>
 
   <div class="t58-nav-spacer"></div>
+
+  <button id="t58-theme-toggle" type="button" title="Toggle light/dark theme"
+    style="display:flex;align-items:center;gap:8px;margin:6px 10px 4px;padding:9px 10px;border-radius:8px;
+           border:1px solid var(--border-light);background:var(--panel-3);color:var(--text-muted);
+           font-size:13px;cursor:pointer;">
+    <span id="t58-theme-icon" aria-hidden="true">&#9789;</span>
+    <span id="t58-theme-label">Dark theme</span>
+  </button>
 </div>
 
 <script src="/static/t58-chrome.js" defer></script>

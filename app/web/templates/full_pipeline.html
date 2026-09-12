@@ -211,6 +211,9 @@
         <option value="{{ s }}">{{ s }}</option>
         {% endfor %}
       </select>
+      <label>Notify me when done (optional)</label>
+      <input type="url" name="notify_webhook_url" placeholder="Discord/Slack/Zapier webhook URL — leave blank for none">
+      <p class="help" style="margin-top:4px;">Posts one message here the moment this run (single or batch) finishes — useful for an overnight Full Pipeline batch you don't want to babysit. Works with any Discord/Slack "Incoming Webhook" URL, or your own endpoint.</p>
     </details>
   </div>
 
@@ -236,10 +239,14 @@
       above is ignored when you click the batch button below.
     </p>
     <div id="batch-strategy-list" class="batch-strategy-list"></div>
+    <label style="margin-top:14px;">Or schedule this batch to start later (24h HH:MM, local time)</label>
+    <input type="text" name="schedule_start_at" placeholder="e.g. 23:30" pattern="[0-2][0-9]:[0-5][0-9]" style="max-width:140px;">
+    <p class="help" style="margin-top:4px;">Validates the dataset and selected strategies right now, then waits until this clock time (today, or tomorrow if it's already passed) before actually starting -- so you can queue an overnight batch without staying up for it. Runs today if the time hasn't passed yet, otherwise tomorrow.</p>
   </div>
 
   <button class="submit-btn" type="submit">Run Full Pipeline</button>
   <button class="submit-btn" type="submit" formaction="/full-pipeline/start-batch" style="margin-top:10px; background:#1b2a1b; border-color:#2f4f2f;">Run Full Pipeline (Batch — Selected Above)</button>
+  <button class="submit-btn" type="submit" formaction="/full-pipeline/schedule-batch" style="margin-top:10px; background:#1b1b2a; border-color:#2f2f4f;">Schedule Batch Run (at time above)</button>
 </form>
 
 </div>

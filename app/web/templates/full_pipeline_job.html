@@ -118,7 +118,17 @@
 
             const links = document.getElementById('s-report-links');
             links.innerHTML = '';
-            if (s.report_html) links.innerHTML += `<a href="${s.report_html}" target="_blank">Open full pipeline report &rarr;</a>`;
+            if (s.report_html) {
+              links.innerHTML += `<a href="${s.report_html}" target="_blank">Open full pipeline report &rarr;</a> `;
+              links.innerHTML += `<button type="button" id="copy-report-link-btn" style="margin-left:8px;padding:4px 10px;border-radius:6px;border:1px solid var(--border-light);background:var(--panel-3);color:var(--text-muted);font-size:12px;cursor:pointer;">Copy report link</button>`;
+              setTimeout(() => {
+                const btn = document.getElementById('copy-report-link-btn');
+                if (btn) btn.addEventListener('click', () => {
+                  const fullUrl = window.location.origin + s.report_html;
+                  navigator.clipboard.writeText(fullUrl).then(() => { btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy report link', 1500); });
+                });
+              }, 0);
+            }
           }
           return;  // stop polling
         }

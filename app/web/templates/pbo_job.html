@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PBO Job — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<link rel="stylesheet" href="/static/job-theme.css">
+</head>
+<body>
+<header><h1>T58 Quant Algo Backtester — PBO</h1></header>
+<nav>
+  <a href="/">Run &amp; Report</a>
+  <a href="/pbo">New Run</a>
+</nav>
+<main>
+
+{% if not_found %}
+<div class="error">Job "{{ job_id }}" was not found (the server may have restarted since it ran).</div>
+{% else %}
+
+<div class="card">
+  <h2 id="status-title"><span class="spinner" id="spinner"></span>PBO running&hellip;</h2>
+  <div id="log">Starting&hellip;</div>
+</div>
+
+<div id="verdict-wrap" style="display:none;"><div class="verdict-banner" id="verdict-banner"></div></div>
+
+<div class="card" id="summary-card" style="display:none;">
+  <h2>Result</h2>
+  <div class="headline">
+    <div class="stat"><div class="label">Candidates</div><div class="value" id="s-candidates">-</div></div>
+    <div class="stat"><div class="label">Paths evaluated</div><div class="value" id="s-paths">-</div></div>
+    <div class="stat"><div class="label">PBO</div><div class="value" id="s-pbo">-</div></div>
+    <div class="stat"><div class="label">Best candidate (in-sample)</div><div class="value" id="s-best">-</div></div>
+  </div>
+  <div class="links" id="s-report-links"></div>
+</div>
+
+<div class="error" id="error-card" style="display:none;"></div>
+
+{% endif %}
+</main>
+
+{% if not not_found %}
+<script>
+  const jobId = {{ job_id | tojson }};
+  const fmt = (v, d) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d === undefined ? 3 : d);
+
+  function poll() {
+    fetch(`/pbo/job/${jobId}/status.json`)
+      .then(r => r.json())
+      .then(data => {
+        if (!data.found) return;
+        document.getElementById('log').textContent = data.log.filter(Boolean).join('\n');
+        document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
+
+        if (data.error) {
+          document.getElementById('spinner').style.display = 'none';
+          document.getElementById('status-title').textContent = 'PBO failed';
+          const ec = document.getElementById('error-card');
+          ec.style.display = 'block';
+          ec.textContent = data.error;
+          return;
+        }
+
+        if (data.done) {
+          document.getElementById('spinner').style.display = 'none';
+          document.getElementById('status-title').textContent = 'PBO complete';
+          const s = data.summary;
+          if (s) {
+            const wrap = document.getElementById('verdict-wrap');
+            wrap.style.display = 'block';
+            const banner = document.getElementById('verdict-banner');
+            const low = s.pbo < 0.5;
+            banner.className = 'verdict-banner ' + (low ? 'verdict-yes' : 'verdict-no');
+            banner.textContent = low
+              ? 'Low PBO -- the best in-sample candidate tends to hold up out-of-sample too'
+              : 'High PBO -- picking the best-looking backtest out of this pool is more likely luck than skill';
+
+            document.getElementById('summary-card').style.display = 'block';
+            document.getElementById('s-candidates').textContent = s.n_candidates;
+            document.getElementById('s-paths').textContent = s.n_paths;
+            document.getElementById('s-pbo').textContent = fmt(s.pbo * 100, 1) + '%';
+            document.getElementById('s-best').textContent = `#${s.overall_best_candidate_index + 1}`;
+
+            const links = document.getElementById('s-report-links');
+            links.innerHTML = '';
+            if (s.report_html) links.innerHTML += `<a href="${s.report_html}" target="_blank">Open full report &rarr;</a>`;
+          }
+          return;
+        }
+        setTimeout(poll, 2000);
+      })
+      .catch(() => setTimeout(poll, 3000));
+  }
+  poll();
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+  }
+</script>
+{% endif %}
+</body>
+</html>

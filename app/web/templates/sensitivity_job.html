@@ -38,6 +38,20 @@
   <div class="links" id="s-report-links"></div>
 </div>
 
+<div class="card" id="heatmap-card" style="display:none;">
+  <h2>2D Sensitivity Heatmap</h2>
+  <p style="font-size:12px;color:#9aa0aa;margin:0 0 10px;">Pick two of the parameters swept above to see how the metric behaves when BOTH move together -- a stable strategy shows a broad plateau, one fit to noise shows a narrow spot.</p>
+  <label style="display:block;font-size:13px;color:#ccc;margin:4px 0;">Parameter A
+    <select id="hm-param-a" style="width:100%;padding:9px;border-radius:8px;background:var(--panel-3);color:var(--text);border:1px solid var(--border-light);margin-top:4px;"></select>
+  </label>
+  <label style="display:block;font-size:13px;color:#ccc;margin:10px 0 4px;">Parameter B
+    <select id="hm-param-b" style="width:100%;padding:9px;border-radius:8px;background:var(--panel-3);color:var(--text);border:1px solid var(--border-light);margin-top:4px;"></select>
+  </label>
+  <button id="hm-run-btn" style="width:100%;padding:12px;border-radius:8px;border:1px solid var(--teal);background:var(--teal);color:#04120e;font-weight:700;margin-top:12px;">Run 2D Heatmap</button>
+  <div id="hm-status" style="font-size:12px;color:#9aa0aa;margin-top:8px;"></div>
+  <div id="hm-result" style="margin-top:12px;"></div>
+</div>
+
 <div class="error" id="error-card" style="display:none;"></div>
 
 {% endif %}
@@ -47,6 +61,88 @@
 <script>
   const jobId = {{ job_id | tojson }};
   const fmt = (v, d) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d === undefined ? 3 : d);
+
+  function heatmapCellColor(value, min, max) {
+    if (max === min) return 'rgba(53,224,176,0.3)';
+    const t = (value - min) / (max - min);
+    const r = Math.round(255 * (1 - t));
+    const g = Math.round(180 * t + 40);
+    return `rgba(${r},${g},80,0.55)`;
+  }
+
+  function renderHeatmap(hm) {
+    const flat = hm.grid.flat();
+    const min = Math.min(...flat), max = Math.max(...flat);
+    let html = `<div class="pill">base metric: ${fmt(hm.base_metric)}</div>`;
+    html += '<div class="table-scroll"><table><thead><tr><th></th>';
+    hm.b_values.forEach(b => html += `<th>${fmt(b, 2)}</th>`);
+    html += '</tr></thead><tbody>';
+    hm.a_values.forEach((a, i) => {
+      html += `<tr><th>${fmt(a, 2)}</th>`;
+      hm.grid[i].forEach(v => {
+        html += `<td style="background:${heatmapCellColor(v, min, max)};text-align:center;">${fmt(v, 2)}</td>`;
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+    html += `<p style="font-size:11px;color:#9aa0aa;margin-top:8px;">Rows: ${hm.gene_a_label}. Columns: ${hm.gene_b_label}. Green = better ${hm.metric}, red = worse.</p>`;
+    document.getElementById('hm-result').innerHTML = html;
+  }
+
+  let heatmapWired = false;
+  function wireHeatmapPicker(params) {
+    if (heatmapWired || params.length < 2) return;
+    heatmapWired = true;
+    const selA = document.getElementById('hm-param-a');
+    const selB = document.getElementById('hm-param-b');
+    params.forEach((p, i) => {
+      selA.innerHTML += `<option value="${p}">${p}</option>`;
+      selB.innerHTML += `<option value="${p}">${p}</option>`;
+    });
+    selB.selectedIndex = 1;
+    document.getElementById('heatmap-card').style.display = 'block';
+    document.getElementById('hm-run-btn').addEventListener('click', () => {
+      const a = selA.value, b = selB.value;
+      if (a === b) {
+        document.getElementById('hm-status').textContent = 'Pick two different parameters.';
+        return;
+      }
+      document.getElementById('hm-status').textContent = 'Running 2D heatmap\u2026';
+      document.getElementById('hm-result').innerHTML = '';
+      const body = new URLSearchParams({ param_a: a, param_b: b });
+      fetch(`/sensitivity/job/${jobId}/heatmap`, { method: 'POST', body })
+        .then(r => r.json())
+        .then(data => {
+          if (!data.ok) {
+            document.getElementById('hm-status').textContent = data.error || 'Could not start heatmap.';
+            return;
+          }
+          pollHeatmap();
+        });
+    });
+  }
+
+  function pollHeatmap() {
+    fetch(`/sensitivity/job/${jobId}/status.json`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.heatmap_error) {
+          document.getElementById('hm-status').textContent = data.heatmap_error;
+          return;
+        }
+        if (data.heatmap_done && data.heatmap) {
+          document.getElementById('hm-status').textContent = 'Done.';
+          renderHeatmap(data.heatmap);
+          const links = document.getElementById('s-report-links');
+          if (data.summary && data.summary.report_html && links) {
+            links.innerHTML = `<a href="${data.summary.report_html}" target="_blank">Open full report (with charts) &rarr;</a>`;
+          }
+          return;
+        }
+        setTimeout(pollHeatmap, 1500);
+      })
+      .catch(() => setTimeout(pollHeatmap, 2000));
+  }
 
   function poll() {
     fetch(`/sensitivity/job/${jobId}/status.json`)
@@ -83,6 +179,7 @@
             const links = document.getElementById('s-report-links');
             links.innerHTML = '';
             if (s.report_html) links.innerHTML += `<a href="${s.report_html}" target="_blank">Open full report (with charts) &rarr;</a>`;
+            wireHeatmapPicker(s.available_params || []);
           }
           return;
         }
