@@ -100,21 +100,45 @@ class RiskConfig:
 
 
 def with_prop_safety_defaults(risk: "RiskConfig", prop_rules) -> "RiskConfig":
-    """Returns a copy of `risk` with max_account_drawdown_pct filled in from
-    `prop_rules.max_drawdown_pct` whenever the caller hasn't already set an
-    explicit value of their own. This is what makes the account-blown
-    circuit breaker (see app.backtest.execution) apply automatically to
-    every Full Pipeline / Validation Lab / Search Lab / batch run, which
-    already have both a RiskConfig and a PropRules in scope, without
-    forcing every one of those call sites to remember to wire the field by
-    hand. Never overrides a value the caller explicitly configured."""
+    """Returns a copy of `risk` with max_account_drawdown_pct AND
+    daily_loss_limit_pct filled in from `prop_rules` whenever the caller
+    hasn't already set an explicit value of their own for that field.
+    This is what makes the account-blown circuit breaker AND the
+    daily-loss circuit breaker (see app.backtest.execution) apply
+    automatically during the RAW BACKTEST itself -- not just later, when
+    the post-hoc prop simulator (app.prop.simulator.simulate_account)
+    checks the finished trade sequence against the same rules. Never
+    overrides a value the caller explicitly configured on either field.
+
+    FIX (2026-09-12): daily_loss_limit_pct used to be left out of this
+    function entirely -- only max_account_drawdown_pct was wired through.
+    That meant a strategy could freely keep opening new trades on a day
+    that had already blown through the prop firm's daily loss limit
+    during its OWN raw backtest (the stage every search/optimization loop
+    scores fitness from), with the violation only surfacing later at the
+    Monte Carlo / CPCV / prop-simulation stage -- wasting compute
+    exploring candidates whose raw backtest was never a realistic
+    account to begin with, and understating how early a real account
+    would have been forced to stop trading that day. This is exactly the
+    'hard, declarative prop-firm-realistic constraint layer at strategy-
+    discovery time, not just at simulation time' this app was missing:
+    every caller of this function (Speed Run, Full Pipeline, and now
+    Evolution Lab -- see app.evolution.engine.EvolutionRunner.__init__)
+    gets the fix automatically, with no other code path needing to
+    change."""
     from dataclasses import replace
-    if risk.max_account_drawdown_pct is not None:
+    updates: dict = {}
+    if risk.max_account_drawdown_pct is None:
+        max_dd = getattr(prop_rules, "max_drawdown_pct", None)
+        if max_dd is not None:
+            updates["max_account_drawdown_pct"] = max_dd
+    if risk.daily_loss_limit_pct is None:
+        daily_loss = getattr(prop_rules, "daily_loss_limit_pct", None)
+        if daily_loss is not None:
+            updates["daily_loss_limit_pct"] = daily_loss
+    if not updates:
         return risk
-    max_dd = getattr(prop_rules, "max_drawdown_pct", None)
-    if max_dd is None:
-        return risk
-    return replace(risk, max_account_drawdown_pct=max_dd)
+    return replace(risk, **updates)
 
 
 def suggest_pip_size(df) -> float:
