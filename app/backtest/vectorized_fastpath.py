@@ -89,13 +89,15 @@ class VectorizedOutcome:
 def is_vectorizable(strat_result) -> bool:
     """True only for the simplest case this fast path can honestly
     handle: a fixed-pips stop/target (or none at all). Anything with a
-    per-bar dynamic distance, a trailing stop, or a breakeven trigger
-    must go through the real engine instead -- see module docstring."""
+    per-bar dynamic distance, a trailing stop, a breakeven trigger, or a
+    partial-exit/scale-out config must go through the real engine instead
+    -- see module docstring."""
     return (
         strat_result.stop_loss_distance is None
         and strat_result.take_profit_distance is None
         and strat_result.trailing_stop_distance is None
         and strat_result.breakeven_trigger_r is None
+        and getattr(strat_result, "partial_exit", None) is None
     )
 
 

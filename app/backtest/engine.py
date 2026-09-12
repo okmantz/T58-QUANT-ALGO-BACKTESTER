@@ -114,6 +114,7 @@ def run_backtest(
             take_profit_distance=strat_result.take_profit_distance,
             trailing_stop_distance=strat_result.trailing_stop_distance,
             breakeven_trigger_r=strat_result.breakeven_trigger_r,
+            partial_exit_config=strat_result.partial_exit,
             adaptive_risk=adaptive_risk,
         )
     execution_warnings = [str(w.message) for w in caught if issubclass(w.category, RuntimeWarning)]

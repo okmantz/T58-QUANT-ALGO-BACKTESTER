@@ -60,6 +60,7 @@ def run_execution(
     take_profit_distance: pd.Series | None = None,
     trailing_stop_distance: pd.Series | None = None,
     breakeven_trigger_r: float | None = None,
+    partial_exit_config: dict | None = None,
     adaptive_risk: AdaptiveRiskConfig | None = None,
 ) -> tuple[list[Trade], pd.DataFrame]:
     """
@@ -87,6 +88,12 @@ def run_execution(
     realized as of that bar, so it introduces no lookahead. None/disabled
     means every entry uses its full nominal size, unchanged from before
     this parameter existed.
+
+    partial_exit_config: optional {"r_multiple", "fraction",
+    "move_stop_to_breakeven"} dict (see StrategyResult.partial_exit's own
+    docstring). None/omitted -- the default -- reproduces every backtest
+    run before this parameter existed, byte for byte; this is purely
+    additive and never changes behavior for a strategy that doesn't set it.
     """
     n = len(df)
     equity = risk.initial_balance
@@ -269,6 +276,57 @@ def run_execution(
         day_has_pnl[bar_date_] = True
         return pnl
 
+    partial_r_multiple = float(partial_exit_config["r_multiple"]) if partial_exit_config else None
+    partial_fraction = float(partial_exit_config["fraction"]) if partial_exit_config else None
+    partial_move_to_breakeven = bool(partial_exit_config.get("move_stop_to_breakeven", True)) if partial_exit_config else False
+
+    def _settle_partial_exit(open_pos: dict, fill_price: float, direction_: int, i: int) -> float:
+        """Closes `partial_fraction` of open_pos's ORIGINAL size at
+        fill_price -- a real, independently-settled trade of its own
+        (exit_reason='partial_take_profit'), NOT a full close: open_pos
+        itself keeps running afterward with its size reduced by the same
+        amount. Mirrors _settle_exit's cost/clamp/bookkeeping treatment
+        so a partial exit is held to the same honesty standard (spread,
+        slippage, commission, loss-clamping) as any other settled trade;
+        commission is charged pro-rata to the fraction closed rather than
+        a full extra round-turn, since only a fraction of the position is
+        actually being closed out."""
+        nonlocal equity
+        partial_size = open_pos["initial_size"] * partial_fraction
+        filled_exit_price = fill_price - (spread_price + slip_price) * direction_
+        pnl = (filled_exit_price - open_pos["entry_price"]) * partial_size * direction_
+        pnl -= risk.commission_per_trade * partial_fraction
+        if not math.isfinite(pnl):
+            pnl = 0.0
+        pnl = _clamp_loss(pnl, open_pos["equity_at_entry"])
+        equity += pnl
+        trades.append(Trade(
+            entry_time=open_pos["entry_time"],
+            exit_time=pd.Timestamp(ts[i]),
+            direction=direction_,
+            entry_price=open_pos["entry_price"],
+            exit_price=filled_exit_price,
+            size=partial_size,
+            pnl=pnl,
+            pnl_pct=(pnl / open_pos["equity_at_entry"]) * 100 if open_pos["equity_at_entry"] else 0.0,
+            exit_reason="partial_take_profit",
+            commission=risk.commission_per_trade * partial_fraction,
+            equity_after=equity,
+            initial_risk=open_pos["initial_risk"],
+            adaptive_risk_multiplier=open_pos["adaptive_multiplier"],
+            adaptive_risk_rules_active=tuple(open_pos["adaptive_rules_active"]),
+        ))
+        open_pos["size"] -= partial_size
+        bar_date_ = day_idx[i]
+        pnl_today_sum[bar_date_] += pnl
+        day_has_pnl[bar_date_] = True
+        # Deliberately NOT calling adaptive_state.record_trade_close here --
+        # the position this partial belongs to is still open, so this isn't
+        # a trade CLOSE for adaptive-risk purposes (consecutive-loss/streak
+        # tracking is keyed to whether a position was closed, not to every
+        # settled P&L event within one).
+        return pnl
+
     def _resolve_intrabar_exit(
         direction_: int, stop: float | None, take: float | None,
         low: float, high: float, open_: float,
@@ -363,6 +421,43 @@ def run_execution(
                 candidate = open_trade["best_price"] - direction * open_trade["trailing_distance"]
                 if stop is None or (direction == 1 and candidate > stop) or (direction == -1 and candidate < stop):
                     stop = candidate
+
+            # Partial exit / scale-out: once open profit reaches the
+            # configured R multiple, close `fraction` of the ORIGINAL
+            # size at that level (a real settled trade of its own -- see
+            # _settle_partial_exit) and optionally tighten the remaining
+            # position's stop to breakeven. Fires at most once per trade
+            # (partial_taken), and only when there's still a genuine
+            # initial_risk to measure R against. Checked via the same
+            # intrabar high/low the stop/take logic below uses, filled at
+            # the exact target level (matching how a take-profit already
+            # fills here -- see _resolve_intrabar_exit's docstring for why
+            # STOPS, not targets, get the conservative gap-through fill).
+            if (
+                partial_exit_config is not None
+                and not open_trade["partial_taken"]
+                and open_trade["initial_risk"]
+            ):
+                partial_target = open_trade["entry_price"] + direction * partial_r_multiple * open_trade["initial_risk"]
+                partial_hit = (highs[i] >= partial_target) if direction == 1 else (lows[i] <= partial_target)
+                # If the strategy's own take-profit is at or before the
+                # partial target, the position fully closes there anyway
+                # before ever reaching the partial level -- skip so the
+                # normal full-exit path below is the one that fires.
+                take_before_partial = (
+                    open_trade["take_price"] is not None
+                    and (
+                        (direction == 1 and open_trade["take_price"] <= partial_target)
+                        or (direction == -1 and open_trade["take_price"] >= partial_target)
+                    )
+                )
+                if partial_hit and not take_before_partial:
+                    _settle_partial_exit(open_trade, partial_target, direction, i)
+                    open_trade["partial_taken"] = True
+                    if partial_move_to_breakeven:
+                        candidate = open_trade["entry_price"]
+                        if stop is None or (direction == 1 and candidate > stop) or (direction == -1 and candidate < stop):
+                            stop = candidate
 
             open_trade["stop_price"] = stop
             take = open_trade["take_price"]
@@ -522,12 +617,14 @@ def run_execution(
                         "direction": direction,
                         "entry_price": entry_price,
                         "size": size,
+                        "initial_size": size,
                         "stop_price": stop_price,
                         "take_price": take_price,
                         "equity_at_entry": equity,
                         "best_price": entry_price,
                         "initial_risk": initial_risk,
                         "breakeven_done": False,
+                        "partial_taken": False,
                         "trailing_distance": bar_trail_distance,
                         "adaptive_multiplier": adaptive_multiplier,
                         "adaptive_rules_active": adaptive_rules_active,
