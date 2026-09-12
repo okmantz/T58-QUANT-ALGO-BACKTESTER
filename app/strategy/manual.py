@@ -104,7 +104,18 @@ class ManualStrategy(Strategy):
                     "supertrend_line", "supertrend_direction",
                     # Expansion round 6 indicators.
                     "williams_r", "roc", "awesome_oscillator", "cmf",
-                    "psar_line", "psar_direction"}:
+                    "psar_line", "psar_direction",
+                    # Expansion round 7 indicators -- see app.strategy.indicators.
+                    "ichimoku_tenkan", "ichimoku_kijun", "ichimoku_senkou_a", "ichimoku_senkou_b", "ichimoku_chikou",
+                    "fib_382", "fib_500", "fib_618",
+                    "pivot_point", "pivot_r1", "pivot_s1", "pivot_r2", "pivot_s2",
+                    "heikin_ashi_open", "heikin_ashi_high", "heikin_ashi_low", "heikin_ashi_close",
+                    "mfi", "trix", "ultimate_oscillator",
+                    "aroon_up", "aroon_down", "aroon_oscillator",
+                    "choppiness_index", "dpo", "anchored_vwap",
+                    "linreg_mid", "linreg_upper", "linreg_lower",
+                    "correlation", "chandelier_long", "chandelier_short",
+                    "volume_profile_poc", "volume_profile_vah", "volume_profile_val"}:
             return build_indicator_series(work, kind, period=period, column=field, lookback=lookback)
 
         if kind == "time_of_day":
@@ -112,6 +123,18 @@ class ManualStrategy(Strategy):
             session_start = operand.get("session_start", "00:00")
             session_end = operand.get("session_end", "23:59")
             return self._session_mask(ts, session_start, session_end).astype(int)
+
+        if kind == "day_of_week":
+            # 0=Monday..6=Sunday, matching pandas' own dt.dayofweek -- lets
+            # a family bet on a specific calendar-effect day rather than an
+            # intraday clock window (see `time_of_day` above for that case).
+            ts = pd.to_datetime(work["timestamp"])
+            days = operand.get("days")
+            if days is None:
+                target = operand.get("day", 0)
+                days = [target]
+            days = {int(d) for d in days}
+            return ts.dt.dayofweek.isin(days).astype(int)
 
         if kind == "candle_direction":
             bullish = work["close"] > work["open"]
@@ -443,6 +466,21 @@ class ManualStrategy(Strategy):
             except (TypeError, ValueError):
                 breakeven_trigger_r = None
 
+        partial_exit = None
+        pe = rm.get("partial_exit", {}) or {}
+        if pe.get("enabled") and pe.get("r_multiple") not in (None, "") and pe.get("fraction") not in (None, ""):
+            try:
+                r_multiple = max(float(pe["r_multiple"]), 0.0)
+                fraction = min(max(float(pe["fraction"]), 0.0), 1.0)
+                if r_multiple > 0 and fraction > 0:
+                    partial_exit = {
+                        "r_multiple": r_multiple,
+                        "fraction": fraction,
+                        "move_stop_to_breakeven": bool(pe.get("move_stop_to_breakeven", True)),
+                    }
+            except (TypeError, ValueError):
+                partial_exit = None
+
         return {
             "stop_loss_pips": stop_loss_pips,
             "take_profit_pips": take_profit_pips,
@@ -450,6 +488,7 @@ class ManualStrategy(Strategy):
             "take_profit_distance": take_profit_distance,
             "trailing_stop_distance": trailing_stop_distance,
             "breakeven_trigger_r": breakeven_trigger_r,
+            "partial_exit": partial_exit,
         }
 
     # ------------------------------------------------------------------
@@ -496,4 +535,5 @@ class ManualStrategy(Strategy):
             take_profit_distance=risk["take_profit_distance"],
             trailing_stop_distance=risk["trailing_stop_distance"],
             breakeven_trigger_r=risk["breakeven_trigger_r"],
+            partial_exit=risk["partial_exit"],
         )

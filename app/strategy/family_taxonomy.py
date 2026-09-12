@@ -144,6 +144,18 @@ _SKELETON_TO_GROUP: dict[str, str] = {
     "awesome_oscillator_zero_cross": "momentum",
     "cmf_volume_confirmation": "order_flow",
     "parabolic_sar_trend_following": "trend_following",
+    # -- Expansion round 7 (10 new indicator-driven families, Sep 2026) --
+    "ichimoku_cloud_trend": "trend_following",
+    "mfi_extreme_reversion": "mean_reversion",
+    "choppiness_regime_trend_pullback": "pullback",
+    "heikin_ashi_trend_continuation": "trend_following",
+    "pivot_point_breakout": "breakout",
+    "day_of_week_seasonality": "opening_range",
+    "chandelier_exit_trend_following": "trend_following",
+    "aroon_trend_strength_breakout": "breakout",
+    "fibonacci_retracement_bounce": "pullback",
+    "trix_zero_cross_momentum": "momentum",
+    "volume_profile_value_area_fade": "mean_reversion",
 }
 
 # Path 2a: app.strategy.dna active_tags() -> canonical group. Checked in

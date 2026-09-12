@@ -428,6 +428,291 @@ def parabolic_sar(frame: pd.DataFrame, af_start: float = 0.02, af_step: float = 
     return pd.Series(sar, index=frame.index), pd.Series(direction, index=frame.index)
 
 
+# ---------------------------------------------------------------------------
+# Expansion round 7: Ichimoku, Fibonacci, Pivot Points, Heikin-Ashi, MFI,
+# TRIX, Ultimate Oscillator, Aroon, Choppiness Index, DPO, Anchored VWAP,
+# Linear Regression Channel, rolling correlation, Chandelier Exit.
+# Same convention as prior rounds -- pure functions taking a DataFrame/Series
+# and returning a Series (or tuple of Series), dispatched by name from
+# _build_indicator_series_uncached below.
+# ---------------------------------------------------------------------------
+
+def ichimoku(frame: pd.DataFrame, tenkan_period: int = 9, kijun_period: int = 26, senkou_b_period: int = 52) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series, pd.Series]:
+    """Returns (tenkan, kijun, senkou_a, senkou_b, chikou).
+    senkou_a/b are plotted `kijun_period` bars AHEAD on a real Ichimoku chart;
+    here they are returned already shifted forward so `series[i]` is the
+    cloud value overhanging bar i -- i.e. directly comparable to close[i]
+    without the caller needing to know the forward-shift convention.
+    chikou is close shifted `kijun_period` bars BACK (lagging span)."""
+    high, low, close = frame["high"], frame["low"], frame["close"]
+    tenkan = (high.rolling(tenkan_period, min_periods=tenkan_period).max() + low.rolling(tenkan_period, min_periods=tenkan_period).min()) / 2.0
+    kijun = (high.rolling(kijun_period, min_periods=kijun_period).max() + low.rolling(kijun_period, min_periods=kijun_period).min()) / 2.0
+    senkou_a = ((tenkan + kijun) / 2.0).shift(kijun_period)
+    senkou_b = ((high.rolling(senkou_b_period, min_periods=senkou_b_period).max() + low.rolling(senkou_b_period, min_periods=senkou_b_period).min()) / 2.0).shift(kijun_period)
+    chikou = close.shift(-kijun_period)
+    return tenkan, kijun, senkou_a, senkou_b, chikou
+
+
+def fibonacci_levels(frame: pd.DataFrame, period: int = 50) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Rolling-window Fibonacci retracement levels (38.2/50/61.8%) between
+    the period's high and low, recomputed every bar off the CLOSED prior
+    window (shifted 1) so no bar's own high/low leaks into its own levels."""
+    high = frame["high"].shift(1).rolling(period, min_periods=period).max()
+    low = frame["low"].shift(1).rolling(period, min_periods=period).min()
+    span = high - low
+    fib_382 = high - span * 0.382
+    fib_500 = high - span * 0.5
+    fib_618 = high - span * 0.618
+    return fib_382, fib_500, fib_618
+
+
+def pivot_points(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series, pd.Series]:
+    """Classic daily floor-trader pivots computed from the PRIOR calendar
+    day's high/low/close, forward-filled across the current day -- so a
+    bar's pivot levels are always knowable before that bar prints."""
+    if "timestamp" not in frame.columns:
+        raise KeyError("pivot_points requires a 'timestamp' column")
+    ts = pd.to_datetime(frame["timestamp"])
+    day = ts.dt.normalize()
+    daily = frame.groupby(day)
+    prev_high = daily["high"].max().shift(1)
+    prev_low = daily["low"].min().shift(1)
+    prev_close = daily["close"].last().shift(1)
+    pivot = (prev_high + prev_low + prev_close) / 3.0
+    r1 = 2 * pivot - prev_low
+    s1 = 2 * pivot - prev_high
+    r2 = pivot + (prev_high - prev_low)
+    s2 = pivot - (prev_high - prev_low)
+    return (day.map(pivot), day.map(r1), day.map(s1), day.map(r2), day.map(s2))
+
+
+def heikin_ashi(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series]:
+    """Smoothed Heikin-Ashi OHLC transform. ha_open is seeded from the
+    first bar's real open/close average and then recurses, so it is
+    computed with a simple forward loop rather than a vectorized rolling
+    op (each bar's ha_open depends on the PRIOR bar's ha_open/ha_close)."""
+    o, h, l, c = frame["open"].to_numpy(), frame["high"].to_numpy(), frame["low"].to_numpy(), frame["close"].to_numpy()
+    n = len(c)
+    ha_close = (o + h + l + c) / 4.0
+    ha_open = np.empty(n)
+    if n:
+        ha_open[0] = (o[0] + c[0]) / 2.0
+        for i in range(1, n):
+            ha_open[i] = (ha_open[i - 1] + ha_close[i - 1]) / 2.0
+    ha_high = np.maximum.reduce([h, ha_open, ha_close]) if n else h
+    ha_low = np.minimum.reduce([l, ha_open, ha_close]) if n else l
+    idx = frame.index
+    return (pd.Series(ha_open, index=idx), pd.Series(ha_high, index=idx),
+            pd.Series(ha_low, index=idx), pd.Series(ha_close, index=idx))
+
+
+def money_flow_index(frame: pd.DataFrame, period: int = 14) -> pd.Series:
+    """RSI-style volume-weighted oscillator (MFI) -- distinct from Chaikin
+    Money Flow, which weights by where the close sits within the bar's
+    range rather than by raw typical-price direction."""
+    volume = frame["volume"] if "volume" in frame.columns else pd.Series(1.0, index=frame.index)
+    typical = (frame["high"] + frame["low"] + frame["close"]) / 3.0
+    raw_flow = typical * volume
+    direction = typical.diff()
+    pos_flow = raw_flow.where(direction > 0, 0.0)
+    neg_flow = raw_flow.where(direction < 0, 0.0)
+    p = _period(period)
+    pos_sum = pos_flow.rolling(p, min_periods=p).sum()
+    neg_sum = neg_flow.rolling(p, min_periods=p).sum()
+    ratio = pos_sum / neg_sum.replace(0, np.nan)
+    result = 100 - (100 / (1 + ratio))
+    return result.where(neg_sum.ne(0), 100).fillna(50)
+
+
+def trix(series: pd.Series, period: int = 15) -> pd.Series:
+    """Rate of change of a triple-smoothed EMA -- filters out minor cycles
+    that a single or double EMA still passes through."""
+    p = _period(period)
+    e1 = series.ewm(span=p, adjust=False, min_periods=p).mean()
+    e2 = e1.ewm(span=p, adjust=False, min_periods=p).mean()
+    e3 = e2.ewm(span=p, adjust=False, min_periods=p).mean()
+    return e3.pct_change() * 100
+
+
+def ultimate_oscillator(frame: pd.DataFrame, period1: int = 7, period2: int = 14, period3: int = 28) -> pd.Series:
+    """Weighted blend of three lookback periods' buying pressure, damping
+    the single-period whipsaws that plain RSI/Stochastic are prone to."""
+    close, high, low = frame["close"], frame["high"], frame["low"]
+    prev_close = close.shift(1)
+    bp = close - pd.concat([low, prev_close], axis=1).min(axis=1)
+    tr = pd.concat([high, prev_close], axis=1).max(axis=1) - pd.concat([low, prev_close], axis=1).min(axis=1)
+    avg1 = bp.rolling(period1, min_periods=period1).sum() / tr.rolling(period1, min_periods=period1).sum().replace(0, np.nan)
+    avg2 = bp.rolling(period2, min_periods=period2).sum() / tr.rolling(period2, min_periods=period2).sum().replace(0, np.nan)
+    avg3 = bp.rolling(period3, min_periods=period3).sum() / tr.rolling(period3, min_periods=period3).sum().replace(0, np.nan)
+    return (100 * (4 * avg1 + 2 * avg2 + avg3) / 7).fillna(50)
+
+
+def aroon(frame: pd.DataFrame, period: int = 25) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Returns (aroon_up, aroon_down, aroon_oscillator). Measures bars
+    since the most recent period-high/low, not the magnitude of any move --
+    a genuinely different mechanism from every momentum/range oscillator
+    already in this module."""
+    p = _period(period)
+    high, low = frame["high"], frame["low"]
+
+    def _bars_since_max(x: np.ndarray) -> float:
+        return float(p - np.argmax(x[::-1]))
+
+    def _bars_since_min(x: np.ndarray) -> float:
+        return float(p - np.argmin(x[::-1]))
+
+    bars_since_high = high.rolling(p + 1, min_periods=p + 1).apply(_bars_since_max, raw=True)
+    bars_since_low = low.rolling(p + 1, min_periods=p + 1).apply(_bars_since_min, raw=True)
+    up = 100 * (p - bars_since_high) / p
+    down = 100 * (p - bars_since_low) / p
+    return up, down, up - down
+
+
+def choppiness_index(frame: pd.DataFrame, period: int = 14) -> pd.Series:
+    """0-100 regime gauge: near 100 means a choppy/ranging market (true
+    range is large relative to the net high-low span), near 0 means a
+    strongly trending one. Distinct from ADX -- ADX measures directional
+    strength, this measures range-vs-noise regardless of direction."""
+    p = _period(period)
+    tr = true_range(frame)
+    tr_sum = tr.rolling(p, min_periods=p).sum()
+    hh = frame["high"].rolling(p, min_periods=p).max()
+    ll = frame["low"].rolling(p, min_periods=p).min()
+    span = (hh - ll).replace(0, np.nan)
+    result = 100 * np.log10(tr_sum / span) / np.log10(p)
+    return result.fillna(50)
+
+
+def dpo(series: pd.Series, period: int = 20) -> pd.Series:
+    """Detrended Price Oscillator: price minus an SMA shifted back to
+    remove the long-term trend component, isolating shorter cycles."""
+    p = _period(period)
+    shift = p // 2 + 1
+    return series - sma(series, p).shift(shift)
+
+
+def anchored_vwap(frame: pd.DataFrame, period: int = 20) -> pd.Series:
+    """VWAP re-anchored every `period` bars (a rolling anchor) rather than
+    the existing session-anchored `vwap()` -- lets a strategy react to a
+    volume-weighted average from an arbitrary recent point rather than
+    always the start of the session."""
+    typical = (frame["high"] + frame["low"] + frame["close"]) / 3.0
+    volume = frame["volume"] if "volume" in frame.columns else pd.Series(1.0, index=frame.index)
+    p = _period(period)
+    pv = (typical * volume).rolling(p, min_periods=p).sum()
+    vsum = volume.rolling(p, min_periods=p).sum().replace(0, np.nan)
+    return (pv / vsum).fillna(typical)
+
+
+def linreg_channel(series: pd.Series, period: int = 50, std_mult: float = 2.0) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Rolling linear-regression midline +/- std_mult * residual stdev --
+    distinct from Bollinger (which bands a simple moving average, not a
+    fitted trendline)."""
+    p = _period(period)
+    x = np.arange(p, dtype=float)
+    x_mean = x.mean()
+    denom = ((x - x_mean) ** 2).sum()
+
+    def _endpoint(y: np.ndarray) -> float:
+        slope = ((x - x_mean) * (y - y.mean())).sum() / denom
+        intercept = y.mean() - slope * x_mean
+        return float(slope * x[-1] + intercept)
+
+    def _resid_std(y: np.ndarray) -> float:
+        slope = ((x - x_mean) * (y - y.mean())).sum() / denom
+        intercept = y.mean() - slope * x_mean
+        fitted = slope * x + intercept
+        return float(np.std(y - fitted))
+
+    mid = series.rolling(p, min_periods=p).apply(_endpoint, raw=True)
+    resid = series.rolling(p, min_periods=p).apply(_resid_std, raw=True)
+    return mid, mid + resid * std_mult, mid - resid * std_mult
+
+
+def rolling_correlation(frame: pd.DataFrame, period: int = 50, pair_column: str = "pair_close") -> pd.Series:
+    """Rolling Pearson correlation of close-to-close returns against a
+    second merged instrument column -- a general regime filter usable by
+    any family, distinct from `pair_zscore` (which measures spread
+    dislocation, not co-movement strength)."""
+    if pair_column not in frame.columns:
+        raise KeyError(f"rolling_correlation requires a '{pair_column}' column")
+    a = frame["close"].pct_change()
+    b = frame[pair_column].pct_change()
+    return a.rolling(_period(period), min_periods=_period(period)).corr(b).fillna(0.0)
+
+
+def chandelier_exit(frame: pd.DataFrame, period: int = 22, atr_mult: float = 3.0) -> tuple[pd.Series, pd.Series]:
+    """Returns (chandelier_long_stop, chandelier_short_stop): highest-high
+    minus an ATR multiple (for longs) / lowest-low plus an ATR multiple
+    (for shorts) -- a different sensitivity profile from the existing
+    fixed-percent ATR trailing stop used elsewhere in the risk engine."""
+    p = _period(period)
+    atr_series = atr(frame, p)
+    long_stop = frame["high"].rolling(p, min_periods=p).max() - atr_series * atr_mult
+    short_stop = frame["low"].rolling(p, min_periods=p).min() + atr_series * atr_mult
+    return long_stop, short_stop
+
+
+def volume_profile(frame: pd.DataFrame, period: int = 100, n_bins: int = 24, value_area_pct: float = 0.70) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Rolling-window Volume Profile: for each bar, bins the trailing
+    `period` bars' volume by price into `n_bins` buckets and returns
+    (poc, vah, val) -- the point of control (highest-volume bin's price)
+    and the value-area high/low (the tightest band of bins around POC
+    whose combined volume reaches `value_area_pct` of the window total).
+    Genuinely absent from every other indicator in this module -- every
+    existing level (Donchian/session/pivot/etc.) is a price extreme, never
+    a volume-weighted price DISTRIBUTION. Uses each bar's OWN high/low/
+    close/volume approximated as a single point at the bar's typical
+    price rather than splitting volume across the bar's full range --
+    the standard simplification for OHLCV-bar (not tick) volume profiles."""
+    p = _period(period)
+    high, low, close = frame["high"].to_numpy(), frame["low"].to_numpy(), frame["close"].to_numpy()
+    volume = (frame["volume"] if "volume" in frame.columns else pd.Series(1.0, index=frame.index)).to_numpy()
+    typical = (high + low + close) / 3.0
+    n = len(close)
+    poc = np.full(n, np.nan)
+    vah = np.full(n, np.nan)
+    val = np.full(n, np.nan)
+    for i in range(p - 1, n):
+        lo, hi = i - p + 1, i + 1
+        window_high = high[lo:hi].max()
+        window_low = low[lo:hi].min()
+        span = window_high - window_low
+        if span <= 0:
+            poc[i] = vah[i] = val[i] = typical[i]
+            continue
+        edges = np.linspace(window_low, window_high, n_bins + 1)
+        bin_idx = np.clip(np.digitize(typical[lo:hi], edges) - 1, 0, n_bins - 1)
+        bin_volume = np.zeros(n_bins)
+        np.add.at(bin_volume, bin_idx, volume[lo:hi])
+        total = bin_volume.sum()
+        if total <= 0:
+            poc[i] = vah[i] = val[i] = typical[i]
+            continue
+        bin_centers = (edges[:-1] + edges[1:]) / 2.0
+        poc_bin = int(np.argmax(bin_volume))
+        poc[i] = bin_centers[poc_bin]
+        # Expand outward from the POC bin, each step adding whichever
+        # neighbor (below or above) has more volume, until the included
+        # bins' volume reaches the target value-area percentage.
+        lo_bin = hi_bin = poc_bin
+        included = bin_volume[poc_bin]
+        target = total * value_area_pct
+        while included < target and (lo_bin > 0 or hi_bin < n_bins - 1):
+            below = bin_volume[lo_bin - 1] if lo_bin > 0 else -1.0
+            above = bin_volume[hi_bin + 1] if hi_bin < n_bins - 1 else -1.0
+            if above >= below:
+                hi_bin += 1
+                included += bin_volume[hi_bin]
+            else:
+                lo_bin -= 1
+                included += bin_volume[lo_bin]
+        val[i] = bin_centers[lo_bin]
+        vah[i] = bin_centers[hi_bin]
+    idx = frame.index
+    return pd.Series(poc, index=idx), pd.Series(vah, index=idx), pd.Series(val, index=idx)
+
+
 def crossover(a: pd.Series, b: pd.Series) -> pd.Series:
     return (a > b) & (a.shift(1) <= b.shift(1))
 
@@ -539,6 +824,77 @@ def _build_indicator_series_uncached(frame: pd.DataFrame, kind: str, period: int
         return parabolic_sar(frame)[0]
     if kind == "psar_direction":
         return parabolic_sar(frame)[1]
+    # Expansion round 7.
+    if kind == "ichimoku_tenkan":
+        return ichimoku(frame, tenkan_period=p)[0]
+    if kind == "ichimoku_kijun":
+        return ichimoku(frame, kijun_period=p)[1]
+    if kind == "ichimoku_senkou_a":
+        return ichimoku(frame)[2]
+    if kind == "ichimoku_senkou_b":
+        return ichimoku(frame)[3]
+    if kind == "ichimoku_chikou":
+        return ichimoku(frame)[4]
+    if kind == "fib_382":
+        return fibonacci_levels(frame, p)[0]
+    if kind == "fib_500":
+        return fibonacci_levels(frame, p)[1]
+    if kind == "fib_618":
+        return fibonacci_levels(frame, p)[2]
+    if kind == "pivot_point":
+        return pivot_points(frame)[0]
+    if kind == "pivot_r1":
+        return pivot_points(frame)[1]
+    if kind == "pivot_s1":
+        return pivot_points(frame)[2]
+    if kind == "pivot_r2":
+        return pivot_points(frame)[3]
+    if kind == "pivot_s2":
+        return pivot_points(frame)[4]
+    if kind == "heikin_ashi_open":
+        return heikin_ashi(frame)[0]
+    if kind == "heikin_ashi_high":
+        return heikin_ashi(frame)[1]
+    if kind == "heikin_ashi_low":
+        return heikin_ashi(frame)[2]
+    if kind == "heikin_ashi_close":
+        return heikin_ashi(frame)[3]
+    if kind == "mfi":
+        return money_flow_index(frame, p)
+    if kind == "trix":
+        return trix(source, p)
+    if kind == "ultimate_oscillator":
+        return ultimate_oscillator(frame)
+    if kind == "aroon_up":
+        return aroon(frame, p)[0]
+    if kind == "aroon_down":
+        return aroon(frame, p)[1]
+    if kind == "aroon_oscillator":
+        return aroon(frame, p)[2]
+    if kind == "choppiness_index":
+        return choppiness_index(frame, p)
+    if kind == "dpo":
+        return dpo(source, p)
+    if kind == "anchored_vwap":
+        return anchored_vwap(frame, p)
+    if kind == "linreg_mid":
+        return linreg_channel(source, p)[0]
+    if kind == "linreg_upper":
+        return linreg_channel(source, p)[1]
+    if kind == "linreg_lower":
+        return linreg_channel(source, p)[2]
+    if kind == "correlation":
+        return rolling_correlation(frame, p)
+    if kind == "chandelier_long":
+        return chandelier_exit(frame, p)[0]
+    if kind == "chandelier_short":
+        return chandelier_exit(frame, p)[1]
+    if kind == "volume_profile_poc":
+        return volume_profile(frame, p)[0]
+    if kind == "volume_profile_vah":
+        return volume_profile(frame, p)[1]
+    if kind == "volume_profile_val":
+        return volume_profile(frame, p)[2]
     raise KeyError(kind)
 
 

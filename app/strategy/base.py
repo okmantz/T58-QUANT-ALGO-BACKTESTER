@@ -42,6 +42,17 @@ class StrategyResult:
     # Move the stop to break-even once open profit reaches this multiple
     # of the trade's initial risk (e.g. 1.0 == "+1R").
     breakeven_trigger_r: float | None = None
+    # Optional scale-out/partial-profit-taking config: {"r_multiple": float,
+    # "fraction": float in (0, 1], "move_stop_to_breakeven": bool}. Once open
+    # profit reaches `r_multiple` times the trade's initial risk, closes
+    # `fraction` of the ORIGINAL position size at that level (a real
+    # settled trade of its own, tagged exit_reason="partial_take_profit")
+    # and, if move_stop_to_breakeven, tightens the remaining position's
+    # stop to entry -- the common prop-firm "bank some of the daily-loss-
+    # limit-safe portion of a trade early" technique. Fires at most once
+    # per trade. None/omitted = no partial exit, identical to every
+    # backtest run before this field existed.
+    partial_exit: dict | None = None
 
 
 class Strategy:
