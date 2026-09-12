@@ -93,6 +93,9 @@ from app.orchestration.speed_run import SpeedRunConfig, SpeedRunResult, run_spee
 from app.orchestration.speed_run import _rank_key as _speedrun_rank_key
 from app.portfolio.portfolio import InstrumentLeg, PortfolioConfig, PortfolioError, run_portfolio_backtest
 from app.prop.simulator import PropRules, simulate_account
+from app.prop.presets import get_preset as get_prop_firm_preset, list_presets as list_prop_firm_presets
+from app.prop.recommender import recommend_prop_firms, render_recommendation_table
+from app.prop.scaling import ScalingPlan, run_scaling_stress_test
 from app.prop.survival_engine import PropSurvivalConfig, ResetEconomics, run_prop_survival_analysis
 from app.reports.generator import generate_full_report
 from app.reports.crash_log import install_thread_excepthook, log_crash
@@ -478,6 +481,20 @@ def _resolve_family_exclusions(log_lines: list | None = None) -> "set[str] | Non
             f"(tested 30+ times across past runs with zero successes): {', '.join(excluded)}."
         )
     return set(excluded) if survivors is not None else None
+
+
+def _prop_presets_json() -> str:
+    """[{"key","label","firm","account_size","evaluation_profit_target_pct",
+    "daily_loss_limit_pct","max_drawdown_pct","drawdown_type",
+    "drawdown_check_mode","consistency_rule_pct","min_trading_days",
+    "payout_threshold_pct","payout_cap_pct","payout_frequency_days",
+    "required_buffer_pct","as_of","source_note"}, ...] for any page's JS
+    to build a "quick-fill from a prop-firm preset" dropdown that
+    populates that page's own prop-rule form fields on selection. See
+    app.prop.presets' module docstring for why these numbers are
+    approximate and dated.
+    """
+    return json.dumps([p.to_dict() for p in list_prop_firm_presets()])
 
 
 def _saved_strategies_json() -> str:
@@ -3036,14 +3053,14 @@ def family_diversity_form():
 def payout_probability_form():
     return render_template(
         "payout_probability.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-        saved_strategies_json=_saved_strategies_json(),
+        saved_strategies_json=_saved_strategies_json(), prop_presets_json=_prop_presets_json(),
     )
 
 
 @app.route("/payout-probability/run", methods=["POST"])
 def payout_probability_run():
     form = request.form
-    ctx = lambda **kw: dict(stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **kw)
+    ctx = lambda **kw: dict(stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), prop_presets_json=_prop_presets_json(), **kw)
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
@@ -3091,6 +3108,27 @@ def payout_probability_run():
             basename=f"payout_{run_id}",
         )
 
+        # Optional account-scaling stress test (Owen's ask: "does the
+        # expected-payout number get more realistic for firms that scale
+        # a funded account up after a run of payouts") -- entirely
+        # additive; the plain (non-scaling) numbers above are unaffected
+        # either way. See app.prop.scaling's module docstring for the
+        # modeling assumptions.
+        scaling_result = None
+        if form.get("enable_scaling") == "on":
+            plan = ScalingPlan(
+                payouts_per_scale=int(form.get("scale_payouts_per", 4) or 4),
+                scale_multiplier=float(form.get("scale_multiplier", 1.25) or 1.25),
+                max_scale_multiple=float(form.get("scale_max_multiple", 4.0) or 4.0),
+            )
+            try:
+                scaling_result = run_scaling_stress_test(
+                    bt_result.trades, rules, plan,
+                    mc_cfg=None,
+                ).to_dict()
+            except ValueError:
+                scaling_result = None
+
         return render_template("payout_probability.html", **ctx(result={
             "strategy_name": bt_result.strategy_name,
             "instrument": active_label,
@@ -3101,6 +3139,7 @@ def payout_probability_run():
             "notes": result.notes,
             "report_html": f"/payout_reports/{Path(paths['html']).name}",
             "report_json": f"/payout_reports/{Path(paths['json']).name}",
+            "scaling": scaling_result,
         }))
     except StrategyError as exc:
         return render_template("payout_probability.html", **ctx(error=str(exc))), 400
@@ -3111,6 +3150,69 @@ def payout_probability_run():
 @app.route("/payout_reports/<path:filename>")
 def serve_payout_report(filename):
     return send_from_directory(PAYOUT_DIR, filename)
+
+
+# ---------------------------------------------------------------------------
+# Prop-Firm Recommender -- reverse of Payout Probability: given a strategy's
+# own trade sequence, score it against EVERY preset firm's rules and rank
+# them, instead of checking one firm's rules at a time by hand.
+# ---------------------------------------------------------------------------
+
+@app.route("/prop-firm-recommender")
+def prop_firm_recommender_form():
+    return render_template(
+        "prop_firm_recommender.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+        saved_strategies_json=_saved_strategies_json(), all_presets=list_prop_firm_presets(),
+    )
+
+
+@app.route("/prop-firm-recommender/run", methods=["POST"])
+def prop_firm_recommender_run():
+    form = request.form
+    ctx = lambda **kw: dict(
+        stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+        saved_strategies_json=_saved_strategies_json(), all_presets=list_prop_firm_presets(), **kw,
+    )
+    try:
+        df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
+        if dataset_error:
+            return render_template("prop_firm_recommender.html", **ctx(error=dataset_error)), 400
+
+        strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
+        risk = RiskConfig(
+            initial_balance=float(form.get("initial_balance", 100000)),
+            risk_mode=form.get("risk_mode", "percent"),
+            risk_value=float(form.get("risk_value", 1.0)),
+            pip_size=float(form.get("pip_size", 0.0001)),
+        )
+
+        bt_result = run_backtest(df, strategy, risk)
+        if not bt_result.trades:
+            return render_template("prop_firm_recommender.html", **ctx(
+                error="No trades were generated by this strategy over the given data -- there is "
+                      "nothing to score against prop-firm rule sets."
+            )), 400
+
+        n_sims = min(int(form.get("n_sims", 2000) or 2000), 20_000)
+        selected_firms = form.getlist("firms")
+        candidates = None
+        if selected_firms:
+            candidates = [get_prop_firm_preset(key) for key in selected_firms if key]
+
+        recommendations = recommend_prop_firms(
+            bt_result.trades, candidates=candidates,
+            mc_cfg=MonteCarloConfig(n_simulations=n_sims),
+        )
+
+        return render_template("prop_firm_recommender.html", **ctx(result={
+            "strategy_name": bt_result.strategy_name,
+            "instrument": active_label,
+            "recommendations": [r.to_dict() for r in recommendations],
+        }))
+    except StrategyError as exc:
+        return render_template("prop_firm_recommender.html", **ctx(error=str(exc))), 400
+    except Exception as exc:  # noqa: BLE001
+        return render_template("prop_firm_recommender.html", **ctx(error=f"Unexpected error: {exc}")), 500
 
 
 # ---------------------------------------------------------------------------
