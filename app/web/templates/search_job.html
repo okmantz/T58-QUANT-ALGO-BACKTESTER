@@ -29,6 +29,7 @@
 <div class="card">
   <h2 id="status-title"><span class="spinner" id="spinner"></span>Search running&hellip;</h2>
   <div id="log">Starting&hellip;</div>
+  <p id="loop-status" style="display:none; margin-top:10px; padding:10px 12px; border-radius:8px; background:#1a2530; color:#a8c8e8; font-size:13px;"></p>
   <p id="next-step" style="display:none; margin-top:10px; padding:10px 12px; border-radius:8px; background:#152615; color:#b7e8b7; font-size:13px;"></p>
   <form id="stop-form" method="post" action="/search/job/{{ job_id }}/stop" style="margin-top:10px;" onsubmit="return stopSearch(event)">
     <button class="stop-btn" type="submit" id="stop-btn">Stop</button>
@@ -133,6 +134,35 @@
         if (!data.found) return;
         document.getElementById('log').textContent = data.log.filter(Boolean).join('\n');
         document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
+
+        const loopEl = document.getElementById('loop-status');
+        if (data.loop_mode) {
+          const lr = data.loop_last_round;
+          const lines = [`Loop mode -- round ${data.loop_rounds} completed.`];
+          if (lr) {
+            lines.push(
+              `Latest round: ${lr.family === null ? 'all families' : lr.family} ` +
+              `(cap ${lr.max_candidates}), best eval-pass so far: ` +
+              `${lr.best_value !== null && lr.best_value !== undefined ? lr.best_value.toFixed(1) + '%' : 'none yet'}` +
+              (lr.widened_after_this_round ? ' -- widening for the next round.' : '.')
+            );
+          }
+          if (data.loop_result) {
+            const reasonText = {
+              target_reached: 'Target reached -- stopped automatically.',
+              max_rounds: 'Stopped: max rounds reached.',
+              time_budget: 'Stopped: time budget used up.',
+              cancelled: 'Stopped by user.',
+              error: 'Stopped: a round crashed (see error below).',
+            }[data.loop_result.stopped_reason] || data.loop_result.stopped_reason;
+            lines.push(reasonText);
+            if (data.loop_result.winner_candidate_id) {
+              lines.push(`Winning candidate: ${data.loop_result.winner_candidate_id}`);
+            }
+          }
+          loopEl.textContent = lines.join(' ');
+          loopEl.style.display = 'block';
+        }
 
         if (data.error) {
           document.getElementById('spinner').style.display = 'none';
