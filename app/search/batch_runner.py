@@ -1057,13 +1057,48 @@ def run_search(
                 if relaxed_note:
                     log(relaxed_note)
             if not survivors1:
+                n_scored = len(stage1_records)
+                n_skipped = len(items) - n_scored
+                if n_scored == 0:
+                    # Every single candidate was skipped before scoring --
+                    # see the same distinction now made in
+                    # app.search.failure_triage.FailureTriageSummary. This
+                    # is a worker-pool problem (a stall/crash that ate every
+                    # batch), not evidence about the strategy space, and
+                    # must never be reported in the same breath as "the
+                    # search space has no edge".
+                    log(
+                        f"STOPPED: 0 of {len(items):,} candidate(s) were actually scored in Stage 1 -- "
+                        "every batch was skipped before it could run. This means the worker pool never "
+                        "successfully evaluated a single candidate (look above for 'batch ... skipped' "
+                        "or stall/terminate messages), most likely because this dataset is large enough "
+                        "that a worker stalled or ran out of memory before finishing even one batch. "
+                        "This is NOT evidence that no strategy can pass a prop eval on this data -- the "
+                        "search never actually ran. Next steps: (1) re-run with fewer parallel workers "
+                        "(Search settings -> Workers) so each one has more memory headroom, (2) re-run "
+                        "on a shorter slice of the data first to confirm scoring works at all, then scale "
+                        "back up, or (3) check Task Manager/Activity Monitor during the run for memory "
+                        "pressure or a worker process disappearing."
+                    )
+                    db.finish_run(run_id, status="worker_failure")
+                    return SearchSummary(
+                        run_id, space.mode, space.family, len(space.candidates), 0, 0, 0,
+                        None, time.time() - t0, str(db_path), [],
+                    )
                 log(
-                    "No candidates survived Stage 1 even after automatically loosening the filters "
-                    "twice -- nothing to refine or validate. This means the search space itself "
-                    "(the strategy family, or the strategy you provided) doesn't produce a workable "
-                    "number of trades on this data at all, not just a strictness setting. Consider "
-                    "widening the search space, trying a different family, or checking that the "
-                    "market data actually suits the strategy type."
+                    f"No candidates survived Stage 1 even after automatically loosening the filters "
+                    f"twice -- nothing to refine or validate. {n_scored:,} candidate(s) WERE actually "
+                    f"scored (this is a real result about the search space, not a worker problem)"
+                    + (f", {n_skipped:,} were skipped due to worker-pool issues (see above)" if n_skipped else "")
+                    + ". This means the search space itself (the strategy family, or the strategy you "
+                    "provided) doesn't produce a workable number of trades on this data, not just a "
+                    "strictness setting. Concrete next steps: (1) try a different family in Strategy "
+                    "Space (some families assume a session/volatility regime this instrument/timeframe "
+                    "doesn't have), (2) confirm pip_size and timeframe match this data (see the pip-size "
+                    "mismatch check above if it fired), (3) widen n_hypotheses / stage1_top_n so more of "
+                    "the space gets a chance, or (4) check the Strategy Graveyard for this instrument -- "
+                    "if every past run also died here, the data itself (not the search settings) is "
+                    "the more likely cause."
                 )
                 db.finish_run(run_id, status="no_survivors")
                 return SearchSummary(

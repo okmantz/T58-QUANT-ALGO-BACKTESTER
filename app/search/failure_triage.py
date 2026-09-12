@@ -78,8 +78,25 @@ class FailureTriageSummary:
         return self.reason_counts.most_common(n)
 
     def format_log_lines(self, n: int = 8) -> list[str]:
+        if self.total_records == 0:
+            # NOT the same thing as "everything passed" -- this stage
+            # never produced a single scored record at all, which almost
+            # always means every candidate was skipped upstream (a worker
+            # pool stall/crash -- see app.search.batch_runner._drain_futures
+            # and app.evolution.engine._drain_futures) rather than that the
+            # search space has no viable strategy. Reporting this the same
+            # way as a genuine 0-failures pass previously made a worker
+            # crash look identical to "nothing here can work" -- distinct
+            # wording so the two are never confused again.
+            return [
+                f"  {self.stage_label}: 0 candidates were actually scored -- nothing to triage. "
+                f"This is NOT the same as everything passing; it means every candidate was skipped "
+                f"before scoring (most likely a worker-pool stall or crash on this dataset size). "
+                f"Check the log above this line for 'skipped' / 'stalled' / 'terminated' messages "
+                f"before concluding this search space has no edge."
+            ]
         if self.total_failed == 0:
-            return [f"  {self.stage_label}: no failures to triage -- everything passed."]
+            return [f"  {self.stage_label}: no failures to triage -- all {self.total_records} scored candidate(s) passed."]
         lines = [
             f"  {self.stage_label} failure triage: {self.total_failed}/{self.total_records} failed. "
             f"Top reasons:"

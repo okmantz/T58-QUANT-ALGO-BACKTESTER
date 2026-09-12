@@ -40,6 +40,32 @@ def default_graveyard_path() -> Path:
     return get_app_base_dir() / "data" / "evolution" / "strategy_graveyard.jsonl"
 
 
+def _sanitize_path_component(s: str) -> str:
+    # "-" (never "_") for anything not alnum/hyphen, so a sanitized
+    # component can never itself contain the "__" double-underscore this
+    # module uses as the filename's field delimiter (graveyard_path_for) --
+    # an instrument name containing punctuation (e.g. "ES1!") would
+    # otherwise sometimes produce a trailing "_" that collides with the
+    # delimiter and makes the instrument/timeframe unrecoverable from the
+    # filename in list_graveyard_files.
+    s = (s or "unknown").strip().lower()
+    return "".join(c if (c.isalnum() or c == "-") else "-" for c in s) or "unknown"
+
+
+def graveyard_path_for(instrument: str, timeframe: str = "unknown") -> Path:
+    """A stable, PERSISTENT graveyard path shared by every run against the
+    same instrument+timeframe, so rejections actually accumulate across
+    runs instead of disappearing into a one-off file nothing ever reads
+    again. Scoped per-instrument (not one single global file) because a
+    parameter neighborhood dead on ES futures says nothing about whether
+    the same neighborhood is dead on EURUSD -- collapsing everything into
+    one file would let an irrelevant market's history suppress a
+    hypothesis that was never actually tried on THIS data.
+    """
+    fname = f"strategy_graveyard__{_sanitize_path_component(instrument)}__{_sanitize_path_component(timeframe)}.jsonl"
+    return get_app_base_dir() / "data" / "evolution" / fname
+
+
 @dataclass
 class GraveyardEntry:
     candidate_id: str
@@ -130,6 +156,31 @@ def param_signature(family: str, config: dict | None, keys: tuple[str, ...] = ()
         return family + "|" + ",".join(items) if items else family
     except Exception:  # noqa: BLE001 -- signature is a best-effort dedupe key, never load-bearing
         return family
+
+
+def list_graveyard_files() -> list[dict]:
+    """Every persistent, instrument-scoped graveyard file on disk (see
+    graveyard_path_for), newest-modified first, for a browsing UI to pick
+    from. Each dict: {instrument, timeframe, path, n_rows, modified}."""
+    base = get_app_base_dir() / "data" / "evolution"
+    if not base.exists():
+        return []
+    out = []
+    for p in base.glob("strategy_graveyard__*__*.jsonl"):
+        stem = p.stem  # strategy_graveyard__<instrument>__<timeframe>
+        parts = stem.split("__")
+        instrument = parts[1] if len(parts) > 1 else "unknown"
+        timeframe = parts[2] if len(parts) > 2 else "unknown"
+        try:
+            n_rows = sum(1 for _ in p.open("r", encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            n_rows = 0
+        out.append({
+            "instrument": instrument, "timeframe": timeframe, "path": str(p),
+            "n_rows": n_rows, "modified": p.stat().st_mtime,
+        })
+    out.sort(key=lambda d: d["modified"], reverse=True)
+    return out
 
 
 def record_rejection(entry: GraveyardEntry, path: Path | str | None = None) -> None:
