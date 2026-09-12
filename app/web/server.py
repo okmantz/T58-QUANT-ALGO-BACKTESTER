@@ -103,6 +103,9 @@ from app.reports import strategy_state
 from app.scoring.t58_scorecard import score_from_results
 from app.search.batch_runner import SearchCancelled, SearchStageConfig, promote_champion, run_search
 from app.search.family_diversity import render_family_report, summarize_family_performance
+from app.search.graveyard import (
+    graveyard_path_for, list_graveyard_files, load_graveyard, render_graveyard_report, summarize_graveyard,
+)
 from app.search.search_report import generate_search_report
 from app.search.strategy_space import (
     StrategySpaceError, family_description, generate_search_space, hypothesis_question, list_families,
@@ -4676,7 +4679,16 @@ def forge_start():
 
         job_id = uuid.uuid4().hex[:12]
         db_path = str(FORGE_DIR / f"forge_{job_id}.db")
-        graveyard_path = str(FORGE_DIR / f"forge_{job_id}_graveyard.jsonl")
+        # Shared, persistent graveyard path -- deliberately NOT one unique
+        # file per job. A per-job graveyard file was the bug that made the
+        # "map of dead strategy space" pointless: every run wrote its
+        # rejections somewhere no future run (or the /graveyard page) would
+        # ever read again, so nothing ever accumulated and Forge's own
+        # graveyard-feedback pre-filter (app.orchestration.forge, Stage 0)
+        # never had anything to find. One shared file per instrument+
+        # timeframe means a rejection from Monday's run is still visible
+        # (and still skippable) in Friday's.
+        graveyard_path = str(graveyard_path_for(active_label, "unknown"))
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
@@ -4749,6 +4761,39 @@ def forge_job_status(job_id):
         "cohort_pbo": result.cohort_pbo if result else None,
         "elapsed_seconds": result.elapsed_seconds if result else None,
     })
+
+
+@app.route("/graveyard")
+def graveyard_view():
+    """Strategy Graveyard browser -- Owen's ask: 'this should be open
+    source to the user to see exactly what failed and then fed back into
+    the machine to improve subsequent runs.' The feeding-back-in half
+    already happens automatically (see app.orchestration.forge, Stage 0:
+    known-dead parameter neighborhoods are skipped before a single
+    backtest runs); this route is the missing other half -- actually
+    being able to SEE it. Every Forge run against a given instrument+
+    timeframe writes to the same persistent file (app.search.graveyard.
+    graveyard_path_for), so this accumulates across runs instead of
+    resetting every time."""
+    files = list_graveyard_files()
+    selected_path = (request.args.get("path") or "").strip()
+    if not selected_path and files:
+        selected_path = files[0]["path"]
+    rows: list[dict] = []
+    clusters = []
+    if selected_path:
+        rows = load_graveyard(selected_path)
+        clusters = [c.to_dict() for c in summarize_graveyard(rows, top_n=100)]
+    family_filter = (request.args.get("family") or "").strip()
+    if family_filter:
+        clusters = [c for c in clusters if c["family"] == family_filter]
+    all_families = sorted({r.get("family", "?") for r in rows}) if rows else []
+    return render_template(
+        "graveyard.html",
+        files=files, selected_path=selected_path, clusters=clusters,
+        total_rows=len(rows), family_filter=family_filter, all_families=all_families,
+        active_page="graveyard",
+    )
 
 
 # ---------------------------------------------------------------------------
