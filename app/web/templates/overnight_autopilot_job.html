@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Overnight Autopilot Job — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<link rel="stylesheet" href="/static/job-theme.css">
+</head>
+<body>
+<header><h1>T58 Quant Algo Backtester — Overnight Autopilot</h1></header>
+<nav>
+  <a href="/">Run &amp; Report</a>
+  <a href="/overnight-autopilot">New Overnight Autopilot</a>
+</nav>
+<main>
+
+{% if not_found %}
+<div class="error">Job "{{ job_id }}" was not found (the server may have restarted since it ran).</div>
+{% else %}
+
+<div class="card">
+  <h2 id="status-title"><span class="spinner" id="spinner"></span>Overnight Autopilot running&hellip;</h2>
+  <div id="log">Starting&hellip;</div>
+</div>
+
+<div id="verdict-banner-wrap" style="display:none;"><div class="verdict-banner" id="verdict-banner"></div></div>
+
+<div class="card" id="summary-card" style="display:none;">
+  <h2>Result</h2>
+  <div class="headline">
+    <div class="stat"><div class="label">Candidate</div><div class="value" id="s-candidate">-</div></div>
+    <div class="stat"><div class="label">Family</div><div class="value" id="s-family">-</div></div>
+    <div class="stat"><div class="label">Eval pass probability</div><div class="value" id="s-evalpass">-</div></div>
+    <div class="stat"><div class="label">First payout probability</div><div class="value" id="s-payout">-</div></div>
+    <div class="stat"><div class="label">Elapsed</div><div class="value" id="s-elapsed">-</div></div>
+  </div>
+  <h3 style="margin:14px 0 6px;">Forward test</h3>
+  <p class="note" id="s-forward-test"></p>
+  <div class="links" id="s-report-links"></div>
+</div>
+
+<div class="error" id="error-card" style="display:none;"></div>
+
+{% endif %}
+</main>
+
+{% if not not_found %}
+<script>
+  const jobId = {{ job_id | tojson }};
+  const fmt = (v, d) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d === undefined ? 1 : d);
+
+  function poll() {
+    fetch(`/overnight-autopilot/job/${jobId}/status.json`)
+      .then(r => r.json())
+      .then(data => {
+        if (!data.found) return;
+        document.getElementById('log').textContent = data.log.filter(Boolean).join('\n');
+        document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
+
+        if (data.error) {
+          document.getElementById('spinner').style.display = 'none';
+          document.getElementById('status-title').textContent = 'Overnight Autopilot failed';
+          const ec = document.getElementById('error-card');
+          ec.style.display = 'block';
+          ec.textContent = data.error;
+          return;
+        }
+
+        if (data.done) {
+          document.getElementById('spinner').style.display = 'none';
+          document.getElementById('status-title').textContent = 'Overnight Autopilot complete';
+          const s = data.summary;
+          if (s) {
+            const wrap = document.getElementById('verdict-banner-wrap');
+            wrap.style.display = 'block';
+            const banner = document.getElementById('verdict-banner');
+            document.getElementById('summary-card').style.display = 'block';
+            if (s.winner) {
+              banner.className = 'verdict-banner verdict-' + s.winner.verdict;
+              banner.textContent = `WINNER: ${s.winner.verdict}`;
+              document.getElementById('s-candidate').textContent = s.winner.candidate_id;
+              document.getElementById('s-family').textContent = s.winner.family || 'unknown';
+              document.getElementById('s-evalpass').textContent = fmt(s.winner.eval_pass_probability) + '%';
+              document.getElementById('s-payout').textContent = fmt(s.winner.first_payout_probability) + '%';
+              const links = document.getElementById('s-report-links');
+              links.innerHTML = '';
+              if (s.winner.report_html) links.innerHTML += `<a href="${s.winner.report_html}" target="_blank">Open winner's full report &rarr;</a>`;
+            } else {
+              banner.className = 'verdict-banner verdict-NONE';
+              banner.textContent = 'NO WINNER FOUND';
+            }
+            document.getElementById('s-elapsed').textContent = fmt(s.elapsed_seconds, 0) + 's';
+            document.getElementById('s-forward-test').textContent = s.forward_test_message || '';
+          }
+          return;  // stop polling
+        }
+        setTimeout(poll, 2000);
+      })
+      .catch(() => setTimeout(poll, 3000));
+  }
+  poll();
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+  }
+</script>
+{% endif %}
+</body>
+</html>

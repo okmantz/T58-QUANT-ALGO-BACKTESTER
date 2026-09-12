@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Overnight Autopilot — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  .card p.help { font-size: 12px; color: #888; margin: 0 0 10px; line-height: 1.5; }
+  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  input[type=number], select { width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 15px; }
+  input[type=file] { width: 100%; color: #ccc; }
+  .row { display: flex; gap: 10px; }
+  .row > div { flex: 1; }
+  .submit-btn { width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: #04120e; font-size: 16px; font-weight: 700; margin-top: 6px; box-shadow: 0 0 22px rgba(53,224,176,0.35); }
+  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+</style>
+</head>
+<body>
+{% set active_page = active_page|default('overnight_autopilot') %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Overnight autopilot</h1>
+  <p>One button: runs Speed Run's discover-then-validate search and, on a READY/MARGINAL winner,
+  automatically starts a live MT5 demo forward test of it -- then writes one report you can read once
+  it's done. This can't finish a full forward-test evaluation overnight (forward testing is a live,
+  ongoing process) -- what you get is a completed search and, if it qualified, a winner already live
+  and trading. The forward-test step only actually starts something if this server is running on the
+  same Windows machine as a logged-in MT5 demo terminal; otherwise it's skipped with a clear note in
+  the report, and you still get the full search + winner.</p>
+</div>
+
+{% if error %}
+<div class="error">{{ error }}</div>
+{% endif %}
+
+<form method="post" action="/overnight-autopilot/start" enctype="multipart/form-data">
+
+  <div class="card">
+    <h2>1. Market data</h2>
+    {% if stored_datasets %}
+    <label>Use a previously stored dataset</label>
+    <select name="existing_dataset">
+      <option value="">— none —</option>
+      {% for g in dataset_groups %}
+      <optgroup label="{{ g.instrument }}">
+        {% for file in g.files %}
+        <option value="{{ file.full_name }}">{{ file.name }}{{ ' — empty' if file.empty else '' }}</option>
+        {% endfor %}
+      </optgroup>
+      {% endfor %}
+    </select>
+    {% endif %}
+    <label>Or upload CSV(s)</label>
+    <input type="file" name="csv_file" accept=".csv,.tsv,.txt,.parquet,.zip,.7z" multiple>
+  </div>
+
+  <div class="card">
+    <h2>2. Risk &amp; prop rules</h2>
+    <div class="row">
+      <div><label>Initial balance ($)</label><input type="number" name="initial_balance" value="100000"></div>
+      <div><label>Account size ($)</label><input type="number" name="account_size" value="100000"></div>
+    </div>
+    <div class="row">
+      <div><label>Risk value</label><input type="number" step="0.1" name="risk_value" value="1.0"></div>
+      <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" value="0.0001"></div>
+    </div>
+    <div class="row">
+      <div><label>Eval profit target (%)</label><input type="number" name="profit_target" value="8"></div>
+      <div><label>Daily loss limit (%)</label><input type="number" name="daily_loss" value="5"></div>
+    </div>
+    <label>Max drawdown (%)</label>
+    <input type="number" name="max_dd" value="10">
+  </div>
+
+  <div class="card">
+    <h2>3. Speed Run settings</h2>
+    <div class="row">
+      <div><label>Max candidates (discovery)</label><input type="number" name="max_candidates" value="1200"></div>
+      <div><label>Stage 1 survivors kept</label><input type="number" name="stage1_top_n" value="24"></div>
+    </div>
+    <div class="row">
+      <div><label>GA population</label><input type="number" name="ga_population" value="8"></div>
+      <div><label>GA generations</label><input type="number" name="ga_generations" value="3"></div>
+    </div>
+    <div class="row">
+      <div><label>Candidates to validate</label><input type="number" name="top_k_to_validate" value="3"></div>
+      <div><label>Max concurrent validations</label><input type="number" name="max_concurrent_validations" value="2"></div>
+    </div>
+    <div class="row">
+      <div><label>Validation folds</label><input type="number" name="validation_folds" value="3"></div>
+      <div><label>Validation final MC sims</label><input type="number" name="validation_final_mc_sims" value="3000"></div>
+    </div>
+    <label><input type="checkbox" name="save_to_library" checked style="width:auto;display:inline-block;margin-right:6px;"> Save every validated candidate to the Strategy Library</label>
+  </div>
+
+  <div class="card">
+    <h2>4. Forward test (if a winner qualifies)</h2>
+    <label><input type="checkbox" name="auto_forward_test" checked style="width:auto;display:inline-block;margin-right:6px;"> Auto-start a live MT5 demo forward test on a READY/MARGINAL winner</label>
+    <div class="row">
+      <div><label>Forward test risk per trade (%)</label><input type="number" step="0.1" name="ft_risk_pct" value="1.0"></div>
+      <div><label>Forward test max trades/day</label><input type="number" name="ft_max_trades_per_day" value="10"></div>
+    </div>
+    <p class="help">Uses whichever MT5 demo account is already saved on this machine (set up once from the
+    desktop app's Forward Test tab). Only Python/PineScript/MQL5 strategies can be forward-tested; a
+    Manual-config winner still gets a full report, just without an auto-started forward test.</p>
+  </div>
+
+  <button class="submit-btn" type="submit">Run Overnight Autopilot</button>
+</form>
+
+</div>
+</div>
+
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+  }
+</script>
+</body>
+</html>
