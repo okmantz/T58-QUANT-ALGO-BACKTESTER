@@ -60,6 +60,41 @@ need a real daily-loss circuit breaker, use the engine's own
 RiskConfig-level enforcement (see app/backtest/risk.py) rather than trying
 to build one inside generate_signals().
 
+WALK-FORWARD RETRAIN CONTEXT (OPTIONAL, for ML-style strategies only)
+----------------------------------------------------------------------
+The "called once over the whole dataset" rule above still holds — this
+does not change generate_signals(df)'s signature or how it's called for
+a normal Run & Report backtest, GA search, or the vast majority of
+strategies. It only affects app.validation.walk_forward_opt's per-fold
+test evaluation, and only for a strategy file that opts in:
+
+    RETRAIN_PER_FOLD = True   # module-level flag, checked via module_flag()
+
+A strategy that FITS ITSELF TO DATA (see strategies/python/
+ml_classifier_direction.py) needs to know a fold's real train/test
+boundary to retrain correctly each fold — otherwise a fold-based harness
+calling generate_signals separately on fold.train_df and fold.test_df
+leaves the strategy re-deriving its own split from whatever fragment it's
+handed, wasting the fold's actual designated training window (this was a
+real bug, fixed by this protocol — see ml_classifier_direction.py's own
+WALK-FORWARD SAFETY section for the before/after). When RETRAIN_PER_FOLD
+is set, app.validation.walk_forward_opt.run_walk_forward_optimization
+calls generate_signals ONCE on `pd.concat([fold.train_df, fold.test_df])`
+instead of on fold.test_df alone, with:
+
+    df.attrs["wf_train_end_index"] = <int, the row position where
+                                        fold.test_df begins>
+
+set on that combined frame. A strategy reading this attr should treat
+rows [0, wf_train_end_index) as training data and only ever emit signals
+at or after it — exactly the same causal-split discipline
+ml_classifier_direction.py already applies via TRAIN_FRAC, just told the
+real boundary instead of guessing one. `df.attrs.get("wf_train_end_index")`
+is absent (None) for every other call path (normal backtests, GA search,
+walkforward_ga.py's own per-fold parameter search), so a strategy that
+checks it with `.get(...)` and falls back to its own TRAIN_FRAC logic
+when it's None needs no other changes to keep working everywhere else.
+
 The module is imported in isolation via importlib so a bad/malicious upload
 cannot silently corrupt the running app's own modules; execution errors are
 caught and surfaced as a clear StrategyError per the spec's requirement that
@@ -103,6 +138,23 @@ class PythonStrategy(Strategy):
         finally:
             sys.modules.pop(module_name, None)
         return module
+
+    def module_flag(self, name: str, default: bool = False) -> bool:
+        """Reads a top-level flag from the strategy file without calling
+        generate_signals -- e.g. RETRAIN_PER_FOLD (see
+        app.validation.walk_forward_opt's module docstring and
+        strategies/python/ml_classifier_direction.py's own WALK-FORWARD
+        SAFETY section), which fold-based harnesses check to decide
+        whether this strategy needs richer train-context each fold rather
+        than the plain single-df call every other strategy gets. Loads
+        the module fresh (same as every other call here) and fails soft
+        (returns `default`) rather than raising, since this is a
+        capability probe, not a real run."""
+        try:
+            module = self._load_module()
+        except StrategyError:
+            return default
+        return bool(getattr(module, name, default))
 
     def generate(self, df: pd.DataFrame) -> StrategyResult:
         module = self._load_module()

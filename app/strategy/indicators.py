@@ -163,6 +163,22 @@ def pair_zscore(frame: pd.DataFrame, period: int = 50, pair_column: str = "pair_
     return ((ratio - mean) / std.replace(0, np.nan)).fillna(0.0)
 
 
+def news_feature_column(frame: pd.DataFrame, column: str) -> pd.Series:
+    """Reads a column app.data.economic_calendar.merge_news_features()
+    already merged into `frame` (minutes_since_high_impact_news /
+    minutes_until_high_impact_news). Same contract as pair_ratio() above:
+    raises KeyError if the merge step hasn't happened yet, so a
+    calendar-dependent family fails loudly rather than silently trading
+    on garbage/NaN."""
+    if column not in frame.columns:
+        raise KeyError(
+            f"'{column}' not found in market data -- an economic-calendar strategy "
+            "requires news features to be merged in first via "
+            "app.data.economic_calendar.merge_news_features()."
+        )
+    return frame[column]
+
+
 def _wilder_smooth(series: pd.Series, period: int) -> pd.Series:
     """Wilder's smoothing (equivalent to an EMA with alpha=1/period) -- the
     specific averaging method ADX/+DI/-DI and Wilder's own RSI are defined
@@ -713,6 +729,278 @@ def volume_profile(frame: pd.DataFrame, period: int = 100, n_bins: int = 24, val
     return pd.Series(poc, index=idx), pd.Series(vah, index=idx), pd.Series(val, index=idx)
 
 
+# ---------------------------------------------------------------------------
+# Expansion round 8 (Sep 2026) -- lower-lag trend MAs, trend-strength
+# confirmation, a first-class squeeze indicator, volume/price-distribution
+# complements, and two short-term mean-reversion oscillators. See
+# app.search.strategy_space for the new families built on top of these.
+# ---------------------------------------------------------------------------
+
+def hma(series: pd.Series, period: int = 20) -> pd.Series:
+    """Hull Moving Average -- WMA(2*WMA(n/2) - WMA(n), sqrt(n)). Removes far
+    more lag than a plain WMA/EMA of the same period at the cost of a small
+    overshoot on sharp reversals; a common fast-entry MA in prop-eval-style
+    scalping where a standard EMA reacts too slowly to matter within a
+    challenge's time limit."""
+    p = _period(period)
+    half = max(p // 2, 1)
+    sqrt_p = max(int(round(np.sqrt(p))), 1)
+    raw = 2 * wma(series, half) - wma(series, p)
+    return wma(raw, sqrt_p)
+
+
+def dema(series: pd.Series, period: int = 20) -> pd.Series:
+    """Double EMA -- 2*EMA(n) - EMA(EMA(n)). Cuts EMA lag roughly in half by
+    subtracting out the lag of a second EMA pass."""
+    e1 = ema(series, period)
+    e2 = ema(e1, period)
+    return 2 * e1 - e2
+
+
+def tema(series: pd.Series, period: int = 20) -> pd.Series:
+    """Triple EMA -- 3*EMA(n) - 3*EMA(EMA(n)) + EMA(EMA(EMA(n))). Lower lag
+    still than DEMA, at the cost of more overshoot/whipsaw in a genuine
+    chop regime -- the standard tradeoff every lower-lag MA in this section
+    makes."""
+    e1 = ema(series, period)
+    e2 = ema(e1, period)
+    e3 = ema(e2, period)
+    return 3 * e1 - 3 * e2 + e3
+
+
+def kama(series: pd.Series, period: int = 10, fast_period: int = 2, slow_period: int = 30) -> pd.Series:
+    """Kaufman's Adaptive Moving Average -- an EMA whose smoothing constant
+    is itself driven by an efficiency ratio (net directional move over the
+    window / sum of bar-to-bar absolute moves), so it hugs price tightly in
+    a clean trend and flattens out (barely moving) in chop, without needing
+    a separate regime filter the way a fixed-period MA would."""
+    p = _period(period)
+    change = (series - series.shift(p)).abs()
+    volatility = series.diff().abs().rolling(p, min_periods=p).sum()
+    efficiency_ratio = (change / volatility.replace(0, np.nan)).fillna(0.0)
+    fast_sc = 2.0 / (max(fast_period, 1) + 1)
+    slow_sc = 2.0 / (max(slow_period, 1) + 1)
+    smoothing_constant = (efficiency_ratio * (fast_sc - slow_sc) + slow_sc) ** 2
+
+    values = series.to_numpy(dtype=float)
+    sc = smoothing_constant.to_numpy(dtype=float)
+    out = np.full(len(values), np.nan)
+    start = p
+    if start >= len(values):
+        return pd.Series(out, index=series.index)
+    out[start] = values[start]
+    for i in range(start + 1, len(values)):
+        prev = out[i - 1]
+        if np.isnan(prev):
+            out[i] = values[i]
+            continue
+        step = sc[i] if not np.isnan(sc[i]) else slow_sc
+        out[i] = prev + step * (values[i] - prev)
+    return pd.Series(out, index=series.index)
+
+
+def vortex(frame: pd.DataFrame, period: int = 14) -> tuple[pd.Series, pd.Series]:
+    """Vortex Indicator (VI+/VI-) -- trend-strength/direction confirmation,
+    cheap to add given True Range already exists (adx() above already
+    builds its own True-Range-based smoothing). VM+ / VM- are the absolute
+    distance between the current high/prior low and current low/prior high;
+    each is Wilder-summed over `period` and normalized by summed True
+    Range. A VI+/VI- crossover is the standard entry trigger; both lines
+    trending apart signals a strengthening trend either direction."""
+    p = _period(period)
+    vm_plus = (frame["high"] - frame["low"].shift(1)).abs()
+    vm_minus = (frame["low"] - frame["high"].shift(1)).abs()
+    tr_sum = true_range(frame).rolling(p, min_periods=p).sum()
+    vi_plus = vm_plus.rolling(p, min_periods=p).sum() / tr_sum.replace(0, np.nan)
+    vi_minus = vm_minus.rolling(p, min_periods=p).sum() / tr_sum.replace(0, np.nan)
+    return vi_plus.fillna(1.0), vi_minus.fillna(1.0)
+
+
+def elder_ray(frame: pd.DataFrame, period: int = 13) -> tuple[pd.Series, pd.Series]:
+    """Elder Ray (Bull Power / Bear Power) -- Dr. Alexander Elder's trend-
+    strength confirmation pair: an EMA defines the consensus trend, and
+    Bull Power (high - EMA) / Bear Power (low - EMA) measure how far bulls/
+    bears pushed price away from it on the current bar. Cheap to add given
+    ema() already exists; a common confirmation layer alongside ADX/Aroon
+    for "is this trend actually still being pushed, or just drifting"."""
+    baseline = ema(frame["close"], period)
+    bull_power = frame["high"] - baseline
+    bear_power = frame["low"] - baseline
+    return bull_power, bear_power
+
+
+def ttm_squeeze(frame: pd.DataFrame, bb_period: int = 20, bb_mult: float = 2.0,
+                 kc_period: int = 20, kc_mult: float = 1.5, momentum_period: int = 12) -> tuple[pd.Series, pd.Series]:
+    """TTM Squeeze as a first-class, standalone indicator -- returns
+    (squeeze_on, momentum). Prior to this, a Bollinger-inside-Keltner
+    squeeze only existed implicitly as the `keltner_squeeze_breakout`
+    strategy family's own inline condition (bollinger_upper < keltner_upper
+    AND bollinger_lower > keltner_lower); this gives that same test a
+    reusable name plus John Carter's momentum "dot" -- a linear-regression
+    value of (close - average of [midpoint of highest-high/lowest-low over
+    kc_period, and an SMA of close over kc_period]) over momentum_period --
+    so a squeeze release can be read as bullish/bearish, not just on/off.
+    squeeze_on is a bool Series (True while compressed); momentum is a
+    signed float Series (its zero-crossings/slope are the usual triggers
+    once a squeeze fires)."""
+    _, bb_upper, bb_lower = bollinger(frame["close"], bb_period, bb_mult)
+    _, kc_upper, kc_lower = keltner(frame, kc_period, kc_mult)
+    squeeze_on = (bb_lower > kc_lower) & (bb_upper < kc_upper)
+
+    p = _period(kc_period)
+    hh = highest_high(frame["high"], p)
+    ll = lowest_low(frame["low"], p)
+    donchian_mid = (hh + ll) / 2.0
+    sma_close = sma(frame["close"], p)
+    reference = (donchian_mid + sma_close) / 2.0
+    deviation = frame["close"] - reference
+
+    mp = _period(momentum_period)
+    x = np.arange(mp, dtype=float)
+    x_mean = x.mean()
+    denom = ((x - x_mean) ** 2).sum()
+
+    def _linreg_last(values: np.ndarray) -> float:
+        if denom == 0 or np.isnan(values).any():
+            return np.nan
+        slope = ((x - x_mean) * (values - values.mean())).sum() / denom
+        intercept = values.mean() - slope * x_mean
+        return slope * x[-1] + intercept
+
+    momentum = deviation.rolling(mp, min_periods=mp).apply(_linreg_last, raw=True)
+    return squeeze_on.fillna(False), momentum
+
+
+def vwma(frame: pd.DataFrame, period: int = 20, column: str = "close") -> pd.Series:
+    """Volume-Weighted Moving Average -- sum(price*volume)/sum(volume) over
+    a rolling window. A common complement to plain SMA/EMA trend lines that
+    weights the bars where real size actually traded more heavily; falls
+    back to a plain SMA (volume=1 for every bar) when no volume column is
+    present, same convention as every other volume-aware indicator here."""
+    p = _period(period)
+    volume = frame["volume"] if "volume" in frame.columns else pd.Series(1.0, index=frame.index)
+    price = frame[column] if column in frame.columns else frame["close"]
+    pv = (price * volume).rolling(p, min_periods=p).sum()
+    vsum = volume.rolling(p, min_periods=p).sum()
+    return pv / vsum.replace(0, np.nan)
+
+
+def accumulation_distribution(frame: pd.DataFrame) -> pd.Series:
+    """Accumulation/Distribution Line -- a running (non-windowed) cumulative
+    volume-flow line, unlike CMF/OBV which already exist here: CMF is a
+    BOUNDED rolling-window ratio and OBV only looks at close-to-close
+    direction, ignoring where in the bar's own range the close landed. ADL
+    uses the close's location within each bar's own high-low range (the
+    Money Flow Multiplier) times that bar's volume, cumulatively summed --
+    the standard building block chaikin_oscillator() below differences."""
+    high, low, close = frame["high"], frame["low"], frame["close"]
+    volume = frame["volume"] if "volume" in frame.columns else pd.Series(1.0, index=frame.index)
+    range_ = (high - low).replace(0, np.nan)
+    money_flow_multiplier = ((close - low) - (high - close)) / range_
+    money_flow_multiplier = money_flow_multiplier.fillna(0.0)
+    money_flow_volume = money_flow_multiplier * volume
+    return money_flow_volume.cumsum()
+
+
+def chaikin_oscillator(frame: pd.DataFrame, fast_period: int = 3, slow_period: int = 10) -> pd.Series:
+    """Chaikin Oscillator -- EMA(fast) - EMA(slow) of the Accumulation/
+    Distribution Line above, the standard MACD-style momentum-of-volume-flow
+    read on top of it (a rising ADL that's also accelerating vs. one that's
+    merely drifting upward)."""
+    adl = accumulation_distribution(frame)
+    return ema(adl, fast_period) - ema(adl, slow_period)
+
+
+def fisher_transform(frame: pd.DataFrame, period: int = 10) -> tuple[pd.Series, pd.Series]:
+    """Ehlers' Fisher Transform -- returns (fisher, fisher_signal). Rescales
+    the rolling position of price within its own high/low range to [-1, 1]
+    (clamped just short of the +-1 asymptotes) and applies the inverse
+    hyperbolic tangent, which sharpens turning points into distinct,
+    Gaussian-ish peaks -- a popular short-term mean-reversion trigger that
+    reads more cleanly than a bounded oscillator like RSI/Stochastic right
+    at extremes, where those saturate and flatten instead of peaking."""
+    p = _period(period)
+    high, low = frame["high"], frame["low"]
+    typical = (high + low) / 2.0
+    hh = typical.rolling(p, min_periods=p).max()
+    ll = typical.rolling(p, min_periods=p).min()
+    raw_range = (hh - ll).replace(0, np.nan)
+    normalized = 2.0 * ((typical - ll) / raw_range - 0.5)
+    normalized = normalized.fillna(0.0).clip(-0.999, 0.999)
+
+    values = normalized.to_numpy(dtype=float)
+    fisher = np.zeros(len(values))
+    smoothed = 0.0
+    for i in range(1, len(values)):
+        smoothed = 0.33 * values[i] + 0.67 * smoothed
+        smoothed = min(max(smoothed, -0.999), 0.999)
+        fisher[i] = 0.5 * np.log((1 + smoothed) / (1 - smoothed)) + 0.5 * fisher[i - 1]
+    fisher_series = pd.Series(fisher, index=frame.index)
+    return fisher_series, fisher_series.shift(1)
+
+
+def connors_rsi(frame: pd.DataFrame, rsi_period: int = 3, streak_period: int = 2, rank_period: int = 100) -> pd.Series:
+    """Connors RSI -- the average of three components, each bounded 0-100:
+    (1) a short RSI(3) of price itself, (2) an RSI of the current up/down
+    STREAK length (how many consecutive bars price has closed the same
+    direction, signed), and (3) the percentile rank of today's 1-bar return
+    among the trailing `rank_period` bars' 1-bar returns. Popular short-
+    term mean-reversion signal that reads faster and cleaner than a plain
+    RSI at the same short period, since a lone RSI(3) alone is dominated by
+    noise."""
+    close = frame["close"]
+    price_rsi = rsi(close, rsi_period)
+
+    change = close.diff()
+    direction = np.sign(change).fillna(0.0)
+    streak = np.zeros(len(close))
+    for i in range(1, len(close)):
+        if direction.iloc[i] == 0:
+            streak[i] = 0.0
+        elif direction.iloc[i] == direction.iloc[i - 1]:
+            streak[i] = streak[i - 1] + direction.iloc[i]
+        else:
+            streak[i] = direction.iloc[i]
+    streak_series = pd.Series(streak, index=close.index)
+    streak_rsi = rsi(streak_series, streak_period)
+
+    one_bar_return = close.pct_change(1)
+    p = _period(rank_period)
+
+    def _percent_rank(values: np.ndarray) -> float:
+        if np.isnan(values[-1]):
+            return np.nan
+        return 100.0 * (values[:-1] < values[-1]).sum() / (len(values) - 1) if len(values) > 1 else 50.0
+
+    percent_rank = one_bar_return.rolling(p + 1, min_periods=p + 1).apply(_percent_rank, raw=True)
+
+    return ((price_rsi + streak_rsi + percent_rank.fillna(50.0)) / 3.0).fillna(50.0)
+
+
+def average_daily_range(frame: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Average Daily Range (ADR) -- an explicit named indicator, distinct
+    from candle_range() (per-BAR range) and atr() (Wilder-smoothed, still
+    per-bar). Groups bars by calendar day, takes each day's own (high-low)
+    range, and returns the rolling `period`-day average of that -- the
+    "how much room is typically left in a day" figure used constantly for
+    prop-firm intraday position sizing and same-day "how much of today's
+    ADR has already printed" checks. Forward-filled across every intraday
+    bar of a day so it lines up with an intraday index like every other
+    indicator here, rather than being its own daily-only series."""
+    ts = pd.to_datetime(frame["timestamp"])
+    day = ts.dt.normalize()
+    daily_high = frame["high"].groupby(day).transform("max")
+    daily_low = frame["low"].groupby(day).transform("min")
+    daily_range = (daily_high - daily_low)
+    # One range value per calendar day, then a rolling mean of the last
+    # `period` DAYS (not bars) of those values, forward-filled back onto
+    # every intraday bar.
+    per_day = daily_range.groupby(day).first()
+    p = _period(period)
+    adr_by_day = per_day.rolling(p, min_periods=p).mean()
+    return day.map(adr_by_day)
+
+
 def crossover(a: pd.Series, b: pd.Series) -> pd.Series:
     return (a > b) & (a.shift(1) <= b.shift(1))
 
@@ -895,6 +1183,45 @@ def _build_indicator_series_uncached(frame: pd.DataFrame, kind: str, period: int
         return volume_profile(frame, p)[1]
     if kind == "volume_profile_val":
         return volume_profile(frame, p)[2]
+    # Expansion round 8.
+    if kind == "hma":
+        return hma(source, p)
+    if kind == "dema":
+        return dema(source, p)
+    if kind == "tema":
+        return tema(source, p)
+    if kind == "kama":
+        return kama(source, p)
+    if kind == "vortex_plus":
+        return vortex(frame, p)[0]
+    if kind == "vortex_minus":
+        return vortex(frame, p)[1]
+    if kind == "elder_bull_power":
+        return elder_ray(frame, p)[0]
+    if kind == "elder_bear_power":
+        return elder_ray(frame, p)[1]
+    if kind == "ttm_squeeze_on":
+        return ttm_squeeze(frame, kc_period=p)[0].astype(int)
+    if kind == "ttm_squeeze_momentum":
+        return ttm_squeeze(frame, kc_period=p)[1]
+    if kind == "vwma":
+        return vwma(frame, p, column)
+    if kind == "adl":
+        return accumulation_distribution(frame)
+    if kind == "chaikin_oscillator":
+        return chaikin_oscillator(frame)
+    if kind == "fisher_transform":
+        return fisher_transform(frame, p)[0]
+    if kind == "fisher_transform_signal":
+        return fisher_transform(frame, p)[1]
+    if kind == "connors_rsi":
+        return connors_rsi(frame)
+    if kind == "adr":
+        return average_daily_range(frame, p)
+    if kind == "news_minutes_since_high_impact":
+        return news_feature_column(frame, "minutes_since_high_impact_news")
+    if kind == "news_minutes_until_high_impact":
+        return news_feature_column(frame, "minutes_until_high_impact_news")
     raise KeyError(kind)
 
 

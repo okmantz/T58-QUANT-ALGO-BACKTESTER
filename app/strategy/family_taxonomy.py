@@ -156,6 +156,22 @@ _SKELETON_TO_GROUP: dict[str, str] = {
     "fibonacci_retracement_bounce": "pullback",
     "trix_zero_cross_momentum": "momentum",
     "volume_profile_value_area_fade": "mean_reversion",
+    # -- Expansion round 8 (Sep 2026): 13 new families -- 8 built on this
+    # round's new indicators, plus economic-calendar (2), intermarket-
+    # correlation (1), carry/rollover (1), and multi-day swing (1).
+    "hma_trend_following": "trend_following",
+    "vortex_trend_strength_breakout": "breakout",
+    "elder_ray_bull_bear_power": "pullback",
+    "ttm_squeeze_momentum_breakout": "volatility_contraction",
+    "vwma_trend_pullback": "pullback",
+    "chaikin_oscillator_momentum_confirmation": "order_flow",
+    "fisher_transform_extreme_reversion": "mean_reversion",
+    "connors_rsi_extreme_reversion": "mean_reversion",
+    "economic_calendar_news_spike_fade": "mean_reversion",
+    "economic_calendar_pre_release_compression": "volatility_contraction",
+    "intermarket_correlation_trend": "relative_strength",
+    "carry_rollover_trend": "trend_following",
+    "multi_day_swing_trend_continuation": "trend_following",
 }
 
 # Path 2a: app.strategy.dna active_tags() -> canonical group. Checked in

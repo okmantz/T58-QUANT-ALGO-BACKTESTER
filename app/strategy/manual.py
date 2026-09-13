@@ -115,7 +115,16 @@ class ManualStrategy(Strategy):
                     "choppiness_index", "dpo", "anchored_vwap",
                     "linreg_mid", "linreg_upper", "linreg_lower",
                     "correlation", "chandelier_long", "chandelier_short",
-                    "volume_profile_poc", "volume_profile_vah", "volume_profile_val"}:
+                    "volume_profile_poc", "volume_profile_vah", "volume_profile_val",
+                    # Expansion round 8 indicators -- see app.strategy.indicators.
+                    "hma", "dema", "tema", "kama",
+                    "vortex_plus", "vortex_minus",
+                    "elder_bull_power", "elder_bear_power",
+                    "ttm_squeeze_on", "ttm_squeeze_momentum",
+                    "vwma", "adl", "chaikin_oscillator",
+                    "fisher_transform", "fisher_transform_signal",
+                    "connors_rsi", "adr",
+                    "news_minutes_since_high_impact", "news_minutes_until_high_impact"}:
             return build_indicator_series(work, kind, period=period, column=field, lookback=lookback)
 
         if kind == "time_of_day":
