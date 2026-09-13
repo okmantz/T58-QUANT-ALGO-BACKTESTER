@@ -22,17 +22,61 @@ line equally.
 from __future__ import annotations
 
 
-def after_evolution_stop(leaderboard_size: int) -> str:
+def _pbo_note(n_tested: int, threshold: int = 2, hard_threshold: int = 20) -> str:
+    """Shared multiple-comparisons warning for after_search_complete and
+    after_evolution_stop. `n_tested` should be the largest honest count of
+    "how many independent candidates were compared to produce this pick"
+    that the caller has on hand -- total_candidates/total_evaluated when
+    available (the real pool size PBO cares about), falling back to
+    leaderboard_size (survivors only, an undercount, but still >1 means a
+    selection happened). PBO (compute_pbo() in app.validation.cpcv) is the
+    genuine, textbook answer to "is picking the best backtest the same as
+    picking noise" -- it needs the pool of candidates as input, which is
+    exactly the leaderboard this function already has; it does not run
+    itself here, both because it needs the price data + candidate specs
+    (this module stays pure-string, no I/O) and because it's expensive
+    enough (many backtests per candidate per path) that it should be an
+    explicit, opt-in action -- CPCV / PBO tab (route /cpcv, desktop tab
+    "09 -- CPCV / PBO") -- not something that runs silently after every
+    search.
+    """
+    if n_tested < threshold:
+        return ""
+    urgency = (
+        f"With {n_tested} candidates tried, treat this pick with real suspicion until PBO says otherwise -- "
+        if n_tested >= hard_threshold
+        else f"With {n_tested} candidates compared, "
+    )
+    return (
+        f" {urgency}the more variants you test, the more likely the single best one is just the luckiest "
+        "roll of the batch rather than a genuine edge (the multiple-comparisons problem). Before trusting "
+        "profit factor or Sharpe alone to declare a winner, run this same candidate pool through CPCV / "
+        "PBO (VALIDATE -> CPCV / PBO tab, or the app's --pbo CLI flag for a full multi-candidate run): a "
+        "Probability of Backtest Overfitting comfortably under 50% means the pick likely reflects a real "
+        "edge, not noise; at or above 50% means picking this 'winner' was statistically no better than a "
+        "coin flip and you should treat the whole batch as unproven."
+    )
+
+
+def after_evolution_stop(leaderboard_size: int, total_evaluated: int | None = None) -> str:
+    """`total_evaluated`: optional, the honest count of candidates this run
+    actually tried (e.g. generations completed x population size) --
+    pass it when the caller has it (see app.evolution.engine.EvolutionRunner's
+    generation count and cfg.population_size) so the multiple-comparisons
+    note below reflects the real search size, not just how many survived
+    onto the leaderboard. Falls back to leaderboard_size if omitted."""
     if leaderboard_size <= 0:
         return (
             "Next step: no candidate cleared the pre-filter yet. Let it run more generations, or try a "
             "different family selection -- there's nothing to promote until at least one candidate "
             "appears on the leaderboard."
         )
+    pbo_note = _pbo_note(total_evaluated if total_evaluated is not None else leaderboard_size)
     return (
         f"Next step: pick your best candidate from the {leaderboard_size}-strategy leaderboard above and "
         "click PROMOTE. That saves it to the Strategy Library -- from there, run it through the "
-        "Validation Lab (walk-forward + CPCV) or straight through Full Pipeline for a re-validated verdict."
+        "Validation Lab (walk-forward + CPCV) or straight through Full Pipeline for a re-validated "
+        f"verdict.{pbo_note}"
     )
 
 
@@ -45,14 +89,23 @@ def after_promote_to_library(filename: str) -> str:
     )
 
 
-def after_search_complete(champion_candidate_id: str | None, leaderboard_size: int) -> str:
+def after_search_complete(
+    champion_candidate_id: str | None, leaderboard_size: int, total_candidates: int | None = None,
+) -> str:
+    """`total_candidates`: optional, the total number of candidates this
+    search actually generated/tried (see app.search.batch_runner.SearchSummary
+    .total_candidates) -- pass it when available so the multiple-comparisons
+    note reflects the real pool size (usually far larger than the
+    leaderboard, which is only Stage 3 survivors). Falls back to
+    leaderboard_size if omitted."""
+    n_tested = total_candidates if total_candidates is not None else leaderboard_size
     if not champion_candidate_id:
         if leaderboard_size > 0:
             return (
                 "Next step: no candidate passed every Stage 3 gate, but the leaderboard above has "
                 f"{leaderboard_size} candidate(s) that made it partway. Promote the top one and run it "
                 "through Full Pipeline anyway, or widen the search (more families / more candidates) and "
-                "run again."
+                f"run again.{_pbo_note(n_tested)}"
             )
         return (
             "Next step: nothing survived Stage 1 at all. Try a wider family selection, a higher "
@@ -61,7 +114,7 @@ def after_search_complete(champion_candidate_id: str | None, leaderboard_size: i
     return (
         f"Champion candidate found: {champion_candidate_id}. Next step: click PROMOTE next to it, then run "
         "it through Full Pipeline for a re-validated, walk-forward-optimized final verdict before "
-        "considering it for a live prop-firm evaluation."
+        f"considering it for a live prop-firm evaluation.{_pbo_note(n_tested)}"
     )
 
 
@@ -134,33 +187,58 @@ def after_first_backtest(stats: dict, passed_evaluation: bool | None = None) -> 
     if trade_count == 0:
         return (
             "Next step: this strategy generated zero trades on this data. Before touching risk or "
-            "prop rules, check the strategy's own entry logic -- too strict a condition, a timeframe "
-            "mismatch, or (for Manual Builder) an indicator combination that never actually triggers "
-            "are the usual causes. Nothing downstream (Monte Carlo, prop simulation, Search Lab, "
-            "Evolution Lab) can produce a meaningful result until at least a handful of trades appear."
+            "prop rules (03 Prop-Firm Rules / 04 Risk & Execution won't matter until trades exist), fix "
+            "the entry logic itself: for Manual Builder, open 1 Strategy Configuration and check each "
+            "indicator/condition row -- an overly narrow threshold (e.g. RSI < 5 instead of < 30) or two "
+            "conditions that can never be true at the same bar are the usual causes; for an uploaded "
+            "Python/PineScript/MQL5 strategy, check the entry condition function directly for a logic "
+            "bug or a symbol/column name that doesn't match this dataset. Also confirm on 2 Market Data "
+            "that the loaded timeframe actually matches what the strategy expects (a strategy written "
+            "for M15 checked against daily bars will often just never fire). Nothing downstream (Monte "
+            "Carlo, prop simulation, Search Lab, Evolution Lab) can produce a meaningful result until at "
+            "least a handful of trades appear -- re-run 5 Run & Report after each change."
         )
     if trade_count < 20:
         return (
             f"Next step: only {trade_count} trade(s) over this data -- too few for Monte Carlo or a "
             "prop-firm simulation to say much with confidence (both resample from whatever trades "
-            "exist, so a handful of trades just gets resampled a lot, not made more reliable). Try a "
-            "longer data range, a lower timeframe, or a less restrictive entry condition before "
-            "trusting any pass-probability number from this run."
+            "exist, so a handful of trades just gets resampled a lot, not made more reliable; treat any "
+            "pass-probability number from this run as noise until this number is well past 20-30). Three "
+            "concrete ways to get more: on 2 Market Data, load a longer date range or a lower timeframe "
+            "(M15 instead of H4, for example) for more bars to trade against; on 1 Strategy Configuration, "
+            "loosen the entry condition's threshold (e.g. widen an RSI band, shorten a lookback period) so "
+            "it fires more often; or, if the strategy is fundamentally low-frequency by design, accept "
+            "that and skip straight to Search Lab/Evolution Lab across a wider instrument/timeframe set "
+            "rather than trying to force more signals out of this one config."
         )
     if profit_factor is not None and profit_factor < 1.0:
         return (
             f"Next step: profit factor {profit_factor:.2f} means this version loses money over this "
-            "data. Don't chase it with Monte Carlo or Full Pipeline yet -- either adjust the strategy's "
-            "own parameters by hand, run it through Search Lab or Evolution Lab to explore variations "
-            "and other families automatically, or try a different instrument/timeframe."
+            "data -- don't chase it with Monte Carlo, Search Lab's parameter perturbations, or Full "
+            "Pipeline yet, since optimizing a losing edge just finds the least-bad way to still lose. "
+            "Fix the edge first: open 5 Run & Report's trade breakdown and check win rate and average "
+            "win/loss size specifically -- a low win rate with small wins/big losses points to the exit "
+            "logic (tighten the stop-loss or add a profit target on 1 Strategy Configuration / 4 Risk & "
+            "Execution), while a decent win rate that still nets negative points to the entry filter "
+            "being too loose (add a confirming condition, e.g. a higher-timeframe trend filter). If it's "
+            "a Manual Builder strategy, adjust those indicator settings by hand and re-run; if it's an "
+            "uploaded or generated strategy, let Search Lab (structured, three-stage) or Evolution Lab "
+            "(open-ended GA) explore parameter variations and other families automatically instead of "
+            "hand-tuning code. If none of that moves profit factor above 1.0 after a few honest tries, "
+            "try a different instrument or timeframe before spending more time on this exact setup."
         )
     if max_dd is not None and max_dd > 40:
         return (
             f"Next step: max drawdown {max_dd:.1f}% is severe for most prop-firm limits (many cap "
             "overall drawdown around 8-10%). A profitable-on-average strategy with a drawdown this "
             "deep will fail almost every prop-firm simulation despite a decent profit factor -- tighten "
-            "the stop-loss/position sizing, or lower risk per trade on 04 Risk & Execution, before "
-            "moving on."
+            "risk before anything else: on 4 Risk & Execution, lower the position-size / risk-per-trade "
+            "percentage first (the fastest lever), then check whether a stop-loss is set at all and "
+            "tighten it if it's wide or missing; if the strategy relies on a wide stop by design, reduce "
+            "position size further to compensate rather than removing the stop. Re-run 5 Run & Report "
+            "after each change and confirm max drawdown has actually come down before moving on to "
+            "Monte Carlo or Full Pipeline -- a good profit factor with an unfixed drawdown problem will "
+            "still fail a prop evaluation."
         )
     if passed_evaluation is False:
         return (
