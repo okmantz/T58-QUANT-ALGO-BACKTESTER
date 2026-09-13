@@ -3521,18 +3521,26 @@ class MainWindow:
         )
 
         h2("After your very first backtest (TEST → Run & Report)")
-        bullet("Zero trades generated → don't touch risk or prop rules yet. Check the strategy's own entry "
-               "logic first — too strict a condition, a timeframe mismatch, or (Manual Builder) an "
-               "indicator combination that never actually fires are the usual causes.")
+        bullet("Zero trades generated → fix the entry logic before touching risk or prop rules (nothing "
+               "downstream matters until trades exist). Manual Builder: open 1 Strategy Configuration and "
+               "check each indicator/condition row for an overly narrow threshold or two conditions that "
+               "can never both be true. Uploaded code: check the entry function directly. Either way, "
+               "confirm on 2 Market Data that the loaded timeframe matches what the strategy expects.")
         bullet("Fewer than ~20 trades → too few for Monte Carlo or a prop simulation to say much with "
-               "confidence. Try a longer data range, a lower timeframe, or a looser entry condition "
-               "before trusting any pass-probability number from this run.")
-        bullet("Profit factor below 1.0 → this version loses money over this data. Don't chase it with "
-               "Full Pipeline yet — adjust it by hand, or let Search Lab / Evolution Lab explore "
-               "variations and other families automatically.")
+               "confidence; treat any pass-probability number as noise until this is well past 20-30. "
+               "On 2 Market Data, load a longer date range or a lower timeframe; on 1 Strategy "
+               "Configuration, loosen the entry threshold so it fires more often.")
+        bullet("Profit factor below 1.0 → fix the edge first, don't optimize a losing strategy. Open 5 "
+               "Run & Report's trade breakdown: low win rate + small wins/big losses → tighten the "
+               "stop-loss or add a profit target (1 Strategy Configuration / 4 Risk & Execution); decent "
+               "win rate but still net-negative → the entry filter is too loose, add a confirming "
+               "condition. Manual Builder: adjust by hand. Generated/uploaded: let Search Lab or "
+               "Evolution Lab explore variations instead of hand-tuning code.")
         bullet("Max drawdown above ~40% → severe for most prop-firm limits (many cap overall drawdown "
-               "around 8-10%). Tighten the stop-loss or lower risk per trade on 04 Risk & Execution "
-               "before moving on, even if the profit factor looks fine.")
+               "around 8-10%). On 4 Risk & Execution, lower position size / risk-per-trade first (the "
+               "fastest lever), then tighten or add a stop-loss if one is wide or missing. Re-run 5 Run "
+               "& Report and confirm drawdown actually came down before moving on, even if profit "
+               "factor looks fine.")
         bullet("Failed the prop-firm simulation despite decent trade stats → check the failure reason "
                "shown in the report. Daily loss limit and max drawdown are the two most common single-run "
                "killers — re-check that 03 Prop Rules actually matches your real firm's terms.")
@@ -3562,6 +3570,16 @@ class MainWindow:
             "same data the GA searched with — it will usually look better than an honest out-of-sample "
             "number. Check the CPCV OOS pass-probability column next to it; a big gap between the two "
             "means overfitting, not a strong strategy. Full Pipeline re-checks this properly."
+        )
+        warn(
+            "Picking the single best candidate out of a large batch (dozens of Search Lab candidates, "
+            "or a whole Evolution Lab run) is exactly the multiple-comparisons problem: the more variants "
+            "tried, the more likely the 'best' one just got lucky rather than found a real edge. Before "
+            "trusting profit factor/Sharpe alone to declare a winner, run the candidate pool through 09 "
+            "CPCV / PBO (Probability of Backtest Overfitting) — a PBO comfortably under 50% means the "
+            "pick likely reflects a real edge; at or above 50% means the win was statistically no better "
+            "than a coin flip. The live 'Next step' note after a Search Lab or Evolution Lab run now "
+            "flags this automatically once enough candidates were tried."
         )
 
         h2("Full Pipeline verdict")
@@ -8192,7 +8210,8 @@ class MainWindow:
                 self._log_search(f"  {k}: {p}")
             self._log_search(
                 "\n" + pipeline_guide.after_search_complete(
-                    summary.champion_candidate_id, len(summary.leaderboard or [])
+                    summary.champion_candidate_id, len(summary.leaderboard or []),
+                    total_candidates=summary.total_candidates,
                 )
             )
 
@@ -11269,7 +11288,12 @@ class MainWindow:
             self._release_heavy_job(JOB_EVOLUTION_LAB)
             if not getattr(self, "_evo_guide_shown", False):
                 self._evo_guide_shown = True
-                self._evo_log("\n" + pipeline_guide.after_evolution_stop(status["leaderboard_size"]))
+                self._evo_log(
+                    "\n" + pipeline_guide.after_evolution_stop(
+                        status["leaderboard_size"],
+                        total_evaluated=status["generation"] * runner.cfg.population_size,
+                    )
+                )
 
     def _build_full_pipeline_tab(self):
         f = self._scrollable(self.tab_fullpipeline)
@@ -13505,6 +13529,24 @@ class MainWindow:
         self._bind_isolated_wheel(self.ra_question)
         self.ra_max_steps = LabeledEntry(question_section, "Max tool-calling steps", 6)
 
+        reports_section = self._section(
+            f, "Optional: upload backtest reports / screenshots",
+            "HTML/CSV/PDF reports (from this app or elsewhere) are parsed for real metrics. "
+            "Screenshots (.png/.jpg) are read by the vision model below on a best-effort basis and "
+            "flagged as unverified. The agent can call read_uploaded_report on any of these while "
+            "investigating your question.",
+        )
+        self._ra_uploaded_reports: list[str] = []
+        ra_reports_btn_row = Frame(reports_section, bg=PANEL)
+        ra_reports_btn_row.pack(anchor="w", padx=18, pady=(2, 4))
+        self._button(ra_reports_btn_row, "IMPORT REPORT / SCREENSHOT", self._ra_import_report_clicked).pack(side="left")
+        self._button(ra_reports_btn_row, "CLEAR", self._ra_clear_reports_clicked).pack(side="left", padx=8)
+        self.ra_reports_status = Label(
+            reports_section, text="No files attached.", bg=PANEL, fg=TEXT_DIM, font=_safe_font(8),
+            wraplength=900, justify="left",
+        )
+        self.ra_reports_status.pack(anchor="w", padx=18, pady=(0, 12))
+
         self._build_ai_assist_section(f, prefix="ra_ai")
 
         memory_section = self._section(
@@ -14475,6 +14517,24 @@ class MainWindow:
             ("\n\n" + "-" * 60 + "\n\n").join(cards)
         self._show_text_viewer("T58 Research Memory -- Leaderboard", body)
 
+    def _ra_import_report_clicked(self):
+        paths = filedialog.askopenfilenames(
+            title="Import backtest report(s) or screenshot(s)",
+            filetypes=[
+                ("Backtest reports & screenshots", "*.html *.htm *.csv *.pdf *.png *.jpg *.jpeg *.webp"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not paths:
+            return
+        self._ra_uploaded_reports.extend(paths)
+        names = ", ".join(os.path.basename(p) for p in self._ra_uploaded_reports)
+        self.ra_reports_status.config(text=f"{len(self._ra_uploaded_reports)} file(s) attached: {names}")
+
+    def _ra_clear_reports_clicked(self):
+        self._ra_uploaded_reports = []
+        self.ra_reports_status.config(text="No files attached.")
+
     def _ra_run_clicked(self):
         question = self.ra_question.get("1.0", END).strip()
         if not question:
@@ -14516,14 +14576,21 @@ class MainWindow:
             # strategy config on every call, exactly like Full Pipeline's
             # own strategy_builder does.
             strategy_snapshot = self._build_strategy()
+            uploaded_reports = [Path(p) for p in getattr(self, "_ra_uploaded_reports", [])]
             ctx = ResearchAgentContext(
                 df=df, strategy_builder=self._build_strategy,
                 strategy_name=_strategy_display_name(strategy_snapshot),
                 source_type=strategy_snapshot.source_type,
                 risk=risk, prop_rules=rules, instrument=instrument,
+                uploaded_reports=uploaded_reports,
             )
 
             self._log_research_agent(f"Investigating '{ctx.strategy_name}' on {instrument}...\n")
+            if uploaded_reports:
+                self._log_research_agent(
+                    f"Attached {len(uploaded_reports)} report/screenshot file(s): "
+                    + ", ".join(p.name for p in uploaded_reports) + "\n"
+                )
             agent = ResearchAgent(settings, max_steps=max_steps)
             result = agent.run(question, ctx, progress_cb=self._log_research_agent)
 
