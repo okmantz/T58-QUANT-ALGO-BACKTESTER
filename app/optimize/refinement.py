@@ -87,6 +87,7 @@ FITNESS_METRICS: dict[str, str] = {
     "prop_guide_score": "Prop-Oriented Guide Score",
     "composite_prop_score": "Composite Prop Score",
     "first_payout_probability": "First Payout Probability",
+    "fastest_payout": "Fastest Payout -- optimizes for SPEED to first payout under a safety floor (for tight deadlines)",
     "expected_payout": "Expected Payout ($)",
     "net_profit": "Long-Term Net Profit ($) -- for long-term trading, no prop firm",
     "profit_factor": "Profit Factor",
@@ -254,6 +255,51 @@ def _prop_guide_score(stats: dict, mc: MonteCarloResult) -> float:
     )
 
 
+def _fastest_payout_score(mc: MonteCarloResult) -> float:
+    """Optimizes DIRECTLY for speed to first payout, not just the probability
+    of eventually getting there -- the gap flagged in this app's own review:
+    every other metric here (first_payout_probability, composite_prop_score,
+    prop_guide_score) treats a candidate that reaches payout in a median 9
+    days exactly the same as one that takes 40, as long as both eventually
+    clear the bar. For a genuinely time-constrained goal ("I need a payout
+    ASAP"), speed itself is the objective -- and median_days_to_first_payout
+    (falling back to median_days_to_pass for a candidate whose simulations
+    never got as far as a funded payout) is a number every Monte Carlo run
+    already computes (see MonteCarloResult), just never fed into a fitness
+    metric before this one.
+
+    Blended with a safety floor so it can't win by being reckless: a
+    candidate that reaches payout in 3 days on the rare 2% of simulations
+    that don't blow up first isn't "faster" than one that reaches it in 10
+    days on 70% of simulations -- it's just less likely to ever get there,
+    which the raw median days figure alone would not penalize (a median is
+    only computed over the simulations that DID reach payout; it says
+    nothing about how rare those simulations were). eval_pass_probability
+    gates the score for exactly this reason: below MIN_VIABLE_PASS_PROBABILITY
+    the score collapses toward zero regardless of how fast the rare
+    successes are, so a search using this metric can't win by concentrating
+    everything into a wild, mostly-losing strategy in the hope of an
+    occasional lightning-fast pass. The gate is soft (squared ratio, not a
+    hard cutoff) so a GA still has a gradient to climb even below the floor
+    instead of a flat zero that gives it nothing to optimize against.
+    """
+    MIN_VIABLE_PASS_PROBABILITY = 40.0  # below this, speed doesn't matter -- it barely ever passes at all
+    MAX_MEANINGFUL_DAYS = 60.0          # candidates at/above this all score ~0 -- no upside in ranking "45 days" vs "90 days"
+
+    days = mc.median_days_to_first_payout
+    if days is None:
+        days = mc.median_days_to_pass  # never reached a first payout in ANY simulation -- fall back to days-to-pass
+    if days is None or days <= 0:
+        return 0.0  # never passed in any simulation at all -- no speed to reward
+
+    speed_component = max(0.0, 1.0 - (float(days) / MAX_MEANINGFUL_DAYS))  # 1.0 = instant, 0.0 = at/beyond the cutoff
+
+    pass_prob = max(0.0, min(100.0, mc.evaluation_pass_probability)) / 100.0
+    safety_gate = min(1.0, pass_prob / (MIN_VIABLE_PASS_PROBABILITY / 100.0)) ** 2
+
+    return speed_component * safety_gate * 100.0  # 0..100 scale, consistent with the other metrics here
+
+
 def compute_fitness(stats: dict, prop_summary: dict | None, mc: MonteCarloResult, metric: str) -> float:
     if metric == "net_profit":
         return float(stats.get("net_profit", 0.0))
@@ -266,6 +312,8 @@ def compute_fitness(stats: dict, prop_summary: dict | None, mc: MonteCarloResult
         return float(mc.evaluation_pass_probability)
     if metric == "first_payout_probability":
         return float(mc.first_payout_probability)
+    if metric == "fastest_payout":
+        return _fastest_payout_score(mc)
     if metric == "expected_payout":
         return float(mc.expected_payout)
     if metric == "composite_prop_score":
