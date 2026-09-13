@@ -22,6 +22,45 @@ line equally.
 from __future__ import annotations
 
 
+def should_show_first_run_welcome(has_stored_datasets: bool, has_run_history: bool) -> bool:
+    """True only for a genuinely fresh install -- no market data ever
+    loaded AND no backtest ever run. Both web (app.data.storage
+    .list_stored_datasets + app.reports.run_history.dashboard_data) and
+    desktop compute these same two booleans from data already on disk,
+    rather than a new "has this person seen the welcome" flag -- so the
+    welcome banner disappears the moment either becomes true and never
+    needs a separate dismissed/seen state to track or drift out of sync
+    between the two UIs."""
+    return not has_stored_datasets and not has_run_history
+
+
+def first_run_welcome() -> str:
+    """The one guidance message that exists BEFORE any of this module's
+    other functions have anything to branch on -- no run, no leaderboard,
+    no verdict yet. Static text is enough here: there's exactly one
+    sensible first path (see this module's own docstring for the full
+    lifecycle), so this just states it plainly instead of waiting for a
+    result to react to. Everything after this first run is covered by
+    after_first_backtest/after_search_complete/after_evolution_stop/etc.
+    below, whose live 'Next step' notes take over from here."""
+    return (
+        "START HERE -- three steps to your first real result, so you never have to guess the order:\n"
+        "1) Load market data on 2 Market Data. No idea for a strategy yet? Skip to Search Lab or "
+        "Evolution Lab instead (OPTIMIZE section) -- both load their own data as part of setup and will "
+        "hand you a leaderboard of tested candidates to start from.\n"
+        "2) Build or pick a strategy on 1 Strategy Configuration -- Manual Builder for a rule-based idea "
+        "(indicator crossovers, breakouts, MS-LSD-style structure/liquidity logic), or upload existing "
+        "Python/PineScript/MQL5 source. Not sure where to start? CREATE -> Generate Strategies (AI) can "
+        "draft one from a plain-language description.\n"
+        "3) Click RUN on 5 Run & Report.\n"
+        "From that first run on, a green 'Next step' note appears after every action -- fixing a losing "
+        "edge, tightening drawdown, promoting a candidate, moving on to Optimize or Validate -- telling "
+        "you exactly what to do next, in plain language and naming the exact tab, so you're never left "
+        "guessing the sequence yourself. For the full start-to-finish walkthrough instead, see the User "
+        "Manual (desktop: sidebar 'User Manual' tab; web: /user-manual)."
+    )
+
+
 def _pbo_note(n_tested: int, threshold: int = 2, hard_threshold: int = 20) -> str:
     """Shared multiple-comparisons warning for after_search_complete and
     after_evolution_stop. `n_tested` should be the largest honest count of
