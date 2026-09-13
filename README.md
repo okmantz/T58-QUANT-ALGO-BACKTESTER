@@ -1,5 +1,3 @@
-<img src="assets/readme-banner.png" alt="T58 Quant Algo Backtester" width="100%" />
-
 # T58 Trading — Quant Algo Backtester
 
 Full Tutorial: https://drive.google.com/file/d/1sgmIN7Q5vTkf8PESkHDFuSnRRUq1TYFp/view?usp=drive_link
