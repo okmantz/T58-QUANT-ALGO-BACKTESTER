@@ -38,10 +38,26 @@ class LiveAccount:
     server: str
     password: str = ""      # secret -- keyring-backed, populated on load for programmatic use only
     terminal_path: str = ""
+    # Non-MT5 platforms need more than login/password/server (OAuth client id+secret+refresh
+    # token for cTrader; app id/secret+cid/sec for Tradovate; a DXtrade base_url; etc.) -- rather
+    # than adding a new dataclass field per platform, every platform-specific credential lives
+    # here as plain key/value strings. See app.live_deploy.broker_registry.build_adapter for
+    # which keys each platform requires. Secret-shaped values in here (client_secret,
+    # refresh_token, app_secret, sec) are stored keyring-backed exactly like `password` --
+    # everything else (host, is_live, domain, ctid_trader_account_id) is not treated as secret
+    # and lives in the plain JSON file.
+    extra_credentials: dict = field(default_factory=dict)
 
     @property
     def is_usable(self) -> bool:
-        return bool(self.login.strip()) and bool(self.server.strip()) and bool(self.password)
+        if self.platform == "MT4/MT5":
+            return bool(self.login.strip()) and bool(self.server.strip()) and bool(self.password)
+        return bool(self.login.strip()) or bool(self.extra_credentials)
+
+
+# Extra-credential keys treated as secrets (keyring-backed like `password`, never written to
+# the plain accounts JSON file). Everything else in extra_credentials is written in plain JSON.
+_SECRET_EXTRA_KEYS = {"client_secret", "refresh_token", "app_secret", "sec", "access_token"}
 
 
 def _config_dir() -> Path:
@@ -136,6 +152,37 @@ def _load_password(account_id: str) -> str:
     return ""
 
 
+def _extra_keyring_username(account_id: str, key: str) -> str:
+    return f"live_account_{account_id}_extra_{key}"
+
+
+def _save_extra_credentials(account_id: str, extra: dict) -> dict:
+    """Splits extra_credentials into secret keys (keyring-backed, one
+    entry per key, same fallback as `password`) and non-secret keys
+    (returned as-is for the plain JSON payload). Only overwrites a
+    secret's keyring entry when a new non-empty value was actually
+    provided, matching save_account's existing password behavior --
+    editing an account's host/domain shouldn't force re-entering its
+    client_secret."""
+    plain: dict = {}
+    for key, value in (extra or {}).items():
+        if key in _SECRET_EXTRA_KEYS:
+            if value:
+                _save_password(f"{account_id}_extra_{key}", str(value))
+        else:
+            plain[key] = value
+    return plain
+
+
+def _load_extra_credentials(account_id: str, plain: dict) -> dict:
+    out = dict(plain)
+    for key in _SECRET_EXTRA_KEYS:
+        val = _load_password(f"{account_id}_extra_{key}")
+        if val:
+            out[key] = val
+    return out
+
+
 def save_account(account: LiveAccount) -> str:
     """Creates a new account (assigning it an id) or updates an existing
     one (matched by id). Returns the account's id."""
@@ -149,6 +196,7 @@ def save_account(account: LiveAccount) -> str:
         "login": account.login.strip(),
         "server": account.server.strip(),
         "terminal_path": (account.terminal_path or "").strip(),
+        "extra_credentials": _save_extra_credentials(account_id, account.extra_credentials),
     }
     accounts = [a for a in accounts if a.get("id") != account_id]
     accounts.append(payload)
@@ -181,6 +229,7 @@ def load_accounts() -> list[LiveAccount]:
             server=raw.get("server") or "",
             password=_load_password(account_id),
             terminal_path=raw.get("terminal_path") or "",
+            extra_credentials=_load_extra_credentials(account_id, raw.get("extra_credentials") or {}),
         ))
     return accounts
 
@@ -189,3 +238,5 @@ def delete_account(account_id: str) -> None:
     accounts = [a for a in _load_raw_list() if a.get("id") != account_id]
     _accounts_path().write_text(json.dumps(accounts, indent=2), encoding="utf-8")
     _save_password(account_id, "")  # clears both keyring and fallback file
+    for key in _SECRET_EXTRA_KEYS:
+        _save_password(f"{account_id}_extra_{key}", "")
