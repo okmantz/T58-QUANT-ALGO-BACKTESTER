@@ -307,6 +307,53 @@ def _rebuild_equity_curve(trades: list[Trade], initial_balance: float) -> pd.Dat
     return pd.DataFrame(rows)
 
 
+def _wants_retrain_context(strategy: Strategy) -> bool:
+    """True for a PythonStrategy file that opts into real per-fold
+    retraining -- see app/strategy/python.py's WALK-FORWARD RETRAIN
+    CONTEXT section and strategies/python/ml_classifier_direction.py.
+    False (the unchanged, original behavior) for every other strategy."""
+    return getattr(strategy, "source_type", None) == "python" and strategy.module_flag("RETRAIN_PER_FOLD")
+
+
+def _run_fold_test(fold: Fold, test_strategy: Strategy, risk: RiskConfig) -> BacktestResult:
+    """Runs a fold's test-window backtest. For most strategies this is
+    just `run_backtest(fold.test_df, test_strategy, risk)`, unchanged.
+    For a RETRAIN_PER_FOLD python strategy (see _wants_retrain_context),
+    instead concatenates the fold's own train_df ahead of test_df, tells
+    the strategy exactly where the real boundary is via
+    `df.attrs["wf_train_end_index"]`, runs ONE backtest over the combined
+    frame, and trims the resulting trades/statistics down to only the
+    test window -- so the strategy trains on the fold's REAL history
+    (not a re-split of the test window alone) while this fold's reported
+    result still reflects only its own genuine out-of-sample window."""
+    if not _wants_retrain_context(test_strategy):
+        return run_backtest(fold.test_df, test_strategy, risk)
+
+    combined = pd.concat([fold.train_df, fold.test_df], ignore_index=True)
+    combined.attrs["wf_train_end_index"] = len(fold.train_df)
+    full_bt = run_backtest(combined, test_strategy, risk)
+
+    test_start = pd.to_datetime(fold.test_df["timestamp"]).iloc[0]
+    if test_start.tzinfo is not None:
+        # Trade.entry_time comes back tz-naive from the execution engine
+        # regardless of whether the input data's timestamp column was
+        # tz-aware -- normalize this comparison to match, rather than
+        # changing engine-wide timestamp handling as a side effect of
+        # this fold-trimming helper.
+        test_start = test_start.tz_localize(None)
+    trimmed_trades = [t for t in full_bt.trades if t.entry_time >= test_start]
+    trimmed_equity = _rebuild_equity_curve(trimmed_trades, risk.initial_balance)
+    trimmed_stats = compute_statistics(trimmed_trades, trimmed_equity, initial_balance=risk.initial_balance)
+    return BacktestResult(
+        strategy_name=full_bt.strategy_name,
+        trades=trimmed_trades,
+        equity_curve=trimmed_equity,
+        statistics=trimmed_stats,
+        initial_balance=risk.initial_balance,
+        warnings=full_bt.warnings,
+    )
+
+
 def run_walk_forward_optimization(
     df: pd.DataFrame,
     strategy: Strategy,
@@ -386,7 +433,7 @@ def run_walk_forward_optimization(
                 else:
                     train_fitness = float("-inf")
 
-            test_bt = run_backtest(fold.test_df, test_strategy, risk)
+            test_bt = _run_fold_test(fold, test_strategy, risk)
             per_fold_fitness.append(train_fitness if math.isfinite(train_fitness) else 0.0)
             all_test_trades.extend(test_bt.trades)
 
