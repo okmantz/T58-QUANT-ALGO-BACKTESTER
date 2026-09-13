@@ -165,6 +165,10 @@ class SkeletonSpec:
     # app.data.pairs.merge_pair_series; generate_search_space()/batch_runner surface a
     # clear error up front if this family is requested without a "pair_close" column
     # merged into the working DataFrame, instead of letting it fail bar-by-bar as NaNs.
+    requires_calendar_data: bool = False   # True only for the economic-calendar families --
+    # see app.data.economic_calendar.merge_news_features; same up-front-error treatment as
+    # requires_pair_data above, just for minutes_since/until_high_impact_news columns instead
+    # of a pair_close column.
 
     def combinations(self) -> list[dict]:
         keys = list(self.param_grid.keys())
@@ -3707,6 +3711,675 @@ _VOLUME_PROFILE_VALUE_AREA_FADE = SkeletonSpec(
 )
 
 
+# ---------------------------------------------------------------------------
+# Expansion round 8 (Sep 2026) -- 8 new families built on the 8 new
+# indicators added this round (HMA/DEMA/TEMA/KAMA, Vortex, Elder Ray, TTM
+# Squeeze, VWMA, ADL/Chaikin Oscillator, Fisher Transform, Connors RSI),
+# plus 5 families filling genuine taxonomy gaps: two economic-calendar
+# event-driven families (requires merged news features -- see
+# app.data.economic_calendar), an intermarket/correlation-driven family
+# (requires merged pair data, like stat_pairs, but a TREND-CONFIRMATION
+# hypothesis rather than stat_pairs' mean-reversion-on-zscore one), a
+# carry/rollover-flavored forex family, and a true multi-day swing/
+# position family with no time-in-trade restriction (max_bars=None is the
+# only grid point -- every other family in this module defaults to a
+# tight intraday-shaped exit).
+#
+# Deliberately NOT added: martingale/grid/all-in position-sizing
+# "strategies". Doubling down after a loss or averaging into a growing
+# adverse position isn't a market hypothesis this taxonomy classifies --
+# it's a bet-sizing scheme that happens to eventually win most of the
+# time and blow the account the rest, which is exactly the shape of risk
+# most prop firms explicitly ban in their rules and that this app's own
+# eval_pass_probability objective would already correctly punish. Adding
+# it here would work against the whole point of this app.
+# ---------------------------------------------------------------------------
+
+def _build_hma_trend_following(p: dict) -> dict:
+    fast, slow = p["fast"], p["slow"]
+    return {
+        "name": f"HMA Trend Following (hma{fast}/hma{slow})",
+        "entry_conditions": {
+            "long": [_cond(_ind("hma", fast), "cross above", _ind("hma", slow))],
+            "short": [_cond(_ind("hma", fast), "cross below", _ind("hma", slow))],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("hma", fast), "cross below", _ind("hma", slow))],
+            "short": [_cond(_ind("hma", fast), "cross above", _ind("hma", slow))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"]),
+    }
+
+
+_HMA_TREND_FOLLOWING = SkeletonSpec(
+    name="hma_trend_following",
+    label="Hull MA Trend Following (fast/slow HMA cross)",
+    description=(
+        "Trades a fast Hull MA crossing a slower one, exiting on the opposite cross. HMA is a "
+        "genuinely lower-lag alternative to the WMA/EMA/SMA crosses every prior trend family "
+        "uses -- it reacts to a real turn several bars sooner, at the cost of more whipsaw in "
+        "genuine chop, which is exactly the trade a fast prop-eval entry wants to make."
+    ),
+    param_grid={
+        "fast": [9, 16, 21],
+        "slow": [50, 100],
+        "stop_atr_mult": [1.0, 1.5, 2.0],
+        "target_atr_mult": [2.0, 3.0],
+    },
+    build=_build_hma_trend_following,
+    valid=lambda p: p["fast"] < p["slow"],
+)
+
+
+def _build_vortex_trend_strength_breakout(p: dict) -> dict:
+    period, lookback = p["period"], p["lookback"]
+    return {
+        "name": f"Vortex Trend-Strength Breakout (vi{period}, lb={lookback})",
+        "entry_conditions": {
+            "long": [
+                _cond(_ind("vortex_plus", period), "cross above", _ind("vortex_minus", period)),
+                _cond(_breakout_flag(lookback, "bullish"), "is true", _val(1)),
+            ],
+            "long_connectors": ["AND"],
+            "short": [
+                _cond(_ind("vortex_minus", period), "cross above", _ind("vortex_plus", period)),
+                _cond(_breakout_flag(lookback, "bearish"), "is true", _val(1)),
+            ],
+            "short_connectors": ["AND"],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("vortex_minus", period), "cross above", _ind("vortex_plus", period))],
+            "short": [_cond(_ind("vortex_plus", period), "cross above", _ind("vortex_minus", period))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"]),
+    }
+
+
+_VORTEX_TREND_STRENGTH_BREAKOUT = SkeletonSpec(
+    name="vortex_trend_strength_breakout",
+    label="Vortex Trend-Strength Breakout (VI+/VI- cross + N-bar breakout)",
+    description=(
+        "Requires a VI+/VI- crossover (Vortex's own directional-strength flip) to agree with a "
+        "fresh N-bar breakout in the same direction -- two independent trend-strength "
+        "confirmations rather than either alone, cheap to add given True Range/ADX-style "
+        "smoothing already exists in this module."
+    ),
+    param_grid={
+        "period": [14, 21],
+        "lookback": [20, 40],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [2.0, 3.0],
+    },
+    build=_build_vortex_trend_strength_breakout,
+)
+
+
+def _build_elder_ray_bull_bear_power(p: dict) -> dict:
+    period, ema_trend = p["period"], p["ema_trend"]
+    return {
+        "name": f"Elder Ray Bull/Bear Power (period={period}, ema{ema_trend} filter)",
+        "entry_conditions": {
+            "long": [
+                _cond(_ind("close", 1), ">", _ind("ema", ema_trend)),
+                _cond(_ind("elder_bear_power", period), "cross above", _val(0)),
+            ],
+            "long_connectors": ["AND"],
+            "short": [
+                _cond(_ind("close", 1), "<", _ind("ema", ema_trend)),
+                _cond(_ind("elder_bull_power", period), "cross below", _val(0)),
+            ],
+            "short_connectors": ["AND"],
+        },
+        "exit_conditions": {"long": [], "short": []},
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_ELDER_RAY_BULL_BEAR_POWER = SkeletonSpec(
+    name="elder_ray_bull_bear_power",
+    label="Elder Ray Bull/Bear Power (trend-aligned pullback-strength confirmation)",
+    description=(
+        "In an established EMA trend, waits for the COUNTER-trend power measure (Bear Power in "
+        "an uptrend, Bull Power in a downtrend) to turn back in the trend's favor -- i.e. the "
+        "pullback itself is losing its own strength -- before entering. A different confirmation "
+        "mechanism from Family B's RSI dip/pop: this one reads how hard the OTHER side is "
+        "pushing, not how extended price itself is."
+    ),
+    param_grid={
+        "period": [13, 21],
+        "ema_trend": [50, 100],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [2.0, 3.0],
+        "max_bars": [24, 48],
+    },
+    build=_build_elder_ray_bull_bear_power,
+)
+
+
+def _build_ttm_squeeze_momentum_breakout(p: dict) -> dict:
+    kc_period = p["kc_period"]
+    return {
+        "name": f"TTM Squeeze Momentum Breakout (kc{kc_period})",
+        "entry_conditions": {
+            "long": [
+                _cond(_ind("ttm_squeeze_on", kc_period), "cross below", _val(1)),
+                _cond(_ind("ttm_squeeze_momentum", kc_period), ">", _val(0)),
+            ],
+            "long_connectors": ["AND"],
+            "short": [
+                _cond(_ind("ttm_squeeze_on", kc_period), "cross below", _val(1)),
+                _cond(_ind("ttm_squeeze_momentum", kc_period), "<", _val(0)),
+            ],
+            "short_connectors": ["AND"],
+        },
+        "exit_conditions": {"long": [], "short": []},
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_TTM_SQUEEZE_MOMENTUM_BREAKOUT = SkeletonSpec(
+    name="ttm_squeeze_momentum_breakout",
+    label="TTM Squeeze Momentum Breakout (BB-inside-KC release + momentum dot)",
+    description=(
+        "Trades the bar a Bollinger-inside-Keltner volatility squeeze FIRST releases (goes from "
+        "compressed to not), in the direction of Carter's linear-regression momentum dot. "
+        "Genuinely distinct from Family D's plain ATR-expansion breakout and from "
+        "keltner_squeeze_breakout's inline BB/KC band-clear check: this fires exactly once per "
+        "squeeze (the release bar itself) and is directional from the first bar, not just "
+        "'volatility is expanding'."
+    ),
+    param_grid={
+        "kc_period": [20],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [2.0, 3.0],
+        "max_bars": [24, 48],
+    },
+    build=_build_ttm_squeeze_momentum_breakout,
+)
+
+
+def _build_vwma_trend_pullback(p: dict) -> dict:
+    vwma_period, ema_trend, rsi_period, rsi_dip = p["vwma_period"], p["ema_trend"], p["rsi_period"], p["rsi_dip"]
+    return {
+        "name": f"VWMA Trend Pullback (vwma{vwma_period}, ema{ema_trend} filter)",
+        "entry_conditions": {
+            "long": [
+                _cond(_ind("close", 1), ">", _ind("ema", ema_trend)),
+                _cond(_ind("close", 1), "<", _ind("vwma", vwma_period)),
+                _cond(_ind("rsi", rsi_period), "<=", _val(50 - rsi_dip)),
+            ],
+            "long_connectors": ["AND", "AND"],
+            "short": [
+                _cond(_ind("close", 1), "<", _ind("ema", ema_trend)),
+                _cond(_ind("close", 1), ">", _ind("vwma", vwma_period)),
+                _cond(_ind("rsi", rsi_period), ">=", _val(50 + rsi_dip)),
+            ],
+            "short_connectors": ["AND", "AND"],
+        },
+        "exit_conditions": {
+            # The pullback thesis resolves once price reclaims its own VWMA
+            # back in the trend's direction -- a genuinely different exit
+            # trigger from mtf_pullback's own RSI-recovery exit, since VWMA
+            # (volume-weighted) can reclaim well before/after a plain RSI
+            # midline cross on a volume-skewed instrument.
+            "long": [_cond(_ind("close", 1), "cross above", _ind("vwma", vwma_period))],
+            "short": [_cond(_ind("close", 1), "cross below", _ind("vwma", vwma_period))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_VWMA_TREND_PULLBACK = SkeletonSpec(
+    name="vwma_trend_pullback",
+    label="VWMA Trend Pullback (dip below volume-weighted MA, RSI-confirmed)",
+    description=(
+        "In an established EMA trend, enters while price is trading on the wrong side of its "
+        "own VWMA (a volume-weighted, not just price-weighted, dynamic support/resistance) with "
+        "RSI confirming a genuine dip rather than a shallow wiggle, exiting once price reclaims "
+        "VWMA back in the trend's direction. Distinct from Family B's plain-EMA pullback: VWMA "
+        "weights the bars where real size traded, which can sit meaningfully away from a plain "
+        "EMA on a volume-skewed instrument."
+    ),
+    param_grid={
+        "vwma_period": [20, 50],
+        "ema_trend": [100, 200],
+        "rsi_period": [14],
+        "rsi_dip": [10, 15],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [2.0, 3.0],
+        "max_bars": [24, 48],
+    },
+    build=_build_vwma_trend_pullback,
+)
+
+
+def _build_chaikin_oscillator_momentum_confirmation(p: dict) -> dict:
+    lookback = p["lookback"]
+    return {
+        "name": f"Chaikin Oscillator Momentum Confirmation (lb={lookback})",
+        "entry_conditions": {
+            "long": [
+                _cond(_breakout_flag(lookback, "bullish"), "is true", _val(1)),
+                _cond({"type": "chaikin_oscillator"}, ">", _val(0)),
+            ],
+            "long_connectors": ["AND"],
+            "short": [
+                _cond(_breakout_flag(lookback, "bearish"), "is true", _val(1)),
+                _cond({"type": "chaikin_oscillator"}, "<", _val(0)),
+            ],
+            "short_connectors": ["AND"],
+        },
+        "exit_conditions": {"long": [], "short": []},
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_CHAIKIN_OSCILLATOR_MOMENTUM_CONFIRMATION = SkeletonSpec(
+    name="chaikin_oscillator_momentum_confirmation",
+    label="Chaikin Oscillator Momentum Confirmation (ADL momentum + N-bar breakout)",
+    description=(
+        "Requires the Chaikin Oscillator (a MACD-style read on the Accumulation/Distribution "
+        "Line's own momentum) to already agree with an N-bar breakout's direction. Distinct "
+        "from Family CMF's bounded rolling-window ratio and from OBV's close-direction-only "
+        "read: ADL/Chaikin weight each bar by where the CLOSE landed within its own range, a "
+        "genuinely different volume-flow construction neither existing primitive captures."
+    ),
+    param_grid={
+        "lookback": [20, 40],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [2.0, 3.0],
+        "max_bars": [24, 48],
+    },
+    build=_build_chaikin_oscillator_momentum_confirmation,
+)
+
+
+def _build_fisher_transform_extreme_reversion(p: dict) -> dict:
+    period = p["period"]
+    return {
+        "name": f"Fisher Transform Extreme Reversion (period={period}, extreme={p['extreme']})",
+        "entry_conditions": {
+            "long": [_cond(_ind("fisher_transform", period), "cross above", _ind("fisher_transform_signal", period))],
+            "short": [_cond(_ind("fisher_transform", period), "cross below", _ind("fisher_transform_signal", period))],
+        },
+        "exit_conditions": {"long": [], "short": []},
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+def _gate_fisher_extreme(config: dict, extreme: float, period: int) -> dict:
+    gate_long = _cond(_ind("fisher_transform_signal", period), "<=", _val(-extreme))
+    gate_short = _cond(_ind("fisher_transform_signal", period), ">=", _val(extreme))
+    config["entry_conditions"]["long"].append(gate_long)
+    config["entry_conditions"]["long_connectors"] = ["AND"] * (len(config["entry_conditions"]["long"]) - 1)
+    config["entry_conditions"]["short"].append(gate_short)
+    config["entry_conditions"]["short_connectors"] = ["AND"] * (len(config["entry_conditions"]["short"]) - 1)
+    return config
+
+
+_FISHER_TRANSFORM_EXTREME_REVERSION = SkeletonSpec(
+    name="fisher_transform_extreme_reversion",
+    label="Fisher Transform Extreme Reversion (Ehlers Fisher signal-line cross, gated at extremes)",
+    description=(
+        "Only takes a Fisher/Fisher-signal-line cross when the PRIOR bar's Fisher value was "
+        "already beyond a configured extreme -- Fisher's Gaussian-ish peaks make 'beyond an "
+        "extreme, now turning' a cleaner short-term mean-reversion trigger than a bounded "
+        "oscillator like RSI/Stochastic, which saturates and flattens right at the extremes "
+        "instead of peaking."
+    ),
+    param_grid={
+        "period": [10, 20],
+        "extreme": [1.2, 1.5],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [1.5, 2.0],
+        "max_bars": [12, 24],
+    },
+    build=lambda p: _gate_fisher_extreme(_build_fisher_transform_extreme_reversion(p), p["extreme"], p["period"]),
+)
+
+
+def _build_connors_rsi_extreme_reversion(p: dict) -> dict:
+    oversold, overbought, exit_level = p["oversold"], p["overbought"], p["exit_level"]
+    return {
+        "name": f"Connors RSI Extreme Reversion (os={oversold}, ob={overbought})",
+        "entry_conditions": {
+            "long": [_cond({"type": "connors_rsi"}, "<=", _val(oversold))],
+            "short": [_cond({"type": "connors_rsi"}, ">=", _val(overbought))],
+        },
+        "exit_conditions": {
+            "long": [_cond({"type": "connors_rsi"}, ">=", _val(exit_level))],
+            "short": [_cond({"type": "connors_rsi"}, "<=", _val(100 - exit_level))],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_CONNORS_RSI_EXTREME_REVERSION = SkeletonSpec(
+    name="connors_rsi_extreme_reversion",
+    label="Connors RSI Extreme Reversion (composite short-term mean reversion)",
+    description=(
+        "Mean-reverts on Connors RSI (the average of a short RSI, an up/down-streak RSI, and a "
+        "percentile rank of the latest 1-bar return) reaching an extreme, exiting once it "
+        "recovers toward the middle. Slots directly alongside rsi_extreme_reversion but reads "
+        "faster and less noisily than a lone RSI(3), since Connors RSI blends three independent "
+        "short-term reads instead of one."
+    ),
+    param_grid={
+        "oversold": [10, 15],
+        "overbought": [85, 90],
+        "exit_level": [50, 60],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [1.5, 2.0],
+        "max_bars": [12, 24],
+    },
+    build=_build_connors_rsi_extreme_reversion,
+    valid=lambda p: p["exit_level"] < p["overbought"] and (100 - p["exit_level"]) > p["oversold"],
+)
+
+
+# ---------------------------------------------------------------------------
+# Economic-calendar event-driven families (require news features merged in
+# first -- see app.data.economic_calendar.merge_news_features and
+# FAMILIES_REQUIRING_CALENDAR_DATA below). Two distinct, opposite
+# hypotheses on the same underlying data: one fades the initial spike
+# right after a high-impact release, the other trades the compression
+# that typically precedes one.
+# ---------------------------------------------------------------------------
+
+def _build_economic_calendar_news_spike_fade(p: dict) -> dict:
+    post_window, range_mult = p["post_window"], p["range_mult"]
+    return {
+        "name": f"Economic Calendar News-Spike Fade (within {post_window}m post-release)",
+        "entry_conditions": {
+            "long": [
+                _cond({"type": "news_minutes_since_high_impact"}, "<=", _val(post_window)),
+                _cond({"type": "news_minutes_since_high_impact"}, ">=", _val(0)),
+                _cond(_ind("candle_range", 1), ">=", _ind("atr", 14)),
+            ],
+            "long_connectors": ["AND", "AND"],
+            "short": [
+                _cond({"type": "news_minutes_since_high_impact"}, "<=", _val(post_window)),
+                _cond({"type": "news_minutes_since_high_impact"}, ">=", _val(0)),
+                _cond(_ind("candle_range", 1), ">=", _ind("atr", 14)),
+            ],
+            "short_connectors": ["AND", "AND"],
+        },
+        "exit_conditions": {"long": [], "short": []},
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+        "_range_mult": range_mult,  # documents intent; the >= ATR check above is the enforced gate
+    }
+
+
+def _finalize_news_spike_fade(config: dict) -> dict:
+    config.pop("_range_mult", None)
+    # Fade direction: a wide-range spike UP within the post-release window
+    # is shorted (bet the spike overshoots and fades back), a wide-range
+    # spike DOWN is bought -- distinguished by candle_direction, appended
+    # here so both branches above can share the same news-timing gate.
+    config["entry_conditions"]["long"].append(_cond({"type": "candle_direction"}, "==", _val(-1)))
+    config["entry_conditions"]["long_connectors"].append("AND")
+    config["entry_conditions"]["short"].append(_cond({"type": "candle_direction"}, "==", _val(1)))
+    config["entry_conditions"]["short_connectors"].append("AND")
+    return config
+
+
+_ECONOMIC_CALENDAR_NEWS_SPIKE_FADE = SkeletonSpec(
+    name="economic_calendar_news_spike_fade",
+    label="Economic Calendar News-Spike Fade (requires merged calendar data)",
+    description=(
+        "Fades an unusually wide-range bar (>= its own ATR) printed within a configured window "
+        "after a high-impact release (e.g. NFP/CPI) -- the classic 'fade the initial knee-jerk "
+        "spike' play. REQUIRES minutes_since/until_high_impact_news merged into the working data "
+        "first (see app.data.economic_calendar.merge_news_features) -- this app's own "
+        "app.ai.news_forexfactory feed only covers the CURRENT week, so genuine historical "
+        "backtesting of this family depends on a locally-accumulated calendar history or a "
+        "hand-supplied historical calendar CSV; see that module's docstring for the honest "
+        "limitation here."
+    ),
+    param_grid={
+        "post_window": [15, 30],
+        "range_mult": [1.0],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [1.0, 1.5],
+        "max_bars": [12, 24],
+    },
+    build=lambda p: _finalize_news_spike_fade(_build_economic_calendar_news_spike_fade(p)),
+    requires_calendar_data=True,
+)
+
+
+def _build_economic_calendar_pre_release_compression(p: dict) -> dict:
+    pre_window, squeeze_kc_period = p["pre_window"], p["squeeze_kc_period"]
+    return {
+        "name": f"Economic Calendar Pre-Release Compression (within {pre_window}m pre-release)",
+        "entry_conditions": {
+            "long": [
+                _cond({"type": "news_minutes_until_high_impact"}, "<=", _val(pre_window)),
+                _cond({"type": "news_minutes_until_high_impact"}, ">=", _val(0)),
+                _cond(_ind("ttm_squeeze_on", squeeze_kc_period), "cross below", _val(1)),
+                _cond(_ind("ttm_squeeze_momentum", squeeze_kc_period), ">", _val(0)),
+            ],
+            "long_connectors": ["AND", "AND", "AND"],
+            "short": [
+                _cond({"type": "news_minutes_until_high_impact"}, "<=", _val(pre_window)),
+                _cond({"type": "news_minutes_until_high_impact"}, ">=", _val(0)),
+                _cond(_ind("ttm_squeeze_on", squeeze_kc_period), "cross below", _val(1)),
+                _cond(_ind("ttm_squeeze_momentum", squeeze_kc_period), "<", _val(0)),
+            ],
+            "short_connectors": ["AND", "AND", "AND"],
+        },
+        "exit_conditions": {"long": [], "short": []},
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_ECONOMIC_CALENDAR_PRE_RELEASE_COMPRESSION = SkeletonSpec(
+    name="economic_calendar_pre_release_compression",
+    label="Economic Calendar Pre-Release Compression (requires merged calendar data)",
+    description=(
+        "Trades a volatility-squeeze release (see ttm_squeeze above) that fires in the window "
+        "immediately before a scheduled high-impact release -- the 'the market is coiling ahead "
+        "of CPI' play, entering in the direction the release of that pre-existing compression "
+        "already leans, rather than waiting for the release itself. Same merged-calendar-data "
+        "requirement and limitation as economic_calendar_news_spike_fade above."
+    ),
+    param_grid={
+        "pre_window": [30, 60],
+        "squeeze_kc_period": [20],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [1.5, 2.0],
+        "max_bars": [12, 24],
+    },
+    build=_build_economic_calendar_pre_release_compression,
+    requires_calendar_data=True,
+)
+
+
+# ---------------------------------------------------------------------------
+# Intermarket/correlation-driven family (requires merged pair data, exactly
+# like stat_pairs -- but a TREND-CONFIRMATION hypothesis: trade the primary
+# WITH a strong move in a correlated/inversely-correlated driver instrument
+# (e.g. DXY vs Gold, a bond-yield proxy vs an equity index), rather than
+# stat_pairs' mean-reversion-on-ratio-zscore hypothesis. `relationship` is
+# a fixed per-candidate parameter (positive or inverse) rather than
+# detected at runtime, since a static config can't branch on a sign
+# computed mid-backtest -- matching how every other fixed-parameter
+# hypothesis in this module works.
+# ---------------------------------------------------------------------------
+
+def _build_intermarket_correlation_trend(p: dict) -> dict:
+    period, mom_period, corr_min, mom_threshold, relationship = (
+        p["period"], p["mom_period"], p["corr_min"], p["mom_threshold"], p["relationship"]
+    )
+    driver_up = _cond({"type": "percentage_change", "period": mom_period, "field": "pair_close"}, ">=", _val(mom_threshold))
+    driver_down = _cond({"type": "percentage_change", "period": mom_period, "field": "pair_close"}, "<=", _val(-mom_threshold))
+    corr_strong_positive = _cond({"type": "correlation", "period": period}, ">=", _val(corr_min))
+    corr_strong_negative = _cond({"type": "correlation", "period": period}, "<=", _val(-corr_min))
+
+    if relationship == "positive":
+        long_conditions = [driver_up, corr_strong_positive]
+        short_conditions = [driver_down, corr_strong_positive]
+    else:
+        long_conditions = [driver_down, corr_strong_negative]
+        short_conditions = [driver_up, corr_strong_negative]
+
+    return {
+        "name": f"Intermarket Correlation Trend ({relationship}, period={period})",
+        "entry_conditions": {
+            "long": long_conditions, "long_connectors": ["AND"],
+            "short": short_conditions, "short_connectors": ["AND"],
+        },
+        "exit_conditions": {"long": [], "short": []},
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"], max_bars_in_trade=p["max_bars"]),
+    }
+
+
+_INTERMARKET_CORRELATION_TREND = SkeletonSpec(
+    name="intermarket_correlation_trend",
+    label="Intermarket Correlation Trend (requires merged pair/driver data)",
+    description=(
+        "Trades the primary instrument WITH a large recent move in a correlated driver "
+        "instrument (e.g. DXY for Gold, a bond-yield proxy for an equity index), gated by a "
+        "strong rolling correlation between the two -- a TREND-CONFIRMATION hypothesis, "
+        "genuinely distinct from stat_pairs' mean-reversion-on-ratio-zscore hypothesis, built "
+        "on the same rolling_correlation primitive stat_pairs already required but never used "
+        "on its own. `relationship` (positive/inverse) is fixed per candidate, not detected at "
+        "runtime -- pick 'inverse' for a driver like DXY-vs-Gold, 'positive' for two "
+        "instruments that move together. REQUIRES a 'pair_close' column merged in first, "
+        "exactly like stat_pairs (see app.data.pairs.merge_pair_series) -- the driver "
+        "instrument is the one merged in as pair_close."
+    ),
+    param_grid={
+        "period": [30, 50],
+        "mom_period": [5, 10],
+        "corr_min": [0.5, 0.7],
+        "mom_threshold": [0.5, 1.0],
+        "relationship": ["positive", "inverse"],
+        "stop_atr_mult": [1.0, 1.5],
+        "target_atr_mult": [1.5, 2.5],
+        "max_bars": [24, 48],
+    },
+    build=_build_intermarket_correlation_trend,
+    requires_pair_data=True,
+)
+
+
+# ---------------------------------------------------------------------------
+# Carry/rollover forex family. HONEST LIMITATION: this app has no live
+# interest-rate-differential or swap-rate feed, so this does not compute a
+# real carry return. `carry_direction` is a person-supplied structural bias
+# (which side of this specific pair is currently the higher-yielding one --
+# looked up externally, e.g. from a broker's swap-rate table) that GATES
+# the family to only ever trade with that stated bias, confirmed by a slow
+# trend filter and held far longer than this module's other (intraday-
+# shaped) families -- operationalizing "let a real carry bias only trade
+# with the technical wind, and hold it like a carry position would be
+# held" rather than pretending to fetch real swap rates.
+# ---------------------------------------------------------------------------
+
+def _build_carry_rollover_trend(p: dict) -> dict:
+    ema_slow, ema_fast, carry_direction = p["ema_slow"], p["ema_fast"], p["carry_direction"]
+    trend_up = _cond(_ind("ema", ema_fast), ">", _ind("ema", ema_slow))
+    trend_down = _cond(_ind("ema", ema_fast), "<", _ind("ema", ema_slow))
+    long_conditions = [trend_up] if carry_direction == "long" else []
+    short_conditions = [trend_down] if carry_direction == "short" else []
+    return {
+        "name": f"Carry/Rollover Trend ({carry_direction}-carry, ema{ema_fast}/{ema_slow})",
+        "entry_conditions": {
+            "long": long_conditions, "long_connectors": [],
+            "short": short_conditions, "short_connectors": [],
+        },
+        "exit_conditions": {
+            "long": [trend_down] if carry_direction == "long" else [],
+            "short": [trend_up] if carry_direction == "short" else [],
+        },
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"]),
+    }
+
+
+_CARRY_ROLLOVER_TREND = SkeletonSpec(
+    name="carry_rollover_trend",
+    label="Carry/Rollover Trend (structural direction bias + slow trend filter)",
+    description=(
+        "Only ever trades ONE stated direction (`carry_direction`, e.g. 'long' for a pair where "
+        "you hold the higher-yielding currency and collect positive swap) and only while a slow "
+        "EMA trend filter agrees, exiting when it stops agreeing -- explicitly does NOT compute "
+        "a real interest-rate differential or swap rate (this app has no such data feed); "
+        "`carry_direction` must be supplied from your broker's own swap-rate table for the "
+        "specific pair. This operationalizes 'only take the carry-positive side, and only when "
+        "technically confirmed' rather than faking a live rate feed."
+    ),
+    param_grid={
+        "ema_fast": [50],
+        "ema_slow": [200],
+        "carry_direction": ["long", "short"],
+        "stop_atr_mult": [2.0, 3.0],
+        "target_atr_mult": [4.0, 6.0],
+    },
+    build=_build_carry_rollover_trend,
+)
+
+
+# ---------------------------------------------------------------------------
+# True multi-day swing/position family. Every other family in this module
+# defaults to (or grids over) a tight, intraday-shaped max_bars_in_trade --
+# this one's grid has exactly ONE value for it: None (no cap at all), the
+# structural definition of "no time-in-trade restriction" for firms with
+# generous eval windows, paired with much slower trend/pullback periods
+# than any other family here uses.
+# ---------------------------------------------------------------------------
+
+def _build_multi_day_swing_trend_continuation(p: dict) -> dict:
+    ema_fast, ema_slow, pullback_period = p["ema_fast"], p["ema_slow"], p["pullback_period"]
+    return {
+        "name": f"Multi-Day Swing Trend Continuation (ema{ema_fast}/{ema_slow}, pullback{pullback_period})",
+        "entry_conditions": {
+            "long": [
+                _cond(_ind("ema", ema_fast), ">", _ind("ema", ema_slow)),
+                _cond(_ind("close", 1), "cross above", _ind("ema", pullback_period)),
+            ],
+            "long_connectors": ["AND"],
+            "short": [
+                _cond(_ind("ema", ema_fast), "<", _ind("ema", ema_slow)),
+                _cond(_ind("close", 1), "cross below", _ind("ema", pullback_period)),
+            ],
+            "short_connectors": ["AND"],
+        },
+        "exit_conditions": {
+            "long": [_cond(_ind("ema", ema_fast), "<", _ind("ema", ema_slow))],
+            "short": [_cond(_ind("ema", ema_fast), ">", _ind("ema", ema_slow))],
+        },
+        # No max_bars_in_trade -- see comment block above: this family is
+        # explicitly held across many days/sessions, not flattened by a
+        # bar-count cap the way every intraday-shaped family here is.
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"]),
+    }
+
+
+_MULTI_DAY_SWING_TREND_CONTINUATION = SkeletonSpec(
+    name="multi_day_swing_trend_continuation",
+    label="Multi-Day Swing Trend Continuation (slow EMA trend + pullback reclaim, no time cap)",
+    description=(
+        "A genuine multi-day/position-trading hypothesis: an established slow-EMA trend, entered "
+        "on a pullback reclaim of a slower intermediate EMA, held with NO time-in-trade cap at "
+        "all (every other family in this module defaults to or grids over an intraday-shaped "
+        "max_bars_in_trade) and wide ATR stops/targets sized for a multi-day hold. Fills the gap "
+        "this module's own taxonomy left: nearly everything else here is intraday/session-"
+        "oriented, which fits fast prop-eval goals but leaves out firms with generous eval "
+        "windows and no time-in-trade restriction."
+    ),
+    param_grid={
+        "ema_fast": [50, 100],
+        "ema_slow": [200],
+        "pullback_period": [20, 50],
+        "stop_atr_mult": [2.5, 3.5],
+        "target_atr_mult": [5.0, 8.0],
+    },
+    build=_build_multi_day_swing_trend_continuation,
+    valid=lambda p: p["ema_fast"] < p["ema_slow"] and p["pullback_period"] < p["ema_fast"],
+)
+
+
 FAMILIES: dict[str, SkeletonSpec] = {
     _TREND_BREAKOUT.name: _TREND_BREAKOUT,
     _MTF_PULLBACK.name: _MTF_PULLBACK,
@@ -3815,6 +4488,25 @@ FAMILIES: dict[str, SkeletonSpec] = {
     _FIBONACCI_RETRACEMENT_BOUNCE.name: _FIBONACCI_RETRACEMENT_BOUNCE,
     _TRIX_ZERO_CROSS_MOMENTUM.name: _TRIX_ZERO_CROSS_MOMENTUM,
     _VOLUME_PROFILE_VALUE_AREA_FADE.name: _VOLUME_PROFILE_VALUE_AREA_FADE,
+    # -- Expansion round 8 (13 new families): 8 built on this round's new
+    # indicators (HMA, Vortex, Elder Ray, TTM Squeeze, VWMA, Chaikin
+    # Oscillator, Fisher Transform, Connors RSI), plus economic-calendar
+    # (2), intermarket-correlation (1), carry/rollover (1), and a true
+    # multi-day swing family (1) -- see each SkeletonSpec's own comment
+    # block above for what makes it a genuinely distinct hypothesis.
+    _HMA_TREND_FOLLOWING.name: _HMA_TREND_FOLLOWING,
+    _VORTEX_TREND_STRENGTH_BREAKOUT.name: _VORTEX_TREND_STRENGTH_BREAKOUT,
+    _ELDER_RAY_BULL_BEAR_POWER.name: _ELDER_RAY_BULL_BEAR_POWER,
+    _TTM_SQUEEZE_MOMENTUM_BREAKOUT.name: _TTM_SQUEEZE_MOMENTUM_BREAKOUT,
+    _VWMA_TREND_PULLBACK.name: _VWMA_TREND_PULLBACK,
+    _CHAIKIN_OSCILLATOR_MOMENTUM_CONFIRMATION.name: _CHAIKIN_OSCILLATOR_MOMENTUM_CONFIRMATION,
+    _FISHER_TRANSFORM_EXTREME_REVERSION.name: _FISHER_TRANSFORM_EXTREME_REVERSION,
+    _CONNORS_RSI_EXTREME_REVERSION.name: _CONNORS_RSI_EXTREME_REVERSION,
+    _ECONOMIC_CALENDAR_NEWS_SPIKE_FADE.name: _ECONOMIC_CALENDAR_NEWS_SPIKE_FADE,
+    _ECONOMIC_CALENDAR_PRE_RELEASE_COMPRESSION.name: _ECONOMIC_CALENDAR_PRE_RELEASE_COMPRESSION,
+    _INTERMARKET_CORRELATION_TREND.name: _INTERMARKET_CORRELATION_TREND,
+    _CARRY_ROLLOVER_TREND.name: _CARRY_ROLLOVER_TREND,
+    _MULTI_DAY_SWING_TREND_CONTINUATION.name: _MULTI_DAY_SWING_TREND_CONTINUATION,
 }
 
 # Families that need something beyond the plain OHLCV df -- checked by
@@ -3823,6 +4515,7 @@ FAMILIES: dict[str, SkeletonSpec] = {
 # front, instead of quietly producing zero-trade candidates for every
 # single grid point.
 FAMILIES_REQUIRING_PAIR_DATA = {name for name, spec in FAMILIES.items() if spec.requires_pair_data}
+FAMILIES_REQUIRING_CALENDAR_DATA = {name for name, spec in FAMILIES.items() if spec.requires_calendar_data}
 
 
 def list_families() -> dict[str, str]:
@@ -3925,6 +4618,19 @@ HYPOTHESIS_QUESTIONS: dict[str, str] = {
     "fibonacci_retracement_bounce": "Does a pullback to a Fibonacci retracement ratio bounce back in the direction of the prevailing trend?",
     "trix_zero_cross_momentum": "When TRIX (a triple-smoothed EMA's rate of change) crosses zero, does that momentum continue?",
     "volume_profile_value_area_fade": "When price closes outside the rolling Volume Profile's value area, does it fade back toward the point of control?",
+    "hma_trend_following": "When a fast Hull MA crosses a slower one, does price continue in that direction?",
+    "vortex_trend_strength_breakout": "When a Vortex +/- crossover agrees with a fresh N-bar breakout, does the move continue?",
+    "elder_ray_bull_bear_power": "When the counter-trend Elder Ray power measure turns back in the trend's favor, does the trend resume?",
+    "ttm_squeeze_momentum_breakout": "When a Bollinger-inside-Keltner squeeze first releases, does price continue in the momentum dot's direction?",
+    "vwma_trend_pullback": "When price pulls back through its own VWMA and reclaims it inside a trend, does the trend resume?",
+    "chaikin_oscillator_momentum_confirmation": "When the Chaikin Oscillator already agrees with a fresh breakout's direction, does the breakout hold up better?",
+    "fisher_transform_extreme_reversion": "When the Fisher Transform crosses its own signal line from beyond an extreme, does price revert?",
+    "connors_rsi_extreme_reversion": "When Connors RSI (a composite short-term read) reaches an extreme, does price mean-revert?",
+    "economic_calendar_news_spike_fade": "When a wide-range bar prints shortly after a high-impact release, does the initial spike tend to fade?",
+    "economic_calendar_pre_release_compression": "When a volatility squeeze releases just ahead of a scheduled high-impact release, does that direction continue through the release?",
+    "intermarket_correlation_trend": "When a correlated (or inversely correlated) driver instrument makes a large move, does the primary instrument follow?",
+    "carry_rollover_trend": "Does only ever trading a pair's stated carry-positive direction, filtered by a slow trend, hold up over a multi-day hold?",
+    "multi_day_swing_trend_continuation": "Held with no time-in-trade cap, does a slow-EMA-trend pullback entry continue over a multi-day swing?",
 }
 
 
@@ -4063,6 +4769,7 @@ def generate_search_space(
     seed: int = 42,
     grid_points_per_gene: int = 3,
     has_pair_data: bool = False,
+    has_calendar_data: bool = False,
     exclude_families: "set[str] | None" = None,
 ) -> SearchSpace:
     """
@@ -4156,6 +4863,20 @@ def generate_search_space(
                     f"Family '{family}' requires a second instrument's price merged into the "
                     "working data first (see app.data.pairs.merge_pair_series) and "
                     "has_pair_data=True passed here. Merge pair data before searching this family."
+                )
+
+    if not has_calendar_data:
+        requested_calendar_families = [f for f in families_to_run if f in FAMILIES_REQUIRING_CALENDAR_DATA]
+        if requested_calendar_families:
+            if family in (None, "all"):
+                # Same skip-rather-than-fail treatment as the pair-data check above.
+                families_to_run = [f for f in families_to_run if f not in FAMILIES_REQUIRING_CALENDAR_DATA]
+            else:
+                raise StrategySpaceError(
+                    f"Family '{family}' requires economic-calendar news features merged into "
+                    "the working data first (see app.data.economic_calendar.merge_news_features) "
+                    "and has_calendar_data=True passed here. Merge calendar data before searching "
+                    "this family."
                 )
 
     combos_by_family: dict[str, list[dict]] = {
