@@ -7,10 +7,12 @@ import pytest
 
 from app.backtest.engine import run_backtest
 from app.backtest.risk import RiskConfig
+from app.data.economic_calendar import merge_news_features
 from app.data.pairs import merge_pair_series
 from app.search.strategy_space import (
-    FAMILIES, FAMILIES_REQUIRING_PAIR_DATA, StrategySpaceError, build_strategy_from_spec, family_description,
-    family_grid_size, generate_search_space, list_families, spec_from_strategy,
+    FAMILIES, FAMILIES_REQUIRING_CALENDAR_DATA, FAMILIES_REQUIRING_PAIR_DATA, StrategySpaceError,
+    build_strategy_from_spec, family_description, family_grid_size, generate_search_space, list_families,
+    spec_from_strategy,
 )
 from app.strategy.manual import ManualStrategy
 from app.strategy.mql5 import MQL5Strategy
@@ -145,10 +147,12 @@ def test_family_mode_samples_reproducibly_when_over_cap():
 
 def test_family_all_combines_every_family():
     space = generate_search_space("family", family="all", max_candidates=100_000, seed=1)
-    # "all" without has_pair_data=True silently skips families that require a
-    # second instrument merged in first (see FAMILIES_REQUIRING_PAIR_DATA) --
+    # "all" without has_pair_data=True/has_calendar_data=True silently skips
+    # families that require a second instrument or merged news data (see
+    # FAMILIES_REQUIRING_PAIR_DATA / FAMILIES_REQUIRING_CALENDAR_DATA) --
     # every other family still contributes its full grid.
-    plain_families = [name for name in FAMILIES if name not in FAMILIES_REQUIRING_PAIR_DATA]
+    special_data_families = FAMILIES_REQUIRING_PAIR_DATA | FAMILIES_REQUIRING_CALENDAR_DATA
+    plain_families = [name for name in FAMILIES if name not in special_data_families]
     expected_total = sum(family_grid_size(name) for name in plain_families)
     assert space.total_generated == expected_total
     seen_families = {meta["family"] for meta in space.meta.values()}
@@ -159,7 +163,10 @@ def test_family_all_with_pair_data_includes_pair_families():
     df = _synthetic_df()
     pair_df = _synthetic_df(seed=1)
     merged = merge_pair_series(df, pair_df)
-    space = generate_search_space("family", family="all", max_candidates=100_000, seed=1, has_pair_data=True)
+    space = generate_search_space(
+        "family", family="all", max_candidates=100_000, seed=1,
+        has_pair_data=True, has_calendar_data=True,
+    )
     expected_total = sum(family_grid_size(name) for name in FAMILIES)
     assert space.total_generated == expected_total
     seen_families = {meta["family"] for meta in space.meta.values()}
@@ -176,6 +183,18 @@ def test_family_stat_pairs_without_pair_data_raises():
         generate_search_space("family", family="stat_pairs", max_candidates=10, seed=1)
 
 
+def test_family_economic_calendar_without_calendar_data_raises():
+    with pytest.raises(StrategySpaceError, match="calendar|news|merge_news_features"):
+        generate_search_space("family", family="economic_calendar_news_spike_fade", max_candidates=10, seed=1)
+
+
+def test_family_all_without_calendar_data_skips_calendar_families():
+    space = generate_search_space("family", family="all", max_candidates=100_000, seed=1)
+    seen_families = {meta["family"] for meta in space.meta.values()}
+    assert "economic_calendar_news_spike_fade" not in seen_families
+    assert "economic_calendar_pre_release_compression" not in seen_families
+
+
 @pytest.mark.parametrize("family_name", list(FAMILIES))
 def test_every_family_produces_valid_runnable_configs(family_name):
     """
@@ -190,7 +209,20 @@ def test_every_family_produces_valid_runnable_configs(family_name):
     has_pair_data = family_name in FAMILIES_REQUIRING_PAIR_DATA
     if has_pair_data:
         df = merge_pair_series(df, _synthetic_df(seed=1))
-    space = generate_search_space("family", family=family_name, max_candidates=6, seed=3, has_pair_data=has_pair_data)
+    has_calendar_data = family_name in FAMILIES_REQUIRING_CALENDAR_DATA
+    if has_calendar_data:
+        # A calendar event every 30 bars covers this dataset densely enough
+        # that both economic-calendar families reliably find qualifying
+        # bars within a handful of sampled candidates below.
+        events = pd.DataFrame({
+            "timestamp": df["timestamp"].iloc[::30].to_numpy(),
+            "title": "Test Release", "currency": "USD", "impact": "High",
+        })
+        df = merge_news_features(df, events, symbol="EURUSD")
+    space = generate_search_space(
+        "family", family=family_name, max_candidates=6, seed=3,
+        has_pair_data=has_pair_data, has_calendar_data=has_calendar_data,
+    )
     assert len(space.candidates) > 0
     any_trades = False
     for cid, spec in space.candidates.items():

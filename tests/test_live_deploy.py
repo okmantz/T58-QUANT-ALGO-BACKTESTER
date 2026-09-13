@@ -15,17 +15,24 @@ def test_every_prop_firm_has_at_least_one_platform():
 
 def test_connectable_today_is_consistent_with_platforms():
     """connectable_today must be True if and only if at least one listed
-    platform is MT4/MT5 (the only integration this app actually has)."""
+    platform has a working adapter (MT4/MT5, cTrader, Tradovate,
+    TradeLocker, or DXtrade -- see prop_firms.is_platform_connectable)."""
     for firm in prop_firms.PROP_FIRMS:
-        has_mt = any(p in ("MT4", "MT5") for p in firm.platforms)
-        assert firm.connectable_today == has_mt, firm.name
+        has_connectable = any(prop_firms.is_platform_connectable(p) for p in firm.platforms)
+        assert firm.connectable_today == has_connectable, firm.name
 
 
-def test_futures_only_firms_are_flagged_not_connectable():
+def test_futures_firms_are_connectable_via_their_tradovate_platform():
+    """Apex/Topstep/MyFundedFutures are NOT MT4/MT5 firms, but each lists
+    Tradovate among its platforms, and Tradovate has a working adapter
+    (see broker_tradovate.py) -- so all three ARE connectable today, just
+    not via MT4/MT5. Rithmic and NinjaTrader remain unconnectable."""
     for name in ("Apex Trader Funding", "Topstep", "MyFundedFutures"):
         firm = prop_firms.find(name)
         assert firm is not None
-        assert firm.connectable_today is False
+        assert firm.connectable_today is True, firm.name
+    assert prop_firms.is_platform_connectable("Rithmic") is False
+    assert prop_firms.is_platform_connectable("NinjaTrader") is False
 
 
 def test_find_returns_none_for_unknown_firm():
@@ -34,7 +41,7 @@ def test_find_returns_none_for_unknown_firm():
 
 def _account(**overrides) -> live_settings.LiveAccount:
     defaults = dict(
-        id=None, nickname="Test Account", firm_name="FTMO", platform="MT5",
+        id=None, nickname="Test Account", firm_name="FTMO", platform="MT4/MT5",
         login="12345", server="FTMO-Server", password="secret123", terminal_path="",
     )
     defaults.update(overrides)

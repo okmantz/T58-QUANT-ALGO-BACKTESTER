@@ -290,10 +290,12 @@ def test_promoting_a_leaderboard_candidate_to_the_library_does_not_raise(tmp_pat
 def test_generate_population_stratifies_immigrants_across_all_families():
     """Generation 0 (no elites yet) must sample every active family, not
     just whichever family has the biggest parameter grid. Families that
-    require a second instrument's data (e.g. stat_pairs) are skipped
-    when no pair data is merged in -- that's correct behavior, not a
-    diversity failure, so they're excluded from the expected set here."""
-    from app.search.strategy_space import FAMILIES_REQUIRING_PAIR_DATA, list_families
+    require a second instrument's data (e.g. stat_pairs) or merged
+    economic-calendar data (e.g. economic_calendar_news_spike_fade) are
+    skipped when that extra data isn't merged in -- that's correct
+    behavior, not a diversity failure, so they're excluded from the
+    expected set here."""
+    from app.search.strategy_space import FAMILIES_REQUIRING_CALENDAR_DATA, FAMILIES_REQUIRING_PAIR_DATA, list_families
 
     cfg = EvolutionConfig(population_size=30, elite_keep=8, random_seed=1,
                            knowledge_graph_path="/tmp/t58_test_kg_gen0.json")
@@ -301,7 +303,7 @@ def test_generate_population_stratifies_immigrants_across_all_families():
 
     population = runner._generate_population(0, [])
     families_seen = {meta.get("family") for _, _, meta in population}
-    expected = set(list_families().keys()) - set(FAMILIES_REQUIRING_PAIR_DATA)
+    expected = set(list_families().keys()) - set(FAMILIES_REQUIRING_PAIR_DATA) - set(FAMILIES_REQUIRING_CALENDAR_DATA)
 
     assert families_seen == expected
 
