@@ -2549,6 +2549,41 @@ class MainWindow:
             "desktop, mobile web, and Search Lab all feed this automatically.",
         )
 
+        # First-run welcome -- shown only for a genuinely fresh install (no
+        # market data ever loaded AND no backtest ever run, per
+        # app.orchestration.pipeline_guide.should_show_first_run_welcome --
+        # the SAME predicate the web app's /dashboard route uses, so the
+        # two can never disagree about when someone still needs this).
+        # Recomputed fresh every time this tab is built rather than tracked
+        # as a "seen it" flag -- it naturally stops appearing the moment
+        # either becomes true, with nothing to dismiss-and-forget.
+        show_welcome = pipeline_guide.should_show_first_run_welcome(
+            has_stored_datasets=bool(list_stored_datasets()),
+            has_run_history=bool(run_history.dashboard_data().get("total_runs")),
+        )
+        if show_welcome:
+            welcome_box = self._section(
+                f, "👋 New here? Start here",
+                "So you never have to guess the order -- three steps to your first real result.",
+                emphasize=True,
+            )
+            Label(
+                welcome_box, text=pipeline_guide.first_run_welcome(), bg=PANEL, fg=TEXT,
+                font=_safe_font(9), wraplength=880, justify="left",
+            ).pack(anchor="w", padx=18, pady=(0, 10))
+            welcome_btn_row = Frame(welcome_box, bg=PANEL)
+            welcome_btn_row.pack(anchor="w", padx=18, pady=(0, 14))
+            self._button(
+                welcome_btn_row, "1. GO TO STRATEGY CONFIGURATION", lambda: self._show_page("strategyconfig"),
+                primary=True,
+            ).pack(side="left")
+            self._button(welcome_btn_row, "OR TRY SEARCH LAB", lambda: self._show_page("search")).pack(
+                side="left", padx=8,
+            )
+            self._button(welcome_btn_row, "READ THE FULL WALKTHROUGH", lambda: self._show_page("manual")).pack(
+                side="left", padx=8,
+            )
+
         # A dedicated variant of _scrollable() that also paints a soft,
         # glowing neural-graph backdrop around the dashboard's content
         # (see _build_dashboard_scrollable's docstring for why it's a
