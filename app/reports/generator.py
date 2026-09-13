@@ -594,6 +594,29 @@ def export_html(
 
     with open(path, "w", encoding="utf-8") as f:
         f.write(html)
+
+    # Native PDF export button, added alongside the browser's own
+    # print-to-PDF (still works via Ctrl/Cmd+P as before) -- see
+    # app/reports/pdf_export.py and app/web/extra_routes.py's /export/pdf
+    # route. Injected as a small standalone block rather than a
+    # _HTML_TEMPLATE placeholder so this whole feature is one self-contained,
+    # easily-reviewed diff instead of touching the (large) template string.
+    pdf_button_html = f"""
+<div style="position:fixed;bottom:18px;right:18px;z-index:999;">
+  <form method="post" action="/export/pdf" style="margin:0;">
+    <input type="hidden" name="report_json" value='{json.dumps(report).replace("'", "&#39;")}'>
+    <button type="submit" style="padding:10px 16px;border-radius:8px;border:1px solid #2f6fed;
+      background:#2f6fed;color:#fff;font-size:13px;font-weight:600;cursor:pointer;
+      box-shadow:0 2px 10px rgba(0,0,0,.25);">&#11015; Export PDF</button>
+  </form>
+</div>
+"""
+    with open(path, "r+", encoding="utf-8") as f:
+        content = f.read()
+        content = content.replace("</body>", pdf_button_html + "</body>") if "</body>" in content else content + pdf_button_html
+        f.seek(0)
+        f.write(content)
+        f.truncate()
     return path
 
 
