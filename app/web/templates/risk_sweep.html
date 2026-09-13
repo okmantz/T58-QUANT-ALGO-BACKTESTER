@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Risk Sweep — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  input[type=number], input[type=text], select, textarea {
+    width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font-size: 15px;
+  }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 140px; }
+  .pick-list { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto;
+               border: 1px solid var(--border-light); border-radius: 8px; padding: 8px; background: var(--panel-3); }
+  .pick-list label { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; color: #ddd; }
+  .submit-btn {
+    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: #04120e;
+    font-size: 16px; font-weight: 700; margin-top: 10px;
+  }
+  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .note { background: #142225; border: 1px solid #24494f; color: #b7e6ee; padding: 10px 12px; border-radius: 10px; margin-bottom: 14px; font-size: 12px; line-height: 1.5; }
+  table.sweep-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.sweep-table th, table.sweep-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: right; }
+  table.sweep-table th:first-child, table.sweep-table td:first-child { text-align: left; }
+  table.sweep-table th { color: var(--text-muted); text-transform: uppercase; font-size: 11px; }
+  tr.best-row { color: var(--teal); font-weight: 700; }
+  .best-callout { background: linear-gradient(160deg, var(--panel-2), var(--panel-elevated)); border: 1px solid rgba(var(--teal-rgb), .3);
+                  border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; font-size: 14px; }
+  details summary { font-size: 13px; color: #999; cursor: pointer; }
+</style>
+</head>
+<body>
+{% set active_page = 'risk_sweep' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Risk Sweep</h1>
+  <p>Holding the firm's rules fixed, find which risk-per-trade level actually maximizes your odds of reaching payout -- not which one looks best on a single backtest.</p>
+</div>
+
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+<div class="note">
+  Re-runs your strategy at each candidate risk level and scores every one with the full T58 Prop Survival model
+  (pass probability, first-payout probability, median days to payout, drawdown recovery) -- the same engine
+  the Search Lab and Research Loop trust elsewhere in this app. A smaller risk-per-trade can sometimes
+  dramatically improve your odds at the cost of taking longer to reach payout.
+</div>
+
+<form method="post" action="/risk-sweep/run">
+  <div class="card">
+    <h2>1. Pick a saved strategy</h2>
+    <div class="pick-list">
+      {% for s in strategies %}
+      <label><input type="radio" name="strategy_pick" value="{{ s.type }}::{{ s.name }}"
+        {{ 'checked' if form_values.get('strategy_pick') == s.type ~ '::' ~ s.name else '' }}> [{{ s.type }}] {{ s.name }}</label>
+      {% endfor %}
+      {% if not strategies %}<p style="color:var(--text-muted);font-size:13px;">No saved strategies yet -- save one from Run &amp; Report first.</p>{% endif %}
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>2. Dataset to sweep against</h2>
+    <select name="existing_dataset">
+      <option value="">-- choose a stored dataset --</option>
+      {% for d in stored_datasets %}
+      <option value="{{ d.name }}" {{ 'selected' if form_values.get('existing_dataset') == d.name else '' }}>{{ d.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="card">
+    <h2>3. Risk levels to test</h2>
+    <label>Candidate risk-per-trade levels, %, comma-separated</label>
+    <input type="text" name="risk_values" placeholder="{{ default_risk_values }}" value="{{ form_values.get('risk_values', '') }}">
+    <p style="font-size:11px;color:var(--text-muted);margin:4px 0 0;">Leave blank to use the default Masterclass list: {{ default_risk_values }}.</p>
+    <label style="margin-top:14px;"><input type="checkbox" name="quick_mode" {{ 'checked' if form_values.get('quick_mode') == 'on' else '' }}> Quick mode (fewer survival simulations per level -- faster, less smooth)</label>
+  </div>
+
+  <div class="card">
+    <details {{ 'open' if form_values else '' }}>
+      <summary>4. Base risk &amp; prop-firm rules</summary>
+      <div class="row">
+        <div><label>Initial balance</label><input type="number" step="1" name="initial_balance" value="{{ form_values.get('initial_balance', 100000) }}"></div>
+        <div><label>Max trades / day</label><input type="number" step="1" name="max_trades_day" value="{{ form_values.get('max_trades_day', 10) }}"></div>
+      </div>
+      <div class="row">
+        <div><label>Commission / trade</label><input type="number" step="0.01" name="commission" value="{{ form_values.get('commission', 0) }}"></div>
+        <div><label>Slippage (pips)</label><input type="number" step="0.1" name="slippage_pips" value="{{ form_values.get('slippage_pips', 0.5) }}"></div>
+        <div><label>Spread (pips)</label><input type="number" step="0.1" name="spread_pips" value="{{ form_values.get('spread_pips', 1.0) }}"></div>
+        <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" value="{{ form_values.get('pip_size', 0.0001) }}"></div>
+      </div>
+      <div class="row" style="margin-top:6px;">
+        <div><label>Account size</label><input type="number" step="1" name="account_size" value="{{ form_values.get('account_size', 100000) }}"></div>
+        <div><label>Profit target %</label><input type="number" step="0.1" name="profit_target" value="{{ form_values.get('profit_target', 8) }}"></div>
+        <div><label>Daily loss limit %</label><input type="number" step="0.1" name="daily_loss" value="{{ form_values.get('daily_loss', 5) }}"></div>
+        <div><label>Max drawdown %</label><input type="number" step="0.1" name="max_dd" value="{{ form_values.get('max_dd', 10) }}"></div>
+      </div>
+      <div class="row">
+        <div>
+          <label>Drawdown type</label>
+          <select name="dd_type">
+            <option value="trailing" {{ 'selected' if form_values.get('dd_type', 'trailing') == 'trailing' else '' }}>Trailing</option>
+            <option value="static" {{ 'selected' if form_values.get('dd_type') == 'static' else '' }}>Static</option>
+          </select>
+        </div>
+        <div>
+          <label>Drawdown check mode</label>
+          <select name="dd_check_mode">
+            <option value="intrabar" {{ 'selected' if form_values.get('dd_check_mode', 'intrabar') == 'intrabar' else '' }}>Intrabar</option>
+            <option value="close" {{ 'selected' if form_values.get('dd_check_mode') == 'close' else '' }}>Close only</option>
+          </select>
+        </div>
+        <div><label>Consistency rule % (optional)</label><input type="number" step="0.1" name="consistency" value="{{ form_values.get('consistency', '') }}"></div>
+        <div><label>Min trading days</label><input type="number" step="1" name="min_days" value="{{ form_values.get('min_days', 5) }}"></div>
+      </div>
+      <div class="row">
+        <div><label>Payout threshold %</label><input type="number" step="0.1" name="payout_threshold" value="{{ form_values.get('payout_threshold', 0) }}"></div>
+        <div><label>Payout cap % (optional)</label><input type="number" step="0.1" name="payout_cap" value="{{ form_values.get('payout_cap', '') }}"></div>
+        <div><label>Payout frequency (days)</label><input type="number" step="1" name="payout_freq" value="{{ form_values.get('payout_freq', 14) }}"></div>
+        <div><label>Required buffer %</label><input type="number" step="0.1" name="buffer" value="{{ form_values.get('buffer', 0) }}"></div>
+      </div>
+      <div class="row" style="margin-top:6px;">
+        <div>
+          <p style="font-size:11px;color:var(--text-muted);">Or select a prop firm preset instead of filling these in by hand:</p>
+          <select id="prop_preset_select" onchange="window.T58ApplyPropPreset && window.T58ApplyPropPreset(this.value)">
+            <option value="">-- or enter rules manually above --</option>
+          </select>
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <button type="submit" class="submit-btn">Run Risk Sweep</button>
+</form>
+
+{% if result %}
+<div class="card">
+  <h2>Sweep results -- [{{ result.strategy_type }}] {{ result.filename }} on {{ result.dataset }}{{ ' (quick mode)' if result.quick_mode else '' }}</h2>
+
+  {% if result.best_point %}
+  <div class="best-callout">
+    Best risk level for this strategy/data: <b>{{ '%.2f'|format(result.best_point.risk_value) }}%</b> per trade
+    (T58 Prop Survival Score {{ '%.1f'|format(result.best_point.prop_survival_score) }}/100,
+    {{ '%.1f'|format(result.best_point.probability_pass_evaluation) }}% pass probability,
+    {{ '%.1f'|format(result.best_point.probability_first_payout) }}% first-payout probability).
+  </div>
+  {% endif %}
+
+  {% if result.points %}
+  <table class="sweep-table">
+    <thead><tr>
+      <th>Risk %</th><th>Trades</th><th>Net profit</th><th>Max DD %</th>
+      <th>T58 Score</th><th>Pass %</th><th>Payout %</th><th>Median days to payout</th><th>Never recovered %</th>
+    </tr></thead>
+    <tbody>
+      {% for p in result.points %}
+      <tr class="{{ 'best-row' if result.best_point and p.risk_value == result.best_point.risk_value else '' }}">
+        <td>{{ '%.2f'|format(p.risk_value) }}%</td>
+        <td>{{ p.n_trades }}</td>
+        <td>${{ '%.2f'|format(p.net_profit) }}</td>
+        <td>{{ '%.1f'|format(p.max_drawdown_pct) }}%</td>
+        <td>{{ '%.1f'|format(p.prop_survival_score) }}</td>
+        <td>{{ '%.1f'|format(p.probability_pass_evaluation) }}%</td>
+        <td>{{ '%.1f'|format(p.probability_first_payout) }}%</td>
+        <td>{{ '%.0f'|format(p.median_days_to_first_payout) if p.median_days_to_first_payout is not none else '--' }}</td>
+        <td>{{ '%.1f'|format(p.never_recovered_pct) }}%</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if result.notes %}
+  <p style="font-size:11px;color:var(--text-muted);margin-top:10px;">
+    {% for n in result.notes %}{{ n }}<br>{% endfor %}
+  </p>
+  {% endif %}
+</div>
+{% endif %}
+
+</div>
+</div>
+<script>
+  (function () {
+    const raw = {{ (prop_presets_json | default('null')) | safe }};
+    const select = document.getElementById('prop_preset_select');
+    if (!raw || !select) return;
+    raw.forEach((p) => {
+      const opt = document.createElement('option');
+      opt.value = JSON.stringify(p);
+      opt.textContent = p.label;
+      select.appendChild(opt);
+    });
+  })();
+
+  window.T58ApplyPropPreset = function (value) {
+    if (!value) return;
+    const p = JSON.parse(value);
+    const form = document.getElementById('prop_preset_select').closest('form');
+    if (!form) return;
+    const set = (name, val) => { const el = form.querySelector(`[name="${name}"]`); if (el) el.value = val; };
+    set('account_size', p.account_size);
+    set('profit_target', p.evaluation_profit_target_pct);
+    set('daily_loss', p.daily_loss_limit_pct);
+    set('max_dd', p.max_drawdown_pct);
+    set('dd_type', p.drawdown_type);
+    set('dd_check_mode', p.drawdown_check_mode);
+    if (p.consistency_rule_pct != null) set('consistency', p.consistency_rule_pct);
+    set('min_days', p.min_trading_days);
+    set('payout_freq', p.payout_frequency_days);
+    set('payout_threshold', p.payout_threshold_pct);
+    set('buffer', p.required_buffer_pct);
+    if (p.payout_cap_pct != null) set('payout_cap', p.payout_cap_pct);
+  };
+</script>
+</body>
+</html>
