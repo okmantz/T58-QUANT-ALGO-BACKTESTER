@@ -147,3 +147,55 @@ def test_after_forward_test_mismatch():
 def test_after_forward_test_clean():
     msg = pg.after_forward_test({"trade_count": 10, "errors": [], "matched_backtest": True})
     assert "Deploy Live" in msg
+
+
+def test_after_first_backtest_zero_trades_names_tabs():
+    msg = pg.after_first_backtest({"trade_count": 0})
+    assert "1 Strategy Configuration" in msg
+    assert "2 Market Data" in msg
+
+
+def test_after_first_backtest_losing_names_specific_actions():
+    msg = pg.after_first_backtest({"trade_count": 50, "profit_factor": 0.8, "max_drawdown_pct": 5})
+    assert "5 Run & Report" in msg
+    assert "win rate" in msg.lower()
+
+
+def test_after_first_backtest_drawdown_names_tab_and_lever():
+    msg = pg.after_first_backtest({"trade_count": 50, "profit_factor": 1.4, "max_drawdown_pct": 55})
+    assert "4 Risk & Execution" in msg
+    assert "position size" in msg.lower() or "position-size" in msg.lower()
+
+
+def test_after_evolution_stop_no_pbo_note_for_small_leaderboard():
+    msg = pg.after_evolution_stop(1)
+    assert "PBO" not in msg
+
+
+def test_after_evolution_stop_pbo_note_uses_total_evaluated():
+    msg = pg.after_evolution_stop(5, total_evaluated=300)
+    assert "PBO" in msg
+    assert "300 candidates" in msg
+
+
+def test_after_evolution_stop_pbo_note_falls_back_to_leaderboard_size():
+    msg = pg.after_evolution_stop(5)
+    assert "PBO" in msg
+    assert "5 candidates" in msg
+
+
+def test_after_search_complete_champion_pbo_note_uses_total_candidates():
+    msg = pg.after_search_complete("cand_123", 10, total_candidates=250)
+    assert "PBO" in msg
+    assert "250 candidates" in msg
+    assert "coin flip" in msg.lower()
+
+
+def test_after_search_complete_no_champion_leaderboard_pbo_note():
+    msg = pg.after_search_complete(None, 3, total_candidates=40)
+    assert "PBO" in msg
+
+
+def test_after_search_complete_single_candidate_no_pbo_note():
+    msg = pg.after_search_complete("cand_1", 1, total_candidates=1)
+    assert "PBO" not in msg
