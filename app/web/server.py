@@ -38,6 +38,7 @@ from flask import (
 )
 
 from app.ai.ollama_settings import OllamaSettings
+from app.education import content as education_content
 from app.web.network_info import lan_url, print_startup_banner, qr_code_data_uri, qr_code_file, tailscale_url
 from app.web.notifications import send_job_notification
 from app.web.quant_lab_routes import quant_lab_bp
@@ -679,6 +680,18 @@ def resources():
     job, no report; just links out.
     """
     return render_template("resources.html", active_page="resources")
+
+
+@app.route("/education")
+def education():
+    """Quant/algo-trading concept lessons -- what a number or a tab
+    actually MEANS, as opposed to /user-manual (which button to click)
+    and /resources (external trading-fundamentals links). Content lives
+    in app.education.content as one shared source both this route and
+    the desktop Education tab (app.ui.main_window._build_education_tab)
+    render from, so the two can never drift apart. No form, no job, no
+    report; just a reading page, same as Resources and User Manual."""
+    return render_template("education.html", active_page="education", sections=education_content.list_sections())
 
 
 @app.route("/user-manual")
