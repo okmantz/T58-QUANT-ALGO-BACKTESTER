@@ -46,6 +46,7 @@ from app.web.extra_routes import extra_bp
 from app.web.ai_assistant_routes import ai_assistant_bp
 from app.web.options_outlook_routes import options_outlook_bp
 from app.web.hedge_fund_routes import hedge_fund_bp
+from app.web.risk_sweep_routes import risk_sweep_bp
 from app.ai.ollama_settings import load_settings as load_ollama_settings
 from app.ai.ollama_settings import save_settings as save_ollama_settings
 from app.ai.research_agent import ResearchAgentContext, ResearchAgent
@@ -217,6 +218,10 @@ app.register_blueprint(hedge_fund_bp)
 # see app/web/extra_routes.py's module docstring (Deploy Live's live-money
 # routes are deliberately NOT here; see that file for why).
 app.register_blueprint(extra_bp)
+# Risk Sweep -- run_risk_sweep (app/optimize/risk_sweep.py) was already
+# fully implemented and tested but had no route calling it; see
+# app/web/risk_sweep_routes.py's module docstring.
+app.register_blueprint(risk_sweep_bp)
 # Belt-and-suspenders alongside run_web.py's own call (this module can also
 # be run directly via `python -m app.web.server`, which never goes through
 # run_web.py) -- idempotent either way. See app.reports.crash_log.
