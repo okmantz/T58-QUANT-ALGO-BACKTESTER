@@ -4467,7 +4467,9 @@ def evolution_status():
         "target_eval_pass_pct": status.get("target_eval_pass_pct"),
         "target_reached": status.get("target_reached", False),
         "target_reached_candidate_id": status.get("target_reached_candidate_id"),
-        "next_step": None if status["running"] else pipeline_guide.after_evolution_stop(status["leaderboard_size"]),
+        "next_step": None if status["running"] else pipeline_guide.after_evolution_stop(
+            status["leaderboard_size"], total_evaluated=status["generation"] * runner.cfg.population_size,
+        ),
     })
 
 
@@ -4762,14 +4764,39 @@ def research_agent_start():
         except Exception:
             pass
 
+        # Optional: HTML/CSV/PDF backtest reports or screenshots uploaded
+        # alongside the question -- see app.ai.report_import and the
+        # read_uploaded_report tool in app.ai.research_agent. Saved to a
+        # per-job temp dir (never the working data dir) since these are
+        # evidence for the agent to read, not strategies/datasets this app
+        # manages long-term; nothing here is cleaned up automatically, same
+        # as compute_pbo's own tmp_dir convention elsewhere in this file.
+        uploaded_reports: list[Path] = []
+        report_uploads = request.files.getlist("report_files")
+        if report_uploads and any(f.filename for f in report_uploads):
+            reports_dir = Path(tempfile.mkdtemp(prefix="t58_agent_reports_"))
+            for f in report_uploads:
+                if not f.filename:
+                    continue
+                suffix = Path(f.filename).suffix.lower()
+                if suffix not in (".html", ".htm", ".csv", ".pdf", ".png", ".jpg", ".jpeg", ".webp"):
+                    continue
+                dest = reports_dir / Path(f.filename).name
+                f.save(dest)
+                uploaded_reports.append(dest)
+
         ctx = ResearchAgentContext(
             df=df, strategy_builder=(lambda s=strategy: s), strategy_name=getattr(strategy, "name", "Strategy"),
             source_type=strategy.source_type, risk=risk, prop_rules=rules, instrument=active_label,
+            uploaded_reports=uploaded_reports,
         )
 
         job_id = uuid.uuid4().hex[:12]
+        job_log = [f"Loaded {len(df)} bars from {active_label}.", f"Question: {question}"]
+        if uploaded_reports:
+            job_log.append(f"Uploaded {len(uploaded_reports)} report/screenshot file(s): " + ", ".join(p.name for p in uploaded_reports))
         with _AGENT_JOBS_LOCK:
-            _AGENT_JOBS[job_id] = {"log": [f"Loaded {len(df)} bars from {active_label}.", f"Question: {question}"], "done": False, "error": None, "result": None, "started_at": time.time()}
+            _AGENT_JOBS[job_id] = {"log": job_log, "done": False, "error": None, "result": None, "started_at": time.time()}
         thread = threading.Thread(target=_run_agent_job, args=(job_id, question, ctx, settings), daemon=True)
         thread.start()
         return redirect(url_for("research_agent_job", job_id=job_id))
@@ -5235,7 +5262,10 @@ def search_job_status(job_id):
             }
         ),
         "next_step": (
-            pipeline_guide.after_search_complete(summary.champion_candidate_id, len(summary.leaderboard or []))
+            pipeline_guide.after_search_complete(
+                summary.champion_candidate_id, len(summary.leaderboard or []),
+                total_candidates=summary.total_candidates,
+            )
             if (job["done"] and summary is not None) else None
         ),
     })
