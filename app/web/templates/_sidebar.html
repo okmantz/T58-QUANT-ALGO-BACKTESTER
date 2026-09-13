@@ -58,7 +58,7 @@
 
   {% set create_pages   = ['speed_run', 'speed_run_multi_instrument', 'generate_strategies', 'research_agent', 'research_loop'] %}
   {% set test_pages     = ['run', 'payout_probability'] %}
-  {% set optimize_pages = ['optimize_hub', 'search', 'search_multi_instrument', 'refine', 'full_pipeline', 'quick_optimize', 'multi_objective', 'evolution', 'evolution_multi_instrument'] %}
+  {% set optimize_pages = ['optimize_hub', 'search', 'search_multi_instrument', 'refine', 'full_pipeline', 'quick_optimize', 'multi_objective', 'evolution', 'evolution_multi_instrument', 'risk_sweep'] %}
   {% set validate_pages = ['validate_hub', 'wfo', 'wfga', 'cpcv', 'pbo', 'sensitivity', 'parameter_robustness', 'regime_matrix'] %}
   {% set champion_pages = ['family_diversity', 'ensemble', 'portfolio'] %}
 
@@ -128,6 +128,9 @@
       </a>
       <a href="/multi-objective" data-accent="blue" class="t58-nav-item {{ 'active' if active_page == 'multi_objective' else '' }}">
         <span class="t58-nav-icon">&#10022;</span><span class="label">Multi-objective</span>
+      </a>
+      <a href="/risk-sweep" data-accent="blue" class="t58-nav-item {{ 'active' if active_page == 'risk_sweep' else '' }}">
+        <span class="t58-nav-icon">&#9878;</span><span class="label">Risk sweep</span>
       </a>
       <a href="/evolution" data-accent="blue" class="t58-nav-item {{ 'active' if active_page == 'evolution' else '' }}">
         <span class="t58-nav-icon">&#9860;</span><span class="label">Evolution lab (GA)</span>
