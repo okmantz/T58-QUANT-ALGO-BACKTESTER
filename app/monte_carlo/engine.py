@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 
 from app.backtest.execution import Trade
+from app.monte_carlo.slippage_model import SessionVolatilitySlippageConfig, apply_session_volatility_slippage
 from app.prop.simulator import PropRules, precompute_day_structure, simulate_account
 
 
@@ -29,6 +30,11 @@ class MonteCarloConfig:
     method: str = "bootstrap"        # "shuffle" | "bootstrap" | "block_bootstrap"
     block_size: int = 5              # used when method == "block_bootstrap"
     slippage_stress_pct: float = 0.0  # extra % cost applied to every trade
+    # Session/volatility-aware slippage (app.monte_carlo.slippage_model) -- applied ONCE to the
+    # historical trade pool before resampling, independent of and in addition to
+    # slippage_stress_pct above. Disabled by default (opt-in): every existing caller of
+    # MonteCarloConfig() gets byte-identical output to before this field existed.
+    session_slippage: SessionVolatilitySlippageConfig = field(default_factory=SessionVolatilitySlippageConfig)
     random_seed: int | None = 42
 
 
@@ -157,7 +163,7 @@ def run_monte_carlo(
         raise ValueError("Cannot run Monte Carlo simulation with zero trades.")
 
     rng = np.random.default_rng(cfg.random_seed)
-    base_pnls = np.array([t.pnl for t in trades], dtype=float)
+    base_pnls = apply_session_volatility_slippage(trades, cfg.session_slippage)
     base_dates = [pd.Timestamp(t.entry_time).normalize() for t in trades]
     # Every simulation below reassigns the SAME fixed calendar dates
     # (base_dates never changes) to a resampled sequence of P&L values --
