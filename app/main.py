@@ -36,6 +36,52 @@ from app.strategy.manual import ManualStrategy
 # so the GUI is imported lazily -- only in the one branch that actually
 # launches it, below.
 
+def _build_prop_rules(
+    account_size: float = 100_000.0,
+    news_blackout_windows: str = "",
+    weekend_hold_allowed: bool = True,
+    max_lot_size: float | None = None,
+    hedging_allowed: bool = True,
+) -> PropRules:
+    """Shared constructor for every --cli subcommand's PropRules, so the
+    four live-execution-only fields added for Deploy Live (see
+    app.prop.simulator.PropRules' dataclass docstring -- they have no
+    effect on backtest/Monte Carlo/Evolution Lab output, only on
+    app.live_deploy.execution_engine.LiveExecutionSession) are settable
+    from the CLI too instead of only from the web app's prop-rules form.
+    Every other PropRules field keeps its dataclass default, exactly as
+    every subcommand's bare `PropRules()` call did before this existed.
+    """
+    return PropRules(
+        account_size=account_size,
+        news_blackout_windows=news_blackout_windows,
+        weekend_hold_allowed=weekend_hold_allowed,
+        max_lot_size=max_lot_size,
+        hedging_allowed=hedging_allowed,
+    )
+
+
+def _build_mc_cfg(
+    n_simulations: int,
+    session_volatility_slippage: bool = False,
+    slippage_base_pct: float = 0.00005,
+) -> MonteCarloConfig:
+    """Shared constructor for every --cli subcommand's MonteCarloConfig,
+    so the new session/volatility-aware slippage model (app.monte_carlo.
+    slippage_model) is reachable from the CLI. Disabled by default --
+    every existing call site's behavior is unchanged unless
+    --session-volatility-slippage is passed."""
+    from app.monte_carlo.slippage_model import SessionVolatilitySlippageConfig
+
+    return MonteCarloConfig(
+        n_simulations=n_simulations,
+        session_slippage=SessionVolatilitySlippageConfig(
+            enabled=session_volatility_slippage,
+            base_slippage_pct_of_price=slippage_base_pct,
+        ),
+    )
+
+
 DEFAULT_MANUAL_STRATEGY = {
     "name": "SMA 20/50 Cross",
     "indicators": [
@@ -72,6 +118,12 @@ def run_cli(
     refine_cost_stress_multiplier: float = 2.0,
     refine_cost_stress_weight: float = 0.35,
     adaptive_risk_rules_json: str | None = None,
+    news_blackout_windows: str = "",
+    weekend_hold_allowed: bool = True,
+    max_lot_size: float | None = None,
+    hedging_allowed: bool = True,
+    session_volatility_slippage: bool = False,
+    slippage_base_pct: float = 0.00005,
 ) -> None:
     if csv_path is None:
         csv_path = _resolve_default_csv()
@@ -92,7 +144,10 @@ def run_cli(
 
     strategy = ManualStrategy(DEFAULT_MANUAL_STRATEGY)
     risk = RiskConfig()
-    rules = PropRules()
+    rules = _build_prop_rules(
+        news_blackout_windows=news_blackout_windows, weekend_hold_allowed=weekend_hold_allowed,
+        max_lot_size=max_lot_size, hedging_allowed=hedging_allowed,
+    )
 
     adaptive_risk = None
     if adaptive_risk_rules_json:
@@ -132,7 +187,8 @@ def run_cli(
         return
 
     print(f"Running Monte Carlo simulation ({n_sims:,} runs)...")
-    mc_cfg = MonteCarloConfig(n_simulations=n_sims)
+    mc_cfg = _build_mc_cfg(n_sims, session_volatility_slippage=session_volatility_slippage,
+                            slippage_base_pct=slippage_base_pct)
     mc_result = run_monte_carlo(bt_result.trades, rules, mc_cfg)
     print(f"  Evaluation pass probability: {mc_result.evaluation_pass_probability:.1f}%")
     print(f"  First payout probability: {mc_result.first_payout_probability:.1f}%")
@@ -231,6 +287,10 @@ def run_search_cli(
     cost_stress_multiplier: float = 2.0,
     cost_stress_penalty_weight: float = 0.35,
     pair_csv: str | None = None,
+    news_blackout_windows: str = "",
+    weekend_hold_allowed: bool = True,
+    max_lot_size: float | None = None,
+    hedging_allowed: bool = True,
 ) -> None:
     """
     Search Lab: Stages 1-5. Generates a candidate pool, runs it through the
@@ -346,7 +406,10 @@ def run_search_cli(
         cost_stress_penalty_weight=cost_stress_penalty_weight,
     )
     risk = RiskConfig()
-    rules = PropRules()
+    rules = _build_prop_rules(
+        news_blackout_windows=news_blackout_windows, weekend_hold_allowed=weekend_hold_allowed,
+        max_lot_size=max_lot_size, hedging_allowed=hedging_allowed,
+    )
     resolved_db_path = db_path or str(Path(output_dir) / "search.db")
 
     summary = run_search(
@@ -399,6 +462,10 @@ def run_multi_instrument_cli(
     cost_stress_enabled: bool = True,
     cost_stress_multiplier: float = 2.0,
     cost_stress_penalty_weight: float = 0.35,
+    news_blackout_windows: str = "",
+    weekend_hold_allowed: bool = True,
+    max_lot_size: float | None = None,
+    hedging_allowed: bool = True,
 ) -> None:
     """Multi-instrument Search Lab: the SAME family/grid search space, run
     CONCURRENTLY against every `--mi-job` target (see app.orchestration.
@@ -461,7 +528,10 @@ def run_multi_instrument_cli(
         cost_stress_penalty_weight=cost_stress_penalty_weight,
     )
     risk = RiskConfig()
-    rules = PropRules()
+    rules = _build_prop_rules(
+        news_blackout_windows=news_blackout_windows, weekend_hold_allowed=weekend_hold_allowed,
+        max_lot_size=max_lot_size, hedging_allowed=hedging_allowed,
+    )
     db_dir = Path(output_dir) / "multi_instrument"
 
     print(f"Searching {len(jobs)} instrument/timeframe target(s) "
@@ -519,6 +589,12 @@ def run_wfo_cli(
     generations: int = 3,
     fitness_metric: str = "composite_prop_score",
     seed: int = 42,
+    news_blackout_windows: str = "",
+    weekend_hold_allowed: bool = True,
+    max_lot_size: float | None = None,
+    hedging_allowed: bool = True,
+    session_volatility_slippage: bool = False,
+    slippage_base_pct: float = 0.00005,
 ) -> None:
     """First-class walk-forward optimization: re-optimizes fresh on each
     fold's train window and chains every fold's held-out test window into
@@ -542,8 +618,13 @@ def run_wfo_cli(
     print(f"Loaded {len(df)} bars from {csv_path}")
 
     strategy = ManualStrategy(DEFAULT_MANUAL_STRATEGY)
-    risk, rules = RiskConfig(), PropRules()
-    mc_cfg = MonteCarloConfig(n_simulations=1000)
+    risk = RiskConfig()
+    rules = _build_prop_rules(
+        news_blackout_windows=news_blackout_windows, weekend_hold_allowed=weekend_hold_allowed,
+        max_lot_size=max_lot_size, hedging_allowed=hedging_allowed,
+    )
+    mc_cfg = _build_mc_cfg(1000, session_volatility_slippage=session_volatility_slippage,
+                            slippage_base_pct=slippage_base_pct)
     refine_cfg = RefinementConfig(population_size=population, generations=generations, fitness_metric=fitness_metric)
 
     print(f"Running walk-forward optimization ({window_mode}, {n_folds} folds)...")
@@ -657,6 +738,12 @@ def run_sensitivity_cli(
     pct_range: float = 0.5,
     n_steps: int = 9,
     heatmap_params: str | None = None,
+    news_blackout_windows: str = "",
+    weekend_hold_allowed: bool = True,
+    max_lot_size: float | None = None,
+    hedging_allowed: bool = True,
+    session_volatility_slippage: bool = False,
+    slippage_base_pct: float = 0.00005,
 ) -> None:
     """1D parameter sensitivity sweeps (+ optional 2D heatmap for a named
     pair of parameters) on the default strategy."""
@@ -678,8 +765,13 @@ def run_sensitivity_cli(
     print(f"Loaded {len(df)} bars from {csv_path}")
 
     strategy = ManualStrategy(DEFAULT_MANUAL_STRATEGY)
-    risk, rules = RiskConfig(), PropRules()
-    mc_cfg = MonteCarloConfig(n_simulations=500)
+    risk = RiskConfig()
+    rules = _build_prop_rules(
+        news_blackout_windows=news_blackout_windows, weekend_hold_allowed=weekend_hold_allowed,
+        max_lot_size=max_lot_size, hedging_allowed=hedging_allowed,
+    )
+    mc_cfg = _build_mc_cfg(500, session_volatility_slippage=session_volatility_slippage,
+                            slippage_base_pct=slippage_base_pct)
 
     print(f"Running 1D sensitivity sweeps (metric={fitness_metric}, +/-{pct_range * 100:.0f}%, {n_steps} steps)...")
     sweeps = compute_1d_sensitivity(df, strategy, risk, rules, mc_cfg, metric=fitness_metric, pct_range=pct_range, n_steps=n_steps)
@@ -748,6 +840,12 @@ def run_multi_objective_cli(
     population: int = 20,
     generations: int = 8,
     seed: int = 42,
+    news_blackout_windows: str = "",
+    weekend_hold_allowed: bool = True,
+    max_lot_size: float | None = None,
+    hedging_allowed: bool = True,
+    session_volatility_slippage: bool = False,
+    slippage_base_pct: float = 0.00005,
 ) -> None:
     """Multi-objective (Pareto front) optimization across the given
     comma-separated objectives, instead of a single collapsed fitness
@@ -770,8 +868,13 @@ def run_multi_objective_cli(
     print(f"Loaded {len(df)} bars from {csv_path}")
 
     strategy = ManualStrategy(DEFAULT_MANUAL_STRATEGY)
-    risk, rules = RiskConfig(), PropRules()
-    mc_cfg = MonteCarloConfig(n_simulations=1000)
+    risk = RiskConfig()
+    rules = _build_prop_rules(
+        news_blackout_windows=news_blackout_windows, weekend_hold_allowed=weekend_hold_allowed,
+        max_lot_size=max_lot_size, hedging_allowed=hedging_allowed,
+    )
+    mc_cfg = _build_mc_cfg(1000, session_volatility_slippage=session_volatility_slippage,
+                            slippage_base_pct=slippage_base_pct)
     mo_cfg = MultiObjectiveConfig(
         objectives=[o.strip() for o in objectives.split(",")],
         population_size=population, generations=generations, random_seed=seed,
@@ -793,6 +896,12 @@ def run_ensemble_cli(
     min_agreement: int = 2,
     initial_balance: float = 100_000.0,
     correlation_penalty_strength: float = 0.6,
+    news_blackout_windows: str = "",
+    weekend_hold_allowed: bool = True,
+    max_lot_size: float | None = None,
+    hedging_allowed: bool = True,
+    session_volatility_slippage: bool = False,
+    slippage_base_pct: float = 0.00005,
 ) -> None:
     """Multi-strategy ensemble backtest: several DIFFERENT strategies
     (Python/PineScript/MQL5 files) on the SAME instrument, combined either
@@ -855,8 +964,11 @@ def run_ensemble_cli(
         for k, p in paths.items():
             print(f"  {k}: {p}")
     elif mode == "vote":
-        from app.monte_carlo.engine import MonteCarloConfig, run_monte_carlo
-        rules = PropRules(account_size=initial_balance)
+        from app.monte_carlo.engine import run_monte_carlo
+        rules = _build_prop_rules(
+            account_size=initial_balance, news_blackout_windows=news_blackout_windows,
+            weekend_hold_allowed=weekend_hold_allowed, max_lot_size=max_lot_size, hedging_allowed=hedging_allowed,
+        )
         bt_result = run_ensemble_vote(df, strategies, risk, names=names, vote_config=EnsembleVoteConfig(min_agreement=min_agreement))
         print(f"  Trades: {len(bt_result.trades)}  Net profit: ${bt_result.statistics.net_profit:,.2f}")
         if not bt_result.trades:
@@ -866,7 +978,9 @@ def run_ensemble_cli(
         trade_pnls = [t.pnl for t in bt_result.trades]
         trade_dates = [t.entry_time for t in bt_result.trades]
         single_run = simulate_account(trade_pnls, trade_dates, rules)
-        mc_result = run_monte_carlo(bt_result.trades, rules, MonteCarloConfig(n_simulations=3000))
+        mc_result = run_monte_carlo(bt_result.trades, rules, _build_mc_cfg(
+            3000, session_volatility_slippage=session_volatility_slippage, slippage_base_pct=slippage_base_pct,
+        ))
         paths = generate_full_report(
             output_dir=output_dir, strategy_name=bt_result.strategy_name, strategy_source_type="ensemble_vote",
             instrument=Path(csv_path).name, timeframe="unknown", backtest_period=period,
@@ -890,6 +1004,12 @@ def run_wfga_cli(
     generations: int = 6,
     fitness_metric: str = "composite_prop_score",
     seed: int = 42,
+    news_blackout_windows: str = "",
+    weekend_hold_allowed: bool = True,
+    max_lot_size: float | None = None,
+    hedging_allowed: bool = True,
+    session_volatility_slippage: bool = False,
+    slippage_base_pct: float = 0.00005,
 ) -> None:
     """Walk-forward-aware GA: same operators as Iterative Refinement, but
     every candidate's fitness is scored only on chained out-of-sample fold
@@ -913,8 +1033,13 @@ def run_wfga_cli(
     print(f"Loaded {len(df)} bars from {csv_path}")
 
     strategy = ManualStrategy(DEFAULT_MANUAL_STRATEGY)
-    risk, rules = RiskConfig(), PropRules()
-    mc_cfg = MonteCarloConfig(n_simulations=1000)
+    risk = RiskConfig()
+    rules = _build_prop_rules(
+        news_blackout_windows=news_blackout_windows, weekend_hold_allowed=weekend_hold_allowed,
+        max_lot_size=max_lot_size, hedging_allowed=hedging_allowed,
+    )
+    mc_cfg = _build_mc_cfg(1000, session_volatility_slippage=session_volatility_slippage,
+                            slippage_base_pct=slippage_base_pct)
     refine_cfg = RefinementConfig(population_size=population, generations=generations, fitness_metric=fitness_metric, random_seed=seed)
 
     print(f"Running walk-forward-aware GA ({window_mode}, {n_folds} folds)...")
@@ -940,10 +1065,21 @@ def run_full_pipeline_cli(
     final_mc_sims: int = 10000,
     seed: int = 42,
     save_to_library: bool = True,
+    news_blackout_windows: str = "",
+    weekend_hold_allowed: bool = True,
+    max_lot_size: float | None = None,
+    hedging_allowed: bool = True,
 ) -> None:
     """Full Pipeline: baseline -> walk-forward-aware GA (robust, not
     curve-fit) -> re-validated final report -> library save. See
-    app.orchestration.full_pipeline for the full step-by-step docstring."""
+    app.orchestration.full_pipeline for the full step-by-step docstring.
+
+    NOTE: unlike the other subcommands, this one does not accept
+    --session-volatility-slippage -- app.orchestration.full_pipeline's
+    FullPipelineConfig takes a plain `final_mc_sims` int and builds its
+    own MonteCarloConfig internally rather than accepting one, so wiring
+    the new slippage model through here would mean changing that
+    module too, which is out of scope for this change."""
     from app.orchestration.full_pipeline import FullPipelineConfig, run_full_pipeline
 
     if csv_path is None:
@@ -960,7 +1096,11 @@ def run_full_pipeline_cli(
     print(f"Loaded {len(df)} bars from {csv_path}")
 
     strategy = ManualStrategy(DEFAULT_MANUAL_STRATEGY)
-    risk, rules = RiskConfig(), PropRules()
+    risk = RiskConfig()
+    rules = _build_prop_rules(
+        news_blackout_windows=news_blackout_windows, weekend_hold_allowed=weekend_hold_allowed,
+        max_lot_size=max_lot_size, hedging_allowed=hedging_allowed,
+    )
     cfg = FullPipelineConfig(
         n_folds=n_folds, window_mode=window_mode, ga_population=population,
         ga_generations=generations, fitness_metric=fitness_metric,
@@ -989,6 +1129,51 @@ def main():
                                                        "most recently stored dataset in data/raw/, or the bundled sample")
     parser.add_argument("--sims", type=int, default=10000, help="number of Monte Carlo simulations (--cli mode)")
     parser.add_argument("--output", default="reports", help="output directory for the report (--cli mode)")
+
+    # -- Prop-rule fields shared by every subcommand below (see app.prop.simulator.PropRules'
+    # dataclass docstring). These are live-execution-only: they have no effect on backtest/
+    # Monte Carlo/Evolution Lab output on their own, they're just recorded into PropRules (and
+    # from there into every report) so the report reflects the same account constraints Deploy
+    # Live would enforce. Every subcommand that builds a PropRules picks these up. --
+    parser.add_argument(
+        "--news-blackout-windows", default="",
+        help="Prop rule (informational in --cli mode; enforced live by Deploy Live's execution "
+             "engine): semicolon-separated blackout windows, e.g. "
+             "'08:25-08:35;FRI 19:55-21:05' (each is either a daily HH:MM-HH:MM window or a "
+             "specific weekday one). Converted to one-per-line internally to match the format "
+             "app.live_deploy.execution_engine.parse_blackout_windows expects.",
+    )
+    parser.add_argument(
+        "--no-weekend-hold", action="store_true",
+        help="Prop rule: record that this account may NOT hold positions over the weekend "
+             "(informational in --cli mode; Deploy Live's execution engine is what actually "
+             "flattens positions and blocks entries before the weekend close).",
+    )
+    parser.add_argument(
+        "--max-lot-size", type=float, default=None,
+        help="Prop rule: cap on live order volume for this account (informational in --cli mode).",
+    )
+    parser.add_argument(
+        "--no-hedging", action="store_true",
+        help="Prop rule: record that hedging is NOT allowed for this account (informational in "
+             "--cli mode; enforced live by Deploy Live's execution engine).",
+    )
+
+    # -- Session/volatility-aware slippage (app.monte_carlo.slippage_model), shared by every
+    # subcommand that runs a Monte Carlo simulation. Off by default -- every subcommand's
+    # existing output is unchanged unless --session-volatility-slippage is passed. --
+    parser.add_argument(
+        "--session-volatility-slippage", action="store_true",
+        help="Apply session- and volatility-aware slippage to the historical trade pool before "
+             "Monte Carlo resampling, instead of (or alongside) the existing flat "
+             "slippage-stress model. Off by default. See app.monte_carlo.slippage_model.",
+    )
+    parser.add_argument(
+        "--slippage-base-pct", type=float, default=0.00005,
+        help="Base slippage as a fraction of price, before session/volatility multipliers -- "
+             "only used with --session-volatility-slippage. Default ~0.5 pip on a 5-digit FX pair.",
+    )
+
     parser.add_argument(
         "--refine", action="store_true",
         help="optional: also run Iterative Refinement (genetic-algorithm-style parameter "
@@ -1227,6 +1412,19 @@ def main():
 
     args = parser.parse_args()
 
+    # Shared across every subcommand below that accepts them -- see the
+    # argparse definitions above for what each means.
+    prop_rule_kwargs = dict(
+        news_blackout_windows=args.news_blackout_windows.replace(";", "\n"),
+        weekend_hold_allowed=not args.no_weekend_hold,
+        max_lot_size=args.max_lot_size,
+        hedging_allowed=not args.no_hedging,
+    )
+    slippage_kwargs = dict(
+        session_volatility_slippage=args.session_volatility_slippage,
+        slippage_base_pct=args.slippage_base_pct,
+    )
+
     if args.multi_instrument:
         run_multi_instrument_cli(
             args.mi_job or [], args.output, max_concurrent=args.mi_max_concurrent,
@@ -1242,6 +1440,7 @@ def main():
             cost_stress_enabled=not args.search_no_cost_stress,
             cost_stress_multiplier=args.search_cost_stress_multiplier,
             cost_stress_penalty_weight=args.search_cost_stress_weight,
+            **prop_rule_kwargs,
         )
     elif args.search:
         run_search_cli(
@@ -1259,12 +1458,14 @@ def main():
             cost_stress_multiplier=args.search_cost_stress_multiplier,
             cost_stress_penalty_weight=args.search_cost_stress_weight,
             pair_csv=args.pair_csv,
+            **prop_rule_kwargs,
         )
     elif args.wfo:
         run_wfo_cli(
             args.csv, args.output, n_folds=args.wfo_folds, window_mode=args.wfo_window_mode,
             train_frac=args.wfo_train_frac, population=args.wfo_population, generations=args.wfo_generations,
             fitness_metric=args.wfo_metric, seed=args.wfo_seed,
+            **prop_rule_kwargs, **slippage_kwargs,
         )
     elif args.cpcv:
         run_cpcv_cli(
@@ -1282,6 +1483,7 @@ def main():
             args.csv, args.output, fitness_metric=args.sensitivity_metric,
             pct_range=args.sensitivity_pct_range, n_steps=args.sensitivity_steps,
             heatmap_params=args.sensitivity_heatmap,
+            **prop_rule_kwargs, **slippage_kwargs,
         )
     elif args.portfolio:
         run_portfolio_cli(
@@ -1292,18 +1494,21 @@ def main():
         run_multi_objective_cli(
             args.csv, args.output, objectives=args.mo_objectives, population=args.mo_population,
             generations=args.mo_generations, seed=args.mo_seed,
+            **prop_rule_kwargs, **slippage_kwargs,
         )
     elif args.ensemble:
         run_ensemble_cli(
             args.csv, args.ensemble_strategy or [], args.output,
             mode=args.ensemble_mode, min_agreement=args.ensemble_min_agreement,
             initial_balance=args.ensemble_balance, correlation_penalty_strength=args.ensemble_correlation_strength,
+            **prop_rule_kwargs, **slippage_kwargs,
         )
     elif args.wfga:
         run_wfga_cli(
             args.csv, args.output, n_folds=args.wfga_folds, window_mode=args.wfga_window_mode,
             population=args.wfga_population, generations=args.wfga_generations,
             fitness_metric=args.wfga_metric, seed=args.wfga_seed,
+            **prop_rule_kwargs, **slippage_kwargs,
         )
     elif args.full_pipeline:
         run_full_pipeline_cli(
@@ -1311,6 +1516,7 @@ def main():
             population=args.fp_population, generations=args.fp_generations,
             fitness_metric=args.fp_metric, final_mc_sims=args.fp_final_mc_sims, seed=args.fp_seed,
             save_to_library=not args.fp_no_save_to_library,
+            **prop_rule_kwargs,
         )
     elif args.cli:
         run_cli(
@@ -1324,6 +1530,7 @@ def main():
             refine_cost_stress_multiplier=args.refine_cost_stress_multiplier,
             refine_cost_stress_weight=args.refine_cost_stress_weight,
             adaptive_risk_rules_json=args.adaptive_risk_rules,
+            **prop_rule_kwargs, **slippage_kwargs,
         )
     else:
         from app.ui.main_window import launch  # lazy: only needed for the GUI path
