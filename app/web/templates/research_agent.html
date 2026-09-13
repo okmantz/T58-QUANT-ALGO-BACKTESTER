@@ -167,6 +167,12 @@
   </div>
 
   <div class="card">
+    <h2>4b. Optional: upload a backtest report or screenshot</h2>
+    <p class="help">HTML/CSV/PDF reports (from this app or elsewhere) are parsed for real metrics. Screenshots (.png/.jpg) are read by the vision model below on a best-effort basis and flagged as unverified. The agent can call read_uploaded_report on any of these while investigating your question.</p>
+    <input type="file" name="report_files" multiple accept=".html,.htm,.csv,.pdf,.png,.jpg,.jpeg,.webp">
+  </div>
+
+  <div class="card">
     <h2>5. AI Assist (Ollama, required for this tab)</h2>
     <p class="help">Needs Ollama reachable at the host below from wherever this server runs (works over your home/office LAN -- point it at the IP of whatever machine is running Ollama).</p>
     <div class="row">
