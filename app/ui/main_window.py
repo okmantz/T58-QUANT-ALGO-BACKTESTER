@@ -56,6 +56,8 @@ from app.forward_test.journal import ForwardTestJournal
 from app.forward_test.engine import ForwardTestConfig, ForwardTestSession
 from app.live_deploy import prop_firms as live_deploy_prop_firms
 from app.live_deploy import live_settings as live_deploy_settings
+from app.live_deploy.broker_registry import build_adapter, SUPPORTED_PLATFORMS
+from app.live_deploy.execution_engine import LiveExecutionSession, LiveExecutionConfig
 from app.monte_carlo.engine import MonteCarloConfig, MonteCarloResult, run_monte_carlo
 from app.optimize.parameter_space import RefinementError, apply_genome, extract_genome
 from app.optimize.refinement import FITNESS_METRICS, RefinementConfig, run_iterative_refinement
@@ -15401,8 +15403,8 @@ class MainWindow:
         self.dl_firm.combo.bind("<<ComboboxSelected>>", lambda _e: self._dl_on_firm_changed())
         self.dl_platform = LabeledCombo(
             add_section, "Platform",
-            ["MT5", "MT4", "cTrader (not yet supported)", "Tradovate (not yet supported)",
-             "Rithmic (not yet supported)", "NinjaTrader (not yet supported)", "Other (not yet supported)"],
+            ["MT5", "MT4", "cTrader", "Tradovate", "TradeLocker", "DXtrade",
+             "Rithmic (not yet supported)", "NinjaTrader (not yet supported)"],
             "MT5",
         )
         self.dl_nickname = LabeledEntry(add_section, "Account nickname (yours, e.g. 'FTMO 100k #1')", "")
@@ -15410,6 +15412,11 @@ class MainWindow:
         self.dl_server = LabeledEntry(add_section, "Server (from your firm's account email)", "")
         self.dl_password = LabeledEntry(add_section, "Password", "", secret=True)
         self.dl_terminal_path = LabeledEntry(add_section, "Terminal path (optional, only if auto-detect fails)", "")
+        self.dl_extra_credentials = LabeledEntry(
+            add_section,
+            "Extra credentials (cTrader/Tradovate/TradeLocker/DXtrade only) -- semicolon-separated key=value pairs",
+            "",
+        )
 
         firm_note_row = Frame(add_section, bg=PANEL)
         firm_note_row.pack(anchor="w", padx=18, pady=(0, 8))
@@ -15648,8 +15655,19 @@ class MainWindow:
         self.dl_login.var.set(acct.login)
         self.dl_server.var.set(acct.server)
         self.dl_terminal_path.var.set(acct.terminal_path)
+        # Secret-shaped extra-credential keys (see live_deploy_settings._SECRET_EXTRA_KEYS)
+        # are excluded here, same as the password field just below -- never re-displayed.
+        # Leaving them out of a re-save is safe: save_account() only overwrites a secret's
+        # stored value when a new non-empty one is actually provided for that key.
+        _secret_extra_keys = {"client_secret", "refresh_token", "app_secret", "sec", "access_token"}
+        self.dl_extra_credentials.var.set(";".join(
+            f"{k}={v}" for k, v in (acct.extra_credentials or {}).items() if k not in _secret_extra_keys
+        ))
         self.dl_firm_note.config(text="Editing this saved account. Password is never re-displayed -- leave it "
-                                       "blank to keep the existing one, or enter a new one to replace it.")
+                                       "blank to keep the existing one, or enter a new one to replace it. Same "
+                                       "for any secret extra-credential fields (client secret, refresh token, "
+                                       "etc.) -- they're omitted above too; only re-enter them if you're "
+                                       "changing that value.")
         connectable = "(not yet supported)" not in acct.platform
         self.dl_start_btn.config(state="normal" if connectable and self._dl_session is None else "disabled")
         self.dl_status.config(
@@ -15685,15 +15703,30 @@ class MainWindow:
             return
         self.dl_terminal_path.var.set(candidates[0])
 
+    def _dl_parse_extra_credentials(self, raw: str) -> dict:
+        """Parses the "Extra credentials" field: semicolon-separated
+        key=value pairs (e.g. "client_id=abc;client_secret=xyz"). See
+        each app/live_deploy/broker_*.py module's docstring for exactly
+        which keys a given platform needs."""
+        out = {}
+        for pair in raw.split(";"):
+            if "=" in pair:
+                k, v = pair.split("=", 1)
+                if k.strip():
+                    out[k.strip()] = v.strip()
+        return out
+
     def _dl_save_account(self):
         platform = self.dl_platform.get_str()
         if "(not yet supported)" in platform:
             messagebox.showwarning(
                 "Not supported yet",
-                f"{platform.split(' (')[0]} accounts aren't wired up yet -- this app can only place "
-                "live orders through MT4/MT5 today. Saving these account details now so they're "
-                "ready the moment that integration exists, but START LIVE TRADING will stay disabled "
-                "for this account until then.",
+                f"{platform.split(' (')[0]} accounts aren't wired up yet -- Rithmic and NinjaTrader "
+                "both require either a proprietary desktop plugin architecture or a licensed data "
+                "agreement that isn't a simple free API registration (see app/live_deploy/"
+                "prop_firms.py). Saving these account details now so they're ready the moment that "
+                "integration exists, but START LIVE TRADING will stay disabled for this account "
+                "until then.",
             )
         if not self.dl_confirm_var.get():
             messagebox.showwarning(
@@ -15714,12 +15747,14 @@ class MainWindow:
             server=self.dl_server.get_str().strip(),
             password=self.dl_password.get_str(),
             terminal_path=self.dl_terminal_path.get_str().strip(),
+            extra_credentials=self._dl_parse_extra_credentials(self.dl_extra_credentials.get_str()),
         ))
         self._dl_editing_id = None
         self.dl_password.var.set("")
         self.dl_confirm_var.set(False)
         self._dl_refresh_accounts()
         messagebox.showinfo("Saved", "Account saved. Select it in the list above, then Test Connection.")
+
 
     def _dl_refresh_strategy_list(self):
         try:
@@ -15741,20 +15776,24 @@ class MainWindow:
         if "(not yet supported)" in acct.platform:
             self.dl_status.config(text=f"{acct.platform} isn't supported yet -- see the note above.", fg=AMBER)
             return
-        if not mt5_connector_module.is_available():
+        if acct.platform == "MT5" and not mt5_connector_module.is_available():
             self.dl_status.config(text=mt5_connector_module.unavailable_reason(), fg=AMBER)
             return
         self.dl_status.config(text="Connecting...", fg=AMBER)
         self.root.update_idletasks()
 
         def run():
-            connector = mt5_connector_module.MT5Connector(acct.login, acct.password, acct.server, acct.terminal_path)
-            result = connector.connect()
+            try:
+                broker = build_adapter(acct)
+            except Exception as exc:
+                self.root.after(0, lambda: self.dl_status.config(text=str(exc), fg=RED))
+                return
+            result = broker.connect()
             if result.ok:
                 msg = (f"Connected: account {result.account_login} @ {result.account_server} — "
                        f"balance {result.balance:,.2f} {result.currency}, equity {result.equity:,.2f}. "
                        f"Ready -- pick a strategy below and click START LIVE TRADING when you're sure.")
-                connector.disconnect()
+                broker.disconnect()
                 color = GREEN
                 self.root.after(0, lambda: self.dl_start_btn.config(state="normal" if self._dl_session is None else "disabled"))
             else:
@@ -15762,6 +15801,7 @@ class MainWindow:
             self.root.after(0, lambda: self.dl_status.config(text=msg, fg=color))
 
         threading.Thread(target=run, daemon=True).start()
+
 
     def _dl_start_clicked(self):
         sel = self.dl_accounts_listbox.curselection()
@@ -15772,7 +15812,7 @@ class MainWindow:
         if "(not yet supported)" in acct.platform:
             messagebox.showwarning("Not supported yet", f"{acct.platform} isn't wired up yet -- see the note above.")
             return
-        if not mt5_connector_module.is_available():
+        if acct.platform == "MT5" and not mt5_connector_module.is_available():
             messagebox.showwarning("MT5 not available", mt5_connector_module.unavailable_reason())
             return
 
@@ -15803,9 +15843,11 @@ class MainWindow:
             messagebox.showerror("Strategy error", f"Could not load strategy: {exc}")
             return
 
-        from app.forward_test.mt5_connector import MT5Connector
-
-        connector = MT5Connector(acct.login, acct.password, acct.server, acct.terminal_path)
+        try:
+            broker = build_adapter(acct)
+        except Exception as exc:
+            messagebox.showerror("Connection error", str(exc))
+            return
         pip_size_str = self.dl_pip_size.get_str().strip()
         pip_size = None
         if pip_size_str:
@@ -15816,18 +15858,34 @@ class MainWindow:
 
         def resolve_pip_and_start():
             nonlocal pip_size
-            probe = MT5Connector(acct.login, acct.password, acct.server, acct.terminal_path)
+            try:
+                probe = build_adapter(acct)
+            except Exception as exc:
+                self.root.after(0, lambda: self._dl_log_line("error", str(exc)))
+                self.root.after(0, lambda: self.dl_start_btn.config(state="normal"))
+                return
             conn = probe.connect()
             if not conn.ok:
                 self.root.after(0, lambda: self._dl_log_line("error", conn.message))
                 self.root.after(0, lambda: self.dl_start_btn.config(state="normal"))
                 return
             if pip_size is None:
-                try:
-                    pip_size = probe.symbol_point(symbol)
-                except Exception as exc:
+                # symbol_point() is an MT5-specific convenience (reads the broker's own
+                # minimum price increment) -- not part of the common BrokerAdapter interface,
+                # since not every platform exposes an equivalent single call. Auto-detect
+                # where available; otherwise fall back the same way MT5 itself does when
+                # detection fails.
+                if hasattr(probe, "symbol_point"):
+                    try:
+                        pip_size = probe.symbol_point(symbol)
+                    except Exception as exc:
+                        self.root.after(0, lambda: self._dl_log_line(
+                            "warn", f"Could not auto-detect pip size ({exc}); falling back to 0.0001."))
+                        pip_size = 0.0001
+                else:
                     self.root.after(0, lambda: self._dl_log_line(
-                        "warn", f"Could not auto-detect pip size ({exc}); falling back to 0.0001."))
+                        "info", f"{acct.platform} has no pip-size auto-detect yet -- using 0.0001. "
+                                "Set the Pip size field above explicitly if that's wrong for this symbol."))
                     pip_size = 0.0001
             probe.disconnect()
 
@@ -15842,14 +15900,20 @@ class MainWindow:
             baseline_str = self.dl_baseline_win_rate.get_str().strip()
             baseline_win_rate = float(baseline_str) if baseline_str else None
 
-            cfg = ForwardTestConfig(
+            # Deploy Live's own prop-rule risk controls (news blackout / weekend hold /
+            # max lot / hedging) aren't exposed as dedicated widgets on this tab yet --
+            # see INTEGRATION.md's note on this. Defaults (no blackout windows, weekend
+            # holding and hedging both allowed, no lot cap) apply until that's added.
+            prop_rules = PropRules(account_size=conn.balance or 10_000.0)
+
+            cfg = LiveExecutionConfig(
                 symbol=symbol, timeframe_minutes=self._dl_timeframe_minutes(),
-                risk=risk, baseline_win_rate=baseline_win_rate,
+                risk=risk, prop_rules=prop_rules, baseline_win_rate=baseline_win_rate,
             )
             self._dl_journal = ForwardTestJournal()
-            session = ForwardTestSession(
+            session = LiveExecutionSession(
                 strategy=strategy, strategy_type=item.strategy_type, strategy_filename=item.name,
-                connector=connector, journal=self._dl_journal, config=cfg,
+                broker=broker, journal=self._dl_journal, config=cfg,
                 on_log=lambda level, msg: self.root.after(0, lambda: self._dl_log_line(level, msg)),
                 on_status=lambda status: self.root.after(0, lambda: self._dl_update_status(status)),
             )
