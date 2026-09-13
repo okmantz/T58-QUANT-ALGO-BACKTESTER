@@ -1,0 +1,11 @@
+# --- Additions from this changeset -- append these to the existing config/requirements.txt ---
+
+# Deploy Live: cTrader Open API adapter (app/live_deploy/broker_ctrader.py). Optional in spirit:
+# everything else in the app works without it; only connecting a cTrader account raises a clear
+# "pip install ctrader-open-api" error if it's missing, same pattern as MetaTrader5 above.
+ctrader-open-api>=0.9.0
+
+# Native PDF report export (app/reports/pdf_export.py) -- pure-Python, no headless
+# browser/Chromium dependency. Optional in spirit: the existing HTML report's browser
+# print-to-PDF still works without this; only the new native export button needs it.
+reportlab>=4.0.0
