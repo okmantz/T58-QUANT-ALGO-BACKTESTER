@@ -74,6 +74,22 @@ def test_dashboard_hides_first_run_welcome_once_data_exists(tmp_path, monkeypatc
     assert b"New here? Start here" not in r.data
 
 
+def test_education_page_loads_with_expected_sections():
+    client = app.test_client()
+    r = client.get("/education")
+    assert r.status_code == 200
+    assert b"Validation Lab" in r.data
+    assert b"PBO" in r.data
+    assert b"fastest_payout" in r.data
+
+
+def test_education_link_appears_in_sidebar():
+    client = app.test_client()
+    r = client.get("/dashboard")
+    assert r.status_code == 200
+    assert b'href="/education"' in r.data
+
+
 def test_user_manual_page_loads_with_decision_guide():
     """The User Manual used to be a purely linear walkthrough with no
     branching logic. This confirms the new decision-guide section (real
