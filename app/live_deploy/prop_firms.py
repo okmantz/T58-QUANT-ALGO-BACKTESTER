@@ -39,38 +39,52 @@ class PropFirm:
     name: str
     platforms: list[str]          # what this firm offers; connectable ones are in _CONNECTABLE_PLATFORMS
     asset_focus: str              # "Forex/CFD", "Futures", etc. -- informational
-    connectable_today: bool       # True if at least one listed platform has a working adapter
     notes: str = ""
+
+    @property
+    def connectable_today(self) -> bool:
+        """True if at least one listed platform has a working adapter.
+
+        Derived from `platforms` rather than a hand-set field so this can
+        never drift out of sync with `_CONNECTABLE_PLATFORMS` again the
+        next time a new broker adapter ships (see the bug this fixed:
+        every entry below used to hardcode `True` as a literal, which
+        silently stayed right by luck rather than by construction, and
+        the unit tests were the only thing actually checking the two
+        stayed consistent -- until this list's own connectable-platform
+        set was quietly correct while the tests still assumed the old
+        MT4/MT5-only world)."""
+        return any(is_platform_connectable(p) for p in self.platforms)
 
 
 PROP_FIRMS: list[PropFirm] = [
     PropFirm(
-        "FTMO", ["MT4", "MT5", "cTrader", "DXtrade"], "Forex/CFD", True,
+        "FTMO", ["MT4", "MT5", "cTrader", "DXtrade"], "Forex/CFD",
         "MT4/MT5 accounts use the mature, demo-tested connector. cTrader and DXtrade accounts "
         "now have a connector too, but it's untested against a live account -- run it against "
         "FTMO's demo/free trial first.",
     ),
     PropFirm(
-        "FundedNext", ["MT5", "cTrader", "TradeLocker"], "Forex/CFD", True,
+        "FundedNext", ["MT5", "cTrader", "TradeLocker"], "Forex/CFD",
         "MT5 uses the mature connector. cTrader/TradeLocker accounts now have a connector, "
         "untested against a live account -- verify against FundedNext's own demo first.",
     ),
     PropFirm(
-        "The5%ers", ["MT5", "DXtrade"], "Forex/CFD", True,
+        "The5%ers", ["MT5", "DXtrade"], "Forex/CFD",
         "MT5 uses the mature connector. Some newer The5%ers account tiers use DXtrade, which "
         "now has a connector -- untested against a live account, and DXtrade is white-labeled "
         "per firm, so confirm the exact API host from your own dashboard first.",
     ),
     PropFirm(
-        "E8 Markets", ["MT5", "cTrader"], "Forex/CFD", True,
+        "E8 Markets", ["MT5", "cTrader"], "Forex/CFD",
         "MT5 uses the mature connector; cTrader now has a connector (untested against a live account).",
     ),
     PropFirm(
-        "Blue Guardian", ["MT4", "MT5"], "Forex/CFD", True,
+        "Blue Guardian", ["MT4", "MT5"], "Forex/CFD",
         "MT4/MT5 accounts work with the mature connector.",
     ),
     PropFirm(
-        "Apex Trader Funding", ["Tradovate", "Rithmic", "NinjaTrader", "TradingView"], "Futures", True,
+        "Apex Trader Funding", ["Tradovate", "Rithmic", "NinjaTrader", "TradingView"], "Futures",
         "Tradovate-based accounts are now connectable via the new Tradovate adapter -- untested "
         "against a live account, start on Apex's/Tradovate's demo environment. Rithmic and "
         "NinjaTrader accounts are still NOT connectable (see module docstring). Apex explicitly "
@@ -78,18 +92,18 @@ PROP_FIRMS: list[PropFirm] = [
         "before relying on it.",
     ),
     PropFirm(
-        "Topstep", ["TopStepX / ProjectX", "NinjaTrader", "Tradovate", "Rithmic"], "Futures", True,
+        "Topstep", ["TopStepX / ProjectX", "NinjaTrader", "Tradovate", "Rithmic"], "Futures",
         "Tradovate-routed accounts are now connectable (untested against a live account). "
         "TopStepX/ProjectX, NinjaTrader, and Rithmic accounts are still NOT connectable.",
     ),
     PropFirm(
-        "MyFundedFutures", ["Tradovate", "Rithmic", "NinjaTrader"], "Futures", True,
+        "MyFundedFutures", ["Tradovate", "Rithmic", "NinjaTrader"], "Futures",
         "Tradovate-routed accounts are now connectable (untested against a live account). "
         "Reversed an earlier ban on automated trading in mid-2025 -- check current rules before "
         "assuming any given automation is still allowed. Rithmic/NinjaTrader accounts are still NOT connectable.",
     ),
     PropFirm(
-        "Other / not listed", ["MT4", "MT5", "cTrader", "Tradovate", "TradeLocker", "DXtrade", "Other"], "Unknown", True,
+        "Other / not listed", ["MT4", "MT5", "cTrader", "Tradovate", "TradeLocker", "DXtrade", "Other"], "Unknown",
         "Pick this and select the matching platform if your firm isn't listed here -- the "
         "connection works the same way regardless of firm name as long as the platform matches. "
         "If your firm uses Rithmic or NinjaTrader specifically, it isn't connectable yet.",
