@@ -702,9 +702,14 @@ def dashboard():
     if current:
         checklist = strategy_state.get_checklist(current["strategy_name"], current["instrument"])
         score = strategy_state.robustness_score(current["strategy_name"], current["instrument"])
+    dashboard_stats = run_history.dashboard_data()
+    show_welcome = pipeline_guide.should_show_first_run_welcome(
+        has_stored_datasets=bool(list_stored_datasets()),
+        has_run_history=bool(dashboard_stats.get("total_runs")),
+    )
     return render_template(
         "dashboard.html",
-        data=run_history.dashboard_data(),
+        data=dashboard_stats,
         dataset_groups=list_datasets_by_instrument(),
         current_strategy=current,
         checklist=checklist,
@@ -712,6 +717,8 @@ def dashboard():
         validation_labels=strategy_state.VALIDATION_LABELS,
         validation_hrefs=strategy_state.VALIDATION_HREFS,
         validation_kinds=strategy_state.VALIDATION_KINDS,
+        show_welcome=show_welcome,
+        welcome_message=pipeline_guide.first_run_welcome() if show_welcome else None,
     )
 
 
