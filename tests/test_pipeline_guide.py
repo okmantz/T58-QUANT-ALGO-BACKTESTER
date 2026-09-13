@@ -199,3 +199,23 @@ def test_after_search_complete_no_champion_leaderboard_pbo_note():
 def test_after_search_complete_single_candidate_no_pbo_note():
     msg = pg.after_search_complete("cand_1", 1, total_candidates=1)
     assert "PBO" not in msg
+
+
+def test_should_show_first_run_welcome_true_when_nothing_exists():
+    assert pg.should_show_first_run_welcome(has_stored_datasets=False, has_run_history=False) is True
+
+
+def test_should_show_first_run_welcome_false_once_data_loaded():
+    assert pg.should_show_first_run_welcome(has_stored_datasets=True, has_run_history=False) is False
+
+
+def test_should_show_first_run_welcome_false_once_a_run_exists():
+    assert pg.should_show_first_run_welcome(has_stored_datasets=False, has_run_history=True) is False
+
+
+def test_first_run_welcome_names_the_first_three_tabs():
+    msg = pg.first_run_welcome()
+    assert "2 Market Data" in msg
+    assert "1 Strategy Configuration" in msg
+    assert "5 Run & Report" in msg
+    assert "/user-manual" in msg

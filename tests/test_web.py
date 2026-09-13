@@ -50,6 +50,30 @@ def test_resources_link_appears_in_sidebar():
     assert b'href="/resources"' in r.data
 
 
+def test_dashboard_shows_first_run_welcome_on_fresh_install(tmp_path, monkeypatch):
+    from app.reports import run_history
+
+    monkeypatch.setattr(storage, "get_app_base_dir", lambda: tmp_path)
+    monkeypatch.setattr(run_history, "get_app_base_dir", lambda: tmp_path)
+    client = app.test_client()
+    r = client.get("/dashboard")
+    assert r.status_code == 200
+    assert b"New here? Start here" in r.data
+    assert b"2 Market Data" in r.data
+
+
+def test_dashboard_hides_first_run_welcome_once_data_exists(tmp_path, monkeypatch):
+    from app.reports import run_history
+
+    monkeypatch.setattr(storage, "get_app_base_dir", lambda: tmp_path)
+    monkeypatch.setattr(run_history, "get_app_base_dir", lambda: tmp_path)
+    storage.store_csv_bytes(b"timestamp,open,high,low,close,volume\n", "eurusd.csv")
+    client = app.test_client()
+    r = client.get("/dashboard")
+    assert r.status_code == 200
+    assert b"New here? Start here" not in r.data
+
+
 def test_user_manual_page_loads_with_decision_guide():
     """The User Manual used to be a purely linear walkthrough with no
     branching logic. This confirms the new decision-guide section (real
