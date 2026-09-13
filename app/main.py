@@ -287,6 +287,8 @@ def run_search_cli(
     cost_stress_multiplier: float = 2.0,
     cost_stress_penalty_weight: float = 0.35,
     pair_csv: str | None = None,
+    calendar_csv: str | None = None,
+    symbol: str | None = None,
     news_blackout_windows: str = "",
     weekend_hold_allowed: bool = True,
     max_lot_size: float | None = None,
@@ -342,6 +344,18 @@ def run_search_cli(
         has_pair_data = True
         print(f"Merged pair-instrument close from {pair_csv} (enables the 'stat_pairs' family)")
 
+    has_calendar_data = False
+    if calendar_csv:
+        if not symbol:
+            print("--calendar-csv requires --symbol (e.g. --symbol EURUSD) so news relevance can be filtered.")
+            sys.exit(1)
+        from app.data.economic_calendar import load_calendar_history, merge_news_features
+        calendar_df = load_calendar_history(calendar_csv)
+        df = merge_news_features(df, calendar_df, symbol=symbol)
+        has_calendar_data = True
+        print(f"Merged economic-calendar features from {calendar_csv} for {symbol} "
+              "(enables the economic-calendar families)")
+
     built_strategy = None
     if strategy_file:
         ext = Path(strategy_file).suffix.lower()
@@ -392,7 +406,7 @@ def run_search_cli(
                 pass
             space = generate_search_space(
                 mode="family", family=family, max_candidates=max_candidates, seed=seed,
-                has_pair_data=has_pair_data, exclude_families=exclude_families,
+                has_pair_data=has_pair_data, has_calendar_data=has_calendar_data, exclude_families=exclude_families,
             )
 
     stage_cfg = SearchStageConfig(
@@ -1282,6 +1296,19 @@ def main():
              "specifically without this will fail with a clear error.",
     )
     parser.add_argument(
+        "--calendar-csv", default=None,
+        help="path to a historical economic-calendar CSV (timestamp,title,currency,impact -- see "
+             "app.data.economic_calendar.record_current_week/load_calendar_history) merged in as "
+             "minutes_since/until_high_impact_news columns, so the economic-calendar families can "
+             "be searched. Requires --symbol. Omit to search every other family unaffected.",
+    )
+    parser.add_argument(
+        "--symbol", default=None,
+        help="the traded instrument's symbol (e.g. EURUSD, XAUUSD) -- only needed with "
+             "--calendar-csv, to know which currencies' news actually affects this instrument "
+             "(see app.ai.news_forexfactory.CURRENCY_TO_SYMBOLS).",
+    )
+    parser.add_argument(
         "--multi-instrument", action="store_true",
         help="run the SAME family/grid search space (see --search-mode/-family/etc. above) "
              "CONCURRENTLY against several instrument/timeframe CSVs (see --mi-job), instead of "
@@ -1458,6 +1485,8 @@ def main():
             cost_stress_multiplier=args.search_cost_stress_multiplier,
             cost_stress_penalty_weight=args.search_cost_stress_weight,
             pair_csv=args.pair_csv,
+            calendar_csv=args.calendar_csv,
+            symbol=args.symbol,
             **prop_rule_kwargs,
         )
     elif args.wfo:
