@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Compare Strategies — T58 Quant Algo Backtester</title>
+<link rel="stylesheet" href="/static/theme.css">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  input[type=number], select, textarea {
+    width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font-size: 15px;
+  }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 140px; }
+  .pick-list { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto;
+               border: 1px solid var(--border-light); border-radius: 8px; padding: 8px; background: var(--panel-3); }
+  .pick-list label { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; color: #ddd; }
+  .submit-btn {
+    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: #04120e;
+    font-size: 16px; font-weight: 700; margin-top: 10px;
+  }
+  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  table.compare-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.compare-table th, table.compare-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: right; }
+  table.compare-table th:first-child, table.compare-table td:first-child { text-align: left; }
+  table.compare-table th { color: var(--text-muted); text-transform: uppercase; font-size: 11px; }
+  .best { color: var(--teal); font-weight: 700; }
+  .equity-chart { width: 100%; height: 220px; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 8px; font-size: 12px; }
+  .legend span.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+  details summary { font-size: 13px; color: #999; cursor: pointer; }
+</style>
+</head>
+<body>
+{% set active_page = 'compare' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header"><h1>Compare strategies</h1></div>
+
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+<form method="post" action="/compare/run">
+  <div class="card">
+    <h2>1. Pick 2-4 saved strategies</h2>
+    <div class="pick-list">
+      {% for s in strategies %}
+      <label><input type="checkbox" name="strategy_pick" value="{{ s.type }}::{{ s.name }}"> [{{ s.type }}] {{ s.name }}</label>
+      {% endfor %}
+      {% if not strategies %}<p style="color:var(--text-muted);font-size:13px;">No saved strategies yet -- save some from Run &amp; Report first.</p>{% endif %}
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>2. Dataset to backtest all of them against</h2>
+    <select name="existing_dataset">
+      <option value="">-- choose a stored dataset --</option>
+      {% for d in stored_datasets %}
+      <option value="{{ d.name }}">{{ d.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="card">
+    <details>
+      <summary>3. Risk &amp; prop-firm rules (same as Run &amp; Report -- optional to change)</summary>
+      {% include '_prop_rules_extra_fields.html' %}
+    </details>
+  </div>
+
+  <button type="submit" class="submit-btn">Compare</button>
+</form>
+
+{% if result %}
+<div class="card">
+  <h2>Comparison</h2>
+  <table class="compare-table">
+    <thead><tr>
+      <th>Strategy</th><th>Trades</th><th>Net profit</th><th>Win rate</th><th>Profit factor</th>
+      <th>Max DD %</th><th>Eval pass prob %</th><th>Payout prob %</th><th>Prop Fitness</th>
+    </tr></thead>
+    <tbody>
+      {% set best_fitness = (result | selectattr('ok') | map(attribute='prop_fitness_score') | list | max) if (result | selectattr('ok') | list) else None %}
+      {% for r in result %}
+      <tr>
+        <td>[{{ r.strategy_type }}] {{ r.filename }}</td>
+        {% if r.ok %}
+        <td>{{ r.stats.total_trades }}</td>
+        <td>${{ '%.2f'|format(r.stats.net_profit or 0) }}</td>
+        <td>{{ '%.1f'|format(r.stats.win_rate or 0) }}%</td>
+        <td>{{ '%.2f'|format(r.stats.profit_factor or 0) }}</td>
+        <td>{{ '%.1f'|format(r.stats.max_drawdown_pct or 0) }}%</td>
+        <td>{{ '%.1f'|format(r.eval_pass_probability_pct) }}%</td>
+        <td>{{ '%.1f'|format(r.first_payout_probability_pct) }}%</td>
+        <td class="{{ 'best' if r.prop_fitness_score == best_fitness else '' }}">{{ r.prop_fitness_score }}</td>
+        {% else %}
+        <td colspan="8" style="color:#ff8080;">{{ r.error }}</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p style="font-size:11px;color:var(--text-muted);margin-top:8px;">
+    Prop Fitness here uses a simplified formula (no parameter-robustness or walk-forward
+    out-of-sample data folded in -- see app/strategy/compare.py) so these numbers are only
+    directly comparable to each other, not to an Evolution Lab run's Prop Fitness score.
+  </p>
+
+  <h2 style="margin-top:20px;">Equity curves (normalized, starting balance = 0)</h2>
+  <svg class="equity-chart" id="equity-svg" viewBox="0 0 1000 220" preserveAspectRatio="none"></svg>
+  <div class="legend" id="equity-legend"></div>
+</div>
+
+<script>
+  const results = {{ result | tojson }};
+  const colors = ['#35e0b0', '#ff6b6b', '#7aa6ff', '#ffcf7a'];
+  const svg = document.getElementById('equity-svg');
+  const legend = document.getElementById('equity-legend');
+  const okResults = results.filter(r => r.ok && r.equity_curve && r.equity_curve.length > 1);
+
+  let globalMin = Infinity, globalMax = -Infinity;
+  okResults.forEach(r => {
+    const base = r.equity_curve[0];
+    r._normalized = r.equity_curve.map(v => v - base);
+    globalMin = Math.min(globalMin, ...r._normalized);
+    globalMax = Math.max(globalMax, ...r._normalized);
+  });
+  const pad = (globalMax - globalMin) * 0.05 || 1;
+  globalMin -= pad; globalMax += pad;
+
+  okResults.forEach((r, i) => {
+    const n = r._normalized.length;
+    const points = r._normalized.map((v, idx) => {
+      const x = (idx / (n - 1)) * 1000;
+      const y = 220 - ((v - globalMin) / (globalMax - globalMin || 1)) * 220;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    poly.setAttribute('points', points);
+    poly.setAttribute('fill', 'none');
+    poly.setAttribute('stroke', colors[i % colors.length]);
+    poly.setAttribute('stroke-width', '2');
+    svg.appendChild(poly);
+
+    const item = document.createElement('span');
+    item.innerHTML = `<span class="swatch" style="background:${colors[i % colors.length]}"></span>${r.filename}`;
+    legend.appendChild(item);
+  });
+</script>
+{% endif %}
+
+</div>
+</div>
+<script src="/static/csv-export.js" defer></script>
+</body>
+</html>

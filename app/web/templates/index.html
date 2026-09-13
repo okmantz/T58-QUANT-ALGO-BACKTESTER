@@ -209,6 +209,63 @@
     </form>
     {% endif %}
   </details>
+
+  <details style="margin-top:10px;">
+    <summary>Or fetch forex/CFD/futures history from Dukascopy (free, no API key)</summary>
+    <p style="font-size:12px;color:#888;margin:8px 0 10px;">
+      Pulls tick data directly from Dukascopy's free public feed and resamples it into bars,
+      saved into data/raw/ the same way Alpaca fetches are. Covers what Alpaca can't: FX majors/
+      minors, metals, and a few index CFDs. One HTTP request per hour of history, so this is
+      best for filling in a few days/weeks at a time -- see app/data/dukascopy_source.py's
+      docstring if you want a much longer backfill.
+    </p>
+    <div class="row">
+      <div>
+        <label>Symbol</label>
+        <input type="text" id="duka_symbol" value="EURUSD" placeholder="e.g. EURUSD, XAUUSD">
+      </div>
+      <div>
+        <label>Timeframe</label>
+        <select id="duka_timeframe">
+          <option>1Min</option><option>5Min</option><option>15Min</option>
+          <option selected>1Hour</option><option>4Hour</option><option>1Day</option>
+        </select>
+      </div>
+    </div>
+    <div class="row">
+      <div><label>Start (UTC)</label><input type="text" id="duka_start" placeholder="YYYY-MM-DD HH:MM"></div>
+      <div><label>End (UTC)</label><input type="text" id="duka_end" placeholder="YYYY-MM-DD HH:MM"></div>
+    </div>
+    <button type="button" class="submit-btn" style="margin-top:12px;" onclick="t58DukascopyFetch()">Fetch &amp; Save</button>
+    <p id="duka_result" style="font-size:13px;margin-top:8px;"></p>
+  </details>
+  <script>
+    async function t58DukascopyFetch() {
+      const resultEl = document.getElementById('duka_result');
+      resultEl.textContent = 'Fetching...';
+      resultEl.style.color = '#ccc';
+      const body = new URLSearchParams({
+        dukascopy_symbol: document.getElementById('duka_symbol').value,
+        dukascopy_timeframe: document.getElementById('duka_timeframe').value,
+        dukascopy_start: document.getElementById('duka_start').value,
+        dukascopy_end: document.getElementById('duka_end').value,
+      });
+      try {
+        const resp = await fetch('/data/dukascopy/fetch', { method: 'POST', body });
+        const data = await resp.json();
+        if (data.error) {
+          resultEl.style.color = '#ffb4b4';
+          resultEl.textContent = data.error;
+        } else {
+          resultEl.style.color = '#b7e8b7';
+          resultEl.textContent = `Saved ${data.rows} bars to ${data.saved_as} -- reload the page to see it in the dataset dropdown below.`;
+        }
+      } catch (e) {
+        resultEl.style.color = '#ffb4b4';
+        resultEl.textContent = 'Request failed: ' + e;
+      }
+    }
+  </script>
 </div>
 
 <form method="post" action="/run" enctype="multipart/form-data">
@@ -436,6 +493,7 @@
       </div>
       <label>Payout cap (% of profit, blank = 100%)</label>
       <input type="text" name="payout_cap" value="">
+      {% include '_prop_rules_extra_fields.html' %}
     </details>
   </div>
 

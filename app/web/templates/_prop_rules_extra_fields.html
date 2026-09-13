@@ -1,0 +1,91 @@
+{# --------------------------------------------------------------------
+   Optional prop-firm live-execution fields -- news blackout window,
+   weekend-hold restriction, max lot size, hedging. These map directly
+   onto the four new fields added to app.prop.simulator.PropRules (see
+   that file's dataclass docstring) and are read by
+   app.live_deploy.execution_engine.LiveExecutionSession. They have NO
+   effect on backtest/Monte Carlo/Evolution Lab output -- only on Deploy
+   Live -- so leaving them at their defaults is always safe for every
+   other tool in the app.
+
+   Field names match app.web.extra_routes._prop_rules_from_form exactly:
+   news_blackout_windows, weekend_hold_allowed, max_lot_size, hedging_allowed.
+
+   Include this fragment on the SAME screen as the existing account
+   size / profit target / drawdown-type / consistency-rule fields (see
+   INTEGRATION.md for exactly where to drop it into index.html's "3.
+   Prop-Firm Rules" <details> block, and how to replicate it onto other
+   tool pages' prop-rules forms at your own pace).
+   -------------------------------------------------------------------- #}
+<div class="row">
+  <div>
+    <label>News blackout windows (optional)</label>
+    <textarea name="news_blackout_windows" rows="3" placeholder="One per line: HH:MM-HH:MM (every day) or FRI 19:55-21:05 (a specific weekday), account/server time"></textarea>
+  </div>
+</div>
+<div class="row">
+  <div>
+    <label><input type="checkbox" name="weekend_hold_allowed" checked> Allow holding positions over the weekend</label>
+    <p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">Unchecked = flatten all positions before the weekend close and block new entries until Monday.</p>
+  </div>
+  <div>
+    <label><input type="checkbox" name="hedging_allowed" checked> Allow hedging</label>
+    <p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">Unchecked = block opening a position opposite an already-open one, account-wide.</p>
+  </div>
+</div>
+<div class="row">
+  <div>
+    <label>Max lot size (optional)</label>
+    <input type="number" step="0.01" name="max_lot_size" placeholder="No cap">
+  </div>
+</div>
+
+<div class="row" style="margin-top:6px;">
+  <div>
+    <p style="font-size:11px;color:var(--text-muted);">
+      Also select a prop firm preset if you'd rather not fill these in by hand:
+    </p>
+    <select id="prop_preset_select" onchange="window.T58ApplyPropPreset && window.T58ApplyPropPreset(this.value)">
+      <option value="">-- or enter rules manually above --</option>
+    </select>
+  </div>
+</div>
+<script>
+  // Populates the preset dropdown from app.prop.presets (already exposed
+  // to every page that renders the main prop-rules form as
+  // `prop_presets_json` -- see app/web/server.py's _prop_presets_json()).
+  // Falls back to a plain-text notice if this page doesn't pass that
+  // context variable in (e.g. a page that only includes this fragment
+  // without also wiring the preset list).
+  (function () {
+    const raw = {{ (prop_presets_json | default('null')) | safe }};
+    const select = document.getElementById('prop_preset_select');
+    if (!raw || !select) return;
+    raw.forEach((p) => {
+      const opt = document.createElement('option');
+      opt.value = JSON.stringify(p);
+      opt.textContent = p.label;
+      select.appendChild(opt);
+    });
+  })();
+
+  window.T58ApplyPropPreset = function (value) {
+    if (!value) return;
+    const p = JSON.parse(value);
+    const form = document.getElementById('prop_preset_select').closest('form');
+    if (!form) return;
+    const set = (name, val) => { const el = form.querySelector(`[name="${name}"]`); if (el) el.value = val; };
+    set('account_size', p.account_size);
+    set('profit_target', p.evaluation_profit_target_pct);
+    set('daily_loss', p.daily_loss_limit_pct);
+    set('max_dd', p.max_drawdown_pct);
+    set('dd_type', p.drawdown_type);
+    set('dd_check_mode', p.drawdown_check_mode);
+    if (p.consistency_rule_pct != null) set('consistency', p.consistency_rule_pct);
+    set('min_days', p.min_trading_days);
+    set('payout_freq', p.payout_frequency_days);
+    set('payout_threshold', p.payout_threshold_pct);
+    set('buffer', p.required_buffer_pct);
+    if (p.payout_cap_pct != null) set('payout_cap', p.payout_cap_pct);
+  };
+</script>
