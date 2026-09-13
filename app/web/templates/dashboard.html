@@ -23,6 +23,18 @@
   <p>Live stats across every strategy run through the app -- desktop, web, and Search Lab all feed this.</p>
 </div>
 
+{% if show_welcome %}
+<div class="t58-card" style="border-color:var(--cyan, #2dd4ee);">
+  <h2 style="margin-top:0;">👋 New here? Start here so you never have to guess.</h2>
+  <div style="white-space:pre-line;line-height:1.5;">{{ welcome_message }}</div>
+  <div class="actions" style="margin-top:12px;">
+    <a class="t58-btn primary" href="/">1. Load data &amp; configure a strategy</a>
+    <a class="t58-btn secondary" href="/search">Or try Search Lab</a>
+    <a class="t58-btn ghost" href="/user-manual">Read the full walkthrough</a>
+  </div>
+</div>
+{% endif %}
+
 <!-- ---- Champion Strategy ---- -->
 <div class="t58-champion">
   <div class="eyebrow">Current champion &mdash; highest Sharpe of all strategies on record</div>
