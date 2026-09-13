@@ -39,11 +39,31 @@ combinatorics over arbitrary indicators" (see app/search/strategy_space.py
 module docstring); more capacity would need proportionally more
 out-of-sample bars to trust, not more train/test tricks.
 
-Run this exactly like any other uploaded Python strategy: through Run &
-Report, Search Lab (mode=single wraps it for CPCV/WFO/sensitivity/etc.),
-or Full Pipeline. TRAIN_FRAC/LABEL_HORIZON/PREDICT_PROB_THRESHOLD below are
-this strategy's OWN tunable parameters (discovered like any Python
-strategy's numeric constants -- see app.optimize.code_parameter_space).
+WALK-FORWARD RETRAINING (fixed Sep 2026 -- read this if you're comparing
+against an older copy of this file)
+----------------------------------------------------------------------------
+Everything above describes this strategy's OWN internal train/test split
+when it's simply handed a dataframe -- correct for a normal Run & Report
+backtest, GA search, etc. But app.validation.walk_forward_opt's fold-based
+harness used to call generate_signals(df) SEPARATELY on each fold's
+train_df and test_df (two disjoint chronological slices), which meant this
+strategy re-derived its OWN 60/40 split of whatever fragment it was
+handed -- on the test-fold call, that meant fitting on the leading 60% of
+the TEST fold itself and only ever trading its trailing 40%, never using
+the fold's actual designated training window at all. Retraining was real
+(a fresh fit every call), but the boundary was wrong, wasting most of
+each fold's train data and most of each fold's test data too.
+
+Fixed by opting into the protocol app/strategy/python.py's own module
+docstring describes (search "WALK-FORWARD RETRAIN CONTEXT" there):
+RETRAIN_PER_FOLD = True below tells app.validation.walk_forward_opt to
+call generate_signals ONCE per fold on `pd.concat([fold.train_df,
+fold.test_df])` with `df.attrs["wf_train_end_index"]` set to the real
+fold boundary, instead of calling it twice on two disjoint slices. This
+file honors that attr when present (falling back to the TRAIN_FRAC-based
+split below for every other call path, unchanged) -- so it now trains on
+the fold's REAL history and trades the fold's ENTIRE test window, not a
+sub-split of just the test window's own leading portion.
 """
 from __future__ import annotations
 
@@ -51,6 +71,8 @@ import numpy as np
 import pandas as pd
 
 STRATEGY_NAME = "ML Classifier Direction (logistic regression)"
+
+RETRAIN_PER_FOLD = True   # see app/strategy/python.py's WALK-FORWARD RETRAIN CONTEXT section
 
 # --- tunable parameters -----------------------------------------------
 TRAIN_FRAC = 0.6          # fraction of the dataset used to fit the model; rest is out-of-sample
@@ -136,6 +158,17 @@ def generate_signals(df: pd.DataFrame) -> pd.Series:
 
     train_end = int(n * TRAIN_FRAC)
     train_end = max(min(train_end, n - LABEL_HORIZON - 1), RSI_PERIOD + 50)
+    explicit_train_end = df.attrs.get("wf_train_end_index")
+    if explicit_train_end is not None:
+        # Real walk-forward retrain context (see module docstring's
+        # WALK-FORWARD RETRAINING section and app/strategy/python.py's
+        # WALK-FORWARD RETRAIN CONTEXT protocol) -- the harness has told
+        # us exactly where this fold's train/test boundary is, so use
+        # THAT instead of re-deriving a TRAIN_FRAC-based guess from
+        # whatever frame we were handed. Every other call path (normal
+        # backtest, GA search, walkforward_ga.py) never sets this attr,
+        # so train_end above is unchanged for them.
+        train_end = max(min(int(explicit_train_end), n - LABEL_HORIZON - 1), RSI_PERIOD + 50)
 
     # Forward return over LABEL_HORIZON bars, in ATR units so the deadzone
     # threshold is scale-free across instruments.
