@@ -1393,9 +1393,10 @@ class MainWindow:
         self.tab_quantlab = Frame(self.content, bg=BG)
         self.tab_options_outlook = Frame(self.content, bg=BG)
         self.tab_resources = Frame(self.content, bg=BG)
+        self.tab_education = Frame(self.content, bg=BG)
 
         for f in (
-            self.tab_dashboard, self.tab_ai_assistant, self.tab_manual, self.tab_resources, self.tab_strategyconfig, self.tab_data, self.tab_strategy, self.tab_prop,
+            self.tab_dashboard, self.tab_ai_assistant, self.tab_manual, self.tab_resources, self.tab_education, self.tab_strategyconfig, self.tab_data, self.tab_strategy, self.tab_prop,
             self.tab_risk, self.tab_run, self.tab_payout, self.tab_prop_recommender, self.tab_refine, self.tab_search,
             self.tab_wfo, self.tab_cpcv, self.tab_sensitivity, self.tab_param_robustness, self.tab_portfolio,
             self.tab_multiobj, self.tab_wfga, self.tab_ensemble, self.tab_fullpipeline,
@@ -1433,6 +1434,7 @@ class MainWindow:
             ("aiassistant", "", "AI Assistant", self.tab_ai_assistant, NEON_CYAN),
             ("manual", "", "User Manual", self.tab_manual, METAL_BRIGHT),
             ("resources", "", "\U0001F393 Resources", self.tab_resources, METAL_BRIGHT),
+            ("education", "", "\U0001F393 Education", self.tab_education, METAL_BRIGHT),
 
             (None, None, "\u2460 CREATE", None, None),
             ("strategy", "", "Strategy Builder", self.tab_strategy, NEON_VIOLET),
@@ -1493,6 +1495,7 @@ class MainWindow:
             ("AI Assistant", self._build_ai_assistant_tab),
             ("Manual builder", self._build_manual_tab),
             ("Resources", self._build_resources_tab),
+            ("Education", self._build_education_tab),
             ("Speed Run", self._build_speedrun_tab),
             ("Strategy Configuration", self._build_strategy_config_tab),
             ("Data", self._build_data_tab),
@@ -3672,6 +3675,124 @@ class MainWindow:
             "That's the whole loop. OPTIMIZE, VALIDATE, and CHAMPION in the sidebar are all "
             "there for when you want to dig deeper — none of them are required to get your first result."
         )
+
+        text.config(state="disabled")
+
+    def _build_education_tab(self):
+        """Quant/algo-trading CONCEPT lessons -- what a number or a tab
+        actually means, as opposed to _build_manual_tab (which button to
+        click) and _build_resources_tab (external trading-fundamentals
+        links). Content lives in app.education.content as one shared
+        source both this tab and the web app's /education route render
+        from, so the two can never drift apart -- this method is a pure
+        renderer, same Text-widget-with-tags approach as _build_manual_tab,
+        with zero lesson copy of its own."""
+        from app.education.content import list_sections
+
+        f = self.tab_education
+        self._page_header(
+            f, "GUIDE", "\U0001F393 Education",
+            "What the numbers and tabs in this app actually mean, and how to think quantitatively about "
+            "strategy research -- not a generic trading course. If you only read one section, make it "
+            "Validation Lab.",
+        )
+
+        wrap = Frame(f, bg=PANEL, highlightthickness=1, highlightbackground=BORDER)
+        wrap.pack(fill="both", expand=True, padx=24, pady=(0, 20))
+
+        text = Text(
+            wrap, wrap="word", bg=PANEL, fg=TEXT, relief="flat", bd=0,
+            highlightthickness=0, font=_safe_font(9), padx=22, pady=18, cursor="arrow",
+            spacing1=1, spacing3=1,
+        )
+        scrollbar = ttk.Scrollbar(wrap, orient="vertical", command=text.yview, style="T58.Vertical.TScrollbar")
+        text.configure(yscrollcommand=scrollbar.set)
+        text.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            text.bind(seq, lambda e: self._generic_text_wheel(text, e))
+
+        text.tag_configure("h1", font=_safe_font(17, "bold"), foreground=ACCENT_HOVER, spacing1=4, spacing3=10)
+        text.tag_configure("h2", font=_safe_font(12, "bold"), foreground=NEON_CYAN, spacing1=20, spacing3=8)
+        text.tag_configure("h3", font=_safe_font(10, "bold"), foreground=METAL_BRIGHT, spacing1=12, spacing3=4)
+        text.tag_configure("subtitle", font=_safe_font(9, "italic"), foreground=TEXT_DIM, spacing3=10)
+        text.tag_configure("body", font=_safe_font(9), foreground=TEXT_MUTED, spacing3=5, lmargin1=2, lmargin2=2)
+        text.tag_configure("bullet", font=_safe_font(9), foreground=TEXT_MUTED, lmargin1=22, lmargin2=38, spacing3=4)
+        text.tag_configure("numstep", font=_safe_font(9, "bold"), foreground=TEXT, lmargin1=4, lmargin2=26, spacing1=6, spacing3=2)
+        text.tag_configure("example", font=_safe_font(9, "italic"), foreground=NEON_LIME, lmargin1=22, lmargin2=22, spacing1=6, spacing3=8)
+        text.tag_configure("warn", font=_safe_font(9, "bold"), foreground=AMBER, lmargin1=4, lmargin2=20, spacing1=8, spacing3=8)
+        text.tag_configure("tip", font=_safe_font(9), foreground=GREEN, lmargin1=4, lmargin2=20, spacing1=6, spacing3=8)
+        text.tag_configure("see_also", font=_safe_font(8), foreground=TEXT_DIM, lmargin1=4, spacing1=2, spacing3=14)
+        text.tag_configure("divider", font=_safe_font(4), foreground=BORDER, spacing3=14)
+
+        def h1(t):
+            text.insert(END, t + "\n", "h1")
+
+        def h2(t):
+            text.insert(END, t + "\n", "h2")
+
+        def h3(t):
+            text.insert(END, t + "\n", "h3")
+
+        def subtitle(t):
+            text.insert(END, t + "\n", "subtitle")
+
+        def body(t):
+            text.insert(END, t + "\n", "body")
+
+        def bullet(t):
+            text.insert(END, "•  " + t + "\n", "bullet")
+
+        def numstep(n, t):
+            text.insert(END, f"{n}.  " + t + "\n", "numstep")
+
+        def example_line(t):
+            text.insert(END, "\u201c" + t + "\u201d\n", "example")
+
+        def warn(t):
+            text.insert(END, "⚠  " + t + "\n", "warn")
+
+        def tip(t):
+            text.insert(END, "✓  " + t + "\n", "tip")
+
+        def see_also(items):
+            text.insert(END, "See also: " + " · ".join(items) + "\n", "see_also")
+
+        def rule():
+            text.insert(END, "―" * 90 + "\n", "divider")
+
+        h1("\U0001F393 EDUCATION")
+        body(
+            "What the numbers and tabs in this app actually mean, and how to think quantitatively about "
+            "strategy research -- not a generic trading course. If you only read one section, make it "
+            "Validation Lab."
+        )
+        rule()
+
+        for section in list_sections():
+            h1(f"{section.icon}  {section.title.upper()}")
+            subtitle(section.subtitle)
+            for lesson in section.lessons:
+                h2(lesson.title)
+                for blk in lesson.blocks:
+                    if blk.kind == "p":
+                        body(blk.text)
+                    elif blk.kind == "bullets":
+                        for item in blk.items:
+                            bullet(item)
+                    elif blk.kind == "steps":
+                        for i, item in enumerate(blk.items, start=1):
+                            numstep(i, item)
+                    elif blk.kind == "tip":
+                        tip(blk.text)
+                    elif blk.kind == "warn":
+                        warn(blk.text)
+                    elif blk.kind == "example":
+                        example_line(blk.text)
+                if lesson.see_also:
+                    see_also(lesson.see_also)
+            rule()
 
         text.config(state="disabled")
 
