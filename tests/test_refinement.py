@@ -166,11 +166,16 @@ def test_extract_genome_empty_for_config_with_no_tunables():
 # ---------------------------------------------------------------------------
 
 class _FakeMC:
-    def __init__(self, eval_pass=0.0, first_payout=0.0, ruin=0.0, expected_payout=0.0):
+    def __init__(
+        self, eval_pass=0.0, first_payout=0.0, ruin=0.0, expected_payout=0.0,
+        median_days_to_pass=None, median_days_to_first_payout=None,
+    ):
         self.evaluation_pass_probability = eval_pass
         self.first_payout_probability = first_payout
         self.risk_of_ruin_pct = ruin
         self.expected_payout = expected_payout
+        self.median_days_to_pass = median_days_to_pass
+        self.median_days_to_first_payout = median_days_to_first_payout
 
 
 def test_compute_fitness_composite_prop_score():
@@ -187,6 +192,49 @@ def test_compute_fitness_profit_factor_caps_infinity():
 def test_compute_fitness_unknown_metric_raises():
     with pytest.raises(RefinementError):
         compute_fitness({}, {}, _FakeMC(), "not_a_real_metric")
+
+
+def test_fastest_payout_never_passed_scores_zero():
+    mc = _FakeMC(eval_pass=90.0, median_days_to_pass=None, median_days_to_first_payout=None)
+    score = compute_fitness({}, {}, mc, "fastest_payout")
+    assert score == 0.0
+
+
+def test_fastest_payout_falls_back_to_days_to_pass_when_no_payout_ever_reached():
+    mc = _FakeMC(eval_pass=90.0, median_days_to_pass=5.0, median_days_to_first_payout=None)
+    score = compute_fitness({}, {}, mc, "fastest_payout")
+    assert score > 0.0
+
+
+def test_fastest_payout_rewards_speed_when_pass_probability_is_healthy():
+    fast = _FakeMC(eval_pass=90.0, median_days_to_first_payout=5.0)
+    slow = _FakeMC(eval_pass=90.0, median_days_to_first_payout=40.0)
+    fast_score = compute_fitness({}, {}, fast, "fastest_payout")
+    slow_score = compute_fitness({}, {}, slow, "fastest_payout")
+    assert fast_score > slow_score
+    assert slow_score >= 0.0
+
+
+def test_fastest_payout_safety_floor_punishes_low_pass_probability():
+    """A candidate that's blisteringly fast on the rare simulation that
+    doesn't blow up first must NOT outscore a slower, much safer one --
+    this is the whole point of the safety floor."""
+    reckless_but_fast = _FakeMC(eval_pass=5.0, median_days_to_first_payout=2.0)
+    safe_but_slower = _FakeMC(eval_pass=85.0, median_days_to_first_payout=15.0)
+    reckless_score = compute_fitness({}, {}, reckless_but_fast, "fastest_payout")
+    safe_score = compute_fitness({}, {}, safe_but_slower, "fastest_payout")
+    assert safe_score > reckless_score
+
+
+def test_fastest_payout_beyond_cutoff_scores_near_zero():
+    mc = _FakeMC(eval_pass=95.0, median_days_to_first_payout=90.0)
+    score = compute_fitness({}, {}, mc, "fastest_payout")
+    assert score == pytest.approx(0.0, abs=1e-9)
+
+
+def test_fastest_payout_is_registered_in_fitness_metrics():
+    from app.optimize.refinement import FITNESS_METRICS
+    assert "fastest_payout" in FITNESS_METRICS
 
 
 # ---------------------------------------------------------------------------

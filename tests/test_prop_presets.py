@@ -52,3 +52,28 @@ def test_presets_for_firm_case_insensitive():
 def test_multiple_account_sizes_offered_where_expected():
     ftmo_sizes = {p.account_size for p in presets_for_firm("FTMO")}
     assert len(ftmo_sizes) >= 3
+
+
+def test_lucid_payout_frequency_matches_current_lucidpro_terms():
+    """Regression guard: this preset was previously modeled as a 14-day
+    payout cycle when Lucid's own live pricing page (LucidPro, 50K Pro
+    Funded) advertises 3 days -- see app.prop.presets' source_note."""
+    for key in ("lucid_50k", "lucid_100k"):
+        p = get_preset(key)
+        assert p.payout_frequency_days == 3
+        assert p.min_trading_days == 1
+
+
+def test_apex_has_no_evaluation_stage_minimums_post_4_0():
+    """Regression guard: Apex 4.0 (March 2026) removed both the minimum
+    trading days and the evaluation-stage consistency rule."""
+    for key in ("apex_50k", "apex_100k"):
+        p = get_preset(key)
+        assert p.min_trading_days == 0
+        assert p.consistency_rule_pct is None
+
+
+def test_every_preset_has_source_note_and_as_of():
+    for p in list_presets():
+        assert p.as_of, f"{p.key} is missing as_of"
+        assert p.source_note, f"{p.key} is missing source_note"
