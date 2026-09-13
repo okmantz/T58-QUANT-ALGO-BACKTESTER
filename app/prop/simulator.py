@@ -37,6 +37,21 @@ class PropRules:
     required_buffer_pct: float = 0.0                # profit buffer that must be maintained above account_size before payout
     max_position_size: float | None = None          # informational cap on units (enforced in RiskConfig)
 
+    # -- live-execution-only fields (added for Deploy Live / execution_engine.py) --------------
+    # These four have NO effect on simulate_account() below or on any backtest/Monte Carlo/
+    # Evolution Lab output -- they describe constraints on HOW a strategy is allowed to be
+    # traded live, not on a fixed sequence of already-realized trade P&Ls, so there is nothing
+    # for the historical-trade-sequence simulator to enforce. They are read directly by
+    # app.live_deploy.execution_engine.LiveExecutionSession. Kept on this same dataclass
+    # (rather than a separate one) so the Enter Prop-Firm Rules screen can present them as
+    # ordinary optional fields alongside profit target / drawdown / consistency, and so a
+    # single PropRules instance -- built by hand or from a preset -- is what both the
+    # eval-pass-probability tools AND Deploy Live consume.
+    news_blackout_windows: str = ""                 # one per line: "HH:MM-HH:MM" (daily) or "FRI 19:55-21:05" (specific weekday)
+    weekend_hold_allowed: bool = True                # False = flatten all positions before the weekend and block new entries until Monday
+    max_lot_size: float | None = None                # hard cap on live order volume, independent of RiskConfig.max_position_size
+    hedging_allowed: bool = True                     # False = block opening a position opposite an already-open one, account-wide
+
     # drawdown_check_mode controls WHEN the daily-loss-limit and max-drawdown
     # failure checks are evaluated:
     #   "intrabar" (default, conservative): checked after every single trade
