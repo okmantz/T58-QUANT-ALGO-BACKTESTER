@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Education — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<style>
+  .edu-toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 20px; }
+  .edu-toc a {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px;
+    padding: 6px 14px; font-size: 12px; color: var(--text-muted); text-decoration: none;
+  }
+  .edu-toc a:hover { border-color: var(--teal); color: var(--text); }
+  .edu-section {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-lg);
+    padding: 22px; margin-bottom: 18px;
+  }
+  .edu-section .eyebrow { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-dim); font-weight: 700; }
+  .edu-section h2 { margin: 4px 0 4px; font-size: 19px; }
+  .edu-section > p.subtitle { color: var(--text-muted); font-size: 13px; margin: 0 0 14px; }
+  .edu-lesson { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }
+  .edu-lesson:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
+  .edu-lesson h3 { font-size: 14px; margin: 0 0 8px; color: var(--text); }
+  .edu-lesson p { color: var(--text-muted); font-size: 13px; line-height: 1.65; margin: 0 0 10px; }
+  .edu-lesson ul, .edu-lesson ol { color: var(--text-muted); font-size: 13px; line-height: 1.7; padding-left: 20px; margin: 0 0 10px; }
+  .edu-lesson li { margin-bottom: 5px; }
+  .edu-tip {
+    background: rgba(var(--teal-rgb), .08); border: 1px solid rgba(var(--teal-rgb), .3);
+    border-radius: 10px; padding: 10px 14px; font-size: 12px; color: var(--text); margin: 0 0 10px;
+  }
+  .edu-warn {
+    background: rgba(255, 140, 60, .08); border: 1px solid rgba(255, 140, 60, .3);
+    border-radius: 10px; padding: 10px 14px; font-size: 12px; color: var(--text); margin: 0 0 10px;
+  }
+  .edu-example {
+    background: var(--panel-3); border: 1px dashed var(--border-light, var(--border));
+    border-radius: 10px; padding: 10px 14px; font-size: 12px; color: var(--text); margin: 0 0 10px;
+    font-style: italic;
+  }
+  .edu-see-also { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+  .edu-see-also b { color: var(--text-muted); font-weight: 600; }
+</style>
+</head>
+<body>
+{% set active_page = 'education' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+
+<div class="t58-page-header">
+  <h1>🎓 Education</h1>
+  <p>What the numbers and tabs in this app actually mean, and how to think quantitatively about strategy
+  research -- not a generic trading course. If you only read one section, make it Validation Lab.</p>
+</div>
+
+<div class="edu-toc">
+  {% for section in sections %}
+  <a href="#{{ section.id }}">{{ section.icon }} {{ section.title }}</a>
+  {% endfor %}
+</div>
+
+{% for section in sections %}
+<div class="edu-section" id="{{ section.id }}">
+  <div class="eyebrow">Section {{ loop.index }} of {{ sections|length }}</div>
+  <h2>{{ section.icon }} {{ section.title }}</h2>
+  <p class="subtitle">{{ section.subtitle }}</p>
+
+  {% for lesson in section.lessons %}
+  <div class="edu-lesson">
+    <h3>{{ lesson.title }}</h3>
+    {% for block in lesson.blocks %}
+      {% if block.kind == 'p' %}
+        <p>{{ block.text }}</p>
+      {% elif block.kind == 'bullets' %}
+        <ul>{% for item in block.items %}<li>{{ item }}</li>{% endfor %}</ul>
+      {% elif block.kind == 'steps' %}
+        <ol>{% for item in block.items %}<li>{{ item }}</li>{% endfor %}</ol>
+      {% elif block.kind == 'tip' %}
+        <div class="edu-tip">✓ {{ block.text }}</div>
+      {% elif block.kind == 'warn' %}
+        <div class="edu-warn">⚠ {{ block.text }}</div>
+      {% elif block.kind == 'example' %}
+        <div class="edu-example">{{ block.text }}</div>
+      {% endif %}
+    {% endfor %}
+    {% if lesson.see_also %}
+    <div class="edu-see-also"><b>See also:</b> {{ lesson.see_also|join(' · ') }}</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endfor %}
+
+</div>
+</div>
+</body>
+</html>
