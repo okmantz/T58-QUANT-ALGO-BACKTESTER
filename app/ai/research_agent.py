@@ -82,6 +82,12 @@ class ResearchAgentContext:
     prop_rules: PropRules
     instrument: str = ""
     tmp_dir: Path | None = None
+    # Paths to report/screenshot files the person uploaded alongside their
+    # question (HTML/CSV/PDF backtest reports, or screenshots of results
+    # from elsewhere) -- see app.ai.report_import and the read_uploaded_report
+    # tool below. Populated by the web/desktop upload widget on this tab;
+    # empty (the default) for every other Research Agent call site.
+    uploaded_reports: list[Path] = field(default_factory=list)
 
     # Simple per-run memoization so the agent can call the same tool
     # more than once (e.g. after changing nothing) without re-running an
@@ -319,6 +325,39 @@ def _tool_compare_strategies(ctx: ResearchAgentContext, args: dict) -> dict:
     return {"comparison": rows}
 
 
+def _tool_read_uploaded_report(ctx: ResearchAgentContext, args: dict, settings: OllamaSettings) -> dict:
+    """Reads a report/screenshot the person uploaded alongside their
+    question (see app.ai.report_import). Unlike every other tool here,
+    this is NOT a call into this app's own engine -- it's evidence from
+    OUTSIDE this run, so its numbers get flagged as such (and, for
+    screenshots, explicitly as AI-read/unverified) rather than treated
+    with the same authority as a fresh run_backtest()."""
+    from app.ai.report_import import import_report_file
+
+    if not ctx.uploaded_reports:
+        return {"error": "No report or screenshot files were uploaded with this question -- nothing to read."}
+
+    filename = str(args.get("filename", "")).strip()
+    if filename:
+        match = next((p for p in ctx.uploaded_reports if Path(p).name == filename), None)
+        if match is None:
+            available = [Path(p).name for p in ctx.uploaded_reports]
+            return {"error": f"No uploaded file named '{filename}'. Available: {available}"}
+        targets = [match]
+    else:
+        targets = list(ctx.uploaded_reports)
+
+    results = []
+    for path in targets:
+        cache_key = _cache_key("read_uploaded_report", {"path": str(path)})
+        cached = ctx.cache_get(cache_key)
+        if cached is None:
+            cached = import_report_file(Path(path), settings=settings).to_observation()
+            ctx.cache_set(cache_key, cached)
+        results.append(cached)
+    return {"reports": results} if len(results) > 1 else results[0]
+
+
 @dataclass
 class AgentTool:
     name: str
@@ -391,6 +430,20 @@ def build_tool_registry(ctx: ResearchAgentContext, settings: OllamaSettings) -> 
             "and what happened to them (verdict, lesson learned).",
             '{"query": "gold liquidity sweep reversal"}',
             lambda a: _tool_search_experiments(ctx, a, settings),
+        ),
+        "read_uploaded_report": AgentTool(
+            "read_uploaded_report",
+            (
+                "Reads a backtest report or results screenshot the person uploaded with this question "
+                f"({', '.join(Path(p).name for p in ctx.uploaded_reports)}). Parses HTML/CSV/PDF reports "
+                "deterministically for known metrics (profit factor, Sharpe, drawdown, trade count, win "
+                "rate, ...); a screenshot image is read by a vision model instead and comes back flagged "
+                "as unverified/AI-read -- treat those numbers as a claim to sanity-check, not ground truth."
+                if ctx.uploaded_reports else
+                "No files were uploaded with this question, so this tool has nothing to read."
+            ),
+            '{"filename": "backtest_report.html"} (omit filename to read every uploaded file at once)',
+            lambda a: _tool_read_uploaded_report(ctx, a, settings),
         ),
     }
 
