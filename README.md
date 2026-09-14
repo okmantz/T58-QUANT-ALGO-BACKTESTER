@@ -1,6 +1,11 @@
 <img width="1280" height="420" alt="image" src="https://github.com/user-attachments/assets/fbfa3c29-4a64-4dfa-9e2a-3ba5f759b27c" />
 
-# T58 Trading — Quant Algo Backtester
+<div align="center">
+
+        # T58 Trading — Quant Algo Backtester
+
+</div>
+
 ---
 Full Tutorial: https://drive.google.com/file/d/1sgmIN7Q5vTkf8PESkHDFuSnRRUq1TYFp/view?usp=drive_link
 
