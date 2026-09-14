@@ -29,7 +29,7 @@ from app.backtest.risk import RiskConfig
 from app.evolution.engine import EvolutionCandidateRecord, EvolutionConfig, EvolutionRunner
 from app.evolution.prop_fitness import PropFitnessBreakdown
 from app.prop.simulator import PropRules
-from app.search.graveyard import load_graveyard
+from app.search.graveyard import graveyard_path_for, load_graveyard
 
 
 def _trending_df(n=500, seed=3):
@@ -148,8 +148,18 @@ def test_stress_failure_does_not_become_disguised_winner_or_seed_elites(tmp_path
     assert runner._consecutive_stress_failures == 1
 
 
-def test_stress_failures_are_written_to_the_graveyard(tmp_path):
-    cfg = _cfg(tmp_path)
+def test_stress_failures_are_written_to_the_graveyard(tmp_path, monkeypatch):
+    # UPGRADE: Evolution Lab used to derive its graveyard filename from
+    # tested_log_path (a plain "strategy_graveyard.jsonl"), which never
+    # matched the "strategy_graveyard__<instrument>__<timeframe>.jsonl"
+    # naming every OTHER producer/consumer (Forge, the web/desktop
+    # Graveyard page's file scanner) actually uses -- so every rejection
+    # Evolution Lab logged was invisible outside its own graveyard_summary()
+    # call. Fixed by routing through the same graveyard_path_for(instrument,
+    # timeframe) helper Forge already used. Patch get_app_base_dir so that
+    # shared, instrument-scoped path lands under tmp_path for this test.
+    monkeypatch.setattr("app.search.graveyard.get_app_base_dir", lambda: tmp_path)
+    cfg = _cfg(tmp_path, instrument="test-instrument", timeframe="1m")
     runner = EvolutionRunner(_trending_df(), RiskConfig(), PropRules(), cfg, progress_cb=None)
 
     fake_evaluated = [_fake_record("orb_breakout-gen0-aaaa", "prev_day_range_breakout", -12.0, robustness_ratio=0.12)]
@@ -162,7 +172,7 @@ def test_stress_failures_are_written_to_the_graveyard(tmp_path):
 
     runner._run_one_generation(0)
 
-    graveyard_path = Path(cfg.tested_log_path).with_name("strategy_graveyard.jsonl")
+    graveyard_path = graveyard_path_for(cfg.instrument, cfg.timeframe)
     rows = load_graveyard(graveyard_path)
     assert len(rows) == 1
     row = rows[0]

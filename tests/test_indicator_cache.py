@@ -66,4 +66,12 @@ def test_clear_resets_stats_and_entries():
     build_indicator_series(df, "atr", period=14, column="close")
     indicator_cache.clear()
     stats = indicator_cache.stats()
-    assert stats == {"entries": 0, "hits": 0, "misses": 0, "hit_rate": 0.0}
+    assert stats["entries"] == 0
+    assert stats["hits"] == 0
+    assert stats["misses"] == 0
+    assert stats["hit_rate"] == 0.0
+    # New in this round: byte-budget accounting (see indicator_cache's
+    # _MAX_BYTES) -- a cleared cache holds zero bytes and still reports
+    # its configured budget so callers/tests can introspect it.
+    assert stats["bytes"] == 0
+    assert stats["max_bytes"] > 0
