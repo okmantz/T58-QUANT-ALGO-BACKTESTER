@@ -116,21 +116,42 @@ def safe_worker_count(
 
     Always returns at least 1.
     """
+    if df is None or len(df) == 0:
+        one_copy_bytes = 0.0
+    else:
+        try:
+            one_copy_bytes = float(df.memory_usage(deep=True).sum())
+        except Exception:
+            one_copy_bytes = 0.0
+    return safe_worker_count_for_bytes(
+        one_copy_bytes, requested=requested, max_candidates_in_flight=max_candidates_in_flight,
+    )
+
+
+def safe_worker_count_for_bytes(
+    one_worker_payload_bytes: float,
+    requested: Optional[int] = None,
+    max_candidates_in_flight: Optional[int] = None,
+) -> int:
+    """Same guardrail as safe_worker_count, but for callers that don't
+    have a single DataFrame to measure -- e.g. app.optimize.walkforward_ga,
+    whose worker initializer loads EVERY walk-forward fold's slice into
+    each worker process, not one shared DataFrame. Pass the raw byte size
+    of whatever one worker will hold in memory (sum across however many
+    pieces that is); this applies the same available-memory budget and
+    per-worker overhead multiplier safe_worker_count does.
+
+    Always returns at least 1.
+    """
     cpu_cap = requested if requested is not None else (os.cpu_count() or 2)
     cpu_cap = max(1, int(cpu_cap))
     if max_candidates_in_flight is not None:
         cpu_cap = max(1, min(cpu_cap, int(max_candidates_in_flight)))
 
-    if df is None or len(df) == 0:
+    if one_worker_payload_bytes <= 0:
         return cpu_cap
 
-    try:
-        one_copy_bytes = float(df.memory_usage(deep=True).sum()) * _WORKER_OVERHEAD_MULTIPLIER
-    except Exception:
-        return cpu_cap
-    if one_copy_bytes <= 0:
-        return cpu_cap
-
+    one_copy_bytes = float(one_worker_payload_bytes) * _WORKER_OVERHEAD_MULTIPLIER
     budget = _available_memory_bytes() * _MAX_MEMORY_FRACTION
     memory_cap = max(1, int(budget // one_copy_bytes))
 

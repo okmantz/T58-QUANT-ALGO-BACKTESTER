@@ -128,6 +128,7 @@ def run_quick_optimize(
     prop_rules: PropRules,
     cfg: QuickOptimizeConfig | None = None,
     progress_cb=None,
+    cancel_event=None,
 ) -> QuickOptimizeResult:
     """Runs the walk-forward-aware GA against `strategy` and returns a
     before/after comparison. Raises RefinementError (same exception Full
@@ -183,6 +184,7 @@ def run_quick_optimize(
         progress_cb=lambda m: log(f"  {m}"),
         parallel=cfg.parallel, max_workers=cfg.parallel_max_workers,
         adaptive_risk=adaptive_risk,
+        cancel_event=cancel_event,
     )
     warnings.extend(ga_result.warnings)
 

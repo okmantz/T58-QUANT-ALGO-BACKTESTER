@@ -129,6 +129,7 @@
       <select id="existing_strategy_select" onchange="loadFromLibrary()">
         <option value="">— none, paste or upload below —</option>
       </select>
+      <a href="#" onclick="qoViewStrategyCode(); return false;" style="font-size:12px;color:var(--teal);display:inline-block;margin-top:6px;">View code of selected strategy</a>
       <p style="font-size:12px;color:#888;margin-top:6px;" id="library-count-note"></p>
 
       <label style="margin-top:14px;">Or upload a strategy file (from this computer or your phone)</label>
@@ -157,8 +158,10 @@
     </div>
     <div class="row">
       <div><label>Max drawdown %</label><input type="number" step="0.1" name="max_dd" value="10"></div>
-      <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" value="0.0001"></div>
+      <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" id="qo_pip_size_field" value="0.0001"></div>
     </div>
+    <button type="button" onclick="qoDetectPipSize()" style="margin-top:6px;background:none;border:1px solid var(--border-light);color:var(--teal);padding:9px 12px;border-radius:8px;font-size:13px;width:100%;">Detect pip size from data</button>
+    <p id="qo_pip_detect_status" style="font-size:12px;margin-top:6px;"></p>
   </div>
 
   <div class="card">
@@ -195,6 +198,45 @@
   const manualFields = document.getElementById('manual-fields');
   const codeFields = document.getElementById('code-fields');
   const SAVED_STRATEGIES = {{ saved_strategies_json | safe }};
+
+  function qoDetectPipSize() {
+    const statusEl = document.getElementById('qo_pip_detect_status');
+    const fileInput = document.querySelector('input[name="csv_file"]');
+    const datasetSelect = document.querySelector('select[name="existing_dataset"]');
+    const fd = new FormData();
+    let haveSource = false;
+    if (fileInput && fileInput.files && fileInput.files.length) {
+      for (const f of fileInput.files) fd.append('csv_file', f);
+      haveSource = true;
+    }
+    if (datasetSelect && datasetSelect.value) {
+      fd.append('existing_dataset', datasetSelect.value);
+      haveSource = true;
+    }
+    if (!haveSource) {
+      statusEl.style.color = '#ffcf7a';
+      statusEl.textContent = 'Select a market data CSV or a stored dataset above first.';
+      return;
+    }
+    statusEl.style.color = '#888';
+    statusEl.textContent = 'Detecting...';
+    fetch('/data/detect-pip-size', { method: 'POST', body: fd })
+      .then(r => r.json().then(data => ({ ok: r.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok || data.error) {
+          statusEl.style.color = '#ff9d9d';
+          statusEl.textContent = data.error || "Couldn't detect pip size.";
+          return;
+        }
+        document.getElementById('qo_pip_size_field').value = data.pip_size;
+        statusEl.style.color = '#b4ffcb';
+        statusEl.textContent = data.message;
+      })
+      .catch(err => {
+        statusEl.style.color = '#ff9d9d';
+        statusEl.textContent = "Couldn't detect: " + err;
+      });
+  }
 
   function filteredLibraryItems(mode) {
     const query = (document.getElementById('strategy_search_input').value || '').toLowerCase().trim();
@@ -269,6 +311,14 @@
       .then(r => r.ok ? r.text() : Promise.reject())
       .then(text => { document.getElementById('strategy_code').value = text; })
       .catch(() => alert('Could not load that saved strategy.'));
+  }
+
+  function qoViewStrategyCode() {
+    const mode = modeInput.value;
+    const name = document.getElementById('existing_strategy_select').value;
+    if (!name) { alert('Pick a saved strategy from the dropdown first.'); return; }
+    const url = `/strategies/view-code?strategy_type=${encodeURIComponent(mode)}&filename=${encodeURIComponent(name)}`;
+    window.open(url, '_blank');
   }
 
   document.getElementById('strategy_file_input').addEventListener('change', (e) => {

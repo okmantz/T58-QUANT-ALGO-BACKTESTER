@@ -49,6 +49,20 @@
   .checkbox-row label { margin: 0; }
   .batch-strategy-list { max-height: 260px; overflow-y: auto; border: 1px solid #2a2f3a; border-radius: 8px; padding: 8px 12px; }
   .batch-item { font-size: 13px; }
+  /* Batch/schedule run buttons previously used near-black inline colors
+     (#1b2a1b / #1b1b2a) that were nearly invisible against the dark
+     theme -- easy to miss entirely and click the wrong button. Now
+     bright and clearly distinct from the primary teal Single Run button
+     and from each other, with the same glow treatment so all three read
+     as equally "real" buttons. */
+  .submit-btn.batch-run {
+    border-color: var(--lime, #7ee787); background: var(--lime, #7ee787); color: #04120e;
+    box-shadow: 0 0 22px rgba(126,231,135,0.35);
+  }
+  .submit-btn.schedule-run {
+    border-color: var(--amber, #f5c451); background: var(--amber, #f5c451); color: #241a00;
+    box-shadow: 0 0 22px rgba(245,196,81,0.35);
+  }
 </style>
 </head>
 <body>
@@ -133,6 +147,7 @@
       <select id="existing_strategy_select" onchange="loadFromLibrary()">
         <option value="">— none, paste or upload below —</option>
       </select>
+      <a href="#" onclick="fpViewStrategyCode(); return false;" style="font-size:12px;color:var(--teal);display:inline-block;margin-top:6px;">View code of selected strategy</a>
       <p style="font-size:12px;color:#888;margin-top:6px;" id="library-count-note"></p>
 
       <label style="margin-top:14px;">Or upload a strategy file (from this computer or your phone)</label>
@@ -145,6 +160,14 @@
 
   <div class="card">
     <h2>3. Risk &amp; prop rules</h2>
+    <div class="row">
+      <div>
+        <label>Prop firm preset (optional shortcut)</label>
+        <select id="fp_prop_preset_select" onchange="fpApplyPropPreset(this.value)">
+          <option value="">-- or enter rules manually below --</option>
+        </select>
+      </div>
+    </div>
     <div class="row">
       <div><label>Initial balance</label><input type="number" name="initial_balance" value="100000"></div>
       <div><label>Account size (prop rules)</label><input type="number" name="account_size" value="100000"></div>
@@ -161,8 +184,10 @@
     </div>
     <div class="row">
       <div><label>Max drawdown %</label><input type="number" step="0.1" name="max_dd" value="10"></div>
-      <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" value="0.0001"></div>
+      <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" id="fp_pip_size_field" value="0.0001"></div>
     </div>
+    <button type="button" onclick="fpDetectPipSize()" style="margin-top:6px;background:none;border:1px solid var(--border-light);color:var(--teal);padding:9px 12px;border-radius:8px;font-size:13px;width:100%;">Detect pip size from data</button>
+    <p id="fp_pip_detect_status" style="font-size:12px;margin-top:6px;"></p>
   </div>
 
   <div class="card">
@@ -245,8 +270,8 @@
   </div>
 
   <button class="submit-btn" type="submit">Run Full Pipeline</button>
-  <button class="submit-btn" type="submit" formaction="/full-pipeline/start-batch" style="margin-top:10px; background:#1b2a1b; border-color:#2f4f2f;">Run Full Pipeline (Batch — Selected Above)</button>
-  <button class="submit-btn" type="submit" formaction="/full-pipeline/schedule-batch" style="margin-top:10px; background:#1b1b2a; border-color:#2f2f4f;">Schedule Batch Run (at time above)</button>
+  <button class="submit-btn batch-run" type="submit" formaction="/full-pipeline/start-batch" style="margin-top:10px;">Run Full Pipeline (Batch — Selected Above)</button>
+  <button class="submit-btn schedule-run" type="submit" formaction="/full-pipeline/schedule-batch" style="margin-top:10px;">Schedule Batch Run (at time above)</button>
 </form>
 
 </div>
@@ -258,6 +283,74 @@
   const manualFields = document.getElementById('manual-fields');
   const codeFields = document.getElementById('code-fields');
   const SAVED_STRATEGIES = {{ saved_strategies_json | safe }};
+
+  function fpDetectPipSize() {
+    const statusEl = document.getElementById('fp_pip_detect_status');
+    const fileInput = document.querySelector('input[name="csv_file"]');
+    const datasetSelect = document.querySelector('select[name="existing_dataset"]');
+    const fd = new FormData();
+    let haveSource = false;
+    if (fileInput && fileInput.files && fileInput.files.length) {
+      for (const f of fileInput.files) fd.append('csv_file', f);
+      haveSource = true;
+    }
+    if (datasetSelect && datasetSelect.value) {
+      fd.append('existing_dataset', datasetSelect.value);
+      haveSource = true;
+    }
+    if (!haveSource) {
+      statusEl.style.color = '#ffcf7a';
+      statusEl.textContent = 'Select a market data CSV or a stored dataset above first.';
+      return;
+    }
+    statusEl.style.color = '#888';
+    statusEl.textContent = 'Detecting...';
+    fetch('/data/detect-pip-size', { method: 'POST', body: fd })
+      .then(r => r.json().then(data => ({ ok: r.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok || data.error) {
+          statusEl.style.color = '#ff9d9d';
+          statusEl.textContent = data.error || "Couldn't detect pip size.";
+          return;
+        }
+        document.getElementById('fp_pip_size_field').value = data.pip_size;
+        statusEl.style.color = '#b4ffcb';
+        statusEl.textContent = data.message;
+      })
+      .catch(err => {
+        statusEl.style.color = '#ff9d9d';
+        statusEl.textContent = "Couldn't detect: " + err;
+      });
+  }
+
+  // Prop-firm preset dropdown (see app.prop.presets) -- fills account
+  // size / profit target / daily loss / max drawdown from a one-click
+  // pick instead of typing them by hand. Manual entry (the fields
+  // above) remains the primary, always-visible path; this is purely an
+  // optional shortcut.
+  const PROP_PRESETS = {{ (prop_presets_json | default('[]')) | safe }};
+  (function populatePropPresetDropdown() {
+    const select = document.getElementById('fp_prop_preset_select');
+    if (!select) return;
+    PROP_PRESETS.forEach((p) => {
+      const opt = document.createElement('option');
+      opt.value = JSON.stringify(p);
+      opt.textContent = p.label;
+      select.appendChild(opt);
+    });
+  })();
+
+  function fpApplyPropPreset(value) {
+    if (!value) return;
+    const p = JSON.parse(value);
+    const form = document.getElementById('fp_prop_preset_select').closest('form');
+    if (!form) return;
+    const set = (name, val) => { const el = form.querySelector(`[name="${name}"]`); if (el) el.value = val; };
+    set('account_size', p.account_size);
+    set('profit_target', p.evaluation_profit_target_pct);
+    set('daily_loss', p.daily_loss_limit_pct);
+    set('max_dd', p.max_drawdown_pct);
+  }
 
   function filteredLibraryItems(mode) {
     const query = (document.getElementById('strategy_search_input').value || '').toLowerCase().trim();
@@ -332,6 +425,14 @@
       .then(r => r.ok ? r.text() : Promise.reject())
       .then(text => { document.getElementById('strategy_code').value = text; })
       .catch(() => alert('Could not load that saved strategy.'));
+  }
+
+  function fpViewStrategyCode() {
+    const mode = modeInput.value;
+    const name = document.getElementById('existing_strategy_select').value;
+    if (!name) { alert('Pick a saved strategy from the dropdown first.'); return; }
+    const url = `/strategies/view-code?strategy_type=${encodeURIComponent(mode)}&filename=${encodeURIComponent(name)}`;
+    window.open(url, '_blank');
   }
 
   document.getElementById('strategy_file_input').addEventListener('change', (e) => {

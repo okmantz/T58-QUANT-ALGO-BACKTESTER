@@ -61,7 +61,7 @@
   <div class="actions">
     <a class="t58-btn primary" href="{{ next_stage_href }}">{{ next_stage_label }} &rarr;</a>
     {% if data.best.report_html %}
-    <a class="t58-btn secondary" href="/reports/{{ data.best.report_html.split('/')[-1] }}" target="_blank">View report</a>
+    <a class="t58-btn secondary" href="{{ data.best.report_html }}" target="_blank">View report</a>
     {% endif %}
     <a class="t58-btn ghost" href="/forward-test">Forward test</a>
     {% if not current_strategy or current_strategy.strategy_name != data.best.strategy_name or current_strategy.instrument != data.best.instrument %}
@@ -236,7 +236,7 @@
             </form>
             {% endif %}
           </td>
-          <td>{% if s.report_html %}<a href="/reports/{{ s.report_html.split('/')[-1] }}" target="_blank">report &rarr;</a>{% endif %}</td>
+          <td>{% if s.report_html %}<a href="{{ s.report_html }}" target="_blank">report &rarr;</a>{% endif %}</td>
         </tr>
         {% endfor %}
       </tbody>

@@ -130,6 +130,14 @@
       account instead of the one you actually trade.
     </p>
     <div class="row">
+      <div>
+        <label>Prop firm preset (optional shortcut)</label>
+        <select id="evo_prop_preset_select" onchange="evoApplyPropPreset(this.value)">
+          <option value="">-- or enter rules manually below --</option>
+        </select>
+      </div>
+    </div>
+    <div class="row">
       <div><label>Account size ($, prop rules)</label><input type="number" name="account_size" value="100000"></div>
       <div><label>Initial balance ($, backtest engine -- keep equal to account size)</label><input type="number" name="initial_balance" value="100000"></div>
     </div>
@@ -248,6 +256,30 @@
 </div>
 
 <script>
+  const EVO_PROP_PRESETS = {{ (prop_presets_json | default('[]')) | safe }};
+  (function populateEvoPropPresetDropdown() {
+    const select = document.getElementById('evo_prop_preset_select');
+    if (!select) return;
+    EVO_PROP_PRESETS.forEach((p) => {
+      const opt = document.createElement('option');
+      opt.value = JSON.stringify(p);
+      opt.textContent = p.label;
+      select.appendChild(opt);
+    });
+  })();
+
+  function evoApplyPropPreset(value) {
+    if (!value) return;
+    const p = JSON.parse(value);
+    const form = document.getElementById('evo_prop_preset_select').closest('form');
+    if (!form) return;
+    const set = (name, val) => { const el = form.querySelector(`[name="${name}"]`); if (el) el.value = val; };
+    set('account_size', p.account_size);
+    set('profit_target', p.evaluation_profit_target_pct);
+    set('daily_loss', p.daily_loss_limit_pct);
+    set('max_dd', p.max_drawdown_pct);
+  }
+
   function evoDetectPipSize() {
     const statusEl = document.getElementById('evo_pip_detect_status');
     const fileInput = document.querySelector('input[name="csv_file"]');

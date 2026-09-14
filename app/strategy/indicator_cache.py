@@ -41,16 +41,47 @@ from typing import Callable
 
 import pandas as pd
 
-# Simple cap so a very long-running Evolution Lab session (thousands of
-# generations) can't let this grow unbounded. On cap, the whole cache is
-# cleared rather than doing LRU bookkeeping -- cheap, and a cleared cache
-# just means the next few candidates recompute once, not a correctness issue.
+# Entry-count safety cap, kept as a belt-and-suspenders bound. This is NOT
+# the primary guardrail any more -- see _MAX_BYTES below. 20,000 entries
+# was sized assuming small series; on a multi-year 1-minute dataset (the
+# normal case for Search Lab / Evolution Lab / Full Pipeline / Quick
+# Optimize, all of which hit this cache), a single cached Series is
+# roughly rows * 8 bytes -- ~2.35M rows is ~18-19MB PER ENTRY. 20,000 such
+# entries is ~370GB before this cache ever cleared itself, which is the
+# root cause behind the "unable to allocate N MiB" MemoryErrors and the
+# "process was terminated abruptly" (OOM-killed) crashes seen in Search
+# Lab, Quick Optimize, Full Pipeline, and Forge: each worker process's own
+# resident memory grows roughly unbounded over the course of one run as
+# more distinct indicator/period combinations get cached, on top of the
+# market data copy safe_worker_count already budgets for. On cap, the
+# whole cache is cleared rather than doing LRU bookkeeping -- cheap, and a
+# cleared cache just means the next few candidates recompute once, not a
+# correctness issue.
 _MAX_ENTRIES = 20_000
 
+# Primary guardrail: total cache size in bytes, per worker process. Sized
+# conservatively (well under one worker's share of safe_worker_count's own
+# memory budget) since this cache sits ON TOP of that budget, not instead
+# of it -- safe_worker_count only accounts for each worker's copy of the
+# raw market DataFrame, not the indicator series this module accumulates
+# on top of it over a run.
+_MAX_BYTES = 256 * 1024 * 1024  # 256 MB
+
 _CACHE: dict[tuple, pd.Series] = {}
+_CACHE_BYTES = 0
 _LOCK = threading.Lock()
 _HITS = 0
 _MISSES = 0
+
+
+def _series_nbytes(s: pd.Series) -> int:
+    try:
+        return int(s.memory_usage(deep=True))
+    except Exception:  # noqa: BLE001 -- never let a sizing failure break caching
+        try:
+            return int(s.nbytes)
+        except Exception:  # noqa: BLE001
+            return 0
 
 
 def _frame_fingerprint(frame: pd.DataFrame) -> tuple:
@@ -90,12 +121,16 @@ def get_or_compute(
         return cached.copy()
 
     result = compute_fn()
+    result_bytes = _series_nbytes(result)
 
     with _LOCK:
+        global _CACHE_BYTES
         _MISSES += 1
-        if len(_CACHE) >= _MAX_ENTRIES:
+        if len(_CACHE) >= _MAX_ENTRIES or (_CACHE_BYTES + result_bytes) > _MAX_BYTES:
             _CACHE.clear()
+            _CACHE_BYTES = 0
         _CACHE[key] = result
+        _CACHE_BYTES += result_bytes
     return result.copy()
 
 
@@ -103,9 +138,10 @@ def clear() -> None:
     """Drops every cached series. Call when switching to a genuinely new
     dataset within the same long-lived process (e.g. multi-instrument
     search re-using a worker pool across instruments)."""
-    global _HITS, _MISSES
+    global _HITS, _MISSES, _CACHE_BYTES
     with _LOCK:
         _CACHE.clear()
+        _CACHE_BYTES = 0
         _HITS = 0
         _MISSES = 0
 
@@ -117,4 +153,7 @@ def stats() -> dict:
     with _LOCK:
         total = _HITS + _MISSES
         hit_rate = (_HITS / total) if total else 0.0
-        return {"entries": len(_CACHE), "hits": _HITS, "misses": _MISSES, "hit_rate": hit_rate}
+        return {
+            "entries": len(_CACHE), "hits": _HITS, "misses": _MISSES, "hit_rate": hit_rate,
+            "bytes": _CACHE_BYTES, "max_bytes": _MAX_BYTES,
+        }

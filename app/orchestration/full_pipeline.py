@@ -277,6 +277,15 @@ _VERDICT_TO_LIBRARY_STATUS = {
 }
 
 
+class FullPipelineCancelled(Exception):
+    """Raised out of run_full_pipeline when a caller-supplied cancel_event
+    is set between steps -- see run_full_pipeline's cancel_event param.
+    Deliberately a distinct class from FullPipelineBatchCancelled (defined
+    further below) even though they mean the same thing, so a caller that
+    only runs single strategies doesn't need to import the batch module
+    just to catch this."""
+
+
 def run_full_pipeline(
     df: pd.DataFrame,
     strategy: Strategy,
@@ -288,6 +297,7 @@ def run_full_pipeline(
     instrument: str = "unknown",
     ollama_settings: "OllamaSettings | None" = None,
     report_basename: str = "full_pipeline_report",
+    cancel_event: threading.Event | None = None,
 ) -> FullPipelineResult:
     """
     report_basename: filename stem (no extension) for the written report,
@@ -298,6 +308,15 @@ def run_full_pipeline(
     with the same output_dir AND the same report_basename overwrites the
     previous call's report -- pass a distinct report_basename per
     strategy when running more than one against the same output_dir.
+
+    cancel_event: optional. Checked between each of the 7 steps below
+    (not sub-step-by-sub-step -- Step 2's own GA already checks its own
+    cancellation deep inside the worker-pool loop for the batch path, but
+    a single-strategy run stopping between steps rather than mid-GA-
+    generation is still a large improvement over "no stop button at all",
+    which was the actual prior behavior of the web app's single Full
+    Pipeline run). Raises FullPipelineCancelled the moment it's noticed;
+    callers should treat that the same as FullPipelineBatchCancelled.
 
     ollama_settings: optional. When provided and `.is_usable` (enabled,
     with a host configured -- see app.ai.ollama_settings), Step 2's
@@ -315,6 +334,11 @@ def run_full_pipeline(
     def log(msg: str) -> None:
         if progress_cb:
             progress_cb(msg)
+
+    def _check_cancel() -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            log("\nStop requested -- ending this Full Pipeline run.")
+            raise FullPipelineCancelled("Full Pipeline stopped by user.")
 
     cfg = cfg or FullPipelineConfig()
     t0 = time.time()
@@ -381,6 +405,7 @@ def run_full_pipeline(
     )
 
     # -- Step 2: robust (walk-forward-aware) optimization ----------------
+    _check_cancel()
     log("Step 2/7: Searching for a more robust configuration (walk-forward-aware GA)...")
     refinement_ran = False
     refinement_skip_reason = None
@@ -565,6 +590,7 @@ def run_full_pipeline(
         final_strategy = build_strategy_from_spec(final_spec, final_tmp_dir)
 
         # -- Step 3: final validation ------------------------------------
+        _check_cancel()
         log("Step 3/7: Final validation (full backtest, prop simulation, Monte Carlo)...")
         final_bt = run_backtest(df, final_strategy, risk, adaptive_risk=adaptive_risk)
         for w in final_bt.warnings:
@@ -599,6 +625,7 @@ def run_full_pipeline(
         )
 
         # -- Step 4: out-of-sample fold check (no re-tuning) --------------
+        _check_cancel()
         log("Step 4/7: Out-of-sample fold check (same configuration, no further tuning)...")
         oos_validation = None
         oos_skip_reason = None
@@ -620,6 +647,7 @@ def run_full_pipeline(
             log(f"  {oos_skip_reason}")
 
         # -- Step 5: holdout check ----------------------------------------
+        _check_cancel()
         log("Step 5/7: Out-of-sample holdout check...")
         try:
             final_holdout = run_holdout_comparison(df, final_strategy, risk, holdout_frac=cfg.holdout_frac)
@@ -637,6 +665,7 @@ def run_full_pipeline(
         # above -- no AI, no extra network calls, no extra backtests
         # beyond the same in-sample/holdout split run_holdout_comparison
         # just used. See app.validation.icir.
+        _check_cancel()
         log("Step 6/7: ICIR / signal-decay / Bonferroni-corrected significance gate...")
         icir_gate = None
         icir_gate_skip_reason = None
@@ -656,6 +685,7 @@ def run_full_pipeline(
             log(f"  {icir_gate_skip_reason}")
 
         # -- Step 7: report + save -----------------------------------------
+        _check_cancel()
         log("Step 7/7: Generating final report...")
         verdict, verdict_reasons = _make_verdict(final_mc, oos_validation, icir_gate)
 

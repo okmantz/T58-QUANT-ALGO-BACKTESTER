@@ -38,6 +38,7 @@ import os
 import random
 import shutil
 import tempfile
+import threading
 import time
 import uuid
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -54,6 +55,7 @@ from app.backtest.statistics import compute_statistics
 from app.monte_carlo.engine import MonteCarloConfig, run_monte_carlo
 from app.optimize.code_parameter_space import materialize_code_strategy
 from app.optimize.parameter_space import GeneMeta, RefinementError, apply_genome
+from app.orchestration.resource_guard import safe_worker_count_for_bytes
 from app.optimize.refinement import (
     RefinementConfig,
     _build_adapter,
@@ -223,6 +225,14 @@ class WalkforwardGAResult:
     warnings: list = field(default_factory=list)
 
 
+class WalkforwardGACancelled(Exception):
+    """Raised out of run_walkforward_aware_refinement when a caller-
+    supplied cancel_event is set -- checked once per generation, so a
+    Stop click takes effect at the next generation boundary rather than
+    instantly. Used by Quick Optimize's web job (previously had no way to
+    stop a run in progress at all)."""
+
+
 def run_walkforward_aware_refinement(
     df: pd.DataFrame,
     strategy: Strategy,
@@ -238,6 +248,7 @@ def run_walkforward_aware_refinement(
     parallel: bool = True,
     max_workers: int | None = None,
     adaptive_risk=None,
+    cancel_event: "threading.Event | None" = None,
 ) -> WalkforwardGAResult:
     """
     parallel: when True (the default) and the search is large enough to be
@@ -414,6 +425,23 @@ def run_walkforward_aware_refinement(
                     )
 
                 n_workers = max(1, min(max_workers or cpu_count, cpu_count, cfg.population_size))
+                # Every worker's initializer loads ALL of slice_paths (every
+                # walk-forward fold), not just one -- so the right memory
+                # estimate for safe_worker_count_for_bytes is the SUM across
+                # all folds, not any single fold. Without this, this pool
+                # used raw os.cpu_count() workers regardless of dataset size
+                # or available memory, which is what was behind the
+                # "unable to allocate" MemoryErrors and BrokenProcessPool
+                # crashes seen in Quick Optimize and Full Pipeline's GA
+                # stage on large (multi-year, 1-minute) datasets -- see
+                # app.orchestration.resource_guard for the full rationale.
+                try:
+                    total_fold_bytes = sum(float(s.memory_usage(deep=True).sum()) for s in test_slices)
+                except Exception:
+                    total_fold_bytes = 0.0
+                n_workers = safe_worker_count_for_bytes(
+                    total_fold_bytes, requested=n_workers, max_candidates_in_flight=cfg.population_size,
+                )
                 pool = ProcessPoolExecutor(
                     max_workers=n_workers,
                     initializer=_ga_worker_init,
@@ -478,6 +506,9 @@ def run_walkforward_aware_refinement(
             log(f"Generation 0: best OOS fitness={gen_summaries[0].best_fitness:.3f}")
 
             for gen in range(1, cfg.generations + 1):
+                if cancel_event is not None and cancel_event.is_set():
+                    log("Stop requested -- ending the search at the current generation.")
+                    raise WalkforwardGACancelled("Walk-forward-aware GA search stopped by user.")
                 population.sort(key=lambda c: c.fitness, reverse=True)
                 elites = population[: cfg.elite_count]
                 next_pop = list(elites)

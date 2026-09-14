@@ -21,42 +21,22 @@
     <span class="t58-nav-icon">&#8962;</span><span class="label">Dashboard</span>
   </a>
 
-  <a href="/forge" class="t58-nav-item top-level {{ 'active' if active_page == 'forge' else '' }}" style="font-weight:700;">
-    <span class="t58-nav-icon">&#9889;</span><span class="label">Forge Strategy</span>
-  </a>
-
-  <a href="/research" class="t58-nav-item top-level {{ 'active' if active_page == 'research' else '' }}" style="font-weight:700;">
-    <span class="t58-nav-icon">&#128269;</span><span class="label">Research Director</span>
-  </a>
-
-  <a href="/graveyard" class="t58-nav-item top-level {{ 'active' if active_page == 'graveyard' else '' }}" style="font-weight:700;">
-    <span class="t58-nav-icon">&#128128;</span><span class="label">Strategy Graveyard</span>
-  </a>
-
   <a href="/assistant" class="t58-nav-item top-level {{ 'active' if active_page == 'ai_assistant' else '' }}">
     <span class="t58-nav-icon">&#9737;</span><span class="label">AI Assistant</span>
-  </a>
-
-  <a href="/resources" class="t58-nav-item top-level {{ 'active' if active_page == 'resources' else '' }}">
-    <span class="t58-nav-icon">&#127891;</span><span class="label">Resources</span>
-  </a>
-
-  <a href="/education" class="t58-nav-item top-level {{ 'active' if active_page == 'education' else '' }}">
-    <span class="t58-nav-icon">&#127979;</span><span class="label">Education</span>
-  </a>
-
-  <a href="/user-manual" class="t58-nav-item top-level {{ 'active' if active_page == 'user_manual' else '' }}">
-    <span class="t58-nav-icon">&#128214;</span><span class="label">User Manual</span>
   </a>
 
   <a href="/mobile-access" class="t58-nav-item top-level {{ 'active' if active_page == 'mobile_access' else '' }}">
     <span class="t58-nav-icon">&#128241;</span><span class="label">Phone access (QR code)</span>
   </a>
 
+  <a href="/user-manual" class="t58-nav-item top-level {{ 'active' if active_page == 'user_manual' else '' }}">
+    <span class="t58-nav-icon">&#128214;</span><span class="label">User Manual</span>
+  </a>
+
   <div class="t58-nav-divider"></div>
   <div class="t58-nav-section-label">Strategy Lab</div>
 
-  {% set create_pages   = ['speed_run', 'speed_run_multi_instrument', 'generate_strategies', 'research_agent', 'research_loop'] %}
+  {% set create_pages   = ['forge', 'speed_run', 'speed_run_multi_instrument', 'generate_strategies', 'research_agent', 'research', 'research_loop'] %}
   {% set test_pages     = ['run', 'payout_probability'] %}
   {% set optimize_pages = ['optimize_hub', 'search', 'search_multi_instrument', 'refine', 'full_pipeline', 'quick_optimize', 'multi_objective', 'evolution', 'evolution_multi_instrument', 'risk_sweep'] %}
   {% set validate_pages = ['validate_hub', 'wfo', 'wfga', 'cpcv', 'pbo', 'sensitivity', 'parameter_robustness', 'regime_matrix'] %}
@@ -64,12 +44,20 @@
 
   <!-- All groups launch condensed/closed by default, regardless of which
        page is active -- t58-chrome.js only re-opens a group if the person
-       has explicitly opened it before (remembered per-browser). -->
+       has explicitly opened it before (remembered per-browser). Per Owen:
+       the ONLY items that live outside a collapsible group are Dashboard,
+       AI Assistant, Phone access, and User Manual (above), in that order --
+       everything else, including Forge Strategy, Research Director, and
+       Strategy Graveyard (previously top-level items), now lives inside a
+       group below. -->
 
   <!-- (1) Create -- accent: violet, matches desktop's NEON_VIOLET for this section -->
   <details class="t58-nav-group">
     <summary><span class="t58-num">&#9312;</span> Create <span class="chev">&#9656;</span></summary>
     <div class="t58-nav-group-items">
+      <a href="/forge" data-accent="violet" class="t58-nav-item {{ 'active' if active_page == 'forge' else '' }}" style="font-weight:700;">
+        <span class="t58-nav-icon">&#9889;</span><span class="label">Forge Strategy</span>
+      </a>
       <a href="/speed-run" data-accent="violet" class="t58-nav-item {{ 'active' if active_page == 'speed_run' else '' }}">
         <span class="t58-nav-icon">&#9889;</span><span class="label">Speed run</span>
       </a>
@@ -81,6 +69,9 @@
       </a>
       <a href="/research-agent" data-accent="violet" class="t58-nav-item {{ 'active' if active_page == 'research_agent' else '' }}">
         <span class="t58-nav-icon">&#9737;</span><span class="label">Research agent</span>
+      </a>
+      <a href="/research" data-accent="violet" class="t58-nav-item {{ 'active' if active_page == 'research' else '' }}" style="font-weight:700;">
+        <span class="t58-nav-icon">&#128269;</span><span class="label">Research director</span>
       </a>
       <a href="/research-loop" data-accent="violet" class="t58-nav-item {{ 'active' if active_page == 'research_loop' else '' }}">
         <span class="t58-nav-icon">&#8635;</span><span class="label">Research loop (background)</span>
@@ -251,6 +242,41 @@
     <div class="t58-nav-group-items">
       <a href="/hedge-fund" class="t58-nav-item {{ 'active' if active_page == 'hedge_fund' else '' }}">
         <span class="t58-nav-icon">&#9878;</span><span class="label">Research &rarr; Portfolio &rarr; Execution &rarr; Oversight</span>
+      </a>
+    </div>
+  </details>
+
+  <!-- (10) Strategy Graveyard -- its own group, right before Education. -->
+  <details class="t58-nav-group">
+    <summary><span class="t58-num">&#9321;</span> Strategy Graveyard <span class="chev">&#9656;</span></summary>
+    <div class="t58-nav-group-items">
+      <a href="/graveyard" class="t58-nav-item {{ 'active' if active_page == 'graveyard' else '' }}">
+        <span class="t58-nav-icon">&#128128;</span><span class="label">Dead neighborhoods &amp; why they failed</span>
+      </a>
+    </div>
+  </details>
+
+  <!-- (11) Education -- includes Resources. -->
+  <details class="t58-nav-group">
+    <summary><span class="t58-num">&#9322;</span> Education <span class="chev">&#9656;</span></summary>
+    <div class="t58-nav-group-items">
+      <a href="/education" class="t58-nav-item {{ 'active' if active_page == 'education' else '' }}">
+        <span class="t58-nav-icon">&#127979;</span><span class="label">Education (course)</span>
+      </a>
+      <a href="/resources" class="t58-nav-item {{ 'active' if active_page == 'resources' else '' }}">
+        <span class="t58-nav-icon">&#127891;</span><span class="label">Resources</span>
+      </a>
+    </div>
+  </details>
+
+  <!-- (12) Account -- notification settings today; the natural home for
+       login/license-key controls if those get built later (see item 12's
+       note on the notification settings page itself). -->
+  <details class="t58-nav-group">
+    <summary><span class="t58-num">&#9323;</span> Account <span class="chev">&#9656;</span></summary>
+    <div class="t58-nav-group-items">
+      <a href="/settings/notifications" class="t58-nav-item {{ 'active' if active_page == 'notification_settings' else '' }}">
+        <span class="t58-nav-icon">&#128276;</span><span class="label">Notification settings</span>
       </a>
     </div>
   </details>

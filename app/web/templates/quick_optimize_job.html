@@ -25,6 +25,7 @@
 <div class="card">
   <h2 id="status-title"><span class="spinner" id="spinner"></span>Quick Optimize running&hellip;</h2>
   <div id="log">Starting&hellip;</div>
+  <button type="button" id="stop-btn" onclick="stopQuickOptimize()" style="margin-top:12px; padding:10px 22px; border-radius:10px; border:1px solid #6b2323; background:#3a1616; color:#ffb4b4; font-size:14px; font-weight:700; cursor:pointer;">Stop</button>
 </div>
 
 <div id="verdict-wrap" style="display:none;"><div class="verdict-banner" id="verdict-banner"></div></div>
@@ -54,6 +55,12 @@
   const fmt = (v, d) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d === undefined ? 1 : d);
   const money = (v) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : '$' + Number(v).toLocaleString(undefined, {maximumFractionDigits: 0});
 
+  function stopQuickOptimize() {
+    const btn = document.getElementById('stop-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Stopping…'; }
+    fetch(`/quick-optimize/job/${jobId}/stop`, {method: 'POST'}).catch(() => {});
+  }
+
   function poll() {
     fetch(`/quick-optimize/job/${jobId}/status.json`)
       .then(r => r.json())
@@ -62,18 +69,30 @@
         document.getElementById('log').textContent = data.log.filter(Boolean).join('\n');
         document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
 
+        if (data.cancelled) {
+          document.getElementById('spinner').style.display = 'none';
+          document.getElementById('status-title').textContent = 'Quick Optimize stopped';
+          const btn = document.getElementById('stop-btn');
+          if (btn) btn.style.display = 'none';
+          return;
+        }
+
         if (data.error) {
           document.getElementById('spinner').style.display = 'none';
           document.getElementById('status-title').textContent = 'Quick Optimize failed';
           const ec = document.getElementById('error-card');
           ec.style.display = 'block';
           ec.textContent = data.error;
+          const btn = document.getElementById('stop-btn');
+          if (btn) btn.style.display = 'none';
           return;
         }
 
         if (data.done) {
           document.getElementById('spinner').style.display = 'none';
           document.getElementById('status-title').textContent = 'Quick Optimize complete';
+          const btn = document.getElementById('stop-btn');
+          if (btn) btn.style.display = 'none';
           const s = data.summary;
           if (s) {
             const wrap = document.getElementById('verdict-wrap');

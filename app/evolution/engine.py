@@ -88,7 +88,7 @@ from app.optimize.refinement import _mutate, _stressed_risk_config
 from app.orchestration.resource_guard import safe_worker_count
 from app.prop.simulator import PropRules, simulate_account, summarize_single_run
 from app.reports.crash_log import log_crash
-from app.search.graveyard import GraveyardEntry, param_signature, record_rejections
+from app.search.graveyard import GraveyardEntry, graveyard_path_for, param_signature, record_rejections
 from app.search.robustness import parameter_neighborhood_robustness, run_walk_forward
 from app.search.strategy_space import (
     StrategySpaceError,
@@ -308,6 +308,20 @@ def _evo_full_eval_task(
 class EvolutionConfig:
     population_size: int = 60
     elite_keep: int = 10
+    # Instrument/timeframe this run is against -- used ONLY to pick which
+    # persistent, shared graveyard file stress-test failures are recorded
+    # to (see app.search.graveyard.graveyard_path_for). Previously this
+    # engine derived a graveyard filename from tested_log_path instead
+    # (a fixed but DIFFERENT flat "strategy_graveyard.jsonl", not the
+    # "strategy_graveyard__<instrument>__<timeframe>.jsonl" naming every
+    # other producer/consumer uses), so every rejection Evolution Lab
+    # wrote was invisible to list_graveyard_files() and therefore to the
+    # web/desktop Strategy Graveyard page -- it silently wrote to a file
+    # nothing ever read. Defaulting to "unknown"/"unknown" still lands in
+    # a real, shared, glob-matched file even if a caller forgets to set
+    # these explicitly.
+    instrument: str = "unknown"
+    timeframe: str = "unknown"
     families: list[str] | None = None          # None = every family in list_families()
     # When `families` is None (the caller wants "every family," not a
     # specific list), auto-excludes any family app.search.family_health
@@ -1009,7 +1023,7 @@ class EvolutionRunner:
         reflects every stress-test failure from this run AND any prior
         resumed run against the same checkpoint path."""
         from app.search.graveyard import load_graveyard, summarize_graveyard
-        path = Path(self.cfg.tested_log_path).with_name("strategy_graveyard.jsonl")
+        path = graveyard_path_for(self.cfg.instrument, self.cfg.timeframe)
         rows = load_graveyard(path)
         return [c.to_dict() for c in summarize_graveyard(rows, top_n=top_n)]
 
@@ -2178,6 +2192,6 @@ class EvolutionRunner:
                 notes=list(r.fitness.notes) if r.fitness else [],
             ))
         try:
-            record_rejections(entries, Path(self.cfg.tested_log_path).with_name("strategy_graveyard.jsonl"))
+            record_rejections(entries, graveyard_path_for(self.cfg.instrument, self.cfg.timeframe))
         except Exception:  # noqa: BLE001 -- graveyard logging is diagnostic, never allowed to break a run
             pass

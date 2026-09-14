@@ -26,6 +26,7 @@
   <h2 id="status-title"><span class="spinner" id="spinner"></span>Full Pipeline running&hellip;</h2>
   <div id="log">Starting&hellip;</div>
   <p id="next-step" style="display:none; margin-top:10px; padding:10px 12px; border-radius:8px; background:#152615; color:#b7e8b7; font-size:13px;"></p>
+  <button class="stop-btn" type="button" id="stop-btn" onclick="stopFullPipeline()" style="margin-top:12px; padding:10px 22px; border-radius:10px; border:1px solid #6b2323; background:#3a1616; color:#ffb4b4; font-size:14px; font-weight:700; cursor:pointer;">Stop</button>
 </div>
 
 <div id="verdict-banner-wrap" style="display:none;"><div class="verdict-banner" id="verdict-banner"></div></div>
@@ -59,6 +60,12 @@
   const fmt = (v, d) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d === undefined ? 2 : d);
   const money = (v) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : '$' + Number(v).toLocaleString(undefined, {maximumFractionDigits: 0});
 
+  function stopFullPipeline() {
+    const btn = document.getElementById('stop-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Stopping…'; }
+    fetch(`/full-pipeline/job/${jobId}/stop`, {method: 'POST'}).catch(() => {});
+  }
+
   function poll() {
     fetch(`/full-pipeline/job/${jobId}/status.json`)
       .then(r => r.json())
@@ -67,18 +74,30 @@
         document.getElementById('log').textContent = data.log.filter(Boolean).join('\n');
         document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
 
+        if (data.cancelled) {
+          document.getElementById('spinner').style.display = 'none';
+          document.getElementById('status-title').textContent = 'Full Pipeline stopped';
+          const btn = document.getElementById('stop-btn');
+          if (btn) btn.style.display = 'none';
+          return;  // stop polling
+        }
+
         if (data.error) {
           document.getElementById('spinner').style.display = 'none';
           document.getElementById('status-title').textContent = 'Full Pipeline failed';
           const ec = document.getElementById('error-card');
           ec.style.display = 'block';
           ec.textContent = data.error;
+          const btn = document.getElementById('stop-btn');
+          if (btn) btn.style.display = 'none';
           return;
         }
 
         if (data.done) {
           document.getElementById('spinner').style.display = 'none';
           document.getElementById('status-title').textContent = 'Full Pipeline complete';
+          const btn = document.getElementById('stop-btn');
+          if (btn) btn.style.display = 'none';
           if (data.next_step) {
             const nextStepEl = document.getElementById('next-step');
             nextStepEl.textContent = data.next_step;

@@ -19,7 +19,10 @@
     padding: 6px 14px; font-size: 12px; color: var(--text-muted); text-decoration: none;
   }
   .edu-toc a:hover { border-color: var(--teal); color: var(--text); }
-  .edu-section {
+  .edu-toc a.current { border-color: var(--teal); color: var(--text); background: rgba(var(--teal-rgb), .12); font-weight: 600; }
+  .edu-section { display: none; }
+  .edu-section.current {
+    display: block;
     background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-lg);
     padding: 22px; margin-bottom: 18px;
   }
@@ -47,6 +50,14 @@
   }
   .edu-see-also { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
   .edu-see-also b { color: var(--text-muted); font-weight: 600; }
+  .edu-nav { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--border); }
+  .edu-nav button {
+    background: var(--panel-3); border: 1px solid var(--border-light); color: var(--text);
+    padding: 10px 18px; border-radius: 8px; font-size: 13px; cursor: pointer;
+  }
+  .edu-nav button:disabled { opacity: .35; cursor: default; }
+  .edu-nav button.primary { background: var(--teal); color: #04120e; border-color: var(--teal); font-weight: 700; }
+  .edu-progress { font-size: 12px; color: var(--text-dim); }
 </style>
 </head>
 <body>
@@ -58,18 +69,19 @@
 <div class="t58-page-header">
   <h1>🎓 Education</h1>
   <p>What the numbers and tabs in this app actually mean, and how to think quantitatively about strategy
-  research -- not a generic trading course. If you only read one section, make it Validation Lab.</p>
+  research -- not a generic trading course. Work through the modules below in order, or jump straight to
+  the one you need -- if you only read one, make it Validation Lab.</p>
 </div>
 
-<div class="edu-toc">
+<div class="edu-toc" id="edu-module-tabs">
   {% for section in sections %}
-  <a href="#{{ section.id }}">{{ section.icon }} {{ section.title }}</a>
+  <a href="#{{ section.id }}" data-module="{{ section.id }}">{{ section.icon }} {{ loop.index }}. {{ section.title }}</a>
   {% endfor %}
 </div>
 
 {% for section in sections %}
-<div class="edu-section" id="{{ section.id }}">
-  <div class="eyebrow">Section {{ loop.index }} of {{ sections|length }}</div>
+<div class="edu-section" id="{{ section.id }}" data-module="{{ section.id }}">
+  <div class="eyebrow">Module {{ loop.index }} of {{ sections|length }}</div>
   <h2>{{ section.icon }} {{ section.title }}</h2>
   <p class="subtitle">{{ section.subtitle }}</p>
 
@@ -96,10 +108,64 @@
     {% endif %}
   </div>
   {% endfor %}
+
+  <div class="edu-nav">
+    <button type="button" class="edu-prev" {% if loop.first %}disabled{% endif %}>&larr; Previous module</button>
+    <span class="edu-progress">Module {{ loop.index }} of {{ sections|length }}</span>
+    <button type="button" class="edu-next primary" {% if loop.last %}disabled{% endif %}>Next module &rarr;</button>
+  </div>
 </div>
 {% endfor %}
 
 </div>
 </div>
+<script>
+  (function () {
+    var moduleIds = Array.prototype.map.call(document.querySelectorAll('.edu-section'), function (el) {
+      return el.getAttribute('data-module');
+    });
+    var tabs = document.querySelectorAll('#edu-module-tabs a');
+    var sections = document.querySelectorAll('.edu-section');
+
+    function showModule(id) {
+      if (moduleIds.indexOf(id) === -1) id = moduleIds[0];
+      sections.forEach(function (el) {
+        el.classList.toggle('current', el.getAttribute('data-module') === id);
+      });
+      tabs.forEach(function (el) {
+        el.classList.toggle('current', el.getAttribute('data-module') === id);
+      });
+      document.querySelector('.t58-page-header').scrollIntoView({ behavior: 'instant', block: 'start' });
+    }
+
+    tabs.forEach(function (tab) {
+      tab.addEventListener('click', function (e) {
+        e.preventDefault();
+        var id = tab.getAttribute('data-module');
+        window.location.hash = id;
+        showModule(id);
+      });
+    });
+
+    document.querySelectorAll('.edu-next').forEach(function (btn, i) {
+      btn.addEventListener('click', function () {
+        var next = moduleIds[i + 1];
+        if (next) { window.location.hash = next; showModule(next); }
+      });
+    });
+    document.querySelectorAll('.edu-prev').forEach(function (btn, i) {
+      btn.addEventListener('click', function () {
+        var prev = moduleIds[i - 1];
+        if (prev) { window.location.hash = prev; showModule(prev); }
+      });
+    });
+
+    var initial = (window.location.hash || '').replace('#', '') || moduleIds[0];
+    showModule(initial);
+    window.addEventListener('hashchange', function () {
+      showModule((window.location.hash || '').replace('#', ''));
+    });
+  })();
+</script>
 </body>
 </html>

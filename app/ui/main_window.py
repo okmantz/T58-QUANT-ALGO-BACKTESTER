@@ -99,7 +99,7 @@ from app.reports.validation_reports import (
 )
 from app.search.batch_runner import SearchCancelled, SearchStageConfig, promote_champion, run_search
 from app.search.global_search import global_search
-from app.search.graveyard import graveyard_path_for, list_graveyard_files, load_graveyard, summarize_graveyard
+from app.search.graveyard import graveyard_path_for, list_graveyard_files, load_graveyard, render_graveyard_report, summarize_graveyard
 from app.search.search_report import generate_search_report
 from app.search.strategy_space import (
     StrategySpaceError, generate_search_space, hypothesis_question, list_families,
@@ -529,6 +529,19 @@ class LabeledCombo(Frame):
 
     def get_str(self):
         return self.var.get()
+
+    def set_str(self, value):
+        self.var.set(value)
+
+    def set_options(self, values):
+        """Replaces the dropdown's option list in place (e.g. after a
+        background scan finds new files) -- re-sizes the popdown width to
+        fit the new longest value the same way __init__ does, and clears
+        the current selection if it no longer appears in the new list."""
+        longest = max((len(str(v)) for v in values), default=18)
+        self.combo.configure(width=min(60, max(18, longest + 2)), values=list(values))
+        if self.var.get() not in values:
+            self.var.set(values[0] if values else "")
 
 
 class LabeledCheckbox(Frame):
@@ -1394,6 +1407,7 @@ class MainWindow:
         self.tab_options_outlook = Frame(self.content, bg=BG)
         self.tab_resources = Frame(self.content, bg=BG)
         self.tab_education = Frame(self.content, bg=BG)
+        self.tab_graveyard = Frame(self.content, bg=BG)
 
         for f in (
             self.tab_dashboard, self.tab_ai_assistant, self.tab_manual, self.tab_resources, self.tab_education, self.tab_strategyconfig, self.tab_data, self.tab_strategy, self.tab_prop,
@@ -1405,6 +1419,7 @@ class MainWindow:
             self.tab_forwardtest, self.tab_deploylive, self.tab_livemarket, self.tab_genstrat,
             self.tab_evolution, self.tab_researchagent, self.tab_regime_matrix, self.tab_family_diversity,
             self.tab_quantlab, self.tab_options_outlook,
+            self.tab_graveyard,
         ):
             f.place(in_=self.content, x=0, y=0, relwidth=1, relheight=1)
 
@@ -1429,18 +1444,16 @@ class MainWindow:
         self._nav_items = [
             (None, None, "OVERVIEW", None, None),
             ("dashboard", "", "Dashboard", self.tab_dashboard, NEON_VIOLET),
-            ("forge", "", "\u26a1 Forge Strategy", self.tab_forge, NEON_LIME),
-            ("researchdirector", "", "\U0001F50D Research Director", self.tab_research_director, NEON_LIME),
             ("aiassistant", "", "AI Assistant", self.tab_ai_assistant, NEON_CYAN),
             ("manual", "", "User Manual", self.tab_manual, METAL_BRIGHT),
-            ("resources", "", "\U0001F393 Resources", self.tab_resources, METAL_BRIGHT),
-            ("education", "", "\U0001F393 Education", self.tab_education, METAL_BRIGHT),
 
             (None, None, "\u2460 CREATE", None, None),
+            ("forge", "", "\u26a1 Forge Strategy", self.tab_forge, NEON_LIME),
             ("strategy", "", "Strategy Builder", self.tab_strategy, NEON_VIOLET),
             ("speedrun", "", "\u26a1 Speed Run", self.tab_speedrun, NEON_VIOLET),
             ("genstrat", "", "Generate Strategies (AI)", self.tab_genstrat, NEON_VIOLET),
             ("researchagent", "", "Research Agent", self.tab_researchagent, NEON_VIOLET),
+            ("researchdirector", "", "\U0001F50D Research Director", self.tab_research_director, NEON_VIOLET),
 
             (None, None, "\u2461 TEST", None, None),
             ("strategyconfig", "", "1  Strategy Configuration", self.tab_strategyconfig, NEON_CYAN),
@@ -1482,6 +1495,13 @@ class MainWindow:
 
             (None, None, "\u2467 QUANT LAB", None, None),
             ("quantlab", "", "Quant Lab (translator, stat arb, options, more)", self.tab_quantlab, METAL_BRIGHT),
+
+            (None, None, "\u2468 STRATEGY GRAVEYARD", None, None),
+            ("graveyard", "", "\U0001F480 Strategy Graveyard", self.tab_graveyard, METAL_BRIGHT),
+
+            (None, None, "\u2469 EDUCATION", None, None),
+            ("education", "", "\U0001F393 Education (course)", self.tab_education, METAL_BRIGHT),
+            ("resources", "", "\U0001F393 Resources", self.tab_resources, METAL_BRIGHT),
         ]
         self._tab_frame_by_key = {k: frame for k, _icon, _label, frame, _color in self._nav_items if k}
         self._nav_buttons: dict[str, Label] = {}
@@ -1526,6 +1546,7 @@ class MainWindow:
             ("Research Agent", self._build_research_agent_tab),
             ("Quant Lab", self._build_quant_lab_tab),
             ("Options Outlook", self._build_options_outlook_tab),
+            ("Strategy Graveyard", self._build_graveyard_tab),
         ):
             self._pump_splash(f"Loading {label}...")
             builder()
@@ -1575,21 +1596,25 @@ class MainWindow:
             self._sidebar_canvas.yview_scroll(delta, "units")
             return "break"  # see the matching note on _sidebar_wheel above
 
-        # UPGRADE (Sep 2026 UI pass, round 2): the sidebar groups are now
-        # real collapsible dropdowns -- clicking a section header toggles
-        # it, and only the group containing whichever tab is currently
-        # active starts open, so opening the app doesn't dump all ~30 tabs
-        # on screen at once. "OVERVIEW" (Dashboard / User Manual) is the
-        # one section that's always open -- it's only 2 items and one of
-        # them (Dashboard) is the app's home page.
+        # UPGRADE: every collapsible group now starts CLOSED, full stop --
+        # no exception for whichever tab happens to be active. This used
+        # to auto-open the active tab's group ("only the group containing
+        # whichever tab is currently active starts open"), which is
+        # exactly the "some tabs are still open with subcategories
+        # exposed" clutter reported: a plain restart of the app (active
+        # page = dashboard, which lives in the always-open OVERVIEW
+        # section) shouldn't normally trigger this, but navigating to any
+        # page inside a group and then reopening/refreshing the window
+        # left that one group expanded, and once a group was toggled open
+        # by hand it also stayed open across rebuilds for the rest of the
+        # session. "OVERVIEW" (Dashboard / User Manual) is still the one
+        # section that's always open -- it's only 2 items and one of them
+        # (Dashboard) is the app's home page.
         if not hasattr(self, "_collapsed_groups"):
             self._collapsed_groups = {
                 lbl_text for k, _icon, lbl_text, _frame, _color in self._nav_items
                 if k is None and lbl_text != "OVERVIEW"
             }
-            active_group = self._group_header_for_key(getattr(self, "active_page", "dashboard"))
-            if active_group:
-                self._collapsed_groups.discard(active_group)
 
         # Rebuilding from scratch on every toggle is simple and cheap here
         # (~30 widgets total) -- far less code/risk than trying to
@@ -8802,6 +8827,92 @@ class MainWindow:
             self.fd_output.insert(END, "Unexpected error:\n" + traceback.format_exc())
 
     # -----------------------------------------------------------------------
+    # Strategy Graveyard -- desktop read-only view onto the same shared,
+    # persistent, instrument-scoped graveyard files the web app's /graveyard
+    # page reads (see app.search.graveyard.graveyard_path_for /
+    # list_graveyard_files). A rejection recorded by Forge, Search Lab, or
+    # Evolution Lab from EITHER the desktop app or the web app lands in the
+    # same file, so this always shows the full picture regardless of which
+    # UI produced any given run.
+    # -----------------------------------------------------------------------
+    def _build_graveyard_tab(self):
+        f = self._scrollable(self.tab_graveyard)
+
+        self._page_header(
+            f,
+            "STRATEGY GRAVEYARD",
+            "Strategy Graveyard",
+            "Dead neighborhoods -- parameter regions that reached full evaluation and CPCV but "
+            "failed, most-tested first, so you don't waste hours re-discovering the same dead end. "
+            "Shared with the web app: a rejection from Forge, Search Lab, or Evolution Lab on either "
+            "UI shows up here.",
+        )
+
+        section = self._section(f, "Which file to browse", "", emphasize=True)
+        self.gy_file_combo = LabeledCombo(section, "Instrument / timeframe", [], default="")
+        button_row = Frame(f, bg=BG)
+        button_row.pack(fill="x", padx=24, pady=10)
+        self._button(button_row, "REFRESH LIST", self._graveyard_refresh_list, primary=False).pack(side="left", padx=(0, 8))
+        self._button(button_row, "SHOW GRAVEYARD", self._graveyard_show_clicked, primary=True).pack(side="left")
+
+        output_section = self._section(f, "Result", "")
+        _gy_output_frame = Frame(output_section, bg=PANEL)
+        self.gy_output = Text(
+            _gy_output_frame, height=24, wrap="word", bg=LOG_BG, fg=TEXT, insertbackground=TEXT,
+            relief="flat", bd=0, highlightthickness=1, highlightbackground=BORDER, font=(MONO, 9),
+        )
+        _gy_output_scroll = ttk.Scrollbar(
+            _gy_output_frame, orient="vertical", command=self.gy_output.yview, style="T58.Vertical.TScrollbar",
+        )
+        self.gy_output.configure(yscrollcommand=_gy_output_scroll.set)
+        self.gy_output.pack(side="left", fill="both", expand=True)
+        _gy_output_scroll.pack(side="right", fill="y")
+        _gy_output_frame.pack(fill="both", expand=True, padx=18, pady=(3, 16))
+        self._bind_isolated_wheel(self.gy_output)
+
+        self._graveyard_files_by_label: dict[str, str] = {}
+        self._graveyard_refresh_list()
+
+    def _graveyard_refresh_list(self):
+        """(Re)populates the instrument/timeframe dropdown from every
+        persistent graveyard file currently on disk (see
+        app.search.graveyard.list_graveyard_files) -- call this after
+        running Forge / Search Lab / Evolution Lab to pick up a file that
+        didn't exist yet when this tab was first built."""
+        try:
+            files = list_graveyard_files()
+        except Exception:
+            files = []
+        self._graveyard_files_by_label = {}
+        labels = []
+        for entry in files:
+            label = f"{entry['instrument']} / {entry['timeframe']} ({entry['n_rows']} rows)"
+            self._graveyard_files_by_label[label] = entry["path"]
+            labels.append(label)
+        self.gy_file_combo.set_options(labels)
+        if labels:
+            self.gy_file_combo.set_str(labels[0])
+
+    def _graveyard_show_clicked(self):
+        self.gy_output.delete("1.0", END)
+        label = self.gy_file_combo.get_str()
+        path = self._graveyard_files_by_label.get(label)
+        if not path:
+            self.gy_output.insert(
+                END,
+                "No graveyard file selected -- click REFRESH LIST after running Forge, Search Lab, "
+                "or Evolution Lab at least once (a graveyard file is only created once something has "
+                "reached full evaluation/CPCV and then failed).\n",
+            )
+            return
+        try:
+            rows = load_graveyard(Path(path))
+            clusters = summarize_graveyard(rows, top_n=100)
+            self.gy_output.insert(END, render_graveyard_report(clusters))
+        except Exception:
+            self.gy_output.insert(END, "Unexpected error:\n" + traceback.format_exc())
+
+    # -----------------------------------------------------------------------
     # Tab 8 — Walk-Forward Optimization
     # -----------------------------------------------------------------------
 
@@ -11017,9 +11128,14 @@ class MainWindow:
             else "cpcv_oos_eval_pass_probability"
         )
 
+        _evo_instrument = (
+            os.path.basename(self.csv_paths[0]) if len(self.csv_paths) == 1
+            else " + ".join(os.path.basename(p) for p in self.csv_paths)
+        ) if getattr(self, "csv_paths", None) else "unknown"
         cfg = EvolutionConfig(
             population_size=self.evo_population.get_int(60),
             elite_keep=self.evo_elite_keep.get_int(10),
+            instrument=_evo_instrument,
             families=selected_families,
             min_trades=self.evo_min_trades.get_int(20),
             mc_sims=self.evo_mc_sims.get_int(1000),

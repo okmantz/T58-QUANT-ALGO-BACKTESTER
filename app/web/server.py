@@ -40,7 +40,10 @@ from flask import (
 from app.ai.ollama_settings import OllamaSettings
 from app.education import content as education_content
 from app.web.network_info import lan_url, print_startup_banner, qr_code_data_uri, qr_code_file, tailscale_url
-from app.web.notifications import send_job_notification
+from app.web.notifications import (
+    NotificationSettings, load_notification_settings, notify_job_finished, save_notification_settings,
+    send_job_notification,
+)
 from app.web.quant_lab_routes import quant_lab_bp
 from app.web.extra_routes import extra_bp
 from app.web.ai_assistant_routes import ai_assistant_bp
@@ -69,11 +72,11 @@ from app.optimize.risk_sweep import DEFAULT_RISK_VALUES, run_risk_sweep
 from app.optimize.multi_objective import (    DEFAULT_OBJECTIVES, MultiObjectiveConfig, OBJECTIVE_DIRECTIONS, run_multi_objective_refinement,
 )
 from app.optimize.refinement import FITNESS_METRICS, RefinementConfig, RefinementError, run_iterative_refinement
-from app.optimize.walkforward_ga import run_walkforward_aware_refinement
+from app.optimize.walkforward_ga import WalkforwardGACancelled, run_walkforward_aware_refinement
 from app.orchestration.batch_test import BatchTestItem, run_batch_test
 from app.orchestration.full_pipeline import (
-    FullPipelineBatchCancelled, FullPipelineBatchItem, FullPipelineConfig, run_full_pipeline,
-    run_full_pipeline_batch,
+    FullPipelineBatchCancelled, FullPipelineBatchItem, FullPipelineCancelled, FullPipelineConfig,
+    run_full_pipeline, run_full_pipeline_batch,
 )
 from app.orchestration.quick_optimize import QuickOptimizeConfig, run_quick_optimize
 from app.orchestration.resource_guard import (
@@ -193,6 +196,81 @@ REGIME_DIR = BASE_DIR / "reports" / "regime_matrix"
 REGIME_DIR.mkdir(parents=True, exist_ok=True)
 SPEEDRUN_DIR = BASE_DIR / "reports" / "speed_run"
 SPEEDRUN_DIR.mkdir(parents=True, exist_ok=True)
+
+# Maps each known report directory to the URL prefix that actually serves
+# it (see the @app.route("/..._reports/<path:filename>") handlers spread
+# throughout this file). Used by _dashboard_report_url below -- see that
+# function's docstring for the bug this fixes.
+_REPORT_DIR_URL_PREFIXES: list[tuple[Path, str]] = [
+    (FULL_PIPELINE_DIR, "full_pipeline_reports"),
+    (SEARCH_DIR, "search_reports"),
+    (REFINEMENT_DIR, "refinement_reports"),
+    (WFO_DIR, "wfo_reports"),
+    (MULTI_OBJ_DIR, "mo_reports"),
+    (WFGA_DIR, "wfga_reports"),
+    (PORTFOLIO_DIR, "portfolio_reports"),
+    (ENSEMBLE_DIR, "ensemble_reports"),
+    (CPCV_DIR, "cpcv_reports"),
+    (PBO_DIR, "pbo_reports"),
+    (SENSITIVITY_DIR, "sensitivity_reports"),
+    (PAYOUT_DIR, "payout_reports"),
+    (SPEEDRUN_DIR, "speed_run_reports"),
+    # REPORTS_DIR (the bare "reports/" root, served at /reports/<file>) is
+    # deliberately listed LAST: it's an ancestor of every directory above,
+    # so it must only match once none of the more specific ones did.
+    (REPORTS_DIR, "reports"),
+]
+
+
+def _dashboard_report_url(raw: str | None) -> str | None:
+    """Turns whatever app.reports.run_history / app.strategy.library
+    stored for a run's report_html field into a URL this web app can
+    actually serve.
+
+    Historically, most callers of record_backtest_result()/record_run()
+    stored a ready-to-use relative URL (e.g. "/search_reports/x.html"),
+    matching the specific route that serves that tool's own report
+    directory. But app.orchestration.full_pipeline (and, through it,
+    app.reports.run_history.record_run's shared "generate_full_report()"
+    path used by every tool) stores the raw ABSOLUTE FILESYSTEM PATH
+    instead (e.g. ".../reports/full_pipeline/x.html") -- correct for the
+    desktop app opening a local file directly, but meaningless as a web
+    URL. The Dashboard used to naively assume every report lives flat
+    under /reports/<filename>, which is only true for the plain "Run &
+    Report" tool -- clicking a Full-Pipeline-sourced report from the
+    Dashboard (including after restarting the server, since this is read
+    back from the persistent run-history file) 404'd because the file
+    actually lives under /full_pipeline_reports/<filename> instead.
+
+    This resolves it generically: check whether `raw`'s parent directory
+    is literally one of this app's known report directories (compared as
+    real filesystem paths, not by string prefix) -- if so, it's a raw
+    absolute path from one of the buggy callers, and we can build the
+    correct URL for that specific route. If no known directory matches,
+    `raw` was already a proper relative URL to begin with (a leading "/"
+    alone can't distinguish "already a URL" from "an absolute filesystem
+    path this list doesn't know about yet" on POSIX, so an unmatched
+    value is always returned unchanged rather than guessed at).
+    """
+    if not raw:
+        return None
+    try:
+        p = Path(raw)
+    except Exception:  # noqa: BLE001 -- never let a bad stored value break the dashboard
+        return raw
+    for report_dir, url_prefix in _REPORT_DIR_URL_PREFIXES:
+        try:
+            if p.parent == report_dir:
+                return f"/{url_prefix}/{p.name}"
+        except Exception:  # noqa: BLE001
+            continue
+    # No known report directory matched -- on POSIX, a value like
+    # "/search_reports/x.html" (already a correct relative URL from a
+    # caller that did this right) is indistinguishable from a real
+    # absolute filesystem path by looking at leading "/" alone, so the
+    # only safe move when nothing matches is to return it unchanged
+    # rather than guessing a prefix that could just as easily be wrong.
+    return raw
 # run_speed_run() itself writes each validated candidate's Full Pipeline
 # report into output_dir / "speed_run" -- see app.orchestration.speed_run.
 SPEEDRUN_REPORTS_DIR = SPEEDRUN_DIR / "speed_run"
@@ -721,6 +799,16 @@ def dashboard():
         checklist = strategy_state.get_checklist(current["strategy_name"], current["instrument"])
         score = strategy_state.robustness_score(current["strategy_name"], current["instrument"])
     dashboard_stats = run_history.dashboard_data()
+    # Fix up report_html links before they reach the template -- see
+    # _dashboard_report_url's docstring for why the raw stored value
+    # isn't always a usable URL as-is (Full Pipeline runs store an
+    # absolute filesystem path, not a "/xxx_reports/file" URL, which
+    # 404'd when the template guessed "/reports/<filename>" for every
+    # row regardless of which tool actually produced it).
+    if dashboard_stats.get("best") is not None:
+        dashboard_stats["best"]["report_html"] = _dashboard_report_url(dashboard_stats["best"].get("report_html"))
+    for _s in dashboard_stats.get("strategies") or []:
+        _s["report_html"] = _dashboard_report_url(_s.get("report_html"))
     show_welcome = pipeline_guide.should_show_first_run_welcome(
         has_stored_datasets=bool(list_stored_datasets()),
         has_run_history=bool(dashboard_stats.get("total_runs")),
@@ -1195,6 +1283,34 @@ def serve_report(filename):
     return send_from_directory(REPORTS_DIR, filename)
 
 
+@app.route("/settings/notifications")
+def notification_settings_form():
+    return render_template("notification_settings.html", settings=load_notification_settings(), active_page="notification_settings")
+
+
+@app.route("/settings/notifications/save", methods=["POST"])
+def notification_settings_save():
+    form = request.form
+    settings = NotificationSettings(
+        notify_email=(form.get("notify_email") or "").strip(),
+        notify_phone=(form.get("notify_phone") or "").strip(),
+        smtp_host=(form.get("smtp_host") or "").strip(),
+        smtp_port=int(form.get("smtp_port", 587) or 587),
+        smtp_username=(form.get("smtp_username") or "").strip(),
+        # Blank password on save means "keep the existing one" -- so
+        # re-saving the email address doesn't force retyping the SMTP
+        # password (e.g. a Gmail app password) every time.
+        smtp_password=(form.get("smtp_password") or load_notification_settings().smtp_password),
+        smtp_from=(form.get("smtp_from") or "").strip(),
+        email_enabled=form.get("email_enabled") == "on",
+    )
+    save_notification_settings(settings)
+    return render_template(
+        "notification_settings.html", settings=settings, active_page="notification_settings",
+        saved=True,
+    )
+
+
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"})
@@ -1647,7 +1763,7 @@ def _fullpipeline_job_log(job_id: str, msg: str) -> None:
 def _run_fullpipeline_job(
     job_id: str, df, strategy, risk: RiskConfig, rules: PropRules,
     cfg: FullPipelineConfig, active_label: str, ollama_settings: OllamaSettings | None,
-    notify_webhook_url: str | None = None,
+    cancel_event: threading.Event | None = None, notify_webhook_url: str | None = None,
 ) -> None:
     try:
         result = run_full_pipeline(
@@ -1655,6 +1771,7 @@ def _run_fullpipeline_job(
             progress_cb=lambda msg: _fullpipeline_job_log(job_id, msg),
             instrument=active_label, ollama_settings=ollama_settings,
             report_basename=f"full_pipeline_{job_id}",
+            cancel_event=cancel_event,
         )
         with _FULLPIPELINE_JOBS_LOCK:
             job = _FULLPIPELINE_JOBS[job_id]
@@ -1662,18 +1779,24 @@ def _run_fullpipeline_job(
             job["result"] = result
             job["report_html"] = f"/full_pipeline_reports/{Path(result.report_paths['html']).name}"
             job["report_json"] = f"/full_pipeline_reports/{Path(result.report_paths['json']).name}"
-        send_job_notification(
+        notify_job_finished(
             notify_webhook_url, "Full Pipeline",
             f"verdict={getattr(result, 'verdict', '?')}, instrument={active_label}",
             job_url=f"/full-pipeline/job/{job_id}",
         )
+    except FullPipelineCancelled:
+        with _FULLPIPELINE_JOBS_LOCK:
+            job = _FULLPIPELINE_JOBS[job_id]
+            job["done"] = True
+            job["cancelled"] = True
+        notify_job_finished(notify_webhook_url, "Full Pipeline", "Stopped by request", job_url=f"/full-pipeline/job/{job_id}")
     except Exception as exc:  # noqa: BLE001 -- must surface on the status page, not crash the thread silently
         log_crash("Full Pipeline (web)", exc=exc)
         with _FULLPIPELINE_JOBS_LOCK:
             job = _FULLPIPELINE_JOBS[job_id]
             job["done"] = True
             job["error"] = f"Unexpected error: {exc}"
-        send_job_notification(notify_webhook_url, "Full Pipeline", f"FAILED -- {exc}", job_url=f"/full-pipeline/job/{job_id}")
+        notify_job_finished(notify_webhook_url, "Full Pipeline", f"FAILED -- {exc}", job_url=f"/full-pipeline/job/{job_id}")
     finally:
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
 
@@ -1730,7 +1853,7 @@ def _run_fullpipeline_batch_job(
             job["outcomes"] = outcomes
             job["elapsed_seconds"] = summary.elapsed_seconds
         n_ready = sum(1 for o in outcomes if o["ok"])
-        send_job_notification(
+        notify_job_finished(
             notify_webhook_url, "Full Pipeline (batch)",
             f"{len(outcomes)} strategies run, {n_ready} came back ready, instrument={active_label}",
             job_url=f"/full-pipeline/batch-job/{job_id}",
@@ -1740,14 +1863,14 @@ def _run_fullpipeline_batch_job(
             job = _FULLPIPELINE_BATCH_JOBS[job_id]
             job["done"] = True
             job["cancelled"] = True
-        send_job_notification(notify_webhook_url, "Full Pipeline (batch)", "Cancelled by user.", job_url=f"/full-pipeline/batch-job/{job_id}")
+        notify_job_finished(notify_webhook_url, "Full Pipeline (batch)", "Cancelled by user.", job_url=f"/full-pipeline/batch-job/{job_id}")
     except Exception as exc:  # noqa: BLE001 -- must surface on the status page, not crash the thread silently
         log_crash("Full Pipeline batch (web)", exc=exc)
         with _FULLPIPELINE_BATCH_JOBS_LOCK:
             job = _FULLPIPELINE_BATCH_JOBS[job_id]
             job["done"] = True
             job["error"] = f"Unexpected error: {exc}"
-        send_job_notification(notify_webhook_url, "Full Pipeline (batch)", f"FAILED -- {exc}", job_url=f"/full-pipeline/batch-job/{job_id}")
+        notify_job_finished(notify_webhook_url, "Full Pipeline (batch)", f"FAILED -- {exc}", job_url=f"/full-pipeline/batch-job/{job_id}")
     finally:
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
 
@@ -1777,7 +1900,7 @@ def full_pipeline_start_batch():
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
-            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json()), 400
 
         selected = [s for s in form.getlist("batch_items") if s.strip()]
         if not selected:
@@ -1877,11 +2000,11 @@ def full_pipeline_start_batch():
 
     except StrategyError as exc:
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
-        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json()), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
         log_crash("Full Pipeline (web, start-batch)", exc=exc)
-        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 500
+        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json()), 500
 
 
 # ---------------------------------------------------------------------------
@@ -1982,13 +2105,13 @@ def full_pipeline_schedule_batch():
     try:
         start_at = (form.get("schedule_start_at") or "").strip()
         if not start_at or ":" not in start_at:
-            return render_template("full_pipeline.html", error="Give a start time (HH:MM) to schedule the batch run.", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+            return render_template("full_pipeline.html", error="Give a start time (HH:MM) to schedule the batch run.", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json()), 400
         hour_str, minute_str = start_at.split(":")[:2]
         target_hour, target_minute = int(hour_str), int(minute_str)
 
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
-            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json()), 400
 
         selected = [s for s in form.getlist("batch_items") if s.strip()]
         if not selected:
@@ -2086,10 +2209,10 @@ def full_pipeline_schedule_batch():
         thread.start()
         return redirect(url_for("full_pipeline_schedule_status", schedule_id=schedule_id))
     except StrategyError as exc:
-        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json()), 400
     except Exception as exc:  # noqa: BLE001
         log_crash("Full Pipeline (web, schedule-batch)", exc=exc)
-        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 500
+        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json()), 500
 
 
 @app.route("/full-pipeline/schedule/<schedule_id>")
@@ -2183,6 +2306,7 @@ def full_pipeline_form():
         saved_strategies_json=_saved_strategies_json(),
         strategy_statuses=STRATEGY_STATUSES,
         fitness_metrics=FITNESS_METRICS,
+        prop_presets_json=_prop_presets_json(),
         ai_enabled=saved_ai.enabled,
         ai_host=saved_ai.host,
         ai_model=saved_ai.model,
@@ -2207,7 +2331,7 @@ def full_pipeline_start():
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
-            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json()), 400
 
         strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
 
@@ -2263,15 +2387,17 @@ def full_pipeline_start():
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
+        cancel_event = threading.Event()
         with _FULLPIPELINE_JOBS_LOCK:
             _FULLPIPELINE_JOBS[job_id] = {
                 "log": initial_log, "done": False, "error": None, "result": None,
                 "started_at": time.time(), "instrument": active_label,
+                "cancel_event": cancel_event, "cancelled": False,
             }
         thread = threading.Thread(
             target=_run_fullpipeline_job,
             args=(job_id, df, strategy, risk, rules, cfg, active_label, ollama_settings),
-            kwargs={"notify_webhook_url": form.get("notify_webhook_url")},
+            kwargs={"cancel_event": cancel_event, "notify_webhook_url": form.get("notify_webhook_url")},
             daemon=True,
         )
         thread.start()
@@ -2279,11 +2405,11 @@ def full_pipeline_start():
 
     except StrategyError as exc:
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
-        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json()), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
         log_crash("Full Pipeline (web, start)", exc=exc)
-        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 500
+        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json()), 500
 
 
 @app.route("/full-pipeline/job/<job_id>")
@@ -2293,6 +2419,23 @@ def full_pipeline_job(job_id):
     if job is None:
         return render_template("full_pipeline_job.html", job_id=job_id, not_found=True), 404
     return render_template("full_pipeline_job.html", job_id=job_id, not_found=False)
+
+
+@app.route("/full-pipeline/job/<job_id>/stop", methods=["POST"])
+def full_pipeline_job_stop(job_id):
+    """Signals cancellation to a running single-strategy Full Pipeline job
+    -- see run_full_pipeline's cancel_event param. Checked between each of
+    the 7 steps, so this stops the run at the next step boundary rather
+    than instantly, same tradeoff the batch job's stop button already
+    makes."""
+    with _FULLPIPELINE_JOBS_LOCK:
+        job = _FULLPIPELINE_JOBS.get(job_id)
+        if job is None:
+            return jsonify({"found": False}), 404
+        cancel_event = job.get("cancel_event")
+    if cancel_event is not None:
+        cancel_event.set()
+    return jsonify({"found": True, "stopping": True})
 
 
 @app.route("/full-pipeline/job/<job_id>/status.json")
@@ -2331,6 +2474,7 @@ def full_pipeline_job_status(job_id):
         "found": True,
         "done": job["done"],
         "error": job["error"],
+        "cancelled": job.get("cancelled", False),
         "log": job["log"],
         "instrument": job.get("instrument"),
         "summary": summary,
@@ -4077,13 +4221,24 @@ def _quickopt_job_log(job_id: str, msg: str) -> None:
             job["log"].append(msg)
 
 
-def _run_quickopt_job(job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, cfg: QuickOptimizeConfig) -> None:
+def _run_quickopt_job(
+    job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, cfg: QuickOptimizeConfig,
+    cancel_event: threading.Event | None = None,
+) -> None:
     try:
-        result = run_quick_optimize(df, strategy, risk, rules, cfg, progress_cb=lambda msg: _quickopt_job_log(job_id, msg))
+        result = run_quick_optimize(
+            df, strategy, risk, rules, cfg, progress_cb=lambda msg: _quickopt_job_log(job_id, msg),
+            cancel_event=cancel_event,
+        )
         with _QUICKOPT_JOBS_LOCK:
             job = _QUICKOPT_JOBS[job_id]
             job["done"] = True
             job["result"] = result
+    except WalkforwardGACancelled:
+        with _QUICKOPT_JOBS_LOCK:
+            job = _QUICKOPT_JOBS[job_id]
+            job["done"] = True
+            job["cancelled"] = True
     except RefinementError as exc:
         with _QUICKOPT_JOBS_LOCK:
             job = _QUICKOPT_JOBS[job_id]
@@ -4123,9 +4278,14 @@ def quickopt_start():
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
+        cancel_event = threading.Event()
         with _QUICKOPT_JOBS_LOCK:
-            _QUICKOPT_JOBS[job_id] = {"log": initial_log, "done": False, "error": None, "result": None, "started_at": time.time(), "instrument": active_label}
-        thread = threading.Thread(target=_run_quickopt_job, args=(job_id, df, strategy, risk, rules, cfg), daemon=True)
+            _QUICKOPT_JOBS[job_id] = {
+                "log": initial_log, "done": False, "error": None, "result": None,
+                "started_at": time.time(), "instrument": active_label,
+                "cancel_event": cancel_event, "cancelled": False,
+            }
+        thread = threading.Thread(target=_run_quickopt_job, args=(job_id, df, strategy, risk, rules, cfg, cancel_event), daemon=True)
         thread.start()
         return redirect(url_for("quickopt_job", job_id=job_id))
     except (StrategyError, RefinementError) as exc:
@@ -4141,6 +4301,21 @@ def quickopt_job(job_id):
     if job is None:
         return render_template("quick_optimize_job.html", job_id=job_id, not_found=True), 404
     return render_template("quick_optimize_job.html", job_id=job_id, not_found=False)
+
+
+@app.route("/quick-optimize/job/<job_id>/stop", methods=["POST"])
+def quickopt_job_stop(job_id):
+    """Signals cancellation to a running Quick Optimize job -- checked
+    once per GA generation (see run_walkforward_aware_refinement's
+    cancel_event param), so this stops at the next generation boundary."""
+    with _QUICKOPT_JOBS_LOCK:
+        job = _QUICKOPT_JOBS.get(job_id)
+        if job is None:
+            return jsonify({"found": False}), 404
+        cancel_event = job.get("cancel_event")
+    if cancel_event is not None:
+        cancel_event.set()
+    return jsonify({"found": True, "stopping": True})
 
 
 @app.route("/quick-optimize/job/<job_id>/status.json")
@@ -4163,7 +4338,10 @@ def quickopt_job_status(job_id):
             "elapsed_seconds": result.elapsed_seconds,
             "warnings": result.warnings,
         }
-    return jsonify({"found": True, "done": job["done"], "error": job["error"], "log": job["log"], "instrument": job.get("instrument"), "summary": summary})
+    return jsonify({
+        "found": True, "done": job["done"], "error": job["error"], "cancelled": job.get("cancelled", False),
+        "log": job["log"], "instrument": job.get("instrument"), "summary": summary,
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -4206,6 +4384,7 @@ def evolution_form():
         "evolution.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         families=[{"name": n, "description": family_description(n)} for n in list_families()],
         running=(_EVOLUTION_RUNNER is not None and _EVOLUTION_RUNNER.is_running),
+        prop_presets_json=_prop_presets_json(),
     )
 
 
@@ -4228,12 +4407,13 @@ def evolution_start():
             stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             families=[{"name": n, "description": family_description(n)} for n in list_families()],
             running=False,
+            prop_presets_json=_prop_presets_json(),
         ), 409
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_EVOLUTION_LAB)
-            return render_template("evolution.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), families=[{"name": n, "description": family_description(n)} for n in list_families()], running=False), 400
+            return render_template("evolution.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), families=[{"name": n, "description": family_description(n)} for n in list_families()], running=False, prop_presets_json=_prop_presets_json()), 400
 
         # UPGRADE (Evolution Lab account/risk fields): this used to be
         # `RiskConfig(initial_balance=...)` / `PropRules(account_size=...)`
@@ -4271,6 +4451,7 @@ def evolution_start():
         cfg = EvolutionConfig(
             population_size=int(form.get("population_size", 60) or 60),
             elite_keep=int(form.get("elite_keep", 10) or 10),
+            instrument=active_label,
             families=families_selected,
             mc_sims=int(form.get("mc_sims", 1000) or 1000),
             max_generations=(int(form["max_generations"]) if form.get("max_generations") else None),
@@ -4295,7 +4476,7 @@ def evolution_start():
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_EVOLUTION_LAB)
         log_crash("Evolution Lab (web)", exc=exc)
-        return render_template("evolution.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), families=[{"name": n, "description": family_description(n)} for n in list_families()], running=False), 500
+        return render_template("evolution.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), families=[{"name": n, "description": family_description(n)} for n in list_families()], running=False, prop_presets_json=_prop_presets_json()), 500
 
 
 @app.route("/evolution/stop", methods=["POST"])
@@ -5037,6 +5218,7 @@ def search_form():
         saved_strategies_json=_saved_strategies_json(),
         strategy_notice=request.args.get("strategy_notice"),
         strategy_statuses=STRATEGY_STATUSES,
+        prop_presets_json=_prop_presets_json(),
     )
 
 
@@ -5054,6 +5236,7 @@ def search_start():
             stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             families=[{"name": n, "description": family_description(n)} for n in list_families()],
             saved_strategies_json=_saved_strategies_json(),
+            prop_presets_json=_prop_presets_json(),
         ), 409
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
@@ -5063,6 +5246,7 @@ def search_start():
                 "search.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
                 families=[{"name": n, "description": family_description(n)} for n in list_families()],
                 saved_strategies_json=_saved_strategies_json(),
+                prop_presets_json=_prop_presets_json(),
             ), 400
 
         mode_key = form.get("search_mode", "family_named")
@@ -5181,6 +5365,7 @@ def search_start():
             "search.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             families=[{"name": n, "description": family_description(n)} for n in list_families()],
             saved_strategies_json=_saved_strategies_json(),
+            prop_presets_json=_prop_presets_json(),
         ), 400
     except StrategyError as exc:
         HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
@@ -5188,6 +5373,7 @@ def search_start():
             "search.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             families=[{"name": n, "description": family_description(n)} for n in list_families()],
             saved_strategies_json=_saved_strategies_json(),
+            prop_presets_json=_prop_presets_json(),
         ), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
@@ -5196,6 +5382,7 @@ def search_start():
             "search.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             families=[{"name": n, "description": family_description(n)} for n in list_families()],
             saved_strategies_json=_saved_strategies_json(),
+            prop_presets_json=_prop_presets_json(),
         ), 500
 
 

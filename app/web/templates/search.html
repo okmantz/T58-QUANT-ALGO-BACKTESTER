@@ -167,6 +167,7 @@
         <select id="existing_strategy_select" onchange="loadFromLibrary()">
           <option value="">— none, paste or upload below —</option>
         </select>
+        <a href="#" onclick="searchViewSelectedCode(); return false;" style="font-size:12px;color:var(--teal);display:inline-block;margin-top:6px;">View code of selected strategy</a>
         <p style="font-size:12px;color:#888;margin-top:6px;" id="library-count-note"></p>
 
         <div id="library-manage-panel" style="display:none;border:1px solid #262626;border-radius:8px;padding:10px;margin-top:8px;">
@@ -348,6 +349,14 @@
     these settings -- the search results below are only meaningful relative to the account you're
     actually going to trade this against.</p>
     <div class="row">
+      <div>
+        <label>Prop firm preset (optional shortcut)</label>
+        <select id="search_prop_preset_select" onchange="searchApplyPropPreset(this.value)">
+          <option value="">-- or enter rules manually below --</option>
+        </select>
+      </div>
+    </div>
+    <div class="row">
       <div><label>Initial balance</label><input type="number" name="initial_balance" value="100000"></div>
       <div><label>Account size (prop rules)</label><input type="number" name="account_size" value="100000"></div>
     </div>
@@ -527,8 +536,21 @@
       <label style="display:flex;align-items:center;gap:8px;margin:4px 0;">
         <input type="checkbox" name="items" value="${mode}::${s.name}" style="width:auto;">
         <span>[${s.status}] ${s.name}${s.description ? ' — ' + s.description : ''}</span>
+        <a href="#" onclick="searchViewStrategyCode('${mode}', '${s.name}'); return false;" style="font-size:11px;color:var(--teal);">view code</a>
       </label>
     `).join('');
+  }
+
+  function searchViewStrategyCode(strategyType, filename) {
+    const url = `/strategies/view-code?strategy_type=${encodeURIComponent(strategyType)}&filename=${encodeURIComponent(filename)}`;
+    window.open(url, '_blank');
+  }
+
+  function searchViewSelectedCode() {
+    const mode = modeInput.value;
+    const name = document.getElementById('existing_strategy_select').value;
+    if (!name) { alert('Pick a saved strategy from the dropdown first.'); return; }
+    searchViewStrategyCode(mode, name);
   }
 
   function exportChecked() {
@@ -621,6 +643,30 @@
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+  }
+
+  const SEARCH_PROP_PRESETS = {{ (prop_presets_json | default('[]')) | safe }};
+  (function populateSearchPropPresetDropdown() {
+    const select = document.getElementById('search_prop_preset_select');
+    if (!select) return;
+    SEARCH_PROP_PRESETS.forEach((p) => {
+      const opt = document.createElement('option');
+      opt.value = JSON.stringify(p);
+      opt.textContent = p.label;
+      select.appendChild(opt);
+    });
+  })();
+
+  function searchApplyPropPreset(value) {
+    if (!value) return;
+    const p = JSON.parse(value);
+    const form = document.getElementById('search_prop_preset_select').closest('form');
+    if (!form) return;
+    const set = (name, val) => { const el = form.querySelector(`[name="${name}"]`); if (el) el.value = val; };
+    set('account_size', p.account_size);
+    set('profit_target', p.evaluation_profit_target_pct);
+    set('daily_loss', p.daily_loss_limit_pct);
+    set('max_dd', p.max_drawdown_pct);
   }
 
   function searchDetectPipSize() {

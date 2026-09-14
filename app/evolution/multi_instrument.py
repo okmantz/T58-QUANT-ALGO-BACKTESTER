@@ -82,6 +82,7 @@ class MultiInstrumentEvolutionGroup:
                 continue
             cfg = replace(
                 base_cfg,
+                instrument=job.label,
                 checkpoint_path=str(job_dir / "checkpoint.json"),
                 tested_log_path=str(job_dir / "tested_candidates.jsonl"),
                 knowledge_graph_path=str(job_dir / "knowledge_graph.jsonl"),
