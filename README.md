@@ -1,9 +1,11 @@
-# T58 Trading — Quant Algo Backtester
+<img width="1280" height="420" alt="image" src="https://github.com/user-attachments/assets/fbfa3c29-4a64-4dfa-9e2a-3ba5f759b27c" />
 
+# T58 Trading — Quant Algo Backtester
+---
 Full Tutorial: https://drive.google.com/file/d/1sgmIN7Q5vTkf8PESkHDFuSnRRUq1TYFp/view?usp=drive_link
 
 Web Version: https://github.com/user-attachments/assets/a8a5fa7d-a95a-437e-9146-ff7ac05143b5
-
+---
 The one-stop shop for taking a trading idea from "here's a script" to
 "here's a validated, prop-firm-ready strategy" — without leaving one app.
 Import or write a strategy in any of four formats, validate it against real
