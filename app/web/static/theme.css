@@ -32,9 +32,9 @@
   --teal: #35e0b0;
   --teal-dim: #0f6e56;
   --teal-rgb: 53, 224, 176;
-  --violet: #8b7cff;
-  --violet-dim: #3c3489;
-  --violet-rgb: 139, 124, 255;
+  --violet: #7b3dff;
+  --violet-dim: #351a89;
+  --violet-rgb: 123, 61, 255;
   --coral: #ff6f6f;
   --coral-dim: #712b13;
   --coral-rgb: 255, 111, 111;
@@ -48,8 +48,8 @@
      as the same product rather than two different-looking apps. ---- */
   --blue: #6fa8ff;
   --blue-rgb: 111, 168, 255;
-  --neon-cyan: #00f0ff;
-  --neon-cyan-rgb: 0, 240, 255;
+  --neon-cyan: #00d4ff;
+  --neon-cyan-rgb: 0, 212, 255;
   --neon-magenta: #ff2bd6;
   --neon-magenta-rgb: 255, 43, 214;
   --neon-lime: #b6ff3c;
@@ -104,9 +104,9 @@ html[data-theme="light"] {
   --teal: #0f9f78;
   --teal-dim: #0a7259;
   --teal-rgb: 15, 159, 120;
-  --violet: #6c58ef;
-  --violet-dim: #4a3bc4;
-  --violet-rgb: 108, 88, 239;
+  --violet: #602bef;
+  --violet-dim: #421dc4;
+  --violet-rgb: 96, 43, 239;
   --coral: #e0453f;
   --coral-dim: #b8352f;
   --coral-rgb: 224, 69, 63;
@@ -119,8 +119,8 @@ html[data-theme="light"] {
      instead of matching the dark theme's raw brightness. */
   --blue: #2c64d6;
   --blue-rgb: 44, 100, 214;
-  --neon-cyan: #0089a3;
-  --neon-cyan-rgb: 0, 137, 163;
+  --neon-cyan: #0079a3;
+  --neon-cyan-rgb: 0, 121, 163;
   --neon-magenta: #b01c93;
   --neon-magenta-rgb: 176, 28, 147;
   --neon-lime: #5d8a12;
@@ -174,10 +174,13 @@ a { color: var(--teal); }
 }
 .t58-brand .mark {
   width: 28px; height: 28px; border-radius: 8px;
-  background: linear-gradient(135deg, var(--teal), var(--violet));
+  /* T58 brand gradient (see /assets/brand/palette.md): cyan -> purple,
+     matching the logo mark itself rather than the generic teal/violet
+     semantic pair used elsewhere. */
+  background: linear-gradient(135deg, var(--neon-cyan), var(--violet));
   color: #04120e; font-weight: 700; font-size: 12px;
   display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 0 16px rgba(var(--teal-rgb), 0.35);
+  box-shadow: 0 0 16px rgba(var(--neon-cyan-rgb), 0.35);
   flex-shrink: 0;
 }
 .t58-brand .name { font-size: 13px; font-weight: 700; letter-spacing: .02em; }
