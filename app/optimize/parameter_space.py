@@ -26,6 +26,21 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 
+from app.strategy.indicators import BOUNDED_OSCILLATOR_RANGES
+
+# A period of 1 or 2 on a bounded oscillator (see BOUNDED_OSCILLATOR_RANGES)
+# is degenerate, not just aggressive: e.g. a 1-period RSI collapses to
+# essentially a coin-flip of whether the immediately preceding bar closed
+# up or down, so it whipsaws every other bar regardless of any real trend
+# or reversal. Left to the generic period rule's min_lo=1 floor, a GA is
+# free to "discover" this degenerate case because it happens to score
+# well on a narrow validation slice, while it behaves as near-random
+# noise -- and a guaranteed cost bleed once entries/exits fire on every
+# other bar -- once run against the full history.
+# (see 2026-09-15 Quick-Optimize-vs-Full-Pipeline diagnosis this fixes,
+# where the GA produced an RSI(1) exit condition).
+MIN_OSCILLATOR_PERIOD = 3
+
 
 class RefinementError(Exception):
     """Raised when Iterative Refinement cannot proceed (e.g. no tunable parameters)."""
@@ -122,15 +137,83 @@ def _bounds_for(key: str, value: float) -> tuple[float, float, bool]:
     return lo, hi, is_int
 
 
+def _oscillator_bound(node) -> tuple[float, float] | None:
+    """If `node` is an operand dict whose "type" is a bounded oscillator
+    (see BOUNDED_OSCILLATOR_RANGES), return its valid (lo, hi) range --
+    otherwise None. Used so a "value" gene being compared against that
+    operand can never mutate outside a range the oscillator could
+    actually take, however loosely the generic rel_span rule would
+    otherwise have allowed."""
+    if not isinstance(node, dict):
+        return None
+    kind = str(node.get("type", "")).lower().strip()
+    return BOUNDED_OSCILLATOR_RANGES.get(kind)
+
+
 def extract_genome(config: dict) -> list[GeneMeta]:
     """
     Walk a Manual Strategy config dict and return one GeneMeta per tunable
     numeric leaf found, in a stable (depth-first, dict-insertion) order.
+
+    Two bounded-oscillator-aware refinements on top of the generic
+    per-key rules in GENE_KEY_RULES (see BOUNDED_OSCILLATOR_RANGES and
+    MIN_OSCILLATOR_PERIOD above for why these exist):
+
+    - A condition shaped like {"left": ..., "operator": ..., "right": ...}
+      (exactly the shape entry_conditions/exit_conditions items use) has
+      its two sides inspected for each other's indicator type. If one
+      side is a bounded oscillator (RSI, Stochastic, MFI, ...), the other
+      side's "value" gene (the comparison threshold) is clamped into that
+      oscillator's actual range -- so a GA can never mutate, say, an RSI
+      threshold to something outside 0-100, which would otherwise make
+      that whole branch of the condition impossible (permanently
+      True/False) without anything flagging it.
+    - A "period" gene that belongs to a bounded-oscillator operand itself
+      (e.g. the 14 in {"type": "rsi", "period": 14, ...}) is floored at
+      MIN_OSCILLATOR_PERIOD rather than the generic rule's min_lo=1, so
+      the GA cannot collapse it into a degenerate 1- or 2-bar lookback.
     """
     genes: list[GeneMeta] = []
 
-    def walk(node, path: tuple):
+    def _gene_for(k: str, v: float, new_path: tuple, value_bounds, osc_kind) -> GeneMeta:
+        lo, hi, is_int = _bounds_for(k, float(v))
+        if k == "value" and value_bounds is not None:
+            clamped_lo = max(lo, value_bounds[0])
+            clamped_hi = min(hi, value_bounds[1])
+            if clamped_hi > clamped_lo:
+                lo, hi = clamped_lo, clamped_hi
+            else:
+                # The base value itself already sits outside the
+                # oscillator's range (a pre-existing invalid config) --
+                # search the oscillator's own full range rather than a
+                # window that can't contain anything valid.
+                lo, hi = value_bounds
+        elif k in ("period", "lookback") and osc_kind in BOUNDED_OSCILLATOR_RANGES:
+            lo = max(lo, float(MIN_OSCILLATOR_PERIOD))
+            hi = max(hi, lo + 1)
+        return GeneMeta(
+            path=new_path, kind=k, is_int=is_int,
+            lo=lo, hi=hi, base_value=float(v),
+            label=_label(new_path),
+        )
+
+    def walk(node, path: tuple, value_bounds: tuple[float, float] | None = None):
         if isinstance(node, dict):
+            is_condition = "left" in node and "right" in node and "operator" in node
+            if is_condition:
+                left_bound = _oscillator_bound(node.get("left"))
+                right_bound = _oscillator_bound(node.get("right"))
+                walk(node.get("left"), path + ("left",), value_bounds=right_bound)
+                walk(node.get("right"), path + ("right",), value_bounds=left_bound)
+                for k, v in node.items():
+                    if k in ("left", "right") or k in _EXCLUDED_KEYS:
+                        continue
+                    new_path = path + (k,)
+                    if k in GENE_KEY_RULES and isinstance(v, (int, float)) and not isinstance(v, bool) and v is not None:
+                        genes.append(_gene_for(k, v, new_path, None, None))
+                    walk(v, new_path)
+                return
+            osc_kind = str(node.get("type", "")).lower().strip() if "type" in node else None
             for k, v in node.items():
                 if k in _EXCLUDED_KEYS:
                     continue
@@ -141,18 +224,11 @@ def extract_genome(config: dict) -> list[GeneMeta]:
                     and not isinstance(v, bool)
                     and v is not None
                 ):
-                    lo, hi, is_int = _bounds_for(k, float(v))
-                    genes.append(
-                        GeneMeta(
-                            path=new_path, kind=k, is_int=is_int,
-                            lo=lo, hi=hi, base_value=float(v),
-                            label=_label(new_path),
-                        )
-                    )
-                walk(v, new_path)
+                    genes.append(_gene_for(k, v, new_path, value_bounds, osc_kind))
+                walk(v, new_path, value_bounds=value_bounds)
         elif isinstance(node, list):
             for i, item in enumerate(node):
-                walk(item, path + (i,))
+                walk(item, path + (i,), value_bounds=value_bounds)
 
     walk(config, ())
     return genes
