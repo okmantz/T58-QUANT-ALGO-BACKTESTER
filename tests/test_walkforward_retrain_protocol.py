@@ -107,9 +107,10 @@ def test_run_fold_test_gives_ml_classifier_the_real_fold_train_window():
         result = _run_fold_test(fold, strat, risk)
         test_start = pd.to_datetime(fold.test_df["timestamp"]).iloc[0]
         test_end = pd.to_datetime(fold.test_df["timestamp"]).iloc[-1]
-        if test_start.tzinfo is not None:
-            test_start = test_start.tz_localize(None)
-            test_end = test_end.tz_localize(None)
+        # VAL-006 fix: Trade.entry_time now correctly preserves the input
+        # data's tz-awareness instead of always coming back tz-naive, so
+        # test_start/test_end (derived from the same fold.test_df column)
+        # already agree with it by construction -- no stripping needed.
         for trade in result.trades:
             assert test_start <= trade.entry_time <= test_end
 
