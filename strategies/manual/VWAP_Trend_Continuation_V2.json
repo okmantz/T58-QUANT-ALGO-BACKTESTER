@@ -5,13 +5,13 @@
       {
         "left": {
           "type": "ema",
-          "period": 44,
+          "period": 69,
           "field": "close"
         },
         "operator": ">",
         "right": {
           "type": "ema",
-          "period": 408,
+          "period": 360,
           "field": "close"
         }
       },
@@ -31,13 +31,13 @@
       {
         "left": {
           "type": "rsi",
-          "period": 4,
+          "period": 6,
           "field": "close"
         },
         "operator": "<",
         "right": {
           "type": "value",
-          "value": 39.93618930079105
+          "value": 30.51166136500698
         }
       }
     ],
@@ -49,39 +49,39 @@
       {
         "left": {
           "type": "ema",
-          "period": 15,
+          "period": 31,
           "field": "close"
         },
         "operator": "<",
         "right": {
           "type": "ema",
-          "period": 331,
+          "period": 393,
           "field": "close"
         }
       },
       {
         "left": {
           "type": "close",
-          "period": 1,
+          "period": 3,
           "field": "close"
         },
         "operator": "<",
         "right": {
           "type": "vwap",
-          "period": 1,
+          "period": 2,
           "field": "close"
         }
       },
       {
         "left": {
           "type": "rsi",
-          "period": 3,
+          "period": 1,
           "field": "close"
         },
         "operator": ">",
         "right": {
           "type": "value",
-          "value": 68.3729970010251
+          "value": 102.55949550153764
         }
       }
     ],
@@ -101,7 +101,7 @@
         "operator": ">",
         "right": {
           "type": "value",
-          "value": 65.75626192020971
+          "value": 60.781147976025835
         }
       }
     ],
@@ -109,25 +109,25 @@
       {
         "left": {
           "type": "rsi",
-          "period": 5,
+          "period": 11,
           "field": "close"
         },
         "operator": "<",
         "right": {
           "type": "value",
-          "value": 41.36065975419515
+          "value": 29.60830353146075
         }
       }
     ]
   },
   "risk_management": {
     "stop_type": "atr",
-    "stop_value": 2.0883533396801823,
-    "stop_atr_period": 16,
+    "stop_value": 6.265060019040547,
+    "stop_atr_period": 29,
     "target_type": "atr",
-    "target_value": 2.0,
-    "target_atr_period": 6,
+    "target_value": 1.8199151881831175,
+    "target_atr_period": 10,
     "opposite_signal_exit": true,
-    "max_bars_in_trade": 48
+    "max_bars_in_trade": 24
   }
 }
