@@ -49,7 +49,12 @@ import pandas as pd
 
 from app.backtest.adaptive_risk import build_limit_aware_preset
 from app.backtest.engine import run_backtest
-from app.backtest.risk import RiskConfig, has_instrument_scale_mismatch, instrument_scale_mismatch_message
+from app.backtest.risk import (
+    RiskConfig,
+    has_impossible_condition,
+    has_instrument_scale_mismatch,
+    instrument_scale_mismatch_message,
+)
 from app.monte_carlo.engine import MonteCarloConfig, MonteCarloResult, run_monte_carlo
 from app.optimize.code_parameter_space import patched_source_for_strategy
 from app.optimize.parameter_space import RefinementError
@@ -142,6 +147,15 @@ class QuickOptimizeResult:
     # it sitting quietly inside `warnings` at the same level as everything
     # else (see the Quick-Optimize-vs-Full-Pipeline diagnosis this fixes).
     instrument_mismatch_warning: str | None = None
+    # Escalated copy of any app.strategy.manual.validate_bounded_conditions
+    # warning (a condition comparing a bounded oscillator to a threshold
+    # outside its possible range, e.g. "RSI > 102.56") found on either the
+    # baseline or optimized run -- same treatment as
+    # instrument_mismatch_warning above, and for the same reason: this
+    # silently disables part of the strategy's logic while every other
+    # number keeps reporting normally, so it needs the same visual
+    # weight, not a line buried in `warnings`.
+    invalid_condition_warning: str | None = None
 
 
 def run_quick_optimize(
@@ -195,6 +209,11 @@ def run_quick_optimize(
             "  !!! Continuing anyway (Quick Optimize does not skip its search on this, unlike "
             "Full Pipeline) -- but treat every number below as unreliable until pip_size is fixed."
         )
+
+    invalid_condition_warning = None
+    if has_impossible_condition(baseline_bt.warnings):
+        invalid_condition_warning = next(w for w in baseline_bt.warnings if "can never be true" in w)
+        log(f"  !!! {invalid_condition_warning}")
 
     baseline_pnls = [t.pnl for t in baseline_bt.trades]
     baseline_dates = [t.entry_time for t in baseline_bt.trades]
@@ -273,6 +292,9 @@ def run_quick_optimize(
         # problem, not a new one the GA introduced.
         instrument_mismatch_warning = instrument_scale_mismatch_message(risk.pip_size)
         log(f"  !!! {instrument_mismatch_warning}")
+    if invalid_condition_warning is None and has_impossible_condition(final_bt.warnings):
+        invalid_condition_warning = next(w for w in final_bt.warnings if "can never be true" in w)
+        log(f"  !!! {invalid_condition_warning}")
     final_mc = run_monte_carlo(
         final_bt.trades, prop_rules, MonteCarloConfig(n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed)
     )
@@ -384,4 +406,5 @@ def run_quick_optimize(
         elapsed_seconds=elapsed,
         warnings=warnings,
         instrument_mismatch_warning=instrument_mismatch_warning,
+        invalid_condition_warning=invalid_condition_warning,
     )

@@ -81,7 +81,12 @@ import pandas as pd
 
 from app.backtest.engine import BacktestResult, run_backtest, run_holdout_comparison
 from app.backtest.adaptive_risk import build_limit_aware_preset
-from app.backtest.risk import RiskConfig, has_instrument_scale_mismatch, with_prop_safety_defaults
+from app.backtest.risk import (
+    RiskConfig,
+    has_impossible_condition,
+    has_instrument_scale_mismatch,
+    with_prop_safety_defaults,
+)
 from app.monte_carlo.engine import MonteCarloConfig, MonteCarloResult, run_monte_carlo
 from app.optimize.code_parameter_space import patched_source_for_strategy
 from app.optimize.parameter_space import RefinementError
@@ -659,17 +664,39 @@ def run_full_pipeline(
     # high-priced but volatile instrument such as an equity index is the
     # case that price-ratio alone misses.
     instrument_mismatch = has_instrument_scale_mismatch(baseline_bt.warnings)
-    if instrument_mismatch:
-        refinement_skip_reason = (
-            "Skipped optimization search: the baseline run flagged a pip_size/"
-            "instrument-scale mismatch (see the WARNING above). Every position "
-            "size and stop distance this backtest computed is unreliable, so "
-            "searching for 'better' parameters against those numbers would "
-            "waste the search budget without producing a trustworthy result. "
-            "Set risk.pip_size to match this instrument (e.g. 0.01 for gold/"
-            "JPY pairs, 1.0 for high-priced indices/stocks -- see "
-            "app.backtest.risk.suggest_pip_size) and re-run."
-        )
+    # Same fast-skip logic as the pip_size/instrument-scale mismatch above,
+    # for the same reason: a condition comparing a bounded oscillator
+    # (RSI, Stochastic, MFI, ...) to a threshold outside its possible
+    # range (e.g. "RSI > 102.56") can never be satisfied, permanently
+    # disabling that branch of the strategy's logic -- see
+    # app.strategy.manual.validate_bounded_conditions. Before the GA
+    # gene-bounds fix in app.optimize.parameter_space, a GA search could
+    # itself introduce this by mutating a comparison threshold outside
+    # the compared indicator's range; that path is now closed, but a
+    # hand-typed or already-saved config can still arrive here with one,
+    # and searching for "better" parameters around dead logic is exactly
+    # as wasted as searching around an unreliable pip_size.
+    impossible_condition = has_impossible_condition(baseline_bt.warnings)
+    if instrument_mismatch or impossible_condition:
+        if instrument_mismatch:
+            refinement_skip_reason = (
+                "Skipped optimization search: the baseline run flagged a pip_size/"
+                "instrument-scale mismatch (see the WARNING above). Every position "
+                "size and stop distance this backtest computed is unreliable, so "
+                "searching for 'better' parameters against those numbers would "
+                "waste the search budget without producing a trustworthy result. "
+                "Set risk.pip_size to match this instrument (e.g. 0.01 for gold/"
+                "JPY pairs, 1.0 for high-priced indices/stocks -- see "
+                "app.backtest.risk.suggest_pip_size) and re-run."
+            )
+        else:
+            reason_line = next(w for w in baseline_bt.warnings if "can never be true" in w)
+            refinement_skip_reason = (
+                f"Skipped optimization search: {reason_line} Fix the impossible "
+                "condition (or remove it) before searching -- optimizing around "
+                "permanently dead logic wastes the search budget without producing "
+                "a trustworthy result."
+            )
         log(f"  Optimization skipped: {refinement_skip_reason}")
         ga_result = None
     else:
