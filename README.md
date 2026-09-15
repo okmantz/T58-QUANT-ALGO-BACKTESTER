@@ -1,4 +1,12 @@
-<img width="1280" height="420" alt="image" src="https://github.com/user-attachments/assets/fbfa3c29-4a64-4dfa-9e2a-3ba5f759b27c" />
+<p align="center">
+  <img src="assets/logo/t58-logo-horizontal-dark.png" alt="T58 Quant Algo Backtester" width="480" />
+</p>
+
+<p align="center">
+  <sub>STRATEGY RESEARCH &nbsp;/&nbsp; VALIDATION &nbsp;/&nbsp; ROBUSTNESS &nbsp;/&nbsp; PROP SIMULATION</sub>
+</p>
+
+<img width="1280" height="420" alt="T58 Quant Algo Backtester — dashboard preview" src="assets/images/readme-banner.png" />
 
 <div align="center">
 
@@ -47,6 +55,11 @@ Everything else builds on that loop, organized into workflow stages:
   Diversity
 - **Deployment** — Forward Test (MT5 demo), Overnight Autopilot,
   Auto-Retune, Deploy Live (connection management), Live Market monitor
+
+<p align="center">
+  <img src="assets/brand/feature-icons.png" alt="Strategy Research / Validation / Robustness / Prop Simulation" width="640" />
+</p>
+
 
 Plus **Quant Lab** (a dozen standalone analysis tools), **Options Outlook**,
 an **AI Assistant** dashboard (news + market scanner + chat), and a
@@ -310,6 +323,20 @@ silently producing an inaccurate backtest.
 ```bash
 pytest -q tests
 ```
+
+## Brand & assets
+
+The desktop app, web app, and the reports both generate share one visual
+identity — see `assets/brand/palette.md` for the exact colors. Strategy
+Library statuses read at a glance the same way across both builds:
+
+<p align="center">
+  <img src="assets/brand/status-badges.png" alt="Strategy status badges: ready, developing, wait, extended, pass" width="420" />
+</p>
+
+<p align="center">
+  <img src="assets/brand/social-icons.png" alt="GitHub, Discord, YouTube, X" width="320" />
+</p>
 
 ## Disclaimer
 
