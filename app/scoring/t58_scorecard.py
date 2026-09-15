@@ -2,38 +2,61 @@
 T58 Strategy Scorecard.
 
 Implements the T58 Quant Trading Masterclass material's Part XI scorecard
-verbatim: a single 0-100 number built from EIGHT already-computed,
-already-trusted signals this app produces elsewhere -- never a new
-metric invented here, only a documented way of weighting and combining
-what already exists:
+verbatim: a single 0-100 number built from already-computed, already-
+trusted signals this app produces elsewhere -- never a new metric
+invented here, only a documented way of weighting and combining what
+already exists:
 
     Metric                      Weight   Source
     Pass probability              25     app.monte_carlo.engine.MonteCarloResult.evaluation_pass_probability
     First payout probability      20     ...first_payout_probability
     Risk of ruin                 -20     ...risk_of_ruin_pct (subtracted)
     Walk-forward stability        15     app.search.robustness.WalkForwardResult.walk_forward_efficiency
+                                          (or CPCV, if that's the run's chosen primary generalization
+                                          test -- see app.orchestration.full_pipeline's
+                                          primary_robustness_method config; whichever one is primary
+                                          for a given run fills THIS slot)
     Monte Carlo robustness        10     see _mc_robustness_score below
     Parameter stability            5     app.validation.parameter_robustness.ParameterRobustnessResult
                                           (or the cheaper app.search.robustness.RobustnessResult, if
                                           that's the one already computed -- both are 0-100-like already)
     Expectancy                     5     app.backtest.statistics.BacktestStatistics.average_r
     Drawdown                      10     app.backtest.statistics.BacktestStatistics.max_drawdown_pct
+    Parsimony                      5     app.scoring.parsimony.ParsimonyResult.score -- reward for
+                                          reaching the same result with fewer unnecessary degrees of
+                                          freedom (see that module). A modest tiebreaker weight, not a
+                                          dominant factor -- pipeline reorg plan section 24.
+    CPCV / PBO (supporting)        5     app.validation.cpcv.CPCVResult -- only populated when CPCV was
+                                          run as a SECOND, supporting diagnostic alongside a different
+                                          primary generalization test (walk-forward), never when CPCV
+                                          IS the primary test (that would double-count the same
+                                          evidence in two components -- see section 40/41 of the
+                                          pipeline reorg plan on avoiding exactly this).
 
 Tiers, also verbatim from the Masterclass material:
 
     92+  Elite       85+  Strong       75+  Promising      65+  Research      <65  Reject
 
-Three of the eight inputs (Monte Carlo robustness, parameter stability,
-expectancy, drawdown) aren't already expressed on a 0-100 "higher is
-better" scale in this app, so this module documents exactly how each is
-mapped onto one -- see the docstring on each _*_score helper. Every
-mapping is a heuristic; none of them invents a new backtest metric, they
-only rescale ones that already exist. `score_from_results()` does that
-mapping for you from the objects this app's own pipeline already
-produces; `T58ScorecardInputs` is there for a caller that wants to
-supply the eight 0-100 numbers itself (e.g. from records already
-persisted in app.search.results_db, where a fresh Monte Carlo/
+Several of these inputs (Monte Carlo robustness, parameter stability,
+expectancy, drawdown, parsimony, CPCV-as-supporting) aren't already
+expressed on a 0-100 "higher is better" scale in this app, so this module
+documents exactly how each is mapped onto one -- see the docstring on
+each _*_score helper. Every mapping is a heuristic; none of them invents
+a new backtest metric, they only rescale ones that already exist.
+`score_from_results()` does that mapping for you from the objects this
+app's own pipeline already produces; `T58ScorecardInputs` is there for a
+caller that wants to supply the 0-100 numbers itself (e.g. from records
+already persisted in app.search.results_db, where a fresh Monte Carlo/
 robustness object may not be sitting in memory anymore).
+
+IMPORTANT -- missing-aware, not a gate: compute_t58_score() re-normalizes
+over whichever components are actually present (see its own docstring).
+A strategy that hasn't been walk-forward tested yet, or whose parsimony
+couldn't be counted, is NOT penalized as if it had failed that check --
+it's simply scored on the evidence that does exist. This is what makes
+it safe to use as the Full Pipeline's actual verdict logic (see
+app.orchestration.full_pipeline._make_verdict) instead of a hard AND
+across every metric.
 """
 from __future__ import annotations
 
@@ -48,6 +71,8 @@ _WEIGHTS: dict[str, float] = {
     "parameter_stability": 5.0,
     "expectancy": 5.0,
     "drawdown": 10.0,
+    "parsimony": 5.0,
+    "cpcv_supporting": 5.0,
 }
 
 _TIERS: list[tuple[float, str]] = [
@@ -77,6 +102,8 @@ class T58ScorecardInputs:
     parameter_stability: float | None = None
     expectancy: float | None = None
     drawdown: float | None = None
+    parsimony: float | None = None
+    cpcv_supporting: float | None = None
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -223,12 +250,31 @@ def _risk_of_ruin_score(risk_of_ruin_pct: float | None) -> float | None:
     return _clip(100.0 - risk_of_ruin_pct)
 
 
+def _cpcv_score(cpcv_result) -> float | None:
+    """Maps app.validation.cpcv.CPCVResult onto the same kind of
+    'generalization efficiency' scale _walk_forward_score uses: how much
+    of the in-sample metric survived out-of-sample, averaged across every
+    CPCV path (mean_oos_metric / mean_is_metric), clipped to [0, 1] then
+    scaled x100. Falls back to 100 if the in-sample metric was already
+    <= 0 and OOS didn't get worse (mirrors _walk_forward_score's own
+    floor logic), and to 0 if OOS went negative while IS was positive."""
+    mean_is = getattr(cpcv_result, "mean_is_metric", None)
+    mean_oos = getattr(cpcv_result, "mean_oos_metric", None)
+    if mean_is is None or mean_oos is None:
+        return None
+    if mean_is <= 0:
+        return 100.0 if mean_oos >= mean_is else 0.0
+    return _clip((mean_oos / mean_is) * 100.0)
+
+
 def score_from_results(
     mc_result=None,
     walk_forward_result=None,
     robustness_result=None,
     statistics=None,
     prop_max_drawdown_pct: float | None = None,
+    parsimony_result=None,
+    cpcv_supporting_result=None,
 ) -> T58ScorecardResult:
     """Convenience entry point: pass whichever of this app's own result
     objects you already have in hand (any/all may be None -- a partial
@@ -238,7 +284,14 @@ def score_from_results(
     (reads .parameter_robustness_score directly) or
     app.search.robustness.RobustnessResult (reads .stability_ratio,
     scaled x100 and clipped -- it's a ratio centered near 1.0, not
-    already a 0-100 score)."""
+    already a 0-100 score). `parsimony_result` accepts an
+    app.scoring.parsimony.ParsimonyResult. `cpcv_supporting_result`
+    accepts an app.validation.cpcv.CPCVResult -- pass this ONLY when
+    CPCV ran as a supporting diagnostic alongside a different primary
+    generalization test; if CPCV itself is this run's primary test,
+    pass its efficiency through `walk_forward_result`-shaped scoring
+    instead (see app.orchestration.full_pipeline) so it isn't counted
+    twice."""
     pass_probability = getattr(mc_result, "evaluation_pass_probability", None)
     first_payout_probability = getattr(mc_result, "first_payout_probability", None)
     risk_of_ruin_pct = getattr(mc_result, "risk_of_ruin_pct", None)
@@ -257,6 +310,9 @@ def score_from_results(
     average_r = getattr(statistics, "average_r", None) if statistics is not None else None
     max_drawdown_pct = getattr(statistics, "max_drawdown_pct", None) if statistics is not None else None
 
+    parsimony_score = getattr(parsimony_result, "score", None) if parsimony_result is not None else None
+    cpcv_supporting_score = _cpcv_score(cpcv_supporting_result) if cpcv_supporting_result is not None else None
+
     inputs = T58ScorecardInputs(
         pass_probability=pass_probability,
         first_payout_probability=first_payout_probability,
@@ -266,5 +322,7 @@ def score_from_results(
         parameter_stability=parameter_stability,
         expectancy=_expectancy_score(average_r),
         drawdown=_drawdown_score(max_drawdown_pct, prop_max_drawdown_pct),
+        parsimony=parsimony_score,
+        cpcv_supporting=cpcv_supporting_score,
     )
     return compute_t58_score(inputs)
