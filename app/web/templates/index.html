@@ -132,84 +132,10 @@
 </div>
 {% endif %}
 
-<div class="card">
-  <details{{ ' open' if alpaca_notice else '' }}>
-    <summary>Or fetch data from Alpaca</summary>
-    <p style="font-size:12px;color:#888;margin:8px 0 10px;">
-      Pulls bars via the Alpaca API (stocks + crypto only — no forex/futures/CFD feed) and saves
-      them into data/raw/, where they'll appear in the "previously stored dataset" dropdown below.
-      A free Alpaca paper-trading account provides API keys for data access.
-    </p>
-    <form method="post" action="/data/alpaca/fetch">
-      <div class="row">
-        <div>
-          <label>Alpaca API key{{ ' (leave blank to reuse saved key)' if alpaca_has_saved_keys else '' }}</label>
-          <input type="password" name="alpaca_api_key" autocomplete="off" placeholder="{{ '••••••••••• (saved)' if alpaca_has_saved_keys else '' }}">
-        </div>
-        <div>
-          <label>Alpaca secret key{{ ' (leave blank to reuse saved secret)' if alpaca_has_saved_keys else '' }}</label>
-          <input type="password" name="alpaca_secret_key" autocomplete="off" placeholder="{{ '••••••••••• (saved)' if alpaca_has_saved_keys else '' }}">
-        </div>
-      </div>
-      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#ccc;margin-top:10px;">
-        <input type="checkbox" name="alpaca_save_keys" style="width:auto;" checked>
-        Save these keys on this computer for next time
-      </label>
-      <div class="row" style="margin-top:6px;">
-        <div>
-          <label>Symbol(s), comma-separated</label>
-          <input type="text" name="alpaca_symbols" value="AAPL" placeholder="e.g. AAPL, MSFT, BTC/USD">
-        </div>
-        <div>
-          <label>Asset class</label>
-          <select name="alpaca_asset_class">
-            {% for ac in alpaca_asset_classes %}
-            <option value="{{ ac }}">{{ ac }}</option>
-            {% endfor %}
-          </select>
-        </div>
-      </div>
-      <div class="row">
-        <div>
-          <label>Timeframe</label>
-          <select name="alpaca_timeframe">
-            {% for tf in alpaca_timeframes %}
-            <option value="{{ tf }}" {{ 'selected' if tf == '1Day' else '' }}>{{ tf }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div><label>Start date</label><input type="text" name="alpaca_start" value="2024-01-01" placeholder="YYYY-MM-DD"></div>
-        <div><label>End date</label><input type="text" name="alpaca_end" value="2026-01-01" placeholder="YYYY-MM-DD"></div>
-      </div>
-      <div class="row">
-        <div>
-          <label>Feed (stocks only)</label>
-          <select name="alpaca_feed">
-            {% for fd in alpaca_feeds %}
-            <option value="{{ fd }}">{{ fd }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div>
-          <label>Adjustment (stocks only)</label>
-          <select name="alpaca_adjustment">
-            {% for adj in alpaca_adjustments %}
-            <option value="{{ adj }}">{{ adj }}</option>
-            {% endfor %}
-          </select>
-        </div>
-      </div>
-      <button type="submit" class="submit-btn" style="margin-top:12px;">Fetch &amp; Save</button>
-    </form>
-    {% if alpaca_has_saved_keys %}
-    <form method="post" action="/data/alpaca/forget" style="margin-top:8px;">
-      <button type="submit" style="background:none;border:1px solid var(--border-light);color:#999;padding:8px 12px;border-radius:8px;font-size:12px;width:100%;">
-        Forget saved Alpaca keys
-      </button>
-    </form>
-    {% endif %}
-  </details>
+{% set alpaca_return_to = 'index' %}
+{% include "_alpaca_fetch_section.html" %}
 
+<div class="card">
   <details style="margin-top:10px;">
     <summary>Or fetch forex/CFD/futures history from Dukascopy (free, no API key)</summary>
     <p style="font-size:12px;color:#888;margin:8px 0 10px;">
