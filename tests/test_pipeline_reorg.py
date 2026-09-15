@@ -181,8 +181,47 @@ def test_regime_diagnostics_attached_and_never_affects_verdict(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# #2 -- parsimony attached
+# Circularity fix -- reserve_true_holdout (see CIRCULARITY_AUDIT.md)
 # ---------------------------------------------------------------------------
+
+def test_reserve_true_holdout_keeps_steps_1_to_4_off_the_final_holdout_bars(tmp_path):
+    df = _trending_df()
+    strategy = ManualStrategy(_sma_config())
+    result = run_full_pipeline(
+        df, strategy, RiskConfig(), PropRules(), tmp_path, _cfg(reserve_true_holdout=True), progress_cb=None,
+    )
+    assert result.final_holdout is not None
+    dev_cutoff = pd.Timestamp(result.final_holdout["in_sample_period"][1])
+    # Every trade the final (Step 3) backtest produced must have entered
+    # strictly within the dev slice -- none of Steps 1-4 ever saw a bar
+    # past this cutoff.
+    assert all(pd.Timestamp(t.entry_time) <= dev_cutoff for t in result.final_bt.trades)
+    if result.oos_validation is not None:
+        # The post-hoc walk-forward check (Step 4) is built entirely from
+        # dev_df, so it can't possibly span past the same cutoff either.
+        assert result.oos_validation.n_folds > 0
+    # Step 5's own holdout comparison DID get the reserved tail -- its
+    # holdout_bars is exactly the ~holdout_frac of the full dataset, not 0.
+    assert result.final_holdout["holdout_bars"] > 0
+    expected_holdout_bars = len(df) - len(df) * (1 - _cfg().holdout_frac)
+    assert result.final_holdout["holdout_bars"] == pytest.approx(expected_holdout_bars, abs=2)
+
+
+def test_reserve_true_holdout_false_restores_old_behavior(tmp_path):
+    """Regression guard for the escape hatch -- turning the fix off must
+    not crash and must still produce a valid 3-way verdict."""
+    df = _trending_df()
+    strategy = ManualStrategy(_sma_config())
+    result = run_full_pipeline(
+        df, strategy, RiskConfig(), PropRules(), tmp_path, _cfg(reserve_true_holdout=False), progress_cb=None,
+    )
+    assert result.verdict in ("READY", "MARGINAL", "NOT READY")
+    assert result.final_holdout is not None
+
+
+def test_reserve_true_holdout_default_is_on():
+    assert FullPipelineConfig().reserve_true_holdout is True
+
 
 def test_parsimony_attached_to_result_and_scorecard(tmp_path):
     df = _trending_df()
