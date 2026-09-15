@@ -1039,6 +1039,577 @@ class _ChoiceListDialog(Toplevel):
         return dialog.result
 
 
+class RunContextPanel:
+    """A fully self-contained Market Data + Prop Account + Risk & Execution
+    configuration block, embeddable directly inside any single tab.
+
+    This is the desktop-side answer to a gap from the web app: over there,
+    Full Pipeline / Search Lab / Quick Optimize / etc. each have their OWN
+    copy of "which dataset, which prop-firm rules, which risk settings" --
+    nothing is read from some other page, so opening any one of those tools
+    is a complete, self-sufficient ecosystem. The desktop app instead grew
+    ONE shared Market Data tab (Step 02) and ONE shared Prop Rules / Risk
+    tab pair (Steps 03-04) that every other tab quietly read from via
+    self.csv_paths / self._build_prop_rules() / self._build_risk_config().
+    That's convenient when you want one setup to apply everywhere, but it
+    means changing the dataset or the account size for a Search Lab run
+    also silently changes what Full Pipeline (or anything else) would use
+    next -- tabs aren't independent the way they are on the web.
+
+    RunContextPanel gives a tab its own private copy of exactly those three
+    things -- an independent dataset picker (with the same local-file +
+    Alpaca-fetch options as Step 02), its own Prop Account fields (same as
+    Step 03, presets included), and its own Risk & Execution fields (same
+    as Step 04, minus the Adaptive Risk sub-builder, which is niche enough
+    that tabs needing it keep their own toggle inline as they already do).
+    Every instance keeps its state on itself (self.csv_paths, self.p_*,
+    self.r_*, self.alp_*) -- never on the MainWindow -- so two tabs each
+    holding a RunContextPanel never see or affect each other's settings.
+
+    `owner` is the MainWindow instance this panel is embedded in; only used
+    for the shared, state-free widget builders (_button, _section,
+    _bind_isolated_wheel) and .root, never for reading or writing owner's
+    own self.csv_paths / self.p_* / self.r_* fields.
+    """
+
+    def __init__(self, owner: "MainWindow", key: str, default_account_size: float = 100000):
+        self.owner = owner
+        self.key = key  # unique per embedding tab, used only in status text
+        self.csv_paths: list[str] = []
+        self._stored_datasets = []
+        self._dataset_row_map: dict[int, int] = {}
+        self._dataset_index_to_row: dict[int, int] = {}
+        self._default_account_size = default_account_size
+
+    # ------------------------------------------------------------------
+    # Build
+    # ------------------------------------------------------------------
+
+    def build(self, parent) -> None:
+        self._build_data_section(parent)
+        self._build_prop_section(parent)
+        self._build_risk_section(parent)
+
+    def _build_data_section(self, parent):
+        section = self.owner._section(
+            parent, "Market data (this run only)",
+            "Independent of every other tab's data selection -- pick or fetch a dataset "
+            "just for this run. Ctrl/Cmd-click or Shift-click for multi-timeframe.",
+            emphasize=True,
+        )
+        list_frame = Frame(section, bg=PANEL)
+        list_frame.pack(fill="both", expand=True, padx=18, pady=(2, 8))
+
+        self.dataset_listbox = Listbox(
+            list_frame, height=6, selectmode=EXTENDED, exportselection=False,
+            bg=PANEL_3, fg=TEXT, selectbackground=BORDER_LIGHT, selectforeground=METAL_BRIGHT,
+            activestyle="none", relief="flat", bd=0, highlightthickness=1,
+            highlightbackground=BORDER, font=(MONO, 9),
+        )
+        self.dataset_listbox.pack(side="left", fill="both", expand=True)
+        scrollbar = ttk.Scrollbar(
+            list_frame, orient="vertical", command=self.dataset_listbox.yview, style="T58.Vertical.TScrollbar",
+        )
+        scrollbar.pack(side="right", fill="y")
+        self.dataset_listbox.config(yscrollcommand=scrollbar.set)
+        self.owner._bind_isolated_wheel(self.dataset_listbox)
+        self.dataset_listbox.bind("<<ListboxSelect>>", self._on_dataset_selected)
+
+        btn_row = Frame(section, bg=PANEL)
+        btn_row.pack(anchor="w", padx=18, pady=(0, 10))
+        self.owner._button(btn_row, "IMPORT CSV(S)", self._browse_csv, primary=True).pack(side="left")
+        self.owner._button(btn_row, "REFRESH LIST", self._refresh_dataset_list).pack(side="left", padx=8)
+
+        self.data_status = Label(
+            section, text="●  No dataset selected for this run.", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(9),
+        )
+        self.data_status.pack(anchor="w", padx=18, pady=(0, 10))
+
+        self._build_alpaca_section(section)
+        self._refresh_dataset_list()
+
+    def _build_alpaca_section(self, parent):
+        """Same fetch-from-Alpaca flow as Step 02's own copy (see
+        MainWindow._build_alpaca_section), duplicated here with entirely
+        instance-local widgets/state so it saves into (and this panel's
+        list refreshes from) the same data/raw/ folder without touching
+        any other tab's selection."""
+        sub = self.owner._section(
+            parent, "Fetch data from Alpaca",
+            "Pulls bars via the Alpaca API (stocks + crypto only) straight into data/raw/, "
+            "then selects the result for this run automatically.",
+        )
+        saved = alpaca_credentials.load_credentials()
+        prefill_key = saved.api_key if saved else ""
+        prefill_secret = saved.secret_key if saved else ""
+
+        self.alp_api_key = LabeledEntry(sub, "Alpaca API key", prefill_key, secret=True, width=32)
+        self.alp_secret_key = LabeledEntry(sub, "Alpaca secret key", prefill_secret, secret=True, width=32)
+        self.alp_save_keys = LabeledCheckbox(sub, "Save these keys on this computer for next time", default=True)
+        self.alp_asset_class = LabeledCombo(sub, "Asset class", ASSET_CLASSES, default=ASSET_CLASSES[0])
+        self.alp_asset_class.combo.bind("<<ComboboxSelected>>", lambda _e: self._on_alpaca_asset_class_changed())
+        self.alp_symbols = LabeledEntry(sub, "Symbol(s), comma-separated", "AAPL", width=32)
+        self.alp_timeframe = LabeledCombo(sub, "Timeframe", TIMEFRAME_LABELS, default="1Day")
+        self.alp_start = LabeledEntry(sub, "Start date (YYYY-MM-DD)", "2024-01-01")
+        self.alp_end = LabeledEntry(sub, "End date (YYYY-MM-DD)", "2026-01-01")
+        self.alp_feed = LabeledCombo(sub, "Feed (stocks only)", FEED_CHOICES, default="iex")
+        self.alp_adjustment = LabeledCombo(sub, "Adjustment (stocks only)", ADJUSTMENT_CHOICES, default="raw")
+
+        btn_row = Frame(sub, bg=PANEL)
+        btn_row.pack(anchor="w", padx=18, pady=(4, 4))
+        self.alp_test_btn = self.owner._button(btn_row, "TEST CONNECTION", self._test_alpaca_connection)
+        self.alp_test_btn.pack(side="left")
+        self.alp_fetch_btn = self.owner._button(btn_row, "FETCH & SAVE", self._fetch_alpaca_clicked, primary=True)
+        self.alp_fetch_btn.pack(side="left", padx=8)
+        self.alp_forget_btn = self.owner._button(btn_row, "FORGET SAVED KEYS", self._forget_alpaca_keys)
+        self.alp_forget_btn.pack(side="left")
+
+        self.alpaca_status = Label(
+            sub, text="●  A free Alpaca paper-trading account provides API keys for data access.",
+            bg=PANEL, fg=TEXT_MUTED, font=_safe_font(9), wraplength=760, justify="left",
+        )
+        self.alpaca_status.pack(anchor="w", padx=18, pady=(2, 12))
+
+    def _build_prop_section(self, parent):
+        section = self.owner._section(
+            parent, "Prop-firm rules (this run only)",
+            "Own copy of account size, drawdown, consistency, and payout rules -- "
+            "changing these never affects any other tab.",
+        )
+        preset_labels = ["(Choose a preset...)"] + [p.label for p in list_prop_firm_presets()]
+        self.p_preset_combo = LabeledCombo(section, "Prop-firm preset", preset_labels, default=preset_labels[0])
+        self.p_preset_note = Label(
+            section, text="", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8), anchor="w", justify="left", wraplength=560,
+        )
+        self.p_preset_note.pack(fill="x", padx=18, pady=(0, 6))
+        self.p_preset_combo.combo.bind("<<ComboboxSelected>>", lambda _e: self._apply_prop_firm_preset())
+
+        self.p_account_size = LabeledEntry(section, "Account size ($)", self._default_account_size)
+        self.p_profit_target = LabeledEntry(section, "Evaluation profit target (%)", 8)
+        self.p_daily_loss = LabeledEntry(section, "Daily loss limit (%)", 5)
+        self.p_max_dd = LabeledEntry(section, "Maximum drawdown (%)", 10)
+        self.p_dd_type = LabeledEntry(section, "Drawdown type (trailing/static)", "trailing")
+        self.p_dd_check_mode = LabeledEntry(section, "Drawdown check mode (intrabar/eod)", "intrabar")
+        self.p_consistency = LabeledEntry(section, "Consistency rule (% best day of total profit)", 30)
+        self.p_min_days = LabeledEntry(section, "Minimum trading days", 5)
+        self.p_payout_threshold = LabeledEntry(section, "Payout threshold (extra % profit)", 0)
+        self.p_payout_cap = LabeledEntry(section, "Payout cap (% of profit, blank=100)", 100)
+        self.p_payout_freq = LabeledEntry(section, "Payout frequency (days)", 14)
+        self.p_buffer = LabeledEntry(section, "Required buffer (%)", 0)
+        self.p_max_pos = LabeledEntry(section, "Max position size (units, blank=unlimited)", "")
+
+    def _build_risk_section(self, parent):
+        section = self.owner._section(
+            parent, "Risk & execution (this run only)",
+            "Own copy of position risk, trading frequency, transaction costs, and pip size.",
+        )
+        self.r_initial_balance = LabeledEntry(section, "Initial balance ($)", self._default_account_size)
+        self.r_risk_mode = LabeledEntry(section, "Risk mode (percent/fixed)", "percent")
+        self.r_risk_value = LabeledEntry(section, "Risk per trade (% or $)", 1.0)
+        self.r_max_trades_day = LabeledEntry(section, "Max trades/day", 10)
+        self.r_commission = LabeledEntry(section, "Commission per trade ($)", 0)
+        self.r_slippage = LabeledEntry(section, "Slippage (pips)", 0.5)
+        self.r_spread = LabeledEntry(section, "Spread (pips)", 1.0)
+        self.r_pip_size = LabeledEntry(section, "Pip size (e.g. 0.0001 FX)", 0.0001)
+
+        pip_row = Frame(section, bg=PANEL)
+        pip_row.pack(anchor="w", padx=18, pady=(0, 10))
+        self.owner._button(pip_row, "DETECT PIP SIZE FROM DATA", self._detect_pip_size_from_data).pack(side="left")
+        self.pip_detect_status = Label(pip_row, text="", bg=PANEL, fg=TEXT_DIM, font=_safe_font(8))
+        self.pip_detect_status.pack(side="left", padx=(10, 0))
+
+    # ------------------------------------------------------------------
+    # Dataset selection (instance-local -- mirrors MainWindow's Step 02
+    # methods exactly, but never touches self.owner.csv_paths)
+    # ------------------------------------------------------------------
+
+    def _refresh_dataset_list(self):
+        self.dataset_listbox.delete(0, END)
+        self._stored_datasets = list_stored_datasets()
+        by_name = {ds.name: i for i, ds in enumerate(self._stored_datasets)}
+        groups = list_datasets_by_instrument()
+        self._dataset_row_map = {}
+        self._dataset_index_to_row = {}
+        row = 0
+        first_nonempty_row = None
+        for g in groups:
+            self.dataset_listbox.insert(END, f"\u2500\u2500 {g['instrument']} \u2500\u2500")
+            self.dataset_listbox.itemconfig(row, fg=TEXT_MUTED, selectforeground=TEXT_MUTED, selectbackground=PANEL)
+            row += 1
+            for file_info in g["files"]:
+                idx = by_name.get(file_info["full_name"])
+                if idx is None:
+                    continue
+                label = f"    {file_info['name']}"
+                if file_info["empty"]:
+                    label += "   (empty)"
+                elif file_info["rows"] == -1:
+                    label += "   (archive — extracted on import)"
+                self.dataset_listbox.insert(END, label)
+                if file_info["empty"]:
+                    self.dataset_listbox.itemconfig(row, fg=TEXT_DIM)
+                elif first_nonempty_row is None:
+                    first_nonempty_row = row
+                self._dataset_row_map[row] = idx
+                self._dataset_index_to_row[idx] = row
+                row += 1
+        # Unlike Step 02, this panel does NOT auto-select a dataset on
+        # first build -- an empty selection here is exactly the correct,
+        # obvious starting state for a run-local picker (Step 02 auto-
+        # selects because it's the app's one persistent default).
+
+    def _on_dataset_selected(self, _event):
+        sel = self.dataset_listbox.curselection()
+        paths = [self._stored_datasets[self._dataset_row_map[i]].path for i in sel if i in self._dataset_row_map]
+        if not paths:
+            return
+        self._select_datasets(paths)
+
+    def _select_datasets(self, paths, silent: bool = False):
+        results = []
+        for path in paths:
+            result = import_csv(path)
+            if not result.is_valid:
+                detail = "; ".join(result.errors) or "no rows found"
+                if silent:
+                    self.data_status.config(text=f"●  {path.name}: {detail} — pick another dataset.", fg=AMBER)
+                else:
+                    messagebox.showerror("Import failed", f"{path.name}:\n" + "\n".join(result.errors))
+                    self.data_status.config(text=f"●  {path.name}: import failed.", fg=RED)
+                return
+            results.append((path, result))
+
+        self.csv_paths = [str(p) for p, _ in results]
+
+        total_warn = sum(len(r.warnings) for _, r in results)
+        warn = f"  •  {total_warn} warning(s)" if total_warn else ""
+        if len(results) == 1:
+            path, result = results[0]
+            n = len(result.dataframe)
+            self.data_status.config(text=f"●  ACTIVE  {path.name}  •  {n:,} bars{warn}", fg=GREEN)
+        else:
+            _, labels = merge_multi_timeframe([r.dataframe for _, r in results])
+            names = ", ".join(p.name for p, _ in results)
+            self.data_status.config(text=f"●  ACTIVE (multi-timeframe)  {names}  •  {' + '.join(labels)}{warn}", fg=GREEN)
+
+    def _browse_csv(self):
+        paths = filedialog.askopenfilenames(
+            filetypes=[("Market data", "*.csv *.tsv *.txt *.parquet *.zip *.7z"), ("All files", "*.*")]
+        )
+        if not paths:
+            return
+        imported, failed = [], []
+        for p in paths:
+            result = import_csv(p)
+            if not result.is_valid:
+                failed.append((os.path.basename(p), "; ".join(result.errors)))
+                continue
+            imported.append(store_csv_path(p))
+        self._refresh_dataset_list()
+        if imported:
+            self._select_datasets([imported[-1]], silent=True)
+            for i, ds in enumerate(self._stored_datasets):
+                if ds.path == imported[-1]:
+                    row = self._dataset_index_to_row.get(i)
+                    if row is not None:
+                        self.dataset_listbox.selection_clear(0, END)
+                        self.dataset_listbox.selection_set(row)
+                        self.dataset_listbox.see(row)
+                    break
+        if failed:
+            detail = "\n".join(f"- {name}: {err}" for name, err in failed)
+            messagebox.showwarning(
+                "Some files failed to import",
+                f"{len(imported)} file(s) imported successfully.\n\n{len(failed)} file(s) failed:\n{detail}",
+            )
+        elif imported:
+            messagebox.showinfo("Import complete", f"Imported and stored {len(imported)} file(s) in data/raw/.")
+
+    # ------------------------------------------------------------------
+    # Alpaca fetch (instance-local)
+    # ------------------------------------------------------------------
+
+    def _on_alpaca_asset_class_changed(self):
+        is_stock = self.alp_asset_class.get_str() == "Stock"
+        state = "readonly" if is_stock else "disabled"
+        self.alp_feed.combo.config(state=state)
+        self.alp_adjustment.combo.config(state=state)
+
+    def _set_alpaca_status(self, text, color=None):
+        self.alpaca_status.config(text=f"●  {text}", fg=color or TEXT_MUTED)
+        self.owner.root.update_idletasks()
+
+    def _set_alpaca_buttons_enabled(self, enabled: bool):
+        state = "normal" if enabled else "disabled"
+        self.alp_test_btn.config(state=state)
+        self.alp_fetch_btn.config(state=state)
+        self.alp_forget_btn.config(state=state)
+
+    def _maybe_save_alpaca_keys(self, api_key: str, secret_key: str):
+        if self.alp_save_keys.get():
+            alpaca_credentials.save_credentials(api_key, secret_key)
+
+    def _forget_alpaca_keys(self):
+        alpaca_credentials.clear_credentials()
+        self.alp_api_key.var.set("")
+        self.alp_secret_key.var.set("")
+        self.alp_save_keys.var.set(False)
+        self._set_alpaca_status("Saved keys removed from this computer.", GREEN)
+
+    def _test_alpaca_connection(self):
+        api_key = self.alp_api_key.get_str().strip()
+        secret_key = self.alp_secret_key.get_str().strip()
+        if not api_key or not secret_key:
+            messagebox.showwarning("Missing keys", "Enter both an API key and a secret key first.")
+            return
+        self._set_alpaca_buttons_enabled(False)
+        self._set_alpaca_status("Testing connection...", AMBER)
+
+        def worker():
+            try:
+                message = test_connection(api_key, secret_key)
+                self._maybe_save_alpaca_keys(api_key, secret_key)
+                self._set_alpaca_status(message, GREEN)
+            except (AlpacaImportError, AlpacaFetchError) as exc:
+                self._set_alpaca_status(str(exc), RED)
+            except Exception as exc:  # pragma: no cover - defensive
+                self._set_alpaca_status(f"Unexpected error: {exc}", RED)
+            finally:
+                self._set_alpaca_buttons_enabled(True)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _fetch_alpaca_clicked(self):
+        api_key = self.alp_api_key.get_str().strip()
+        secret_key = self.alp_secret_key.get_str().strip()
+        symbols = [s.strip() for s in self.alp_symbols.get_str().split(",") if s.strip()]
+        asset_class = self.alp_asset_class.get_str()
+        timeframe_label = self.alp_timeframe.get_str()
+        start = self.alp_start.get_str().strip()
+        end = self.alp_end.get_str().strip()
+        feed = self.alp_feed.get_str()
+        adjustment = self.alp_adjustment.get_str()
+
+        if not api_key or not secret_key:
+            messagebox.showwarning("Missing keys", "Enter both an API key and a secret key first.")
+            return
+        if not symbols:
+            messagebox.showwarning("Missing symbol", "Enter at least one symbol (comma-separated for more than one).")
+            return
+
+        self._set_alpaca_buttons_enabled(False)
+        threading.Thread(
+            target=self._fetch_alpaca_pipeline,
+            args=(api_key, secret_key, symbols, asset_class, timeframe_label, start, end, feed, adjustment),
+            daemon=True,
+        ).start()
+
+    def _fetch_alpaca_pipeline(self, api_key, secret_key, symbols, asset_class, timeframe_label, start, end, feed, adjustment):
+        try:
+            self._maybe_save_alpaca_keys(api_key, secret_key)
+            saved_paths = []
+            for i, symbol in enumerate(symbols, start=1):
+                self._set_alpaca_status(f"Fetching {symbol} ({i}/{len(symbols)})...", AMBER)
+                df = fetch_bars(
+                    api_key, secret_key, symbol, asset_class, timeframe_label, start, end,
+                    feed=feed, adjustment=adjustment,
+                )
+                dest = save_bars_as_csv(df, symbol, timeframe_label)
+                saved_paths.append(dest)
+                self._set_alpaca_status(f"Saved {symbol}: {len(df):,} bars -> {dest.name}", GREEN)
+
+            self._refresh_dataset_list()
+            if len(saved_paths) == 1:
+                self._select_datasets(saved_paths, silent=True)
+                self._set_alpaca_status(f"Done. {saved_paths[0].name} is now this run's active dataset.", GREEN)
+            else:
+                names = ", ".join(p.name for p in saved_paths)
+                self._set_alpaca_status(
+                    f"Done. Saved {len(saved_paths)} file(s): {names}. "
+                    "Ctrl/Cmd-click them in the list above to combine as multi-timeframe, or pick just one.",
+                    GREEN,
+                )
+        except (AlpacaImportError, AlpacaFetchError) as exc:
+            self._set_alpaca_status(str(exc), RED)
+        except Exception as exc:  # pragma: no cover - defensive
+            self._set_alpaca_status(f"Unexpected error: {exc}", RED)
+        finally:
+            self._set_alpaca_buttons_enabled(True)
+
+    # ------------------------------------------------------------------
+    # Prop rules / risk config / dataframe resolution
+    # ------------------------------------------------------------------
+
+    def _apply_prop_firm_preset(self):
+        idx = self.p_preset_combo.combo.current()
+        presets = list_prop_firm_presets()
+        if idx <= 0 or idx - 1 >= len(presets):
+            self.p_preset_note.config(text="")
+            return
+        p = presets[idx - 1]
+        self.p_account_size.var.set(str(p.account_size))
+        self.p_profit_target.var.set(str(p.evaluation_profit_target_pct))
+        self.p_daily_loss.var.set(str(p.daily_loss_limit_pct))
+        self.p_max_dd.var.set(str(p.max_drawdown_pct))
+        self.p_dd_type.var.set(p.drawdown_type)
+        self.p_dd_check_mode.var.set(p.drawdown_check_mode)
+        self.p_consistency.var.set(str(p.consistency_rule_pct) if p.consistency_rule_pct is not None else "")
+        self.p_min_days.var.set(str(p.min_trading_days))
+        self.p_payout_threshold.var.set(str(p.payout_threshold_pct))
+        self.p_payout_cap.var.set(str(p.payout_cap_pct) if p.payout_cap_pct is not None else "100")
+        self.p_payout_freq.var.set(str(p.payout_frequency_days))
+        self.p_buffer.var.set(str(p.required_buffer_pct))
+        self.p_preset_note.config(text=f"As of {p.as_of}: {p.source_note}")
+
+    def build_prop_rules(self) -> PropRules:
+        cap = self.p_payout_cap.get_str().strip()
+        max_pos = self.p_max_pos.get_str().strip()
+        return PropRules(
+            account_size=self.p_account_size.get_float(self._default_account_size),
+            evaluation_profit_target_pct=self.p_profit_target.get_float(8),
+            daily_loss_limit_pct=self.p_daily_loss.get_float(5),
+            max_drawdown_pct=self.p_max_dd.get_float(10),
+            drawdown_type=self.p_dd_type.get_str().strip() or "trailing",
+            drawdown_check_mode=self.p_dd_check_mode.get_str().strip() or "intrabar",
+            consistency_rule_pct=self.p_consistency.get_float(30),
+            min_trading_days=self.p_min_days.get_int(5),
+            payout_threshold_pct=self.p_payout_threshold.get_float(0),
+            payout_cap_pct=float(cap) if cap else None,
+            payout_frequency_days=self.p_payout_freq.get_int(14),
+            required_buffer_pct=self.p_buffer.get_float(0),
+            max_position_size=float(max_pos) if max_pos else None,
+        )
+
+    def build_risk_config(self) -> RiskConfig:
+        return RiskConfig(
+            initial_balance=self.r_initial_balance.get_float(self._default_account_size),
+            risk_mode=self.r_risk_mode.get_str().strip() or "percent",
+            risk_value=self.r_risk_value.get_float(1.0),
+            max_trades_per_day=self.r_max_trades_day.get_int(10),
+            commission_per_trade=self.r_commission.get_float(0),
+            slippage_pips=self.r_slippage.get_float(0.5),
+            spread_pips=self.r_spread.get_float(1.0),
+            pip_size=self.r_pip_size.get_float(0.0001),
+        )
+
+    def _detect_pip_size_from_data(self):
+        if not self.csv_paths:
+            self.pip_detect_status.config(text="Select a market data CSV above first.", fg=AMBER)
+            return
+        try:
+            result = import_csv(self.csv_paths[0])
+            if not result.is_valid:
+                self.pip_detect_status.config(text="Couldn't read that CSV.", fg=RED)
+                return
+            suggested = suggest_pip_size(result.dataframe)
+            self.r_pip_size.var.set(str(suggested))
+            self.pip_detect_status.config(
+                text=f"Suggested {suggested} from {os.path.basename(self.csv_paths[0])} "
+                     f"-- confirm this matches the instrument.",
+                fg=GREEN,
+            )
+        except Exception as exc:
+            self.pip_detect_status.config(text=f"Couldn't detect: {exc}", fg=RED)
+
+    def load_dataframe(self, log_fn):
+        """Same shape/contract as MainWindow._load_df_for_page, but reads
+        this panel's own self.csv_paths instead of the shared Step 02
+        selection."""
+        if not self.csv_paths:
+            log_fn(f"Please select a market data CSV above for this {self.key} run first.")
+            return None
+        per_file_results = []
+        for p in self.csv_paths:
+            result = import_csv(p)
+            if not result.is_valid:
+                log_fn(f"Import errors ({os.path.basename(p)}):\n" + "\n".join(result.errors))
+                return None
+            per_file_results.append((p, result))
+        if len(per_file_results) == 1:
+            df = per_file_results[0][1].dataframe
+        else:
+            df, _labels = merge_multi_timeframe([r.dataframe for _, r in per_file_results])
+        log_fn(f"Loaded {len(df)} bars.")
+        return df
+
+    def instrument_label(self) -> str:
+        if not self.csv_paths:
+            return "unknown"
+        return (
+            os.path.basename(self.csv_paths[0]) if len(self.csv_paths) == 1
+            else " + ".join(os.path.basename(p) for p in self.csv_paths)
+        )
+
+
+class RunContextDialog(Toplevel):
+    """Modal, one-off version of RunContextPanel for actions that aren't a
+    whole tab of their own -- e.g. OPTIMIZE SELECTED in the Strategy
+    Library. Confirming this dialog resolves this ONE click's market data /
+    prop rules / risk settings entirely on its own (nothing shared with the
+    Data/Prop Rules/Risk tabs or any other tab), matching the same
+    self-contained-ecosystem idea as a full RunContextPanel tab, just
+    scoped to a single action instead of a persistent page."""
+
+    def __init__(self, parent, owner: "MainWindow", action_label: str):
+        super().__init__(parent)
+        self.title(f"{action_label} — market data & prop settings")
+        self.configure(bg=BG)
+        self.geometry("720x680")
+        self.confirmed = False
+
+        outer = Frame(self, bg=BG)
+        outer.pack(fill="both", expand=True)
+        canvas = Canvas(outer, bg=BG, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview, style="T58.Vertical.TScrollbar")
+        inner = Frame(canvas, bg=BG)
+        inner.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        window_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(window_id, width=e.width))
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1 * (e.delta // 120)), "units"))
+
+        Label(
+            inner, text=f"Configure THIS {action_label} run",
+            bg=BG, fg=TEXT, font=_safe_font(12, "bold"),
+        ).pack(anchor="w", padx=24, pady=(16, 2))
+        Label(
+            inner,
+            text="Self-contained to this run only -- picking a dataset or changing account/risk "
+            "settings here never touches Steps 02-04 or any other tab.",
+            bg=BG, fg=TEXT_DIM, font=_safe_font(8), wraplength=660, justify="left",
+        ).pack(anchor="w", padx=24, pady=(0, 8))
+
+        self.panel = RunContextPanel(owner, action_label)
+        self.panel.build(inner)
+
+        btn_row = Frame(self, bg=BG)
+        btn_row.pack(fill="x", padx=24, pady=10)
+        owner._button(btn_row, "RUN", self._confirm, primary=True).pack(side="right")
+        owner._button(btn_row, "CANCEL", self._cancel).pack(side="right", padx=8)
+
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+
+    def _confirm(self):
+        if not self.panel.csv_paths:
+            messagebox.showwarning("Missing data", "Select or fetch a market data file above first.")
+            return
+        self.confirmed = True
+        self.destroy()
+
+    def _cancel(self):
+        self.confirmed = False
+        self.destroy()
+
+    @classmethod
+    def ask(cls, parent, owner: "MainWindow", action_label: str) -> "RunContextPanel | None":
+        dialog = cls(parent, owner, action_label)
+        parent.wait_window(dialog)
+        return dialog.panel if dialog.confirmed else None
+
+
 class MainWindow:
     def __init__(self, root: Tk):
         self.root = root
@@ -1408,6 +1979,8 @@ class MainWindow:
         self.tab_resources = Frame(self.content, bg=BG)
         self.tab_education = Frame(self.content, bg=BG)
         self.tab_graveyard = Frame(self.content, bg=BG)
+        self.tab_account = Frame(self.content, bg=BG)
+        self.tab_hedge_fund = Frame(self.content, bg=BG)
 
         for f in (
             self.tab_dashboard, self.tab_ai_assistant, self.tab_manual, self.tab_resources, self.tab_education, self.tab_strategyconfig, self.tab_data, self.tab_strategy, self.tab_prop,
@@ -1419,7 +1992,7 @@ class MainWindow:
             self.tab_forwardtest, self.tab_deploylive, self.tab_livemarket, self.tab_genstrat,
             self.tab_evolution, self.tab_researchagent, self.tab_regime_matrix, self.tab_family_diversity,
             self.tab_quantlab, self.tab_options_outlook,
-            self.tab_graveyard,
+            self.tab_graveyard, self.tab_account, self.tab_hedge_fund,
         ):
             f.place(in_=self.content, x=0, y=0, relwidth=1, relheight=1)
 
@@ -1484,6 +2057,7 @@ class MainWindow:
             ("portfolio", "", "Multi-Asset Portfolio", self.tab_portfolio, NEON_MAGENTA),
             ("ensemble", "", "Multi-Strategy Ensemble", self.tab_ensemble, NEON_MAGENTA),
             ("familydiversity", "", "Family Diversity", self.tab_family_diversity, NEON_MAGENTA),
+            ("hedgefund", "", "\U0001F3E6 Hedge Fund Manager", self.tab_hedge_fund, NEON_MAGENTA),
 
             (None, None, "\u2465 DEPLOYMENT", None, None),
             ("forwardtest", "", "Forward Test (MT5)", self.tab_forwardtest, NEON_LIME),
@@ -1502,6 +2076,9 @@ class MainWindow:
             (None, None, "\u2469 EDUCATION", None, None),
             ("education", "", "\U0001F393 Education (course)", self.tab_education, METAL_BRIGHT),
             ("resources", "", "\U0001F393 Resources", self.tab_resources, METAL_BRIGHT),
+
+            (None, None, "\u246A ACCOUNT", None, None),
+            ("account", "", "\u2699 Account", self.tab_account, METAL_BRIGHT),
         ]
         self._tab_frame_by_key = {k: frame for k, _icon, _label, frame, _color in self._nav_items if k}
         self._nav_buttons: dict[str, Label] = {}
@@ -1547,6 +2124,8 @@ class MainWindow:
             ("Quant Lab", self._build_quant_lab_tab),
             ("Options Outlook", self._build_options_outlook_tab),
             ("Strategy Graveyard", self._build_graveyard_tab),
+            ("Hedge Fund Manager", self._build_hedge_fund_tab),
+            ("Account", self._build_account_tab),
         ):
             self._pump_splash(f"Loading {label}...")
             builder()
@@ -5919,7 +6498,11 @@ class MainWindow:
         every currently-highlighted Strategy Library row. Unlike the Batch
         test queue, this acts directly on whatever's selected in the list
         right now (no separate queue/stage step), since it's meant as a
-        quick "is this worth a real Full Pipeline run" check."""
+        quick "is this worth a real Full Pipeline run" check.
+
+        Self-contained like the web app's Quick Optimize page: confirming
+        the RunContextDialog below resolves market data + prop rules +
+        risk settings just for THIS click, independent of Steps 02-04."""
         items = self._selected_library_items()
         if not items:
             messagebox.showinfo(
@@ -5928,34 +6511,24 @@ class MainWindow:
                 "(Ctrl/Cmd-click or Shift-click for more than one).",
             )
             return
-        if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data file in Step 2 before optimizing.")
+        context = RunContextDialog.ask(self.root, self, "Quick Optimize")
+        if context is None:
             return
         win, append, _show_results = self._open_progress_window(f"Optimizing {len(items)} strategy(ies)...")
         threading.Thread(
-            target=self._run_library_quick_optimize, args=(items, append), daemon=True,
+            target=self._run_library_quick_optimize, args=(items, append, context), daemon=True,
         ).start()
 
-    def _run_library_quick_optimize(self, items, log):
+    def _run_library_quick_optimize(self, items, log, context: "RunContextPanel"):
         from app.orchestration.quick_optimize import QuickOptimizeConfig, run_quick_optimize
 
         try:
-            log(f"Loading {len(self.csv_paths)} market data file(s)...")
-            per_file_results = []
-            for p in self.csv_paths:
-                result = import_csv(p)
-                if not result.is_valid:
-                    log(f"Import errors ({os.path.basename(p)}):\n" + "\n".join(result.errors))
-                    return
-                per_file_results.append((p, result))
-            if len(per_file_results) == 1:
-                df = per_file_results[0][1].dataframe
-            else:
-                df, _labels = merge_multi_timeframe([r.dataframe for _, r in per_file_results])
-            log(f"Loaded {len(df)} bars.\n")
+            df = context.load_dataframe(log)
+            if df is None:
+                return
 
-            risk = self._build_risk_config()
-            rules = self._build_prop_rules()
+            risk = context.build_risk_config()
+            rules = context.build_prop_rules()
             cfg = QuickOptimizeConfig(adaptive_risk_enabled=self.lib_optimize_adaptive_risk.var.get())
             results = []
             for i, item in enumerate(items, start=1):
@@ -7679,8 +8252,13 @@ class MainWindow:
             "for how many candidates were tried) decides what actually survives. "
             "Works with Manual, Python, PineScript, and MQL5 strategies alike. "
             "Completely separate from the normal Run & Report pipeline and from Step 6 "
-            "-- nothing here changes unless you click Run below.",
+            "-- nothing here changes unless you click Run below. Its own market data, "
+            "prop-firm rules, and risk settings below are self-contained to this tab, "
+            "just like the web app -- independent of Steps 02-04 and every other tab.",
         )
+
+        self.search_context = RunContextPanel(self, "Search Lab")
+        self.search_context.build(f)
 
         mode_section = self._section(
             f, "What to search",
@@ -7717,9 +8295,9 @@ class MainWindow:
             f, "Strategies to upload (Bulk backtest mode above)",
             "Runs every file added here through the exact same pipeline as Run & Report -- "
             "full historical backtest, prop-firm simulation, Monte Carlo, and a saved HTML "
-            "report each -- reusing the Prop Rules (Step 3) and Risk & Execution (Step 4) "
-            "settings and the dataset(s) currently loaded on the Data tab, so every strategy "
-            "is judged on the same terms. Mixing Python (.py), PineScript (.pine/.txt), and "
+            "report each -- reusing this tab's own Prop Rules and Risk & Execution settings "
+            "and the dataset(s) selected above, so every strategy in the batch is judged on "
+            "the same terms. Mixing Python (.py), PineScript (.pine/.txt), and "
             "MQL5 (.mq5) files in the same batch is fine -- each is detected by extension. "
             "Every result is recorded automatically and shows up on the Dashboard afterward.",
         )
@@ -8087,10 +8665,10 @@ class MainWindow:
         )
 
     def _search_run_clicked(self):
-        if not self.csv_paths:
+        if not self.search_context.csv_paths:
             messagebox.showwarning(
                 "Missing data",
-                "Please select a market data CSV in Step 2.",
+                "Please select a market data CSV above (this tab's own Market Data section).",
             )
             return
 
@@ -8164,9 +8742,9 @@ class MainWindow:
         into run_history and shows up on the Dashboard afterward -- no
         separate wiring needed here."""
         try:
-            self._log_search(f"Loading {len(self.csv_paths)} market data file(s)...")
+            self._log_search(f"Loading {len(self.search_context.csv_paths)} market data file(s)...")
             per_file_results = []
-            for p in self.csv_paths:
+            for p in self.search_context.csv_paths:
                 result = import_csv(p)
                 if not result.is_valid:
                     self._log_search(
@@ -8181,14 +8759,11 @@ class MainWindow:
                 df, _labels = merge_multi_timeframe([r.dataframe for _, r in per_file_results])
             self._log_search(f"Loaded {len(df)} bars.\n")
 
-            risk = self._build_risk_config()
-            rules = self._build_prop_rules()
+            risk = self.search_context.build_risk_config()
+            rules = self.search_context.build_prop_rules()
             n_sims = self.mc_sims.get_int(10000)
             method = self.mc_method.get_str().strip() or "bootstrap"
-            instrument = (
-                os.path.basename(self.csv_paths[0]) if len(self.csv_paths) == 1
-                else " + ".join(os.path.basename(p) for p in self.csv_paths)
-            )
+            instrument = self.search_context.instrument_label()
             period = (str(df["timestamp"].iloc[0]), str(df["timestamp"].iloc[-1]))
 
             total = len(self._bulk_strategy_paths)
@@ -8287,7 +8862,7 @@ class MainWindow:
         try:
             self._log_search("Importing market data...")
             per_file_results = []
-            for p in self.csv_paths:
+            for p in self.search_context.csv_paths:
                 result = import_csv(p)
                 if not result.is_valid:
                     self._log_search(
@@ -8317,8 +8892,8 @@ class MainWindow:
                     "(enables the 'stat_pairs' family)."
                 )
 
-            risk = self._build_risk_config()
-            rules = self._build_prop_rules()
+            risk = self.search_context.build_risk_config()
+            rules = self.search_context.build_prop_rules()
 
             mode_key = self._SEARCH_MODE_LABELS.get(self.search_mode.get_str(), "family_named")
             if mode_key == "single":
@@ -8345,10 +8920,7 @@ class MainWindow:
             # (run_search() itself logs the "Search space ready..." line via
             # progress_cb once it starts -- not duplicated here.)
             stage_cfg = self._build_search_stage_config()
-            instrument = (
-                os.path.basename(self.csv_paths[0]) if len(self.csv_paths) == 1
-                else " + ".join(os.path.basename(p) for p in self.csv_paths)
-            )
+            instrument = self.search_context.instrument_label()
             db_path = str(OUTPUT_DIR / "search" / "search.db")
 
             summary = run_search(
@@ -8449,7 +9021,7 @@ class MainWindow:
         try:
             self._log_search("Importing market data...")
             per_file_results = []
-            for p in self.csv_paths:
+            for p in self.search_context.csv_paths:
                 result = import_csv(p)
                 if not result.is_valid:
                     self._log_search(
@@ -8479,13 +9051,10 @@ class MainWindow:
                     "(enables the 'stat_pairs' family)."
                 )
 
-            risk = self._build_risk_config()
-            rules = self._build_prop_rules()
+            risk = self.search_context.build_risk_config()
+            rules = self.search_context.build_prop_rules()
             stage_cfg = self._build_search_stage_config()
-            instrument = (
-                os.path.basename(self.csv_paths[0]) if len(self.csv_paths) == 1
-                else " + ".join(os.path.basename(p) for p in self.csv_paths)
-            )
+            instrument = self.search_context.instrument_label()
 
             family_label = self.search_family.get_str()
             family_key = self._search_family_label_to_key.get(family_label, "all")
@@ -8829,6 +9398,271 @@ class MainWindow:
             self.fd_output.insert(END, render_family_report(summaries))
         except Exception:
             self.fd_output.insert(END, "Unexpected error:\n" + traceback.format_exc())
+
+    # -----------------------------------------------------------------------
+    # Hedge Fund Manager -- desktop parity for the web app's /hedge-fund.
+    # Self-contained like every RunContextPanel-based tab: its own asset
+    # slots (each an independent dataset pick, nothing shared with Steps
+    # 02-04 or any other tab) and its own rebalance/forecast settings.
+    # Thin wrapper over app.hedge_fund.pipeline.run_hedge_fund_manager --
+    # same entry point app.web.hedge_fund_routes uses, so a book run here
+    # and a book run on the web app are scored identically.
+    # -----------------------------------------------------------------------
+
+    _HF_MAX_ASSETS = 6
+
+    def _build_hedge_fund_tab(self):
+        f = self._scrollable(self.tab_hedge_fund)
+
+        self._page_header(
+            f,
+            "CHAMPION / Hedge Fund Manager",
+            "\U0001F3E6 Hedge Fund Manager",
+            "Research -> Portfolio -> Execution -> Oversight over a multi-asset book: each "
+            "asset gets an ensemble return forecast (bootstrap, or -- if you point a slot at "
+            "a saved Strategy Library entry -- that strategy's own signal), the forecasts "
+            "become Black-Litterman views, and the book rebalances on a fixed cadence with "
+            "transaction costs and a turnover cap. Needs at least 2 assets. Every setting "
+            "on this page is self-contained to this tab, same as the web app's version.",
+        )
+
+        assets_section = self._section(
+            f, "Book assets (pick at least 2)",
+            "Each slot is independent -- its own dataset pick and its own optional label. "
+            "Leave a slot's dataset on '(none)' to skip it.",
+            emphasize=True,
+        )
+
+        self._hf_asset_rows = []
+        for i in range(1, self._HF_MAX_ASSETS + 1):
+            row = Frame(assets_section, bg=PANEL)
+            row.pack(fill="x", padx=18, pady=4)
+            Label(row, text=f"Asset {i}", width=8, anchor="w", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(9)).pack(side="left")
+            dataset_combo = LabeledCombo(row, "Dataset", ["(none)"], default="(none)")
+            label_entry = LabeledEntry(row, "Label (optional)", "", width=14)
+            import_btn = self._button(row, "IMPORT CSV...", lambda idx=i: self._hf_import_csv_for_slot(idx))
+            import_btn.pack(side="left", padx=(6, 0))
+            self._hf_asset_rows.append({"combo": dataset_combo, "label": label_entry})
+
+        refresh_row = Frame(assets_section, bg=PANEL)
+        refresh_row.pack(anchor="w", padx=18, pady=(2, 12))
+        self._button(refresh_row, "REFRESH DATASET LISTS", self._hf_refresh_dataset_combos).pack(side="left")
+        self._hf_refresh_dataset_combos()
+
+        config_section = self._section(
+            f, "Rebalance & forecast settings",
+            "Own copy of book-level settings -- nothing here is read from any other tab.",
+        )
+        self.hf_initial_balance = LabeledEntry(config_section, "Initial balance ($)", 100000)
+        self.hf_rebalance_every_bars = LabeledEntry(config_section, "Rebalance every N bars", 5)
+        self.hf_lookback_bars = LabeledEntry(config_section, "Forecast lookback (bars)", 100)
+        self.hf_horizon_bars = LabeledEntry(config_section, "Forecast horizon (bars)", 5)
+        self.hf_n_samples = LabeledEntry(config_section, "Forecast samples", 32)
+        self.hf_confidence = LabeledEntry(config_section, "Black-Litterman confidence (0-1)", 0.5)
+        self.hf_long_only = LabeledCheckbox(config_section, "Long-only (no short positions)", True)
+        self.hf_max_turnover = LabeledEntry(config_section, "Max turnover per cycle (blank=uncapped)", 0.5)
+        self.hf_transaction_cost_bps = LabeledEntry(config_section, "Transaction cost (bps each way)", 10.0)
+        self.hf_min_trade_frac = LabeledEntry(config_section, "Min trade size (fraction of equity, skips dust)", 0.005)
+        self.hf_write_journal = LabeledCheckbox(config_section, "Write an AI research-desk journal for this run", True)
+
+        button_row = Frame(f, bg=BG)
+        button_row.pack(fill="x", padx=24, pady=10)
+        self._button(button_row, "RUN HEDGE FUND MANAGER", self._hf_run_clicked, primary=True).pack(side="left")
+
+        self.hf_progress = NeuralProgress(f)
+        self.hf_progress.pack(fill="x", padx=24, pady=(2, 10))
+
+        output_section = self._section(f, "Output", "Stats, journal, and per-cycle detail from the most recent run.")
+        _hf_output_frame = Frame(output_section, bg=PANEL)
+        self.hf_output = Text(
+            _hf_output_frame, height=22, wrap="word", bg=LOG_BG, fg=TEXT,
+            insertbackground=TEXT, relief="flat", bd=0, highlightthickness=1,
+            highlightbackground=BORDER, font=(MONO, 9),
+        )
+        _hf_output_scroll = ttk.Scrollbar(_hf_output_frame, orient="vertical", command=self.hf_output.yview, style="T58.Vertical.TScrollbar")
+        self.hf_output.configure(yscrollcommand=_hf_output_scroll.set)
+        self.hf_output.pack(side="left", fill="both", expand=True)
+        _hf_output_scroll.pack(side="right", fill="y")
+        _hf_output_frame.pack(fill="both", expand=True, padx=18, pady=(3, 16))
+        self._bind_isolated_wheel(self.hf_output)
+
+    def _hf_refresh_dataset_combos(self):
+        names = ["(none)"] + [ds.name for ds in list_stored_datasets()]
+        for row in getattr(self, "_hf_asset_rows", []):
+            row["combo"].set_options(names)
+
+    def _hf_import_csv_for_slot(self, slot_index: int):
+        paths = filedialog.askopenfilenames(
+            filetypes=[("Market data", "*.csv *.tsv *.txt *.parquet *.zip *.7z"), ("All files", "*.*")]
+        )
+        if not paths:
+            return
+        result = import_csv(paths[0])
+        if not result.is_valid:
+            messagebox.showerror("Import failed", f"{os.path.basename(paths[0])}:\n" + "\n".join(result.errors))
+            return
+        stored_path = store_csv_path(paths[0])
+        self._hf_refresh_dataset_combos()
+        self._hf_asset_rows[slot_index - 1]["combo"].set_str(stored_path.name)
+
+    def _hf_log(self, msg: str):
+        self.hf_output.insert(END, msg + "\n")
+        self.hf_output.see(END)
+        self.root.update_idletasks()
+
+    def _hf_run_clicked(self):
+        price_data: dict[str, "pd.DataFrame"] = {}
+        for i, row in enumerate(self._hf_asset_rows, start=1):
+            name = row["combo"].get_str()
+            if not name or name == "(none)":
+                continue
+            match = next((ds for ds in list_stored_datasets() if ds.name == name), None)
+            if match is None:
+                continue
+            result = import_csv(match.path)
+            if not result.is_valid:
+                messagebox.showerror("Import failed", f"{name}:\n" + "\n".join(result.errors))
+                return
+            label = row["label"].get_str().strip() or name
+            if label in price_data:
+                label = f"{label} ({i})"
+            price_data[label] = result.dataframe
+
+        if len(price_data) < 2:
+            messagebox.showwarning(
+                "Not enough assets",
+                "A hedge fund book needs at least 2 assets -- pick a dataset for at least 2 of the asset slots above.",
+            )
+            return
+
+        self.hf_output.delete("1.0", END)
+        self.hf_progress.start(10)
+        threading.Thread(target=self._hf_run_pipeline, args=(price_data,), daemon=True).start()
+
+    def _hf_run_pipeline(self, price_data):
+        from app.hedge_fund.pipeline import HedgeFundManagerError, run_hedge_fund_manager
+        from app.hedge_fund.rebalancer import RebalanceConfig
+        from app.hedge_fund.research import EnsembleForecastConfig
+
+        try:
+            max_turnover_raw = self.hf_max_turnover.get_str().strip()
+            forecast_config = EnsembleForecastConfig(
+                lookback_bars=self.hf_lookback_bars.get_int(100),
+                horizon_bars=self.hf_horizon_bars.get_int(5),
+                n_samples=self.hf_n_samples.get_int(32),
+            )
+            config = RebalanceConfig(
+                initial_balance=self.hf_initial_balance.get_float(100000),
+                rebalance_every_bars=self.hf_rebalance_every_bars.get_int(5),
+                forecast=forecast_config,
+                confidence=self.hf_confidence.get_float(0.5),
+                long_only=self.hf_long_only.get(),
+                max_turnover=(float(max_turnover_raw) if max_turnover_raw else None),
+                transaction_cost_bps=self.hf_transaction_cost_bps.get_float(10.0),
+                min_trade_frac=self.hf_min_trade_frac.get_float(0.005),
+            )
+
+            self._hf_log(f"Running Hedge Fund Manager over {len(price_data)} assets: {', '.join(price_data.keys())}\n")
+            outcome = run_hedge_fund_manager(price_data, config, write_journal=self.hf_write_journal.get())
+
+            stats = outcome.backtest.stats
+            self._hf_log(
+                f"Total return: {stats.total_return_pct:.2f}%   |   CAGR: {stats.cagr_pct:.2f}%   |   "
+                f"Max drawdown: {stats.max_drawdown_pct:.2f}%   |   Sharpe: {stats.sharpe_ratio:.2f}"
+            )
+            self._hf_log(
+                f"Rebalances: {stats.num_rebalances}   |   Avg turnover: {stats.avg_turnover_pct:.2f}%   |   "
+                f"Total transaction costs: ${stats.total_transaction_costs:,.2f}"
+            )
+            equity = outcome.backtest.equity_curve["equity"]
+            self._hf_log(f"Equity: ${equity.iloc[0]:,.2f} -> ${equity.iloc[-1]:,.2f}\n")
+
+            for w in outcome.backtest.warnings:
+                self._hf_log(f"WARNING: {w}")
+
+            if outcome.backtest.cycles:
+                last_cycle = outcome.backtest.cycles[-1]
+                self._hf_log("Most recent cycle's target weights:")
+                for asset, weight in last_cycle.target_weights.items():
+                    self._hf_log(f"  {asset}: {weight:.1%}")
+
+            if outcome.journal:
+                self._hf_log("\n--- Research desk journal ---")
+                self._hf_log(outcome.journal)
+                if outcome.journal_note:
+                    self._hf_log(f"({outcome.journal_note})")
+        except HedgeFundManagerError as exc:
+            self._hf_log(f"\nHedge Fund Manager error: {exc}")
+        except Exception:
+            self._hf_log("\nUnexpected error:\n" + traceback.format_exc())
+        finally:
+            self.hf_progress.stop()
+
+    # -----------------------------------------------------------------------
+    # Account -- desktop parity for the web app's Account section
+    # (currently just notification settings; see app.web.notifications).
+    # Self-contained settings page, not tied to any run.
+    # -----------------------------------------------------------------------
+
+    def _build_account_tab(self):
+        f = self._scrollable(self.tab_account)
+
+        self._page_header(
+            f,
+            "ACCOUNT / Notification settings",
+            "\u2699 Account",
+            "Get an email the moment a long-running job (Evolution Lab, Search Lab, Full "
+            "Pipeline) finishes -- so you don't have to keep a progress window open and "
+            "watch it. Separate from the per-run webhook field some tabs already have "
+            "(Discord/Slack/Telegram/Zapier), which keeps working whether or not email is "
+            "set up here. Settings are stored locally on this computer only.",
+        )
+
+        from app.web.notifications import load_notification_settings
+
+        saved = load_notification_settings()
+
+        dest_section = self._section(f, "Where to send it", emphasize=True)
+        self.acct_notify_email = LabeledEntry(dest_section, "Notification email", saved.notify_email, width=32)
+        self.acct_email_enabled = LabeledCheckbox(dest_section, "Email notifications enabled", saved.email_enabled)
+
+        smtp_section = self._section(
+            f, "Outgoing mail server (SMTP)",
+            "Any SMTP-capable mail account works, including a free Gmail/Outlook account -- "
+            "for Gmail specifically, use an app password, not your normal login password. "
+            "Nothing here is sent anywhere except directly to the SMTP host you enter.",
+        )
+        self.acct_smtp_host = LabeledEntry(smtp_section, "SMTP host", saved.smtp_host, width=32)
+        self.acct_smtp_port = LabeledEntry(smtp_section, "SMTP port", saved.smtp_port)
+        self.acct_smtp_username = LabeledEntry(smtp_section, "SMTP username", saved.smtp_username, width=32)
+        self.acct_smtp_password = LabeledEntry(
+            smtp_section, "SMTP password (blank = keep current)", "", secret=True, width=32,
+        )
+        self.acct_smtp_from = LabeledEntry(smtp_section, "\"From\" address", saved.smtp_from, width=32)
+
+        btn_row = Frame(f, bg=BG)
+        btn_row.pack(fill="x", padx=24, pady=10)
+        self._button(btn_row, "SAVE", self._save_account_settings, primary=True).pack(side="left")
+
+        self.acct_status = Label(f, text="", bg=BG, fg=TEXT_MUTED, font=_safe_font(9))
+        self.acct_status.pack(anchor="w", padx=26, pady=(4, 2))
+
+    def _save_account_settings(self):
+        from app.web.notifications import NotificationSettings, load_notification_settings, save_notification_settings
+
+        entered_password = self.acct_smtp_password.get_str().strip()
+        settings = NotificationSettings(
+            notify_email=self.acct_notify_email.get_str().strip(),
+            smtp_host=self.acct_smtp_host.get_str().strip(),
+            smtp_port=self.acct_smtp_port.get_int(587),
+            smtp_username=self.acct_smtp_username.get_str().strip(),
+            smtp_password=(entered_password or load_notification_settings().smtp_password),
+            smtp_from=self.acct_smtp_from.get_str().strip(),
+            email_enabled=self.acct_email_enabled.get(),
+        )
+        save_notification_settings(settings)
+        self.acct_smtp_password.var.set("")
+        self.acct_status.config(text="●  Saved.", fg=GREEN)
 
     # -----------------------------------------------------------------------
     # Strategy Graveyard -- desktop read-only view onto the same shared,
@@ -11587,9 +12421,14 @@ class MainWindow:
             "MARGINAL / NOT READY verdict. For Python/PineScript/MQL5 strategies, the "
             "winning source is also saved straight into the Strategy Library, auto-tagged "
             "TESTED / PASSED, VALIDATED, or TESTED / FAILED based on that verdict (or "
-            "whatever fixed status you pick below), ready to use. Uses the strategy, data, "
-            "prop rules, and risk settings already configured in Steps 01-04.",
+            "whatever fixed status you pick below), ready to use. Uses the strategy "
+            "configured on Step 01 -- but its own market data, prop-firm rules, and risk "
+            "settings below are self-contained to this tab, just like the web app: picking "
+            "a dataset or changing the account size here never touches any other tab.",
         )
+
+        self.fp_context = RunContextPanel(self, "Full Pipeline")
+        self.fp_context.build(f)
 
         settings = self._section(
             f, "Pipeline settings",
@@ -13026,8 +13865,8 @@ class MainWindow:
             webbrowser.open(f"file://{self._last_fullpipeline_html_path.resolve()}")
 
     def _fullpipeline_run_clicked(self):
-        if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
+        if not self.fp_context.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV above (this tab's own Market Data section).")
             return
         if not self._try_start_heavy_job(JOB_FULL_PIPELINE):
             return
@@ -13038,12 +13877,12 @@ class MainWindow:
 
     def _fullpipeline_run_pipeline(self):
         try:
-            df = self._load_df_for_page(self._log_fullpipeline)
+            df = self.fp_context.load_dataframe(self._log_fullpipeline)
             if df is None:
                 return
             strategy = self._build_strategy()
-            risk = self._build_risk_config()
-            rules = self._build_prop_rules()
+            risk = self.fp_context.build_risk_config()
+            rules = self.fp_context.build_prop_rules()
 
             metric_key = self._fp_metric_label_to_key.get(self.fp_metric.get_str(), "eval_pass_probability")
             cfg = FullPipelineConfig(
@@ -13063,11 +13902,7 @@ class MainWindow:
             )
 
             self._log_fullpipeline(f"Starting Full Pipeline for '{_strategy_display_name(strategy)}'...\n")
-            instrument = (
-                os.path.basename(self.csv_paths[0])
-                if len(self.csv_paths) == 1
-                else " + ".join(os.path.basename(p) for p in self.csv_paths)
-            )
+            instrument = self.fp_context.instrument_label()
             ollama_settings = self._build_ollama_settings()
             result = run_full_pipeline(
                 df, strategy, risk, rules, OUTPUT_DIR / "full_pipeline", cfg,
