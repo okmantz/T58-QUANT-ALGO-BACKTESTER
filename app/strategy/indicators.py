@@ -4,6 +4,30 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+# Indicators whose value is only ever meaningful inside a fixed, known
+# numeric range. A condition that compares one of these to a threshold
+# outside its range (e.g. "RSI > 102.56") is not just an unusual setting
+# -- it is IMPOSSIBLE, since the indicator can mathematically never reach
+# that value. An impossible condition silently turns that branch of an
+# AND-chain into permanent dead code: the strategy still "runs" and still
+# produces trades and metrics from whatever conditions ARE live, with
+# nothing in the output flagging that part of the intended entry/exit
+# logic never fires at all. This is the single shared source of truth for
+# that range, used by both app.optimize.parameter_space (so a GA can
+# never mutate a condition's threshold outside it) and
+# app.strategy.manual's validate_bounded_conditions (so a hand-built or
+# already-saved config gets the same check surfaced as a plain warning).
+BOUNDED_OSCILLATOR_RANGES: dict[str, tuple[float, float]] = {
+    "rsi": (0.0, 100.0),
+    "stoch_k": (0.0, 100.0),
+    "stoch_d": (0.0, 100.0),
+    "mfi": (0.0, 100.0),
+    "connors_rsi": (0.0, 100.0),
+    "ultimate_oscillator": (0.0, 100.0),
+    "choppiness_index": (0.0, 100.0),
+    "williams_r": (-100.0, 0.0),
+}
+
 
 def _period(period: int) -> int:
     return max(int(period), 1)

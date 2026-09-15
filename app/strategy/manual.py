@@ -19,7 +19,84 @@ import pandas as pd
 
 from app.strategy.base import Strategy, StrategyError, StrategyResult, signals_from_conditions
 from app.strategy.expr import safe_eval_bool
-from app.strategy.indicators import build_indicator_series, INDICATOR_FUNCS
+from app.strategy.indicators import BOUNDED_OSCILLATOR_RANGES, build_indicator_series, INDICATOR_FUNCS
+
+# Distinctive substring every message from validate_bounded_conditions()
+# contains -- lets app.backtest.risk.has_impossible_condition() (and
+# anything else that wants to check for this class of warning) recognize
+# it without string-matching the whole sentence.
+IMPOSSIBLE_CONDITION_MARKER = "can never be true"
+
+
+def validate_bounded_conditions(config: dict) -> list[str]:
+    """Scan a Manual Strategy config's entry/exit conditions for a
+    comparison against a bounded oscillator (RSI, Stochastic, MFI, ...--
+    see app.strategy.indicators.BOUNDED_OSCILLATOR_RANGES) whose threshold
+    sits outside that oscillator's actual range -- e.g. "RSI > 102.56",
+    which can never be true since RSI cannot exceed 100.
+
+    This is NOT a style nitpick: an impossible condition silently makes
+    that entire branch of an AND-chain permanently dead code (or, for an
+    OR-chain, permanently redundant) with nothing in a normal backtest
+    run indicating that part of the intended logic never fires -- the
+    report just shows whatever numbers the still-live conditions
+    produce. app.optimize.parameter_space.extract_genome now clamps GA
+    genes so they can never MUTATE a threshold into this state, but a
+    hand-typed, imported, or already-saved config can still contain one,
+    so this check is surfaced independently as a plain warning wherever
+    a manual strategy is backtested (see app.backtest.engine.run_backtest).
+
+    Returns a list of human-readable warning strings (empty if nothing's
+    wrong).
+    """
+    warnings: list[str] = []
+
+    def _side_kind(node) -> str | None:
+        if isinstance(node, dict):
+            return str(node.get("type", "")).lower().strip()
+        return None
+
+    def _side_label(node) -> str:
+        if not isinstance(node, dict):
+            return str(node)
+        kind = _side_kind(node)
+        if kind in ("value", "constant", "number"):
+            return str(node.get("value", "?"))
+        period = node.get("period")
+        return f"{kind}({period})" if period is not None else str(kind)
+
+    def scan_conditions(conditions, branch_label: str):
+        for cond in conditions or []:
+            if not isinstance(cond, dict):
+                continue
+            left, right = cond.get("left"), cond.get("right")
+            left_kind, right_kind = _side_kind(left), _side_kind(right)
+            for osc_node, osc_kind, val_node in ((left, left_kind, right), (right, right_kind, left)):
+                bounds = BOUNDED_OSCILLATOR_RANGES.get(osc_kind)
+                if bounds is None or not isinstance(val_node, dict):
+                    continue
+                if str(val_node.get("type", "")).lower().strip() not in ("value", "constant", "number"):
+                    continue
+                try:
+                    threshold = float(val_node.get("value", 0))
+                except (TypeError, ValueError):
+                    continue
+                lo, hi = bounds
+                if threshold < lo or threshold > hi:
+                    warnings.append(
+                        f"Impossible condition in {branch_label}: {_side_label(left)} "
+                        f"{cond.get('operator', '?')} {_side_label(right)} {IMPOSSIBLE_CONDITION_MARKER} "
+                        f"-- {osc_kind.upper()} is bounded to [{lo:g}, {hi:g}], so this condition can never "
+                        f"be satisfied and permanently disables this branch of the logic."
+                    )
+
+    entries = config.get("entry_conditions", {}) or {}
+    exits = config.get("exit_conditions", {}) or {}
+    scan_conditions(entries.get("long"), "long entry conditions")
+    scan_conditions(entries.get("short"), "short entry conditions")
+    scan_conditions(exits.get("long"), "long exit conditions")
+    scan_conditions(exits.get("short"), "short exit conditions")
+    return warnings
 
 
 class ManualStrategy(Strategy):
