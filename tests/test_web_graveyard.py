@@ -46,4 +46,9 @@ def test_graveyard_page_family_filter(tmp_path, monkeypatch):
     assert r.status_code == 200
     body = r.get_data(as_text=True)
     assert "fam_b" in body
-    assert "fam_a" not in body.split("Dead neighborhoods")[1]
+    # Split on the actual "Dead neighborhoods" *heading*, not the first
+    # match of that phrase anywhere on the page -- the sidebar nav also
+    # has a "Dead neighborhoods & why they failed" link, which sits
+    # before the family-filter dropdown (itself expected to always list
+    # every family, including the filtered-out one, as an <option>).
+    assert "fam_a" not in body.split("<h2>Dead neighborhoods")[1]
