@@ -41,7 +41,16 @@ This module does that hand-off automatically:
                                    distinct historical stretches?
     Step 5  Holdout check       -- the same chronological in-sample/
                                    holdout split every other pipeline run
-                                   in this app already does.
+                                   in this app already does -- and, as of
+                                   the circularity fix (see
+                                   FullPipelineConfig.reserve_true_holdout
+                                   and CIRCULARITY_AUDIT.md), a GENUINE
+                                   one: Steps 1-4 above only ever see the
+                                   first (1 - holdout_frac) of the data,
+                                   so this step is the first time the
+                                   final configuration is evaluated
+                                   against bars that had no chance to
+                                   influence its own selection.
     Step 6  Report + save       -- one full HTML/JSON report (the same
                                    generate_full_report every other run
                                    produces) for the FINAL strategy, a
@@ -72,7 +81,7 @@ import pandas as pd
 
 from app.backtest.engine import BacktestResult, run_backtest, run_holdout_comparison
 from app.backtest.adaptive_risk import build_limit_aware_preset
-from app.backtest.risk import RiskConfig, with_prop_safety_defaults
+from app.backtest.risk import RiskConfig, has_instrument_scale_mismatch, with_prop_safety_defaults
 from app.monte_carlo.engine import MonteCarloConfig, MonteCarloResult, run_monte_carlo
 from app.optimize.code_parameter_space import patched_source_for_strategy
 from app.optimize.parameter_space import RefinementError
@@ -114,6 +123,24 @@ class FullPipelineConfig:
     # speed change with no effect on the report's headline numbers.
     baseline_mc_sims: int = 2_000
     holdout_frac: float = 0.2
+    # Circularity fix (see CIRCULARITY_AUDIT.md): when True (default),
+    # the LAST holdout_frac fraction of `df` is carved off and hidden
+    # from every step that selects or scores parameters -- Step 1's
+    # baseline, Step 2's GA search (and therefore every fold it builds
+    # via app.validation.walk_forward_opt.build_folds), Step 3's final
+    # re-validation, Step 4's post-hoc walk-forward check, and CPCV (if
+    # enabled) -- all run on this smaller "dev" slice only. Step 5's
+    # run_holdout_comparison then re-splits the ORIGINAL, full `df` by
+    # this same holdout_frac, which reproduces the exact dev/holdout
+    # boundary above -- so its holdout half is, for the first time,
+    # genuinely never seen by anything upstream of it. Before this flag
+    # existed, Step 2's chained-OOS fold search already spanned the
+    # entire dataset (folds walk forward to the end of `df`), so Step
+    # 5's "holdout" overlapped data the GA had already selected against
+    # -- see CIRCULARITY_AUDIT.md Finding 1 for the full trace. Setting
+    # this False restores that old (circular) behavior, e.g. for
+    # comparing against a report generated before this fix.
+    reserve_true_holdout: bool = True
     oos_check_folds: int = 4               # for the post-hoc run_walk_forward check
     oos_check_metric: str = "eval_pass_probability"
     random_seed: int | None = 42
@@ -441,7 +468,29 @@ def run_full_pipeline(
     warnings: list[str] = []
     display_name = _display_name(strategy)
 
-    # Step 2's GA below loads its own full copy of `df` into each worker
+    # -- Circularity fix: reserve a true holdout BEFORE anything below
+    # gets to see it (see CIRCULARITY_AUDIT.md and
+    # FullPipelineConfig.reserve_true_holdout's own docstring) ----------
+    # `df` keeps meaning "the full dataset" everywhere below (Step 5's
+    # run_holdout_comparison call and the final report still use it, so
+    # the report's price chart and Step 5's own re-derived split are
+    # unaffected). `dev_df` is what Steps 1-4, CPCV, and regime
+    # diagnostics use instead -- a strategy, once selected using ONLY
+    # dev_df, sees the true holdout tail for the very first time in
+    # Step 5, not before.
+    if cfg.reserve_true_holdout:
+        _holdout_split_idx = int(len(df) * (1 - cfg.holdout_frac))
+        _holdout_split_idx = max(1, min(_holdout_split_idx, len(df) - 1)) if len(df) > 1 else len(df)
+        dev_df = df.iloc[:_holdout_split_idx].reset_index(drop=True)
+        log(
+            f"Reserving the final {cfg.holdout_frac:.0%} of the dataset ({len(df) - len(dev_df):,} of "
+            f"{len(df):,} bars) as a true holdout -- Steps 1-4 below only see the first {len(dev_df):,} "
+            f"bars; Step 5 is the first time the reserved bars are used at all."
+        )
+    else:
+        dev_df = df
+
+    # Step 2's GA below loads its own full copy of `dev_df` into each worker
     # process it spawns (same pattern as Search Lab / Evolution Lab -- see
     # app.orchestration.resource_guard's module docstring). On a large
     # dataset (e.g. years of 1-minute bars), letting that default to
@@ -451,11 +500,11 @@ def run_full_pipeline(
     # Only overrides when the caller hasn't already pinned an explicit
     # value (batch mode already computes its own per-item split; this
     # additionally caps that against available memory).
-    _safe_fp_workers = safe_worker_count(df, requested=cfg.parallel_search_max_workers)
+    _safe_fp_workers = safe_worker_count(dev_df, requested=cfg.parallel_search_max_workers)
     if _safe_fp_workers != (cfg.parallel_search_max_workers or _safe_fp_workers):
         log(
             f"Reducing Full Pipeline GA worker processes from {cfg.parallel_search_max_workers} to "
-            f"{_safe_fp_workers} -- {len(df):,} bars is large enough that more full copies of it "
+            f"{_safe_fp_workers} -- {len(dev_df):,} bars is large enough that more full copies of it "
             f"(one per worker) would risk exhausting available memory."
         )
     cfg = replace(cfg, parallel_search_max_workers=_safe_fp_workers)
@@ -475,8 +524,8 @@ def run_full_pipeline(
 
     # -- Step 1: baseline -----------------------------------------------
     log(f"Step 1/7: Baseline run for '{display_name}'...")
-    preflight_signal_check(df, strategy, risk, "Full Pipeline")
-    baseline_bt = run_backtest(df, strategy, risk, adaptive_risk=adaptive_risk)
+    preflight_signal_check(dev_df, strategy, risk, "Full Pipeline")
+    baseline_bt = run_backtest(dev_df, strategy, risk, adaptive_risk=adaptive_risk)
     for w in baseline_bt.warnings:
         log(f"  WARNING: {w}")
         warnings.append(w)
@@ -485,7 +534,7 @@ def run_full_pipeline(
     if strategy.source_type in ("python", "pinescript", "mql5"):
         try:
             from app.strategy.lookahead_check import check_for_lookahead
-            lookahead_result = check_for_lookahead(strategy, df, max_signal_checkpoints=8)
+            lookahead_result = check_for_lookahead(strategy, dev_df, max_signal_checkpoints=8)
             lookahead_summary = lookahead_result.summary()
             log(f"  Lookahead check: {lookahead_summary}")
         except Exception:
@@ -609,11 +658,7 @@ def run_full_pipeline(
     # tiny next to the instrument's own actual volatility (ATR); a
     # high-priced but volatile instrument such as an equity index is the
     # case that price-ratio alone misses.
-    instrument_mismatch = any(
-        "doesn't match the instrument actually being tested" in w
-        or "under 15% of this instrument's own recent ATR" in w
-        for w in baseline_bt.warnings
-    )
+    instrument_mismatch = has_instrument_scale_mismatch(baseline_bt.warnings)
     if instrument_mismatch:
         refinement_skip_reason = (
             "Skipped optimization search: the baseline run flagged a pip_size/"
@@ -637,7 +682,7 @@ def run_full_pipeline(
                 random_seed=cfg.random_seed,
             )
             ga_result = run_walkforward_aware_refinement(
-                df, strategy, risk, prop_rules,
+                dev_df, strategy, risk, prop_rules,
                 MonteCarloConfig(n_simulations=cfg.ga_search_mc_sims, random_seed=cfg.random_seed),
                 refinement_config=refine_cfg,
                 n_folds=cfg.n_folds, window_mode=cfg.window_mode,
@@ -688,7 +733,7 @@ def run_full_pipeline(
         # -- Step 3: final validation ------------------------------------
         _check_cancel()
         log("Step 3/7: Final validation (full backtest, prop simulation, Monte Carlo)...")
-        final_bt = run_backtest(df, final_strategy, risk, adaptive_risk=adaptive_risk)
+        final_bt = run_backtest(dev_df, final_strategy, risk, adaptive_risk=adaptive_risk)
         for w in final_bt.warnings:
             log(f"  WARNING: {w}")
             warnings.append(w)
@@ -727,7 +772,7 @@ def run_full_pipeline(
         oos_skip_reason = None
         try:
             oos_validation = run_walk_forward(
-                df, lambda: build_strategy_from_spec(final_spec, final_tmp_dir), risk,
+                dev_df, lambda: build_strategy_from_spec(final_spec, final_tmp_dir), risk,
                 n_folds=cfg.oos_check_folds, metric=cfg.oos_check_metric,
                 prop_rules=prop_rules, mc_cfg=MonteCarloConfig(n_simulations=cfg.ga_search_mc_sims, random_seed=cfg.random_seed),
             )
@@ -743,6 +788,12 @@ def run_full_pipeline(
             log(f"  {oos_skip_reason}")
 
         # -- Step 5: holdout check ----------------------------------------
+        # Deliberately the ORIGINAL, full `df` here (not dev_df) -- this
+        # is what makes the holdout genuine: re-splitting the full
+        # dataset by the same holdout_frac reproduces dev_df's own
+        # cutoff exactly, so the tail half this compares against is the
+        # same bars Steps 1-4 above never got to see (see
+        # FullPipelineConfig.reserve_true_holdout).
         _check_cancel()
         log("Step 5/7: Out-of-sample holdout check...")
         try:
@@ -760,7 +811,10 @@ def run_full_pipeline(
         # (Bonferroni). All pure arithmetic over trades already produced
         # above -- no AI, no extra network calls, no extra backtests
         # beyond the same in-sample/holdout split run_holdout_comparison
-        # just used. See app.validation.icir.
+        # just used. See app.validation.icir. Uses the full `df` (like
+        # Step 5, not dev_df) -- it doesn't select or score parameters,
+        # so it isn't part of the circularity Step 2's search creates;
+        # it's simply re-deriving its own in-sample/holdout split.
         _check_cancel()
         log("Step 6/7: ICIR / signal-decay / Bonferroni-corrected significance gate...")
         icir_gate = None
@@ -798,7 +852,7 @@ def run_full_pipeline(
             log("Step 6b/7: CPCV / PBO (out-of-sample generalization, multi-path)...")
             try:
                 cpcv_result = run_cpcv(
-                    df, lambda: build_strategy_from_spec(final_spec, final_tmp_dir), risk,
+                    dev_df, lambda: build_strategy_from_spec(final_spec, final_tmp_dir), risk,
                     n_groups=cfg.cpcv_n_groups, n_test_groups=cfg.cpcv_n_test_groups,
                     metric=cfg.oos_check_metric, prop_rules=prop_rules,
                     mc_cfg=MonteCarloConfig(n_simulations=cfg.ga_search_mc_sims, random_seed=cfg.random_seed),
@@ -836,7 +890,7 @@ def run_full_pipeline(
         if cfg.regime_diagnostics_enabled:
             try:
                 from app.validation.regime_matrix import build_regime_matrix
-                regime_result = build_regime_matrix(df, final_bt.trades, risk.initial_balance)
+                regime_result = build_regime_matrix(dev_df, final_bt.trades, risk.initial_balance)
                 worst = regime_result.disable_regimes()
                 if worst:
                     log(f"  Regime diagnostics: {len(worst)} regime(s) flagged as candidates to disable -- see report (informational only).")

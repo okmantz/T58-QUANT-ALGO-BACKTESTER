@@ -27,6 +27,16 @@ optimizes for -- it has NOT been through the OOS holdout check or the
 ICIR/Bonferroni significance gate that Full Pipeline runs afterward
 specifically to catch a GA that got lucky. Treat a strong Quick Optimize
 result as "worth a real Full Pipeline run," not as a finished answer.
+
+A pip_size/instrument-scale mismatch (see app.backtest.risk's
+has_instrument_scale_mismatch) is escalated the same way Full Pipeline
+escalates it -- into a dedicated, hard-to-miss
+QuickOptimizeResult.instrument_mismatch_warning field and a "!!!"-
+prefixed log line -- rather than sitting quietly inside `warnings`
+alongside routine notices. Unlike Full Pipeline, this tool does NOT skip
+its GA search when it detects this (Quick Optimize's whole point is a
+fast, narrower check), so a mismatch here means every number this run
+reports is unreliable, not just slower to produce.
 """
 from __future__ import annotations
 
@@ -39,7 +49,7 @@ import pandas as pd
 
 from app.backtest.adaptive_risk import build_limit_aware_preset
 from app.backtest.engine import run_backtest
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, has_instrument_scale_mismatch, instrument_scale_mismatch_message
 from app.monte_carlo.engine import MonteCarloConfig, MonteCarloResult, run_monte_carlo
 from app.optimize.code_parameter_space import patched_source_for_strategy
 from app.optimize.parameter_space import RefinementError
@@ -76,7 +86,11 @@ class QuickOptimizeConfig:
     final_mc_sims: int = 1000
     n_folds: int = 4
     window_mode: str = "rolling"          # "rolling" or "anchored"
-    random_seed: int | None = None
+    # Fixed default (was None, i.e. a fresh random search every run) so a
+    # Quick Optimize run against the same strategy/data/config is
+    # reproducible run-to-run -- matching FullPipelineConfig.random_seed's
+    # own default of 42. Pass an explicit seed (or None) to override.
+    random_seed: int | None = 42
     parallel: bool = True
     parallel_max_workers: int | None = None
     save_to_library: bool = True          # code strategies only -- manual configs aren't files
@@ -119,6 +133,15 @@ class QuickOptimizeResult:
     saved_library_note: str | None
     elapsed_seconds: float
     warnings: list[str] = field(default_factory=list)
+    # Escalated copy of app.backtest.risk.instrument_scale_mismatch_message
+    # when either the baseline or the optimized run flagged a pip_size/
+    # instrument-scale mismatch -- None otherwise. Unlike Full Pipeline
+    # (which skips its GA search on this), Quick Optimize still runs the
+    # search either way -- this field exists purely so the UI can give
+    # this warning the same visual weight Full Pipeline does, instead of
+    # it sitting quietly inside `warnings` at the same level as everything
+    # else (see the Quick-Optimize-vs-Full-Pipeline diagnosis this fixes).
+    instrument_mismatch_warning: str | None = None
 
 
 def run_quick_optimize(
@@ -156,6 +179,23 @@ def run_quick_optimize(
     log("Running baseline backtest...")
     baseline_bt = run_backtest(df, strategy, risk, adaptive_risk=adaptive_risk)
     warnings.extend(baseline_bt.warnings)
+
+    # Escalate a pip_size/instrument-scale mismatch to the SAME prominence
+    # Full Pipeline gives it, rather than letting it sit quietly inside
+    # `warnings` -- Full Pipeline detects this and skips its GA search
+    # entirely (see app.orchestration.full_pipeline); Quick Optimize still
+    # runs the search either way (this tool's whole point is a fast,
+    # narrower check), but the person running it needs to see this just as
+    # clearly, since every number below is unreliable while it's present.
+    instrument_mismatch_warning = None
+    if has_instrument_scale_mismatch(baseline_bt.warnings):
+        instrument_mismatch_warning = instrument_scale_mismatch_message(risk.pip_size)
+        log(f"  !!! {instrument_mismatch_warning}")
+        log(
+            "  !!! Continuing anyway (Quick Optimize does not skip its search on this, unlike "
+            "Full Pipeline) -- but treat every number below as unreliable until pip_size is fixed."
+        )
+
     baseline_pnls = [t.pnl for t in baseline_bt.trades]
     baseline_dates = [t.entry_time for t in baseline_bt.trades]
     simulate_account(baseline_pnls, baseline_dates, prop_rules)  # surfaces any account-sim issues early
@@ -226,6 +266,13 @@ def run_quick_optimize(
     final_strategy = build_strategy_from_spec(final_spec)
     final_bt = run_backtest(df, final_strategy, risk, adaptive_risk=adaptive_risk)
     warnings.extend(final_bt.warnings)
+    if instrument_mismatch_warning is None and has_instrument_scale_mismatch(final_bt.warnings):
+        # Same mismatch, just not visible until the optimized parameters
+        # were actually run -- risk.pip_size is unchanged from the
+        # baseline check above, so this is the identical underlying
+        # problem, not a new one the GA introduced.
+        instrument_mismatch_warning = instrument_scale_mismatch_message(risk.pip_size)
+        log(f"  !!! {instrument_mismatch_warning}")
     final_mc = run_monte_carlo(
         final_bt.trades, prop_rules, MonteCarloConfig(n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed)
     )
@@ -336,4 +383,5 @@ def run_quick_optimize(
         saved_library_note=saved_library_note,
         elapsed_seconds=elapsed,
         warnings=warnings,
+        instrument_mismatch_warning=instrument_mismatch_warning,
     )
