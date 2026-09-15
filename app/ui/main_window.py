@@ -2161,7 +2161,11 @@ class MainWindow:
         self._button(row, "Redo", clist.redo, width=8).pack(side="left", padx=(6, 0))
         return row
 
-
+    def _button(self, parent, text, command, primary: bool = False, width: int | None = None) -> Button:
+        """Builds one themed Button (primary/accent style or the default
+        panel style) with hand-rolled hover recoloring -- Tk's native
+        Button only recolors on click (activebackground), not on hover.
+        Shared by every tab in the app (~190 call sites)."""
         kwargs = {
             "text": text,
             "command": command,

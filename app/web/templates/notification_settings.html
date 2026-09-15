@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Notification settings — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; max-width: 560px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  .card p.help { font-size: 12.5px; color: var(--text-muted); margin: 0 0 14px; line-height: 1.5; }
+  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  input[type=text], input[type=email], input[type=number], input[type=password] {
+    width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font-size: 14px;
+  }
+  input:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), 0.15); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 140px; }
+  .checkbox-row { display: flex; align-items: center; gap: 8px; margin: 14px 0 4px; }
+  .checkbox-row input { width: auto; }
+  .submit-btn {
+    padding: 13px 20px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal);
+    color: #04120e; font-weight: 700; font-size: 14px; margin-top: 14px; cursor: pointer;
+  }
+  .saved-banner { border-left: 3px solid var(--teal); font-size: 13px; }
+  .field-note { font-size: 12px; color: var(--text-muted); margin: -2px 0 0; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p.lede { color: var(--text-muted); font-size: 13px; margin: 0 0 16px; max-width: 560px; }
+</style>
+</head>
+<body>
+{% set active_page = 'notification_settings' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Notification settings</h1>
+  <p class="lede">
+    Get an email the moment a long-running job (Evolution Lab, Search Lab, Full Pipeline)
+    finishes -- so you don't have to keep a progress page open and watch it. This is
+    separate from the per-run webhook field on each job's own start page (Discord/Slack/
+    Telegram/Zapier), which keeps working whether or not email is set up here.
+  </p>
+
+  {% if saved %}
+  <div class="card saved-banner">Saved.</div>
+  {% endif %}
+
+  <form method="POST" action="/settings/notifications/save">
+    <div class="card">
+      <h2>Where to send it</h2>
+      <label for="notify_email">Notification email</label>
+      <input type="email" id="notify_email" name="notify_email" value="{{ settings.notify_email }}" placeholder="you@example.com">
+      <p class="field-note">This is the address that receives the "job finished" email -- it doesn't need to match the SMTP account below.</p>
+
+      <div class="checkbox-row">
+        <input type="checkbox" id="email_enabled" name="email_enabled" {% if settings.email_enabled %}checked{% endif %}>
+        <label for="email_enabled" style="margin:0;">Email notifications enabled</label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Outgoing mail server (SMTP)</h2>
+      <p class="help">
+        Any SMTP-capable mail account works, including a free Gmail/Outlook account --
+        for Gmail specifically, use an
+        <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener" style="color:var(--teal);">app password</a>,
+        not your normal login password. Nothing here is sent anywhere except directly to
+        the SMTP host you enter -- it's stored locally on this computer only.
+      </p>
+      <div class="row">
+        <div>
+          <label for="smtp_host">SMTP host</label>
+          <input type="text" id="smtp_host" name="smtp_host" value="{{ settings.smtp_host }}" placeholder="smtp.gmail.com">
+        </div>
+        <div style="max-width:120px;">
+          <label for="smtp_port">Port</label>
+          <input type="number" id="smtp_port" name="smtp_port" value="{{ settings.smtp_port }}" placeholder="587">
+        </div>
+      </div>
+      <label for="smtp_username">SMTP username</label>
+      <input type="text" id="smtp_username" name="smtp_username" value="{{ settings.smtp_username }}" placeholder="you@example.com">
+
+      <label for="smtp_password">SMTP password</label>
+      <input type="password" id="smtp_password" name="smtp_password" value="" placeholder="{% if settings.smtp_password %}(unchanged -- leave blank to keep it){% else %}app password{% endif %}">
+      <p class="field-note">Leave this blank when re-saving other fields to keep the password you already have on file.</p>
+
+      <label for="smtp_from">"From" address</label>
+      <input type="text" id="smtp_from" name="smtp_from" value="{{ settings.smtp_from }}" placeholder="usually the same as SMTP username">
+    </div>
+
+    <button class="submit-btn" type="submit">Save</button>
+  </form>
+</div>
+</div>
+</div>
+<script src="/static/t58-chrome.js" defer></script>
+</body>
+</html>
