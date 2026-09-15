@@ -1085,8 +1085,9 @@ class RunContextPanel:
     # Build
     # ------------------------------------------------------------------
 
-    def build(self, parent) -> None:
-        self._build_data_section(parent)
+    def build(self, parent, include_data: bool = True) -> None:
+        if include_data:
+            self._build_data_section(parent)
         self._build_prop_section(parent)
         self._build_risk_section(parent)
 
@@ -6400,46 +6401,32 @@ class MainWindow:
                 "Check one or more strategies in the Batch selection panel first.",
             )
             return
-        if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2 before testing strategies.")
+        context = RunContextDialog.ask(self.root, self, "Test Checked (Batch)")
+        if context is None:
             return
         win, append, show_results = self._open_progress_window(f"Testing {len(items)} strategy(ies)...")
         threading.Thread(
-            target=self._run_library_batch_test_pipeline, args=(items, append, show_results), daemon=True,
+            target=self._run_library_batch_test_pipeline, args=(items, append, show_results, context), daemon=True,
         ).start()
 
-    def _run_library_batch_test_pipeline(self, items, log, show_results=None):
+    def _run_library_batch_test_pipeline(self, items, log, show_results=None, context: "RunContextPanel" = None):
         """Runs every checked Strategy Library item through
         app.orchestration.batch_test.run_batch_test -- the same pipeline
         Bulk Backtest already uses, just sourced from the Batch selection
         checklist instead of a fresh file upload, and recording each result back onto
-        that strategy's own library metadata. Prop Rules and Risk are read
-        fresh right here, so whatever is set on 03/04 at the moment RUN
-        BATCH TEST is clicked is what every queued strategy gets tested
-        against."""
+        that strategy's own library metadata. Market data, Prop Rules, and Risk are
+        resolved from the RunContextDialog confirmed when TEST CHECKED (BATCH) was
+        clicked -- self-contained to this run, independent of Steps 02-04."""
         try:
-            log(f"Loading {len(self.csv_paths)} market data file(s)...")
-            per_file_results = []
-            for p in self.csv_paths:
-                result = import_csv(p)
-                if not result.is_valid:
-                    log(f"Import errors ({os.path.basename(p)}):\n" + "\n".join(result.errors))
-                    return
-                per_file_results.append((p, result))
-            if len(per_file_results) == 1:
-                df = per_file_results[0][1].dataframe
-            else:
-                df, _labels = merge_multi_timeframe([r.dataframe for _, r in per_file_results])
-            log(f"Loaded {len(df)} bars.\n")
+            df = context.load_dataframe(log)
+            if df is None:
+                return
 
-            risk = self._build_risk_config()
-            rules = self._build_prop_rules()
+            risk = context.build_risk_config()
+            rules = context.build_prop_rules()
             n_sims = self.mc_sims.get_int(10000)
             method = self.mc_method.get_str().strip() or "bootstrap"
-            instrument = (
-                os.path.basename(self.csv_paths[0]) if len(self.csv_paths) == 1
-                else " + ".join(os.path.basename(p) for p in self.csv_paths)
-            )
+            instrument = context.instrument_label()
 
             batch_items = []
             for item in items:
@@ -6575,8 +6562,12 @@ class MainWindow:
                 "Check one or more strategies in the Batch selection panel first.",
             )
             return
-        if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2 before testing strategies.")
+        if not self.fp_context.csv_paths:
+            messagebox.showwarning(
+                "Missing data",
+                "This reads its market data/prop rules/risk from the Full Pipeline tab's own "
+                "Market Data section -- open the Full Pipeline tab and select a dataset there first.",
+            )
             return
         proceed = messagebox.askokcancel(
             "Run Full Pipeline on multiple strategies?",
@@ -6599,31 +6590,18 @@ class MainWindow:
         FULL 7-step pipeline the 15 Full Pipeline tab's single-strategy
         RUN FULL PIPELINE button uses, just looped over every strategy
         staged in the Batch selection checklist instead of one loaded strategy.
-        GA population/generations/etc. and AI Assist settings are read
-        fresh from the 15 Full Pipeline tab's own widgets, so whatever is
-        configured there (and on 03/04) at the moment this is clicked is
-        what every queued strategy runs with."""
+        Market data, Prop Rules, Risk, GA population/generations/etc., and AI
+        Assist settings are all read fresh from the Full Pipeline tab's own
+        self-contained RunContextPanel/widgets, so this batch action runs
+        with exactly whatever that tab is currently configured with."""
         try:
-            log(f"Loading {len(self.csv_paths)} market data file(s)...")
-            per_file_results = []
-            for p in self.csv_paths:
-                result = import_csv(p)
-                if not result.is_valid:
-                    log(f"Import errors ({os.path.basename(p)}):\n" + "\n".join(result.errors))
-                    return
-                per_file_results.append((p, result))
-            if len(per_file_results) == 1:
-                df = per_file_results[0][1].dataframe
-            else:
-                df, _labels = merge_multi_timeframe([r.dataframe for _, r in per_file_results])
-            log(f"Loaded {len(df)} bars.\n")
+            df = self.fp_context.load_dataframe(log)
+            if df is None:
+                return
 
-            risk = self._build_risk_config()
-            rules = self._build_prop_rules()
-            instrument = (
-                os.path.basename(self.csv_paths[0]) if len(self.csv_paths) == 1
-                else " + ".join(os.path.basename(p) for p in self.csv_paths)
-            )
+            risk = self.fp_context.build_risk_config()
+            rules = self.fp_context.build_prop_rules()
+            instrument = self.fp_context.instrument_label()
 
             # Same settings the 15 Full Pipeline tab's own RUN FULL PIPELINE
             # button reads -- see _fullpipeline_run_pipeline. Falls back to
@@ -7312,7 +7290,8 @@ class MainWindow:
             "best-performing configurations each round, and converges toward the "
             "best-scoring configuration it can find. Produces its own, separate report "
             "-- the normal Run & Report tab and report.html are completely unaffected "
-            "unless you enable this below.",
+            "unless you enable this below. Its own market data, prop rules, and risk "
+            "settings below are self-contained to this tab, just like the web app.",
         )
 
         section = self._section(
@@ -7336,6 +7315,9 @@ class MainWindow:
                  "rather than run a meaningless search.",
             bg=PANEL, fg=AMBER, font=_safe_font(8), wraplength=820, justify="left",
         ).pack(anchor="w", padx=18, pady=(0, 10))
+
+        self.refine_context = RunContextPanel(self, "Iterative Refinement")
+        self.refine_context.build(f)
 
         settings = self._section(
             f, "Search settings",
@@ -7423,11 +7405,8 @@ class MainWindow:
             webbrowser.open(f"file://{self._last_refinement_html_path.resolve()}")
 
     def _refine_run_clicked(self):
-        if not self.csv_paths:
-            messagebox.showwarning(
-                "Missing data",
-                "Please select a market data CSV in Step 2.",
-            )
+        if not self.refine_context.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV above (this tab's own Market Data section).")
             return
         self.refine_output.delete("1.0", END)
         self.refine_progress.start(10)
@@ -7437,7 +7416,7 @@ class MainWindow:
         try:
             self._log_refine("Importing market data...")
             per_file_results = []
-            for p in self.csv_paths:
+            for p in self.refine_context.csv_paths:
                 result = import_csv(p)
                 if not result.is_valid:
                     self._log_refine(
@@ -7455,8 +7434,8 @@ class MainWindow:
 
             self._log_refine("Building strategy...")
             strategy = self._build_strategy()
-            risk = self._build_risk_config()
-            rules = self._build_prop_rules()
+            risk = self.refine_context.build_risk_config()
+            rules = self.refine_context.build_prop_rules()
 
             n_sims = self.mc_sims.get_int(10000)
             method = self.mc_method.get_str().strip() or "bootstrap"
@@ -9249,9 +9228,13 @@ class MainWindow:
             "Classifies every bar on trend, volatility, session, and market environment, "
             "then attributes THIS strategy's own trades to whichever regime was active at "
             "entry -- so you can see exactly which market conditions to gate the strategy "
-            "off in, not just one aggregate backtest number. Uses the market data and "
-            "strategy currently configured on Steps 01/02.",
+            "off in, not just one aggregate backtest number. Uses the strategy configured "
+            "on Step 01 -- but its own market data and risk settings below are "
+            "self-contained to this tab, just like the web app.",
         )
+
+        self.regime_context = RunContextPanel(self, "Regime Survival Matrix")
+        self.regime_context.build(f)
 
         section = self._section(
             f, "Matrix dimensions to cross",
@@ -9304,13 +9287,13 @@ class MainWindow:
                 log("Pick two DIFFERENT dimensions to cross for the primary matrix.")
                 return
 
-            df = self._load_df_for_page(log)
+            df = self.regime_context.load_dataframe(log)
             if df is None:
                 return
 
             log("Building strategy...")
             strategy = self._build_strategy()
-            risk = self._build_risk_config()
+            risk = self.regime_context.build_risk_config()
 
             log(f"Classifying regimes and attributing trades ({dim_a} x {dim_b})...")
             result = run_regime_matrix(df, strategy, risk, dimensions=(dim_a, dim_b))
@@ -9766,8 +9749,14 @@ class MainWindow:
             "configuration UNCHANGED to that fold's held-out test window, and "
             "chains every fold's out-of-sample trades into one continuous equity "
             "curve. This is the number to trust over a single in-sample backtest "
-            "-- it never lets a fold's optimizer see the data it will be judged on.",
+            "-- it never lets a fold's optimizer see the data it will be judged on. "
+            "Uses the strategy configured on Step 01 -- but its own market data, "
+            "prop rules, and risk settings below are self-contained to this tab, "
+            "just like the web app.",
         )
+
+        self.wfo_context = RunContextPanel(self, "Walk-Forward Opt")
+        self.wfo_context.build(f)
 
         settings = self._section(
             f, "Fold settings",
@@ -9833,8 +9822,8 @@ class MainWindow:
             webbrowser.open(f"file://{self._last_wfo_html_path.resolve()}")
 
     def _wfo_run_clicked(self):
-        if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
+        if not self.wfo_context.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV above (this tab's own Market Data section).")
             return
         if not self._try_start_heavy_job(JOB_WFO):
             return
@@ -9844,12 +9833,12 @@ class MainWindow:
 
     def _wfo_run_pipeline(self):
         try:
-            df = self._load_df_for_page(self._log_wfo)
+            df = self.wfo_context.load_dataframe(self._log_wfo)
             if df is None:
                 return
             strategy = self._build_strategy()
-            risk = self._build_risk_config()
-            rules = self._build_prop_rules()
+            risk = self.wfo_context.build_risk_config()
+            rules = self.wfo_context.build_prop_rules()
             mc_cfg = self._validation_mc_config()
 
             metric_key = self._wfo_metric_label_to_key.get(self.wfo_metric.get_str(), "eval_pass_probability")
@@ -9902,8 +9891,14 @@ class MainWindow:
             "split. Probability of Backtest Overfitting (PBO) goes further: it "
             "checks a small POOL of candidate configurations (this strategy plus "
             "a few automatically perturbed variants) and reports the probability "
-            "that whichever one looks best in-sample is really just noise.",
+            "that whichever one looks best in-sample is really just noise. Uses the "
+            "strategy configured on Step 01 -- but its own market data, prop rules, "
+            "and risk settings below are self-contained to this tab, just like the "
+            "web app.",
         )
+
+        self.cpcv_context = RunContextPanel(self, "CPCV / PBO")
+        self.cpcv_context.build(f)
 
         cpcv_settings = self._section(
             f, "CPCV settings (single strategy)",
@@ -9984,8 +9979,8 @@ class MainWindow:
             webbrowser.open(f"file://{self._last_pbo_html_path.resolve()}")
 
     def _cpcv_run_clicked(self):
-        if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
+        if not self.cpcv_context.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV above (this tab's own Market Data section).")
             return
         if not self._try_start_heavy_job(JOB_CPCV):
             return
@@ -9995,11 +9990,11 @@ class MainWindow:
 
     def _cpcv_run_pipeline(self):
         try:
-            df = self._load_df_for_page(self._log_cpcv)
+            df = self.cpcv_context.load_dataframe(self._log_cpcv)
             if df is None:
                 return
-            risk = self._build_risk_config()
-            prop_rules = self._build_prop_rules()
+            risk = self.cpcv_context.build_risk_config()
+            prop_rules = self.cpcv_context.build_prop_rules()
             # A fresh Strategy instance per call, since some strategy sources
             # cache state keyed to the data they last saw.
             strategy_builder = self._build_strategy
@@ -10031,8 +10026,8 @@ class MainWindow:
             self._release_heavy_job(JOB_CPCV)
 
     def _pbo_run_clicked(self):
-        if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
+        if not self.cpcv_context.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV above (this tab's own Market Data section).")
             return
         if not self._try_start_heavy_job(JOB_CPCV):
             return
@@ -10042,11 +10037,11 @@ class MainWindow:
 
     def _pbo_run_pipeline(self):
         try:
-            df = self._load_df_for_page(self._log_cpcv)
+            df = self.cpcv_context.load_dataframe(self._log_cpcv)
             if df is None:
                 return
             strategy = self._build_strategy()
-            risk = self._build_risk_config()
+            risk = self.cpcv_context.build_risk_config()
 
             n_candidates = self.pbo_n_candidates.get_int(5)
             specs = [{"source_type": strategy.source_type,
@@ -10116,8 +10111,14 @@ class MainWindow:
             "wherever the metric drops sharply between adjacent steps -- the sign "
             "of a knife-edge parameter rather than a real, stable plateau. "
             "Optionally also produces a 2D heatmap for a chosen pair of parameters, "
-            "since two parameters can interact even when each looks fine alone.",
+            "since two parameters can interact even when each looks fine alone. Uses "
+            "the strategy configured on Step 01 -- but its own market data, prop "
+            "rules, and risk settings below are self-contained to this tab, just "
+            "like the web app.",
         )
+
+        self.sensitivity_context = RunContextPanel(self, "Sensitivity")
+        self.sensitivity_context.build(f)
 
         settings = self._section(
             f, "Sweep settings",
@@ -10202,8 +10203,8 @@ class MainWindow:
             messagebox.showerror("Error", traceback.format_exc())
 
     def _sens_run_clicked(self):
-        if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
+        if not self.sensitivity_context.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV above (this tab's own Market Data section).")
             return
         if not self._try_start_heavy_job(JOB_SENSITIVITY):
             return
@@ -10213,12 +10214,12 @@ class MainWindow:
 
     def _sens_run_pipeline(self):
         try:
-            df = self._load_df_for_page(self._log_sens)
+            df = self.sensitivity_context.load_dataframe(self._log_sens)
             if df is None:
                 return
             strategy = self._build_strategy()
-            risk = self._build_risk_config()
-            rules = self._build_prop_rules()
+            risk = self.sensitivity_context.build_risk_config()
+            rules = self.sensitivity_context.build_prop_rules()
             mc_cfg = self._validation_mc_config(n_simulations=min(self.mc_sims.get_int(10000), 1000))
             metric = self.sens_metric.get_str().strip() or "profit_factor"
 
@@ -10268,8 +10269,13 @@ class MainWindow:
             "happened to work?\" Sweeps every tunable parameter around its current value, "
             "heatmaps the most sensitive pair, and rolls it all into one 0-100 Parameter "
             "Robustness Score with a ROBUST / WATCH / FRAGILE verdict -- reuses the exact same "
-            "app.validation.parameter_robustness engine as the web app's own Robustness Map page.",
+            "app.validation.parameter_robustness engine as the web app's own Robustness Map page. "
+            "Uses the strategy configured on Step 01 -- but its own market data, prop rules, "
+            "and risk settings below are self-contained to this tab, just like the web app.",
         )
+
+        self.paramrob_context = RunContextPanel(self, "Parameter Robustness")
+        self.paramrob_context.build(f)
 
         settings = self._section(
             f, "Robustness map settings",
@@ -10338,8 +10344,8 @@ class MainWindow:
         return "FRAGILE", "RED"
 
     def _param_robustness_run_clicked(self):
-        if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
+        if not self.paramrob_context.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV above (this tab's own Market Data section).")
             return
         if not self._try_start_heavy_job(JOB_PARAMETER_ROBUSTNESS):
             return
@@ -10351,12 +10357,12 @@ class MainWindow:
 
     def _param_robustness_run_pipeline(self):
         try:
-            df = self._load_df_for_page(self._log_pr)
+            df = self.paramrob_context.load_dataframe(self._log_pr)
             if df is None:
                 return
             strategy = self._build_strategy()
-            risk = self._build_risk_config()
-            rules = self._build_prop_rules()
+            risk = self.paramrob_context.build_risk_config()
+            rules = self.paramrob_context.build_prop_rules()
             mc_cfg = self._validation_mc_config(n_simulations=min(self.mc_sims.get_int(10000), 1000))
 
             self._log_pr(
@@ -10442,7 +10448,10 @@ class MainWindow:
             "matrix of their daily returns, re-weights each instrument's risk (correlated "
             "instruments get sized down), and merges every instrument's trades into one "
             "shared account equity curve -- the way trading a portfolio out of one prop "
-            "account actually works.",
+            "account actually works. Each leg picks its own market data file directly -- "
+            "and this tab's own Prop Rules and Risk settings below (for the COMBINED "
+            "portfolio-level simulation) are self-contained to this tab, just like the "
+            "web app.",
         )
 
         legs_section = self._section(
@@ -10499,8 +10508,11 @@ class MainWindow:
             settings, "Correlation penalty strength (0=ignore, 1=full re-weighting)", 0.6,
         )
         self.portfolio_compute_pass_prob = LabeledCheckbox(
-            settings, "Also compute the COMBINED portfolio's own probability of passing (uses Step 3's Prop Rules + Step 6's Monte Carlo sims)", True,
+            settings, "Also compute the COMBINED portfolio's own probability of passing (uses this tab's own Prop Rules + Monte Carlo sims)", True,
         )
+
+        self.portfolio_context = RunContextPanel(self, "Multi-Asset Portfolio")
+        self.portfolio_context.build(f, include_data=False)
 
         button_row = Frame(f, bg=BG)
         button_row.pack(fill="x", padx=24, pady=10)
@@ -10707,7 +10719,7 @@ class MainWindow:
 
                 legs.append(InstrumentLeg(
                     name=leg_name, df=result.dataframe,
-                    strategy=leg_strategy, risk=self._build_risk_config(),
+                    strategy=leg_strategy, risk=self.portfolio_context.build_risk_config(),
                     weight=leg_spec["weight"],
                 ))
 
@@ -10717,7 +10729,7 @@ class MainWindow:
             mc_cfg = None
             if self.portfolio_compute_pass_prob.get():
                 try:
-                    prop_rules = self._build_prop_rules()
+                    prop_rules = self.portfolio_context.build_prop_rules()
                     if abs(prop_rules.account_size - initial_balance) > 0.01:
                         self._log_portfolio(
                             f"  NOTE: Step 3's Prop Rules account size (${prop_rules.account_size:,.0f}) differs "
@@ -10773,8 +10785,13 @@ class MainWindow:
             "them into one weighted score the way Iterative Refinement's GA does. "
             "Produces a Pareto front -- a set of candidates where none is "
             "strictly worse than any other on the front. Picking a final winner "
-            "from that list is left as your call.",
+            "from that list is left as your call. Uses the strategy configured "
+            "on Step 01 -- but its own market data, prop rules, and risk "
+            "settings below are self-contained to this tab, just like the web app.",
         )
+
+        self.multiobj_context = RunContextPanel(self, "Multi-Objective")
+        self.multiobj_context.build(f)
 
         obj_section = self._section(
             f, "Objectives (pick at least 2)",
@@ -10837,8 +10854,8 @@ class MainWindow:
             webbrowser.open(f"file://{self._last_multiobj_html_path.resolve()}")
 
     def _multiobj_run_clicked(self):
-        if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
+        if not self.multiobj_context.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV above (this tab's own Market Data section).")
             return
         selected = [name for name, var in self._multiobj_vars.items() if var.get()]
         if len(selected) < 2:
@@ -10852,12 +10869,12 @@ class MainWindow:
 
     def _multiobj_run_pipeline(self, selected_objectives: list[str]):
         try:
-            df = self._load_df_for_page(self._log_multiobj)
+            df = self.multiobj_context.load_dataframe(self._log_multiobj)
             if df is None:
                 return
             strategy = self._build_strategy()
-            risk = self._build_risk_config()
-            rules = self._build_prop_rules()
+            risk = self.multiobj_context.build_risk_config()
+            rules = self.multiobj_context.build_prop_rules()
             mc_cfg = self._validation_mc_config()
 
             mo_cfg = MultiObjectiveConfig(
@@ -10900,8 +10917,14 @@ class MainWindow:
             "(Step 6), but every candidate's fitness is scored ONLY on chained "
             "out-of-sample fold data -- never on the training windows or the full "
             "dataset. A genome that only fits one historical stretch simply scores "
-            "lower here and gets selected against, generation over generation.",
+            "lower here and gets selected against, generation over generation. "
+            "Uses the strategy configured on Step 01 -- but its own market data, "
+            "prop rules, and risk settings below are self-contained to this tab, "
+            "just like the web app.",
         )
+
+        self.wfga_context = RunContextPanel(self, "Walk-Forward GA")
+        self.wfga_context.build(f)
 
         settings = self._section(
             f, "Fold + search settings",
@@ -10957,8 +10980,8 @@ class MainWindow:
             webbrowser.open(f"file://{self._last_wfga_html_path.resolve()}")
 
     def _wfga_run_clicked(self):
-        if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
+        if not self.wfga_context.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV above (this tab's own Market Data section).")
             return
         if not self._try_start_heavy_job(JOB_WFGA):
             return
@@ -10968,12 +10991,12 @@ class MainWindow:
 
     def _wfga_run_pipeline(self):
         try:
-            df = self._load_df_for_page(self._log_wfga)
+            df = self.wfga_context.load_dataframe(self._log_wfga)
             if df is None:
                 return
             strategy = self._build_strategy()
-            risk = self._build_risk_config()
-            rules = self._build_prop_rules()
+            risk = self.wfga_context.build_risk_config()
+            rules = self.wfga_context.build_prop_rules()
             mc_cfg = self._validation_mc_config()
 
             metric_key = self._wfga_metric_label_to_key.get(self.wfga_metric.get_str(), "eval_pass_probability")
@@ -11032,8 +11055,12 @@ class MainWindow:
             "independently at a correlation-adjusted share of the account's risk budget "
             "(reuses the Portfolio feature's own math); Vote combines every strategy's "
             "signal into one entry, taken only once enough of them agree on direction. "
-            "Uses the market data currently selected on Step 2.",
+            "Its own market data below is self-contained to this tab, just like the web app "
+            "(account balance and risk are configured directly in Ensemble settings below).",
         )
+
+        self.ensemble_context = RunContextPanel(self, "Multi-Strategy Ensemble")
+        self.ensemble_context._build_data_section(f)
 
         legs_section = self._section(
             f, "Strategy legs (at least 2 required)",
@@ -11221,8 +11248,8 @@ class MainWindow:
                 "MANUAL/PYTHON/PINESCRIPT/MQL5 buttons, ADD FROM STRATEGY LIBRARY, or ADD FILES... above.",
             )
             return
-        if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
+        if not self.ensemble_context.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV above (this tab's own Market Data section).")
             return
         self.ensemble_output.delete("1.0", END)
         self.open_ensemble_report_btn.config(state="disabled")
@@ -11231,7 +11258,7 @@ class MainWindow:
 
     def _ensemble_run_pipeline(self):
         try:
-            df = self._load_df_for_page(self._log_ensemble)
+            df = self.ensemble_context.load_dataframe(self._log_ensemble)
             if df is None:
                 return
 
@@ -11253,8 +11280,8 @@ class MainWindow:
             balance = self.ensemble_balance.get_float(100000)
             risk = RiskConfig(initial_balance=balance)
             instrument = (
-                os.path.basename(self.csv_paths[0]) if len(self.csv_paths) == 1
-                else " + ".join(os.path.basename(p) for p in self.csv_paths)
+                os.path.basename(self.ensemble_context.csv_paths[0]) if len(self.ensemble_context.csv_paths) == 1
+                else " + ".join(os.path.basename(p) for p in self.ensemble_context.csv_paths)
             )
 
             if mode == "blend":
@@ -11595,66 +11622,23 @@ class MainWindow:
             bg=BG, fg=TEXT_DIM, font=_safe_font(9), wraplength=900, justify="left",
         ).pack(anchor="w", padx=24, pady=(0, 10))
 
-        # UPGRADE (Evolution Lab account/risk override): Evolution Lab used
-        # to have NO account/risk fields of its own -- it silently used
-        # whatever 03 Prop Rules / 04 Risk happened to already hold at the
-        # moment START was clicked. That's an easy way to run a whole
-        # overnight Evolution Lab against the WRONG account size, profit
-        # target, drawdown limits, or risk-per-trade (e.g. the app's
-        # 100k/8%/1% defaults instead of a real $50k/6%/0.5-1% eval), only
-        # to have Full Pipeline re-check the same "winners" against the
-        # rules actually intended and fail almost all of them -- which
-        # looks like a Full Pipeline bug but is really a config mismatch
-        # nobody could see from this tab. Fixed by putting the exact same
-        # fields directly on this tab. These are NOT a separate copy: each
-        # field below shares its StringVar with the matching field on 03
-        # Prop Rules / 04 Risk (see LabeledEntry's `variable=` param), so
-        # editing a value here or there is the same edit, seen in both
-        # places instantly, and Full Pipeline (which also reads 03/04)
-        # always evaluates against the exact numbers shown here.
-        account_section = self._section(
-            f, "Prop account & risk (this run will use exactly these numbers)",
-            "Shared live with 03 Prop Rules and 04 Risk & Execution -- change it here or there, "
-            "it's the same value in both places, and Full Pipeline will check winners against "
-            "these same numbers. Set your real prop-firm account size, profit target, drawdown "
-            "limits, and per-trade risk here before clicking START.",
-            emphasize=True,
-        )
-        acct_row = Frame(account_section, bg=PANEL)
-        acct_row.pack(fill="x")
-        acct_col1 = Frame(acct_row, bg=PANEL)
-        acct_col1.pack(side="left", fill="both", expand=True)
-        acct_col2 = Frame(acct_row, bg=PANEL)
-        acct_col2.pack(side="left", fill="both", expand=True)
-
-        LabeledEntry(acct_col1, "Account size ($)", variable=self.p_account_size.var)
-        LabeledEntry(acct_col1, "Evaluation profit target (%)", variable=self.p_profit_target.var)
-        LabeledEntry(acct_col1, "Daily loss limit (%)", variable=self.p_daily_loss.var)
-        LabeledEntry(acct_col1, "Maximum drawdown (%)", variable=self.p_max_dd.var)
-        LabeledEntry(acct_col1, "Drawdown type (trailing/static)", variable=self.p_dd_type.var)
-
-        LabeledEntry(acct_col2, "Risk mode (percent/fixed)", variable=self.r_risk_mode.var)
-        LabeledEntry(acct_col2, "Risk per trade (% or $)", variable=self.r_risk_value.var)
-        LabeledEntry(acct_col2, "Pip size (e.g. ES1! futures = 1.0, FX = 0.0001)", variable=self.r_pip_size.var)
-        LabeledEntry(acct_col2, "Spread (pips)", variable=self.r_spread.var)
-        LabeledEntry(acct_col2, "Slippage (pips)", variable=self.r_slippage.var)
-
-        pip_row = Frame(account_section, bg=PANEL)
-        pip_row.pack(anchor="w", padx=18, pady=(0, 10))
-        self.evo_pip_detect_status = Label(
-            pip_row, text="", bg=PANEL, fg=TEXT_DIM, font=_safe_font(8),
-        )
-        self._button(
-            pip_row, "DETECT PIP SIZE FROM DATA",
-            lambda: self._detect_pip_size_from_data(self.evo_pip_detect_status),
-        ).pack(side="left")
-        self.evo_pip_detect_status.pack(side="left", padx=(10, 0))
+        # Evolution Lab now has its OWN self-contained market data + prop
+        # account + risk settings via RunContextPanel below -- independent
+        # of Steps 02-04 and every other tab, same as Full Pipeline / Search
+        # Lab / the other converted tabs. (This used to intentionally SHARE
+        # StringVars with 03 Prop Rules / 04 Risk so an overnight run and
+        # Full Pipeline's later re-check couldn't drift apart -- but now
+        # that Full Pipeline is itself self-contained rather than reading
+        # 03/04, that coupling reason no longer applies, and genuine
+        # independence is what was actually asked for.)
+        self.evo_context = RunContextPanel(self, "Evolution Lab (GA)")
+        self.evo_context.build(f)
 
         cfg_section = self._section(
             f, "Run configuration",
-            "Uses whatever market data is loaded in 02 Data and the prop account / risk settings "
-            "above (shared with 03 Prop Rules / 04 Risk) at the moment you click START -- changing "
-            "any of those after starting has no effect on an already-running Evolution Lab run.",
+            "Uses the market data and prop account / risk settings above (this tab's own, "
+            "self-contained) at the moment you click START -- changing any of those after "
+            "starting has no effect on an already-running Evolution Lab run.",
             emphasize=True,
         )
         self.evo_population = LabeledEntry(cfg_section, "Population size per generation", "60")
@@ -11925,7 +11909,7 @@ class MainWindow:
                 "and start a fresh run.",
             )
             return
-        if not self.csv_paths:
+        if not self.evo_context.csv_paths:
             messagebox.showwarning("Missing data", "Please select a market data file in 02 Data before starting the Evolution Lab.")
             return
         if not self._try_start_heavy_job(JOB_EVOLUTION_LAB):
@@ -11935,7 +11919,7 @@ class MainWindow:
 
         try:
             per_file_results = []
-            for p in self.csv_paths:
+            for p in self.evo_context.csv_paths:
                 result = import_csv(p)
                 if not result.is_valid:
                     messagebox.showerror("Import error", f"{os.path.basename(p)}:\n" + "\n".join(result.errors))
@@ -11951,8 +11935,8 @@ class MainWindow:
             self._release_heavy_job(JOB_EVOLUTION_LAB)
             return
 
-        risk = self._build_risk_config()
-        rules = self._build_prop_rules()
+        risk = self.evo_context.build_risk_config()
+        rules = self.evo_context.build_prop_rules()
         selected_families = [fam for fam, var in self.evo_family_vars.items() if var.get()] or None
         max_gen_raw = self.evo_max_generations.get_str().strip()
         max_generations = int(max_gen_raw) if max_gen_raw.isdigit() else None
@@ -11967,8 +11951,8 @@ class MainWindow:
         )
 
         _evo_instrument = (
-            os.path.basename(self.csv_paths[0]) if len(self.csv_paths) == 1
-            else " + ".join(os.path.basename(p) for p in self.csv_paths)
+            os.path.basename(self.evo_context.csv_paths[0]) if len(self.evo_context.csv_paths) == 1
+            else " + ".join(os.path.basename(p) for p in self.evo_context.csv_paths)
         ) if getattr(self, "csv_paths", None) else "unknown"
         cfg = EvolutionConfig(
             population_size=self.evo_population.get_int(60),
@@ -12536,9 +12520,13 @@ class MainWindow:
             "on the survivors -- ranked the whole way through by PROP SURVIVAL, not raw profit. "
             "Every rejection expensive enough to be worth explaining is diagnosed and logged to the "
             "Strategy Graveyard, and a hypothesis whose parameter neighborhood a PRIOR run already "
-            "proved dead is skipped automatically before a single backtest runs. Uses the data, "
-            "prop rules, and risk settings already configured in Steps 02-04.",
+            "proved dead is skipped automatically before a single backtest runs. Its own market "
+            "data, prop rules, and risk settings below are self-contained to this tab, just like "
+            "the web app.",
         )
+
+        self.forge_context = RunContextPanel(self, "Forge Strategy")
+        self.forge_context.build(f)
 
         settings = self._section(
             f, "Forge settings",
@@ -12702,7 +12690,7 @@ class MainWindow:
             pass
 
     def _forge_run_clicked(self):
-        if not self.csv_paths:
+        if not self.forge_context.csv_paths:
             messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2 (Market Data).")
             return
         if not self._try_start_heavy_job(JOB_FORGE):
@@ -12727,11 +12715,11 @@ class MainWindow:
 
     def _forge_run_pipeline(self):
         try:
-            df = self._load_df_for_page(self._log_forge)
+            df = self.forge_context.load_dataframe(self._log_forge)
             if df is None:
                 return
-            risk = self._build_risk_config()
-            rules = self._build_prop_rules()
+            risk = self.forge_context.build_risk_config()
+            rules = self.forge_context.build_prop_rules()
 
             config = ForgeConfig(
                 n_hypotheses=self.forge_n_hypotheses.get_int(10_000),
@@ -12756,8 +12744,8 @@ class MainWindow:
                 random_seed=self.forge_seed.get_int(42),
             )
             instrument = (
-                os.path.basename(self.csv_paths[0]) if len(self.csv_paths) == 1
-                else " + ".join(os.path.basename(p) for p in self.csv_paths)
+                os.path.basename(self.forge_context.csv_paths[0]) if len(self.forge_context.csv_paths) == 1
+                else " + ".join(os.path.basename(p) for p in self.forge_context.csv_paths)
             )
             # Same persistent, instrument-scoped path the web app uses (see
             # app.search.graveyard.graveyard_path_for) -- a rejection from a
@@ -12837,11 +12825,11 @@ class MainWindow:
         loop that can run for a long time, not just a frozen "Running..."
         state until the whole thing finishes."""
         try:
-            df = self._load_df_for_page(self._log_forge)
+            df = self.forge_context.load_dataframe(self._log_forge)
             if df is None:
                 return
-            risk = self._build_risk_config()
-            rules = self._build_prop_rules()
+            risk = self.forge_context.build_risk_config()
+            rules = self.forge_context.build_prop_rules()
 
             base_config = ForgeConfig(
                 min_trades=self.forge_min_trades.get_int(20),
@@ -12861,8 +12849,8 @@ class MainWindow:
                 workers=int(self.forge_workers.get_str().strip()) if self.forge_workers.get_str().strip() else None,
             )
             instrument = (
-                os.path.basename(self.csv_paths[0]) if len(self.csv_paths) == 1
-                else " + ".join(os.path.basename(p) for p in self.csv_paths)
+                os.path.basename(self.forge_context.csv_paths[0]) if len(self.forge_context.csv_paths) == 1
+                else " + ".join(os.path.basename(p) for p in self.forge_context.csv_paths)
             )
             graveyard_path = graveyard_path_for(instrument, "unknown")
             self._last_forge_graveyard_path = graveyard_path
@@ -13022,8 +13010,12 @@ class MainWindow:
             "condition is removed), null-strategy benchmarks (random / coin-flip / buy-and-hold / "
             "session-only / breakout / mean-reversion / previous-bar baselines on the SAME data), "
             "signal degradation (execution-fragility stress), trade contribution + conditional "
-            "expectancy analysis, and regime discovery. Uses the data currently loaded in Step 2.",
+            "expectancy analysis, and regime discovery. Its own market data, prop rules, and "
+            "risk settings below are self-contained to this tab, just like the web app.",
         )
+
+        self.resdir_context = RunContextPanel(self, "Research Director")
+        self.resdir_context.build(f)
 
         strategy_section = self._section(
             f, "Strategy to analyze",
@@ -13104,7 +13096,7 @@ class MainWindow:
                 "Save a strategy in Manual Strategy Builder first, then pick it here.",
             )
             return
-        if not self.csv_paths:
+        if not self.resdir_context.csv_paths:
             messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2 (Market Data).")
             return
         self.rd_output.delete("1.0", END)
@@ -13113,7 +13105,7 @@ class MainWindow:
 
     def _rd_run_pipeline(self, strategy_name: str):
         try:
-            df = self._load_df_for_page(self._rd_log)
+            df = self.resdir_context.load_dataframe(self._rd_log)
             if df is None:
                 return
             try:
@@ -13122,8 +13114,8 @@ class MainWindow:
                 self._rd_log(f"Couldn't load strategy '{strategy_name}': {exc}")
                 return
 
-            risk = self._build_risk_config()
-            rules = self._build_prop_rules()
+            risk = self.resdir_context.build_risk_config()
+            rules = self.resdir_context.build_prop_rules()
             window_trading_days = self.rd_window_days.get_int(30)
 
             full_bt = research_director._run_spec(spec, df, risk)
@@ -13989,11 +13981,15 @@ class MainWindow:
             "of them to spend less time per candidate, and every existing safeguard "
             "(lookahead detection, pip-scale mismatch, stop-fill honesty, the account-blown "
             "circuit breaker) still runs exactly as it does everywhere else in this app. "
-            "Uses the data, prop rules, and risk settings from Steps 02/03/04 -- it finds "
-            "its own strategy, so Step 01 (Strategy Configuration) is skipped entirely. Depending on your "
+            "It finds its own strategy, so Step 01 (Strategy Configuration) is skipped "
+            "entirely -- and its own market data, prop rules, and risk settings below are "
+            "self-contained to this tab, just like the web app. Depending on your "
             "data size and machine, a run typically takes anywhere from several minutes to "
             "an hour or more; use the settings below to trade thoroughness for speed.",
         )
+
+        self.sr_context = RunContextPanel(self, "Speed Run")
+        self.sr_context.build(f)
 
         settings = self._section(
             f, "Speed Run settings",
@@ -14284,8 +14280,8 @@ class MainWindow:
             self._speedrun_candidates_cache.append({"row": r, "html_path": html_path})
 
     def _speedrun_run_clicked(self):
-        if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
+        if not self.sr_context.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV above (this tab's own Market Data section).")
             return
         if not self._try_start_heavy_job(JOB_SPEED_RUN):
             return
@@ -14314,11 +14310,11 @@ class MainWindow:
 
     def _speedrun_run_pipeline(self):
         try:
-            df = self._load_df_for_page(self._log_speedrun)
+            df = self.sr_context.load_dataframe(self._log_speedrun)
             if df is None:
                 return
-            risk = self._build_risk_config()
-            rules = self._build_prop_rules()
+            risk = self.sr_context.build_risk_config()
+            rules = self.sr_context.build_prop_rules()
 
             metric_key = self._sr_metric_label_to_key.get(self.sr_metric.get_str(), "eval_pass_probability")
             cfg = SpeedRunConfig(
@@ -14336,9 +14332,9 @@ class MainWindow:
             )
 
             instrument = (
-                os.path.basename(self.csv_paths[0])
-                if len(self.csv_paths) == 1
-                else " + ".join(os.path.basename(p) for p in self.csv_paths)
+                os.path.basename(self.sr_context.csv_paths[0])
+                if len(self.sr_context.csv_paths) == 1
+                else " + ".join(os.path.basename(p) for p in self.sr_context.csv_paths)
             )
             self._log_speedrun(f"Starting Speed Run on {instrument} ({len(df)} bars)...\n")
             result = run_speed_run(
@@ -14391,8 +14387,8 @@ class MainWindow:
             webbrowser.open(f"file://{Path(self._last_autopilot_report_path).resolve()}")
 
     def _autopilot_run_clicked(self):
-        if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
+        if not self.sr_context.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV above (this tab's own Market Data section).")
             return
         if not self._try_start_heavy_job(JOB_SPEED_RUN):
             return
@@ -14407,11 +14403,11 @@ class MainWindow:
 
     def _autopilot_run_pipeline(self):
         try:
-            df = self._load_df_for_page(self._log_speedrun)
+            df = self.sr_context.load_dataframe(self._log_speedrun)
             if df is None:
                 return
-            risk = self._build_risk_config()
-            rules = self._build_prop_rules()
+            risk = self.sr_context.build_risk_config()
+            rules = self.sr_context.build_prop_rules()
 
             metric_key = self._sr_metric_label_to_key.get(self.sr_metric.get_str(), "eval_pass_probability")
             speed_run_cfg = SpeedRunConfig(
@@ -14436,9 +14432,9 @@ class MainWindow:
             )
 
             instrument = (
-                os.path.basename(self.csv_paths[0])
-                if len(self.csv_paths) == 1
-                else " + ".join(os.path.basename(p) for p in self.csv_paths)
+                os.path.basename(self.sr_context.csv_paths[0])
+                if len(self.sr_context.csv_paths) == 1
+                else " + ".join(os.path.basename(p) for p in self.sr_context.csv_paths)
             )
             self._log_speedrun(f"Starting Overnight Autopilot on {instrument} ({len(df)} bars)...\n")
             result = run_overnight_autopilot(
@@ -14483,11 +14479,11 @@ class MainWindow:
         on_round), so the tab shows live progress across a loop that can
         run for a long time."""
         try:
-            df = self._load_df_for_page(self._log_speedrun)
+            df = self.sr_context.load_dataframe(self._log_speedrun)
             if df is None:
                 return
-            risk = self._build_risk_config()
-            rules = self._build_prop_rules()
+            risk = self.sr_context.build_risk_config()
+            rules = self.sr_context.build_prop_rules()
 
             metric_key = self._sr_metric_label_to_key.get(self.sr_metric.get_str(), "eval_pass_probability")
             base_config = SpeedRunConfig(
@@ -14501,9 +14497,9 @@ class MainWindow:
                 save_winner_to_library=self.sr_save_to_library.get(),
             )
             instrument = (
-                os.path.basename(self.csv_paths[0])
-                if len(self.csv_paths) == 1
-                else " + ".join(os.path.basename(p) for p in self.csv_paths)
+                os.path.basename(self.sr_context.csv_paths[0])
+                if len(self.sr_context.csv_paths) == 1
+                else " + ".join(os.path.basename(p) for p in self.sr_context.csv_paths)
             )
             time_budget_raw = self.sr_loop_time_budget_hours.get_str().strip()
             loop_cfg = SpeedRunLoopConfig(
@@ -14610,8 +14606,14 @@ class MainWindow:
             "memory of every past strategy test) -- each one runs this app's real, already-"
             "validated engine, never a guess. The model can recommend a next step (e.g. a "
             "parameter worth testing), but cannot apply it itself -- take any recommendation "
-            "into 09 Refinement / Quick Optimize / 15 Full Pipeline to actually test it.",
+            "into 09 Refinement / Quick Optimize / 15 Full Pipeline to actually test it. "
+            "Its own market data, prop rules, and risk settings below are self-contained "
+            "to this tab (shared by the Closed Research Loop section further down), just "
+            "like the web app.",
         )
+
+        self.resagent_context = RunContextPanel(self, "Research Agent")
+        self.resagent_context.build(f)
 
         question_section = self._section(
             f, "Research question",
@@ -14882,8 +14884,14 @@ class MainWindow:
             "simulator, sentiment-price correlation, Markowitz portfolio optimization, an "
             "implied-vol surface, and a Fama-French factor model). Each is a real, tested "
             "backend module -- this tab is a thin form wrapper over it, same as the CLI's and "
-            "web app's own Quant Lab wiring.",
+            "web app's own Quant Lab wiring. The tools below that need market data, prop rules, "
+            "or risk settings share one self-contained context (independent of Steps 02-04 and "
+            "every other tab) rather than each duplicating its own copy, since they're all part "
+            "of the same page.",
         )
+
+        self.qlab_context = RunContextPanel(self, "Quant Lab")
+        self.qlab_context.build(f)
 
         # -- 1. Universal Strategy Translator --------------------------------
         sec = self._section(
@@ -15135,7 +15143,7 @@ class MainWindow:
 
         def work():
             log_lines = []
-            df = self._load_df_for_page(log_lines.append)
+            df = self.qlab_context.load_dataframe(log_lines.append)
             if df is None:
                 raise ValueError("\n".join(log_lines) or "No market data loaded.")
             # Every saved strategy is a candidate except one explicitly
@@ -15188,11 +15196,11 @@ class MainWindow:
                 raise ValueError(f"Could not find saved strategy '{retune_choice}' -- re-select it and try again.")
             strategy = load_strategy_object(stored)
             log_lines: list[str] = []
-            df = self._load_df_for_page(log_lines.append)
+            df = self.qlab_context.load_dataframe(log_lines.append)
             if df is None:
                 raise ValueError("\n".join(log_lines) or "No market data loaded.")
-            risk = self._build_risk_config()
-            rules = self._build_prop_rules()
+            risk = self.qlab_context.build_risk_config()
+            rules = self.qlab_context.build_prop_rules()
 
             outcome = maybe_trigger_retune(
                 journal, session_id, strategy_label, predicted, account_balance=balance,
@@ -15232,10 +15240,10 @@ class MainWindow:
             if len(names) < 2:
                 raise ValueError("Select at least 2 strategies from the list (ctrl/shift-click for multiple).")
             log_lines = []
-            df = self._load_df_for_page(log_lines.append)
+            df = self.qlab_context.load_dataframe(log_lines.append)
             if df is None:
                 raise ValueError("\n".join(log_lines) or "No market data loaded.")
-            risk = self._build_risk_config()
+            risk = self.qlab_context.build_risk_config()
             # Same broadened pool as the listbox itself (_ql_validated_names) --
             # everything except a strategy explicitly marked failed.
             by_name = {s.name: s for s in list_saved_strategies() if s.status != "tested_failed"}
@@ -15330,7 +15338,7 @@ class MainWindow:
             lines += [f"{row.label:<9} {row.sentiment:+.2f}  {row.title}" for row in sentiment_df.itertuples()]
             if use_price:
                 log_lines = []
-                df = self._load_df_for_page(log_lines.append)
+                df = self.qlab_context.load_dataframe(log_lines.append)
                 if df is not None:
                     corr = correlate_sentiment_with_price(sentiment_df, df)
                     lines.append("")
@@ -15392,7 +15400,7 @@ class MainWindow:
 
         def work():
             log_lines = []
-            df = self._load_df_for_page(log_lines.append)
+            df = self.qlab_context.load_dataframe(log_lines.append)
             if df is None:
                 raise ValueError("\n".join(log_lines) or "No market data loaded.")
             returns = compute_returns_from_prices(df)
@@ -15411,7 +15419,7 @@ class MainWindow:
 
         def work():
             log_lines = []
-            df = self._load_df_for_page(log_lines.append)
+            df = self.qlab_context.load_dataframe(log_lines.append)
             if df is None:
                 raise ValueError("\n".join(log_lines) or "No market data loaded.")
             summary = summarize_market_structure(
@@ -15476,7 +15484,7 @@ class MainWindow:
 
         def work():
             log_lines = []
-            df = self._load_df_for_page(log_lines.append)
+            df = self.qlab_context.load_dataframe(log_lines.append)
             if df is None:
                 raise ValueError("\n".join(log_lines) or "No market data loaded.")
             signal_a = self._ql_build_signal(df, a_kind, a_period, a_type, a_level, a_level2, a_min_bars)
@@ -15496,8 +15504,8 @@ class MainWindow:
         self.root.update_idletasks()
 
     def _research_loop_run_clicked(self):
-        if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
+        if not self.resagent_context.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV above (this tab's own Market Data section).")
             return
         self.loop_output.delete("1.0", END)
         self.loop_summary_label.config(text="Running...", fg=TEXT_DIM)
@@ -15506,11 +15514,11 @@ class MainWindow:
 
     def _research_loop_run_pipeline(self):
         try:
-            df = self._load_df_for_page(self._log_research_loop)
+            df = self.resagent_context.load_dataframe(self._log_research_loop)
             if df is None:
                 return
-            risk = self._build_risk_config()
-            rules = self._build_prop_rules()
+            risk = self.resagent_context.build_risk_config()
+            rules = self.resagent_context.build_prop_rules()
             settings = self._build_ollama_settings(prefix="ra_ai")
             if not settings.is_usable:
                 self._log_research_loop(
@@ -15651,8 +15659,8 @@ class MainWindow:
         if not question:
             messagebox.showinfo("Ask a question first", "Type a research question in the box above.")
             return
-        if not self.csv_paths:
-            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
+        if not self.resagent_context.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV above (this tab's own Market Data section).")
             return
         settings = self._build_ollama_settings(prefix="ra_ai")
         if not settings.is_usable:
@@ -15669,16 +15677,16 @@ class MainWindow:
 
     def _ra_run_agent(self, question: str, settings: "OllamaSettings"):
         try:
-            df = self._load_df_for_page(self._log_research_agent)
+            df = self.resagent_context.load_dataframe(self._log_research_agent)
             if df is None:
                 return
-            risk = self._build_risk_config()
-            rules = self._build_prop_rules()
+            risk = self.resagent_context.build_risk_config()
+            rules = self.resagent_context.build_prop_rules()
             max_steps = self.ra_max_steps.get_int(6)
             instrument = (
-                os.path.basename(self.csv_paths[0])
-                if len(self.csv_paths) == 1
-                else " + ".join(os.path.basename(p) for p in self.csv_paths)
+                os.path.basename(self.resagent_context.csv_paths[0])
+                if len(self.resagent_context.csv_paths) == 1
+                else " + ".join(os.path.basename(p) for p in self.resagent_context.csv_paths)
             )
 
             # Zero-arg builder consistent with every other tab's "always
