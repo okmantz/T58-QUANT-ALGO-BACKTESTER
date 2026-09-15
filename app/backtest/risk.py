@@ -197,6 +197,18 @@ def has_instrument_scale_mismatch(warnings: "list[str]") -> bool:
     return any(marker in w for w in warnings for marker in _INSTRUMENT_MISMATCH_MARKERS)
 
 
+def has_impossible_condition(warnings: "list[str]") -> bool:
+    """True if any warning in `warnings` is app.strategy.manual's
+    validate_bounded_conditions warning -- a condition comparing a
+    bounded oscillator (RSI, Stochastic, MFI, ...) to a threshold outside
+    its possible range, which can never be satisfied and permanently
+    disables that branch of the strategy's logic. Shared by Quick
+    Optimize and Full Pipeline so both escalate it the same prominent
+    way they already escalate has_instrument_scale_mismatch."""
+    from app.strategy.manual import IMPOSSIBLE_CONDITION_MARKER
+    return any(IMPOSSIBLE_CONDITION_MARKER in w for w in warnings)
+
+
 def instrument_scale_mismatch_message(pip_size: float) -> str:
     """Shared, actionable explanation shown wherever
     has_instrument_scale_mismatch() is True -- one copy of the wording so

@@ -102,6 +102,19 @@ def run_backtest(
     """
     strat_result: StrategyResult = strategy.generate(df)
 
+    condition_warnings: list[str] = []
+    if getattr(strategy, "source_type", None) == "manual" and isinstance(getattr(strategy, "config", None), dict):
+        # Catches a class of bug the GA-gene-bounds fix in
+        # app.optimize.parameter_space now prevents going forward, but a
+        # hand-typed, imported, or already-saved config can still contain:
+        # a comparison against a bounded oscillator (RSI, Stochastic, ...)
+        # whose threshold sits outside that oscillator's possible range,
+        # silently disabling that branch of the strategy's logic. See
+        # app.strategy.manual.validate_bounded_conditions for the full
+        # explanation.
+        from app.strategy.manual import validate_bounded_conditions
+        condition_warnings = validate_bounded_conditions(strategy.config)
+
     with _warnings_module.catch_warnings(record=True) as caught:
         _warnings_module.simplefilter("always", RuntimeWarning)
         trades, equity_curve = run_execution(
@@ -127,5 +140,5 @@ def run_backtest(
         equity_curve=equity_curve,
         statistics=stats,
         initial_balance=risk.initial_balance,
-        warnings=execution_warnings,
+        warnings=condition_warnings + execution_warnings,
     )
