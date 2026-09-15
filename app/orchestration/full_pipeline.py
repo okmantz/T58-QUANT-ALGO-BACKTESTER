@@ -81,12 +81,16 @@ from app.optimize.walkforward_ga import WalkforwardGAResult, run_walkforward_awa
 from app.orchestration.resource_guard import safe_worker_count
 from app.prop.simulator import AccountSimResult, PropRules, simulate_account
 from app.reports.crash_log import log_crash
+from app.scoring.parsimony import ParsimonyResult, compute_parsimony
+from app.scoring.t58_scorecard import T58ScorecardResult, score_from_results
 from app.search.robustness import WalkForwardResult, run_walk_forward
 from app.search.strategy_space import build_strategy_from_spec
 from app.strategy.base import Strategy
 from app.strategy.library import StrategyAlreadyExists, save_strategy_text, set_strategy_status, \
     record_backtest_result
+from app.validation.cpcv import CPCVError, CPCVResult, run_cpcv
 from app.validation.icir import ICIRGateResult, run_icir_gate_from_backtest
+from app.validation.regime_matrix import RegimeMatrixResult, build_regime_matrix
 
 ProgressCallback = Callable[[str], None]
 
@@ -140,6 +144,43 @@ class FullPipelineConfig:
     parallel_search: bool = True
     parallel_search_max_workers: int | None = None
 
+    # -- Pipeline reorg: scorecard verdict + ruin hard gate --------------
+    # The ONE legitimate hard gate (pipeline reorg plan section 2/19):
+    # risk of ruin has a genuinely binary quality that the other metrics
+    # don't, so it's checked BEFORE scoring rather than folded in as just
+    # another weighted component. A strategy failing this gate is always
+    # "NOT READY" regardless of how good everything else looks -- ruin
+    # still also appears INSIDE the scorecard below (as a ranking signal
+    # among strategies that already passed this cap), it's just no
+    # longer the only thing standing between "READY" and "NOT READY".
+    risk_of_ruin_cap: float = 20.0
+
+    # -- Pipeline reorg: one canonical robustness test (Option A) --------
+    # "walk_forward" (default -- unchanged behavior) keeps using Step 4's
+    # existing run_walk_forward result as the scorecard's
+    # walk_forward_stability component. "cpcv" instead runs CPCV/PBO
+    # (app.validation.cpcv) as the PRIMARY generalization test and feeds
+    # ITS efficiency into that same scorecard slot -- the two are never
+    # both scored as primary at once, so robustness is never counted
+    # twice under two different names (pipeline reorg plan section 11).
+    primary_robustness_method: str = "walk_forward"   # "walk_forward" | "cpcv"
+    # When True AND primary_robustness_method is "walk_forward", CPCV
+    # additionally runs as a SECOND, low-weight SUPPORTING diagnostic
+    # (scorecard's cpcv_supporting component, 5 points) rather than a
+    # gate -- lets you see whether CPCV's more expensive multi-path
+    # check actually changes anything before promoting it to primary.
+    # Ignored (never runs) when primary_robustness_method is "cpcv",
+    # since that would double-count the same evidence twice.
+    cpcv_supporting_enabled: bool = False
+    cpcv_n_groups: int = 6
+    cpcv_n_test_groups: int = 2
+    # Regime performance stays purely informational (pipeline reorg plan
+    # section 13/14) -- attached to the report/result for a human to
+    # read, never scored or gated. Reuses the SAME trades final_bt
+    # already produced (build_regime_matrix, not run_regime_matrix) so
+    # this costs no extra backtest -- cheap enough to default on.
+    regime_diagnostics_enabled: bool = True
+
 
 @dataclass
 class FullPipelineResult:
@@ -174,6 +215,15 @@ class FullPipelineResult:
     verdict: str                # "READY" | "MARGINAL" | "NOT READY"
     verdict_reasons: list[str]
 
+    # -- Pipeline reorg additions -----------------------------------------
+    scorecard: "T58ScorecardResult | None"       # the continuous 0-100 score/tier behind `verdict`
+    risk_of_ruin_hard_fail: bool                 # True if verdict is NOT READY solely because of the ruin cap
+    parsimony: "ParsimonyResult | None"
+    cpcv_result: "CPCVResult | None"             # populated if primary_robustness_method=="cpcv" OR cpcv_supporting_enabled
+    cpcv_skip_reason: str | None
+    regime_result: "RegimeMatrixResult | None"   # report-only diagnostic, never gated/scored
+    regime_skip_reason: str | None
+
     saved_library_path: Path | None
     saved_library_note: str | None
 
@@ -203,65 +253,111 @@ def _spec_for_code(source_type: str, code_text: str, extension: str) -> dict:
 
 
 def _make_verdict(
-    final_mc: MonteCarloResult, oos_validation: WalkForwardResult | None,
+    final_mc: MonteCarloResult,
+    oos_validation: WalkForwardResult | None,
     icir_gate: "ICIRGateResult | None" = None,
-) -> tuple[str, list[str]]:
+    statistics=None,
+    prop_rules: PropRules | None = None,
+    risk_of_ruin_cap: float = 20.0,
+    parsimony: "ParsimonyResult | None" = None,
+    cpcv_primary_result: "CPCVResult | None" = None,
+    cpcv_supporting_result: "CPCVResult | None" = None,
+) -> tuple[str, list[str], "T58ScorecardResult", bool]:
+    """Pipeline reorg item #1: the verdict is now a hard safety gate
+    (risk of ruin) followed by app.scoring.t58_scorecard's continuous,
+    missing-aware score -- NOT five independent boolean checks ANDed
+    together. See that module's docstring for why: requiring every one
+    of several imperfect, correlated tests to pass simultaneously can
+    reject a genuinely good strategy just because one noisy measurement
+    disagreed with the others (pipeline reorg plan section 4).
+
+    Returns (verdict, verdict_reasons, scorecard_result, risk_of_ruin_hard_fail).
+    `verdict` stays one of the same three strings ("READY" / "MARGINAL" /
+    "NOT READY") every existing caller and test already expects --
+    Elite/Strong tiers -> READY, Promising/Research -> MARGINAL, Reject
+    (or a ruin hard-fail) -> NOT READY. `scorecard_result` carries the
+    actual continuous score/tier/component breakdown for anything that
+    wants more resolution than the 3-way verdict (e.g. the leaderboard).
+
+    cpcv_primary_result: pass this when primary_robustness_method=="cpcv"
+    for this run -- its efficiency fills the SAME scorecard slot
+    oos_validation would otherwise fill (never both at once).
+    cpcv_supporting_result: pass this when CPCV ran as a second,
+    non-primary diagnostic (cpcv_supporting_enabled) -- scored in its
+    own small-weight component instead."""
     reasons: list[str] = []
-    eval_pass = final_mc.evaluation_pass_probability
-    payout = final_mc.first_payout_probability
     ruin = final_mc.risk_of_ruin_pct
+    ruin_hard_fail = ruin > risk_of_ruin_cap
 
-    score = 0
-    if eval_pass >= 60:
-        score += 1
-        reasons.append(f"Monte Carlo evaluation-pass probability is {eval_pass:.1f}%.")
-    else:
-        reasons.append(f"Monte Carlo evaluation-pass probability is only {eval_pass:.1f}% (want 60%+).")
-    if payout >= 40:
-        score += 1
-        reasons.append(f"Monte Carlo first-payout probability is {payout:.1f}%.")
-    else:
-        reasons.append(f"Monte Carlo first-payout probability is only {payout:.1f}% (want 40%+).")
-    if ruin <= 15:
-        score += 1
-    else:
-        reasons.append(f"Monte Carlo risk of ruin is {ruin:.1f}% (want under 15%).")
-
-    if oos_validation is None:
-        reasons.append("Out-of-sample fold check couldn't run (not enough data) -- treat this as UNPROVEN, not passing.")
-    elif oos_validation.is_stable:
-        score += 1
-        reasons.append(
-            f"Held up across {oos_validation.n_folds} out-of-sample fold(s) "
-            f"(walk-forward efficiency {oos_validation.walk_forward_efficiency:.2f})."
+    # -- Continuous, missing-aware scorecard (computed either way, so a
+    # rejected strategy's other numbers still show up in the report and
+    # leaderboard rather than vanishing behind a bare "NOT READY") ------
+    # "Primary generalization test" is whichever of walk-forward/CPCV this
+    # run actually used -- they share the same scorecard slot
+    # (_walk_forward_score / _cpcv_score both map onto the same 0-100
+    # "generalization efficiency" scale), never scored as two components
+    # at once (pipeline reorg plan section 11).
+    if cpcv_primary_result is not None:
+        from app.scoring.t58_scorecard import _cpcv_score as _score_cpcv_as_primary
+        scorecard = score_from_results(
+            mc_result=final_mc, statistics=statistics,
+            prop_max_drawdown_pct=getattr(prop_rules, "max_drawdown_pct", None),
+            parsimony_result=parsimony, cpcv_supporting_result=cpcv_supporting_result,
         )
+        from app.scoring.t58_scorecard import T58ScorecardInputs, compute_t58_score
+        inputs = T58ScorecardInputs(**{k: v["value"] for k, v in scorecard.components.items()})
+        inputs.walk_forward_stability = _score_cpcv_as_primary(cpcv_primary_result)
+        scorecard = compute_t58_score(inputs)
     else:
-        reasons.append(
-            f"Did NOT hold up consistently across {oos_validation.n_folds} out-of-sample fold(s) "
-            f"(walk-forward efficiency {oos_validation.walk_forward_efficiency:.2f}, "
-            f"below the {oos_validation.stability_threshold:.2f} stability threshold)."
+        scorecard = score_from_results(
+            mc_result=final_mc, walk_forward_result=oos_validation, statistics=statistics,
+            prop_max_drawdown_pct=getattr(prop_rules, "max_drawdown_pct", None),
+            parsimony_result=parsimony, cpcv_supporting_result=cpcv_supporting_result,
         )
 
+    # -- The one legitimate hard gate ------------------------------------
+    if ruin_hard_fail:
+        reasons.append(
+            f"HARD SAFETY GATE FAILED: Monte Carlo risk of ruin is {ruin:.1f}%, above the "
+            f"configured cap of {risk_of_ruin_cap:.1f}%. This strategy is NOT READY regardless of "
+            f"how the rest of the evidence looks -- ruin is the one metric this pipeline treats as "
+            f"a genuine pass/fail requirement rather than evidence to weigh (see "
+            f"FullPipelineConfig.risk_of_ruin_cap)."
+        )
+        reasons.append(f"For reference, {scorecard.render_line()} (not the reason for this verdict).")
+        return "NOT READY", reasons, scorecard, True
+
+    if oos_validation is None and cpcv_primary_result is None:
+        reasons.append(
+            "Primary generalization test couldn't run (not enough data) -- scored as UNPROVEN "
+            "(missing, not failing) rather than penalized as if it had failed."
+        )
     if icir_gate is None:
         reasons.append(
-            "ICIR / signal-decay / Bonferroni-corrected significance gate couldn't run -- "
-            "treat this as UNPROVEN, not passing."
+            "ICIR / signal-decay / Bonferroni-corrected significance gate couldn't run -- kept as "
+            "a supporting diagnostic only, not part of the T58 Score."
         )
-    elif icir_gate.ok:
-        score += 1
-        reasons.append("Passed the ICIR / signal-decay / Bonferroni-corrected significance gate: " +
-                        " ".join(icir_gate.reasons))
-    else:
-        reasons.append("Did NOT pass the ICIR / signal-decay / Bonferroni-corrected significance gate: " +
-                        " ".join(icir_gate.reasons))
+    elif not icir_gate.ok:
+        reasons.append(
+            "Supporting diagnostic: did NOT pass the ICIR / signal-decay / Bonferroni-corrected "
+            "significance gate (" + " ".join(icir_gate.reasons) + "). Not scored into the T58 Score "
+            "or gated on -- section 14 of the pipeline reorg plan treats this as informational once "
+            "a primary generalization test already ran."
+        )
 
-    if score >= 5:
+    reasons.append(scorecard.render_line())
+    for name, comp in scorecard.components.items():
+        if comp["value"] is not None:
+            reasons.append(f"  {name}: {comp['value']:.1f}/100 (weight {comp['weight']:+.0f})")
+    reasons.extend(scorecard.notes)
+
+    if scorecard.tier in ("Elite", "Strong"):
         verdict = "READY"
-    elif score >= 3:
+    elif scorecard.tier in ("Promising", "Research"):
         verdict = "MARGINAL"
     else:
         verdict = "NOT READY"
-    return verdict, reasons
+    return verdict, reasons, scorecard, False
 
 
 # What each Full Pipeline verdict tags a newly-saved strategy with in the
@@ -684,10 +780,81 @@ def run_full_pipeline(
             icir_gate_skip_reason = f"ICIR gate failed to run: {exc}"
             log(f"  {icir_gate_skip_reason}")
 
+        # -- Pipeline reorg extra: CPCV/PBO (Option A -- one canonical
+        # generalization test, section 11) ----------------------------------
+        # cfg.primary_robustness_method selects whether CPCV or the
+        # walk-forward check above (Step 4) is the PRIMARY generalization
+        # test feeding the scorecard. cfg.cpcv_supporting_enabled instead
+        # runs CPCV as a second, SUPPORTING diagnostic alongside
+        # walk-forward-as-primary -- the two settings are mutually
+        # exclusive in what they feed (see _make_verdict), so CPCV never
+        # gets counted as evidence twice under two different names.
+        _check_cancel()
+        cpcv_primary_result = None
+        cpcv_supporting_result = None
+        cpcv_skip_reason = None
+        run_cpcv_this_time = (cfg.primary_robustness_method == "cpcv") or cfg.cpcv_supporting_enabled
+        if run_cpcv_this_time:
+            log("Step 6b/7: CPCV / PBO (out-of-sample generalization, multi-path)...")
+            try:
+                cpcv_result = run_cpcv(
+                    df, lambda: build_strategy_from_spec(final_spec, final_tmp_dir), risk,
+                    n_groups=cfg.cpcv_n_groups, n_test_groups=cfg.cpcv_n_test_groups,
+                    metric=cfg.oos_check_metric, prop_rules=prop_rules,
+                    mc_cfg=MonteCarloConfig(n_simulations=cfg.ga_search_mc_sims, random_seed=cfg.random_seed),
+                )
+                log(
+                    f"  CPCV: {cpcv_result.n_paths} path(s), mean OOS/IS "
+                    f"{cpcv_result.mean_oos_metric:.3f}/{cpcv_result.mean_is_metric:.3f} "
+                    f"({'robust' if cpcv_result.is_robust else 'NOT robust'})."
+                )
+                if cfg.primary_robustness_method == "cpcv":
+                    cpcv_primary_result = cpcv_result
+                else:
+                    cpcv_supporting_result = cpcv_result
+            except CPCVError as exc:
+                cpcv_skip_reason = f"CPCV could not run: {exc}"
+                log(f"  {cpcv_skip_reason}")
+            except Exception as exc:  # noqa: BLE001 -- best-effort validation step
+                cpcv_skip_reason = f"CPCV failed to run: {exc}"
+                log(f"  {cpcv_skip_reason}")
+        elif cfg.primary_robustness_method == "cpcv":
+            cpcv_skip_reason = "CPCV was selected as the primary robustness method but did not run (see log above)."
+
+        # -- Pipeline reorg extra: parsimony (section 24) --------------------
+        # Reward strategies with fewer unnecessary degrees of freedom --
+        # a small, additive scorecard component, never a gate. Cheap
+        # (static analysis of the final strategy's own config/source),
+        # so this always runs.
+        parsimony_result = compute_parsimony(final_strategy)
+        log(f"  Parsimony: {parsimony_result.notes[0] if parsimony_result.notes else 'not scored'}")
+
+        # -- Pipeline reorg extra: regime diagnostics (report-only,
+        # section 13/14 -- never scored, never gated) -----------------------
+        regime_result = None
+        regime_skip_reason = None
+        if cfg.regime_diagnostics_enabled:
+            try:
+                from app.validation.regime_matrix import build_regime_matrix
+                regime_result = build_regime_matrix(df, final_bt.trades, risk.initial_balance)
+                worst = regime_result.disable_regimes()
+                if worst:
+                    log(f"  Regime diagnostics: {len(worst)} regime(s) flagged as candidates to disable -- see report (informational only).")
+                else:
+                    log("  Regime diagnostics: no regime flagged for disabling.")
+            except Exception as exc:  # noqa: BLE001 -- report-only diagnostic, never allowed to affect the verdict
+                regime_skip_reason = f"Regime diagnostics failed to run: {exc}"
+                log(f"  {regime_skip_reason}")
+
         # -- Step 7: report + save -----------------------------------------
         _check_cancel()
         log("Step 7/7: Generating final report...")
-        verdict, verdict_reasons = _make_verdict(final_mc, oos_validation, icir_gate)
+        verdict, verdict_reasons, scorecard, risk_of_ruin_hard_fail = _make_verdict(
+            final_mc, oos_validation, icir_gate,
+            statistics=final_bt.statistics, prop_rules=prop_rules,
+            risk_of_ruin_cap=cfg.risk_of_ruin_cap, parsimony=parsimony_result,
+            cpcv_primary_result=cpcv_primary_result, cpcv_supporting_result=cpcv_supporting_result,
+        )
 
         elapsed = time.time() - t0
         return _finish(
@@ -696,6 +863,8 @@ def run_full_pipeline(
             final_source_type, final_config, final_code_text, final_code_ext,
             final_bt, final_single_run, final_mc, final_holdout,
             oos_validation, oos_skip_reason, icir_gate, icir_gate_skip_reason, verdict, verdict_reasons,
+            scorecard, risk_of_ruin_hard_fail, parsimony_result,
+            cpcv_primary_result or cpcv_supporting_result, cpcv_skip_reason, regime_result, regime_skip_reason,
             df, prop_rules, risk, cfg, elapsed, warnings, log, output_dir,
             instrument, report_basename,
         )
@@ -710,6 +879,8 @@ def _finish(
     final_source_type, final_config, final_code_text, final_code_ext,
     final_bt, final_single_run, final_mc, final_holdout,
     oos_validation, oos_skip_reason, icir_gate, icir_gate_skip_reason, verdict, verdict_reasons,
+    scorecard, risk_of_ruin_hard_fail, parsimony_result, cpcv_result, cpcv_skip_reason,
+    regime_result, regime_skip_reason,
     df, prop_rules, risk, cfg, elapsed, warnings, log, output_dir,
     instrument="unknown", report_basename="full_pipeline_report",
 ) -> FullPipelineResult:
@@ -720,6 +891,18 @@ def _finish(
 
     period = (str(df["timestamp"].iloc[0]), str(df["timestamp"].iloc[-1]))
     final_strategy_name = f"{display_name} (Full Pipeline)"
+
+    # Pipeline reorg: every record_backtest_result() call below also
+    # stamps these three fields into the strategy's "last_run" metadata
+    # -- this is the ONLY change needed to make app.scoring.leaderboard's
+    # cross-tool Final Selection leaderboard (item #5/#3 of the reorg
+    # plan) possible, since list_saved_strategies() already surfaces
+    # this same metadata for every strategy in the library regardless of
+    # which tool (Full Pipeline, Forge, Evolution Lab, Search Lab) wrote
+    # it last.
+    t58_score = scorecard.score if scorecard is not None else None
+    t58_tier = scorecard.tier if scorecard is not None else None
+    parsimony_score = parsimony_result.score if parsimony_result is not None else None
 
     final_parameters = None
     if ga_result is not None and ga_result.genes:
@@ -770,6 +953,11 @@ def _finish(
                 "first_payout_probability": round(final_mc.first_payout_probability, 1),
                 "verdict": verdict,
                 "report_html": str(report_paths["html"]),
+                "t58_score": round(t58_score, 1) if t58_score is not None else None,
+                "t58_tier": t58_tier,
+                "parsimony_score": round(parsimony_score, 1) if parsimony_score is not None else None,
+                "risk_of_ruin_pct": round(final_mc.risk_of_ruin_pct, 1),
+                "risk_of_ruin_hard_fail": risk_of_ruin_hard_fail,
             })
             saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {cfg.library_status})."
             log(f"  {saved_library_note}")
@@ -809,6 +997,11 @@ def _finish(
                 "first_payout_probability": round(final_mc.first_payout_probability, 1),
                 "verdict": verdict,
                 "report_html": str(report_paths["html"]),
+                "t58_score": round(t58_score, 1) if t58_score is not None else None,
+                "t58_tier": t58_tier,
+                "parsimony_score": round(parsimony_score, 1) if parsimony_score is not None else None,
+                "risk_of_ruin_pct": round(final_mc.risk_of_ruin_pct, 1),
+                "risk_of_ruin_hard_fail": risk_of_ruin_hard_fail,
             })
             saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {cfg.library_status})."
             log(f"  {saved_library_note}")
@@ -873,6 +1066,13 @@ def _finish(
         icir_gate_skip_reason=icir_gate_skip_reason,
         verdict=verdict,
         verdict_reasons=verdict_reasons,
+        scorecard=scorecard,
+        risk_of_ruin_hard_fail=risk_of_ruin_hard_fail,
+        parsimony=parsimony_result,
+        cpcv_result=cpcv_result,
+        cpcv_skip_reason=cpcv_skip_reason,
+        regime_result=regime_result,
+        regime_skip_reason=regime_skip_reason,
         saved_library_path=saved_library_path,
         saved_library_note=saved_library_note,
         report_paths=report_paths,
