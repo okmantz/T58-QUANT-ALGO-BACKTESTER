@@ -169,3 +169,44 @@ def suggest_pip_size(df) -> float:
     if median_price >= 5:
         return 0.01
     return 0.0001
+
+
+# The two exact substrings app.backtest.execution's run_backtest emits
+# when a fixed-pips stop is an implausible fraction of either the
+# instrument's raw price (pip_scale_mismatch) or its own recent ATR
+# (atr_scale_mismatch) -- see that module for the full warning text.
+# Both are checked (not just the price-ratio one) because a fixed-pips
+# stop can pass the price-ratio check -- look like a perfectly ordinary
+# fraction of price -- while still being tiny next to the instrument's
+# own actual volatility; a high-priced but volatile instrument such as
+# an equity index is the case that price-ratio alone misses.
+_INSTRUMENT_MISMATCH_MARKERS = (
+    "doesn't match the instrument actually being tested",
+    "under 15% of this instrument's own recent ATR",
+)
+
+
+def has_instrument_scale_mismatch(warnings: "list[str]") -> bool:
+    """True if any warning in `warnings` (e.g. a BacktestResult.warnings
+    list) is app.backtest.execution's pip_scale_mismatch or
+    atr_scale_mismatch warning -- the single most common cause of a
+    strategy's numbers being unreliable (see suggest_pip_size above).
+    Shared by app.orchestration.full_pipeline (which skips its GA search
+    on this) and app.orchestration.quick_optimize (which surfaces it
+    prominently instead) so both tools agree on exactly what counts."""
+    return any(marker in w for w in warnings for marker in _INSTRUMENT_MISMATCH_MARKERS)
+
+
+def instrument_scale_mismatch_message(pip_size: float) -> str:
+    """Shared, actionable explanation shown wherever
+    has_instrument_scale_mismatch() is True -- one copy of the wording so
+    Full Pipeline and Quick Optimize never drift into saying two
+    different things about the same problem."""
+    return (
+        f"Pip-size/instrument-scale mismatch detected (current pip_size: {pip_size}). Every position "
+        "size and stop distance this run computed is unreliable -- this almost always means "
+        "risk.pip_size doesn't match the instrument actually being tested (e.g. an FX-calibrated "
+        "0.0001 run against gold, an index, crypto, or a JPY pair). Set pip_size to match the real "
+        "instrument (e.g. 0.01 for gold/JPY pairs, 1.0 for high-priced indices/stocks -- see "
+        "suggest_pip_size, or click \"DETECT PIP SIZE FROM DATA\") before trusting this result."
+    )
