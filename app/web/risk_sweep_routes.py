@@ -42,6 +42,7 @@ from app.prop.simulator import PropRules
 from app.prop.survival_engine import PropSurvivalConfig
 from app.search.strategy_space import build_strategy_from_spec
 from app.strategy.library import list_saved_strategies, load_strategy_text
+from app.web.alpaca_shared import alpaca_template_context
 
 risk_sweep_bp = Blueprint("risk_sweep", __name__)
 
@@ -92,7 +93,8 @@ def _parse_risk_values(raw: str) -> list[float] | None:
     return values or None
 
 
-def _render_form(*, error: str | None = None, result=None, form_values: dict | None = None):
+def _render_form(*, error: str | None = None, result=None, form_values: dict | None = None,
+                  alpaca_notice: str | None = None, alpaca_notice_kind: str = "info"):
     return render_template(
         "risk_sweep.html", active_page="risk_sweep",
         strategies=[{"type": s.strategy_type, "name": s.name} for s in list_saved_strategies()],
@@ -100,12 +102,17 @@ def _render_form(*, error: str | None = None, result=None, form_values: dict | N
         prop_presets_json=_prop_presets_json(),
         default_risk_values=", ".join(f"{v:.2f}" for v in DEFAULT_RISK_VALUES),
         error=error, result=result, form_values=form_values or {},
+        alpaca_notice=alpaca_notice, alpaca_notice_kind=alpaca_notice_kind,
+        **alpaca_template_context(),
     )
 
 
 @risk_sweep_bp.route("/risk-sweep", methods=["GET"])
 def risk_sweep_form():
-    return _render_form()
+    return _render_form(
+        alpaca_notice=request.args.get("alpaca_notice"),
+        alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"),
+    )
 
 
 @risk_sweep_bp.route("/risk-sweep/run", methods=["POST"])

@@ -36,6 +36,7 @@ from app.strategy.library import STRATEGY_TYPES, list_saved_strategies, load_str
 from app.strategy.mql5 import MQL5Strategy
 from app.strategy.pinescript import PineScriptStrategy
 from app.strategy.python import PythonStrategy
+from app.web.alpaca_shared import alpaca_template_context
 
 hedge_fund_bp = Blueprint("hedge_fund", __name__, url_prefix="/hedge-fund")
 
@@ -146,6 +147,8 @@ def hedge_fund_form():
     return render_template(
         "hedge_fund.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         max_assets=MAX_ASSETS, saved_strategies_json=_saved_strategies_json(),
+        alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"),
+        **alpaca_template_context(),
     )
 
 
@@ -154,7 +157,8 @@ def hedge_fund_run():
     form = request.form
     ctx = lambda **kw: dict(
         stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-        max_assets=MAX_ASSETS, saved_strategies_json=_saved_strategies_json(), **kw,
+        max_assets=MAX_ASSETS, saved_strategies_json=_saved_strategies_json(),
+        **alpaca_template_context(), **kw,
     )
 
     price_data = {}

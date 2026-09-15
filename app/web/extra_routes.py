@@ -31,6 +31,7 @@ from app.prop.simulator import PropRules
 from app.prop.presets import list_presets as list_prop_firm_presets
 from app.strategy.compare import CompareError, compare_strategies, compare_to_dicts
 from app.strategy.library import list_saved_strategies
+from app.web.alpaca_shared import alpaca_template_context
 
 extra_bp = Blueprint("extra", __name__)
 
@@ -71,18 +72,24 @@ def _prop_rules_from_form(form) -> PropRules:
     )
 
 
-def _render_compare(strategies, stored_datasets, result=None, error=None):
+def _render_compare(strategies, stored_datasets, result=None, error=None, alpaca_notice=None, alpaca_notice_kind="info"):
     return render_template(
         "compare.html", active_page="compare",
         strategies=[{"type": s.strategy_type, "name": s.name} for s in strategies],
         stored_datasets=stored_datasets, result=result, error=error,
         prop_presets_json=_prop_presets_json(),
+        alpaca_notice=alpaca_notice, alpaca_notice_kind=alpaca_notice_kind,
+        **alpaca_template_context(),
     )
 
 
 @extra_bp.route("/compare", methods=["GET"])
 def compare_page():
-    return _render_compare(list_saved_strategies(), list_stored_datasets())
+    return _render_compare(
+        list_saved_strategies(), list_stored_datasets(),
+        alpaca_notice=request.args.get("alpaca_notice"),
+        alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"),
+    )
 
 
 @extra_bp.route("/compare/run", methods=["POST"])

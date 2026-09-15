@@ -62,6 +62,7 @@ from app.data.alpaca_source import (
     AlpacaFetchError, AlpacaImportError, fetch_bars, save_bars_as_csv,
 )
 from app.data.importer import import_csv, import_csv_bytes
+from app.web.alpaca_shared import alpaca_template_context
 from app.data.storage import get_app_base_dir, get_raw_data_dir, list_datasets_by_instrument, list_stored_datasets, store_csv_bytes
 from app.ensemble.ensemble import EnsembleError, EnsembleVoteConfig, run_ensemble_blend, run_ensemble_vote
 from app.evolution import checkpoint as evo_checkpoint
@@ -618,18 +619,14 @@ def _saved_strategies_json() -> str:
 
 
 def _alpaca_template_context() -> dict:
-    """Shared context injected wherever a Market Data card is rendered
-    (index.html, full_pipeline.html, search.html, quick_optimize.html) --
-    the dropdown/option lists plus whether keys are already saved, so the
-    form can pre-check "save keys" and (for privacy) never echo a saved
-    secret back into the page source."""
-    return {
-        "alpaca_asset_classes": ASSET_CLASSES,
-        "alpaca_timeframes": TIMEFRAME_LABELS,
-        "alpaca_feeds": FEED_CHOICES,
-        "alpaca_adjustments": ADJUSTMENT_CHOICES,
-        "alpaca_has_saved_keys": alpaca_credentials.has_saved_credentials(),
-    }
+    """Thin wrapper over app.web.alpaca_shared.alpaca_template_context so
+    every existing call site in this file (index.html, full_pipeline.html,
+    search.html, quick_optimize.html, and the batch of Optimize/Validate/
+    Champion/Research pages added alongside it) keeps working unchanged.
+    Blueprint modules (extra_routes.py, hedge_fund_routes.py,
+    risk_sweep_routes.py) import alpaca_template_context directly from
+    alpaca_shared instead, since they can't import this module."""
+    return alpaca_template_context()
 
 
 # Every page with its own "Or fetch data from Alpaca" section (see
@@ -643,7 +640,17 @@ def _alpaca_template_context() -> dict:
 # own GET endpoint, so the redirect-with-notice lands back on whichever
 # page the person actually submitted from instead of always bouncing to
 # the Run & Report page.
-_ALPACA_RETURN_ENDPOINTS = {"index", "full_pipeline_form", "search_form", "quickopt_form"}
+_ALPACA_RETURN_ENDPOINTS = {
+    "index", "full_pipeline_form", "search_form", "quickopt_form",
+    "cpcv_form", "ensemble_form", "evolution_form", "forge_form", "mo_form",
+    "overnight_autopilot_form", "parameter_robustness_form", "payout_probability_form",
+    "pbo_form", "portfolio_form", "prop_firm_recommender_form", "refine_form",
+    "regime_matrix_form", "research_form", "research_agent_form", "research_loop_form",
+    "sensitivity_form", "speed_run_form", "wfga_form", "wfo_form",
+    # These three live in their own Blueprints (extra_bp / hedge_fund_bp /
+    # risk_sweep_bp), so url_for() needs the blueprint-qualified endpoint name.
+    "extra.compare_page", "hedge_fund.hedge_fund_form", "risk_sweep.risk_sweep_form",
+}
 
 
 def _alpaca_redirect(notice: str, kind: str):
@@ -1638,10 +1645,9 @@ def _run_refinement_job(
 def refine_form():
     return render_template(
         "refine.html",
-        stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+        alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         saved_strategies_json=_saved_strategies_json(),
-        strategy_statuses=STRATEGY_STATUSES,
-    )
+        strategy_statuses=STRATEGY_STATUSES, **_alpaca_template_context())
 
 
 @app.route("/refine/start", methods=["POST"])
@@ -1650,7 +1656,7 @@ def refine_start():
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
-            return render_template("refine.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 400
+            return render_template("refine.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
 
         strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
 
@@ -1704,9 +1710,9 @@ def refine_start():
         return redirect(url_for("refine_job", job_id=job_id))
 
     except (StrategyError, RefinementError) as exc:
-        return render_template("refine.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 400
+        return render_template("refine.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
-        return render_template("refine.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 500
+        return render_template("refine.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 500
 
 
 @app.route("/refine/job/<job_id>")
@@ -2567,9 +2573,8 @@ def _run_wfo_job(
 @app.route("/walk-forward-opt")
 def wfo_form():
     return render_template(
-        "wfo.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-        strategy_statuses=STRATEGY_STATUSES, fitness_metrics=FITNESS_METRICS,
-    )
+        "wfo.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
+        strategy_statuses=STRATEGY_STATUSES, fitness_metrics=FITNESS_METRICS, **_alpaca_template_context())
 
 
 @app.route("/walk-forward-opt/start", methods=["POST"])
@@ -2585,7 +2590,7 @@ def wfo_start():
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_WFO)
-            return render_template("wfo.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+            return render_template("wfo.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 400
 
         strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(
@@ -2631,10 +2636,10 @@ def wfo_start():
         return redirect(url_for("wfo_job", job_id=job_id))
     except (StrategyError, RefinementError) as exc:
         HEAVY_JOB_GUARD.release(JOB_WFO)
-        return render_template("wfo.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+        return render_template("wfo.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_WFO)
-        return render_template("wfo.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 500
+        return render_template("wfo.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 500
 
 
 @app.route("/walk-forward-opt/job/<job_id>")
@@ -2715,9 +2720,8 @@ def _run_mo_job(job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, m
 @app.route("/multi-objective")
 def mo_form():
     return render_template(
-        "multi_objective.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-        strategy_statuses=STRATEGY_STATUSES, all_objectives=sorted(OBJECTIVE_DIRECTIONS), default_objectives=DEFAULT_OBJECTIVES,
-    )
+        "multi_objective.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
+        strategy_statuses=STRATEGY_STATUSES, all_objectives=sorted(OBJECTIVE_DIRECTIONS), default_objectives=DEFAULT_OBJECTIVES, **_alpaca_template_context())
 
 
 @app.route("/multi-objective/start", methods=["POST"])
@@ -2734,7 +2738,7 @@ def mo_start():
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_MULTI_OBJECTIVE)
-            return render_template("multi_objective.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), all_objectives=sorted(OBJECTIVE_DIRECTIONS), default_objectives=DEFAULT_OBJECTIVES), 400
+            return render_template("multi_objective.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), all_objectives=sorted(OBJECTIVE_DIRECTIONS), default_objectives=DEFAULT_OBJECTIVES, **_alpaca_template_context()), 400
 
         strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(
@@ -2773,10 +2777,10 @@ def mo_start():
         return redirect(url_for("mo_job", job_id=job_id))
     except (StrategyError, RefinementError) as exc:
         HEAVY_JOB_GUARD.release(JOB_MULTI_OBJECTIVE)
-        return render_template("multi_objective.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), all_objectives=sorted(OBJECTIVE_DIRECTIONS), default_objectives=DEFAULT_OBJECTIVES), 400
+        return render_template("multi_objective.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), all_objectives=sorted(OBJECTIVE_DIRECTIONS), default_objectives=DEFAULT_OBJECTIVES, **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_MULTI_OBJECTIVE)
-        return render_template("multi_objective.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), all_objectives=sorted(OBJECTIVE_DIRECTIONS), default_objectives=DEFAULT_OBJECTIVES), 500
+        return render_template("multi_objective.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), all_objectives=sorted(OBJECTIVE_DIRECTIONS), default_objectives=DEFAULT_OBJECTIVES, **_alpaca_template_context()), 500
 
 
 @app.route("/multi-objective/job/<job_id>")
@@ -2872,9 +2876,8 @@ def _run_wfga_job(
 @app.route("/walk-forward-ga")
 def wfga_form():
     return render_template(
-        "wfga.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-        strategy_statuses=STRATEGY_STATUSES, fitness_metrics=FITNESS_METRICS,
-    )
+        "wfga.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
+        strategy_statuses=STRATEGY_STATUSES, fitness_metrics=FITNESS_METRICS, **_alpaca_template_context())
 
 
 @app.route("/walk-forward-ga/start", methods=["POST"])
@@ -2890,7 +2893,7 @@ def wfga_start():
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_WFGA)
-            return render_template("wfga.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+            return render_template("wfga.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 400
 
         strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(
@@ -2935,10 +2938,10 @@ def wfga_start():
         return redirect(url_for("wfga_job", job_id=job_id))
     except (StrategyError, RefinementError) as exc:
         HEAVY_JOB_GUARD.release(JOB_WFGA)
-        return render_template("wfga.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+        return render_template("wfga.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_WFGA)
-        return render_template("wfga.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 500
+        return render_template("wfga.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 500
 
 
 @app.route("/walk-forward-ga/job/<job_id>")
@@ -3033,9 +3036,8 @@ def _mode_from_filename(filename: str) -> str | None:
 @app.route("/portfolio")
 def portfolio_form():
     return render_template(
-        "portfolio.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-        strategy_statuses=STRATEGY_STATUSES,
-    )
+        "portfolio.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
+        strategy_statuses=STRATEGY_STATUSES, **_alpaca_template_context())
 
 
 @app.route("/portfolio/run", methods=["POST"])
@@ -3074,7 +3076,7 @@ def portfolio_run():
                 except (StrategyError, FileNotFoundError, OSError) as exc:
                     return render_template("portfolio.html", **ctx(
                         error=f"Could not load library strategy '{leg_name}' for leg {i}: {exc}"
-                    )), 400
+                    ), **_alpaca_template_context()), 400
                 leg_label = f"{label} ({leg_name})"
             else:
                 leg_strategy = strategy
@@ -3084,7 +3086,7 @@ def portfolio_run():
             leg_labels.append(leg_label)
 
         if len(legs) < 2:
-            return render_template("portfolio.html", **ctx(error="A portfolio needs at least 2 instrument legs -- fill in a market data file/dataset for at least 2 of the leg slots below.")), 400
+            return render_template("portfolio.html", **ctx(error="A portfolio needs at least 2 instrument legs -- fill in a market data file/dataset for at least 2 of the leg slots below."), **_alpaca_template_context()), 400
 
         config = PortfolioConfig(
             initial_balance=risk.initial_balance,
@@ -3106,11 +3108,11 @@ def portfolio_run():
             "warnings": result.warnings,
             "report_html": f"/portfolio_reports/{Path(paths['html']).name}",
             "report_json": f"/portfolio_reports/{Path(paths['json']).name}",
-        }))
+        }), **_alpaca_template_context())
     except (StrategyError, PortfolioError) as exc:
-        return render_template("portfolio.html", **ctx(error=str(exc))), 400
+        return render_template("portfolio.html", **ctx(error=str(exc)), **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
-        return render_template("portfolio.html", **ctx(error=f"Unexpected error: {exc}")), 500
+        return render_template("portfolio.html", **ctx(error=f"Unexpected error: {exc}"), **_alpaca_template_context()), 500
 
 
 @app.route("/portfolio_reports/<path:filename>")
@@ -3128,8 +3130,7 @@ _REGIME_DIMENSIONS = ("trend", "volatility", "session", "environment")
 @app.route("/regime-matrix")
 def regime_matrix_form():
     return render_template(
-        "regime_matrix.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-    )
+        "regime_matrix.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context())
 
 
 @app.route("/regime-matrix/run", methods=["POST"])
@@ -3142,7 +3143,7 @@ def regime_matrix_run():
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
-            return render_template("regime_matrix.html", **ctx(error=dataset_error)), 400
+            return render_template("regime_matrix.html", **ctx(error=dataset_error), **_alpaca_template_context()), 400
 
         strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(
@@ -3157,13 +3158,13 @@ def regime_matrix_run():
         if dim_a == dim_b:
             return render_template("regime_matrix.html", **ctx(
                 error="Pick two DIFFERENT dimensions to cross for the primary matrix.",
-            )), 400
+            ), **_alpaca_template_context()), 400
 
         result = run_regime_matrix(df, strategy, risk, dimensions=(dim_a, dim_b))
         if result is None:
             return render_template("regime_matrix.html", **ctx(
                 error="Not enough bars in this dataset to classify regimes reliably -- try a longer history.",
-            )), 400
+            ), **_alpaca_template_context()), 400
 
         strategy_state.record_validation(
             getattr(strategy, "name", "Strategy"), active_label, "regime_matrix",
@@ -3178,11 +3179,11 @@ def regime_matrix_run():
             "disable_regimes": [c.to_dict() for c in result.disable_regimes()],
             "notes": result.notes,
             "table_text": result.render_table(),
-        }))
+        }), **_alpaca_template_context())
     except StrategyError as exc:
-        return render_template("regime_matrix.html", **ctx(error=str(exc))), 400
+        return render_template("regime_matrix.html", **ctx(error=str(exc)), **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
-        return render_template("regime_matrix.html", **ctx(error=f"Unexpected error: {exc}")), 500
+        return render_template("regime_matrix.html", **ctx(error=f"Unexpected error: {exc}"), **_alpaca_template_context()), 500
     finally:
         HEAVY_JOB_GUARD.release(JOB_REGIME_MATRIX)
 
@@ -3245,9 +3246,8 @@ def family_diversity_form():
 @app.route("/payout-probability")
 def payout_probability_form():
     return render_template(
-        "payout_probability.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-        saved_strategies_json=_saved_strategies_json(), prop_presets_json=_prop_presets_json(),
-    )
+        "payout_probability.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+        saved_strategies_json=_saved_strategies_json(), prop_presets_json=_prop_presets_json(), **_alpaca_template_context())
 
 
 @app.route("/payout-probability/run", methods=["POST"])
@@ -3257,7 +3257,7 @@ def payout_probability_run():
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
-            return render_template("payout_probability.html", **ctx(error=dataset_error)), 400
+            return render_template("payout_probability.html", **ctx(error=dataset_error), **_alpaca_template_context()), 400
 
         strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(
@@ -3278,7 +3278,7 @@ def payout_probability_run():
             return render_template("payout_probability.html", **ctx(
                 error="No trades were generated by this strategy over the given data -- there is "
                       "nothing to run a lifecycle simulation on."
-            )), 400
+            ), **_alpaca_template_context()), 400
 
         reset_fee_raw = (form.get("reset_fee") or "").strip()
         econ = ResetEconomics(
@@ -3333,11 +3333,11 @@ def payout_probability_run():
             "report_html": f"/payout_reports/{Path(paths['html']).name}",
             "report_json": f"/payout_reports/{Path(paths['json']).name}",
             "scaling": scaling_result,
-        }))
+        }), **_alpaca_template_context())
     except StrategyError as exc:
-        return render_template("payout_probability.html", **ctx(error=str(exc))), 400
+        return render_template("payout_probability.html", **ctx(error=str(exc)), **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
-        return render_template("payout_probability.html", **ctx(error=f"Unexpected error: {exc}")), 500
+        return render_template("payout_probability.html", **ctx(error=f"Unexpected error: {exc}"), **_alpaca_template_context()), 500
 
 
 @app.route("/payout_reports/<path:filename>")
@@ -3354,9 +3354,8 @@ def serve_payout_report(filename):
 @app.route("/prop-firm-recommender")
 def prop_firm_recommender_form():
     return render_template(
-        "prop_firm_recommender.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-        saved_strategies_json=_saved_strategies_json(), all_presets=list_prop_firm_presets(),
-    )
+        "prop_firm_recommender.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+        saved_strategies_json=_saved_strategies_json(), all_presets=list_prop_firm_presets(), **_alpaca_template_context())
 
 
 @app.route("/prop-firm-recommender/run", methods=["POST"])
@@ -3369,7 +3368,7 @@ def prop_firm_recommender_run():
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
-            return render_template("prop_firm_recommender.html", **ctx(error=dataset_error)), 400
+            return render_template("prop_firm_recommender.html", **ctx(error=dataset_error), **_alpaca_template_context()), 400
 
         strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(
@@ -3384,7 +3383,7 @@ def prop_firm_recommender_run():
             return render_template("prop_firm_recommender.html", **ctx(
                 error="No trades were generated by this strategy over the given data -- there is "
                       "nothing to score against prop-firm rule sets."
-            )), 400
+            ), **_alpaca_template_context()), 400
 
         n_sims = min(int(form.get("n_sims", 2000) or 2000), 20_000)
         selected_firms = form.getlist("firms")
@@ -3401,11 +3400,11 @@ def prop_firm_recommender_run():
             "strategy_name": bt_result.strategy_name,
             "instrument": active_label,
             "recommendations": [r.to_dict() for r in recommendations],
-        }))
+        }), **_alpaca_template_context())
     except StrategyError as exc:
-        return render_template("prop_firm_recommender.html", **ctx(error=str(exc))), 400
+        return render_template("prop_firm_recommender.html", **ctx(error=str(exc)), **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
-        return render_template("prop_firm_recommender.html", **ctx(error=f"Unexpected error: {exc}")), 500
+        return render_template("prop_firm_recommender.html", **ctx(error=f"Unexpected error: {exc}"), **_alpaca_template_context()), 500
 
 
 # ---------------------------------------------------------------------------
@@ -3419,9 +3418,8 @@ def prop_firm_recommender_run():
 @app.route("/ensemble")
 def ensemble_form():
     return render_template(
-        "ensemble.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-        strategy_statuses=STRATEGY_STATUSES,
-    )
+        "ensemble.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
+        strategy_statuses=STRATEGY_STATUSES, **_alpaca_template_context())
 
 
 @app.route("/ensemble/run", methods=["POST"])
@@ -3431,7 +3429,7 @@ def ensemble_run():
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
-            return render_template("ensemble.html", **ctx(error=dataset_error)), 400
+            return render_template("ensemble.html", **ctx(error=dataset_error), **_alpaca_template_context()), 400
 
         strategies, names = [], []
         for i in range(1, 5):
@@ -3440,16 +3438,16 @@ def ensemble_run():
                 continue
             mode = _mode_from_filename(f.filename)
             if mode is None:
-                return render_template("ensemble.html", **ctx(error=f"'{f.filename}': unrecognized strategy file type (expected .py, .pine, or .mq5).")), 400
+                return render_template("ensemble.html", **ctx(error=f"'{f.filename}': unrecognized strategy file type (expected .py, .pine, or .mq5)."), **_alpaca_template_context()), 400
             code = f.read().decode("utf-8", errors="replace")
             try:
                 strategies.append(build_strategy_from_code(mode, code))
             except StrategyError as exc:
-                return render_template("ensemble.html", **ctx(error=f"'{f.filename}': {exc}")), 400
+                return render_template("ensemble.html", **ctx(error=f"'{f.filename}': {exc}"), **_alpaca_template_context()), 400
             names.append(Path(f.filename).stem)
 
         if len(strategies) < 2:
-            return render_template("ensemble.html", **ctx(error="An ensemble needs at least 2 strategy legs -- upload at least 2 strategy files below (Python/PineScript/MQL5, mixing types is fine).")), 400
+            return render_template("ensemble.html", **ctx(error="An ensemble needs at least 2 strategy legs -- upload at least 2 strategy files below (Python/PineScript/MQL5, mixing types is fine)."), **_alpaca_template_context()), 400
 
         balance = float(form.get("initial_balance", 100000) or 100000)
         risk = RiskConfig(initial_balance=balance)
@@ -3459,7 +3457,7 @@ def ensemble_run():
             min_agreement = int(form.get("min_agreement", 2) or 2)
             bt_result = run_ensemble_vote(df, strategies, risk, names=names, vote_config=EnsembleVoteConfig(min_agreement=min_agreement))
             if not bt_result.trades:
-                return render_template("ensemble.html", **ctx(error="This vote ensemble produced zero trades on the given data -- nothing to report.")), 400
+                return render_template("ensemble.html", **ctx(error="This vote ensemble produced zero trades on the given data -- nothing to report."), **_alpaca_template_context()), 400
             rules = PropRules(account_size=balance)
             period = (str(df["timestamp"].iloc[0]), str(df["timestamp"].iloc[-1]))
             pnls = [t.pnl for t in bt_result.trades]
@@ -3479,7 +3477,7 @@ def ensemble_run():
                 "eval_pass_probability": mc_result.evaluation_pass_probability,
                 "report_html": f"/ensemble_reports/{Path(paths['html']).name}",
                 "report_json": f"/ensemble_reports/{Path(paths['json']).name}",
-            }))
+            }), **_alpaca_template_context())
 
         config = PortfolioConfig(initial_balance=balance, correlation_penalty_strength=float(form.get("correlation_penalty_strength", 0.6) or 0.6))
         result = run_ensemble_blend(df, strategies, risk, names=names, config=config)
@@ -3492,11 +3490,11 @@ def ensemble_run():
             "warnings": result.warnings,
             "report_html": f"/ensemble_reports/{Path(paths['html']).name}",
             "report_json": f"/ensemble_reports/{Path(paths['json']).name}",
-        }))
+        }), **_alpaca_template_context())
     except (StrategyError, EnsembleError, PortfolioError) as exc:
-        return render_template("ensemble.html", **ctx(error=str(exc))), 400
+        return render_template("ensemble.html", **ctx(error=str(exc)), **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
-        return render_template("ensemble.html", **ctx(error=f"Unexpected error: {exc}")), 500
+        return render_template("ensemble.html", **ctx(error=f"Unexpected error: {exc}"), **_alpaca_template_context()), 500
 
 
 @app.route("/ensemble_reports/<path:filename>")
@@ -3562,7 +3560,7 @@ def _run_cpcv_job(job_id: str, df, strategy, risk: RiskConfig, n_groups: int, n_
 
 @app.route("/cpcv")
 def cpcv_form():
-    return render_template("cpcv.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), strategy_statuses=STRATEGY_STATUSES)
+    return render_template("cpcv.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), strategy_statuses=STRATEGY_STATUSES, **_alpaca_template_context())
 
 
 @app.route("/cpcv/start", methods=["POST"])
@@ -3577,7 +3575,7 @@ def cpcv_start():
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_CPCV)
-            return render_template("cpcv.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 400
+            return render_template("cpcv.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
         strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000)),
@@ -3607,10 +3605,10 @@ def cpcv_start():
         return redirect(url_for("cpcv_job", job_id=job_id))
     except (StrategyError, CPCVError) as exc:
         HEAVY_JOB_GUARD.release(JOB_CPCV)
-        return render_template("cpcv.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 400
+        return render_template("cpcv.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_CPCV)
-        return render_template("cpcv.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 500
+        return render_template("cpcv.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 500
 
 
 @app.route("/cpcv/job/<job_id>")
@@ -3763,9 +3761,8 @@ def _perturbed_variant_specs(strategy, n_variants: int, seed: int) -> list[dict]
 @app.route("/pbo")
 def pbo_form():
     return render_template(
-        "pbo.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-        saved_strategies_json=_saved_strategies_json(), strategy_statuses=STRATEGY_STATUSES,
-    )
+        "pbo.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+        saved_strategies_json=_saved_strategies_json(), strategy_statuses=STRATEGY_STATUSES, **_alpaca_template_context())
 
 
 @app.route("/pbo/start", methods=["POST"])
@@ -3780,7 +3777,7 @@ def pbo_start():
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_PBO)
-            return render_template("pbo.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 400
+            return render_template("pbo.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
         strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
 
         pool_refs = [r for r in form.getlist("pool_strategy") if r]
@@ -3794,8 +3791,7 @@ def pbo_start():
             HEAVY_JOB_GUARD.release(JOB_PBO)
             return render_template(
                 "pbo.html", error="PBO needs at least 2 candidates -- check one or more Strategy Library entries and/or set 'perturbed variants' above 0.",
-                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-            ), 400
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
 
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000)),
@@ -3825,10 +3821,10 @@ def pbo_start():
         return redirect(url_for("pbo_job", job_id=job_id))
     except (StrategyError, CPCVError, RefinementError) as exc:
         HEAVY_JOB_GUARD.release(JOB_PBO)
-        return render_template("pbo.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 400
+        return render_template("pbo.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_PBO)
-        return render_template("pbo.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 500
+        return render_template("pbo.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 500
 
 
 @app.route("/pbo/job/<job_id>")
@@ -3955,7 +3951,7 @@ def _run_sensitivity_heatmap_job(job_id: str, param_a: str, param_b: str, pct_ra
 
 @app.route("/sensitivity")
 def sensitivity_form():
-    return render_template("sensitivity.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), strategy_statuses=STRATEGY_STATUSES)
+    return render_template("sensitivity.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), strategy_statuses=STRATEGY_STATUSES, **_alpaca_template_context())
 
 
 @app.route("/sensitivity/start", methods=["POST"])
@@ -3970,7 +3966,7 @@ def sensitivity_start():
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_SENSITIVITY)
-            return render_template("sensitivity.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 400
+            return render_template("sensitivity.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
         strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000)), pip_size=float(form.get("pip_size", 0.0001)))
         rules = PropRules(account_size=float(form.get("account_size", 100000)))
@@ -3995,10 +3991,10 @@ def sensitivity_start():
         return redirect(url_for("sensitivity_job", job_id=job_id))
     except (StrategyError, RefinementError) as exc:
         HEAVY_JOB_GUARD.release(JOB_SENSITIVITY)
-        return render_template("sensitivity.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 400
+        return render_template("sensitivity.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_SENSITIVITY)
-        return render_template("sensitivity.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json()), 500
+        return render_template("sensitivity.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 500
 
 
 @app.route("/sensitivity/job/<job_id>")
@@ -4140,10 +4136,9 @@ def _run_param_robustness_job(
 @app.route("/parameter-robustness")
 def parameter_robustness_form():
     return render_template(
-        "parameter_robustness.html", stored_datasets=list_stored_datasets(),
+        "parameter_robustness.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(),
         dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-        strategy_statuses=STRATEGY_STATUSES,
-    )
+        strategy_statuses=STRATEGY_STATUSES, **_alpaca_template_context())
 
 
 @app.route("/parameter-robustness/start", methods=["POST"])
@@ -4161,8 +4156,7 @@ def parameter_robustness_start():
             HEAVY_JOB_GUARD.release(JOB_PARAMETER_ROBUSTNESS)
             return render_template(
                 "parameter_robustness.html", error=dataset_error, stored_datasets=list_stored_datasets(),
-                dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-            ), 400
+                dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
         strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000)), pip_size=float(form.get("pip_size", 0.0001)))
         rules = PropRules(account_size=float(form.get("account_size", 100000)))
@@ -4191,14 +4185,12 @@ def parameter_robustness_start():
         HEAVY_JOB_GUARD.release(JOB_PARAMETER_ROBUSTNESS)
         return render_template(
             "parameter_robustness.html", error=str(exc), stored_datasets=list_stored_datasets(),
-            dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-        ), 400
+            dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_PARAMETER_ROBUSTNESS)
         return render_template(
             "parameter_robustness.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(),
-            dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-        ), 500
+            dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 500
 
 
 @app.route("/parameter-robustness/job/<job_id>")
@@ -4399,11 +4391,10 @@ HEAVY_JOB_GUARD.register_health_check(
 @app.route("/evolution")
 def evolution_form():
     return render_template(
-        "evolution.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+        "evolution.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         families=[{"name": n, "description": family_description(n)} for n in list_families()],
         running=(_EVOLUTION_RUNNER is not None and _EVOLUTION_RUNNER.is_running),
-        prop_presets_json=_prop_presets_json(),
-    )
+        prop_presets_json=_prop_presets_json(), **_alpaca_template_context())
 
 
 @app.route("/evolution/start", methods=["POST"])
@@ -4425,13 +4416,12 @@ def evolution_start():
             stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             families=[{"name": n, "description": family_description(n)} for n in list_families()],
             running=False,
-            prop_presets_json=_prop_presets_json(),
-        ), 409
+            prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 409
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_EVOLUTION_LAB)
-            return render_template("evolution.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), families=[{"name": n, "description": family_description(n)} for n in list_families()], running=False, prop_presets_json=_prop_presets_json()), 400
+            return render_template("evolution.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), families=[{"name": n, "description": family_description(n)} for n in list_families()], running=False, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
 
         # UPGRADE (Evolution Lab account/risk fields): this used to be
         # `RiskConfig(initial_balance=...)` / `PropRules(account_size=...)`
@@ -4494,7 +4484,7 @@ def evolution_start():
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_EVOLUTION_LAB)
         log_crash("Evolution Lab (web)", exc=exc)
-        return render_template("evolution.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), families=[{"name": n, "description": family_description(n)} for n in list_families()], running=False, prop_presets_json=_prop_presets_json()), 500
+        return render_template("evolution.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), families=[{"name": n, "description": family_description(n)} for n in list_families()], running=False, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 500
 
 
 @app.route("/evolution/stop", methods=["POST"])
@@ -4962,9 +4952,8 @@ def _run_agent_job(job_id: str, question: str, ctx: ResearchAgentContext, settin
 def research_agent_form():
     saved_ai = load_ollama_settings()
     return render_template(
-        "research_agent.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-        strategy_statuses=STRATEGY_STATUSES, ai_enabled=saved_ai.enabled, ai_host=saved_ai.host, ai_model=saved_ai.model,
-    )
+        "research_agent.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
+        strategy_statuses=STRATEGY_STATUSES, ai_enabled=saved_ai.enabled, ai_host=saved_ai.host, ai_model=saved_ai.model, **_alpaca_template_context())
 
 
 @app.route("/research-agent/start", methods=["POST"])
@@ -4973,14 +4962,14 @@ def research_agent_start():
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
-            return render_template("research_agent.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), ai_enabled=False, ai_host="", ai_model=""), 400
+            return render_template("research_agent.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), ai_enabled=False, ai_host="", ai_model="", **_alpaca_template_context()), 400
 
         strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000) or 100000), pip_size=float(form.get("pip_size", 0.0001) or 0.0001))
         rules = PropRules(account_size=float(form.get("account_size", 100000) or 100000))
         question = (form.get("question") or "").strip()
         if not question:
-            return render_template("research_agent.html", error="Enter a question for the agent to investigate.", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), ai_enabled=False, ai_host="", ai_model=""), 400
+            return render_template("research_agent.html", error="Enter a question for the agent to investigate.", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), ai_enabled=False, ai_host="", ai_model="", **_alpaca_template_context()), 400
 
         settings = OllamaSettings(enabled=True, host=form.get("ai_host", "http://localhost:11434") or "http://localhost:11434", model=form.get("ai_model", "llama3.1") or "llama3.1")
         try:
@@ -5025,9 +5014,9 @@ def research_agent_start():
         thread.start()
         return redirect(url_for("research_agent_job", job_id=job_id))
     except StrategyError as exc:
-        return render_template("research_agent.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), ai_enabled=False, ai_host="", ai_model=""), 400
+        return render_template("research_agent.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), ai_enabled=False, ai_host="", ai_model="", **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
-        return render_template("research_agent.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), ai_enabled=False, ai_host="", ai_model=""), 500
+        return render_template("research_agent.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), ai_enabled=False, ai_host="", ai_model="", **_alpaca_template_context()), 500
 
 
 @app.route("/research-agent/job/<job_id>")
@@ -5095,10 +5084,9 @@ def research_loop_form():
             for jid, j in _RESEARCH_LOOP_JOBS.items()
         ]
     return render_template(
-        "research_loop.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+        "research_loop.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         ai_enabled=saved_ai.enabled, ai_host=saved_ai.host, ai_model=saved_ai.model,
-        active_jobs=active_jobs,
-    )
+        active_jobs=active_jobs, **_alpaca_template_context())
 
 
 @app.route("/research-loop/start", methods=["POST"])
@@ -5109,8 +5097,7 @@ def research_loop_start():
         if dataset_error:
             return render_template(
                 "research_loop.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-                ai_enabled=False, ai_host="", ai_model="", active_jobs=[],
-            ), 400
+                ai_enabled=False, ai_host="", ai_model="", active_jobs=[], **_alpaca_template_context()), 400
 
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000) or 100000),
@@ -5149,8 +5136,7 @@ def research_loop_start():
         log_crash("Research Loop (web, start)", exc=exc)
         return render_template(
             "research_loop.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-            ai_enabled=False, ai_host="", ai_model="", active_jobs=[],
-        ), 500
+            ai_enabled=False, ai_host="", ai_model="", active_jobs=[], **_alpaca_template_context()), 500
 
 
 @app.route("/research-loop/job/<job_id>")
@@ -5664,10 +5650,9 @@ def _run_forge_loop_job(
 def research_form():
     return render_template(
         "research.html",
-        stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+        alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         manual_strategies=list_saved_strategies("manual"),
-        active_page="research",
-    )
+        active_page="research", **_alpaca_template_context())
 
 
 @app.route("/research/run", methods=["POST"])
@@ -5681,8 +5666,7 @@ def research_run():
             manual_strategies=list_saved_strategies("manual"),
             selected_dataset=(form.get("existing_dataset") or ""),
             selected_strategy=(form.get("strategy_file") or ""),
-            active_page="research",
-        ), status
+            active_page="research", **_alpaca_template_context()), status
 
     df, active_label, _import_note, dataset_error = _resolve_dataset(form, request.files)
     if dataset_error:
@@ -5757,8 +5741,7 @@ def research_run():
             manual_strategies=list_saved_strategies("manual"),
             selected_dataset=(form.get("existing_dataset") or ""),
             selected_strategy=strategy_file,
-            active_page="research",
-        )
+            active_page="research", **_alpaca_template_context())
     except Exception as exc:  # noqa: BLE001
         log_crash("Research Director (web)", exc=exc)
         return _rerender(f"Unexpected error: {exc}", status=500)
@@ -5768,10 +5751,9 @@ def research_run():
 def forge_form():
     return render_template(
         "forge.html",
-        stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+        alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         families=[{"name": n, "hypothesis": hypothesis_question(n)} for n in list_families()],
-        active_page="forge",
-    )
+        active_page="forge", **_alpaca_template_context())
 
 
 @app.route("/forge/start", methods=["POST"])
@@ -5786,8 +5768,7 @@ def forge_start():
                 f"before starting Forge Strategy."
             ),
             stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-            active_page="forge",
-        ), 409
+            active_page="forge", **_alpaca_template_context()), 409
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
@@ -5795,8 +5776,7 @@ def forge_start():
             return render_template(
                 "forge.html", error=dataset_error,
                 stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-                active_page="forge",
-            ), 400
+                active_page="forge", **_alpaca_template_context()), 400
 
         seed = int(form.get("seed", 42) or 42)
         workers_raw = (form.get("workers") or "").strip()
@@ -5910,8 +5890,7 @@ def forge_start():
         return render_template(
             "forge.html", error=f"Unexpected error: {exc}",
             stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-            active_page="forge",
-        ), 500
+            active_page="forge", **_alpaca_template_context()), 500
 
 
 @app.route("/forge/job/<job_id>")
@@ -6458,8 +6437,7 @@ def _run_speedrun_loop_job(
 @app.route("/speed-run")
 def speed_run_form():
     return render_template(
-        "speed_run.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), fitness_metrics=FITNESS_METRICS,
-    )
+        "speed_run.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), fitness_metrics=FITNESS_METRICS, **_alpaca_template_context())
 
 
 @app.route("/speed-run/start", methods=["POST"])
@@ -6474,16 +6452,14 @@ def speed_run_start():
                 f"time can exhaust available memory -- this is the same failure mode that can freeze "
                 f"or crash the desktop app. Wait for it to finish before starting Speed Run."
             ),
-            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), fitness_metrics=FITNESS_METRICS,
-        ), 409
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 409
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_SPEED_RUN)
             return render_template(
                 "speed_run.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-                fitness_metrics=FITNESS_METRICS,
-            ), 400
+                fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 400
 
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000)),
@@ -6566,8 +6542,7 @@ def speed_run_start():
         log_crash("Speed Run (web, start)", exc=exc)
         return render_template(
             "speed_run.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-            fitness_metrics=FITNESS_METRICS,
-        ), 500
+            fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 500
 
 
 @app.route("/speed-run/job/<job_id>")
@@ -6747,8 +6722,7 @@ def _run_autopilot_job(job_id: str, df, risk: RiskConfig, rules: PropRules, acti
 @app.route("/overnight-autopilot")
 def overnight_autopilot_form():
     return render_template(
-        "overnight_autopilot.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-    )
+        "overnight_autopilot.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), **_alpaca_template_context())
 
 
 @app.route("/overnight-autopilot/start", methods=["POST"])
@@ -6762,16 +6736,14 @@ def overnight_autopilot_start():
                 f"one heavy job at the same time can exhaust available memory. Wait for it to finish "
                 f"before starting Overnight Autopilot."
             ),
-            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-        ), 409
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), **_alpaca_template_context()), 409
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_SPEED_RUN)
             return render_template(
                 "overnight_autopilot.html", error=dataset_error,
-                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-            ), 400
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), **_alpaca_template_context()), 400
 
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000)),
@@ -6823,8 +6795,7 @@ def overnight_autopilot_start():
         log_crash("Overnight Autopilot (web, start)", exc=exc)
         return render_template(
             "overnight_autopilot.html", error=f"Unexpected error: {exc}",
-            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-        ), 500
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), **_alpaca_template_context()), 500
 
 
 @app.route("/overnight-autopilot/job/<job_id>")
