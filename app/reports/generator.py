@@ -315,6 +315,7 @@ Instrument: {instrument} &middot; Timeframe: {timeframe} &middot; Period: {perio
 {single_run_table}
 
 <h2>Monte Carlo Simulation ({n_sims:,} simulated accounts)</h2>
+<p class="muted">{mc_methodology_note}</p>
 {monte_carlo_table}
 
 <div class="chart-row">
@@ -585,7 +586,11 @@ def export_html(
         holdout_section=_holdout_section(report.get("holdout_comparison")),
         rules_table=_dict_to_table(report["prop_firm_rules"]),
         single_run_table=_dict_to_table(single),
-        monte_carlo_table=_dict_to_table({k: v for k, v in mc.items() if not isinstance(v, (dict, list))}),
+        monte_carlo_table=_dict_to_table({
+            k: v for k, v in mc.items()
+            if not isinstance(v, (dict, list)) and k != "methodology_note"
+        }),
+        mc_methodology_note=mc.get("methodology_note", ""),
         return_chart=return_chart,
         drawdown_chart=drawdown_chart,
         n_sims=mc["n_simulations"],

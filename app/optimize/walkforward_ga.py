@@ -223,6 +223,11 @@ class WalkforwardGAResult:
     overfitting_gap: float | None  # best.in_sample_fitness - best.fitness; large positive = curve-fit, likely to disappoint live
     elapsed_seconds: float
     warnings: list = field(default_factory=list)
+    # VAL-005: 0-based, exclusive-end bar position (in the `df` this GA
+    # was run against) of the furthest-forward bar any of its fold TEST
+    # windows touched -- None if no folds were built. See
+    # app.search.robustness.run_walk_forward's embargo_start_bar.
+    max_test_bar_used: int | None = None
 
 
 class WalkforwardGACancelled(Exception):
@@ -316,12 +321,29 @@ def run_walkforward_aware_refinement(
     t0 = time.time()
     warnings: list[str] = []
 
-    folds = build_folds(df, n_folds=n_folds, window_mode=window_mode, train_frac=train_frac)
+    folds = build_folds(df, n_folds=n_folds, window_mode=window_mode, train_frac=train_frac, warnings=warnings)
     if not folds:
         raise RefinementError(
             "Not enough bars to build the requested number of walk-forward folds for the GA."
         )
+    if len(folds) < n_folds:
+        # VAL-005: build_folds already appended the per-fold reason(s) to
+        # `warnings` above -- this adds the summary a person actually
+        # scans for: "the chained-OOS fitness below reflects fewer folds
+        # than you configured."
+        warnings.append(
+            f"Only {len(folds)} of the {n_folds} requested walk-forward fold(s) were usable -- "
+            "the chained out-of-sample fitness, generation-history log, and overfitting_gap "
+            "below were all computed from those folds only."
+        )
     test_slices = [f.test_df for f in folds]
+    # VAL-005: the furthest-forward bar (0-based, exclusive end) any of
+    # this GA's fold TEST windows touched in the original `df` -- Full
+    # Pipeline's Step 4 out-of-sample check uses this to embargo its own
+    # fold construction so it doesn't re-test bars this search already
+    # selected the winning genome against. See
+    # app.search.robustness.run_walk_forward's embargo_start_bar.
+    max_test_bar_used = max((f.test_end_bar for f in folds), default=None)
 
     preflight_signal_check(df, strategy, risk, "Walk-Forward-Aware GA")
 
@@ -611,6 +633,7 @@ def run_walkforward_aware_refinement(
             overfitting_gap=overfitting_gap,
             elapsed_seconds=elapsed,
             warnings=warnings,
+            max_test_bar_used=max_test_bar_used,
         )
     finally:
         if tmp_dir is not None:

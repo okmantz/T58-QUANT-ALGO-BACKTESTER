@@ -28,6 +28,22 @@ class RiskConfig:
     # existed). This is the correct, supported way to give a strategy a daily-loss cutoff --
     # a strategy's own generate_signals() cannot implement this itself (see app/strategy/
     # python.py) because it never sees realized trade outcomes, only price data.
+    reentry_cooldown_bars: int = 0
+    # FIX (EXEC-002): after an open position is stopped out (or hits its
+    # take-profit) intrabar, app.backtest.execution used to let a brand
+    # new position open in the SAME direction on that exact same bar's
+    # close, with no cooldown at all, as long as the strategy's signal
+    # hadn't gone flat -- i.e. a whipsaw bar that clips a tight stop and
+    # then closes back at a level the strategy still signals on produced
+    # TWO trades and re-exposed the same risk within one bar. That
+    # behavior is still the default (0 = no cooldown, byte-for-byte the
+    # original behavior, so nothing changes for any existing caller/
+    # saved config unless this is explicitly set), but it is now an
+    # explicit, documented, configurable choice instead of a silent one.
+    # Setting this to N>0 blocks any NEW entry for N bars (measured from
+    # the bar the previous position closed on, inclusive) regardless of
+    # what the strategy's signal says -- see app.backtest.execution's
+    # module docstring for the exact accounting.
 
     # --- account-survivability hard caps ---------------------------------
     # A real prop/broker account has negative-balance protection and a hard
@@ -100,15 +116,19 @@ class RiskConfig:
 
 
 def with_prop_safety_defaults(risk: "RiskConfig", prop_rules) -> "RiskConfig":
-    """Returns a copy of `risk` with max_account_drawdown_pct AND
+    """Returns a copy of `risk` with max_account_drawdown_pct, AND
     daily_loss_limit_pct filled in from `prop_rules` whenever the caller
-    hasn't already set an explicit value of their own for that field.
-    This is what makes the account-blown circuit breaker AND the
-    daily-loss circuit breaker (see app.backtest.execution) apply
-    automatically during the RAW BACKTEST itself -- not just later, when
-    the post-hoc prop simulator (app.prop.simulator.simulate_account)
-    checks the finished trade sequence against the same rules. Never
-    overrides a value the caller explicitly configured on either field.
+    hasn't already set an explicit value of their own for that field, AND
+    initial_balance forced to match `prop_rules.account_size`. This is
+    what makes the account-blown circuit breaker AND the daily-loss
+    circuit breaker (see app.backtest.execution) apply automatically
+    during the RAW BACKTEST itself, against the SAME dollar account the
+    post-hoc prop simulator (app.prop.simulator.simulate_account) checks
+    the finished trade sequence against -- not just later, and not
+    against a different balance. Never overrides a value the caller
+    explicitly configured on either PERCENTAGE field (max_account_
+    drawdown_pct / daily_loss_limit_pct); initial_balance is the one
+    exception -- see the RISK-001 fix note below for why.
 
     FIX (2026-09-12): daily_loss_limit_pct used to be left out of this
     function entirely -- only max_account_drawdown_pct was wired through.
@@ -125,7 +145,31 @@ def with_prop_safety_defaults(risk: "RiskConfig", prop_rules) -> "RiskConfig":
     every caller of this function (Speed Run, Full Pipeline, and now
     Evolution Lab -- see app.evolution.engine.EvolutionRunner.__init__)
     gets the fix automatically, with no other code path needing to
-    change."""
+    change.
+
+    FIX (RISK-001): `daily_loss_limit_pct` and `max_account_drawdown_pct`
+    are PERCENTAGES, and they used to get applied against two different
+    dollar bases depending on which layer checked them -- the raw
+    backtest's intrabar circuit breaker used `risk.initial_balance`,
+    while the post-hoc prop-firm verdict (simulate_account) used
+    `prop_rules.account_size`. Both values default to different numbers
+    (10,000 vs 100,000) and, worse, both were independently user-editable
+    (two separate "Initial balance ($)" / "Account size ($)" fields in
+    both the desktop and web UI, with no sync between them), so a
+    strategy could cleanly survive the raw-backtest circuit breaker
+    (checked against the wrong, too-generous dollar floor) and then be
+    silently re-scored against a completely different floor at the final
+    verdict, or vice versa. Since PropRules IS the definition of the
+    account actually being evaluated, `prop_rules.account_size` is now
+    treated as authoritative and always wins here -- this function is
+    the one policy chokepoint already shared by every pipeline that
+    matters for a research verdict, so fixing it here fixes the
+    divergence everywhere this function is already called. Callers that
+    construct a RiskConfig/PropRules pair directly (rather than through
+    a pipeline that calls this function) should call
+    account_size_mismatch_message() themselves first if they want to
+    warn the person BEFORE the values get silently reconciled -- see its
+    docstring."""
     from dataclasses import replace
     updates: dict = {}
     if risk.max_account_drawdown_pct is None:
@@ -136,9 +180,48 @@ def with_prop_safety_defaults(risk: "RiskConfig", prop_rules) -> "RiskConfig":
         daily_loss = getattr(prop_rules, "daily_loss_limit_pct", None)
         if daily_loss is not None:
             updates["daily_loss_limit_pct"] = daily_loss
+    account_size = getattr(prop_rules, "account_size", None)
+    if account_size is not None and risk.initial_balance != account_size:
+        updates["initial_balance"] = account_size
     if not updates:
         return risk
     return replace(risk, **updates)
+
+
+def account_size_mismatch_message(initial_balance: float, account_size: float) -> str | None:
+    """RISK-001: None if `initial_balance` (RiskConfig, drives position
+    sizing and the raw backtest's own intrabar circuit breakers) and
+    `account_size` (PropRules, what the final prop-firm verdict is
+    actually computed against) already agree -- otherwise an actionable
+    message explaining the mismatch and that with_prop_safety_defaults()
+    will make `account_size` win. Callers that build a RiskConfig and a
+    PropRules directly (web routes, the desktop UI, any script) should
+    call this BEFORE calling with_prop_safety_defaults so the person
+    sees why their numbers just changed, the same way
+    instrument_scale_mismatch_message() is surfaced before its own
+    silent-but-safe correction."""
+    if initial_balance == account_size:
+        return None
+    return (
+        f"Account-size mismatch: Risk config's 'Initial balance' (${initial_balance:,.2f}) does not "
+        f"match the prop rules' 'Account size' (${account_size:,.2f}). These must be the same dollar "
+        "account -- position sizing, the raw backtest's daily-loss/max-drawdown circuit breakers, AND "
+        "the final prop-firm pass/fail verdict all need to agree on how big the account actually is, "
+        "or a strategy can silently survive one stage's check and fail (or pass) the other's, on the "
+        "exact same trades, purely because they used different dollar floors for the same percentage "
+        f"rule. Using the prop rules' account size (${account_size:,.2f}) for this run -- update the "
+        "'Initial balance' field to match if that wasn't intended."
+    )
+
+
+_ACCOUNT_SIZE_MISMATCH_MARKER = "Account-size mismatch:"
+
+
+def has_account_size_mismatch(warnings: "list[str]") -> bool:
+    """True if any warning in `warnings` is account_size_mismatch_message's
+    warning -- same shared-detection pattern as has_instrument_scale_mismatch
+    and has_impossible_condition, so every caller escalates this the same way."""
+    return any(_ACCOUNT_SIZE_MISMATCH_MARKER in w for w in warnings)
 
 
 def suggest_pip_size(df) -> float:

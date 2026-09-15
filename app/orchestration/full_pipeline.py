@@ -31,9 +31,21 @@ This module does that hand-off automatically:
     Step 3  Final validation    -- the winning configuration is re-run
                                    through a full backtest, prop-firm
                                    simulation, and full-fidelity Monte
-                                   Carlo on the WHOLE dataset (more
-                                   simulations than the search phase used,
-                                   since this is the one that counts).
+                                   Carlo on `dev_df` -- the same
+                                   pre-holdout slice Steps 1-2 already
+                                   used (more simulations than the search
+                                   phase used, since this is the one that
+                                   counts) -- NOT the whole dataset; see
+                                   Step 5 below and
+                                   FullPipelineConfig.reserve_true_holdout
+                                   for where the genuinely-unseen tail
+                                   comes in. (DOC-003: this step used to
+                                   be described as running on "the whole
+                                   dataset," which was true before the
+                                   circularity fix landed but never
+                                   updated afterward -- the code has been
+                                   correct since; only this docstring was
+                                   stale.)
     Step 4  Out-of-sample check -- app.search.robustness.run_walk_forward
                                    on the exact winning configuration, NO
                                    further re-tuning: does this exact
@@ -83,6 +95,7 @@ from app.backtest.engine import BacktestResult, run_backtest, run_holdout_compar
 from app.backtest.adaptive_risk import build_limit_aware_preset
 from app.backtest.risk import (
     RiskConfig,
+    account_size_mismatch_message,
     has_impossible_condition,
     has_instrument_scale_mismatch,
     with_prop_safety_defaults,
@@ -262,6 +275,13 @@ class FullPipelineResult:
     report_paths: dict
     elapsed_seconds: float
     warnings: list = field(default_factory=list)
+    # RISK-001: set when the caller's RiskConfig.initial_balance didn't
+    # match PropRules.account_size before this run -- see
+    # app.backtest.risk.account_size_mismatch_message. Also present in
+    # `warnings` above; broken out here so callers/UI can give it the
+    # same dedicated prominence Quick Optimize gives its own copy of
+    # this field.
+    account_mismatch_warning: str | None = None
 
 
 def _display_name(strategy: Strategy) -> str:
@@ -514,12 +534,24 @@ def run_full_pipeline(
         )
     cfg = replace(cfg, parallel_search_max_workers=_safe_fp_workers)
 
+    # RISK-001: detect (and log) a RiskConfig.initial_balance / PropRules.
+    # account_size mismatch BEFORE with_prop_safety_defaults silently
+    # reconciles it below -- same "!!!"-prefixed prominence this pipeline
+    # already gives the pip_size/instrument-scale mismatch warning, since
+    # every number this run produces was computed against the corrected
+    # balance, not whatever the caller originally passed in.
+    account_mismatch_warning = account_size_mismatch_message(risk.initial_balance, prop_rules.account_size)
+    if account_mismatch_warning is not None:
+        log(f"  !!! {account_mismatch_warning}")
+        warnings.append(account_mismatch_warning)
+
     # Automatically ties the raw execution engine's account-blown circuit
     # breaker (app.backtest.execution) to whatever max-drawdown floor this
     # PROP FIRM actually enforces, so a single misconfigured/gapped trade
     # can never report a loss bigger than the account the prop simulation
     # is about to test it against. No-op if `risk` already set its own
-    # max_account_drawdown_pct explicitly.
+    # max_account_drawdown_pct explicitly. Also forces risk.initial_balance
+    # to match prop_rules.account_size (see RISK-001 note on this function).
     risk = with_prop_safety_defaults(risk, prop_rules)
 
     adaptive_risk = build_limit_aware_preset(prop_rules, daily_profit_lock_pct=cfg.adaptive_risk_daily_profit_lock_pct) \
@@ -786,7 +818,14 @@ def run_full_pipeline(
         pnls = [t.pnl for t in final_bt.trades]
         dates = [t.entry_time for t in final_bt.trades]
         final_single_run = simulate_account(pnls, dates, prop_rules)
-        final_mc = run_monte_carlo(final_bt.trades, prop_rules, MonteCarloConfig(n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed))
+        final_mc = run_monte_carlo(
+            final_bt.trades, prop_rules, MonteCarloConfig(n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed),
+            # MC-004: these trades came from Step 2's GA search over this
+            # same dev_df when refinement actually ran -- see
+            # run_monte_carlo's docstring. Steps 4-6 below provide the
+            # genuinely independent evidence this number alone doesn't.
+            selection_bias_caveat=refinement_ran,
+        )
         log(
             f"  Final: {len(final_bt.trades)} trades, net ${final_bt.statistics.net_profit:,.2f}, "
             f"eval pass {final_mc.evaluation_pass_probability:.1f}%, payout {final_mc.first_payout_probability:.1f}%."
@@ -797,15 +836,36 @@ def run_full_pipeline(
         log("Step 4/7: Out-of-sample fold check (same configuration, no further tuning)...")
         oos_validation = None
         oos_skip_reason = None
+        # VAL-005 fix: Step 2's GA already selected the winning genome
+        # using chained fitness over its OWN fold test windows on this
+        # same dev_df -- without embargoing past those bars, this step's
+        # EXPANDING fold construction substantially or fully overlapped 3
+        # of 4 "out-of-sample" fold test windows with the GA's own
+        # (verified numerically), making most of this "independence" an
+        # illusion. ga_result.max_test_bar_used (None if refinement
+        # didn't run, or the strategy had no tunable parameters) tells
+        # run_walk_forward exactly where to start instead.
+        embargo_start_bar = (
+            ga_result.max_test_bar_used if (refinement_ran and ga_result is not None) else None
+        )
         try:
             oos_validation = run_walk_forward(
                 dev_df, lambda: build_strategy_from_spec(final_spec, final_tmp_dir), risk,
                 n_folds=cfg.oos_check_folds, metric=cfg.oos_check_metric,
                 prop_rules=prop_rules, mc_cfg=MonteCarloConfig(n_simulations=cfg.ga_search_mc_sims, random_seed=cfg.random_seed),
+                embargo_start_bar=embargo_start_bar,
             )
             if oos_validation is None:
                 oos_skip_reason = "Not enough bars to build the requested number of out-of-sample folds."
+                if embargo_start_bar is not None:
+                    oos_skip_reason += (
+                        f" (after embargoing the first {embargo_start_bar:,} bar(s) the "
+                        "optimization search already used, to keep this check genuinely independent)."
+                    )
             else:
+                for w in oos_validation.warnings:
+                    log(f"  {w}")
+                    warnings.append(w)
                 log(
                     f"  Walk-forward efficiency {oos_validation.walk_forward_efficiency:.2f} "
                     f"({'stable' if oos_validation.is_stable else 'NOT stable'})."
@@ -947,7 +1007,7 @@ def run_full_pipeline(
             scorecard, risk_of_ruin_hard_fail, parsimony_result,
             cpcv_primary_result or cpcv_supporting_result, cpcv_skip_reason, regime_result, regime_skip_reason,
             df, prop_rules, risk, cfg, elapsed, warnings, log, output_dir,
-            instrument, report_basename,
+            instrument, report_basename, account_mismatch_warning,
         )
     finally:
         if final_tmp_dir is not None:
@@ -963,7 +1023,7 @@ def _finish(
     scorecard, risk_of_ruin_hard_fail, parsimony_result, cpcv_result, cpcv_skip_reason,
     regime_result, regime_skip_reason,
     df, prop_rules, risk, cfg, elapsed, warnings, log, output_dir,
-    instrument="unknown", report_basename="full_pipeline_report",
+    instrument="unknown", report_basename="full_pipeline_report", account_mismatch_warning=None,
 ) -> FullPipelineResult:
     """Writes the report + (for code strategies) saves the winner into the
     Strategy Library. Split out of run_full_pipeline only to keep that
@@ -1158,6 +1218,7 @@ def _finish(
         saved_library_note=saved_library_note,
         report_paths=report_paths,
         elapsed_seconds=elapsed,
+        account_mismatch_warning=account_mismatch_warning,
         warnings=warnings,
     )
 

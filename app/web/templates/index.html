@@ -388,7 +388,7 @@
     <details>
       <summary>3. Prop-Firm Rules</summary>
       <div class="row">
-        <div><label>Account size ($)</label><input type="number" name="account_size" value="100000"></div>
+        <div><label>Account size ($)</label><input type="number" name="account_size" id="account_size_input" value="100000"><div class="hint" style="font-size:0.8em;color:#888;">Kept in sync with Initial balance below (RISK-001) -- these must be the same account.</div></div>
         <div><label>Eval profit target (%)</label><input type="number" name="profit_target" value="8"></div>
       </div>
       <div class="row">
@@ -427,7 +427,7 @@
     <details>
       <summary>4. Risk &amp; Execution</summary>
       <div class="row">
-        <div><label>Initial balance ($)</label><input type="number" name="initial_balance" value="100000"></div>
+        <div><label>Initial balance ($)</label><input type="number" name="initial_balance" id="initial_balance_input" value="100000"><div class="hint" style="font-size:0.8em;color:#888;">Kept in sync with Account size above (RISK-001) -- these must be the same account.</div></div>
         <div><label>Risk mode</label>
           <select name="risk_mode"><option value="percent">Percent</option><option value="fixed">Fixed $</option></select>
         </div>
@@ -472,6 +472,24 @@
 </div>
 
 <script>
+  // RISK-001 fix: "Account size ($)" (Prop-Firm Rules) and "Initial
+  // balance ($)" (Risk & Execution) must be the same dollar account --
+  // the backend now forces them to match server-side regardless
+  // (app.backtest.risk.with_prop_safety_defaults), but syncing them live
+  // here means the person never sees the two numbers disagree in the
+  // first place, or wonders why the value they typed "changed" server-side.
+  (function () {
+    const accountSizeInput = document.getElementById('account_size_input');
+    const initialBalanceInput = document.getElementById('initial_balance_input');
+    if (!accountSizeInput || !initialBalanceInput) return;
+    accountSizeInput.addEventListener('input', () => {
+      initialBalanceInput.value = accountSizeInput.value;
+    });
+    initialBalanceInput.addEventListener('input', () => {
+      accountSizeInput.value = initialBalanceInput.value;
+    });
+  })();
+
   function detectPipSize() {
     const statusEl = document.getElementById('pip_detect_status');
     const fileInput = document.querySelector('input[name="csv_file"]');

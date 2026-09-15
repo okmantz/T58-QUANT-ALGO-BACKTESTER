@@ -337,8 +337,22 @@ def _attribute_trades(trades: list, labels: pd.DataFrame, df: pd.DataFrame, dim_
     that trade's values across `dim_cols`."""
     ts = pd.to_datetime(df["timestamp"])
     by_key: dict[tuple, list] = {}
+    # VAL-006 defensive fix: app.backtest.execution now preserves the
+    # input data's tz-awareness on Trade.entry_time/exit_time, so this
+    # and `ts` (re-derived straight from df) should already agree. But
+    # this lookup shouldn't ITSELF assume that holds for every possible
+    # caller/trade source -- normalize both sides to the same
+    # tz-awareness right here (rather than relying on upstream agreement)
+    # so a naive/aware mismatch degrades to a plain comparison instead of
+    # raising and silently disabling this entire diagnostic.
+    ts_tz = getattr(ts.dtype, "tz", None)
     for t in trades:
-        idx = ts.searchsorted(pd.Timestamp(t.entry_time), side="right") - 1
+        entry_ts = pd.Timestamp(t.entry_time)
+        if ts_tz is not None and entry_ts.tzinfo is None:
+            entry_ts = entry_ts.tz_localize(ts_tz)
+        elif ts_tz is None and entry_ts.tzinfo is not None:
+            entry_ts = entry_ts.tz_localize(None)
+        idx = ts.searchsorted(entry_ts, side="right") - 1
         if idx < 0 or idx >= len(labels):
             continue
         row = labels.iloc[idx]

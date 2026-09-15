@@ -89,7 +89,20 @@ def _periodic_max_drawdown(equity_df: pd.DataFrame, freq: str) -> float:
     equity = df["equity"]
     if equity.empty:
         return 0.0
-    period_key = equity.index.to_period(freq)
+    # VAL-006 side-effect fix: equity.index is now correctly tz-aware
+    # whenever the source data was (see app.backtest.execution's
+    # _restore_tz), but pandas' PeriodIndex has no concept of timezone at
+    # all -- .to_period() on a tz-aware index works fine but emits a
+    # UserWarning every single call (and this runs once per backtest,
+    # so a GA search/Search Lab run could emit it thousands of times).
+    # Stripping the tz label (NOT converting to UTC first) keeps the
+    # exact same displayed wall-clock time, which is what should
+    # determine which calendar period a bar belongs to -- this is a
+    # silence-the-warning fix, not a behavior change.
+    index_for_period = equity.index
+    if getattr(index_for_period, "tz", None) is not None:
+        index_for_period = index_for_period.tz_localize(None)
+    period_key = index_for_period.to_period(freq)
     running_max = equity.groupby(period_key).cummax()
     dd = (equity - running_max) / running_max.replace(0, np.nan)
     dd = dd.fillna(0.0)

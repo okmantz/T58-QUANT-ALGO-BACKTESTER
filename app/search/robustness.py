@@ -195,6 +195,12 @@ class WalkForwardResult:
     walk_forward_efficiency: float   # mean_test_metric / mean_train_metric, clipped to [-5, 5]
     is_stable: bool
     stability_threshold: float
+    # VAL-005: bars actually skipped at the start of `df` because of
+    # `embargo_start_bar` (0 if no embargo was requested, or if it was
+    # requested but the whole dataset was already past that bar) -- see
+    # run_walk_forward's own docstring for why this exists.
+    embargo_applied_bars: int = 0
+    warnings: list = field(default_factory=list)
 
 
 def _metric_value(stats: dict, metric: str, trades: list | None = None, prop_rules=None, mc_cfg=None) -> float:
@@ -225,6 +231,7 @@ def run_walk_forward(
     stability_threshold: float = 0.4,
     prop_rules=None,
     mc_cfg=None,
+    embargo_start_bar: int | None = None,
 ):
     """
     strategy_builder: a zero-argument callable returning a FRESH Strategy
@@ -243,6 +250,23 @@ def run_walk_forward(
     per-period configuration?" (that second question is what Stage 2's GA
     already answered, on the full dataset).
 
+    embargo_start_bar: VAL-005 fix. When a GA (e.g.
+    app.optimize.walkforward_ga) already searched/selected against this
+    same `df` using its own chained-out-of-sample fold construction, this
+    function's own EXPANDING fold construction used to overlap those same
+    fold test windows almost entirely (verified: with this app's actual
+    default settings, 3 of 4 "out-of-sample" folds here substantially or
+    fully overlapped the GA's own fold test windows) -- meaning what this
+    function reports as evidence the winning configuration "keeps working
+    across several distinct historical stretches" was, for most of those
+    stretches, re-confirming performance on data the GA already selected
+    the winner FOR being good at, not independent evidence. Pass the
+    furthest-forward bar the GA's own folds touched (see
+    WalkforwardGAResult.max_test_bar_used) here to skip straight past it
+    before building this function's OWN folds, so every fold this
+    function reports is guaranteed to start on data the GA never saw.
+    None (default) reproduces the original, unembargoed behavior exactly.
+
     Returns None (not a failure) when there isn't enough data to fold
     meaningfully -- callers should treat that as "unproven", not "failed".
     """
@@ -253,6 +277,27 @@ def run_walk_forward(
         # back to a reported metric rather than silently scoring every
         # fold 0.0. Callers doing prop-firm work should pass prop_rules.
         metric = "profit_factor"
+
+    warnings: list[str] = []
+    embargo_applied_bars = 0
+    if embargo_start_bar is not None and embargo_start_bar > 0:
+        original_len = len(df)
+        embargo_applied_bars = min(embargo_start_bar, original_len)
+        df = df.iloc[embargo_applied_bars:].reset_index(drop=True)
+        if embargo_applied_bars >= original_len:
+            warnings.append(
+                f"Embargo of {embargo_start_bar} bar(s) (to avoid re-testing data the "
+                "optimization search already used) left zero bars for this out-of-sample "
+                "check -- the dataset isn't long enough for both a search AND a genuinely "
+                "independent walk-forward check on top of it."
+            )
+        else:
+            warnings.append(
+                f"Embargoed the first {embargo_applied_bars:,} bar(s) of this dataset (already "
+                "used by the optimization search's own out-of-sample folds) before building "
+                f"these {n_folds} walk-forward fold(s), so every fold below starts on data the "
+                "search never saw."
+            )
 
     n = len(df)
     if n_folds < 2 or n < n_folds * 20:
@@ -305,6 +350,8 @@ def run_walk_forward(
         walk_forward_efficiency=wfe,
         is_stable=wfe >= stability_threshold,
         stability_threshold=stability_threshold,
+        embargo_applied_bars=embargo_applied_bars,
+        warnings=warnings,
     )
 
 

@@ -76,7 +76,7 @@ import numpy as np
 
 from app.backtest.adaptive_risk import build_limit_aware_preset
 from app.backtest.engine import run_backtest
-from app.backtest.risk import RiskConfig, with_prop_safety_defaults
+from app.backtest.risk import RiskConfig, account_size_mismatch_message, with_prop_safety_defaults
 from app.evolution import checkpoint as evo_checkpoint
 from app.evolution.family_budget import FamilyBudgetTracker
 from app.evolution.knowledge_graph import DEFAULT_KG_PATH, KnowledgeGraph, feature_vector_for_spec
@@ -662,6 +662,16 @@ class EvolutionRunner:
         progress_cb=None,
     ):
         self.df = df
+        self.progress_cb = progress_cb
+        # RISK-001: detect (and log) a RiskConfig.initial_balance /
+        # PropRules.account_size mismatch BEFORE with_prop_safety_defaults
+        # silently reconciles it just below -- same prominence Full
+        # Pipeline/Quick Optimize give this warning, since every genome's
+        # backtest below runs against the corrected balance, not whatever
+        # the caller originally passed in.
+        self.account_mismatch_warning = account_size_mismatch_message(risk.initial_balance, prop_rules.account_size)
+        if self.account_mismatch_warning is not None:
+            self._log(f"  !!! {self.account_mismatch_warning}")
         # FIX (2026-09-12): Speed Run and Full Pipeline both already wrap
         # their RiskConfig through with_prop_safety_defaults() so a raw
         # backtest's own account-blown / daily-loss circuit breakers match
@@ -671,14 +681,14 @@ class EvolutionRunner:
         # ever getting caught by the post-hoc Monte Carlo/CPCV/prop-
         # simulation stage. See with_prop_safety_defaults' own docstring
         # for the full rationale; this never overrides a value the caller
-        # explicitly set on their own RiskConfig.
+        # explicitly set on their own RiskConfig (except initial_balance,
+        # which RISK-001 makes always match prop_rules.account_size).
         self.risk = with_prop_safety_defaults(risk, prop_rules)
         self.prop_rules = prop_rules
         self.cfg = cfg or EvolutionConfig()
         self.adaptive_risk = build_limit_aware_preset(
             prop_rules, daily_profit_lock_pct=self.cfg.adaptive_risk_daily_profit_lock_pct,
         ) if self.cfg.adaptive_risk_enabled else None
-        self.progress_cb = progress_cb
         self.knowledge_graph = KnowledgeGraph(Path(self.cfg.knowledge_graph_path))
 
         self._stop_flag = threading.Event()

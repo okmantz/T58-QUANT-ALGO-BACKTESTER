@@ -51,9 +51,11 @@ from app.backtest.adaptive_risk import build_limit_aware_preset
 from app.backtest.engine import run_backtest
 from app.backtest.risk import (
     RiskConfig,
+    account_size_mismatch_message,
     has_impossible_condition,
     has_instrument_scale_mismatch,
     instrument_scale_mismatch_message,
+    with_prop_safety_defaults,
 )
 from app.monte_carlo.engine import MonteCarloConfig, MonteCarloResult, run_monte_carlo
 from app.optimize.code_parameter_space import patched_source_for_strategy
@@ -156,6 +158,14 @@ class QuickOptimizeResult:
     # number keeps reporting normally, so it needs the same visual
     # weight, not a line buried in `warnings`.
     invalid_condition_warning: str | None = None
+    # RISK-001: set when the caller's RiskConfig.initial_balance didn't
+    # match PropRules.account_size before this run -- see
+    # app.backtest.risk.account_size_mismatch_message. The run still
+    # proceeds (with_prop_safety_defaults makes account_size win), but
+    # this needs the same "!!!"-prefixed prominence as the other two
+    # warnings above since every number below was computed against the
+    # corrected balance, not whatever the caller originally passed in.
+    account_mismatch_warning: str | None = None
 
 
 def run_quick_optimize(
@@ -181,6 +191,16 @@ def run_quick_optimize(
     t0 = time.time()
     warnings: list[str] = []
     display_name = _display_name(strategy)
+
+    # RISK-001: detect (and log) a RiskConfig.initial_balance / PropRules.
+    # account_size mismatch BEFORE it gets silently reconciled below --
+    # same escalation prominence as the instrument-mismatch/impossible-
+    # condition warnings that already exist on this result.
+    account_mismatch_warning = account_size_mismatch_message(risk.initial_balance, prop_rules.account_size)
+    if account_mismatch_warning is not None:
+        log(f"  !!! {account_mismatch_warning}")
+        warnings.append(account_mismatch_warning)
+    risk = with_prop_safety_defaults(risk, prop_rules)
 
     log(f"Checking '{display_name}' produces trades on this data...")
     preflight_signal_check(df, strategy, risk, "Quick Optimize")
@@ -296,7 +316,10 @@ def run_quick_optimize(
         invalid_condition_warning = next(w for w in final_bt.warnings if "can never be true" in w)
         log(f"  !!! {invalid_condition_warning}")
     final_mc = run_monte_carlo(
-        final_bt.trades, prop_rules, MonteCarloConfig(n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed)
+        final_bt.trades, prop_rules, MonteCarloConfig(n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed),
+        # MC-004: these trades came straight out of this run's own GA
+        # search over this same data -- see run_monte_carlo's docstring.
+        selection_bias_caveat=(ga_result.best.oos_trade_count > 0),
     )
     log(
         f"Optimized: {len(final_bt.trades)} trades, net ${final_bt.statistics.net_profit:,.2f}, "
@@ -407,4 +430,5 @@ def run_quick_optimize(
         warnings=warnings,
         instrument_mismatch_warning=instrument_mismatch_warning,
         invalid_condition_warning=invalid_condition_warning,
+        account_mismatch_warning=account_mismatch_warning,
     )

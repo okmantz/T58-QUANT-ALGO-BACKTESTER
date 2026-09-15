@@ -89,6 +89,17 @@ class Fold:
     test_df: pd.DataFrame
     train_period: tuple
     test_period: tuple
+    # VAL-005: this fold's test window as [start, end) BAR POSITIONS in
+    # the ORIGINAL `df` passed to build_folds (before any reset_index) --
+    # train_df/test_df lose this once they're sliced out and reset, but a
+    # downstream consumer that needs to know exactly which bars of the
+    # original dataset this fold's test window touched (e.g. Full
+    # Pipeline's Step 4 embargo, see app.search.robustness.run_walk_forward's
+    # embargo_start_bar) needs it. 0/0 for a fold built by code that
+    # hasn't been updated to pass these (should not happen in this repo,
+    # but keeps the dataclass's positional-args tests from breaking).
+    test_start_bar: int = 0
+    test_end_bar: int = 0
 
 
 def build_folds(
@@ -97,6 +108,7 @@ def build_folds(
     window_mode: str = "rolling",
     train_frac: float = 0.6,
     embargo_bars: int = 0,
+    warnings: "list[str] | None" = None,
 ) -> list[Fold]:
     """
     Splits `df` chronologically into `n_folds` (train, test) windows.
@@ -111,13 +123,38 @@ def build_folds(
     slice (purged) to reduce contamination from indicator warm-up state
     computed at the train/test boundary (e.g. a slow moving average
     whose value at the boundary still depends on train-window bars).
+
+    warnings: VAL-005 fix -- optional list to append human-readable
+    messages to whenever a requested fold is silently dropped (or the
+    whole request can't be satisfied) for insufficient data. Before this
+    fix, a fold failing `len(train_slice) < 10 or len(test_slice) < 5`
+    (or the whole dataset being too small for `n_folds`) was dropped with
+    NO warning anywhere -- callers such as
+    app.optimize.walkforward_ga.run_walkforward_aware_refinement could
+    silently chain fitness across fewer folds than the person configured
+    (e.g. 3 instead of a requested 4), with every downstream number
+    (chained-OOS fitness, generation-history logs, overfitting_gap) quietly
+    computed off less data and no indication why. None (default) reproduces
+    the original silent-drop behavior exactly, for callers that don't pass
+    a list -- this is purely additive.
     """
     n = len(df)
     if n_folds < 1 or n < (n_folds + 1) * 20:
+        if warnings is not None and n_folds >= 1:
+            warnings.append(
+                f"build_folds: requested {n_folds} fold(s) but the dataset only has {n} bar(s) -- "
+                f"need at least {(n_folds + 1) * 20} for {n_folds} fold(s) of usable size. "
+                "Returning zero folds."
+            )
         return []
 
     fold_span = n // (n_folds + 1)
     if fold_span < 10:
+        if warnings is not None:
+            warnings.append(
+                f"build_folds: each fold's span would be only {fold_span} bar(s) (need >=10) with "
+                f"n_folds={n_folds} on {n} total bar(s). Returning zero folds."
+            )
         return []
 
     folds: list[Fold] = []
@@ -137,13 +174,23 @@ def build_folds(
         test_end = min(fold_span * (i + 2), n)
 
         if window_mode == "anchored":
-            train_slice = df.iloc[0:train_end].reset_index(drop=True)
+            train_slice_raw = df.iloc[0:train_end]
         else:
-            train_slice = df.iloc[train_start:train_end].reset_index(drop=True)
-        test_slice = df.iloc[test_start:test_end].reset_index(drop=True)
+            train_slice_raw = df.iloc[train_start:train_end]
+        test_slice_raw = df.iloc[test_start:test_end]
 
-        if len(train_slice) < 10 or len(test_slice) < 5:
+        if len(train_slice_raw) < 10 or len(test_slice_raw) < 5:
+            if warnings is not None:
+                warnings.append(
+                    f"build_folds: fold {i} of {n_folds} dropped -- insufficient data "
+                    f"(train={len(train_slice_raw)} bar(s), test={len(test_slice_raw)} bar(s); "
+                    "need >=10 train, >=5 test). Results computed from these folds reflect "
+                    f"fewer than the {n_folds} fold(s) requested."
+                )
             continue
+
+        train_slice = train_slice_raw.reset_index(drop=True)
+        test_slice = test_slice_raw.reset_index(drop=True)
 
         folds.append(Fold(
             fold_index=i,
@@ -151,6 +198,8 @@ def build_folds(
             test_df=test_slice,
             train_period=(str(train_slice["timestamp"].iloc[0]), str(train_slice["timestamp"].iloc[-1])),
             test_period=(str(test_slice["timestamp"].iloc[0]), str(test_slice["timestamp"].iloc[-1])),
+            test_start_bar=test_start,
+            test_end_bar=test_end,
         ))
     return folds
 
@@ -334,13 +383,16 @@ def _run_fold_test(fold: Fold, test_strategy: Strategy, risk: RiskConfig) -> Bac
     full_bt = run_backtest(combined, test_strategy, risk)
 
     test_start = pd.to_datetime(fold.test_df["timestamp"]).iloc[0]
-    if test_start.tzinfo is not None:
-        # Trade.entry_time comes back tz-naive from the execution engine
-        # regardless of whether the input data's timestamp column was
-        # tz-aware -- normalize this comparison to match, rather than
-        # changing engine-wide timestamp handling as a side effect of
-        # this fold-trimming helper.
-        test_start = test_start.tz_localize(None)
+    # VAL-006 fix: Trade.entry_time now correctly preserves the input
+    # data's tz-awareness (app.backtest.execution's _restore_tz) instead
+    # of always coming back tz-naive regardless of the input -- this used
+    # to force test_start to tz-naive to match that old (lossy) behavior.
+    # Since both `test_start` (derived from fold.test_df["timestamp"])
+    # and `t.entry_time` (derived from the same original column via the
+    # execution engine) now agree on tz-awareness by construction, no
+    # normalization is needed here at all; forcing one side naive again
+    # would just reintroduce the same class of mismatch in the other
+    # direction.
     trimmed_trades = [t for t in full_bt.trades if t.entry_time >= test_start]
     trimmed_equity = _rebuild_equity_curve(trimmed_trades, risk.initial_balance)
     trimmed_stats = compute_statistics(trimmed_trades, trimmed_equity, initial_balance=risk.initial_balance)

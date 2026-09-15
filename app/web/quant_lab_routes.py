@@ -316,7 +316,7 @@ def strategy_health():
             '<option value="critical">critical</option></select>',
         )
         + '<label for="retune_csv">Market data (.csv) -- only needed if re-tuning</label><input type="file" id="retune_csv" name="retune_csv">'
-        + _field("initial_balance", "Initial balance ($)", "number", "10000")
+        + _field("initial_balance", "Initial balance ($)", "number", "100000")
         + _field("risk_value", "Risk value (%)", "number", "1.0")
         + _field("pip_size", "Pip size", "number", "0.0001")
         + _field("account_size", "Prop account size ($)", "number", "10000")
@@ -367,7 +367,7 @@ def strategy_health():
                 strategy = load_strategy_object(stored)
                 df = _load_ohlcv_upload("retune_csv")
                 risk = RiskConfig(
-                    initial_balance=float(request.form.get("initial_balance", 10000) or 10000),
+                    initial_balance=float(request.form.get("initial_balance", 100000) or 100000),
                     risk_value=float(request.form.get("risk_value", 1.0) or 1.0),
                     pip_size=float(request.form.get("pip_size", 0.0001) or 0.0001),
                 )

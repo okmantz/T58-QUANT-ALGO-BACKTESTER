@@ -117,8 +117,18 @@ def _trades_by_regime(trades: list, regime_series: pd.Series, df: pd.DataFrame) 
     already uses for identical reasons."""
     ts = pd.to_datetime(df["timestamp"])
     out: dict[str, list] = {}
+    # VAL-006 defensive fix: same as app.validation.regime_matrix's
+    # _attribute_trades -- normalize both sides to the same tz-awareness
+    # rather than assuming Trade.entry_time and `ts` (re-derived straight
+    # from df) already agree.
+    ts_tz = getattr(ts.dtype, "tz", None)
     for t in trades:
-        idx = ts.searchsorted(pd.Timestamp(t.entry_time), side="right") - 1
+        entry_ts = pd.Timestamp(t.entry_time)
+        if ts_tz is not None and entry_ts.tzinfo is None:
+            entry_ts = entry_ts.tz_localize(ts_tz)
+        elif ts_tz is None and entry_ts.tzinfo is not None:
+            entry_ts = entry_ts.tz_localize(None)
+        idx = ts.searchsorted(entry_ts, side="right") - 1
         if idx < 0 or idx >= len(regime_series):
             continue
         label = regime_series.iloc[idx]

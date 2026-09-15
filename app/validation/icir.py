@@ -128,7 +128,13 @@ def compute_ic_series(trades: list, period: str = "M") -> ICSeriesResult:
         return ICSeriesResult()
 
     df = pd.DataFrame(rows, columns=["exit_time", "direction", "ret"])
-    df["bucket"] = df["exit_time"].dt.to_period(period)
+    # VAL-006 side-effect fix: same as app.backtest.statistics' equivalent
+    # -- "exit_time" is now correctly tz-aware whenever the source data
+    # was, but PeriodIndex has no tz concept at all, so .to_period()
+    # warns on every call. Stripping the tz label (not converting to
+    # UTC) keeps the same wall-clock time for bucketing purposes.
+    exit_time_for_bucket = df["exit_time"].dt.tz_localize(None) if df["exit_time"].dt.tz is not None else df["exit_time"]
+    df["bucket"] = exit_time_for_bucket.dt.to_period(period)
 
     ic_values, labels = [], []
     n_total = 0

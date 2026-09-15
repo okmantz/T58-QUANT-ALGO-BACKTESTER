@@ -10,6 +10,22 @@ take-profit intrabar hits (using high/low) or a signal-driven exit.
 This is intentionally a straightforward, transparent simulation appropriate
 for an MVP -- no partial fills, no multi-leg positions, one open trade at a
 time (consistent with the standardized long/flat/short signal model).
+
+EXPLICIT EXECUTION ASSUMPTIONS (documented here so none of these are silent):
+  - Stop-vs-target ordering on a bar whose range spans both levels always
+    resolves to the stop, never the target (see _resolve_intrabar_exit) --
+    a deliberate conservative bias, not a guess at which came first.
+  - A resting stop the bar gapped straight through fills at the bar's
+    open (worse than the stop price), never at the stop level itself.
+  - Same-bar stop-out-then-reentry: if a position closes intrabar (stop,
+    target, or forced daily-loss close) and the strategy's signal for
+    that same bar is still non-flat, a fresh position in the same
+    direction is allowed to open at that bar's own close. This is the
+    ORIGINAL, default behavior (RiskConfig.reentry_cooldown_bars == 0),
+    preserved exactly for backward compatibility -- but it is now an
+    explicit, configurable choice: set reentry_cooldown_bars to N>0 to
+    block any new entry for N bars after a position closes, regardless
+    of what the signal says. See RiskConfig.reentry_cooldown_bars.
 """
 from __future__ import annotations
 
@@ -150,6 +166,17 @@ def run_execution(
     )
     blown_floor = risk.account_blown_floor()  # None if no floor configured
 
+    # EXEC-002: bar index the most recently CLOSED (fully closed, not
+    # partial) position exited on -- -10**9 sentinel so the very first
+    # entry of the run is never blocked by "no previous close yet". Only
+    # `_settle_exit` (a full close) updates this; `_settle_partial_exit`
+    # deliberately does not, since the position it's called from is
+    # still open, not re-entered. With the default
+    # risk.reentry_cooldown_bars == 0, `i - last_close_bar_idx >= 0` is
+    # true the instant a position closes, reproducing the original
+    # (no-cooldown) behavior exactly -- this is purely additive.
+    last_close_bar_idx = -10 ** 9
+
     def _clamp_loss(pnl_value: float, equity_at_entry: float) -> float:
         """A single trade's loss can never realistically exceed what the
         account actually has to lose (negative-balance protection) or a
@@ -166,6 +193,34 @@ def run_execution(
 
     sig = signals.values
     ts = df["timestamp"].values
+    # VAL-006 fix: `.values` on a timezone-AWARE column silently drops to a
+    # bare numpy datetime64 array with no tz attached at all -- numpy has
+    # no tz-aware datetime dtype, so this is a lossy conversion even
+    # though the underlying instants stay correct. Every Trade.entry_time/
+    # exit_time built from `ts[i]` below used to therefore come out
+    # tz-NAIVE whenever the input df was tz-aware (true of most real
+    # vendor/broker feeds), while other code re-deriving timestamps
+    # straight from the original DataFrame (e.g.
+    # app.validation.regime_matrix's date-to-trade lookup) stayed
+    # tz-aware -- comparing the two raises "Cannot compare tz-naive and
+    # tz-aware datetime-like objects" and silently disables that
+    # diagnostic. `_ts_tz` captures the ORIGINAL column's tz (None for an
+    # already-naive column, in which case _restore_tz below is a no-op)
+    # so every timestamp this engine produces matches the input data's
+    # tz-awareness instead of losing it on the way through this numpy
+    # round-trip.
+    _ts_tz = getattr(df["timestamp"].dtype, "tz", None)
+
+    def _restore_tz(ts_value) -> pd.Timestamp:
+        """Rebuilds a `pd.Timestamp` from a raw `ts[i]` numpy datetime64
+        value with the original column's tz reattached. A tz-aware pandas
+        datetime64 array is always stored internally as UTC instants, so
+        localizing to UTC first and then converting recovers the exact
+        original instant and label -- this is not a guess, it is the
+        inverse of the tz-stripping `.values` does above."""
+        t = pd.Timestamp(ts_value)
+        return t.tz_localize("UTC").tz_convert(_ts_tz) if _ts_tz is not None else t
+
     opens = df["open"].values
     highs = df["high"].values
     lows = df["low"].values
@@ -230,7 +285,8 @@ def run_execution(
     # suffix the normal exit path already applied -- now every path
     # gets the same treatment.
     def _settle_exit(open_pos: dict, raw_exit_price: float, reason: str, direction_: int, i: int) -> float:
-        nonlocal equity, gap_loss_count
+        nonlocal equity, gap_loss_count, last_close_bar_idx
+        last_close_bar_idx = i  # EXEC-002: this is a FULL close -- see reentry_cooldown_bars above
         filled_exit_price = raw_exit_price - (spread_price + slip_price) * direction_
         pnl = (filled_exit_price - open_pos["entry_price"]) * open_pos["size"] * direction_
         pnl -= risk.commission_per_trade
@@ -256,7 +312,7 @@ def run_execution(
         equity += pnl
         trades.append(Trade(
             entry_time=open_pos["entry_time"],
-            exit_time=pd.Timestamp(ts[i]),
+            exit_time=_restore_tz(ts[i]),
             direction=direction_,
             entry_price=open_pos["entry_price"],
             exit_price=filled_exit_price,
@@ -302,7 +358,7 @@ def run_execution(
         equity += pnl
         trades.append(Trade(
             entry_time=open_pos["entry_time"],
-            exit_time=pd.Timestamp(ts[i]),
+            exit_time=_restore_tz(ts[i]),
             direction=direction_,
             entry_price=open_pos["entry_price"],
             exit_price=filled_exit_price,
@@ -506,14 +562,27 @@ def run_execution(
         # (stop/target/signal exits) -- only NEW entries are blocked.
         if not account_blown and (equity <= 0 or (blown_floor is not None and equity <= blown_floor)):
             account_blown = True
-            account_blown_at = pd.Timestamp(ts[i])
+            account_blown_at = _restore_tz(ts[i])
 
         # --- consider new entry ---
         day_realized_pnl = pnl_today_sum[bar_date]
         daily_limit_breached = (
             daily_limit_amount is not None and day_realized_pnl <= -daily_limit_amount
         )
-        if open_trade is None and sig[i] != 0 and not daily_limit_breached and not account_blown:
+        # EXEC-002: without this, a position stopped out (or hit its
+        # target) intrabar on bar `i` could immediately reopen a fresh
+        # position in the SAME direction at that SAME bar's close, as
+        # long as the strategy's signal hadn't gone flat -- a whipsaw bar
+        # that clips a tight stop and then closes back at a level the
+        # strategy still signals on produced two trades and re-exposed
+        # the same risk within one bar, with no cooldown and no way to
+        # configure one. reentry_cooldown_bars defaults to 0, under which
+        # `i - last_close_bar_idx >= 0` is true the instant a position
+        # closes -- byte-identical to the original (undocumented,
+        # unconditional) behavior. Setting it to N>0 blocks any new entry
+        # until N bars after the previous close, regardless of signal.
+        cooldown_active = (i - last_close_bar_idx) < risk.reentry_cooldown_bars
+        if open_trade is None and sig[i] != 0 and not daily_limit_breached and not account_blown and not cooldown_active:
             n_today = trades_today_count[bar_date]
             if n_today < risk.max_trades_per_day:
                 direction = int(sig[i])
@@ -613,7 +682,7 @@ def run_execution(
                     initial_risk = abs(entry_price - stop_price) if stop_price is not None else None
 
                     open_trade = {
-                        "entry_time": pd.Timestamp(ts[i]),
+                        "entry_time": _restore_tz(ts[i]),
                         "direction": direction,
                         "entry_price": entry_price,
                         "size": size,
@@ -642,7 +711,16 @@ def run_execution(
     # preallocated equity_arr) instead of a list of per-bar tuples avoids
     # pandas' row-wise tuple-unpacking path entirely -- see equity_arr's
     # definition above for why that path was expensive at 2M+ rows.
-    equity_df = pd.DataFrame({"timestamp": ts, "equity": equity_arr})
+    # VAL-006: use the ORIGINAL (tz-aware, if the input was) timestamp
+    # column here rather than the numpy-stripped `ts` array -- same root
+    # cause as the Trade.entry_time/exit_time fix above. df's row order
+    # matches equity_arr's build order exactly (one entry per bar, built
+    # in a single forward pass over df), so reset_index(drop=True) is
+    # only a defensive guard against a caller passing a non-default index.
+    equity_df = pd.DataFrame({
+        "timestamp": df["timestamp"].reset_index(drop=True),
+        "equity": equity_arr,
+    })
 
     if account_blown:
         import warnings

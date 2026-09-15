@@ -72,6 +72,13 @@ class MonteCarloResult:
     return_distribution: list = field(default_factory=list)
     drawdown_distribution: list = field(default_factory=list)
 
+    # MC-004: what this run's resampling actually did, in plain language,
+    # so `evaluation_pass_probability` isn't read as a stronger claim than
+    # it is. Every consumer of this number (Search Lab, Quick Optimizer,
+    # Evolution Lab, Full Pipeline's verdict, CPCV) inherits this same
+    # caveat -- see run_monte_carlo's docstring for the full reasoning.
+    methodology_note: str = ""
+
     def to_dict(self) -> dict:
         d = dict(self.__dict__)
         return d
@@ -153,11 +160,87 @@ def eval_pass_probability_for_trades(
     return result.evaluation_pass_probability
 
 
+def _methodology_note(cfg: "MonteCarloConfig", n_trades: int, selection_bias_caveat: bool) -> str:
+    """MC-004: plain-language description of what THIS run's resampling
+    actually did, so evaluation_pass_probability isn't read as a
+    stronger claim than it is. Two things this deliberately calls out
+    that were previously only in code comments, not anywhere a person
+    reading a report would see them:
+
+    (1) The resampling method. The default ("bootstrap") is i.i.d.
+    resampling with replacement -- every trade's P&L is treated as
+    statistically independent of its neighbors, which discards any real
+    streakiness/regime-clustering the strategy actually has. "shuffle"
+    (no replacement) and "block_bootstrap" (preserves local runs of
+    trades) make different, also-real tradeoffs; whichever ran, the
+    person reading the number should know which.
+
+    (2) The FIXED trading-day calendar. Every simulation reuses the
+    exact same calendar dates from the historical trade sequence --
+    only the P&L VALUES are resampled onto that fixed timeline. That
+    means this Monte Carlo run answers "given this exact trade-timing
+    skeleton, how do outcomes vary if the P&L values landed in a
+    different order?", not "how would this strategy's whole trajectory
+    (including trade frequency/timing) vary across different possible
+    histories?" -- a materially narrower question than the headline
+    number alone suggests.
+
+    selection_bias_caveat: True when the caller knows (or can't rule
+    out) that these trades came from a search/optimization step that
+    already selected them for scoring well -- in that case this Monte
+    Carlo run is resampling-order robustness LAYERED ON TOP OF whatever
+    selection bias already exists in the input trades, not independent
+    out-of-sample evidence on its own.
+    """
+    method_descriptions = {
+        "bootstrap": (
+            f"resampled {cfg.n_simulations:,} times with i.i.d. bootstrap (each of the "
+            f"{n_trades} historical trades treated as independent -- any real streakiness "
+            "in the strategy's actual results is not preserved)"
+        ),
+        "shuffle": (
+            f"resampled {cfg.n_simulations:,} times by shuffling the order of the same "
+            f"{n_trades} historical trades (no repeats -- the exact multiset of outcomes "
+            "is preserved, only their order varies)"
+        ),
+        "block_bootstrap": (
+            f"resampled {cfg.n_simulations:,} times with block bootstrap (block size "
+            f"{cfg.block_size}, preserving short local runs of the {n_trades} historical "
+            "trades rather than treating each one as fully independent)"
+        ),
+    }
+    method_text = method_descriptions.get(
+        cfg.method, f"resampled {cfg.n_simulations:,} times (method: {cfg.method})"
+    )
+    note = (
+        f"Based on {n_trades} historical trades, {method_text}, replayed onto the SAME fixed "
+        "trading-day calendar every time (only the P&L order/values vary -- trade timing and "
+        "frequency do not). This measures robustness to trade-ordering on this exact trade "
+        "sequence, not an independent out-of-sample test."
+    )
+    if selection_bias_caveat:
+        note += (
+            " These trades came from an optimization/search step -- treat this result as "
+            "resampling-order robustness on top of whatever selection bias already exists in "
+            "how these trades were chosen, not as independent validation by itself."
+        )
+    return note
+
+
 def run_monte_carlo(
     trades: list[Trade],
     rules: PropRules,
     cfg: MonteCarloConfig | None = None,
+    selection_bias_caveat: bool = False,
 ) -> MonteCarloResult:
+    """
+    selection_bias_caveat: MC-004. Pass True when `trades` are known (or
+    can't be ruled out) to have come from a search/optimization step that
+    already selected them for scoring well on some metric -- e.g. a
+    genome the walk-forward-aware GA just picked. Only changes the
+    wording of the returned result's `methodology_note`; never changes
+    any numeric output.
+    """
     cfg = cfg or MonteCarloConfig()
     if not trades:
         raise ValueError("Cannot run Monte Carlo simulation with zero trades.")
@@ -243,5 +326,6 @@ def run_monte_carlo(
         days_to_payout_distribution=days_to_first_payout_list,
         return_distribution=return_arr.tolist(),
         drawdown_distribution=dd_arr.tolist(),
+        methodology_note=_methodology_note(cfg, len(trades), selection_bias_caveat),
     )
     return result
