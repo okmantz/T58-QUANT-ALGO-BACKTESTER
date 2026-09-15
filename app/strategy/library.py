@@ -119,6 +119,35 @@ _LEGACY_STATUS_ALIASES: dict[str, str] = {
     "live": "ready_for_live",
 }
 
+# Pipeline reorg plan section 45 ("status taxonomy") maps almost exactly
+# onto the STRATEGY_STATUSES lifecycle this library already had -- rather
+# than introduce a second, parallel set of status strings (which would
+# mean every existing caller that filters/sets status has to learn a new
+# vocabulary, and every already-saved .meta.json sidecar needs migrating),
+# this is a purely additive DISPLAY layer: the doc's six-stage names,
+# shown alongside the existing slug wherever a caller wants the more
+# research-pipeline-flavored label instead of (or next to) "TESTED /
+# PASSED" etc. Nothing reads or writes PIPELINE_STAGE_LABELS as the
+# actual stored status -- `status` on disk is unchanged.
+PIPELINE_STAGE_LABELS: dict[str, str] = {
+    "draft": "EXPLORING / FILTER",
+    "tested_failed": "REJECTED",
+    "tested_passed": "ROBUSTNESS / PROP REVIEW",
+    "validated": "QUALIFIED (FINAL SELECTION)",
+    "ready_for_demo": "FORWARD TESTING",
+    "ready_for_live": "LIVE CANDIDATE",
+}
+
+
+def pipeline_stage_label(status: str) -> str:
+    """The pipeline reorg plan's six-stage-funnel name for a strategy's
+    CURRENT saved status, e.g. 'validated' -> 'QUALIFIED (FINAL
+    SELECTION)'. Purely cosmetic -- see PIPELINE_STAGE_LABELS above.
+    Falls back to the ordinary status_label() for anything unrecognized,
+    so this never raises."""
+    s = _LEGACY_STATUS_ALIASES.get((status or "").strip().lower(), (status or "").strip().lower())
+    return PIPELINE_STAGE_LABELS.get(s, status_label(s))
+
 
 def status_label(status: str) -> str:
     """Human-readable form of a status slug, for display -- e.g.
