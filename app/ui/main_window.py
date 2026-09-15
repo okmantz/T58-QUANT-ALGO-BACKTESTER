@@ -97,6 +97,7 @@ from app.reports.validation_reports import (
     generate_portfolio_report, generate_sensitivity_report, generate_walk_forward_report,
     generate_walkforward_ga_report,
 )
+from app.scoring.leaderboard import build_leaderboard, render_leaderboard_table
 from app.search.batch_runner import SearchCancelled, SearchStageConfig, promote_champion, run_search
 from app.search.global_search import global_search
 from app.search.graveyard import graveyard_path_for, list_graveyard_files, load_graveyard, render_graveyard_report, summarize_graveyard
@@ -1982,6 +1983,7 @@ class MainWindow:
         self.tab_graveyard = Frame(self.content, bg=BG)
         self.tab_account = Frame(self.content, bg=BG)
         self.tab_hedge_fund = Frame(self.content, bg=BG)
+        self.tab_leaderboard = Frame(self.content, bg=BG)
 
         for f in (
             self.tab_dashboard, self.tab_ai_assistant, self.tab_manual, self.tab_resources, self.tab_education, self.tab_strategyconfig, self.tab_data, self.tab_strategy, self.tab_prop,
@@ -1993,7 +1995,7 @@ class MainWindow:
             self.tab_forwardtest, self.tab_deploylive, self.tab_livemarket, self.tab_genstrat,
             self.tab_evolution, self.tab_researchagent, self.tab_regime_matrix, self.tab_family_diversity,
             self.tab_quantlab, self.tab_options_outlook,
-            self.tab_graveyard, self.tab_account, self.tab_hedge_fund,
+            self.tab_graveyard, self.tab_account, self.tab_hedge_fund, self.tab_leaderboard,
         ):
             f.place(in_=self.content, x=0, y=0, relwidth=1, relheight=1)
 
@@ -2053,6 +2055,9 @@ class MainWindow:
             ("paramrobustness", "", "Parameter Stability / Robustness Map", self.tab_param_robustness, NEON_AMBER),
             ("regimematrix", "", "Regime Survival Matrix", self.tab_regime_matrix, NEON_AMBER),
             ("montecarlo", "", "Monte Carlo", self.tab_payout, NEON_AMBER),
+
+            (None, None, "FINAL SELECTION", None, None),
+            ("leaderboard", "", "\U0001F3C6 Final Selection Leaderboard", self.tab_leaderboard, NEON_LIME),
 
             (None, None, "\u2464 CHAMPION", None, None),
             ("portfolio", "", "Multi-Asset Portfolio", self.tab_portfolio, NEON_MAGENTA),
@@ -2125,6 +2130,7 @@ class MainWindow:
             ("Quant Lab", self._build_quant_lab_tab),
             ("Options Outlook", self._build_options_outlook_tab),
             ("Strategy Graveyard", self._build_graveyard_tab),
+            ("Final Selection Leaderboard", self._build_leaderboard_tab),
             ("Hedge Fund Manager", self._build_hedge_fund_tab),
             ("Account", self._build_account_tab),
         ):
@@ -9732,6 +9738,72 @@ class MainWindow:
             self.gy_output.insert(END, render_graveyard_report(clusters))
         except Exception:
             self.gy_output.insert(END, "Unexpected error:\n" + traceback.format_exc())
+
+    # -----------------------------------------------------------------------
+    # Tab — Final Selection Leaderboard
+    # -----------------------------------------------------------------------
+
+    def _build_leaderboard_tab(self):
+        f = self._scrollable(self.tab_leaderboard)
+
+        self._page_header(
+            f,
+            "FINAL SELECTION",
+            "Final Selection Leaderboard",
+            "One ranked view across every strategy that has been through Full Pipeline -- Forge, "
+            "Evolution Lab, Search Lab, and Full Pipeline all converge here once a strategy has a "
+            "T58 Score, replacing the separate leaderboards each of those tools used to keep on its "
+            "own. Ranked by T58 Score (app.scoring.t58_scorecard); anything that failed the risk-of-"
+            "ruin hard safety gate is excluded by default.",
+        )
+
+        section = self._section(f, "Filters", "", emphasize=True)
+        self.lb_type_combo = LabeledCombo(section, "Strategy type", ["All"] + list(STRATEGY_TYPES), default="All")
+        self.lb_top_n_combo = LabeledCombo(section, "Show top", ["10", "20", "50", "100"], default="20")
+        self.lb_include_ruin_fail_var = BooleanVar(value=False)
+        Checkbutton(
+            section, text="Include strategies that failed the risk-of-ruin hard gate",
+            variable=self.lb_include_ruin_fail_var, bg=PANEL, fg=TEXT, selectcolor=PANEL,
+            activebackground=PANEL, highlightthickness=0,
+        ).pack(anchor="w", padx=14, pady=(4, 10))
+
+        button_row = Frame(f, bg=BG)
+        button_row.pack(fill="x", padx=24, pady=10)
+        self._button(button_row, "REFRESH LEADERBOARD", self._leaderboard_refresh_clicked, primary=True).pack(side="left")
+
+        output_section = self._section(f, "Ranking", "")
+        _lb_output_frame = Frame(output_section, bg=PANEL)
+        self.lb_output = Text(
+            _lb_output_frame, height=28, wrap="none", bg=LOG_BG, fg=TEXT, insertbackground=TEXT,
+            relief="flat", bd=0, highlightthickness=1, highlightbackground=BORDER, font=(MONO, 9),
+        )
+        _lb_output_scroll = ttk.Scrollbar(
+            _lb_output_frame, orient="vertical", command=self.lb_output.yview, style="T58.Vertical.TScrollbar",
+        )
+        self.lb_output.configure(yscrollcommand=_lb_output_scroll.set)
+        self.lb_output.pack(side="left", fill="both", expand=True)
+        _lb_output_scroll.pack(side="right", fill="y")
+        _lb_output_frame.pack(fill="both", expand=True, padx=18, pady=(3, 16))
+        self._bind_isolated_wheel(self.lb_output)
+
+        self._leaderboard_refresh_clicked()
+
+    def _leaderboard_refresh_clicked(self):
+        self.lb_output.delete("1.0", END)
+        type_choice = self.lb_type_combo.get_str()
+        strategy_type = None if type_choice in ("All", "") else type_choice
+        try:
+            top_n = int(self.lb_top_n_combo.get_str())
+        except (TypeError, ValueError):
+            top_n = 20
+        try:
+            entries = build_leaderboard(
+                strategy_type=strategy_type, top_n=top_n,
+                exclude_ruin_hard_fail=not self.lb_include_ruin_fail_var.get(),
+            )
+            self.lb_output.insert(END, render_leaderboard_table(entries))
+        except Exception:
+            self.lb_output.insert(END, "Unexpected error:\n" + traceback.format_exc())
 
     # -----------------------------------------------------------------------
     # Tab 8 — Walk-Forward Optimization
