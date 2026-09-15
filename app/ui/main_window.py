@@ -204,6 +204,14 @@ THEMES = {
     # NEON_* dashboard-tile set are unchanged (they have no equivalent in
     # the web palette and changing them risked clashing with the existing
     # glow/KPI rendering for no real consistency gain).
+    #
+    # UPGRADE (2026-09-15, brand kit): ACCENT (the primary brand accent)
+    # and NEON_CYAN (the logo's second brand color) retuned to the exact
+    # T58 brand palette -- cyan #00D4FF / purple #7B3DFF -- from the
+    # official logo/icon assets (see /assets/brand/palette.md). GREEN/
+    # RED/AMBER/BLUE and the rest of the NEON_* set are semantic (pass/
+    # fail/warning) or purely decorative and intentionally untouched --
+    # see the note above.
     "dark": {
         "BG": "#05070A",             # == web --bg
         "PANEL": "#0D1017",          # == web --panel
@@ -222,9 +230,9 @@ THEMES = {
         "RED": "#FF6F6F",            # == web --coral -- fail/danger/destructive everywhere
         "BLUE": "#6FA8FF",
         "AMBER": "#F0B429",          # == web --amber -- warning everywhere
-        "ACCENT": "#8B7CFF",         # == web --violet -- primary brand accent
-        "ACCENT_HOVER": "#A79CFF",
-        "ACCENT_DIM": "#2B2850",     # low-opacity-style accent for subtle fills/left-bars
+        "ACCENT": "#7B3DFF",          # == web --violet -- primary brand accent (T58 brand purple)
+        "ACCENT_HOVER": "#905CFF",
+        "ACCENT_DIM": "#261650",      # low-opacity-style accent for subtle fills/left-bars
         "ACCENT_INK": "#0C0A16",     # near-black used as text on top of the bright accent
         # Neon accent set -- used for the glowing card borders / ring progress /
         # per-metric coloring on the Dashboard tab, matching the neon-dark
@@ -232,7 +240,10 @@ THEMES = {
         # (which mean pass/fail/warning everywhere else in the app) -- these are
         # purely decorative variety across KPI tiles, the way the mockups give
         # every stat card a different hue rather than making hue mean something.
-        "NEON_CYAN": "#00F0FF",
+        # NEON_CYAN doubles as the T58 logo's second brand color (see
+        # /assets/brand/palette.md) -- see app.web.static.theme.css's
+        # --neon-cyan, which this must stay in sync with.
+        "NEON_CYAN": "#00D4FF",
         "NEON_MAGENTA": "#FF2BD6",
         "NEON_LIME": "#B6FF3C",
         "NEON_VIOLET": "#8A5CFF",
@@ -256,16 +267,16 @@ THEMES = {
         "RED": "#E0453F",            # == web light --coral
         "BLUE": "#2C64D6",
         "AMBER": "#B8790F",          # == web light --amber
-        "ACCENT": "#6C58EF",         # == web light --violet
-        "ACCENT_HOVER": "#5A46D6",
-        "ACCENT_DIM": "#E7E3FB",
+        "ACCENT": "#602BEF",         # == web light --violet
+        "ACCENT_HOVER": "#5024C9",
+        "ACCENT_DIM": "#E0D6FC",
         "ACCENT_INK": "#FFFFFF",
         # Same decorative role as the dark theme's neon set, deliberately
         # darkened/desaturated from true neon so they stay legible as text
         # and card borders against a near-white background instead of
         # glaring -- same hue identity per tile, tuned for contrast rather
         # than raw brightness.
-        "NEON_CYAN": "#0089A3",
+        "NEON_CYAN": "#0079A3",
         "NEON_MAGENTA": "#B01C93",
         "NEON_LIME": "#5D8A12",
         "NEON_VIOLET": "#6438C9",
