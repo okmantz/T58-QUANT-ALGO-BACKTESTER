@@ -5,13 +5,13 @@
       {
         "left": {
           "type": "rsi",
-          "period": 21,
+          "period": 8,
           "field": "close"
         },
         "operator": "<",
         "right": {
           "type": "value",
-          "value": 20
+          "value": 30.0
         }
       }
     ],
@@ -19,13 +19,13 @@
       {
         "left": {
           "type": "rsi",
-          "period": 21,
+          "period": 59,
           "field": "close"
         },
         "operator": ">",
         "right": {
           "type": "value",
-          "value": 80
+          "value": 94.88017124764063
         }
       }
     ]
@@ -35,13 +35,13 @@
       {
         "left": {
           "type": "rsi",
-          "period": 21,
+          "period": 63,
           "field": "close"
         },
         "operator": ">",
         "right": {
           "type": "value",
-          "value": 50
+          "value": 35.290760151570844
         }
       }
     ],
@@ -49,26 +49,25 @@
       {
         "left": {
           "type": "rsi",
-          "period": 21,
+          "period": 6,
           "field": "close"
         },
         "operator": "<",
         "right": {
           "type": "value",
-          "value": 50
+          "value": 44.13769743656002
         }
       }
     ]
   },
   "risk_management": {
     "stop_type": "atr",
-    "stop_value": 1.5,
-    "stop_atr_period": 14,
+    "stop_value": 3.9566802115660136,
+    "stop_atr_period": 31,
     "target_type": "atr",
-    "target_value": 2.0,
-    "target_atr_period": 14,
+    "target_value": 4.352568448224747,
+    "target_atr_period": 33,
     "opposite_signal_exit": true,
-    "max_bars_in_trade": 24
+    "max_bars_in_trade": 56
   }
 }
-
