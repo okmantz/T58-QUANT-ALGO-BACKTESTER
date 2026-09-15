@@ -618,10 +618,11 @@ def _saved_strategies_json() -> str:
 
 
 def _alpaca_template_context() -> dict:
-    """Shared context injected wherever the Market Data card is rendered
-    (index.html today) -- the dropdown/option lists plus whether keys are
-    already saved, so the form can pre-check "save keys" and (for privacy)
-    never echo a saved secret back into the page source."""
+    """Shared context injected wherever a Market Data card is rendered
+    (index.html, full_pipeline.html, search.html, quick_optimize.html) --
+    the dropdown/option lists plus whether keys are already saved, so the
+    form can pre-check "save keys" and (for privacy) never echo a saved
+    secret back into the page source."""
     return {
         "alpaca_asset_classes": ASSET_CLASSES,
         "alpaca_timeframes": TIMEFRAME_LABELS,
@@ -629,6 +630,27 @@ def _alpaca_template_context() -> dict:
         "alpaca_adjustments": ADJUSTMENT_CHOICES,
         "alpaca_has_saved_keys": alpaca_credentials.has_saved_credentials(),
     }
+
+
+# Every page with its own "Or fetch data from Alpaca" section (see
+# _alpaca_fetch_section.html) submits to the SAME two routes below rather
+# than each having its own copy of this handler -- self-contained per page
+# for the SETTINGS (each page's own dataset pick/prop rules/risk config,
+# per the desktop app's RunContextPanel equivalent), but there's no reason
+# for "talk to the Alpaca API and drop a file in data/raw/" to be
+# duplicated per page since it has no per-page state of its own. Each
+# page's Alpaca form includes a hidden alpaca_return_to field naming its
+# own GET endpoint, so the redirect-with-notice lands back on whichever
+# page the person actually submitted from instead of always bouncing to
+# the Run & Report page.
+_ALPACA_RETURN_ENDPOINTS = {"index", "full_pipeline_form", "search_form", "quickopt_form"}
+
+
+def _alpaca_redirect(notice: str, kind: str):
+    endpoint = request.form.get("alpaca_return_to") or "index"
+    if endpoint not in _ALPACA_RETURN_ENDPOINTS:
+        endpoint = "index"
+    return redirect(url_for(endpoint, alpaca_notice=notice, alpaca_notice_kind=kind))
 
 
 @app.route("/")
@@ -650,7 +672,8 @@ def data_alpaca_fetch():
     """Fetches bars from Alpaca and saves them into data/raw/<SYMBOL>/,
     same as the desktop app's FETCH & SAVE button. A plain form POST (not
     AJAX) to stay consistent with the rest of this page and to keep
-    working with JS disabled; redirects back to '/' with a short notice."""
+    working with JS disabled; redirects back to whichever page submitted
+    the form (see _alpaca_redirect above) with a short notice."""
     form = request.form
     api_key = (form.get("alpaca_api_key") or "").strip()
     secret_key = (form.get("alpaca_secret_key") or "").strip()
@@ -673,9 +696,9 @@ def data_alpaca_fetch():
     adjustment = form.get("alpaca_adjustment") or ADJUSTMENT_CHOICES[0]
 
     if not api_key or not secret_key:
-        return redirect(url_for("index", alpaca_notice="Enter both an API key and a secret key.", alpaca_notice_kind="error"))
+        return _alpaca_redirect("Enter both an API key and a secret key.", "error")
     if not symbols:
-        return redirect(url_for("index", alpaca_notice="Enter at least one symbol.", alpaca_notice_kind="error"))
+        return _alpaca_redirect("Enter at least one symbol.", "error")
 
     if save_keys:
         alpaca_credentials.save_credentials(api_key, secret_key)
@@ -702,13 +725,13 @@ def data_alpaca_fetch():
     else:
         notice, kind = f"Fetch failed: {'; '.join(errors)}", "error"
 
-    return redirect(url_for("index", alpaca_notice=notice, alpaca_notice_kind=kind))
+    return _alpaca_redirect(notice, kind)
 
 
 @app.route("/data/alpaca/forget", methods=["POST"])
 def data_alpaca_forget():
     alpaca_credentials.clear_credentials()
-    return redirect(url_for("index", alpaca_notice="Saved Alpaca keys removed from this computer.", alpaca_notice_kind="success"))
+    return _alpaca_redirect("Saved Alpaca keys removed from this computer.", "success")
 
 
 @app.route("/data/detect-pip-size", methods=["POST"])
@@ -1894,13 +1917,12 @@ def full_pipeline_start_batch():
                 f"time can exhaust available memory. Wait for it to finish before starting Full Pipeline."
             ),
             stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-            fitness_metrics=FITNESS_METRICS,
-        ), 409
+            fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 409
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
-            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json()), 400
+            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
 
         selected = [s for s in form.getlist("batch_items") if s.strip()]
         if not selected:
@@ -1910,8 +1932,7 @@ def full_pipeline_start_batch():
                 error="No strategies were selected for the batch. Check one or more strategies in the "
                       "\"Run on multiple saved strategies\" list before clicking RUN FULL PIPELINE (BATCH).",
                 stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-                fitness_metrics=FITNESS_METRICS,
-            ), 400
+                fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 400
 
         batch_items = []
         load_errors = []
@@ -1930,8 +1951,7 @@ def full_pipeline_start_batch():
                 "full_pipeline.html",
                 error="Every selected strategy failed to load: " + "; ".join(load_errors),
                 stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-                fitness_metrics=FITNESS_METRICS,
-            ), 400
+                fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 400
 
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000)),
@@ -2000,11 +2020,11 @@ def full_pipeline_start_batch():
 
     except StrategyError as exc:
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
-        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json()), 400
+        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
         log_crash("Full Pipeline (web, start-batch)", exc=exc)
-        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json()), 500
+        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 500
 
 
 # ---------------------------------------------------------------------------
@@ -2105,13 +2125,13 @@ def full_pipeline_schedule_batch():
     try:
         start_at = (form.get("schedule_start_at") or "").strip()
         if not start_at or ":" not in start_at:
-            return render_template("full_pipeline.html", error="Give a start time (HH:MM) to schedule the batch run.", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json()), 400
+            return render_template("full_pipeline.html", error="Give a start time (HH:MM) to schedule the batch run.", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
         hour_str, minute_str = start_at.split(":")[:2]
         target_hour, target_minute = int(hour_str), int(minute_str)
 
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
-            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json()), 400
+            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
 
         selected = [s for s in form.getlist("batch_items") if s.strip()]
         if not selected:
@@ -2120,8 +2140,7 @@ def full_pipeline_schedule_batch():
                 error="No strategies were selected to schedule. Check one or more strategies in the "
                       "\"Run on multiple saved strategies\" list first.",
                 stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-                fitness_metrics=FITNESS_METRICS,
-            ), 400
+                fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 400
 
         batch_items = []
         load_errors = []
@@ -2137,8 +2156,7 @@ def full_pipeline_schedule_batch():
             return render_template(
                 "full_pipeline.html", error="Every selected strategy failed to load: " + "; ".join(load_errors),
                 stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-                fitness_metrics=FITNESS_METRICS,
-            ), 400
+                fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 400
 
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000)),
@@ -2209,10 +2227,10 @@ def full_pipeline_schedule_batch():
         thread.start()
         return redirect(url_for("full_pipeline_schedule_status", schedule_id=schedule_id))
     except StrategyError as exc:
-        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json()), 400
+        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
         log_crash("Full Pipeline (web, schedule-batch)", exc=exc)
-        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json()), 500
+        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 500
 
 
 @app.route("/full-pipeline/schedule/<schedule_id>")
@@ -2305,12 +2323,13 @@ def full_pipeline_form():
         stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         saved_strategies_json=_saved_strategies_json(),
         strategy_statuses=STRATEGY_STATUSES,
+        alpaca_notice=request.args.get("alpaca_notice"),
+        alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"),
         fitness_metrics=FITNESS_METRICS,
         prop_presets_json=_prop_presets_json(),
         ai_enabled=saved_ai.enabled,
         ai_host=saved_ai.host,
-        ai_model=saved_ai.model,
-    )
+        ai_model=saved_ai.model, **_alpaca_template_context())
 
 
 @app.route("/full-pipeline/start", methods=["POST"])
@@ -2325,13 +2344,12 @@ def full_pipeline_start():
                 f"time can exhaust available memory. Wait for it to finish before starting Full Pipeline."
             ),
             stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-            fitness_metrics=FITNESS_METRICS,
-        ), 409
+            fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 409
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
-            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json()), 400
+            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
 
         strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
 
@@ -2405,11 +2423,11 @@ def full_pipeline_start():
 
     except StrategyError as exc:
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
-        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json()), 400
+        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
         log_crash("Full Pipeline (web, start)", exc=exc)
-        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json()), 500
+        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 500
 
 
 @app.route("/full-pipeline/job/<job_id>")
@@ -4253,7 +4271,7 @@ def _run_quickopt_job(
 
 @app.route("/quick-optimize")
 def quickopt_form():
-    return render_template("quick_optimize.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), strategy_statuses=STRATEGY_STATUSES, fitness_metrics=FITNESS_METRICS)
+    return render_template("quick_optimize.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), strategy_statuses=STRATEGY_STATUSES, fitness_metrics=FITNESS_METRICS, alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), **_alpaca_template_context())
 
 
 @app.route("/quick-optimize/start", methods=["POST"])
@@ -4262,7 +4280,7 @@ def quickopt_start():
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
-            return render_template("quick_optimize.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+            return render_template("quick_optimize.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 400
         strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000)), pip_size=float(form.get("pip_size", 0.0001)))
         rules = PropRules(account_size=float(form.get("account_size", 100000)))
@@ -4289,9 +4307,9 @@ def quickopt_start():
         thread.start()
         return redirect(url_for("quickopt_job", job_id=job_id))
     except (StrategyError, RefinementError) as exc:
-        return render_template("quick_optimize.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 400
+        return render_template("quick_optimize.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
-        return render_template("quick_optimize.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS), 500
+        return render_template("quick_optimize.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 500
 
 
 @app.route("/quick-optimize/job/<job_id>")
@@ -5218,8 +5236,9 @@ def search_form():
         saved_strategies_json=_saved_strategies_json(),
         strategy_notice=request.args.get("strategy_notice"),
         strategy_statuses=STRATEGY_STATUSES,
-        prop_presets_json=_prop_presets_json(),
-    )
+        alpaca_notice=request.args.get("alpaca_notice"),
+        alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"),
+        prop_presets_json=_prop_presets_json(), **_alpaca_template_context())
 
 
 @app.route("/search/start", methods=["POST"])
@@ -5236,8 +5255,7 @@ def search_start():
             stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             families=[{"name": n, "description": family_description(n)} for n in list_families()],
             saved_strategies_json=_saved_strategies_json(),
-            prop_presets_json=_prop_presets_json(),
-        ), 409
+            prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 409
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
@@ -5246,8 +5264,7 @@ def search_start():
                 "search.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
                 families=[{"name": n, "description": family_description(n)} for n in list_families()],
                 saved_strategies_json=_saved_strategies_json(),
-                prop_presets_json=_prop_presets_json(),
-            ), 400
+                prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
 
         mode_key = form.get("search_mode", "family_named")
         seed = int(form.get("seed", 42) or 42)
@@ -5365,16 +5382,14 @@ def search_start():
             "search.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             families=[{"name": n, "description": family_description(n)} for n in list_families()],
             saved_strategies_json=_saved_strategies_json(),
-            prop_presets_json=_prop_presets_json(),
-        ), 400
+            prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
     except StrategyError as exc:
         HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
         return render_template(
             "search.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             families=[{"name": n, "description": family_description(n)} for n in list_families()],
             saved_strategies_json=_saved_strategies_json(),
-            prop_presets_json=_prop_presets_json(),
-        ), 400
+            prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
         log_crash("Search Lab (web, start)", exc=exc)
@@ -5382,8 +5397,7 @@ def search_start():
             "search.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             families=[{"name": n, "description": family_description(n)} for n in list_families()],
             saved_strategies_json=_saved_strategies_json(),
-            prop_presets_json=_prop_presets_json(),
-        ), 500
+            prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 500
 
 
 @app.route("/search/job/<job_id>")
