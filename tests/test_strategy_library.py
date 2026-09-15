@@ -701,3 +701,16 @@ def test_manual_metadata_sidecar_is_not_listed_as_its_own_strategy():
     library.set_strategy_tags("manual", "leader.json", ["evolab"])  # creates leader.json.meta.json
     names = sorted(s.name for s in library.list_saved_strategies("manual"))
     assert names == ["leader.json"]
+
+
+def test_pipeline_stage_label_maps_every_status_and_falls_back_gracefully():
+    """Pipeline reorg plan section 45 -- purely additive display layer on
+    top of the existing STRATEGY_STATUSES lifecycle, never a second
+    stored status."""
+    for status in library.STRATEGY_STATUSES:
+        label = library.pipeline_stage_label(status)
+        assert label  # every real status maps to something non-empty
+    assert library.pipeline_stage_label("validated") == "QUALIFIED (FINAL SELECTION)"
+    assert library.pipeline_stage_label("tested_failed") == "REJECTED"
+    # Unknown status never raises -- falls back to the ordinary status_label().
+    assert library.pipeline_stage_label("made_up_status") == "MADE_UP_STATUS"

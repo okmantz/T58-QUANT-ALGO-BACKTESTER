@@ -42,7 +42,7 @@ def test_missing_components_are_renormalized_not_penalized():
     result = compute_t58_score(inputs)
     assert result.score == 100.0
     assert result.n_components_used == 2
-    assert result.n_components_total == 8
+    assert result.n_components_total == 10
     assert result.notes
 
 
