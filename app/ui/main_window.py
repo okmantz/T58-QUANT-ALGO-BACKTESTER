@@ -1283,6 +1283,38 @@ class RunContextPanel:
 
         self.csv_paths = [str(p) for p, _ in results]
 
+        # Auto-suggest pip size the moment a dataset is chosen -- removes
+        # the silent-default trap where r_pip_size quietly sits at its FX
+        # default (0.0001) against a non-FX instrument until someone
+        # remembers to click "DETECT PIP SIZE FROM DATA" by hand (see
+        # CIRCULARITY_AUDIT.md-adjacent diagnosis: this is exactly how two
+        # independent RunContextPanel instances ended up with different
+        # pip_size for what the person believed was "the same run").
+        # Every OTHER risk/prop field (account size, spread, commission,
+        # slippage, drawdown rules, ...) has no equivalent way to derive a
+        # value from OHLCV data alone -- pip_size is the one field this
+        # codebase has an actual, tested heuristic for
+        # (app.backtest.risk.suggest_pip_size, keyed to the data's own
+        # price scale), so it's the one auto-filled here. Guarded with
+        # hasattr since _build_risk_section (which creates r_pip_size)
+        # runs after _build_data_section during .build() -- this only
+        # ever fires from real user interaction after the panel is fully
+        # built, but stays defensive rather than assuming that ordering.
+        if hasattr(self, "r_pip_size"):
+            try:
+                combined_df = results[0][1].dataframe if len(results) == 1 else \
+                    merge_multi_timeframe([r.dataframe for _, r in results])[0]
+                suggested = suggest_pip_size(combined_df)
+                self.r_pip_size.var.set(str(suggested))
+                if hasattr(self, "pip_detect_status"):
+                    self.pip_detect_status.config(
+                        text=f"Auto-suggested {suggested} from {os.path.basename(str(paths[0]))} "
+                             f"-- confirm this matches the instrument.",
+                        fg=GREEN,
+                    )
+            except Exception:
+                pass  # best-effort -- never let a suggestion failure block picking a dataset
+
         total_warn = sum(len(r.warnings) for _, r in results)
         warn = f"  •  {total_warn} warning(s)" if total_warn else ""
         if len(results) == 1:
@@ -6534,6 +6566,8 @@ class MainWindow:
                 try:
                     res = run_quick_optimize(df, strategy, risk, rules, cfg, progress_cb=lambda m: log(f"  {m}"))
                     results.append((item.name, res))
+                    if res.instrument_mismatch_warning:
+                        log(f"  !!! WARNING for {item.name}: {res.instrument_mismatch_warning}")
                 except Exception as exc:
                     log(f"  Optimize failed: {exc}\n")
                     continue
@@ -6543,9 +6577,10 @@ class MainWindow:
                 log("Summary (eval-pass probability, before -> after):")
                 for name, res in sorted(results, key=lambda t: t[1].optimized_eval_pass_probability, reverse=True):
                     marker = "IMPROVED" if res.improved else "no improvement"
+                    mismatch_flag = "  [!!! PIP-SIZE MISMATCH -- UNRELIABLE, SEE ABOVE]" if res.instrument_mismatch_warning else ""
                     log(
                         f"  {name}: {res.baseline_eval_pass_probability:.1f}% -> "
-                        f"{res.optimized_eval_pass_probability:.1f}%  ({marker})"
+                        f"{res.optimized_eval_pass_probability:.1f}%  ({marker}){mismatch_flag}"
                     )
 
             def _refresh_after_run():
