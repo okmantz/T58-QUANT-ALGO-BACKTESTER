@@ -1216,7 +1216,15 @@ class RunContextPanel:
             parent, "Risk & execution (this run only)",
             "Own copy of position risk, trading frequency, transaction costs, and pip size.",
         )
-        self.r_initial_balance = LabeledEntry(section, "Initial balance ($)", self._default_account_size)
+        # RISK-001 fix: same reasoning as the main Tab 3/4 pair -- these
+        # two fields represent the same "this run only" account, so they
+        # share one StringVar (self.p_account_size.var, built just above
+        # in _build_prop_section) rather than being two independently-
+        # editable numbers that can silently disagree.
+        self.r_initial_balance = LabeledEntry(
+            section, "Initial balance ($) -- kept in sync with Account size above",
+            variable=self.p_account_size.var,
+        )
         self.r_risk_mode = LabeledEntry(section, "Risk mode (percent/fixed)", "percent")
         self.r_risk_value = LabeledEntry(section, "Risk per trade (% or $)", 1.0)
         self.r_max_trades_day = LabeledEntry(section, "Max trades/day", 10)
@@ -7118,8 +7126,17 @@ class MainWindow:
             emphasize=True,
         )
 
+        # RISK-001 fix: Initial balance and Account size (Tab 3, "Prop
+        # rules") must be the same dollar account -- the backend already
+        # forces this (app.backtest.risk.with_prop_safety_defaults makes
+        # PropRules.account_size win if they ever diverge), but sharing
+        # the SAME StringVar here means the person never sees the two
+        # numbers disagree in the first place, using the exact mechanism
+        # this class's own docstring describes for mirroring fields
+        # across tabs.
         self.r_initial_balance = LabeledEntry(
-            section, "Initial balance ($)", 100000
+            section, "Initial balance ($) -- kept in sync with Account size (Prop rules tab)",
+            variable=self.p_account_size.var,
         )
         self.r_risk_mode = LabeledEntry(
             section, "Risk mode (percent/fixed)", "percent"
