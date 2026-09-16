@@ -452,6 +452,8 @@
       </div>
       <button type="button" onclick="detectPipSize()" style="margin-top:6px;background:none;border:1px solid var(--border-light);color:var(--teal);padding:9px 12px;border-radius:8px;font-size:13px;width:100%;">Detect pip size from data</button>
       <p id="pip_detect_status" style="font-size:12px;margin-top:6px;"></p>
+      <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;background:rgba(255,200,80,0.08);border:1px solid rgba(255,200,80,0.35);border-radius:8px;padding:8px 10px;margin-top:10px;"><input type="checkbox" name="adaptive_risk_enabled" style="width:auto;">Enable adaptive, limit-aware position sizing (throttles risk as the account nears its daily-loss/max-drawdown limits)</label>
+      <p style="font-size:12px;color:#888;margin-top:4px;">Off by default. If you ran Quick Optimize, Full Pipeline, or Iterative Refinement on this strategy with this ON, leave it ON here too -- comparing a Run &amp; Report result with this enabled against one of those with it OFF (or vice versa) is not an apples-to-apples comparison and can show wildly different results for the identical strategy and data.</p>
     </details>
   </div>
 
