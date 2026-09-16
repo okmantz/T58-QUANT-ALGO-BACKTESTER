@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import shutil
 import sys
 import zipfile
@@ -190,6 +191,33 @@ def _ensure_extension(filename: str, strategy_type: str) -> str:
     if not name.lower().endswith(ext):
         name += ext
     return name
+
+
+def safe_filename_stem(display_name: str, fallback: str = "strategy") -> str:
+    """Turns an arbitrary human-readable strategy name into a safe base
+    filename component (no extension).
+
+    FIX (2026-09-16): callers used to do `Path(display_name).stem` to
+    strip a would-be extension and get a filesystem-safe base name, but
+    Path() treats "/" (and, on Windows, "\\") in the string as directory
+    separators -- a display name like "VWAP Trend Continuation (ema
+    50/200, rsi7)" (the "50/200" being a perfectly normal way to write
+    "EMA 50 over EMA 200") got silently truncated to whatever followed
+    the LAST separator, producing a nonsense saved filename like
+    "200,_rsi7)_optimized.json" instead of the strategy's actual name.
+    This strips/replaces filesystem-unsafe characters directly instead
+    of routing through Path(), so every character of the intended name
+    survives (as an underscore where it can't be used literally).
+    """
+    name = (display_name or "").strip()
+    # Replace anything that isn't alphanumeric, space, hyphen, underscore,
+    # or parens with an underscore -- this covers path separators (both
+    # slash directions), colons, and any other character a filesystem
+    # could misinterpret, without depending on pathlib to parse it.
+    name = re.sub(r"[^A-Za-z0-9 _().-]+", "_", name)
+    name = name.replace(" ", "_")
+    name = re.sub(r"_+", "_", name).strip("_.")
+    return name or fallback
 
 
 def _seed_bundled_strategies(base: Path) -> None:
