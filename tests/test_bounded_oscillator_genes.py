@@ -166,8 +166,75 @@ def test_non_oscillator_period_gene_unaffected():
 
 
 # ---------------------------------------------------------------------
-# validate_bounded_conditions / has_impossible_condition
+# ZERO_SENSITIVE_MIN_ABS_THRESHOLD / roc_momentum_continuation
+#
+# Covers the repeated Search Lab worker stalls seen across multiple loop
+# rounds, always on roc_momentum_continuation candidates during Stage 2
+# GA refinement: the generic "value" gene's rel_span rule could mutate a
+# meaningfully non-zero ROC threshold (1-3%) down toward 0%, turning a
+# real momentum trigger into a de facto zero-cross condition that fires
+# on nearly every bar of a multi-million-bar 1-minute dataset -- an
+# explosively large trade count that makes a single candidate's backtest
+# take minutes instead of seconds, which the worker-pool's 240s stall
+# detector then (correctly, but repeatedly) has to recover from.
 # ---------------------------------------------------------------------
+
+from app.search.strategy_space import _build_roc_momentum_continuation
+
+
+def test_roc_threshold_gene_floored_away_from_zero():
+    config = _build_roc_momentum_continuation(
+        {"period": 10, "threshold": 1.0, "stop_atr_mult": 1.0, "target_atr_mult": 2.0}
+    )
+    genes = extract_genome(config)
+    entry_value_genes = [
+        g for g in genes if g.kind == "value" and "entry_conditions" in g.label
+    ]
+    assert entry_value_genes, "expected the long/short entry threshold genes"
+    for gene in entry_value_genes:
+        assert abs(gene.lo) >= 0.5 or gene.lo * gene.hi > 0  # never straddles the zero band
+        assert abs(gene.lo) >= 0.5
+        assert abs(gene.hi) >= 0.5
+        # sign is preserved: a positive base threshold never searches negative and vice versa
+        assert (gene.base_value > 0) == (gene.lo > 0)
+
+
+def test_roc_intentional_zero_cross_exit_condition_is_unaffected():
+    # The family's own exit conditions ("roc < 0" / "roc > 0") are an
+    # INTENTIONAL zero-cross design -- the floor must never apply to a
+    # base threshold that is already exactly 0.
+    config = _build_roc_momentum_continuation(
+        {"period": 10, "threshold": 1.0, "stop_atr_mult": 1.0, "target_atr_mult": 2.0}
+    )
+    genes = extract_genome(config)
+    exit_value_genes = [g for g in genes if g.kind == "value" and "exit_conditions" in g.label]
+    assert exit_value_genes
+    for gene in exit_value_genes:
+        assert gene.base_value == 0.0
+        assert gene.lo < 0.0 < gene.hi  # untouched -- free to search across zero
+
+
+def test_dedicated_zero_cross_family_threshold_is_unaffected():
+    # A family that isn't in ZERO_SENSITIVE_MIN_ABS_THRESHOLD at all (a
+    # plain "value" condition against a non-roc operand) must see no
+    # behavior change from this fix.
+    config = {
+        "name": "unrelated",
+        "entry_conditions": {
+            "long": [{"left": {"type": "macd_histogram", "period": 12}, "operator": ">", "right": {"type": "value", "value": 0.0}}],
+            "long_connectors": [], "short": [], "short_connectors": [],
+        },
+        "exit_conditions": {"long": [], "short": []},
+        "risk_management": {"stop_type": "atr", "stop_value": 1.0, "target_type": "atr", "target_value": 2.0},
+    }
+    genes = extract_genome(config)
+    value_genes = [g for g in genes if g.kind == "value"]
+    assert value_genes
+    for gene in value_genes:
+        assert gene.lo < 0.0 < gene.hi
+
+
+
 
 def test_validate_bounded_conditions_flags_impossible_rsi_threshold():
     config = _minimal_manual_config(short_condition=_IMPOSSIBLE_RSI_CONDITION)
