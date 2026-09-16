@@ -92,6 +92,25 @@
   <div class="funnel-row"><span>Expected total payout (with scaling plan)</span><span>${{ '{:,.0f}'.format(result.scaling.expected_total_payout_scaled) }}</span></div>
 </div>
 {% endif %}
+{% if result.bankroll %}
+<div class="card">
+  <h2>Bankroll / EV survival</h2>
+  <p class="help">{{ result.bankroll.methodology_note }}</p>
+  <div class="headline">
+    <div class="stat"><div class="label">Reach payout before ruin</div><div class="value">{{ '%.1f' % result.bankroll.probability_reach_first_payout }}%</div></div>
+    <div class="stat"><div class="label">Ruin before any payout</div><div class="value">{{ '%.1f' % result.bankroll.probability_ruin_before_first_payout }}%</div></div>
+    <div class="stat"><div class="label">Expected net profit</div><div class="value">${{ '{:,.0f}'.format(result.bankroll.expected_net_profit) }}</div></div>
+    <div class="stat"><div class="label">Net positive</div><div class="value">{{ '%.1f' % result.bankroll.probability_net_positive }}%</div></div>
+  </div>
+  <div class="funnel-row"><span>Exhausted attempts, never paid</span><span>{{ '%.1f' % result.bankroll.probability_exhausted_attempts_without_payout }}%</span></div>
+  <div class="funnel-row"><span>Median net profit</span><span>${{ '{:,.0f}'.format(result.bankroll.median_net_profit) }}</span></div>
+  <div class="funnel-row"><span>Expected attempts used</span><span>{{ '%.1f' % result.bankroll.expected_attempts_used }}</span></div>
+  <div class="funnel-row"><span>Expected fees paid</span><span>${{ '{:,.0f}'.format(result.bankroll.expected_fees_paid) }}</span></div>
+  <div class="funnel-row"><span>Expected gross payouts</span><span>${{ '{:,.0f}'.format(result.bankroll.expected_gross_payouts) }}</span></div>
+  <div class="funnel-row"><span>Median bankroll low point</span><span>${{ '{:,.0f}'.format(result.bankroll.median_bankroll_low_point) }}</span></div>
+  <div class="funnel-row"><span>Worst bankroll low point</span><span>${{ '{:,.0f}'.format(result.bankroll.worst_bankroll_low_point) }}</span></div>
+</div>
+{% endif %}
 {% endif %}
 
 {% if alpaca_notice %}
@@ -210,6 +229,33 @@
     </div>
     <label>Max scale multiple (cap, e.g. 4 = never exceed 4x the starting account size)</label>
     <input type="number" step="0.5" name="scale_max_multiple" value="4.0">
+  </div>
+
+  <div class="card">
+    <h2>6. Bankroll / EV Survival (optional)</h2>
+    <p class="help">A different question than the funnel above: with $X actually set aside for buying
+    evaluations/resets, what's the probability of reaching a payout before going broke -- and what's the
+    expected net profit? Reuses the evaluation/reset fee and profit split from Section 4, but each simulated
+    life draws ONE resampled trade ordering and chains every mechanical rebuy within that SAME ordering
+    (instead of a fresh independent resample per attempt), so a real bad stretch of trades stays clustered
+    together the way it would in one continuous plausible future. Additive only -- leave unchecked for the
+    plain (no-bankroll) result above.</p>
+    <label><input type="checkbox" name="enable_bankroll" style="width:auto;display:inline-block;margin-right:6px;"> Enable bankroll / EV survival</label>
+    <div class="row">
+      <div><label>Starting bankroll ($)</label><input type="number" name="bankroll_amount" value="1000"></div>
+      <div><label>Simulated bankroll lifetimes</label><input type="number" name="bankroll_n_sims" value="5000"></div>
+    </div>
+    <div class="row">
+      <div><label>Resampling method</label>
+        <select name="bankroll_method">
+          <option value="block_bootstrap" selected>Block bootstrap (recommended)</option>
+          <option value="bootstrap">Bootstrap</option>
+          <option value="shuffle">Shuffle</option>
+        </select>
+      </div>
+      <div><label>Block size (block_bootstrap only)</label><input type="number" name="bankroll_block_size" value="5"></div>
+    </div>
+    <label><input type="checkbox" name="bankroll_stop_after_first_payout" style="width:auto;display:inline-block;margin-right:6px;"> Stop each simulated life at its first payout (measures "ever get paid before going broke", not lifetime return)</label>
   </div>
 
   <button class="submit-btn" type="submit">Run Payout Probability Simulation</button>

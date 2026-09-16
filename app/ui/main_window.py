@@ -59,6 +59,7 @@ from app.live_deploy import live_settings as live_deploy_settings
 from app.live_deploy.broker_registry import build_adapter, SUPPORTED_PLATFORMS
 from app.live_deploy.execution_engine import LiveExecutionSession, LiveExecutionConfig
 from app.monte_carlo.engine import MonteCarloConfig, MonteCarloResult, run_monte_carlo
+from app.monte_carlo.bankroll import BankrollConfig, BankrollSurvivalResult, simulate_bankroll_survival
 from app.optimize.parameter_space import RefinementError, apply_genome, extract_genome
 from app.optimize.refinement import FITNESS_METRICS, RefinementConfig, run_iterative_refinement
 from app.optimize.multi_objective import DEFAULT_OBJECTIVES, MultiObjectiveConfig, OBJECTIVE_DIRECTIONS, run_multi_objective_refinement
@@ -7660,6 +7661,13 @@ class MainWindow:
             "Method (bootstrap/shuffle/block_bootstrap)",
             "bootstrap",
         )
+        self.mc_reset_on_breach = LabeledCheckbox(
+            section,
+            "Reset-on-breach: chain mechanical rebuys within each simulated path instead of "
+            "stopping at the first bust (see 'Full-Lifecycle Survival Simulator' for the version "
+            "priced with real fees/bankroll)",
+            default=False,
+        )
 
         button_row = Frame(f, bg=BG)
         button_row.pack(fill="x", padx=24, pady=10)
@@ -7852,15 +7860,18 @@ class MainWindow:
 
             n_sims = self.mc_sims.get_int(10000)
             method = self.mc_method.get_str().strip() or "bootstrap"
+            reset_on_breach = self.mc_reset_on_breach.get()
 
             self._log(
                 f"Running Monte Carlo simulation "
-                f"({n_sims:,} runs, method={method})..."
+                f"({n_sims:,} runs, method={method}"
+                f"{', reset-on-breach chaining ON' if reset_on_breach else ''})..."
             )
 
             mc_cfg = MonteCarloConfig(
                 n_simulations=n_sims,
                 method=method,
+                reset_on_breach=reset_on_breach,
             )
 
             mc_result = run_monte_carlo(
@@ -7885,6 +7896,16 @@ class MainWindow:
                 f"  Risk of ruin: "
                 f"{mc_result.risk_of_ruin_pct:.1f}%"
             )
+            if reset_on_breach:
+                self._log(
+                    f"  Mean mechanical rebuys per simulated path: "
+                    f"{mc_result.mean_attempts_per_path:.1f} "
+                    f"(median {mc_result.median_attempts_per_path:.0f}, "
+                    f"p95 {mc_result.p95_attempts_per_path:.0f}) -- see "
+                    "the methodology note in the report for what this changes about the "
+                    "probabilities above; use 15 Payout Probability's Bankroll/EV section "
+                    "to price this against a real starting bankroll and reset fees."
+                )
 
             self._log("Running out-of-sample holdout check...")
             try:
@@ -8053,6 +8074,71 @@ class MainWindow:
 
         self._last_payout_html_path = None
 
+        # -----------------------------------------------------------------
+        # Bankroll / EV Survival -- a different question than the funnel
+        # above: given a REAL, finite amount of money set aside for buying
+        # evaluations/resets, what fraction of plausible futures reach a
+        # payout before it runs out? Backed by app.monte_carlo.bankroll,
+        # which reuses this tab's reset economics (fee/split/max attempts
+        # above) but chains ALL of a simulated life's attempts within ONE
+        # resampled trade ordering (ideally block bootstrap, so a real bad
+        # stretch of trades stays clustered together), instead of a fresh
+        # independent resample per attempt the way the funnel above does.
+        # -----------------------------------------------------------------
+        bankroll_section = self._section(
+            f, "Bankroll / EV Survival (chained reset-on-breach, priced against a real bankroll)",
+            "Reuses the evaluation/reset fee and profit split above, but answers a sharper "
+            "question: with $X actually set aside for buying attempts, what's the probability "
+            "of reaching a payout before going broke -- and what's the expected net profit? "
+            "Each simulated life draws ONE resampled trade ordering and chains every mechanical "
+            "rebuy within that SAME ordering (app.prop.simulator.simulate_account's "
+            "reset_on_breach), so a real bad stretch of trades stays clustered together the way "
+            "it would in one continuous plausible future, rather than being redrawn fresh (and "
+            "so smeared away) on every attempt.",
+            emphasize=True,
+        )
+        self.bankroll_starting_amount = LabeledEntry(bankroll_section, "Starting bankroll ($)", 1000)
+        self.bankroll_n_sims = LabeledEntry(bankroll_section, "Number of simulated bankroll lifetimes", 5000)
+        self.bankroll_method = LabeledCombo(
+            bankroll_section, "Resampling method",
+            ["block_bootstrap", "bootstrap", "shuffle"], default="block_bootstrap",
+        )
+        self.bankroll_block_size = LabeledEntry(bankroll_section, "Block size (block_bootstrap only)", 5)
+        self.bankroll_stop_after_first_payout = LabeledCheckbox(
+            bankroll_section,
+            "Stop each simulated life at its first payout (measures 'ever get paid before going "
+            "broke', not lifetime return -- leave unchecked for the fuller lifetime-return question)",
+            default=False,
+        )
+
+        bankroll_button_row = Frame(f, bg=BG)
+        bankroll_button_row.pack(fill="x", padx=24, pady=10)
+        self._button(
+            bankroll_button_row, "RUN BANKROLL / EV SURVIVAL", self._bankroll_run_clicked, primary=True,
+        ).pack(side="left")
+
+        self.bankroll_progress = NeuralProgress(f)
+        self.bankroll_progress.pack(fill="x", padx=24, pady=(2, 10))
+
+        bankroll_output_section = self._section(
+            f, "Bankroll / EV Survival output", "Live progress + the ruin/payout/EV summary.",
+        )
+        _bankroll_output_frame = Frame(bankroll_output_section, bg=PANEL)
+        self.bankroll_output = Text(
+            _bankroll_output_frame, height=16, wrap="word", bg=LOG_BG, fg=TEXT,
+            insertbackground=TEXT, relief="flat", bd=0, highlightthickness=1,
+            highlightbackground=BORDER, font=(MONO, 9),
+        )
+        _bankroll_output_scroll = ttk.Scrollbar(
+            _bankroll_output_frame, orient="vertical", command=self.bankroll_output.yview,
+            style="T58.Vertical.TScrollbar",
+        )
+        self.bankroll_output.configure(yscrollcommand=_bankroll_output_scroll.set)
+        self.bankroll_output.pack(side="left", fill="both", expand=True)
+        _bankroll_output_scroll.pack(side="right", fill="y")
+        _bankroll_output_frame.pack(fill="both", expand=True, padx=18, pady=(3, 16))
+        self._bind_isolated_wheel(self.bankroll_output)
+
     def _log_payout(self, msg: str):
         self.payout_output.insert(END, msg + "\n")
         self.payout_output.see(END)
@@ -8158,6 +8244,92 @@ class MainWindow:
             self._log_payout("\nUnexpected error:\n" + traceback.format_exc())
         finally:
             self.payout_progress.stop()
+
+    # -----------------------------------------------------------------------
+    # Bankroll / EV Survival (see the section built in _build_payout_probability_tab)
+    # -----------------------------------------------------------------------
+
+    def _bankroll_run_clicked(self):
+        if not self.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV in Step 2.")
+            return
+        self.bankroll_output.delete("1.0", END)
+        self.bankroll_progress.start(10)
+        threading.Thread(target=self._bankroll_run_pipeline, daemon=True).start()
+
+    def _log_bankroll(self, msg: str):
+        self.bankroll_output.insert(END, msg + "\n")
+        self.bankroll_output.see(END)
+
+    def _bankroll_run_pipeline(self):
+        try:
+            df = self._load_df_for_page(self._log_bankroll)
+            if df is None:
+                return
+            strategy = self._build_strategy()
+            risk = self._build_risk_config()
+            rules = self._build_prop_rules()
+            adaptive_risk = self._build_adaptive_risk_config()
+
+            self._log_bankroll("Running historical backtest to obtain a real trade sequence...")
+            bt_result = run_backtest(df, strategy, risk, adaptive_risk=adaptive_risk)
+            if not bt_result.trades:
+                self._log_bankroll(
+                    "\nNo trades were generated by this strategy over the given data -- there is "
+                    "nothing to run a bankroll simulation on."
+                )
+                return
+            self._log_bankroll(f"  {len(bt_result.trades)} trades.")
+
+            # Reuses this SAME tab's reset-economics fields (fee/split/max
+            # attempts) so the two sections above/below never show two
+            # different prices for the same reset.
+            reset_fee_raw = self.payout_reset_fee.get_float(0)
+            econ = ResetEconomics(
+                evaluation_fee=self.payout_eval_fee.get_float(0),
+                reset_fee=(reset_fee_raw if reset_fee_raw > 0 else None),
+                profit_split_pct=self.payout_profit_split.get_float(80),
+                max_attempts=self.payout_max_attempts.get_int(3),
+            )
+            cfg = BankrollConfig(
+                starting_bankroll=self.bankroll_starting_amount.get_float(1000),
+                reset_economics=econ,
+                n_simulations=self.bankroll_n_sims.get_int(5000),
+                method=self.bankroll_method.get_str().strip() or "block_bootstrap",
+                block_size=self.bankroll_block_size.get_int(5),
+                stop_after_first_payout=self.bankroll_stop_after_first_payout.get(),
+            )
+
+            self._log_bankroll(
+                f"Simulating {cfg.n_simulations:,} bankroll lifetimes starting from "
+                f"${cfg.starting_bankroll:,.0f} (method={cfg.method})..."
+            )
+            result = simulate_bankroll_survival(bt_result.trades, rules, cfg)
+
+            self._log_bankroll("")
+            self._log_bankroll(f"  Probability of reaching a payout before ruin: {result.probability_reach_first_payout:.1f}%")
+            self._log_bankroll(f"  Probability of ruin before any payout:        {result.probability_ruin_before_first_payout:.1f}%")
+            self._log_bankroll(f"  Probability of exhausting attempts, no payout: {result.probability_exhausted_attempts_without_payout:.1f}%")
+            self._log_bankroll("")
+            self._log_bankroll(f"  Expected net profit:  ${result.expected_net_profit:,.2f}")
+            self._log_bankroll(f"  Median net profit:    ${result.median_net_profit:,.2f}")
+            self._log_bankroll(f"  Probability net positive: {result.probability_net_positive:.1f}%")
+            self._log_bankroll("")
+            self._log_bankroll(f"  Expected attempts used: {result.expected_attempts_used:.1f} (median {result.median_attempts_used:.0f})")
+            self._log_bankroll(f"  Expected fees paid:     ${result.expected_fees_paid:,.2f}")
+            self._log_bankroll(f"  Expected gross payouts: ${result.expected_gross_payouts:,.2f}")
+            self._log_bankroll(f"  Median bankroll low point: ${result.median_bankroll_low_point:,.2f}")
+            self._log_bankroll(f"  Worst bankroll low point:  ${result.worst_bankroll_low_point:,.2f}")
+            self._log_bankroll("")
+            self._log_bankroll(result.methodology_note)
+        except StrategyError as exc:
+            self._log_bankroll(f"\nStrategy error: {exc}")
+        except ValueError as exc:
+            self._log_bankroll(f"\n{exc}")
+        except Exception:
+            self._log_bankroll("\nUnexpected error:\n" + traceback.format_exc())
+        finally:
+            self.bankroll_progress.stop()
 
     # -----------------------------------------------------------------------
     # Tab -- Prop-Firm Recommender (reverse of Payout Probability: given a

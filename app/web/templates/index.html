@@ -116,6 +116,9 @@
     <div class="stat"><div class="label">Risk of Ruin</div><div class="value">{{ "%.1f"|format(result.risk_of_ruin) }}%</div></div>
     <div class="stat"><div class="label">Expected Payout</div><div class="value">${{ "{:,.0f}".format(result.expected_payout) }}</div></div>
   </div>
+  {% if result.reset_on_breach %}
+  <p style="font-size:12px;color:#ffcf7a;margin-top:10px;">Reset-on-breach was ON: the probabilities above mean "at least one mechanical rebuy in the chain succeeded" -- mean {{ "%.1f"|format(result.mean_attempts_per_path) }} attempts per simulated path (median {{ "%.0f"|format(result.median_attempts_per_path) }}). See the full HTML report's methodology note for the exact wording, or use <a href="/payout-probability" style="color:#9ecbff;">Payout Probability</a>'s Bankroll / EV Survival section to price this against a real starting bankroll and reset fees.</p>
+  {% endif %}
   <p style="font-size:13px;color:#999;margin-top:12px;">
     {{ result.trades }} historical trades &middot; net profit ${{ "{:,.0f}".format(result.net_profit) }} &middot;
     win rate {{ "%.1f"|format(result.win_rate) }}% &middot; max DD {{ "%.1f"|format(result.max_dd) }}% &middot;
@@ -470,6 +473,8 @@
           </select>
         </div>
       </div>
+      <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;background:rgba(255,200,80,0.08);border:1px solid rgba(255,200,80,0.35);border-radius:8px;padding:8px 10px;margin-top:10px;"><input type="checkbox" name="reset_on_breach" style="width:auto;">Reset-on-breach: chain mechanical rebuys within each simulated path instead of stopping at the first bust</label>
+      <p style="font-size:12px;color:#888;margin-top:4px;">Off by default. Turns evaluation-pass/first-payout probability into "at least one attempt in the chain succeeded" rather than "the one attempt succeeded" -- see the full report's methodology note for the exact wording. For the version priced against a real starting bankroll and real reset fees, use <a href="/payout-probability" style="color:#9ecbff;">Payout Probability</a>'s Bankroll / EV Survival section instead.</p>
     </details>
   </div>
 

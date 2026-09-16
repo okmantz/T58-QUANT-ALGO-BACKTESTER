@@ -69,6 +69,7 @@ from app.evolution import checkpoint as evo_checkpoint
 from app.evolution.engine import EvolutionConfig, EvolutionRunner, evolution_stats_metadata
 from app.orchestration import pipeline_guide
 from app.monte_carlo.engine import MonteCarloConfig, run_monte_carlo
+from app.monte_carlo.bankroll import BankrollConfig, simulate_bankroll_survival
 from app.optimize.risk_sweep import DEFAULT_RISK_VALUES, run_risk_sweep
 from app.optimize.multi_objective import (    DEFAULT_OBJECTIVES, MultiObjectiveConfig, OBJECTIVE_DIRECTIONS, run_multi_objective_refinement,
 )
@@ -1272,7 +1273,11 @@ def run_pipeline():
             return render_template("index.html", error=msg, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
 
         n_sims = int(form.get("n_sims", 5000))
-        mc_cfg = MonteCarloConfig(n_simulations=min(n_sims, 50_000), method=form.get("mc_method", "bootstrap"))
+        reset_on_breach = form.get("reset_on_breach") == "on"
+        mc_cfg = MonteCarloConfig(
+            n_simulations=min(n_sims, 50_000), method=form.get("mc_method", "bootstrap"),
+            reset_on_breach=reset_on_breach,
+        )
         mc_result = run_monte_carlo(bt_result.trades, rules, mc_cfg)
 
         try:
@@ -1332,6 +1337,9 @@ def run_pipeline():
                 "risk_of_ruin": mc_result.risk_of_ruin_pct,
                 "expected_payout": mc_result.expected_payout,
                 "n_sims": mc_result.n_simulations,
+                "reset_on_breach": mc_result.reset_on_breach,
+                "mean_attempts_per_path": mc_result.mean_attempts_per_path,
+                "median_attempts_per_path": mc_result.median_attempts_per_path,
                 "report_html": f"/reports/{paths['html'].name}",
                 "report_json": f"/reports/{paths['json'].name}",
                 "report_csv": f"/reports/{paths['summary_csv'].name}",
@@ -3373,6 +3381,28 @@ def payout_probability_run():
             except ValueError:
                 scaling_result = None
 
+        # Optional bankroll / EV survival (Owen's ask: "given $X set aside
+        # for buying attempts, what fraction of simulated futures let me
+        # reach a first payout before running out of money"). Entirely
+        # additive; the plain funnel numbers above are unaffected either
+        # way. Reuses this SAME request's reset economics (econ, above)
+        # so the two sections never show two different prices for the
+        # same reset. See app.monte_carlo.bankroll's module docstring.
+        bankroll_result = None
+        if form.get("enable_bankroll") == "on":
+            try:
+                bankroll_cfg = BankrollConfig(
+                    starting_bankroll=float(form.get("bankroll_amount", 1000) or 1000),
+                    reset_economics=econ,
+                    n_simulations=min(int(form.get("bankroll_n_sims", 5000) or 5000), 50_000),
+                    method=form.get("bankroll_method", "block_bootstrap"),
+                    block_size=int(form.get("bankroll_block_size", 5) or 5),
+                    stop_after_first_payout=form.get("bankroll_stop_after_first_payout") == "on",
+                )
+                bankroll_result = simulate_bankroll_survival(bt_result.trades, rules, bankroll_cfg).to_dict()
+            except ValueError:
+                bankroll_result = None
+
         return render_template("payout_probability.html", **ctx(result={
             "strategy_name": bt_result.strategy_name,
             "instrument": active_label,
@@ -3384,6 +3414,7 @@ def payout_probability_run():
             "report_html": f"/payout_reports/{Path(paths['html']).name}",
             "report_json": f"/payout_reports/{Path(paths['json']).name}",
             "scaling": scaling_result,
+            "bankroll": bankroll_result,
         }), **_alpaca_template_context())
     except StrategyError as exc:
         return render_template("payout_probability.html", **ctx(error=str(exc)), **_alpaca_template_context()), 400
