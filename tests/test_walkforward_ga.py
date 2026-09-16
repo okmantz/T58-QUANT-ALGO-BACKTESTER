@@ -199,3 +199,45 @@ def test_ai_suggest_cb_single_argument_form_still_works_unchanged():
     )
     assert result.best is not None
     assert len(calls) >= 2
+
+
+def test_ga_worker_init_reconstructs_nested_session_slippage_dataclass():
+    """Regression test: dataclasses.asdict(search_mc_cfg) at the pool
+    creation call site recurses into MonteCarloConfig.session_slippage
+    (itself a dataclass), producing a plain dict for it. Before the fix,
+    _ga_worker_init passed that dict straight to
+    MonteCarloConfig(**search_mc_kwargs) without reconstructing it,
+    leaving session_slippage as a bare dict on the worker's MonteCarloConfig
+    -- which raised AttributeError: 'dict' object has no attribute
+    'enabled' the moment any genome's fitness evaluation reached
+    run_monte_carlo -> apply_session_volatility_slippage. Because that
+    failure was caught by evaluate_batch's blanket except-and-fall-back,
+    every parallel Quick Optimize / Full Pipeline GA run silently
+    degraded to serial on every generation without ever surfacing a
+    wrong number -- just a much slower run."""
+    from dataclasses import asdict
+    from app.monte_carlo.slippage_model import SessionVolatilitySlippageConfig
+    from app.optimize import walkforward_ga
+
+    session_slippage = SessionVolatilitySlippageConfig(enabled=True)
+    mc_cfg = MonteCarloConfig(n_simulations=50, session_slippage=session_slippage)
+    # This is exactly what the real pool-creation call site does: asdict()
+    # the whole MonteCarloConfig for pickling, which recurses into the
+    # nested session_slippage field too.
+    search_mc_kwargs = asdict(mc_cfg)
+    assert isinstance(search_mc_kwargs["session_slippage"], dict)  # confirms the setup actually exercises the bug
+
+    walkforward_ga._ga_worker_init(
+        kind="manual", manual_config={}, code_shim=None, genes=[], test_slice_paths=[],
+        risk_kwargs=asdict(RiskConfig()), prop_kwargs=asdict(PropRules()),
+        tmp_dir_path=".", search_mc_kwargs=search_mc_kwargs, fitness_metric="profit_factor",
+        cost_stress_enabled=False, cost_stress_multiplier=1.5, cost_stress_penalty_weight=0.0,
+        adaptive_risk=None,
+    )
+    # NOTE: read the module's CURRENT global here, not a name imported
+    # before the call -- _ga_worker_init reassigns the module-level
+    # _GA_WORKER to a brand new dict, so a `from ... import _GA_WORKER`
+    # done earlier would still point at the old (stale) object.
+    reconstructed = walkforward_ga._GA_WORKER["search_mc_cfg"].session_slippage
+    assert isinstance(reconstructed, SessionVolatilitySlippageConfig)
+    assert reconstructed.enabled is True
