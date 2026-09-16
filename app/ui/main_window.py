@@ -13440,7 +13440,7 @@ class MainWindow:
     def _build_ai_assistant_tab(self):
         f = self._scrollable(self.tab_ai_assistant)
         self._page_header(
-            f, "AI ASSISTANT", "Owen AI",
+            f, "AI ASSISTANT", "T58 AI",
             "Chat against Owen's exact strategy hierarchy (macro -> HTF structure -> 50/200 EMA -> "
             "location -> liquidity -> sweep -> supply/demand -> premium/discount -> M15 confirmation), "
             "or upload a chart/trade screenshot below for an image-based read. Requires a local Ollama "
@@ -13600,7 +13600,7 @@ class MainWindow:
         self._bind_isolated_wheel(self.aiassistant_output)
         self.aiassistant_output.configure(state="disabled")
 
-        self.aiassistant_question = LabeledEntry(chat_section, "Ask Owen AI", "")
+        self.aiassistant_question = LabeledEntry(chat_section, "Ask T58 AI", "")
         btn_row2 = Frame(chat_section, bg=PANEL)
         btn_row2.pack(anchor="w", padx=18, pady=(0, 16))
         self.aiassistant_send_btn = self._button(btn_row2, "SEND", self._ai_send_chat, primary=True)
@@ -13737,7 +13737,7 @@ class MainWindow:
             return reply
 
         def done(reply):
-            self._ai_append_output("Owen AI", reply)
+            self._ai_append_output("T58 AI", reply)
             self._ai_chat_history.append({"role": "user", "content": question})
             self._ai_chat_history.append({"role": "assistant", "content": reply})
 
@@ -13754,7 +13754,7 @@ class MainWindow:
                 raise RuntimeError(error)
             return reply
 
-        self._ai_run_async(self.aiassistant_send_btn, work, lambda reply: self._ai_append_output("Owen AI", reply))
+        self._ai_run_async(self.aiassistant_send_btn, work, lambda reply: self._ai_append_output("T58 AI", reply))
 
     def _ai_watchlist(self):
         """Generates a watchlist from the top symbols in the Best Trades
@@ -13783,7 +13783,7 @@ class MainWindow:
                 raise RuntimeError(error)
             return reply
 
-        self._ai_run_async(self.aiassistant_send_btn, work, lambda reply: self._ai_append_output("Owen AI", reply))
+        self._ai_run_async(self.aiassistant_send_btn, work, lambda reply: self._ai_append_output("T58 AI", reply))
 
     # -- Market Intelligence: News window + Best Trades window + Basic
     # Outlook button (see the section built in _build_ai_assistant_tab). --
@@ -13863,13 +13863,13 @@ class MainWindow:
             reply, error = client.market_outlook(context)
             if error:
                 return context, events, rankings, deterministic + f"\n\n(Ollama narrative unavailable: {error})"
-            return context, events, rankings, deterministic + "\n\n--- Owen AI's read ---\n" + reply
+            return context, events, rankings, deterministic + "\n\n--- T58 AI's read ---\n" + reply
 
         def done(result):
             context, events, rankings, text = result
             self._ai_populate_news_list(events)
             self._ai_populate_trades_tree(rankings)
-            self._ai_append_output("Owen AI -- Basic Outlook", text)
+            self._ai_append_output("T58 AI -- Basic Outlook", text)
             self.aiassistant_outlook_status.config(text="", fg=TEXT_DIM)
 
         self._ai_run_async(self.aiassistant_outlook_btn, work, done)
@@ -13894,7 +13894,7 @@ class MainWindow:
                 raise RuntimeError(error)
             return reply
 
-        self._ai_run_async(self.aiassistant_chart_btn, work, lambda reply: self._ai_append_output("Owen AI -- Trading Plan", reply))
+        self._ai_run_async(self.aiassistant_chart_btn, work, lambda reply: self._ai_append_output("T58 AI -- Trading Plan", reply))
 
     def _ai_analyze_trade_screenshot(self):
         path = filedialog.askopenfilename(
@@ -13915,7 +13915,7 @@ class MainWindow:
                 raise RuntimeError(error)
             return reply
 
-        self._ai_run_async(self.aiassistant_trade_btn, work, lambda reply: self._ai_append_output("Owen AI -- Session Review", reply))
+        self._ai_run_async(self.aiassistant_trade_btn, work, lambda reply: self._ai_append_output("T58 AI -- Session Review", reply))
 
     # ------------------------------------------------------------------
     # Options Outlook tab -- deterministic call/put candidates (Black-
@@ -13930,7 +13930,7 @@ class MainWindow:
             f, "OPTIONS", "Options Outlook",
             "Deterministic call/put candidates around target deltas (~50/25/10), priced with the "
             "same from-scratch Black-Scholes engine as the Options Pricing Calculator, then ranked "
-            "and explained by Owen AI for the horizon you pick. Every strike, premium, and delta is "
+            "and explained by T58 AI for the horizon you pick. Every strike, premium, and delta is "
             "computed by the app -- the model never invents a number.",
         )
 
@@ -15211,7 +15211,7 @@ class MainWindow:
             f, "Market Structure (Wyckoff + BOS/ChoCH)",
             "Deterministic swing structure (HH/HL/LH/LL, break of structure / change of character) and Wyckoff "
             "spring/upthrust/SOS/SOW + phase detection on Step 2's currently loaded market data -- the same "
-            "facts app.ai.market_intelligence now feeds Owen AI instead of the old EMA-only proxy.",
+            "facts app.ai.market_intelligence now feeds T58 AI instead of the old EMA-only proxy.",
         )
         self.ql_ms_swing_left = LabeledEntry(sec, "Fractal swing bars, left", 5)
         self.ql_ms_swing_right = LabeledEntry(sec, "Fractal swing bars, right", 5)
