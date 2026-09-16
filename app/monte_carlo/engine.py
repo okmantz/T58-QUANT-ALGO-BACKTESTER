@@ -36,6 +36,25 @@ class MonteCarloConfig:
     # MonteCarloConfig() gets byte-identical output to before this field existed.
     session_slippage: SessionVolatilitySlippageConfig = field(default_factory=SessionVolatilitySlippageConfig)
     random_seed: int | None = 42
+    # When True, each of the n_simulations resampled paths is run through
+    # simulate_account with reset_on_breach=True instead of stopping at the
+    # first bust: within that ONE resampled trade ordering, a bust snaps
+    # the account back to account_size and keeps walking the rest of that
+    # SAME path (see app.prop.simulator.simulate_account's docstring).
+    # This answers "if I mechanically rebought every time I busted, how
+    # many attempts before this simulated timeline ran out, and what
+    # fraction passed" -- drawn from thousands of plausible resampled
+    # orderings of the real trade history, rather than the single order
+    # that actually happened (which is what
+    # app.prop.survival_engine.simulate_reset_chain measures instead, by
+    # drawing a fresh independent resample per attempt). Default False:
+    # every existing caller gets byte-identical output to before this
+    # field existed. Turning it on only changes evaluation_pass_
+    # probability / first_payout_probability et al. to mean "at least one
+    # attempt in the chain" rather than "the one attempt" -- see
+    # MonteCarloResult's new attempts_* fields for the chain-level detail
+    # that distinction papers over.
+    reset_on_breach: bool = False
 
 
 @dataclass
@@ -71,6 +90,17 @@ class MonteCarloResult:
     # HTML report's charts.
     return_distribution: list = field(default_factory=list)
     drawdown_distribution: list = field(default_factory=list)
+
+    # -- reset-on-breach chain summary (only meaningful when cfg.reset_on_breach
+    # was True; all zero/empty at their defaults otherwise, matching this
+    # result's shape before the reset_on_breach chain feature existed) --
+    reset_on_breach: bool = False
+    mean_attempts_per_path: float = 0.0          # avg # of mechanical rebuys per simulated path
+    median_attempts_per_path: float = 0.0
+    p95_attempts_per_path: float = 0.0
+    any_attempt_pass_probability: float = 0.0    # % of paths where >=1 attempt in the chain passed eval
+    any_attempt_payout_probability: float = 0.0  # % of paths where >=1 attempt in the chain reached payout
+    attempts_distribution: list = field(default_factory=list)  # per-path total_attempts, for charting
 
     # MC-004: what this run's resampling actually did, in plain language,
     # so `evaluation_pass_probability` isn't read as a stronger claim than
@@ -160,6 +190,32 @@ def eval_pass_probability_for_trades(
     return result.evaluation_pass_probability
 
 
+def _reset_on_breach_note(cfg: "MonteCarloConfig") -> str:
+    """MC-005: plain-language addendum for when reset_on_breach is on --
+    the headline pass/payout numbers now mean 'at least one attempt in a
+    mechanically-rebought chain,' not 'the one attempt that happened to
+    run,' and that distinction needs to be visible next to the number."""
+    if cfg.method != "block_bootstrap":
+        method_caveat = (
+            " Note this run used i.i.d. resampling rather than block "
+            "bootstrap -- see the block_bootstrap method for a version "
+            "that keeps bad stretches of trades clustered together the "
+            "way they'd actually cluster in reality, instead of smearing "
+            "a bad week randomly across the whole simulated chain."
+        )
+    else:
+        method_caveat = ""
+    return (
+        " reset_on_breach was ON: within each of those resampled paths, a bust did not end the "
+        "simulation -- the account snapped back to a fresh balance and kept walking the rest of "
+        "that same path, so evaluation_pass_probability / first_payout_probability above mean "
+        "'at least one attempt in that path's chain succeeded,' not 'the one attempt succeeded.' "
+        "See mean_attempts_per_path and attempts_distribution for how many mechanical rebuys that "
+        "typically took, and app.monte_carlo.bankroll for turning this into an actual "
+        f"fees-vs-payout survival question.{method_caveat}"
+    )
+
+
 def _methodology_note(cfg: "MonteCarloConfig", n_trades: int, selection_bias_caveat: bool) -> str:
     """MC-004: plain-language description of what THIS run's resampling
     actually did, so evaluation_pass_probability isn't read as a
@@ -224,6 +280,8 @@ def _methodology_note(cfg: "MonteCarloConfig", n_trades: int, selection_bias_cav
             "resampling-order robustness on top of whatever selection bias already exists in "
             "how these trades were chosen, not as independent validation by itself."
         )
+    if cfg.reset_on_breach:
+        note += _reset_on_breach_note(cfg)
     return note
 
 
@@ -264,17 +322,22 @@ def run_monte_carlo(
     days_to_pass_list, days_to_first_payout_list = [], []
     return_pcts, payout_amounts, drawdown_pcts, losing_streaks = [], [], [], []
     total_withdrawals = 0.0
+    attempts_per_path: list[int] = []
 
     for _ in range(cfg.n_simulations):
         sim_pnls = _resample_pnls(rng, base_pnls, cfg)
         sim_pnls = _apply_slippage_stress(sim_pnls, cfg.slippage_stress_pct)
 
-        result = simulate_account(sim_pnls, base_dates, rules, _day_structure=day_structure)
+        result = simulate_account(
+            sim_pnls, base_dates, rules, _day_structure=day_structure,
+            reset_on_breach=cfg.reset_on_breach,
+        )
 
         passed_flags.append(result.passed_evaluation)
         first_payout_flags.append(result.reached_first_payout)
         failed_before_payout_flags.append(result.failed and not result.reached_first_payout)
         multiple_payout_flags.append(len(result.payouts) > 1)
+        attempts_per_path.append(result.total_attempts)
 
         if result.days_to_pass is not None:
             days_to_pass_list.append(result.days_to_pass)
@@ -297,6 +360,7 @@ def run_monte_carlo(
     streak_arr = np.array(losing_streaks)
 
     ruin_arr = dd_arr >= rules.max_drawdown_pct  # account hit its max-drawdown floor at least once
+    attempts_arr = np.array(attempts_per_path)
 
     def pct(arr, q):
         return float(np.percentile(arr, q)) if len(arr) else 0.0
@@ -327,5 +391,12 @@ def run_monte_carlo(
         return_distribution=return_arr.tolist(),
         drawdown_distribution=dd_arr.tolist(),
         methodology_note=_methodology_note(cfg, len(trades), selection_bias_caveat),
+        reset_on_breach=cfg.reset_on_breach,
+        mean_attempts_per_path=float(attempts_arr.mean()) if len(attempts_arr) else 0.0,
+        median_attempts_per_path=pct(attempts_arr, 50),
+        p95_attempts_per_path=pct(attempts_arr, 95),
+        any_attempt_pass_probability=float(passed_arr.mean() * 100),
+        any_attempt_payout_probability=float(first_payout_arr.mean() * 100),
+        attempts_distribution=attempts_arr.tolist(),
     )
     return result
