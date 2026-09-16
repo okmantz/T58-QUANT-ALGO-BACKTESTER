@@ -72,6 +72,7 @@ from app.monte_carlo.engine import MonteCarloConfig, run_monte_carlo
 from app.optimize.risk_sweep import DEFAULT_RISK_VALUES, run_risk_sweep
 from app.optimize.multi_objective import (    DEFAULT_OBJECTIVES, MultiObjectiveConfig, OBJECTIVE_DIRECTIONS, run_multi_objective_refinement,
 )
+from app.backtest.adaptive_risk import build_limit_aware_preset
 from app.optimize.refinement import FITNESS_METRICS, RefinementConfig, RefinementError, run_iterative_refinement
 from app.optimize.walkforward_ga import WalkforwardGACancelled, run_walkforward_aware_refinement
 from app.orchestration.batch_test import BatchTestItem, run_batch_test
@@ -1221,7 +1222,30 @@ def run_pipeline():
             required_buffer_pct=float(form.get("buffer", 0)),
         )
 
-        bt_result = run_backtest(df, strategy, risk)
+        # Same "Enable adaptive, limit-aware position sizing" overlay Quick
+        # Optimize/Full Pipeline/Evolution Lab already offer (see
+        # app.backtest.adaptive_risk) -- Run & Report was previously the
+        # only place in the app with no way to turn this on at all, which
+        # made a Run & Report result silently non-comparable to a Quick
+        # Optimize/Full Pipeline run made against the same strategy with
+        # this enabled (see the 2026-09-16 Quick-Optimize-vs-Full-Pipeline
+        # diagnosis this closes).
+        adaptive_risk = build_limit_aware_preset(rules) if form.get("adaptive_risk_enabled") == "on" else None
+
+        bt_result = run_backtest(df, strategy, risk, adaptive_risk=adaptive_risk)
+        if adaptive_risk is not None:
+            # Surfaced in the report's own warnings section (not just the
+            # server log) so the setting that produced these numbers is
+            # visible on the report itself, not just reconstructible from
+            # a log line someone has to remember to check -- exactly the
+            # gap that made an earlier Full Pipeline report look
+            # unreproducible (see the 2026-09-16 Quick-Optimize-vs-Full-
+            # Pipeline diagnosis).
+            bt_result.warnings.append(
+                f"Adaptive risk was ENABLED for this run: {len(adaptive_risk.rules)} limit-aware "
+                f"throttle rule(s) applied. A run of this same strategy/data with adaptive risk OFF "
+                f"is not an apples-to-apples comparison against this report."
+            )
 
         lookahead_warning = None
         if strategy.source_type == "python":
@@ -1612,11 +1636,13 @@ def _run_refinement_job(
     job_id: str, df, strategy, risk: RiskConfig, rules: PropRules,
     mc_cfg: MonteCarloConfig, cfg: RefinementConfig, active_label: str,
     library_ref: tuple[str, str] | None = None,
+    adaptive_risk=None,
 ) -> None:
     try:
         result = run_iterative_refinement(
             df, strategy, risk, rules, mc_cfg, cfg,
             progress_cb=lambda msg: _refinement_job_log(job_id, msg),
+            adaptive_risk=adaptive_risk,
         )
         period = (str(df["timestamp"].iloc[0]), str(df["timestamp"].iloc[-1]))
         paths = generate_refinement_report(
@@ -1692,6 +1718,16 @@ def refine_start():
         )
         mc_cfg = MonteCarloConfig(n_simulations=int(form.get("n_sims", 2000) or 2000))
 
+        # Same "Enable adaptive, limit-aware position sizing" overlay Quick
+        # Optimize/Full Pipeline/Evolution Lab already offer (see
+        # app.backtest.adaptive_risk) -- Iterative Refinement was previously
+        # the only search tool with no way to turn this on, which made its
+        # baseline/GA/final numbers silently non-comparable to a Quick
+        # Optimize or Full Pipeline run made against the same strategy with
+        # this enabled (see the 2026-09-16 Quick-Optimize-vs-Full-Pipeline
+        # diagnosis this closes).
+        adaptive_risk = build_limit_aware_preset(rules) if form.get("adaptive_risk_enabled") == "on" else None
+
         cfg = RefinementConfig(
             enabled=True,
             fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
@@ -1718,6 +1754,7 @@ def refine_start():
         thread = threading.Thread(
             target=_run_refinement_job,
             args=(job_id, df, strategy, risk, rules, mc_cfg, cfg, active_label, library_ref),
+            kwargs={"adaptive_risk": adaptive_risk},
             daemon=True,
         )
         thread.start()
