@@ -13,7 +13,7 @@ volume, same as every other module under app/) instead of HyperTA's
 Date/Open/High/Low/Close/Volume, and to return plain dataclasses instead
 of loose DataFrames-of-everything, so this plugs cleanly into both:
 
-  - app.ai.market_intelligence -- Owen AI's market-bias proxy today is
+  - app.ai.market_intelligence -- T58 AI's market-bias proxy today is
     purely EMA50-vs-EMA200 (see that module's own docstring/caveat).
     summarize_market_structure() below gives it real, deterministic
     BOS/ChoCH and Wyckoff phase facts to reason from instead, without
@@ -362,7 +362,7 @@ def summarize_market_structure(
     """Rolls calculate_hh_ll_structure() + calculate_wyckoff_events() up
     into one answer: current trend, most recent BOS/ChoCH, most recent
     Wyckoff phase/event, and a single bullish/bearish/neutral bias --
-    the deterministic facts app.ai.market_intelligence hands to Owen AI
+    the deterministic facts app.ai.market_intelligence hands to T58 AI
     instead of asking the model to eyeball structure from price alone."""
     warnings: list[str] = []
     hh_ll = calculate_hh_ll_structure(df, left=swing_left, right=swing_right)
