@@ -77,6 +77,29 @@ class PayoutEvent:
 
 
 @dataclass
+class AttemptRecord:
+    """One "buy-in" inside a reset-on-breach chain (see simulate_account's
+    `reset_on_breach` parameter): a single evaluation/funded run that starts
+    fresh at `rules.account_size` and ends either because it busted a
+    prop-firm rule or because the available trade history ran out while it
+    was still alive. Only ever produced when `reset_on_breach=True` -- a
+    normal (non-reset) call to simulate_account still returns exactly one
+    of these (attempt #1) so callers can treat both modes uniformly, but
+    the chain only continues past attempt #1 when reset_on_breach is set.
+    """
+    attempt_index: int              # 0-based: 0 is the first attempt
+    start_day_index: int            # day index (in the full trade sequence) this attempt started on
+    end_day_index: int              # day index this attempt ended on (failed or ran out of trades)
+    days_used: int                  # trading days this attempt lasted
+    passed_evaluation: bool
+    failed: bool
+    failure_reason: str | None
+    reached_first_payout: bool
+    payout_amount: float            # total $ paid out (gross, before any profit split) during this attempt
+    ending_balance: float
+
+
+@dataclass
 class AccountSimResult:
     passed_evaluation: bool
     failed: bool
@@ -89,6 +112,19 @@ class AccountSimResult:
     final_balance: float = 0.0
     max_drawdown_pct_reached: float = 0.0
     trading_days_count: int = 0
+    # -- reset-on-breach chain bookkeeping (see simulate_account's docstring) --
+    # Populated for every call (attempts always has at least one record,
+    # attempt #1); only ever has more than one entry when reset_on_breach
+    # was True and an earlier attempt busted with trade history still left
+    # to mechanically "rebuy" into. These four fields are pure summary
+    # views over `attempts` -- nothing here changes any pre-existing field
+    # above, and every field above still describes attempt #1 alone when
+    # reset_on_breach=False, exactly as before this chain feature existed.
+    reset_on_breach: bool = False
+    attempts: list[AttemptRecord] = field(default_factory=list)
+    total_attempts: int = 1
+    attempts_passed: int = 0
+    attempts_reached_payout: int = 0
 
     @property
     def reached_first_payout(self) -> bool:
@@ -154,6 +190,7 @@ def simulate_account(
     trade_dates: list,
     rules: PropRules,
     _day_structure: "DayStructure | None" = None,
+    reset_on_breach: bool = False,
 ) -> AccountSimResult:
     """
     trade_pnls: P&L of each trade (account-currency $), in chronological order
@@ -165,137 +202,227 @@ def simulate_account(
     once, computed from trade_dates, to skip re-deriving it on every call.
     Every other caller can ignore this parameter entirely; it's derived
     from trade_dates automatically when omitted, with identical results.
+
+    reset_on_breach: when False (the default -- byte-identical to this
+    function's behavior before this parameter existed), the walk stops the
+    instant the account busts a rule, exactly as before. When True, a bust
+    does NOT end the simulation: the account snaps back to a fresh
+    `rules.account_size` and a new "attempt" starts on the very next trade
+    in the SAME sequence, continuing until either an attempt survives all
+    the way to the end of `trade_pnls` (the chain stops there -- there's no
+    more history to mechanically rebuy into) or the trades run out mid-
+    attempt. This models "what if I mechanically bought a new evaluation
+    every single time this one busted" against ONE fixed, already-ordered
+    trade sequence -- e.g. one Monte Carlo simulation's resampled path --
+    as opposed to app.prop.survival_engine.simulate_reset_chain, which
+    draws a FRESH independent resample for every attempt. Every attempt is
+    recorded in the returned AccountSimResult.attempts list; the top-level
+    passed_evaluation/failed/first_payout_day_index/etc. fields describe
+    the FIRST attempt only that reached that milestone (so a caller that
+    never asks about `attempts` sees exactly the single-attempt semantics
+    it always has), while total_attempts/attempts_passed/
+    attempts_reached_payout summarize the whole chain. This function never
+    applies attempt fees, profit splits, or a bankroll cap -- that
+    trader-economics layer lives in app.monte_carlo.bankroll, which
+    consumes `attempts` to answer "does a trader with $X survive this
+    chain to a payout," precisely so this function stays a pure mechanical
+    rules engine, not an economics one.
     """
     if len(trade_pnls) == 0:
         return AccountSimResult(
             passed_evaluation=False, failed=False, failure_reason="No trades generated.",
             failure_day_index=None, days_to_pass=None, first_payout_day_index=None,
             first_payout_amount=None, final_balance=rules.account_size,
+            reset_on_breach=reset_on_breach, attempts=[], total_attempts=0,
         )
-
-    balance = rules.account_size
-    trailing_peak = rules.account_size
-    static_floor = rules.account_size * (1 - rules.max_drawdown_pct / 100.0)
-
-    stage = "evaluation"
-    passed_evaluation = False
-    days_to_pass = None
-    failed = False
-    failure_reason = None
-    failure_day_index = None
 
     day_structure = _day_structure if _day_structure is not None else precompute_day_structure(trade_dates)
     day_index_per_trade = day_structure.day_index_per_trade
     is_last_of_day = day_structure.is_last_of_day
     day_dates = day_structure.day_dates
-    daily_pnl = [0.0] * day_structure.n_days
-    day_profit_history = [0.0] * day_structure.n_days  # day index -> cumulative pnl that day
+    n = len(trade_pnls)
+    static_floor = rules.account_size * (1 - rules.max_drawdown_pct / 100.0)
 
-    payouts: list[PayoutEvent] = []
-    first_payout_day_index = None
-    first_payout_amount = None
-
-    last_payout_day_index = -10 ** 9
-    payout_baseline_balance = rules.account_size  # balance at last payout (or eval pass, for funded profit tracking)
-    max_dd_pct_reached = 0.0
-
-    total_profit_since_start = 0.0
-    best_day_profit = 0.0
-
+    attempts: list[AttemptRecord] = []
+    overall_payouts: list[PayoutEvent] = []
+    overall_passed_evaluation = False
+    overall_days_to_pass = None
+    overall_first_payout_day_index = None
+    overall_first_payout_amount = None
+    overall_max_dd_pct_reached = 0.0
     last_day_idx_reached = -1
 
-    for i, pnl in enumerate(trade_pnls):
-        cur_day_idx = day_index_per_trade[i]
-        last_day_idx_reached = cur_day_idx
+    i = 0
+    attempt_index = 0
+    # `balance`/`failed`/`failure_reason`/`failure_day_index` below always
+    # describe whichever attempt most recently ran, so that after the loop
+    # exits (for any reason) they can be used directly as the overall
+    # result's trailing state -- matching the single-attempt case exactly.
+    balance = rules.account_size
+    failed = False
+    failure_reason = None
+    failure_day_index = None
 
-        balance += pnl
-        daily_pnl[cur_day_idx] += pnl
-        day_profit_history[cur_day_idx] += pnl
-        total_profit_since_start += pnl
-        best_day_profit = max(best_day_profit, day_profit_history[cur_day_idx])
+    while i < n:
+        # --- fresh per-attempt state ---
+        balance = rules.account_size
+        trailing_peak = rules.account_size
+        stage = "evaluation"
+        passed_evaluation = False
+        days_to_pass = None
+        failed = False
+        failure_reason = None
+        failure_day_index = None
+        attempt_start_day_idx = day_index_per_trade[i]
+        attempt_last_day_idx = attempt_start_day_idx
+        daily_pnl: dict = {}
+        day_profit_history: dict = {}
+        payouts_this_attempt: list[PayoutEvent] = []
+        first_payout_day_index_attempt = None
+        first_payout_amount_attempt = None
+        last_payout_day_index = -10 ** 9
+        payout_baseline_balance = rules.account_size
+        total_profit_since_start = 0.0
+        best_day_profit = 0.0
 
-        check_now = (rules.drawdown_check_mode == "intrabar") or is_last_of_day[i]
+        j = i
+        while j < n:
+            pnl = trade_pnls[j]
+            cur_day_idx = day_index_per_trade[j]
+            attempt_last_day_idx = cur_day_idx
+            last_day_idx_reached = cur_day_idx
 
-        if not check_now:
-            # "eod" mode: this trade isn't the day's last -- defer the
-            # peak/drawdown/failure evaluation until the day is complete.
-            continue
+            balance += pnl
+            daily_pnl[cur_day_idx] = daily_pnl.get(cur_day_idx, 0.0) + pnl
+            day_profit_history[cur_day_idx] = day_profit_history.get(cur_day_idx, 0.0) + pnl
+            total_profit_since_start += pnl
+            best_day_profit = max(best_day_profit, day_profit_history[cur_day_idx])
 
-        trailing_peak = max(trailing_peak, balance)
-        if rules.drawdown_type == "trailing":
-            dd_floor = trailing_peak * (1 - rules.max_drawdown_pct / 100.0)
-        else:
-            dd_floor = static_floor
-        current_dd_pct = max(0.0, (trailing_peak - balance) / trailing_peak * 100.0) if trailing_peak else 0.0
-        max_dd_pct_reached = max(max_dd_pct_reached, current_dd_pct)
+            check_now = (rules.drawdown_check_mode == "intrabar") or is_last_of_day[j]
 
-        # --- Failure checks (apply in both evaluation and funded stages) ---
-        if daily_pnl[cur_day_idx] <= -rules.account_size * (rules.daily_loss_limit_pct / 100.0):
-            failed = True
-            failure_reason = "daily_loss_limit"
-            failure_day_index = cur_day_idx
+            if not check_now:
+                # "eod" mode: this trade isn't the day's last -- defer the
+                # peak/drawdown/failure evaluation until the day is complete.
+                j += 1
+                continue
+
+            trailing_peak = max(trailing_peak, balance)
+            if rules.drawdown_type == "trailing":
+                dd_floor = trailing_peak * (1 - rules.max_drawdown_pct / 100.0)
+            else:
+                dd_floor = static_floor
+            current_dd_pct = max(0.0, (trailing_peak - balance) / trailing_peak * 100.0) if trailing_peak else 0.0
+            overall_max_dd_pct_reached = max(overall_max_dd_pct_reached, current_dd_pct)
+
+            # --- Failure checks (apply in both evaluation and funded stages) ---
+            if daily_pnl[cur_day_idx] <= -rules.account_size * (rules.daily_loss_limit_pct / 100.0):
+                failed = True
+                failure_reason = "daily_loss_limit"
+                failure_day_index = cur_day_idx
+                break
+
+            if balance <= dd_floor:
+                failed = True
+                failure_reason = f"max_drawdown ({rules.drawdown_type})"
+                failure_day_index = cur_day_idx
+                break
+
+            # --- Evaluation pass check ---
+            if stage == "evaluation":
+                target_balance = rules.account_size * (1 + rules.evaluation_profit_target_pct / 100.0)
+                trading_days_so_far = cur_day_idx - attempt_start_day_idx + 1
+                if balance >= target_balance and trading_days_so_far >= rules.min_trading_days:
+                    consistency_ok = True
+                    if rules.consistency_rule_pct is not None and total_profit_since_start > 0:
+                        consistency_ok = (
+                            best_day_profit / total_profit_since_start * 100.0
+                        ) <= rules.consistency_rule_pct
+                    if consistency_ok:
+                        stage = "funded"
+                        passed_evaluation = True
+                        days_to_pass = trading_days_so_far
+                        payout_baseline_balance = balance
+                        last_payout_day_index = cur_day_idx  # start payout clock from pass date
+
+            # --- Funded stage payout check ---
+            elif stage == "funded":
+                profit_since_baseline = balance - payout_baseline_balance
+                required_profit = rules.account_size * (rules.payout_threshold_pct / 100.0) \
+                    + rules.account_size * (rules.required_buffer_pct / 100.0)
+                days_since_last_payout = cur_day_idx - last_payout_day_index
+                if profit_since_baseline > required_profit and days_since_last_payout >= rules.payout_frequency_days:
+                    withdrawable = profit_since_baseline - rules.account_size * (rules.required_buffer_pct / 100.0)
+                    if rules.payout_cap_pct is not None:
+                        withdrawable = min(withdrawable, profit_since_baseline * (rules.payout_cap_pct / 100.0))
+                    withdrawable = max(withdrawable, 0.0)
+                    if withdrawable > 0:
+                        balance -= withdrawable
+                        payout = PayoutEvent(
+                            day_index=cur_day_idx,
+                            date=str(day_dates[cur_day_idx].date()),
+                            amount=withdrawable,
+                            balance_after=balance,
+                        )
+                        payouts_this_attempt.append(payout)
+                        if first_payout_day_index_attempt is None:
+                            first_payout_day_index_attempt = cur_day_idx
+                            first_payout_amount_attempt = withdrawable
+                        payout_baseline_balance = balance
+                        last_payout_day_index = cur_day_idx
+                        trailing_peak = max(trailing_peak, balance)
+
+            j += 1
+
+        # --- attempt finished: either it busted (break above) or it rode
+        # out every remaining trade without failing (j == n) ---
+        attempts.append(AttemptRecord(
+            attempt_index=attempt_index,
+            start_day_index=attempt_start_day_idx,
+            end_day_index=attempt_last_day_idx,
+            days_used=max(0, attempt_last_day_idx - attempt_start_day_idx + 1),
+            passed_evaluation=passed_evaluation,
+            failed=failed,
+            failure_reason=failure_reason,
+            reached_first_payout=first_payout_day_index_attempt is not None,
+            payout_amount=sum(p.amount for p in payouts_this_attempt),
+            ending_balance=balance,
+        ))
+        overall_payouts.extend(payouts_this_attempt)
+        if not overall_passed_evaluation and passed_evaluation:
+            overall_passed_evaluation = True
+            overall_days_to_pass = days_to_pass
+        if overall_first_payout_day_index is None and first_payout_day_index_attempt is not None:
+            overall_first_payout_day_index = first_payout_day_index_attempt
+            overall_first_payout_amount = first_payout_amount_attempt
+
+        attempt_index += 1
+
+        if not reset_on_breach or not failed:
+            # Non-reset mode always stops after attempt #1 (matching this
+            # function's behavior before reset_on_breach existed); reset
+            # mode stops once an attempt survives to the end of the data
+            # (nothing left to mechanically rebuy into).
             break
 
-        if balance <= dd_floor:
-            failed = True
-            failure_reason = f"max_drawdown ({rules.drawdown_type})"
-            failure_day_index = cur_day_idx
-            break
-
-        # --- Evaluation pass check ---
-        if stage == "evaluation":
-            target_balance = rules.account_size * (1 + rules.evaluation_profit_target_pct / 100.0)
-            trading_days_so_far = cur_day_idx + 1
-            if balance >= target_balance and trading_days_so_far >= rules.min_trading_days:
-                consistency_ok = True
-                if rules.consistency_rule_pct is not None and total_profit_since_start > 0:
-                    consistency_ok = (best_day_profit / total_profit_since_start * 100.0) <= rules.consistency_rule_pct
-                if consistency_ok:
-                    stage = "funded"
-                    passed_evaluation = True
-                    days_to_pass = trading_days_so_far
-                    payout_baseline_balance = balance
-                    last_payout_day_index = cur_day_idx  # start payout clock from pass date
-
-        # --- Funded stage payout check ---
-        elif stage == "funded":
-            profit_since_baseline = balance - payout_baseline_balance
-            required_profit = rules.account_size * (rules.payout_threshold_pct / 100.0) \
-                + rules.account_size * (rules.required_buffer_pct / 100.0)
-            days_since_last_payout = cur_day_idx - last_payout_day_index
-            if profit_since_baseline > required_profit and days_since_last_payout >= rules.payout_frequency_days:
-                withdrawable = profit_since_baseline - rules.account_size * (rules.required_buffer_pct / 100.0)
-                if rules.payout_cap_pct is not None:
-                    withdrawable = min(withdrawable, profit_since_baseline * (rules.payout_cap_pct / 100.0))
-                withdrawable = max(withdrawable, 0.0)
-                if withdrawable > 0:
-                    balance -= withdrawable
-                    payout = PayoutEvent(
-                        day_index=cur_day_idx,
-                        date=str(day_dates[cur_day_idx].date()),
-                        amount=withdrawable,
-                        balance_after=balance,
-                    )
-                    payouts.append(payout)
-                    if first_payout_day_index is None:
-                        first_payout_day_index = cur_day_idx
-                        first_payout_amount = withdrawable
-                    payout_baseline_balance = balance
-                    last_payout_day_index = cur_day_idx
-                    trailing_peak = max(trailing_peak, balance)
+        i = j + 1  # failed at index j -- next attempt starts on the following trade
 
     return AccountSimResult(
-        passed_evaluation=passed_evaluation,
+        passed_evaluation=overall_passed_evaluation,
         failed=failed,
         failure_reason=failure_reason,
         failure_day_index=failure_day_index,
-        days_to_pass=days_to_pass,
-        first_payout_day_index=first_payout_day_index,
-        first_payout_amount=first_payout_amount,
-        payouts=payouts,
+        days_to_pass=overall_days_to_pass,
+        first_payout_day_index=overall_first_payout_day_index,
+        first_payout_amount=overall_first_payout_amount,
+        payouts=overall_payouts,
         final_balance=balance,
-        max_drawdown_pct_reached=max_dd_pct_reached,
+        max_drawdown_pct_reached=overall_max_dd_pct_reached,
         trading_days_count=last_day_idx_reached + 1,
+        reset_on_breach=reset_on_breach,
+        attempts=attempts,
+        total_attempts=len(attempts),
+        attempts_passed=sum(1 for a in attempts if a.passed_evaluation),
+        attempts_reached_payout=sum(1 for a in attempts if a.reached_first_payout),
     )
 
 
