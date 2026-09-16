@@ -53,6 +53,7 @@ from app.backtest.execution import Trade
 from app.backtest.risk import RiskConfig
 from app.backtest.statistics import compute_statistics
 from app.monte_carlo.engine import MonteCarloConfig, run_monte_carlo
+from app.monte_carlo.slippage_model import SessionVolatilitySlippageConfig
 from app.optimize.code_parameter_space import materialize_code_strategy
 from app.optimize.parameter_space import GeneMeta, RefinementError, apply_genome
 from app.orchestration.resource_guard import safe_worker_count_for_bytes
@@ -149,6 +150,29 @@ def _ga_worker_init(
     adaptive_risk=None,
 ) -> None:
     global _GA_WORKER
+    # BUG FIX (2026-09): dataclasses.asdict() -- used at the pool-creation
+    # call site to make MonteCarloConfig picklable as plain kwargs --
+    # recurses into EVERY nested dataclass field, not just the top-level
+    # one. MonteCarloConfig.session_slippage is itself a dataclass
+    # (SessionVolatilitySlippageConfig), so search_mc_kwargs["session_
+    # slippage"] arrives here as a plain dict, not an object. Reconstructing
+    # MonteCarloConfig(**search_mc_kwargs) without first rebuilding that
+    # nested field left session_slippage as a bare dict on the resulting
+    # MonteCarloConfig -- which then raised
+    # `AttributeError: 'dict' object has no attribute 'enabled'` the
+    # instant a genome's fitness evaluation reached
+    # apply_session_volatility_slippage(trades, cfg.session_slippage)
+    # inside run_monte_carlo, on EVERY worker, for EVERY genome, every
+    # generation. Because this is caught by evaluate_batch's blanket
+    # except and silently falls back to a single process, this never
+    # produced a wrong number -- it just meant this pool never actually
+    # ran a single genome in parallel, silently paying full sequential
+    # cost on every Quick Optimize / Full Pipeline run that used this GA
+    # (i.e. every one of them, since both share this exact function).
+    search_mc_kwargs = dict(search_mc_kwargs)
+    session_slippage_kwargs = search_mc_kwargs.get("session_slippage")
+    if isinstance(session_slippage_kwargs, dict):
+        search_mc_kwargs["session_slippage"] = SessionVolatilitySlippageConfig(**session_slippage_kwargs)
     _GA_WORKER = {
         "kind": kind,
         "manual_config": manual_config,
