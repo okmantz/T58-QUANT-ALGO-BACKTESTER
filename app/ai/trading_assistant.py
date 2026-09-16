@@ -1,4 +1,4 @@
-"""Owen AI -- the conversational layer on top of app.ai.t58_strategy_engine
+"""T58 AI -- the conversational layer on top of app.ai.t58_strategy_engine
 (deterministic market facts), app.ai.news_forexfactory (deterministic news
 facts), and app.ai.market_scanner (deterministic rankings).
 
@@ -456,7 +456,7 @@ class TradingAssistantClient:
         return headers
 
     # Capped so a chatty local model can't run on for minutes -- 600 tokens
-    # is comfortably enough for even a long Owen AI answer, and a hard
+    # is comfortably enough for even a long T58 AI answer, and a hard
     # ceiling here is a genuine (not just perceived) speed fix: the single
     # biggest source of "the AI assistant takes forever" on CPU-only Ollama
     # is generation length, since every extra token costs the same
