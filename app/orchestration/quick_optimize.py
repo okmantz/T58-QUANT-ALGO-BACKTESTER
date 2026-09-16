@@ -65,7 +65,7 @@ from app.optimize.walkforward_ga import WalkforwardGAResult, run_walkforward_awa
 from app.prop.simulator import PropRules, simulate_account
 from app.search.strategy_space import build_strategy_from_spec
 from app.strategy.base import Strategy
-from app.strategy.library import StrategyAlreadyExists, save_strategy_text, set_strategy_status
+from app.strategy.library import StrategyAlreadyExists, safe_filename_stem, save_strategy_text, set_strategy_status
 
 ProgressCallback = "Callable[[str], None]"
 
@@ -339,7 +339,7 @@ def run_quick_optimize(
     saved_library_note = None
     if cfg.save_to_library and final_source_type in ("python", "pinescript", "mql5") and final_code_text:
         ext = _EXT_FOR_SOURCE[final_source_type]
-        base_name = Path(display_name).stem.replace(" ", "_") or "optimized_strategy"
+        base_name = safe_filename_stem(display_name, "optimized_strategy")
         filename = f"{base_name}_optimized{ext}"
         try:
             try:
@@ -358,7 +358,7 @@ def run_quick_optimize(
         # Search-Lab configs are dicts, not files, but app.strategy.library
         # already has a first-class "manual" type that stores exactly this
         # shape as JSON, so there's no real reason this used to give up.
-        base_name = Path(display_name).stem.replace(" ", "_") or "optimized_strategy"
+        base_name = safe_filename_stem(display_name, "optimized_strategy")
         filename = f"{base_name}_optimized.json"
         config_text = json.dumps(final_config, indent=2)
         try:

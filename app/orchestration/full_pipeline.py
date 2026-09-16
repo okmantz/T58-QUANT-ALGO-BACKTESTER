@@ -113,7 +113,7 @@ from app.scoring.t58_scorecard import T58ScorecardResult, score_from_results
 from app.search.robustness import WalkForwardResult, run_walk_forward
 from app.search.strategy_space import build_strategy_from_spec
 from app.strategy.base import Strategy
-from app.strategy.library import StrategyAlreadyExists, save_strategy_text, set_strategy_status, \
+from app.strategy.library import StrategyAlreadyExists, safe_filename_stem, save_strategy_text, set_strategy_status, \
     record_backtest_result
 from app.validation.cpcv import CPCVError, CPCVResult, run_cpcv
 from app.validation.icir import ICIRGateResult, run_icir_gate_from_backtest
@@ -1076,7 +1076,7 @@ def _finish(
     saved_library_note = None
     if cfg.save_to_library and final_source_type in ("python", "pinescript", "mql5") and final_code_text:
         ext = {"python": ".py", "pinescript": ".pine", "mql5": ".mq5"}[final_source_type]
-        base_name = Path(display_name).stem.replace(" ", "_") or "full_pipeline_strategy"
+        base_name = safe_filename_stem(display_name, "full_pipeline_strategy")
         filename = f"{base_name}_pipeline{ext}"
         try:
             try:
@@ -1119,7 +1119,7 @@ def _finish(
         # code" action downstream (e.g. Speed Run's candidate list) has
         # something to show for a manual-builder winner too, not just for
         # python/pinescript/mql5 ones.
-        base_name = Path(display_name).stem.replace(" ", "_") or "full_pipeline_strategy"
+        base_name = safe_filename_stem(display_name, "full_pipeline_strategy")
         filename = f"{base_name}_pipeline.json"
         config_text = json.dumps(final_config, indent=2)
         try:
