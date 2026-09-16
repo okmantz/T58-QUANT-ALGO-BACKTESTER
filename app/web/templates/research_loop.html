@@ -107,6 +107,10 @@
       <div><label>Prop-survival sims per iteration</label><input type="number" name="survival_sims" value="1000"></div>
     </div>
     <div class="row">
+      <div>
+        <label>Prop firm preset (optional shortcut)</label>
+        <select id="rl_prop_preset_select"><option value="">-- or enter rules manually below --</option></select>
+      </div>
       <div><label>Initial account balance</label><input type="number" name="initial_balance" value="100000"></div>
       <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" value="0.0001"></div>
     </div>
@@ -127,5 +131,9 @@
 </div>
 </div>
 <script src="/static/t58-chrome.js" defer></script>
+<script src="/static/prop-presets.js"></script>
+<script>
+  initPropFirmPresetDropdown('rl_prop_preset_select', { account_size: 'initial_balance' });
+</script>
 </body>
 </html>

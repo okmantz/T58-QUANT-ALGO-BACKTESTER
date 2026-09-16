@@ -129,6 +129,10 @@
   <div class="card">
     <h2>2. Shared risk settings</h2>
     <div class="row">
+      <div>
+        <label>Prop firm preset (optional shortcut)</label>
+        <select id="port_prop_preset_select"><option value="">-- or enter rules manually below --</option></select>
+      </div>
       <div><label>Initial account balance</label><input type="number" name="initial_balance" value="100000"></div>
       <div><label>Risk value</label><input type="number" step="0.1" name="risk_value" value="1.0"></div>
     </div>
@@ -292,6 +296,10 @@
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/static/sw.js').catch(() => {});
   }
+</script>
+<script src="/static/prop-presets.js"></script>
+<script>
+  initPropFirmPresetDropdown('port_prop_preset_select', { account_size: 'initial_balance' });
 </script>
 </body>
 </html>

@@ -126,6 +126,10 @@
       </div>
     </div>
     <div class="row" style="margin-top:10px;">
+      <div>
+        <label>Prop firm preset (optional shortcut)</label>
+        <select id="smi_prop_preset_select"><option value="">-- or enter rules manually below --</option></select>
+      </div>
       <div><label>Initial account balance</label><input type="number" name="initial_balance" value="100000"></div>
       <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" value="0.0001"></div>
     </div>
@@ -166,5 +170,9 @@
   checkboxes.forEach(cb => cb.addEventListener('change', updateCount));
 </script>
 <script src="/static/t58-chrome.js" defer></script>
+<script src="/static/prop-presets.js"></script>
+<script>
+  initPropFirmPresetDropdown('smi_prop_preset_select', { account_size: 'initial_balance' });
+</script>
 </body>
 </html>

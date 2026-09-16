@@ -176,8 +176,8 @@
       </div>
     </div>
     <div class="row">
-      <div><label>Initial balance</label><input type="number" name="initial_balance" value="100000"></div>
-      <div><label>Account size (prop rules)</label><input type="number" name="account_size" value="100000"></div>
+      <div><label>Initial balance</label><input type="number" name="initial_balance" id="fp_initial_balance" value="100000"></div>
+      <div><label>Account size (prop rules)</label><input type="number" name="account_size" id="fp_account_size" value="100000"></div>
     </div>
     <div class="row">
       <div><label>Risk mode</label>
@@ -223,7 +223,8 @@
         <div><label>Final MC sims</label><input type="number" name="final_mc_sims" value="10000"></div>
       </div>
       <label class="checkbox-row"><input type="checkbox" name="parallel_search" checked>Parallelize GA search across CPU cores</label>
-      <label class="checkbox-row"><input type="checkbox" name="adaptive_risk_enabled">Enable adaptive, limit-aware position sizing (throttles risk as the account nears its daily-loss/max-drawdown limits)</label>
+      <label class="checkbox-row" style="background:rgba(255,200,80,0.08);border:1px solid rgba(255,200,80,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="adaptive_risk_enabled">Enable adaptive, limit-aware position sizing (throttles risk as the account nears its daily-loss/max-drawdown limits)</label>
+      <p style="font-size:12px;color:#888;margin-top:4px;">Off by default. If you ran Quick Optimize on this strategy with this ON, leave it ON here too -- comparing a Quick Optimize result with this enabled against a Full Pipeline run with it OFF (or vice versa) is not an apples-to-apples comparison and can show wildly different pass/fail outcomes for the identical strategy and data.</p>
     </details>
     <details style="margin-top:10px;">
       <summary>Validation &amp; library settings</summary>
@@ -352,7 +353,7 @@
     const p = JSON.parse(value);
     const form = document.getElementById('fp_prop_preset_select').closest('form');
     if (!form) return;
-    const set = (name, val) => { const el = form.querySelector(`[name="${name}"]`); if (el) el.value = val; };
+    const set = (name, val) => { const el = form.querySelector(`[name="${name}"]`); if (el) { el.value = val; el.dispatchEvent(new Event('input', { bubbles: true })); } };
     set('account_size', p.account_size);
     set('profit_target', p.evaluation_profit_target_pct);
     set('daily_loss', p.daily_loss_limit_pct);
@@ -510,6 +511,21 @@
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/static/sw.js').catch(() => {});
   }
+</script>
+
+<script>
+  // RISK-001 fix: "Account size" and "Initial balance" must be the same
+  // dollar account -- the backend already forces this server-side
+  // (app.backtest.risk.with_prop_safety_defaults makes account_size win
+  // if they ever disagree), but syncing them live here means the person
+  // never sees the two numbers disagree in the first place. RISK-001-SYNC
+  (function () {
+    const a = document.getElementById('fp_account_size');
+    const b = document.getElementById('fp_initial_balance');
+    if (!a || !b) return;
+    a.addEventListener('input', () => { b.value = a.value; });
+    b.addEventListener('input', () => { a.value = b.value; });
+  })();
 </script>
 </body>
 </html>

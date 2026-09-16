@@ -190,6 +190,10 @@
   <div class="card">
     <h2>4. Execution desk (rebalance + costs)</h2>
     <div class="row">
+      <div>
+        <label>Prop firm preset (optional shortcut)</label>
+        <select id="hf_prop_preset_select"><option value="">-- or enter rules manually below --</option></select>
+      </div>
       <div><label>Initial balance</label><input type="number" name="initial_balance" value="100000"></div>
       <div><label>Rebalance every (bars)</label><input type="number" name="rebalance_every_bars" value="5"></div>
     </div>
@@ -237,6 +241,10 @@
     });
     nameSelect.style.display = 'block';
   }
+</script>
+<script src="/static/prop-presets.js"></script>
+<script>
+  initPropFirmPresetDropdown('hf_prop_preset_select', { account_size: 'initial_balance' });
 </script>
 </body>
 </html>

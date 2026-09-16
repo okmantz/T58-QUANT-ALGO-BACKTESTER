@@ -388,6 +388,12 @@
     <details>
       <summary>3. Prop-Firm Rules</summary>
       <div class="row">
+        <div>
+          <label>Prop firm preset (optional shortcut)</label>
+          <select id="index_prop_preset_select"><option value="">-- or enter rules manually below --</option></select>
+        </div>
+      </div>
+      <div class="row">
         <div><label>Account size ($)</label><input type="number" name="account_size" id="account_size_input" value="100000"><div class="hint" style="font-size:0.8em;color:#888;">Kept in sync with Initial balance below (RISK-001) -- these must be the same account.</div></div>
         <div><label>Eval profit target (%)</label><input type="number" name="profit_target" value="8"></div>
       </div>
@@ -756,6 +762,12 @@
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/static/sw.js').catch(() => {});
   }
+</script>
+<script src="/static/prop-presets.js"></script>
+<script>
+  initPropFirmPresetDropdown('index_prop_preset_select', {
+    account_size: 'account_size', profit_target: 'profit_target', daily_loss: 'daily_loss', max_dd: 'max_dd',
+  });
 </script>
 </body>
 </html>

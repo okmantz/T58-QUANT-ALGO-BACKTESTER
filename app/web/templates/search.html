@@ -364,8 +364,8 @@
       </div>
     </div>
     <div class="row">
-      <div><label>Initial balance</label><input type="number" name="initial_balance" value="100000"></div>
-      <div><label>Account size (prop rules)</label><input type="number" name="account_size" value="100000"></div>
+      <div><label>Initial balance</label><input type="number" name="initial_balance" id="search_initial_balance" value="100000"></div>
+      <div><label>Account size (prop rules)</label><input type="number" name="account_size" id="search_account_size" value="100000"></div>
     </div>
     <div class="row">
       <div><label>Risk mode</label>
@@ -669,7 +669,7 @@
     const p = JSON.parse(value);
     const form = document.getElementById('search_prop_preset_select').closest('form');
     if (!form) return;
-    const set = (name, val) => { const el = form.querySelector(`[name="${name}"]`); if (el) el.value = val; };
+    const set = (name, val) => { const el = form.querySelector(`[name="${name}"]`); if (el) { el.value = val; el.dispatchEvent(new Event('input', { bubbles: true })); } };
     set('account_size', p.account_size);
     set('profit_target', p.evaluation_profit_target_pct);
     set('daily_loss', p.daily_loss_limit_pct);
@@ -714,6 +714,21 @@
         statusEl.textContent = "Couldn't detect: " + err;
       });
   }
+</script>
+
+<script>
+  // RISK-001 fix: "Account size" and "Initial balance" must be the same
+  // dollar account -- the backend already forces this server-side
+  // (app.backtest.risk.with_prop_safety_defaults makes account_size win
+  // if they ever disagree), but syncing them live here means the person
+  // never sees the two numbers disagree in the first place. RISK-001-SYNC
+  (function () {
+    const a = document.getElementById('search_account_size');
+    const b = document.getElementById('search_initial_balance');
+    if (!a || !b) return;
+    a.addEventListener('input', () => { b.value = a.value; });
+    b.addEventListener('input', () => { a.value = b.value; });
+  })();
 </script>
 </body>
 </html>

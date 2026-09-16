@@ -130,6 +130,10 @@
       <option value="vote">Vote (one combined signal, entered only once enough strategies agree)</option>
     </select>
     <div class="row">
+      <div>
+        <label>Prop firm preset (optional shortcut)</label>
+        <select id="ens_prop_preset_select"><option value="">-- or enter rules manually below --</option></select>
+      </div>
       <div><label>Shared initial account balance</label><input type="number" name="initial_balance" value="100000"></div>
       <div id="min-agreement-field" style="display:none;"><label>Min agreement (Vote mode only)</label><input type="number" name="min_agreement" value="2"></div>
     </div>
@@ -166,6 +170,10 @@
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/static/sw.js').catch(() => {});
   }
+</script>
+<script src="/static/prop-presets.js"></script>
+<script>
+  initPropFirmPresetDropdown('ens_prop_preset_select', { account_size: 'initial_balance' });
 </script>
 </body>
 </html>

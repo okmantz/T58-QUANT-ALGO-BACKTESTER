@@ -79,8 +79,12 @@
   <div class="card">
     <h2>2. Account &amp; risk (applied identically to every instrument)</h2>
     <div class="row">
-      <div><label>Initial balance</label><input type="number" name="initial_balance" value="100000"></div>
-      <div><label>Account size (prop rules)</label><input type="number" name="account_size" value="100000"></div>
+      <div>
+        <label>Prop firm preset (optional shortcut)</label>
+        <select id="srmi_prop_preset_select"><option value="">-- or enter rules manually below --</option></select>
+      </div>
+      <div><label>Initial balance</label><input type="number" name="initial_balance" id="srmi_initial_balance" value="100000"></div>
+      <div><label>Account size (prop rules)</label><input type="number" name="account_size" id="srmi_account_size" value="100000"></div>
     </div>
     <div class="row">
       <div><label>Risk mode</label>
@@ -149,5 +153,24 @@
   checkboxes.forEach(cb => cb.addEventListener('change', updateCount));
 </script>
 <script src="/static/t58-chrome.js" defer></script>
+
+<script>
+  // RISK-001 fix: "Account size" and "Initial balance" must be the same
+  // dollar account -- the backend already forces this server-side
+  // (app.backtest.risk.with_prop_safety_defaults makes account_size win
+  // if they ever disagree), but syncing them live here means the person
+  // never sees the two numbers disagree in the first place. RISK-001-SYNC
+  (function () {
+    const a = document.getElementById('srmi_account_size');
+    const b = document.getElementById('srmi_initial_balance');
+    if (!a || !b) return;
+    a.addEventListener('input', () => { b.value = a.value; });
+    b.addEventListener('input', () => { a.value = b.value; });
+  })();
+</script>
+<script src="/static/prop-presets.js"></script>
+<script>
+  initPropFirmPresetDropdown('srmi_prop_preset_select', { account_size: 'account_size', profit_target: 'profit_target', daily_loss: 'daily_loss', max_dd: 'max_dd' });
+</script>
 </body>
 </html>

@@ -322,5 +322,20 @@
     navigator.serviceWorker.register('/static/sw.js').catch(() => {});
   }
 </script>
+
+<script>
+  // RISK-001 fix: "Account size" and "Initial balance" must be the same
+  // dollar account -- the backend already forces this server-side
+  // (app.backtest.risk.with_prop_safety_defaults makes account_size win
+  // if they ever disagree), but syncing them live here means the person
+  // never sees the two numbers disagree in the first place. RISK-001-SYNC
+  (function () {
+    const a = document.getElementById('pp_account_size');
+    const b = document.getElementById('pp_initial_balance');
+    if (!a || !b) return;
+    a.addEventListener('input', () => { b.value = a.value; });
+    b.addEventListener('input', () => { a.value = b.value; });
+  })();
+</script>
 </body>
 </html>
