@@ -51,6 +51,7 @@ from typing import Callable
 
 import pandas as pd
 
+from app.backtest.adaptive_risk import AdaptiveRiskConfig
 from app.backtest.engine import BacktestResult, run_backtest, run_holdout_comparison
 from app.backtest.risk import RiskConfig
 from app.monte_carlo.engine import MonteCarloConfig, MonteCarloResult, run_monte_carlo
@@ -391,6 +392,7 @@ def _evaluate(
     keep_full: bool = False,
     cost_stress_multiplier: float | None = None,
     cost_stress_penalty_weight: float = 0.0,
+    adaptive_risk: AdaptiveRiskConfig | None = None,
 ):
     """Runs one full backtest -> prop sim -> Monte Carlo pass for one strategy instance.
 
@@ -402,8 +404,19 @@ def _evaluate(
     `mc_summary` always describe the NOMINAL run (so reports keep showing
     real, un-stressed numbers) -- only the scalar fitness the GA selects on
     is cost-stress-adjusted.
+
+    adaptive_risk: same declarative, limit-aware position-sizing overlay
+    Quick Optimize and Full Pipeline already accept (see
+    app.backtest.adaptive_risk) -- applied identically to every backtest
+    below (baseline, every GA candidate, the stressed-cost pass, and the
+    final full-fidelity re-run) so a strategy searched here with this
+    enabled produces a result that's actually comparable to a Quick
+    Optimize/Full Pipeline run made with the same setting, instead of
+    silently diverging the way an unthrottled run can (see the 2026-09-16
+    Quick-Optimize-vs-Full-Pipeline diagnosis this closes for Iterative
+    Refinement).
     """
-    bt_result = run_backtest(df, strategy, risk)
+    bt_result = run_backtest(df, strategy, risk, adaptive_risk=adaptive_risk)
 
     if not bt_result.trades:
         return (
@@ -428,7 +441,7 @@ def _evaluate(
 
     if cost_stress_multiplier and cost_stress_penalty_weight > 0 and math.isfinite(fitness):
         stressed_risk = _stressed_risk_config(risk, cost_stress_multiplier)
-        stressed_bt = run_backtest(df, strategy, stressed_risk)
+        stressed_bt = run_backtest(df, strategy, stressed_risk, adaptive_risk=adaptive_risk)
         if stressed_bt.trades:
             stressed_pnls = [t.pnl for t in stressed_bt.trades]
             stressed_dates = [t.entry_time for t in stressed_bt.trades]
@@ -563,6 +576,7 @@ def _build_adapter(strategy: Strategy, tmp_dir: Path | None):
 
 def preflight_signal_check(
     df: pd.DataFrame, strategy: Strategy, risk: RiskConfig, feature_name: str,
+    adaptive_risk: AdaptiveRiskConfig | None = None,
 ) -> None:
     """
     Runs ONE cheap, unmodified backtest of `strategy` on the FULL `df`
@@ -589,7 +603,7 @@ def preflight_signal_check(
     re-discovering the same "zero trades" fact many times over.
     """
     try:
-        bt = run_backtest(df, strategy, risk)
+        bt = run_backtest(df, strategy, risk, adaptive_risk=adaptive_risk)
     except Exception:
         # Let the caller's own error handling deal with a strategy that
         # can't even run once -- this check is only about "runs fine but
@@ -639,6 +653,7 @@ def run_iterative_refinement(
     mc_config: MonteCarloConfig,
     refinement_config: RefinementConfig,
     progress_cb: ProgressCallback | None = None,
+    adaptive_risk: AdaptiveRiskConfig | None = None,
 ) -> RefinementResult:
     """
     strategy: an already-built Strategy instance (ManualStrategy,
@@ -648,10 +663,24 @@ def run_iterative_refinement(
     its n_simulations is used for the baseline and the final best-candidate
     evaluation; the search phase uses refinement_config.search_monte_carlo_sims
     instead, for speed.
+    adaptive_risk: same declarative, limit-aware position-sizing overlay
+    accepted by Quick Optimize and Full Pipeline (see
+    app.backtest.adaptive_risk.build_limit_aware_preset) -- None/omitted
+    runs exactly as before this parameter existed. Applied to the
+    baseline backtest, every GA candidate, and the final full-fidelity
+    re-run, so a result produced here is only comparable to a Quick
+    Optimize/Full Pipeline result made with the SAME setting -- mixing
+    an enabled run here with a disabled one there (or vice versa) is not
+    an apples-to-apples comparison, same caveat that already exists on
+    those other two tools' "Enable adaptive, limit-aware position
+    sizing" checkboxes.
     """
     def log(msg: str) -> None:
         if progress_cb:
             progress_cb(msg)
+
+    if adaptive_risk is not None and adaptive_risk.enabled:
+        log(f"Adaptive risk enabled: {len(adaptive_risk.rules)} limit-aware throttle rule(s) applied.")
 
     if strategy.source_type not in SUPPORTED_SOURCE_TYPES:
         raise RefinementError(
@@ -691,6 +720,7 @@ def run_iterative_refinement(
                 df, candidate_strategy, risk, prop_rules, search_mc_cfg, cfg.fitness_metric, keep_full=keep_full,
                 cost_stress_multiplier=cfg.cost_stress_multiplier if cfg.cost_stress_enabled else None,
                 cost_stress_penalty_weight=cfg.cost_stress_penalty_weight if cfg.cost_stress_enabled else 0.0,
+                adaptive_risk=adaptive_risk,
             )
             config, code_text, code_ext = (None, None, None)
             if keep_full:
@@ -762,6 +792,7 @@ def run_iterative_refinement(
             df, best_strategy, risk, prop_rules, mc_config, cfg.fitness_metric, keep_full=True,
             cost_stress_multiplier=cfg.cost_stress_multiplier if cfg.cost_stress_enabled else None,
             cost_stress_penalty_weight=cfg.cost_stress_penalty_weight if cfg.cost_stress_enabled else 0.0,
+            adaptive_risk=adaptive_risk,
         )
         final_config, final_code_text, final_code_ext = snapshot(best_ever.genome)
         best_final = Candidate(
