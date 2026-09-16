@@ -1,4 +1,4 @@
-"""Owen AI Assistant -- web routes.
+"""T58 AI Assistant -- web routes.
 
 Wires app.ai.t58_strategy_engine / app.ai.news_forexfactory /
 app.ai.market_scanner / app.ai.trading_assistant into the mobile/desktop
@@ -20,7 +20,7 @@ Macro bias caveat (surfaced honestly in the API's `macro_note` field and
 worth knowing before trusting the rankings): this app has no fundamentals/
 rates/positioning data source, so macro_bias_by_symbol is a plain
 technical PROXY (daily EMA50 vs EMA200 trend), not a true fundamental
-read. Ask Owen AI chat directly for a fundamental macro take -- the model
+read. Ask T58 AI chat directly for a fundamental macro take -- the model
 can reason about that from its own knowledge/training even though the
 deterministic engine can't compute it -- and treat the scanner's status
 column as technical-only until you do.
@@ -280,7 +280,7 @@ def api_outlook():
     if error:
         text = deterministic + f"\n\n(Ollama narrative unavailable: {error})"
     else:
-        text = deterministic + "\n\n--- Owen AI's read ---\n" + reply
+        text = deterministic + "\n\n--- T58 AI's read ---\n" + reply
     return jsonify({"text": text, "error": None})
 
 

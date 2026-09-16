@@ -316,10 +316,9 @@ def strategy_health():
             '<option value="critical">critical</option></select>',
         )
         + '<label for="retune_csv">Market data (.csv) -- only needed if re-tuning</label><input type="file" id="retune_csv" name="retune_csv">'
-        + _field("initial_balance", "Initial balance ($)", "number", "100000")
         + _field("risk_value", "Risk value (%)", "number", "1.0")
         + _field("pip_size", "Pip size", "number", "0.0001")
-        + _field("account_size", "Prop account size ($)", "number", "10000")
+        + _field("account_size", "Account size ($) -- also used as initial balance", "number", "100000")
         + _field("profit_target", "Eval profit target (%)", "number", "8")
         + _field("daily_loss", "Daily loss limit (%)", "number", "5")
         + _field("max_dd", "Max drawdown (%)", "number", "10")
@@ -367,12 +366,16 @@ def strategy_health():
                 strategy = load_strategy_object(stored)
                 df = _load_ohlcv_upload("retune_csv")
                 risk = RiskConfig(
-                    initial_balance=float(request.form.get("initial_balance", 100000) or 100000),
+                    # RISK-001 fix: this page used to read "initial_balance" (default
+                    # 100000) and "account_size" (default 10000) as two independent
+                    # form fields that could silently disagree -- now a single
+                    # "account_size" field drives both.
+                    initial_balance=float(request.form.get("account_size", 100000) or 100000),
                     risk_value=float(request.form.get("risk_value", 1.0) or 1.0),
                     pip_size=float(request.form.get("pip_size", 0.0001) or 0.0001),
                 )
                 rules = PropRules(
-                    account_size=float(request.form.get("account_size", 10000) or 10000),
+                    account_size=float(request.form.get("account_size", 100000) or 100000),
                     evaluation_profit_target_pct=float(request.form.get("profit_target", 8) or 8),
                     daily_loss_limit_pct=float(request.form.get("daily_loss", 5) or 5),
                     max_drawdown_pct=float(request.form.get("max_dd", 10) or 10),
@@ -802,7 +805,7 @@ def market_structure():
     return _render(
         "Market Structure (Wyckoff + BOS/ChoCH)",
         "Deterministic swing structure (HH/HL/LH/LL, break of structure / change of character) and Wyckoff "
-        "spring/upthrust/SOS/SOW + phase detection -- the same facts app.ai.market_intelligence now feeds Owen AI.",
+        "spring/upthrust/SOS/SOW + phase detection -- the same facts app.ai.market_intelligence now feeds T58 AI.",
         form_html, result_html, error,
     )
 

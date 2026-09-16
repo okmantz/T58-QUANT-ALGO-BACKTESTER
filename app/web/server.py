@@ -282,7 +282,7 @@ app = Flask(__name__, static_folder="static", template_folder="templates")
 # composer, and the app/quant_lab/ toolkit) lives in its own Blueprint --
 # see app/web/quant_lab_routes.py's module docstring for why.
 app.register_blueprint(quant_lab_bp)
-# Owen AI Assistant (chat + chart/trade screenshot analysis) -- was defined
+# T58 AI Assistant (chat + chart/trade screenshot analysis) -- was defined
 # in app/web/ai_assistant_routes.py but never actually registered here, so
 # /assistant was unreachable from the web app; wiring it in now, alongside
 # the sidebar link added in _sidebar.html.
@@ -863,6 +863,20 @@ def api_dashboard_data():
     """JSON feed the dashboard page polls to refresh live, without a full
     page reload, whenever a run finishes (desktop, web, or CLI)."""
     return jsonify(run_history.dashboard_data())
+
+
+@app.route("/api/prop-firm-presets")
+def api_prop_firm_presets():
+    """Same preset list as _prop_presets_json(), served as a standalone
+    JSON endpoint so app/web/static/prop-presets.js can fetch it once
+    and wire up a "prop firm preset" dropdown on ANY page -- including
+    pages/render paths that don't (or forget to) pass prop_presets_json
+    into their own render_template() call. This is what lets every tab
+    with prop-firm-rule fields (account size, profit target, daily loss,
+    max drawdown, ...) get a working preset shortcut without every one
+    of ~60 render_template() call sites across this file needing to
+    remember to thread the data through by hand."""
+    return jsonify([p.to_dict() for p in list_prop_firm_presets()])
 
 
 @app.route("/current-strategy/set", methods=["POST"])
