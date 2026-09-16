@@ -41,6 +41,30 @@ from app.strategy.indicators import BOUNDED_OSCILLATOR_RANGES
 # where the GA produced an RSI(1) exit condition).
 MIN_OSCILLATOR_PERIOD = 3
 
+# A raw-percentage / unbounded-momentum indicator's comparison threshold
+# (e.g. the 1.0 in "ROC(10) crosses above 1.0%") sitting very close to
+# zero is a DIFFERENT kind of degenerate case than an oscillator's period
+# above, but the same root problem: left to the generic "value" gene's
+# rel_span rule, a GA is free to mutate a meaningfully non-zero threshold
+# (1-3%) down toward 0 because a de facto zero-cross trigger can score
+# well on a narrow slice, while in reality it fires on nearly every bar
+# of an unbounded oscillating series -- an explosively large trade count
+# on a multi-million-bar 1-minute dataset that can take a worker minutes
+# per candidate instead of seconds, exactly the "worker appears hung /
+# stall recovery" pattern repeatedly seen on roc_momentum_continuation
+# candidates during Search Lab's genetic-algorithm refinement stage (see
+# the Search Lab log this fixes, where every stalled Stage 2 batch was
+# that same family). Some families (awesome_oscillator_zero_cross,
+# trix_zero_cross_momentum, day_of_week_seasonality's zero-anchored
+# comparisons) DELIBERATELY compare against exactly 0 -- this floor is
+# only ever applied when the strategy's OWN base threshold is already
+# non-zero (see _gene_for below), so it never touches an intentional
+# zero-cross design; it only stops the GA from mutating an already-
+# meaningful non-zero threshold down into a degenerate near-zero one.
+ZERO_SENSITIVE_MIN_ABS_THRESHOLD: dict[str, float] = {
+    "roc": 0.5,   # percent -- half of roc_momentum_continuation's smallest shipped threshold (1.0%)
+}
+
 
 class RefinementError(Exception):
     """Raised when Iterative Refinement cannot proceed (e.g. no tunable parameters)."""
@@ -150,6 +174,17 @@ def _oscillator_bound(node) -> tuple[float, float] | None:
     return BOUNDED_OSCILLATOR_RANGES.get(kind)
 
 
+def _zero_sensitive_min_abs(node) -> float | None:
+    """If `node` is an operand dict whose "type" is a zero-sensitive
+    unbounded-momentum indicator (see ZERO_SENSITIVE_MIN_ABS_THRESHOLD),
+    return the minimum absolute comparison-threshold magnitude the GA
+    must keep -- otherwise None."""
+    if not isinstance(node, dict):
+        return None
+    kind = str(node.get("type", "")).lower().strip()
+    return ZERO_SENSITIVE_MIN_ABS_THRESHOLD.get(kind)
+
+
 def extract_genome(config: dict) -> list[GeneMeta]:
     """
     Walk a Manual Strategy config dict and return one GeneMeta per tunable
@@ -175,7 +210,7 @@ def extract_genome(config: dict) -> list[GeneMeta]:
     """
     genes: list[GeneMeta] = []
 
-    def _gene_for(k: str, v: float, new_path: tuple, value_bounds, osc_kind) -> GeneMeta:
+    def _gene_for(k: str, v: float, new_path: tuple, value_bounds, osc_kind, zero_min: float | None) -> GeneMeta:
         lo, hi, is_int = _bounds_for(k, float(v))
         if k == "value" and value_bounds is not None:
             clamped_lo = max(lo, value_bounds[0])
@@ -191,26 +226,40 @@ def extract_genome(config: dict) -> list[GeneMeta]:
         elif k in ("period", "lookback") and osc_kind in BOUNDED_OSCILLATOR_RANGES:
             lo = max(lo, float(MIN_OSCILLATOR_PERIOD))
             hi = max(hi, lo + 1)
+        if k == "value" and zero_min is not None and v != 0:
+            # Keep the same sign as the strategy's own base threshold --
+            # only push the range AWAY from zero, never flip which side
+            # of zero it searches (see ZERO_SENSITIVE_MIN_ABS_THRESHOLD).
+            if v > 0:
+                lo = max(lo, zero_min)
+                if hi <= lo:
+                    hi = lo + zero_min
+            else:
+                hi = min(hi, -zero_min)
+                if lo >= hi:
+                    lo = hi - zero_min
         return GeneMeta(
             path=new_path, kind=k, is_int=is_int,
             lo=lo, hi=hi, base_value=float(v),
             label=_label(new_path),
         )
 
-    def walk(node, path: tuple, value_bounds: tuple[float, float] | None = None):
+    def walk(node, path: tuple, value_bounds: tuple[float, float] | None = None, zero_min: float | None = None):
         if isinstance(node, dict):
             is_condition = "left" in node and "right" in node and "operator" in node
             if is_condition:
                 left_bound = _oscillator_bound(node.get("left"))
                 right_bound = _oscillator_bound(node.get("right"))
-                walk(node.get("left"), path + ("left",), value_bounds=right_bound)
-                walk(node.get("right"), path + ("right",), value_bounds=left_bound)
+                left_zero_min = _zero_sensitive_min_abs(node.get("left"))
+                right_zero_min = _zero_sensitive_min_abs(node.get("right"))
+                walk(node.get("left"), path + ("left",), value_bounds=right_bound, zero_min=right_zero_min)
+                walk(node.get("right"), path + ("right",), value_bounds=left_bound, zero_min=left_zero_min)
                 for k, v in node.items():
                     if k in ("left", "right") or k in _EXCLUDED_KEYS:
                         continue
                     new_path = path + (k,)
                     if k in GENE_KEY_RULES and isinstance(v, (int, float)) and not isinstance(v, bool) and v is not None:
-                        genes.append(_gene_for(k, v, new_path, None, None))
+                        genes.append(_gene_for(k, v, new_path, None, None, None))
                     walk(v, new_path)
                 return
             osc_kind = str(node.get("type", "")).lower().strip() if "type" in node else None
@@ -224,11 +273,11 @@ def extract_genome(config: dict) -> list[GeneMeta]:
                     and not isinstance(v, bool)
                     and v is not None
                 ):
-                    genes.append(_gene_for(k, v, new_path, value_bounds, osc_kind))
-                walk(v, new_path, value_bounds=value_bounds)
+                    genes.append(_gene_for(k, v, new_path, value_bounds, osc_kind, zero_min))
+                walk(v, new_path, value_bounds=value_bounds, zero_min=zero_min)
         elif isinstance(node, list):
             for i, item in enumerate(node):
-                walk(item, path + (i,), value_bounds=value_bounds)
+                walk(item, path + (i,), value_bounds=value_bounds, zero_min=zero_min)
 
     walk(config, ())
     return genes
