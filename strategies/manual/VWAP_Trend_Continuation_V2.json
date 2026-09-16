@@ -75,13 +75,13 @@
       {
         "left": {
           "type": "rsi",
-          "period": 1,
+          "period": 3,
           "field": "close"
         },
         "operator": ">",
         "right": {
           "type": "value",
-          "value": 102.55949550153764
+          "value": 69.48833863499303
         }
       }
     ],
@@ -95,7 +95,7 @@
       {
         "left": {
           "type": "rsi",
-          "period": 1,
+          "period": 3,
           "field": "close"
         },
         "operator": ">",
