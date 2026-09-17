@@ -61,7 +61,7 @@ from typing import Callable
 import pandas as pd
 
 from app.backtest.engine import run_backtest
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, with_prop_safety_defaults
 from app.backtest.statistics import compute_cost_ladder
 from app.monte_carlo.engine import MonteCarloConfig
 from app.optimize.parameter_space import RefinementError
@@ -148,6 +148,17 @@ class StrategyLabSpec:
 
     random_seed: int = 42
     workers: int | None = None
+
+    # UPGRADE (prop-firm reset-on-breach as the search basis): threaded
+    # into the Generate->Filter->Optimize->Validate funnel's own Monte
+    # Carlo scoring (Stage 2/3, via SearchStageConfig) and the parameter-
+    # stability stage's own MC below -- separate from, and in addition
+    # to, this spec's existing reset_economics/survival_life_sims (the
+    # richer reset-CHAIN survival analysis already run on the final
+    # untouched holdout). False (default) is byte-identical to every run
+    # before this field existed; the web/desktop Strategy Lab form
+    # defaults its own checkbox to CHECKED.
+    reset_on_breach: bool = False
 
     def __post_init__(self):
         if self.goal_metric not in KNOWN_GOAL_METRICS:
@@ -335,6 +346,14 @@ def run_strategy_lab(
     t0 = time.time()
     warnings: list[str] = []
 
+    # FIX (audit, Sep 2026): harden risk against prop_rules HERE, not just
+    # inside the delegated run_search() call below -- that function only
+    # rebinds its own local `risk` variable, so without this, the
+    # Untouched Test stage's own run_backtest call (which uses the
+    # `risk` this function received) would keep using an un-hardened
+    # account with no account-blown/daily-loss floor.
+    risk = with_prop_safety_defaults(risk, prop_rules)
+
     # -- Reserve the untouched holdout BEFORE anything else runs ---------
     n = len(df)
     split = max(1, int(n * (1 - spec.untouched_holdout_frac)))
@@ -372,6 +391,7 @@ def run_strategy_lab(
         walk_forward_folds=spec.walk_forward_folds, walk_forward_metric=spec.walk_forward_metric,
         fitness_metric=spec.goal_metric,
         workers=spec.workers, random_seed=spec.random_seed,
+        reset_on_breach=spec.reset_on_breach,
     )
 
     out_dir = Path(output_dir) if output_dir else Path(tempfile.mkdtemp(prefix="t58_strategy_lab_"))
@@ -455,7 +475,10 @@ def run_strategy_lab(
         # -- Parameter stability (NEW -- not part of plain Search Lab) ----
         param_results: dict[str, "ParameterRobustnessResult | None"] = {}
         scored_by_param: list[tuple[float, dict]] = []
-        param_mc_cfg = MonteCarloConfig(n_simulations=max(200, spec.full_mc_sims // 10), random_seed=spec.random_seed)
+        param_mc_cfg = MonteCarloConfig(
+            n_simulations=max(200, spec.full_mc_sims // 10), random_seed=spec.random_seed,
+            reset_on_breach=spec.reset_on_breach,
+        )
         for r in regime_top:
             candidate_spec = _spec_from_leaderboard_record(r)
             strategy = build_strategy_from_spec(candidate_spec, tmp_dir)
