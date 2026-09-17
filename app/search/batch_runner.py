@@ -64,7 +64,7 @@ from typing import Callable
 import pandas as pd
 
 from app.backtest.engine import run_backtest, run_holdout_comparison
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, with_prop_safety_defaults
 from app.backtest.statistics import compute_cost_ladder, compute_statistics
 from app.backtest.vectorized_fastpath import VectorizedCandidate, is_vectorizable, run_vectorized_batch
 from app.monte_carlo.engine import MonteCarloConfig, run_monte_carlo
@@ -277,6 +277,22 @@ class SearchStageConfig:
     fitness_metric: str = "eval_pass_probability"
     workers: int | None = None                # None = os.cpu_count()
     random_seed: int = 42
+
+    # UPGRADE (prop-firm reset-on-breach as the search basis): when True,
+    # every Monte Carlo pass this stage runs (Stage 2's GA inner-loop
+    # scoring AND Stage 3's full-fidelity validation MC), plus each
+    # candidate's single-run prop_summary, treats a blown account the way
+    # a real prop trader actually would -- buy a new eval and keep going
+    # -- instead of scoring that path as a dead loss the moment one
+    # account busts. See app.prop.simulator.simulate_account's own
+    # reset_on_breach docstring for the mechanics. False (default) is
+    # byte-identical to every run before this field existed -- the web/
+    # desktop routes that build this config default their own checkbox to
+    # CHECKED, so a normal user gets reset-on-breach scoring unless they
+    # explicitly turn it off; this field only stays False here so a config
+    # built directly in code/tests without going through that form is
+    # unaffected.
+    reset_on_breach: bool = False
 
     # Strategy Family Diversity -- caps how many Stage 1 survivors from
     # the SAME classified family (app.strategy.family_taxonomy) can
@@ -515,7 +531,8 @@ def _stage2_task(
     df, risk, prop_rules = _WORKER["df"], _WORKER["risk"], _WORKER["prop_rules"]
     tmp_dir = _WORKER.get("tmp_dir")
     strategy = build_strategy_from_spec(spec, tmp_dir)
-    mc_cfg = MonteCarloConfig(n_simulations=mc_search_sims, random_seed=seed)
+    reset_on_breach = refine_kwargs.get("reset_on_breach", False)
+    mc_cfg = MonteCarloConfig(n_simulations=mc_search_sims, random_seed=seed, reset_on_breach=reset_on_breach)
     refine_cfg = RefinementConfig(
         fitness_metric=fitness_metric,
         population_size=refine_kwargs["population"],
@@ -540,7 +557,7 @@ def _stage2_task(
             return {**base, "error": str(exc), "passed_stage2": False}
         pnls = [t.pnl for t in bt.trades]
         dates = [t.entry_time for t in bt.trades]
-        single_run = simulate_account(pnls, dates, prop_rules)
+        single_run = simulate_account(pnls, dates, prop_rules, reset_on_breach=reset_on_breach)
         mc = run_monte_carlo(bt.trades, prop_rules, mc_cfg)
         prop_summary = summarize_single_run(single_run)
         fitness = compute_fitness(stats, prop_summary, mc, fitness_metric)
@@ -614,10 +631,11 @@ def _stage3_task(candidate_id: str, spec: dict, cfg: dict) -> dict:
 
     trade_pnls = [t.pnl for t in bt.trades]
     trade_dates = [t.entry_time for t in bt.trades]
-    single_run = simulate_account(trade_pnls, trade_dates, prop_rules)
+    reset_on_breach = cfg.get("reset_on_breach", False)
+    single_run = simulate_account(trade_pnls, trade_dates, prop_rules, reset_on_breach=reset_on_breach)
     prop_summary = summarize_single_run(single_run)
 
-    mc_cfg = MonteCarloConfig(n_simulations=cfg["full_mc_sims"], random_seed=cfg["random_seed"])
+    mc_cfg = MonteCarloConfig(n_simulations=cfg["full_mc_sims"], random_seed=cfg["random_seed"], reset_on_breach=reset_on_breach)
     mc_result = run_monte_carlo(bt.trades, prop_rules, mc_cfg)
     mc_summary = {
         "evaluation_pass_probability": mc_result.evaluation_pass_probability,
@@ -900,6 +918,21 @@ def run_search(
         exists instead of `for f in as_completed(futures)`)."""
         _drain_futures(pool_box, futures, cancel_event, on_result, log, pool_factory=pool_factory)
 
+    # FIX (audit, Sep 2026): every other heavy-job orchestrator (Evolution
+    # Lab, Quick Optimize, Full Pipeline, Speed Run) hardens its RiskConfig
+    # against the active PropRules before running a single backtest, so the
+    # account-blown circuit breaker and daily-loss circuit breaker (see
+    # app.backtest.execution) actually fire during the RAW backtest every
+    # stage below scores fitness from -- Search Lab was the one heavy job
+    # that never did this, so its Stage 1/2/3 backtests could keep opening
+    # new trades straight through a blown account or a breached daily-loss
+    # limit, something no real prop account could ever do. That silently
+    # let Search Lab rank candidates on stats no live account could
+    # reproduce. See app.backtest.risk.with_prop_safety_defaults' own
+    # docstring for exactly what this fills in (and never overrides an
+    # explicit value the caller already set).
+    risk = with_prop_safety_defaults(risk, prop_rules)
+
     run_id = uuid.uuid4().hex[:12]
     t0 = time.time()
     workers = stage_cfg.workers or max(os.cpu_count() or 2, 1)
@@ -1179,6 +1212,7 @@ def run_search(
                 "cost_stress_enabled": stage_cfg.cost_stress_enabled,
                 "cost_stress_multiplier": stage_cfg.cost_stress_multiplier,
                 "cost_stress_penalty_weight": stage_cfg.cost_stress_penalty_weight,
+                "reset_on_breach": stage_cfg.reset_on_breach,
             }
             futures = {
                 pool_box[0].submit(
@@ -1236,6 +1270,7 @@ def run_search(
                 "robustness_neighbors": stage_cfg.robustness_neighbors,
                 "robustness_perturbation_frac": stage_cfg.robustness_perturbation_frac,
                 "robustness_min_stability": stage_cfg.robustness_min_stability,
+                "reset_on_breach": stage_cfg.reset_on_breach,
             }
             futures = {
                 pool_box[0].submit(_stage3_task, r["candidate_id"], _spec_from_record(r), stage3_cfg): r["candidate_id"]
@@ -1343,6 +1378,7 @@ def run_search(
 def promote_champion(
     db_path: str, run_id: str, candidate_id: str, df: pd.DataFrame,
     risk: RiskConfig, prop_rules: PropRules, output_dir: str, mc_sims: int = 10000,
+    reset_on_breach: bool = False,
 ) -> dict:
     """
     Re-runs one chosen Stage 3 survivor through the app's EXISTING,
@@ -1371,8 +1407,8 @@ def promote_champion(
         bt_result = run_backtest(df, strategy, risk)
         trade_pnls = [t.pnl for t in bt_result.trades]
         trade_dates = [t.entry_time for t in bt_result.trades]
-        single_run = simulate_account(trade_pnls, trade_dates, prop_rules)
-        mc_cfg = MonteCarloConfig(n_simulations=mc_sims)
+        single_run = simulate_account(trade_pnls, trade_dates, prop_rules, reset_on_breach=reset_on_breach)
+        mc_cfg = MonteCarloConfig(n_simulations=mc_sims, reset_on_breach=reset_on_breach)
         mc_result = run_monte_carlo(bt_result.trades, prop_rules, mc_cfg)
         try:
             holdout = run_holdout_comparison(
