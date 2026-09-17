@@ -135,6 +135,7 @@
     <input type="number" name="max_concurrent_instruments" value="2">
     <p class="help">Each concurrent instrument splits its own discovery workers and validation slots from your CPU budget -- 2 is a safe default on most machines.</p>
     <label class="checkbox-row"><input type="checkbox" name="save_to_library" checked>Save each instrument's winning strategy to the Strategy Library when finished</label>
+    <label class="checkbox-row" style="background:rgba(120,200,120,0.08);border:1px solid rgba(120,200,120,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="reset_on_breach" checked>Reset-on-breach: score on the basis that a blown account gets a fresh eval and keeps going, not a dead end (recommended)</label>
   </div>
 
   <button class="submit-btn" type="submit">Start multi-instrument speed run</button>

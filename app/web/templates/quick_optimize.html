@@ -195,6 +195,7 @@
     </div>
     <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;"><input type="checkbox" name="save_to_library" checked style="width:auto;">Save the result to the Strategy Library (tagged "draft")</label>
     <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;background:rgba(255,200,80,0.08);border:1px solid rgba(255,200,80,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="adaptive_risk_enabled" style="width:auto;">Enable adaptive, limit-aware position sizing on the search</label>
+    <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;background:rgba(120,200,120,0.08);border:1px solid rgba(120,200,120,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="reset_on_breach" checked style="width:auto;">Reset-on-breach: score on the basis that a blown account gets a fresh eval and keeps going, not a dead end (recommended)</label>
     <p style="font-size:12px;color:#888;margin-top:4px;">Off by default. This setting is NOT saved with the optimized strategy -- if you later run this strategy through Full Pipeline, its own "Enable adaptive, limit-aware position sizing" checkbox (off by default there too) needs to match whatever you choose here, or the two results are not comparable.</p>
   </div>
 
