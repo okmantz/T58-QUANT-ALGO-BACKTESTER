@@ -237,6 +237,7 @@ def _evo_full_eval_task(
     mc_sims: int, robustness_perturbation_frac: float, robustness_neighbors: int,
     robustness_min_stability: float, walk_forward_folds: int, walk_forward_metric: str,
     min_trades_target_for_fitness: int, random_seed: int, fitness_goal: "dict | str | None" = "balanced",
+    reset_on_breach: bool = False,
 ):
     """One PRE-FILTER survivor's ROBUSTNESS / OOS / MONTE CARLO / PROP
     SIMULATION scoring, run in a worker process. Mirrors
@@ -256,13 +257,13 @@ def _evo_full_eval_task(
     trade_pnls = [t.pnl for t in bt.trades]
     trade_dates = [t.entry_time for t in bt.trades]
 
-    mc_cfg = MonteCarloConfig(n_simulations=mc_sims, random_seed=random_seed)
+    mc_cfg = MonteCarloConfig(n_simulations=mc_sims, random_seed=random_seed, reset_on_breach=reset_on_breach)
     mc = run_monte_carlo(bt.trades, prop_rules, mc_cfg)
     mc_summary = {
         "evaluation_pass_probability": mc.evaluation_pass_probability,
         "first_payout_probability": mc.first_payout_probability,
     }
-    single_run = simulate_account(trade_pnls, trade_dates, prop_rules)
+    single_run = simulate_account(trade_pnls, trade_dates, prop_rules, reset_on_breach=reset_on_breach)
     summarize_single_run(single_run)  # surfaces prop-sim issues early; summary itself not needed downstream here
 
     robustness_dict = None
@@ -554,6 +555,15 @@ class EvolutionConfig:
     # and leaves normal-sized datasets (15m/1h/daily feeds) completely
     # untouched. Set to 0 to force no cap regardless of dataset size.
     prefilter_max_bars: int | None = None
+
+    # UPGRADE (prop-firm reset-on-breach as the search basis): threaded
+    # into every Monte Carlo pass (pre-filter, robustness/OOS, CPCV) and
+    # single-run prop_summary this engine computes, so a blown account is
+    # scored the way a real prop trader would actually handle it -- reset
+    # and keep going -- instead of as a dead end. False (default) is
+    # byte-identical to every run before this field existed; the web/
+    # desktop Evolution Lab form defaults its own checkbox to CHECKED.
+    reset_on_breach: bool = False
 
 
 # A multi-year 1-minute-bar dataset (Owen's GC1! feed: ~2.04M bars) is
@@ -1845,6 +1855,7 @@ class EvolutionRunner:
             self.cfg.mc_sims, self.cfg.robustness_perturbation_frac, self.cfg.robustness_neighbors,
             self.cfg.robustness_min_stability, self.cfg.walk_forward_folds, self.cfg.walk_forward_metric,
             self.cfg.min_trades_target_for_fitness, self.cfg.random_seed, self.cfg.fitness_goal,
+            self.cfg.reset_on_breach,
         )
         records: list[EvolutionCandidateRecord] = []
         eval_pool = self._ensure_pool()
