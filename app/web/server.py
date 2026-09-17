@@ -55,7 +55,7 @@ from app.ai.ollama_settings import save_settings as save_ollama_settings
 from app.ai.research_agent import ResearchAgentContext, ResearchAgent
 from app.ai.research_loop import ResearchLoopConfig, ResearchLoopRunner
 from app.backtest.engine import run_backtest, run_holdout_comparison
-from app.backtest.risk import RiskConfig, suggest_pip_size
+from app.backtest.risk import RiskConfig, suggest_pip_size, with_prop_safety_defaults
 from app.data import alpaca_credentials
 from app.data.alpaca_source import (
     ASSET_CLASSES, ADJUSTMENT_CHOICES, FEED_CHOICES, TIMEFRAME_LABELS,
@@ -2051,6 +2051,7 @@ def full_pipeline_start_batch():
             save_to_library=form.get("save_to_library") == "on",
             library_status=library_status_raw or None,
             parallel_search=form.get("parallel_search", "on") == "on",
+            reset_on_breach=form.get("reset_on_breach", "on") == "on",
         )
 
         ollama_settings = None
@@ -2256,6 +2257,7 @@ def full_pipeline_schedule_batch():
             save_to_library=form.get("save_to_library") == "on",
             library_status=library_status_raw or None,
             parallel_search=form.get("parallel_search", "on") == "on",
+            reset_on_breach=form.get("reset_on_breach", "on") == "on",
         )
         ollama_settings = None
         if form.get("ai_enabled") == "on":
@@ -2452,6 +2454,7 @@ def full_pipeline_start():
             save_to_library=form.get("save_to_library") == "on",
             library_status=library_status_raw or None,
             parallel_search=form.get("parallel_search", "on") == "on",
+            reset_on_breach=form.get("reset_on_breach", "on") == "on",
         )
 
         ollama_settings = None
@@ -2823,6 +2826,7 @@ def mo_start():
             population_size=int(form.get("population_size", 20) or 20),
             generations=int(form.get("generations", 8) or 8),
             search_monte_carlo_sims=int(form.get("search_mc_sims", 300) or 300),
+            reset_on_breach=form.get("reset_on_breach") == "on",
         )
 
         job_id = uuid.uuid4().hex[:12]
@@ -2970,7 +2974,24 @@ def wfga_start():
             daily_loss_limit_pct=float(form.get("daily_loss", 5)),
             max_drawdown_pct=float(form.get("max_dd", 10)),
         )
-        mc_cfg = MonteCarloConfig(n_simulations=int(form.get("n_sims", 1000) or 1000))
+        # FIX (audit, Sep 2026): Walk-Forward GA is one of the nine
+        # JOB_WFGA-class heavy jobs (see app.orchestration.resource_guard)
+        # but, unlike Evolution Lab/Quick Optimize/Full Pipeline/Speed
+        # Run, never hardened its RiskConfig against the active PropRules
+        # -- see app.backtest.risk.with_prop_safety_defaults' own
+        # docstring. Without this, every fold backtest below could keep
+        # opening new trades straight through a blown account or a
+        # breached daily-loss limit.
+        risk = with_prop_safety_defaults(risk, rules)
+        # Default OFF when the field is absent (matches every other "on"
+        # checkbox in this app, e.g. loop_mode/save_to_library, and keeps
+        # a caller that posts without this field byte-identical to before
+        # this existed) -- the web form itself renders the checkbox
+        # pre-CHECKED, so a user who never touches it still gets "on"
+        # submitted; only an explicit uncheck (or an old/scripted POST
+        # that never sends the field) resolves to False here.
+        reset_on_breach = form.get("reset_on_breach") == "on"
+        mc_cfg = MonteCarloConfig(n_simulations=int(form.get("n_sims", 1000) or 1000), reset_on_breach=reset_on_breach)
         refine_cfg = RefinementConfig(
             population_size=int(form.get("population_size", 10) or 10),
             generations=int(form.get("generations", 5) or 5),
@@ -4365,6 +4386,7 @@ def quickopt_start():
             n_folds=int(form.get("n_folds", 4) or 4),
             save_to_library=form.get("save_to_library", "on") == "on",
             adaptive_risk_enabled=form.get("adaptive_risk_enabled") == "on",
+            reset_on_breach=form.get("reset_on_breach", "on") == "on",
         )
         job_id = uuid.uuid4().hex[:12]
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
@@ -4556,6 +4578,7 @@ def evolution_start():
                 float(form["target_eval_pass_pct"]) if form.get("target_eval_pass_pct") else None
             ),
             target_metric=form.get("target_metric", "cpcv_oos_eval_pass_probability") or "cpcv_oos_eval_pass_probability",
+            reset_on_breach=form.get("reset_on_breach", "on") == "on",
         )
         _EVOLUTION_LOG.clear()
         _EVOLUTION_LOG.append(f"Loaded {len(df)} bars from {active_label}.")
@@ -4890,6 +4913,7 @@ def evolution_multi_instrument_start():
                 float(form["target_eval_pass_pct"]) if form.get("target_eval_pass_pct") else None
             ),
             target_metric=form.get("target_metric", "cpcv_oos_eval_pass_probability") or "cpcv_oos_eval_pass_probability",
+            reset_on_breach=form.get("reset_on_breach", "on") == "on",
         )
 
         group_id = uuid.uuid4().hex[:12]
@@ -5372,6 +5396,7 @@ def search_start():
             fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
             workers=int(workers_raw) if workers_raw else None,
             random_seed=seed,
+            reset_on_breach=form.get("reset_on_breach") == "on",
         )
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000) or 100000),
@@ -5883,6 +5908,7 @@ def forge_start():
             locked_holdout_frac=float(form.get("locked_holdout_frac", 0.15) or 0.15) if advanced else 0.15,
             workers=int(workers_raw) if workers_raw else None,
             random_seed=seed,
+            reset_on_breach=form.get("reset_on_breach", "on") == "on",
         )
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000) or 100000),
@@ -6567,6 +6593,7 @@ def speed_run_start():
             fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
             save_winner_to_library=form.get("save_to_library") == "on",
             random_seed=int(form.get("random_seed", 42) or 42),
+            reset_on_breach=form.get("reset_on_breach", "on") == "on",
         )
 
         job_id = uuid.uuid4().hex[:12]
@@ -6849,6 +6876,7 @@ def overnight_autopilot_start():
             validation_folds=int(form.get("validation_folds", 3) or 3),
             validation_final_mc_sims=int(form.get("validation_final_mc_sims", 3000) or 3000),
             save_winner_to_library=form.get("save_to_library") == "on",
+            reset_on_breach=form.get("reset_on_breach", "on") == "on",
         )
         autopilot_cfg = AutopilotConfig(
             speed_run_cfg=speed_run_cfg,
@@ -7078,6 +7106,7 @@ def speed_run_multi_instrument_start():
             fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
             save_winner_to_library=form.get("save_to_library") == "on",
             random_seed=int(form.get("random_seed", 42) or 42),
+            reset_on_breach=form.get("reset_on_breach", "on") == "on",
         )
         max_concurrent = int(form.get("max_concurrent_instruments", 2) or 2)
 
