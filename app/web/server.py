@@ -4387,6 +4387,12 @@ def quickopt_start():
             save_to_library=form.get("save_to_library", "on") == "on",
             adaptive_risk_enabled=form.get("adaptive_risk_enabled") == "on",
             reset_on_breach=form.get("reset_on_breach", "on") == "on",
+            # Point (5) of the 2026-09-17 fix: opt-in holdout carve-out --
+            # unchecked by default, so an existing bookmark/saved form that
+            # doesn't send this field keeps today's fully-in-sample
+            # behavior. See QuickOptimizeConfig.reserve_holdout's docstring.
+            reserve_holdout=form.get("reserve_holdout") == "on",
+            holdout_frac=float(form.get("holdout_frac", 0.2) or 0.2),
         )
         job_id = uuid.uuid4().hex[:12]
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
@@ -4451,6 +4457,30 @@ def quickopt_job_status(job_id):
             "saved_library_note": result.saved_library_note,
             "elapsed_seconds": result.elapsed_seconds,
             "warnings": result.warnings,
+            # 2026-09-17 Quick-Optimize-vs-Full-Pipeline follow-up fields --
+            # see app.orchestration.quick_optimize.QuickOptimizeResult for
+            # what each of these means; the template renders all of them
+            # so this tool can never again look like a finished, validated
+            # answer purely because the UI didn't ask for the caveat.
+            "validated": result.validated,
+            "result_banner": result.result_banner,
+            "result_banner_detail": result.result_banner_detail,
+            "oos_trade_count": result.oos_trade_count,
+            "min_trade_count_met": result.min_trade_count_met,
+            "trade_count_warning": result.trade_count_warning,
+            "significance_note": result.significance_note,
+            "icir_gate_skip_reason": result.icir_gate_skip_reason,
+            "icir_gate_ok": (result.icir_gate.ok if result.icir_gate is not None else None),
+            "icir_gate_reasons": (result.icir_gate.reasons if result.icir_gate is not None else []),
+            "parsimony_note": result.parsimony_note,
+            "parsimony_score": (result.parsimony_result.score if result.parsimony_result is not None else None),
+            "holdout_enabled": result.holdout_enabled,
+            "holdout_trades": result.holdout_trades,
+            "holdout_net_profit": result.holdout_net_profit,
+            "holdout_win_rate": result.holdout_win_rate,
+            "holdout_eval_pass_probability": result.holdout_eval_pass_probability,
+            "holdout_payout_probability": result.holdout_payout_probability,
+            "holdout_note": result.holdout_note,
         }
     return jsonify({
         "found": True, "done": job["done"], "error": job["error"], "cancelled": job.get("cancelled", False),
