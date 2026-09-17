@@ -60,7 +60,17 @@ def _isolated_evolution_base_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(server_module, "_EVOLUTION_RUNNER", None, raising=False)
 
 
-def _poll_until_stopped(client, group_id: str, timeout: float = 60.0) -> dict:
+def _poll_until_stopped(client, group_id: str, timeout: float = 150.0) -> dict:
+    """timeout was 60.0 -- raised (FIX, audit) after this test was
+    confirmed to pass reliably in isolation (41s) but occasionally time
+    out only when run as part of the full ~1650-test suite in one
+    process. This is a real background thread doing real backtest/GA
+    work, competing for CPU with everything else the suite has spun up
+    by that point in the run -- not a hang, and not state leaking between
+    tests (see tests/conftest.py's own fix for that separate class of
+    issue). The poll loop already returns the moment the job actually
+    stops, so a higher ceiling costs nothing in the common (fast,
+    isolated) case; it only buys headroom for the slow, loaded one."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         r = client.get(f"/evolution/multi-instrument/job/{group_id}/status.json")

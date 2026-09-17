@@ -122,10 +122,11 @@ def test_make_verdict_never_requires_every_metric_to_pass_simultaneously():
         is_stable: bool = True
         stability_threshold: float = 0.4
 
-    verdict, reasons, scorecard, hard_fail = _make_verdict(
+    verdict, reasons, scorecard, hard_fail, lookahead_hard_fail = _make_verdict(
         _FakeMC(), _FakeWF(), icir_gate=None, risk_of_ruin_cap=20.0,
     )
     assert hard_fail is False
+    assert lookahead_hard_fail is False
     assert verdict in ("READY", "MARGINAL")  # not dragged to NOT READY by the missing ICIR gate alone
     assert scorecard.n_components_used >= 4
 
