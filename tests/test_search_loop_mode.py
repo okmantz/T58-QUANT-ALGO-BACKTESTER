@@ -144,8 +144,24 @@ def test_loop_result_carries_the_graveyard_path_search_lab_wrote_to(tmp_path):
         target_eval_pass_pct=99.9, max_rounds=1,
         starting_family="trend_breakout", starting_max_candidates=6,
     )
+    # FIX (audit, Sep 2026): run_search() now hardens RiskConfig against
+    # PropRules (see app.backtest.risk.with_prop_safety_defaults), so at
+    # the default risk_value=1.0 every trend_breakout candidate on this
+    # flat/noise data now correctly blows its account within the first
+    # few dozen bars -- exactly like a real prop account would -- and
+    # gets rejected at the cheap Stage 1 filter instead of ever reaching
+    # Stage 3 (Stage 1 rejections aren't graveyard-worthy; only Stage 3's
+    # more expensive diagnosis is, see _write_search_graveyard_entries).
+    # A smaller risk_value keeps the account alive long enough to reach
+    # Stage 3, and a strict Stage-3 gate here reliably rejects it there
+    # instead -- this test is about the graveyard-path plumbing, not
+    # about exactly which stage catches a bad candidate.
+    risk = RiskConfig(risk_value=0.1)
+    stage_cfg = _fast_stage_cfg(
+        stage3_min_trades=1, stage3_min_profit_factor=1.5, stage3_max_drawdown_buffer_mult=0.05,
+    )
     result = run_search_loop(
-        df, RiskConfig(), PropRules(), _fast_stage_cfg(), db_dir=tmp_path / "loop_dbs",
+        df, risk, PropRules(), stage_cfg, db_dir=tmp_path / "loop_dbs",
         loop_cfg=loop_cfg, instrument="EURUSD", timeframe="5m",
         family_health_search_dir=tmp_path / "fh_search", family_health_evolution_dir=tmp_path / "fh_evo",
     )
