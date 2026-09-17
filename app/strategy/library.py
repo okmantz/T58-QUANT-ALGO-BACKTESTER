@@ -48,6 +48,7 @@ import shutil
 import sys
 import zipfile
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -218,6 +219,48 @@ def safe_filename_stem(display_name: str, fallback: str = "strategy") -> str:
     name = name.replace(" ", "_")
     name = re.sub(r"_+", "_", name).strip("_.")
     return name or fallback
+
+
+def provenance_stamped_name(base_display_name: str, *, origin: str, seed: int | None) -> str:
+    """Appends a short, honest provenance stamp to a strategy's display
+    name -- "<base name> [origin, seed=N, YYYY-MM-DD]" -- for a config
+    that a GA has actually MUTATED away from `base_display_name`'s own
+    parameters.
+
+    FIX (2026-09-17 Quick-Optimize-vs-Full-Pipeline naming-drift bug):
+    Quick Optimize and Full Pipeline both used to save a GA winner's
+    filename (and, for manual configs, its JSON "name" field) using the
+    ORIGINAL strategy's display name verbatim -- e.g. a manual config
+    literally named "Pure RSI Extreme Reversion (rsi21, 20/80)" could
+    have every one of its actual RSI periods/thresholds mutated by the
+    GA into something unrecognizable, and still get saved back out
+    under that same stale "(rsi21, 20/80)" name. Two independently-run
+    optimizations of the same starting file then produced two
+    completely different parameter sets filed under near-identical
+    names, which is exactly what made the Quick-Optimize-vs-Full-
+    Pipeline discrepancy look like the same strategy giving
+    inconsistent results, when it was actually two different mutated
+    strategies sharing a label neither of them still matched.
+
+    This does NOT attempt to auto-summarize the winning parameters into
+    the name -- an arbitrary manual/code config has no generic, always-
+    readable way to render that compactly, and a wrong or truncated
+    summary would just trade one misleading name for another. Instead
+    it stamps WHERE this exact file came from (which tool, which
+    reproducible seed, which day) so two mutated results are never
+    filed as if they were the same thing, and the saved file is always
+    traceable back to a specific run. Callers use this for the file's
+    base name (safe_filename_stem is applied afterward) and, for manual
+    configs, also overwrite the saved JSON's own "name" field with it,
+    so the two never drift apart again.
+
+    Only called when the config was actually mutated (see each caller's
+    own "did the GA produce a real winner" check) -- an unmutated
+    baseline correctly keeps its original name.
+    """
+    seed_part = f"seed={seed}" if seed is not None else "seed=random"
+    date_part = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return f"{base_display_name} [{origin}, {seed_part}, {date_part}]"
 
 
 def _seed_bundled_strategies(base: Path) -> None:
