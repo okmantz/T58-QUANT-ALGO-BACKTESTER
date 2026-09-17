@@ -113,6 +113,15 @@ class QuickOptimizeConfig:
     # so the result hasn't earned "tested_passed"/"validated" yet.
     library_status: str = "draft"
 
+    # UPGRADE (prop-firm reset-on-breach as the search basis): threaded into
+    # the baseline/GA-search/final Monte Carlo passes and single-run prop
+    # summaries below, so a blown account is scored the way a real prop
+    # trader would actually handle it -- reset and keep going -- instead of
+    # as a dead end. False (default) is byte-identical to every run before
+    # this field existed; the web/desktop Quick Optimize form defaults its
+    # own checkbox to CHECKED.
+    reset_on_breach: bool = False
+
 
 @dataclass
 class QuickOptimizeResult:
@@ -237,9 +246,10 @@ def run_quick_optimize(
 
     baseline_pnls = [t.pnl for t in baseline_bt.trades]
     baseline_dates = [t.entry_time for t in baseline_bt.trades]
-    simulate_account(baseline_pnls, baseline_dates, prop_rules)  # surfaces any account-sim issues early
+    simulate_account(baseline_pnls, baseline_dates, prop_rules, reset_on_breach=cfg.reset_on_breach)  # surfaces any account-sim issues early
     baseline_mc = run_monte_carlo(
-        baseline_bt.trades, prop_rules, MonteCarloConfig(n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed)
+        baseline_bt.trades, prop_rules,
+        MonteCarloConfig(n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
     )
     log(
         f"Baseline: {len(baseline_bt.trades)} trades, net ${baseline_bt.statistics.net_profit:,.2f}, "
@@ -257,7 +267,7 @@ def run_quick_optimize(
     )
     ga_result = run_walkforward_aware_refinement(
         df, strategy, risk, prop_rules,
-        MonteCarloConfig(n_simulations=cfg.ga_search_mc_sims, random_seed=cfg.random_seed),
+        MonteCarloConfig(n_simulations=cfg.ga_search_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
         refinement_config=refine_cfg,
         n_folds=cfg.n_folds, window_mode=cfg.window_mode,
         progress_cb=lambda m: log(f"  {m}"),
@@ -316,7 +326,8 @@ def run_quick_optimize(
         invalid_condition_warning = next(w for w in final_bt.warnings if "can never be true" in w)
         log(f"  !!! {invalid_condition_warning}")
     final_mc = run_monte_carlo(
-        final_bt.trades, prop_rules, MonteCarloConfig(n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed),
+        final_bt.trades, prop_rules,
+        MonteCarloConfig(n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
         # MC-004: these trades came straight out of this run's own GA
         # search over this same data -- see run_monte_carlo's docstring.
         selection_bias_caveat=(ga_result.best.oos_trade_count > 0),

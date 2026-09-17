@@ -58,7 +58,7 @@ from typing import Callable
 import pandas as pd
 
 from app.backtest.engine import run_backtest
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, with_prop_safety_defaults
 from app.monte_carlo.engine import MonteCarloConfig, run_monte_carlo
 from app.prop.rolling_evaluation import run_rolling_evaluation
 from app.prop.simulator import PropRules
@@ -117,6 +117,15 @@ class ForgeConfig:
     rolling_survivors: int = 2
     locked_holdout_frac: float = 0.15   # reserved BEFORE any stage runs, never searched over
     locked_oos_min_pass_rate: float = 25.0  # % -- below this, the holdout check kills the candidate
+
+    # UPGRADE (prop-firm reset-on-breach as the search basis): threaded
+    # through to every stage below (Stages 1-3 via SearchStageConfig,
+    # Forge's own CPCV/regime/deeper-MC/rolling-eval stages) so a blown
+    # account is scored the way a real prop trader would actually handle
+    # it -- reset and keep going -- rather than as a dead end. False
+    # (default) is byte-identical to every run before this field existed;
+    # the web/desktop Forge form defaults its own checkbox to CHECKED.
+    reset_on_breach: bool = False
 
     # Strategy Graveyard feedback loop -- skip hypotheses whose parameter
     # neighborhood has already been proven dead by a PRIOR run against
@@ -229,6 +238,16 @@ def run_forge(
         if cancel_event is not None and cancel_event.is_set():
             raise SearchCancelled("Forge Strategy run stopped by user.")
 
+    # FIX (audit, Sep 2026): harden risk against prop_rules HERE, not just
+    # inside the Stages 1-3 delegate call to app.search.batch_runner.
+    # run_search -- that function only rebinds its own local `risk`
+    # variable, so without this, every one of Forge's OWN later stages
+    # (deeper Monte Carlo, CPCV/regime, rolling evaluation -- all of which
+    # call run_backtest with the `risk` this function received) would keep
+    # using an un-hardened account with no account-blown/daily-loss floor,
+    # even though Stages 1-3 (via run_search) already got the correct one.
+    risk = with_prop_safety_defaults(risk, prop_rules)
+
     t0 = time.time()
     funnel: list[FunnelStage] = []
     diagnoses: list[CandidateDiagnosis] = []
@@ -336,6 +355,7 @@ def run_forge(
         fitness_metric="eval_pass_probability",
         workers=config.workers,
         random_seed=config.random_seed,
+        reset_on_breach=config.reset_on_breach,
     )
     summary = run_search(
         search_df, risk, prop_rules, space, stage_cfg, db_path=db_path,
@@ -477,7 +497,10 @@ def run_forge(
         bt = run_backtest(search_df, strategy, risk)
         if not bt.trades:
             continue
-        mc_result = run_monte_carlo(bt.trades, prop_rules, MonteCarloConfig(n_simulations=config.final_mc_sims))
+        mc_result = run_monte_carlo(
+            bt.trades, prop_rules,
+            MonteCarloConfig(n_simulations=config.final_mc_sims, reset_on_breach=config.reset_on_breach),
+        )
         mc_pool.append({**rec, "trades": bt.trades, "statistics": bt.statistics.to_dict(), "final_mc": mc_result.to_dict()})
     mc_pool.sort(key=lambda r: r["final_mc"]["evaluation_pass_probability"], reverse=True)
     kept_mc = mc_pool[: config.mc_survivors]

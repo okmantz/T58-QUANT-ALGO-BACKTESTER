@@ -134,6 +134,16 @@ class SpeedRunConfig:
     save_winner_to_library: bool = True
     random_seed: int = 42
 
+    # UPGRADE (prop-firm reset-on-breach as the search basis): threaded
+    # into BOTH phases below -- Phase 1's SearchStageConfig and Phase 2's
+    # FullPipelineConfig -- so a blown account is scored the way a real
+    # prop trader would actually handle it -- reset and keep going --
+    # instead of as a dead end, consistently across the whole Speed Run
+    # funnel. False (default) is byte-identical to every run before this
+    # field existed; the web/desktop Speed Run form defaults its own
+    # checkbox to CHECKED.
+    reset_on_breach: bool = False
+
     def __post_init__(self):
         self.max_candidates = max(int(self.max_candidates), 1)
         self.stage1_top_n = max(int(self.stage1_top_n), 1)
@@ -357,6 +367,7 @@ def run_speed_run(
         workers=cfg.discovery_workers,
         random_seed=cfg.discovery_random_seed,
         max_per_family_stage1=cfg.max_per_family_stage1,
+        reset_on_breach=cfg.reset_on_breach,
     )
     db_dir = output_dir / "speed_run_search_db"
     db_dir.mkdir(parents=True, exist_ok=True)
@@ -434,6 +445,7 @@ def run_speed_run(
         save_to_library=cfg.save_winner_to_library,
         parallel_search=True,
         parallel_search_max_workers=per_job_workers,
+        reset_on_breach=cfg.reset_on_breach,
     )
 
     log_lock = threading.Lock()

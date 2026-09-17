@@ -226,6 +226,15 @@ class FullPipelineConfig:
     # this costs no extra backtest -- cheap enough to default on.
     regime_diagnostics_enabled: bool = True
 
+    # UPGRADE (prop-firm reset-on-breach as the search basis): threaded
+    # into Step 1's baseline MC, Step 2's GA search (via mc_config), and
+    # Step 3's final re-validated MC/single-run below, so a blown account
+    # is scored the way a real prop trader would actually handle it --
+    # reset and keep going -- instead of as a dead end. False (default)
+    # is byte-identical to every run before this field existed; the web/
+    # desktop Full Pipeline form defaults its own checkbox to CHECKED.
+    reset_on_breach: bool = False
+
 
 @dataclass
 class FullPipelineResult:
@@ -579,8 +588,11 @@ def run_full_pipeline(
 
     pnls = [t.pnl for t in baseline_bt.trades]
     dates = [t.entry_time for t in baseline_bt.trades]
-    baseline_single_run = simulate_account(pnls, dates, prop_rules)
-    baseline_mc = run_monte_carlo(baseline_bt.trades, prop_rules, MonteCarloConfig(n_simulations=cfg.baseline_mc_sims, random_seed=cfg.random_seed))
+    baseline_single_run = simulate_account(pnls, dates, prop_rules, reset_on_breach=cfg.reset_on_breach)
+    baseline_mc = run_monte_carlo(
+        baseline_bt.trades, prop_rules,
+        MonteCarloConfig(n_simulations=cfg.baseline_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
+    )
     log(
         f"  Baseline: {len(baseline_bt.trades)} trades, net ${baseline_bt.statistics.net_profit:,.2f}, "
         f"eval pass {baseline_mc.evaluation_pass_probability:.1f}%, payout {baseline_mc.first_payout_probability:.1f}%."
@@ -742,7 +754,7 @@ def run_full_pipeline(
             )
             ga_result = run_walkforward_aware_refinement(
                 dev_df, strategy, risk, prop_rules,
-                MonteCarloConfig(n_simulations=cfg.ga_search_mc_sims, random_seed=cfg.random_seed),
+                MonteCarloConfig(n_simulations=cfg.ga_search_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
                 refinement_config=refine_cfg,
                 n_folds=cfg.n_folds, window_mode=cfg.window_mode,
                 progress_cb=lambda m: log(f"  {m}"),
@@ -817,9 +829,10 @@ def run_full_pipeline(
 
         pnls = [t.pnl for t in final_bt.trades]
         dates = [t.entry_time for t in final_bt.trades]
-        final_single_run = simulate_account(pnls, dates, prop_rules)
+        final_single_run = simulate_account(pnls, dates, prop_rules, reset_on_breach=cfg.reset_on_breach)
         final_mc = run_monte_carlo(
-            final_bt.trades, prop_rules, MonteCarloConfig(n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed),
+            final_bt.trades, prop_rules,
+            MonteCarloConfig(n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
             # MC-004: these trades came from Step 2's GA search over this
             # same dev_df when refinement actually ran -- see
             # run_monte_carlo's docstring. Steps 4-6 below provide the
@@ -852,7 +865,7 @@ def run_full_pipeline(
             oos_validation = run_walk_forward(
                 dev_df, lambda: build_strategy_from_spec(final_spec, final_tmp_dir), risk,
                 n_folds=cfg.oos_check_folds, metric=cfg.oos_check_metric,
-                prop_rules=prop_rules, mc_cfg=MonteCarloConfig(n_simulations=cfg.ga_search_mc_sims, random_seed=cfg.random_seed),
+                prop_rules=prop_rules, mc_cfg=MonteCarloConfig(n_simulations=cfg.ga_search_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
                 embargo_start_bar=embargo_start_bar,
             )
             if oos_validation is None:
@@ -942,7 +955,7 @@ def run_full_pipeline(
                     dev_df, lambda: build_strategy_from_spec(final_spec, final_tmp_dir), risk,
                     n_groups=cfg.cpcv_n_groups, n_test_groups=cfg.cpcv_n_test_groups,
                     metric=cfg.oos_check_metric, prop_rules=prop_rules,
-                    mc_cfg=MonteCarloConfig(n_simulations=cfg.ga_search_mc_sims, random_seed=cfg.random_seed),
+                    mc_cfg=MonteCarloConfig(n_simulations=cfg.ga_search_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
                 )
                 log(
                     f"  CPCV: {cpcv_result.n_paths} path(s), mean OOS/IS "
