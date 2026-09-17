@@ -78,7 +78,13 @@ def test_leaderboard_ranks_a_strategy_after_full_pipeline_run(tmp_path):
     assert entry.t58_tier in ("Elite", "Strong", "Promising", "Research", "Reject")
     table = render_leaderboard_table(entries)
     assert "FINAL SELECTION LEADERBOARD" in table
-    assert entry.filename in table
+    # render_leaderboard_table intentionally truncates the Strategy column
+    # to 33 characters (see its own f"{e.filename[:33]:<34}" formatting) --
+    # a full filename longer than that (e.g. a provenance-stamped one from
+    # the 2026-09-17 naming-drift fix, app.strategy.library.
+    # provenance_stamped_name) is expected to appear truncated in the
+    # table, not verbatim.
+    assert entry.filename[:33] in table
 
 
 def test_leaderboard_excludes_risk_of_ruin_hard_fails_by_default(tmp_path):
