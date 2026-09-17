@@ -197,6 +197,11 @@
     <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;background:rgba(255,200,80,0.08);border:1px solid rgba(255,200,80,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="adaptive_risk_enabled" style="width:auto;">Enable adaptive, limit-aware position sizing on the search</label>
     <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;background:rgba(120,200,120,0.08);border:1px solid rgba(120,200,120,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="reset_on_breach" checked style="width:auto;">Reset-on-breach: score on the basis that a blown account gets a fresh eval and keeps going, not a dead end (recommended)</label>
     <p style="font-size:12px;color:#888;margin-top:4px;">Off by default. This setting is NOT saved with the optimized strategy -- if you later run this strategy through Full Pipeline, its own "Enable adaptive, limit-aware position sizing" checkbox (off by default there too) needs to match whatever you choose here, or the two results are not comparable.</p>
+    <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;background:rgba(90,160,255,0.08);border:1px solid rgba(90,160,255,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="reserve_holdout" style="width:auto;">Reserve a holdout slice (lighter, optional check -- still not a substitute for Full Pipeline)</label>
+    <div class="row" id="holdout-frac-row">
+      <div><label>Holdout fraction</label><input type="number" name="holdout_frac" value="0.2" min="0.05" max="0.5" step="0.05"></div>
+    </div>
+    <p style="font-size:12px;color:#888;margin-top:4px;">Off by default -- unchanged, fully in-sample behavior. When checked, the LAST fraction of the dataset below is carved off before the baseline/search run at all, and the winning configuration is backtested against it once, purely to report a less-than-100%-circular number. This is NOT the same as Full Pipeline's own holdout check: there's no walk-forward OOS-fold re-verification and no ICIR/Bonferroni re-check of the holdout segment itself. Every Quick Optimize result -- with or without this on -- is still labeled "NOT OOS VALIDATED"; run Full Pipeline for that.</p>
   </div>
 
   <button class="submit-btn" type="submit">Run Quick Optimize</button>

@@ -28,6 +28,11 @@
   <button type="button" id="stop-btn" onclick="stopQuickOptimize()" style="margin-top:12px; padding:10px 22px; border-radius:10px; border:1px solid #6b2323; background:#3a1616; color:#ffb4b4; font-size:14px; font-weight:700; cursor:pointer;">Stop</button>
 </div>
 
+<div id="research-wrap" style="display:none;">
+  <div class="research-banner" id="research-banner"></div>
+  <div class="research-banner-detail" id="research-banner-detail"></div>
+</div>
+
 <div id="verdict-wrap" style="display:none;"><div class="verdict-banner" id="verdict-banner"></div></div>
 
 <div class="card" id="summary-card" style="display:none;">
@@ -41,7 +46,29 @@
       <tr><td>Eval pass probability</td><td id="b-evalpass">-</td><td id="o-evalpass">-</td></tr>
     </tbody>
   </table>
+  <p class="trade-count-warning" id="s-trade-count-warning" style="display:none;"></p>
   <p class="note" id="s-library-note"></p>
+</div>
+
+<div class="card" id="diagnostics-card" style="display:none;">
+  <h2>Significance &amp; parsimony (same checks Full Pipeline runs)</h2>
+  <p class="status-msg" id="s-significance-note"></p>
+  <ul class="diagnostics-list" id="s-icir-reasons"></ul>
+  <p class="note" id="s-parsimony-note"></p>
+</div>
+
+<div class="card" id="holdout-card" style="display:none;">
+  <h2>Holdout check (reserved data, never seen by the search above)</h2>
+  <table>
+    <thead><tr><th>Trades</th><th>Net profit</th><th>Win rate</th><th>Eval pass</th><th>Payout</th></tr></thead>
+    <tbody>
+      <tr>
+        <td id="h-trades">-</td><td id="h-profit">-</td><td id="h-winrate">-</td>
+        <td id="h-evalpass">-</td><td id="h-payout">-</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="note" id="s-holdout-note"></p>
 </div>
 
 <div class="error" id="error-card" style="display:none;"></div>
@@ -54,6 +81,12 @@
   const jobId = {{ job_id | tojson }};
   const fmt = (v, d) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d === undefined ? 1 : d);
   const money = (v) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : '$' + Number(v).toLocaleString(undefined, {maximumFractionDigits: 0});
+  // Point (2) of the 2026-09-17 fix: a percentage built on too few
+  // out-of-sample trades is shown with an explicit qualifier instead of
+  // a bare, confident-looking number -- see MIN_CREDIBLE_OOS_TRADES in
+  // app.orchestration.quick_optimize.
+  const evalPassText = (pct, minTradeCountMet) =>
+    minTradeCountMet ? (fmt(pct) + '%') : (fmt(pct) + '% (unreliable — too few trades)');
 
   function stopQuickOptimize() {
     const btn = document.getElementById('stop-btn');
@@ -95,6 +128,16 @@
           if (btn) btn.style.display = 'none';
           const s = data.summary;
           if (s) {
+            // Point (1): this banner is unconditional -- it renders for
+            // EVERY completed result, regardless of s.improved or how
+            // strong any number below looks, because Quick Optimize never
+            // independently validates against unseen data on its own.
+            const rwrap = document.getElementById('research-wrap');
+            rwrap.style.display = 'block';
+            document.getElementById('research-banner').textContent = s.result_banner || '⚠️ RESEARCH RESULT — NOT OOS VALIDATED';
+            document.getElementById('research-banner-detail').textContent = s.result_banner_detail ||
+              'Run Full Pipeline to determine whether this result survives unseen-data validation.';
+
             const wrap = document.getElementById('verdict-wrap');
             wrap.style.display = 'block';
             const banner = document.getElementById('verdict-banner');
@@ -109,8 +152,44 @@
             document.getElementById('b-winrate').textContent = fmt(s.baseline_win_rate) + '%';
             document.getElementById('o-winrate').textContent = fmt(s.optimized_win_rate) + '%';
             document.getElementById('b-evalpass').textContent = fmt(s.baseline_eval_pass_probability) + '%';
-            document.getElementById('o-evalpass').textContent = fmt(s.optimized_eval_pass_probability) + '%';
+            document.getElementById('o-evalpass').textContent = evalPassText(s.optimized_eval_pass_probability, s.min_trade_count_met);
             document.getElementById('s-library-note').textContent = s.saved_library_note || '';
+
+            const tcw = document.getElementById('s-trade-count-warning');
+            if (s.trade_count_warning) {
+              tcw.style.display = 'block';
+              tcw.textContent = '⚠️ ' + s.trade_count_warning;
+            }
+
+            // Point (4): significance/parsimony -- same gate Full Pipeline
+            // runs, best-effort (may not have run at all -- see icir_gate_
+            // skip_reason -- in which case the card still shows whatever
+            // it has, e.g. just the parsimony note).
+            if (s.significance_note || s.icir_gate_skip_reason || s.parsimony_note) {
+              document.getElementById('diagnostics-card').style.display = 'block';
+              document.getElementById('s-significance-note').textContent =
+                s.significance_note || s.icir_gate_skip_reason || '';
+              const list = document.getElementById('s-icir-reasons');
+              list.innerHTML = '';
+              (s.icir_gate_reasons || []).forEach(reason => {
+                const li = document.createElement('li');
+                li.textContent = reason;
+                list.appendChild(li);
+              });
+              document.getElementById('s-parsimony-note').textContent = s.parsimony_note || '';
+            }
+
+            // Point (5): holdout section, only when the run actually
+            // reserved one (QuickOptimizeConfig.reserve_holdout).
+            if (s.holdout_enabled) {
+              document.getElementById('holdout-card').style.display = 'block';
+              document.getElementById('h-trades').textContent = s.holdout_trades ?? '—';
+              document.getElementById('h-profit').textContent = money(s.holdout_net_profit);
+              document.getElementById('h-winrate').textContent = fmt(s.holdout_win_rate) + '%';
+              document.getElementById('h-evalpass').textContent = fmt(s.holdout_eval_pass_probability) + '%';
+              document.getElementById('h-payout').textContent = fmt(s.holdout_payout_probability) + '%';
+              document.getElementById('s-holdout-note').textContent = s.holdout_note || '';
+            }
           }
           return;
         }
