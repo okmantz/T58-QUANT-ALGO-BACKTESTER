@@ -41,7 +41,7 @@ from typing import Callable
 import pandas as pd
 
 from app.backtest.engine import run_backtest
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, with_prop_safety_defaults
 from app.monte_carlo.engine import MonteCarloConfig, MonteCarloResult, run_monte_carlo
 from app.optimize.parameter_space import RefinementError
 from app.optimize.refinement import (
@@ -127,6 +127,15 @@ class MultiObjectiveConfig:
     random_immigrants_frac: float = 0.15
     search_monte_carlo_sims: int = 300
     random_seed: int | None = 42
+
+    # UPGRADE (prop-firm reset-on-breach as the search basis): threaded
+    # into the GA's own per-candidate Monte Carlo/single-run scoring
+    # below, so a blown account is scored the way a real prop trader
+    # would actually handle it -- reset and keep going -- instead of as
+    # a dead end. False (default) is byte-identical to every run before
+    # this field existed; the web/desktop Multi-Objective form defaults
+    # its own checkbox to CHECKED.
+    reset_on_breach: bool = False
 
     def __post_init__(self):
         for obj in self.objectives:
@@ -249,6 +258,14 @@ def run_multi_objective_refinement(
     t0 = time.time()
     warnings: list[str] = []
 
+    # FIX (audit, Sep 2026): Multi-Objective is one of the JOB_MULTI_OBJECTIVE
+    # heavy jobs (see app.orchestration.resource_guard) but never hardened
+    # its RiskConfig against the active PropRules -- see
+    # app.backtest.risk.with_prop_safety_defaults' own docstring. Without
+    # this, every genome's backtest below could keep opening new trades
+    # straight through a blown account or a breached daily-loss limit.
+    risk = with_prop_safety_defaults(risk, prop_rules)
+
     tmp_dir: Path | None = None
     if strategy.source_type == "python":
         tmp_dir = Path(tempfile.mkdtemp(prefix="t58_mo_"))
@@ -268,6 +285,7 @@ def run_multi_objective_refinement(
             n_simulations=cfg.search_monte_carlo_sims,
             method=mc_config.method, block_size=mc_config.block_size,
             slippage_stress_pct=mc_config.slippage_stress_pct, random_seed=mc_config.random_seed,
+            reset_on_breach=cfg.reset_on_breach,
         )
 
         def evaluate(genome: list) -> MOCandidate:
@@ -280,7 +298,7 @@ def run_multi_objective_refinement(
             stats = bt.statistics.to_dict()
             pnls = [t.pnl for t in bt.trades]
             dates = [t.entry_time for t in bt.trades]
-            single_run = simulate_account(pnls, dates, prop_rules)
+            single_run = simulate_account(pnls, dates, prop_rules, reset_on_breach=cfg.reset_on_breach)
             mc = run_monte_carlo(bt.trades, prop_rules, search_mc_cfg)
             prop_summary = summarize_single_run(single_run)
             sort_values = _objective_vector(cfg.objectives, stats, prop_summary, mc)

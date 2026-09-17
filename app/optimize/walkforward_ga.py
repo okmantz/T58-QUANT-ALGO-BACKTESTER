@@ -125,7 +125,7 @@ def _chained_fitness(
     stats = compute_statistics(all_trades, equity_curve, initial_balance=risk_to_use.initial_balance)
     pnls = [t.pnl for t in all_trades]
     dates = [t.entry_time for t in all_trades]
-    single_run = simulate_account(pnls, dates, prop_rules)
+    single_run = simulate_account(pnls, dates, prop_rules, reset_on_breach=mc_cfg.reset_on_breach)
     mc = run_monte_carlo(all_trades, prop_rules, mc_cfg)
     prop_summary = summarize_single_run(single_run)
     fitness = compute_fitness(stats.to_dict(), prop_summary, mc, fitness_metric)
@@ -414,7 +414,7 @@ def run_walkforward_aware_refinement(
                 return float("-inf")
             pnls = [t.pnl for t in bt.trades]
             dates = [t.entry_time for t in bt.trades]
-            single_run = simulate_account(pnls, dates, prop_rules)
+            single_run = simulate_account(pnls, dates, prop_rules, reset_on_breach=search_mc_cfg.reset_on_breach)
             mc = run_monte_carlo(bt.trades, prop_rules, search_mc_cfg)
             fitness = compute_fitness(bt.statistics.to_dict(), summarize_single_run(single_run), mc, cfg.fitness_metric)
             return fitness if math.isfinite(fitness) else float("-inf")
