@@ -272,6 +272,7 @@ class FullPipelineResult:
     # -- Pipeline reorg additions -----------------------------------------
     scorecard: "T58ScorecardResult | None"       # the continuous 0-100 score/tier behind `verdict`
     risk_of_ruin_hard_fail: bool                 # True if verdict is NOT READY solely because of the ruin cap
+    lookahead_hard_fail: bool                    # True if verdict is NOT READY solely because of a confirmed lookahead-bias leak
     parsimony: "ParsimonyResult | None"
     cpcv_result: "CPCVResult | None"             # populated if primary_robustness_method=="cpcv" OR cpcv_supporting_enabled
     cpcv_skip_reason: str | None
@@ -323,20 +324,30 @@ def _make_verdict(
     parsimony: "ParsimonyResult | None" = None,
     cpcv_primary_result: "CPCVResult | None" = None,
     cpcv_supporting_result: "CPCVResult | None" = None,
-) -> tuple[str, list[str], "T58ScorecardResult", bool]:
+    lookahead_bug_detected: bool = False,
+) -> tuple[str, list[str], "T58ScorecardResult", bool, bool]:
     """Pipeline reorg item #1: the verdict is now a hard safety gate
-    (risk of ruin) followed by app.scoring.t58_scorecard's continuous,
-    missing-aware score -- NOT five independent boolean checks ANDed
-    together. See that module's docstring for why: requiring every one
-    of several imperfect, correlated tests to pass simultaneously can
-    reject a genuinely good strategy just because one noisy measurement
-    disagreed with the others (pipeline reorg plan section 4).
+    (risk of ruin, and -- FIX (audit) -- a confirmed lookahead-bias leak)
+    followed by app.scoring.t58_scorecard's continuous, missing-aware
+    score -- NOT independent boolean checks ANDed together. See that
+    module's docstring for why: requiring every one of several
+    imperfect, correlated tests to pass simultaneously can reject a
+    genuinely good strategy just because one noisy measurement
+    disagreed with the others (pipeline reorg plan section 4). A
+    confirmed lookahead leak is different in kind from those noisy
+    measurements -- like risk of ruin, it's treated as a genuine
+    pass/fail requirement, not evidence to weigh, because a strategy
+    whose signal depends on future data isn't "somewhat trustworthy":
+    every number this pipeline reports for it (backtest, Monte Carlo,
+    walk-forward, CPCV) is downstream of that same leaky signal and
+    therefore equally untrustworthy.
 
-    Returns (verdict, verdict_reasons, scorecard_result, risk_of_ruin_hard_fail).
+    Returns (verdict, verdict_reasons, scorecard_result,
+    risk_of_ruin_hard_fail, lookahead_hard_fail).
     `verdict` stays one of the same three strings ("READY" / "MARGINAL" /
     "NOT READY") every existing caller and test already expects --
     Elite/Strong tiers -> READY, Promising/Research -> MARGINAL, Reject
-    (or a ruin hard-fail) -> NOT READY. `scorecard_result` carries the
+    (or a hard-fail) -> NOT READY. `scorecard_result` carries the
     actual continuous score/tier/component breakdown for anything that
     wants more resolution than the 3-way verdict (e.g. the leaderboard).
 
@@ -345,10 +356,37 @@ def _make_verdict(
     oos_validation would otherwise fill (never both at once).
     cpcv_supporting_result: pass this when CPCV ran as a second,
     non-primary diagnostic (cpcv_supporting_enabled) -- scored in its
-    own small-weight component instead."""
+    own small-weight component instead.
+    lookahead_bug_detected: the re-checked (final-configuration, not
+    baseline) result of app.strategy.lookahead_check.check_for_lookahead
+    -- see run_full_pipeline's "Lookahead re-check on the ACTUAL final
+    candidate" step. Defaults to False so every existing caller/test
+    that doesn't pass it keeps its prior behavior exactly."""
     reasons: list[str] = []
     ruin = final_mc.risk_of_ruin_pct
     ruin_hard_fail = ruin > risk_of_ruin_cap
+
+    # -- The other hard gate: a confirmed lookahead-bias leak ------------
+    # Checked before the ruin gate's early-return so a leaky strategy is
+    # always reported as a lookahead failure first, even if its (equally
+    # untrustworthy) simulated ruin number also happens to look bad --
+    # the leak is the actionable root cause, not the ruin number.
+    if lookahead_bug_detected:
+        scorecard = score_from_results(
+            mc_result=final_mc, walk_forward_result=oos_validation, statistics=statistics,
+            prop_max_drawdown_pct=getattr(prop_rules, "max_drawdown_pct", None),
+            parsimony_result=parsimony, cpcv_supporting_result=cpcv_supporting_result,
+        )
+        reasons.append(
+            "HARD SAFETY GATE FAILED: the lookahead-bias check detected that this strategy's "
+            "signal depends on data that had not happened yet as of its own bar -- see the "
+            "lookahead check log/report above for exactly which bar. This strategy is NOT READY "
+            "regardless of how the rest of the evidence looks, because every number this pipeline "
+            "reports for it (backtest, Monte Carlo, walk-forward, CPCV) is downstream of that same "
+            "leaky signal and is therefore equally unreliable."
+        )
+        reasons.append(f"For reference, {scorecard.render_line()} (not the reason for this verdict).")
+        return "NOT READY", reasons, scorecard, False, True
 
     # -- Continuous, missing-aware scorecard (computed either way, so a
     # rejected strategy's other numbers still show up in the report and
@@ -386,7 +424,7 @@ def _make_verdict(
             f"FullPipelineConfig.risk_of_ruin_cap)."
         )
         reasons.append(f"For reference, {scorecard.render_line()} (not the reason for this verdict).")
-        return "NOT READY", reasons, scorecard, True
+        return "NOT READY", reasons, scorecard, True, False
 
     if oos_validation is None and cpcv_primary_result is None:
         reasons.append(
@@ -418,7 +456,7 @@ def _make_verdict(
         verdict = "MARGINAL"
     else:
         verdict = "NOT READY"
-    return verdict, reasons, scorecard, False
+    return verdict, reasons, scorecard, False, False
 
 
 # What each Full Pipeline verdict tags a newly-saved strategy with in the
@@ -577,14 +615,23 @@ def run_full_pipeline(
         warnings.append(w)
 
     lookahead_summary = None
+    lookahead_bug_detected = False
     if strategy.source_type in ("python", "pinescript", "mql5"):
         try:
             from app.strategy.lookahead_check import check_for_lookahead
             lookahead_result = check_for_lookahead(strategy, dev_df, max_signal_checkpoints=8)
             lookahead_summary = lookahead_result.summary()
+            lookahead_bug_detected = lookahead_result.bug_detected
             log(f"  Lookahead check: {lookahead_summary}")
         except Exception:
             log("  Lookahead check failed to run (skipped, best-effort only).")
+    # NOTE: this baseline-strategy check is re-run below (see "Lookahead
+    # check (final configuration)") against whatever strategy actually
+    # ends up as `final_strategy` after Step 2's optimization -- that
+    # re-check, not this one, is what _make_verdict() below treats as a
+    # hard gate. This one only seeds the log/report early and covers the
+    # (common) case where refinement never runs or never changes the
+    # verdict-relevant answer.
 
     pnls = [t.pnl for t in baseline_bt.trades]
     dates = [t.entry_time for t in baseline_bt.trades]
@@ -827,6 +874,32 @@ def run_full_pipeline(
             final_strategy = build_strategy_from_spec(final_spec, final_tmp_dir)
             final_bt = baseline_bt
 
+        # -- Lookahead re-check on the ACTUAL final candidate ----------------
+        # FIX (audit): the check above only ever looked at the strategy as
+        # handed in, before Step 2's optimization had a chance to run. This
+        # is the one _make_verdict() below actually gates on -- Step 2 can
+        # change parameters (or, for a fallback, revert to baseline), so the
+        # candidate that gets a verdict is re-checked directly rather than
+        # trusting the earlier check's target strategy instance to still be
+        # representative. Cheap: a handful of truncated re-generate() calls,
+        # same cost class as the baseline check above.
+        if final_source_type in ("python", "pinescript", "mql5"):
+            try:
+                from app.strategy.lookahead_check import check_for_lookahead
+                final_lookahead_result = check_for_lookahead(final_strategy, dev_df, max_signal_checkpoints=8)
+                lookahead_summary = final_lookahead_result.summary()
+                lookahead_bug_detected = final_lookahead_result.bug_detected
+                log(f"  Lookahead check (final configuration): {lookahead_summary}")
+            except Exception:
+                log("  Lookahead check on final configuration failed to run (skipped, best-effort only).")
+        else:
+            # Manual (indicator-builder) strategies are causal by
+            # construction (see app.strategy.lookahead_check's own scope
+            # note) -- no re-check needed even if refinement changed
+            # numeric parameters, since the underlying evaluation code
+            # never changes shape.
+            lookahead_bug_detected = False
+
         pnls = [t.pnl for t in final_bt.trades]
         dates = [t.entry_time for t in final_bt.trades]
         final_single_run = simulate_account(pnls, dates, prop_rules, reset_on_breach=cfg.reset_on_breach)
@@ -1003,11 +1076,12 @@ def run_full_pipeline(
         # -- Step 7: report + save -----------------------------------------
         _check_cancel()
         log("Step 7/7: Generating final report...")
-        verdict, verdict_reasons, scorecard, risk_of_ruin_hard_fail = _make_verdict(
+        verdict, verdict_reasons, scorecard, risk_of_ruin_hard_fail, lookahead_hard_fail = _make_verdict(
             final_mc, oos_validation, icir_gate,
             statistics=final_bt.statistics, prop_rules=prop_rules,
             risk_of_ruin_cap=cfg.risk_of_ruin_cap, parsimony=parsimony_result,
             cpcv_primary_result=cpcv_primary_result, cpcv_supporting_result=cpcv_supporting_result,
+            lookahead_bug_detected=lookahead_bug_detected,
         )
 
         elapsed = time.time() - t0
@@ -1017,7 +1091,7 @@ def run_full_pipeline(
             final_source_type, final_config, final_code_text, final_code_ext,
             final_bt, final_single_run, final_mc, final_holdout,
             oos_validation, oos_skip_reason, icir_gate, icir_gate_skip_reason, verdict, verdict_reasons,
-            scorecard, risk_of_ruin_hard_fail, parsimony_result,
+            scorecard, risk_of_ruin_hard_fail, lookahead_hard_fail, parsimony_result,
             cpcv_primary_result or cpcv_supporting_result, cpcv_skip_reason, regime_result, regime_skip_reason,
             df, prop_rules, risk, cfg, elapsed, warnings, log, output_dir,
             instrument, report_basename, account_mismatch_warning,
@@ -1033,7 +1107,7 @@ def _finish(
     final_source_type, final_config, final_code_text, final_code_ext,
     final_bt, final_single_run, final_mc, final_holdout,
     oos_validation, oos_skip_reason, icir_gate, icir_gate_skip_reason, verdict, verdict_reasons,
-    scorecard, risk_of_ruin_hard_fail, parsimony_result, cpcv_result, cpcv_skip_reason,
+    scorecard, risk_of_ruin_hard_fail, lookahead_hard_fail, parsimony_result, cpcv_result, cpcv_skip_reason,
     regime_result, regime_skip_reason,
     df, prop_rules, risk, cfg, elapsed, warnings, log, output_dir,
     instrument="unknown", report_basename="full_pipeline_report", account_mismatch_warning=None,
@@ -1129,6 +1203,7 @@ def _finish(
                 "parsimony_score": round(parsimony_score, 1) if parsimony_score is not None else None,
                 "risk_of_ruin_pct": round(final_mc.risk_of_ruin_pct, 1),
                 "risk_of_ruin_hard_fail": risk_of_ruin_hard_fail,
+                "lookahead_hard_fail": lookahead_hard_fail,
             })
             saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {cfg.library_status})."
             log(f"  {saved_library_note}")
@@ -1181,6 +1256,7 @@ def _finish(
                 "parsimony_score": round(parsimony_score, 1) if parsimony_score is not None else None,
                 "risk_of_ruin_pct": round(final_mc.risk_of_ruin_pct, 1),
                 "risk_of_ruin_hard_fail": risk_of_ruin_hard_fail,
+                "lookahead_hard_fail": lookahead_hard_fail,
             })
             saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {cfg.library_status})."
             log(f"  {saved_library_note}")
@@ -1247,6 +1323,7 @@ def _finish(
         verdict_reasons=verdict_reasons,
         scorecard=scorecard,
         risk_of_ruin_hard_fail=risk_of_ruin_hard_fail,
+        lookahead_hard_fail=lookahead_hard_fail,
         parsimony=parsimony_result,
         cpcv_result=cpcv_result,
         cpcv_skip_reason=cpcv_skip_reason,

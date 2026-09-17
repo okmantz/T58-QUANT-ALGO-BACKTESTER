@@ -1223,7 +1223,19 @@ def run_pipeline():
             required_buffer_pct=float(form.get("buffer", 0)),
         )
 
-        # Same "Enable adaptive, limit-aware position sizing" overlay Quick
+        # FIX (audit): unlike Quick Optimize/Full Pipeline/Evolution Lab/
+        # Speed Run/Walk-Forward GA, Run & Report never reconciled its
+        # RiskConfig against the active PropRules before backtesting --
+        # see app.backtest.risk.with_prop_safety_defaults' own docstring.
+        # Without this, the SAME strategy/data/settings could silently
+        # backtest against a different account balance here than in Quick
+        # Optimize or Full Pipeline (whenever initial_balance and
+        # account_size aren't already identical), and this route's raw
+        # backtest never enforced the account-blown/daily-loss circuit
+        # breakers those other tools' backtests do -- producing a
+        # genuinely different trade sequence, not just a differently
+        # labeled one, for what looked like an apples-to-apples comparison.
+        risk = with_prop_safety_defaults(risk, rules)        # Same "Enable adaptive, limit-aware position sizing" overlay Quick
         # Optimize/Full Pipeline/Evolution Lab already offer (see
         # app.backtest.adaptive_risk) -- Run & Report was previously the
         # only place in the app with no way to turn this on at all, which

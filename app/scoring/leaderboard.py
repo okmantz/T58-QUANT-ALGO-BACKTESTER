@@ -43,6 +43,7 @@ class LeaderboardEntry:
     payout_probability: float | None
     risk_of_ruin_pct: float | None
     risk_of_ruin_hard_fail: bool
+    lookahead_hard_fail: bool
     max_drawdown_pct: float | None
     trade_count: int | None
     parsimony_score: float | None
@@ -55,6 +56,7 @@ def build_leaderboard(
     strategy_type: str | None = None,
     top_n: int = 20,
     exclude_ruin_hard_fail: bool = True,
+    exclude_lookahead_hard_fail: bool = True,
 ) -> list[LeaderboardEntry]:
     """Ranked, cross-tool Final Selection leaderboard.
 
@@ -67,6 +69,13 @@ def build_leaderboard(
     those are never candidates for Final Selection regardless of their
     other numbers. Set False to see them anyway (e.g. for an "everything
     that's been tested" audit view rather than a shortlist).
+
+    exclude_lookahead_hard_fail: True (default) drops anything that
+    failed Full Pipeline's lookahead-bias hard safety gate (see
+    app.orchestration.full_pipeline._make_verdict) -- same reasoning as
+    exclude_ruin_hard_fail: a strategy whose signal depends on future
+    data has no numbers worth ranking, regardless of what its (equally
+    untrustworthy) t58_score happens to say.
     """
     entries: list[LeaderboardEntry] = []
     for item in list_saved_strategies(strategy_type=strategy_type):
@@ -75,6 +84,8 @@ def build_leaderboard(
         if t58_score is None:
             continue  # never been through Full Pipeline (or ran before this field existed) -- not rankable yet
         if exclude_ruin_hard_fail and last_run.get("risk_of_ruin_hard_fail"):
+            continue
+        if exclude_lookahead_hard_fail and last_run.get("lookahead_hard_fail"):
             continue
         entries.append(LeaderboardEntry(
             strategy_type=item.strategy_type,
@@ -87,6 +98,7 @@ def build_leaderboard(
             payout_probability=last_run.get("first_payout_probability"),
             risk_of_ruin_pct=last_run.get("risk_of_ruin_pct"),
             risk_of_ruin_hard_fail=bool(last_run.get("risk_of_ruin_hard_fail")),
+            lookahead_hard_fail=bool(last_run.get("lookahead_hard_fail")),
             max_drawdown_pct=last_run.get("max_dd"),
             trade_count=last_run.get("trades"),
             parsimony_score=last_run.get("parsimony_score"),

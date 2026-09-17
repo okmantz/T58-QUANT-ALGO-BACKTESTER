@@ -99,6 +99,7 @@ from app.search.strategy_space import (
 from app.strategy.library import (
     StrategyAlreadyExists, save_strategy_metadata, save_strategy_text, set_strategy_status,
 )
+from app.strategy.lookahead_check import check_for_lookahead
 from app.validation.cpcv import CPCVError, compute_pbo, run_cpcv
 
 def evolution_stats_metadata(record: dict, generation: int | None = None) -> dict:
@@ -598,6 +599,19 @@ class EvolutionCandidateRecord:
     # folds instead, and is what a promoted strategy's Full Pipeline result
     # should be expected to resemble, not the raw in-sample one.
     cpcv_oos_eval_pass_probability: float | None = None
+    # FIX (audit): Evolution Lab used to have no lookahead-bias check
+    # anywhere in its pipeline -- unlike Search Lab and Full Pipeline,
+    # a genome that leaked future data into its own signal could reach
+    # the leaderboard, get auto-promoted by target_eval_pass_pct, or be
+    # saved to the Strategy Library with nothing ever flagging it. Set
+    # in _cpcv_and_pbo (the one point every leaderboard-eligible
+    # candidate already passes through every generation) using the same
+    # app.strategy.lookahead_check.check_for_lookahead every other
+    # engine relies on. None means "not checked" (e.g. a manual/
+    # indicator-builder spec, causal by construction -- see that
+    # module's own scope note); True/False means it was actually run.
+    lookahead_bug_detected: bool | None = None
+    lookahead_summary: str | None = None
     stressed_ok: bool | None = None
     fitness: object = None                     # PropFitnessBreakdown
     trade_pnls: list = field(default_factory=list)
@@ -622,6 +636,8 @@ class EvolutionCandidateRecord:
             "pbo": self.pbo,
             "cpcv_degradation": self.cpcv_degradation,
             "cpcv_oos_eval_pass_probability": self.cpcv_oos_eval_pass_probability,
+            "lookahead_bug_detected": self.lookahead_bug_detected,
+            "lookahead_summary": self.lookahead_summary,
             "stressed_ok": self.stressed_ok,
             "fitness": self.fitness.to_dict() if self.fitness is not None else None,
             "trade_pnls": self.trade_pnls[:500],
@@ -641,6 +657,8 @@ def _record_from_dict(d: dict) -> EvolutionCandidateRecord:
         pbo=d.get("pbo"),
         cpcv_degradation=d.get("cpcv_degradation"),
         cpcv_oos_eval_pass_probability=d.get("cpcv_oos_eval_pass_probability"),
+        lookahead_bug_detected=d.get("lookahead_bug_detected"),
+        lookahead_summary=d.get("lookahead_summary"),
         stressed_ok=d.get("stressed_ok"),
         fitness=fitness,
         trade_pnls=d.get("trade_pnls") or [],
@@ -1922,6 +1940,25 @@ class EvolutionRunner:
         (out-of-sample performance) that the rest of this pipeline
         never does. See cpcv_oos_eval_pass_probability's docstring."""
         pool = sorted(evaluated, key=lambda r: r.fitness.final_score, reverse=True)[: self.cfg.cpcv_top_n]
+
+        # -- Lookahead-bias check (FIX, audit) -------------------------------
+        # Same detector Search Lab's Stage 3 gate and Full Pipeline's
+        # verdict now both use, run here BEFORE the CPCV/PBO-specific
+        # "need at least 2 candidates" guard below -- CPCV/PBO's own math
+        # needs a pool of 2+ to do pairwise/combinatorial comparisons, but
+        # that requirement has nothing to do with whether a single
+        # candidate's signal depends on future data, and the earlier
+        # version of this fix accidentally inherited that guard, silently
+        # skipping the lookahead check whenever a generation's CPCV pool
+        # had only one candidate in it. Every candidate this method is
+        # ever called with -- 1 or many -- gets checked here. A confirmed
+        # leak disqualifies the candidate outright: excluded before CPCV/
+        # PBO, stress test, clustering, the leaderboard, target_eval_pass_
+        # pct auto-promotion, and Strategy Library saves ever see it,
+        # exactly like Search Lab treats it, regardless of how good its
+        # (equally untrustworthy) fitness score looks.
+        pool = self._exclude_lookahead_bugs(pool)
+
         if len(pool) < 2:
             return pool
 
@@ -1974,6 +2011,51 @@ class EvolutionRunner:
                 weights=self.cfg.fitness_goal,
             )
         return pool
+
+    def _exclude_lookahead_bugs(self, pool: list[EvolutionCandidateRecord]) -> list[EvolutionCandidateRecord]:
+        """See the FIX (audit) note at this method's call site in
+        _cpcv_and_pbo for why this is a separate, unconditional pass over
+        `pool` rather than folded into that method's own (CPCV/PBO-only)
+        'need at least 2 candidates' guard."""
+        clean_pool: list[EvolutionCandidateRecord] = []
+        _lookahead_tmp_dir = None
+        try:
+            for r in pool:
+                if self._stop_flag.is_set():
+                    clean_pool.append(r)
+                    continue
+                if r.spec.get("source_type") not in ("python", "pinescript", "mql5"):
+                    # Manual/indicator-builder specs are causal by construction
+                    # -- see app.strategy.lookahead_check's own scope note.
+                    clean_pool.append(r)
+                    continue
+                try:
+                    # build_strategy_from_spec requires a writable tmp_dir for
+                    # "python" specs (PythonStrategy only accepts a file path)
+                    # -- created lazily, once, only if this pool actually has
+                    # a non-manual candidate to check.
+                    if _lookahead_tmp_dir is None:
+                        import tempfile as _tempfile
+                        _lookahead_tmp_dir = _tempfile.mkdtemp(prefix="t58_evolution_lookahead_")
+                    strategy = build_strategy_from_spec(r.spec, _lookahead_tmp_dir)
+                    lookahead_result = check_for_lookahead(strategy, self.df)
+                    r.lookahead_bug_detected = lookahead_result.bug_detected
+                    r.lookahead_summary = lookahead_result.summary()
+                except Exception:
+                    # Best-effort, same as every other validation step in this
+                    # method (CPCV/PBO above) -- a check that itself failed to
+                    # run is never treated as a positive result.
+                    r.lookahead_bug_detected = None
+                    r.lookahead_summary = None
+                if r.lookahead_bug_detected:
+                    self._log(f"  LOOKAHEAD BUG [{r.candidate_id}]: excluded regardless of every other score.")
+                    continue
+                clean_pool.append(r)
+        finally:
+            if _lookahead_tmp_dir is not None:
+                from shutil import rmtree as _rmtree
+                _rmtree(_lookahead_tmp_dir, ignore_errors=True)
+        return clean_pool
 
     # -- STRESS TEST ---------------------------------------------------------
     def _stress_test(self, pool: list[EvolutionCandidateRecord]) -> list[EvolutionCandidateRecord]:

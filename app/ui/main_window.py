@@ -7823,6 +7823,15 @@ class MainWindow:
             self._log("Configuring risk & prop rules...")
             risk = self._build_risk_config()
             rules = self._build_prop_rules()
+            # FIX (audit): reconcile risk against the active prop rules
+            # before backtesting -- see app.backtest.risk.with_prop_safety_
+            # defaults' own docstring and Quick Optimize/Full Pipeline/
+            # Evolution Lab/Speed Run, which already do this. Without it, this
+            # tab could silently backtest against a different account balance
+            # (and without the account-blown/daily-loss circuit breakers those
+            # other tools' backtests enforce) than the other tools would for
+            # the exact same strategy/data/settings.
+            risk = with_prop_safety_defaults(risk, rules)
             adaptive_risk = self._build_adaptive_risk_config()
             if adaptive_risk is not None:
                 self._log(f"Adaptive risk enabled: {len(adaptive_risk.rules)} rule(s)")
@@ -8193,6 +8202,15 @@ class MainWindow:
             strategy = self._build_strategy()
             risk = self._build_risk_config()
             rules = self._build_prop_rules()
+            # FIX (audit): reconcile risk against the active prop rules
+            # before backtesting -- see app.backtest.risk.with_prop_safety_
+            # defaults' own docstring and Quick Optimize/Full Pipeline/
+            # Evolution Lab/Speed Run, which already do this. Without it, this
+            # tab could silently backtest against a different account balance
+            # (and without the account-blown/daily-loss circuit breakers those
+            # other tools' backtests enforce) than the other tools would for
+            # the exact same strategy/data/settings.
+            risk = with_prop_safety_defaults(risk, rules)
             adaptive_risk = self._build_adaptive_risk_config()
 
             self._log_payout("Running historical backtest to obtain a real trade sequence...")
@@ -8299,6 +8317,15 @@ class MainWindow:
             strategy = self._build_strategy()
             risk = self._build_risk_config()
             rules = self._build_prop_rules()
+            # FIX (audit): reconcile risk against the active prop rules
+            # before backtesting -- see app.backtest.risk.with_prop_safety_
+            # defaults' own docstring and Quick Optimize/Full Pipeline/
+            # Evolution Lab/Speed Run, which already do this. Without it, this
+            # tab could silently backtest against a different account balance
+            # (and without the account-blown/daily-loss circuit breakers those
+            # other tools' backtests enforce) than the other tools would for
+            # the exact same strategy/data/settings.
+            risk = with_prop_safety_defaults(risk, rules)
             adaptive_risk = self._build_adaptive_risk_config()
 
             self._log_bankroll("Running historical backtest to obtain a real trade sequence...")
