@@ -113,8 +113,8 @@ from app.scoring.t58_scorecard import T58ScorecardResult, score_from_results
 from app.search.robustness import WalkForwardResult, run_walk_forward
 from app.search.strategy_space import build_strategy_from_spec
 from app.strategy.base import Strategy
-from app.strategy.library import StrategyAlreadyExists, safe_filename_stem, save_strategy_text, set_strategy_status, \
-    record_backtest_result
+from app.strategy.library import StrategyAlreadyExists, provenance_stamped_name, safe_filename_stem, \
+    save_strategy_text, set_strategy_status, record_backtest_result
 from app.validation.cpcv import CPCVError, CPCVResult, run_cpcv
 from app.validation.icir import ICIRGateResult, run_icir_gate_from_backtest
 from app.validation.regime_matrix import RegimeMatrixResult, build_regime_matrix
@@ -1046,6 +1046,23 @@ def _finish(
     period = (str(df["timestamp"].iloc[0]), str(df["timestamp"].iloc[-1]))
     final_strategy_name = f"{display_name} (Full Pipeline)"
 
+    # 2026-09-17 Quick-Optimize-vs-Full-Pipeline naming-drift fix, point (3):
+    # final_config/final_code_text above only ever get replaced with the
+    # GA's mutated winner when refinement actually ran AND that winner
+    # produced OOS trades (see the "if ga_result.best.oos_trade_count > 0"
+    # branch just before this function is called) -- any other case keeps
+    # the ORIGINAL baseline configuration, whose display_name is still
+    # accurate. save_name below is what both the saved filename AND (for
+    # manual configs) the saved JSON's own "name" field are derived from --
+    # see app.strategy.library.provenance_stamped_name's docstring for the
+    # exact bug this closes (the same fix as app.orchestration.
+    # quick_optimize.run_quick_optimize's save_name).
+    mutated_by_ga = refinement_ran and ga_result is not None and ga_result.best.oos_trade_count > 0
+    save_name = (
+        provenance_stamped_name(display_name, origin="full_pipeline", seed=cfg.random_seed)
+        if mutated_by_ga else display_name
+    )
+
     # Pipeline reorg: every record_backtest_result() call below also
     # stamps these three fields into the strategy's "last_run" metadata
     # -- this is the ONLY change needed to make app.scoring.leaderboard's
@@ -1089,7 +1106,7 @@ def _finish(
     saved_library_note = None
     if cfg.save_to_library and final_source_type in ("python", "pinescript", "mql5") and final_code_text:
         ext = {"python": ".py", "pinescript": ".pine", "mql5": ".mq5"}[final_source_type]
-        base_name = safe_filename_stem(display_name, "full_pipeline_strategy")
+        base_name = safe_filename_stem(save_name, "full_pipeline_strategy")
         filename = f"{base_name}_pipeline{ext}"
         try:
             try:
@@ -1132,9 +1149,17 @@ def _finish(
         # code" action downstream (e.g. Speed Run's candidate list) has
         # something to show for a manual-builder winner too, not just for
         # python/pinescript/mql5 ones.
-        base_name = safe_filename_stem(display_name, "full_pipeline_strategy")
+        base_name = safe_filename_stem(save_name, "full_pipeline_strategy")
         filename = f"{base_name}_pipeline.json"
-        config_text = json.dumps(final_config, indent=2)
+        # 2026-09-17 naming-drift fix, continued: overwrite the saved
+        # JSON's own "name" field with save_name too when mutated --
+        # otherwise the file on disk would still claim the ORIGINAL
+        # (now-inaccurate) name internally even though its filename was
+        # fixed. Mirrors app.orchestration.quick_optimize's identical fix.
+        config_to_save = dict(final_config)
+        if mutated_by_ga:
+            config_to_save["name"] = save_name
+        config_text = json.dumps(config_to_save, indent=2)
         try:
             try:
                 saved_library_path = save_strategy_text(config_text, filename, "manual", overwrite=False)
