@@ -5325,6 +5325,20 @@ class MainWindow:
             False,
         )
 
+        # 2026-09-17 fix, point (5): mirrors the web app's "Reserve a
+        # holdout slice" checkbox on the Quick Optimize page -- optional,
+        # off by default (byte-identical behavior to before this existed),
+        # carves off the trailing 20% of whatever data OPTIMIZE SELECTED
+        # loads and reports the winner's performance on it separately. See
+        # QuickOptimizeConfig.reserve_holdout's own docstring for exactly
+        # what this does and does not check.
+        self.lib_optimize_reserve_holdout = LabeledCheckbox(
+            library_section,
+            "OPTIMIZE SELECTED: reserve a holdout slice (lighter, optional check -- still not a "
+            "substitute for Full Pipeline; every result stays labeled NOT OOS VALIDATED either way)",
+            False,
+        )
+
         lib_btn_row_4 = Frame(library_section, bg=PANEL)
         lib_btn_row_4.pack(anchor="w", padx=18, pady=(0, 6))
 
@@ -6575,7 +6589,11 @@ class MainWindow:
 
             risk = context.build_risk_config()
             rules = context.build_prop_rules()
-            cfg = QuickOptimizeConfig(adaptive_risk_enabled=self.lib_optimize_adaptive_risk.var.get(), reset_on_breach=True)
+            cfg = QuickOptimizeConfig(
+                adaptive_risk_enabled=self.lib_optimize_adaptive_risk.var.get(),
+                reset_on_breach=True,
+                reserve_holdout=self.lib_optimize_reserve_holdout.var.get(),
+            )
             results = []
             for i, item in enumerate(items, start=1):
                 log(f"===== [{i}/{len(items)}] Optimizing: {item.name} =====")
@@ -6595,13 +6613,23 @@ class MainWindow:
                 log("")
 
             if results:
-                log("Summary (eval-pass probability, before -> after):")
+                # 2026-09-17 fix, points (1) and (2): this summary line is
+                # exactly the kind of clean-looking percentage that made
+                # the original Quick-Optimize-vs-Full-Pipeline discrepancy
+                # so easy to misread as a finished result -- the per-item
+                # log above already prints the full "NOT OOS VALIDATED"
+                # banner and (when relevant) the too-few-trades warning,
+                # but this rolled-up summary line needs its own reminder
+                # too, since it's the line most likely to be read on its
+                # own after a long batch scrolls past.
+                log("Summary (eval-pass probability, before -> after) -- ⚠️ NOT OOS VALIDATED, see Full Pipeline:")
                 for name, res in sorted(results, key=lambda t: t[1].optimized_eval_pass_probability, reverse=True):
                     marker = "IMPROVED" if res.improved else "no improvement"
                     mismatch_flag = "  [!!! PIP-SIZE MISMATCH -- UNRELIABLE, SEE ABOVE]" if res.instrument_mismatch_warning else ""
+                    trade_count_flag = "  [!!! TOO FEW OOS TRADES -- SEE ABOVE]" if not res.min_trade_count_met else ""
                     log(
                         f"  {name}: {res.baseline_eval_pass_probability:.1f}% -> "
-                        f"{res.optimized_eval_pass_probability:.1f}%  ({marker}){mismatch_flag}"
+                        f"{res.optimized_eval_pass_probability:.1f}%  ({marker}){mismatch_flag}{trade_count_flag}"
                     )
 
             def _refresh_after_run():
