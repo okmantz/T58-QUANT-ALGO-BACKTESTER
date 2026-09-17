@@ -100,6 +100,31 @@ main { padding: 18px 16px 40px; max-width: 760px; margin: 0 auto; }
 .verdict-yes { background: rgba(var(--teal-rgb), 0.12); color: var(--teal); border-color: rgba(var(--teal-rgb), 0.35); }
 .verdict-no  { background: rgba(var(--coral-rgb), 0.12); color: var(--coral); border-color: rgba(var(--coral-rgb), 0.35); }
 
+/* ---- Research-result banner (2026-09-17 Quick Optimize fix) ----
+   Always shown on every Quick Optimize result, regardless of how strong
+   the numbers look -- this tool never independently validates a result
+   against unseen data the way Full Pipeline's Step 5 holdout check does,
+   so nothing here should ever look like a finished answer. Distinct from
+   .verdict-yes/.verdict-no (which describe "did the optimizer improve on
+   the baseline") -- this describes "has this been OOS-validated at all,"
+   which is a separate, always-relevant question. */
+.research-banner {
+  font-size: 14px; font-weight: 700; padding: 12px 14px; border-radius: var(--radius-md);
+  margin-bottom: 6px; text-align: center; border: 1px solid rgba(var(--coral-rgb), 0.4);
+  background: rgba(var(--coral-rgb), 0.10); color: var(--coral);
+}
+.research-banner-detail {
+  font-size: 12px; color: var(--text-dim); text-align: center; margin-bottom: 14px;
+}
+.trade-count-warning {
+  font-size: 12px; color: var(--coral); margin-top: 4px;
+}
+.diagnostics-list {
+  list-style: none; margin: 8px 0 0; padding: 0; font-size: 12px; color: var(--text-muted);
+}
+.diagnostics-list li { padding: 3px 0; border-top: 1px solid var(--border); }
+.diagnostics-list li:first-child { border-top: none; }
+
 /* ---- Badges (pass/fail/infeasible) ---- */
 .badge {
   font-size: 10px; padding: 2px 8px; border-radius: 999px; font-weight: 700; letter-spacing: .02em;
