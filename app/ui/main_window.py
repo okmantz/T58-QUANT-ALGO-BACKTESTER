@@ -10,6 +10,7 @@ report workflows are preserved.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 import os
@@ -31,7 +32,7 @@ from tkinter import (
 import app.evolution.checkpoint as evo_checkpoint
 from app.backtest.adaptive_risk import AdaptiveRiskConfig, AdaptiveRiskError, AdaptiveRiskRule
 from app.backtest.engine import run_backtest, run_holdout_comparison
-from app.backtest.risk import RiskConfig, suggest_pip_size
+from app.backtest.risk import RiskConfig, suggest_pip_size, with_prop_safety_defaults
 import app.ai.ollama_settings as ollama_settings_module
 from app.ai.ollama_settings import OllamaSettings
 import app.ai.strategy_generator as strategy_generator_module
@@ -6574,7 +6575,7 @@ class MainWindow:
 
             risk = context.build_risk_config()
             rules = context.build_prop_rules()
-            cfg = QuickOptimizeConfig(adaptive_risk_enabled=self.lib_optimize_adaptive_risk.var.get())
+            cfg = QuickOptimizeConfig(adaptive_risk_enabled=self.lib_optimize_adaptive_risk.var.get(), reset_on_breach=True)
             results = []
             for i, item in enumerate(items, start=1):
                 log(f"===== [{i}/{len(items)}] Optimizing: {item.name} =====")
@@ -6686,10 +6687,11 @@ class MainWindow:
                     save_to_library=self.fp_save_to_library.var.get(),
                     library_status=self._fp_status_label_to_key.get(self.fp_library_status.get_str()),
                     adaptive_risk_enabled=self.fp_adaptive_risk_enabled.var.get(),
+                    reset_on_breach=self.fp_reset_on_breach.var.get(),
                 )
                 ollama_settings = self._build_ollama_settings()
             except Exception:
-                cfg = FullPipelineConfig()
+                cfg = FullPipelineConfig(reset_on_breach=True)
                 ollama_settings = None
             log(
                 f"Using Full Pipeline settings from the 15 Full Pipeline tab: "
@@ -8605,6 +8607,13 @@ class MainWindow:
         self.search_min_trades = LabeledEntry(stage1_section, "Minimum trades to survive", 20)
         self.search_min_pf = LabeledEntry(stage1_section, "Minimum profit factor to survive", 1.05)
         self.search_stage1_top_n = LabeledEntry(stage1_section, "Survivors that advance to Stage 2 (GA)", 40)
+        self.search_reset_on_breach = LabeledCheckbox(
+            stage1_section,
+            "Reset-on-breach: score every candidate on the basis that a blown account gets "
+            "a fresh eval and keeps going, not a dead end (recommended -- uncheck to "
+            "optimize on a single account with no reset)",
+            True,
+        )
 
         stage2_section = self._section(
             f, "Stage 2 -- GA refinement",
@@ -8882,6 +8891,7 @@ class MainWindow:
             cost_stress_enabled=self.search_cost_stress_enabled.get(),
             cost_stress_multiplier=self.search_cost_stress_multiplier.get_float(2.0),
             cost_stress_penalty_weight=self.search_cost_stress_weight.get_float(0.35),
+            reset_on_breach=self.search_reset_on_breach.var.get(),
         )
 
     def _search_run_clicked(self):
@@ -11189,6 +11199,7 @@ class MainWindow:
                 population_size=self.mo_population.get_int(20),
                 generations=self.mo_generations.get_int(8),
                 random_seed=self.mo_seed.get_int(42),
+                reset_on_breach=True,
             )
             self._log_multiobj(f"Running multi-objective search for: {selected_objectives}...")
             result = run_multi_objective_refinement(df, strategy, risk, rules, mc_cfg, mo_cfg, progress_cb=self._log_multiobj)
@@ -11304,7 +11315,11 @@ class MainWindow:
             strategy = self._build_strategy()
             risk = self.wfga_context.build_risk_config()
             rules = self.wfga_context.build_prop_rules()
-            mc_cfg = self._validation_mc_config()
+            # FIX (audit, Sep 2026): Walk-Forward GA never hardened its
+            # RiskConfig against PropRules here either -- see
+            # app.backtest.risk.with_prop_safety_defaults' own docstring.
+            risk = with_prop_safety_defaults(risk, rules)
+            mc_cfg = dataclasses.replace(self._validation_mc_config(), reset_on_breach=True)
 
             metric_key = self._wfga_metric_label_to_key.get(self.wfga_metric.get_str(), "eval_pass_probability")
             refine_cfg = RefinementConfig(
@@ -11978,6 +11993,13 @@ class MainWindow:
             "evaluates (same engine as 05 Run & Report's Adaptive Risk section)",
             False,
         )
+        self.evo_reset_on_breach = LabeledCheckbox(
+            cfg_section,
+            "Reset-on-breach: score every candidate on the basis that a blown account gets "
+            "a fresh eval and keeps going, not a dead end (recommended -- uncheck to "
+            "optimize on a single account with no reset)",
+            True,
+        )
 
         families_frame = Frame(cfg_section, bg=PANEL)
         families_frame.pack(fill="x", padx=18, pady=(4, 4))
@@ -12275,6 +12297,7 @@ class MainWindow:
             prefilter_max_bars=prefilter_max_bars,
             target_eval_pass_pct=loop_target,
             target_metric=loop_metric_key,
+            reset_on_breach=self.evo_reset_on_breach.var.get(),
         )
         self.evo_log_text.delete("1.0", END)
         self._evo_guide_shown = False
@@ -12747,6 +12770,13 @@ class MainWindow:
             "Adaptive Risk section, applied automatically to every backtest this pipeline runs)",
             False,
         )
+        self.fp_reset_on_breach = LabeledCheckbox(
+            settings,
+            "Reset-on-breach: score on the basis that a blown account gets a fresh eval and "
+            "keeps going, not a dead end (recommended -- uncheck to optimize on a single "
+            "account with no reset)",
+            True,
+        )
 
         library_section = self._section(
             f, "Strategy Library",
@@ -13049,6 +13079,7 @@ class MainWindow:
                 graveyard_min_attempts=self.forge_graveyard_min_attempts.get_int(8),
                 workers=int(self.forge_workers.get_str().strip()) if self.forge_workers.get_str().strip() else None,
                 random_seed=self.forge_seed.get_int(42),
+                reset_on_breach=True,
             )
             instrument = (
                 os.path.basename(self.forge_context.csv_paths[0]) if len(self.forge_context.csv_paths) == 1
@@ -13154,6 +13185,7 @@ class MainWindow:
                 graveyard_skip_known_dead=self.forge_graveyard_skip.var.get(),
                 graveyard_min_attempts=self.forge_graveyard_min_attempts.get_int(8),
                 workers=int(self.forge_workers.get_str().strip()) if self.forge_workers.get_str().strip() else None,
+                reset_on_breach=True,
             )
             instrument = (
                 os.path.basename(self.forge_context.csv_paths[0]) if len(self.forge_context.csv_paths) == 1
@@ -14198,6 +14230,7 @@ class MainWindow:
                 save_to_library=self.fp_save_to_library.var.get(),
                 library_status=self._fp_status_label_to_key.get(self.fp_library_status.get_str()),
                 adaptive_risk_enabled=self.fp_adaptive_risk_enabled.var.get(),
+                reset_on_breach=self.fp_reset_on_breach.var.get(),
             )
 
             self._log_fullpipeline(f"Starting Full Pipeline for '{_strategy_display_name(strategy)}'...\n")
@@ -14636,6 +14669,7 @@ class MainWindow:
                 fitness_metric=metric_key,
                 save_winner_to_library=self.sr_save_to_library.get(),
                 random_seed=self.sr_seed.get_int(42),
+                reset_on_breach=True,
             )
 
             instrument = (
@@ -14729,6 +14763,7 @@ class MainWindow:
                 fitness_metric=metric_key,
                 save_winner_to_library=self.sr_save_to_library.get(),
                 random_seed=self.sr_seed.get_int(42),
+                reset_on_breach=True,
             )
             autopilot_cfg = AutopilotConfig(
                 speed_run_cfg=speed_run_cfg,
@@ -14802,6 +14837,7 @@ class MainWindow:
                 validation_final_mc_sims=self.sr_validation_final_mc_sims.get_int(3000),
                 fitness_metric=metric_key,
                 save_winner_to_library=self.sr_save_to_library.get(),
+                reset_on_breach=True,
             )
             instrument = (
                 os.path.basename(self.sr_context.csv_paths[0])
