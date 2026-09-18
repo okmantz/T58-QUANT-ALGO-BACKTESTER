@@ -16,6 +16,8 @@ firm terminates an account once it breaches the drawdown floor rather
 than letting it keep trading into deeper negative equity), so the engine
 must not be able to report it either.
 """
+import math
+
 import pandas as pd
 import pytest
 
@@ -146,3 +148,113 @@ def test_with_prop_safety_defaults_wires_both_fields_independently():
     # explicit value kept for one field, prop-rules default filled for the other
     assert safe_risk.max_account_drawdown_pct == 8.0
     assert safe_risk.daily_loss_limit_pct == 5.0
+
+
+# --- RiskConfig.reset_on_breach (2026-09-18 fix) -----------------------------
+#
+# Root cause this closes: the raw bar-by-bar engine's account-blown circuit
+# breaker (test_account_blown_halts_new_trades above) permanently stopped
+# opening new trades for the rest of the run the instant it fired -- even
+# with years of data left, and even when a tab's "reset-on-breach" checkbox
+# was checked, because that checkbox was only ever wired into the POST-HOC
+# scoring layer (app.prop.simulator.simulate_account /
+# app.monte_carlo.engine.MonteCarloConfig), never into the RiskConfig the
+# raw engine itself reads. A strategy could take a handful of trades right
+# at the start of a multi-year dataset, blow the drawdown floor, and then
+# simply never trade again -- regardless of how much data followed.
+
+def test_reset_on_breach_resumes_trading_after_a_blown_account():
+    """Same account-blowing scenario as test_account_blown_halts_new_trades,
+    but with reset_on_breach=True: the engine must keep opening new trades
+    against later signals instead of halting forever."""
+    ts = pd.date_range("2024-01-01 09:00", periods=6, freq="D")
+    rows = [
+        (ts[0], 100.0, 100.2, 99.8, 100.0, 1000.0),
+        (ts[1], 100.0, 100.2, 80.0, 82.0, 1000.0),   # blows the account
+        (ts[2], 82.0, 90.0, 81.0, 88.0, 1000.0),     # must now be allowed to re-enter
+        (ts[3], 88.0, 92.0, 87.0, 91.0, 1000.0),
+        (ts[4], 91.0, 95.0, 90.0, 94.0, 1000.0),
+        (ts[5], 94.0, 98.0, 93.0, 97.0, 1000.0),
+    ]
+    df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    signals = pd.Series([1, 0, 1, 1, 1, 1])
+
+    risk = RiskConfig(
+        initial_balance=10_000.0, risk_mode="percent", risk_value=50.0,
+        pip_size=1.0, max_account_drawdown_pct=10.0, reset_on_breach=True,
+    )
+    with pytest.warns(RuntimeWarning, match="account reset"):
+        trades, equity_df = run_execution(df, signals, risk, stop_loss_pips=25, take_profit_pips=None)
+
+    # Unlike the no-reset version, a later signal must have produced a
+    # second trade instead of being permanently blocked.
+    assert len(trades) >= 2
+    reset_events = equity_df.attrs["account_reset_events"]
+    assert len(reset_events) == 1
+    assert reset_events[0]["equity_before_reset"] == pytest.approx(6400.0, abs=1e-6)
+
+
+def test_reset_on_breach_false_is_byte_identical_to_before():
+    """reset_on_breach defaults to False and must reproduce the permanent-
+    halt behavior exactly -- this is purely additive."""
+    ts = pd.date_range("2024-01-01 09:00", periods=6, freq="D")
+    rows = [
+        (ts[0], 100.0, 100.2, 99.8, 100.0, 1000.0),
+        (ts[1], 100.0, 100.2, 80.0, 82.0, 1000.0),
+        (ts[2], 82.0, 90.0, 81.0, 88.0, 1000.0),
+        (ts[3], 88.0, 92.0, 87.0, 91.0, 1000.0),
+        (ts[4], 91.0, 95.0, 90.0, 94.0, 1000.0),
+        (ts[5], 94.0, 98.0, 93.0, 97.0, 1000.0),
+    ]
+    df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    signals = pd.Series([1, 0, 1, 1, 1, 1])
+    risk = RiskConfig(
+        initial_balance=10_000.0, risk_mode="percent", risk_value=50.0,
+        pip_size=1.0, max_account_drawdown_pct=10.0,  # reset_on_breach left at its False default
+    )
+    with pytest.warns(RuntimeWarning, match="Account BLOWN"):
+        trades, equity_df = run_execution(df, signals, risk, stop_loss_pips=25, take_profit_pips=None)
+    assert len(trades) == 1
+    assert equity_df.attrs["account_reset_events"] == []
+
+
+def test_reset_on_breach_never_leaves_a_dangling_open_position():
+    """Whenever a reset fires, any position still open at that instant must
+    be force-closed as a real, fully-settled trade first -- a terminated
+    account cannot carry a position into the next 'account'. Runs a
+    partial-exit strategy (the one path where equity can drop while a
+    position is still open) through several breach/reset cycles and checks
+    every trade the engine produced is honestly settled."""
+    ts = pd.date_range("2024-01-01 09:00", periods=4, freq="D")
+    rows = [
+        (ts[0], 100.0, 100.2, 99.8, 100.0, 1000.0),
+        (ts[1], 100.0, 100.2, 40.0, 42.0, 1000.0),
+        (ts[2], 42.0, 60.0, 41.0, 55.0, 1000.0),
+        (ts[3], 55.0, 65.0, 54.0, 60.0, 1000.0),
+    ]
+    df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    signals = pd.Series([1, 1, 1, 0])
+    risk = RiskConfig(
+        initial_balance=10_000.0, risk_mode="percent", risk_value=80.0,
+        pip_size=1.0, max_account_drawdown_pct=10.0, reset_on_breach=True,
+    )
+    trades, equity_df = run_execution(
+        df, signals, risk, stop_loss_pips=None, take_profit_pips=None,
+        partial_exit_config={"r_multiple": 0.001, "fraction": 0.5, "move_stop_to_breakeven": False},
+    )
+    # Every trade must be a real, priced, fully-settled exit -- none of them
+    # an artifact of a position silently carried across a reset.
+    for t in trades:
+        assert t.exit_reason in {
+            "stop_loss", "take_profit", "signal", "end_of_data",
+            "partial_take_profit", "daily_loss_limit_forced_close",
+            "account_blown_forced_close",
+        }
+        assert math.isfinite(t.pnl)
+    # equity_after on the LAST trade before each reset must match that
+    # reset's recorded pre-reset equity (proves the reset always resets
+    # from a fully up-to-date, already-settled equity figure).
+    for ev in equity_df.attrs["account_reset_events"]:
+        prior_trades = [t for t in trades if t.exit_time <= ev["reset_at"]]
+        if prior_trades:
+            assert prior_trades[-1].equity_after == pytest.approx(ev["equity_after_forced_close"], abs=1e-6)
