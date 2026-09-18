@@ -72,6 +72,40 @@ class RiskConfig:
     # enforced beyond the per-trade cap above). Typically set from the
     # active PropRules.max_drawdown_pct so the raw backtest and the prop
     # simulation agree on where the account actually dies.
+    reset_on_breach: bool = False
+    # FIX (2026-09-18): every optimization tab already offers a
+    # "reset-on-breach" checkbox ("score on the basis that a blown account
+    # gets a fresh eval and keeps going, not a dead end") and threads it
+    # into the POST-HOC scoring layer (app.prop.simulator.simulate_account,
+    # app.monte_carlo.engine.MonteCarloConfig) -- but none of those callers
+    # ever set THIS field, so the RAW bar-by-bar backtest that produces the
+    # trade list those layers score (app.backtest.execution.run_execution)
+    # never knew about it. Its account-blown circuit breaker (see
+    # max_account_drawdown_pct above) permanently stopped opening new
+    # trades for the rest of the run -- often years of remaining data --
+    # the instant the first account blew, regardless of this flag. The
+    # post-hoc layers could only ever rebuy/resample within the handful of
+    # trades that occurred before that permanent halt; they could never
+    # cause the strategy's own signal to actually keep trading against the
+    # rest of the dataset, which is what "gets a fresh eval and keeps
+    # going" was supposed to mean. This is why a strategy would take a
+    # handful of trades right at the start of a multi-year dataset, blow
+    # the configured drawdown floor, and then simply never trade again for
+    # the remaining years, no matter how much data was fed in.
+    #
+    # Setting this True makes the RAW backtest itself mechanically "buy a
+    # new account" the instant the current one is blown: any position still
+    # open at that instant is forced closed first (an account that just got
+    # terminated can't keep holding a position), a reset event is recorded
+    # (see run_execution's returned equity_df.attrs["account_reset_events"]),
+    # and equity resets to initial_balance so entries resume on the very
+    # next eligible signal -- exactly the "if I get stopped out, I'll buy a
+    # new account and keep going" mental model a prop-firm evaluator (who
+    # doesn't care about blowing accounts, only about making money before
+    # the max drawdown is hit) actually trades under. False (the default)
+    # is byte-for-byte the original permanent-halt behavior -- this is
+    # purely additive and changes nothing for any existing caller/saved
+    # config that doesn't explicitly set it.
 
     def risk_amount(self, current_equity: float) -> float:
         # Floor equity at 0 for sizing purposes: a negative-equity account

@@ -48,6 +48,12 @@ class BacktestStatistics:
     calmar_ratio: float
 
     total_trades: int
+    account_reset_count: int = 0
+    # Number of times reset_on_breach caused the raw backtest to
+    # mechanically "buy a new account" mid-run (see RiskConfig.
+    # reset_on_breach / app.backtest.execution.run_execution). 0 for any
+    # backtest that never used reset_on_breach -- byte-identical default,
+    # purely additive.
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -61,13 +67,47 @@ def _max_streak(bools: list[bool]) -> int:
     return best
 
 
-def _drawdown_series(equity: pd.Series) -> pd.Series:
-    running_max = equity.cummax()
+def _reset_segment_ids(equity_df: pd.DataFrame) -> np.ndarray | None:
+    """Integer "which simulated account is this bar part of" id per row of
+    `equity_df`, incrementing by one at every account-reset event recorded
+    in equity_df.attrs["account_reset_events"] (see
+    app.backtest.execution.run_execution / RiskConfig.reset_on_breach).
+    Returns None when there are no reset events at all -- callers should
+    then fall back to treating the whole curve as a single segment, which
+    is exactly today's (pre-reset-on-breach) behavior, unchanged.
+
+    FIX (2026-09-18): a running-max/cummax computed straight across a
+    reset would treat the OLD account's peak equity as still being the
+    high-water mark for the BRAND NEW account that started fresh at
+    initial_balance right after it -- reporting a "drawdown" that is
+    really just (old account's peak) - (new account's near-initial-
+    balance start), which has nothing to do with how much either actual
+    account itself ever drew down. Left unfixed, turning reset_on_breach
+    on would have made every drawdown-derived number (max_drawdown_pct,
+    average_drawdown_pct, max_daily/weekly_drawdown_pct, calmar_ratio, and
+    anything downstream that reads them, e.g. Monte Carlo's risk-of-ruin)
+    wildly and misleadingly overstated -- the opposite of what
+    reset_on_breach is supposed to model. Segmenting the cummax at each
+    reset is the fix: each simulated account's drawdown is measured only
+    against its OWN peak.
+    """
+    events = equity_df.attrs.get("account_reset_events")
+    if not events:
+        return None
+    ts = equity_df["timestamp"]
+    seg_id = np.zeros(len(ts), dtype=np.int64)
+    for ev in events:
+        seg_id += (ts >= ev["reset_at"]).to_numpy().astype(np.int64)
+    return seg_id
+
+
+def _drawdown_series(equity: pd.Series, seg_id: np.ndarray | None = None) -> pd.Series:
+    running_max = equity.cummax() if seg_id is None else equity.groupby(seg_id).cummax()
     dd = (equity - running_max) / running_max.replace(0, np.nan)
     return dd.fillna(0.0)
 
 
-def _periodic_max_drawdown(equity_df: pd.DataFrame, freq: str) -> float:
+def _periodic_max_drawdown(equity_df: pd.DataFrame, freq: str, seg_id: np.ndarray | None = None) -> float:
     """Worst intra-period drawdown (e.g. worst single day, worst single
     week) across the whole equity curve.
 
@@ -103,10 +143,11 @@ def _periodic_max_drawdown(equity_df: pd.DataFrame, freq: str) -> float:
     if getattr(index_for_period, "tz", None) is not None:
         index_for_period = index_for_period.tz_localize(None)
     period_key = index_for_period.to_period(freq)
-    running_max = equity.groupby(period_key).cummax()
+    group_key = period_key if seg_id is None else [seg_id, period_key]
+    running_max = equity.groupby(group_key).cummax()
     dd = (equity - running_max) / running_max.replace(0, np.nan)
     dd = dd.fillna(0.0)
-    worst = dd.groupby(period_key).min().min()
+    worst = dd.groupby(group_key).min().min()
     return abs(worst) * 100.0 if pd.notna(worst) else 0.0
 
 
@@ -174,14 +215,16 @@ def compute_statistics(
     largest_loser = float(losses.min()) if len(losses) else 0.0
 
     equity = equity_curve["equity"]
-    running_max = equity.cummax()
+    seg_id = _reset_segment_ids(equity_curve)
+    running_max = equity.cummax() if seg_id is None else equity.groupby(seg_id).cummax()
     dd_abs = equity - running_max
     max_drawdown = float(dd_abs.min())
-    dd_pct_series = _drawdown_series(equity)
+    dd_pct_series = _drawdown_series(equity, seg_id)
     max_drawdown_pct = float(abs(dd_pct_series.min()) * 100)
     average_drawdown_pct = float(abs(dd_pct_series[dd_pct_series < 0].mean()) * 100) if (dd_pct_series < 0).any() else 0.0
-    max_daily_dd = _periodic_max_drawdown(equity_curve, "1D")
-    max_weekly_dd = _periodic_max_drawdown(equity_curve, "1W")
+    max_daily_dd = _periodic_max_drawdown(equity_curve, "1D", seg_id)
+    max_weekly_dd = _periodic_max_drawdown(equity_curve, "1W", seg_id)
+    account_reset_count = int(seg_id[-1]) if seg_id is not None and len(seg_id) else 0
 
     win_streak = _max_streak(list(pnls > 0))
     loss_streak = _max_streak(list(pnls <= 0))
@@ -232,7 +275,7 @@ def compute_statistics(
         profit_factor=profit_factor, expectancy=expectancy,
         average_r=average_r, risk_reward=risk_reward,
         sharpe_ratio=sharpe_ratio, sortino_ratio=sortino_ratio, calmar_ratio=calmar_ratio,
-        total_trades=len(trades),
+        total_trades=len(trades), account_reset_count=account_reset_count,
     )
 
 

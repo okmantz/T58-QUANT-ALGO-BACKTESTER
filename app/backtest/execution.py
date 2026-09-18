@@ -159,6 +159,7 @@ def run_execution(
     clamped_loss_count = 0
     account_blown = False
     account_blown_at = None
+    reset_events: list[dict] = []  # populated only when risk.reset_on_breach is True
     daily_limit_amount = (
         risk.initial_balance * (risk.daily_loss_limit_pct / 100.0)
         if risk.daily_loss_limit_pct is not None
@@ -554,15 +555,47 @@ def run_execution(
         # the firm's max-drawdown floor -- it does not keep "trading"
         # itself into ever-deeper negative equity. Once realized equity
         # crosses that floor (or the account has literally run out of
-        # money), stop opening any new trades for the remainder of the
-        # run; this is what makes a single misconfigured/gapped trade
-        # (see max_trade_loss above) unable to cascade into the kind of
+        # money), the default (risk.reset_on_breach == False) is to stop
+        # opening any new trades for the remainder of the run; this is
+        # what makes a single misconfigured/gapped trade (see
+        # max_trade_loss above) unable to cascade into the kind of
         # -$50,000-on-a-$50,000-account or -$2.5M results this was built
         # to prevent. Any already-open trade still manages normally
         # (stop/target/signal exits) -- only NEW entries are blocked.
         if not account_blown and (equity <= 0 or (blown_floor is not None and equity <= blown_floor)):
-            account_blown = True
-            account_blown_at = _restore_tz(ts[i])
+            if risk.reset_on_breach:
+                # RESET-ON-BREACH (see RiskConfig.reset_on_breach): a
+                # prop-firm evaluator who "doesn't care about blowing
+                # accounts, as long as I can make money before" mechanically
+                # buys a new account and keeps going rather than treating
+                # one blown account as the end of the story. Mirror that
+                # here instead of halting forever: force-close any position
+                # still open (a terminated account cannot keep holding
+                # one -- same settlement path, spread/slippage/commission/
+                # loss-clamp included, as any other exit), record the
+                # event, and reset equity to initial_balance so entries
+                # resume on the very next eligible signal. account_blown
+                # is deliberately never set True on this path.
+                breach_equity = equity
+                breach_at = _restore_tz(ts[i])
+                if open_trade is not None:
+                    direction = open_trade["direction"]
+                    _settle_exit(open_trade, closes[i], "account_blown_forced_close", direction, i)
+                    open_trade = None
+                reset_events.append({
+                    "reset_at": breach_at,
+                    "equity_before_reset": breach_equity,
+                    "equity_after_forced_close": equity,
+                    "drawdown_pct": (
+                        (risk.initial_balance - breach_equity) / risk.initial_balance * 100.0
+                        if risk.initial_balance else None
+                    ),
+                })
+                equity = risk.initial_balance
+                equity_arr[i] = equity
+            else:
+                account_blown = True
+                account_blown_at = _restore_tz(ts[i])
 
         # --- consider new entry ---
         day_realized_pnl = pnl_today_sum[bar_date]
@@ -721,6 +754,26 @@ def run_execution(
         "timestamp": df["timestamp"].reset_index(drop=True),
         "equity": equity_arr,
     })
+    # Additive, non-breaking: reset_on_breach details for anything downstream
+    # that wants them (e.g. the report generator). Always present (empty
+    # list when reset_on_breach is False or no reset ever fired) so callers
+    # don't need to guard against a missing key.
+    equity_df.attrs["account_reset_events"] = reset_events
+
+    if reset_events:
+        import warnings
+        warnings.warn(
+            f"{len(reset_events)} account reset(s) occurred (reset_on_breach=True): "
+            "the account crossed the configured account-survivability floor "
+            f"{len(reset_events)} time(s) and was mechanically restarted at "
+            "initial_balance each time, exactly like buying a new funded "
+            "account, rather than being halted for the remainder of the run. "
+            "Every trade after the first reset belongs to a DIFFERENT "
+            "simulated account than the one before it -- see "
+            "equity_df.attrs['account_reset_events'] for when each reset "
+            "happened and what the account's equity was at that point.",
+            RuntimeWarning,
+        )
 
     if account_blown:
         import warnings
