@@ -229,6 +229,16 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
     background: #fff4e5; border: 1px solid #f0b429; border-left: 4px solid #f0b429;
     border-radius: 6px; padding: 14px 18px; margin: 16px 0 20px;
   }}
+  .info-banner {{
+    background: #eff6ff; border: 1px solid #2f6fed; border-left: 4px solid #2f6fed;
+    border-radius: 6px; padding: 14px 18px; margin: 16px 0 20px;
+  }}
+  .info-banner .info-title {{
+    font-weight: 700; font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em;
+    color: #1e3a8a; margin-bottom: 8px;
+  }}
+  .info-banner p {{ font-size: 13px; color: #1e3a8a; margin: 0 0 8px; }}
+  .info-banner p:last-child {{ margin-bottom: 0; }}
   .warning-banner .warning-title {{
     font-weight: 700; font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em;
     color: #92400e; margin-bottom: 8px;
@@ -277,6 +287,8 @@ Instrument: {instrument} &middot; Timeframe: {timeframe} &middot; Period: {perio
 <p class="muted">The exact execution/risk assumptions used to produce every dollar figure below. Recorded here so this report can be reproduced or audited later.</p>
 {risk_config_table}
 
+{risk_reconciliation_section}
+
 <h2>The Number That Matters Most</h2>
 <div class="headline">
   <div class="card"><div class="label">Evaluation Pass Probability</div><div class="value">{eval_pass:.1f}%</div></div>
@@ -288,10 +300,13 @@ Instrument: {instrument} &middot; Timeframe: {timeframe} &middot; Period: {perio
 </div>
 <p class="muted">"Risk of Ruin" is the probability that max drawdown is breached at <b>some point</b> across the full simulated path -- including after passing the evaluation and collecting payouts -- not just during the evaluation phase. It will not generally match Evaluation Pass Probability, and a strategy can be likely to pass yet still likely to eventually blow the account well downstream. "Failure Before Payout" (above) is the more relevant number for "will this specific attempt work."</p>
 
+{reset_chain_headline_section}
+
 {final_parameters_section}
 
 <h2>Historical Backtest Statistics</h2>
 <p class="muted">Computed over the full, uninterrupted trade sequence with prop-firm rules (daily loss limit, max drawdown, etc.) <b>not</b> enforced. Compare against "Prop-Firm Single-Run Result" below, which walks these same trades forward and stops the account the moment a rule is actually breached -- a strategy can look profitable here and still fail outright there.</p>
+{reset_chain_banner}
 {backtest_table}
 
 <h2>Concentration Check</h2>
@@ -508,6 +523,114 @@ def _risk_config_table(risk_config: dict | None) -> str:
     return _dict_to_table(risk_config)
 
 
+def _risk_reconciliation_section(stats: dict) -> str:
+    """"How much you told the system you're willing to risk" vs. "how much
+    it actually risked" -- see app.backtest.execution's Trade.
+    intended_risk_dollars / app.backtest.statistics.compute_risk_
+    reconciliation. Returns "" when there's nothing to reconcile (no
+    trade in the run carried an intended_risk_dollars figure at all,
+    e.g. every trade was skipped or the run had zero trades)."""
+    intended = stats.get("avg_intended_risk_dollars", 0.0)
+    actual = stats.get("avg_actual_stop_risk_dollars", 0.0)
+    if not intended and not actual:
+        return ""
+    realized_loss = stats.get("avg_realized_loss_on_losers", 0.0)
+    pct_capped = stats.get("pct_trades_position_capped", 0.0)
+    pct_overshoot = stats.get("pct_trades_risk_overshoot", 0.0)
+    table = _dict_to_table({
+        "Configured target risk per trade (avg)": intended,
+        "Actual risk at stop, given size taken (avg)": actual,
+        "Realized loss on losing trades (avg)": realized_loss,
+        "% of trades sized below the configured target (cap/throttle engaged)": pct_capped,
+        "% of trades whose realized loss exceeded their own stop risk (gap-through)": pct_overshoot,
+    })
+    cap_note = ""
+    if pct_capped >= 5.0:
+        cap_note = (
+            f"<p class='muted'>{pct_capped:.0f}% of trades risked meaningfully LESS than the "
+            "configured target -- a max-position-size cap or adaptive-risk throttle is engaging "
+            "(the strategy's own stop distance combined with your risk % is calling for a "
+            "position the cap won't allow). This is why the account can realize a smaller "
+            "average loss than \"risk value % x account size\" alone would suggest.</p>"
+        )
+    overshoot_note = ""
+    if pct_overshoot >= 5.0:
+        overshoot_note = (
+            f"<p class='muted'>{pct_overshoot:.0f}% of LOSING trades realized MORE loss than "
+            "their own stop was sized for -- almost always a gap-through fill (price crossed the "
+            "resting stop within one bar), not a bug. See the execution warnings above if this "
+            "share is large.</p>"
+        )
+    return f"""<h2>Risk Reconciliation</h2>
+<p class="muted">Reconciles the risk % you configured against what actually happened to it on a trade-by-trade basis -- two different, independent gaps to watch for: sizing that comes in UNDER your target (a cap/throttle shrinking the position) and realized losses that come in OVER a trade's own stop (a gap-through fill).</p>
+{table}
+{cap_note}{overshoot_note}"""
+
+
+def _reset_chain_banner(stats: dict) -> str:
+    """Prepended to the Historical Backtest Statistics table whenever this
+    run used reset_on_breach and at least one reset actually occurred
+    (stats['account_reset_count'] > 0) -- see BacktestStatistics.
+    is_reset_chain's docstring for the full reasoning. `net_profit` inside
+    the table immediately below this banner is the raw, unqualified
+    cumulative figure across every simulated account in the chain; this
+    banner is what tells the reader that BEFORE they get there, plus
+    gives them the one number (final_segment_net_profit) that describes
+    just the currently-standing account. Returns "" for any run with no
+    resets -- the default, far more common case."""
+    reset_count = stats.get("account_reset_count", 0)
+    if not reset_count:
+        return ""
+    final_pnl = stats.get("final_segment_net_profit", 0.0)
+    final_trades = stats.get("final_segment_trade_count", 0)
+    net_profit = stats.get("net_profit", 0.0)
+    return f"""<div class="info-banner">
+<div class="info-title">Reset-on-breach was used -- read "Net Profit" below carefully</div>
+<p>This backtest mechanically "bought a new account" {reset_count} time(s) whenever the configured
+account-survivability floor was crossed (see RiskConfig.reset_on_breach) -- every trade after each
+reset belongs to a DIFFERENT simulated account than the one before it, not the same account taking
+a deeper loss.</p>
+<p><b>"Net Profit" in the table below (${net_profit:,.2f}) is CUMULATIVE P&amp;L pooled across all
+{reset_count + 1} of those simulated accounts</b> -- it is not, and should not be read as, one
+account's result. The account still standing at the end of this run made
+<b>${final_pnl:,.2f}</b> of its own, over its own {final_trades} trades.</p>
+</div>"""
+
+
+def _reset_chain_headline_section(mc: dict, is_reset_chain: bool) -> str:
+    """A second row of headline cards, shown ONLY when this run's Monte
+    Carlo used reset_on_breach, giving the true per-account-attempt
+    pass/payout rate (MonteCarloResult.per_attempt_pass_probability et
+    al.) right next to the chain-level "Evaluation Pass Probability" card
+    above -- which, under reset_on_breach, answers a different question
+    ("did at least one attempt anywhere in the chain pass") that can look
+    far stronger than any single attempt's real odds once a chain runs
+    many attempts (see mean_attempts_per_path). Returns "" for the
+    default, non-reset case -- the existing headline already answers the
+    single-attempt question correctly there."""
+    if not is_reset_chain or not mc.get("reset_on_breach"):
+        return ""
+    per_attempt_pass = mc.get("per_attempt_pass_probability", 0.0)
+    per_attempt_payout = mc.get("per_attempt_payout_probability", 0.0)
+    mean_attempts = mc.get("mean_attempts_per_path", 0.0)
+    total_attempts = mc.get("total_independent_attempts", 0)
+    return f"""<div class="info-banner">
+<div class="info-title">Reset-on-breach Monte Carlo -- the cards above answer a different question</div>
+<p>With reset_on_breach on, each simulated path mechanically "rebought" an average of
+{mean_attempts:,.1f} times (see "Attempts per path" in the Monte Carlo table below) before the
+simulated history ran out. "Evaluation Pass Probability" / "First Payout Probability" above mean
+<b>"did at least one attempt anywhere in that chain eventually pass / get paid"</b> -- with hundreds
+of attempts per chain, that can look strong even when any ONE account's real odds are modest.</p>
+<div class="headline">
+  <div class="card"><div class="label">Per-Attempt Pass Probability</div><div class="value">{per_attempt_pass:.1f}%</div></div>
+  <div class="card"><div class="label">Per-Attempt Payout Probability</div><div class="value">{per_attempt_payout:.1f}%</div></div>
+</div>
+<p>These two are pooled across all {total_attempts:,} independent account attempts this Monte Carlo
+run represents, and directly answer <b>"if I buy ONE account, what's the probability it passes /
+gets paid"</b> -- the number to trust for a single real-money account decision.</p>
+</div>"""
+
+
 def export_html(
     report: dict,
     path: str | Path,
@@ -573,12 +696,17 @@ def export_html(
         verdict_section=_verdict_section(report.get("verdict"), report.get("verdict_reasons")),
         final_parameters_section=_final_parameters_section(report.get("final_parameters")),
         risk_config_table=_risk_config_table(report.get("risk_config")),
+        risk_reconciliation_section=_risk_reconciliation_section(report["historical_backtest"]["statistics"]),
         eval_pass=mc["evaluation_pass_probability"],
         first_payout=mc["first_payout_probability"],
         failure_before_payout=mc["failure_before_payout_probability"],
         median_days_payout=mc["median_days_to_first_payout"] if mc["median_days_to_first_payout"] is not None else "N/A",
         expected_payout=mc["expected_payout"],
         risk_of_ruin=mc["risk_of_ruin_pct"],
+        reset_chain_headline_section=_reset_chain_headline_section(
+            mc, report["historical_backtest"]["statistics"].get("is_reset_chain", False)
+        ),
+        reset_chain_banner=_reset_chain_banner(report["historical_backtest"]["statistics"]),
         backtest_table=_dict_to_table(report["historical_backtest"]["statistics"]),
         concentration_table=_concentration_table(report.get("concentration_check", {})),
         cost_ladder_table=_cost_ladder_table(report.get("cost_ladder", [])),

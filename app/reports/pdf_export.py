@@ -127,6 +127,34 @@ def export_pdf(report: dict, path: str | Path) -> Path:
         ("Sharpe ratio", _fmt(stats.get("sharpe_ratio"))),
     ]))
 
+    # FIX (RESET-ACCT-001): same clarification app.reports.generator's HTML
+    # export shows in its "Reset-on-breach was used" info-banner -- without
+    # it, "Net profit" above (cumulative across every simulated account a
+    # reset chain burned through) reads exactly like an ordinary single-
+    # account result in this PDF, which is how this confusion started.
+    reset_count = stats.get("account_reset_count", 0)
+    if reset_count:
+        story.append(Paragraph(
+            f"Reset-on-breach was used: {reset_count} account reset(s) occurred. "
+            f"\"Net profit\" above is CUMULATIVE P&amp;L across {reset_count + 1} simulated "
+            f"accounts, not one account's result -- the account still standing at the end of "
+            f"this run made ${_fmt(stats.get('final_segment_net_profit'))} of its own, over its "
+            f"{_fmt(stats.get('final_segment_trade_count'), 0)} trades.",
+            body,
+        ))
+        story.append(Spacer(1, 8))
+
+    avg_intended = stats.get("avg_intended_risk_dollars", 0.0)
+    if avg_intended:
+        story.append(Paragraph("Risk Reconciliation", h2))
+        story.append(_table([
+            ("Configured target risk/trade (avg)", f"${_fmt(avg_intended)}"),
+            ("Actual risk at stop, given size taken (avg)", f"${_fmt(stats.get('avg_actual_stop_risk_dollars'))}"),
+            ("Realized loss on losers (avg)", f"${_fmt(stats.get('avg_realized_loss_on_losers'))}"),
+            ("% trades sized below target (cap/throttle)", f"{_fmt(stats.get('pct_trades_position_capped'))}%"),
+            ("% trades with realized loss over their stop", f"{_fmt(stats.get('pct_trades_risk_overshoot'))}%"),
+        ]))
+
     warnings = report.get("execution_warnings") or []
     if warnings:
         story.append(Paragraph("Execution-Integrity Warnings", h2))
@@ -166,6 +194,19 @@ def export_pdf(report: dict, path: str | Path) -> Path:
             ("Worst-case drawdown (max sim)", f"{_fmt(mc.get('worst_drawdown_pct'))}%"),
             ("Risk of ruin", f"{_fmt(mc.get('risk_of_ruin_pct'))}%"),
         ]))
+        if mc.get("reset_on_breach"):
+            story.append(Paragraph(
+                "Reset-on-breach Monte Carlo: \"Evaluation pass probability\"/\"First payout "
+                "probability\" above mean \"did at least one attempt anywhere in a mechanically-"
+                f"rebought chain (avg {_fmt(mc.get('mean_attempts_per_path'))} attempts/path) "
+                "eventually pass/get paid\" -- not one account's real odds. The per-attempt rate, "
+                f"pooled across all {_fmt(mc.get('total_independent_attempts'), 0)} independent "
+                f"attempts, is what answers \"if I buy ONE account\": pass "
+                f"{_fmt(mc.get('per_attempt_pass_probability'))}%, payout "
+                f"{_fmt(mc.get('per_attempt_payout_probability'))}%.",
+                body,
+            ))
+            story.append(Spacer(1, 8))
 
     holdout = report.get("holdout_comparison")
     if holdout:
