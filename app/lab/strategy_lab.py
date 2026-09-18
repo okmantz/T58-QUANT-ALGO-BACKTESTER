@@ -54,7 +54,7 @@ from __future__ import annotations
 import math
 import tempfile
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
@@ -353,6 +353,12 @@ def run_strategy_lab(
     # `risk` this function received) would keep using an un-hardened
     # account with no account-blown/daily-loss floor.
     risk = with_prop_safety_defaults(risk, prop_rules)
+    # FIX (2026-09-18): see RiskConfig.reset_on_breach's docstring --
+    # spec.reset_on_breach was already threaded into stage_cfg below (and
+    # into run_backtest calls further down) but never onto `risk` itself,
+    # which the Untouched Test stage's own run_backtest call above uses
+    # directly.
+    risk = replace(risk, reset_on_breach=spec.reset_on_breach)
 
     # -- Reserve the untouched holdout BEFORE anything else runs ---------
     n = len(df)
