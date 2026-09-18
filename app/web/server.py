@@ -63,6 +63,7 @@ from app.data.alpaca_source import (
     AlpacaFetchError, AlpacaImportError, fetch_bars, save_bars_as_csv,
 )
 from app.data.importer import import_csv, import_csv_bytes
+from app.data.timeframe_resample import infer_timeframe_label
 from app.web.alpaca_shared import alpaca_template_context
 from app.data.storage import get_app_base_dir, get_raw_data_dir, list_datasets_by_instrument, list_stored_datasets, store_csv_bytes
 from app.ensemble.ensemble import EnsembleError, EnsembleVoteConfig, run_ensemble_blend, run_ensemble_vote
@@ -1313,7 +1314,7 @@ def run_pipeline():
             strategy_name=bt_result.strategy_name,
             strategy_source_type=strategy.source_type,
             instrument=active_label,
-            timeframe="unknown",
+            timeframe=infer_timeframe_label(df),
             backtest_period=period,
             backtest_result=bt_result,
             prop_rules=rules,
@@ -1581,13 +1582,13 @@ def _run_search_job(
     try:
         summary = run_search(
             df, risk, rules, space, stage_cfg, db_path=db_path,
-            instrument=instrument, timeframe="unknown",
+            instrument=instrument, timeframe=infer_timeframe_label(df),
             progress_cb=lambda msg: _job_log(job_id, msg),
             cancel_event=cancel_event,
         )
         report_paths = generate_search_report(
             output_dir=str(SEARCH_DIR), summary=summary, space=space,
-            instrument=instrument, timeframe="unknown",
+            instrument=instrument, timeframe=infer_timeframe_label(df),
         )
         if library_ref and summary.leaderboard:
             try:
@@ -1663,7 +1664,7 @@ def _run_search_loop_job(
     try:
         result = run_search_loop(
             df, risk, rules, stage_cfg, db_dir=loop_dir, loop_cfg=loop_cfg,
-            instrument=instrument, timeframe="unknown",
+            instrument=instrument, timeframe=infer_timeframe_label(df),
             progress_cb=lambda msg: _job_log(job_id, msg),
             cancel_event=cancel_event, on_round=on_round,
             # Scoped to this instrument's own search directory (same one
@@ -1731,7 +1732,7 @@ def _run_refinement_job(
         paths = generate_refinement_report(
             output_dir=REFINEMENT_DIR, result=result,
             strategy_name=getattr(strategy, "name", "Strategy"),
-            instrument=active_label, timeframe="unknown", backtest_period=period,
+            instrument=active_label, timeframe=infer_timeframe_label(df), backtest_period=period,
             basename=f"refinement_{job_id}", price_df=df,
         )
         if library_ref:
@@ -3650,7 +3651,7 @@ def ensemble_run():
             run_id = uuid.uuid4().hex[:10]
             paths = generate_full_report(
                 output_dir=ENSEMBLE_DIR, strategy_name=bt_result.strategy_name, strategy_source_type="ensemble_vote",
-                instrument=active_label, timeframe="unknown", backtest_period=period, backtest_result=bt_result,
+                instrument=active_label, timeframe=infer_timeframe_label(df), backtest_period=period, backtest_result=bt_result,
                 prop_rules=rules, prop_single_run=single_run, monte_carlo_result=mc_result, basename=f"ensemble_vote_{run_id}",
                 risk_config=risk, price_df=df,
             )
@@ -5776,7 +5777,7 @@ def _run_forge_job(
     try:
         result = run_forge(
             df, risk, rules, config, db_path=db_path,
-            instrument=instrument, timeframe="unknown", graveyard_path=graveyard_path,
+            instrument=instrument, timeframe=infer_timeframe_label(df), graveyard_path=graveyard_path,
             progress_cb=lambda msg: _forge_job_log(job_id, msg),
             cancel_event=cancel_event,
         )
@@ -5831,7 +5832,7 @@ def _run_forge_loop_job(
     try:
         result = run_forge_loop(
             df, risk, rules, db_dir=loop_dir, loop_cfg=loop_cfg,
-            instrument=instrument, timeframe="unknown",
+            instrument=instrument, timeframe=infer_timeframe_label(df),
             progress_cb=lambda msg: _forge_job_log(job_id, msg),
             cancel_event=cancel_event, on_round=on_round,
             family_health_search_dir=str(SEARCH_DIR), family_health_evolution_dir=str(SEARCH_DIR),
@@ -6044,7 +6045,7 @@ def forge_start():
         # never had anything to find. One shared file per instrument+
         # timeframe means a rejection from Monday's run is still visible
         # (and still skippable) in Friday's.
-        graveyard_path = str(graveyard_path_for(active_label, "unknown"))
+        graveyard_path = str(graveyard_path_for(active_label, infer_timeframe_label(df)))
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
