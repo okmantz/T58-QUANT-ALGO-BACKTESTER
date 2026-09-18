@@ -102,6 +102,28 @@ class MonteCarloResult:
     any_attempt_payout_probability: float = 0.0  # % of paths where >=1 attempt in the chain reached payout
     attempts_distribution: list = field(default_factory=list)  # per-path total_attempts, for charting
 
+    # FIX (RESET-ACCT-002): evaluation_pass_probability/first_payout_probability
+    # above answer "did >=1 attempt in the (possibly long) reset chain ever
+    # pass/reach payout" once reset_on_breach is on -- with hundreds of
+    # mechanical rebuys per path (see mean_attempts_per_path), that can look
+    # like a strong number even for a strategy whose SINGLE account has only
+    # a modest real chance, because a long enough chain eventually clears a
+    # low bar almost by construction. These three fields instead pool every
+    # independent attempt across every simulated path (using each path's own
+    # AccountSimResult.attempts_passed/attempts_reached_payout/total_attempts
+    # -- see app.prop.simulator) into one ratio: "of every independent $-size
+    # account attempt this Monte Carlo run represents, what fraction passed /
+    # reached payout" -- the actual "will ONE account attempt succeed"
+    # question. When reset_on_breach is False, every path has exactly one
+    # attempt, so these are IDENTICAL to evaluation_pass_probability/
+    # first_payout_probability -- byte-for-byte no change for the default,
+    # far more common case. Only diverges from the chain-level fields once
+    # reset_on_breach is on and a path's chain runs more than one attempt.
+    per_attempt_pass_probability: float = 0.0
+    per_attempt_payout_probability: float = 0.0
+    per_attempt_failure_before_payout_probability: float = 0.0
+    total_independent_attempts: int = 0          # sum of total_attempts across every simulated path
+
     # MC-004: what this run's resampling actually did, in plain language,
     # so `evaluation_pass_probability` isn't read as a stronger claim than
     # it is. Every consumer of this number (Search Lab, Quick Optimizer,
@@ -323,6 +345,9 @@ def run_monte_carlo(
     return_pcts, payout_amounts, drawdown_pcts, losing_streaks = [], [], [], []
     total_withdrawals = 0.0
     attempts_per_path: list[int] = []
+    sum_attempts_passed = 0
+    sum_attempts_reached_payout = 0
+    sum_total_attempts = 0
 
     for _ in range(cfg.n_simulations):
         sim_pnls = _resample_pnls(rng, base_pnls, cfg)
@@ -338,6 +363,9 @@ def run_monte_carlo(
         failed_before_payout_flags.append(result.failed and not result.reached_first_payout)
         multiple_payout_flags.append(len(result.payouts) > 1)
         attempts_per_path.append(result.total_attempts)
+        sum_attempts_passed += result.attempts_passed
+        sum_attempts_reached_payout += result.attempts_reached_payout
+        sum_total_attempts += result.total_attempts
 
         if result.days_to_pass is not None:
             days_to_pass_list.append(result.days_to_pass)
@@ -398,5 +426,11 @@ def run_monte_carlo(
         any_attempt_pass_probability=float(passed_arr.mean() * 100),
         any_attempt_payout_probability=float(first_payout_arr.mean() * 100),
         attempts_distribution=attempts_arr.tolist(),
+        per_attempt_pass_probability=float(sum_attempts_passed / sum_total_attempts * 100) if sum_total_attempts else 0.0,
+        per_attempt_payout_probability=float(sum_attempts_reached_payout / sum_total_attempts * 100) if sum_total_attempts else 0.0,
+        per_attempt_failure_before_payout_probability=(
+            float((sum_total_attempts - sum_attempts_reached_payout) / sum_total_attempts * 100) if sum_total_attempts else 0.0
+        ),
+        total_independent_attempts=int(sum_total_attempts),
     )
     return result
