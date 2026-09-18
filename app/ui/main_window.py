@@ -48,7 +48,7 @@ from app.data.alpaca_source import (
 )
 from app.data.importer import import_csv
 from app.data.multi_timeframe import merge_multi_timeframe
-from app.data.timeframe_resample import native_bar_minutes, normalize_timeframe_label
+from app.data.timeframe_resample import infer_timeframe_label as _infer_timeframe_label
 from app.data.pairs import PairDataError, merge_pair_series
 from app.data.storage import EMPTY_DATASET_BYTES, list_datasets_by_instrument, list_stored_datasets, store_csv_path
 from app.ensemble.ensemble import EnsembleError, EnsembleVoteConfig, run_ensemble_blend, run_ensemble_vote
@@ -436,20 +436,6 @@ _patch_messagebox_for_overrideredirect_focus()
 # NOTE: the condition-row vocabulary (sources/operators/kind mapping) used
 # to live here, but now lives in app.ui.condition_builder alongside the
 # widget that uses it, so there's a single source of truth.
-
-
-def _infer_timeframe_label(df) -> str:
-    """Best-effort real timeframe label ("5m", "1h", "1d", ...) inferred
-    from the loaded dataframe's own bar spacing (app.data.timeframe_resample.
-    native_bar_minutes), for the several call sites outside Full Pipeline
-    that used to hardcode timeframe="unknown" even though the data needed
-    to compute a real value was already sitting right there in `df`.
-    Falls back to "unknown" only if inference itself fails (e.g. too few
-    rows, or a malformed/irregular timestamp column) -- never raises."""
-    try:
-        return normalize_timeframe_label(str(native_bar_minutes(df)))
-    except Exception:
-        return "unknown"
 
 
 def _asset_path(filename: str) -> Path:
@@ -2102,7 +2088,7 @@ class MainWindow:
             ("manual", "", "User Manual", self.tab_manual, METAL_BRIGHT),
 
             (None, "SUPERHEADER", "Strategy Lab", None, None),
-            (None, None, "\u2460 CREATE", None, None),
+            (None, None, "\u2460 CREATE", None, NEON_VIOLET),
             ("genstrat", "", "Generate Strategies (AI)", self.tab_genstrat, NEON_VIOLET),
             ("researchagent", "", "Research Agent", self.tab_researchagent, NEON_VIOLET),
             ("researchdirector", "", "\U0001F50D Research Director", self.tab_research_director, NEON_VIOLET),
@@ -2112,7 +2098,7 @@ class MainWindow:
             ("forge", "", "\u26a1 Forge Strategy", self.tab_forge, NEON_LIME),
             ("strategy", "", "Strategy Builder", self.tab_strategy, NEON_VIOLET),
 
-            (None, None, "\u2461 TEST", None, None),
+            (None, None, "\u2461 TEST", None, NEON_CYAN),
             ("strategyconfig", "", "1  Strategy Configuration", self.tab_strategyconfig, NEON_CYAN),
             ("data", "", "2  Market Data", self.tab_data, NEON_CYAN),
             ("prop", "", "3  Prop-Firm Rules", self.tab_prop, NEON_CYAN),
@@ -2131,14 +2117,14 @@ class MainWindow:
             # PHASE_1_STATUS.md) rather than stubbed in here. What
             # already exists below is reordered to match the requested
             # sequence as closely as possible.
-            (None, None, "\u2462 OPTIMIZE", None, None),
+            (None, None, "\u2462 OPTIMIZE", None, BLUE),
             ("fullpipeline", "", "Full Pipeline (all-in-one)", self.tab_fullpipeline, BLUE),
             ("search", "", "Search Lab", self.tab_search, BLUE),
             ("evolution", "", "Evolution Lab (GA)", self.tab_evolution, BLUE),
             ("multiobj", "", "Multi-Objective Optimization", self.tab_multiobj, BLUE),
             ("refine", "", "Iterative Refinement", self.tab_refine, BLUE),
 
-            (None, None, "\u2463 VALIDATE", None, None),
+            (None, None, "\u2463 VALIDATE", None, NEON_AMBER),
             ("wfo", "", "Walk-Forward Optimization", self.tab_wfo, NEON_AMBER),
             ("wfga", "", "Walk-Forward GA", self.tab_wfga, NEON_AMBER),
             ("cpcv", "", "CPCV", self.tab_cpcv, NEON_AMBER),
@@ -2151,7 +2137,7 @@ class MainWindow:
             (None, None, "FINAL SELECTION", None, None),
             ("leaderboard", "", "\U0001F3C6 Final Selection Leaderboard", self.tab_leaderboard, NEON_LIME),
 
-            (None, None, "\u2464 CHAMPION", None, None),
+            (None, None, "\u2464 CHAMPION", None, NEON_MAGENTA),
             ("familydiversity", "", "Family Diversity", self.tab_family_diversity, NEON_MAGENTA),
             ("portfolio", "", "Multi-Asset Portfolio", self.tab_portfolio, NEON_MAGENTA),
             ("ensemble", "", "Multi-Strategy Ensemble", self.tab_ensemble, NEON_MAGENTA),
@@ -2166,7 +2152,7 @@ class MainWindow:
             # separate screen for each. "Compare Strategies" has no
             # desktop equivalent at all yet (web-only, see /compare) --
             # tracked separately, see PHASE_1_STATUS.md.
-            (None, None, "\u2465 DEPLOYMENT", None, None),
+            (None, None, "\u2465 DEPLOYMENT", None, NEON_LIME),
             (None, "SUBHEADER", "Champion Checks", None, None),
             ("autopilot_pointer", "", "\u26a1 Overnight Autopilot", self.tab_speedrun, NEON_LIME),
             ("strathealth_pointer", "", "\U0001F4C8 Strategy Health / Auto Re-tune", self.tab_quantlab, NEON_LIME),
@@ -2181,24 +2167,24 @@ class MainWindow:
             # everything from CREATE through STRATEGY GRAVEYARD reads as
             # "Strategy Lab, steps 1-7" without changing how any of those
             # groups collapse/expand on their own. See _build_sidebar_nav.
-            (None, None, "\u2466 STRATEGY GRAVEYARD", None, None),
+            (None, None, "\u2466 STRATEGY GRAVEYARD", None, METAL_BRIGHT),
             ("graveyard", "", "\U0001F480 Strategy Graveyard", self.tab_graveyard, METAL_BRIGHT),
 
             (None, "SUPERHEADER", "Quant Lab", None, None),
-            (None, None, "QUANT LAB", None, None),
+            (None, None, "\u2460 QUANT LAB", None, NEON_CYAN),
             ("quantlab", "", "Quant Lab (translator, stat arb, options, more)", self.tab_quantlab, METAL_BRIGHT),
 
-            (None, None, "OPTIONS", None, None),
+            (None, None, "\u2461 OPTIONS", None, NEON_LIME),
             ("optionsoutlook", "", "Options Outlook (calls & puts)", self.tab_options_outlook, NEON_LIME),
 
-            (None, None, "HEDGE FUND MANAGER", None, None),
+            (None, None, "\u2462 HEDGE FUND MANAGER", None, NEON_MAGENTA),
             ("hedgefund", "", "\U0001F3E6 Hedge Fund Manager", self.tab_hedge_fund, NEON_MAGENTA),
 
             (None, "SUPERHEADER", "Account", None, None),
-            (None, None, "ACCOUNT", None, None),
+            (None, None, "\u2460 ACCOUNT", None, METAL_BRIGHT),
             ("account", "", "\u2699 Account", self.tab_account, METAL_BRIGHT),
 
-            (None, None, "EDUCATION", None, None),
+            (None, None, "\u2461 EDUCATION", None, METAL_BRIGHT),
             ("education", "", "\U0001F393 Education (course)", self.tab_education, METAL_BRIGHT),
             ("resources", "", "\U0001F393 Resources", self.tab_resources, METAL_BRIGHT),
         ]
@@ -2370,17 +2356,39 @@ class MainWindow:
                 # state -- every group is both labeled AND a real dropdown,
                 # which is what actually makes a long list like this read
                 # as organized instead of messy.
+                #
+                # A leading circled numeral (\u2460 "\u2460"..\u2473 "\u2473", i.e. \u2460-20)
+                # renders as its own bright, accent-colored label instead of
+                # being swallowed into the same muted/letter-spaced text as
+                # the rest of the header -- Strategy Lab's steps 1-7, Quant
+                # Lab's 1-3, and Account's 1-2 all use this, so the numeral
+                # visibly pops against the grey header instead of blending
+                # into it. `color` (5th tuple field, normally an item's row
+                # color) doubles as the numeral's accent color for header
+                # tuples -- falls back to TEXT_DIM (i.e. no visible accent)
+                # if a numbered header omits it.
                 collapsible = label != "OVERVIEW"
                 section_collapsed = collapsible and label in self._collapsed_groups
                 header_row = Frame(self._sidebar_inner, bg=PANEL, cursor=("hand2" if collapsible else "arrow"))
                 header_row.pack(fill="x", pady=(14 if not first_section else 4, 4))
                 chev = "\u25b8" if section_collapsed else "\u25be"
-                header_text = " ".join(label.upper()) + ("   " + chev if collapsible else "")
+                numeral, _sep, rest = label.partition(" ")
+                has_numeral = len(numeral) == 1 and "\u2460" <= numeral <= "\u2473"
+                if has_numeral:
+                    numeral_lbl = Label(
+                        header_row, text=numeral, bg=PANEL, fg=(color or TEXT_DIM),
+                        font=_safe_font(9, "bold"), anchor="w", padx=(16, 2),
+                    )
+                    numeral_lbl.pack(side="left")
+                    label_for_text = rest
+                else:
+                    label_for_text = label
+                header_text = " ".join(label_for_text.upper()) + ("   " + chev if collapsible else "")
                 header_lbl = Label(
                     header_row, text=header_text, bg=PANEL, fg=TEXT_DIM,
-                    font=_safe_font(7, "bold"), anchor="w", padx=16,
+                    font=_safe_font(7, "bold"), anchor="w", padx=(0 if has_numeral else 16, 0),
                 )
-                header_lbl.pack(fill="x")
+                header_lbl.pack(side="left", fill="x", expand=True)
                 if collapsible:
                     def _toggle(_e=None, name=label):
                         if name in self._collapsed_groups:
@@ -2390,6 +2398,8 @@ class MainWindow:
                         self._build_sidebar_nav()
                     header_row.bind("<Button-1>", _toggle)
                     header_lbl.bind("<Button-1>", _toggle)
+                    if has_numeral:
+                        numeral_lbl.bind("<Button-1>", _toggle)
                 first_section = False
                 continue
             if section_collapsed:
@@ -9383,17 +9393,17 @@ class MainWindow:
             instrument = self.search_context.instrument_label()
             db_path = str(OUTPUT_DIR / "search" / "search.db")
 
-            # timeframe stays "unknown" for run_search itself (matching
-            # app.web.server's own /search/start route) because
-            # app.search.batch_runner.run_search uses it internally for
-            # graveyard_path_for(instrument, timeframe) -- changing it here
-            # alone would split this desktop run's rejections into a
-            # different graveyard file than every web run for the same
-            # instrument. generate_search_report's timeframe below is pure
-            # report display and has no such constraint.
+            # timeframe is now the real inferred value (see
+            # app.data.timeframe_resample.infer_timeframe_label) --
+            # app.web.server's own /search/start route was updated to
+            # compute the SAME value from the same df, so a desktop run
+            # and a web run against equivalent data still land in the
+            # same graveyard_path_for(instrument, timeframe) file; only
+            # runs against genuinely irregular/malformed timestamp data
+            # (where inference itself fails) fall back to "unknown".
             summary = run_search(
                 df, risk, rules, space, stage_cfg, db_path=db_path,
-                instrument=instrument, timeframe="unknown", progress_cb=self._log_search,
+                instrument=instrument, timeframe=_infer_timeframe_label(df), progress_cb=self._log_search,
                 cancel_event=self._search_cancel_event,
             )
 
@@ -9563,13 +9573,12 @@ class MainWindow:
                 except Exception:
                     pass
 
-            # timeframe stays "unknown" here too, same graveyard-routing
-            # reasoning as plain Search Lab's run_search call above (see
-            # its comment) -- run_search_loop makes the same internal
-            # graveyard_path_for(instrument, timeframe) call.
+            # timeframe is now the real inferred value, same coordinated
+            # fix as plain Search Lab's run_search call above (see its
+            # comment) -- web's /search/loop route was updated to match.
             result = run_search_loop(
                 df, risk, rules, stage_cfg, db_dir=loop_dir, loop_cfg=loop_cfg,
-                instrument=instrument, timeframe="unknown", progress_cb=self._log_search,
+                instrument=instrument, timeframe=_infer_timeframe_label(df), progress_cb=self._log_search,
                 cancel_event=self._search_cancel_event, on_round=on_round,
                 family_health_search_dir=str(OUTPUT_DIR / "search"),
                 family_health_evolution_dir=str(OUTPUT_DIR / "evolution"),
@@ -13414,15 +13423,11 @@ class MainWindow:
             # desktop run and a web run against the same instrument/
             # timeframe land in the SAME file, so the graveyard-feedback
             # loop benefits from every run against this data regardless of
-            # which UI produced it.
-            # graveyard_path_for's timeframe stays the literal "unknown"
-            # string (matching app.web.server's Forge route exactly) so a
-            # desktop run and a web run against the same instrument keep
-            # landing in the SAME graveyard file -- only the timeframe
-            # passed to run_forge() itself (for this run's own report/
-            # metadata) is the real inferred value.
+            # which UI produced it. timeframe is the real inferred value
+            # (app.web.server's own Forge route computes the same thing
+            # from the same df), not the literal string "unknown".
             timeframe_label = _infer_timeframe_label(df)
-            graveyard_path = graveyard_path_for(instrument, "unknown")
+            graveyard_path = graveyard_path_for(instrument, timeframe_label)
             self._last_forge_graveyard_path = graveyard_path
             db_path = str(OUTPUT_DIR / "forge" / "forge.db")
 
@@ -13522,7 +13527,7 @@ class MainWindow:
                 os.path.basename(self.forge_context.csv_paths[0]) if len(self.forge_context.csv_paths) == 1
                 else " + ".join(os.path.basename(p) for p in self.forge_context.csv_paths)
             )
-            graveyard_path = graveyard_path_for(instrument, "unknown")
+            graveyard_path = graveyard_path_for(instrument, _infer_timeframe_label(df))
             self._last_forge_graveyard_path = graveyard_path
 
             time_budget_raw = self.forge_loop_time_budget_hours.get_str().strip()
@@ -13573,17 +13578,13 @@ class MainWindow:
                 self.root.after(0, _paint)
                 self._last_forge_result = result
 
-            # timeframe stays "unknown" here (matching app.web.server's own
-            # Forge Loop call) because run_forge_loop uses it to compute
-            # its OWN graveyard_path_for(instrument, timeframe) internally
-            # (see app.orchestration.loop_runner) -- unlike plain run_forge
-            # above, there's no separate graveyard_path argument to pin
-            # independently, so changing this would silently split Forge
-            # Loop's graveyard file away from every other tool's for the
-            # same instrument (which all still key on "unknown" too).
+            # timeframe is now the real inferred value -- app.web.server's
+            # own Forge Loop call was updated to compute the same value
+            # from the same df, so the two stay pointed at the same
+            # graveyard_path_for(instrument, timeframe) file.
             result = run_forge_loop(
                 df, risk, rules, db_dir=str(OUTPUT_DIR / "forge" / "loop"), loop_cfg=loop_cfg,
-                instrument=instrument, timeframe="unknown",
+                instrument=instrument, timeframe=_infer_timeframe_label(df),
                 progress_cb=self._log_forge, cancel_event=self._forge_cancel_event, on_round=on_round,
             )
 
