@@ -1,26 +1,135 @@
 {
-  "name": "T58 ES VWMA Trend Pullback (vwma24/35, ema178/280, rsi27/17, 1H)",
+  "name": "T58 ES VWMA Trend Pullback (vwma24/35, ema178/280, rsi27/17, 1H) [quick_optimize, seed=42, 2026-09-18]",
   "entry_conditions": {
     "long": [
-      {"left": {"type": "close", "period": 1, "field": "close"}, "operator": ">", "right": {"type": "ema", "period": 178, "field": "close"}},
-      {"left": {"type": "close", "period": 3, "field": "close"}, "operator": "<", "right": {"type": "vwma", "period": 24, "field": "close"}},
-      {"left": {"type": "rsi", "period": 27, "field": "close"}, "operator": "<=", "right": {"type": "value", "value": 44.59}}
+      {
+        "left": {
+          "type": "close",
+          "period": 2,
+          "field": "close"
+        },
+        "operator": ">",
+        "right": {
+          "type": "ema",
+          "period": 150,
+          "field": "close"
+        }
+      },
+      {
+        "left": {
+          "type": "close",
+          "period": 3,
+          "field": "close"
+        },
+        "operator": "<",
+        "right": {
+          "type": "vwma",
+          "period": 72,
+          "field": "close"
+        }
+      },
+      {
+        "left": {
+          "type": "rsi",
+          "period": 55,
+          "field": "close"
+        },
+        "operator": "<=",
+        "right": {
+          "type": "value",
+          "value": 41.82988274174774
+        }
+      }
     ],
-    "long_connectors": ["AND", "AND"],
+    "long_connectors": [
+      "AND",
+      "AND"
+    ],
     "short": [
-      {"left": {"type": "close", "period": 3, "field": "close"}, "operator": "<", "right": {"type": "ema", "period": 280, "field": "close"}},
-      {"left": {"type": "close", "period": 3, "field": "close"}, "operator": ">", "right": {"type": "vwma", "period": 35, "field": "close"}},
-      {"left": {"type": "rsi", "period": 17, "field": "close"}, "operator": ">=", "right": {"type": "value", "value": 75.33}}
+      {
+        "left": {
+          "type": "close",
+          "period": 5,
+          "field": "close"
+        },
+        "operator": "<",
+        "right": {
+          "type": "ema",
+          "period": 175,
+          "field": "close"
+        }
+      },
+      {
+        "left": {
+          "type": "close",
+          "period": 3,
+          "field": "close"
+        },
+        "operator": ">",
+        "right": {
+          "type": "vwma",
+          "period": 42,
+          "field": "close"
+        }
+      },
+      {
+        "left": {
+          "type": "rsi",
+          "period": 32,
+          "field": "close"
+        },
+        "operator": ">=",
+        "right": {
+          "type": "value",
+          "value": 52.00920185640763
+        }
+      }
     ],
-    "short_connectors": ["AND", "AND"]
+    "short_connectors": [
+      "AND",
+      "AND"
+    ]
   },
   "exit_conditions": {
-    "long": [{"left": {"type": "close", "period": 2, "field": "close"}, "operator": "cross above", "right": {"type": "vwma", "period": 6, "field": "close"}}],
-    "short": [{"left": {"type": "close", "period": 2, "field": "close"}, "operator": "cross below", "right": {"type": "vwma", "period": 6, "field": "close"}}]
+    "long": [
+      {
+        "left": {
+          "type": "close",
+          "period": 2,
+          "field": "close"
+        },
+        "operator": "cross above",
+        "right": {
+          "type": "vwma",
+          "period": 3,
+          "field": "close"
+        }
+      }
+    ],
+    "short": [
+      {
+        "left": {
+          "type": "close",
+          "period": 4,
+          "field": "close"
+        },
+        "operator": "cross below",
+        "right": {
+          "type": "vwma",
+          "period": 6,
+          "field": "close"
+        }
+      }
+    ]
   },
   "risk_management": {
-    "stop_type": "atr", "stop_value": 1.34, "stop_atr_period": 11,
-    "target_type": "atr", "target_value": 3.23, "target_atr_period": 25,
-    "opposite_signal_exit": true, "max_bars_in_trade": 8
+    "stop_type": "atr",
+    "stop_value": 3.6778096070561714,
+    "stop_atr_period": 29,
+    "target_type": "atr",
+    "target_value": 1.5869469483789467,
+    "target_atr_period": 24,
+    "opposite_signal_exit": true,
+    "max_bars_in_trade": 17
   }
 }
