@@ -128,6 +128,30 @@ def native_bar_minutes(df: pd.DataFrame) -> float:
     return infer_timeframe_minutes(df)
 
 
+def infer_timeframe_label(df: pd.DataFrame) -> str:
+    """Best-effort real timeframe label ("5m", "1h", "1d", ...) inferred
+    from a loaded dataframe's own bar spacing -- the shared implementation
+    both the desktop app and the web app call, so a desktop run and a web
+    run against the same data always compute the identical label (and
+    therefore the identical graveyard_path_for(instrument, timeframe) key
+    for the tools -- run_search, run_search_loop, run_forge_loop -- that
+    use this value to pick which shared graveyard file to write to).
+    Falls back to "unknown" only if inference itself fails (e.g. too few
+    rows, or a malformed/irregular timestamp column) -- never raises.
+
+    NOTE: switching one of those three call sites from a hardcoded
+    "unknown" to this real inferred value changes which graveyard file
+    NEW runs write to for non-"unknown"-shaped data -- rejections already
+    recorded under the old "unknown" bucket stay there rather than being
+    retroactively reclassified. This is the accepted, understood cost of
+    fixing "unknown" to mean something real going forward.
+    """
+    try:
+        return normalize_timeframe_label(str(native_bar_minutes(df)))
+    except Exception:
+        return "unknown"
+
+
 def resample_ohlcv(df: pd.DataFrame, timeframe_label: str) -> pd.DataFrame:
     """Resamples a standardized OHLCV dataframe (timestamp/open/high/low/
     close[/volume]) up to a coarser bar size. Standard aggregation: open
