@@ -28,6 +28,7 @@ import random
 import re
 import tempfile
 import threading
+from dataclasses import replace
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -1196,6 +1197,14 @@ def run_pipeline():
         form = request.form
         strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
 
+        # FIX (2026-09-18): read reset_on_breach here (BEFORE the backtest
+        # below runs) and set it on `risk` itself, not just on the
+        # MonteCarloConfig further down -- see RiskConfig.reset_on_breach's
+        # own docstring. Previously this checkbox was parsed only after
+        # bt_result already existed, and only ever reached the post-hoc
+        # Monte Carlo layer, so checking it never actually kept the raw
+        # backtest itself trading past the first blown account.
+        reset_on_breach = form.get("reset_on_breach") == "on"
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000)),
             risk_mode=form.get("risk_mode", "percent"),
@@ -1205,6 +1214,7 @@ def run_pipeline():
             slippage_pips=float(form.get("slippage_pips", 0.5)),
             spread_pips=float(form.get("spread_pips", 1.0)),
             pip_size=float(form.get("pip_size", 0.0001)),
+            reset_on_breach=reset_on_breach,
         )
 
         payout_cap = form.get("payout_cap", "").strip()
@@ -1278,14 +1288,13 @@ def run_pipeline():
 
         trade_pnls = [t.pnl for t in bt_result.trades]
         trade_dates = [t.entry_time for t in bt_result.trades]
-        single_run = simulate_account(trade_pnls, trade_dates, rules)
+        single_run = simulate_account(trade_pnls, trade_dates, rules, reset_on_breach=reset_on_breach)
 
         if not bt_result.trades:
             msg = pipeline_guide.after_first_backtest({"trade_count": 0})
             return render_template("index.html", error=msg, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
 
         n_sims = int(form.get("n_sims", 5000))
-        reset_on_breach = form.get("reset_on_breach") == "on"
         mc_cfg = MonteCarloConfig(
             n_simulations=min(n_sims, 50_000), method=form.get("mc_method", "bootstrap"),
             reset_on_breach=reset_on_breach,
@@ -3003,6 +3012,11 @@ def wfga_start():
         # submitted; only an explicit uncheck (or an old/scripted POST
         # that never sends the field) resolves to False here.
         reset_on_breach = form.get("reset_on_breach") == "on"
+        # FIX (2026-09-18): see RiskConfig.reset_on_breach's docstring --
+        # this was already threaded into mc_cfg below but never into
+        # `risk`, which every fold's own run_backtest() call actually
+        # scores fitness from.
+        risk = replace(risk, reset_on_breach=reset_on_breach)
         mc_cfg = MonteCarloConfig(n_simulations=int(form.get("n_sims", 1000) or 1000), reset_on_breach=reset_on_breach)
         refine_cfg = RefinementConfig(
             population_size=int(form.get("population_size", 10) or 10),
