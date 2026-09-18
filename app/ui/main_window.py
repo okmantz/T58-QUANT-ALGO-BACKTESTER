@@ -33,6 +33,7 @@ import app.evolution.checkpoint as evo_checkpoint
 from app.backtest.adaptive_risk import AdaptiveRiskConfig, AdaptiveRiskError, AdaptiveRiskRule
 from app.backtest.engine import run_backtest, run_holdout_comparison
 from app.backtest.risk import RiskConfig, suggest_pip_size, with_prop_safety_defaults
+from app.backtest.statistics import net_profit_reset_note
 import app.ai.ollama_settings as ollama_settings_module
 from app.ai.ollama_settings import OllamaSettings
 import app.ai.strategy_generator as strategy_generator_module
@@ -7873,6 +7874,7 @@ class MainWindow:
                 f"Net profit: ${bt_result.statistics.net_profit:,.2f}  "
                 f"Win rate: {bt_result.statistics.win_rate:.1f}%  "
                 f"Max DD: {bt_result.statistics.max_drawdown_pct:.2f}%"
+                + net_profit_reset_note(bt_result.statistics)
             )
 
             self._log(
@@ -9085,6 +9087,7 @@ class MainWindow:
                     f"  Trades: {len(bt_result.trades)}  "
                     f"Net profit: ${bt_result.statistics.net_profit:,.2f}  "
                     f"Win rate: {bt_result.statistics.win_rate:.1f}%"
+                    + net_profit_reset_note(bt_result.statistics)
                 )
 
                 trade_pnls = [t.pnl for t in bt_result.trades]
