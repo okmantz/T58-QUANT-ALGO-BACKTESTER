@@ -113,6 +113,17 @@ class ManualStrategy(Strategy):
     def _build_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         work = df.copy()
         for ind in self.config.get("indicators", []):
+            if ind.get("timeframe"):
+                # FIX (MTF-STRATEGY-001): this indicator declared a
+                # coarser context timeframe -- app.data.timeframe_resample.
+                # prepare_timeframe_aligned_data already computed it
+                # against that timeframe's own native-frequency bars and
+                # merged the result onto `df` as a tfNN_-prefixed column
+                # (see that module's docstring). Nothing to compute here;
+                # legacy expression-based conditions should reference the
+                # merged column directly (e.g. "tf60_ema_40_close") rather
+                # than this indicator's own bare `as` alias.
+                continue
             itype = str(ind.get("type", "")).lower()
             if itype not in INDICATOR_FUNCS:
                 raise StrategyError(
@@ -157,6 +168,37 @@ class ManualStrategy(Strategy):
         period = max(int(operand.get("period", 14) or 14), 1)
         lookback = max(int(operand.get("lookback", period) or period), 1)
         direction = str(operand.get("direction", "both")).lower().strip()
+
+        tf = operand.get("timeframe")
+        if tf and kind not in {"value", "constant", "number"}:
+            # FIX (MTF-STRATEGY-001): this operand declared its OWN,
+            # coarser timeframe (e.g. a 1h bias EMA for a strategy whose
+            # execution timeframe is 15m) -- app.data.timeframe_resample.
+            # prepare_timeframe_aligned_data (called once, upstream, by
+            # app.backtest.engine.run_backtest, before generate() is ever
+            # invoked) already resampled the raw data to that timeframe's
+            # own NATIVE frequency, computed this exact indicator against
+            # those genuine native-frequency bars (never against this
+            # base timeframe's upsampled/repeated values, which would
+            # silently give the wrong period), and merged the result onto
+            # `work` as a lookahead-safe tfNN_-prefixed column. Read that
+            # column directly rather than recomputing anything here.
+            try:
+                from app.data.timeframe_resample import normalize_timeframe_label, parse_timeframe_label
+                prefix = f"tf{round(parse_timeframe_label(normalize_timeframe_label(tf)))}"
+            except Exception as exc:  # noqa: BLE001
+                raise StrategyError(f"Invalid timeframe '{tf}' on a condition operand.") from exc
+            col_name = field if kind == "price" else kind
+            merged_col = f"{prefix}_{col_name}" if kind in {"price", "open", "high", "low", "close", "volume"} \
+                else f"{prefix}_{kind}_{period}_{field}"
+            if merged_col not in work.columns:
+                raise StrategyError(
+                    f"Higher-timeframe column '{merged_col}' not found. This strategy's timeframe "
+                    f"declarations may not have been resolved -- run it through app.backtest.engine."
+                    f"run_backtest (every tab in this app already does), not by calling generate() "
+                    "directly on raw data."
+                )
+            return work[merged_col]
 
         if kind in {"value", "constant", "number"}:
             try:

@@ -11,6 +11,38 @@ Optionally the module may also define fixed, whole-backtest exit parameters:
     TAKE_PROFIT_PIPS = <float>
     STRATEGY_NAME = "<str>"
 
+DECLARING A TIMEFRAME (OPTIONAL)
+---------------------------------
+By default, generate_signals(df) receives whatever bar size the loaded
+price file actually is (1-minute GC/ES/NQ data, say) -- exactly as before
+this existed. If your strategy actually needs a coarser bar size (it was
+designed as a 15-minute or 1-hour system, for instance), declare it
+instead of assuming the loaded file already matches:
+
+    TIMEFRAME = "15m"              # resamples the loaded data up to 15m
+                                    # bars before generate_signals ever
+                                    # runs -- trades are placed and filled
+                                    # on THESE bars.
+    HTF_TIMEFRAMES = ["1h"]        # optional: one or more COARSER context
+                                    # timeframes, merged on as tf60_open/
+                                    # tf60_high/tf60_low/tf60_close/
+                                    # tf60_volume columns (correctly
+                                    # lookahead-safe -- only a bar that has
+                                    # actually closed as of each row is
+                                    # ever visible). Use these for a bias/
+                                    # filter without hand-rolling your own
+                                    # resample (see app.data.
+                                    # timeframe_resample and app.strategy.
+                                    # mtf if you need something more custom
+                                    # than a straight OHLCV merge).
+
+Both are optional and independent of each other. Omitting TIMEFRAME means
+the loaded file's own native bar size is the execution timeframe, exactly
+as every Python strategy has always worked. This is unrelated to (and
+compatible with) the older, fully manual pattern the next section
+describes, for a strategy that wants to do its own resampling by hand
+instead.
+
 DYNAMIC (per-trade) STOPS AND TARGETS
 --------------------------------------
 Many real strategies compute a stop/target that depends on the specific
@@ -155,6 +187,18 @@ class PythonStrategy(Strategy):
         except StrategyError:
             return default
         return bool(getattr(module, name, default))
+
+    def module_attr(self, name: str, default=None):
+        """Like module_flag, but returns the attribute's raw value rather
+        than coercing it to bool -- e.g. TIMEFRAME = "15m" or
+        HTF_TIMEFRAMES = ["1h"] (see app.data.timeframe_resample), which
+        are strings/lists, not flags. Fails soft (returns `default`)
+        exactly like module_flag."""
+        try:
+            module = self._load_module()
+        except StrategyError:
+            return default
+        return getattr(module, name, default)
 
     def generate(self, df: pd.DataFrame) -> StrategyResult:
         module = self._load_module()
