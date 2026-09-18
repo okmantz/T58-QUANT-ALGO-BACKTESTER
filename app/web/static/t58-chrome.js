@@ -145,8 +145,91 @@
     restoreNavGroups();
     animateNumbers();
     initThemeToggle();
+    initGlobalSearch();
   });
 })();
+
+/* Global search box (top of sidebar) -- fans out across strategies,
+   datasets, reports, and runs via GET /api/global-search?q=..., the
+   same app.search.global_search backend the desktop app's own top-bar
+   search box already uses. Debounced, and closes on click-away or
+   Escape. Purely a convenience layer: a fetch failure just shows "no
+   matches" rather than an error dialog. */
+function initGlobalSearch() {
+  var input = document.getElementById("t58-global-search");
+  var resultsBox = document.getElementById("t58-global-search-results");
+  if (!input || !resultsBox) return;
+
+  var KIND_LABELS = { strategy: "STRATEGY", dataset: "DATASET", report: "REPORT", run: "RUN" };
+  var debounceTimer = null;
+  var currentRequestId = 0;
+
+  function hideResults() {
+    resultsBox.style.display = "none";
+    resultsBox.innerHTML = "";
+  }
+
+  function renderResults(query, results) {
+    resultsBox.innerHTML = "";
+    if (!results.length) {
+      var empty = document.createElement("div");
+      empty.style.cssText = "padding:12px 14px;font-size:12.5px;color:var(--text-dim);";
+      empty.textContent = "No strategies, reports, datasets, or runs matched \"" + query + "\".";
+      resultsBox.appendChild(empty);
+      resultsBox.style.display = "block";
+      return;
+    }
+    results.forEach(function (r) {
+      var row = document.createElement(r.url ? "a" : "div");
+      if (r.url) row.href = r.url, row.target = "_blank", row.rel = "noopener";
+      row.style.cssText = "display:block;padding:9px 14px;font-size:12.5px;color:var(--text);" +
+        "text-decoration:none;border-bottom:1px solid var(--border);cursor:" + (r.url ? "pointer" : "default") + ";";
+      row.onmouseenter = function () { row.style.background = "var(--panel-3)"; };
+      row.onmouseleave = function () { row.style.background = "transparent"; };
+      var kindSpan = document.createElement("span");
+      kindSpan.textContent = (KIND_LABELS[r.kind] || r.kind.toUpperCase()) + "  ";
+      kindSpan.style.cssText = "font-size:10px;font-weight:700;letter-spacing:.04em;color:var(--teal);";
+      var titleSpan = document.createElement("span");
+      titleSpan.textContent = r.title;
+      titleSpan.style.fontWeight = "600";
+      var sub = document.createElement("div");
+      sub.textContent = r.subtitle || "";
+      sub.style.cssText = "font-size:11px;color:var(--text-muted);margin-top:2px;";
+      row.appendChild(kindSpan);
+      row.appendChild(titleSpan);
+      row.appendChild(sub);
+      resultsBox.appendChild(row);
+    });
+    resultsBox.style.display = "block";
+  }
+
+  input.addEventListener("input", function () {
+    var query = input.value.trim();
+    clearTimeout(debounceTimer);
+    if (!query) { hideResults(); return; }
+    debounceTimer = setTimeout(function () {
+      var requestId = ++currentRequestId;
+      fetch("/api/global-search?q=" + encodeURIComponent(query))
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (requestId !== currentRequestId) return; // a newer keystroke already superseded this request
+          renderResults(query, data.results || []);
+        })
+        .catch(function () {
+          if (requestId !== currentRequestId) return;
+          renderResults(query, []);
+        });
+    }, 250);
+  });
+
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { input.blur(); hideResults(); }
+  });
+
+  document.addEventListener("click", function (e) {
+    if (e.target !== input && !resultsBox.contains(e.target)) hideResults();
+  });
+}
 
 /* Submits a ".mini-form" div (data-action="/some/route", optional
    data-confirm="...") as a real full-page POST navigation, by building a
