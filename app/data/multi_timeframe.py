@@ -43,6 +43,26 @@ def merge_multi_timeframe(
       - labels: a human-readable description of what became the base and
         what became each additional timeframe, in the order merged, e.g.
         ["base (5m)", "tf15 (15m)", "tf60 (60m)"].
+
+    FIX (MTF-LOOKAHEAD-001): a higher-timeframe row produced by
+    `df.resample(freq)` is LABELED BY ITS START (pandas' default), but its
+    OHLC values aren't actually knowable until the bar CLOSES, one full
+    `freq` later. The as-of/backward merge previously matched HTF rows by
+    that raw start-of-bar label directly, so a base row falling anywhere
+    inside a still-forming HTF bar (e.g. 5 minutes into an hour that won't
+    close for another 55) was merged against that SAME still-forming bar's
+    final OHLC -- values that, at that point in time, do not exist yet.
+    This is exactly the lookahead trap app.strategy.mtf's docstring
+    describes finding in a real uploaded strategy (there, hand-rolled as
+    `htf[htf.index < timestamp]`) -- it turns out this shared utility had
+    the identical bug, just never caught because nothing exercises it
+    against a case where the base row falls strictly inside an unclosed
+    HTF bar. The fix: shift each HTF frame's timestamps forward by its own
+    bar length before merging, so the merge key represents "this bar's
+    CLOSE time" rather than its start -- a base row now only ever matches
+    an HTF row that has genuinely finished forming as of that timestamp
+    (see app.strategy.mtf.completed_bars for the equivalent, already-
+    correct logic this now matches).
     """
     if not dataframes:
         raise ValueError("No dataframes provided.")
@@ -77,6 +97,12 @@ def merge_multi_timeframe(
         htf["timestamp"] = pd.to_datetime(htf["timestamp"])
         htf = htf.sort_values("timestamp").reset_index(drop=True)
         htf = htf.rename(columns={c: f"{prefix}_{c}" for c in htf.columns if c != "timestamp"})
+        # FIX (MTF-LOOKAHEAD-001): shift the merge key forward by this
+        # timeframe's own bar length so `merge_asof(..., direction=
+        # "backward")` only ever matches a bar that has actually closed
+        # as of the base row's timestamp -- see this function's docstring.
+        bar_length = pd.tseries.frequencies.to_offset(f"{round(minutes)}min")
+        htf["timestamp"] = htf["timestamp"] + bar_length
 
         merged = pd.merge_asof(
             merged.sort_values("timestamp"),
