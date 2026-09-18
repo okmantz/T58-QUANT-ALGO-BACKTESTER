@@ -173,7 +173,11 @@ _REPLAY_WINDOW = 300
 
 def list_replay_datasets() -> list[str]:
     try:
-        return [d.name for d in list_stored_datasets()]
+        # Sorted alphabetically (by instrument, same as every other
+        # "stored dataset" dropdown in this app -- list_stored_datasets()
+        # itself is newest-first, which isn't the order this page's
+        # picker should show) rather than left in mtime order.
+        return sorted(d.name for d in list_stored_datasets())
     except Exception:
         return []
 

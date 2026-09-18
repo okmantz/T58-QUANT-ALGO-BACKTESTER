@@ -1380,6 +1380,41 @@ def serve_report(filename):
     return send_from_directory(REPORTS_DIR, filename)
 
 
+@app.route("/api/global-search")
+def api_global_search():
+    """Backs the web app's own top-bar search box -- same shared
+    app.search.global_search fan-out the desktop app's search box already
+    uses (strategies, datasets, reports, runs), just returned as JSON
+    instead of populating a Tkinter Listbox. Read-only/best-effort: a
+    query error surfaces as an empty result list, never a 500, since
+    search is a convenience feature layered on top of four existing
+    sources.
+    """
+    from app.search.global_search import global_search
+
+    query = (request.args.get("q") or "").strip()
+    if not query:
+        return jsonify({"query": query, "results": []})
+    try:
+        results = global_search(query, max_per_kind=8, reports_dir=REPORTS_DIR)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"query": query, "results": [], "error": str(exc)})
+
+    out = []
+    for r in results:
+        url = None
+        if r.kind == "report" and r.path:
+            try:
+                rel = Path(r.path).resolve().relative_to(REPORTS_DIR.resolve())
+                url = f"/reports/{rel.as_posix()}"
+            except ValueError:
+                url = None
+        out.append({
+            "kind": r.kind, "title": r.title, "subtitle": r.subtitle, "url": url,
+        })
+    return jsonify({"query": query, "results": out})
+
+
 @app.route("/settings/account")
 def account_settings_form():
     from app.accounts.settings import load_account_settings
