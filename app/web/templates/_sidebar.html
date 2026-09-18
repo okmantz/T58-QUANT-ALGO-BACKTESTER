@@ -17,6 +17,15 @@
     </div>
   </div>
 
+  <div class="t58-search-wrap" style="position:relative;margin:4px 10px 10px;">
+    <input id="t58-global-search" type="text" placeholder="Search strategies, datasets, reports, runs..."
+      style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border-light);
+             background:var(--panel-3);color:var(--text);font-size:12.5px;" autocomplete="off">
+    <div id="t58-global-search-results" style="display:none;position:absolute;top:100%;left:0;right:0;
+         z-index:50;margin-top:4px;background:var(--panel-2);border:1px solid var(--border-light);
+         border-radius:8px;max-height:360px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,0.35);"></div>
+  </div>
+
   <a href="/dashboard" class="t58-nav-item top-level {{ 'active' if active_page == 'dashboard' else '' }}">
     <span class="t58-nav-icon">&#8962;</span><span class="label">Dashboard</span>
   </a>

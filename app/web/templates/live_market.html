@@ -42,8 +42,13 @@
   }
   .lm-toolbar select, .lm-toolbar input {
     background: var(--lm-panel); color: var(--lm-text); border: 1px solid var(--lm-border);
-    border-radius: 6px; padding: 6px 9px; font-size: 12px;
+    border-radius: 6px; padding: 6px 9px; font-size: 12px; font-weight: 600;
   }
+  /* Some browsers render <option> text with a system/native color instead
+     of inheriting the <select>'s own `color`, which is what made this
+     dropdown's text look washed-out/hard-to-read regardless of the theme
+     -- setting it explicitly on the options fixes that. */
+  .lm-toolbar select option { background: var(--lm-panel); color: var(--lm-text); font-weight: 600; }
   .lm-toolbar label { font-size: 11px; color: var(--lm-text-muted); display: flex; align-items: center; gap: 6px; }
   .lm-btn {
     background: var(--lm-panel); color: var(--lm-text); border: 1px solid var(--lm-border);
@@ -51,6 +56,14 @@
     letter-spacing: .03em;
   }
   .lm-btn:hover { border-color: var(--lm-accent); color: var(--lm-accent); }
+  /* OPEN IN TRADINGVIEW used to share the same neutral, panel-colored
+     style as APPLY/FIT CHART and blended straight into the toolbar --
+     a filled accent button makes it read as the distinct "leave this
+     app" action it actually is. */
+  .lm-btn#lm-tradingview {
+    background: var(--lm-accent); color: #04120e; border-color: var(--lm-accent);
+  }
+  .lm-btn#lm-tradingview:hover { background: var(--lm-accent); color: #04120e; opacity: .88; }
   .lm-spacer { flex: 1; }
 
   .lm-status-badge {
