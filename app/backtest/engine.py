@@ -15,6 +15,7 @@ from app.backtest.adaptive_risk import AdaptiveRiskConfig
 from app.backtest.execution import Trade, run_execution
 from app.backtest.risk import RiskConfig
 from app.backtest.statistics import BacktestStatistics, compute_statistics
+from app.data.timeframe_resample import prepare_timeframe_aligned_data
 from app.strategy.base import Strategy, StrategyResult
 
 
@@ -100,6 +101,18 @@ def run_backtest(
         app.backtest.adaptive_risk) -- None/omitted runs exactly as before
         this parameter existed.
     """
+    # FIX (MTF-STRATEGY-001): resample `df` to whatever timeframe(s)
+    # `strategy` itself declares it needs (see app.data.timeframe_resample
+    # for exactly how each source type declares this) BEFORE the strategy
+    # ever sees the data -- this is the one chokepoint every tool in the
+    # app funnels through (Run & Report, Full Pipeline, Quick Optimize,
+    # Search Lab, Evolution Lab, Forge, Speed Run, CPCV, WFO/WFGA, Multi-
+    # Objective, Ensemble, Portfolio, ...), so fixing it here fixes it
+    # everywhere with no other caller needing to change. A strategy that
+    # declares nothing gets `df` back completely unchanged -- byte-
+    # identical to every run before this existed.
+    df, timeframe_warnings = prepare_timeframe_aligned_data(df, strategy)
+
     strat_result: StrategyResult = strategy.generate(df)
 
     condition_warnings: list[str] = []
@@ -140,5 +153,5 @@ def run_backtest(
         equity_curve=equity_curve,
         statistics=stats,
         initial_balance=risk.initial_balance,
-        warnings=condition_warnings + execution_warnings,
+        warnings=timeframe_warnings + condition_warnings + execution_warnings,
     )
