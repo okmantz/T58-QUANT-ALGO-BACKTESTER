@@ -7832,6 +7832,15 @@ class MainWindow:
             # other tools' backtests enforce) than the other tools would for
             # the exact same strategy/data/settings.
             risk = with_prop_safety_defaults(risk, rules)
+            # FIX (2026-09-18): read this here (BEFORE the backtest below
+            # runs) and set it on `risk` itself, not just on mc_cfg further
+            # down -- see RiskConfig.reset_on_breach's own docstring.
+            # Previously this was read only after bt_result already
+            # existed, and only ever reached the post-hoc Monte Carlo
+            # layer, so checking it never actually kept the raw backtest
+            # itself trading past the first blown account.
+            reset_on_breach = self.mc_reset_on_breach.get()
+            risk = dataclasses.replace(risk, reset_on_breach=reset_on_breach)
             adaptive_risk = self._build_adaptive_risk_config()
             if adaptive_risk is not None:
                 self._log(f"Adaptive risk enabled: {len(adaptive_risk.rules)} rule(s)")
@@ -7877,6 +7886,7 @@ class MainWindow:
                 trade_pnls,
                 trade_dates,
                 rules,
+                reset_on_breach=reset_on_breach,
             )
 
             self._log(
@@ -7899,7 +7909,6 @@ class MainWindow:
 
             n_sims = self.mc_sims.get_int(10000)
             method = self.mc_method.get_str().strip() or "bootstrap"
-            reset_on_breach = self.mc_reset_on_breach.get()
 
             self._log(
                 f"Running Monte Carlo simulation "
@@ -11374,6 +11383,11 @@ class MainWindow:
             # RiskConfig against PropRules here either -- see
             # app.backtest.risk.with_prop_safety_defaults' own docstring.
             risk = with_prop_safety_defaults(risk, rules)
+            # FIX (2026-09-18): see RiskConfig.reset_on_breach's docstring
+            # -- this was already threaded into mc_cfg below but never into
+            # `risk`, which every fold's own run_backtest() call actually
+            # scores fitness from.
+            risk = dataclasses.replace(risk, reset_on_breach=True)
             mc_cfg = dataclasses.replace(self._validation_mc_config(), reset_on_breach=True)
 
             metric_key = self._wfga_metric_label_to_key.get(self.wfga_metric.get_str(), "eval_pass_probability")
