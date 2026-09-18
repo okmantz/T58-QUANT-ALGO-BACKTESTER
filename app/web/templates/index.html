@@ -398,11 +398,11 @@
       </div>
       <div class="row">
         <div><label>Account size ($)</label><input type="number" name="account_size" id="account_size_input" value="100000"><div class="hint" style="font-size:0.8em;color:#888;">Kept in sync with Initial balance below (RISK-001) -- these must be the same account.</div></div>
-        <div><label>Eval profit target (%)</label><input type="number" name="profit_target" value="8"></div>
+        <div><label>Eval profit target (%)</label><input type="number" step="0.1" name="profit_target" value="8"></div>
       </div>
       <div class="row">
-        <div><label>Daily loss limit (%)</label><input type="number" name="daily_loss" value="5"></div>
-        <div><label>Max drawdown (%)</label><input type="number" name="max_dd" value="10"></div>
+        <div><label>Daily loss limit (%)</label><input type="number" step="0.1" name="daily_loss" value="5"></div>
+        <div><label>Max drawdown (%)</label><input type="number" step="0.1" name="max_dd" value="10"></div>
       </div>
       <div class="row">
         <div><label>Drawdown type</label>
@@ -416,15 +416,15 @@
         </div>
       </div>
       <div class="row">
-        <div><label>Consistency rule (%)</label><input type="number" name="consistency" value="30"></div>
+        <div><label>Consistency rule (%)</label><input type="number" step="0.1" name="consistency" value="30"></div>
       </div>
       <div class="row">
         <div><label>Min trading days</label><input type="number" name="min_days" value="5"></div>
         <div><label>Payout frequency (days)</label><input type="number" name="payout_freq" value="14"></div>
       </div>
       <div class="row">
-        <div><label>Payout threshold (%)</label><input type="number" name="payout_threshold" value="0"></div>
-        <div><label>Required buffer (%)</label><input type="number" name="buffer" value="0"></div>
+        <div><label>Payout threshold (%)</label><input type="number" step="0.1" name="payout_threshold" value="0"></div>
+        <div><label>Required buffer (%)</label><input type="number" step="0.1" name="buffer" value="0"></div>
       </div>
       <label>Payout cap (% of profit, blank = 100%)</label>
       <input type="text" name="payout_cap" value="">
