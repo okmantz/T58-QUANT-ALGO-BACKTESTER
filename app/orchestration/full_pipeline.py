@@ -94,6 +94,7 @@ import pandas as pd
 from app.backtest.engine import BacktestResult, run_backtest, run_holdout_comparison
 from app.backtest.adaptive_risk import build_limit_aware_preset
 from app.backtest.statistics import format_run_summary_line
+from app.data.timeframe_resample import describe_resolved_timeframe
 from app.backtest.risk import (
     RiskConfig,
     account_size_mismatch_message,
@@ -1182,7 +1183,7 @@ def _finish(
         strategy_name=final_strategy_name,
         strategy_source_type=final_source_type,
         instrument=instrument,
-        timeframe="unknown",
+        timeframe=describe_resolved_timeframe(final_strategy, df),
         backtest_period=period,
         backtest_result=final_bt,
         prop_rules=prop_rules,
