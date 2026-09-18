@@ -79,6 +79,12 @@ from app.orchestration.resource_guard import (
 )
 from app.orchestration.speed_run import SpeedRunConfig, SpeedRunResult, run_speed_run
 from app.orchestration.speed_run import _rank_key as _speedrun_rank_key
+from app.orchestration.multi_instrument_search import InstrumentJob
+from app.orchestration.multi_instrument_speed_run import (
+    MultiInstrumentSpeedRunResult,
+    best_speed_run_across_instruments,
+    run_multi_instrument_speed_run,
+)
 from app.orchestration.overnight_autopilot import AutopilotConfig, run_overnight_autopilot
 from app.orchestration.auto_retune import maybe_trigger_retune
 from app.orchestration.full_pipeline import (
@@ -2022,6 +2028,8 @@ class MainWindow:
         self.tab_forge = Frame(self.content, bg=BG)
         self.tab_research_director = Frame(self.content, bg=BG)
         self.tab_speedrun = Frame(self.content, bg=BG)
+        self.tab_speedrun_multi = Frame(self.content, bg=BG)
+        self.tab_research_loop = Frame(self.content, bg=BG)
         self.tab_forwardtest = Frame(self.content, bg=BG)
         self.tab_deploylive = Frame(self.content, bg=BG)
         self.tab_livemarket = Frame(self.content, bg=BG)
@@ -2045,7 +2053,7 @@ class MainWindow:
             self.tab_wfo, self.tab_cpcv, self.tab_sensitivity, self.tab_param_robustness, self.tab_portfolio,
             self.tab_multiobj, self.tab_wfga, self.tab_ensemble, self.tab_fullpipeline,
             self.tab_forge, self.tab_research_director,
-            self.tab_speedrun,
+            self.tab_speedrun, self.tab_speedrun_multi, self.tab_research_loop,
             self.tab_forwardtest, self.tab_deploylive, self.tab_livemarket, self.tab_genstrat,
             self.tab_evolution, self.tab_researchagent, self.tab_regime_matrix, self.tab_family_diversity,
             self.tab_quantlab, self.tab_options_outlook,
@@ -2077,13 +2085,16 @@ class MainWindow:
             ("aiassistant", "", "AI Assistant", self.tab_ai_assistant, NEON_CYAN),
             ("manual", "", "User Manual", self.tab_manual, METAL_BRIGHT),
 
+            (None, "SUPERHEADER", "Strategy Lab", None, None),
             (None, None, "\u2460 CREATE", None, None),
-            ("forge", "", "\u26a1 Forge Strategy", self.tab_forge, NEON_LIME),
-            ("strategy", "", "Strategy Builder", self.tab_strategy, NEON_VIOLET),
-            ("speedrun", "", "\u26a1 Speed Run", self.tab_speedrun, NEON_VIOLET),
             ("genstrat", "", "Generate Strategies (AI)", self.tab_genstrat, NEON_VIOLET),
             ("researchagent", "", "Research Agent", self.tab_researchagent, NEON_VIOLET),
             ("researchdirector", "", "\U0001F50D Research Director", self.tab_research_director, NEON_VIOLET),
+            ("researchloop", "", "\u21bb Research Loop (Background)", self.tab_research_loop, NEON_VIOLET),
+            ("speedrun", "", "\u26a1 Speed Run", self.tab_speedrun, NEON_VIOLET),
+            ("speedrunmulti", "", "\u26a1 Multi-Instrument Speed Run", self.tab_speedrun_multi, NEON_VIOLET),
+            ("forge", "", "\u26a1 Forge Strategy", self.tab_forge, NEON_LIME),
+            ("strategy", "", "Strategy Builder", self.tab_strategy, NEON_VIOLET),
 
             (None, None, "\u2461 TEST", None, None),
             ("strategyconfig", "", "1  Strategy Configuration", self.tab_strategyconfig, NEON_CYAN),
@@ -2094,17 +2105,34 @@ class MainWindow:
             ("payout", "", "6  Payout Probability", self.tab_payout, NEON_CYAN),
             ("propfirmrec", "", "7  Prop-Firm Recommender", self.tab_prop_recommender, NEON_CYAN),
 
+            # NOTE (Sep 2026 OPTIMIZE reorder): the requested order also
+            # names an "Overview / Picker" hub, "Quick Optimize",
+            # "Multi-instrument Search Lab", "Multi-instrument Evolution
+            # Lab", and "Risk Sweep" -- those exist on the web app
+            # (/optimize, /quick-optimize, /search/multi-instrument,
+            # /evolution/multi-instrument, /risk-sweep) but have no
+            # desktop tab yet; building them is tracked separately (see
+            # PHASE_1_STATUS.md) rather than stubbed in here. What
+            # already exists below is reordered to match the requested
+            # sequence as closely as possible.
             (None, None, "\u2462 OPTIMIZE", None, None),
-            ("refine", "", "Iterative Refinement", self.tab_refine, BLUE),
-            ("search", "", "Search Lab", self.tab_search, BLUE),
-            ("multiobj", "", "Multi-Objective", self.tab_multiobj, BLUE),
-            ("evolution", "", "Evolution Lab (GA)", self.tab_evolution, BLUE),
             ("fullpipeline", "", "Full Pipeline (all-in-one)", self.tab_fullpipeline, BLUE),
+            ("search", "", "Search Lab", self.tab_search, BLUE),
+            ("evolution", "", "Evolution Lab (GA)", self.tab_evolution, BLUE),
+            ("multiobj", "", "Multi-Objective Optimization", self.tab_multiobj, BLUE),
+            ("refine", "", "Iterative Refinement", self.tab_refine, BLUE),
 
+            # NOTE: "PBO" below points at the same CPCV/PBO tab as "cpcv"
+            # (PBO's own settings already live inside that tab -- see the
+            # "PBO settings (candidate pool)" section there) so it shows
+            # up as its own named item in VALIDATE, as requested. Fully
+            # splitting it into a visually separate screen is tracked
+            # separately (see PHASE_1_STATUS.md).
             (None, None, "\u2463 VALIDATE", None, None),
-            ("wfo", "", "Walk-Forward Opt", self.tab_wfo, NEON_AMBER),
+            ("wfo", "", "Walk-Forward Optimization", self.tab_wfo, NEON_AMBER),
             ("wfga", "", "Walk-Forward GA", self.tab_wfga, NEON_AMBER),
-            ("cpcv", "", "CPCV / PBO", self.tab_cpcv, NEON_AMBER),
+            ("cpcv", "", "CPCV", self.tab_cpcv, NEON_AMBER),
+            ("pbo", "", "PBO", self.tab_cpcv, NEON_AMBER),
             ("sensitivity", "", "Sensitivity", self.tab_sensitivity, NEON_AMBER),
             ("paramrobustness", "", "Parameter Stability / Robustness Map", self.tab_param_robustness, NEON_AMBER),
             ("regimematrix", "", "Regime Survival Matrix", self.tab_regime_matrix, NEON_AMBER),
@@ -2114,31 +2142,55 @@ class MainWindow:
             ("leaderboard", "", "\U0001F3C6 Final Selection Leaderboard", self.tab_leaderboard, NEON_LIME),
 
             (None, None, "\u2464 CHAMPION", None, None),
+            ("familydiversity", "", "Family Diversity", self.tab_family_diversity, NEON_MAGENTA),
             ("portfolio", "", "Multi-Asset Portfolio", self.tab_portfolio, NEON_MAGENTA),
             ("ensemble", "", "Multi-Strategy Ensemble", self.tab_ensemble, NEON_MAGENTA),
-            ("familydiversity", "", "Family Diversity", self.tab_family_diversity, NEON_MAGENTA),
-            ("hedgefund", "", "\U0001F3E6 Hedge Fund Manager", self.tab_hedge_fund, NEON_MAGENTA),
 
+            # "SUBHEADER" (icon field) marks a subtle, non-collapsible label
+            # inside a group -- unlike a key=None/icon=None main header, it
+            # does NOT start a new collapsible section (see
+            # _build_sidebar_nav). "Overnight Autopilot" and "Strategy
+            # Health" below point at the existing screens those controls
+            # already live on (Speed Run's own "Overnight Autopilot"
+            # section; Quant Lab's Strategy Health tool) pending a fully
+            # separate screen for each. "Compare Strategies" has no
+            # desktop equivalent at all yet (web-only, see /compare) --
+            # tracked separately, see PHASE_1_STATUS.md.
             (None, None, "\u2465 DEPLOYMENT", None, None),
+            (None, "SUBHEADER", "Champion Checks", None, None),
+            ("autopilot_pointer", "", "\u26a1 Overnight Autopilot", self.tab_speedrun, NEON_LIME),
+            ("strathealth_pointer", "", "\U0001F4C8 Strategy Health / Auto Re-tune", self.tab_quantlab, NEON_LIME),
+            (None, "SUBHEADER", "Live Markets", None, None),
             ("forwardtest", "", "Forward Test (MT5)", self.tab_forwardtest, NEON_LIME),
             ("deploylive", "", "Deploy Live", self.tab_deploylive, RED),
             ("livemarket", "", "Monitor (Live Market)", self.tab_livemarket, NEON_CYAN),
 
-            (None, None, "\u2466 OPTIONS", None, None),
-            ("optionsoutlook", "", "Options Outlook (calls & puts)", self.tab_options_outlook, NEON_LIME),
-
-            (None, None, "\u2467 QUANT LAB", None, None),
-            ("quantlab", "", "Quant Lab (translator, stat arb, options, more)", self.tab_quantlab, METAL_BRIGHT),
-
-            (None, None, "\u2468 STRATEGY GRAVEYARD", None, None),
+            # "SUPERHEADER" (icon field) marks a subtle, always-visible,
+            # non-collapsible umbrella label ABOVE a run of ordinary
+            # (still individually collapsible) section headers -- e.g.
+            # everything from CREATE through STRATEGY GRAVEYARD reads as
+            # "Strategy Lab, steps 1-7" without changing how any of those
+            # groups collapse/expand on their own. See _build_sidebar_nav.
+            (None, None, "\u2466 STRATEGY GRAVEYARD", None, None),
             ("graveyard", "", "\U0001F480 Strategy Graveyard", self.tab_graveyard, METAL_BRIGHT),
 
-            (None, None, "\u2469 EDUCATION", None, None),
+            (None, "SUPERHEADER", "Quant Lab", None, None),
+            (None, None, "QUANT LAB", None, None),
+            ("quantlab", "", "Quant Lab (translator, stat arb, options, more)", self.tab_quantlab, METAL_BRIGHT),
+
+            (None, None, "OPTIONS", None, None),
+            ("optionsoutlook", "", "Options Outlook (calls & puts)", self.tab_options_outlook, NEON_LIME),
+
+            (None, None, "HEDGE FUND MANAGER", None, None),
+            ("hedgefund", "", "\U0001F3E6 Hedge Fund Manager", self.tab_hedge_fund, NEON_MAGENTA),
+
+            (None, "SUPERHEADER", "Account", None, None),
+            (None, None, "ACCOUNT", None, None),
+            ("account", "", "\u2699 Account", self.tab_account, METAL_BRIGHT),
+
+            (None, None, "EDUCATION", None, None),
             ("education", "", "\U0001F393 Education (course)", self.tab_education, METAL_BRIGHT),
             ("resources", "", "\U0001F393 Resources", self.tab_resources, METAL_BRIGHT),
-
-            (None, None, "\u246A ACCOUNT", None, None),
-            ("account", "", "\u2699 Account", self.tab_account, METAL_BRIGHT),
         ]
         self._tab_frame_by_key = {k: frame for k, _icon, _label, frame, _color in self._nav_items if k}
         self._nav_buttons: dict[str, Label] = {}
@@ -2154,6 +2206,8 @@ class MainWindow:
             ("Resources", self._build_resources_tab),
             ("Education", self._build_education_tab),
             ("Speed Run", self._build_speedrun_tab),
+            ("Multi-Instrument Speed Run", self._build_speedrun_multi_tab),
+            ("Research Loop", self._build_research_loop_tab),
             ("Strategy Configuration", self._build_strategy_config_tab),
             ("Data", self._build_data_tab),
             ("Strategy", self._build_strategy_tab),
@@ -2219,7 +2273,9 @@ class MainWindow:
         auto-expands the group it lives in, even if that group is
         currently collapsed."""
         current_header = None
-        for k, _icon, lbl_text, _frame, _color in self._nav_items:
+        for k, icon, lbl_text, _frame, _color in self._nav_items:
+            if k is None and icon in ("SUBHEADER", "SUPERHEADER"):
+                continue  # a sub-/super-header, not a real (collapsible) group
             if k is None:
                 current_header = lbl_text
             elif k == key:
@@ -2252,8 +2308,8 @@ class MainWindow:
         # (Dashboard) is the app's home page.
         if not hasattr(self, "_collapsed_groups"):
             self._collapsed_groups = {
-                lbl_text for k, _icon, lbl_text, _frame, _color in self._nav_items
-                if k is None and lbl_text != "OVERVIEW"
+                lbl_text for k, icon, lbl_text, _frame, _color in self._nav_items
+                if k is None and icon not in ("SUBHEADER", "SUPERHEADER") and lbl_text != "OVERVIEW"
             }
 
         # Rebuilding from scratch on every toggle is simple and cheap here
@@ -2266,6 +2322,37 @@ class MainWindow:
         first_section = True
         section_collapsed = False
         for key, _icon, label, frame, color in self._nav_items:
+            if key is None and _icon == "SUPERHEADER":
+                # An umbrella label sitting ABOVE a run of ordinary
+                # section headers (e.g. "Strategy Lab" above CREATE...
+                # STRATEGY GRAVEYARD) -- always visible regardless of
+                # whichever group happened to render right before it,
+                # and never itself collapsible.
+                super_row = Frame(self._sidebar_inner, bg=PANEL)
+                super_row.pack(fill="x", pady=(18, 2))
+                Label(
+                    super_row, text=label.upper(), bg=PANEL, fg=TEXT_MUTED,
+                    font=_safe_font(8, "bold"), anchor="w", padx=10,
+                ).pack(fill="x")
+                Canvas(super_row, bg=BORDER, height=1, highlightthickness=0).pack(fill="x", padx=10, pady=(3, 0))
+                first_section = False
+                continue
+            if key is None and _icon == "SUBHEADER":
+                # A subtle, non-collapsible sub-header inside the current
+                # group (e.g. "Champion Checks" / "Live Markets" inside
+                # DEPLOYMENT) -- unlike a real section header below, this
+                # does NOT toggle/reset collapse state; it just hides
+                # along with the rest of the group when that group is
+                # collapsed.
+                if section_collapsed:
+                    continue
+                sub_row = Frame(self._sidebar_inner, bg=PANEL)
+                sub_row.pack(fill="x", padx=8, pady=(10, 2))
+                Label(
+                    sub_row, text=label.upper(), bg=PANEL, fg=TEXT_DIM,
+                    font=_safe_font(7, "bold"), anchor="w", padx=14,
+                ).pack(fill="x")
+                continue
             if key is None:
                 # A named, clickable section header (small-caps,
                 # letter-spaced, muted) with a chevron showing open/closed
@@ -9910,20 +9997,38 @@ class MainWindow:
 
         self._page_header(
             f,
-            "ACCOUNT / Notification settings",
+            "ACCOUNT / Account settings",
             "\u2699 Account",
-            "Get an email the moment a long-running job (Evolution Lab, Search Lab, Full "
-            "Pipeline) finishes -- so you don't have to keep a progress window open and "
-            "watch it. Separate from the per-run webhook field some tabs already have "
-            "(Discord/Slack/Telegram/Zapier), which keeps working whether or not email is "
-            "set up here. Settings are stored locally on this computer only.",
+            "Account Settings (your own name/email, stored locally) plus Notification Settings -- "
+            "get an email the moment a long-running job (Evolution Lab, Search Lab, Full "
+            "Pipeline) finishes, so you don't have to keep a progress window open and "
+            "watch it. Notifications are separate from the per-run webhook field some tabs already "
+            "have (Discord/Slack/Telegram/Zapier), which keeps working whether or not email is "
+            "set up here. Everything on this tab is stored locally on this computer only.",
         )
 
+        from app.accounts.settings import load_account_settings
         from app.web.notifications import load_notification_settings
 
+        acct_saved = load_account_settings()
         saved = load_notification_settings()
 
-        dest_section = self._section(f, "Where to send it", emphasize=True)
+        account_section = self._section(
+            f, "Account Settings",
+            "Your own name/email/company -- used to personalize exported reports; not a login, "
+            "just local profile info.",
+            emphasize=True,
+        )
+        self.acct_display_name = LabeledEntry(account_section, "Display name", acct_saved.display_name, width=32)
+        self.acct_email = LabeledEntry(account_section, "Email", acct_saved.email, width=32)
+        self.acct_company = LabeledEntry(account_section, "Company (optional)", acct_saved.company, width=32)
+        acct_btn_row = Frame(account_section, bg=PANEL)
+        acct_btn_row.pack(anchor="w", padx=18, pady=(4, 12))
+        self._button(acct_btn_row, "SAVE ACCOUNT SETTINGS", self._save_account_profile, primary=True).pack(side="left")
+        self.acct_profile_status = Label(account_section, text="", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8))
+        self.acct_profile_status.pack(anchor="w", padx=18, pady=(0, 8))
+
+        dest_section = self._section(f, "Notification Settings -- where to send it", emphasize=True)
         self.acct_notify_email = LabeledEntry(dest_section, "Notification email", saved.notify_email, width=32)
         self.acct_email_enabled = LabeledCheckbox(dest_section, "Email notifications enabled", saved.email_enabled)
 
@@ -9947,6 +10052,16 @@ class MainWindow:
 
         self.acct_status = Label(f, text="", bg=BG, fg=TEXT_MUTED, font=_safe_font(9))
         self.acct_status.pack(anchor="w", padx=26, pady=(4, 2))
+
+    def _save_account_profile(self):
+        from app.accounts.settings import AccountSettings, save_account_settings
+
+        save_account_settings(AccountSettings(
+            display_name=self.acct_display_name.get_str().strip(),
+            email=self.acct_email.get_str().strip(),
+            company=self.acct_company.get_str().strip(),
+        ))
+        self.acct_profile_status.config(text="\u25cf  Saved.", fg=GREEN)
 
     def _save_account_settings(self):
         from app.web.notifications import NotificationSettings, load_notification_settings, save_notification_settings
@@ -14795,6 +14910,274 @@ class MainWindow:
             self.stop_speedrun_btn.config(state="disabled")
             self._release_heavy_job(JOB_SPEED_RUN)
 
+    # -----------------------------------------------------------------------
+    # Multi-Instrument Speed Run -- desktop parity with the web app's
+    # /speed-run/multi-instrument page: the SAME SpeedRunConfig run
+    # CONCURRENTLY across several instrument/timeframe datasets (a thin
+    # wrapper over app.orchestration.multi_instrument_speed_run.
+    # run_multi_instrument_speed_run -- no discovery/validation logic is
+    # reimplemented here). Uses its own RunContextPanel's multi-select
+    # dataset list, but unlike every other tab's RunContextPanel usage,
+    # each selected CSV becomes its OWN separate job instead of being
+    # stitched into one combined dataframe.
+    # -----------------------------------------------------------------------
+
+    def _misr_instrument_label_for_path(self, path: str) -> tuple[str, str]:
+        """(instrument, timeframe) labels for one selected CSV, same
+        convention as list_datasets_by_instrument: the top-level data/raw/
+        subfolder is the instrument, the filename stem is the timeframe.
+        Falls back to the bare filename stem for a file outside data/raw/
+        (e.g. picked via Alpaca fetch or an arbitrary import)."""
+        from app.data.storage import get_raw_data_dir
+        p = Path(path)
+        try:
+            rel = p.relative_to(get_raw_data_dir())
+            parts = rel.parts
+            if len(parts) > 1:
+                return parts[0], rel.stem
+        except ValueError:
+            pass
+        return p.stem, p.stem
+
+    def _build_speedrun_multi_tab(self):
+        f = self._scrollable(self.tab_speedrun_multi)
+
+        self._page_header(
+            f,
+            "CREATE / Multi-Instrument Speed Run",
+            "\u26a1 Multi-Instrument Speed Run",
+            "Runs the SAME Speed Run (wide discovery -> validate the leaders -> pick a winner) "
+            "CONCURRENTLY across several instrument/timeframe datasets -- a real edge is often "
+            "instrument-dependent, so one overnight session across several instruments covers more "
+            "ground than guessing which one to try next. Select 2 or more datasets below (Ctrl/Cmd-"
+            "click or Shift-click); each gets its own Speed Run using the SAME settings, its own "
+            "output directory, and its own winner (or honest 'no winner'). Every existing safeguard "
+            "(lookahead detection, pip-scale mismatch, stop-fill honesty, the account-blown circuit "
+            "breaker) still runs exactly as it does everywhere else in this app.",
+        )
+
+        self.misr_context = RunContextPanel(self, "Multi-Instrument Speed Run")
+        self.misr_context.build(f)
+
+        settings = self._section(
+            f, "Speed Run settings (applied identically to every instrument)",
+            "Same knobs as the regular Speed Run tab -- see that tab's own settings section for what "
+            "each one does.",
+            emphasize=True,
+        )
+        self.misr_max_candidates = LabeledEntry(settings, "Discovery: max candidates sampled (all families combined)", 1200)
+        self.misr_stage1_top_n = LabeledEntry(settings, "Discovery: Stage 1 survivors kept", 24)
+        self.misr_ga_population = LabeledEntry(settings, "Discovery: GA population", 8)
+        self.misr_ga_generations = LabeledEntry(settings, "Discovery: GA generations", 3)
+        self.misr_top_k = LabeledEntry(settings, "Candidates to validate through Full Pipeline", 3)
+        self.misr_max_concurrent = LabeledEntry(settings, "Max concurrent validations (per instrument)", 2)
+        self.misr_validation_folds = LabeledEntry(settings, "Validation: walk-forward/OOS folds", 3)
+        self.misr_validation_final_mc_sims = LabeledEntry(settings, "Validation: final Monte Carlo sims", 3000)
+        self._misr_metric_labels = list(FITNESS_METRICS.values())
+        self._misr_metric_label_to_key = {v: k for k, v in FITNESS_METRICS.items()}
+        self.misr_metric = LabeledCombo(
+            settings, "Fitness metric", self._misr_metric_labels, FITNESS_METRICS["eval_pass_probability"],
+        )
+        self.misr_seed = LabeledEntry(settings, "Random seed", 42)
+        self.misr_save_to_library = LabeledCheckbox(
+            settings, "Save every validated candidate to the Strategy Library when finished", True,
+        )
+        self.misr_max_concurrent_instruments = LabeledEntry(
+            settings, "Max instruments run at once (splits worker/concurrency budget across them)", 2,
+        )
+
+        button_row = Frame(f, bg=BG)
+        button_row.pack(fill="x", padx=24, pady=10)
+        self._button(button_row, "RUN ACROSS ALL SELECTED INSTRUMENTS", self._speedrun_multi_run_clicked, primary=True).pack(side="left")
+
+        self.misr_progress = NeuralProgress(f)
+        self.misr_progress.pack(fill="x", padx=24, pady=(2, 10))
+
+        results_section = self._section(
+            f, "Per-instrument results",
+            "One line per instrument/timeframe -- double-click (or select + OPEN REPORT) to open "
+            "that instrument's own winner report.",
+        )
+        misr_list_frame = Frame(results_section, bg=PANEL)
+        misr_list_frame.pack(fill="both", expand=True, padx=18, pady=(2, 6))
+        misr_list_frame.columnconfigure(0, weight=1)
+        misr_list_frame.rowconfigure(0, weight=1)
+        self.misr_results_listbox = Listbox(
+            misr_list_frame, height=8, exportselection=False, bg=PANEL_3, fg=TEXT,
+            activestyle="none", relief="flat", bd=0, highlightthickness=1, highlightbackground=BORDER,
+            font=(MONO, 9),
+        )
+        misr_scrollbar = ttk.Scrollbar(
+            misr_list_frame, orient="vertical", command=self.misr_results_listbox.yview, style="T58.Vertical.TScrollbar",
+        )
+        self.misr_results_listbox.config(yscrollcommand=misr_scrollbar.set)
+        self._bind_isolated_wheel(self.misr_results_listbox)
+        self.misr_results_listbox.grid(row=0, column=0, sticky="nsew")
+        misr_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.misr_results_listbox.bind("<Double-Button-1>", lambda e: self._open_misr_selected_report())
+
+        misr_btn_row = Frame(results_section, bg=PANEL)
+        misr_btn_row.pack(anchor="w", padx=18, pady=(0, 12))
+        self._button(misr_btn_row, "OPEN REPORT", self._open_misr_selected_report).pack(side="left")
+
+        self._misr_results_cache: list[dict] = []
+
+        best_section = self._section(f, "Best across all instruments", "Filled in once the run completes.")
+        self.misr_best_label = Label(
+            best_section, text="No run yet.", bg=PANEL, fg=TEXT_DIM,
+            font=_safe_font(11, "bold"), justify="left", wraplength=900, anchor="w",
+        )
+        self.misr_best_label.pack(anchor="w", fill="x", padx=18, pady=(2, 12))
+
+        output_section = self._section(f, "Multi-Instrument Speed Run output", "Live progress log, one line per instrument.")
+        _misr_output_frame = Frame(output_section, bg=PANEL)
+        self.misr_output = Text(
+            _misr_output_frame, height=16, wrap="word", bg=LOG_BG, fg=TEXT,
+            insertbackground=TEXT, relief="flat", bd=0, highlightthickness=1,
+            highlightbackground=BORDER, font=(MONO, 9),
+        )
+        _misr_output_scroll = ttk.Scrollbar(
+            _misr_output_frame, orient="vertical", command=self.misr_output.yview, style="T58.Vertical.TScrollbar",
+        )
+        self.misr_output.configure(yscrollcommand=_misr_output_scroll.set)
+        self.misr_output.pack(side="left", fill="both", expand=True)
+        _misr_output_scroll.pack(side="right", fill="y")
+        _misr_output_frame.pack(fill="both", expand=True, padx=18, pady=(3, 16))
+        self._bind_isolated_wheel(self.misr_output)
+
+    def _log_misr(self, label: str, msg: str):
+        # Called from several concurrent instrument-job threads at once
+        # (same reasoning as _log_speedrun) -- marshal onto the main
+        # thread rather than touching the Text widget directly.
+        def _write():
+            self.misr_output.insert(END, f"[{label}] {msg}\n")
+            self.misr_output.see(END)
+        try:
+            self.root.after(0, _write)
+        except Exception:
+            pass
+
+    def _open_misr_selected_report(self):
+        sel = self.misr_results_listbox.curselection()
+        if not sel or not self._misr_results_cache:
+            return
+        row = self._misr_results_cache[sel[0]]
+        html_path = row.get("html_path")
+        if html_path:
+            webbrowser.open(f"file://{Path(html_path).resolve()}")
+        else:
+            messagebox.showinfo("No report", "This instrument didn't produce a winner report.")
+
+    def _render_misr_results(self, results: dict[str, "MultiInstrumentSpeedRunResult"]):
+        self.misr_results_listbox.delete(0, END)
+        self._misr_results_cache = []
+        for label, res in sorted(results.items()):
+            if res.error:
+                line = f"[FAILED   ]  {label}  -- {res.error.splitlines()[0]}"
+                self.misr_results_listbox.insert(END, line)
+                self._misr_results_cache.append({"html_path": None})
+                continue
+            r = res.result
+            if r.winner is not None and r.winner.pipeline_result is not None:
+                pr = r.winner.pipeline_result
+                html_path = pr.report_paths.get("html")
+                line = (
+                    f"[{pr.verdict:9s}]  {label}  eval pass {pr.final_mc.evaluation_pass_probability:5.1f}%  "
+                    f"payout {pr.final_mc.first_payout_probability:5.1f}%"
+                )
+            else:
+                html_path = None
+                line = f"[NO WINNER]  {label}  -- {r.winner_reason}"
+            self.misr_results_listbox.insert(END, line)
+            self._misr_results_cache.append({"html_path": html_path})
+
+    def _speedrun_multi_run_clicked(self):
+        if len(self.misr_context.csv_paths) < 2:
+            messagebox.showwarning(
+                "Select at least 2 datasets",
+                "Select 2 or more datasets above (Ctrl/Cmd-click or Shift-click) -- with only 1 "
+                "selected, use the regular Speed Run tab instead.",
+            )
+            return
+        if not self._try_start_heavy_job(JOB_SPEED_RUN):
+            return
+        self.misr_output.delete("1.0", END)
+        self.misr_results_listbox.delete(0, END)
+        self._misr_results_cache = []
+        self.misr_best_label.config(text="Running...", fg=TEXT_DIM)
+        self.misr_progress.start(10)
+        threading.Thread(target=self._speedrun_multi_run_pipeline, daemon=True).start()
+
+    def _speedrun_multi_run_pipeline(self):
+        try:
+            jobs = []
+            for path in self.misr_context.csv_paths:
+                instrument, timeframe = self._misr_instrument_label_for_path(path)
+                jobs.append(InstrumentJob(instrument=instrument, timeframe=timeframe, csv_path=path))
+
+            risk = self.misr_context.build_risk_config()
+            rules = self.misr_context.build_prop_rules()
+            metric_key = self._misr_metric_label_to_key.get(self.misr_metric.get_str(), "eval_pass_probability")
+            cfg = SpeedRunConfig(
+                max_candidates=self.misr_max_candidates.get_int(1200),
+                stage1_top_n=self.misr_stage1_top_n.get_int(24),
+                ga_population=self.misr_ga_population.get_int(8),
+                ga_generations=self.misr_ga_generations.get_int(3),
+                top_k_to_validate=self.misr_top_k.get_int(3),
+                max_concurrent_validations=self.misr_max_concurrent.get_int(2),
+                validation_folds=self.misr_validation_folds.get_int(3),
+                validation_final_mc_sims=self.misr_validation_final_mc_sims.get_int(3000),
+                fitness_metric=metric_key,
+                save_winner_to_library=self.misr_save_to_library.get(),
+                random_seed=self.misr_seed.get_int(42),
+                reset_on_breach=True,
+            )
+            max_concurrent_instruments = self.misr_max_concurrent_instruments.get_int(2)
+
+            self._log_misr(
+                "multi-instrument",
+                f"Starting Speed Run on {len(jobs)} instrument/timeframe target(s): "
+                + ", ".join(f"{j.instrument}/{j.timeframe}" for j in jobs),
+            )
+            results = run_multi_instrument_speed_run(
+                jobs, risk, rules, cfg, OUTPUT_DIR / "speed_run" / "multi_instrument",
+                max_concurrent_instruments=max_concurrent_instruments,
+                progress_cb=self._log_misr,
+            )
+
+            self._render_misr_results(results)
+
+            best = best_speed_run_across_instruments(results)
+            if best is not None and best.result.winner is not None and best.result.winner.pipeline_result is not None:
+                pr = best.result.winner.pipeline_result
+                verdict_color = {"READY": GREEN, "MARGINAL": AMBER}.get(pr.verdict, TEXT_DIM)
+                self.misr_best_label.config(
+                    text=(
+                        f"BEST: {best.label} -- {best.result.winner.candidate_id} "
+                        f"({best.result.winner.family or 'unknown family'})\n"
+                        f"  {pr.verdict}  --  eval pass {pr.final_mc.evaluation_pass_probability:.1f}%  --  "
+                        f"payout {pr.final_mc.first_payout_probability:.1f}%"
+                    ),
+                    fg=verdict_color,
+                )
+            else:
+                self.misr_best_label.config(text="No instrument produced a winner. See the log below.", fg=RED)
+
+            try:
+                self._refresh_dashboard()
+            except Exception:
+                pass
+
+            n_winners = sum(1 for r in results.values() if r.has_winner)
+            self._log_misr("multi-instrument", f"\nDone -- {n_winners}/{len(jobs)} instrument(s) produced a winner.")
+        except Exception as exc:
+            self._log_misr("multi-instrument", "\nUnexpected error:\n" + traceback.format_exc())
+            self.misr_best_label.config(text="Failed -- see log.", fg=RED)
+            log_crash("Multi-Instrument Speed Run", exc=exc)
+        finally:
+            self.misr_progress.stop()
+            self._release_heavy_job(JOB_SPEED_RUN)
+
     def _open_autopilot_report(self):
         if self._last_autopilot_report_path:
             webbrowser.open(f"file://{Path(self._last_autopilot_report_path).resolve()}")
@@ -15095,6 +15478,17 @@ class MainWindow:
         )
         self.ra_memory_status.pack(anchor="w", padx=18, pady=(0, 12))
 
+        loop_pointer_section = self._section(
+            f, "Closed Research Loop (Ollama)",
+            "Moved to its own tab -- CREATE / Research Loop (Background) -- so it can run as an "
+            "independent, self-contained background companion (own market data, own AI Assist "
+            "settings) instead of sharing this tab's setup.",
+        )
+        self._button(
+            loop_pointer_section, "OPEN RESEARCH LOOP (BACKGROUND)",
+            lambda: self._show_page("researchloop"),
+        ).pack(anchor="w", padx=18, pady=(2, 12))
+
         button_row = Frame(f, bg=BG)
         button_row.pack(fill="x", padx=24, pady=10)
         self.ra_run_btn = self._button(button_row, "RUN RESEARCH AGENT", self._ra_run_clicked, primary=True)
@@ -15126,17 +15520,44 @@ class MainWindow:
         _ra_output_frame.pack(fill="both", expand=True, padx=18, pady=(3, 16))
         self._bind_isolated_wheel(self.ra_output)
 
-        loop_section = self._section(
-            f, "Closed Research Loop (Ollama)",
+    # -----------------------------------------------------------------------
+    # Research Loop (Background) -- split out from Research Agent into its
+    # own tab (Sep 2026 CREATE reorder) so it's a fully independent,
+    # self-contained background companion: own market data / prop rules /
+    # risk settings (own RunContextPanel) and its own AI Assist (Ollama)
+    # settings, matching the web app's standalone /research-loop page
+    # instead of quietly sharing Research Agent's setup.
+    # -----------------------------------------------------------------------
+
+    def _build_research_loop_tab(self):
+        f = self._scrollable(self.tab_research_loop)
+        self._page_header(
+            f,
+            "CREATE / Research Loop (Background)",
+            "\u21bb Closed Research Loop (Ollama)",
             "The full 'Research Papers -> Ollama -> hypothesis -> generated strategy -> backtest -> "
             "Monte Carlo -> prop-firm survival simulation -> analyze WHY it failed -> Ollama proposes "
             "an improved hypothesis -> repeat' loop from the AI Research Engine plan -- see "
             "app.ai.research_loop. Every KEEP/DISCARD verdict comes from the real Prop Survival Score "
             "(app.prop.survival_engine), never Ollama's own judgment; the failure diagnosis each round "
             "is a computed number (e.g. '73% of losses happened in low-volatility regimes'), not a "
-            "guess. Every round is recorded into T58 Research Memory below, and this loop refuses to "
+            "guess. Every round is recorded into T58 Research Memory, and this loop refuses to "
             "re-run a strategy whose Strategy DNA exactly matches a pattern that already failed earlier "
-            "in the SAME run.",
+            "in the SAME run. Its own market data, prop rules, risk settings, and AI Assist settings "
+            "below are self-contained to this tab -- leave iterations blank/large and let it run as a "
+            "background companion alongside whatever else you're doing.",
+        )
+
+        self.researchloop_context = RunContextPanel(self, "Research Loop")
+        self.researchloop_context.build(f)
+
+        self._build_ai_assist_section(f, prefix="loop_ai")
+
+        loop_section = self._section(
+            f, "Loop settings",
+            "Leave iterations high (or rely on STOP) to let this run for a long time as a background "
+            "companion -- e.g. alongside a Multi-Instrument Speed Run.",
+            emphasize=True,
         )
         _loop_initial_idea_frame = Frame(loop_section, bg=PANEL)
         self.loop_initial_idea = Text(
@@ -15919,7 +16340,7 @@ class MainWindow:
         self.root.update_idletasks()
 
     def _research_loop_run_clicked(self):
-        if not self.resagent_context.csv_paths:
+        if not self.researchloop_context.csv_paths:
             messagebox.showwarning("Missing data", "Please select a market data CSV above (this tab's own Market Data section).")
             return
         self.loop_output.delete("1.0", END)
@@ -15929,12 +16350,12 @@ class MainWindow:
 
     def _research_loop_run_pipeline(self):
         try:
-            df = self.resagent_context.load_dataframe(self._log_research_loop)
+            df = self.researchloop_context.load_dataframe(self._log_research_loop)
             if df is None:
                 return
-            risk = self.resagent_context.build_risk_config()
-            rules = self.resagent_context.build_prop_rules()
-            settings = self._build_ollama_settings(prefix="ra_ai")
+            risk = self.researchloop_context.build_risk_config()
+            rules = self.researchloop_context.build_prop_rules()
+            settings = self._build_ollama_settings(prefix="loop_ai")
             if not settings.is_usable:
                 self._log_research_loop(
                     "Ollama isn't enabled -- turn on AI Assist above (in this tab) with a valid host/model first."
