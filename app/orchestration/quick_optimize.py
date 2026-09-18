@@ -87,6 +87,7 @@ import pandas as pd
 
 from app.backtest.adaptive_risk import build_limit_aware_preset
 from app.backtest.engine import run_backtest
+from app.backtest.statistics import reset_chain_note
 from app.backtest.risk import (
     RiskConfig,
     account_size_mismatch_message,
@@ -436,6 +437,11 @@ def run_quick_optimize(
         f"Baseline: {len(baseline_bt.trades)} trades, net ${baseline_bt.statistics.net_profit:,.2f}, "
         f"win rate {baseline_bt.statistics.win_rate:.1f}%, eval pass {baseline_mc.evaluation_pass_probability:.1f}%, "
         f"payout {baseline_mc.first_payout_probability:.1f}%."
+        + reset_chain_note(
+            baseline_bt.statistics, baseline_mc.evaluation_pass_probability, baseline_mc.first_payout_probability,
+            baseline_mc.per_attempt_pass_probability, baseline_mc.per_attempt_payout_probability,
+            baseline_mc.total_independent_attempts,
+        )
     )
 
     log(f"Searching for a more robust configuration ({cfg.ga_generations} generations x {cfg.ga_population} candidates)...")
@@ -526,6 +532,11 @@ def run_quick_optimize(
         f"Optimized: {len(final_bt.trades)} trades, net ${final_bt.statistics.net_profit:,.2f}, "
         f"win rate {final_bt.statistics.win_rate:.1f}%, eval pass {final_mc.evaluation_pass_probability:.1f}%, "
         f"payout {final_mc.first_payout_probability:.1f}%."
+        + reset_chain_note(
+            final_bt.statistics, final_mc.evaluation_pass_probability, final_mc.first_payout_probability,
+            final_mc.per_attempt_pass_probability, final_mc.per_attempt_payout_probability,
+            final_mc.total_independent_attempts,
+        )
     )
 
     # Point (2) of the 2026-09-17 fix: the headline eval-pass/payout
@@ -611,6 +622,11 @@ def run_quick_optimize(
                     f"Holdout: {holdout_trades} trades, net ${holdout_net_profit:,.2f}, "
                     f"win rate {holdout_win_rate:.1f}%, eval pass {holdout_eval_pass_probability:.1f}%, "
                     f"payout {holdout_payout_probability:.1f}%."
+                    + reset_chain_note(
+                        holdout_bt.statistics, holdout_eval_pass_probability, holdout_payout_probability,
+                        holdout_mc.per_attempt_pass_probability, holdout_mc.per_attempt_payout_probability,
+                        holdout_mc.total_independent_attempts,
+                    )
                 )
             else:
                 holdout_note = "Holdout: 0 trades -- the winning configuration never traded on the reserved slice."

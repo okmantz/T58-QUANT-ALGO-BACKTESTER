@@ -93,6 +93,7 @@ import pandas as pd
 
 from app.backtest.engine import BacktestResult, run_backtest, run_holdout_comparison
 from app.backtest.adaptive_risk import build_limit_aware_preset
+from app.backtest.statistics import format_run_summary_line
 from app.backtest.risk import (
     RiskConfig,
     account_size_mismatch_message,
@@ -653,8 +654,12 @@ def run_full_pipeline(
         MonteCarloConfig(n_simulations=cfg.baseline_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
     )
     log(
-        f"  Baseline: {len(baseline_bt.trades)} trades, net ${baseline_bt.statistics.net_profit:,.2f}, "
-        f"eval pass {baseline_mc.evaluation_pass_probability:.1f}%, payout {baseline_mc.first_payout_probability:.1f}%."
+        format_run_summary_line(
+            "  Baseline", len(baseline_bt.trades), baseline_bt.statistics,
+            baseline_mc.evaluation_pass_probability, baseline_mc.first_payout_probability,
+            baseline_mc.per_attempt_pass_probability, baseline_mc.per_attempt_payout_probability,
+            baseline_mc.total_independent_attempts,
+        )
     )
 
     # -- Step 2: robust (walk-forward-aware) optimization ----------------
@@ -925,8 +930,12 @@ def run_full_pipeline(
             selection_bias_caveat=refinement_ran,
         )
         log(
-            f"  Final: {len(final_bt.trades)} trades, net ${final_bt.statistics.net_profit:,.2f}, "
-            f"eval pass {final_mc.evaluation_pass_probability:.1f}%, payout {final_mc.first_payout_probability:.1f}%."
+            format_run_summary_line(
+                "  Final", len(final_bt.trades), final_bt.statistics,
+                final_mc.evaluation_pass_probability, final_mc.first_payout_probability,
+                final_mc.per_attempt_pass_probability, final_mc.per_attempt_payout_probability,
+                final_mc.total_independent_attempts,
+            )
         )
 
         # -- Step 4: out-of-sample fold check (no re-tuning) --------------
