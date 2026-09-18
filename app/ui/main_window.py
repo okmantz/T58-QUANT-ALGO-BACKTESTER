@@ -48,6 +48,7 @@ from app.data.alpaca_source import (
 )
 from app.data.importer import import_csv
 from app.data.multi_timeframe import merge_multi_timeframe
+from app.data.timeframe_resample import native_bar_minutes, normalize_timeframe_label
 from app.data.pairs import PairDataError, merge_pair_series
 from app.data.storage import EMPTY_DATASET_BYTES, list_datasets_by_instrument, list_stored_datasets, store_csv_path
 from app.ensemble.ensemble import EnsembleError, EnsembleVoteConfig, run_ensemble_blend, run_ensemble_vote
@@ -435,6 +436,20 @@ _patch_messagebox_for_overrideredirect_focus()
 # NOTE: the condition-row vocabulary (sources/operators/kind mapping) used
 # to live here, but now lives in app.ui.condition_builder alongside the
 # widget that uses it, so there's a single source of truth.
+
+
+def _infer_timeframe_label(df) -> str:
+    """Best-effort real timeframe label ("5m", "1h", "1d", ...) inferred
+    from the loaded dataframe's own bar spacing (app.data.timeframe_resample.
+    native_bar_minutes), for the several call sites outside Full Pipeline
+    that used to hardcode timeframe="unknown" even though the data needed
+    to compute a real value was already sitting right there in `df`.
+    Falls back to "unknown" only if inference itself fails (e.g. too few
+    rows, or a malformed/irregular timestamp column) -- never raises."""
+    try:
+        return normalize_timeframe_label(str(native_bar_minutes(df)))
+    except Exception:
+        return "unknown"
 
 
 def _asset_path(filename: str) -> Path:
@@ -2018,6 +2033,7 @@ class MainWindow:
         self.tab_search = Frame(self.content, bg=BG)
         self.tab_wfo = Frame(self.content, bg=BG)
         self.tab_cpcv = Frame(self.content, bg=BG)
+        self.tab_pbo = Frame(self.content, bg=BG)
         self.tab_sensitivity = Frame(self.content, bg=BG)
         self.tab_param_robustness = Frame(self.content, bg=BG)
         self.tab_portfolio = Frame(self.content, bg=BG)
@@ -2050,7 +2066,7 @@ class MainWindow:
         for f in (
             self.tab_dashboard, self.tab_ai_assistant, self.tab_manual, self.tab_resources, self.tab_education, self.tab_strategyconfig, self.tab_data, self.tab_strategy, self.tab_prop,
             self.tab_risk, self.tab_run, self.tab_payout, self.tab_prop_recommender, self.tab_refine, self.tab_search,
-            self.tab_wfo, self.tab_cpcv, self.tab_sensitivity, self.tab_param_robustness, self.tab_portfolio,
+            self.tab_wfo, self.tab_cpcv, self.tab_pbo, self.tab_sensitivity, self.tab_param_robustness, self.tab_portfolio,
             self.tab_multiobj, self.tab_wfga, self.tab_ensemble, self.tab_fullpipeline,
             self.tab_forge, self.tab_research_director,
             self.tab_speedrun, self.tab_speedrun_multi, self.tab_research_loop,
@@ -2122,17 +2138,11 @@ class MainWindow:
             ("multiobj", "", "Multi-Objective Optimization", self.tab_multiobj, BLUE),
             ("refine", "", "Iterative Refinement", self.tab_refine, BLUE),
 
-            # NOTE: "PBO" below points at the same CPCV/PBO tab as "cpcv"
-            # (PBO's own settings already live inside that tab -- see the
-            # "PBO settings (candidate pool)" section there) so it shows
-            # up as its own named item in VALIDATE, as requested. Fully
-            # splitting it into a visually separate screen is tracked
-            # separately (see PHASE_1_STATUS.md).
             (None, None, "\u2463 VALIDATE", None, None),
             ("wfo", "", "Walk-Forward Optimization", self.tab_wfo, NEON_AMBER),
             ("wfga", "", "Walk-Forward GA", self.tab_wfga, NEON_AMBER),
             ("cpcv", "", "CPCV", self.tab_cpcv, NEON_AMBER),
-            ("pbo", "", "PBO", self.tab_cpcv, NEON_AMBER),
+            ("pbo", "", "PBO", self.tab_pbo, NEON_AMBER),
             ("sensitivity", "", "Sensitivity", self.tab_sensitivity, NEON_AMBER),
             ("paramrobustness", "", "Parameter Stability / Robustness Map", self.tab_param_robustness, NEON_AMBER),
             ("regimematrix", "", "Regime Survival Matrix", self.tab_regime_matrix, NEON_AMBER),
@@ -2220,6 +2230,7 @@ class MainWindow:
             ("Search Lab", self._build_search_tab),
             ("Walk-forward", self._build_wfo_tab),
             ("CPCV", self._build_cpcv_tab),
+            ("PBO", self._build_pbo_tab),
             ("Sensitivity", self._build_sensitivity_tab),
             ("Parameter Stability / Robustness Map", self._build_param_robustness_tab),
             ("Portfolio", self._build_portfolio_tab),
@@ -2469,6 +2480,7 @@ class MainWindow:
             row.configure(bg=bg)
             lbl.configure(bg=bg, fg=color if active else TEXT_MUTED)
             self._draw_nav_accent(k, "active" if active else "idle")
+        self._update_stage_stepper()
         for k, _icon, _label, frame, _color in self._nav_items:
             if k == key:
                 frame.lift()
@@ -2662,7 +2674,6 @@ class MainWindow:
             fg=TEXT_DIM,
             font=_safe_font(7),
         ).pack(anchor="e", pady=(0, 2))
-
         # -- Center: global search -----------------------------------------
         # Packed last so it fills whatever width is left between the
         # already-packed left/right sides, rather than needing an explicit
@@ -2697,6 +2708,71 @@ class MainWindow:
         search_entry.bind("<Return>", lambda _e: self._run_global_search())
 
         Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=18, pady=(0, 12))
+
+        self._build_stage_stepper(parent)
+
+    # The 8-stage journey (matches the web app's own t58-chrome.js
+    # STAGES exactly): Create -> Test -> Optimize -> Validate ->
+    # Champion -> Forward Test -> Deploy -> Monitor. `landing_key` is
+    # which nav key clicking the stage name jumps to; `keys` is every
+    # nav key that counts as "in" this stage, used to highlight whichever
+    # stage the currently active page belongs to. A wayfinding aid only --
+    # like the web version, it doesn't claim per-strategy completion.
+    _STAGE_DEFS = [
+        ("Create", "speedrun", {"genstrat", "researchagent", "researchdirector", "researchloop",
+                                 "speedrun", "speedrunmulti", "forge", "strategy"}),
+        ("Test", "run", {"strategyconfig", "data", "prop", "risk", "run", "payout", "propfirmrec"}),
+        ("Optimize", "fullpipeline", {"fullpipeline", "search", "evolution", "multiobj", "refine"}),
+        ("Validate", "wfo", {"wfo", "wfga", "cpcv", "pbo", "sensitivity", "paramrobustness",
+                              "regimematrix", "montecarlo"}),
+        ("Champion", "familydiversity", {"familydiversity", "portfolio", "ensemble"}),
+        ("Forward Test", "forwardtest", {"forwardtest"}),
+        ("Deploy", "deploylive", {"deploylive"}),
+        ("Monitor", "livemarket", {"livemarket"}),
+    ]
+
+    def _build_stage_stepper(self, parent):
+        """Desktop counterpart to the web app's persistent Create-Test-
+        Optimize-...-Monitor sequence banner (t58-chrome.js buildStepper) --
+        same 8 stages, same wayfinding-not-checklist framing, just a Tk
+        row of clickable labels instead of injected HTML."""
+        bar = Frame(parent, bg=BG)
+        bar.pack(fill="x", padx=18, pady=(0, 10))
+        self._stage_stepper_labels: dict[str, Label] = {}
+        for i, (name, landing_key, _keys) in enumerate(self._STAGE_DEFS):
+            lbl = Label(
+                bar, text=name.upper(), bg=BG, fg=TEXT_DIM, font=_safe_font(8, "bold"), cursor="hand2",
+            )
+            lbl.pack(side="left")
+            lbl.bind("<Button-1>", lambda _e, k=landing_key: self._show_page(k))
+            lbl.bind("<Enter>", lambda _e, l=lbl, n=name: l.configure(fg=TEXT) if self._current_stage_name() != n else None)
+            lbl.bind("<Leave>", lambda _e: self._update_stage_stepper())
+            self._stage_stepper_labels[name] = lbl
+            if i < len(self._STAGE_DEFS) - 1:
+                Label(bar, text="  \u2192  ", bg=BG, fg=TEXT_DIM, font=_safe_font(8)).pack(side="left")
+        self._update_stage_stepper()
+
+    def _current_stage_name(self) -> str | None:
+        active = getattr(self, "active_page", "dashboard")
+        for name, _landing_key, keys in self._STAGE_DEFS:
+            if active in keys:
+                return name
+        return None
+
+    def _update_stage_stepper(self):
+        """Repaints the stage stepper's highlight to match self.active_page --
+        called from _show_page (same place the sidebar's own active-row
+        highlight is repainted) so the two never disagree about which
+        stage is current."""
+        labels = getattr(self, "_stage_stepper_labels", None)
+        if not labels:
+            return
+        current = self._current_stage_name()
+        for name, lbl in labels.items():
+            if name == current:
+                lbl.configure(fg=ACCENT)
+            else:
+                lbl.configure(fg=TEXT_DIM)
 
     def _open_settings_popup(self):
         """Minimal settings surface behind the top bar's gear icon.
@@ -3360,14 +3436,6 @@ class MainWindow:
         self._dash_hero_canvas = Canvas(hero_wrap, bg=PANEL, height=200, highlightthickness=0)
         self._dash_hero_canvas.pack(fill="x", padx=14, pady=(0, 14))
 
-        library_wrap = Frame(scroll_frame, bg=PANEL, highlightthickness=1, highlightbackground=NEON_VIOLET)
-        library_wrap.pack(fill="x", padx=24, pady=(0, 14))
-        Label(library_wrap, text="● MARKET DATA LIBRARY — data/raw, BY INSTRUMENT", bg=PANEL, fg=NEON_VIOLET, font=_safe_font(8, "bold")).pack(
-            anchor="w", padx=14, pady=(10, 4)
-        )
-        self._dash_library_frame = Frame(library_wrap, bg=PANEL)
-        self._dash_library_frame.pack(fill="x", padx=14, pady=(0, 14))
-
         universe_wrap = Frame(scroll_frame, bg=PANEL, highlightthickness=1, highlightbackground=NEON_CYAN)
         universe_wrap.pack(fill="x", padx=24, pady=(0, 14))
         Label(universe_wrap, text="● STRATEGY UNIVERSE", bg=PANEL, fg=NEON_CYAN, font=_safe_font(8, "bold")).pack(
@@ -3432,6 +3500,14 @@ class MainWindow:
         dash_tree_scrollbar.pack(side="right", fill="y")
         self._dash_tree.configure(yscrollcommand=dash_tree_scrollbar.set)
         self._bind_isolated_wheel(self._dash_tree)
+
+        library_wrap = Frame(scroll_frame, bg=PANEL, highlightthickness=1, highlightbackground=NEON_VIOLET)
+        library_wrap.pack(fill="x", padx=24, pady=(0, 20))
+        Label(library_wrap, text="● MARKET DATA LIBRARY — data/raw, BY INSTRUMENT", bg=PANEL, fg=NEON_VIOLET, font=_safe_font(8, "bold")).pack(
+            anchor="w", padx=14, pady=(10, 4)
+        )
+        self._dash_library_frame = Frame(library_wrap, bg=PANEL)
+        self._dash_library_frame.pack(fill="x", padx=14, pady=(0, 14))
 
         self._refresh_dashboard()
 
@@ -7450,7 +7526,7 @@ class MainWindow:
             result=result,
             strategy_name=_strategy_display_name(strategy),
             instrument=instrument,
-            timeframe="unknown",
+            timeframe=_infer_timeframe_label(df),
             backtest_period=period,
             price_df=df,
         )
@@ -8067,7 +8143,7 @@ class MainWindow:
                     if len(self.csv_paths) == 1
                     else " + ".join(os.path.basename(p) for p in self.csv_paths)
                 ),
-                timeframe="unknown",
+                timeframe=_infer_timeframe_label(df),
                 backtest_period=period,
                 backtest_result=bt_result,
                 prop_rules=rules,
@@ -9195,7 +9271,7 @@ class MainWindow:
                     strategy_name=path.stem,
                     strategy_source_type=strategy.source_type,
                     instrument=instrument,
-                    timeframe="unknown",
+                    timeframe=_infer_timeframe_label(df),
                     backtest_period=period,
                     backtest_result=bt_result,
                     prop_rules=rules,
@@ -9307,6 +9383,14 @@ class MainWindow:
             instrument = self.search_context.instrument_label()
             db_path = str(OUTPUT_DIR / "search" / "search.db")
 
+            # timeframe stays "unknown" for run_search itself (matching
+            # app.web.server's own /search/start route) because
+            # app.search.batch_runner.run_search uses it internally for
+            # graveyard_path_for(instrument, timeframe) -- changing it here
+            # alone would split this desktop run's rejections into a
+            # different graveyard file than every web run for the same
+            # instrument. generate_search_report's timeframe below is pure
+            # report display and has no such constraint.
             summary = run_search(
                 df, risk, rules, space, stage_cfg, db_path=db_path,
                 instrument=instrument, timeframe="unknown", progress_cb=self._log_search,
@@ -9315,7 +9399,7 @@ class MainWindow:
 
             report_paths = generate_search_report(
                 output_dir=str(OUTPUT_DIR / "search"), summary=summary, space=space,
-                instrument=instrument, timeframe="unknown",
+                instrument=instrument, timeframe=_infer_timeframe_label(df),
             )
 
             active_lib_strategy = getattr(self, "_active_library_strategy", None)
@@ -9479,6 +9563,10 @@ class MainWindow:
                 except Exception:
                     pass
 
+            # timeframe stays "unknown" here too, same graveyard-routing
+            # reasoning as plain Search Lab's run_search call above (see
+            # its comment) -- run_search_loop makes the same internal
+            # graveyard_path_for(instrument, timeframe) call.
             result = run_search_loop(
                 df, risk, rules, stage_cfg, db_dir=loop_dir, loop_cfg=loop_cfg,
                 instrument=instrument, timeframe="unknown", progress_cb=self._log_search,
@@ -9510,7 +9598,7 @@ class MainWindow:
                 self._log_search(f"Winning candidate: {result.winner_candidate_id}")
                 report_paths = generate_search_report(
                     output_dir=str(OUTPUT_DIR / "search"), summary=winner.summary, space=winner.space,
-                    instrument=instrument, timeframe="unknown",
+                    instrument=instrument, timeframe=_infer_timeframe_label(df),
                 )
                 self._last_search_html_path = report_paths["html"]
                 self._log_search("\nWinning round's leaderboard written to:")
@@ -9525,7 +9613,7 @@ class MainWindow:
                 if last.summary.leaderboard:
                     report_paths = generate_search_report(
                         output_dir=str(OUTPUT_DIR / "search"), summary=last.summary, space=last.space,
-                        instrument=instrument, timeframe="unknown",
+                        instrument=instrument, timeframe=_infer_timeframe_label(df),
                     )
                     self._last_search_html_path = report_paths["html"]
 
@@ -10383,20 +10471,18 @@ class MainWindow:
 
         self._page_header(
             f,
-            "VALIDATE / CPCV & PBO",
-            "Combinatorial Purged Cross-Validation & PBO",
+            "VALIDATE / CPCV",
+            "Combinatorial Purged Cross-Validation",
             "CPCV stress-tests this strategy across many different combinatorial "
             "train/test partitions of the same data, instead of just one holdout "
-            "split. Probability of Backtest Overfitting (PBO) goes further: it "
-            "checks a small POOL of candidate configurations (this strategy plus "
-            "a few automatically perturbed variants) and reports the probability "
-            "that whichever one looks best in-sample is really just noise. Uses the "
-            "strategy configured on Step 01 -- but its own market data, prop rules, "
-            "and risk settings below are self-contained to this tab, just like the "
-            "web app.",
+            "split. Uses the strategy configured on Step 01 -- but its own market "
+            "data, prop rules, and risk settings below are self-contained to this "
+            "tab, just like the web app. See VALIDATE / PBO (its own tab) for "
+            "Probability of Backtest Overfitting, which checks a small POOL of "
+            "candidate configurations instead of validating just this one.",
         )
 
-        self.cpcv_context = RunContextPanel(self, "CPCV / PBO")
+        self.cpcv_context = RunContextPanel(self, "CPCV")
         self.cpcv_context.build(f)
 
         cpcv_settings = self._section(
@@ -10411,41 +10497,16 @@ class MainWindow:
         self.cpcv_max_paths = LabeledEntry(cpcv_settings, "Max combinatorial paths to evaluate", 30)
 
         cpcv_btn_row = Frame(f, bg=BG)
-        cpcv_btn_row.pack(fill="x", padx=24, pady=(4, 4))
+        cpcv_btn_row.pack(fill="x", padx=24, pady=(4, 10))
         self._button(cpcv_btn_row, "RUN CPCV", self._cpcv_run_clicked, primary=True).pack(side="left")
         self.open_cpcv_report_btn = self._button(cpcv_btn_row, "OPEN CPCV REPORT", self._open_cpcv_report)
         self.open_cpcv_report_btn.config(state="disabled")
         self.open_cpcv_report_btn.pack(side="left", padx=8)
 
-        Frame(f, bg=BORDER, height=1).pack(fill="x", padx=24, pady=14)
-
-        pbo_settings = self._section(
-            f, "PBO settings (candidate pool)",
-            "The pool is this strategy's own configuration plus N-1 variants "
-            "with its numeric parameters randomly perturbed -- a quick, "
-            "self-contained way to check whether the search process itself is "
-            "trustworthy. For a genuine multi-strategy PBO, use the CLI "
-            "(--pbo) or call app.validation.cpcv.compute_pbo() directly with a "
-            "Search Lab leaderboard slice.",
-        )
-        self.pbo_n_groups = LabeledEntry(pbo_settings, "Number of groups (N)", 6)
-        self.pbo_n_test_groups = LabeledEntry(pbo_settings, "Test groups per path (k)", 2)
-        self.pbo_metric = LabeledEntry(pbo_settings, "Metric to rank candidates by", "sharpe_ratio")
-        self.pbo_max_paths = LabeledEntry(pbo_settings, "Max combinatorial paths to evaluate", 30)
-        self.pbo_n_candidates = LabeledEntry(pbo_settings, "Number of candidates (baseline + perturbed)", 5)
-        self.pbo_seed = LabeledEntry(pbo_settings, "Random seed (candidate perturbation)", 42)
-
-        pbo_btn_row = Frame(f, bg=BG)
-        pbo_btn_row.pack(fill="x", padx=24, pady=(4, 10))
-        self._button(pbo_btn_row, "RUN PBO", self._pbo_run_clicked, primary=True).pack(side="left")
-        self.open_pbo_report_btn = self._button(pbo_btn_row, "OPEN PBO REPORT", self._open_pbo_report)
-        self.open_pbo_report_btn.config(state="disabled")
-        self.open_pbo_report_btn.pack(side="left", padx=8)
-
         self.cpcv_progress = NeuralProgress(f)
         self.cpcv_progress.pack(fill="x", padx=24, pady=(2, 10))
 
-        output_section = self._section(f, "CPCV / PBO output", "Live progress log.")
+        output_section = self._section(f, "CPCV output", "Live progress log.")
         _cpcv_output_frame = Frame(output_section, bg=PANEL)
         self.cpcv_output = Text(
             _cpcv_output_frame, height=16, wrap="word", bg=LOG_BG, fg=TEXT,
@@ -10462,11 +10523,87 @@ class MainWindow:
         self._bind_isolated_wheel(self.cpcv_output)
 
         self._last_cpcv_html_path = None
+
+    # -----------------------------------------------------------------------
+    # PBO (Probability of Backtest Overfitting) -- split out from the old
+    # combined "CPCV / PBO" tab into its own screen (Sep 2026 VALIDATE
+    # reorder), with its own RunContextPanel, progress bar, and output log
+    # instead of sharing CPCV's. Nothing about compute_pbo() or the report
+    # generator changed -- only which widgets this UI reads from/writes to.
+    # -----------------------------------------------------------------------
+
+    def _build_pbo_tab(self):
+        f = self._scrollable(self.tab_pbo)
+
+        self._page_header(
+            f,
+            "VALIDATE / PBO",
+            "Probability of Backtest Overfitting",
+            "Checks a small POOL of candidate configurations (this strategy plus "
+            "a few automatically perturbed variants) and reports the probability "
+            "that whichever one looks best in-sample is really just noise. Uses "
+            "the strategy configured on Step 01 -- but its own market data, prop "
+            "rules, and risk settings below are self-contained to this tab, just "
+            "like the web app. See VALIDATE / CPCV (its own tab) for a single-"
+            "strategy combinatorial train/test stress test instead.",
+        )
+
+        self.pbo_context = RunContextPanel(self, "PBO")
+        self.pbo_context.build(f)
+
+        pbo_settings = self._section(
+            f, "PBO settings (candidate pool)",
+            "The pool is this strategy's own configuration plus N-1 variants "
+            "with its numeric parameters randomly perturbed -- a quick, "
+            "self-contained way to check whether the search process itself is "
+            "trustworthy. For a genuine multi-strategy PBO, use the CLI "
+            "(--pbo) or call app.validation.cpcv.compute_pbo() directly with a "
+            "Search Lab leaderboard slice.",
+            emphasize=True,
+        )
+        self.pbo_n_groups = LabeledEntry(pbo_settings, "Number of groups (N)", 6)
+        self.pbo_n_test_groups = LabeledEntry(pbo_settings, "Test groups per path (k)", 2)
+        self.pbo_metric = LabeledEntry(pbo_settings, "Metric to rank candidates by", "sharpe_ratio")
+        self.pbo_max_paths = LabeledEntry(pbo_settings, "Max combinatorial paths to evaluate", 30)
+        self.pbo_n_candidates = LabeledEntry(pbo_settings, "Number of candidates (baseline + perturbed)", 5)
+        self.pbo_seed = LabeledEntry(pbo_settings, "Random seed (candidate perturbation)", 42)
+
+        pbo_btn_row = Frame(f, bg=BG)
+        pbo_btn_row.pack(fill="x", padx=24, pady=(4, 10))
+        self._button(pbo_btn_row, "RUN PBO", self._pbo_run_clicked, primary=True).pack(side="left")
+        self.open_pbo_report_btn = self._button(pbo_btn_row, "OPEN PBO REPORT", self._open_pbo_report)
+        self.open_pbo_report_btn.config(state="disabled")
+        self.open_pbo_report_btn.pack(side="left", padx=8)
+
+        self.pbo_progress = NeuralProgress(f)
+        self.pbo_progress.pack(fill="x", padx=24, pady=(2, 10))
+
+        pbo_output_section = self._section(f, "PBO output", "Live progress log.")
+        _pbo_output_frame = Frame(pbo_output_section, bg=PANEL)
+        self.pbo_output = Text(
+            _pbo_output_frame, height=16, wrap="word", bg=LOG_BG, fg=TEXT,
+            insertbackground=TEXT, relief="flat", bd=0, highlightthickness=1,
+            highlightbackground=BORDER, font=(MONO, 9),
+        )
+        _pbo_output_scroll = ttk.Scrollbar(
+            _pbo_output_frame, orient="vertical", command=self.pbo_output.yview, style="T58.Vertical.TScrollbar",
+        )
+        self.pbo_output.configure(yscrollcommand=_pbo_output_scroll.set)
+        self.pbo_output.pack(side="left", fill="both", expand=True)
+        _pbo_output_scroll.pack(side="right", fill="y")
+        _pbo_output_frame.pack(fill="both", expand=True, padx=18, pady=(3, 16))
+        self._bind_isolated_wheel(self.pbo_output)
+
         self._last_pbo_html_path = None
 
     def _log_cpcv(self, msg: str):
         self.cpcv_output.insert(END, msg + "\n")
         self.cpcv_output.see(END)
+        self.root.update_idletasks()
+
+    def _log_pbo(self, msg: str):
+        self.pbo_output.insert(END, msg + "\n")
+        self.pbo_output.see(END)
         self.root.update_idletasks()
 
     def _open_cpcv_report(self):
@@ -10525,22 +10662,22 @@ class MainWindow:
             self._release_heavy_job(JOB_CPCV)
 
     def _pbo_run_clicked(self):
-        if not self.cpcv_context.csv_paths:
+        if not self.pbo_context.csv_paths:
             messagebox.showwarning("Missing data", "Please select a market data CSV above (this tab's own Market Data section).")
             return
         if not self._try_start_heavy_job(JOB_CPCV):
             return
-        self.cpcv_output.delete("1.0", END)
-        self.cpcv_progress.start(10)
+        self.pbo_output.delete("1.0", END)
+        self.pbo_progress.start(10)
         threading.Thread(target=self._pbo_run_pipeline, daemon=True).start()
 
     def _pbo_run_pipeline(self):
         try:
-            df = self.cpcv_context.load_dataframe(self._log_cpcv)
+            df = self.pbo_context.load_dataframe(self._log_pbo)
             if df is None:
                 return
             strategy = self._build_strategy()
-            risk = self.cpcv_context.build_risk_config()
+            risk = self.pbo_context.build_risk_config()
 
             n_candidates = self.pbo_n_candidates.get_int(5)
             specs = [{"source_type": strategy.source_type,
@@ -10557,19 +10694,19 @@ class MainWindow:
                     genome = [max(min(g.base_value + rng.uniform(-0.3, 0.3) * (g.hi - g.lo), g.hi), g.lo) for g in genes]
                     specs.append({"source_type": "manual", "config": apply_genome(strategy.config, genes, genome)})
                 if not genes:
-                    self._log_cpcv(
+                    self._log_pbo(
                         "This strategy has no tunable numeric parameters -- PBO will run "
                         "with a single candidate, which is a degenerate (but still valid) case."
                     )
             else:
-                self._log_cpcv(
+                self._log_pbo(
                     f"'{strategy.source_type}' candidate perturbation isn't wired up in the "
                     "desktop UI yet -- running PBO with just this one strategy as the pool "
                     "(degenerate case). Use the CLI or compute_pbo() directly for a real "
                     "multi-candidate code-strategy pool."
                 )
 
-            self._log_cpcv(f"Running PBO across {len(specs)} candidate(s)...")
+            self._log_pbo(f"Running PBO across {len(specs)} candidate(s)...")
             result = compute_pbo(
                 df, specs, risk,
                 n_groups=self.pbo_n_groups.get_int(6),
@@ -10580,18 +10717,18 @@ class MainWindow:
             paths = generate_pbo_report(OUTPUT_DIR / "pbo", result)
             self._last_pbo_html_path = paths["html"]
             self.open_pbo_report_btn.config(state="normal")
-            self._log_cpcv(f"  PBO: {result.pbo * 100:.1f}%")
-            self._log_cpcv("\nDone. PBO report written to:")
+            self._log_pbo(f"  PBO: {result.pbo * 100:.1f}%")
+            self._log_pbo("\nDone. PBO report written to:")
             for k, p in paths.items():
-                self._log_cpcv(f"  {k}: {p}")
+                self._log_pbo(f"  {k}: {p}")
         except StrategyError as exc:
-            self._log_cpcv(f"\nStrategy error: {exc}")
+            self._log_pbo(f"\nStrategy error: {exc}")
         except CPCVError as exc:
-            self._log_cpcv(f"\nPBO error: {exc}")
+            self._log_pbo(f"\nPBO error: {exc}")
         except Exception:
-            self._log_cpcv("\nUnexpected error:\n" + traceback.format_exc())
+            self._log_pbo("\nUnexpected error:\n" + traceback.format_exc())
         finally:
-            self.cpcv_progress.stop()
+            self.pbo_progress.stop()
             self._release_heavy_job(JOB_CPCV)
 
     # -----------------------------------------------------------------------
@@ -11835,7 +11972,7 @@ class MainWindow:
                 mc_result = run_monte_carlo(bt_result.trades, rules, mc_cfg)
                 paths = generate_full_report(
                     output_dir=OUTPUT_DIR / "ensemble", strategy_name=bt_result.strategy_name,
-                    strategy_source_type="ensemble_vote", instrument=instrument, timeframe="unknown",
+                    strategy_source_type="ensemble_vote", instrument=instrument, timeframe=_infer_timeframe_label(df),
                     backtest_period=period, backtest_result=bt_result, prop_rules=rules,
                     prop_single_run=single_run, monte_carlo_result=mc_result, holdout_comparison=None,
                     risk_config=risk, price_df=df,
@@ -13278,13 +13415,20 @@ class MainWindow:
             # timeframe land in the SAME file, so the graveyard-feedback
             # loop benefits from every run against this data regardless of
             # which UI produced it.
+            # graveyard_path_for's timeframe stays the literal "unknown"
+            # string (matching app.web.server's Forge route exactly) so a
+            # desktop run and a web run against the same instrument keep
+            # landing in the SAME graveyard file -- only the timeframe
+            # passed to run_forge() itself (for this run's own report/
+            # metadata) is the real inferred value.
+            timeframe_label = _infer_timeframe_label(df)
             graveyard_path = graveyard_path_for(instrument, "unknown")
             self._last_forge_graveyard_path = graveyard_path
             db_path = str(OUTPUT_DIR / "forge" / "forge.db")
 
             result = run_forge(
                 df, risk, rules, config, db_path=db_path,
-                instrument=instrument, timeframe="unknown", graveyard_path=graveyard_path,
+                instrument=instrument, timeframe=timeframe_label, graveyard_path=graveyard_path,
                 progress_cb=self._log_forge, cancel_event=self._forge_cancel_event,
             )
             self._last_forge_result = result
@@ -13429,6 +13573,14 @@ class MainWindow:
                 self.root.after(0, _paint)
                 self._last_forge_result = result
 
+            # timeframe stays "unknown" here (matching app.web.server's own
+            # Forge Loop call) because run_forge_loop uses it to compute
+            # its OWN graveyard_path_for(instrument, timeframe) internally
+            # (see app.orchestration.loop_runner) -- unlike plain run_forge
+            # above, there's no separate graveyard_path argument to pin
+            # independently, so changing this would silently split Forge
+            # Loop's graveyard file away from every other tool's for the
+            # same instrument (which all still key on "unknown" too).
             result = run_forge_loop(
                 df, risk, rules, db_dir=str(OUTPUT_DIR / "forge" / "loop"), loop_cfg=loop_cfg,
                 instrument=instrument, timeframe="unknown",
