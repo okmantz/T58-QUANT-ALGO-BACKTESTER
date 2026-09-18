@@ -1380,6 +1380,25 @@ def serve_report(filename):
     return send_from_directory(REPORTS_DIR, filename)
 
 
+@app.route("/settings/account")
+def account_settings_form():
+    from app.accounts.settings import load_account_settings
+    return render_template("account_settings.html", settings=load_account_settings(), active_page="account_settings")
+
+
+@app.route("/settings/account/save", methods=["POST"])
+def account_settings_save():
+    from app.accounts.settings import AccountSettings, save_account_settings
+    form = request.form
+    settings = AccountSettings(
+        display_name=(form.get("display_name") or "").strip(),
+        email=(form.get("email") or "").strip(),
+        company=(form.get("company") or "").strip(),
+    )
+    save_account_settings(settings)
+    return render_template("account_settings.html", settings=settings, active_page="account_settings", saved=True)
+
+
 @app.route("/settings/notifications")
 def notification_settings_form():
     return render_template("notification_settings.html", settings=load_notification_settings(), active_page="notification_settings")
