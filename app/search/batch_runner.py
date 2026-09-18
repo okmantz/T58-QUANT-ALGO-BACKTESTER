@@ -57,7 +57,7 @@ import time
 import uuid
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor
 from concurrent.futures import wait as futures_wait
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
@@ -932,6 +932,11 @@ def run_search(
     # docstring for exactly what this fills in (and never overrides an
     # explicit value the caller already set).
     risk = with_prop_safety_defaults(risk, prop_rules)
+    # FIX (2026-09-18): see RiskConfig.reset_on_breach's docstring --
+    # stage_cfg.reset_on_breach was already threaded into the post-hoc
+    # simulate_account/MonteCarloConfig scoring layer below but never into
+    # the RiskConfig Stage 1/2/3 actually backtest every candidate against.
+    risk = replace(risk, reset_on_breach=stage_cfg.reset_on_breach)
 
     run_id = uuid.uuid4().hex[:12]
     t0 = time.time()
@@ -1400,6 +1405,16 @@ def promote_champion(
         raise ValueError(f"Candidate '{candidate_id}' has no stored configuration to promote.")
     if source_type != "manual" and not spec.get("code_text"):
         raise ValueError(f"Candidate '{candidate_id}' has no stored source code to promote.")
+
+    # FIX (2026-09-18): this re-validation backtest never hardened `risk`
+    # against `prop_rules` at all (unlike run_search above), so a promoted
+    # champion's final report could run with no account-blown/daily-loss
+    # circuit breaker, or with one but no reset_on_breach even though the
+    # candidate was searched/scored with it on -- a different account than
+    # the one Stage 1-3 actually found this candidate under. See
+    # RiskConfig.reset_on_breach's own docstring.
+    risk = with_prop_safety_defaults(risk, prop_rules)
+    risk = replace(risk, reset_on_breach=reset_on_breach)
 
     promote_tmp_dir = Path(tempfile.mkdtemp(prefix="t58_promote_"))
     try:
