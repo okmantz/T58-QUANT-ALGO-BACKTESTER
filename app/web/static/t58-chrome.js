@@ -74,9 +74,9 @@
   var STAGES = [
     { name: "Create", href: "/speed-run", paths: ["/speed-run", "/generate-strategies", "/research-agent"] },
     { name: "Test", href: "/", paths: ["/", "/payout-probability"] },
-    { name: "Optimize", href: "/search", paths: ["/search", "/refine", "/full-pipeline", "/quick-optimize", "/multi-objective", "/evolution"] },
-    { name: "Validate", href: "/walk-forward-opt", paths: ["/walk-forward-opt", "/walk-forward-ga", "/cpcv", "/sensitivity", "/parameter-robustness", "/regime-matrix"] },
-    { name: "Champion", href: "/portfolio", paths: ["/portfolio", "/ensemble", "/family-diversity"] },
+    { name: "Optimize", href: "/optimize", paths: ["/search", "/refine", "/full-pipeline", "/quick-optimize", "/multi-objective", "/evolution", "/optimize"] },
+    { name: "Validate", href: "/validate", paths: ["/walk-forward-opt", "/walk-forward-ga", "/cpcv", "/pbo", "/sensitivity", "/parameter-robustness", "/regime-matrix", "/validate"] },
+    { name: "Champion", href: "/family-diversity", paths: ["/portfolio", "/ensemble", "/family-diversity"] },
     { name: "Forward Test", href: "/forward-test", paths: ["/forward-test"] },
     { name: "Deploy", href: "/deploy-live", paths: ["/deploy-live"] },
     { name: "Monitor", href: "/live-market", paths: ["/live-market"] }
@@ -196,6 +196,73 @@ function t58SubmitMiniForm(wrap) {
 
   document.body.appendChild(form);
   form.submit();
+}
+
+/* Shared "Detect pip size from data" handler -- one implementation for
+   every page's own button instead of each page (Speed Run, WFO, WFGA,
+   CPCV, PBO, Sensitivity, Parameter Robustness, Regime Matrix,
+   Multi-Objective, Payout Probability, Overnight Autopilot, Prop-Firm
+   Recommender, and the three multi-instrument pages) re-implementing the
+   same fetch('/data/detect-pip-size') call (search.html and
+   evolution.html already had their own copy of this before this pass --
+   see t58DetectPipSize below, which is exactly their logic, generalized).
+
+   opts:
+     statusId   - id of a <p>/<span> to show progress/result/error in
+     pipFieldId - id of the numeric <input name="pip_size"> to fill in
+     fileSelector    - CSS selector for the page's csv_file <input type=file> (optional)
+     datasetSelector - CSS selector for a single <select name="existing_dataset"> (optional)
+     datasetValue    - a literal dataset name/path to use instead of reading a <select>
+                        (e.g. the first checked box in a multi-instrument checklist) (optional)
+   At least one dataset source must resolve to something at click time. */
+function t58DetectPipSize(opts) {
+  var statusEl = document.getElementById(opts.statusId);
+  var pipField = document.getElementById(opts.pipFieldId);
+  if (!statusEl || !pipField) return;
+
+  var fd = new FormData();
+  var haveSource = false;
+
+  var fileInput = opts.fileSelector ? document.querySelector(opts.fileSelector) : null;
+  if (fileInput && fileInput.files && fileInput.files.length) {
+    for (var i = 0; i < fileInput.files.length; i++) fd.append('csv_file', fileInput.files[i]);
+    haveSource = true;
+  }
+
+  var datasetValue = opts.datasetValue;
+  if (!datasetValue && opts.datasetSelector) {
+    var datasetSelect = document.querySelector(opts.datasetSelector);
+    if (datasetSelect && datasetSelect.value) datasetValue = datasetSelect.value;
+  }
+  if (datasetValue) {
+    fd.append('existing_dataset', datasetValue);
+    haveSource = true;
+  }
+
+  if (!haveSource) {
+    statusEl.style.color = '#ffcf7a';
+    statusEl.textContent = 'Select a market data CSV or a stored dataset above first.';
+    return;
+  }
+
+  statusEl.style.color = '#888';
+  statusEl.textContent = 'Detecting...';
+  fetch('/data/detect-pip-size', { method: 'POST', body: fd })
+    .then(function (r) { return r.json().then(function (data) { return { ok: r.ok, data: data }; }); })
+    .then(function (res) {
+      if (!res.ok || res.data.error) {
+        statusEl.style.color = '#ff9d9d';
+        statusEl.textContent = (res.data && res.data.error) || "Couldn't detect pip size.";
+        return;
+      }
+      pipField.value = res.data.pip_size;
+      statusEl.style.color = '#b4ffcb';
+      statusEl.textContent = res.data.message;
+    })
+    .catch(function (err) {
+      statusEl.style.color = '#ff9d9d';
+      statusEl.textContent = "Couldn't detect: " + err;
+    });
 }
 
 /* Checks or unchecks every checkbox inside the given container id --

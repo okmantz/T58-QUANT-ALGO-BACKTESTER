@@ -244,6 +244,10 @@ a { color: var(--teal); }
   padding: 6px 10px 2px; font-size: 10px; font-weight: 700; letter-spacing: .09em;
   text-transform: uppercase; color: var(--text-dim);
 }
+.t58-nav-subheader {
+  padding: 8px 14px 2px; font-size: 9px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--text-dim); opacity: .8;
+}
 .t58-num {
   display: inline-flex; align-items: center; justify-content: center;
   width: 16px; font-size: 13px; color: var(--teal); flex-shrink: 0;
