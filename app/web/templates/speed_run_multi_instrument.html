@@ -98,8 +98,10 @@
     </div>
     <div class="row">
       <div><label>Max drawdown %</label><input type="number" step="0.1" name="max_dd" value="10"></div>
-      <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" value="0.0001"></div>
+      <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" id="srm_pip_size_field" value="0.0001"></div>
     </div>
+    <button type="button" onclick="srmDetectPipSize()" style="margin-top:6px;background:none;border:1px solid var(--border-light);color:var(--teal);padding:9px 12px;border-radius:8px;font-size:13px;width:100%;">Detect pip size from data</button>
+    <p id="srm_pip_detect_status" style="font-size:12px;margin-top:6px;"></p>
   </div>
 
   <div class="card">
@@ -152,6 +154,23 @@
     counter.textContent = n + ' selected';
   }
   checkboxes.forEach(cb => cb.addEventListener('change', updateCount));
+
+  // Detects against whichever dataset was checked FIRST (in document
+  // order) -- with several instruments selected there's no single
+  // "the" dataset, so this is a starting suggestion for the group, not
+  // a per-instrument value; confirm it matches before running.
+  function srmDetectPipSize() {
+    const checked = document.querySelector('input[name="datasets"]:checked');
+    if (!checked) {
+      const statusEl = document.getElementById('srm_pip_detect_status');
+      if (statusEl) { statusEl.style.color = '#ffcf7a'; statusEl.textContent = 'Select at least one dataset above first.'; }
+      return;
+    }
+    t58DetectPipSize({
+      statusId: 'srm_pip_detect_status', pipFieldId: 'srm_pip_size_field',
+      datasetValue: checked.value,
+    });
+  }
 </script>
 <script src="/static/t58-chrome.js" defer></script>
 

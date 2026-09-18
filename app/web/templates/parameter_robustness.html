@@ -168,8 +168,10 @@
     </div>
     <div class="row">
       <div><label>Max drawdown %</label><input type="number" step="0.1" name="max_dd" value="10"></div>
-      <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" value="0.0001"></div>
+      <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" id="pr_pip_size_field" value="0.0001"></div>
     </div>
+    <button type="button" onclick="t58DetectPipSize({statusId:'pr_pip_detect_status', pipFieldId:'pr_pip_size_field', fileSelector:'input[name=csv_file]', datasetSelector:'select[name=existing_dataset]'})" style="margin-top:6px;background:none;border:1px solid var(--border-light);color:var(--teal);padding:9px 12px;border-radius:8px;font-size:13px;width:100%;">Detect pip size from data</button>
+    <p id="pr_pip_detect_status" style="font-size:12px;margin-top:6px;"></p>
   </div>
 
   <div class="card">

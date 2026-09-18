@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Account settings — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; max-width: 560px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  .card p.help { font-size: 12.5px; color: var(--text-muted); margin: 0 0 14px; line-height: 1.5; }
+  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  input[type=text], input[type=email] {
+    width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font-size: 14px;
+  }
+  input:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), 0.15); }
+  .submit-btn {
+    padding: 13px 20px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal);
+    color: #04120e; font-weight: 700; font-size: 14px; margin-top: 14px; cursor: pointer;
+  }
+  .saved-banner { border-left: 3px solid var(--teal); font-size: 13px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p.lede { color: var(--text-muted); font-size: 13px; margin: 0 0 16px; max-width: 560px; }
+</style>
+</head>
+<body>
+{% set active_page = 'account_settings' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Account settings</h1>
+  <p class="lede">
+    Your own name/email/company -- used to personalize exported reports; not a login, just
+    local profile info. Stored locally on this computer only, same as Notification Settings.
+  </p>
+
+  {% if saved %}
+  <div class="card saved-banner">Saved.</div>
+  {% endif %}
+
+  <form method="POST" action="/settings/account/save">
+    <div class="card">
+      <h2>Your profile</h2>
+      <label for="display_name">Display name</label>
+      <input type="text" id="display_name" name="display_name" value="{{ settings.display_name }}" placeholder="Owen">
+
+      <label for="email">Email</label>
+      <input type="email" id="email" name="email" value="{{ settings.email }}" placeholder="you@example.com">
+
+      <label for="company">Company (optional)</label>
+      <input type="text" id="company" name="company" value="{{ settings.company }}" placeholder="T58 Trading">
+    </div>
+
+    <button class="submit-btn" type="submit">Save</button>
+  </form>
+</div>
+</div>
+</div>
+<script src="/static/t58-chrome.js" defer></script>
+</body>
+</html>

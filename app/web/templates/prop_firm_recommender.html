@@ -160,12 +160,16 @@
     <h2>3. Risk (position sizing)</h2>
     <p class="help">Prop-firm rules themselves come from the firm checklist below, not from fields here --
     this only sets how the strategy sizes its own positions before its trades get scored against each firm.</p>
+    <label>Prop firm preset (optional shortcut)</label>
+    <select id="pfr_prop_preset_select"><option value="">-- or enter values manually below --</option></select>
     <div class="row">
       <div><label>Initial balance ($)</label><input type="number" name="initial_balance" value="100000"></div>
       <div><label>Risk value</label><input type="number" step="0.1" name="risk_value" value="1.0"></div>
     </div>
     <label>Pip size</label>
-    <input type="number" step="0.0001" name="pip_size" value="0.0001">
+    <input type="number" step="0.0001" name="pip_size" id="pfr_pip_size_field" value="0.0001">
+    <button type="button" onclick="t58DetectPipSize({statusId:'pfr_pip_detect_status', pipFieldId:'pfr_pip_size_field', fileSelector:'input[name=csv_file]', datasetSelector:'select[name=existing_dataset]'})" style="margin-top:6px;background:none;border:1px solid var(--border-light);color:var(--teal);padding:9px 12px;border-radius:8px;font-size:13px;width:100%;">Detect pip size from data</button>
+    <p id="pfr_pip_detect_status" style="font-size:12px;margin-top:6px;"></p>
   </div>
 
   <div class="card">
@@ -271,6 +275,10 @@
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/static/sw.js').catch(() => {});
   }
+</script>
+<script src="/static/prop-presets.js"></script>
+<script>
+  initPropFirmPresetDropdown('pfr_prop_preset_select', { account_size: 'initial_balance' });
 </script>
 </body>
 </html>
