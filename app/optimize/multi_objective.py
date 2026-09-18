@@ -34,7 +34,7 @@ import random
 import shutil
 import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
@@ -265,6 +265,11 @@ def run_multi_objective_refinement(
     # this, every genome's backtest below could keep opening new trades
     # straight through a blown account or a breached daily-loss limit.
     risk = with_prop_safety_defaults(risk, prop_rules)
+    # FIX (2026-09-18): see RiskConfig.reset_on_breach's docstring --
+    # cfg.reset_on_breach was already threaded into search_mc_cfg below but
+    # never into the RiskConfig every genome's own backtest() call runs
+    # against.
+    risk = replace(risk, reset_on_breach=cfg.reset_on_breach)
 
     tmp_dir: Path | None = None
     if strategy.source_type == "python":
