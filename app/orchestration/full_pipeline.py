@@ -601,6 +601,18 @@ def run_full_pipeline(
     # to match prop_rules.account_size (see RISK-001 note on this function).
     risk = with_prop_safety_defaults(risk, prop_rules)
 
+    # FIX (2026-09-18): cfg.reset_on_breach was already threaded into the
+    # POST-HOC scoring layer below (simulate_account / MonteCarloConfig)
+    # but never into the RiskConfig the RAW baseline/GA-search/final
+    # backtests actually run against -- so with the checkbox checked, the
+    # underlying trade sequence for every stage of this pipeline still
+    # permanently stopped opening new trades the instant it first blew the
+    # configured drawdown floor, often within the first few trades of a
+    # multi-year dataset. See RiskConfig.reset_on_breach's own docstring.
+    # This one-line fix is what actually makes "score on the basis that a
+    # blown account gets a fresh eval and keeps going" true end to end.
+    risk = replace(risk, reset_on_breach=cfg.reset_on_breach)
+
     adaptive_risk = build_limit_aware_preset(prop_rules, daily_profit_lock_pct=cfg.adaptive_risk_daily_profit_lock_pct) \
         if cfg.adaptive_risk_enabled else None
     if adaptive_risk is not None:

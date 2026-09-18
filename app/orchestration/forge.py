@@ -51,7 +51,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
@@ -247,6 +247,12 @@ def run_forge(
     # using an un-hardened account with no account-blown/daily-loss floor,
     # even though Stages 1-3 (via run_search) already got the correct one.
     risk = with_prop_safety_defaults(risk, prop_rules)
+    # FIX (2026-09-18): see RiskConfig.reset_on_breach's docstring --
+    # config.reset_on_breach was already threaded into the post-hoc
+    # simulate_account/MonteCarloConfig scoring layer but never into the
+    # RiskConfig Forge's own later stages (and, via run_search below,
+    # Stages 1-3) actually backtest against.
+    risk = replace(risk, reset_on_breach=config.reset_on_breach)
 
     t0 = time.time()
     funnel: list[FunnelStage] = []

@@ -80,7 +80,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pandas as pd
@@ -386,6 +386,11 @@ def run_quick_optimize(
         log(f"  !!! {account_mismatch_warning}")
         warnings.append(account_mismatch_warning)
     risk = with_prop_safety_defaults(risk, prop_rules)
+    # FIX (2026-09-18): see RiskConfig.reset_on_breach's docstring -- cfg.
+    # reset_on_breach was already threaded into simulate_account/
+    # MonteCarloConfig below but never into the RiskConfig the raw
+    # baseline/GA-search/final/holdout backtests actually run against.
+    risk = replace(risk, reset_on_breach=cfg.reset_on_breach)
 
     log(f"Checking '{display_name}' produces trades on this data...")
     preflight_signal_check(dev_df, strategy, risk, "Quick Optimize")
