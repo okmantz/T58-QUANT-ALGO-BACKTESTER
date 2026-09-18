@@ -68,7 +68,7 @@ import time
 import traceback
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor
 from concurrent.futures import wait as futures_wait
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 import pandas as pd
@@ -714,6 +714,12 @@ class EvolutionRunner:
         self.risk = with_prop_safety_defaults(risk, prop_rules)
         self.prop_rules = prop_rules
         self.cfg = cfg or EvolutionConfig()
+        # FIX (2026-09-18): see RiskConfig.reset_on_breach's docstring --
+        # self.cfg.reset_on_breach was already threaded into the post-hoc
+        # simulate_account/MonteCarloConfig scoring layer (see this file's
+        # other reset_on_breach uses) but never into self.risk, which every
+        # genome's PRE-FILTER and FULL-EVAL backtest actually runs against.
+        self.risk = replace(self.risk, reset_on_breach=self.cfg.reset_on_breach)
         self.adaptive_risk = build_limit_aware_preset(
             prop_rules, daily_profit_lock_pct=self.cfg.adaptive_risk_daily_profit_lock_pct,
         ) if self.cfg.adaptive_risk_enabled else None
