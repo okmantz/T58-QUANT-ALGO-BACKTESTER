@@ -55,6 +55,59 @@ class BacktestStatistics:
     # backtest that never used reset_on_breach -- byte-identical default,
     # purely additive.
 
+    is_reset_chain: bool = False
+    final_segment_net_profit: float = 0.0
+    final_segment_trade_count: int = 0
+    # FIX (RESET-ACCT-001): `net_profit` above is a straight sum of every
+    # trade's pnl across the WHOLE run -- when account_reset_count > 0,
+    # that pools together the P&L of account_reset_count+1 DIFFERENT
+    # simulated accounts (see RiskConfig.reset_on_breach) into one number,
+    # which reads like one account's result but isn't. `final_segment_
+    # net_profit`/`final_segment_trade_count` describe ONLY the last
+    # (currently active) simulated account -- the one still standing at
+    # the end of the run -- so a report can show "this account's own P&L"
+    # right next to "cumulative P&L across every account this chain burned
+    # through" instead of conflating the two under a single "Net Profit"
+    # label. Both are 0/equal-to-net_profit's own trades whenever
+    # account_reset_count is 0 (no reset ever happened), so this changes
+    # nothing for the vast majority of runs that don't use reset_on_breach.
+
+    avg_intended_risk_dollars: float = 0.0
+    avg_actual_stop_risk_dollars: float = 0.0
+    avg_realized_loss_on_losers: float = 0.0
+    pct_trades_position_capped: float = 0.0
+    pct_trades_risk_overshoot: float = 0.0
+    # RISK-RECON: reconciles "how much you told the system you're willing
+    # to risk" (RiskConfig.risk_value, e.g. 0.5% of a $50k account = a
+    # $250 target -- see Trade.intended_risk_dollars) against what actually
+    # happened to that risk in two different ways:
+    #   avg_intended_risk_dollars      -- mean of the raw %-of-equity target,
+    #                                     BEFORE any max_position_size cap
+    #                                     or adaptive-risk throttle.
+    #   avg_actual_stop_risk_dollars   -- mean of initial_risk * size, i.e.
+    #                                     what a clean stop-out would have
+    #                                     cost given the size actually taken
+    #                                     (reflects any cap/throttle shrink).
+    #   pct_trades_position_capped     -- % of trades where actual stop risk
+    #                                     came in materially BELOW the
+    #                                     intended target (a cap/throttle
+    #                                     engaged) -- this is "the strategy
+    #                                     calls for less" than the risk %
+    #                                     setting alone would suggest.
+    #   avg_realized_loss_on_losers    -- mean realized $ loss on trades that
+    #                                     actually lost (same value as
+    #                                     abs(average_loser) -- included here
+    #                                     so all three numbers sit together).
+    #   pct_trades_risk_overshoot      -- % of trades whose REALIZED loss
+    #                                     exceeded their own actual stop risk
+    #                                     by a material margin (gap-through
+    #                                     fills -- see execution.py's
+    #                                     gap_loss_count warning) -- i.e. the
+    #                                     opposite failure mode, where a
+    #                                     trade risked MORE than intended.
+    # All 0.0 for a backtest with no trades carrying initial_risk/
+    # intended_risk_dollars (e.g. a strategy that defines no stop at all).
+
     def to_dict(self) -> dict:
         return asdict(self)
 
@@ -151,6 +204,183 @@ def _periodic_max_drawdown(equity_df: pd.DataFrame, freq: str, seg_id: np.ndarra
     return abs(worst) * 100.0 if pd.notna(worst) else 0.0
 
 
+def _trade_reset_segment_ids(trades: list[Trade], equity_df: pd.DataFrame) -> np.ndarray | None:
+    """Integer "which simulated account is this TRADE part of" id, one per
+    entry in `trades` -- the trade-level counterpart to _reset_segment_ids
+    above (which operates on the bar-level equity curve). Returns None
+    when there are no reset events (the common case), so callers fall
+    back to treating every trade as one account, unchanged from before
+    this existed.
+
+    A trade's exit_time strictly AFTER a reset's timestamp belongs to the
+    new (post-reset) account; a trade exiting exactly AT the reset instant
+    is the forced-close that caused the reset (see app.backtest.execution's
+    reset_on_breach handling) and so still belongs to the OLD, dying
+    account -- hence the strict `>` rather than `>=` used for the bar-level
+    equity curve (there, the reset bar's own equity has already been reset
+    to initial_balance, so `>=` is correct for that series; a trade is a
+    discrete event that either caused the reset or came after it, not a
+    continuously-updated row that IS the reset)."""
+    events = equity_df.attrs.get("account_reset_events") if equity_df is not None else None
+    if not events or not trades:
+        return None
+    reset_ats = [ev["reset_at"] for ev in events]
+    seg_id = np.zeros(len(trades), dtype=np.int64)
+    exit_times = pd.to_datetime([t.exit_time for t in trades])
+    for reset_at in reset_ats:
+        seg_id += (exit_times > pd.Timestamp(reset_at)).astype(np.int64)
+    return seg_id
+
+
+def compute_risk_reconciliation(trades: list[Trade]) -> dict:
+    """Reconciles "how much you're willing to risk" (RiskConfig.risk_value,
+    captured per-trade as Trade.intended_risk_dollars at sizing time)
+    against what a trade's actual configured stop would have cost given
+    the size it was actually sized to (Trade.initial_risk * Trade.size),
+    and against what it actually realized if it lost. Returns the raw
+    dict compute_statistics folds into BacktestStatistics; also usable
+    standalone (e.g. for a dedicated report table) since it needs nothing
+    but a trade list.
+
+    A position-size cap (RiskConfig.max_position_size) or an adaptive-risk
+    throttle can size a trade below its intended target -- "the strategy
+    calls for less" than the risk % setting alone would suggest -- which
+    shows up here as actual_stop_risk < intended_risk on a meaningful
+    share of trades. A gap-through fill shows up as the REALIZED loss
+    exceeding that same trade's own actual stop risk -- the opposite
+    direction (risking more than intended), tracked separately.
+    """
+    intended = [t.intended_risk_dollars for t in trades if t.intended_risk_dollars]
+    pairs = [
+        (t.intended_risk_dollars, t.initial_risk * t.size)
+        for t in trades
+        if t.intended_risk_dollars and t.initial_risk and t.size
+    ]
+    losers = [t.pnl for t in trades if t.pnl < 0]
+
+    avg_intended = float(np.mean(intended)) if intended else 0.0
+    avg_actual_stop = float(np.mean([p[1] for p in pairs])) if pairs else 0.0
+    avg_realized_loss = float(abs(np.mean(losers))) if losers else 0.0
+
+    # "Materially" capped/overshot -- a >1% difference, to avoid flagging
+    # ordinary floating-point noise as a cap/overshoot event.
+    capped = [p for p in pairs if p[1] < p[0] * 0.99]
+    pct_capped = float(len(capped) / len(pairs) * 100) if pairs else 0.0
+
+    overshoot_flags = [
+        abs(t.pnl) > (t.initial_risk * t.size) * 1.01
+        for t in trades
+        if t.pnl < 0 and t.initial_risk and t.size
+    ]
+    pct_overshoot = float(sum(overshoot_flags) / len(overshoot_flags) * 100) if overshoot_flags else 0.0
+
+    return {
+        "avg_intended_risk_dollars": avg_intended,
+        "avg_actual_stop_risk_dollars": avg_actual_stop,
+        "avg_realized_loss_on_losers": avg_realized_loss,
+        "pct_trades_position_capped": pct_capped,
+        "pct_trades_risk_overshoot": pct_overshoot,
+    }
+
+
+def format_run_summary_line(
+    label: str,
+    n_trades: int,
+    stats: "BacktestStatistics",
+    chain_eval_pass_pct: float,
+    chain_payout_pct: float,
+    per_attempt_eval_pass_pct: float | None = None,
+    per_attempt_payout_pct: float | None = None,
+    total_attempts: int | None = None,
+) -> str:
+    """Shared "Baseline: N trades, net $X, eval pass Y%, payout Z%." console
+    line built by every orchestration tool (Full Pipeline, Quick Optimize)
+    -- one copy so a fix to how this line reads never has to be applied in
+    two (or more) places and drift.
+
+    FIX (RESET-ACCT-002/RESET-ACCT-001): when this run used
+    reset_on_breach (stats.account_reset_count > 0), the previous version
+    of this line printed `stats.net_profit` (cumulative P&L pooled across
+    every simulated account the reset chain burned through -- see
+    BacktestStatistics.is_reset_chain's docstring) labeled as plain "net
+    $X", and printed `chain_eval_pass_pct`/`chain_payout_pct` (whether
+    >=1 attempt anywhere in a, possibly hundreds-long, reset chain ever
+    passed/paid out -- see MonteCarloResult.per_attempt_pass_probability's
+    docstring) labeled as plain "eval pass Y%" -- both read like ordinary
+    single-account numbers but weren't. This still prints those same
+    chain-level numbers (some callers/tests read them), but ONLY when a
+    reset chain was actually used does it also print the two numbers that
+    actually answer "what happens to ONE account attempt": the final
+    (currently-standing) account's own P&L, and the true per-attempt
+    pass/payout rate pooled across every independent attempt in the
+    chain. When account_reset_count is 0 (the default, non-reset case)
+    this is byte-identical to the line before this fix existed.
+    """
+    line = (
+        f"{label}: {n_trades} trades, net ${stats.net_profit:,.2f}, "
+        f"eval pass {chain_eval_pass_pct:.1f}%, payout {chain_payout_pct:.1f}%."
+    )
+    return line + reset_chain_note(
+        stats, chain_eval_pass_pct, chain_payout_pct,
+        per_attempt_eval_pass_pct, per_attempt_payout_pct, total_attempts,
+    )
+
+
+def reset_chain_note(
+    stats: "BacktestStatistics",
+    chain_eval_pass_pct: float,
+    chain_payout_pct: float,
+    per_attempt_eval_pass_pct: float | None = None,
+    per_attempt_payout_pct: float | None = None,
+    total_attempts: int | None = None,
+) -> str:
+    """The bracketed reset-chain clarification appended by
+    format_run_summary_line above -- split out separately so any console
+    line that reports net_profit/eval-pass/payout with its own custom
+    formatting (e.g. one that also prints win rate) can append the exact
+    same clarification without duplicating its wording. Returns "" (no
+    change to the line at all) whenever stats.account_reset_count is 0 --
+    the default, non-reset case."""
+    if stats.account_reset_count <= 0:
+        return ""
+    note = (
+        f" [reset_on_breach: {stats.account_reset_count} account reset(s) occurred -- "
+        f"net ${stats.net_profit:,.2f} above is CUMULATIVE P&L across "
+        f"{stats.account_reset_count + 1} simulated accounts, not one account's result; "
+        f"the CURRENT (final) account's own P&L is ${stats.final_segment_net_profit:,.2f} "
+        f"over its {stats.final_segment_trade_count} trades. "
+        f"'eval pass {chain_eval_pass_pct:.1f}%'/'payout {chain_payout_pct:.1f}%' above mean "
+        f"\"did at least one attempt anywhere in the reset chain\" -- "
+    )
+    if per_attempt_eval_pass_pct is not None and per_attempt_payout_pct is not None:
+        attempts_note = f" across {total_attempts:,} independent attempts" if total_attempts else ""
+        note += (
+            f"the per-ATTEMPT rate{attempts_note} (the \"will ONE account attempt pass\" "
+            f"question) is eval pass {per_attempt_eval_pass_pct:.1f}%, "
+            f"payout {per_attempt_payout_pct:.1f}%.]"
+        )
+    else:
+        note += "see the Monte Carlo section for the per-attempt rate.]"
+    return note
+
+
+def net_profit_reset_note(stats: "BacktestStatistics") -> str:
+    """A shorter version of reset_chain_note's clarification, for the
+    (several) console/log lines around the app that print net_profit
+    alone, before any Monte Carlo eval-pass/payout numbers exist yet to
+    report (e.g. the raw-backtest-just-finished line printed before the
+    prop-firm simulation step runs). Returns "" whenever
+    stats.account_reset_count is 0 -- the default, non-reset case."""
+    if stats.account_reset_count <= 0:
+        return ""
+    return (
+        f" [reset_on_breach: {stats.account_reset_count} account reset(s) occurred -- "
+        f"this net profit is CUMULATIVE P&L across {stats.account_reset_count + 1} simulated "
+        f"accounts, not one account's result; the CURRENT (final) account's own P&L is "
+        f"${stats.final_segment_net_profit:,.2f} over its {stats.final_segment_trade_count} trades.]"
+    )
+
+
 def compute_statistics(
     trades: list[Trade],
     equity_curve: pd.DataFrame,
@@ -226,6 +456,18 @@ def compute_statistics(
     max_weekly_dd = _periodic_max_drawdown(equity_curve, "1W", seg_id)
     account_reset_count = int(seg_id[-1]) if seg_id is not None and len(seg_id) else 0
 
+    trade_seg_id = _trade_reset_segment_ids(trades, equity_curve)
+    if trade_seg_id is not None and len(trade_seg_id):
+        last_seg = int(trade_seg_id[-1])
+        final_seg_trades = [t for t, seg in zip(trades, trade_seg_id) if seg == last_seg]
+        final_seg_pnls = np.array([t.pnl for t in final_seg_trades if np.isfinite(t.pnl)])
+        final_segment_net_profit = float(final_seg_pnls.sum())
+        final_segment_trade_count = len(final_seg_trades)
+    else:
+        final_segment_net_profit = net_profit
+        final_segment_trade_count = len(pnls)
+    risk_recon = compute_risk_reconciliation(trades)
+
     win_streak = _max_streak(list(pnls > 0))
     loss_streak = _max_streak(list(pnls <= 0))
 
@@ -276,6 +518,14 @@ def compute_statistics(
         average_r=average_r, risk_reward=risk_reward,
         sharpe_ratio=sharpe_ratio, sortino_ratio=sortino_ratio, calmar_ratio=calmar_ratio,
         total_trades=len(trades), account_reset_count=account_reset_count,
+        is_reset_chain=account_reset_count > 0,
+        final_segment_net_profit=final_segment_net_profit,
+        final_segment_trade_count=final_segment_trade_count,
+        avg_intended_risk_dollars=risk_recon["avg_intended_risk_dollars"],
+        avg_actual_stop_risk_dollars=risk_recon["avg_actual_stop_risk_dollars"],
+        avg_realized_loss_on_losers=risk_recon["avg_realized_loss_on_losers"],
+        pct_trades_position_capped=risk_recon["pct_trades_position_capped"],
+        pct_trades_risk_overshoot=risk_recon["pct_trades_risk_overshoot"],
     )
 
 

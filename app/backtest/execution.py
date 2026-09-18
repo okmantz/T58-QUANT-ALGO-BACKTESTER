@@ -55,6 +55,19 @@ class Trade:
     initial_risk: float | None = None  # |entry - stop| in raw price units, at entry time
     adaptive_risk_multiplier: float = 1.0     # position-size multiplier in effect when this trade was OPENED
     adaptive_risk_rules_active: tuple = ()    # human-readable labels of whichever adaptive-risk rule(s) fired
+    intended_risk_dollars: float | None = None
+    # RISK-RECON: the raw dollar figure risk.risk_amount(equity_at_entry) targeted
+    # for this trade -- i.e. literally "how much you told the system you're
+    # willing to risk" (RiskConfig.risk_value, e.g. 0.5% of a $50k account =
+    # $250), computed BEFORE any max_position_size cap or adaptive-risk
+    # throttle shrinks the actual position. Compare against
+    # `initial_risk * size` (the trade's ACTUAL dollar risk at its own stop,
+    # given the size that was actually taken) to see whether -- and by how
+    # much -- a cap/throttle/rounding made this trade risk less (or, via a
+    # gap-through fill on the realized `pnl` itself, more) than what was
+    # configured. See app.backtest.statistics.compute_risk_reconciliation
+    # for the aggregated view surfaced in every report. None only for a
+    # trade whose sizing produced no finite risk_amount (equity <= 0).
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -326,6 +339,7 @@ def run_execution(
             initial_risk=open_pos["initial_risk"],
             adaptive_risk_multiplier=open_pos["adaptive_multiplier"],
             adaptive_risk_rules_active=tuple(open_pos["adaptive_rules_active"]),
+            intended_risk_dollars=open_pos.get("intended_risk_dollars"),
         ))
         bar_date_ = day_idx[i]
         adaptive_state.record_trade_close(pnl, is_new_day=not day_has_pnl[bar_date_])
@@ -372,6 +386,7 @@ def run_execution(
             initial_risk=open_pos["initial_risk"],
             adaptive_risk_multiplier=open_pos["adaptive_multiplier"],
             adaptive_risk_rules_active=tuple(open_pos["adaptive_rules_active"]),
+            intended_risk_dollars=open_pos.get("intended_risk_dollars"),
         ))
         open_pos["size"] -= partial_size
         bar_date_ = day_idx[i]
@@ -648,6 +663,7 @@ def run_execution(
                     sizing_pips = bar_sl_distance / risk.pip_size if risk.pip_size else 0
                 else:
                     sizing_pips = stop_loss_pips or 0
+                intended_risk_dollars = risk.risk_amount(equity)
                 size = risk.position_size(equity, sizing_pips)
 
                 adaptive_multiplier = 1.0
@@ -725,6 +741,7 @@ def run_execution(
                         "equity_at_entry": equity,
                         "best_price": entry_price,
                         "initial_risk": initial_risk,
+                        "intended_risk_dollars": intended_risk_dollars,
                         "breakeven_done": False,
                         "partial_taken": False,
                         "trailing_distance": bar_trail_distance,
