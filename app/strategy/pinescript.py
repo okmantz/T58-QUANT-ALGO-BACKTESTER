@@ -57,6 +57,19 @@ Supported subset
   the backtest engine already treats as taking precedence over the fixed
   pip fields -- see app/strategy/base.py's StrategyResult docstring. If
   both are present in the same file, the ATR-mult ones win.
+- Special directive comments for the timeframe this script needs (see
+  app.data.timeframe_resample's own docstring for the full mechanism --
+  this parser has no native way to express it, since a working script
+  here can't use security()/multi-timeframe requests at all, see below):
+    // T58_TIMEFRAME=15m
+    // T58_HTF=1h,4h
+  T58_TIMEFRAME resamples the loaded data to that execution timeframe
+  before this script ever sees it. T58_HTF merges one or more coarser
+  context timeframes' raw OHLCV on as tfNN_open/tfNN_high/tfNN_low/
+  tfNN_close/tfNN_volume columns -- this line-based parser can't compute
+  a Pine indicator AT that timeframe the way a Manual/Python strategy
+  can, only expose the raw bars. Both are optional; a script with
+  neither behaves exactly as before this existed.
 
 Not supported (raises StrategyError): custom functions, arrays/matrices,
 security()/multi-timeframe requests, repainting constructs, plotting,
