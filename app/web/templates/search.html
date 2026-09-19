@@ -295,6 +295,19 @@
   </div>
 
   <div class="card">
+    <h2>3b. Timeframes to test (optional)</h2>
+    <p class="help">
+      Leave blank to search only the loaded data's own native bar spacing, as before. Fill in a list
+      (e.g. "5m, 15m, 30m, 1h, 4h") and the dataset above -- typically your finest-grained one, e.g.
+      1-minute -- gets resampled into each one, with this exact search run independently against every
+      timeframe. Results open on the Multi-Instrument Search job page instead of the usual single-result
+      page below, since this is now several independent searches. Not combined with Loop Mode yet -- use
+      one or the other.
+    </p>
+    <input type="text" name="expand_timeframes" placeholder="e.g. 5m, 15m, 30m, 1h, 4h">
+  </div>
+
+  <div class="card">
     <h2>Loop mode (repeat rounds, widening on stall, until a winner or a budget runs out)</h2>
     <p class="help">Only applies to a named-family/all-families search (not Single-strategy or
     Family Grid mode). Repeats Search Lab rounds automatically: if a round makes no progress for

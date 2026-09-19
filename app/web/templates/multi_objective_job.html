@@ -27,6 +27,15 @@
   <div id="log">Starting&hellip;</div>
 </div>
 
+<div class="card" id="sweep-card" style="display:none;">
+  <h2>Timeframe sweep -- every timeframe's own Pareto front</h2>
+  <p class="help">Each timeframe ran its own independent NSGA-II search -- fronts are NOT merged across timeframes, since objectives like trade count or net profit aren't directly comparable across bar sizes. The table below the log shows the FIRST timeframe's front in full; open any other timeframe's own report for its own candidates.</p>
+  <table>
+    <thead><tr><th>Timeframe</th><th>Pareto front size</th><th>Generations</th><th>Report</th></tr></thead>
+    <tbody id="sweep-tbody"></tbody>
+  </table>
+</div>
+
 <div class="card" id="summary-card" style="display:none;">
   <h2>Pareto front</h2>
   <p class="help" id="s-objectives"></p>
@@ -70,6 +79,22 @@
         if (data.done) {
           document.getElementById('spinner').style.display = 'none';
           document.getElementById('status-title').textContent = 'Multi-objective search complete';
+
+          if (data.sweep_results) {
+            const sweepCard = document.getElementById('sweep-card');
+            sweepCard.style.display = 'block';
+            const tbody = document.getElementById('sweep-tbody');
+            tbody.innerHTML = '';
+            Object.keys(data.sweep_results).forEach(label => {
+              const row = data.sweep_results[label];
+              const tr = document.createElement('tr');
+              const link = row.report_html ? `<a href="${row.report_html}" target="_blank">Open report &rarr;</a>` : '—';
+              tr.innerHTML = `<td>${label}</td><td>${(row.pareto_front || []).length}</td>` +
+                `<td>${row.generations_run}</td><td>${link}</td>`;
+              tbody.appendChild(tr);
+            });
+          }
+
           const s = data.summary;
           if (s) {
             document.getElementById('summary-card').style.display = 'block';

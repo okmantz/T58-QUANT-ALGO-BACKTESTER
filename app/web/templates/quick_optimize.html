@@ -204,6 +204,19 @@
     <p style="font-size:12px;color:#888;margin-top:4px;">Off by default -- unchanged, fully in-sample behavior. When checked, the LAST fraction of the dataset below is carved off before the baseline/search run at all, and the winning configuration is backtested against it once, purely to report a less-than-100%-circular number. This is NOT the same as Full Pipeline's own holdout check: there's no walk-forward OOS-fold re-verification and no ICIR/Bonferroni re-check of the holdout segment itself. Every Quick Optimize result -- with or without this on -- is still labeled "NOT OOS VALIDATED"; run Full Pipeline for that.</p>
   </div>
 
+  <div class="card">
+    <h2>5. Timeframes to test (optional)</h2>
+    <p style="font-size:12px;color:#888;">
+      Leave blank to optimize only against the loaded data's own native bar spacing, as before. Fill in a
+      list (e.g. "5m, 15m, 30m, 1h, 4h") and the GA above runs independently once per timeframe -- the
+      dataset gets resampled to each one -- and whichever timeframe's optimized result has the higher
+      eval-pass probability (win rate as the tiebreaker) is what gets saved to the Strategy Library, with
+      that winning timeframe stamped onto it (manual/JSON strategies only) so it keeps trading on that bar
+      size later. The job page shows every timeframe's own numbers side by side.
+    </p>
+    <input type="text" name="expand_timeframes" placeholder="e.g. 5m, 15m, 30m, 1h, 4h">
+  </div>
+
   <button class="submit-btn" type="submit">Run Quick Optimize</button>
 </form>
 

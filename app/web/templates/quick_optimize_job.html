@@ -35,6 +35,15 @@
 
 <div id="verdict-wrap" style="display:none;"><div class="verdict-banner" id="verdict-banner"></div></div>
 
+<div class="card" id="sweep-card" style="display:none;">
+  <h2>Timeframe sweep -- every timeframe tried</h2>
+  <p class="note" id="sweep-note"></p>
+  <table>
+    <thead><tr><th>Timeframe</th><th>Optimized eval pass</th><th>Optimized win rate</th><th>Optimized net profit</th><th>Trades</th></tr></thead>
+    <tbody id="sweep-tbody"></tbody>
+  </table>
+</div>
+
 <div class="card" id="summary-card" style="display:none;">
   <h2>Baseline vs. optimized</h2>
   <table>
@@ -126,6 +135,27 @@
           document.getElementById('status-title').textContent = 'Quick Optimize complete';
           const btn = document.getElementById('stop-btn');
           if (btn) btn.style.display = 'none';
+
+          if (data.sweep_timeframes) {
+            const sweepCard = document.getElementById('sweep-card');
+            sweepCard.style.display = 'block';
+            document.getElementById('sweep-note').textContent =
+              `Winning timeframe: ${data.best_timeframe} (highest optimized eval-pass probability, win rate as tiebreaker).`;
+            const tbody = document.getElementById('sweep-tbody');
+            tbody.innerHTML = '';
+            Object.keys(data.sweep_timeframes).forEach(label => {
+              const row = data.sweep_timeframes[label];
+              const tr = document.createElement('tr');
+              if (row.is_best) tr.style.fontWeight = '700';
+              tr.innerHTML = `<td>${label}${row.is_best ? ' \u2605' : ''}</td>` +
+                `<td>${fmt(row.optimized_eval_pass_probability)}%</td>` +
+                `<td>${fmt(row.optimized_win_rate)}%</td>` +
+                `<td>${money(row.optimized_net_profit)}</td>` +
+                `<td>${row.optimized_trades}</td>`;
+              tbody.appendChild(tr);
+            });
+          }
+
           const s = data.summary;
           if (s) {
             // Point (1): this banner is unconditional -- it renders for

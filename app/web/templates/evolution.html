@@ -256,6 +256,18 @@
     <div class="checkbox-row" style="background:rgba(120,200,120,0.08);border:1px solid rgba(120,200,120,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="reset_on_breach" checked><label style="margin:0;">Reset-on-breach: score every candidate on the basis that a blown account gets a fresh eval and keeps going, not a dead end (recommended -- uncheck to optimize on a single account with no reset)</label></div>
   </div>
 
+  <div class="card">
+    <h2>3b. Timeframes to test (optional)</h2>
+    <p class="help">
+      Leave blank to evolve only against the loaded data's own native bar spacing, as before. Fill in a
+      list (e.g. "5m, 15m, 30m, 1h, 4h") and the dataset above -- typically your finest-grained one, e.g.
+      1-minute -- gets resampled into each one, with an independent Evolution Lab runner started per
+      timeframe. Results open on the Multi-Instrument Evolution job page instead of this page's own
+      single-runner status below, since this is now several independent runs.
+    </p>
+    <input type="text" name="expand_timeframes" placeholder="e.g. 5m, 15m, 30m, 1h, 4h">
+  </div>
+
   <button class="submit-btn" type="submit">Start Evolution Lab</button>
 </form>
 {% endif %}

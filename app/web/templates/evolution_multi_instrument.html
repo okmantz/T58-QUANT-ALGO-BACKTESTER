@@ -92,6 +92,22 @@
   </div>
 
   <div class="card">
+    <h2>1b. Or auto-generate timeframes from a single dataset</h2>
+    <p class="help">
+      Leave this blank to run across the separate files checked above, unchanged. Fill it in and you can
+      check just ONE dataset (typically your finest-grained one, e.g. 1-minute) above -- it gets resampled
+      into every timeframe listed here and each one runs as its own independent evolution runner, same as
+      if you'd uploaded a separate file for each. Works with several checked datasets too: every dataset
+      gets expanded into every timeframe listed.
+    </p>
+    <input type="text" name="expand_timeframes" placeholder="e.g. 5m, 15m, 30m, 1h, 4h" style="width:100%; max-width:420px;">
+    <p class="help" style="margin-top:6px;">
+      A timeframe finer than the loaded data's own native bar spacing, a duplicate, or one that would leave
+      too few bars is skipped (not fatal) and noted next to this group's results.
+    </p>
+  </div>
+
+  <div class="card">
     <h2>2. Prop account &amp; risk (applied identically to every instrument in this group)</h2>
     <p class="help">
       Same field names as the regular Evolution Lab / Full Pipeline / Run &amp; Report pages. Set your
