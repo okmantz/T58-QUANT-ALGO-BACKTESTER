@@ -1,23 +1,106 @@
 {
   "name": "T58 Gold Trend Breakout (bos24/6, ema40-179 & 24-123, adx17-20, 1H)",
+  "timeframe": "1h",
   "entry_conditions": {
     "long": [
-      {"left": {"type": "bos", "lookback": 24, "direction": "bullish"}, "operator": "is true", "right": {"type": "value", "value": 1}},
-      {"left": {"type": "ema", "period": 40, "field": "close"}, "operator": ">", "right": {"type": "ema", "period": 179, "field": "close"}},
-      {"left": {"type": "adx", "period": 24, "field": "close"}, "operator": ">", "right": {"type": "value", "value": 17.22}}
+      {
+        "left": {
+          "type": "bos",
+          "lookback": 24,
+          "direction": "bullish"
+        },
+        "operator": "is true",
+        "right": {
+          "type": "value",
+          "value": 1
+        }
+      },
+      {
+        "left": {
+          "type": "ema",
+          "period": 40,
+          "field": "close"
+        },
+        "operator": ">",
+        "right": {
+          "type": "ema",
+          "period": 179,
+          "field": "close"
+        }
+      },
+      {
+        "left": {
+          "type": "adx",
+          "period": 24,
+          "field": "close"
+        },
+        "operator": ">",
+        "right": {
+          "type": "value",
+          "value": 17.22
+        }
+      }
     ],
-    "long_connectors": ["AND", "AND"],
+    "long_connectors": [
+      "AND",
+      "AND"
+    ],
     "short": [
-      {"left": {"type": "bos", "lookback": 6, "direction": "bearish"}, "operator": "is true", "right": {"type": "value", "value": 1}},
-      {"left": {"type": "ema", "period": 24, "field": "close"}, "operator": "<", "right": {"type": "ema", "period": 123, "field": "close"}},
-      {"left": {"type": "adx", "period": 33, "field": "close"}, "operator": ">", "right": {"type": "value", "value": 19.95}}
+      {
+        "left": {
+          "type": "bos",
+          "lookback": 6,
+          "direction": "bearish"
+        },
+        "operator": "is true",
+        "right": {
+          "type": "value",
+          "value": 1
+        }
+      },
+      {
+        "left": {
+          "type": "ema",
+          "period": 24,
+          "field": "close"
+        },
+        "operator": "<",
+        "right": {
+          "type": "ema",
+          "period": 123,
+          "field": "close"
+        }
+      },
+      {
+        "left": {
+          "type": "adx",
+          "period": 33,
+          "field": "close"
+        },
+        "operator": ">",
+        "right": {
+          "type": "value",
+          "value": 19.95
+        }
+      }
     ],
-    "short_connectors": ["AND", "AND"]
+    "short_connectors": [
+      "AND",
+      "AND"
+    ]
   },
-  "exit_conditions": {"long": [], "short": []},
+  "exit_conditions": {
+    "long": [],
+    "short": []
+  },
   "risk_management": {
-    "stop_type": "atr", "stop_value": 4.5, "stop_atr_period": 4,
-    "target_type": "atr", "target_value": 3.97, "target_atr_period": 6,
-    "opposite_signal_exit": true, "max_bars_in_trade": 77
+    "stop_type": "atr",
+    "stop_value": 4.5,
+    "stop_atr_period": 4,
+    "target_type": "atr",
+    "target_value": 3.97,
+    "target_atr_period": 6,
+    "opposite_signal_exit": true,
+    "max_bars_in_trade": 77
   }
 }
