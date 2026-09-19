@@ -1,5 +1,6 @@
 {
   "name": "Volume Climax Reversal (rel-vol14>2.0x, vol-expansion gated)",
+  "timeframe": "5m",
   "entry_conditions": {
     "long": [
       {
