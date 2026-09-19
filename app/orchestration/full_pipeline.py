@@ -1138,6 +1138,8 @@ def _finish(
     Strategy Library. Split out of run_full_pipeline only to keep that
     function's main try/finally block readable."""
     from app.reports.generator import generate_full_report
+    from tempfile import mkdtemp
+    from shutil import rmtree
 
     period = (str(df["timestamp"].iloc[0]), str(df["timestamp"].iloc[-1]))
     final_strategy_name = f"{display_name} (Full Pipeline)"
@@ -1178,12 +1180,30 @@ def _finish(
             for gene, value in zip(ga_result.genes, ga_result.best.genome)
         }
 
+    # BUGFIX (2026-09-19): `final_strategy` (the Strategy object) is a local
+    # of run_full_pipeline's try-block and was never threaded into this
+    # split-out function, so this call always raised NameError before a
+    # report could ever be written (every Full Pipeline run hit this).
+    # Rebuild the equivalent Strategy object here from final_config /
+    # final_source_type, which _are_ passed through -- describe_resolved_timeframe
+    # only reads the strategy's declared timeframe, so this is sufficient.
+    if final_source_type == "manual":
+        _report_strategy = build_strategy_from_spec(_spec_for_manual(final_config), None)
+    else:
+        _tmp_report_dir = Path(mkdtemp(prefix="t58_fullpipeline_report_"))
+        try:
+            _report_strategy = build_strategy_from_spec(
+                _spec_for_code(final_source_type, final_code_text, final_code_ext), _tmp_report_dir
+            )
+        finally:
+            rmtree(_tmp_report_dir, ignore_errors=True)
+
     report_paths = generate_full_report(
         output_dir=output_dir,
         strategy_name=final_strategy_name,
         strategy_source_type=final_source_type,
         instrument=instrument,
-        timeframe=describe_resolved_timeframe(final_strategy, df),
+        timeframe=describe_resolved_timeframe(_report_strategy, df),
         backtest_period=period,
         backtest_result=final_bt,
         prop_rules=prop_rules,
