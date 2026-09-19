@@ -42,6 +42,21 @@ How a strategy declares its timeframe(s):
   computes whatever it wants from those). Omitting both is identical to
   every Python strategy's existing behavior.
 
+  PineScript / MQL5 strategies -- same directive-comment convention
+  app.strategy.pinescript/app.strategy.mql5 already use for
+  T58_SL_PIPS/T58_TP_PIPS (neither language has a native way to express
+  this, so a `//`-comment directive is the only option): an optional
+  `// T58_TIMEFRAME=15m` (execution timeframe) and/or
+  `// T58_HTF=1h` or `// T58_HTF=1h,4h` (one or more comma-separated
+  coarser context timeframes, merged on as the same tfNN_* raw-OHLCV
+  columns Python strategies get -- there is no way for a line-based
+  parser to know what a Pine/MQL5 script would have DONE with an
+  indicator computed at that timeframe, so unlike Manual/Python, no
+  indicator can be tagged to a context timeframe here, only raw OHLCV).
+  The directive can appear anywhere in the script, on its own line or
+  trailing other code, same as the SL/TP directives. Omitting it is
+  identical to every PineScript/MQL5 strategy's existing behavior.
+
 This is invoked from exactly one place -- app.backtest.engine.run_backtest
 -- so every tool that ultimately calls run_backtest (Run & Report, Full
 Pipeline, Quick Optimize, Search Lab, Evolution Lab, Forge, Speed Run,
@@ -309,6 +324,49 @@ def _resolve_python_declaration(strategy) -> StrategyTimeframeDeclaration:
     return decl
 
 
+# PineScript / MQL5 directive-comment convention -- see this module's own
+# docstring for the full explanation of why a `//`-comment directive is
+# the mechanism for these two languages (neither has a native way to
+# express this) and exactly what T58_TIMEFRAME/T58_HTF mean. Same regex
+# style (bare `KEY\s*=\s*value`, no `//` required in the pattern itself)
+# as app.strategy.pinescript/app.strategy.mql5's own pre-existing
+# T58_SL_PIPS/T58_TP_PIPS directives, which this is a sibling of.
+_TIMEFRAME_DIRECTIVE_RE = re.compile(r"T58_TIMEFRAME\s*=\s*(\S+)")
+_HTF_DIRECTIVE_RE = re.compile(r"T58_HTF\s*=\s*(\S+)")
+
+
+def _resolve_directive_declaration(strategy) -> StrategyTimeframeDeclaration:
+    """PineScript and MQL5 both resolve through this one function -- see
+    this module's docstring ("PineScript / MQL5 strategies") for the
+    `// T58_TIMEFRAME=15m` / `// T58_HTF=1h,4h` convention. Unlike Manual/
+    Python, no indicator can be tagged to a context timeframe here (a
+    line-based parser can't know what a Pine/MQL5 script would have DONE
+    with an indicator at that timeframe) -- T58_HTF only ever contributes
+    raw OHLCV tfNN_* columns, never a computed indicator. A script with
+    neither directive declares nothing, exactly like today."""
+    decl = StrategyTimeframeDeclaration()
+    code = getattr(strategy, "code", None)
+    if not code:
+        return decl
+    exec_match = _TIMEFRAME_DIRECTIVE_RE.search(code)
+    if exec_match:
+        try:
+            decl.execution_timeframe = normalize_timeframe_label(exec_match.group(1))
+        except TimeframeError:
+            pass
+    htf_match = _HTF_DIRECTIVE_RE.search(code)
+    if htf_match:
+        for tf in htf_match.group(1).split(","):
+            tf = tf.strip()
+            if not tf:
+                continue
+            try:
+                decl.context_timeframes.add(normalize_timeframe_label(tf))
+            except TimeframeError:
+                continue
+    return decl
+
+
 def resolve_strategy_declaration(strategy) -> StrategyTimeframeDeclaration:
     """What timeframe(s), if any, `strategy` has declared it needs. See
     this module's docstring for exactly how each source type declares
@@ -320,6 +378,8 @@ def resolve_strategy_declaration(strategy) -> StrategyTimeframeDeclaration:
         return _resolve_manual_declaration(strategy.config)
     if source_type == "python":
         return _resolve_python_declaration(strategy)
+    if source_type in ("pinescript", "mql5"):
+        return _resolve_directive_declaration(strategy)
     return StrategyTimeframeDeclaration()
 
 
