@@ -1,5 +1,5 @@
 {
-  "name": "T58 ES VWMA Trend Pullback (vwma24/35, ema178/280, rsi27/17, 1H)",
+  "name": "T58 ES VWMA Trend Pullback -- Full Pipeline optimized (vwma31/86, ema458/244, rsi19/9, 1H), set risk at 0.85%",
   "timeframe": "1h",
   "entry_conditions": {
     "long": [
@@ -12,33 +12,33 @@
         "operator": ">",
         "right": {
           "type": "ema",
-          "period": 178,
+          "period": 458,
           "field": "close"
         }
       },
       {
         "left": {
           "type": "close",
-          "period": 3,
+          "period": 5,
           "field": "close"
         },
         "operator": "<",
         "right": {
           "type": "vwma",
-          "period": 24,
+          "period": 31,
           "field": "close"
         }
       },
       {
         "left": {
           "type": "rsi",
-          "period": 27,
+          "period": 19,
           "field": "close"
         },
         "operator": "<=",
         "right": {
           "type": "value",
-          "value": 44.59
+          "value": 34.573716861434065
         }
       }
     ],
@@ -50,39 +50,39 @@
       {
         "left": {
           "type": "close",
-          "period": 3,
+          "period": 1,
           "field": "close"
         },
         "operator": "<",
         "right": {
           "type": "ema",
-          "period": 280,
+          "period": 244,
           "field": "close"
         }
       },
       {
         "left": {
           "type": "close",
-          "period": 3,
+          "period": 9,
           "field": "close"
         },
         "operator": ">",
         "right": {
           "type": "vwma",
-          "period": 35,
+          "period": 86,
           "field": "close"
         }
       },
       {
         "left": {
           "type": "rsi",
-          "period": 17,
+          "period": 9,
           "field": "close"
         },
         "operator": ">=",
         "right": {
           "type": "value",
-          "value": 75.33
+          "value": 82.19449073633591
         }
       }
     ],
@@ -96,13 +96,13 @@
       {
         "left": {
           "type": "close",
-          "period": 2,
+          "period": 3,
           "field": "close"
         },
         "operator": "cross above",
         "right": {
           "type": "vwma",
-          "period": 6,
+          "period": 18,
           "field": "close"
         }
       }
@@ -111,13 +111,13 @@
       {
         "left": {
           "type": "close",
-          "period": 2,
+          "period": 3,
           "field": "close"
         },
         "operator": "cross below",
         "right": {
           "type": "vwma",
-          "period": 6,
+          "period": 14,
           "field": "close"
         }
       }
@@ -125,12 +125,13 @@
   },
   "risk_management": {
     "stop_type": "atr",
-    "stop_value": 1.34,
-    "stop_atr_period": 11,
+    "stop_value": 1.7554904697329148,
+    "stop_atr_period": 19,
     "target_type": "atr",
-    "target_value": 3.23,
-    "target_atr_period": 25,
+    "target_value": 9.69,
+    "target_atr_period": 51,
     "opposite_signal_exit": true,
-    "max_bars_in_trade": 8
-  }
+    "max_bars_in_trade": 14
+  },
+  "description": "Full Pipeline (walk-forward GA, fastest_payout fitness) re-optimization of the original ES1! VWMA Trend Pullback manual strategy, run against ES1! 1h bars (resampled from 1-minute, Mar 2025-Sep 2026). Dev-period backtest: 42 trades, +$17,262 net (+17.3%) on a $100k account at 0.85% risk/trade, 66.7% win rate, PF 2.44, max DD 3.9%, Monte Carlo eval-pass 89.5% / first-payout 48.8% / risk-of-ruin 14.2% (under the 20% cap), median 25 days to first payout. IMPORTANT: on the true holdout (the most recent ~3.5 months, never seen by the optimizer) this configuration -- and the original, un-optimized version -- both lost money, and the pipeline's ICIR/Bonferroni significance gate did NOT pass. Treat this as a candidate that needs live forward-testing before real capital, not a proven edge. Set risk-per-trade to 0.85% of account equity (Step 04 Risk) when running this -- that is what keeps risk-of-ruin under the 20% cap; the raw GA output before this risk-sizing pass showed 23.5% risk-of-ruin at 1% risk/trade."
 }
