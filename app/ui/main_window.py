@@ -20,6 +20,7 @@ import threading
 import time
 import traceback
 import urllib.parse
+import uuid
 import webbrowser
 from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
@@ -2017,6 +2018,7 @@ class MainWindow:
         self.tab_prop_recommender = Frame(self.content, bg=BG)
         self.tab_refine = Frame(self.content, bg=BG)
         self.tab_search = Frame(self.content, bg=BG)
+        self.tab_search_multi = Frame(self.content, bg=BG)
         self.tab_wfo = Frame(self.content, bg=BG)
         self.tab_cpcv = Frame(self.content, bg=BG)
         self.tab_pbo = Frame(self.content, bg=BG)
@@ -2027,6 +2029,12 @@ class MainWindow:
         self.tab_wfga = Frame(self.content, bg=BG)
         self.tab_ensemble = Frame(self.content, bg=BG)
         self.tab_fullpipeline = Frame(self.content, bg=BG)
+        self.tab_quickoptimize = Frame(self.content, bg=BG)
+        self.tab_evolution_multi = Frame(self.content, bg=BG)
+        self.tab_risksweep = Frame(self.content, bg=BG)
+        self.tab_compare = Frame(self.content, bg=BG)
+        self.tab_optimize_hub = Frame(self.content, bg=BG)
+        self.tab_validate_hub = Frame(self.content, bg=BG)
         self.tab_forge = Frame(self.content, bg=BG)
         self.tab_research_director = Frame(self.content, bg=BG)
         self.tab_speedrun = Frame(self.content, bg=BG)
@@ -2054,6 +2062,8 @@ class MainWindow:
             self.tab_risk, self.tab_run, self.tab_payout, self.tab_prop_recommender, self.tab_refine, self.tab_search,
             self.tab_wfo, self.tab_cpcv, self.tab_pbo, self.tab_sensitivity, self.tab_param_robustness, self.tab_portfolio,
             self.tab_multiobj, self.tab_wfga, self.tab_ensemble, self.tab_fullpipeline,
+            self.tab_quickoptimize, self.tab_search_multi, self.tab_evolution_multi, self.tab_risksweep,
+            self.tab_compare, self.tab_optimize_hub, self.tab_validate_hub,
             self.tab_forge, self.tab_research_director,
             self.tab_speedrun, self.tab_speedrun_multi, self.tab_research_loop,
             self.tab_forwardtest, self.tab_deploylive, self.tab_livemarket, self.tab_genstrat,
@@ -2107,24 +2117,20 @@ class MainWindow:
             ("payout", "", "6  Payout Probability", self.tab_payout, NEON_CYAN),
             ("propfirmrec", "", "7  Prop-Firm Recommender", self.tab_prop_recommender, NEON_CYAN),
 
-            # NOTE (Sep 2026 OPTIMIZE reorder): the requested order also
-            # names an "Overview / Picker" hub, "Quick Optimize",
-            # "Multi-instrument Search Lab", "Multi-instrument Evolution
-            # Lab", and "Risk Sweep" -- those exist on the web app
-            # (/optimize, /quick-optimize, /search/multi-instrument,
-            # /evolution/multi-instrument, /risk-sweep) but have no
-            # desktop tab yet; building them is tracked separately (see
-            # PHASE_1_STATUS.md) rather than stubbed in here. What
-            # already exists below is reordered to match the requested
-            # sequence as closely as possible.
             (None, None, "\u2462 OPTIMIZE", None, BLUE),
+            ("optimizehub", "", "\u2261 Overview / Picker", self.tab_optimize_hub, BLUE),
             ("fullpipeline", "", "Full Pipeline (all-in-one)", self.tab_fullpipeline, BLUE),
+            ("quickoptimize", "", "\u26a1 Quick Optimize", self.tab_quickoptimize, BLUE),
             ("search", "", "Search Lab", self.tab_search, BLUE),
             ("evolution", "", "Evolution Lab (GA)", self.tab_evolution, BLUE),
             ("multiobj", "", "Multi-Objective Optimization", self.tab_multiobj, BLUE),
+            ("searchmulti", "", "Multi-Instrument Search Lab", self.tab_search_multi, BLUE),
+            ("evolutionmulti", "", "Multi-Instrument Evolution Lab", self.tab_evolution_multi, BLUE),
             ("refine", "", "Iterative Refinement", self.tab_refine, BLUE),
+            ("risksweep", "", "\U0001F4CA Risk Sweep", self.tab_risksweep, BLUE),
 
             (None, None, "\u2463 VALIDATE", None, NEON_AMBER),
+            ("validatehub", "", "\u2261 Overview / Checklist", self.tab_validate_hub, NEON_AMBER),
             ("wfo", "", "Walk-Forward Optimization", self.tab_wfo, NEON_AMBER),
             ("wfga", "", "Walk-Forward GA", self.tab_wfga, NEON_AMBER),
             ("cpcv", "", "CPCV", self.tab_cpcv, NEON_AMBER),
@@ -2149,12 +2155,11 @@ class MainWindow:
             # Health" below point at the existing screens those controls
             # already live on (Speed Run's own "Overnight Autopilot"
             # section; Quant Lab's Strategy Health tool) pending a fully
-            # separate screen for each. "Compare Strategies" has no
-            # desktop equivalent at all yet (web-only, see /compare) --
-            # tracked separately, see PHASE_1_STATUS.md.
+            # separate screen for each.
             (None, None, "\u2465 DEPLOYMENT", None, NEON_LIME),
             (None, "SUBHEADER", "Champion Checks", None, None),
             ("autopilot_pointer", "", "\u26a1 Overnight Autopilot", self.tab_speedrun, NEON_LIME),
+            ("compare", "", "\u2696 Compare Strategies", self.tab_compare, NEON_LIME),
             ("strathealth_pointer", "", "\U0001F4C8 Strategy Health / Auto Re-tune", self.tab_quantlab, NEON_LIME),
             (None, "SUBHEADER", "Live Markets", None, None),
             ("forwardtest", "", "Forward Test (MT5)", self.tab_forwardtest, NEON_LIME),
@@ -2214,6 +2219,7 @@ class MainWindow:
             ("Prop-Firm Recommender", self._build_prop_recommender_tab),
             ("Refinement", self._build_refine_tab),
             ("Search Lab", self._build_search_tab),
+            ("Multi-Instrument Search Lab", self._build_search_multi_tab),
             ("Walk-forward", self._build_wfo_tab),
             ("CPCV", self._build_cpcv_tab),
             ("PBO", self._build_pbo_tab),
@@ -2227,7 +2233,13 @@ class MainWindow:
             ("Family Diversity", self._build_family_diversity_tab),
             ("Strategy generator", self._build_generate_strategies_tab),
             ("Evolution Lab", self._build_evolution_lab_tab),
+            ("Multi-Instrument Evolution Lab", self._build_evolution_multi_tab),
             ("Full Pipeline", self._build_full_pipeline_tab),
+            ("Quick Optimize", self._build_quick_optimize_tab),
+            ("Risk Sweep", self._build_risk_sweep_tab),
+            ("Compare Strategies", self._build_compare_tab),
+            ("Optimize Overview", self._build_optimize_hub_tab),
+            ("Validate Overview", self._build_validate_hub_tab),
             ("Forward Test", self._build_forward_test_tab),
             ("Deploy Live", self._build_deploy_live_tab),
             ("Live Market", self._build_live_market_tab),
@@ -4002,6 +4014,26 @@ class MainWindow:
             "list -- this walkthrough still goes in a sensible first-pass order regardless of section."
         )
 
+        h2("What's new in this update")
+        body(
+            "The sidebar was reorganized into three umbrellas -- Strategy Lab (Create through Strategy "
+            "Graveyard, the 7-step journey below), Quant Lab (Quant Lab, Options, Hedge Fund Manager), "
+            "and Account (Account, Education) -- and several tools that used to be tucked inside another "
+            "tab now have their own screen:"
+        )
+        bullet("CREATE \u2192 Multi-Instrument Speed Run -- the same Speed Run, run concurrently across several instrument/timeframe datasets.")
+        bullet("CREATE \u2192 Research Loop (Background) -- split out of Research Agent into its own independent tab (own market data, own AI Assist settings) so it can run as a background companion.")
+        bullet("OPTIMIZE \u2192 Overview / Picker -- a guided \"which OPTIMIZE tool should I use\" picker; every tool underneath is still its own full tab.")
+        bullet("OPTIMIZE \u2192 Quick Optimize -- the GA search step in isolation (previously only reachable via the Strategy Library's OPTIMIZE SELECTED button, which still works too). \u26a0 NOT OOS validated -- a strong result here means \"worth a real Full Pipeline run,\" not a finished answer.")
+        bullet("OPTIMIZE \u2192 Multi-Instrument Search Lab and Multi-Instrument Evolution Lab -- the same Search Lab / Evolution Lab run concurrently across several instrument/timeframe datasets.")
+        bullet("OPTIMIZE \u2192 Risk Sweep -- not a strategy-parameter search: finds which risk-per-trade level maximizes prop-survival odds for the strategy as configured.")
+        bullet("VALIDATE \u2192 Overview / Checklist -- aggregates what Walk-Forward Opt / WFGA / CPCV / Sensitivity / Regime Matrix have already found for whichever strategy is marked \"current.\"")
+        bullet("VALIDATE \u2192 PBO is now its own tab, split out from the combined CPCV / PBO screen.")
+        bullet("DEPLOYMENT \u2192 Compare Strategies -- pick 2-4 saved strategies and see them backtested side by side.")
+        bullet("ACCOUNT \u2192 Account Settings (display name/email/company) now sits above Notification Settings.")
+        tip("If a bullet above doesn't match what you see, the sidebar item names/order win -- this manual "
+            "gets updated by hand and can occasionally lag a fast-moving reorganization.")
+
         h2("STEP 1 — Import your market data (TEST → Market Data)")
         body("The backtester needs historical price candles (open/high/low/close/volume) before anything else can run.")
         numstep(1, "Click Market Data in the sidebar (under TEST).")
@@ -4169,29 +4201,33 @@ class MainWindow:
             "Pipeline tab already runs a solid, automated version of search and out-of-sample "
             "validation on its own. Come back here once you have a strategy worth digging into further."
         )
-        h2("08 — Walk-Forward Optimization")
+        h2("VALIDATE \u2192 Walk-Forward Optimization")
         body(
             "Re-optimizes the strategy fresh on each rolling or anchored fold's training window using a "
             "small GA search, applies the winning configuration UNCHANGED to that fold's held-out test "
             "window, and chains every fold's out-of-sample trades into one continuous equity curve — trust "
             "this number over a single in-sample backtest."
         )
-        h2("09 — CPCV / PBO")
+        h2("VALIDATE \u2192 CPCV")
         body(
             "Combinatorial Purged Cross-Validation stress-tests the strategy across many different "
-            "combinatorial train/test partitions of the same data, instead of one holdout split. Probability "
-            "of Backtest Overfitting (PBO) checks a small pool of candidates (this strategy plus a few "
+            "combinatorial train/test partitions of the same data, instead of one holdout split."
+        )
+        h2("VALIDATE \u2192 PBO")
+        body(
+            "Probability of Backtest Overfitting -- its own tab now, separate from CPCV above (they used "
+            "to share one screen). Checks a small pool of candidates (this strategy plus a few "
             "automatically perturbed variants) and reports the odds that whichever looks best in-sample is "
             "really just noise."
         )
-        h2("10 — Parameter Sensitivity")
+        h2("VALIDATE \u2192 Sensitivity")
         body(
             "Sweeps every tunable numeric parameter across +/- a percentage of its current value, holding "
             "everything else fixed, and flags a 'cliff' wherever the metric drops sharply between adjacent "
             "steps — the sign of a knife-edge parameter rather than a real, stable plateau. Can also produce "
             "a 2D heatmap for a chosen pair of parameters, since two can interact even when each looks fine alone."
         )
-        h2("11 — Multi-Asset Portfolio (now under CHAMPION, not this section)")
+        h2("CHAMPION \u2192 Multi-Asset Portfolio")
         body(
             "Applies the strategy configured on Step 2 to every instrument you list, computes the "
             "correlation matrix of their daily returns, re-weights each instrument's risk (correlated "
@@ -4200,14 +4236,14 @@ class MainWindow:
         )
         tip("ADD LEG FROM LIBRARY lets a portfolio combine genuinely different saved strategies, not just "
             "one strategy run across several instruments.")
-        h2("12 — Multi-Objective Optimization (now under OPTIMIZE, not this section)")
+        h2("OPTIMIZE \u2192 Multi-Objective Optimization")
         body(
             "Runs a real NSGA-II search across several objectives at once (e.g. Sharpe, max drawdown, "
             "eval-pass probability) instead of collapsing them into one weighted score the way Iterative "
             "Refinement's GA does. Produces a Pareto front — candidates where none is strictly worse than "
             "any other on the front. Picking a final winner from that list is your call."
         )
-        h2("13 — Walk-Forward-Aware GA")
+        h2("VALIDATE \u2192 Walk-Forward GA")
         body(
             "The same crossover/mutation/tournament-selection GA as Iterative Refinement, but every "
             "candidate's fitness is scored ONLY on chained out-of-sample fold data — never on the training "
@@ -6112,8 +6148,8 @@ class MainWindow:
     def _load_library_item_into_active_slot(self, item):
         """Loads a StoredStrategy (from the main library list) into the
         single 'active strategy' slot at the top of Step 01 Strategy
-        Configuration -- the slot Full Pipeline (15), Refinement (06),
-        Walk-Forward Opt (08), Sensitivity (10), and Multi-Objective (12)
+        Configuration -- the slot Full Pipeline, Refinement,
+        Walk-Forward Opt, Sensitivity, and Multi-Objective
         all read via _build_strategy(). Switches the STRATEGY SOURCE mode
         too, so loading a PineScript item while Python is the active tab
         still works."""
@@ -15330,6 +15366,856 @@ class MainWindow:
         finally:
             self.misr_progress.stop()
             self._release_heavy_job(JOB_SPEED_RUN)
+
+    # -----------------------------------------------------------------------
+    # Quick Optimize -- split out into its own OPTIMIZE tab (Sep 2026
+    # reorder) for desktop/web parity. Was previously only reachable via
+    # the Strategy Library's "OPTIMIZE SELECTED" button (still there,
+    # unchanged, for optimizing several saved strategies at once); this
+    # tab is the single-strategy version using the strategy configured on
+    # Step 01, matching every other "own RunContextPanel" tool tab.
+    # -----------------------------------------------------------------------
+
+    def _build_quick_optimize_tab(self):
+        f = self._scrollable(self.tab_quickoptimize)
+
+        self._page_header(
+            f,
+            "OPTIMIZE / Quick Optimize",
+            "\u26a1 Quick Optimize",
+            "\"Select a strategy, click Optimize.\" Runs Full Pipeline's own walk-forward-"
+            "aware GA (app.orchestration.quick_optimize) in isolation against the strategy "
+            "configured on Step 01, and hands back a before/after comparison -- without the "
+            "OOS holdout check or the ICIR/Bonferroni significance gate Full Pipeline runs "
+            "afterward specifically to catch a GA that got lucky. \u26a0 NOT OOS VALIDATED -- "
+            "treat a strong result here as \"worth a real Full Pipeline run,\" not as a "
+            "finished answer. To optimize several saved strategies at once instead of one, "
+            "use the Strategy Library's own OPTIMIZE SELECTED button.",
+        )
+
+        self.qopt_context = RunContextPanel(self, "Quick Optimize")
+        self.qopt_context.build(f)
+
+        settings = self._section(
+            f, "Quick Optimize settings",
+            "The same walk-forward-aware GA engine Full Pipeline's Step 2 uses.",
+            emphasize=True,
+        )
+        self.qopt_ga_population = LabeledEntry(settings, "GA population", 16)
+        self.qopt_ga_generations = LabeledEntry(settings, "GA generations", 8)
+        self.qopt_n_folds = LabeledEntry(settings, "Walk-forward folds", 4)
+        self.qopt_final_mc_sims = LabeledEntry(settings, "Final Monte Carlo sims", 1000)
+        self.qopt_reset_on_breach = LabeledCheckbox(settings, "Reset-on-breach (prop-firm realistic) search basis", True)
+        self.qopt_adaptive_risk = LabeledCheckbox(settings, "Enable adaptive, limit-aware position sizing", False)
+        self.qopt_reserve_holdout = LabeledCheckbox(settings, "Reserve a holdout slice (opt-in lightweight check)", False)
+        self.qopt_save_to_library = LabeledCheckbox(settings, "Save the result to the Strategy Library (tagged \"draft\")", True)
+
+        button_row = Frame(f, bg=BG)
+        button_row.pack(fill="x", padx=24, pady=10)
+        self._button(button_row, "RUN QUICK OPTIMIZE", self._quick_optimize_run_clicked, primary=True).pack(side="left")
+
+        self.qopt_progress = NeuralProgress(f)
+        self.qopt_progress.pack(fill="x", padx=24, pady=(2, 10))
+
+        result_section = self._section(f, "Before / after", "\u26a0 NOT OOS VALIDATED -- see Full Pipeline for that.")
+        self.qopt_result_label = Label(
+            result_section, text="No run yet.", bg=PANEL, fg=TEXT_DIM,
+            font=_safe_font(11, "bold"), justify="left", wraplength=900, anchor="w",
+        )
+        self.qopt_result_label.pack(anchor="w", fill="x", padx=18, pady=(2, 12))
+
+        output_section = self._section(f, "Quick Optimize output", "Live progress log.")
+        _qopt_output_frame = Frame(output_section, bg=PANEL)
+        self.qopt_output = Text(
+            _qopt_output_frame, height=16, wrap="word", bg=LOG_BG, fg=TEXT,
+            insertbackground=TEXT, relief="flat", bd=0, highlightthickness=1,
+            highlightbackground=BORDER, font=(MONO, 9),
+        )
+        _qopt_output_scroll = ttk.Scrollbar(
+            _qopt_output_frame, orient="vertical", command=self.qopt_output.yview, style="T58.Vertical.TScrollbar",
+        )
+        self.qopt_output.configure(yscrollcommand=_qopt_output_scroll.set)
+        self.qopt_output.pack(side="left", fill="both", expand=True)
+        _qopt_output_scroll.pack(side="right", fill="y")
+        _qopt_output_frame.pack(fill="both", expand=True, padx=18, pady=(3, 16))
+        self._bind_isolated_wheel(self.qopt_output)
+
+    def _log_qopt(self, msg: str):
+        self.qopt_output.insert(END, msg + "\n")
+        self.qopt_output.see(END)
+        self.root.update_idletasks()
+
+    def _quick_optimize_run_clicked(self):
+        if not self.qopt_context.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV above (this tab's own Market Data section).")
+            return
+        self.qopt_output.delete("1.0", END)
+        self.qopt_result_label.config(text="Running...", fg=TEXT_DIM)
+        self.qopt_progress.start(10)
+        threading.Thread(target=self._quick_optimize_run_pipeline, daemon=True).start()
+
+    def _quick_optimize_run_pipeline(self):
+        from app.orchestration.quick_optimize import QuickOptimizeConfig, run_quick_optimize
+
+        try:
+            df = self.qopt_context.load_dataframe(self._log_qopt)
+            if df is None:
+                return
+            strategy = self._build_strategy()
+            risk = self.qopt_context.build_risk_config()
+            rules = self.qopt_context.build_prop_rules()
+            cfg = QuickOptimizeConfig(
+                ga_population=self.qopt_ga_population.get_int(16),
+                ga_generations=self.qopt_ga_generations.get_int(8),
+                n_folds=self.qopt_n_folds.get_int(4),
+                final_mc_sims=self.qopt_final_mc_sims.get_int(1000),
+                reset_on_breach=self.qopt_reset_on_breach.get(),
+                adaptive_risk_enabled=self.qopt_adaptive_risk.get(),
+                reserve_holdout=self.qopt_reserve_holdout.get(),
+                save_to_library=self.qopt_save_to_library.get(),
+            )
+            res = run_quick_optimize(df, strategy, risk, rules, cfg, progress_cb=self._log_qopt)
+            if res.instrument_mismatch_warning:
+                self._log_qopt(f"\n!!! {res.instrument_mismatch_warning}")
+            marker = "IMPROVED" if res.improved else "no improvement"
+            self.qopt_result_label.config(
+                text=(
+                    "\u26a0 NOT OOS VALIDATED  --  "
+                    f"{res.baseline_eval_pass_probability:.1f}% -> {res.optimized_eval_pass_probability:.1f}%  ({marker})"
+                ),
+                fg=GREEN if res.improved else AMBER,
+            )
+            self._log_qopt(f"\nDone in {res.elapsed_seconds:.1f}s.")
+            if res.saved_library_path:
+                self._log_qopt(f"Saved to library: {res.saved_library_path}")
+            try:
+                self._refresh_strategy_library()
+            except Exception:
+                pass
+        except Exception as exc:
+            self._log_qopt("\nUnexpected error:\n" + traceback.format_exc())
+            self.qopt_result_label.config(text="Failed -- see log.", fg=RED)
+            log_crash("Quick Optimize", exc=exc)
+        finally:
+            self.qopt_progress.stop()
+
+    # -----------------------------------------------------------------------
+    # Risk Sweep -- "Risk Is a Strategy Variable" (T58 Quant Trading
+    # Masterclass, Lesson 7): re-runs the strategy at several candidate
+    # risk-per-trade levels and scores each with the same full-lifecycle
+    # prop-survival model the Search Lab/Research Loop already trust
+    # (app.optimize.risk_sweep -- a thin desktop wrapper, no numerical
+    # logic re-implemented here).
+    # -----------------------------------------------------------------------
+
+    def _build_risk_sweep_tab(self):
+        f = self._scrollable(self.tab_risksweep)
+
+        self._page_header(
+            f,
+            "OPTIMIZE / Risk Sweep",
+            "\U0001F4CA Risk Sweep",
+            "Don't assume 1% risk-per-trade is optimal, and don't optimize for the return "
+            "of any ONE trade -- optimize P(reach payout target before hitting a loss "
+            "constraint), which a SMALLER risk level can sometimes dramatically improve at "
+            "the cost of taking longer. Re-runs the strategy configured on Step 01 at each "
+            "candidate risk level (position sizing changes every trade's dollar P&L, so this "
+            "can't be approximated by rescaling one backtest's numbers after the fact) and "
+            "scores each with the T58 Prop Survival Score.",
+        )
+
+        self.risksweep_context = RunContextPanel(self, "Risk Sweep")
+        self.risksweep_context.build(f)
+
+        settings = self._section(
+            f, "Risk Sweep settings",
+            "Leave the default risk levels blank to use the standard sweep "
+            "(0.10%, 0.15%, 0.20%, 0.25%, 0.35%, 0.50%, 0.75%, 1.00%).",
+            emphasize=True,
+        )
+        self.risksweep_values = LabeledEntry(
+            settings, "Risk levels to test (comma-separated %, blank = default)", "",
+        )
+        self.risksweep_survival_sims = LabeledEntry(settings, "Survival-simulation sims per level", 1000)
+
+        button_row = Frame(f, bg=BG)
+        button_row.pack(fill="x", padx=24, pady=10)
+        self._button(button_row, "RUN RISK SWEEP", self._risk_sweep_run_clicked, primary=True).pack(side="left")
+
+        self.risksweep_progress = NeuralProgress(f)
+        self.risksweep_progress.pack(fill="x", padx=24, pady=(2, 10))
+
+        result_section = self._section(f, "Best risk level", "Filled in once the sweep finishes.")
+        self.risksweep_result_label = Label(
+            result_section, text="No run yet.", bg=PANEL, fg=TEXT_DIM,
+            font=_safe_font(11, "bold"), justify="left", wraplength=900, anchor="w",
+        )
+        self.risksweep_result_label.pack(anchor="w", fill="x", padx=18, pady=(2, 12))
+
+        output_section = self._section(f, "Risk Sweep output", "The full table renders here once the sweep finishes.")
+        _risksweep_output_frame = Frame(output_section, bg=PANEL)
+        self.risksweep_output = Text(
+            _risksweep_output_frame, height=20, wrap="none", bg=LOG_BG, fg=TEXT,
+            insertbackground=TEXT, relief="flat", bd=0, highlightthickness=1,
+            highlightbackground=BORDER, font=(MONO, 9),
+        )
+        _risksweep_output_scroll = ttk.Scrollbar(
+            _risksweep_output_frame, orient="vertical", command=self.risksweep_output.yview, style="T58.Vertical.TScrollbar",
+        )
+        self.risksweep_output.configure(yscrollcommand=_risksweep_output_scroll.set)
+        self.risksweep_output.pack(side="left", fill="both", expand=True)
+        _risksweep_output_scroll.pack(side="right", fill="y")
+        _risksweep_output_frame.pack(fill="both", expand=True, padx=18, pady=(3, 16))
+        self._bind_isolated_wheel(self.risksweep_output)
+
+    def _risk_sweep_run_clicked(self):
+        if not self.risksweep_context.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV above (this tab's own Market Data section).")
+            return
+        self.risksweep_output.delete("1.0", END)
+        self.risksweep_result_label.config(text="Running...", fg=TEXT_DIM)
+        self.risksweep_progress.start(10)
+        threading.Thread(target=self._risk_sweep_run_pipeline, daemon=True).start()
+
+    def _risk_sweep_run_pipeline(self):
+        from app.optimize.risk_sweep import run_risk_sweep
+        from app.prop.survival_engine import PropSurvivalConfig
+
+        def _log(msg: str):
+            self.risksweep_output.insert(END, msg + "\n")
+            self.risksweep_output.see(END)
+            self.root.update_idletasks()
+
+        try:
+            df = self.risksweep_context.load_dataframe(_log)
+            if df is None:
+                return
+            risk = self.risksweep_context.build_risk_config()
+            rules = self.risksweep_context.build_prop_rules()
+            strategy_builder = self._build_strategy
+
+            raw_levels = self.risksweep_values.get_str().strip()
+            risk_values = None
+            if raw_levels:
+                try:
+                    risk_values = [float(v.strip()) for v in raw_levels.split(",") if v.strip()]
+                except ValueError:
+                    _log("Couldn't parse the risk levels list -- using the default sweep instead.")
+                    risk_values = None
+
+            survival_cfg = PropSurvivalConfig(n_simulations=self.risksweep_survival_sims.get_int(1000))
+
+            _log("Running Risk Sweep...")
+            result = run_risk_sweep(df, strategy_builder, risk, rules, risk_values=risk_values, survival_cfg=survival_cfg)
+            self.risksweep_output.delete("1.0", END)
+            self.risksweep_output.insert(END, result.render_table())
+            for note in result.notes:
+                self.risksweep_output.insert(END, f"\n\nNote: {note}")
+
+            if result.best_point:
+                self.risksweep_result_label.config(
+                    text=(
+                        f"Best: {result.best_point.risk_value:.2f}% per trade  --  "
+                        f"T58 Prop Survival Score {result.best_point.prop_survival_score:.1f}/100  --  "
+                        f"pass {result.best_point.probability_pass_evaluation:.1f}%  --  "
+                        f"payout {result.best_point.probability_first_payout:.1f}%"
+                    ),
+                    fg=GREEN,
+                )
+            else:
+                self.risksweep_result_label.config(text="No risk level produced any trades.", fg=RED)
+        except Exception as exc:
+            _log("\nUnexpected error:\n" + traceback.format_exc())
+            self.risksweep_result_label.config(text="Failed -- see log.", fg=RED)
+            log_crash("Risk Sweep", exc=exc)
+        finally:
+            self.risksweep_progress.stop()
+
+    # -----------------------------------------------------------------------
+    # Compare Strategies -- the direct, visual side-by-side comparison
+    # screen (app.strategy.compare): pick 2-4 saved CODE strategies
+    # (python/pinescript/mql5 -- not "manual" configs, which have no
+    # library file to load), backtest each fresh against the same
+    # dataset/risk config, and see net profit / eval-pass probability /
+    # Prop Fitness in one place.
+    # -----------------------------------------------------------------------
+
+    def _build_compare_tab(self):
+        f = self._scrollable(self.tab_compare)
+
+        self._page_header(
+            f,
+            "DEPLOYMENT / Compare Strategies",
+            "\u2696 Compare Strategies",
+            "Pick 2-4 saved strategies (Python, PineScript, or MQL5 -- not a \"manual\" "
+            "config, which has no library file to load) and see them backtested fresh "
+            "against the SAME dataset/risk config side by side: net profit, Monte Carlo "
+            "eval-pass probability, and a simplified Prop Fitness score. That Prop Fitness "
+            "number is directly comparable to the others on THIS screen (all computed the "
+            "same simplified way) but will read differently from one out of a full "
+            "Evolution Lab run, which also factors in parameter-neighborhood robustness and "
+            "walk-forward consistency -- this quick view deliberately skips both.",
+        )
+
+        self.compare_context = RunContextPanel(self, "Compare Strategies")
+        self.compare_context.build(f)
+
+        picker_section = self._section(
+            f, "Pick 2-4 saved strategies",
+            "Ctrl/Cmd-click or Shift-click to select several. Refresh if you just saved a new one.",
+            emphasize=True,
+        )
+        picker_btn_row = Frame(picker_section, bg=PANEL)
+        picker_btn_row.pack(anchor="w", padx=18, pady=(2, 6))
+        self._button(picker_btn_row, "REFRESH LIST", self._refresh_compare_list).pack(side="left")
+
+        compare_list_frame = Frame(picker_section, bg=PANEL)
+        compare_list_frame.pack(fill="both", expand=True, padx=18, pady=(0, 12))
+        compare_list_frame.columnconfigure(0, weight=1)
+        self.compare_listbox = Listbox(
+            compare_list_frame, height=10, selectmode="extended", exportselection=False,
+            bg=PANEL_3, fg=TEXT, activestyle="none", relief="flat", bd=0,
+            highlightthickness=1, highlightbackground=BORDER, font=(MONO, 9),
+        )
+        compare_scrollbar = ttk.Scrollbar(
+            compare_list_frame, orient="vertical", command=self.compare_listbox.yview, style="T58.Vertical.TScrollbar",
+        )
+        self.compare_listbox.config(yscrollcommand=compare_scrollbar.set)
+        self._bind_isolated_wheel(self.compare_listbox)
+        self.compare_listbox.grid(row=0, column=0, sticky="nsew")
+        compare_scrollbar.grid(row=0, column=1, sticky="ns")
+        self._compare_listbox_items: list[tuple[str, str]] = []  # [(strategy_type, filename), ...] parallel to listbox rows
+
+        settings = self._section(f, "Compare settings", emphasize=True)
+        self.compare_mc_sims = LabeledEntry(settings, "Monte Carlo sims per candidate", 1000)
+
+        button_row = Frame(f, bg=BG)
+        button_row.pack(fill="x", padx=24, pady=10)
+        self._button(button_row, "RUN COMPARE", self._compare_run_clicked, primary=True).pack(side="left")
+
+        self.compare_progress = NeuralProgress(f)
+        self.compare_progress.pack(fill="x", padx=24, pady=(2, 10))
+
+        output_section = self._section(f, "Comparison", "Each candidate's own summary, in the order selected.")
+        _compare_output_frame = Frame(output_section, bg=PANEL)
+        self.compare_output = Text(
+            _compare_output_frame, height=20, wrap="word", bg=LOG_BG, fg=TEXT,
+            insertbackground=TEXT, relief="flat", bd=0, highlightthickness=1,
+            highlightbackground=BORDER, font=(MONO, 9),
+        )
+        _compare_output_scroll = ttk.Scrollbar(
+            _compare_output_frame, orient="vertical", command=self.compare_output.yview, style="T58.Vertical.TScrollbar",
+        )
+        self.compare_output.configure(yscrollcommand=_compare_output_scroll.set)
+        self.compare_output.pack(side="left", fill="both", expand=True)
+        _compare_output_scroll.pack(side="right", fill="y")
+        _compare_output_frame.pack(fill="both", expand=True, padx=18, pady=(3, 16))
+        self._bind_isolated_wheel(self.compare_output)
+
+        self._refresh_compare_list()
+
+    def _refresh_compare_list(self):
+        self.compare_listbox.delete(0, END)
+        self._compare_listbox_items = []
+        try:
+            strategies = list_saved_strategies()
+        except Exception:
+            strategies = []
+        # Code strategies only (python/pinescript/mql5) -- "manual" configs
+        # have no library file for compare_strategies() to load.
+        for s in strategies:
+            if s.strategy_type not in ("python", "pinescript", "mql5"):
+                continue
+            self.compare_listbox.insert(END, f"[{s.strategy_type:10s}] {s.name}  ({s.status_display})")
+            self._compare_listbox_items.append((s.strategy_type, s.name))
+
+    def _compare_run_clicked(self):
+        sel = self.compare_listbox.curselection()
+        if not (2 <= len(sel) <= 4):
+            messagebox.showwarning("Select 2-4 strategies", "Select 2 to 4 strategies above (Ctrl/Cmd-click or Shift-click) to compare.")
+            return
+        if not self.compare_context.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV above (this tab's own Market Data section).")
+            return
+        self.compare_output.delete("1.0", END)
+        self.compare_progress.start(10)
+        threading.Thread(target=self._compare_run_pipeline, args=(list(sel),), daemon=True).start()
+
+    def _compare_run_pipeline(self, selected_indices: list[int]):
+        from app.strategy.compare import CompareError, compare_strategies
+
+        def _log(msg: str):
+            self.compare_output.insert(END, msg + "\n")
+            self.compare_output.see(END)
+            self.root.update_idletasks()
+
+        try:
+            df = self.compare_context.load_dataframe(_log)
+            if df is None:
+                return
+            risk = self.compare_context.build_risk_config()
+            rules = self.compare_context.build_prop_rules()
+            candidates = [self._compare_listbox_items[i] for i in selected_indices]
+
+            _log(f"Comparing {len(candidates)} strategies against {len(df)} bars...")
+            results = compare_strategies(
+                candidates, df, risk, rules,
+                mc_n_simulations=self.compare_mc_sims.get_int(1000),
+            )
+            self.compare_output.delete("1.0", END)
+            for r in results:
+                self.compare_output.insert(END, f"=== [{r.strategy_type}] {r.filename} ===\n")
+                if not r.ok:
+                    self.compare_output.insert(END, f"  FAILED: {r.error}\n\n")
+                    continue
+                self.compare_output.insert(
+                    END,
+                    f"  Net profit: {r.stats.get('net_profit', 0):,.2f}   "
+                    f"Trades: {r.stats.get('total_trades', '?')}   "
+                    f"Win rate: {r.stats.get('win_rate', 0):.1f}%\n"
+                    f"  Eval-pass probability: {r.eval_pass_probability_pct:.1f}%   "
+                    f"First-payout probability: {r.first_payout_probability_pct:.1f}%\n"
+                    f"  Prop Fitness (simplified{'*' if r.prop_fitness_is_simplified else ''}): "
+                    f"{r.prop_fitness_score:.3f}\n\n"
+                )
+            self.compare_output.insert(
+                END,
+                "\n* Simplified: doesn't factor in parameter-neighborhood robustness or "
+                "walk-forward OOS consistency -- comparable to the other rows here only, not "
+                "to an Evolution Lab leaderboard score.",
+            )
+        except CompareError as exc:
+            _log(f"\n{exc}")
+        except Exception as exc:
+            _log("\nUnexpected error:\n" + traceback.format_exc())
+            log_crash("Compare Strategies", exc=exc)
+        finally:
+            self.compare_progress.stop()
+
+    # -----------------------------------------------------------------------
+    # Multi-Instrument Search Lab -- desktop parity with the web app's
+    # /search/multi-instrument page: the SAME search space (single-
+    # strategy mode, built from the strategy configured on Step 01) run
+    # CONCURRENTLY across several instrument/timeframe datasets, via
+    # app.orchestration.multi_instrument_search.run_multi_instrument_search.
+    # -----------------------------------------------------------------------
+
+    def _build_search_multi_tab(self):
+        f = self._scrollable(self.tab_search_multi)
+
+        self._page_header(
+            f,
+            "OPTIMIZE / Multi-Instrument Search Lab",
+            "\u25a3 Multi-Instrument Search Lab",
+            "Runs Search Lab's own discover-then-validate pipeline CONCURRENTLY across "
+            "several instrument/timeframe datasets -- select 2 or more below (Ctrl/Cmd-"
+            "click or Shift-click). Uses single-strategy mode (the exact strategy "
+            "configured on Step 01, no family/grid expansion) against each dataset; each "
+            "job gets its own results database under data/evolution/search/multi_instrument/ "
+            "and its own leaderboard.",
+        )
+
+        self.searchmulti_context = RunContextPanel(self, "Multi-Instrument Search Lab")
+        self.searchmulti_context.build(f)
+
+        settings = self._section(
+            f, "Search settings (applied identically to every instrument)",
+            emphasize=True,
+        )
+        self.searchmulti_workers = LabeledEntry(settings, "Total worker budget (split across concurrent instruments)", 4)
+        self.searchmulti_max_concurrent_instruments = LabeledEntry(settings, "Max instruments run at once", 2)
+
+        button_row = Frame(f, bg=BG)
+        button_row.pack(fill="x", padx=24, pady=10)
+        self._button(button_row, "RUN ACROSS ALL SELECTED INSTRUMENTS", self._search_multi_run_clicked, primary=True).pack(side="left")
+
+        self.searchmulti_progress = NeuralProgress(f)
+        self.searchmulti_progress.pack(fill="x", padx=24, pady=(2, 10))
+
+        results_section = self._section(f, "Per-instrument results", "One line per instrument/timeframe.")
+        self.searchmulti_results_listbox = Listbox(
+            results_section, height=8, exportselection=False, bg=PANEL_3, fg=TEXT,
+            activestyle="none", relief="flat", bd=0, highlightthickness=1, highlightbackground=BORDER,
+            font=(MONO, 9),
+        )
+        self.searchmulti_results_listbox.pack(fill="x", padx=18, pady=(2, 12))
+        self._bind_isolated_wheel(self.searchmulti_results_listbox)
+
+        best_section = self._section(f, "Best across all instruments", "Filled in once the run completes.")
+        self.searchmulti_best_label = Label(
+            best_section, text="No run yet.", bg=PANEL, fg=TEXT_DIM,
+            font=_safe_font(11, "bold"), justify="left", wraplength=900, anchor="w",
+        )
+        self.searchmulti_best_label.pack(anchor="w", fill="x", padx=18, pady=(2, 12))
+
+        output_section = self._section(f, "Multi-Instrument Search Lab output", "Live progress log, one line per instrument.")
+        _sm_output_frame = Frame(output_section, bg=PANEL)
+        self.searchmulti_output = Text(
+            _sm_output_frame, height=16, wrap="word", bg=LOG_BG, fg=TEXT,
+            insertbackground=TEXT, relief="flat", bd=0, highlightthickness=1,
+            highlightbackground=BORDER, font=(MONO, 9),
+        )
+        _sm_output_scroll = ttk.Scrollbar(
+            _sm_output_frame, orient="vertical", command=self.searchmulti_output.yview, style="T58.Vertical.TScrollbar",
+        )
+        self.searchmulti_output.configure(yscrollcommand=_sm_output_scroll.set)
+        self.searchmulti_output.pack(side="left", fill="both", expand=True)
+        _sm_output_scroll.pack(side="right", fill="y")
+        _sm_output_frame.pack(fill="both", expand=True, padx=18, pady=(3, 16))
+        self._bind_isolated_wheel(self.searchmulti_output)
+
+    def _log_search_multi(self, label: str, msg: str):
+        def _write():
+            self.searchmulti_output.insert(END, f"[{label}] {msg}\n")
+            self.searchmulti_output.see(END)
+        try:
+            self.root.after(0, _write)
+        except Exception:
+            pass
+
+    def _search_multi_run_clicked(self):
+        if len(self.searchmulti_context.csv_paths) < 2:
+            messagebox.showwarning(
+                "Select at least 2 datasets",
+                "Select 2 or more datasets above (Ctrl/Cmd-click or Shift-click) -- with only "
+                "1 selected, use the regular Search Lab tab instead.",
+            )
+            return
+        self.searchmulti_output.delete("1.0", END)
+        self.searchmulti_results_listbox.delete(0, END)
+        self.searchmulti_best_label.config(text="Running...", fg=TEXT_DIM)
+        self.searchmulti_progress.start(10)
+        threading.Thread(target=self._search_multi_run_pipeline, daemon=True).start()
+
+    def _search_multi_run_pipeline(self):
+        from app.orchestration.multi_instrument_search import (
+            best_result_across_instruments, run_multi_instrument_search,
+        )
+
+        try:
+            jobs = []
+            for path in self.searchmulti_context.csv_paths:
+                instrument, timeframe = self._misr_instrument_label_for_path(path)
+                jobs.append(InstrumentJob(instrument=instrument, timeframe=timeframe, csv_path=path))
+
+            risk = self.searchmulti_context.build_risk_config()
+            rules = self.searchmulti_context.build_prop_rules()
+            strategy = self._build_strategy()
+            space = generate_search_space(mode="single", strategy=strategy)
+            stage_cfg = self._build_search_stage_config()
+            stage_cfg = dataclasses.replace(stage_cfg, workers=self.searchmulti_workers.get_int(4))
+            max_concurrent = self.searchmulti_max_concurrent_instruments.get_int(2)
+
+            self._log_search_multi(
+                "multi-instrument",
+                f"Starting Search Lab on {len(jobs)} instrument/timeframe target(s): "
+                + ", ".join(f"{j.instrument}/{j.timeframe}" for j in jobs),
+            )
+            results = run_multi_instrument_search(
+                jobs, space, risk, rules, stage_cfg, OUTPUT_DIR / "search" / "multi_instrument",
+                max_concurrent_instruments=max_concurrent, progress_cb=self._log_search_multi,
+            )
+
+            self.searchmulti_results_listbox.delete(0, END)
+            for label, res in sorted(results.items()):
+                if res.error:
+                    self.searchmulti_results_listbox.insert(END, f"[FAILED] {label} -- {res.error.splitlines()[0]}")
+                    continue
+                s = res.summary
+                self.searchmulti_results_listbox.insert(
+                    END, f"[OK] {label} -- {s.stage3_survivors} Stage 3 survivor(s), "
+                         f"{s.stage1_survivors} Stage 1 survivor(s)",
+                )
+
+            best = best_result_across_instruments(results)
+            if best is not None and best.summary is not None and best.summary.leaderboard:
+                top = best.summary.leaderboard[0]
+                self.searchmulti_best_label.config(
+                    text=f"BEST: {best.label} -- {top.candidate_id}  eval pass {top.eval_pass_probability:.1f}%",
+                    fg=GREEN,
+                )
+            else:
+                self.searchmulti_best_label.config(text="No instrument produced a leaderboard entry.", fg=RED)
+
+            n_ok = sum(1 for r in results.values() if r.summary is not None)
+            self._log_search_multi("multi-instrument", f"\nDone -- {n_ok}/{len(jobs)} instrument(s) succeeded.")
+        except Exception as exc:
+            self._log_search_multi("multi-instrument", "\nUnexpected error:\n" + traceback.format_exc())
+            self.searchmulti_best_label.config(text="Failed -- see log.", fg=RED)
+            log_crash("Multi-Instrument Search Lab", exc=exc)
+        finally:
+            self.searchmulti_progress.stop()
+
+    # -----------------------------------------------------------------------
+    # Multi-Instrument Evolution Lab -- desktop parity with the web app's
+    # /evolution/multi-instrument page: a MultiInstrumentEvolutionGroup
+    # (app.evolution.multi_instrument) owning one independent EvolutionRunner
+    # per selected instrument/timeframe, each on its own background thread
+    # with its own fully-isolated checkpoint/tested-log/knowledge-graph
+    # files. Unlike Speed Run/Search Lab's multi-instrument tabs (a single
+    # run-to-completion call), this is start/stop + poll, same shape as the
+    # single-instrument Evolution Lab tab.
+    # -----------------------------------------------------------------------
+
+    def _build_evolution_multi_tab(self):
+        f = self._scrollable(self.tab_evolution_multi)
+
+        self._page_header(
+            f,
+            "OPTIMIZE / Multi-Instrument Evolution Lab",
+            "\u2620 Multi-Instrument Evolution Lab",
+            "A named group of independent Evolution Lab runners, one per selected "
+            "instrument/timeframe (select 2 or more below), each with its OWN checkpoint/ "
+            "tested-log/knowledge-graph files -- never shared, so two instruments never "
+            "pollute each other's search history. Every runner shares the same population/"
+            "generation/family settings below; each stops itself independently once ITS OWN "
+            "leaderboard clears any loop-mode target, so one instrument finishing early "
+            "doesn't stop the others.",
+        )
+
+        self.evomulti_context = RunContextPanel(self, "Multi-Instrument Evolution Lab")
+        self.evomulti_context.build(f)
+
+        settings = self._section(f, "Evolution settings (applied identically to every instrument)", emphasize=True)
+        self.evomulti_population = LabeledEntry(settings, "Population size", 40)
+        self.evomulti_elite_keep = LabeledEntry(settings, "Elite keep", 8)
+        self.evomulti_min_trades = LabeledEntry(settings, "Minimum trades to be scoreable", 20)
+        self.evomulti_mc_sims = LabeledEntry(settings, "Monte Carlo sims per candidate", 500)
+        self.evomulti_max_generations = LabeledEntry(settings, "Max generations (blank = unlimited)", "")
+
+        button_row = Frame(f, bg=BG)
+        button_row.pack(fill="x", padx=24, pady=10)
+        self._button(button_row, "START GROUP", self._evo_multi_start_clicked, primary=True).pack(side="left")
+        self._button(button_row, "STOP GROUP", self._evo_multi_stop_clicked).pack(side="left", padx=8)
+
+        self.evomulti_status_label = Label(f, text="Not started.", bg=BG, fg=TEXT_DIM, font=_safe_font(10, "bold"))
+        self.evomulti_status_label.pack(anchor="w", padx=24, pady=(2, 10))
+
+        results_section = self._section(f, "Per-instrument status", "Refreshes automatically every 2 seconds while running.")
+        self.evomulti_results_listbox = Listbox(
+            results_section, height=8, exportselection=False, bg=PANEL_3, fg=TEXT,
+            activestyle="none", relief="flat", bd=0, highlightthickness=1, highlightbackground=BORDER,
+            font=(MONO, 9),
+        )
+        self.evomulti_results_listbox.pack(fill="x", padx=18, pady=(2, 12))
+        self._bind_isolated_wheel(self.evomulti_results_listbox)
+
+        output_section = self._section(f, "Multi-Instrument Evolution Lab log", "Combined log across every instrument in the group.")
+        _em_output_frame = Frame(output_section, bg=PANEL)
+        self.evomulti_output = Text(
+            _em_output_frame, height=16, wrap="word", bg=LOG_BG, fg=TEXT,
+            insertbackground=TEXT, relief="flat", bd=0, highlightthickness=1,
+            highlightbackground=BORDER, font=(MONO, 9),
+        )
+        _em_output_scroll = ttk.Scrollbar(
+            _em_output_frame, orient="vertical", command=self.evomulti_output.yview, style="T58.Vertical.TScrollbar",
+        )
+        self.evomulti_output.configure(yscrollcommand=_em_output_scroll.set)
+        self.evomulti_output.pack(side="left", fill="both", expand=True)
+        _em_output_scroll.pack(side="right", fill="y")
+        _em_output_frame.pack(fill="both", expand=True, padx=18, pady=(3, 16))
+        self._bind_isolated_wheel(self.evomulti_output)
+
+        self._evo_multi_group = None
+        self._evo_multi_seen_log_counts: dict[str, int] = {}
+
+    def _evo_multi_start_clicked(self):
+        if self._evo_multi_group is not None and self._evo_multi_group.is_running:
+            messagebox.showinfo("Already running", "Stop the current group first if you want to change settings and start fresh.")
+            return
+        if len(self.evomulti_context.csv_paths) < 2:
+            messagebox.showwarning(
+                "Select at least 2 datasets",
+                "Select 2 or more datasets above (Ctrl/Cmd-click or Shift-click) -- with only "
+                "1 selected, use the regular Evolution Lab tab instead.",
+            )
+            return
+
+        from app.evolution.engine import EvolutionConfig
+        from app.evolution.multi_instrument import EvolutionInstrumentJob, MultiInstrumentEvolutionGroup
+
+        jobs = []
+        for path in self.evomulti_context.csv_paths:
+            instrument, timeframe = self._misr_instrument_label_for_path(path)
+            jobs.append(EvolutionInstrumentJob(instrument=instrument, timeframe=timeframe, csv_path=path))
+
+        risk = self.evomulti_context.build_risk_config()
+        rules = self.evomulti_context.build_prop_rules()
+        max_gen_raw = self.evomulti_max_generations.get_str().strip()
+        base_cfg = EvolutionConfig(
+            population_size=self.evomulti_population.get_int(40),
+            elite_keep=self.evomulti_elite_keep.get_int(8),
+            min_trades=self.evomulti_min_trades.get_int(20),
+            mc_sims=self.evomulti_mc_sims.get_int(500),
+            max_generations=int(max_gen_raw) if max_gen_raw.isdigit() else None,
+        )
+
+        group_id = uuid.uuid4().hex[:10]
+        self.evomulti_output.delete("1.0", END)
+        self._evo_multi_seen_log_counts = {}
+        try:
+            self._evo_multi_group = MultiInstrumentEvolutionGroup(group_id, jobs, risk, rules, base_cfg)
+        except Exception as exc:
+            messagebox.showerror("Could not start group", str(exc))
+            return
+        for label, err in self._evo_multi_group.errors.items():
+            self.evomulti_output.insert(END, f"[{label}] SKIPPED: {err}\n")
+        self._evo_multi_group.start_all()
+        self.evomulti_output.insert(
+            END, f"Started group {group_id} on {len(self._evo_multi_group.runners)} instrument(s).\n",
+        )
+        self._poll_evo_multi_status()
+
+    def _evo_multi_stop_clicked(self):
+        if self._evo_multi_group is None:
+            return
+        self.evomulti_status_label.config(text="Stopping...", fg=AMBER)
+        threading.Thread(target=self._evo_multi_group.stop_all, daemon=True).start()
+
+    def _poll_evo_multi_status(self):
+        group = self._evo_multi_group
+        if group is None:
+            return
+        status = group.status()
+        self.evomulti_status_label.config(
+            text=f"{'RUNNING' if status['running'] else 'STOPPED'} -- {len(status['instruments'])} instrument(s) in group",
+            fg=GREEN if status["running"] else TEXT_DIM,
+        )
+        self.evomulti_results_listbox.delete(0, END)
+        for label, inst in sorted(status["instruments"].items()):
+            if inst.get("error"):
+                self.evomulti_results_listbox.insert(END, f"[FAILED] {label} -- {inst['error']}")
+                continue
+            leader = inst["leaderboard"][0] if inst["leaderboard"] else None
+            leader_note = f"  best {leader['candidate_id']}" if leader else "  no leaderboard entry yet"
+            state = "RUNNING" if inst["running"] else "stopped"
+            self.evomulti_results_listbox.insert(
+                END, f"[{state:7s}] {label} -- gen {inst['generation']}, "
+                     f"leaderboard {inst['leaderboard_size']}{leader_note}",
+            )
+            new_lines = inst["log"][self._evo_multi_seen_log_counts.get(label, 0):]
+            for line in new_lines:
+                self.evomulti_output.insert(END, f"[{label}] {line}\n")
+            self._evo_multi_seen_log_counts[label] = len(inst["log"])
+        self.evomulti_output.see(END)
+        if status["running"]:
+            try:
+                self.root.after(2000, self._poll_evo_multi_status)
+            except Exception:
+                pass
+
+    # -----------------------------------------------------------------------
+    # Optimize Overview / Picker + Validate Overview / Checklist -- desktop
+    # parity with the web app's lightweight /optimize and /validate hub
+    # pages (app.reports.strategy_state): a guided picker for OPTIMIZE
+    # (every method underneath is still its own full tab, this just helps
+    # decide which one) and an aggregated checklist for VALIDATE, built
+    # from whatever WFO/WFGA/CPCV/Sensitivity/Regime Matrix has already
+    # recorded against the strategy marked "current".
+    #
+    # KNOWN LIMITATION: strategy_state.record_validation() is currently
+    # only called from app.web.server's own WFO/WFGA/CPCV/Sensitivity/
+    # Regime Matrix routes -- desktop's five equivalent tabs don't yet
+    # call it at the end of their own runs. Since data/config/
+    # current_strategy.json and validation_checklist.json are shared by
+    # both apps on the same machine (get_app_base_dir()), this Validate
+    # Overview tab correctly shows checklist progress recorded by WEB
+    # runs -- it just won't reflect a desktop-only WFO/CPCV/etc run yet.
+    # Wiring record_validation() into those five desktop tabs is tracked
+    # separately (see PHASE_1_STATUS.md) rather than rushed in here.
+    # -----------------------------------------------------------------------
+
+    def _build_optimize_hub_tab(self):
+        f = self._scrollable(self.tab_optimize_hub)
+        self._page_header(
+            f,
+            "OPTIMIZE / Overview \u2022 Picker",
+            "\u2261 Which OPTIMIZE tool should I use?",
+            "Every method below is still its own full tab -- nothing is lost by using this "
+            "picker first, it just answers \"which one\" before sending you on.",
+        )
+        picks = [
+            ("Full Pipeline", "fullpipeline", "One button, the whole workflow -- backtest, GA search, re-validate, holdout check. Start here if you're not sure."),
+            ("Quick Optimize", "quickoptimize", "Just the GA search step, fast, with no OOS holdout check. Good for a quick \"is this worth pursuing\" signal -- NOT a finished answer."),
+            ("Search Lab", "search", "Wide discovery across many candidate configurations (single strategy, a parameter grid, or a whole named family)."),
+            ("Evolution Lab (GA)", "evolution", "A long-running, checkpointed genetic search -- start it and let it run in the background for hours."),
+            ("Multi-Objective Optimization", "multiobj", "Search Lab, but optimizing several competing objectives (e.g. return AND drawdown) at once instead of one fitness metric."),
+            ("Multi-Instrument Search Lab", "searchmulti", "The same Search Lab space run concurrently across several instrument/timeframe datasets."),
+            ("Multi-Instrument Evolution Lab", "evolutionmulti", "The same Evolution Lab run concurrently across several instrument/timeframe datasets, each with its own checkpoint."),
+            ("Iterative Refinement", "refine", "Small, targeted nudges to an already-decent strategy's parameters -- not a wide search."),
+            ("Risk Sweep", "risksweep", "Not a strategy-parameter search at all -- finds which RISK-PER-TRADE level maximizes prop-survival odds for the strategy as configured."),
+        ]
+        for label, key, desc in picks:
+            row = self._section(f, label, desc)
+            self._button(row, f"OPEN {label.upper()}", lambda k=key: self._show_page(k)).pack(anchor="w", padx=18, pady=(2, 12))
+
+    def _build_validate_hub_tab(self):
+        f = self._scrollable(self.tab_validate_hub)
+        self._page_header(
+            f,
+            "VALIDATE / Overview \u2022 Checklist",
+            "\u2261 Validation checklist",
+            "Aggregates what Walk-Forward Optimization, Walk-Forward GA, CPCV, Sensitivity, "
+            "and Regime Survival Matrix have already found for whichever strategy is marked "
+            "\"current\" -- nothing here re-runs or duplicates those tools. Mark a strategy "
+            "current from the Dashboard's Strategy Scorecard (\"Set as current\") first.",
+        )
+
+        from app.reports import strategy_state
+
+        current_section = self._section(f, "Current strategy", emphasize=True)
+        current = None
+        try:
+            current = strategy_state.get_current_strategy()
+        except Exception:
+            pass
+        if current:
+            score = strategy_state.robustness_score(current["strategy_name"], current["instrument"])
+            Label(
+                current_section,
+                text=f"{current['strategy_name']}  ({current['instrument']})",
+                bg=PANEL, fg=TEXT, font=_safe_font(12, "bold"), anchor="w",
+            ).pack(anchor="w", padx=18, pady=(2, 2))
+            Label(
+                current_section,
+                text=(
+                    f"{score['ran_count']}/{score['total_count']} checks run"
+                    + (f"  --  {score['passed_count']}/{score['decided_count']} passed" if score["decided_count"] else "")
+                ),
+                bg=PANEL, fg=TEXT_MUTED, font=_safe_font(9), anchor="w",
+            ).pack(anchor="w", padx=18, pady=(0, 12))
+
+            checklist = strategy_state.get_checklist(current["strategy_name"], current["instrument"])
+            labels = {
+                "wfo": ("Walk-Forward Optimization", "wfo"), "wfga": ("Walk-Forward GA", "wfga"),
+                "cpcv": ("CPCV", "cpcv"), "sensitivity": ("Sensitivity", "sensitivity"),
+                "regime_matrix": ("Regime Survival Matrix", "regimematrix"),
+            }
+            for kind, (label, nav_key) in labels.items():
+                entry = checklist.get(kind, {"ran": False})
+                row = Frame(current_section, bg=PANEL)
+                row.pack(fill="x", padx=18, pady=3)
+                if not entry.get("ran"):
+                    marker, color = "\u25cb  NOT RUN", TEXT_DIM
+                elif entry.get("passed") is True:
+                    marker, color = "\u25cf  PASSED", GREEN
+                elif entry.get("passed") is False:
+                    marker, color = "\u25cf  FAILED", RED
+                else:
+                    marker, color = "\u25cf  RAN", AMBER
+                Label(row, text=marker, bg=PANEL, fg=color, font=_safe_font(9, "bold"), width=12, anchor="w").pack(side="left")
+                Label(row, text=label, bg=PANEL, fg=TEXT, font=_safe_font(9), anchor="w").pack(side="left", padx=(0, 8))
+                if entry.get("summary"):
+                    Label(row, text=entry["summary"], bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8), anchor="w").pack(side="left")
+                self._button(row, "OPEN", lambda k=nav_key: self._show_page(k)).pack(side="right")
+        else:
+            Label(
+                current_section,
+                text="No strategy marked current yet. Run a backtest, then use \"Set as current\" "
+                     "on the Dashboard's Strategy Scorecard.",
+                bg=PANEL, fg=TEXT_MUTED, font=_safe_font(9), anchor="w", wraplength=880, justify="left",
+            ).pack(anchor="w", padx=18, pady=(2, 12))
+            self._button(current_section, "OPEN DASHBOARD", lambda: self._show_page("dashboard")).pack(anchor="w", padx=18, pady=(0, 12))
 
     def _open_autopilot_report(self):
         if self._last_autopilot_report_path:
