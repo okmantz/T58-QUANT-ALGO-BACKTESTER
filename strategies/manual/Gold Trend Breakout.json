@@ -1,12 +1,12 @@
 {
-  "name": "T58 Gold Trend Breakout (bos24/6, ema40-179 & 24-123, adx17-20, 1H)",
+  "name": "T58 Gold Trend Breakout -- Full Pipeline optimized (bos59/15, ema75-66 & 20-93, adx28-53, 1H), set risk at 0.6%",
   "timeframe": "1h",
   "entry_conditions": {
     "long": [
       {
         "left": {
           "type": "bos",
-          "lookback": 24,
+          "lookback": 59,
           "direction": "bullish"
         },
         "operator": "is true",
@@ -18,26 +18,26 @@
       {
         "left": {
           "type": "ema",
-          "period": 40,
+          "period": 75,
           "field": "close"
         },
         "operator": ">",
         "right": {
           "type": "ema",
-          "period": 179,
+          "period": 66,
           "field": "close"
         }
       },
       {
         "left": {
           "type": "adx",
-          "period": 24,
+          "period": 28,
           "field": "close"
         },
         "operator": ">",
         "right": {
           "type": "value",
-          "value": 17.22
+          "value": 12.978256274467885
         }
       }
     ],
@@ -49,7 +49,7 @@
       {
         "left": {
           "type": "bos",
-          "lookback": 6,
+          "lookback": 15,
           "direction": "bearish"
         },
         "operator": "is true",
@@ -61,26 +61,26 @@
       {
         "left": {
           "type": "ema",
-          "period": 24,
+          "period": 20,
           "field": "close"
         },
         "operator": "<",
         "right": {
           "type": "ema",
-          "period": 123,
+          "period": 93,
           "field": "close"
         }
       },
       {
         "left": {
           "type": "adx",
-          "period": 33,
+          "period": 53,
           "field": "close"
         },
         "operator": ">",
         "right": {
           "type": "value",
-          "value": 19.95
+          "value": 29.924999999999997
         }
       }
     ],
@@ -95,12 +95,13 @@
   },
   "risk_management": {
     "stop_type": "atr",
-    "stop_value": 4.5,
-    "stop_atr_period": 4,
+    "stop_value": 5.170557057059706,
+    "stop_atr_period": 12,
     "target_type": "atr",
-    "target_value": 3.97,
-    "target_atr_period": 6,
+    "target_value": 11.91,
+    "target_atr_period": 2,
     "opposite_signal_exit": true,
-    "max_bars_in_trade": 77
-  }
+    "max_bars_in_trade": 225
+  },
+  "description": "Full Pipeline (walk-forward GA, fastest_payout fitness) re-optimization of the original Gold Trend Breakout manual strategy, run against GC1! 1h bars (resampled from 1-minute, Jan 2025-Jul 2026). Dev-period backtest: 75 trades, +$24,277 net (+24.3%) on a $100k account at 0.6% risk/trade, 57.3% win rate, PF 2.26, max DD 3.3%, Monte Carlo eval-pass 99.0% / first-payout 96.3% / risk-of-ruin 16.0% (under the 20% cap). IMPORTANT: on the true holdout (the most recent ~3.5 months, never seen by the optimizer) this configuration -- and the original, un-optimized version -- both underperformed (holdout net roughly flat to slightly negative), and the pipeline's ICIR/Bonferroni significance gate did NOT pass (too few trades to prove the edge isn't noise). Treat this as a promising, risk-managed candidate that needs live forward-testing before real capital, not a proven edge. Set risk-per-trade to 0.6% of account equity (Step 04 Risk) when running this -- that is what keeps risk-of-ruin under the 20% cap; the raw GA output before this risk-sizing pass showed 80% risk-of-ruin at 1% risk/trade."
 }
