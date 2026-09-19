@@ -24,6 +24,7 @@ phone (as opposed to browsing to one) is out of scope for this MVP.
 from __future__ import annotations
 
 import json
+import os
 import random
 import re
 import tempfile
@@ -35,7 +36,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from flask import (
-    Flask, Response, jsonify, redirect, render_template, request, send_from_directory, url_for,
+    Flask, Response, jsonify, redirect, render_template, request, send_from_directory, session, url_for,
 )
 
 from app.ai.ollama_settings import OllamaSettings
@@ -282,6 +283,100 @@ SPEEDRUN_REPORTS_DIR = SPEEDRUN_DIR / "speed_run"
 SPEEDRUN_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
+
+# Session cookie signing key -- only needed for the OPTIONAL local account
+# lock (see app.accounts.settings' docstring: set a password on the
+# Account tab and this app asks for it once per browser before showing
+# any page; leave it blank and none of this is ever touched). Persisted
+# alongside the other local JSON config files so an already-unlocked
+# browser tab doesn't get re-locked every time the app restarts, while
+# still being generated locally rather than hardcoded.
+def _load_or_create_flask_secret_key() -> bytes:
+    from app.data.storage import get_app_base_dir
+    path = get_app_base_dir() / ".flask_secret_key"
+    try:
+        if path.exists():
+            existing = path.read_bytes()
+            if existing:
+                return existing
+    except Exception:  # noqa: BLE001
+        pass
+    key = os.urandom(32)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(key)
+    except Exception:  # noqa: BLE001
+        pass  # Worst case: a fresh random key every restart, which just means re-entering the lock password.
+    return key
+
+
+app.secret_key = _load_or_create_flask_secret_key()
+
+# Paths the account lock gate below never blocks, even when a password is
+# set and the browser hasn't unlocked yet: the lock page itself (else
+# nobody could ever unlock), static assets/PWA files (so the lock screen
+# itself can render with its icon/manifest/theme), and the Account
+# Settings page + its POST endpoints (so a password can be SET or CLEARED
+# even from a not-yet-unlocked browser on first run -- see
+# _account_lock_gate's own comment for why this one exemption is safe).
+_LOCK_GATE_EXEMPT_PREFIXES = (
+    "/lock", "/static/", "/manifest.json", "/favicon.ico",
+    "/settings/account",
+)
+
+
+@app.before_request
+def _account_lock_gate():
+    """Optional local app lock -- see app.accounts.settings' module
+    docstring. No-op (returns None, request proceeds normally) whenever
+    no password is set, the request already unlocked this session, or the
+    path is one of the always-exempt ones above. Exempting the whole
+    /settings/account* family is deliberate: it is the ONLY place a
+    password can be set/changed/cleared, so it must stay reachable even
+    pre-unlock, and it reveals nothing itself (no strategy/account data,
+    just the profile form) -- everything else on the site stays gated.
+    """
+    path = request.path
+    if any(path == p or path.startswith(p) for p in _LOCK_GATE_EXEMPT_PREFIXES):
+        return None
+    try:
+        from app.accounts.settings import load_account_settings
+        settings = load_account_settings()
+    except Exception:  # noqa: BLE001 -- a settings-load failure must never lock someone out entirely
+        return None
+    if not settings.has_password or session.get("t58_unlocked"):
+        return None
+    if request.method == "GET":
+        return redirect(url_for("account_lock_form", next=path))
+    # Non-GET (POST/AJAX/job-poll) requests get a plain 401 instead of a
+    # redirect, so any existing JS fetch() call fails visibly in the
+    # console rather than silently receiving the lock page's HTML back
+    # where JSON was expected.
+    return jsonify({"error": "locked", "message": "This app is locked. Open it in a browser tab to unlock."}), 401
+
+
+@app.route("/lock", methods=["GET"])
+def account_lock_form():
+    from app.accounts.settings import load_account_settings
+    if not load_account_settings().has_password or session.get("t58_unlocked"):
+        return redirect(request.args.get("next") or url_for("dashboard"))
+    return render_template("lock.html", next=request.args.get("next") or "/dashboard", error=None)
+
+
+@app.route("/lock/unlock", methods=["POST"])
+def account_lock_unlock():
+    from app.accounts.settings import load_account_settings, verify_password
+    next_path = request.form.get("next") or "/dashboard"
+    settings = load_account_settings()
+    if not settings.has_password:
+        session["t58_unlocked"] = True
+        return redirect(next_path)
+    if verify_password(request.form.get("password", ""), settings.password_hash):
+        session["t58_unlocked"] = True
+        return redirect(next_path)
+    return render_template("lock.html", next=next_path, error="Incorrect password."), 401
+
+
 # Quant Lab (translator, auto regime selector, strategy health, portfolio
 # composer, and the app/quant_lab/ toolkit) lives in its own Blueprint --
 # see app/web/quant_lab_routes.py's module docstring for why.
@@ -1416,23 +1511,107 @@ def api_global_search():
     return jsonify({"query": query, "results": out})
 
 
+def _account_settings_page_context(**extra):
+    from app.accounts.app_info import APP_VERSION
+    from app.accounts.settings import load_account_settings
+    from app.accounts.subscription import LICENSE_STATUS_CHOICES, load_subscription
+    ctx = dict(
+        settings=load_account_settings(),
+        subscription=load_subscription(),
+        license_status_choices=LICENSE_STATUS_CHOICES,
+        app_version=APP_VERSION,
+        active_page="account_settings",
+    )
+    ctx.update(extra)
+    return ctx
+
+
 @app.route("/settings/account")
 def account_settings_form():
-    from app.accounts.settings import load_account_settings
-    return render_template("account_settings.html", settings=load_account_settings(), active_page="account_settings")
+    return render_template("account_settings.html", **_account_settings_page_context())
 
 
 @app.route("/settings/account/save", methods=["POST"])
 def account_settings_save():
-    from app.accounts.settings import AccountSettings, save_account_settings
+    from app.accounts.settings import load_account_settings, save_account_settings
     form = request.form
-    settings = AccountSettings(
-        display_name=(form.get("display_name") or "").strip(),
-        email=(form.get("email") or "").strip(),
-        company=(form.get("company") or "").strip(),
-    )
+    settings = load_account_settings()  # keep password_hash untouched -- Change Password below is the only way to alter it
+    settings.display_name = (form.get("display_name") or "").strip()
+    settings.username = (form.get("username") or "").strip()
+    settings.email = (form.get("email") or "").strip()
+    settings.company = (form.get("company") or "").strip()
     save_account_settings(settings)
-    return render_template("account_settings.html", settings=settings, active_page="account_settings", saved=True)
+    return render_template("account_settings.html", **_account_settings_page_context(saved="profile"))
+
+
+@app.route("/settings/account/change_password", methods=["POST"])
+def account_settings_change_password():
+    from app.accounts.settings import hash_password, load_account_settings, save_account_settings
+    new_password = request.form.get("new_password", "")
+    confirm_password = request.form.get("confirm_password", "")
+    if new_password != confirm_password:
+        return render_template("account_settings.html", **_account_settings_page_context(
+            password_error="New password and confirmation didn't match -- nothing was changed.",
+        )), 400
+    settings = load_account_settings()
+    settings.password_hash = hash_password(new_password)  # empty new_password -> hash_password("") -> "" -> lock removed
+    save_account_settings(settings)
+    session["t58_unlocked"] = True  # whoever just set/changed it is, by definition, already "in"
+    message = "Local app lock password set." if new_password else "Local app lock password cleared -- this app no longer asks for one."
+    return render_template("account_settings.html", **_account_settings_page_context(saved="password", password_message=message))
+
+
+@app.route("/settings/account/logout", methods=["POST"])
+def account_settings_logout():
+    session.pop("t58_unlocked", None)
+    from app.accounts.settings import load_account_settings
+    if load_account_settings().has_password:
+        return redirect(url_for("account_lock_form"))
+    return render_template("account_settings.html", **_account_settings_page_context(saved="logout"))
+
+
+@app.route("/settings/account/delete", methods=["POST"])
+def account_settings_delete():
+    """Clears all locally stored profile/lock fields (Account Settings'
+    own JSON file) back to defaults. Deliberately does NOT touch
+    subscription.json, strategies, datasets, or reports -- \"delete
+    account\" here means \"forget my local profile + lock\", the only
+    thing this app actually has an \"account\" for (see this module's own
+    docstring on the app having no server-side account system)."""
+    from app.accounts.settings import AccountSettings, save_account_settings
+    save_account_settings(AccountSettings())
+    session.pop("t58_unlocked", None)
+    return render_template("account_settings.html", **_account_settings_page_context(saved="deleted"))
+
+
+@app.route("/settings/account/subscription/save", methods=["POST"])
+def account_settings_subscription_save():
+    from app.accounts.subscription import SubscriptionInfo, LICENSE_STATUS_CHOICES, save_subscription
+    form = request.form
+    status = (form.get("license_status") or "unset").strip()
+    if status not in LICENSE_STATUS_CHOICES:
+        status = "unset"
+    info = SubscriptionInfo(
+        plan=(form.get("plan") or "").strip(),
+        license_key=(form.get("license_key") or "").strip(),
+        license_status=status,
+        renewal_date=(form.get("renewal_date") or "").strip(),
+    )
+    save_subscription(info)
+    return render_template("account_settings.html", **_account_settings_page_context(saved="subscription"))
+
+
+@app.route("/settings/account/subscription/check_key", methods=["POST"])
+def account_settings_check_license_key():
+    from app.accounts.subscription import check_license_key_format
+    looks_valid, message = check_license_key_format(request.form.get("license_key", ""))
+    return render_template("account_settings.html", **_account_settings_page_context(license_check_message=message, license_check_ok=looks_valid))
+
+
+@app.route("/settings/account/check_updates", methods=["POST"])
+def account_settings_check_updates():
+    from app.accounts.app_info import check_for_updates
+    return render_template("account_settings.html", **_account_settings_page_context(update_check=check_for_updates()))
 
 
 @app.route("/settings/notifications")
