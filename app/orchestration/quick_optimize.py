@@ -774,3 +774,117 @@ def run_quick_optimize(
         holdout_payout_probability=holdout_payout_probability,
         holdout_note=holdout_note,
     )
+
+
+# ---------------------------------------------------------------------------
+# Timeframe sweep -- "optimize this strategy's parameters, AND tell me which
+# of these timeframes it should even be trading on." Deliberately an outer
+# loop around run_quick_optimize above, not a change to it: each requested
+# timeframe gets its own complete, independent Quick Optimize run (same GA,
+# same OOS-fold scoring, same holdout/ICIR machinery -- nothing about a
+# single run's own rigor changes), and this just collects the N results and
+# says which one won. See app.data.timeframe_sweep for exactly how a
+# timeframe list gets turned into resampled DataFrames (and what a bad/
+# too-fine/duplicate entry does -- skipped, never fatal to the others).
+# ---------------------------------------------------------------------------
+
+@dataclass
+class QuickOptimizeSweepResult:
+    per_timeframe: dict  # dict[str, QuickOptimizeResult], insertion order == timeframes tried
+    best_timeframe: str
+    best_result: QuickOptimizeResult
+    skipped: list = field(default_factory=list)   # list[app.data.timeframe_sweep.SweepSkipped]
+    errors: dict = field(default_factory=dict)     # dict[str, str] -- timeframe label -> why it failed
+
+
+def run_quick_optimize_sweep(
+    df: pd.DataFrame,
+    strategy: Strategy,
+    risk: RiskConfig,
+    prop_rules: PropRules,
+    timeframes: list[str],
+    cfg: QuickOptimizeConfig | None = None,
+    progress_cb=None,
+    cancel_event=None,
+) -> QuickOptimizeSweepResult:
+    """Runs run_quick_optimize once per timeframe in `timeframes`, on `df`
+    resampled to each one, and returns every timeframe's result alongside
+    which one won.
+
+    An empty `timeframes` (or one where every entry gets skipped by the
+    sweep -- e.g. everything requested was finer than the loaded data)
+    falls back to a single run against `df` completely unresampled, under
+    the label "native" -- so calling this with no timeframes is never
+    worse than calling run_quick_optimize directly.
+
+    "Won" is judged the same way a single run's own `.improved` flag is:
+    higher optimized_eval_pass_probability first, optimized_win_rate as
+    the tiebreaker (see QuickOptimizeResult.improved's own comment) --
+    never net_profit alone, since eval-pass/payout probability is what
+    this app treats as the real target everywhere else.
+
+    For a manual (JSON) Strategy Builder strategy, the CANDIDATE timeframe
+    being tried is stamped onto a COPY of its config's own top-level
+    "timeframe" key before that timeframe's run -- so if it wins, the
+    version saved to the Strategy Library already declares the timeframe
+    it was found on (see app.data.timeframe_resample), and re-running it
+    later anywhere else in the app automatically resamples to that same
+    bar size rather than silently reverting to whatever's loaded. Python/
+    PineScript/MQL5 strategies are swept the same way (their code runs
+    against each resampled DataFrame in turn) but are NOT auto-stamped
+    this way -- declare their timeframe the normal way (a module-level
+    TIMEFRAME= constant, or a `// T58_TIMEFRAME=` directive) if you want
+    the same guarantee for a non-manual winner.
+    """
+    from app.data.timeframe_sweep import build_timeframe_sweep
+
+    plan = build_timeframe_sweep(df, timeframes or [])
+    target_pairs = [(t.label, t.dataframe) for t in plan.targets] if plan.targets else [("native", df)]
+
+    per_timeframe: dict[str, QuickOptimizeResult] = {}
+    errors: dict[str, str] = {}
+
+    for label, target_df in target_pairs:
+        if cancel_event is not None and cancel_event.is_set():
+            break
+        if progress_cb:
+            progress_cb(f"=== Timeframe {label}: starting Quick Optimize ({len(target_df):,} bars) ===")
+
+        run_strategy = strategy
+        if (
+            plan.targets and getattr(strategy, "source_type", None) == "manual"
+            and isinstance(getattr(strategy, "config", None), dict)
+        ):
+            from app.strategy.manual import ManualStrategy
+
+            stamped_config = json.loads(json.dumps(strategy.config))  # cheap, dependency-free deep copy
+            stamped_config["timeframe"] = label
+            run_strategy = ManualStrategy(stamped_config)
+
+        def _scoped_log(msg: str, _label=label) -> None:
+            if progress_cb:
+                progress_cb(f"[{_label}] {msg}")
+
+        try:
+            result = run_quick_optimize(
+                target_df, run_strategy, risk, prop_rules, cfg=cfg,
+                progress_cb=_scoped_log if progress_cb else None, cancel_event=cancel_event,
+            )
+            per_timeframe[label] = result
+        except RefinementError as exc:
+            errors[label] = str(exc)
+            _scoped_log(f"skipped -- {exc}")
+
+    if not per_timeframe:
+        detail = "; ".join(f"{k}: {v}" for k, v in errors.items()) if errors else "no timeframe could be resampled from this dataset."
+        raise RefinementError(f"Quick Optimize's timeframe sweep produced no usable timeframe -- {detail}")
+
+    best_label = max(
+        per_timeframe,
+        key=lambda k: (per_timeframe[k].optimized_eval_pass_probability, per_timeframe[k].optimized_win_rate),
+    )
+
+    return QuickOptimizeSweepResult(
+        per_timeframe=per_timeframe, best_timeframe=best_label, best_result=per_timeframe[best_label],
+        skipped=plan.skipped, errors=errors,
+    )
