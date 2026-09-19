@@ -101,6 +101,7 @@ from app.prop.survival_engine import PropSurvivalConfig, ResetEconomics, run_pro
 from app.reports.generator import generate_full_report
 from app.reports.crash_log import log_crash
 from app.reports import run_history
+from app.reports import strategy_state
 from app.reports.refinement_report import generate_refinement_report
 from app.reports.survival_report import generate_survival_report
 from app.reports.validation_reports import (
@@ -9849,6 +9850,11 @@ class MainWindow:
             for n in result.notes:
                 log("")
                 log(f"Note: {n}")
+            # Matches app.web.server's own /regime-matrix route's record_validation call.
+            strategy_state.record_validation(
+                getattr(strategy, "name", "Strategy"), self.regime_context.instrument_label(), "regime_matrix",
+                passed=None, summary=f"{len(result.cells)} regime cell(s) analyzed",
+            )
         except StrategyError as exc:
             log(f"Strategy error: {exc}")
         except Exception:
@@ -10132,34 +10138,104 @@ class MainWindow:
             f,
             "ACCOUNT / Account settings",
             "\u2699 Account",
-            "Account Settings (your own name/email, stored locally) plus Notification Settings -- "
-            "get an email the moment a long-running job (Evolution Lab, Search Lab, Full "
-            "Pipeline) finishes, so you don't have to keep a progress window open and "
-            "watch it. Notifications are separate from the per-run webhook field some tabs already "
-            "have (Discord/Slack/Telegram/Zapier), which keeps working whether or not email is "
-            "set up here. Everything on this tab is stored locally on this computer only.",
+            "Profile, Subscription, Security, and App info -- desktop parity with the web app's "
+            "own /settings/account page (both read/write the exact same local JSON files under "
+            "this computer's app data folder, so either build always shows the same values). "
+            "Below that: Notification Settings, so a long-running job (Evolution Lab, Search Lab, "
+            "Full Pipeline) can email you the moment it finishes instead of you keeping a progress "
+            "window open and watching it. Everything on this tab is stored locally on this "
+            "computer only -- this app has no cloud account or login of its own.",
         )
 
+        from app.accounts.app_info import APP_VERSION, check_for_updates
         from app.accounts.settings import load_account_settings
+        from app.accounts.subscription import LICENSE_STATUS_CHOICES, load_subscription
         from app.web.notifications import load_notification_settings
 
         acct_saved = load_account_settings()
+        sub_saved = load_subscription()
         saved = load_notification_settings()
 
-        account_section = self._section(
-            f, "Account Settings",
-            "Your own name/email/company -- used to personalize exported reports; not a login, "
-            "just local profile info.",
+        # ================= PROFILE =================
+        profile_section = self._section(
+            f, "Profile",
+            "Your own name/username/email -- used to personalize exported reports; not a login, "
+            "just local profile info. Password status is shown here; set or change it in the "
+            "Security section below.",
             emphasize=True,
         )
-        self.acct_display_name = LabeledEntry(account_section, "Display name", acct_saved.display_name, width=32)
-        self.acct_email = LabeledEntry(account_section, "Email", acct_saved.email, width=32)
-        self.acct_company = LabeledEntry(account_section, "Company (optional)", acct_saved.company, width=32)
-        acct_btn_row = Frame(account_section, bg=PANEL)
+        self.acct_display_name = LabeledEntry(profile_section, "Name", acct_saved.display_name, width=32)
+        self.acct_username = LabeledEntry(profile_section, "Username", acct_saved.username, width=32)
+        self.acct_email = LabeledEntry(profile_section, "Email", acct_saved.email, width=32)
+        self.acct_company = LabeledEntry(profile_section, "Company (optional)", acct_saved.company, width=32)
+        pw_row = Frame(profile_section, bg=PANEL)
+        pw_row.pack(fill="x", padx=18, pady=(10, 2))
+        Label(pw_row, text="Password", bg=PANEL, fg="#ccc", font=_safe_font(9)).pack(side="left")
+        self.acct_password_status_label = Label(
+            pw_row,
+            text="\u25cf  Set" if acct_saved.has_password else "\u25cb  Not set",
+            bg=PANEL, fg=(GREEN if acct_saved.has_password else TEXT_DIM), font=_safe_font(9, "bold"),
+        )
+        self.acct_password_status_label.pack(side="left", padx=(8, 0))
+        Label(
+            profile_section, text="Set or change your password in the Security section below.",
+            bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8),
+        ).pack(anchor="w", padx=18, pady=(0, 10))
+        acct_btn_row = Frame(profile_section, bg=PANEL)
         acct_btn_row.pack(anchor="w", padx=18, pady=(4, 12))
-        self._button(acct_btn_row, "SAVE ACCOUNT SETTINGS", self._save_account_profile, primary=True).pack(side="left")
-        self.acct_profile_status = Label(account_section, text="", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8))
+        self._button(acct_btn_row, "SAVE PROFILE", self._save_account_profile, primary=True).pack(side="left")
+        self.acct_profile_status = Label(profile_section, text="", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8))
         self.acct_profile_status.pack(anchor="w", padx=18, pady=(0, 8))
+
+        # ================= SUBSCRIPTION =================
+        subscription_section = self._section(
+            f, "Subscription",
+            "Recorded locally for your own reference -- this app doesn't have a licensing "
+            "server yet, so nothing here is verified automatically. \"Check key format\" only "
+            "confirms your key LOOKS correctly formatted (XXXX-XXXX-XXXX-XXXX).",
+            emphasize=True,
+        )
+        self.acct_sub_plan = LabeledEntry(subscription_section, "Plan", sub_saved.plan, width=32)
+        self.acct_sub_license_key = LabeledEntry(subscription_section, "License key", sub_saved.license_key, width=32)
+        self.acct_sub_status = LabeledCombo(
+            subscription_section, "License status",
+            [c.capitalize() for c in LICENSE_STATUS_CHOICES],
+            sub_saved.license_status.capitalize() if sub_saved.license_status in LICENSE_STATUS_CHOICES else "Unset",
+        )
+        self.acct_sub_renewal = LabeledEntry(subscription_section, "Renewal / expiration date", sub_saved.renewal_date, width=32)
+        sub_btn_row = Frame(subscription_section, bg=PANEL)
+        sub_btn_row.pack(anchor="w", padx=18, pady=(4, 4))
+        self._button(sub_btn_row, "SAVE SUBSCRIPTION INFO", self._save_subscription_info, primary=True).pack(side="left")
+        self._button(sub_btn_row, "CHECK KEY FORMAT", self._check_license_key_format).pack(side="left", padx=8)
+        self.acct_sub_status_label = Label(subscription_section, text="", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8), wraplength=760, justify="left")
+        self.acct_sub_status_label.pack(anchor="w", padx=18, pady=(6, 8))
+
+        # ================= SECURITY =================
+        security_section = self._section(
+            f, "Security",
+            "An OPTIONAL local app lock -- useful mainly if you use Phone Access on a shared "
+            "Wi-Fi, since it's the same lock the web app's own Account Settings page sets. The "
+            "desktop app itself has no login session of its own to lock or log out of.",
+            emphasize=True,
+        )
+        self.acct_new_password = LabeledEntry(security_section, "New password (blank = remove lock)", "", secret=True, width=32)
+        self.acct_confirm_password = LabeledEntry(security_section, "Confirm password", "", secret=True, width=32)
+        sec_btn_row = Frame(security_section, bg=PANEL)
+        sec_btn_row.pack(anchor="w", padx=18, pady=(4, 4))
+        self._button(sec_btn_row, "CHANGE PASSWORD", self._account_change_password, primary=True).pack(side="left")
+        self._button(sec_btn_row, "LOG OUT", self._account_log_out).pack(side="left", padx=8)
+        self._button(sec_btn_row, "DELETE ACCOUNT", self._account_delete).pack(side="left", padx=8)
+        self.acct_security_status = Label(security_section, text="", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8), wraplength=760, justify="left")
+        self.acct_security_status.pack(anchor="w", padx=18, pady=(6, 8))
+
+        # ================= APP =================
+        app_section = self._section(f, "App", emphasize=True)
+        Label(app_section, text=f"App version: {APP_VERSION}", bg=PANEL, fg=TEXT, font=_safe_font(10, "bold")).pack(
+            anchor="w", padx=18, pady=(2, 8),
+        )
+        self._button(app_section, "CHECK FOR UPDATES", self._account_check_for_updates).pack(anchor="w", padx=18)
+        self.acct_update_status = Label(app_section, text="", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8), wraplength=760, justify="left")
+        self.acct_update_status.pack(anchor="w", padx=18, pady=(8, 8))
 
         dest_section = self._section(f, "Notification Settings -- where to send it", emphasize=True)
         self.acct_notify_email = LabeledEntry(dest_section, "Notification email", saved.notify_email, width=32)
@@ -10187,14 +10263,120 @@ class MainWindow:
         self.acct_status.pack(anchor="w", padx=26, pady=(4, 2))
 
     def _save_account_profile(self):
+        from app.accounts.settings import load_account_settings, save_account_settings
+
+        # Keep password_hash untouched -- Security's CHANGE PASSWORD button
+        # below is the only way to alter it, same convention as the web
+        # app's own /settings/account/save route.
+        settings = load_account_settings()
+        settings.display_name = self.acct_display_name.get_str().strip()
+        settings.username = self.acct_username.get_str().strip()
+        settings.email = self.acct_email.get_str().strip()
+        settings.company = self.acct_company.get_str().strip()
+        save_account_settings(settings)
+        self.acct_profile_status.config(text="\u25cf  Saved.", fg=GREEN)
+
+    def _save_subscription_info(self):
+        from app.accounts.subscription import LICENSE_STATUS_CHOICES, SubscriptionInfo, save_subscription
+
+        status = self.acct_sub_status.get_str().strip().lower()
+        if status not in LICENSE_STATUS_CHOICES:
+            status = "unset"
+        save_subscription(SubscriptionInfo(
+            plan=self.acct_sub_plan.get_str().strip(),
+            license_key=self.acct_sub_license_key.get_str().strip(),
+            license_status=status,
+            renewal_date=self.acct_sub_renewal.get_str().strip(),
+        ))
+        self.acct_sub_status_label.config(text="\u25cf  Subscription info saved.", fg=GREEN)
+
+    def _check_license_key_format(self):
+        from app.accounts.subscription import check_license_key_format
+
+        looks_valid, message = check_license_key_format(self.acct_sub_license_key.get_str())
+        self.acct_sub_status_label.config(text=message, fg=(GREEN if looks_valid else AMBER))
+
+    def _account_change_password(self):
+        from app.accounts.settings import hash_password, load_account_settings, save_account_settings
+
+        new_password = self.acct_new_password.get_str()
+        confirm_password = self.acct_confirm_password.get_str()
+        if new_password != confirm_password:
+            self.acct_security_status.config(
+                text="New password and confirmation didn't match -- nothing was changed.", fg=RED,
+            )
+            return
+        settings = load_account_settings()
+        settings.password_hash = hash_password(new_password)  # blank -> "" -> lock removed
+        save_account_settings(settings)
+        self.acct_new_password.var.set("")
+        self.acct_confirm_password.var.set("")
+        if new_password:
+            self.acct_security_status.config(text="\u25cf  Local app lock password set.", fg=GREEN)
+            self.acct_password_status_label.config(text="\u25cf  Set", fg=GREEN)
+        else:
+            self.acct_security_status.config(text="\u25cf  Local app lock password cleared.", fg=GREEN)
+            self.acct_password_status_label.config(text="\u25cb  Not set", fg=TEXT_DIM)
+
+    def _account_log_out(self):
+        from app.accounts.settings import load_account_settings
+
+        # The desktop app has no login session of its own -- unlike the web
+        # app (which gates browser access behind session["t58_unlocked"]
+        # for Phone Access), there's nothing here to actually log out of.
+        # Stated plainly rather than pretending this button does something
+        # it can't, matching this app's own honest-about-its-limits style.
+        if load_account_settings().has_password:
+            self.acct_security_status.config(
+                text="The desktop app has no login session to log out of. Your local app lock "
+                     "password still gates Phone Access (the web app running on this machine) "
+                     "the same as before.",
+                fg=TEXT_MUTED,
+            )
+        else:
+            self.acct_security_status.config(
+                text="No lock password is set, so there's nothing to log out of.", fg=TEXT_MUTED,
+            )
+
+    def _account_delete(self):
+        if not messagebox.askyesno(
+            "Delete account",
+            "Delete local account data? This clears your name, username, email, company, and "
+            "lock password on this computer. Strategies, datasets, and reports are NOT "
+            "affected. This can't be undone.",
+        ):
+            return
         from app.accounts.settings import AccountSettings, save_account_settings
 
-        save_account_settings(AccountSettings(
-            display_name=self.acct_display_name.get_str().strip(),
-            email=self.acct_email.get_str().strip(),
-            company=self.acct_company.get_str().strip(),
-        ))
-        self.acct_profile_status.config(text="\u25cf  Saved.", fg=GREEN)
+        save_account_settings(AccountSettings())
+        self.acct_display_name.var.set("")
+        self.acct_username.var.set("")
+        self.acct_email.var.set("")
+        self.acct_company.var.set("")
+        self.acct_new_password.var.set("")
+        self.acct_confirm_password.var.set("")
+        self.acct_password_status_label.config(text="\u25cb  Not set", fg=TEXT_DIM)
+        self.acct_profile_status.config(text="", fg=TEXT_MUTED)
+        self.acct_security_status.config(text="\u25cf  Local account data deleted.", fg=GREEN)
+
+    def _account_check_for_updates(self):
+        from app.accounts.app_info import check_for_updates
+
+        result = check_for_updates()
+        if not result.configured:
+            self.acct_update_status.config(text=result.error, fg=TEXT_MUTED)
+        elif result.checked and result.update_available:
+            self.acct_update_status.config(
+                text=f"A newer version is available: {result.latest_version}."
+                     + (f"  {result.release_url}" if result.release_url else ""),
+                fg=AMBER,
+            )
+        elif result.checked:
+            self.acct_update_status.config(
+                text=f"You're up to date (latest release: {result.latest_version}).", fg=GREEN,
+            )
+        else:
+            self.acct_update_status.config(text=result.error, fg=RED)
 
     def _save_account_settings(self):
         from app.web.notifications import NotificationSettings, load_notification_settings, save_notification_settings
@@ -10497,6 +10679,14 @@ class MainWindow:
             self._log_wfo("\nDone. Walk-forward optimization report written to:")
             for k, p in paths.items():
                 self._log_wfo(f"  {k}: {p}")
+            eff = getattr(result, "out_of_sample_efficiency", None)
+            summary = f"OOS efficiency {eff:.2f}" if eff is not None else f"{self.wfo_folds.get_int(5)} folds completed"
+            # No strict pass/fail verdict is computed by this tool -- passed=None
+            # records that it *ran*, matching app.web.server's own /walk-forward-opt route.
+            strategy_state.record_validation(
+                getattr(strategy, "name", "Strategy"), self.wfo_context.instrument_label(), "wfo",
+                passed=None, summary=summary, report_html=f"file://{self._last_wfo_html_path.resolve()}",
+            )
         except StrategyError as exc:
             self._log_wfo(f"\nStrategy error: {exc}")
         except RefinementError as exc:
@@ -10696,6 +10886,12 @@ class MainWindow:
             self._log_cpcv("\nDone. CPCV report written to:")
             for k, p in paths.items():
                 self._log_cpcv(f"  {k}: {p}")
+            # Matches app.web.server's own /cpcv route's record_validation call.
+            strategy_state.record_validation(
+                getattr(strategy_builder(), "name", "Strategy"), self.cpcv_context.instrument_label(), "cpcv",
+                passed=bool(result.is_robust), summary=f"{result.n_paths} paths evaluated",
+                report_html=f"file://{self._last_cpcv_html_path.resolve()}",
+            )
         except StrategyError as exc:
             self._log_cpcv(f"\nStrategy error: {exc}")
         except CPCVError as exc:
@@ -10925,6 +11121,13 @@ class MainWindow:
             self._log_sens("\nDone. Sensitivity report written to:")
             for k, p in paths.items():
                 self._log_sens(f"  {k}: {p}")
+            # This tool is diagnostic, not pass/fail -- passed=None records that it
+            # ran, matching app.web.server's own /sensitivity route.
+            strategy_state.record_validation(
+                getattr(strategy, "name", "Strategy"), self.sensitivity_context.instrument_label(), "sensitivity",
+                passed=None, summary=f"{len(sweeps)} parameter(s) swept",
+                report_html=f"file://{self._last_sens_html_path.resolve()}",
+            )
         except StrategyError as exc:
             self._log_sens(f"\nStrategy error: {exc}")
         except RefinementError as exc:
@@ -11713,6 +11916,13 @@ class MainWindow:
             self._log_wfga("\nDone. Walk-forward-aware GA report written to:")
             for k, p in paths.items():
                 self._log_wfga(f"  {k}: {p}")
+            gap = getattr(result, "overfitting_gap", None)
+            summary = f"overfitting gap {gap:.2f}" if gap is not None else f"{self.wfga_folds.get_int(4)} folds, walk-forward-aware GA"
+            # Matches app.web.server's own /walk-forward-ga route's record_validation call.
+            strategy_state.record_validation(
+                getattr(strategy, "name", "Strategy"), self.wfga_context.instrument_label(), "wfga",
+                passed=None, summary=summary, report_html=f"file://{self._last_wfga_html_path.resolve()}",
+            )
         except StrategyError as exc:
             self._log_wfga(f"\nStrategy error: {exc}")
         except RefinementError as exc:
@@ -16113,16 +16323,15 @@ class MainWindow:
     # from whatever WFO/WFGA/CPCV/Sensitivity/Regime Matrix has already
     # recorded against the strategy marked "current".
     #
-    # KNOWN LIMITATION: strategy_state.record_validation() is currently
-    # only called from app.web.server's own WFO/WFGA/CPCV/Sensitivity/
-    # Regime Matrix routes -- desktop's five equivalent tabs don't yet
-    # call it at the end of their own runs. Since data/config/
-    # current_strategy.json and validation_checklist.json are shared by
-    # both apps on the same machine (get_app_base_dir()), this Validate
-    # Overview tab correctly shows checklist progress recorded by WEB
-    # runs -- it just won't reflect a desktop-only WFO/CPCV/etc run yet.
-    # Wiring record_validation() into those five desktop tabs is tracked
-    # separately (see PHASE_1_STATUS.md) rather than rushed in here.
+    # RESOLVED (2026-09): strategy_state.record_validation() is now called
+    # from desktop's own WFO/WFGA/CPCV/Sensitivity/Regime Matrix tabs at
+    # the end of each successful run (_wfo_run_pipeline, _cpcv_run_pipeline,
+    # _sens_run_pipeline, _wfga_run_pipeline, _run_regime_matrix_pipeline),
+    # mirroring the summary/passed conventions of app.web.server's own five
+    # routes. Since data/config/current_strategy.json and
+    # validation_checklist.json are shared by both apps on the same machine
+    # (get_app_base_dir()), this Validate Overview tab now reflects
+    # checklist progress from EITHER a web or a desktop-only run.
     # -----------------------------------------------------------------------
 
     def _build_optimize_hub_tab(self):
