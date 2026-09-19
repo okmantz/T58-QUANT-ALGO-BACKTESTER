@@ -75,6 +75,7 @@ from app.monte_carlo.engine import MonteCarloConfig, run_monte_carlo
 from app.monte_carlo.bankroll import BankrollConfig, simulate_bankroll_survival
 from app.optimize.risk_sweep import DEFAULT_RISK_VALUES, run_risk_sweep
 from app.optimize.multi_objective import (    DEFAULT_OBJECTIVES, MultiObjectiveConfig, OBJECTIVE_DIRECTIONS, run_multi_objective_refinement,
+    run_multi_objective_sweep,
 )
 from app.backtest.adaptive_risk import build_limit_aware_preset
 from app.optimize.refinement import FITNESS_METRICS, RefinementConfig, RefinementError, run_iterative_refinement
@@ -84,7 +85,7 @@ from app.orchestration.full_pipeline import (
     FullPipelineBatchCancelled, FullPipelineBatchItem, FullPipelineCancelled, FullPipelineConfig,
     run_full_pipeline, run_full_pipeline_batch,
 )
-from app.orchestration.quick_optimize import QuickOptimizeConfig, run_quick_optimize
+from app.orchestration.quick_optimize import QuickOptimizeConfig, run_quick_optimize, run_quick_optimize_sweep
 from app.orchestration.resource_guard import (
     HEAVY_JOB_GUARD, JOB_EVOLUTION_LAB, JOB_FORGE, JOB_FULL_PIPELINE, JOB_SEARCH_LAB, JOB_SPEED_RUN,
     JOB_WFO, JOB_WFGA, JOB_CPCV, JOB_SENSITIVITY, JOB_MULTI_OBJECTIVE, JOB_REGIME_MATRIX, JOB_PBO,
@@ -94,6 +95,11 @@ from app.orchestration.resource_guard import (
 from app.orchestration.forge import ForgeConfig, run_forge
 from app.research import director as research_director
 from app.evolution.multi_instrument import EvolutionInstrumentJob, MultiInstrumentEvolutionGroup
+from app.data.timeframe_sweep import DEFAULT_SWEEP_TIMEFRAMES, parse_sweep_timeframes
+from app.orchestration.multi_timeframe_jobs import (
+    describe_skipped, evolution_jobs_from_expansion, expand_dataset_across_timeframes,
+    search_jobs_from_expansion,
+)
 from app.orchestration.multi_instrument_search import (
     InstrumentJob, best_result_across_instruments, run_multi_instrument_search,
     run_multi_instrument_search_loop,
@@ -3030,6 +3036,67 @@ def _run_mo_job(job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, m
             job = _MO_JOBS[job_id]
             job["done"] = True
             job["error"] = f"Unexpected error: {exc}"
+
+
+def _run_mo_sweep_job(
+    job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, mc_cfg: MonteCarloConfig,
+    mo_cfg: MultiObjectiveConfig, timeframes: list[str],
+) -> None:
+    """Same shape as _run_mo_job, but drives
+    app.optimize.multi_objective.run_multi_objective_sweep -- one full
+    NSGA-II run per timeframe, each with its own report. `job["result"]`
+    is set to the FIRST timeframe's own MultiObjectiveResult so
+    mo_job_status's existing single-result summary keeps working
+    unchanged; `job["sweep_results"]` carries every timeframe's own
+    summary + report link for the job page's per-timeframe breakdown.
+    """
+    try:
+        sweep = run_multi_objective_sweep(
+            df, strategy, risk, rules, mc_cfg, timeframes, mo_cfg,
+            progress_cb=lambda msg: _mo_job_log(job_id, msg),
+        )
+        sweep_results = {}
+        first_result = None
+        for label, result in sweep.per_timeframe.items():
+            paths = generate_multi_objective_report(
+                MULTI_OBJ_DIR, result, basename=f"multi_objective_{job_id}_{label}",
+            )
+            report_html = f"/mo_reports/{Path(paths['html']).name}"
+            if first_result is None:
+                first_result = result
+            sweep_results[label] = {
+                "objectives": result.config.objectives,
+                "pareto_front": [
+                    {"objective_values": dict(zip(result.config.objectives, c.objective_values)), "feasible": c.feasible}
+                    for c in result.pareto_front
+                ],
+                "generations_run": len(result.generation_history or []),
+                "elapsed_seconds": result.elapsed_seconds,
+                "report_html": report_html,
+            }
+        with _MO_JOBS_LOCK:
+            job = _MO_JOBS[job_id]
+            job["done"] = True
+            job["result"] = first_result
+            job["report_html"] = sweep_results.get(next(iter(sweep_results), ""), {}).get("report_html")
+            job["sweep_results"] = sweep_results
+            if sweep.skipped:
+                job["log"].append(
+                    "Skipped from the timeframe sweep: "
+                    + "; ".join(f"{s.requested_label} ({s.reason})" for s in sweep.skipped)
+                )
+            for label, err in sweep.errors.items():
+                job["log"].append(f"[{label}] could not be searched: {err}")
+    except RefinementError as exc:
+        with _MO_JOBS_LOCK:
+            job = _MO_JOBS[job_id]
+            job["done"] = True
+            job["error"] = str(exc)
+    except Exception as exc:  # noqa: BLE001
+        with _MO_JOBS_LOCK:
+            job = _MO_JOBS[job_id]
+            job["done"] = True
+            job["error"] = f"Unexpected error: {exc}"
     finally:
         HEAVY_JOB_GUARD.release(JOB_MULTI_OBJECTIVE)
 
@@ -3090,7 +3157,20 @@ def mo_start():
             initial_log.append(import_note)
         with _MO_JOBS_LOCK:
             _MO_JOBS[job_id] = {"log": initial_log, "done": False, "error": None, "result": None, "started_at": time.time(), "instrument": active_label}
-        thread = threading.Thread(target=_run_mo_job, args=(job_id, df, strategy, risk, rules, mc_cfg, mo_cfg), daemon=True)
+        # FIX (multi-timeframe sweep): "Timeframes to test" runs the SAME
+        # NSGA-II search once per requested timeframe (df resampled per
+        # timeframe -- see app.data.timeframe_sweep) and reports every
+        # timeframe's own Pareto front side by side rather than merging
+        # them -- see app.optimize.multi_objective.run_multi_objective_sweep
+        # for why that merge is deliberately NOT attempted.
+        expand_labels = parse_sweep_timeframes(form.get("expand_timeframes", ""))
+        if expand_labels:
+            thread = threading.Thread(
+                target=_run_mo_sweep_job, args=(job_id, df, strategy, risk, rules, mc_cfg, mo_cfg, expand_labels),
+                daemon=True,
+            )
+        else:
+            thread = threading.Thread(target=_run_mo_job, args=(job_id, df, strategy, risk, rules, mc_cfg, mo_cfg), daemon=True)
         thread.start()
         return redirect(url_for("mo_job", job_id=job_id))
     except (StrategyError, RefinementError) as exc:
@@ -3130,7 +3210,10 @@ def mo_job_status(job_id):
             "report_html": job.get("report_html"),
             "report_json": job.get("report_json"),
         }
-    return jsonify({"found": True, "done": job["done"], "error": job["error"], "log": job["log"], "instrument": job.get("instrument"), "summary": summary})
+    return jsonify({
+        "found": True, "done": job["done"], "error": job["error"], "log": job["log"],
+        "instrument": job.get("instrument"), "summary": summary, "sweep_results": job.get("sweep_results"),
+    })
 
 
 @app.route("/mo_reports/<path:filename>")
@@ -4624,6 +4707,62 @@ def _run_quickopt_job(
             job["error"] = f"Unexpected error: {exc}"
 
 
+def _run_quickopt_sweep_job(
+    job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, cfg: QuickOptimizeConfig,
+    timeframes: list[str], cancel_event: threading.Event | None = None,
+) -> None:
+    """Same shape as _run_quickopt_job, but drives
+    app.orchestration.quick_optimize.run_quick_optimize_sweep instead of a
+    single run. `job["result"]` ends up as the WINNING timeframe's own
+    QuickOptimizeResult -- so quickopt_job_status's existing summary-
+    building code below needs no changes at all to render it; this only
+    adds `job["sweep_timeframes"]`, a plain label -> headline-numbers dict
+    for the extra per-timeframe comparison table on the job page.
+    """
+    try:
+        sweep = run_quick_optimize_sweep(
+            df, strategy, risk, rules, timeframes, cfg,
+            progress_cb=lambda msg: _quickopt_job_log(job_id, msg), cancel_event=cancel_event,
+        )
+        with _QUICKOPT_JOBS_LOCK:
+            job = _QUICKOPT_JOBS[job_id]
+            job["done"] = True
+            job["result"] = sweep.best_result
+            job["best_timeframe"] = sweep.best_timeframe
+            job["sweep_timeframes"] = {
+                label: {
+                    "optimized_eval_pass_probability": res.optimized_eval_pass_probability,
+                    "optimized_win_rate": res.optimized_win_rate,
+                    "optimized_net_profit": res.optimized_net_profit,
+                    "optimized_trades": res.optimized_trades,
+                    "is_best": label == sweep.best_timeframe,
+                }
+                for label, res in sweep.per_timeframe.items()
+            }
+            if sweep.skipped:
+                job["log"].append(
+                    "Skipped from the timeframe sweep: "
+                    + "; ".join(f"{s.requested_label} ({s.reason})" for s in sweep.skipped)
+                )
+            for label, err in sweep.errors.items():
+                job["log"].append(f"[{label}] could not be optimized: {err}")
+    except WalkforwardGACancelled:
+        with _QUICKOPT_JOBS_LOCK:
+            job = _QUICKOPT_JOBS[job_id]
+            job["done"] = True
+            job["cancelled"] = True
+    except RefinementError as exc:
+        with _QUICKOPT_JOBS_LOCK:
+            job = _QUICKOPT_JOBS[job_id]
+            job["done"] = True
+            job["error"] = str(exc)
+    except Exception as exc:  # noqa: BLE001
+        with _QUICKOPT_JOBS_LOCK:
+            job = _QUICKOPT_JOBS[job_id]
+            job["done"] = True
+            job["error"] = f"Unexpected error: {exc}"
+
+
 @app.route("/quick-optimize")
 def quickopt_form():
     return render_template("quick_optimize.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), strategy_statuses=STRATEGY_STATUSES, fitness_metrics=FITNESS_METRICS, alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), **_alpaca_template_context())
@@ -4665,7 +4804,19 @@ def quickopt_start():
                 "started_at": time.time(), "instrument": active_label,
                 "cancel_event": cancel_event, "cancelled": False,
             }
-        thread = threading.Thread(target=_run_quickopt_job, args=(job_id, df, strategy, risk, rules, cfg, cancel_event), daemon=True)
+        # FIX (multi-timeframe sweep): "Timeframes to test" runs the SAME
+        # GA once per requested timeframe (df resampled per timeframe --
+        # see app.data.timeframe_sweep) and keeps the winner, exactly like
+        # a single Quick Optimize run otherwise -- see
+        # app.orchestration.quick_optimize.run_quick_optimize_sweep.
+        expand_labels = parse_sweep_timeframes(form.get("expand_timeframes", ""))
+        if expand_labels:
+            thread = threading.Thread(
+                target=_run_quickopt_sweep_job, args=(job_id, df, strategy, risk, rules, cfg, expand_labels, cancel_event),
+                daemon=True,
+            )
+        else:
+            thread = threading.Thread(target=_run_quickopt_job, args=(job_id, df, strategy, risk, rules, cfg, cancel_event), daemon=True)
         thread.start()
         return redirect(url_for("quickopt_job", job_id=job_id))
     except (StrategyError, RefinementError) as exc:
@@ -4745,6 +4896,7 @@ def quickopt_job_status(job_id):
     return jsonify({
         "found": True, "done": job["done"], "error": job["error"], "cancelled": job.get("cancelled", False),
         "log": job["log"], "instrument": job.get("instrument"), "summary": summary,
+        "best_timeframe": job.get("best_timeframe"), "sweep_timeframes": job.get("sweep_timeframes"),
     })
 
 
@@ -4872,6 +5024,47 @@ def evolution_start():
         )
         _EVOLUTION_LOG.clear()
         _EVOLUTION_LOG.append(f"Loaded {len(df)} bars from {active_label}.")
+
+        # FIX (multi-timeframe sweep): "Timeframes to test" -- same
+        # mechanism as Search Lab's own copy of this (see that route's
+        # comment). `active_label` is resampled into every requested
+        # timeframe and each becomes its own independent evolution runner
+        # in a Multi-Instrument Evolution group, reusing this exact `cfg`
+        # as every runner's base config (instrument gets overridden per
+        # job -- see MultiInstrumentEvolutionGroup.__init__). Results open
+        # on the Multi-Instrument Evolution job page instead of this
+        # page's own single-runner status.
+        expand_labels = parse_sweep_timeframes(form.get("expand_timeframes", ""))
+        if expand_labels:
+            HEAVY_JOB_GUARD.release(JOB_EVOLUTION_LAB)
+            if not HEAVY_JOB_GUARD.try_acquire(JOB_MULTI_INSTRUMENT_EVOLUTION):
+                return render_template(
+                    "evolution.html",
+                    error=f"{HEAVY_JOB_GUARD.active_name} is already running on this server. Wait for it "
+                          f"to finish before starting a timeframe sweep.",
+                    stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+                    families=[{"name": n, "description": family_description(n)} for n in list_families()],
+                    running=False, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 409
+            expansion = expand_dataset_across_timeframes(df, active_label, expand_labels)
+            sweep_jobs = evolution_jobs_from_expansion(expansion)
+            if not sweep_jobs:
+                HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_EVOLUTION)
+                reasons = "; ".join(f"{s.requested_label} ({s.reason})" for s in expansion.skipped)
+                return render_template(
+                    "evolution.html",
+                    error=f"Could not resample '{active_label}' into any of the requested timeframes -- {reasons}",
+                    stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+                    families=[{"name": n, "description": family_description(n)} for n in list_families()],
+                    running=False, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
+            group_id = uuid.uuid4().hex[:12]
+            group = MultiInstrumentEvolutionGroup(group_id, sweep_jobs, risk, rules, cfg)
+            if expansion.skipped:
+                group.errors["(timeframe sweep)"] = "; ".join(describe_skipped(expansion, active_label))
+            group.start_all()
+            with _MULTI_EVOLUTION_LOCK:
+                _MULTI_EVOLUTION_GROUPS[group_id] = group
+            return redirect(url_for("evolution_multi_instrument_job", group_id=group_id))
+
         with _EVOLUTION_LOCK:
             _EVOLUTION_RUNNER = EvolutionRunner(df, risk, rules, cfg, progress_cb=_evolution_log)
             _EVOLUTION_RUNNER.start()
@@ -5132,25 +5325,48 @@ def evolution_multi_instrument_start():
         ), 409
     try:
         selected = form.getlist("datasets")
-        if len(selected) < 2:
+        expand_labels = parse_sweep_timeframes(form.get("expand_timeframes", ""))
+        if not selected:
             HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_EVOLUTION)
             return render_template(
                 "evolution_multi_instrument.html",
-                error="Select at least 2 datasets to run across -- with only 1 selected, use the "
-                      "regular Evolution Lab page instead.",
+                error="Select at least 1 dataset.",
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+                families=[{"name": n, "description": family_description(n)} for n in list_families()],
+                active_groups=[],
+            ), 400
+        if not expand_labels and len(selected) < 2:
+            HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_EVOLUTION)
+            return render_template(
+                "evolution_multi_instrument.html",
+                error="Select at least 2 datasets to run across, or fill in \"Timeframes to auto-generate\" "
+                      "to expand a single dataset into several timeframes instead.",
                 stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
                 families=[{"name": n, "description": family_description(n)} for n in list_families()],
                 active_groups=[],
             ), 400
 
+        # FIX (multi-timeframe sweep): see the identical comment in
+        # search_multi_instrument_start above -- same mechanism, this
+        # engine's own EvolutionInstrumentJob shape instead of InstrumentJob.
         jobs: list[EvolutionInstrumentJob] = []
+        sweep_warnings: list[str] = []
         for name in selected:
             candidate_path = get_raw_data_dir() / name
             if not candidate_path.exists():
                 continue
             stem = Path(name).stem
             instrument = name.split("/")[0] if "/" in name else stem
-            jobs.append(EvolutionInstrumentJob(instrument=instrument, timeframe=stem, csv_path=str(candidate_path)))
+            if expand_labels:
+                import_result = import_csv(candidate_path)
+                if not import_result.is_valid:
+                    sweep_warnings.append(f"{name}: could not read this dataset to expand it -- skipped.")
+                    continue
+                expansion = expand_dataset_across_timeframes(import_result.dataframe, instrument, expand_labels)
+                sweep_warnings.extend(describe_skipped(expansion, name))
+                jobs.extend(evolution_jobs_from_expansion(expansion))
+            else:
+                jobs.append(EvolutionInstrumentJob(instrument=instrument, timeframe=stem, csv_path=str(candidate_path)))
 
         if len(jobs) < 2:
             HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_EVOLUTION)
@@ -5208,6 +5424,8 @@ def evolution_multi_instrument_start():
 
         group_id = uuid.uuid4().hex[:12]
         group = MultiInstrumentEvolutionGroup(group_id, jobs, risk, rules, base_cfg)
+        if sweep_warnings:
+            group.errors["(timeframe sweep)"] = "; ".join(sweep_warnings)
         group.start_all()
         with _MULTI_EVOLUTION_LOCK:
             _MULTI_EVOLUTION_GROUPS[group_id] = group
@@ -5708,6 +5926,61 @@ def search_start():
             initial_log.append(import_note)
         initial_log.extend(_family_exclusion_log)
         cancel_event = threading.Event()
+
+        # FIX (multi-timeframe sweep): "Timeframes to test" lets this single-
+        # dataset page do a real multi-timeframe run without sending anyone
+        # over to the separate Multi-Instrument Search page -- `active_label`
+        # is resampled into every requested timeframe (see
+        # app.data.timeframe_sweep) and each one becomes its own job, reusing
+        # the exact same `space`/`stage_cfg`/`risk`/`rules` already built
+        # above from this form. Results render on the Multi-Instrument
+        # Search job page (built for exactly this "several targets, one
+        # search space" shape) rather than duplicating that page's report
+        # here.
+        expand_labels = parse_sweep_timeframes(form.get("expand_timeframes", ""))
+        if expand_labels:
+            HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
+            if not HEAVY_JOB_GUARD.try_acquire(JOB_MULTI_INSTRUMENT_SEARCH):
+                return render_template(
+                    "search.html",
+                    error=(
+                        f"{HEAVY_JOB_GUARD.active_name} is already running on this server. Wait for it to "
+                        f"finish before starting a timeframe sweep."
+                    ),
+                    stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+                    families=[{"name": n, "description": family_description(n)} for n in list_families()],
+                    saved_strategies_json=_saved_strategies_json(),
+                    prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 409
+            expansion = expand_dataset_across_timeframes(df, active_label, expand_labels)
+            sweep_jobs = search_jobs_from_expansion(expansion)
+            if not sweep_jobs:
+                HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_SEARCH)
+                reasons = "; ".join(f"{s.requested_label} ({s.reason})" for s in expansion.skipped)
+                return render_template(
+                    "search.html",
+                    error=f"Could not resample '{active_label}' into any of the requested timeframes -- {reasons}",
+                    stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+                    families=[{"name": n, "description": family_description(n)} for n in list_families()],
+                    saved_strategies_json=_saved_strategies_json(),
+                    prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
+            sweep_job_id = uuid.uuid4().hex[:12]
+            sweep_log = initial_log + describe_skipped(expansion, active_label) + [
+                f"Timeframe sweep of {active_label}: searching {len(sweep_jobs)} timeframe target(s): "
+                + ", ".join(f"{j.instrument}/{j.timeframe}" for j in sweep_jobs),
+            ]
+            with _MULTI_SEARCH_JOBS_LOCK:
+                _MULTI_SEARCH_JOBS[sweep_job_id] = {
+                    "log": sweep_log, "done": False, "error": None, "results": None,
+                    "best_label": None, "champion_report": None,
+                    "labels": [f"{j.instrument}/{j.timeframe}" for j in sweep_jobs], "loop_mode": False,
+                }
+            thread = threading.Thread(
+                target=_run_multi_search_job,
+                args=(sweep_job_id, sweep_jobs, space, risk, rules, stage_cfg, min(len(sweep_jobs), 3)),
+                daemon=True,
+            )
+            thread.start()
+            return redirect(url_for("search_multi_instrument_job", job_id=sweep_job_id))
 
         loop_mode_on = form.get("loop_mode") == "on"
         if loop_mode_on:
@@ -6564,17 +6837,34 @@ def search_multi_instrument_start():
         ), 409
     try:
         selected = form.getlist("datasets")
-        if len(selected) < 2:
+        expand_labels = parse_sweep_timeframes(form.get("expand_timeframes", ""))
+        if not selected:
             HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_SEARCH)
             return render_template(
                 "search_multi_instrument.html",
-                error="Select at least 2 datasets to search across -- with only 1 selected, use the "
-                      "regular Search Lab page instead.",
+                error="Select at least 1 dataset.",
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+                families=[{"name": n, "description": family_description(n)} for n in list_families()],
+            ), 400
+        if not expand_labels and len(selected) < 2:
+            HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_SEARCH)
+            return render_template(
+                "search_multi_instrument.html",
+                error="Select at least 2 datasets to search across, or fill in \"Timeframes to auto-generate\" "
+                      "to expand a single dataset into several timeframes instead.",
                 stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
                 families=[{"name": n, "description": family_description(n)} for n in list_families()],
             ), 400
 
+        # FIX (multi-timeframe sweep): "Timeframes to auto-generate" lets one
+        # (or several) selected dataset(s) stand in for N separate files --
+        # each is resampled into every requested timeframe (see
+        # app.data.timeframe_sweep) and written to data/raw/ as its own real
+        # CSV, so the loop below builds jobs from those exactly like it
+        # always has from a person's own separately-uploaded files. Every
+        # dataset x every requested timeframe becomes its own job.
         jobs: list[InstrumentJob] = []
+        sweep_warnings: list[str] = []
         for name in selected:
             candidate_path = get_raw_data_dir() / name
             if not candidate_path.exists():
@@ -6586,13 +6876,18 @@ def search_multi_instrument_start():
             # flat "XAUUSD15.csv" just uses the filename for both labels
             # (still unique, just less pretty) rather than raising here.
             stem = Path(name).stem
-            if "/" in name:
-                instrument = name.split("/")[0]
-                timeframe = stem
+            instrument = name.split("/")[0] if "/" in name else stem
+
+            if expand_labels:
+                import_result = import_csv(candidate_path)
+                if not import_result.is_valid:
+                    sweep_warnings.append(f"{name}: could not read this dataset to expand it -- skipped.")
+                    continue
+                expansion = expand_dataset_across_timeframes(import_result.dataframe, instrument, expand_labels)
+                sweep_warnings.extend(describe_skipped(expansion, name))
+                jobs.extend(search_jobs_from_expansion(expansion))
             else:
-                instrument = stem
-                timeframe = stem
-            jobs.append(InstrumentJob(instrument=instrument, timeframe=timeframe, csv_path=str(candidate_path)))
+                jobs.append(InstrumentJob(instrument=instrument, timeframe=stem, csv_path=str(candidate_path)))
 
         if len(jobs) < 2:
             HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_SEARCH)
@@ -6652,7 +6947,8 @@ def search_multi_instrument_start():
                 _MULTI_SEARCH_JOBS[job_id] = {
                     "log": [f"Loop mode ON -- searching {len(jobs)} instrument/timeframe target(s) "
                             f"independently until each clears {loop_cfg.target_eval_pass_pct:.0f}%: " +
-                            ", ".join(f"{j.instrument}/{j.timeframe}" for j in jobs)] + _family_exclusion_log,
+                            ", ".join(f"{j.instrument}/{j.timeframe}" for j in jobs)]
+                           + sweep_warnings + _family_exclusion_log,
                     "done": False, "error": None, "results": None,
                     "best_label": None, "champion_report": None,
                     "labels": [f"{j.instrument}/{j.timeframe}" for j in jobs],
@@ -6669,7 +6965,8 @@ def search_multi_instrument_start():
         with _MULTI_SEARCH_JOBS_LOCK:
             _MULTI_SEARCH_JOBS[job_id] = {
                 "log": [f"Searching {len(jobs)} instrument/timeframe target(s): " +
-                        ", ".join(f"{j.instrument}/{j.timeframe}" for j in jobs)] + _family_exclusion_log,
+                        ", ".join(f"{j.instrument}/{j.timeframe}" for j in jobs)]
+                       + sweep_warnings + _family_exclusion_log,
                 "done": False, "error": None, "results": None,
                 "best_label": None, "champion_report": None,
                 "labels": [f"{j.instrument}/{j.timeframe}" for j in jobs],
