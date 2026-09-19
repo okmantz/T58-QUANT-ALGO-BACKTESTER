@@ -393,3 +393,93 @@ def run_multi_objective_refinement(
     finally:
         if tmp_dir is not None:
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Timeframe sweep -- runs the SAME multi-objective NSGA-II search
+# independently once per requested timeframe (each on `df` resampled to
+# that bar size -- see app.data.timeframe_sweep), and returns every
+# timeframe's own Pareto front side by side rather than merging them into
+# one. Merging fronts found on different bar sizes into a single ranking
+# would silently compare apples (e.g. an hourly strategy's trade count)
+# to oranges (a 5-minute strategy's) under objectives like "more trades"
+# or "higher net profit" that are NOT bar-size-invariant -- so this
+# deliberately leaves that comparison to the person reading the results,
+# one timeframe's front at a time, rather than fabricating a single
+# combined ranking this module has no principled way to compute.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class MultiObjectiveSweepResult:
+    per_timeframe: dict  # dict[str, MultiObjectiveResult], insertion order == timeframes tried
+    skipped: list = field(default_factory=list)   # list[app.data.timeframe_sweep.SweepSkipped]
+    errors: dict = field(default_factory=dict)     # dict[str, str] -- timeframe label -> why it failed
+
+
+def run_multi_objective_sweep(
+    df: pd.DataFrame,
+    strategy: Strategy,
+    risk: RiskConfig,
+    prop_rules: PropRules,
+    mc_config: MonteCarloConfig,
+    timeframes: list[str],
+    mo_config: MultiObjectiveConfig | None = None,
+    progress_cb=None,
+) -> MultiObjectiveSweepResult:
+    """Runs run_multi_objective_refinement once per timeframe in
+    `timeframes` (each against `df` resampled to that bar size), and
+    returns every timeframe's own Pareto front. An empty `timeframes` (or
+    one where every entry gets skipped -- see
+    app.data.timeframe_sweep.build_timeframe_sweep) falls back to a
+    single run against `df` unresampled, under the label "native".
+
+    For a manual (JSON) Strategy Builder strategy, each candidate
+    timeframe is stamped onto a COPY of its config's own top-level
+    "timeframe" key before that timeframe's search runs, so every
+    resulting Pareto-front candidate's own `.config` already declares the
+    timeframe it was found on (see app.data.timeframe_resample) -- saving
+    any of them keeps it trading on that same bar size later. Python/
+    PineScript/MQL5 strategies are swept the same way but not auto-
+    stamped this way.
+    """
+    from app.data.timeframe_sweep import build_timeframe_sweep
+
+    plan = build_timeframe_sweep(df, timeframes or [])
+    target_pairs = [(t.label, t.dataframe) for t in plan.targets] if plan.targets else [("native", df)]
+
+    per_timeframe: dict[str, MultiObjectiveResult] = {}
+    errors: dict[str, str] = {}
+
+    for label, target_df in target_pairs:
+        if progress_cb:
+            progress_cb(f"=== Timeframe {label}: starting Multi-Objective search ({len(target_df):,} bars) ===")
+
+        run_strategy = strategy
+        if (
+            plan.targets and getattr(strategy, "source_type", None) == "manual"
+            and isinstance(getattr(strategy, "config", None), dict)
+        ):
+            import json as _json
+
+            from app.strategy.manual import ManualStrategy
+
+            stamped_config = _json.loads(_json.dumps(strategy.config))
+            stamped_config["timeframe"] = label
+            run_strategy = ManualStrategy(stamped_config)
+
+        try:
+            result = run_multi_objective_refinement(
+                target_df, run_strategy, risk, prop_rules, mc_config, mo_config=mo_config,
+                progress_cb=(lambda msg, _l=label: progress_cb(f"[{_l}] {msg}")) if progress_cb else None,
+            )
+            per_timeframe[label] = result
+        except RefinementError as exc:
+            errors[label] = str(exc)
+            if progress_cb:
+                progress_cb(f"[{label}] skipped -- {exc}")
+
+    if not per_timeframe:
+        detail = "; ".join(f"{k}: {v}" for k, v in errors.items()) if errors else "no timeframe could be resampled from this dataset."
+        raise RefinementError(f"Multi-Objective's timeframe sweep produced no usable timeframe -- {detail}")
+
+    return MultiObjectiveSweepResult(per_timeframe=per_timeframe, skipped=plan.skipped, errors=errors)
