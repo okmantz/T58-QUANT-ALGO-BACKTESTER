@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Locked — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { background: var(--bg, #05070a); min-height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0; }
+  .lock-card {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 14px;
+    padding: 28px 26px; width: 100%; max-width: 340px; text-align: center;
+  }
+  .lock-icon { font-size: 30px; margin-bottom: 6px; }
+  h1 { font-size: 16px; margin: 0 0 4px; color: var(--text); }
+  p.lede { color: var(--text-muted); font-size: 13px; margin: 0 0 18px; }
+  input[type=password] {
+    width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font-size: 15px; text-align: center;
+  }
+  input:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), 0.15); }
+  .submit-btn {
+    width: 100%; padding: 13px 20px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal);
+    color: #04120e; font-weight: 700; font-size: 14px; margin-top: 14px; cursor: pointer;
+  }
+  .error-note { color: var(--danger); font-size: 13px; margin: 12px 0 0; }
+</style>
+</head>
+<body>
+  <form class="lock-card" method="POST" action="/lock/unlock">
+    <div class="lock-icon">&#128274;</div>
+    <h1>This app is locked</h1>
+    <p class="lede">Enter the local app password to continue.</p>
+    <input type="password" name="password" autocomplete="current-password" autofocus placeholder="Password">
+    <input type="hidden" name="next" value="{{ next }}">
+    <button class="submit-btn" type="submit">Unlock</button>
+    {% if error %}<p class="error-note">{{ error }}</p>{% endif %}
+  </form>
+</body>
+</html>

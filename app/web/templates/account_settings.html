@@ -16,18 +16,40 @@
   .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
   .card p.help { font-size: 12.5px; color: var(--text-muted); margin: 0 0 14px; line-height: 1.5; }
   label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
-  input[type=text], input[type=email] {
+  input[type=text], input[type=email], input[type=password], select {
     width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-light);
     background: var(--panel-3); color: var(--text); font-size: 14px;
   }
-  input:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), 0.15); }
+  input:focus, select:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), 0.15); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 140px; }
   .submit-btn {
     padding: 13px 20px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal);
     color: #04120e; font-weight: 700; font-size: 14px; margin-top: 14px; cursor: pointer;
   }
+  .secondary-btn {
+    padding: 11px 18px; border-radius: 10px; border: 1px solid var(--border-light); background: var(--panel-3);
+    color: var(--text); font-weight: 600; font-size: 13.5px; margin-top: 10px; cursor: pointer;
+  }
+  .danger-btn {
+    padding: 11px 18px; border-radius: 10px; border: 1px solid var(--danger); background: transparent;
+    color: var(--danger); font-weight: 700; font-size: 13.5px; margin-top: 10px; cursor: pointer;
+  }
+  .btn-row { display: flex; gap: 10px; flex-wrap: wrap; }
   .saved-banner { border-left: 3px solid var(--teal); font-size: 13px; }
+  .error-banner { border-left: 3px solid var(--danger); font-size: 13px; color: var(--danger); }
+  .field-note { font-size: 12px; color: var(--text-muted); margin: 6px 0 0; line-height: 1.5; }
+  .status-pill {
+    display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .03em; margin-left: 8px;
+  }
+  .status-pill.active { background: rgba(var(--teal-rgb), 0.15); color: var(--teal); }
+  .status-pill.trial { background: rgba(var(--amber-rgb), 0.15); color: var(--amber); }
+  .status-pill.expired, .status-pill.cancelled { background: rgba(var(--coral-rgb, 240, 90, 90), 0.15); color: var(--danger); }
+  .status-pill.unset { background: var(--panel-3); color: var(--text-muted); }
   h1 { font-size: 18px; margin: 0 0 4px; }
   p.lede { color: var(--text-muted); font-size: 13px; margin: 0 0 16px; max-width: 560px; }
+  .divider { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 </style>
 </head>
 <body>
@@ -38,19 +60,29 @@
 <div class="t58-page-header">
   <h1>Account settings</h1>
   <p class="lede">
-    Your own name/email/company -- used to personalize exported reports; not a login, just
-    local profile info. Stored locally on this computer only, same as Notification Settings.
+    Everything below is local to this computer -- this app has no cloud account or login of
+    its own. Profile fields personalize exported reports; the Security section's password
+    is an OPTIONAL local lock for this app (useful mainly if you use Phone Access on a
+    shared Wi-Fi); Subscription is a place to record your own plan/license info.
   </p>
 
-  {% if saved %}
-  <div class="card saved-banner">Saved.</div>
-  {% endif %}
+  {% if saved == 'profile' %}<div class="card saved-banner">Profile saved.</div>{% endif %}
+  {% if saved == 'password' %}<div class="card saved-banner">{{ password_message }}</div>{% endif %}
+  {% if saved == 'subscription' %}<div class="card saved-banner">Subscription info saved.</div>{% endif %}
+  {% if saved == 'deleted' %}<div class="card saved-banner">Local account data deleted.</div>{% endif %}
+  {% if saved == 'logout' %}<div class="card saved-banner">No lock password is set, so there's nothing to log out of.</div>{% endif %}
+  {% if password_error %}<div class="card error-banner">{{ password_error }}</div>{% endif %}
 
+  <!-- ================= PROFILE ================= -->
   <form method="POST" action="/settings/account/save">
     <div class="card">
-      <h2>Your profile</h2>
-      <label for="display_name">Display name</label>
+      <h2>Profile</h2>
+      <label for="display_name">Name</label>
       <input type="text" id="display_name" name="display_name" value="{{ settings.display_name }}" placeholder="Owen">
+
+      <label for="username">Username</label>
+      <input type="text" id="username" name="username" value="{{ settings.username }}" placeholder="owen">
+      <p class="field-note">A local display handle only -- not used to sign in anywhere (see the lede above).</p>
 
       <label for="email">Email</label>
       <input type="email" id="email" name="email" value="{{ settings.email }}" placeholder="you@example.com">
@@ -58,8 +90,117 @@
       <label for="company">Company (optional)</label>
       <input type="text" id="company" name="company" value="{{ settings.company }}" placeholder="T58 Trading">
     </div>
+    <button class="submit-btn" type="submit">Save profile</button>
+  </form>
 
-    <button class="submit-btn" type="submit">Save</button>
+  <!-- ================= SUBSCRIPTION ================= -->
+  <form method="POST" action="/settings/account/subscription/save">
+    <div class="card">
+      <h2>Subscription</h2>
+      <p class="help">
+        Recorded locally for your own reference -- this app doesn't have a licensing
+        server yet, so nothing here is verified automatically. "Check key" below only
+        confirms your key LOOKS correctly formatted.
+      </p>
+
+      <label for="plan">Plan</label>
+      <input type="text" id="plan" name="plan" value="{{ subscription.plan }}" placeholder="e.g. T58 Trading Pro">
+
+      <label for="license_key">License key</label>
+      <input type="text" id="license_key" name="license_key" value="{{ subscription.license_key }}" placeholder="XXXX-XXXX-XXXX-XXXX">
+
+      <div class="row">
+        <div>
+          <label for="license_status">License status
+            {% if subscription.license_status and subscription.license_status != 'unset' %}
+            <span class="status-pill {{ subscription.license_status }}">{{ subscription.license_status }}</span>
+            {% endif %}
+          </label>
+          <select id="license_status" name="license_status">
+            {% for choice in license_status_choices %}
+            <option value="{{ choice }}" {{ 'selected' if subscription.license_status == choice else '' }}>{{ choice|capitalize }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="renewal_date">Renewal / expiration date</label>
+          <input type="text" id="renewal_date" name="renewal_date" value="{{ subscription.renewal_date }}" placeholder="YYYY-MM-DD">
+        </div>
+      </div>
+
+      {% if license_check_message %}
+      <p class="field-note" style="color: {{ 'var(--teal)' if license_check_ok else 'var(--danger)' }};">{{ license_check_message }}</p>
+      {% endif %}
+    </div>
+    <div class="btn-row">
+      <button class="submit-btn" type="submit">Save subscription info</button>
+      <button class="secondary-btn" type="submit" formaction="/settings/account/subscription/check_key">Check key format</button>
+    </div>
+  </form>
+
+  <!-- ================= SECURITY ================= -->
+  <form method="POST" action="/settings/account/change_password">
+    <div class="card">
+      <h2>Security</h2>
+      <p class="help">
+        {% if settings.has_password %}
+        A local lock password is currently set -- this app will ask for it before showing
+        any page in a browser that hasn't unlocked yet. Leave both fields below blank and
+        save to remove the lock.
+        {% else %}
+        No local lock is set -- anyone who can reach this app's URL (e.g. on the same
+        Wi-Fi via Phone Access) can open it. Set a password below to require it once per
+        browser.
+        {% endif %}
+      </p>
+
+      <label for="new_password">{{ 'New password' if settings.has_password else 'Set a password' }}</label>
+      <input type="password" id="new_password" name="new_password" autocomplete="new-password" placeholder="Leave blank for no lock">
+
+      <label for="confirm_password">Confirm password</label>
+      <input type="password" id="confirm_password" name="confirm_password" autocomplete="new-password">
+
+      <div class="btn-row">
+        <button class="submit-btn" type="submit">{{ 'Change password' if settings.has_password else 'Set password' }}</button>
+      </div>
+
+      <hr class="divider">
+
+      <div class="btn-row">
+        <button class="secondary-btn" type="submit" formaction="/settings/account/logout" formnovalidate>Log out of this browser</button>
+        <button class="danger-btn" type="submit" formaction="/settings/account/delete" formnovalidate
+          onclick="return confirm('Delete local account data? This clears your name, username, email, company, and lock password on this computer. Strategies, datasets, and reports are NOT affected. This can\'t be undone.');">
+          Delete account
+        </button>
+      </div>
+      <p class="field-note">"Log out" clears this browser's unlock for the current lock password (if one is set). "Delete account" only clears the Profile + Security fields above -- your strategies, datasets, and reports stay untouched.</p>
+    </div>
+  </form>
+
+  <!-- ================= APP ================= -->
+  <form method="POST" action="/settings/account/check_updates">
+    <div class="card">
+      <h2>App</h2>
+      <label>App version</label>
+      <p style="margin: 0 0 10px; font-size: 14px;">{{ app_version }}</p>
+
+      {% if update_check %}
+        {% if not update_check.configured %}
+        <p class="field-note">{{ update_check.error }}</p>
+        {% elif update_check.checked and update_check.update_available %}
+        <p class="field-note" style="color: var(--amber);">
+          A newer version is available: {{ update_check.latest_version }}.
+          {% if update_check.release_url %}<a href="{{ update_check.release_url }}" target="_blank" rel="noopener" style="color: var(--teal);">View release</a>{% endif %}
+        </p>
+        {% elif update_check.checked %}
+        <p class="field-note" style="color: var(--teal);">You're up to date (latest release: {{ update_check.latest_version }}).</p>
+        {% else %}
+        <p class="field-note" style="color: var(--danger);">{{ update_check.error }}</p>
+        {% endif %}
+      {% endif %}
+
+      <button class="secondary-btn" type="submit">Check for updates</button>
+    </div>
   </form>
 </div>
 </div>
