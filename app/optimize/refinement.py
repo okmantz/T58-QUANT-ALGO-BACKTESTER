@@ -122,6 +122,22 @@ class RefinementConfig:
     cost_stress_multiplier: float = 2.0
     cost_stress_penalty_weight: float = 0.35   # 0 = ignore stress entirely, 1 = fully penalize any degradation
 
+    # Plateau-robust champion selection: a GA searching a noisy in-sample
+    # fitness surface will happily hand back a genome that sits on a thin,
+    # one-bar-wide spike -- often just curve-fit noise -- instead of a
+    # nearby, slightly-lower-scoring region that holds up under a small
+    # nudge to any one parameter. When enabled (the default), the top
+    # `plateau_finalist_pool` genomes found anywhere in the search are each
+    # perturbed by +/- `plateau_neighbor_step_frac` of that gene's own
+    # search range in every dimension, one dimension at a time; the genome
+    # whose local neighborhood scores best on average (least penalized by
+    # how much that average varies) is promoted to `best_ever` in place of
+    # whichever raw single point happened to score highest. Set to False to
+    # restore the old raw-best-fitness behavior.
+    plateau_robust_selection: bool = True
+    plateau_neighbor_step_frac: float = 0.08
+    plateau_finalist_pool: int = 5
+
     def __post_init__(self):
         self.population_size = max(int(self.population_size), 4)
         self.generations = max(int(self.generations), 1)
@@ -132,6 +148,8 @@ class RefinementConfig:
         self.search_monte_carlo_sims = max(int(self.search_monte_carlo_sims), 50)
         self.cost_stress_multiplier = max(float(self.cost_stress_multiplier), 1.0)
         self.cost_stress_penalty_weight = min(max(float(self.cost_stress_penalty_weight), 0.0), 1.0)
+        self.plateau_neighbor_step_frac = min(max(float(self.plateau_neighbor_step_frac), 0.01), 0.5)
+        self.plateau_finalist_pool = max(int(self.plateau_finalist_pool), 1)
         if self.fitness_metric not in FITNESS_METRICS:
             raise RefinementError(f"Unknown fitness metric '{self.fitness_metric}'.")
 
@@ -179,6 +197,12 @@ class RefinementResult:
     holdout_comparison: dict | None
     elapsed_seconds: float
     warnings: list = field(default_factory=list)
+    # None when plateau_robust_selection was off, or no finite candidate ever
+    # existed to select from. Otherwise: raw_best_fitness (the single highest
+    # in-sample fitness seen anywhere in the search), chosen_fitness (the
+    # plateau-robust pick's own fitness), swapped (whether the robust pick
+    # differs from the raw optimum), and neighbor_step_frac (for the report).
+    plateau_robustness: dict | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -490,6 +514,96 @@ def _mutate(genome: list, genes: list, rate: float, strength: float, rng: random
     return out
 
 
+def _neighbor_genomes(genome: list, genes: list, step_frac: float) -> list[list]:
+    """One perturbed genome per (gene, direction) pair: nudge that single
+    gene by +/- step_frac of its own search range, clamped to [lo, hi] and
+    rounded for integer genes, leaving every other gene untouched. This
+    probes the immediate neighborhood one dimension at a time (2 * len(genes)
+    points) rather than a single random perturbation, so a spike that's
+    fragile in even one parameter's direction is caught."""
+    out: list[list] = []
+    for i, gene in enumerate(genes):
+        span = gene.hi - gene.lo
+        if span <= 0:
+            continue
+        step = step_frac * span
+        for sign in (1.0, -1.0):
+            v = min(max(genome[i] + sign * step, gene.lo), gene.hi)
+            v = float(round(v)) if gene.is_int else float(v)
+            if v == genome[i]:
+                continue
+            neighbor = list(genome)
+            neighbor[i] = v
+            out.append(neighbor)
+    return out
+
+
+def _plateau_robustness_score(center_fitness: float, neighbor_fitnesses: list[float]) -> float:
+    """Higher is more plateau-like: rewards a neighborhood that scores well
+    on average, penalized by how much it varies. A thin spike has a high
+    center_fitness but neighbors that collapse -- low mean, high spread --
+    and scores worse here than a slightly-lower, flatter region despite
+    having the higher raw fitness."""
+    values = [v for v in ([center_fitness] + neighbor_fitnesses) if math.isfinite(v)]
+    if not values:
+        return float("-inf")
+    mean_v = sum(values) / len(values)
+    if len(values) < 2:
+        return mean_v
+    variance = sum((v - mean_v) ** 2 for v in values) / len(values)
+    return mean_v - (variance ** 0.5)
+
+
+def _select_plateau_robust(
+    candidates: list[Candidate],
+    genes: list,
+    cfg: RefinementConfig,
+    evaluate_cheap,
+) -> tuple[Candidate, dict | None]:
+    """Picks a plateau-robust champion from every finite candidate the
+    search evaluated. Returns (chosen_candidate, report_dict | None) --
+    report_dict is None only when there was nothing finite to choose from
+    (evaluate_cheap already handles that case by returning the raw best)."""
+    finite = [c for c in candidates if math.isfinite(c.fitness)]
+    if not finite:
+        raw_best = max(candidates, key=lambda c: c.fitness)
+        return raw_best, None
+
+    raw_best = max(finite, key=lambda c: c.fitness)
+
+    # De-duplicate by genome so an identical genome re-evaluated across
+    # generations (e.g. via elitism) isn't scored as its own finalist twice.
+    seen: set[tuple] = set()
+    pool: list[Candidate] = []
+    for c in sorted(finite, key=lambda c: c.fitness, reverse=True):
+        key = tuple(round(v, 6) for v in c.genome)
+        if key in seen:
+            continue
+        seen.add(key)
+        pool.append(c)
+        if len(pool) >= cfg.plateau_finalist_pool:
+            break
+
+    best_candidate = raw_best
+    best_score = float("-inf")
+    for candidate in pool:
+        neighbor_genomes = _neighbor_genomes(candidate.genome, genes, cfg.plateau_neighbor_step_frac)
+        neighbor_fitnesses = [evaluate_cheap(g).fitness for g in neighbor_genomes]
+        score = _plateau_robustness_score(candidate.fitness, neighbor_fitnesses)
+        if score > best_score:
+            best_score = score
+            best_candidate = candidate
+
+    report = {
+        "raw_best_fitness": raw_best.fitness,
+        "chosen_fitness": best_candidate.fitness,
+        "swapped": tuple(round(v, 6) for v in best_candidate.genome) != tuple(round(v, 6) for v in raw_best.genome),
+        "neighbor_step_frac": cfg.plateau_neighbor_step_frac,
+        "finalist_pool_size": len(pool),
+    }
+    return best_candidate, report
+
+
 def _tournament_select(population: list[Candidate], rng: random.Random, k: int = 3) -> Candidate:
     k = min(k, len(population))
     contenders = rng.sample(population, k)
@@ -714,7 +828,9 @@ def run_iterative_refinement(
             code_text, ext = patched_source_for_strategy(strategy, genes, genome)
             return None, code_text, ext
 
-        def evaluate(genome: list, generation: int, keep_full: bool = False) -> Candidate:
+        all_evaluated: list[Candidate] = []
+
+        def evaluate(genome: list, generation: int, keep_full: bool = False, track: bool = True) -> Candidate:
             candidate_strategy = build(genome)
             fitness, stats, prop_summary, mc_summary, bt_full, mc_full, single_full = _evaluate(
                 df, candidate_strategy, risk, prop_rules, search_mc_cfg, cfg.fitness_metric, keep_full=keep_full,
@@ -725,12 +841,20 @@ def run_iterative_refinement(
             config, code_text, code_ext = (None, None, None)
             if keep_full:
                 config, code_text, code_ext = snapshot(genome)
-            return Candidate(
+            result = Candidate(
                 generation=generation, genome=list(genome), fitness=fitness, source_type=source_type,
                 config=config, code_text=code_text, code_extension=code_ext,
                 statistics=stats, prop_summary=prop_summary, mc_summary=mc_summary,
                 bt_result=bt_full, mc_result=mc_full, single_run=single_full,
             )
+            # `track=False` is used for the plateau-robustness probes below --
+            # those are cheap neighborhood checks around already-evaluated
+            # finalists, not new search points, so they don't belong in the
+            # finalist pool themselves (nor would re-adding them there change
+            # anything, since de-duplication is by genome).
+            if track:
+                all_evaluated.append(result)
+            return result
 
         log(f"Analyzing strategy parameters... found {len(genes)} tunable parameter(s).")
 
@@ -786,6 +910,28 @@ def run_iterative_refinement(
                 f"(best-ever={best_ever.fitness:.3f})"
             )
 
+        plateau_report: dict | None = None
+        if cfg.plateau_robust_selection:
+            log(
+                f"Checking the top {min(cfg.plateau_finalist_pool, len(all_evaluated))} candidate(s) "
+                "for neighborhood-robust (plateau) selection..."
+            )
+            evaluate_cheap = lambda genome: evaluate(genome, generation=-1, keep_full=False, track=False)  # noqa: E731
+            best_ever, plateau_report = _select_plateau_robust(all_evaluated, genes, cfg, evaluate_cheap)
+            if plateau_report is not None and plateau_report["swapped"]:
+                log(
+                    f"Raw optimum (fitness={plateau_report['raw_best_fitness']:.3f}) looks like a thin spike; "
+                    f"using the plateau-robust pick instead (fitness={plateau_report['chosen_fitness']:.3f}, "
+                    f"+/-{plateau_report['neighbor_step_frac']:.0%} per parameter holds up)."
+                )
+                warnings.append(
+                    "Iterative Refinement's raw best-scoring configuration sat on a narrow parameter "
+                    "spike (a small nudge to at least one parameter meaningfully hurt its score). The "
+                    "configuration actually returned is a nearby, neighborhood-robust pick instead -- "
+                    "see plateau_robustness in the result for both fitness values. Disable via "
+                    "plateau_robust_selection=False to restore the old raw-best behavior."
+                )
+
         log("Running full-fidelity Monte Carlo on the best-ever configuration...")
         best_strategy = build(best_ever.genome)
         final_fitness, final_stats, final_prop, final_mc_summary, final_bt, final_mc, final_single = _evaluate(
@@ -831,6 +977,7 @@ def run_iterative_refinement(
             holdout_comparison=holdout_comparison,
             elapsed_seconds=elapsed,
             warnings=warnings,
+            plateau_robustness=plateau_report,
         )
     finally:
         if tmp_dir is not None:
