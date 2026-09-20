@@ -33,6 +33,11 @@ from app.data.importer import import_csv
 from app.data.storage import get_app_base_dir
 from app.evolution.engine import EvolutionConfig, EvolutionRunner
 from app.prop.simulator import PropRules
+from app.search.budget_allocator import (
+    allocate_search_budget,
+    normalize_evolution_record,
+    pooled_cross_instrument_leaderboard,
+)
 
 
 @dataclass(frozen=True)
@@ -60,13 +65,36 @@ class MultiInstrumentEvolutionGroup:
     def __init__(
         self, group_id: str, jobs: list[EvolutionInstrumentJob], risk: RiskConfig,
         prop_rules: PropRules, base_cfg: EvolutionConfig,
+        total_evaluation_budget: int | None = None,
     ):
+        """
+        total_evaluation_budget: optional. None (the default) is the
+        EXACT prior behavior -- every job gets base_cfg's own
+        population_size/max_generations unchanged, so N instruments cost
+        N times the compute of one. When given, the SAME total budget
+        (roughly population_size * max_generations) is split across all
+        `jobs` instead (see app.search.budget_allocator.
+        allocate_search_budget) -- "widen the search instead of
+        deepening the grid," spending the same compute on more
+        instruments/timeframes rather than multiplying it. Per-job
+        max_generations is only overridden when the caller's base_cfg
+        left it as None (unbounded/loop mode) or when a budget was
+        given; an EXPLICIT finite max_generations on base_cfg is treated
+        as a hard ceiling and never raised, only ever lowered to fit a
+        job's allocated share.
+        """
         self.group_id = group_id
         self.jobs = jobs
+        self.total_evaluation_budget = total_evaluation_budget
         self._lock = threading.Lock()
         self.runners: dict[str, EvolutionRunner] = {}
         self.logs: dict[str, list[str]] = {}
         self.errors: dict[str, str] = {}
+
+        budget_by_label = {}
+        if total_evaluation_budget is not None:
+            for plan in allocate_search_budget(total_evaluation_budget, [job.label for job in jobs]):
+                budget_by_label[plan.label] = plan
 
         base_dir = get_app_base_dir() / "data" / "evolution" / "multi_instrument" / group_id
         for job in jobs:
@@ -80,14 +108,26 @@ class MultiInstrumentEvolutionGroup:
             except Exception as exc:  # noqa: BLE001 -- one bad file must not sink the group
                 self.errors[job.label] = f"Could not load {job.csv_path}: {exc}"
                 continue
-            cfg = replace(
-                base_cfg,
-                instrument=job.label,
-                checkpoint_path=str(job_dir / "checkpoint.json"),
-                tested_log_path=str(job_dir / "tested_candidates.jsonl"),
-                knowledge_graph_path=str(job_dir / "knowledge_graph.jsonl"),
-            )
-            self.logs[job.label] = [f"Loaded {len(df)} bars from {job.csv_path}."]
+            overrides: dict = {
+                "instrument": job.label,
+                "checkpoint_path": str(job_dir / "checkpoint.json"),
+                "tested_log_path": str(job_dir / "tested_candidates.jsonl"),
+                "knowledge_graph_path": str(job_dir / "knowledge_graph.jsonl"),
+            }
+            plan = budget_by_label.get(job.label)
+            if plan is not None:
+                overrides["population_size"] = plan.population_size
+                overrides["max_generations"] = min(plan.max_generations, base_cfg.max_generations) \
+                    if base_cfg.max_generations is not None else plan.max_generations
+            cfg = replace(base_cfg, **overrides)
+            log_line = f"Loaded {len(df)} bars from {job.csv_path}."
+            if plan is not None:
+                log_line += (
+                    f" Allocated budget: population={plan.population_size}, "
+                    f"max_generations={cfg.max_generations} (~{plan.population_size * cfg.max_generations:,} "
+                    f"evaluations of this group's {total_evaluation_budget:,}-total budget)."
+                )
+            self.logs[job.label] = [log_line]
             self.runners[job.label] = EvolutionRunner(
                 df, risk, prop_rules, cfg,
                 progress_cb=lambda msg, label=job.label: self._log(label, msg),
@@ -132,6 +172,21 @@ class MultiInstrumentEvolutionGroup:
             if r.candidate_id == candidate_id:
                 return r.to_checkpoint_dict()
         return None
+
+    def pooled_leaderboard(self, top_n: int = 25, max_per_family: int = 2) -> list[dict]:
+        """Every runner's own leaderboard, pooled and re-ranked with
+        app.search.family_diversity's family cap applied GLOBALLY across
+        the whole group instead of per-instrument -- see
+        app.search.budget_allocator's module docstring, problem 2. Each
+        returned record carries an 'instrument' key naming which job it
+        came from. Safe to call at any time, including mid-run (reads
+        each runner's current in-memory leaderboard, not a final
+        result)."""
+        job_records = {
+            label: [normalize_evolution_record(r.to_checkpoint_dict(), instrument_label=label) for r in runner.leaderboard]
+            for label, runner in self.runners.items()
+        }
+        return pooled_cross_instrument_leaderboard(job_records, max_per_family=max_per_family, top_n=top_n)
 
     def status(self) -> dict:
         with self._lock:
