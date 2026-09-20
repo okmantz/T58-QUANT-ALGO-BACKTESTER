@@ -160,6 +160,7 @@ from app.strategy.library import (
     save_strategy_text, set_strategy_status, set_strategy_tags,
 )
 from app.strategy.lookahead_check import check_for_lookahead
+from app.validation.integrity_check import run_integrity_check
 from app.strategy.manual import ManualStrategy
 from app.strategy.mql5 import MQL5Strategy
 from app.strategy.pinescript import PineScriptStrategy
@@ -1357,6 +1358,24 @@ def run_pipeline():
         # diagnosis this closes).
         adaptive_risk = build_limit_aware_preset(rules) if form.get("adaptive_risk_enabled") == "on" else None
 
+        # T58 BACKTEST INTEGRITY CHECK -- pre-flight gate, BEFORE the backtest
+        # itself runs (see app.validation.integrity_check's own docstring for
+        # why: catches a corrupt dataset, a timeframe the data can't actually
+        # support, or a confirmed lookahead leak up front, instead of only
+        # ever being discoverable after the fact from a suspicious-looking
+        # result). A BLOCKED verdict refuses to run the backtest at all.
+        integrity_report = run_integrity_check(
+            df, strategy, risk, prop_rules=rules,
+            requested_timeframe=form.get("timeframe") or None,
+            data_label=active_label,
+        )
+        if integrity_report.status == "BLOCKED":
+            return render_template(
+                "index.html", error=integrity_report.render(),
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+                saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context(),
+            ), 400
+
         bt_result = run_backtest(df, strategy, risk, adaptive_risk=adaptive_risk)
         if adaptive_risk is not None:
             # Surfaced in the report's own warnings section (not just the
@@ -1449,6 +1468,8 @@ def run_pipeline():
                 "active_dataset": active_label,
                 "import_note": import_note,
                 "lookahead_warning": lookahead_warning,
+                "integrity_check": integrity_report.render(),
+                "integrity_check_status": integrity_report.status,
                 "trades": len(bt_result.trades),
                 "net_profit": bt_result.statistics.net_profit,
                 "win_rate": bt_result.statistics.win_rate,
