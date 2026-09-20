@@ -109,6 +109,14 @@
   {% if result.lookahead_warning %}
   <p style="font-size:13px;color:#ffcf7a;margin-bottom:10px;border:1px solid #6b5423;background:#2a2314;padding:10px;border-radius:8px;">⚠ {{ result.lookahead_warning }}</p>
   {% endif %}
+  {% if result.integrity_check %}
+  <details style="margin-bottom:10px;border:1px solid #333;background:#1a1a1a;border-radius:8px;padding:8px 12px;">
+    <summary style="cursor:pointer;font-size:13px;color:{{ '#7be08a' if result.integrity_check_status == 'VALID' else '#ffcf7a' }};">
+      T58 Backtest Integrity Check -- {{ result.integrity_check_status }}
+    </summary>
+    <pre style="white-space:pre-wrap;font-size:12px;color:#ccc;margin-top:8px;">{{ result.integrity_check }}</pre>
+  </details>
+  {% endif %}
   <p style="font-size:12px;color:#888;margin-bottom:10px;">Ran against: <b>{{ result.active_dataset }}</b></p>
   <div class="headline">
     <div class="stat"><div class="label">Eval Pass Probability</div><div class="value">{{ "%.1f"|format(result.eval_pass_prob) }}%</div></div>
