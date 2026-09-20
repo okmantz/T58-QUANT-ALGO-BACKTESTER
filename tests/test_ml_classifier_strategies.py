@@ -1,10 +1,11 @@
 """Tests for strategies/python/ml_classifier_direction.py (logistic
-regression baseline) and ml_classifier_gbdt_direction.py (LightGBM
-gradient-boosted trees) -- shared no-lookahead contract and
-RETRAIN_PER_FOLD wiring, parametrized across both files since they're
-built to the identical contract on purpose (see the GBDT file's own
-module docstring for why it's a separate file rather than a model=
-parameter on the logistic one)."""
+regression baseline), ml_classifier_gbdt_direction.py (LightGBM
+gradient-boosted trees), and ml_classifier_random_forest.py (bagged-tree
+"Forest") -- shared no-lookahead contract and RETRAIN_PER_FOLD wiring,
+parametrized across all three files since they're built to the identical
+contract on purpose (see the GBDT/Forest files' own module docstrings for
+why each is a separate file rather than a model= parameter on the
+logistic one)."""
 from __future__ import annotations
 
 import importlib.util
@@ -20,7 +21,15 @@ from app.validation.walk_forward_opt import _run_fold_test, _wants_retrain_conte
 STRATEGY_PATHS = [
     "strategies/python/ml_classifier_direction.py",
     "strategies/python/ml_classifier_gbdt_direction.py",
+    "strategies/python/ml_classifier_random_forest.py",
 ]
+
+# The Forest file's feature set includes a 200-span EMA, so it needs a
+# longer warm-up than the other two families' n=800 default before it has
+# any valid (non-NaN) feature rows to train on at all.
+MIN_SYNTHETIC_N = {
+    "strategies/python/ml_classifier_random_forest.py": 1400,
+}
 
 
 def _load_module(path):
@@ -60,7 +69,7 @@ def test_too_little_data_stands_down_flat(path):
 @pytest.mark.parametrize("path", STRATEGY_PATHS)
 def test_training_segment_is_always_flat(path):
     module = _load_module(path)
-    df = _synthetic_df(n=800)
+    df = _synthetic_df(n=MIN_SYNTHETIC_N.get(path, 800))
     signals = module.generate_signals(df.copy())
     train_end = int(len(df) * module.TRAIN_FRAC)
     assert (signals.iloc[:train_end] == 0).all()
@@ -69,7 +78,7 @@ def test_training_segment_is_always_flat(path):
 @pytest.mark.parametrize("path", STRATEGY_PATHS)
 def test_signals_are_only_minus1_0_1(path):
     module = _load_module(path)
-    df = _synthetic_df(n=800)
+    df = _synthetic_df(n=MIN_SYNTHETIC_N.get(path, 800))
     signals = module.generate_signals(df.copy())
     assert set(signals.unique()) <= {-1, 0, 1}
 
@@ -77,8 +86,8 @@ def test_signals_are_only_minus1_0_1(path):
 @pytest.mark.parametrize("path", STRATEGY_PATHS)
 def test_explicit_wf_train_end_index_overrides_train_frac_split(path):
     module = _load_module(path)
-    df = _synthetic_df(n=800)
-    explicit_boundary = 500
+    df = _synthetic_df(n=MIN_SYNTHETIC_N.get(path, 800))
+    explicit_boundary = int(len(df) * 0.625)
     df.attrs["wf_train_end_index"] = explicit_boundary
     signals = module.generate_signals(df.copy())
     assert (signals.iloc[:explicit_boundary] == 0).all()
@@ -88,7 +97,7 @@ def test_explicit_wf_train_end_index_overrides_train_frac_split(path):
 def test_walk_forward_fold_trades_stay_inside_the_test_window(path):
     strat = PythonStrategy(path)
     assert _wants_retrain_context(strat) is True
-    df = _synthetic_df(n=1500)
+    df = _synthetic_df(n=max(MIN_SYNTHETIC_N.get(path, 800), 1500))
     folds = build_folds(df, n_folds=3, window_mode="rolling", train_frac=0.6)
     assert folds
     risk = RiskConfig(initial_balance=10_000, pip_size=0.01, spread_pips=1.0, slippage_pips=0.5)
