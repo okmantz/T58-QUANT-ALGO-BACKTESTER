@@ -1,0 +1,137 @@
+{
+  "name": "T58 NQ Trend Pullback (15m) -- Full Pipeline optimized (ema25/571, vwma35/32, rsi12/4), risk at 0.7%",
+  "timeframe": "15m",
+  "entry_conditions": {
+    "long": [
+      {
+        "left": {
+          "type": "close",
+          "period": 1,
+          "field": "close"
+        },
+        "operator": ">",
+        "right": {
+          "type": "ema",
+          "period": 25,
+          "field": "close"
+        }
+      },
+      {
+        "left": {
+          "type": "close",
+          "period": 8,
+          "field": "close"
+        },
+        "operator": "<",
+        "right": {
+          "type": "vwma",
+          "period": 35,
+          "field": "close"
+        }
+      },
+      {
+        "left": {
+          "type": "rsi",
+          "period": 12,
+          "field": "close"
+        },
+        "operator": "<=",
+        "right": {
+          "type": "value",
+          "value": 26.781353557174008
+        }
+      }
+    ],
+    "long_connectors": [
+      "AND",
+      "AND"
+    ],
+    "short": [
+      {
+        "left": {
+          "type": "close",
+          "period": 7,
+          "field": "close"
+        },
+        "operator": "<",
+        "right": {
+          "type": "ema",
+          "period": 571,
+          "field": "close"
+        }
+      },
+      {
+        "left": {
+          "type": "close",
+          "period": 3,
+          "field": "close"
+        },
+        "operator": ">",
+        "right": {
+          "type": "vwma",
+          "period": 32,
+          "field": "close"
+        }
+      },
+      {
+        "left": {
+          "type": "rsi",
+          "period": 4,
+          "field": "close"
+        },
+        "operator": ">=",
+        "right": {
+          "type": "value",
+          "value": 85.76888165431605
+        }
+      }
+    ],
+    "short_connectors": [
+      "AND",
+      "AND"
+    ]
+  },
+  "exit_conditions": {
+    "long": [
+      {
+        "left": {
+          "type": "close",
+          "period": 4,
+          "field": "close"
+        },
+        "operator": "cross above",
+        "right": {
+          "type": "vwma",
+          "period": 7,
+          "field": "close"
+        }
+      }
+    ],
+    "short": [
+      {
+        "left": {
+          "type": "close",
+          "period": 3,
+          "field": "close"
+        },
+        "operator": "cross below",
+        "right": {
+          "type": "vwma",
+          "period": 15,
+          "field": "close"
+        }
+      }
+    ]
+  },
+  "risk_management": {
+    "stop_type": "atr",
+    "stop_value": 2.2265317426007254,
+    "stop_atr_period": 38,
+    "target_type": "atr",
+    "target_value": 10.5,
+    "target_atr_period": 41,
+    "opposite_signal_exit": true,
+    "max_bars_in_trade": 51
+  },
+  "description": "Full Pipeline (walk-forward GA) re-optimization of an EMA-trend + VWMA-pullback + RSI-extreme manual strategy, built and tuned specifically for NQ1! 15-minute bars (resampled from 1-minute, Sep 2024-Mar 2026) to trade multiple times per week. Dev-period backtest at 0.70% risk/trade: 140 trades (~2.3/week), +$9,121 net (+9.1%) on a $100k account, 62.9% win rate, PF 1.31, max DD 3.5%, Monte Carlo eval-pass 64.6% / first-payout 50.5% / risk-of-ruin 4.5%, median 52 days to first payout. HONEST LIMITATIONS -- read before trading this: (1) trading multiple times a week on NQ, after realistic costs, produces a meaningfully thinner edge than a slower, more selective approach -- I could not find a multi-trade-per-week NQ config in this indicator set that also hit the 'very high probability' bar the way the lower-frequency Gold/ES1! strategies did (which trade roughly weekly, not several times a week); this is the best realistic balance I found after testing 8+ template/timeframe combinations. (2) Median days-to-first-payout is 52, not under 30 -- pushing risk/trade up to hit 30 days (e.g. 0.85%+) raises risk-of-ruin to 20%+, which I did not think was worth the tradeoff; see the risk-per-trade table in the accompanying notes if you want to make that call yourself. (3) On the true holdout (most recent ~3.5 months, never seen by the optimizer), this configuration lost money (46 trades, -$5,656, PF 0.60, 19.3% risk-of-ruin, 0% eval-pass in that specific window) -- the same recent stretch also hurt the Gold and ES1! VWMA strategies, so this looks like a broadly hard recent regime rather than a strategy-specific flaw, but it means this has NOT been shown to work out-of-sample yet. Forward-test/paper-trade before funding an account on it. Set risk-per-trade to 0.70% of account equity (Step 04 Risk) when running this."
+}
