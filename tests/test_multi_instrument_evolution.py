@@ -112,3 +112,94 @@ def test_a_bad_csv_is_recorded_as_an_error_not_a_crash(tmp_path, two_instrument_
     assert "BAD/1m" in group.errors
     assert "BAD/1m" not in group.runners
     assert set(group.runners.keys()) == {"EURUSD/5m", "GBPUSD/5m"}
+
+
+def test_no_total_budget_keeps_every_job_at_base_cfg_population(tmp_path, two_instrument_jobs, monkeypatch):
+    """total_evaluation_budget=None (the default) must reproduce the
+    exact prior behavior -- every job gets base_cfg unchanged."""
+    monkeypatch.setattr("app.evolution.multi_instrument.get_app_base_dir", lambda: tmp_path)
+    group = MultiInstrumentEvolutionGroup(
+        "testgroup5", two_instrument_jobs, RiskConfig(), PropRules(), _fast_cfg(population_size=8, max_generations=1),
+    )
+    for runner in group.runners.values():
+        assert runner.cfg.population_size == 8
+        assert runner.cfg.max_generations == 1
+
+
+def test_total_budget_splits_population_across_jobs(tmp_path, two_instrument_jobs, monkeypatch):
+    """Widening the search: a fixed total_evaluation_budget should be
+    spread across both jobs rather than each job getting the full,
+    unmodified base_cfg population/generations."""
+    monkeypatch.setattr("app.evolution.multi_instrument.get_app_base_dir", lambda: tmp_path)
+    group = MultiInstrumentEvolutionGroup(
+        "testgroup6", two_instrument_jobs, RiskConfig(), PropRules(),
+        _fast_cfg(population_size=60, max_generations=None),
+        total_evaluation_budget=200,
+    )
+    assert set(group.runners.keys()) == {"EURUSD/5m", "GBPUSD/5m"}
+    total_spent = 0
+    for runner in group.runners.values():
+        # Neither job should get the full, un-split base population.
+        assert runner.cfg.population_size <= 60
+        assert runner.cfg.max_generations is not None
+        total_spent += runner.cfg.population_size * runner.cfg.max_generations
+    # Combined, the group should spend roughly the requested total budget
+    # (allocate_search_budget rounds down per job, so this is <=, with a
+    # small floor-driven allowance).
+    assert total_spent <= 220
+
+
+def test_total_budget_never_raises_an_explicit_finite_max_generations(tmp_path, two_instrument_jobs, monkeypatch):
+    """An explicit, finite max_generations on base_cfg is a ceiling --
+    a generous total_evaluation_budget must not raise it."""
+    monkeypatch.setattr("app.evolution.multi_instrument.get_app_base_dir", lambda: tmp_path)
+    group = MultiInstrumentEvolutionGroup(
+        "testgroup7", two_instrument_jobs, RiskConfig(), PropRules(),
+        _fast_cfg(population_size=20, max_generations=1),
+        total_evaluation_budget=100_000,
+    )
+    for runner in group.runners.values():
+        assert runner.cfg.max_generations == 1
+
+
+def test_pooled_leaderboard_applies_family_cap_across_the_whole_group(tmp_path, two_instrument_jobs, monkeypatch):
+    monkeypatch.setattr("app.evolution.multi_instrument.get_app_base_dir", lambda: tmp_path)
+    group = MultiInstrumentEvolutionGroup(
+        "testgroup8", two_instrument_jobs, RiskConfig(), PropRules(), _fast_cfg(),
+    )
+    from app.evolution.engine import EvolutionCandidateRecord
+    from app.evolution.prop_fitness import PropFitnessBreakdown
+
+    def _fake_record(cid, family, score):
+        return EvolutionCandidateRecord(
+            candidate_id=cid,
+            spec={"source_type": "manual", "config": {"name": cid}},
+            meta={"family": family},
+            stats=None, mc_summary=None,
+            fitness=PropFitnessBreakdown(
+                pass_probability=0.5, payout_probability=0.5, robustness=1.0,
+                oos_consistency=1.0, drawdown_pct=1.0, base_score=score, final_score=score,
+            ),
+        )
+
+    eur_runner = group.runners["EURUSD/5m"]
+    gbp_runner = group.runners["GBPUSD/5m"]
+    eur_runner.leaderboard = [
+        _fake_record("eur_1", "rsi_extreme_reversion", 0.9),
+        _fake_record("eur_2", "rsi_extreme_reversion", 0.7),
+    ]
+    gbp_runner.leaderboard = [
+        _fake_record("gbp_1", "rsi_extreme_reversion", 0.95),
+        _fake_record("gbp_2", "macd_cross_trend", 0.6),
+    ]
+
+    pooled = group.pooled_leaderboard(top_n=10, max_per_family=1)
+    families = [rec["family"] for rec in pooled]
+    # Only the single best rsi_extreme_reversion candidate across BOTH
+    # instruments should survive the max_per_family=1 cap -- not one per
+    # instrument.
+    assert families.count("mean_reversion") <= 1
+    ids = {rec["candidate_id"] for rec in pooled}
+    assert "gbp_1" in ids  # the highest-scoring mean-reversion candidate, across the whole group
+    assert "eur_1" not in ids
+    assert "gbp_2" in ids  # the only trend-following candidate, unaffected by the cap
