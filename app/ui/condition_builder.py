@@ -68,6 +68,7 @@ SOURCE_KIND = {
     "Previous Day High": "previous_day_high", "Previous Day Low": "previous_day_low",
     "Previous Day Close": "previous_day_close", "Opening Range High": "opening_range_high",
     "Opening Range Low": "opening_range_low", "ATR Regime": "atr_regime", "Volatility Regime": "volatility_regime",
+    "IB Contraction Ratio": "ib_contraction_ratio",
 }
 
 OPERATORS = [
@@ -93,13 +94,18 @@ PERIOD_KINDS = {
     "bollinger_mid", "bollinger_upper", "bollinger_lower", "highest_high", "lowest_low",
     "average_volume", "percentage_change", "swing_high", "swing_low", "liquidity_sweep",
     "break_of_structure", "change_of_character", "fair_value_gap", "order_block",
-    "atr_regime", "volatility_regime",
+    "atr_regime", "volatility_regime", "ib_contraction_ratio",
 }
 DEFAULT_PERIOD = {
     "rsi": 14, "atr": 14, "atr_regime": 14, "volatility_regime": 14, "average_volume": 20,
     "highest_high": 20, "lowest_low": 20, "percentage_change": 1, "swing_high": 5, "swing_low": 5,
     "liquidity_sweep": 20, "break_of_structure": 20, "change_of_character": 10, "fair_value_gap": 2,
     "order_block": 20, "bollinger_mid": 20, "bollinger_upper": 20, "bollinger_lower": 20,
+    # Trailing days of prior Initial Balance ranges averaged for the contraction
+    # ratio's denominator -- this field doubles as `lookback` (see manual.py's
+    # `lookback = operand.get("lookback", period) or period` fallback), matching
+    # every other lookback-shaped kind above (swing_high, liquidity_sweep, ...).
+    "ib_contraction_ratio": 10,
 }
 
 # Kinds where the source column (open/high/low/close) can be chosen.
@@ -116,7 +122,7 @@ DIRECTION_KINDS = {
 ALWAYS_BOOLEAN_KINDS = {"swing_high", "swing_low"}
 
 # Kinds whose level depends on the strategy's global session window.
-SESSION_KINDS = {"session_high", "session_low", "opening_range_high", "opening_range_low"}
+SESSION_KINDS = {"session_high", "session_low", "opening_range_high", "opening_range_low", "ib_contraction_ratio"}
 
 
 def _combo(parent, values, default, width=14):
