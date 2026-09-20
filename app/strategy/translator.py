@@ -151,6 +151,7 @@ _UNSUPPORTED_KIND_HINT = {
     "volatility_regime": "volatility-regime classification",
     "swing_high": "confirmed swing-point detection",
     "swing_low": "confirmed swing-point detection",
+    "ib_contraction_ratio": "initial-balance contraction-vs-trailing-average filtering",
 }
 
 

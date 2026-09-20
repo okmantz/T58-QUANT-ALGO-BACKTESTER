@@ -295,6 +295,9 @@ class ManualStrategy(Strategy):
                     "opening_range_high", "opening_range_low"}:
             return self._session_series(work, kind, operand)
 
+        if kind == "ib_contraction_ratio":
+            return self._ib_contraction_series(work, operand, lookback)
+
         if kind in {"atr_regime", "volatility_regime"}:
             return self._regime_series(work, kind, period, operand)
 
@@ -403,6 +406,50 @@ class ManualStrategy(Strategy):
         opening_low = work["low"].where(opening_mask).groupby(day).transform("min")
         result = opening_high if kind == "opening_range_high" else opening_low
         return result.where(after_open).ffill()
+
+    def _ib_contraction_series(self, work: pd.DataFrame, operand: dict[str, Any], lookback: int) -> pd.Series:
+        """ib_contraction_ratio: today's Initial Balance (IB) range -- the
+        high/low range of the session_start..session_end window, e.g. the
+        first 15-30 minutes of the trading day -- divided by the trailing
+        average IB range over the previous `lookback` trading days.
+
+        A value below 1.0 means today's IB is narrower (more contracted)
+        than its own recent average; this is the "volatility contraction
+        before breakout" filter used by initial-balance/opening-range
+        breakout systems -- compare it against a threshold such as
+        `<= 0.5` ("today's IB is no wider than half its trailing 10-day
+        average") before trusting a subsequent breakout of that range.
+
+        Like opening_range_high/low, the ratio for a given day only
+        becomes available once that day's IB window has fully closed
+        (held constant via ffill from that point on), so this can never
+        leak the still-forming IB into a same-window comparison. The
+        first `lookback` days of a dataset have no prior IB to average
+        and are left NaN, which -- like every other indicator's warm-up
+        NaN -- makes any condition referencing it fail closed (no trade)
+        rather than firing on a fabricated baseline.
+        """
+        ts = pd.to_datetime(work["timestamp"])
+        day = ts.dt.normalize()
+        session_start = operand.get("session_start", "09:30")
+        session_end = operand.get("session_end", "09:45")
+        start_t = pd.to_datetime(session_start).time()
+        end_t = pd.to_datetime(session_end).time()
+        if start_t <= end_t:
+            ib_mask = (ts.dt.time >= start_t) & (ts.dt.time <= end_t)
+        else:
+            ib_mask = (ts.dt.time >= start_t) | (ts.dt.time <= end_t)
+        after_ib = ts.dt.time > end_t
+
+        ib_high_by_day = work["high"].where(ib_mask).groupby(day).max()
+        ib_low_by_day = work["low"].where(ib_mask).groupby(day).min()
+        ib_range_by_day = ib_high_by_day - ib_low_by_day
+
+        trailing_avg = ib_range_by_day.shift(1).rolling(max(int(lookback), 1), min_periods=1).mean()
+        ratio_by_day = ib_range_by_day / trailing_avg.replace(0, np.nan)
+
+        ratio_per_bar = day.map(ratio_by_day)
+        return ratio_per_bar.where(after_ib).ffill()
 
     def _regime_series(self, work: pd.DataFrame, kind: str, period: int, operand: dict[str, Any]) -> pd.Series:
         expansion_mult = float(operand.get("expansion_mult", 1.25) or 1.25)
