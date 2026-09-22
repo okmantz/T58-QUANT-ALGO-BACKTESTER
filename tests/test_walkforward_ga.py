@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -65,6 +67,100 @@ def test_run_walkforward_aware_refinement_basic():
     assert result.best.config is not None
     assert len(result.leaderboard) == refine_cfg.population_size
     assert len(result.generation_history) == refine_cfg.generations + 1
+    # UPGRADE (optimizer core): evaluation-count transparency should reach
+    # Quick Optimize / Full Pipeline's actual GA, not just Iterative
+    # Refinement's separate implementation. Genetic mode's elitism means
+    # this is legitimately LESS than population_size * (generations + 1)
+    # (elites carry over unevaluated) -- just confirm it's tracked at all
+    # and in the right ballpark, not an exact multiply-out.
+    assert 0 < result.total_evaluations <= refine_cfg.population_size * (refine_cfg.generations + 1)
+
+
+@pytest.mark.parametrize("mode", ["tpe", "cma_es"])
+def test_run_walkforward_aware_refinement_optimizer_modes(mode):
+    """UPGRADE (optimizer core): TPE and CMA-ES must work through Quick
+    Optimize / Full Pipeline's ACTUAL walk-forward-aware GA (not just
+    Iterative Refinement's separate implementation), including its
+    worker-pool evaluate_batch path -- this is what makes 'same execution
+    engine everywhere' real for the two tools Owen actually uses day to
+    day, not just the standalone Iterative Refinement tool."""
+    pytest.importorskip("optuna" if mode == "tpe" else "cma")
+    df = _trending_df()
+    strategy = ManualStrategy(_sma_config())
+    risk = RiskConfig()
+    rules = PropRules()
+    mc_cfg = MonteCarloConfig(n_simulations=50)
+    refine_cfg = RefinementConfig(
+        population_size=6, generations=2, search_monte_carlo_sims=30, optimizer_mode=mode,
+    )
+
+    result = run_walkforward_aware_refinement(
+        df, strategy, risk, rules, mc_cfg, refinement_config=refine_cfg, n_folds=3,
+        parallel=False,  # keep this test fast/deterministic; parallel path covered by the pool test below
+    )
+
+    assert result.n_folds >= 2
+    assert result.best is not None
+    assert math.isfinite(result.best.fitness)
+    assert len(result.leaderboard) == refine_cfg.population_size
+    assert len(result.generation_history) == refine_cfg.generations + 1
+    assert result.total_evaluations >= refine_cfg.population_size * (refine_cfg.generations + 1)
+
+
+@pytest.mark.parametrize("mode", ["tpe", "cma_es"])
+def test_walkforward_optimizer_modes_reproducible_given_same_seed(mode):
+    """Same contract as Iterative Refinement's reproducibility test --
+    same seed, same mode, same everything else must give byte-identical
+    results here too."""
+    pytest.importorskip("optuna" if mode == "tpe" else "cma")
+    df = _trending_df(seed=9)
+    strategy = ManualStrategy(_sma_config())
+    risk = RiskConfig()
+    rules = PropRules()
+    mc_cfg = MonteCarloConfig(n_simulations=40)
+
+    def _run():
+        cfg = RefinementConfig(
+            population_size=6, generations=1, search_monte_carlo_sims=25,
+            random_seed=17, optimizer_mode=mode,
+        )
+        return run_walkforward_aware_refinement(
+            df, strategy, risk, rules, mc_cfg, refinement_config=cfg, n_folds=3, parallel=False,
+        )
+
+    result_a = _run()
+    result_b = _run()
+    assert result_a.best.fitness == result_b.best.fitness
+    assert result_a.best.genome == result_b.best.genome
+
+
+def test_walkforward_optimizer_mode_with_worker_pool():
+    """TPE/CMA-ES batches are submitted through the exact same
+    `evaluate_batch` call the genetic mode uses, which is what decides
+    serial vs. worker-pool -- population_size * (generations+1) here is
+    well above _MIN_EVALUATIONS_FOR_PARALLEL, so on a multi-core machine
+    this exercises the ProcessPoolExecutor path. (This sandbox reports a
+    single CPU core, so `use_parallel` evaluates False regardless of mode
+    and this only confirms the large-batch/serial-fallback shape here --
+    the pool path itself was not directly observed in this environment.)
+    """
+    pytest.importorskip("cma")
+    from app.optimize import walkforward_ga
+    df = _trending_df(n=3000)
+    strategy = ManualStrategy(_sma_config())
+    risk = RiskConfig()
+    rules = PropRules()
+    mc_cfg = MonteCarloConfig(n_simulations=30)
+    refine_cfg = RefinementConfig(
+        population_size=max(walkforward_ga._MIN_EVALUATIONS_FOR_PARALLEL // 2, 8),
+        generations=2, search_monte_carlo_sims=20, optimizer_mode="cma_es",
+    )
+
+    result = run_walkforward_aware_refinement(
+        df, strategy, risk, rules, mc_cfg, refinement_config=refine_cfg, n_folds=3, parallel=True,
+    )
+    assert result.best is not None
+    assert math.isfinite(result.best.fitness)
 
 
 def test_run_walkforward_aware_refinement_no_params_raises():
