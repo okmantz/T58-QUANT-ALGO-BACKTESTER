@@ -47,6 +47,16 @@
   </p>
 </div>
 
+<div class="t58-card">
+  <h2>&#128161; What this section is for</h2>
+  <p style="font-size:13px;color:var(--text-muted);line-height:1.6;margin:0;">
+    Optimize is where a strategy's parameters actually get tuned/searched -- six different methods below,
+    each trading off speed, breadth, and how much it needs from you. If you're not sure which to reach for,
+    Full Pipeline is the recommended default: it runs search, refinement, and out-of-sample validation
+    together in one pass.
+  </p>
+</div>
+
 <div class="t58-recommended">
   <div class="eyebrow">Recommended default</div>
   <h2>&#9889; Full Pipeline</h2>
@@ -96,6 +106,22 @@
     Once you have a result you like, head to Validate to check it isn't overfit.
   </p>
   <a class="t58-btn secondary" href="/validate">Go to Validate &rarr;</a>
+</div>
+
+<div class="t58-card">
+  <h2>&#8981; Everything in Optimize</h2>
+  <div class="t58-method-grid">
+    <a class="t58-method-card" href="/optimize"><h3>Start Here</h3><p>This page.</p></a>
+    <a class="t58-method-card" href="/full-pipeline"><h3>Full Pipeline</h3><p>Search, refinement, and out-of-sample validation together in one pass.</p></a>
+    <a class="t58-method-card" href="/quick-optimize"><h3>Quick Optimize</h3><p>Auto-tunes one strategy's own parameters toward pass/win-rate/payout targets.</p></a>
+    <a class="t58-method-card" href="/search"><h3>Search Lab</h3><p>Generates and filters strategy variations across a large parameter space.</p></a>
+    <a class="t58-method-card" href="/search/multi-instrument"><h3>Multi-Instrument Search Lab</h3><p>Search Lab run across several instruments/timeframes at once.</p></a>
+    <a class="t58-method-card" href="/evolution"><h3>Evolution Lab (GA)</h3><p>A genetic algorithm evolves parameter sets across generations.</p></a>
+    <a class="t58-method-card" href="/evolution/multi-instrument"><h3>Multi-Instrument Evolution Lab</h3><p>Evolution Lab run across several instruments/timeframes at once.</p></a>
+    <a class="t58-method-card" href="/multi-objective"><h3>Multi-Objective Optimization</h3><p>Optimizes profit, drawdown, and consistency together instead of one fitness number.</p></a>
+    <a class="t58-method-card" href="/refine"><h3>Iterative Refinement</h3><p>Repeated rounds of local parameter search around a strategy you already like.</p></a>
+    <a class="t58-method-card" href="/risk-sweep"><h3>Risk Sweep</h3><p>Tests risk-per-trade against the full prop-survival model to find the best level.</p></a>
+  </div>
 </div>
 
 </div>

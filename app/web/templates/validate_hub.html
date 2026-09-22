@@ -41,6 +41,16 @@
   <p>Is this strategy actually robust, or did it just get lucky on one backtest? This checklist is built entirely from validation tools you've already run -- nothing here is re-computed or guessed.</p>
 </div>
 
+<div class="t58-card">
+  <h2>&#128161; What this section is for</h2>
+  <p style="font-size:13px;color:var(--text-muted);line-height:1.6;margin:0;">
+    Validate exists to catch a strategy that only looked good because of luck on one backtest.
+    The checklist below aggregates results from WFO, WFGA, CPCV, PBO, Sensitivity, and the Regime
+    Survival Matrix for whichever strategy is marked current -- it never re-runs or guesses at those
+    results, so run the checks you need first if the checklist below shows them as pending.
+  </p>
+</div>
+
 {% if not current_strategy %}
 <div class="t58-card">
   <div class="t58-empty">
@@ -118,6 +128,21 @@
 </div>
 
 {% endif %}
+
+<div class="t58-card">
+  <h2>&#8981; Everything in Validate</h2>
+  <div class="t58-method-grid">
+    <a class="t58-method-card" href="/validate"><h3>Start Here</h3><p>This page.</p></a>
+    <a class="t58-method-card" href="/wfo"><h3>Walk-Forward Optimization</h3><p>Trains and tests on rolling, non-overlapping windows through time.</p></a>
+    <a class="t58-method-card" href="/wfga"><h3>Walk-Forward GA</h3><p>Walk-forward validation using the genetic-algorithm search.</p></a>
+    <a class="t58-method-card" href="/cpcv"><h3>CPCV</h3><p>Combinatorial purged cross-validation -- many train/test path combinations.</p></a>
+    <a class="t58-method-card" href="/pbo"><h3>PBO</h3><p>Probability of backtest overfitting.</p></a>
+    <a class="t58-method-card" href="/sensitivity"><h3>Sensitivity</h3><p>How much results change with small parameter perturbations.</p></a>
+    <a class="t58-method-card" href="/parameter-robustness"><h3>Parameter Stability / Robustness Map</h3><p>Visualizes the whole neighborhood around your parameters, not just one point.</p></a>
+    <a class="t58-method-card" href="/regime-matrix"><h3>Regime Survival Matrix</h3><p>Does the strategy survive across different market regimes, not just one period?</p></a>
+    <a class="t58-method-card" href="/payout-probability"><h3>Monte Carlo / Payout Probability</h3><p>Simulated odds of actually reaching a funded payout.</p></a>
+  </div>
+</div>
 
 </div>
 </div>
