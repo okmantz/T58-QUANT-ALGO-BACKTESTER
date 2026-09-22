@@ -212,6 +212,13 @@
       {% endfor %}
     </select>
     <p style="font-size:12px;color:#888;margin-top:4px;">Not trading a prop-firm evaluation? Pick "Long-Term Net Profit" -- it scores candidates purely on total P&amp;L and ignores prop-firm drawdown/payout rules entirely.</p>
+    <label>Optimizer mode</label>
+    <select name="optimizer_mode">
+      {% for key, label in optimizer_modes.items() %}
+      <option value="{{ key }}" {{ 'selected' if key == 'genetic' else '' }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <p style="font-size:12px;color:#888;margin-top:4px;">All three run the exact same chained out-of-sample scoring per candidate -- only how the next configuration to try is chosen differs. TPE/CMA-ES need the optuna / cma packages on the server; you'll get a clear error here if one isn't installed.</p>
     <details style="margin-top:10px;" open>
       <summary>GA search settings</summary>
       <div class="row">
