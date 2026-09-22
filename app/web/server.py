@@ -293,6 +293,20 @@ SPEEDRUN_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
+# UPGRADE (Evolution Lab optimizer_mode): a Jinja GLOBAL rather than
+# passing optimizer_modes=OPTIMIZER_MODES through every one of Evolution
+# Lab's ~13 render_template("evolution.html"/"evolution_multi_instrument
+# .html", ...) call sites (every error path, every re-render, both single
+# and multi-instrument) -- Full Pipeline/Quick Optimize/Refinement thread
+# it through their own render_template kwargs explicitly instead, but
+# those routes each only have a handful of call sites; Evolution Lab's
+# many scattered call sites make that same approach error-prone (easy to
+# miss one and get a silent "optimizer_modes is undefined" in only some
+# code paths). A global is available to every template unconditionally,
+# and a route that ALSO passes optimizer_modes explicitly simply
+# overrides this for that one render -- the two approaches coexist fine.
+app.jinja_env.globals["optimizer_modes"] = OPTIMIZER_MODES
+
 # Session cookie signing key -- only needed for the OPTIONAL local account
 # lock (see app.accounts.settings' docstring: set a password on the
 # Account tab and this app asks for it once per browser before showing
@@ -1160,6 +1174,7 @@ def replay_data(replay_id):
     return jsonify(data)
 
 
+@app.route("/library")
 def strategy_library_page():
     from app.strategy.library import list_saved_strategies, list_all_tags, list_all_markets, STRATEGY_TYPES
 
@@ -2774,6 +2789,14 @@ def refine_job_status(job_id):
             "report_html": job.get("report_html"),
             "report_json": job.get("report_json"),
             "best_file": job.get("best_file"),
+            # UPGRADE (distribution-based results reporting): this was
+            # already computed by run_iterative_refinement (see
+            # app.optimize.refinement._compute_distribution_summary's own
+            # docstring for exactly what it does and doesn't claim) but
+            # never actually reached the UI -- surfaced here so the job
+            # page can show "Raw Optimum vs Robust Candidate" instead of
+            # only ever reporting the single best genome found.
+            "distribution_summary": result.distribution_summary,
         },
         "generations": generations,
     })
@@ -5935,6 +5958,7 @@ def evolution_form():
         "evolution.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         families=[{"name": n, "description": family_description(n)} for n in list_families()],
         running=(_EVOLUTION_RUNNER is not None and _EVOLUTION_RUNNER.is_running),
+        optimizer_modes=OPTIMIZER_MODES,
         prop_presets_json=_prop_presets_json(), **_alpaca_template_context())
 
 
@@ -6037,6 +6061,7 @@ def evolution_start():
             ),
             target_metric=form.get("target_metric", "cpcv_oos_eval_pass_probability") or "cpcv_oos_eval_pass_probability",
             reset_on_breach=form.get("reset_on_breach", "on") == "on",
+            optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
         )
         _EVOLUTION_LOG.clear()
         _EVOLUTION_LOG.append(f"Loaded {len(df)} bars from {active_label}.")
@@ -6321,6 +6346,7 @@ def evolution_multi_instrument_form():
         stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         families=[{"name": n, "description": family_description(n)} for n in list_families()],
         active_groups=[{"group_id": gid, "running": g.is_running, "labels": [j.label for j in g.jobs]} for gid, g in groups],
+        optimizer_modes=OPTIMIZER_MODES,
     )
 
 
@@ -6436,6 +6462,7 @@ def evolution_multi_instrument_start():
             ),
             target_metric=form.get("target_metric", "cpcv_oos_eval_pass_probability") or "cpcv_oos_eval_pass_probability",
             reset_on_breach=form.get("reset_on_breach", "on") == "on",
+            optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
         )
 
         # UPGRADE (budget field): app.search.budget_allocator was wired
@@ -7058,6 +7085,7 @@ def search_form():
         strategy_statuses=STRATEGY_STATUSES,
         alpaca_notice=request.args.get("alpaca_notice"),
         alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"),
+        optimizer_modes=OPTIMIZER_MODES,
         prop_presets_json=_prop_presets_json(), **_alpaca_template_context())
 
 
@@ -7129,6 +7157,7 @@ def search_start():
             workers=int(workers_raw) if workers_raw else None,
             random_seed=seed,
             reset_on_breach=form.get("reset_on_breach") == "on",
+            optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
         )
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000) or 100000),
@@ -8102,6 +8131,7 @@ def search_multi_instrument_form():
         "search_multi_instrument.html",
         stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         families=[{"name": n, "description": family_description(n)} for n in list_families()],
+        optimizer_modes=OPTIMIZER_MODES,
     )
 
 
@@ -8203,6 +8233,7 @@ def search_multi_instrument_start():
             robustness_neighbors=int(form.get("robustness_neighbors", 6) or 6),
             fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
             workers=None, random_seed=int(form.get("seed", 42) or 42),
+            optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
         )
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000) or 100000),
