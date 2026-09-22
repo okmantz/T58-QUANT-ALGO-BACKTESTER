@@ -32,7 +32,7 @@ import threading
 from dataclasses import replace
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from flask import (
@@ -44,7 +44,7 @@ from app.education import content as education_content
 from app.web.network_info import lan_url, print_startup_banner, qr_code_data_uri, qr_code_file, tailscale_url
 from app.web.notifications import (
     NotificationSettings, load_notification_settings, notify_job_finished, save_notification_settings,
-    send_job_notification,
+    send_job_notification, _send_email_notification,
 )
 from app.web.quant_lab_routes import quant_lab_bp
 from app.web.extra_routes import extra_bp
@@ -1050,7 +1050,156 @@ def get_saved_strategy(strategy_type, filename):
 
 
 def _redirect_target(form) -> str:
-    return "search_form" if form.get("return_to") == "search" else "index"
+    if form.get("return_to") == "search":
+        return "search_form"
+    if form.get("return_to") == "library":
+        return "strategy_library_page"
+    return "index"
+
+
+_REPLAY_RESULTS: dict = {}
+_REPLAY_RESULTS_LOCK = threading.Lock()
+
+
+@app.route("/replay")
+def replay_form():
+    return render_template(
+        "replay.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+        saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context(),
+    )
+
+
+@app.route("/replay/prepare", methods=["POST"])
+def replay_prepare():
+    """UPGRADE (Interactive Replay): runs the SAME run_backtest every
+    other tool in this app uses -- once, up front -- then hands the
+    browser the full bar/trade/equity history to scrub and play through
+    client-side. This is pure visualization of an already-computed,
+    already-validated backtest: no new execution or fill logic exists
+    here, so there is no way for this feature to produce a different
+    number than Run & Report would for the exact same inputs (worth
+    stating plainly, since tick-level fills / L2 order-book simulation --
+    the other two items in this phase -- are a fundamentally different,
+    much riskier kind of change that this is NOT)."""
+    form = request.form
+    try:
+        df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
+        if dataset_error:
+            return render_template(
+                "replay.html", error=dataset_error, stored_datasets=list_stored_datasets(),
+                dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
+                **_alpaca_template_context(),
+            ), 400
+
+        strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
+        risk = RiskConfig(
+            initial_balance=float(form.get("initial_balance", 100000) or 100000),
+            risk_mode=form.get("risk_mode", "percent"),
+            risk_value=float(form.get("risk_value", 1.0) or 1.0),
+            pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+        )
+    except (StrategyError, RefinementError) as exc:
+        return render_template(
+            "replay.html", error=str(exc), stored_datasets=list_stored_datasets(),
+            dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
+            **_alpaca_template_context(),
+        ), 400
+
+    max_bars = int(form.get("max_bars", 2000) or 2000)
+    if len(df) > max_bars:
+        df = df.tail(max_bars).reset_index(drop=True)
+
+    result = run_backtest(df, strategy, risk)
+
+    import pandas as pd
+    bars = [
+        {
+            "time": int(pd.Timestamp(row.timestamp).timestamp()),
+            "open": float(row.open), "high": float(row.high), "low": float(row.low), "close": float(row.close),
+            "volume": float(row.volume) if hasattr(row, "volume") else 0.0,
+        }
+        for row in df.itertuples(index=False)
+    ]
+    trades = [
+        {
+            "entry_time": int(pd.Timestamp(t.entry_time).timestamp()),
+            "exit_time": int(pd.Timestamp(t.exit_time).timestamp()),
+            "direction": t.direction, "entry_price": t.entry_price, "exit_price": t.exit_price,
+            "pnl": t.pnl, "exit_reason": t.exit_reason,
+        }
+        for t in result.trades
+    ]
+    equity = [
+        {"time": int(pd.Timestamp(ts).timestamp()), "equity": float(eq)}
+        for ts, eq in zip(result.equity_curve["timestamp"], result.equity_curve["equity"])
+    ] if "timestamp" in result.equity_curve.columns and "equity" in result.equity_curve.columns else []
+
+    replay_id = uuid.uuid4().hex[:12]
+    with _REPLAY_RESULTS_LOCK:
+        _REPLAY_RESULTS[replay_id] = {
+            "bars": bars, "trades": trades, "equity": equity,
+            "label": active_label, "initial_balance": risk.initial_balance,
+            "statistics": result.statistics.to_dict() if hasattr(result.statistics, "to_dict") else {},
+        }
+    return redirect(url_for("replay_view", replay_id=replay_id))
+
+
+@app.route("/replay/view/<replay_id>")
+def replay_view(replay_id):
+    with _REPLAY_RESULTS_LOCK:
+        exists = replay_id in _REPLAY_RESULTS
+    return render_template("replay_view.html", replay_id=replay_id, not_found=not exists)
+
+
+@app.route("/replay/data/<replay_id>.json")
+def replay_data(replay_id):
+    with _REPLAY_RESULTS_LOCK:
+        data = _REPLAY_RESULTS.get(replay_id)
+    if data is None:
+        return jsonify({"error": "Replay data not found (the server may have restarted since it was prepared)."}), 404
+    return jsonify(data)
+
+
+def strategy_library_page():
+    from app.strategy.library import list_saved_strategies, list_all_tags, list_all_markets, STRATEGY_TYPES
+
+    all_strategies = []
+    for t in STRATEGY_TYPES:
+        for s in list_saved_strategies(t):
+            all_strategies.append({
+                "type": t, "name": s.name, "description": s.metadata.get("description", ""),
+                "market": s.metadata.get("market", ""), "tags": s.tags, "status": s.status,
+                "status_display": s.status_display, "last_run": s.metadata.get("last_run"),
+                "last_search": s.metadata.get("last_search"), "size_bytes": s.size_bytes,
+                "modified": s.modified,
+            })
+    all_strategies.sort(key=lambda s: s["modified"], reverse=True)
+
+    all_tags = sorted({tag for t in STRATEGY_TYPES for tag in list_all_tags(t)})
+    all_markets = sorted({m for t in STRATEGY_TYPES for m in list_all_markets(t) if m})
+
+    return render_template(
+        "library.html", active_page="strategy_library",
+        strategies_json=json.dumps(all_strategies), all_tags=all_tags, all_markets=all_markets,
+        strategy_statuses=STRATEGY_STATUSES,
+        notice=request.args.get("strategy_notice"),
+    )
+
+
+@app.route("/strategies/save-code", methods=["POST"])
+def save_strategy_code_route():
+    """Saves an edit made in the Strategy Library's Code tab back to the
+    same file -- always overwrite=True, since this is editing an EXISTING
+    saved strategy in place (renaming to a different file is what
+    /strategies/rename is for)."""
+    strategy_type = request.form.get("strategy_type", "")
+    filename = request.form.get("filename", "")
+    code = request.form.get("code", "")
+    try:
+        save_strategy_text(code, filename, strategy_type, overwrite=True)
+        return jsonify({"ok": True})
+    except (ValueError, StrategyError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
 
 
 @app.route("/strategies/delete", methods=["POST"])
@@ -1560,6 +1709,219 @@ def account_settings_form():
     return render_template("account_settings.html", **_account_settings_page_context())
 
 
+@app.route("/settings/api-keys")
+def api_keys_settings_form():
+    from app.ai.ollama_settings import load_settings as load_ollama_settings
+    from app.data.alpaca_credentials import load_credentials as load_alpaca_credentials
+    from app.accounts.api_keys import load_settings as load_api_keys_settings
+    from app.live_deploy.live_settings import load_accounts
+    from app.live_deploy.broker_registry import SUPPORTED_PLATFORMS
+
+    alpaca_creds = load_alpaca_credentials()
+    return render_template(
+        "api_keys_settings.html",
+        active_page="api_keys_settings",
+        ollama=load_ollama_settings(),
+        alpaca_api_key=(alpaca_creds.api_key if alpaca_creds else ""),
+        alpaca_secret_key=(alpaca_creds.secret_key if alpaca_creds else ""),
+        api_keys=load_api_keys_settings(),
+        broker_accounts=load_accounts(),
+        broker_platforms=SUPPORTED_PLATFORMS,
+    )
+
+
+@app.route("/settings/api-keys/save-ai", methods=["POST"])
+def api_keys_save_ai():
+    from app.ai.ollama_settings import OllamaSettings, save_settings as save_ollama_settings, load_settings as load_ollama_settings
+    from app.accounts.api_keys import save_settings as save_api_keys_settings, load_settings as load_api_keys_settings
+    form = request.form
+    existing_ollama = load_ollama_settings()
+    save_ollama_settings(OllamaSettings(
+        enabled=form.get("ollama_enabled") == "on",
+        host=(form.get("ollama_host") or existing_ollama.host).strip(),
+        model=(form.get("ollama_model") or existing_ollama.model).strip(),
+        api_key=(form.get("ollama_api_key") or existing_ollama.api_key),
+        vision_model=(form.get("ollama_vision_model") or existing_ollama.vision_model).strip(),
+    ))
+    existing_keys = load_api_keys_settings()
+    save_api_keys_settings(existing_keys.__class__(
+        fred_api_key=existing_keys.fred_api_key,
+        openai_api_key=(form.get("openai_api_key") or existing_keys.openai_api_key),
+        claude_api_key=(form.get("claude_api_key") or existing_keys.claude_api_key),
+        london_strategic_edge_key=existing_keys.london_strategic_edge_key,
+    ))
+    return redirect(url_for("api_keys_settings_form"))
+
+
+@app.route("/settings/api-keys/save-trading", methods=["POST"])
+def api_keys_save_trading():
+    from app.data.alpaca_credentials import save_credentials as save_alpaca_credentials, load_credentials as load_alpaca_credentials
+    form = request.form
+    existing = load_alpaca_credentials()
+    api_key = (form.get("alpaca_api_key") or (existing.api_key if existing else "")).strip()
+    secret_key = (form.get("alpaca_secret_key") or (existing.secret_key if existing else "")).strip()
+    if api_key and secret_key:
+        save_alpaca_credentials(api_key, secret_key)
+    return redirect(url_for("api_keys_settings_form"))
+
+
+@app.route("/settings/api-keys/save-data", methods=["POST"])
+def api_keys_save_data():
+    from app.accounts.api_keys import save_settings as save_api_keys_settings, load_settings as load_api_keys_settings
+    form = request.form
+    existing = load_api_keys_settings()
+    save_api_keys_settings(existing.__class__(
+        fred_api_key=(form.get("fred_api_key") or existing.fred_api_key),
+        openai_api_key=existing.openai_api_key,
+        claude_api_key=existing.claude_api_key,
+        london_strategic_edge_key=(form.get("london_strategic_edge_key") or existing.london_strategic_edge_key),
+    ))
+    return redirect(url_for("api_keys_settings_form"))
+
+
+@app.route("/settings/api-keys/brokers/save", methods=["POST"])
+def api_keys_save_broker():
+    from app.live_deploy.live_settings import LiveAccount, save_account
+    form = request.form
+    extra_keys = ["client_id", "client_secret", "refresh_token", "ctid_trader_account_id", "host",
+                  "app_id", "app_secret", "cid", "sec", "is_live", "base_url", "environment"]
+    extra = {k: form.get(k, "").strip() for k in extra_keys if form.get(k, "").strip()}
+    account = LiveAccount(
+        id=form.get("account_id") or None,
+        nickname=(form.get("nickname") or "").strip(),
+        firm_name=(form.get("firm_name") or "").strip(),
+        platform=form.get("platform", "MT4/MT5"),
+        login=(form.get("login") or "").strip(),
+        server=(form.get("server") or "").strip(),
+        password=(form.get("password") or "").strip(),
+        terminal_path=(form.get("terminal_path") or "").strip(),
+        extra_credentials=extra,
+    )
+    save_account(account)
+    return redirect(url_for("api_keys_settings_form"))
+
+
+@app.route("/settings/api-keys/brokers/delete", methods=["POST"])
+def api_keys_delete_broker():
+    from app.live_deploy.live_settings import delete_account
+    account_id = request.form.get("account_id", "")
+    if account_id:
+        delete_account(account_id)
+    return redirect(url_for("api_keys_settings_form"))
+
+
+@app.route("/settings/api-keys/test", methods=["POST"])
+def api_keys_test_connection():
+    """Test Connection for every category. Uses whatever is CURRENTLY
+    SAVED, same reasoning as /settings/notifications/test: a connection
+    check needs the real secret, and shouldn't require Save first if the
+    person is just re-testing what's already there."""
+    service = request.form.get("service", "")
+
+    if service == "ollama":
+        from app.ai.ollama_client import OllamaClient
+        from app.ai.ollama_settings import load_settings as load_ollama_settings
+        settings = load_ollama_settings()
+        if not settings.is_usable:
+            return jsonify({"ok": False, "error": "Ollama isn't enabled, or no host is set."})
+        ok, message = OllamaClient(settings).test_connection()
+        return jsonify({"ok": ok, "message": message} if ok else {"ok": False, "error": message})
+
+    if service == "alpaca":
+        from app.data.alpaca_source import test_connection as test_alpaca
+        from app.data.alpaca_credentials import load_credentials as load_alpaca_credentials
+        creds = load_alpaca_credentials()
+        if not creds:
+            return jsonify({"ok": False, "error": "No Alpaca credentials saved yet."})
+        try:
+            message = test_alpaca(creds.api_key, creds.secret_key)
+            return jsonify({"ok": True, "message": message})
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"ok": False, "error": str(exc)})
+
+    if service == "fred":
+        from app.accounts.api_keys import load_settings as load_api_keys_settings
+        key = load_api_keys_settings().fred_api_key
+        if not key:
+            return jsonify({"ok": False, "error": "No FRED API key saved yet."})
+        try:
+            import urllib.request
+            url = f"https://api.stlouisfed.org/fred/series?series_id=GDP&api_key={key}&file_type=json"
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                if resp.status == 200:
+                    return jsonify({"ok": True, "message": "FRED API key is valid."})
+            return jsonify({"ok": False, "error": f"Unexpected status {resp.status}."})
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"ok": False, "error": f"FRED rejected the key or is unreachable: {exc}"})
+
+    if service in ("openai", "claude"):
+        from app.accounts.api_keys import load_settings as load_api_keys_settings
+        keys = load_api_keys_settings()
+        key = keys.openai_api_key if service == "openai" else keys.claude_api_key
+        if not key:
+            return jsonify({"ok": False, "error": f"No {service} API key saved yet."})
+        try:
+            import urllib.request
+            if service == "openai":
+                req = urllib.request.Request(
+                    "https://api.openai.com/v1/models", headers={"Authorization": f"Bearer {key}"},
+                )
+            else:
+                req = urllib.request.Request(
+                    "https://api.anthropic.com/v1/models",
+                    headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
+                )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return jsonify({"ok": True, "message": f"{service.title()} key is valid."})
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"ok": False, "error": f"{service.title()} rejected the key or is unreachable: {exc}"})
+
+    if service == "london_strategic_edge":
+        return jsonify({"ok": False, "error": "No integration is implemented for this service yet -- this is just secure storage for the key."})
+
+    if service == "broker":
+        from app.live_deploy.live_settings import load_accounts
+        from app.live_deploy.broker_registry import build_adapter
+        account_id = request.form.get("account_id", "")
+        account = next((a for a in load_accounts() if a.id == account_id), None)
+        if account is None:
+            return jsonify({"ok": False, "error": "Account not found."})
+        try:
+            adapter = build_adapter(account)
+            result = adapter.connect()
+            if result.ok:
+                adapter.disconnect()
+            return jsonify({"ok": result.ok, "message": result.message} if result.ok else {"ok": False, "error": result.message})
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"ok": False, "error": str(exc)})
+
+    return jsonify({"ok": False, "error": f"Unknown service '{service}'."})
+
+
+@app.route("/support")
+def support_page():
+    return render_template("support.html", active_page="support")
+
+
+@app.route("/support/report-issue", methods=["POST"])
+def support_report_issue():
+    """No external support backend exists for this app (see support.html's
+    own copy) -- this just appends to a local JSONL log so an issue typed
+    here isn't lost, for the person to paste elsewhere themselves later."""
+    title = (request.form.get("title") or "").strip()
+    body = (request.form.get("body") or "").strip()
+    if not title and not body:
+        return jsonify({"ok": False, "error": "Nothing to save."}), 400
+    log_dir = get_app_base_dir() / "data" / "config"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(), "title": title, "body": body,
+    }
+    with open(log_dir / "issue_reports.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
+    return jsonify({"ok": True})
+
+
 @app.route("/settings/account/save", methods=["POST"])
 def account_settings_save():
     from app.accounts.settings import load_account_settings, save_account_settings
@@ -1571,6 +1933,55 @@ def account_settings_save():
     settings.company = (form.get("company") or "").strip()
     save_account_settings(settings)
     return render_template("account_settings.html", **_account_settings_page_context(saved="profile"))
+
+
+@app.route("/settings/account/profile-picture", methods=["POST"])
+def account_settings_profile_picture():
+    from app.accounts.settings import load_account_settings, save_account_settings
+    file = request.files.get("profile_picture")
+    if file is None or not file.filename:
+        return redirect(url_for("account_settings_form"))
+    ext = Path(file.filename).suffix.lower()
+    if ext not in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
+        return render_template(
+            "account_settings.html",
+            **_account_settings_page_context(error="Profile picture must be a PNG, JPG, GIF, or WEBP image."),
+        ), 400
+
+    settings = load_account_settings()
+    # One fixed filename per extension slot -- overwrite in place rather
+    # than accumulate a new file per upload, and remove any OTHER
+    # extension's leftover file so switching from a .png to a .jpg doesn't
+    # leave both being served depending on which route someone hits.
+    pic_dir = get_app_base_dir() / "data" / "config"
+    pic_dir.mkdir(parents=True, exist_ok=True)
+    for other_ext in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
+        (pic_dir / f"profile_picture{other_ext}").unlink(missing_ok=True)
+    filename = f"profile_picture{ext}"
+    file.save(pic_dir / filename)
+    settings.profile_picture_filename = filename
+    save_account_settings(settings)
+    return render_template("account_settings.html", **_account_settings_page_context(saved="profile"))
+
+
+@app.route("/settings/account/profile-picture/remove", methods=["POST"])
+def account_settings_profile_picture_remove():
+    from app.accounts.settings import load_account_settings, save_account_settings
+    settings = load_account_settings()
+    if settings.profile_picture_filename:
+        (get_app_base_dir() / "data" / "config" / settings.profile_picture_filename).unlink(missing_ok=True)
+        settings.profile_picture_filename = ""
+        save_account_settings(settings)
+    return render_template("account_settings.html", **_account_settings_page_context(saved="profile"))
+
+
+@app.route("/settings/account/profile-picture/file")
+def account_settings_profile_picture_file():
+    from app.accounts.settings import load_account_settings
+    settings = load_account_settings()
+    if not settings.profile_picture_filename:
+        return "", 404
+    return send_from_directory(get_app_base_dir() / "data" / "config", settings.profile_picture_filename)
 
 
 @app.route("/settings/account/change_password", methods=["POST"])
@@ -1651,6 +2062,7 @@ def notification_settings_form():
 @app.route("/settings/notifications/save", methods=["POST"])
 def notification_settings_save():
     form = request.form
+    existing = load_notification_settings()
     settings = NotificationSettings(
         notify_email=(form.get("notify_email") or "").strip(),
         notify_phone=(form.get("notify_phone") or "").strip(),
@@ -1660,15 +2072,75 @@ def notification_settings_save():
         # Blank password on save means "keep the existing one" -- so
         # re-saving the email address doesn't force retyping the SMTP
         # password (e.g. a Gmail app password) every time.
-        smtp_password=(form.get("smtp_password") or load_notification_settings().smtp_password),
+        smtp_password=(form.get("smtp_password") or existing.smtp_password),
         smtp_from=(form.get("smtp_from") or "").strip(),
         email_enabled=form.get("email_enabled") == "on",
+        discord_webhook_url=(form.get("discord_webhook_url") or "").strip(),
+        # Same "blank means keep the existing one" rule as smtp_password --
+        # a bot token is a secret, re-typing it on every unrelated save
+        # (e.g. just adding an email address) would be needless friction.
+        telegram_bot_token=(form.get("telegram_bot_token") or existing.telegram_bot_token),
+        telegram_chat_id=(form.get("telegram_chat_id") or "").strip(),
     )
     save_notification_settings(settings)
     return render_template(
         "notification_settings.html", settings=settings, active_page="notification_settings",
         saved=True,
     )
+
+
+@app.route("/settings/notifications/test", methods=["POST"])
+def notification_settings_test():
+    """Test Connection for Discord/Telegram -- fires an actual test
+    message through send_job_notification/_send_telegram_notification's
+    exact same code path a real job completion uses, using whatever is
+    CURRENTLY SAVED (not the unsaved form fields, since a webhook POST or
+    bot-API call needs the real secret, and a bare 'test' click shouldn't
+    require Save first if nothing changed). Reports success only as
+    'request sent' -- these channels are deliberately fire-and-forget
+    (see their own docstrings), so this can't confirm delivery, only that
+    the request didn't fail synchronously."""
+    channel = request.form.get("channel", "")
+    settings = load_notification_settings()
+    if channel == "discord":
+        if not settings.discord_is_usable:
+            return jsonify({"ok": False, "error": "No Discord webhook URL saved yet."})
+        try:
+            import urllib.request
+            payload = json.dumps({"content": "T58 -- test notification. If you see this, Discord is connected."}).encode("utf-8")
+            req = urllib.request.Request(
+                settings.discord_webhook_url.strip(), data=payload, method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            urllib.request.urlopen(req, timeout=10)
+            return jsonify({"ok": True, "message": "Test message sent to Discord."})
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"ok": False, "error": f"Discord webhook request failed: {exc}"})
+    elif channel == "telegram":
+        if not settings.telegram_is_usable:
+            return jsonify({"ok": False, "error": "Telegram needs both a bot token and a chat ID saved."})
+        try:
+            import urllib.request
+            import urllib.parse
+            url = f"https://api.telegram.org/bot{settings.telegram_bot_token.strip()}/sendMessage"
+            data = urllib.parse.urlencode({
+                "chat_id": settings.telegram_chat_id.strip(),
+                "text": "T58 -- test notification. If you see this, Telegram is connected.",
+            }).encode("utf-8")
+            req = urllib.request.Request(url, data=data, method="POST")
+            resp = urllib.request.urlopen(req, timeout=10)
+            body = json.loads(resp.read().decode("utf-8"))
+            if not body.get("ok"):
+                return jsonify({"ok": False, "error": f"Telegram API rejected the request: {body.get('description', 'unknown error')}"})
+            return jsonify({"ok": True, "message": "Test message sent to Telegram."})
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"ok": False, "error": f"Telegram request failed: {exc}"})
+    elif channel == "email":
+        if not settings.is_usable:
+            return jsonify({"ok": False, "error": "Email notifications aren't fully configured yet."})
+        _send_email_notification(settings, "Test Notification", "connection test", None)
+        return jsonify({"ok": True, "message": "Test email queued -- check your inbox in a moment."})
+    return jsonify({"ok": False, "error": f"Unknown channel '{channel}'."})
 
 
 @app.route("/health")
@@ -6161,14 +6633,205 @@ def research_loop_stop(job_id):
     return redirect(url_for("research_loop_job", job_id=job_id))
 
 
+_FORWARD_TEST_SESSION: dict = {"session": None, "log": [], "id": None}
+_FORWARD_TEST_LOCK = threading.Lock()
+_LIVE_DEPLOY_SESSION: dict = {"session": None, "log": [], "id": None}
+_LIVE_DEPLOY_LOCK = threading.Lock()
+
+
 @app.route("/forward-test")
 def forward_test_info():
-    return render_template("forward_test.html")
+    from app.live_deploy.live_settings import load_accounts
+    mt5_accounts = [a for a in load_accounts() if a.platform == "MT4/MT5"]
+    with _FORWARD_TEST_LOCK:
+        running = _FORWARD_TEST_SESSION["session"] is not None and _FORWARD_TEST_SESSION["session"].status.running
+    return render_template("forward_test.html", mt5_accounts=mt5_accounts, running=running, **_alpaca_template_context())
+
+
+@app.route("/forward-test/start", methods=["POST"])
+def forward_test_start():
+    from app.forward_test.engine import ForwardTestConfig, ForwardTestSession
+    from app.forward_test.journal import ForwardTestJournal
+    from app.forward_test.mt5_connector import MT5Connector
+    from app.live_deploy.live_settings import load_accounts
+
+    with _FORWARD_TEST_LOCK:
+        if _FORWARD_TEST_SESSION["session"] is not None and _FORWARD_TEST_SESSION["session"].status.running:
+            return jsonify({"ok": False, "error": "A forward test is already running. Stop it first."}), 409
+
+        form = request.form
+        account_id = form.get("account_id", "")
+        accounts = {a.id: a for a in load_accounts() if a.platform == "MT4/MT5"}
+        account = accounts.get(account_id)
+        if account is None:
+            return jsonify({"ok": False, "error": "Select a saved MT5 account first (add one under Settings -> API Keys)."}), 400
+
+        try:
+            strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
+        except (StrategyError, RefinementError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+        connector = MT5Connector(
+            login=account.login, password=account.password, server=account.server,
+            terminal_path=account.terminal_path,
+        )
+        risk = RiskConfig(
+            initial_balance=float(form.get("initial_balance", 100000) or 100000),
+            risk_mode=form.get("risk_mode", "percent"),
+            risk_value=float(form.get("risk_value", 1.0) or 1.0),
+            pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+        )
+        cfg = ForwardTestConfig(
+            symbol=form.get("symbol", "").strip() or "EURUSD",
+            timeframe_minutes=int(form.get("timeframe_minutes", 5) or 5),
+            risk=risk,
+            poll_seconds=int(form.get("poll_seconds", 20) or 20),
+        )
+        log = []
+        session = ForwardTestSession(
+            strategy=strategy, strategy_type=form.get("strategy_mode", "manual"),
+            strategy_filename=form.get("strategy_mode", "manual"),
+            connector=connector, journal=ForwardTestJournal(), config=cfg,
+            on_log=lambda level, msg: log.append(f"[{level}] {msg}"),
+        )
+        ok, message = session.start()
+        if not ok:
+            return jsonify({"ok": False, "error": message}), 400
+        _FORWARD_TEST_SESSION["session"] = session
+        _FORWARD_TEST_SESSION["log"] = log
+        return jsonify({"ok": True, "message": message})
+
+
+@app.route("/forward-test/stop", methods=["POST"])
+def forward_test_stop():
+    with _FORWARD_TEST_LOCK:
+        session = _FORWARD_TEST_SESSION["session"]
+        if session is None:
+            return jsonify({"ok": False, "error": "Nothing is running."})
+        session.stop()
+        return jsonify({"ok": True})
+
+
+@app.route("/forward-test/status.json")
+def forward_test_status():
+    with _FORWARD_TEST_LOCK:
+        session = _FORWARD_TEST_SESSION["session"]
+        if session is None:
+            return jsonify({"running": False, "log": []})
+        s = session.status
+        return jsonify({
+            "running": s.running, "connected": s.connected, "balance": s.balance, "equity": s.equity,
+            "n_trades_closed": s.n_trades_closed, "win_rate": s.win_rate, "net_pnl": s.net_pnl,
+            "halted_reason": s.halted_reason, "drift_flag": s.drift_flag,
+            "log": _FORWARD_TEST_SESSION["log"][-100:],
+        })
 
 
 @app.route("/deploy-live")
 def deploy_live_info():
-    return render_template("deploy_live.html")
+    from app.live_deploy.live_settings import load_accounts
+    with _LIVE_DEPLOY_LOCK:
+        running = _LIVE_DEPLOY_SESSION["session"] is not None and _LIVE_DEPLOY_SESSION["session"].status.running
+    return render_template("deploy_live.html", broker_accounts=load_accounts(), running=running, **_alpaca_template_context())
+
+
+@app.route("/deploy-live/start", methods=["POST"])
+def deploy_live_start():
+    """UPGRADE (MT5/prop-firm web deploy): this connects to a REAL,
+    FUNDED account and can place REAL trades -- see deploy_live.html's own
+    prominent warning. The typed confirmation phrase below is a real
+    guard, not decoration: a stray/accidental POST to this endpoint
+    (a browser back-button resubmit, a bookmarked/cached form, a CSRF
+    attempt from a page that doesn't know the exact phrase) cannot start
+    live trading without it. This does NOT add authentication to the
+    server itself -- see deploy_live.html for why that's a decision for
+    the person running this server to make about their own network
+    exposure, not something to silently bolt on here."""
+    from app.live_deploy.execution_engine import LiveExecutionConfig, LiveExecutionSession
+    from app.live_deploy.broker_registry import build_adapter
+    from app.live_deploy.live_settings import load_accounts
+    from app.forward_test.journal import ForwardTestJournal
+
+    with _LIVE_DEPLOY_LOCK:
+        if _LIVE_DEPLOY_SESSION["session"] is not None and _LIVE_DEPLOY_SESSION["session"].status.running:
+            return jsonify({"ok": False, "error": "A live session is already running. Stop it first."}), 409
+
+        form = request.form
+        if (form.get("confirm_text") or "").strip() != "DEPLOY LIVE":
+            return jsonify({"ok": False, "error": "Type DEPLOY LIVE exactly, in capitals, to confirm you understand this trades real money."}), 400
+
+        account_id = form.get("account_id", "")
+        accounts = {a.id: a for a in load_accounts()}
+        account = accounts.get(account_id)
+        if account is None:
+            return jsonify({"ok": False, "error": "Select a saved broker account first (add one under Settings -> API Keys)."}), 400
+
+        try:
+            strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
+        except (StrategyError, RefinementError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+        try:
+            broker = build_adapter(account)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"ok": False, "error": f"Could not build a broker connection: {exc}"}), 400
+
+        risk = RiskConfig(
+            initial_balance=float(form.get("initial_balance", 100000) or 100000),
+            risk_mode=form.get("risk_mode", "percent"),
+            risk_value=float(form.get("risk_value", 1.0) or 1.0),
+            pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+        )
+        rules = PropRules(
+            account_size=float(form.get("account_size", 100000) or 100000),
+            evaluation_profit_target_pct=float(form.get("profit_target", 8) or 8),
+            daily_loss_limit_pct=float(form.get("daily_loss", 5) or 5),
+            max_drawdown_pct=float(form.get("max_dd", 10) or 10),
+        )
+        cfg = LiveExecutionConfig(
+            symbol=form.get("symbol", "").strip() or "EURUSD",
+            timeframe_minutes=int(form.get("timeframe_minutes", 5) or 5),
+            risk=risk, prop_rules=rules,
+            poll_seconds=int(form.get("poll_seconds", 20) or 20),
+        )
+        log = []
+        session = LiveExecutionSession(
+            strategy=strategy, strategy_type=form.get("strategy_mode", "manual"),
+            strategy_filename=form.get("strategy_mode", "manual"),
+            broker=broker, journal=ForwardTestJournal(), config=cfg,
+            on_log=lambda level, msg: log.append(f"[{level}] {msg}"),
+        )
+        ok, message = session.start()
+        if not ok:
+            return jsonify({"ok": False, "error": message}), 400
+        _LIVE_DEPLOY_SESSION["session"] = session
+        _LIVE_DEPLOY_SESSION["log"] = log
+        return jsonify({"ok": True, "message": message})
+
+
+@app.route("/deploy-live/stop", methods=["POST"])
+def deploy_live_stop():
+    with _LIVE_DEPLOY_LOCK:
+        session = _LIVE_DEPLOY_SESSION["session"]
+        if session is None:
+            return jsonify({"ok": False, "error": "Nothing is running."})
+        session.stop()
+        return jsonify({"ok": True})
+
+
+@app.route("/deploy-live/status.json")
+def deploy_live_status():
+    with _LIVE_DEPLOY_LOCK:
+        session = _LIVE_DEPLOY_SESSION["session"]
+        if session is None:
+            return jsonify({"running": False, "log": []})
+        s = session.status
+        return jsonify({
+            "running": s.running, "connected": s.connected, "platform": s.platform,
+            "balance": s.balance, "equity": s.equity, "n_trades_closed": s.n_trades_closed,
+            "win_rate": s.win_rate, "net_pnl": s.net_pnl, "halted_reason": s.halted_reason,
+            "drift_flag": s.drift_flag, "log": _LIVE_DEPLOY_SESSION["log"][-100:],
+        })
 
 
 @app.route("/api/suggest-loop-config")

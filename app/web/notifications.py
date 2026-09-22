@@ -58,6 +58,15 @@ class NotificationSettings:
     smtp_password: str = ""
     smtp_from: str = ""
     email_enabled: bool = False
+    # UPGRADE (API Keys / centralized notifications): account-wide Discord
+    # and Telegram notification channels, fired the same way email is --
+    # automatically on every job completion, once configured here, instead
+    # of needing a webhook URL re-typed into each job's own form every
+    # time (that per-job field still works too -- see send_job_notification
+    # -- this is in addition to it, not a replacement).
+    discord_webhook_url: str = ""
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
 
     @property
     def is_usable(self) -> bool:
@@ -65,6 +74,14 @@ class NotificationSettings:
             self.email_enabled and self.notify_email.strip() and self.smtp_host.strip()
             and self.smtp_from.strip(),
         )
+
+    @property
+    def discord_is_usable(self) -> bool:
+        return bool(self.discord_webhook_url.strip())
+
+    @property
+    def telegram_is_usable(self) -> bool:
+        return bool(self.telegram_bot_token.strip() and self.telegram_chat_id.strip())
 
 
 def _config_dir() -> Path:
@@ -106,9 +123,13 @@ def _deobfuscate(value: str) -> str:
 
 
 def save_notification_settings(settings: NotificationSettings) -> None:
-    """Persists everything except smtp_password to a plain local JSON
-    file, and smtp_password preferentially to the OS keyring -- same
-    split app.ai.ollama_settings uses for its one secret field."""
+    """Persists everything except smtp_password and telegram_bot_token to
+    a plain local JSON file, and those two secrets preferentially to the
+    OS keyring -- same split app.ai.ollama_settings uses for its one
+    secret field. discord_webhook_url and telegram_chat_id are treated as
+    non-secret (a webhook URL is bearer-token-shaped but this app already
+    stores several of these in plain JSON elsewhere -- e.g. the per-job
+    ad-hoc field this mirrors; a chat id is just a numeric identifier)."""
     payload = {
         "notify_email": (settings.notify_email or "").strip(),
         "notify_phone": (settings.notify_phone or "").strip(),
@@ -117,6 +138,8 @@ def save_notification_settings(settings: NotificationSettings) -> None:
         "smtp_username": (settings.smtp_username or "").strip(),
         "smtp_from": (settings.smtp_from or "").strip(),
         "email_enabled": bool(settings.email_enabled),
+        "discord_webhook_url": (settings.discord_webhook_url or "").strip(),
+        "telegram_chat_id": (settings.telegram_chat_id or "").strip(),
     }
     _settings_path().write_text(json.dumps(payload), encoding="utf-8")
 
@@ -129,14 +152,40 @@ def save_notification_settings(settings: NotificationSettings) -> None:
             else:
                 kr.delete_password(SERVICE_NAME, KEYRING_USERNAME)
             _password_fallback_path().unlink(missing_ok=True)
+        except Exception:
+            if password:
+                _password_fallback_path().write_text(_obfuscate(password), encoding="utf-8")
+            else:
+                _password_fallback_path().unlink(missing_ok=True)
+    else:
+        if password:
+            _password_fallback_path().write_text(_obfuscate(password), encoding="utf-8")
+        else:
+            _password_fallback_path().unlink(missing_ok=True)
+
+    telegram_token = (settings.telegram_bot_token or "").strip()
+    if kr is not None:
+        try:
+            if telegram_token:
+                kr.set_password(SERVICE_NAME, _TELEGRAM_KEYRING_USERNAME, telegram_token)
+            else:
+                kr.delete_password(SERVICE_NAME, _TELEGRAM_KEYRING_USERNAME)
+            _telegram_token_fallback_path().unlink(missing_ok=True)
             return
         except Exception:
             pass  # fall through to the file-based fallback below
 
-    if password:
-        _password_fallback_path().write_text(_obfuscate(password), encoding="utf-8")
+    if telegram_token:
+        _telegram_token_fallback_path().write_text(_obfuscate(telegram_token), encoding="utf-8")
     else:
-        _password_fallback_path().unlink(missing_ok=True)
+        _telegram_token_fallback_path().unlink(missing_ok=True)
+
+
+_TELEGRAM_KEYRING_USERNAME = "telegram_bot_token"
+
+
+def _telegram_token_fallback_path() -> Path:
+    return _config_dir() / "notification_telegram_token.txt"
 
 
 def load_notification_settings() -> NotificationSettings:
@@ -145,6 +194,7 @@ def load_notification_settings() -> NotificationSettings:
     just to read config."""
     path = _settings_path()
     notify_email = notify_phone = smtp_host = smtp_username = smtp_from = ""
+    discord_webhook_url = telegram_chat_id = ""
     smtp_port = 587
     email_enabled = False
     if path.exists():
@@ -157,6 +207,8 @@ def load_notification_settings() -> NotificationSettings:
             smtp_username = data.get("smtp_username") or ""
             smtp_from = data.get("smtp_from") or ""
             email_enabled = bool(data.get("email_enabled", False))
+            discord_webhook_url = data.get("discord_webhook_url") or ""
+            telegram_chat_id = data.get("telegram_chat_id") or ""
         except Exception:
             pass
 
@@ -175,10 +227,26 @@ def load_notification_settings() -> NotificationSettings:
             except Exception:
                 smtp_password = ""
 
+    telegram_bot_token = ""
+    if kr is not None:
+        try:
+            telegram_bot_token = kr.get_password(SERVICE_NAME, _TELEGRAM_KEYRING_USERNAME) or ""
+        except Exception:
+            telegram_bot_token = ""
+    if not telegram_bot_token:
+        fallback = _telegram_token_fallback_path()
+        if fallback.exists():
+            try:
+                telegram_bot_token = _deobfuscate(fallback.read_text(encoding="utf-8"))
+            except Exception:
+                telegram_bot_token = ""
+
     return NotificationSettings(
         notify_email=notify_email, notify_phone=notify_phone, smtp_host=smtp_host,
         smtp_port=smtp_port, smtp_username=smtp_username, smtp_password=smtp_password,
         smtp_from=smtp_from, email_enabled=email_enabled,
+        discord_webhook_url=discord_webhook_url,
+        telegram_bot_token=telegram_bot_token, telegram_chat_id=telegram_chat_id,
     )
 
 
@@ -216,14 +284,52 @@ def _send_email_notification(settings: NotificationSettings, job_kind: str, summ
 
 
 def notify_job_finished(webhook_url: str | None, job_kind: str, summary: str, job_url: str | None = None) -> None:
-    """Single call site every job-completion path uses -- fires BOTH the
-    per-job webhook (if a URL was supplied for this run) and the
-    account-wide email notification (if configured and enabled in
-    Settings -> Notification settings). Each channel is independently
-    optional and independently best-effort; a failure or absence of one
-    never affects the other."""
+    """Single call site every job-completion path uses -- fires the
+    per-job webhook (if a URL was supplied for this run), the account-wide
+    email notification, AND the account-wide Discord/Telegram channels (if
+    configured and enabled in Settings -> Notification settings). Each
+    channel is independently optional and independently best-effort; a
+    failure or absence of one never affects the others."""
     send_job_notification(webhook_url, job_kind, summary, job_url=job_url)
-    _send_email_notification(load_notification_settings(), job_kind, summary, job_url)
+    settings = load_notification_settings()
+    _send_email_notification(settings, job_kind, summary, job_url)
+    if settings.discord_is_usable:
+        send_job_notification(settings.discord_webhook_url, job_kind, summary, job_url=job_url)
+    if settings.telegram_is_usable:
+        _send_telegram_notification(settings, job_kind, summary, job_url)
+
+
+def _send_telegram_notification(settings: NotificationSettings, job_kind: str, summary: str, job_url: str | None) -> None:
+    """Fires a Telegram Bot API message in a background thread -- never
+    blocks or raises into the caller, matching send_job_notification's
+    webhook behavior exactly. A no-op unless both telegram_bot_token and
+    telegram_chat_id are set (see NotificationSettings.telegram_is_usable).
+    Unlike Discord, Telegram has no generic incoming-webhook URL -- every
+    message goes through the bot API's own sendMessage endpoint instead."""
+    if not settings.telegram_is_usable:
+        return
+
+    message = f"T58 -- {job_kind} finished: {summary}"
+    if job_url:
+        message += f"\n{job_url}"
+    token = settings.telegram_bot_token.strip()
+    chat_id = settings.telegram_chat_id.strip()
+
+    def _post() -> None:
+        try:
+            import urllib.request
+            import urllib.parse
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            data = urllib.parse.urlencode({"chat_id": chat_id, "text": message}).encode("utf-8")
+            req = urllib.request.Request(url, data=data, method="POST")
+            urllib.request.urlopen(req, timeout=15)
+        except Exception:
+            # Best-effort only, matching every other notification channel
+            # here -- a Telegram failure must never surface as a job
+            # failure.
+            pass
+
+    threading.Thread(target=_post, daemon=True).start()
 
 
 def send_job_notification(webhook_url: str | None, job_kind: str, summary: str, job_url: str | None = None) -> None:
