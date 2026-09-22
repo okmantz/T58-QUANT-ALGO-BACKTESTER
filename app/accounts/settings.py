@@ -45,6 +45,13 @@ class AccountSettings:
     email: str = ""
     company: str = ""  # optional -- e.g. "T58 Trading", shown on exported reports if set
     password_hash: str = ""  # "pbkdf2$<algo>$<iterations>$<salt_hex>$<hash_hex>", or "" if no lock is set
+    # UPGRADE (Account tab pass): filename only (e.g. "profile_picture.png"),
+    # relative to the same config directory _settings_path() lives in --
+    # see app.web.server's /settings/account/profile-picture routes for
+    # where the actual image bytes are written/served. Never a full path
+    # (this file may move between machines/backups) and never the image
+    # bytes themselves (this is a small JSON file, not a blob store).
+    profile_picture_filename: str = ""
 
     @property
     def has_password(self) -> bool:
@@ -67,6 +74,7 @@ def load_account_settings() -> AccountSettings:
             email=str(data.get("email", "")),
             company=str(data.get("company", "")),
             password_hash=str(data.get("password_hash", "")),
+            profile_picture_filename=str(data.get("profile_picture_filename", "")),
         )
     except Exception:  # noqa: BLE001 -- a corrupt/unreadable file must never crash the Account tab
         return AccountSettings()
