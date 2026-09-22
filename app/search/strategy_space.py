@@ -4380,12 +4380,98 @@ _MULTI_DAY_SWING_TREND_CONTINUATION = SkeletonSpec(
 )
 
 
+# ---------------------------------------------------------------------------
+# Family (IB Contraction Breakout): Opening-range breakout taken only on
+# days where the session's own Initial Balance (IB) range has contracted
+# well below its trailing multi-day average -- the "volatility squeeze
+# before breakout" hypothesis behind the reconstructed RoboQuant-style
+# "IVB -- Initial Volatility Breakout" strategy (see
+# strategies/manual/"IVB - Initial Volatility Breakout (reconstructed).json",
+# which this family generalizes). Confirmed by a same-window relative-volume
+# surge so a narrow-IB day with no real participation doesn't qualify --
+# a distinct volatility-STATE hypothesis from Family D (expanding ATR):
+# this one bets on contraction-then-expansion, not an already-expanding
+# regime. `ib_contraction_ratio` was previously only usable hand-typed
+# (visual builder) or discovered via Iterative Refinement's GA on an
+# already-built strategy; this is the first family that lets Search Lab /
+# Evolution Lab propose it -- and its IB window, contraction threshold,
+# lookback, and volume filter -- from scratch.
+# ---------------------------------------------------------------------------
+
+def _build_ib_contraction_breakout(p: dict) -> dict:
+    start, end = p["session_start"], p["session_end"]
+    ib_operand = {
+        "type": "ib_contraction_ratio", "session_start": start, "session_end": end,
+        "lookback": p["ib_lookback"],
+    }
+    vol_operand = {"type": "relative_volume", "period": p["volume_period"]}
+    orh = {"type": "opening_range_high", "session_start": start, "session_end": end}
+    orl = {"type": "opening_range_low", "session_start": start, "session_end": end}
+    return {
+        "name": (
+            f"IB Contraction Breakout ({start}-{end} IB, "
+            f"contraction<={p['contraction_max']}, vol>={p['volume_mult']}x)"
+        ),
+        "entry_conditions": {
+            "long": [
+                _cond(_ind("close", 1), "cross above", orh),
+                _cond(vol_operand, ">=", _val(p["volume_mult"])),
+                _cond(ib_operand, "<=", _val(p["contraction_max"])),
+            ],
+            "long_connectors": ["AND", "AND"],
+            "short": [
+                _cond(_ind("close", 1), "cross below", orl),
+                _cond(vol_operand, ">=", _val(p["volume_mult"])),
+                _cond(ib_operand, "<=", _val(p["contraction_max"])),
+            ],
+            "short_connectors": ["AND", "AND"],
+        },
+        "exit_conditions": {"long": [], "short": []},
+        "risk_management": _risk_management(p["stop_atr_mult"], p["target_atr_mult"]),
+        # Same discipline flagged as missing on the hand-typed IVB JSON --
+        # a narrow-IB breakout with no clock-time flatten can carry an
+        # overnight-gap-risk position the hypothesis makes no claim about.
+        "_time_based_exit": p["flat_time"],
+    }
+
+
+_IB_CONTRACTION_BREAKOUT = SkeletonSpec(
+    name="ib_contraction_breakout",
+    label="IB Contraction Breakout (opening-range breakout, IB-contraction + volume-surge gated)",
+    description=(
+        "Opening-range breakout taken only on days where the session's own Initial "
+        "Balance range has contracted well below its trailing multi-day average -- a "
+        "distinct volatility-STATE hypothesis (narrow-range-before-expansion, unlike "
+        "Family D's already-expanding-ATR filter), confirmed by a relative-volume surge "
+        "so a quiet, low-participation narrow day doesn't qualify. Generalizes the "
+        "reconstructed RoboQuant-style 'IVB' strategy into a searchable family so Search "
+        "Lab/Evolution Lab can tune the IB window, contraction threshold, lookback, and "
+        "volume filter directly instead of only via a hand-typed config or Iterative "
+        "Refinement."
+    ),
+    param_grid={
+        "session_start": ["09:30", "08:30"],
+        "session_end": ["09:45", "09:30"],
+        "ib_lookback": [10, 20],
+        "contraction_max": [0.5, 0.65],
+        "volume_period": [5, 20],
+        "volume_mult": [1.4, 1.6],
+        "stop_atr_mult": [2.0, 3.0],
+        "target_atr_mult": [2.0, 3.0],
+        "flat_time": ["15:55"],
+    },
+    build=lambda p: _apply_time_based_exit(_build_ib_contraction_breakout(p)),
+    valid=lambda p: p["session_start"] < p["session_end"],
+)
+
+
 FAMILIES: dict[str, SkeletonSpec] = {
     _TREND_BREAKOUT.name: _TREND_BREAKOUT,
     _MTF_PULLBACK.name: _MTF_PULLBACK,
     _MEAN_REVERSION_BAND.name: _MEAN_REVERSION_BAND,
     _VOLATILITY_BREAKOUT.name: _VOLATILITY_BREAKOUT,
     _SESSION_TIME_EFFECT.name: _SESSION_TIME_EFFECT,
+    _IB_CONTRACTION_BREAKOUT.name: _IB_CONTRACTION_BREAKOUT,
     _VOLUME_IMBALANCE.name: _VOLUME_IMBALANCE,
     _STAT_PAIRS.name: _STAT_PAIRS,
     _LIQUIDITY_SWEEP_REVERSAL.name: _LIQUIDITY_SWEEP_REVERSAL,
