@@ -248,6 +248,12 @@ JOB_WFGA = "Walk-Forward GA"
 JOB_CPCV = "CPCV"
 JOB_SENSITIVITY = "Sensitivity"
 JOB_MULTI_OBJECTIVE = "Multi-Objective Optimization"
+# UPGRADE (multi-market aggregate scoring): app.optimize.multi_market's
+# search loop is single-process (no ProcessPoolExecutor of its own yet --
+# see that module's docstring), but it runs len(markets) full backtests
+# PER candidate, so it belongs in the same shared slot as the nine above,
+# not left unguarded.
+JOB_MULTI_MARKET = "Multi-Market Aggregate Search"
 JOB_REGIME_MATRIX = "Regime Survival Matrix"
 JOB_PARAMETER_ROBUSTNESS = "Parameter Stability / Robustness Map"
 # UI pass (indicators/families/UI-parity round): PBO's own candidate-pool
