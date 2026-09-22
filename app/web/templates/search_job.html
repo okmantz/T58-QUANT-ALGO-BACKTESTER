@@ -46,6 +46,11 @@
   </div>
   <p style="font-size:13px;color:#999;margin-top:12px;" id="s-champion"></p>
   <div class="links" id="s-report-links"></div>
+  <div style="margin-top:14px;border-top:1px solid var(--border-light, #2a323d);padding-top:14px;">
+    <button class="promote-btn" id="auto-ensemble-btn" onclick="buildAutoEnsemble(this)">Auto-Build Ensemble from this leaderboard</button>
+    <p style="font-size:12px;color:#8a97a8;margin-top:6px;">Greedily assembles a 3-5-leg, weakly-correlated basket straight from this run's stage-3 candidates instead of hand-picking legs on the Ensemble tab.</p>
+    <div id="auto-ensemble-result" style="display:none;margin-top:10px;"></div>
+  </div>
 </div>
 
 <div class="card" id="leaderboard-card" style="display:none;">
@@ -116,6 +121,46 @@
       tbody.appendChild(tr);
     });
     document.getElementById('leaderboard-card').style.display = rows.length ? 'block' : 'none';
+  }
+
+  function buildAutoEnsemble(btn) {
+    btn.disabled = true;
+    btn.textContent = 'Building…';
+    const box = document.getElementById('auto-ensemble-result');
+    fetch(`/search/job/${jobId}/auto_ensemble`, {method: 'POST'})
+      .then(r => r.json())
+      .then(data => {
+        btn.disabled = false;
+        btn.textContent = 'Auto-Build Ensemble from this leaderboard';
+        box.style.display = 'block';
+        if (!data.ok) {
+          box.innerHTML = `<p style="color:#ff8a8a;">Could not build an ensemble: ${data.error}</p>`;
+          return;
+        }
+        const r = data.result;
+        if (r.status !== 'built') {
+          box.innerHTML = `<p style="color:#e8c87b;">Not enough diversified candidates to build an ensemble (${r.notes.join(' ')})</p>`;
+          return;
+        }
+        const legsHtml = r.basket_names.map((name, i) => `<li>${name} <span style="color:#8a97a8;">(${r.basket_families[i]})</span></li>`).join('');
+        const mc = (r.portfolio || {}).mc_result;
+        const mcLine = mc
+          ? `<p style="font-size:13px;color:#a8c8e8;">
+               Combined eval-pass probability: ${fmt(mc.evaluation_pass_probability, 1)}% &middot;
+               First-payout probability: ${fmt(mc.first_payout_probability, 1)}%
+             </p>`
+          : '';
+        box.innerHTML = `
+          <p style="font-weight:700;color:#b7e8b7;">Built a ${r.basket_names.length}-leg ensemble:</p>
+          <ul style="margin:6px 0 10px 20px;">${legsHtml}</ul>
+          ${mcLine}`;
+      })
+      .catch(err => {
+        btn.disabled = false;
+        btn.textContent = 'Auto-Build Ensemble from this leaderboard';
+        box.style.display = 'block';
+        box.innerHTML = `<p style="color:#ff8a8a;">Request failed: ${err}</p>`;
+      });
   }
 
   function stopSearch(evt) {
