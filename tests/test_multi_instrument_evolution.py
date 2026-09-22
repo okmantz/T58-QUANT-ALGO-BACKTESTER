@@ -162,6 +162,41 @@ def test_total_budget_never_raises_an_explicit_finite_max_generations(tmp_path, 
         assert runner.cfg.max_generations == 1
 
 
+def test_worker_pool_is_divided_across_concurrent_instruments(tmp_path, two_instrument_jobs, monkeypatch):
+    """FIX (multi-instrument Evolution Lab crash/force-stop): every
+    runner in this group starts on its own thread and independently
+    sizes its own ProcessPoolExecutor via
+    app.orchestration.resource_guard.safe_worker_count(), which has no
+    idea sibling runners exist. Before this fix, base_cfg's
+    parallel_workers (e.g. None -> os.cpu_count(), or an explicit
+    higher count) passed through to EVERY job unchanged, so N
+    instruments running together independently claimed N x the
+    intended CPU/memory budget -- the exact oversubscription failure
+    this fix (_resolved_workers_per_job, mirroring Search Lab's
+    identical multi-instrument fix) exists to prevent. Confirms each
+    job's resolved parallel_workers is base_cfg's budget divided by
+    the number of concurrent jobs, never left at the un-split value."""
+    monkeypatch.setattr("app.evolution.multi_instrument.get_app_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("app.evolution.multi_instrument.os.cpu_count", lambda: 8)
+    group = MultiInstrumentEvolutionGroup(
+        "testgroup8", two_instrument_jobs, RiskConfig(), PropRules(),
+        _fast_cfg(parallel_workers=None),
+    )
+    assert set(group.runners.keys()) == {"EURUSD/5m", "GBPUSD/5m"}
+    for runner in group.runners.values():
+        assert runner.cfg.parallel_workers == 4  # 8 cpus // 2 concurrent instruments
+
+
+def test_worker_pool_division_never_goes_below_one(tmp_path, two_instrument_jobs, monkeypatch):
+    monkeypatch.setattr("app.evolution.multi_instrument.get_app_base_dir", lambda: tmp_path)
+    group = MultiInstrumentEvolutionGroup(
+        "testgroup9", two_instrument_jobs, RiskConfig(), PropRules(),
+        _fast_cfg(parallel_workers=1),
+    )
+    for runner in group.runners.values():
+        assert runner.cfg.parallel_workers == 1
+
+
 def test_pooled_leaderboard_applies_family_cap_across_the_whole_group(tmp_path, two_instrument_jobs, monkeypatch):
     monkeypatch.setattr("app.evolution.multi_instrument.get_app_base_dir", lambda: tmp_path)
     group = MultiInstrumentEvolutionGroup(
