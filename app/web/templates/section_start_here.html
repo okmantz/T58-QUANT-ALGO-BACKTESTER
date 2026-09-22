@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{{ section_title }} — Start Here — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin-bottom: 16px; max-width: 760px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin: 0 0 10px; }
+  .card p { font-size: 14px; color: #ccc; line-height: 1.6; margin: 0 0 12px; }
+  .roadmap { margin: 0; padding-left: 22px; }
+  .roadmap li { font-size: 13.5px; color: #ccc; line-height: 1.75; margin-bottom: 4px; }
+  .btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px; padding: 11px 16px; border-radius: 9px;
+    border: 1px solid var(--accent, var(--teal)); background: var(--accent, var(--teal)); color: #04120e;
+    font-weight: 700; font-size: 13.5px; text-decoration: none; cursor: pointer;
+  }
+  .btn.secondary { background: transparent; color: var(--accent, var(--teal)); }
+  .tool-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+  .tool-card {
+    border: 1px solid var(--border-light); border-radius: 10px; padding: 12px 14px; text-decoration: none;
+    color: var(--text); background: var(--panel-3); transition: border-color .15s;
+  }
+  .tool-card:hover { border-color: var(--accent, var(--teal)); }
+  .tool-card .name { font-weight: 700; font-size: 13.5px; margin-bottom: 3px; }
+  .tool-card .desc { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+</style>
+</head>
+<body style="--accent: {{ accent_color }};">
+{% set active_page = active_page_key %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>{{ section_title }} — Start Here</h1>
+  <p>{{ tagline }}</p>
+</div>
+
+<div class="card">
+  <h2>&#128161; What this section is for</h2>
+  <p>{{ description }}</p>
+  {% if roadmap %}
+  <ol class="roadmap">
+    {% for step in roadmap %}
+    <li>{{ step }}</li>
+    {% endfor %}
+  </ol>
+  {% endif %}
+  {% if primary_buttons %}
+  <div class="btn-row">
+    {% for b in primary_buttons %}
+    <a class="btn" href="{{ b.href }}">{{ b.label }}</a>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="card" style="max-width: none;">
+  <h2>&#8981; Everything in {{ section_title }}</h2>
+  <div class="tool-grid">
+    {% for t in tools %}
+    <a class="tool-card" href="{{ t.href }}">
+      <div class="name">{{ t.name }}</div>
+      <div class="desc">{{ t.desc }}</div>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+
+</div>
+</div>
+</body>
+</html>

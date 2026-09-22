@@ -48,20 +48,6 @@
 <div class="t58-shell">
 {% include '_sidebar.html' %}
 <div class="t58-main">
-{% from '_start_here.html' import start_here %}
-{{ start_here(
-  description="Forge Strategy is the CREATE section's one-button entry point: it generates thousands of distinct market-hypothesis strategies from scratch, screens them hard, and validates the survivors for prop-firm survival -- not raw profit. Use this when you don't have a specific strategy idea yet and want the system to search broadly for one.",
-  roadmap=[
-    "Pick a dataset (or datasets, for a multi-market run) below.",
-    "Click the one Forge button -- no other setup required for a first run.",
-    "Review the survivors it finds, then send a promising one to Search Lab, Evolution Lab, or Iterative Refinement to sharpen it further.",
-    "Once you have a specific strategy in mind instead of a broad search, use the Strategy Library to build or edit one directly.",
-  ],
-  buttons=[
-    {"label": "Browse the Strategy Library instead", "href": "/library"},
-    {"label": "Generate strategies with AI instead", "href": "/generate-strategies"},
-  ],
-) }}
 <div class="t58-page-header">
   <h1>Forge Strategy</h1>
   <p>One button: generate thousands of distinct market-hypothesis strategies, screen them hard, and validate the survivors for prop-firm survival -- not raw profit.</p>

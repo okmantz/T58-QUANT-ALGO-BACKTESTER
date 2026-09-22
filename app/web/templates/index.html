@@ -56,20 +56,6 @@
 <div class="t58-shell">
 {% include '_sidebar.html' %}
 <div class="t58-main">
-{% from '_start_here.html' import start_here %}
-{{ start_here(
-  description="Run & Report is the fastest way to backtest ONE strategy against ONE dataset -- upload or pick your data, build or load a strategy, and get a full backtest plus prop-firm pass-probability report back. Use this to check a specific idea quickly; use Full Pipeline instead once you want the complete validated verdict (walk-forward search, out-of-sample checks, READY/MARGINAL/NOT READY).",
-  roadmap=[
-    "Pick or upload a dataset below.",
-    "Build a strategy (Manual/Python/PineScript/MQL5), or load one from the Strategy Library.",
-    "Set your risk and prop-firm rules.",
-    "Run it, and read the report -- pass probability, drawdown, and the Monte Carlo distribution behind it.",
-  ],
-  buttons=[
-    {"label": "Browse the Strategy Library", "href": "/library"},
-    {"label": "Run the full validated pipeline instead", "href": "/full-pipeline"},
-  ],
-) }}
 <div class="t58-page-header">
   <h1>Run &amp; report</h1>
   <p>Backtest &rarr; prop-firm simulation &rarr; Monte Carlo probability of passing &amp; getting paid.</p>

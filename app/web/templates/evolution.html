@@ -49,21 +49,6 @@
 <div class="t58-shell">
 {% include '_sidebar.html' %}
 <div class="t58-main">
-{% from '_start_here.html' import start_here %}
-{{ start_here(
-  description="Evolution Lab runs a longer, open-ended, multi-generation search than Search Lab's own quicker pass -- it keeps improving across generations until you click STOP, and checkpoints to disk so you can stop and resume later without losing progress. Use this once Search Lab has told you a family/market combination is worth digging into deeply.",
-  roadmap=[
-    "Pick a dataset below (or Multi-Instrument Evolution Lab for several at once).",
-    "Optionally narrow to specific families if Search Lab already pointed you at one.",
-    "Click START and let it run -- STOP any time, and START again picks up where it left off.",
-    "Promote a strong candidate straight to the Strategy Library, or on to Full Pipeline for a validated verdict.",
-  ],
-  buttons=[
-    {"label": "Search Lab instead (faster, one pass)", "href": "/search"},
-    {"label": "Multi-Instrument Evolution Lab", "href": "/evolution/multi-instrument"},
-    {"label": "Browse the Strategy Library", "href": "/library"},
-  ],
-) }}
 <div class="t58-page-header">
   <h1>Evolution lab</h1>
   <p>An open-ended search across every strategy family, generation after generation, until you click STOP. Progress checkpoints to disk after every generation -- STOP then START again continues where it left off (same data) instead of starting over.</p>
