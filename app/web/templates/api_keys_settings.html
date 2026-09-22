@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>API Keys — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 14px; max-width: 640px; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 4px; }
+  .category-label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--teal); margin: 22px 0 8px; }
+  .category-label:first-of-type { margin-top: 0; }
+  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  input[type=text], input[type=password], input[type=number], select {
+    width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font-size: 14px;
+  }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 140px; }
+  .submit-btn {
+    padding: 11px 18px; border-radius: 8px; border: 1px solid var(--teal); background: var(--teal);
+    color: #04120e; font-weight: 700; font-size: 13px; margin-top: 10px; cursor: pointer;
+  }
+  .test-btn {
+    padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-light); background: transparent;
+    color: var(--teal); font-weight: 600; font-size: 12.5px; margin-top: 8px; margin-left: 8px; cursor: pointer;
+  }
+  .status { font-size: 12.5px; }
+  .test-result { font-size: 12.5px; margin-top: 6px; min-height: 16px; }
+  .divider { border: none; border-top: 1px solid var(--border-light); margin: 14px 0; }
+  .account-row { border: 1px solid var(--border-light); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+  .account-row .meta { font-size: 12.5px; color: var(--text-muted); }
+  .delete-btn { background: transparent; border: 1px solid #6b2323; color: #ff8a8a; padding: 6px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+  .field-note { font-size: 12px; color: #888; margin-top: 4px; }
+  .platform-fields { display: none; }
+  .platform-fields.active { display: block; }
+</style>
+</head>
+<body>
+{% set active_page = 'api_keys_settings' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>API keys</h1>
+  <p>Every integration's credentials, in one place, used across every tab that needs them -- instead of configuring the same key separately wherever it's used.</p>
+</div>
+
+{% macro status_icon(usable) -%}
+  {%- if usable -%}&#128994; Connected{%- else -%}&#9898; Not configured{%- endif -%}
+{%- endmacro %}
+
+<div class="category-label">AI</div>
+<form method="POST" action="/settings/api-keys/save-ai">
+  <div class="card">
+    <h2>Ollama (local AI assistant)</h2>
+    <label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" name="ollama_enabled" style="width:auto;" {% if ollama.enabled %}checked{% endif %}> Enabled</label>
+    <div class="row">
+      <div><label>Host</label><input type="text" name="ollama_host" value="{{ ollama.host }}"></div>
+      <div><label>Model</label><input type="text" name="ollama_model" value="{{ ollama.model }}"></div>
+    </div>
+    <label>API key (optional -- only for a remote Ollama behind auth)</label>
+    <input type="password" name="ollama_api_key" value="" placeholder="{% if ollama.api_key %}(unchanged -- leave blank to keep it){% else %}not needed for a local install{% endif %}">
+    <p class="status">{{ status_icon(ollama.is_usable) }}</p>
+    <button type="button" class="test-btn" onclick="testService('ollama', this)">Test Connection</button>
+    <p class="test-result" id="test-result-ollama"></p>
+  </div>
+  <div class="card">
+    <h2>OpenAI (ChatGPT)</h2>
+    <label>API key</label>
+    <input type="password" name="openai_api_key" value="" placeholder="{% if api_keys.openai_api_key %}(unchanged -- leave blank to keep it){% else %}sk-...{% endif %}">
+    <p class="status">{{ status_icon(api_keys.openai_api_key) }}</p>
+    <button type="button" class="test-btn" onclick="testService('openai', this)">Test Connection</button>
+    <p class="test-result" id="test-result-openai"></p>
+  </div>
+  <div class="card">
+    <h2>Claude (Anthropic)</h2>
+    <label>API key</label>
+    <input type="password" name="claude_api_key" value="" placeholder="{% if api_keys.claude_api_key %}(unchanged -- leave blank to keep it){% else %}sk-ant-...{% endif %}">
+    <p class="status">{{ status_icon(api_keys.claude_api_key) }}</p>
+    <button type="button" class="test-btn" onclick="testService('claude', this)">Test Connection</button>
+    <p class="test-result" id="test-result-claude"></p>
+  </div>
+  <button class="submit-btn" type="submit">Save AI keys</button>
+</form>
+
+<div class="category-label">Trading</div>
+<form method="POST" action="/settings/api-keys/save-trading">
+  <div class="card">
+    <h2>Alpaca (market data)</h2>
+    <p class="field-note" style="margin-bottom:8px;">Used for fetching market data across the app -- not for live order execution. For MT5/cTrader/Tradovate/TradeLocker/DXtrade live or demo trading accounts, see Brokers / Prop Firms below.</p>
+    <div class="row">
+      <div><label>API key</label><input type="password" name="alpaca_api_key" value="" placeholder="{% if alpaca_api_key %}(unchanged){% else %}key{% endif %}"></div>
+      <div><label>Secret key</label><input type="password" name="alpaca_secret_key" value="" placeholder="{% if alpaca_secret_key %}(unchanged){% else %}secret{% endif %}"></div>
+    </div>
+    <p class="status">{{ status_icon(alpaca_api_key and alpaca_secret_key) }}</p>
+    <button type="button" class="test-btn" onclick="testService('alpaca', this)">Test Connection</button>
+    <p class="test-result" id="test-result-alpaca"></p>
+  </div>
+  <button class="submit-btn" type="submit">Save trading keys</button>
+</form>
+
+<div class="category-label">Data</div>
+<form method="POST" action="/settings/api-keys/save-data">
+  <div class="card">
+    <h2>FRED (economic data)</h2>
+    <p class="field-note" style="margin-bottom:8px;">Powers the economic news/events pulled into the AI Assistant tab.</p>
+    <label>API key</label>
+    <input type="password" name="fred_api_key" value="" placeholder="{% if api_keys.fred_api_key %}(unchanged -- leave blank to keep it){% else %}your FRED API key{% endif %}">
+    <p class="status">{{ status_icon(api_keys.fred_api_key) }}</p>
+    <button type="button" class="test-btn" onclick="testService('fred', this)">Test Connection</button>
+    <p class="test-result" id="test-result-fred"></p>
+  </div>
+  <div class="card">
+    <h2>London Strategic Edge</h2>
+    <p class="field-note" style="margin-bottom:8px;">Secure storage for this key only -- no integration is built against this service yet, so Test Connection will say so rather than pretend to succeed.</p>
+    <label>API key</label>
+    <input type="password" name="london_strategic_edge_key" value="" placeholder="{% if api_keys.london_strategic_edge_key %}(unchanged -- leave blank to keep it){% else %}API key{% endif %}">
+    <p class="status">{{ status_icon(api_keys.london_strategic_edge_key) }}</p>
+  </div>
+  <button class="submit-btn" type="submit">Save data keys</button>
+</form>
+
+<div class="category-label">Brokers / Prop Firms</div>
+<div class="card">
+  <h2>Saved accounts</h2>
+  <p class="field-note" style="margin-bottom:10px;">Save as many accounts as you have -- e.g. two Tradovate accounts and two TradeLocker accounts at once. Used by Forward Test and Deploy Live.</p>
+  {% if broker_accounts %}
+  {% for acct in broker_accounts %}
+  <div class="account-row">
+    <strong>{{ acct.nickname or acct.login }}</strong> -- {{ acct.platform }}{% if acct.firm_name %} ({{ acct.firm_name }}){% endif %}
+    <div class="meta">Login: {{ acct.login }}{% if acct.server %} &middot; Server: {{ acct.server }}{% endif %} &middot; {{ status_icon(acct.is_usable) }}</div>
+    <button type="button" class="test-btn" onclick="testBroker('{{ acct.id }}', this)">Test Connection</button>
+    <form method="POST" action="/settings/api-keys/brokers/delete" style="display:inline;">
+      <input type="hidden" name="account_id" value="{{ acct.id }}">
+      <button type="submit" class="delete-btn" onclick="return confirm('Remove this account?')">Remove</button>
+    </form>
+    <p class="test-result" id="test-result-broker-{{ acct.id }}"></p>
+  </div>
+  {% endfor %}
+  {% else %}
+  <p class="field-note">No broker accounts saved yet.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Add an account</h2>
+  <form method="POST" action="/settings/api-keys/brokers/save">
+    <label>Platform</label>
+    <select name="platform" id="platform-select" onchange="onPlatformChanged()">
+      {% for p in broker_platforms %}
+      <option value="{{ p }}">{{ p }}</option>
+      {% endfor %}
+    </select>
+    <div class="row">
+      <div><label>Nickname</label><input type="text" name="nickname" placeholder="e.g. Tradovate #1"></div>
+      <div><label>Firm name (optional)</label><input type="text" name="firm_name" placeholder="e.g. Apex, TopStep"></div>
+    </div>
+    <div class="row">
+      <div><label>Login</label><input type="text" name="login"></div>
+      <div><label>Password</label><input type="password" name="password"></div>
+    </div>
+
+    <div class="platform-fields active" data-platform="MT4/MT5">
+      <div class="row">
+        <div><label>Server</label><input type="text" name="server" placeholder="e.g. ICMarkets-Demo"></div>
+        <div><label>Terminal path (optional)</label><input type="text" name="terminal_path"></div>
+      </div>
+    </div>
+    <div class="platform-fields" data-platform="cTrader">
+      <div class="row">
+        <div><label>Client ID</label><input type="text" name="client_id"></div>
+        <div><label>Client secret</label><input type="password" name="client_secret"></div>
+      </div>
+      <div class="row">
+        <div><label>Refresh token</label><input type="password" name="refresh_token"></div>
+        <div><label>Trader account ID</label><input type="text" name="ctid_trader_account_id"></div>
+      </div>
+    </div>
+    <div class="platform-fields" data-platform="Tradovate">
+      <div class="row">
+        <div><label>App ID</label><input type="text" name="app_id"></div>
+        <div><label>App secret</label><input type="password" name="app_secret"></div>
+      </div>
+      <div class="row">
+        <div><label>CID</label><input type="text" name="cid"></div>
+        <div><label>Sec</label><input type="password" name="sec"></div>
+      </div>
+    </div>
+    <div class="platform-fields" data-platform="TradeLocker">
+      <div class="row">
+        <div><label>Environment</label><input type="text" name="environment" placeholder="e.g. demo, live"></div>
+        <div><label>Server</label><input type="text" name="server"></div>
+      </div>
+    </div>
+    <div class="platform-fields" data-platform="DXtrade">
+      <div class="row">
+        <div><label>Base URL</label><input type="text" name="base_url"></div>
+        <div><label>Server</label><input type="text" name="server"></div>
+      </div>
+    </div>
+
+    <button class="submit-btn" type="submit">Save account</button>
+  </form>
+</div>
+
+</div>
+</div>
+
+<script>
+  function testService(service, btn) {
+    btn.disabled = true;
+    fetch('/settings/api-keys/test', {method: 'POST', body: new URLSearchParams({service})})
+      .then(r => r.json())
+      .then(data => {
+        btn.disabled = false;
+        const el = document.getElementById('test-result-' + service);
+        el.textContent = data.ok ? data.message : ('Failed: ' + data.error);
+        el.style.color = data.ok ? 'var(--teal)' : '#ff8a8a';
+      });
+  }
+  function testBroker(accountId, btn) {
+    btn.disabled = true;
+    fetch('/settings/api-keys/test', {method: 'POST', body: new URLSearchParams({service: 'broker', account_id: accountId})})
+      .then(r => r.json())
+      .then(data => {
+        btn.disabled = false;
+        const el = document.getElementById('test-result-broker-' + accountId);
+        el.textContent = data.ok ? data.message : ('Failed: ' + data.error);
+        el.style.color = data.ok ? 'var(--teal)' : '#ff8a8a';
+      });
+  }
+  function onPlatformChanged() {
+    const val = document.getElementById('platform-select').value;
+    document.querySelectorAll('.platform-fields').forEach(el => {
+      el.classList.toggle('active', el.dataset.platform === val);
+    });
+  }
+</script>
+</body>
+</html>

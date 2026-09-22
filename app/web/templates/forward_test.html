@@ -9,57 +9,176 @@
 <link rel="apple-touch-icon" href="/static/icon-192.png">
 <meta name="theme-color" content="#05070a">
 <link rel="stylesheet" href="/static/theme.css">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
-  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 14px; line-height: 1.6; font-size: 14px; color: #ddd; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 14px; max-width: 640px; }
   .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
-  .card ul { margin: 8px 0 0; padding-left: 20px; }
-  .card li { margin-bottom: 6px; }
+  .card p.help { font-size: 12.5px; color: #888; margin: 0 0 10px; line-height: 1.5; }
+  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  input[type=text], input[type=number], select {
+    width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font-size: 14px;
+  }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 140px; }
+  .submit-btn {
+    padding: 13px 20px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal);
+    color: #04120e; font-weight: 700; font-size: 14px; margin-top: 6px; cursor: pointer;
+  }
+  .stop-btn {
+    padding: 13px 20px; border-radius: 10px; border: 1px solid #6b2323; background: transparent;
+    color: #ff8a8a; font-weight: 700; font-size: 14px; margin-top: 6px; cursor: pointer;
+  }
+  .status-grid { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; }
+  .status-stat { flex: 1; min-width: 100px; }
+  .status-stat .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; }
+  .status-stat .value { font-size: 18px; font-weight: 700; }
+  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  #log { background: var(--panel-3); border-radius: 8px; padding: 10px; font-family: ui-monospace, monospace; font-size: 12px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; }
 </style>
 </head>
 <body>
-{% set active_page = active_page|default('forward_test') %}
+{% set active_page = 'forward_test' %}
 <div class="t58-shell">
 {% include '_sidebar.html' %}
 <div class="t58-main">
 <div class="t58-page-header">
   <h1>Forward test (MT5)</h1>
-  <p>This one stays desktop-only -- a platform constraint, not a bug.</p>
+  <p>Runs your strategy live against a demo (or real) MT5 account's incoming bars, without risking a backtest's usual look-ahead assumptions. Works whenever THIS web server's own machine has a MetaTrader 5 terminal installed and logged in -- there's no way to reach an MT5 terminal on a different machine from a browser, but if you're running this app locally (the normal way to use it), that's exactly the same machine your MT5 terminal is on.</p>
 </div>
 
+{% if not mt5_accounts %}
 <div class="card">
-  <h2>Why this can't run here</h2>
-  <p>The desktop app's Forward Test tab talks directly to a MetaTrader 5 terminal running on the same Windows machine, via the <code>MetaTrader5</code> Python package -- which itself only works on Windows, and only against a terminal that's actually installed and logged in locally. There's no web equivalent of "the MT5 terminal on your desk" to connect to from a phone browser.</p>
+  <p class="help">No MT5 accounts saved yet. Add one under <a href="/settings/api-keys">Settings &rarr; API Keys &rarr; Brokers/Prop Firms</a> first.</p>
 </div>
+{% endif %}
 
-<div class="card">
-  <h2>What this means practically</h2>
-  <ul>
-    <li>Use the T58-Quant-Algo-Backtester.exe (or `python -m app.main`) on Windows for live/demo MT5 forward testing -- that tab works exactly as before.</li>
-    <li>Everything else in this app -- backtesting, Full Pipeline, Search Lab, the Validation Lab tabs, Evolution Lab, the Strategy Library -- works identically whether you're on the desktop app or this web app.</li>
-  </ul>
-</div>
+<div id="error-box"></div>
 
-<div class="card">
-  <h2>If real web-based forward testing matters to you later</h2>
-  <p>The honest options, if this becomes a priority:</p>
-  <ul>
-    <li>Leave it desktop-only permanently (simplest, no new moving parts).</li>
-    <li>Build a small always-on Windows relay service (running wherever a real MT5 terminal lives) that this web app talks to over the network instead of importing the MT5 package directly -- a real project in its own right, not a quick port.</li>
-  </ul>
+<form id="ft-form">
+  <div class="card">
+    <h2>1. Account &amp; instrument</h2>
+    <label>MT5 account</label>
+    <select name="account_id" id="account_id">
+      {% for a in mt5_accounts %}
+      <option value="{{ a.id }}">{{ a.nickname or a.login }} ({{ a.server }})</option>
+      {% endfor %}
+    </select>
+    <div class="row">
+      <div><label>Symbol</label><input type="text" name="symbol" value="EURUSD"></div>
+      <div><label>Timeframe (minutes)</label><input type="number" name="timeframe_minutes" value="5"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>2. Strategy</h2>
+    <p class="help">Manual Strategy Builder parameters for this first pass -- same scope note as the Multi-Market Search page.</p>
+    <input type="hidden" name="strategy_mode" value="manual">
+    <div class="row">
+      <div><label>SMA fast</label><input type="number" name="sma_fast" value="20"></div>
+      <div><label>SMA slow</label><input type="number" name="sma_slow" value="50"></div>
+    </div>
+    <div class="row">
+      <div><label>Stop loss (pips)</label><input type="number" name="sl_pips" value="20"></div>
+      <div><label>Take profit (pips)</label><input type="number" name="tp_pips" value="40"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>3. Risk</h2>
+    <div class="row">
+      <div><label>Initial balance</label><input type="number" name="initial_balance" value="100000"></div>
+      <div><label>Risk value (% or lots)</label><input type="number" step="0.1" name="risk_value" value="1.0"></div>
+    </div>
+    <div class="row">
+      <div><label>Risk mode</label>
+        <select name="risk_mode"><option value="percent">% of balance</option><option value="fixed">Fixed lot</option></select>
+      </div>
+      <div><label>Poll interval (seconds)</label><input type="number" name="poll_seconds" value="20"></div>
+    </div>
+  </div>
+
+  <button class="submit-btn" type="submit" id="start-btn">Start Forward Test</button>
+  <button class="stop-btn" type="button" id="stop-btn" style="display:none;" onclick="stopSession()">Stop</button>
+</form>
+
+<div class="card" id="status-card" style="display:none;margin-top:16px;">
+  <h2>Live status</h2>
+  <div class="status-grid">
+    <div class="status-stat"><div class="label">Balance</div><div class="value" id="s-balance">-</div></div>
+    <div class="status-stat"><div class="label">Equity</div><div class="value" id="s-equity">-</div></div>
+    <div class="status-stat"><div class="label">Trades closed</div><div class="value" id="s-trades">-</div></div>
+    <div class="status-stat"><div class="label">Net P&amp;L</div><div class="value" id="s-pnl">-</div></div>
+  </div>
+  <p style="font-size:12px;color:#ff8a8a;margin-top:8px;" id="s-halted"></p>
+  <h3 style="font-size:12px;color:#999;margin:14px 0 6px;">Log</h3>
+  <div id="log"></div>
 </div>
 
 </div>
 </div>
 
 <script>
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+  const fmt = (v, d) => (v === null || v === undefined) ? '—' : Number(v).toFixed(d === undefined ? 2 : d);
+  let polling = null;
+
+  document.getElementById('ft-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const btn = document.getElementById('start-btn');
+    btn.disabled = true;
+    btn.textContent = 'Starting…';
+    fetch('/forward-test/start', {method: 'POST', body: new FormData(this)})
+      .then(r => r.json())
+      .then(data => {
+        btn.disabled = false;
+        btn.textContent = 'Start Forward Test';
+        document.getElementById('error-box').innerHTML = '';
+        if (!data.ok) {
+          document.getElementById('error-box').innerHTML = `<div class="error">${data.error}</div>`;
+          return;
+        }
+        document.getElementById('start-btn').style.display = 'none';
+        document.getElementById('stop-btn').style.display = 'inline-block';
+        document.getElementById('status-card').style.display = 'block';
+        startPolling();
+      });
+  });
+
+  function stopSession() {
+    fetch('/forward-test/stop', {method: 'POST'}).then(() => {
+      document.getElementById('start-btn').style.display = 'inline-block';
+      document.getElementById('stop-btn').style.display = 'none';
+      if (polling) clearInterval(polling);
+    });
   }
+
+  function startPolling() {
+    if (polling) clearInterval(polling);
+    polling = setInterval(() => {
+      fetch('/forward-test/status.json').then(r => r.json()).then(data => {
+        if (!data.running) {
+          document.getElementById('start-btn').style.display = 'inline-block';
+          document.getElementById('stop-btn').style.display = 'none';
+          clearInterval(polling);
+          return;
+        }
+        document.getElementById('s-balance').textContent = fmt(data.balance);
+        document.getElementById('s-equity').textContent = fmt(data.equity);
+        document.getElementById('s-trades').textContent = data.n_trades_closed;
+        document.getElementById('s-pnl').textContent = fmt(data.net_pnl);
+        document.getElementById('s-halted').textContent = data.halted_reason || '';
+        document.getElementById('log').textContent = (data.log || []).join('\n');
+      });
+    }, 3000);
+  }
+
+  {% if running %}
+  document.getElementById('start-btn').style.display = 'none';
+  document.getElementById('stop-btn').style.display = 'inline-block';
+  document.getElementById('status-card').style.display = 'block';
+  startPolling();
+  {% endif %}
 </script>
 </body>
 </html>

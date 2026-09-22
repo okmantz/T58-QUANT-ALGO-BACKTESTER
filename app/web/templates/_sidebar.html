@@ -45,7 +45,7 @@
   <div class="t58-nav-divider"></div>
   <div class="t58-nav-section-label">Strategy Lab</div>
 
-  {% set create_pages   = ['forge', 'speed_run', 'speed_run_multi_instrument', 'generate_strategies', 'research_agent', 'research', 'research_loop'] %}
+  {% set create_pages   = ['forge', 'strategy_library', 'speed_run', 'speed_run_multi_instrument', 'generate_strategies', 'research_agent', 'research', 'research_loop'] %}
   {% set test_pages     = ['run', 'payout_probability'] %}
   {% set optimize_pages = ['optimize_hub', 'search', 'search_multi_instrument', 'refine', 'full_pipeline', 'quick_optimize', 'multi_objective', 'evolution', 'evolution_multi_instrument', 'risk_sweep'] %}
   {% set validate_pages = ['validate_hub', 'wfo', 'wfga', 'cpcv', 'pbo', 'sensitivity', 'parameter_robustness', 'regime_matrix'] %}
@@ -85,6 +85,9 @@
       </a>
       <a href="/forge" data-accent="violet" class="t58-nav-item {{ 'active' if active_page == 'forge' else '' }}" style="font-weight:700;">
         <span class="t58-nav-icon">&#9889;</span><span class="label">Forge Strategy</span>
+      </a>
+      <a href="/library" data-accent="violet" class="t58-nav-item {{ 'active' if active_page == 'strategy_library' else '' }}">
+        <span class="t58-nav-icon">&#128218;</span><span class="label">Strategy Library</span>
       </a>
     </div>
   </details>
@@ -220,6 +223,9 @@
       <a href="/live-market" data-accent="cyan" class="t58-nav-item {{ 'active' if active_page == 'live_market' else '' }}">
         <span class="t58-nav-icon">&#9679;</span><span class="label">Monitor (live market)</span>
       </a>
+      <a href="/replay" data-accent="cyan" class="t58-nav-item {{ 'active' if active_page == 'replay' else '' }}">
+        <span class="t58-nav-icon">&#9199;</span><span class="label">Interactive replay</span>
+      </a>
     </div>
   </details>
 
@@ -269,16 +275,24 @@
   <div class="t58-nav-divider"></div>
   <div class="t58-nav-section-label">Account</div>
 
-  <!-- (11) Account -- Account Settings (name/email/company) now comes
-       before Notification Settings, per the Sep 2026 Account tab pass. -->
+  <!-- (11) Account -- Account Settings (name/email/company), then API Keys
+       (centralized credentials for every integration in the app), then
+       Notification Settings, then Support -- per the Sep 2026 Account tab
+       pass and the follow-up API-Keys/Support consolidation. -->
   <details class="t58-nav-group">
     <summary><span class="t58-num">&#9312;</span> Account <span class="chev">&#9656;</span></summary>
     <div class="t58-nav-group-items">
       <a href="/settings/account" class="t58-nav-item {{ 'active' if active_page == 'account_settings' else '' }}">
         <span class="t58-nav-icon">&#9881;</span><span class="label">Account settings</span>
       </a>
+      <a href="/settings/api-keys" class="t58-nav-item {{ 'active' if active_page == 'api_keys_settings' else '' }}">
+        <span class="t58-nav-icon">&#128273;</span><span class="label">API keys</span>
+      </a>
       <a href="/settings/notifications" class="t58-nav-item {{ 'active' if active_page == 'notification_settings' else '' }}">
         <span class="t58-nav-icon">&#128276;</span><span class="label">Notification settings</span>
+      </a>
+      <a href="/support" class="t58-nav-item {{ 'active' if active_page == 'support' else '' }}">
+        <span class="t58-nav-icon">&#128172;</span><span class="label">Support</span>
       </a>
     </div>
   </details>

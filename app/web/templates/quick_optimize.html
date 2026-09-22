@@ -394,6 +394,24 @@
     populateLibrarySelect(btn.dataset.mode);
   }));
 
+  // UPGRADE (Strategy Library): see full_pipeline.html's identical block
+  // for the full rationale -- arriving with ?load_strategy_type=X&
+  // load_strategy_name=Y pre-selects that mode and loads that strategy.
+  (function () {
+    const params = new URLSearchParams(window.location.search);
+    const loadType = params.get('load_strategy_type');
+    const loadName = params.get('load_strategy_name');
+    if (!loadType || !loadName) return;
+    const targetTab = Array.from(tabs).find(b => b.dataset.mode === loadType);
+    if (targetTab) targetTab.click();
+    populateLibrarySelect(loadType);
+    const select = document.getElementById('existing_strategy_select');
+    if (select) {
+      select.value = loadName;
+      loadFromLibrary();
+    }
+  })();
+
   // Run once on page load for whichever tab starts active (Manual), so
   // the library dropdown/search/filter panel is populated and visible
   // immediately instead of only appearing after the user clicks a tab.

@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Strategy Library — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .filters input, .filters select { padding: 9px 12px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 13px; }
+  .filters input { flex: 2; min-width: 160px; }
+  .filters select { flex: 1; min-width: 110px; }
+  .strategy-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+  .strategy-card {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px; cursor: pointer;
+    transition: border-color .15s;
+  }
+  .strategy-card:hover { border-color: var(--teal); }
+  .strategy-card .name { font-weight: 700; font-size: 14px; margin-bottom: 4px; }
+  .strategy-card .meta { font-size: 11.5px; color: var(--text-muted); }
+  .badge { display: inline-block; padding: 2px 7px; border-radius: 5px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; margin-right: 4px; }
+  .badge.type { background: var(--panel-3); color: #aaa; }
+  .badge.status { background: rgba(53,224,176,0.15); color: var(--teal); }
+  .tag { display: inline-block; background: var(--panel-3); color: #ccc; padding: 1px 6px; border-radius: 4px; font-size: 10.5px; margin: 4px 4px 0 0; }
+  /* ---- Detail panel (modal-style overlay) ---- */
+  #detail-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 50; }
+  #detail-panel {
+    position: fixed; top: 0; right: 0; bottom: 0; width: min(720px, 100vw); background: var(--panel-1, #0a0d12);
+    border-left: 1px solid var(--border); z-index: 51; overflow-y: auto; padding: 18px;
+  }
+  #detail-panel h2 { margin: 0 0 4px; font-size: 18px; }
+  .close-btn { position: absolute; top: 14px; right: 14px; background: none; border: none; color: #999; font-size: 22px; cursor: pointer; }
+  .detail-tabs { display: flex; gap: 6px; margin: 14px 0; flex-wrap: wrap; }
+  .detail-tabs button {
+    padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3);
+    color: #ccc; font-size: 12.5px; cursor: pointer;
+  }
+  .detail-tabs button.active { background: var(--teal); color: #04120e; border-color: var(--teal); font-weight: 700; }
+  .detail-section { display: none; }
+  .detail-section.active { display: block; }
+  textarea#code-editor {
+    width: 100%; min-height: 360px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px;
+    background: var(--panel-3); color: var(--text); border: 1px solid var(--border-light); border-radius: 8px; padding: 10px;
+  }
+  .submit-btn {
+    padding: 10px 16px; border-radius: 8px; border: 1px solid var(--teal); background: var(--teal);
+    color: #04120e; font-weight: 700; font-size: 13px; cursor: pointer; margin-top: 8px;
+  }
+  .delete-btn { border: 1px solid #6b2323; background: transparent; color: #ff8a8a; padding: 10px 16px; border-radius: 8px; font-size: 13px; cursor: pointer; }
+  input[type=text], select, textarea { width: 100%; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 13px; margin-bottom: 8px; }
+  .notice { background: rgba(53,224,176,0.1); border: 1px solid var(--teal); color: var(--teal); padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; font-size: 13px; }
+  .result-block { background: var(--panel-3); border-radius: 8px; padding: 10px; font-family: ui-monospace, monospace; font-size: 11.5px; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
+</style>
+</head>
+<body>
+{% set active_page = 'strategy_library' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Strategy Library</h1>
+  <p>Every strategy in the system -- Manual, Python, PineScript, MQL5. Click one to view its code, run a backtest or optimize instantly, see its results, deploy it, or manage its settings.</p>
+</div>
+
+{% if notice %}<div class="notice">{{ notice }}</div>{% endif %}
+
+<div class="filters">
+  <input type="text" id="filter-search" placeholder="Search name or description..." oninput="renderGrid()">
+  <select id="filter-type" onchange="renderGrid()">
+    <option value="">All types</option>
+    <option value="manual">Manual</option>
+    <option value="python">Python</option>
+    <option value="pinescript">PineScript</option>
+    <option value="mql5">MQL5</option>
+  </select>
+  <select id="filter-status" onchange="renderGrid()">
+    <option value="">All statuses</option>
+    {% for s in strategy_statuses %}
+    <option value="{{ s }}">{{ s }}</option>
+    {% endfor %}
+  </select>
+  <select id="filter-market" onchange="renderGrid()">
+    <option value="">All markets</option>
+    {% for m in all_markets %}
+    <option value="{{ m }}">{{ m }}</option>
+    {% endfor %}
+  </select>
+</div>
+
+<div class="strategy-grid" id="strategy-grid"></div>
+<p style="color:#888;font-size:13px;margin-top:14px;" id="empty-note" style="display:none;"></p>
+
+</div>
+</div>
+
+<!-- ================= DETAIL PANEL ================= -->
+<div id="detail-overlay" onclick="closeDetail()"></div>
+<div id="detail-panel">
+  <button class="close-btn" onclick="closeDetail()">&times;</button>
+  <h2 id="d-name">-</h2>
+  <p style="font-size:12.5px;color:#888;" id="d-meta">-</p>
+
+  <div class="detail-tabs">
+    <button data-tab="code" onclick="showDetailTab('code')" class="active">Code</button>
+    <button data-tab="backtest" onclick="showDetailTab('backtest')">Backtest</button>
+    <button data-tab="optimize" onclick="showDetailTab('optimize')">Optimize</button>
+    <button data-tab="results" onclick="showDetailTab('results')">Results</button>
+    <button data-tab="deployments" onclick="showDetailTab('deployments')">Deployments</button>
+    <button data-tab="settings" onclick="showDetailTab('settings')">Settings</button>
+  </div>
+
+  <div class="detail-section active" data-section="code">
+    <textarea id="code-editor" spellcheck="false"></textarea>
+    <button class="submit-btn" onclick="saveCode()">Save changes</button>
+    <p id="code-save-note" style="font-size:12.5px;margin-top:6px;"></p>
+  </div>
+
+  <div class="detail-section" data-section="backtest">
+    <p style="font-size:13px;color:#ccc;">Opens Full Pipeline with this strategy already loaded -- pick a dataset there and run. (A dataset is always required and has no sensible default, so this is one step short of a blind one-click run.)</p>
+    <button class="submit-btn" onclick="goToTool('/full-pipeline')">Open in Full Pipeline &rarr;</button>
+  </div>
+
+  <div class="detail-section" data-section="optimize">
+    <p style="font-size:13px;color:#ccc;">Opens Quick Optimize with this strategy already loaded -- pick a dataset there and run.</p>
+    <button class="submit-btn" onclick="goToTool('/quick-optimize')">Open in Quick Optimize &rarr;</button>
+  </div>
+
+  <div class="detail-section" data-section="results">
+    <h3 style="font-size:13px;color:#999;">Last Full Pipeline run</h3>
+    <div class="result-block" id="d-last-run">No recorded run yet.</div>
+    <h3 style="font-size:13px;color:#999;margin-top:14px;">Last search result</h3>
+    <div class="result-block" id="d-last-search">No recorded search yet.</div>
+  </div>
+
+  <div class="detail-section" data-section="deployments">
+    <p style="font-size:13px;color:#ccc;">Forward Test (demo) and Deploy Live (real accounts) currently support Manual strategies only -- see each page's own notes for Python/PineScript/MQL5 support.</p>
+    <a class="submit-btn" style="display:inline-block;text-decoration:none;text-align:center;" href="/forward-test">Go to Forward Test</a>
+    <a class="submit-btn" style="display:inline-block;text-decoration:none;text-align:center;margin-left:8px;background:#ff4444;border-color:#ff4444;color:#200;" href="/deploy-live">Go to Deploy Live</a>
+  </div>
+
+  <div class="detail-section" data-section="settings">
+    <form method="POST" action="/strategies/metadata">
+      <input type="hidden" name="strategy_type" id="set-type-1">
+      <input type="hidden" name="filename" id="set-filename-1">
+      <input type="hidden" name="return_to" value="library">
+      <label style="font-size:13px;color:#ccc;">Description</label>
+      <input type="text" name="description" id="set-description">
+      <label style="font-size:13px;color:#ccc;">Market</label>
+      <input type="text" name="market" id="set-market">
+      <label style="font-size:13px;color:#ccc;">Tags (comma-separated)</label>
+      <input type="text" name="tags" id="set-tags">
+      <button class="submit-btn" type="submit">Save info</button>
+    </form>
+
+    <form method="POST" action="/strategies/status" style="margin-top:10px;">
+      <input type="hidden" name="strategy_type" id="set-type-2">
+      <input type="hidden" name="filename" id="set-filename-2">
+      <input type="hidden" name="return_to" value="library">
+      <label style="font-size:13px;color:#ccc;">Status</label>
+      <select name="status" id="set-status">
+        {% for s in strategy_statuses %}
+        <option value="{{ s }}">{{ s }}</option>
+        {% endfor %}
+      </select>
+      <button class="submit-btn" type="submit">Update status</button>
+    </form>
+
+    <form method="POST" action="/strategies/rename" style="margin-top:10px;">
+      <input type="hidden" name="strategy_type" id="set-type-3">
+      <input type="hidden" name="old_filename" id="set-old-filename">
+      <input type="hidden" name="return_to" value="library">
+      <label style="font-size:13px;color:#ccc;">Rename to</label>
+      <input type="text" name="new_filename" id="set-new-filename">
+      <button class="submit-btn" type="submit">Rename</button>
+    </form>
+
+    <form method="POST" action="/strategies/delete" style="margin-top:14px;" onsubmit="return confirm('Delete this strategy permanently?')">
+      <input type="hidden" name="strategy_type" id="set-type-4">
+      <input type="hidden" name="filename" id="set-filename-4">
+      <input type="hidden" name="return_to" value="library">
+      <button class="delete-btn" type="submit">Delete strategy</button>
+    </form>
+  </div>
+</div>
+
+<script>
+  const STRATEGIES = {{ strategies_json | safe }};
+  let currentDetail = null;
+
+  function renderGrid() {
+    const q = document.getElementById('filter-search').value.toLowerCase();
+    const type = document.getElementById('filter-type').value;
+    const status = document.getElementById('filter-status').value;
+    const market = document.getElementById('filter-market').value;
+
+    const filtered = STRATEGIES.filter(s => {
+      if (type && s.type !== type) return false;
+      if (status && s.status !== status) return false;
+      if (market && s.market !== market) return false;
+      if (q && !(s.name.toLowerCase().includes(q) || (s.description || '').toLowerCase().includes(q))) return false;
+      return true;
+    });
+
+    const grid = document.getElementById('strategy-grid');
+    grid.innerHTML = filtered.map((s, i) => `
+      <div class="strategy-card" onclick='openDetail(${JSON.stringify(JSON.stringify(s))})'>
+        <div class="name">${s.name}</div>
+        <div class="meta">
+          <span class="badge type">${s.type}</span>
+          <span class="badge status">${s.status_display || s.status}</span>
+        </div>
+        ${s.description ? `<div class="meta" style="margin-top:6px;">${s.description}</div>` : ''}
+        ${(s.tags || []).map(t => `<span class="tag">${t}</span>`).join('')}
+      </div>
+    `).join('');
+
+    document.getElementById('empty-note').style.display = filtered.length ? 'none' : 'block';
+    document.getElementById('empty-note').textContent = filtered.length ? '' : 'No strategies match the current filters.';
+  }
+
+  function openDetail(jsonStr) {
+    const s = JSON.parse(jsonStr);
+    currentDetail = s;
+    document.getElementById('d-name').textContent = s.name;
+    document.getElementById('d-meta').textContent = `${s.type} · ${s.status_display || s.status}${s.market ? ' · ' + s.market : ''}`;
+
+    document.getElementById('set-type-1').value = s.type; document.getElementById('set-filename-1').value = s.name;
+    document.getElementById('set-type-2').value = s.type; document.getElementById('set-filename-2').value = s.name;
+    document.getElementById('set-type-3').value = s.type; document.getElementById('set-old-filename').value = s.name;
+    document.getElementById('set-type-4').value = s.type; document.getElementById('set-filename-4').value = s.name;
+    document.getElementById('set-description').value = s.description || '';
+    document.getElementById('set-market').value = s.market || '';
+    document.getElementById('set-tags').value = (s.tags || []).join(', ');
+    document.getElementById('set-status').value = s.status;
+    document.getElementById('set-new-filename').value = s.name;
+
+    document.getElementById('d-last-run').textContent = s.last_run ? JSON.stringify(s.last_run, null, 2) : 'No recorded run yet.';
+    document.getElementById('d-last-search').textContent = s.last_search ? JSON.stringify(s.last_search, null, 2) : 'No recorded search yet.';
+
+    document.getElementById('code-editor').value = 'Loading…';
+    fetch(`/strategies/${encodeURIComponent(s.type)}/${encodeURIComponent(s.name)}`)
+      .then(r => r.ok ? r.text() : Promise.reject())
+      .then(text => { document.getElementById('code-editor').value = text; })
+      .catch(() => { document.getElementById('code-editor').value = '(Could not load source.)'; });
+
+    document.getElementById('detail-overlay').style.display = 'block';
+    document.getElementById('detail-panel').style.display = 'block';
+    showDetailTab('code');
+  }
+
+  function closeDetail() {
+    document.getElementById('detail-overlay').style.display = 'none';
+    document.getElementById('detail-panel').style.display = 'none';
+  }
+
+  function showDetailTab(tab) {
+    document.querySelectorAll('.detail-tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+    document.querySelectorAll('.detail-section').forEach(s => s.classList.toggle('active', s.dataset.section === tab));
+  }
+
+  function saveCode() {
+    if (!currentDetail) return;
+    const note = document.getElementById('code-save-note');
+    note.textContent = 'Saving…';
+    fetch('/strategies/save-code', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: new URLSearchParams({
+        strategy_type: currentDetail.type, filename: currentDetail.name,
+        code: document.getElementById('code-editor').value,
+      }),
+    }).then(r => r.json()).then(data => {
+      note.textContent = data.ok ? 'Saved.' : ('Failed: ' + data.error);
+      note.style.color = data.ok ? 'var(--teal)' : '#ff8a8a';
+    });
+  }
+
+  function goToTool(basePath) {
+    if (!currentDetail) return;
+    const url = `${basePath}?load_strategy_type=${encodeURIComponent(currentDetail.type)}&load_strategy_name=${encodeURIComponent(currentDetail.name)}`;
+    window.location.href = url;
+  }
+
+  document.getElementById('detail-panel').style.display = 'none';
+  renderGrid();
+</script>
+</body>
+</html>

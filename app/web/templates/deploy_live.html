@@ -9,18 +9,34 @@
 <link rel="apple-touch-icon" href="/static/icon-192.png">
 <meta name="theme-color" content="#05070a">
 <link rel="stylesheet" href="/static/theme.css">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
-  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 14px; line-height: 1.6; font-size: 14px; color: #ddd; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 14px; max-width: 640px; }
   .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
-  .card ul { margin: 8px 0 0; padding-left: 20px; }
-  .card li { margin-bottom: 6px; }
-  .warn { background: #3A0E14; border: 1px solid #6b2323; color: #F0C7CC; padding: 16px; border-radius: 12px; margin-bottom: 14px; font-size: 13px; line-height: 1.6; }
-  .warn strong { color: #FF8FA0; }
+  .card p.help { font-size: 12.5px; color: #888; margin: 0 0 10px; line-height: 1.5; }
+  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  input[type=text], input[type=number], select {
+    width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font-size: 14px;
+  }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 140px; }
+  .submit-btn {
+    padding: 13px 20px; border-radius: 10px; border: 1px solid #ff4444; background: #ff4444;
+    color: #200; font-weight: 700; font-size: 14px; margin-top: 6px; cursor: pointer;
+  }
+  .stop-btn {
+    padding: 13px 20px; border-radius: 10px; border: 1px solid #6b2323; background: transparent;
+    color: #ff8a8a; font-weight: 700; font-size: 14px; margin-top: 6px; cursor: pointer;
+  }
+  .status-grid { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; }
+  .status-stat { flex: 1; min-width: 100px; }
+  .status-stat .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; }
+  .status-stat .value { font-size: 18px; font-weight: 700; }
+  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .warn { background: #2a1e0a; border: 1px solid #7a5210; color: #ffd28a; padding: 14px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; line-height: 1.55; }
+  #log { background: var(--panel-3); border-radius: 8px; padding: 10px; font-family: ui-monospace, monospace; font-size: 12px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; }
 </style>
 </head>
 <body>
@@ -29,67 +45,168 @@
 {% include '_sidebar.html' %}
 <div class="t58-main">
 <div class="t58-page-header">
-  <h1>Deploy Live</h1>
-  <p>This one stays desktop-only -- on purpose, not as an oversight.</p>
+  <h1>Deploy live</h1>
+  <p>Connects to a real broker/prop-firm account (MT5, cTrader, Tradovate, TradeLocker, DXtrade) and places real trades.</p>
 </div>
 
 <div class="warn">
-  <strong>&#9888; This connects to real, funded accounts and trades real money.</strong> Unlike every
-  other gap between this web app and the desktop app, this isn't just "hasn't been built yet" -- there
-  are two separate reasons it shouldn't be built the same way here.
+  <strong>&#9888; Read before using this page.</strong> This trades real money on a real account. Two things are true
+  at once here: (1) it works the same way the desktop app's Deploy Live tab does -- same broker connections, same
+  execution engine -- whenever this web server runs on the same machine as your MT5 terminal (for MT5 accounts) or
+  has network access to your broker's API (for the others); and (2) <strong>this web server, as configured, has no
+  login of its own and listens on every network interface</strong> -- anyone who can reach this server on your
+  network can open this page. If that matters to you (this server is reachable beyond just your own device), set a
+  local app-lock password under <a href="/settings/account">Account Settings</a> first, or don't expose this
+  server's port beyond localhost.
 </div>
 
+{% if not broker_accounts %}
 <div class="card">
-  <h2>Reason 1: the same platform constraint as Forward Test</h2>
-  <p>The desktop app's Deploy Live tab connects the same way its Forward Test / Live Demo Test tab does
-  -- via the <code>MetaTrader5</code> Python package, which only works on Windows, and only against an
-  MT5 terminal actually installed and logged in on that same machine. There's no web equivalent of "the
-  MT5 terminal on your desk" to connect to from a phone or browser -- see the Forward Test page for the
-  full explanation, since it's the identical underlying limitation.</p>
+  <p class="help">No broker accounts saved yet. Add one under <a href="/settings/api-keys">Settings &rarr; API Keys &rarr; Brokers/Prop Firms</a> first.</p>
 </div>
+{% endif %}
 
-<div class="card">
-  <h2>Reason 2: this server has no login, and Deploy Live handles real credentials</h2>
-  <p>The desktop app stores your prop-firm login via your OS's secure credential store specifically
-  because it's a real broker password. This web server, as configured, has <strong>no authentication at
-  all</strong> and listens on every network interface -- anyone on the same network (or further, if a
-  port is ever forwarded) could reach it. Building live-credential entry and real-order-placement on top
-  of that would be a serious step backward in safety, independent of the MT5 platform issue above. This
-  isn't a "not implemented yet" gap to close quickly -- it needs a real login system in front of this
-  server first, which is a separate project from anything else in this patch.</p>
-</div>
+<div id="error-box"></div>
 
-<div class="card">
-  <h2>What this means practically</h2>
-  <ul>
-    <li>Use the T58-Quant-Algo-Backtester.exe (or <code>python -m app.main</code>) on Windows for live
-    prop-firm deployment -- that tab works exactly as before, with the same warnings it's always had.</li>
-    <li>Everything else in this app -- backtesting, Full Pipeline, Search Lab, Speed Run, Evolution Lab,
-    Generate Strategies, the Strategy Library -- works identically whether you're on the desktop app or
-    this web app.</li>
-  </ul>
-</div>
+<form id="dl-form">
+  <div class="card">
+    <h2>1. Account &amp; instrument</h2>
+    <label>Broker account</label>
+    <select name="account_id" id="account_id">
+      {% for a in broker_accounts %}
+      <option value="{{ a.id }}">{{ a.nickname or a.login }} -- {{ a.platform }}{% if a.firm_name %} ({{ a.firm_name }}){% endif %}</option>
+      {% endfor %}
+    </select>
+    <div class="row">
+      <div><label>Symbol</label><input type="text" name="symbol" value="EURUSD"></div>
+      <div><label>Timeframe (minutes)</label><input type="number" name="timeframe_minutes" value="5"></div>
+    </div>
+  </div>
 
-<div class="card">
-  <h2>If real web-based live deployment matters to you later</h2>
-  <p>The honest options, if this becomes a priority:</p>
-  <ul>
-    <li>Leave it desktop-only permanently (simplest, no new moving parts, no new attack surface).</li>
-    <li>Add real authentication (a login, not just "the app is on my LAN") to this server as a
-    prerequisite, then build a small always-on Windows relay service (running wherever a real MT5
-    terminal lives) that this web app talks to over the network instead of importing the MT5 package
-    directly -- a real project in its own right, and one worth getting a second pair of eyes on given
-    it touches real money, not a quick port.</li>
-  </ul>
+  <div class="card">
+    <h2>2. Strategy</h2>
+    <p class="help">Manual Strategy Builder parameters for this first pass -- same scope note as Multi-Market Search and Forward Test.</p>
+    <input type="hidden" name="strategy_mode" value="manual">
+    <div class="row">
+      <div><label>SMA fast</label><input type="number" name="sma_fast" value="20"></div>
+      <div><label>SMA slow</label><input type="number" name="sma_slow" value="50"></div>
+    </div>
+    <div class="row">
+      <div><label>Stop loss (pips)</label><input type="number" name="sl_pips" value="20"></div>
+      <div><label>Take profit (pips)</label><input type="number" name="tp_pips" value="40"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>3. Risk &amp; prop rules</h2>
+    <div class="row">
+      <div><label>Initial balance</label><input type="number" name="initial_balance" value="100000"></div>
+      <div><label>Account size (prop rules)</label><input type="number" name="account_size" value="100000"></div>
+    </div>
+    <div class="row">
+      <div><label>Risk mode</label>
+        <select name="risk_mode"><option value="percent">% of balance</option><option value="fixed">Fixed lot</option></select>
+      </div>
+      <div><label>Risk value</label><input type="number" step="0.1" name="risk_value" value="1.0"></div>
+    </div>
+    <div class="row">
+      <div><label>Profit target %</label><input type="number" step="0.1" name="profit_target" value="8"></div>
+      <div><label>Daily loss limit %</label><input type="number" step="0.1" name="daily_loss" value="5"></div>
+    </div>
+    <div class="row">
+      <div><label>Max drawdown %</label><input type="number" step="0.1" name="max_dd" value="10"></div>
+      <div><label>Poll interval (seconds)</label><input type="number" name="poll_seconds" value="20"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>4. Confirm</h2>
+    <label>Type <code>DEPLOY LIVE</code> exactly to confirm you understand this trades real money</label>
+    <input type="text" name="confirm_text" id="confirm_text" placeholder="DEPLOY LIVE">
+  </div>
+
+  <button class="submit-btn" type="submit" id="start-btn">Deploy Live</button>
+  <button class="stop-btn" type="button" id="stop-btn" style="display:none;" onclick="stopSession()">Stop</button>
+</form>
+
+<div class="card" id="status-card" style="display:none;margin-top:16px;">
+  <h2>Live status</h2>
+  <div class="status-grid">
+    <div class="status-stat"><div class="label">Platform</div><div class="value" id="s-platform">-</div></div>
+    <div class="status-stat"><div class="label">Balance</div><div class="value" id="s-balance">-</div></div>
+    <div class="status-stat"><div class="label">Equity</div><div class="value" id="s-equity">-</div></div>
+    <div class="status-stat"><div class="label">Trades closed</div><div class="value" id="s-trades">-</div></div>
+    <div class="status-stat"><div class="label">Net P&amp;L</div><div class="value" id="s-pnl">-</div></div>
+  </div>
+  <p style="font-size:12px;color:#ff8a8a;margin-top:8px;" id="s-halted"></p>
+  <h3 style="font-size:12px;color:#999;margin:14px 0 6px;">Log</h3>
+  <div id="log"></div>
 </div>
 
 </div>
 </div>
 
 <script>
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+  const fmt = (v, d) => (v === null || v === undefined) ? '—' : Number(v).toFixed(d === undefined ? 2 : d);
+  let polling = null;
+
+  document.getElementById('dl-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const btn = document.getElementById('start-btn');
+    btn.disabled = true;
+    btn.textContent = 'Starting…';
+    fetch('/deploy-live/start', {method: 'POST', body: new FormData(this)})
+      .then(r => r.json())
+      .then(data => {
+        btn.disabled = false;
+        btn.textContent = 'Deploy Live';
+        document.getElementById('error-box').innerHTML = '';
+        if (!data.ok) {
+          document.getElementById('error-box').innerHTML = `<div class="error">${data.error}</div>`;
+          return;
+        }
+        document.getElementById('start-btn').style.display = 'none';
+        document.getElementById('stop-btn').style.display = 'inline-block';
+        document.getElementById('status-card').style.display = 'block';
+        startPolling();
+      });
+  });
+
+  function stopSession() {
+    fetch('/deploy-live/stop', {method: 'POST'}).then(() => {
+      document.getElementById('start-btn').style.display = 'inline-block';
+      document.getElementById('stop-btn').style.display = 'none';
+      if (polling) clearInterval(polling);
+    });
   }
+
+  function startPolling() {
+    if (polling) clearInterval(polling);
+    polling = setInterval(() => {
+      fetch('/deploy-live/status.json').then(r => r.json()).then(data => {
+        if (!data.running) {
+          document.getElementById('start-btn').style.display = 'inline-block';
+          document.getElementById('stop-btn').style.display = 'none';
+          clearInterval(polling);
+          return;
+        }
+        document.getElementById('s-platform').textContent = data.platform || '-';
+        document.getElementById('s-balance').textContent = fmt(data.balance);
+        document.getElementById('s-equity').textContent = fmt(data.equity);
+        document.getElementById('s-trades').textContent = data.n_trades_closed;
+        document.getElementById('s-pnl').textContent = fmt(data.net_pnl);
+        document.getElementById('s-halted').textContent = data.halted_reason || '';
+        document.getElementById('log').textContent = (data.log || []).join('\n');
+      });
+    }, 3000);
+  }
+
+  {% if running %}
+  document.getElementById('start-btn').style.display = 'none';
+  document.getElementById('stop-btn').style.display = 'inline-block';
+  document.getElementById('status-card').style.display = 'block';
+  startPolling();
+  {% endif %}
 </script>
 </body>
 </html>

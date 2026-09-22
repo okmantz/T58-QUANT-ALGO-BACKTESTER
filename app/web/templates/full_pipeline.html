@@ -70,6 +70,21 @@
 <div class="t58-shell">
 {% include '_sidebar.html' %}
 <div class="t58-main">
+{% from '_start_here.html' import start_here %}
+{{ start_here(
+  description="Full Pipeline is the complete, validated verdict: baseline, then a walk-forward-aware GA search, a re-validated final Monte Carlo run, out-of-sample fold checks, a holdout check, and a READY / MARGINAL / NOT READY verdict at the end. This is the slowest thing in the app -- run Quick Optimize first if you just want fast iteration on parameters, and come here once you have something worth fully validating.",
+  roadmap=[
+    "Load a strategy -- from the Strategy Library, or build one here directly.",
+    "Pick a dataset and set your risk/prop-firm rules.",
+    "Pick an optimizer mode (genetic is the default; TPE/CMA-ES are available under Advanced).",
+    "Run it and wait -- this is genuinely the slowest tool in the app.",
+    "Read the verdict: READY means it held up to everything this pipeline checks; MARGINAL or NOT READY tells you what didn't.",
+  ],
+  buttons=[
+    {"label": "Quick Optimize instead (faster)", "href": "/quick-optimize"},
+    {"label": "Browse the Strategy Library", "href": "/library"},
+  ],
+) }}
 <div class="t58-page-header">
   <h1>Full pipeline</h1>
   <p>The "run everything" button: baseline &rarr; walk-forward-aware GA search &rarr; re-validated final Monte Carlo &rarr; out-of-sample fold check &rarr; holdout check &rarr; a READY / MARGINAL / NOT READY verdict. Slowest thing this app runs -- expect it to take a while on a full dataset.</p>
@@ -482,6 +497,26 @@
     }
     populateLibrarySelect(btn.dataset.mode);
   }));
+
+  // UPGRADE (Strategy Library): arriving here with ?load_strategy_type=X
+  // &load_strategy_name=Y (from the Strategy Library's Backtest button)
+  // pre-selects that mode's tab and loads that exact saved strategy into
+  // the code/config field, the same as clicking the tab and picking it
+  // from the dropdown by hand would.
+  (function () {
+    const params = new URLSearchParams(window.location.search);
+    const loadType = params.get('load_strategy_type');
+    const loadName = params.get('load_strategy_name');
+    if (!loadType || !loadName) return;
+    const targetTab = Array.from(tabs).find(b => b.dataset.mode === loadType);
+    if (targetTab) targetTab.click();
+    populateLibrarySelect(loadType);
+    const select = document.getElementById('existing_strategy_select');
+    if (select) {
+      select.value = loadName;
+      loadFromLibrary();
+    }
+  })();
 
   // Run once on page load for whichever tab starts active (Manual), so
   // the library dropdown/search/filter panel is populated and visible

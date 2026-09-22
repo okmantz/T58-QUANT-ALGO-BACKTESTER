@@ -54,6 +54,20 @@
 <div class="t58-shell">
 {% include '_sidebar.html' %}
 <div class="t58-main">
+{% from '_start_here.html' import start_here %}
+{{ start_here(
+  description="Search Lab tries many DIFFERENT strategy families/hypotheses against your data at once, then screens and refines the survivors -- use this when you have a dataset and want to find out which kind of edge (if any) exists in it, rather than testing one specific idea. For a longer, open-ended search within families, use Evolution Lab instead.",
+  roadmap=[
+    "Pick a dataset below (or use Multi-Instrument Search to run across several at once).",
+    "Pick a search mode -- \"all families\" for a broad first pass, or a specific family if you have a hypothesis in mind.",
+    "Run it, then send the best survivors to Iterative Refinement to tune their parameters further, or straight to Full Pipeline for a validated verdict.",
+  ],
+  buttons=[
+    {"label": "Multi-Instrument Search instead", "href": "/search/multi-instrument"},
+    {"label": "Evolution Lab instead", "href": "/evolution"},
+    {"label": "Browse the Strategy Library", "href": "/library"},
+  ],
+) }}
 <div class="t58-page-header">
   <h1>Search lab</h1>
   <p>Generate hundreds of strategy variations, filter, refine, and validate them, and find the most optimized one.</p>

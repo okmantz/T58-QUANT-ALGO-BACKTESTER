@@ -61,9 +61,11 @@
      a filled accent button makes it read as the distinct "leave this
      app" action it actually is. */
   .lm-btn#lm-tradingview {
-    background: var(--lm-accent); color: #04120e; border-color: var(--lm-accent);
+    background: var(--lm-accent, #35e0b0) !important; color: #04120e !important;
+    border-color: var(--lm-accent, #35e0b0) !important; font-weight: 700 !important;
+    box-shadow: 0 0 12px rgba(53,224,176,0.35);
   }
-  .lm-btn#lm-tradingview:hover { background: var(--lm-accent); color: #04120e; opacity: .88; }
+  .lm-btn#lm-tradingview:hover { opacity: .88; box-shadow: 0 0 18px rgba(53,224,176,0.5); }
   .lm-spacer { flex: 1; }
 
   .lm-status-badge {

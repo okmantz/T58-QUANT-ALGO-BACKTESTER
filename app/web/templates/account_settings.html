@@ -72,6 +72,33 @@
   {% if saved == 'deleted' %}<div class="card saved-banner">Local account data deleted.</div>{% endif %}
   {% if saved == 'logout' %}<div class="card saved-banner">No lock password is set, so there's nothing to log out of.</div>{% endif %}
   {% if password_error %}<div class="card error-banner">{{ password_error }}</div>{% endif %}
+  {% if error %}<div class="card error-banner">{{ error }}</div>{% endif %}
+
+  <!-- ================= PROFILE PICTURE ================= -->
+  <div class="card">
+    <h2>Profile picture</h2>
+    <div style="display:flex;align-items:center;gap:16px;">
+      {% if settings.profile_picture_filename %}
+      <img src="/settings/account/profile-picture/file?v={{ settings.profile_picture_filename }}" alt="Profile picture"
+           style="width:72px;height:72px;border-radius:50%;object-fit:cover;border:1px solid var(--border-light);">
+      {% else %}
+      <div style="width:72px;height:72px;border-radius:50%;background:var(--panel-3);border:1px solid var(--border-light);
+                  display:flex;align-items:center;justify-content:center;font-size:24px;color:var(--text-muted);">
+        {{ (settings.display_name or settings.username or '?')[:1] | upper }}
+      </div>
+      {% endif %}
+      <div style="flex:1;">
+        <form method="POST" action="/settings/account/profile-picture" enctype="multipart/form-data" style="margin-bottom:6px;">
+          <input type="file" name="profile_picture" accept="image/png,image/jpeg,image/gif,image/webp" onchange="this.form.submit()">
+        </form>
+        {% if settings.profile_picture_filename %}
+        <form method="POST" action="/settings/account/profile-picture/remove">
+          <button class="submit-btn" type="submit" style="padding:6px 12px;font-size:12px;background:transparent;color:#ff8a8a;border-color:#6b2323;">Remove picture</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
 
   <!-- ================= PROFILE ================= -->
   <form method="POST" action="/settings/account/save">
@@ -92,6 +119,7 @@
     </div>
     <button class="submit-btn" type="submit">Save profile</button>
   </form>
+
 
   <!-- ================= SUBSCRIPTION ================= -->
   <form method="POST" action="/settings/account/subscription/save">

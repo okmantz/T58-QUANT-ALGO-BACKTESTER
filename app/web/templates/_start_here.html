@@ -1,0 +1,68 @@
+{#
+  Reusable "Start Here" section -- collapsible, sits at the top of a
+  section's landing page, before the actual tool/form. Call it like:
+
+    {% from '_start_here.html' import start_here %}
+    {{ start_here(
+      description="One or two sentences on what this whole section is for.",
+      roadmap=[
+        "Step 1 description",
+        "Step 2 description",
+        "Step 3 description",
+      ],
+      buttons=[
+        {"label": "Do the first thing", "href": "/some-page"},
+        {"label": "Do the second thing", "href": "/other-page"},
+      ],
+    ) }}
+
+  Collapsed by default only after the person has opened it once on this
+  section before (tracked in localStorage per section, keyed by the page's
+  own path) -- so it's not a wall of text every single visit, but it's
+  never hidden the FIRST time.
+#}
+{% macro start_here(description, roadmap=[], buttons=[], key=none) %}
+<div class="t58-start-here card" id="start-here-card">
+  <div class="t58-start-here-header" onclick="t58ToggleStartHere()" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+    <h2 style="margin:0;font-size:14px;text-transform:uppercase;letter-spacing:.04em;color:var(--teal);">&#128161; Start here</h2>
+    <span id="start-here-chev" style="color:var(--text-muted);font-size:13px;">&#9662;</span>
+  </div>
+  <div id="start-here-body" style="margin-top:10px;">
+    <p style="font-size:13.5px;color:#ccc;line-height:1.55;margin:0 0 12px;">{{ description }}</p>
+    {% if roadmap %}
+    <ol style="font-size:13px;color:#bbb;line-height:1.7;margin:0 0 12px;padding-left:20px;">
+      {% for step in roadmap %}
+      <li>{{ step }}</li>
+      {% endfor %}
+    </ol>
+    {% endif %}
+    {% if buttons %}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      {% for b in buttons %}
+      <a href="{{ b.href }}" style="padding:9px 14px;border-radius:8px;border:1px solid var(--teal);background:transparent;color:var(--teal);font-weight:600;font-size:12.5px;text-decoration:none;">{{ b.label }}</a>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+<script>
+  (function() {
+    const storageKey = 't58-start-here-collapsed:' + (window.location.pathname || '');
+    const body = document.getElementById('start-here-body');
+    const chev = document.getElementById('start-here-chev');
+    if (!body || !chev) return;
+    function applyState(collapsed) {
+      body.style.display = collapsed ? 'none' : 'block';
+      chev.innerHTML = collapsed ? '&#9656;' : '&#9662;';
+    }
+    let collapsed = false;
+    try { collapsed = localStorage.getItem(storageKey) === '1'; } catch (e) {}
+    applyState(collapsed);
+    window.t58ToggleStartHere = function() {
+      collapsed = !collapsed;
+      applyState(collapsed);
+      try { localStorage.setItem(storageKey, collapsed ? '1' : '0'); } catch (e) {}
+    };
+  })();
+</script>
+{% endmacro %}

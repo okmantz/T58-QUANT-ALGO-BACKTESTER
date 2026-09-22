@@ -30,6 +30,12 @@
     color: #04120e; font-weight: 700; font-size: 14px; margin-top: 14px; cursor: pointer;
   }
   .saved-banner { border-left: 3px solid var(--teal); font-size: 13px; }
+  .test-btn {
+    padding: 9px 14px; border-radius: 8px; border: 1px solid var(--border-light); background: transparent;
+    color: var(--teal); font-weight: 600; font-size: 13px; margin-top: 6px; cursor: pointer;
+  }
+  .test-btn:hover { border-color: var(--teal); }
+  .test-result { font-size: 12.5px; margin-top: 6px; min-height: 16px; }
   .field-note { font-size: 12px; color: var(--text-muted); margin: -2px 0 0; }
   h1 { font-size: 18px; margin: 0 0 4px; }
   p.lede { color: var(--text-muted); font-size: 13px; margin: 0 0 16px; max-width: 560px; }
@@ -96,10 +102,59 @@
       <input type="text" id="smtp_from" name="smtp_from" value="{{ settings.smtp_from }}" placeholder="usually the same as SMTP username">
     </div>
 
+    <div class="card">
+      <h2>Discord</h2>
+      <p class="help">Fires the same message a job's own "notify me" webhook field already sends, but automatically on every job completion once saved here -- no need to re-paste the URL into each job's form.</p>
+      <label for="discord_webhook_url">Discord webhook URL</label>
+      <input type="text" id="discord_webhook_url" name="discord_webhook_url" value="{{ settings.discord_webhook_url }}" placeholder="https://discord.com/api/webhooks/...">
+      <p style="font-size:12.5px;margin-top:8px;">
+        Status: {% if settings.discord_is_usable %}&#128994; Connected{% else %}&#9898; Not configured{% endif %}
+      </p>
+      <button type="button" class="test-btn" onclick="testChannel('discord', this)">Test Connection</button>
+      <p class="test-result" id="test-result-discord"></p>
+    </div>
+
+    <div class="card">
+      <h2>Telegram</h2>
+      <p class="help">Create a bot via <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a> to get a bot token, then message your bot once and check <code>https://api.telegram.org/bot&lt;token&gt;/getUpdates</code> to find your chat ID.</p>
+      <label for="telegram_bot_token">Bot token</label>
+      <input type="password" id="telegram_bot_token" name="telegram_bot_token" value="" placeholder="{% if settings.telegram_bot_token %}(unchanged -- leave blank to keep it){% else %}123456:ABC-DEF...{% endif %}">
+      <label for="telegram_chat_id">Chat ID</label>
+      <input type="text" id="telegram_chat_id" name="telegram_chat_id" value="{{ settings.telegram_chat_id }}" placeholder="e.g. 123456789">
+      <p style="font-size:12.5px;margin-top:8px;">
+        Status: {% if settings.telegram_is_usable %}&#128994; Connected{% else %}&#9898; Not configured{% endif %}
+      </p>
+      <button type="button" class="test-btn" onclick="testChannel('telegram', this)">Test Connection</button>
+      <p class="test-result" id="test-result-telegram"></p>
+    </div>
+
     <button class="submit-btn" type="submit">Save</button>
   </form>
 </div>
 </div>
+
+<script>
+  function testChannel(channel, btn) {
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = 'Testing…';
+    const resultEl = document.getElementById('test-result-' + channel);
+    fetch('/settings/notifications/test', {method: 'POST', body: new URLSearchParams({channel})})
+      .then(r => r.json())
+      .then(data => {
+        btn.disabled = false;
+        btn.textContent = original;
+        resultEl.textContent = data.ok ? data.message : ('Failed: ' + data.error);
+        resultEl.style.color = data.ok ? 'var(--teal)' : '#ff8a8a';
+      })
+      .catch(err => {
+        btn.disabled = false;
+        btn.textContent = original;
+        resultEl.textContent = 'Request failed: ' + err;
+        resultEl.style.color = '#ff8a8a';
+      });
+  }
+</script>
 </div>
 <script src="/static/t58-chrome.js" defer></script>
 </body>

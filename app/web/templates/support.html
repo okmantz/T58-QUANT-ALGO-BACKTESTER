@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Support — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 14px; max-width: 640px; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 8px; }
+  .card p { font-size: 14px; color: #ccc; line-height: 1.55; margin: 0 0 12px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px; padding: 12px 18px; border-radius: 10px;
+    border: 1px solid var(--teal); background: var(--teal); color: #04120e; font-weight: 700;
+    font-size: 14px; text-decoration: none; cursor: pointer;
+  }
+  .btn.secondary { background: transparent; color: var(--teal); }
+  .btn.discord { border-color: #5865F2; background: #5865F2; color: #fff; }
+  details { border: 1px solid var(--border-light); border-radius: 8px; padding: 10px 14px; margin-bottom: 8px; }
+  details summary { font-size: 14px; font-weight: 600; cursor: pointer; color: #ddd; }
+  details p { margin: 10px 0 0; font-size: 13.5px; color: #bbb; }
+  textarea {
+    width: 100%; min-height: 120px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font-size: 14px; font-family: inherit;
+  }
+  input[type=text] {
+    width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font-size: 14px; margin-bottom: 8px;
+  }
+  .saved-note { color: var(--teal); font-size: 13px; margin-top: 8px; display: none; }
+</style>
+</head>
+<body>
+{% set active_page = 'support' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Support</h1>
+  <p>Get help from the community, learn the app, or log an issue.</p>
+</div>
+
+<div class="card">
+  <h2>Learn the app</h2>
+  <p>The Education tab walks through building your first strategy and reading a backtest report, step by step.</p>
+  <a class="btn" href="/education">Go to Education</a>
+</div>
+
+<div class="card">
+  <h2>Community</h2>
+  <p>Join the Discord for help, discussion, and updates.</p>
+  <a class="btn discord" href="https://discord.gg/3MbKm3S2zG" target="_blank" rel="noopener">Join Discord</a>
+</div>
+
+<div class="card">
+  <h2>FAQ</h2>
+  <details>
+    <summary>How do I create a strategy?</summary>
+    <p>Use Forge Strategy under the Create tab to build one from scratch (Manual, Python, PineScript, or MQL5), or start from a template in the Strategy Library.</p>
+  </details>
+  <details>
+    <summary>What's the difference between Quick Optimize and Full Pipeline?</summary>
+    <p>Quick Optimize runs the walk-forward-aware GA search on its own for a fast iteration loop. Full Pipeline runs the complete 15-step process -- baseline, search, final Monte Carlo, out-of-sample checks, and a READY/MARGINAL/NOT READY verdict -- and is what you'd run before trusting a result.</p>
+  </details>
+  <details>
+    <summary>Why does a search say a candidate has zero trades?</summary>
+    <p>The strategy's entry conditions never fired on that dataset/timeframe combination -- widen the parameter ranges, check the timeframe matches what the strategy expects, or try a different instrument.</p>
+  </details>
+  <details>
+    <summary>What do Search Lab, Evolution Lab, and Iterative Refinement each do differently?</summary>
+    <p>Search Lab tries many different STRATEGY FAMILIES/hypotheses. Evolution Lab runs a longer, multi-generation search within families. Iterative Refinement takes a strategy you already have and tunes its existing numeric parameters via a genetic algorithm (or TPE/CMA-ES).</p>
+  </details>
+  <details>
+    <summary>Can I use MT5, cTrader, Tradovate, TradeLocker, or DXtrade?</summary>
+    <p>Yes -- add an account under Settings &rarr; API Keys &rarr; Brokers/Prop Firms, then use Forward Test (demo) or Deploy Live from the Strategy Library's Deployments tab.</p>
+  </details>
+</div>
+
+<div class="card">
+  <h2>Report an issue</h2>
+  <p>This app has no external support backend -- there's no ticket system on the other end of this form. What you type here is saved to a local file
+  (<code>data/config/issue_reports.jsonl</code>) on this machine, so you have a running log of things to fix or follow up on yourself, or to paste
+  elsewhere (an email, a GitHub issue, a message to whoever's helping you build this) when you're ready.</p>
+  <input type="text" id="issue-title" placeholder="Short summary (e.g. 'Evolution Lab crashes on multi-instrument runs')">
+  <textarea id="issue-body" placeholder="What happened, what you expected instead, and any steps to reproduce it..."></textarea>
+  <button class="btn" style="margin-top:10px;" onclick="saveIssue()">Save Report</button>
+  <p class="saved-note" id="issue-saved-note">Saved locally.</p>
+</div>
+
+</div>
+</div>
+
+<script>
+  function saveIssue() {
+    const title = document.getElementById('issue-title').value.trim();
+    const body = document.getElementById('issue-body').value.trim();
+    if (!title && !body) return;
+    fetch('/support/report-issue', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: new URLSearchParams({title, body}),
+    }).then(r => r.json()).then(data => {
+      if (data.ok) {
+        document.getElementById('issue-title').value = '';
+        document.getElementById('issue-body').value = '';
+        const note = document.getElementById('issue-saved-note');
+        note.style.display = 'block';
+        setTimeout(() => { note.style.display = 'none'; }, 3000);
+      }
+    });
+  }
+</script>
+</body>
+</html>

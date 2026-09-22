@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Interactive Replay — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<script src="/static/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  #replay-chart { width: 100%; height: 480px; }
+  #equity-chart { width: 100%; height: 120px; }
+  .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+  .controls button {
+    padding: 10px 16px; border-radius: 8px; border: 1px solid var(--teal); background: transparent;
+    color: var(--teal); font-weight: 700; font-size: 13px; cursor: pointer;
+  }
+  .controls button.primary { background: var(--teal); color: #04120e; }
+  .controls select { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); }
+  #scrubber { width: 100%; margin-top: 10px; }
+  .stat-grid { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; }
+  .stat { flex: 1; min-width: 100px; }
+  .stat .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; }
+  .stat .value { font-size: 18px; font-weight: 700; }
+  .stat .value.up { color: #35e0b0; }
+  .stat .value.down { color: #ff6b6b; }
+  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; }
+  #trade-log { background: var(--panel-3); border-radius: 8px; padding: 8px; font-family: ui-monospace, monospace; font-size: 11.5px; max-height: 160px; overflow-y: auto; margin-top: 10px; }
+</style>
+</head>
+<body>
+{% set active_page = 'replay' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Interactive replay</h1>
+</div>
+
+{% if not_found %}
+<div class="error">Replay data for "{{ replay_id }}" was not found (the server may have restarted since it was prepared). <a href="/replay">Start a new one</a>.</div>
+{% else %}
+
+<div class="card">
+  <div id="replay-chart"></div>
+  <div id="equity-chart"></div>
+
+  <input type="range" id="scrubber" min="0" max="0" value="0">
+  <div class="controls">
+    <button class="primary" id="play-pause-btn" onclick="togglePlay()">&#9654; Play</button>
+    <button onclick="stepFrame(-1)">&#9664; Step back</button>
+    <button onclick="stepFrame(1)">Step forward &#9654;</button>
+    <button onclick="resetReplay()">&#8635; Reset</button>
+    <select id="speed-select" onchange="updateSpeed()">
+      <option value="600">Slow</option>
+      <option value="250" selected>Normal</option>
+      <option value="80">Fast</option>
+      <option value="20">Very fast</option>
+    </select>
+  </div>
+
+  <div class="stat-grid">
+    <div class="stat"><div class="label">Bar</div><div class="value" id="s-bar">0 / 0</div></div>
+    <div class="stat"><div class="label">Time</div><div class="value" id="s-time" style="font-size:13px;">-</div></div>
+    <div class="stat"><div class="label">Equity</div><div class="value" id="s-equity">-</div></div>
+    <div class="stat"><div class="label">Trades so far</div><div class="value" id="s-trades">0</div></div>
+    <div class="stat"><div class="label">P&amp;L so far</div><div class="value" id="s-pnl">-</div></div>
+  </div>
+
+  <div id="trade-log"></div>
+</div>
+
+{% endif %}
+</div>
+</div>
+
+{% if not not_found %}
+<script>
+  const replayId = {{ replay_id | tojson }};
+  let BARS = [], TRADES = [], EQUITY = [];
+  let cursor = 0;
+  let playing = false;
+  let playTimer = null;
+  let speedMs = 250;
+
+  let chart, candleSeries, volumeSeries, equityChart, equitySeries;
+
+  function fmtMoney(v) {
+    if (v === null || v === undefined) return '-';
+    return '$' + Number(v).toLocaleString(undefined, {maximumFractionDigits: 2});
+  }
+  function fmtTime(unixSeconds) {
+    if (!unixSeconds) return '-';
+    return new Date(unixSeconds * 1000).toLocaleString();
+  }
+
+  function initCharts() {
+    chart = LightweightCharts.createChart(document.getElementById('replay-chart'), {
+      layout: { background: { color: 'transparent' }, textColor: '#ccc' },
+      grid: { vertLines: { color: 'rgba(255,255,255,0.05)' }, horzLines: { color: 'rgba(255,255,255,0.05)' } },
+      timeScale: { timeVisible: true, secondsVisible: false },
+    });
+    candleSeries = chart.addCandlestickSeries({
+      upColor: '#35e0b0', downColor: '#ff6b6b', borderVisible: false,
+      wickUpColor: '#35e0b0', wickDownColor: '#ff6b6b',
+    });
+    volumeSeries = chart.addHistogramSeries({
+      priceFormat: { type: 'volume' }, priceScaleId: '', color: 'rgba(120,140,160,0.4)',
+    });
+    volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
+
+    equityChart = LightweightCharts.createChart(document.getElementById('equity-chart'), {
+      layout: { background: { color: 'transparent' }, textColor: '#888' },
+      grid: { vertLines: { visible: false }, horzLines: { visible: false } },
+      timeScale: { visible: false }, rightPriceScale: { visible: false },
+    });
+    equitySeries = equityChart.addLineSeries({ color: '#35e0b0', lineWidth: 2 });
+  }
+
+  function loadData() {
+    fetch(`/replay/data/${replayId}.json`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) {
+          document.querySelector('.t58-main').innerHTML = `<div class="error">${data.error}</div>`;
+          return;
+        }
+        BARS = data.bars || [];
+        TRADES = data.trades || [];
+        EQUITY = data.equity || [];
+        document.getElementById('scrubber').max = Math.max(BARS.length - 1, 0);
+        candleSeries.setData(BARS);
+        volumeSeries.setData(BARS.map(b => ({ time: b.time, value: b.volume, color: b.close >= b.open ? 'rgba(53,224,176,0.4)' : 'rgba(255,107,107,0.4)' })));
+        cursor = 0;
+        renderFrame();
+      });
+  }
+
+  function equityAtOrBefore(unixTime) {
+    let last = null;
+    for (const e of EQUITY) {
+      if (e.time > unixTime) break;
+      last = e;
+    }
+    return last;
+  }
+
+  function renderFrame() {
+    if (!BARS.length) return;
+    cursor = Math.max(0, Math.min(cursor, BARS.length - 1));
+    document.getElementById('scrubber').value = cursor;
+    const currentBar = BARS[cursor];
+    document.getElementById('s-bar').textContent = `${cursor + 1} / ${BARS.length}`;
+    document.getElementById('s-time').textContent = fmtTime(currentBar.time);
+
+    chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, cursor - 120), to: cursor + 5 });
+    candleSeries.setMarkers(
+      TRADES.filter(t => t.entry_time <= currentBar.time).flatMap(t => {
+        const markers = [{
+          time: t.entry_time, position: t.direction > 0 ? 'belowBar' : 'aboveBar',
+          color: t.direction > 0 ? '#35e0b0' : '#ff6b6b', shape: t.direction > 0 ? 'arrowUp' : 'arrowDown',
+          text: t.direction > 0 ? 'BUY' : 'SELL',
+        }];
+        if (t.exit_time <= currentBar.time) {
+          markers.push({
+            time: t.exit_time, position: 'inBar', color: t.pnl >= 0 ? '#35e0b0' : '#ff6b6b',
+            shape: 'circle', text: (t.pnl >= 0 ? '+' : '') + t.pnl.toFixed(0),
+          });
+        }
+        return markers;
+      })
+    );
+
+    const eq = equityAtOrBefore(currentBar.time);
+    const equityPoints = EQUITY.filter(e => e.time <= currentBar.time);
+    equitySeries.setData(equityPoints.map(e => ({ time: e.time, value: e.equity })));
+    document.getElementById('s-equity').textContent = eq ? fmtMoney(eq.equity) : '-';
+
+    const closedTrades = TRADES.filter(t => t.exit_time <= currentBar.time);
+    document.getElementById('s-trades').textContent = closedTrades.length;
+    const pnlSoFar = closedTrades.reduce((sum, t) => sum + t.pnl, 0);
+    const pnlEl = document.getElementById('s-pnl');
+    pnlEl.textContent = fmtMoney(pnlSoFar);
+    pnlEl.className = 'value ' + (pnlSoFar >= 0 ? 'up' : 'down');
+
+    const log = document.getElementById('trade-log');
+    log.innerHTML = closedTrades.slice(-15).reverse().map(t =>
+      `${fmtTime(t.exit_time)}  ${t.direction > 0 ? 'LONG' : 'SHORT'}  entry ${t.entry_price.toFixed(5)} -> exit ${t.exit_price.toFixed(5)}  ${t.pnl >= 0 ? '+' : ''}${t.pnl.toFixed(2)}  (${t.exit_reason})`
+    ).join('<br>');
+  }
+
+  function stepFrame(delta) {
+    cursor += delta;
+    renderFrame();
+    if (cursor >= BARS.length - 1) stopPlaying();
+  }
+
+  function togglePlay() { playing ? stopPlaying() : startPlaying(); }
+
+  function startPlaying() {
+    if (cursor >= BARS.length - 1) cursor = 0;
+    playing = true;
+    document.getElementById('play-pause-btn').innerHTML = '&#9208; Pause';
+    playTimer = setInterval(() => stepFrame(1), speedMs);
+  }
+
+  function stopPlaying() {
+    playing = false;
+    document.getElementById('play-pause-btn').innerHTML = '&#9654; Play';
+    if (playTimer) clearInterval(playTimer);
+  }
+
+  function resetReplay() {
+    stopPlaying();
+    cursor = 0;
+    renderFrame();
+  }
+
+  function updateSpeed() {
+    speedMs = parseInt(document.getElementById('speed-select').value, 10);
+    if (playing) { stopPlaying(); startPlaying(); }
+  }
+
+  document.getElementById('scrubber').addEventListener('input', (e) => {
+    stopPlaying();
+    cursor = parseInt(e.target.value, 10);
+    renderFrame();
+  });
+
+  initCharts();
+  loadData();
+</script>
+{% endif %}
+</body>
+</html>
