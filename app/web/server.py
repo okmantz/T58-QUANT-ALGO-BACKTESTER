@@ -79,7 +79,7 @@ from app.optimize.multi_objective import (    DEFAULT_OBJECTIVES, MultiObjective
     run_multi_objective_sweep,
 )
 from app.backtest.adaptive_risk import build_limit_aware_preset
-from app.optimize.refinement import FITNESS_METRICS, RefinementConfig, RefinementError, run_iterative_refinement
+from app.optimize.refinement import FITNESS_METRICS, OPTIMIZER_MODES, RefinementConfig, RefinementError, run_iterative_refinement
 from app.optimize.walkforward_ga import WalkforwardGACancelled, run_walkforward_aware_refinement
 from app.orchestration.batch_test import BatchTestItem, run_batch_test
 from app.orchestration.full_pipeline import (
@@ -2031,6 +2031,13 @@ def refine_start():
             search_monte_carlo_sims=int(form.get("search_mc_sims", 500) or 500),
             cost_stress_enabled=form.get("cost_stress_enabled") == "on",
             cost_stress_multiplier=float(form.get("cost_stress_multiplier", 2.0) or 2.0),
+            # UPGRADE (optimizer core): explicit optimizer mode -- "genetic"
+            # (default, unchanged) or the optional TPE/CMA-ES samplers (see
+            # app.optimize.refinement.OPTIMIZER_MODES). Every downstream
+            # step (plateau-robust selection, cost-stress penalty, the
+            # final full-fidelity re-run, the holdout check) runs
+            # identically regardless of which one is picked.
+            optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
         )
 
         job_id = uuid.uuid4().hex[:12]
@@ -2265,12 +2272,12 @@ def full_pipeline_start_batch():
                 f"time can exhaust available memory. Wait for it to finish before starting Full Pipeline."
             ),
             stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-            fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 409
+            fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context()), 409
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
-            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
+            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
 
         selected = [s for s in form.getlist("batch_items") if s.strip()]
         if not selected:
@@ -2280,7 +2287,7 @@ def full_pipeline_start_batch():
                 error="No strategies were selected for the batch. Check one or more strategies in the "
                       "\"Run on multiple saved strategies\" list before clicking RUN FULL PIPELINE (BATCH).",
                 stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-                fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 400
+                fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context()), 400
 
         batch_items = []
         load_errors = []
@@ -2299,7 +2306,7 @@ def full_pipeline_start_batch():
                 "full_pipeline.html",
                 error="Every selected strategy failed to load: " + "; ".join(load_errors),
                 stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-                fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 400
+                fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context()), 400
 
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000)),
@@ -2324,6 +2331,7 @@ def full_pipeline_start_batch():
             ga_population=int(form.get("ga_population", 12) or 12),
             ga_generations=int(form.get("ga_generations", 6) or 6),
             ga_search_mc_sims=int(form.get("ga_search_mc_sims", 200) or 200),
+            optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
             adaptive_risk_enabled=form.get("adaptive_risk_enabled") == "on",
             fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
             final_mc_sims=int(form.get("final_mc_sims", 10000) or 10000),
@@ -2369,11 +2377,11 @@ def full_pipeline_start_batch():
 
     except StrategyError as exc:
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
-        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
+        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
         log_crash("Full Pipeline (web, start-batch)", exc=exc)
-        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 500
+        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 500
 
 
 # ---------------------------------------------------------------------------
@@ -2474,13 +2482,13 @@ def full_pipeline_schedule_batch():
     try:
         start_at = (form.get("schedule_start_at") or "").strip()
         if not start_at or ":" not in start_at:
-            return render_template("full_pipeline.html", error="Give a start time (HH:MM) to schedule the batch run.", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
+            return render_template("full_pipeline.html", error="Give a start time (HH:MM) to schedule the batch run.", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
         hour_str, minute_str = start_at.split(":")[:2]
         target_hour, target_minute = int(hour_str), int(minute_str)
 
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
-            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
+            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
 
         selected = [s for s in form.getlist("batch_items") if s.strip()]
         if not selected:
@@ -2489,7 +2497,7 @@ def full_pipeline_schedule_batch():
                 error="No strategies were selected to schedule. Check one or more strategies in the "
                       "\"Run on multiple saved strategies\" list first.",
                 stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-                fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 400
+                fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context()), 400
 
         batch_items = []
         load_errors = []
@@ -2505,7 +2513,7 @@ def full_pipeline_schedule_batch():
             return render_template(
                 "full_pipeline.html", error="Every selected strategy failed to load: " + "; ".join(load_errors),
                 stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-                fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 400
+                fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context()), 400
 
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000)),
@@ -2530,6 +2538,7 @@ def full_pipeline_schedule_batch():
             ga_population=int(form.get("ga_population", 12) or 12),
             ga_generations=int(form.get("ga_generations", 6) or 6),
             ga_search_mc_sims=int(form.get("ga_search_mc_sims", 200) or 200),
+            optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
             adaptive_risk_enabled=form.get("adaptive_risk_enabled") == "on",
             fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
             final_mc_sims=int(form.get("final_mc_sims", 10000) or 10000),
@@ -2577,10 +2586,10 @@ def full_pipeline_schedule_batch():
         thread.start()
         return redirect(url_for("full_pipeline_schedule_status", schedule_id=schedule_id))
     except StrategyError as exc:
-        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
+        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
         log_crash("Full Pipeline (web, schedule-batch)", exc=exc)
-        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 500
+        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 500
 
 
 @app.route("/full-pipeline/schedule/<schedule_id>")
@@ -2675,7 +2684,7 @@ def full_pipeline_form():
         strategy_statuses=STRATEGY_STATUSES,
         alpaca_notice=request.args.get("alpaca_notice"),
         alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"),
-        fitness_metrics=FITNESS_METRICS,
+        fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES,
         prop_presets_json=_prop_presets_json(),
         ai_enabled=saved_ai.enabled,
         ai_host=saved_ai.host,
@@ -2694,12 +2703,12 @@ def full_pipeline_start():
                 f"time can exhaust available memory. Wait for it to finish before starting Full Pipeline."
             ),
             stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-            fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 409
+            fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context()), 409
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
-            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
+            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
 
         strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
 
@@ -2735,7 +2744,7 @@ def full_pipeline_start():
             return render_template(
                 "full_pipeline.html", error=integrity_report.render(),
                 stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-                saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS,
+                saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES,
                 prop_presets_json=_prop_presets_json(), **_alpaca_template_context(),
             ), 400
 
@@ -2746,6 +2755,7 @@ def full_pipeline_start():
             ga_population=int(form.get("ga_population", 12) or 12),
             ga_generations=int(form.get("ga_generations", 6) or 6),
             ga_search_mc_sims=int(form.get("ga_search_mc_sims", 200) or 200),
+            optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
             adaptive_risk_enabled=form.get("adaptive_risk_enabled") == "on",
             fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
             final_mc_sims=int(form.get("final_mc_sims", 10000) or 10000),
@@ -2793,11 +2803,11 @@ def full_pipeline_start():
 
     except StrategyError as exc:
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
-        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
+        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
         log_crash("Full Pipeline (web, start)", exc=exc)
-        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 500
+        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 500
 
 
 @app.route("/full-pipeline/job/<job_id>")
@@ -2938,7 +2948,7 @@ def _run_wfo_job(
 def wfo_form():
     return render_template(
         "wfo.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-        strategy_statuses=STRATEGY_STATUSES, fitness_metrics=FITNESS_METRICS, **_alpaca_template_context())
+        strategy_statuses=STRATEGY_STATUSES, fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context())
 
 
 @app.route("/walk-forward-opt/start", methods=["POST"])
@@ -2946,7 +2956,7 @@ def wfo_start():
     form = request.form
     guard_resp = _try_acquire_heavy_job(
         JOB_WFO, "wfo.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-        fitness_metrics=FITNESS_METRICS,
+        fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES,
     )
     if guard_resp:
         return guard_resp
@@ -2954,7 +2964,7 @@ def wfo_start():
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_WFO)
-            return render_template("wfo.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 400
+            return render_template("wfo.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context()), 400
 
         strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(
@@ -3000,10 +3010,10 @@ def wfo_start():
         return redirect(url_for("wfo_job", job_id=job_id))
     except (StrategyError, RefinementError) as exc:
         HEAVY_JOB_GUARD.release(JOB_WFO)
-        return render_template("wfo.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 400
+        return render_template("wfo.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_WFO)
-        return render_template("wfo.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 500
+        return render_template("wfo.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context()), 500
 
 
 @app.route("/walk-forward-opt/job/<job_id>")
@@ -3319,7 +3329,7 @@ def _run_wfga_job(
 def wfga_form():
     return render_template(
         "wfga.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-        strategy_statuses=STRATEGY_STATUSES, fitness_metrics=FITNESS_METRICS, **_alpaca_template_context())
+        strategy_statuses=STRATEGY_STATUSES, fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context())
 
 
 @app.route("/walk-forward-ga/start", methods=["POST"])
@@ -3327,7 +3337,7 @@ def wfga_start():
     form = request.form
     guard_resp = _try_acquire_heavy_job(
         JOB_WFGA, "wfga.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-        fitness_metrics=FITNESS_METRICS,
+        fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES,
     )
     if guard_resp:
         return guard_resp
@@ -3335,7 +3345,7 @@ def wfga_start():
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_WFGA)
-            return render_template("wfga.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 400
+            return render_template("wfga.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context()), 400
 
         strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(
@@ -3402,10 +3412,10 @@ def wfga_start():
         return redirect(url_for("wfga_job", job_id=job_id))
     except (StrategyError, RefinementError) as exc:
         HEAVY_JOB_GUARD.release(JOB_WFGA)
-        return render_template("wfga.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 400
+        return render_template("wfga.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_WFGA)
-        return render_template("wfga.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 500
+        return render_template("wfga.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context()), 500
 
 
 @app.route("/walk-forward-ga/job/<job_id>")
@@ -4806,7 +4816,7 @@ def _run_quickopt_sweep_job(
 
 @app.route("/quick-optimize")
 def quickopt_form():
-    return render_template("quick_optimize.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), strategy_statuses=STRATEGY_STATUSES, fitness_metrics=FITNESS_METRICS, alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), **_alpaca_template_context())
+    return render_template("quick_optimize.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), strategy_statuses=STRATEGY_STATUSES, fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), **_alpaca_template_context())
 
 
 @app.route("/quick-optimize/start", methods=["POST"])
@@ -4815,7 +4825,7 @@ def quickopt_start():
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
-            return render_template("quick_optimize.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 400
+            return render_template("quick_optimize.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context()), 400
         strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000)), pip_size=float(form.get("pip_size", 0.0001)))
         rules = PropRules(account_size=float(form.get("account_size", 100000)))
@@ -4833,7 +4843,7 @@ def quickopt_start():
             return render_template(
                 "quick_optimize.html", error=integrity_report.render(),
                 stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-                saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS,
+                saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES,
                 **_alpaca_template_context(),
             ), 400
 
@@ -4841,6 +4851,7 @@ def quickopt_start():
             ga_population=int(form.get("ga_population", 16) or 16),
             ga_generations=int(form.get("ga_generations", 8) or 8),
             fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
+            optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
             n_folds=int(form.get("n_folds", 4) or 4),
             save_to_library=form.get("save_to_library", "on") == "on",
             adaptive_risk_enabled=form.get("adaptive_risk_enabled") == "on",
@@ -4879,9 +4890,9 @@ def quickopt_start():
         thread.start()
         return redirect(url_for("quickopt_job", job_id=job_id))
     except (StrategyError, RefinementError) as exc:
-        return render_template("quick_optimize.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 400
+        return render_template("quick_optimize.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
-        return render_template("quick_optimize.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 500
+        return render_template("quick_optimize.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context()), 500
 
 
 @app.route("/quick-optimize/job/<job_id>")
@@ -7289,7 +7300,7 @@ def _run_speedrun_loop_job(
 @app.route("/speed-run")
 def speed_run_form():
     return render_template(
-        "speed_run.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), fitness_metrics=FITNESS_METRICS, **_alpaca_template_context())
+        "speed_run.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context())
 
 
 @app.route("/speed-run/start", methods=["POST"])
@@ -7304,14 +7315,14 @@ def speed_run_start():
                 f"time can exhaust available memory -- this is the same failure mode that can freeze "
                 f"or crash the desktop app. Wait for it to finish before starting Speed Run."
             ),
-            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 409
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context()), 409
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_SPEED_RUN)
             return render_template(
                 "speed_run.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-                fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 400
+                fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context()), 400
 
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000)),
@@ -7395,7 +7406,7 @@ def speed_run_start():
         log_crash("Speed Run (web, start)", exc=exc)
         return render_template(
             "speed_run.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-            fitness_metrics=FITNESS_METRICS, **_alpaca_template_context()), 500
+            fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context()), 500
 
 
 @app.route("/speed-run/job/<job_id>")
@@ -7782,7 +7793,7 @@ def _run_multi_speedrun_job(
 def speed_run_multi_instrument_form():
     return render_template(
         "speed_run_multi_instrument.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-        fitness_metrics=FITNESS_METRICS,
+        fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES,
     )
 
 
@@ -7796,7 +7807,7 @@ def speed_run_multi_instrument_start():
                 f"{HEAVY_JOB_GUARD.active_name} is already running on this server. Running more than "
                 f"one heavy job at the same time can exhaust available memory. Wait for it to finish first."
             ),
-            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), fitness_metrics=FITNESS_METRICS,
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES,
         ), 409
     try:
         selected = form.getlist("datasets")
@@ -7806,7 +7817,7 @@ def speed_run_multi_instrument_start():
                 "speed_run_multi_instrument.html",
                 error="Select at least 2 datasets to run across -- with only 1 selected, use the "
                       "regular Speed Run page instead.",
-                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), fitness_metrics=FITNESS_METRICS,
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES,
             ), 400
 
         jobs: list[InstrumentJob] = []
@@ -7823,7 +7834,7 @@ def speed_run_multi_instrument_start():
             return render_template(
                 "speed_run_multi_instrument.html",
                 error="Could not resolve at least 2 of the selected datasets to real files on disk.",
-                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), fitness_metrics=FITNESS_METRICS,
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES,
             ), 400
 
         risk = RiskConfig(
@@ -7874,7 +7885,7 @@ def speed_run_multi_instrument_start():
         log_crash("Multi-Instrument Speed Run (web, start)", exc=exc)
         return render_template(
             "speed_run_multi_instrument.html", error=f"Unexpected error: {exc}",
-            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), fitness_metrics=FITNESS_METRICS,
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES,
         ), 500
 
 
