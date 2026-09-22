@@ -252,6 +252,9 @@ class WalkforwardGAResult:
     # windows touched -- None if no folds were built. See
     # app.search.robustness.run_walk_forward's embargo_start_bar.
     max_test_bar_used: int | None = None
+    # UPGRADE (optimizer core): evaluation-count transparency -- see
+    # app.optimize.refinement.RefinementResult's identical field.
+    total_evaluations: int = 0
 
 
 class WalkforwardGACancelled(Exception):
@@ -344,6 +347,11 @@ def run_walkforward_aware_refinement(
     cfg = refinement_config or RefinementConfig(population_size=12, generations=6, search_monte_carlo_sims=200)
     t0 = time.time()
     warnings: list[str] = []
+    # Evaluation-count transparency (see app.optimize.refinement's
+    # identical RefinementResult.total_evaluations) -- a single-element
+    # list rather than a plain int so evaluate_batch's closure below can
+    # mutate it without a `nonlocal` declaration.
+    total_evaluations = [0]
 
     folds = build_folds(df, n_folds=n_folds, window_mode=window_mode, train_frac=train_frac, warnings=warnings)
     if not folds:
@@ -523,91 +531,129 @@ def run_walkforward_aware_refinement(
                         i = futures[fut]
                         fitness, tc = fut.result()
                         results[i] = _Cand(genome_list[i], fitness, tc)
+                    total_evaluations[0] += len(results)
                     return results
                 except Exception as exc:  # noqa: BLE001 -- fall back to serial for this batch
                     log(f"  Parallel evaluation failed ({exc}) -- falling back to a single process.")
-            return [make(g) for g in genome_list]
+            results = [make(g) for g in genome_list]
+            total_evaluations[0] += len(results)
+            return results
 
         try:
             log(f"Analyzing strategy parameters... found {len(genes)} tunable parameter(s). "
                 f"Fitness will be scored on {len(test_slices)} chained out-of-sample fold(s).")
 
             baseline = make([g.base_value for g in genes])
-            population = [baseline]
-            # Generation 0: nothing evaluated yet, so the population snapshot
-            # a two-argument callback receives is empty -- it has only the
-            # gene definitions to work with, same as before this hook existed.
-            ai_seed_genomes = [g for g in ai_genomes(genes, []) if len(g) == len(genes)]
-            ai_seed_genomes = ai_seed_genomes[: max(0, cfg.population_size - len(population))]
-            if ai_seed_genomes:
-                population.extend(evaluate_batch(ai_seed_genomes))
-                log(f"AI assist: seeded {len(ai_seed_genomes)} candidate(s) into the initial population.")
-            remaining = cfg.population_size - len(population)
-            if remaining > 0:
-                random_genomes = [[_random_gene_value(g, rng) for g in genes] for _ in range(remaining)]
-                population.extend(evaluate_batch(random_genomes))
+            total_evaluations[0] += 1
 
-            best_ever = max(population, key=lambda c: c.fitness)
-            gen_summaries = [_summary(0, population)]
-            log(f"Generation 0: best OOS fitness={gen_summaries[0].best_fitness:.3f}")
-
-            for gen in range(1, cfg.generations + 1):
-                if cancel_event is not None and cancel_event.is_set():
-                    log("Stop requested -- ending the search at the current generation.")
-                    raise WalkforwardGACancelled("Walk-forward-aware GA search stopped by user.")
-                population.sort(key=lambda c: c.fitness, reverse=True)
-                elites = population[: cfg.elite_count]
-                next_pop = list(elites)
-                n_immigrants = max(1, round(cfg.population_size * cfg.random_immigrants_frac))
-                n_bred = max(cfg.population_size - len(elites) - n_immigrants, 0)
-
-                bred_genomes = []
-                for _ in range(n_bred):
-                    pa = _tournament_select(population, rng)
-                    pb = _tournament_select(population, rng)
-                    child_genome = _crossover(pa.genome, pb.genome, rng)
-                    child_genome = _mutate(child_genome, genes, cfg.mutation_rate, cfg.mutation_strength, rng)
-                    bred_genomes.append(child_genome)
-                if bred_genomes:
-                    next_pop.extend(evaluate_batch(bred_genomes))
-
-                # AI-suggested genomes take up to n_immigrants of the
-                # remaining slots (never an elite slot -- see the docstring
-                # above), so a fresh round of suggestions each generation can
-                # actually influence the search as it progresses, not just at
-                # the start. Whatever's left over still falls back to random
-                # immigrants exactly as before.
-                remaining = cfg.population_size - len(next_pop)
-                ai_added = 0
-                if remaining > 0:
-                    # `population` here is still the PRIOR generation's fully
-                    # evaluated set (before this generation's next_pop
-                    # replaces it below), so this is exactly the "population
-                    # this callback should analyze" snapshot for its optional
-                    # second argument.
-                    prior_population_snapshot = [(c.genome, c.fitness) for c in population]
-                    ai_batch: list[list[float]] = []
-                    for ai_genome in ai_genomes(genes, prior_population_snapshot):
-                        if ai_added >= n_immigrants or len(next_pop) + len(ai_batch) >= cfg.population_size:
-                            break
-                        if len(ai_genome) == len(genes):
-                            ai_batch.append(ai_genome)
-                            ai_added += 1
-                    if ai_batch:
-                        next_pop.extend(evaluate_batch(ai_batch))
-                        log(f"AI assist: seeded {ai_added} candidate(s) into generation {gen}.")
-                remaining = cfg.population_size - len(next_pop)
+            if cfg.optimizer_mode == "genetic":
+                population = [baseline]
+                # Generation 0: nothing evaluated yet, so the population snapshot
+                # a two-argument callback receives is empty -- it has only the
+                # gene definitions to work with, same as before this hook existed.
+                ai_seed_genomes = [g for g in ai_genomes(genes, []) if len(g) == len(genes)]
+                ai_seed_genomes = ai_seed_genomes[: max(0, cfg.population_size - len(population))]
+                if ai_seed_genomes:
+                    population.extend(evaluate_batch(ai_seed_genomes))
+                    log(f"AI assist: seeded {len(ai_seed_genomes)} candidate(s) into the initial population.")
+                remaining = cfg.population_size - len(population)
                 if remaining > 0:
                     random_genomes = [[_random_gene_value(g, rng) for g in genes] for _ in range(remaining)]
-                    next_pop.extend(evaluate_batch(random_genomes))
+                    population.extend(evaluate_batch(random_genomes))
 
-                population = next_pop
-                gen_best = max(population, key=lambda c: c.fitness)
-                if gen_best.fitness > best_ever.fitness:
-                    best_ever = gen_best
-                gen_summaries.append(_summary(gen, population))
-                log(f"Generation {gen}/{cfg.generations}: best OOS fitness={gen_summaries[-1].best_fitness:.3f} "
-                    f"mean={gen_summaries[-1].mean_fitness:.3f}")
+                best_ever = max(population, key=lambda c: c.fitness)
+                gen_summaries = [_summary(0, population)]
+                log(f"Generation 0: best OOS fitness={gen_summaries[0].best_fitness:.3f}")
+
+                for gen in range(1, cfg.generations + 1):
+                    if cancel_event is not None and cancel_event.is_set():
+                        log("Stop requested -- ending the search at the current generation.")
+                        raise WalkforwardGACancelled("Walk-forward-aware GA search stopped by user.")
+                    population.sort(key=lambda c: c.fitness, reverse=True)
+                    elites = population[: cfg.elite_count]
+                    next_pop = list(elites)
+                    n_immigrants = max(1, round(cfg.population_size * cfg.random_immigrants_frac))
+                    n_bred = max(cfg.population_size - len(elites) - n_immigrants, 0)
+
+                    bred_genomes = []
+                    for _ in range(n_bred):
+                        pa = _tournament_select(population, rng)
+                        pb = _tournament_select(population, rng)
+                        child_genome = _crossover(pa.genome, pb.genome, rng)
+                        child_genome = _mutate(child_genome, genes, cfg.mutation_rate, cfg.mutation_strength, rng)
+                        bred_genomes.append(child_genome)
+                    if bred_genomes:
+                        next_pop.extend(evaluate_batch(bred_genomes))
+
+                    # AI-suggested genomes take up to n_immigrants of the
+                    # remaining slots (never an elite slot -- see the docstring
+                    # above), so a fresh round of suggestions each generation can
+                    # actually influence the search as it progresses, not just at
+                    # the start. Whatever's left over still falls back to random
+                    # immigrants exactly as before.
+                    remaining = cfg.population_size - len(next_pop)
+                    ai_added = 0
+                    if remaining > 0:
+                        # `population` here is still the PRIOR generation's fully
+                        # evaluated set (before this generation's next_pop
+                        # replaces it below), so this is exactly the "population
+                        # this callback should analyze" snapshot for its optional
+                        # second argument.
+                        prior_population_snapshot = [(c.genome, c.fitness) for c in population]
+                        ai_batch: list[list[float]] = []
+                        for ai_genome in ai_genomes(genes, prior_population_snapshot):
+                            if ai_added >= n_immigrants or len(next_pop) + len(ai_batch) >= cfg.population_size:
+                                break
+                            if len(ai_genome) == len(genes):
+                                ai_batch.append(ai_genome)
+                                ai_added += 1
+                        if ai_batch:
+                            next_pop.extend(evaluate_batch(ai_batch))
+                            log(f"AI assist: seeded {ai_added} candidate(s) into generation {gen}.")
+                    remaining = cfg.population_size - len(next_pop)
+                    if remaining > 0:
+                        random_genomes = [[_random_gene_value(g, rng) for g in genes] for _ in range(remaining)]
+                        next_pop.extend(evaluate_batch(random_genomes))
+
+                    population = next_pop
+                    gen_best = max(population, key=lambda c: c.fitness)
+                    if gen_best.fitness > best_ever.fitness:
+                        best_ever = gen_best
+                    gen_summaries.append(_summary(gen, population))
+                    log(f"Generation {gen}/{cfg.generations}: best OOS fitness={gen_summaries[-1].best_fitness:.3f} "
+                        f"mean={gen_summaries[-1].mean_fitness:.3f}")
+            else:
+                # TPE / CMA-ES -- see app.optimize.refinement.OPTIMIZER_MODES
+                # for what each mode is. Both propose a whole BATCH of
+                # population_size genomes per "generation" and hand that
+                # batch to the exact same `evaluate_batch` every genetic
+                # generation already uses above -- so the worker-pool
+                # parallelism, its memory-safety sizing, and the fallback-
+                # to-serial-on-failure behavior are all reused completely
+                # unchanged regardless of which mode is running. AI-suggestion
+                # injection (ai_suggest_cb) is a population-feedback hook
+                # specific to the genetic mode's generational structure and
+                # is not called in these two branches -- see the warning
+                # appended below when both are configured together.
+                if ai_suggest_cb is not None:
+                    warnings.append(
+                        f"An AI-suggestion callback was provided, but optimizer_mode='{cfg.optimizer_mode}' "
+                        "does not use it -- AI-assisted genome suggestions are currently genetic-mode only."
+                    )
+                if cfg.optimizer_mode == "tpe":
+                    population, gen_summaries = _run_tpe_batches(genes, evaluate_batch, cfg, log)
+                elif cfg.optimizer_mode == "cma_es":
+                    population, gen_summaries = _run_cma_es_batches(genes, evaluate_batch, cfg, log)
+                else:
+                    raise RefinementError(
+                        f"Unknown optimizer_mode '{cfg.optimizer_mode}'. Supported: genetic, tpe, cma_es."
+                    )
+                # Leaderboard/generation-history shape stays exactly
+                # population_size (matching what the genetic branch's own
+                # `population` holds at the end of its last generation) --
+                # baseline is still considered for best_ever below, just
+                # not folded into the reported leaderboard batch itself.
+                best_ever = max(population + [baseline], key=lambda c: c.fitness)
         finally:
             if pool is not None:
                 pool.shutdown(wait=True)
@@ -658,6 +704,7 @@ def run_walkforward_aware_refinement(
             elapsed_seconds=elapsed,
             warnings=warnings,
             max_test_bar_used=max_test_bar_used,
+            total_evaluations=total_evaluations[0],
         )
     finally:
         if tmp_dir is not None:
@@ -669,3 +716,106 @@ def _summary(gen: int, population: list) -> WalkforwardGAGenerationSummary:
     best = max((c.fitness for c in population), default=float("-inf"))
     mean = (sum(finite) / len(finite)) if finite else float("-inf")
     return WalkforwardGAGenerationSummary(generation=gen, best_fitness=best, mean_fitness=mean)
+
+
+# ---------------------------------------------------------------------------
+# TPE / CMA-ES batch search -- see app.optimize.refinement's identical-in-
+# spirit _run_tpe_search / _run_cma_es_search for the single-genome version
+# used by Iterative Refinement. The difference here is BATCHED: each
+# "generation" proposes a whole population_size batch of genomes up front
+# and hands it to the caller's `evaluate_batch`, so the exact same worker-
+# pool parallelism (and its memory-safety sizing / serial fallback) that
+# already makes the genetic mode fast on a multi-core machine works
+# identically for these two modes -- neither one bypasses it.
+# ---------------------------------------------------------------------------
+
+def _run_tpe_batches(genes: list, evaluate_batch: Callable, cfg: RefinementConfig, log) -> tuple[list, list]:
+    try:
+        import optuna
+    except ImportError as exc:
+        raise RefinementError(
+            "optimizer_mode='tpe' requires the optuna package (pip install optuna) -- "
+            "it isn't a hard dependency of the rest of this app, only of TPE search."
+        ) from exc
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+    sampler = optuna.samplers.TPESampler(seed=cfg.random_seed)
+    study = optuna.create_study(direction="maximize", sampler=sampler)
+
+    all_population: list = []
+    gen_summaries: list[WalkforwardGAGenerationSummary] = []
+    total_batches = cfg.generations + 1  # matches genetic mode's gen-0 initial population + `generations` more
+
+    for gen in range(total_batches):
+        trials = []
+        genomes = []
+        for _ in range(cfg.population_size):
+            trial = study.ask()
+            genome = []
+            for gene in genes:
+                if gene.is_int:
+                    v = trial.suggest_int(gene.label, int(round(gene.lo)), int(round(gene.hi)))
+                else:
+                    v = trial.suggest_float(gene.label, float(gene.lo), float(gene.hi))
+                genome.append(float(v))
+            trials.append(trial)
+            genomes.append(genome)
+
+        batch = evaluate_batch(genomes)
+        for trial, cand in zip(trials, batch):
+            study.tell(trial, cand.fitness if math.isfinite(cand.fitness) else -1e18)
+
+        all_population.extend(batch)
+        gen_summaries.append(_summary(gen, batch))
+        log(f"TPE batch {gen}/{cfg.generations}: best OOS fitness={gen_summaries[-1].best_fitness:.3f} "
+            f"mean={gen_summaries[-1].mean_fitness:.3f}")
+
+    return all_population[-cfg.population_size:], gen_summaries
+
+
+def _run_cma_es_batches(genes: list, evaluate_batch: Callable, cfg: RefinementConfig, log) -> tuple[list, list]:
+    try:
+        import cma
+    except ImportError as exc:
+        raise RefinementError(
+            "optimizer_mode='cma_es' requires the cma package (pip install cma) -- "
+            "it isn't a hard dependency of the rest of this app, only of CMA-ES search."
+        ) from exc
+
+    # Genes normalized to a shared 0..1 range internally (see
+    # app.optimize.refinement._run_cma_es_search's identical rationale) so
+    # a period-2-to-30 gene and an ATR-multiplier 0.5-to-5 gene don't get a
+    # badly mismatched step size.
+    es = cma.CMAEvolutionStrategy(
+        [0.5] * len(genes), 0.3,
+        {"bounds": [0.0, 1.0], "popsize": cfg.population_size,
+         "seed": cfg.random_seed or 0, "verbose": -9},
+    )
+
+    def _denormalize(unit_genome: list) -> list:
+        out = []
+        for u, gene in zip(unit_genome, genes):
+            v = gene.lo + max(0.0, min(1.0, u)) * (gene.hi - gene.lo)
+            out.append(float(round(v)) if gene.is_int else float(v))
+        return out
+
+    all_population: list = []
+    gen_summaries: list[WalkforwardGAGenerationSummary] = []
+    last_batch: list = []
+    gen = 0
+    while gen <= cfg.generations and not es.stop():
+        solutions = es.ask()
+        genomes = [_denormalize(s) for s in solutions]
+        batch = evaluate_batch(genomes)
+        penalties = [-c.fitness if math.isfinite(c.fitness) else 1e12 for c in batch]
+        es.tell(solutions, penalties)
+
+        all_population.extend(batch)
+        last_batch = batch
+        gen_summaries.append(_summary(gen, batch))
+        log(f"CMA-ES generation {gen}/{cfg.generations}: best OOS fitness={gen_summaries[-1].best_fitness:.3f} "
+            f"mean={gen_summaries[-1].mean_fitness:.3f}")
+        gen += 1
+
+    return last_batch or all_population, gen_summaries
+
