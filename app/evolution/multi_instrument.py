@@ -33,6 +33,7 @@ from app.backtest.risk import RiskConfig
 from app.data.importer import import_csv
 from app.data.storage import get_app_base_dir
 from app.evolution.engine import EvolutionConfig, EvolutionRunner
+from app.optimize.distribution_summary import compute_distribution_summary
 from app.prop.simulator import PropRules
 from app.search.budget_allocator import (
     allocate_search_budget,
@@ -247,6 +248,18 @@ class MultiInstrumentEvolutionGroup:
                 "target_eval_pass_pct": runner_status.get("target_eval_pass_pct"),
                 "target_reached": runner_status.get("target_reached", False),
                 "target_reached_candidate_id": runner_status.get("target_reached_candidate_id"),
+                # UPGRADE (distribution-based results reporting): same
+                # median-vs-best summary as single-instrument Evolution
+                # Lab's own /evolution/status.json, computed independently
+                # per instrument from THIS instrument's own leaderboard --
+                # see app.optimize.distribution_summary's own docstring.
+                "distribution_summary": compute_distribution_summary(
+                    [
+                        {"fitness": (r.fitness.final_score if r.fitness else None), "mc_summary": r.mc_summary, "statistics": r.stats}
+                        for r in runner.leaderboard
+                    ],
+                    total_tested=runner.generation * runner.cfg.population_size,
+                ),
             }
         for label, err in self.errors.items():
             instruments[label] = {"running": False, "error": err}
