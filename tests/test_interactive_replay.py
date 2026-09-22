@@ -80,10 +80,23 @@ def test_replay_data_json_shape_is_correct():
         trade = payload["trades"][0]
         assert set(trade.keys()) == {
             "entry_time", "exit_time", "direction", "entry_price", "exit_price", "pnl", "exit_reason",
+            # UPGRADE (Interactive Replay: TP/SL fields, running balance):
+            # equity_after is the backtest engine's own already-tracked
+            # per-trade balance; stop_loss_price is derived from
+            # initial_risk (None when the trade wasn't risk-sized off a
+            # stop); take_profit_price is only ever populated when
+            # exit_reason is actually "take_profit" -- never fabricated
+            # for any other exit reason.
+            "equity_after", "stop_loss_price", "take_profit_price",
         }
         assert trade["direction"] in (1, -1)
         # A trade can't exit before it entered.
         assert trade["exit_time"] >= trade["entry_time"]
+        # take_profit_price is only ever set for an actual TP exit.
+        if trade["exit_reason"] == "take_profit":
+            assert trade["take_profit_price"] == trade["exit_price"]
+        else:
+            assert trade["take_profit_price"] is None
 
     if payload["equity"]:
         eq_point = payload["equity"][0]
@@ -120,3 +133,62 @@ def test_two_replays_prepared_with_the_same_inputs_produce_identical_trade_count
     data2 = client.get(f"/replay/data/{id2}.json").get_json()
     assert len(data1["trades"]) == len(data2["trades"])
     assert data1["trades"] == data2["trades"]
+
+
+def test_replay_form_has_library_and_pip_detect_and_prop_preset_ui():
+    """UPGRADE (Interactive Replay overhaul): the form used to hard-code
+    strategy_mode=manual with no way to pick a saved strategy, no pip-
+    size detection, and no prop-firm preset -- all three now exist."""
+    body = _client().get("/replay").get_data(as_text=True)
+    assert "tab-library" in body  # strategy-library picker
+    assert "detectPipSize" in body  # reuses the existing shared endpoint
+    assert "initPropFirmPresetDropdown" in body  # reuses the shared preset dropdown
+
+
+def test_replay_prepare_can_load_a_saved_strategy_from_the_library():
+    """The 'library' strategy_mode path -- loads a real saved strategy by
+    (type, name) via the same helper Full Pipeline's batch queue uses,
+    instead of only ever building the fixed quick SMA-crossover config."""
+    from app.strategy.library import delete_saved_strategy, save_strategy_text
+
+    code = (
+        "import numpy as np\n"
+        "SMA_FAST = 10\nSMA_SLOW = 30\n"
+        "def generate_signals(df):\n"
+        "    fast = df['close'].rolling(SMA_FAST).mean()\n"
+        "    slow = df['close'].rolling(SMA_SLOW).mean()\n"
+        "    return np.where(fast > slow, 1, np.where(fast < slow, -1, 0))\n"
+    )
+    filename = "test_replay_library_strategy.py"
+    save_strategy_text(code, filename, "python", overwrite=True)
+    try:
+        client = _client()
+        resp = _prepare_replay(
+            client, strategy_mode="library", library_strategy_type="python", library_strategy_name=filename,
+        )
+        assert resp.status_code == 302
+        replay_id = resp.headers["Location"].rstrip("/").split("/")[-1]
+        data = client.get(f"/replay/data/{replay_id}.json").get_json()
+        assert len(data["trades"]) > 0
+    finally:
+        delete_saved_strategy("python", filename)
+
+
+def test_replay_prepare_missing_library_selection_is_a_clean_error():
+    client = _client()
+    resp = _prepare_replay(client, strategy_mode="library", library_strategy_type="", library_strategy_name="")
+    assert resp.status_code == 400
+    assert "Pick a saved strategy" in resp.get_data(as_text=True)
+
+
+def test_replay_data_includes_prop_account_size_for_the_balance_panel():
+    """UPGRADE (Interactive Replay: running balance panel): the replay
+    payload now carries prop_account_size separately from the backtest's
+    own initial_balance, since a Prop Account size set on the form can
+    legitimately differ from what the backtest itself was sized against
+    (see replay_view.html's own comment on this exact point)."""
+    client = _client()
+    resp = _prepare_replay(client, account_size="50000")
+    replay_id = resp.headers["Location"].rstrip("/").split("/")[-1]
+    data = client.get(f"/replay/data/{replay_id}.json").get_json()
+    assert data["prop_account_size"] == 50000.0
