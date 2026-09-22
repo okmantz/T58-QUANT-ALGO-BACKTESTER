@@ -27,6 +27,11 @@
     box-shadow: 0 0 22px rgba(53,224,176,0.35);
   }
   .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .strategy-tab-btn {
+    flex: 1; padding: 10px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3);
+    color: #ccc; font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  .strategy-tab-btn.active { background: var(--teal); color: #04120e; border-color: var(--teal); }
 </style>
 </head>
 <body>
@@ -67,30 +72,65 @@
 
   <div class="card">
     <h2>2. Strategy</h2>
-    <p style="font-size:12.5px;color:#888;margin-bottom:10px;">Manual Strategy Builder parameters for this first pass -- same scope note as Multi-Market Search and Forward Test.</p>
-    <input type="hidden" name="strategy_mode" value="manual">
-    <div class="row">
-      <div><label>SMA fast</label><input type="number" name="sma_fast" value="20"></div>
-      <div><label>SMA slow</label><input type="number" name="sma_slow" value="50"></div>
+    <div class="row" style="margin-bottom:10px;">
+      <button type="button" id="tab-quick" class="strategy-tab-btn active" onclick="setStrategyTab('quick')">Quick strategy</button>
+      <button type="button" id="tab-library" class="strategy-tab-btn" onclick="setStrategyTab('library')">Load from library</button>
     </div>
-    <div class="row">
-      <div><label>Stop loss (pips)</label><input type="number" name="sl_pips" value="20"></div>
-      <div><label>Take profit (pips)</label><input type="number" name="tp_pips" value="40"></div>
+    <input type="hidden" name="strategy_mode" id="strategy_mode_field" value="manual">
+
+    <div id="quick-strategy-fields">
+      <p style="font-size:12.5px;color:#888;margin-bottom:10px;">A simple SMA-crossover Manual Strategy Builder config for a first pass -- same scope note as Multi-Market Search and Forward Test.</p>
+      <div class="row">
+        <div><label>SMA fast</label><input type="number" name="sma_fast" value="20"></div>
+        <div><label>SMA slow</label><input type="number" name="sma_slow" value="50"></div>
+      </div>
+      <div class="row">
+        <div><label>Stop loss (pips)</label><input type="number" name="sl_pips" value="20"></div>
+        <div><label>Take profit (pips)</label><input type="number" name="tp_pips" value="40"></div>
+      </div>
+    </div>
+
+    <div id="library-strategy-fields" style="display:none;">
+      <p style="font-size:12.5px;color:#888;margin-bottom:10px;">Pick any saved strategy -- Replay shows exactly where IT actually enters and exits on this dataset, not a generic quick strategy.</p>
+      <label>Saved strategy</label>
+      <select id="library_strategy_select">
+        <option value="">— pick a saved strategy —</option>
+      </select>
+      <input type="hidden" name="library_strategy_type" id="library_strategy_type_field">
+      <input type="hidden" name="library_strategy_name" id="library_strategy_name_field">
+      <p style="font-size:12px;color:#888;margin-top:6px;" id="library-empty-note"></p>
     </div>
   </div>
 
   <div class="card">
-    <h2>3. Risk</h2>
+    <h2>3. Prop Account (optional)</h2>
+    <p style="font-size:12.5px;color:#888;margin-bottom:10px;">Only sets the starting balance shown on the replay's running-balance panel -- Replay is a visualization of one plain backtest's own trade sequence, not a prop-firm evaluation/payout simulation.</p>
+    <label>Prop firm preset</label>
+    <select id="prop_preset_select"><option value="">— none, set account size manually —</option></select>
     <div class="row">
-      <div><label>Initial balance</label><input type="number" name="initial_balance" value="100000"></div>
+      <div><label>Account size</label><input type="number" name="account_size" id="account_size_field" value="100000"></div>
+      <div><label>Profit target %</label><input type="number" step="0.1" name="profit_target" id="profit_target_field" value="8"></div>
+    </div>
+    <div class="row">
+      <div><label>Daily loss limit %</label><input type="number" step="0.1" name="daily_loss" id="daily_loss_field" value="5"></div>
+      <div><label>Max drawdown %</label><input type="number" step="0.1" name="max_dd" id="max_dd_field" value="10"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>4. Risk</h2>
+    <div class="row">
+      <div><label>Initial balance</label><input type="number" name="initial_balance" id="initial_balance_field" value="100000"></div>
       <div><label>Risk value</label><input type="number" step="0.1" name="risk_value" value="1.0"></div>
     </div>
     <div class="row">
       <div><label>Risk mode</label>
         <select name="risk_mode"><option value="percent">% of balance</option><option value="fixed">Fixed lot</option></select>
       </div>
-      <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" value="0.0001"></div>
+      <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" id="pip_size_field" value="0.0001"></div>
     </div>
+    <button type="button" onclick="detectPipSize()" style="margin-top:6px;background:none;border:1px solid var(--border-light);color:var(--teal);padding:9px 12px;border-radius:8px;font-size:13px;width:100%;">Detect pip size from data</button>
+    <p id="pip_detect_status" style="font-size:12px;color:#888;margin-top:6px;"></p>
   </div>
 
   <button class="submit-btn" type="submit">Prepare Replay</button>
@@ -98,5 +138,85 @@
 
 </div>
 </div>
+<script src="/static/prop-presets.js"></script>
+<script>
+  const SAVED_STRATEGIES = {{ saved_strategies_json | default('{}') | safe }};
+
+  function setStrategyTab(tab) {
+    document.getElementById('tab-quick').classList.toggle('active', tab === 'quick');
+    document.getElementById('tab-library').classList.toggle('active', tab === 'library');
+    document.getElementById('quick-strategy-fields').style.display = tab === 'quick' ? 'block' : 'none';
+    document.getElementById('library-strategy-fields').style.display = tab === 'library' ? 'block' : 'none';
+    document.getElementById('strategy_mode_field').value = tab === 'quick' ? 'manual' : 'library';
+  }
+
+  function populateLibraryDropdown() {
+    const select = document.getElementById('library_strategy_select');
+    let count = 0;
+    Object.keys(SAVED_STRATEGIES).forEach((type) => {
+      (SAVED_STRATEGIES[type] || []).forEach((s) => {
+        const opt = document.createElement('option');
+        opt.value = JSON.stringify({ type: type, name: s.name });
+        opt.textContent = `${s.name} (${type}${s.market ? ', ' + s.market : ''})`;
+        select.appendChild(opt);
+        count++;
+      });
+    });
+    document.getElementById('library-empty-note').textContent =
+      count ? `${count} saved strategies available.` : 'No saved strategies yet -- build one in the Strategy Library first, or use Quick strategy.';
+  }
+  document.getElementById('library_strategy_select').addEventListener('change', (e) => {
+    if (!e.target.value) return;
+    const picked = JSON.parse(e.target.value);
+    document.getElementById('library_strategy_type_field').value = picked.type;
+    document.getElementById('library_strategy_name_field').value = picked.name;
+  });
+  populateLibraryDropdown();
+
+  function detectPipSize() {
+    const statusEl = document.getElementById('pip_detect_status');
+    const fileInput = document.querySelector('input[name="csv_file"]');
+    const datasetSelect = document.querySelector('select[name="existing_dataset"]');
+    const fd = new FormData();
+    let haveSource = false;
+    if (fileInput && fileInput.files && fileInput.files.length) {
+      fd.append('csv_file', fileInput.files[0]);
+      haveSource = true;
+    }
+    if (datasetSelect && datasetSelect.value) {
+      fd.append('existing_dataset', datasetSelect.value);
+      haveSource = true;
+    }
+    if (!haveSource) {
+      statusEl.style.color = '#ffcf7a';
+      statusEl.textContent = 'Select a market data CSV or a stored dataset in Section 1 first.';
+      return;
+    }
+    statusEl.style.color = '#888';
+    statusEl.textContent = 'Detecting...';
+    fetch('/data/detect-pip-size', { method: 'POST', body: fd })
+      .then(r => r.json().then(data => ({ ok: r.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok || data.error) {
+          statusEl.style.color = '#ff9d9d';
+          statusEl.textContent = data.error || "Couldn't detect pip size.";
+          return;
+        }
+        document.getElementById('pip_size_field').value = data.pip_size;
+        statusEl.style.color = '#b4ffcb';
+        statusEl.textContent = data.message;
+      })
+      .catch(err => {
+        statusEl.style.color = '#ff9d9d';
+        statusEl.textContent = "Couldn't detect: " + err;
+      });
+  }
+
+  initPropFirmPresetDropdown('prop_preset_select', {
+    account_size: 'account_size', profit_target: 'profit_target',
+    daily_loss: 'daily_loss', max_dd: 'max_dd',
+  });
+  syncAccountAndBalanceFields('account_size_field', 'initial_balance_field');
+</script>
 </body>
 </html>

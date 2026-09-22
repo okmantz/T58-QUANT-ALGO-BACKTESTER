@@ -53,6 +53,25 @@
   </div>
 </div>
 
+<div class="card" id="distribution-card" style="display:none;">
+  <h2>Optimization results -- distribution, not just a winner</h2>
+  <p style="font-size:12.5px;color:#999;margin:0 0 12px;" id="d-tested"></p>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th></th><th>Median</th><th>Best (raw optimum)</th></tr></thead>
+      <tbody id="d-rows"></tbody>
+    </table>
+  </div>
+  <p style="font-size:12.5px;color:#999;margin-top:12px;" id="d-robust"></p>
+  <p style="font-size:11.5px;color:#777;margin-top:8px;">
+    "Median" is across every stage-3 candidate on this run's leaderboard -- not just the champion above.
+    "Candidates tested" is the total funnel size before Stage 1/2/3 narrowed it down, so you can see how
+    wide the search actually was, not just how it ended. "Robust candidates" is a simple, transparent
+    count of genuinely different genomes that cleared 80% of the best fitness found -- a rough sense of
+    how wide the good region of the parameter space is, not a formal robustness test.
+  </p>
+</div>
+
 <div class="card" id="leaderboard-card" style="display:none;">
   <h2>Leaderboard</h2>
   <div class="table-scroll">
@@ -252,6 +271,23 @@
             links.innerHTML = '';
             if (s.report_html) {
               links.innerHTML += `<a href="${s.report_html}" target="_blank">Open full leaderboard report &rarr;</a>`;
+            }
+
+            const d = s.distribution_summary;
+            if (d) {
+              document.getElementById('distribution-card').style.display = 'block';
+              document.getElementById('d-tested').textContent =
+                `${d.candidates_tested} candidates tested (funnel-wide), ${d.candidates_with_trades} on this leaderboard produced at least one trade.`;
+              const pct = (v) => (v === null || v === undefined || isNaN(v)) ? '—' : `${v.toFixed(1)}%`;
+              let rows = '';
+              rows += `<tr><td>Eval pass probability</td><td>${pct(d.eval_pass_probability.median)}</td><td>${pct(d.eval_pass_probability.best)}</td></tr>`;
+              rows += `<tr><td>First payout probability</td><td>${pct(d.first_payout_probability.median)}</td><td>${pct(d.first_payout_probability.best)}</td></tr>`;
+              if (d.max_drawdown_pct) {
+                rows += `<tr><td>Max drawdown</td><td>${pct(d.max_drawdown_pct.median)}</td><td>${pct(d.max_drawdown_pct.best)} (lowest)</td></tr>`;
+              }
+              document.getElementById('d-rows').innerHTML = rows;
+              document.getElementById('d-robust').textContent =
+                `${d.robust_candidates} robust candidate(s) cleared ${Math.round(d.robust_threshold_fraction_of_best * 100)}% of the best fitness found.`;
             }
           }
           renderLeaderboard(data.leaderboard || []);

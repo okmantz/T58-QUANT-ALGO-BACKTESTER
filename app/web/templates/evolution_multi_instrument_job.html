@@ -90,6 +90,15 @@
       ? '<span class="badge running">RUNNING</span>' : '<span class="badge stopped">STOPPED</span>';
     let html = `<h2>${label} ${badge}</h2>`;
     html += `<p style="font-size:12px;color:#999;">Generation ${inst.generation} — leaderboard: ${inst.leaderboard_size}</p>`;
+    const d = inst.distribution_summary;
+    if (d) {
+      const pct = (v) => (v === null || v === undefined || isNaN(v)) ? '—' : `${v.toFixed(1)}%`;
+      html += `<div style="font-size:12px;color:#999;background:#161b22;border:1px solid #2a323d;border-radius:6px;padding:8px 10px;margin-bottom:8px;">` +
+        `~${d.candidates_tested} tested, ${d.candidates_with_trades} with trades &mdash; ` +
+        `Eval pass median/best: ${pct(d.eval_pass_probability.median)} / ${pct(d.eval_pass_probability.best)}, ` +
+        `Payout median/best: ${pct(d.first_payout_probability.median)} / ${pct(d.first_payout_probability.best)}, ` +
+        `${d.robust_candidates} robust candidate(s)</div>`;
+    }
     html += `<div id="log-${label.replace('/', '-')}"></div>`;
     if ((inst.leaderboard || []).length) {
       html += `<div class="table-scroll"><table><thead><tr><th>#</th><th>Candidate</th><th>Net profit</th><th>PF</th><th>Eval pass %</th><th></th></tr></thead><tbody>`;

@@ -31,6 +31,27 @@
   .stat .value.down { color: #ff6b6b; }
   .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; }
   #trade-log { background: var(--panel-3); border-radius: 8px; padding: 8px; font-family: ui-monospace, monospace; font-size: 11.5px; max-height: 160px; overflow-y: auto; margin-top: 10px; }
+  .replay-layout { display: flex; gap: 14px; align-items: flex-start; }
+  .replay-main { flex: 1; min-width: 0; }
+  .replay-side { width: 300px; flex-shrink: 0; position: sticky; top: 14px; }
+  @media (max-width: 900px) { .replay-layout { flex-direction: column; } .replay-side { width: 100%; position: static; } }
+  .balance-hero { text-align: center; padding: 14px 0; border-bottom: 1px solid var(--border); margin-bottom: 10px; }
+  .balance-hero .value { font-size: 26px; font-weight: 800; }
+  .balance-hero .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; }
+  #trade-ticker { max-height: 560px; overflow-y: auto; }
+  .trade-row {
+    display: flex; justify-content: space-between; align-items: center; padding: 8px 4px;
+    border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 12.5px;
+  }
+  .trade-row:last-child { border-bottom: none; }
+  .trade-row .side { font-weight: 700; }
+  .trade-row .side.long { color: #35e0b0; }
+  .trade-row .side.short { color: #ff6b6b; }
+  .trade-row .right { text-align: right; }
+  .trade-row .pnl.up { color: #35e0b0; }
+  .trade-row .pnl.down { color: #ff6b6b; }
+  .trade-row .bal { font-size: 11px; color: var(--text-muted); }
+  .trade-row .tpsl { font-size: 10.5px; color: var(--text-muted); }
 </style>
 </head>
 <body>
@@ -46,6 +67,8 @@
 <div class="error">Replay data for "{{ replay_id }}" was not found (the server may have restarted since it was prepared). <a href="/replay">Start a new one</a>.</div>
 {% else %}
 
+<div class="replay-layout">
+<div class="replay-main">
 <div class="card">
   <div id="replay-chart"></div>
   <div id="equity-chart"></div>
@@ -74,6 +97,25 @@
 
   <div id="trade-log"></div>
 </div>
+</div>
+
+<div class="replay-side">
+<div class="card">
+  <h2 style="font-size:14px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);margin:0 0 6px;">Account</h2>
+  <div class="balance-hero">
+    <div class="value" id="side-balance">-</div>
+    <div class="label">Current balance</div>
+  </div>
+  <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-muted);margin-bottom:10px;">
+    <span>Starting: <span id="side-starting-balance">-</span></span>
+    <span id="side-net-change">-</span>
+  </div>
+  <h2 style="font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);margin:14px 0 6px;border-top:1px solid var(--border);padding-top:10px;">Trades, in order</h2>
+  <p style="font-size:11px;color:var(--text-dim,#777);margin:0 0 8px;">Each trade's own $ P&amp;L and the account balance right after it closed -- only trades the scrubber has already reached.</p>
+  <div id="trade-ticker"></div>
+</div>
+</div>
+</div>
 
 {% endif %}
 </div>
@@ -83,6 +125,7 @@
 <script>
   const replayId = {{ replay_id | tojson }};
   let BARS = [], TRADES = [], EQUITY = [];
+  let STARTING_BALANCE = 0;
   let cursor = 0;
   let playing = false;
   let playTimer = null;
@@ -92,7 +135,9 @@
 
   function fmtMoney(v) {
     if (v === null || v === undefined) return '-';
-    return '$' + Number(v).toLocaleString(undefined, {maximumFractionDigits: 2});
+    const n = Number(v);
+    const sign = n < 0 ? '-' : '';
+    return sign + '$' + Math.abs(n).toLocaleString(undefined, {maximumFractionDigits: 2});
   }
   function fmtTime(unixSeconds) {
     if (!unixSeconds) return '-';
@@ -133,6 +178,8 @@
         BARS = data.bars || [];
         TRADES = data.trades || [];
         EQUITY = data.equity || [];
+        STARTING_BALANCE = data.prop_account_size || data.initial_balance || 0;
+        document.getElementById('side-starting-balance').textContent = fmtMoney(STARTING_BALANCE);
         document.getElementById('scrubber').max = Math.max(BARS.length - 1, 0);
         candleSeries.setData(BARS);
         volumeSeries.setData(BARS.map(b => ({ time: b.time, value: b.volume, color: b.close >= b.open ? 'rgba(53,224,176,0.4)' : 'rgba(255,107,107,0.4)' })));
@@ -187,6 +234,50 @@
     const pnlEl = document.getElementById('s-pnl');
     pnlEl.textContent = fmtMoney(pnlSoFar);
     pnlEl.className = 'value ' + (pnlSoFar >= 0 ? 'up' : 'down');
+
+    // UPGRADE (Interactive Replay: live per-trade P&L + running balance):
+    // the account panel's "current balance" tracks STARTING_BALANCE (the
+    // Prop Account size set on the form, or the backtest's own initial
+    // balance if none was set) + the running sum of closed trades' own
+    // pnl -- e.g. a +$200 trade on a $50,000 starting balance shows +$200
+    // for that trade and $50,200 as the new balance right after it,
+    // exactly as asked for. This is deliberately NOT the same number as
+    // each trade's own `equity_after` field (which tracks the backtest's
+    // own internal RiskConfig.initial_balance, used for position sizing
+    // math) -- that internal balance and this display's starting balance
+    // can legitimately differ if a prop account size was set, and this
+    // panel's whole point is showing what a $X account would have done.
+    const currentBalance = STARTING_BALANCE + pnlSoFar;
+    document.getElementById('side-balance').textContent = fmtMoney(currentBalance);
+    const netChange = currentBalance - STARTING_BALANCE;
+    const netChangeEl = document.getElementById('side-net-change');
+    netChangeEl.textContent = (netChange >= 0 ? '+' : '') + fmtMoney(netChange);
+    netChangeEl.style.color = netChange >= 0 ? '#35e0b0' : '#ff6b6b';
+
+    const ticker = document.getElementById('trade-ticker');
+    let runningBalance = STARTING_BALANCE;
+    const rows = closedTrades.map((t) => {
+      runningBalance += t.pnl;
+      return { t, balanceAfter: runningBalance };
+    });
+    ticker.innerHTML = rows.slice().reverse().map(({ t, balanceAfter }) => {
+      const sideClass = t.direction > 0 ? 'long' : 'short';
+      const sideLabel = t.direction > 0 ? 'LONG' : 'SHORT';
+      const pnlClass = t.pnl >= 0 ? 'up' : 'down';
+      let tpsl = '';
+      if (t.stop_loss_price) tpsl += `SL ${t.stop_loss_price.toFixed(5)}`;
+      if (t.take_profit_price) tpsl += (tpsl ? ' &middot; ' : '') + `TP ${t.take_profit_price.toFixed(5)}`;
+      return `<div class="trade-row">
+        <div>
+          <div class="side ${sideClass}">${sideLabel} ${t.entry_price.toFixed(5)} &rarr; ${t.exit_price.toFixed(5)}</div>
+          <div class="tpsl">${tpsl || t.exit_reason}</div>
+        </div>
+        <div class="right">
+          <div class="pnl ${pnlClass}">${t.pnl >= 0 ? '+' : ''}${fmtMoney(t.pnl)}</div>
+          <div class="bal">bal ${fmtMoney(balanceAfter)}</div>
+        </div>
+      </div>`;
+    }).join('') || '<p style="font-size:12px;color:var(--text-dim,#777);">No closed trades yet at this point in the replay.</p>';
 
     const log = document.getElementById('trade-log');
     log.innerHTML = closedTrades.slice(-15).reverse().map(t =>
