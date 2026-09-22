@@ -48,3 +48,60 @@ def test_run_is_blocked_when_requested_timeframe_is_finer_than_native_data():
     assert "BACKTEST BLOCKED" in body
     assert "Resampling: FAILED" in body
     assert "No performance results were produced" in body
+
+
+def test_quick_optimize_is_blocked_when_requested_timeframe_is_finer_than_native_data():
+    """UPGRADE (ensemble/budget/integrity finish-up): Quick Optimize
+    previously had no integrity pre-flight at all -- see /run's identical
+    test above for the mechanism being reused here."""
+    client = app.test_client()
+    with open(SAMPLE_CSV, "rb") as f:
+        data = dict(_BASE_FORM, csv_file=(f, "EURUSD_5M_sample.csv"), timeframe="1m")
+        r = client.post("/quick-optimize/start", data=data, content_type="multipart/form-data")
+
+    assert r.status_code == 400
+    body = r.get_data(as_text=True)
+    assert "BACKTEST BLOCKED" in body
+    assert "Resampling: FAILED" in body
+
+
+def test_full_pipeline_is_blocked_when_requested_timeframe_is_finer_than_native_data():
+    client = app.test_client()
+    with open(SAMPLE_CSV, "rb") as f:
+        data = dict(_BASE_FORM, csv_file=(f, "EURUSD_5M_sample.csv"), timeframe="1m")
+        r = client.post("/full-pipeline/start", data=data, content_type="multipart/form-data")
+
+    assert r.status_code == 400
+    body = r.get_data(as_text=True)
+    assert "BACKTEST BLOCKED" in body
+    assert "Resampling: FAILED" in body
+
+
+def test_search_lab_family_named_is_blocked_when_requested_timeframe_is_finer_than_native_data():
+    """family_named mode has no single Strategy object at all (many
+    candidates) -- run_integrity_check must still accept strategy=None
+    and gate on the DATA/TIMEFRAME sections alone."""
+    client = app.test_client()
+    with open(SAMPLE_CSV, "rb") as f:
+        data = dict(
+            _BASE_FORM, csv_file=(f, "EURUSD_5M_sample.csv"), timeframe="1m",
+            search_mode="family_named", family="trend_breakout", max_candidates="5",
+        )
+        r = client.post("/search/start", data=data, content_type="multipart/form-data")
+
+    assert r.status_code == 400
+    body = r.get_data(as_text=True)
+    assert "BACKTEST BLOCKED" in body
+    assert "Resampling: FAILED" in body
+
+
+def test_evolution_lab_is_blocked_when_requested_timeframe_is_finer_than_native_data():
+    client = app.test_client()
+    with open(SAMPLE_CSV, "rb") as f:
+        data = dict(_BASE_FORM, csv_file=(f, "EURUSD_5M_sample.csv"), timeframe="1m")
+        r = client.post("/evolution/start", data=data, content_type="multipart/form-data")
+
+    assert r.status_code == 400
+    body = r.get_data(as_text=True)
+    assert "BACKTEST BLOCKED" in body
+    assert "Resampling: FAILED" in body

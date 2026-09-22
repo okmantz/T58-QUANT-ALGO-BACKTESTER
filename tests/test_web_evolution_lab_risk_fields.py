@@ -83,12 +83,13 @@ class _FakeMultiGroup:
     """Same idea as _FakeRunner but for MultiInstrumentEvolutionGroup."""
     last_instance = None
 
-    def __init__(self, group_id, jobs, risk, rules, base_cfg):
+    def __init__(self, group_id, jobs, risk, rules, base_cfg, total_evaluation_budget=None):
         self.group_id = group_id
         self.jobs = jobs
         self.risk = risk
         self.rules = rules
         self.base_cfg = base_cfg
+        self.total_evaluation_budget = total_evaluation_budget
         _FakeMultiGroup.last_instance = self
 
     def start_all(self):
@@ -177,3 +178,45 @@ def test_multi_instrument_evolution_start_uses_full_posted_prop_and_risk_fields(
     group = _FakeMultiGroup.last_instance
     assert group is not None, "MultiInstrumentEvolutionGroup was never constructed"
     _assert_custom_risk_and_rules(group.risk, group.rules)
+
+
+def test_multi_instrument_evolution_start_forwards_total_evaluation_budget(tmp_path, monkeypatch):
+    """UPGRADE (ensemble/budget/integrity finish-up): the budget field was
+    never read from the multi-instrument form at all, so every group ran
+    the pre-existing 'N instruments cost N times the compute' behavior
+    even though MultiInstrumentEvolutionGroup has supported spreading a
+    shared budget across instruments since a prior session. A posted
+    value must reach the constructor (see the blank-means-None sibling
+    test below for the other half of this)."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    monkeypatch.setattr(server_module, "get_raw_data_dir", lambda: raw_dir)
+    for name in ("a.csv", "b.csv"):
+        (raw_dir / name).write_bytes(SAMPLE_CSV.read_bytes())
+
+    client = app.test_client()
+    r = client.post(
+        "/evolution/multi-instrument/start",
+        data={"datasets": ["a.csv", "b.csv"], **_FAST_EVO_FIELDS, "total_evaluation_budget": "5000"},
+    )
+    assert r.status_code == 302
+    assert _FakeMultiGroup.last_instance.total_evaluation_budget == 5000
+
+
+def test_multi_instrument_evolution_start_blank_budget_means_none(tmp_path, monkeypatch):
+    """A blank/omitted budget field must keep the exact prior behavior --
+    None, not 0 or some other falsy sentinel that would still trigger
+    allocate_search_budget's splitting logic."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    monkeypatch.setattr(server_module, "get_raw_data_dir", lambda: raw_dir)
+    for name in ("a.csv", "b.csv"):
+        (raw_dir / name).write_bytes(SAMPLE_CSV.read_bytes())
+
+    client = app.test_client()
+    r = client.post(
+        "/evolution/multi-instrument/start",
+        data={"datasets": ["a.csv", "b.csv"], **_FAST_EVO_FIELDS},
+    )
+    assert r.status_code == 302
+    assert _FakeMultiGroup.last_instance.total_evaluation_budget is None
