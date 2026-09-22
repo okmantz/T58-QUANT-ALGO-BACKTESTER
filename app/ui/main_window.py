@@ -160,6 +160,8 @@ from app.quant_lab.market_structure import calculate_hh_ll_structure, calculate_
 from app.strategy.composite_thresholds import cross_level, hold_level, in_range, mix_thresholds, preview_signal
 from app.ui.condition_builder import ConditionList
 from app.validation.cpcv import CPCVError, compute_pbo, run_cpcv
+from app.ensemble.auto_builder import AutoEnsembleError, build_diversified_ensemble
+from app.validation.integrity_check import run_integrity_check
 from app.validation.regime_matrix import run_regime_matrix
 from app.validation.sensitivity import compute_1d_sensitivity, compute_2d_heatmap, list_tunable_parameters
 from app.validation.parameter_robustness import compute_parameter_robustness
@@ -8771,6 +8773,7 @@ class MainWindow:
 
         self.search_context = RunContextPanel(self, "Search Lab")
         self.search_context.build(f)
+        self._button(f, "CHECK DATA INTEGRITY", lambda c=self.search_context: self._check_data_integrity(c)).pack(anchor="w", padx=18, pady=(0, 8))
 
         mode_section = self._section(
             f, "What to search",
@@ -8933,6 +8936,14 @@ class MainWindow:
             stage3_section, "Fitness metric (what \u201cbest\u201d means)", self._search_metric_labels,
             FITNESS_METRICS["eval_pass_probability"],
         )
+        # Independent of _build_refine_tab's own copy of these two maps --
+        # never relies on tab build order.
+        self._optimizer_mode_labels = list(OPTIMIZER_MODES.values())
+        self._optimizer_mode_label_to_key = {v: k for k, v in OPTIMIZER_MODES.items()}
+        self.search_optimizer_mode = LabeledCombo(
+            stage3_section, "Optimizer mode (Stage 2 refinement)", self._optimizer_mode_labels,
+            OPTIMIZER_MODES["genetic"],
+        )
 
         loop_section = self._section(
             f, "Loop mode",
@@ -8977,6 +8988,18 @@ class MainWindow:
         )
         self.open_champion_report_btn.config(state="disabled")
         self.open_champion_report_btn.pack(side="left", padx=8)
+
+        # UPGRADE (ensemble-builder button): app.ensemble.auto_builder.
+        # build_diversified_ensemble already existed and is already wired
+        # on the web app's own Search Lab job page -- this is the same
+        # one-click "turn this finished run's own leaderboard into a
+        # diversified 3-5-leg basket" action, using the exact same
+        # instrument/timeframe/risk/rules this Search Lab run just used.
+        self.auto_ensemble_btn = self._button(
+            button_row, "AUTO-BUILD ENSEMBLE FROM LEADERBOARD", self._search_auto_build_ensemble,
+        )
+        self.auto_ensemble_btn.config(state="disabled")
+        self.auto_ensemble_btn.pack(side="left", padx=8)
 
         self.search_progress = NeuralProgress(f)
         self.search_progress.pack(fill="x", padx=24, pady=(2, 10))
@@ -9163,6 +9186,8 @@ class MainWindow:
     def _build_search_stage_config(self) -> SearchStageConfig:
         metric_label = self.search_metric.get_str()
         metric_key = self._refine_metric_label_to_key.get(metric_label, "eval_pass_probability")
+        optimizer_label = self.search_optimizer_mode.get_str()
+        optimizer_key = self._optimizer_mode_label_to_key.get(optimizer_label, "genetic")
         workers_raw = self.search_workers.get_str().strip()
         workers = int(workers_raw) if workers_raw else None
         return SearchStageConfig(
@@ -9182,6 +9207,7 @@ class MainWindow:
             cost_stress_multiplier=self.search_cost_stress_multiplier.get_float(2.0),
             cost_stress_penalty_weight=self.search_cost_stress_weight.get_float(0.35),
             reset_on_breach=self.search_reset_on_breach.var.get(),
+            optimizer_mode=optimizer_key,
         )
 
     def _search_run_clicked(self):
@@ -9205,6 +9231,7 @@ class MainWindow:
             self.open_search_report_btn.config(state="disabled")
             self.promote_champion_btn.config(state="disabled")
             self.open_champion_report_btn.config(state="disabled")
+            self.auto_ensemble_btn.config(state="disabled")
             self.search_progress.start(10)
             # The bulk backtest loop isn't cancellable mid-strategy (each one
             # is quick), so STOP stays disabled for this mode -- it's only
@@ -9218,6 +9245,7 @@ class MainWindow:
         self.open_search_report_btn.config(state="disabled")
         self.promote_champion_btn.config(state="disabled")
         self.open_champion_report_btn.config(state="disabled")
+        self.auto_ensemble_btn.config(state="disabled")
         self._search_cancel_event.clear()
         self.stop_search_btn.config(state="normal")
         self.search_progress.start(10)
@@ -9488,6 +9516,7 @@ class MainWindow:
             self._last_search_rules = rules
 
             self.open_search_report_btn.config(state="normal")
+            self.auto_ensemble_btn.config(state="normal")
             if summary.champion_candidate_id:
                 self.promote_champion_btn.config(state="normal")
 
@@ -10618,10 +10647,134 @@ class MainWindow:
 
             def _finish():
                 self.acct_notif_test_status.config(text=message, fg=(GREEN if ok else RED))
+            # Direct call rather than self.root.after(0, _finish) --
+            # see the identical fix (and full explanation) in
+            # _search_auto_build_ensemble's own comment above.
+            _finish()
+
+        threading.Thread(target=run, daemon=True).start()
+
+    # -----------------------------------------------------------------------
+    # Data Integrity Check button -- desktop parity with the same
+    # pre-flight gate Run & Report / Full Pipeline / Quick Optimize /
+    # Search Lab / Evolution Lab all run automatically on the web app
+    # before a job starts (see app.validation.integrity_check's own
+    # module docstring for exactly what it checks and why). On desktop
+    # this is an on-demand button rather than an automatic gate -- each
+    # tab already has its own Start/Run button with its own established
+    # flow, and inserting an automatic block there is a bigger behavior
+    # change than a button a person can press when they actually want to
+    # check their data first. Always run with strategy=None (checking
+    # data/timeframe/account alone) -- this is a fully supported,
+    # documented mode of run_integrity_check, not a shortcut: Search Lab
+    # and Evolution Lab explore many strategy families with no single
+    # "current strategy" to check in the first place (this is exactly
+    # what the web app's own "family_named" mode does), and using the
+    # same data-only check uniformly across all four tabs, rather than a
+    # deeper per-tab strategy extraction for only some of them, is a
+    # correctness/consistency trade worth making here.
+    # -----------------------------------------------------------------------
+    def _check_data_integrity(self, context: "RunContextPanel"):
+        log_lines: list[str] = []
+        df = context.load_dataframe(log_fn=log_lines.append)
+        if df is None:
+            messagebox.showwarning("Data Integrity Check", "\n".join(log_lines) or "No data loaded yet.")
+            return
+        try:
+            risk = context.build_risk_config()
+            rules = context.build_prop_rules()
+            report = run_integrity_check(df, None, risk, rules, data_label=context.instrument_label())
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("Data Integrity Check", f"Couldn't run the integrity check: {exc}")
+            return
+        win = Toplevel(self.root)
+        win.title(f"Data Integrity Check -- {context.key}")
+        win.configure(bg=PANEL)
+        win.geometry("640x520")
+        Label(
+            win, text="Checks data/timeframe/account only, not a specific strategy's own lookahead "
+            "safety (this tab doesn't have one fixed strategy to check) -- run this before a long "
+            "search/optimization to catch a corrupt dataset or unsupportable timeframe early.",
+            bg=PANEL, fg=TEXT_DIM, font=_safe_font(9), wraplength=600, justify="left",
+        ).pack(anchor="w", padx=12, pady=(12, 8))
+        text = Text(win, bg=PANEL_3, fg=TEXT, font=(MONO, 10), relief="flat", bd=0, wrap="word")
+        text.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        text.insert("1.0", report.render())
+        text.config(state="disabled")
+
+    def _search_auto_build_ensemble(self):
+        """Desktop parity for the web app's Search Lab job page
+        "Auto-Build Ensemble from this leaderboard" button -- see
+        app.web.server.search_job_auto_ensemble's own comment for why
+        this exists (app.ensemble.auto_builder.build_diversified_ensemble
+        had no caller anywhere in the app before that). Same call, using
+        this desktop tab's own self._last_search_* state instead of a web
+        job dict."""
+        if self._last_search_summary is None or self._last_search_db_path is None:
+            messagebox.showwarning("Auto-Build Ensemble", "Run a search on this tab first -- no finished run to build from yet.")
+            return
+        self.auto_ensemble_btn.config(state="disabled", text="BUILDING ENSEMBLE...")
+        self.root.update_idletasks()
+
+        def run():
             try:
-                self.root.after(0, _finish)
-            except Exception:
-                pass
+                from app.search.results_db import ResultsDB
+
+                with ResultsDB(self._last_search_db_path) as db:
+                    records = db.leaderboard(self._last_search_summary.run_id, stage="stage3", top_n=50, only_passed=False)
+                if not records:
+                    raise AutoEnsembleError("No stage-3 candidates on this run's leaderboard to build an ensemble from.")
+                result = build_diversified_ensemble(
+                    self._last_search_df, records, self._last_search_risk, prop_rules=self._last_search_rules,
+                    mc_config=MonteCarloConfig(n_simulations=3000),
+                    min_legs=3, max_legs=5, initial_balance=self._last_search_risk.initial_balance,
+                )
+                summary_dict = result.to_summary_dict()
+                ok, message = True, summary_dict
+            except AutoEnsembleError as exc:
+                ok, message = False, str(exc)
+            except Exception as exc:  # noqa: BLE001
+                ok, message = False, f"Unexpected error: {exc}"
+
+            def _finish():
+                self.auto_ensemble_btn.config(state="normal", text="AUTO-BUILD ENSEMBLE FROM LEADERBOARD")
+                if not ok:
+                    messagebox.showerror("Auto-Build Ensemble", message)
+                    return
+                win = Toplevel(self.root)
+                win.title("Auto-Built Ensemble")
+                win.configure(bg=PANEL)
+                win.geometry("640x480")
+                text = Text(win, bg=PANEL_3, fg=TEXT, font=(MONO, 10), relief="flat", bd=0, wrap="word")
+                text.pack(fill="both", expand=True, padx=12, pady=12)
+                legs = message.get("basket_names", [])
+                families = message.get("basket_families", [])
+                lines = [f"Status: {message.get('status', '?')}\n", f"{len(legs)}-leg diversified ensemble\n", "-" * 40 + "\n"]
+                for name, fam in zip(legs, families):
+                    lines.append(f"  {name}  ({fam})\n")
+                if message.get("notes"):
+                    lines.append("\nNotes:\n")
+                    for note in message["notes"]:
+                        lines.append(f"  - {note}\n")
+                if message.get("portfolio"):
+                    lines.append("\nPortfolio result:\n")
+                    for k, v in message["portfolio"].items():
+                        lines.append(f"  {k}: {v}\n")
+                text.insert("1.0", "".join(lines))
+                text.config(state="disabled")
+            # Direct call rather than self.root.after(0, _finish) -- this
+            # codebase's own established convention for background-thread
+            # UI updates elsewhere (e.g. RunContextPanel._set_alpaca_status)
+            # already does this, and self.root.after() from a non-main
+            # thread turned out to be genuinely flaky in testing (Python's
+            # tkinter raises "main thread is not in main loop" from a
+            # background thread under some timing conditions, silently
+            # swallowed by a bare except here, which would leave a button
+            # stuck on its "in progress" text forever with no popup/result
+            # and no error shown -- confirmed and reproduced this exact
+            # failure directly before switching every new background-
+            # thread callback in this session to this direct-call fix).
+            _finish()
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -10811,10 +10964,10 @@ class MainWindow:
 
             def _finish():
                 self.apikeys_trading_status.config(text=message, fg=(GREEN if ok else RED))
-            try:
-                self.root.after(0, _finish)
-            except Exception:
-                pass
+            # Direct call rather than self.root.after(0, _finish) --
+            # see the identical fix (and full explanation) in
+            # _search_auto_build_ensemble's own comment above.
+            _finish()
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -10838,10 +10991,10 @@ class MainWindow:
 
             def _finish():
                 self.apikeys_fred_status.config(text=message, fg=(GREEN if ok else RED))
-            try:
-                self.root.after(0, _finish)
-            except Exception:
-                pass
+            # Direct call rather than self.root.after(0, _finish) --
+            # see the identical fix (and full explanation) in
+            # _search_auto_build_ensemble's own comment above.
+            _finish()
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -10872,10 +11025,10 @@ class MainWindow:
 
             def _finish():
                 self.apikeys_ai_status.config(text=message, fg=(GREEN if ok else RED))
-            try:
-                self.root.after(0, _finish)
-            except Exception:
-                pass
+            # Direct call rather than self.root.after(0, _finish) --
+            # see the identical fix (and full explanation) in
+            # _search_auto_build_ensemble's own comment above.
+            _finish()
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -13128,6 +13281,7 @@ class MainWindow:
         # independence is what was actually asked for.)
         self.evo_context = RunContextPanel(self, "Evolution Lab (GA)")
         self.evo_context.build(f)
+        self._button(f, "CHECK DATA INTEGRITY", lambda c=self.evo_context: self._check_data_integrity(c)).pack(anchor="w", padx=18, pady=(0, 8))
 
         cfg_section = self._section(
             f, "Run configuration",
@@ -13151,6 +13305,12 @@ class MainWindow:
         )
         self.evo_min_trades = LabeledEntry(cfg_section, "Min trades (pre-filter)", "20")
         self.evo_mc_sims = LabeledEntry(cfg_section, "Monte Carlo sims per candidate", "1000")
+        self._optimizer_mode_labels = list(OPTIMIZER_MODES.values())
+        self._optimizer_mode_label_to_key = {v: k for k, v in OPTIMIZER_MODES.items()}
+        self.evo_optimizer_mode = LabeledCombo(
+            cfg_section, "Optimizer mode (per-family child proposals)", self._optimizer_mode_labels,
+            OPTIMIZER_MODES["genetic"],
+        )
         self.evo_cpcv_top_n = LabeledEntry(cfg_section, "CPCV / PBO pool size (most expensive stage)", "8")
         self.evo_stress_mult = LabeledEntry(cfg_section, "Stress test cost multiplier", "2.0")
         self.evo_prefilter_max_bars = LabeledEntry(
@@ -13471,6 +13631,7 @@ class MainWindow:
             target_eval_pass_pct=loop_target,
             target_metric=loop_metric_key,
             reset_on_breach=self.evo_reset_on_breach.var.get(),
+            optimizer_mode=self._optimizer_mode_label_to_key.get(self.evo_optimizer_mode.get_str(), "genetic"),
         )
         self.evo_log_text.delete("1.0", END)
         self._evo_guide_shown = False
@@ -13916,6 +14077,7 @@ class MainWindow:
 
         self.fp_context = RunContextPanel(self, "Full Pipeline")
         self.fp_context.build(f)
+        self._button(f, "CHECK DATA INTEGRITY", lambda c=self.fp_context: self._check_data_integrity(c)).pack(anchor="w", padx=18, pady=(0, 8))
 
         settings = self._section(
             f, "Pipeline settings",
@@ -16199,6 +16361,7 @@ class MainWindow:
 
         self.qopt_context = RunContextPanel(self, "Quick Optimize")
         self.qopt_context.build(f)
+        self._button(f, "CHECK DATA INTEGRITY", lambda c=self.qopt_context: self._check_data_integrity(c)).pack(anchor="w", padx=18, pady=(0, 8))
 
         settings = self._section(
             f, "Quick Optimize settings",
@@ -16785,6 +16948,12 @@ class MainWindow:
         self.evomulti_elite_keep = LabeledEntry(settings, "Elite keep", 8)
         self.evomulti_min_trades = LabeledEntry(settings, "Minimum trades to be scoreable", 20)
         self.evomulti_mc_sims = LabeledEntry(settings, "Monte Carlo sims per candidate", 500)
+        self._optimizer_mode_labels = list(OPTIMIZER_MODES.values())
+        self._optimizer_mode_label_to_key = {v: k for k, v in OPTIMIZER_MODES.items()}
+        self.evomulti_optimizer_mode = LabeledCombo(
+            settings, "Optimizer mode (per-family child proposals)", self._optimizer_mode_labels,
+            OPTIMIZER_MODES["genetic"],
+        )
         self.evomulti_max_generations = LabeledEntry(settings, "Max generations (blank = unlimited)", "")
 
         button_row = Frame(f, bg=BG)
@@ -16852,6 +17021,7 @@ class MainWindow:
             min_trades=self.evomulti_min_trades.get_int(20),
             mc_sims=self.evomulti_mc_sims.get_int(500),
             max_generations=int(max_gen_raw) if max_gen_raw.isdigit() else None,
+            optimizer_mode=self._optimizer_mode_label_to_key.get(self.evomulti_optimizer_mode.get_str(), "genetic"),
         )
 
         group_id = uuid.uuid4().hex[:10]
