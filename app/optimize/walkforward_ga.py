@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import Callable
 
 import pandas as pd
+import numpy as np
 
 from app.backtest.engine import run_backtest
 from app.backtest.execution import Trade
@@ -788,8 +789,15 @@ def _run_cma_es_batches(genes: list, evaluate_batch: Callable, cfg: RefinementCo
     # badly mismatched step size.
     es = cma.CMAEvolutionStrategy(
         [0.5] * len(genes), 0.3,
-        {"bounds": [0.0, 1.0], "popsize": cfg.population_size,
-         "seed": cfg.random_seed or 0, "verbose": -9},
+        {"bounds": [0.0, 1.0], "popsize": cfg.population_size, "verbose": -9,
+         # UPGRADE (reproducibility bug fix): see app.optimize.refinement's
+         # identical fix for the full investigation -- "seed" alone seeds
+         # numpy's GLOBAL random state, but cma's default "randn" reads
+         # from that same global state, so the backtest/OOS-fold scoring
+         # this loop runs between every ask()/tell() pair silently broke
+         # reproducibility for any search past one generation. An isolated
+         # RandomState passed as "randn" fixes it.
+         "randn": np.random.RandomState(cfg.random_seed or 0).randn},
     )
 
     def _denormalize(unit_genome: list) -> list:

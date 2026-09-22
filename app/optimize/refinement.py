@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import Callable
 
 import pandas as pd
+import numpy as np
 
 from app.backtest.adaptive_risk import AdaptiveRiskConfig
 from app.backtest.engine import BacktestResult, run_backtest, run_holdout_comparison
@@ -95,6 +96,19 @@ FITNESS_METRICS: dict[str, str] = {
     "sharpe_ratio": "Sharpe Ratio",
 }
 
+# Explicit optimizer modes. All three run through the exact SAME
+# per-candidate execution path (_evaluate -> run_backtest -> prop
+# simulation -> Monte Carlo, below) and feed the exact same downstream
+# machinery (plateau-robust selection, cost-stress penalty, the final
+# full-fidelity re-evaluation, the holdout check) -- only HOW the next
+# genome to try is chosen differs. Picking a mode never changes what a
+# candidate is scored on, only how the search space is explored.
+OPTIMIZER_MODES: dict[str, str] = {
+    "genetic": "Genetic Algorithm -- tournament selection + crossover/mutation + random immigrants (default, dependency-free)",
+    "tpe": "TPE / Bayesian (Optuna) -- models which regions of the parameter space score well and samples more there each trial",
+    "cma_es": "CMA-ES -- adapts a search distribution's shape/scale to the space's curvature; strong on continuous, correlated parameters",
+}
+
 
 @dataclass
 class RefinementConfig:
@@ -138,6 +152,14 @@ class RefinementConfig:
     plateau_neighbor_step_frac: float = 0.08
     plateau_finalist_pool: int = 5
 
+    # Explicit optimizer mode -- see OPTIMIZER_MODES above. "genetic" is
+    # the exact pre-existing algorithm (default, zero behavior change).
+    # "tpe" and "cma_es" spend the SAME evaluation budget
+    # (population_size * (generations + 1), matching the genetic mode's
+    # initial population + bred generations) choosing genomes a different
+    # way, via the optional `optuna` / `cma` packages respectively.
+    optimizer_mode: str = "genetic"
+
     def __post_init__(self):
         self.population_size = max(int(self.population_size), 4)
         self.generations = max(int(self.generations), 1)
@@ -152,6 +174,10 @@ class RefinementConfig:
         self.plateau_finalist_pool = max(int(self.plateau_finalist_pool), 1)
         if self.fitness_metric not in FITNESS_METRICS:
             raise RefinementError(f"Unknown fitness metric '{self.fitness_metric}'.")
+        if self.optimizer_mode not in OPTIMIZER_MODES:
+            raise RefinementError(
+                f"Unknown optimizer_mode '{self.optimizer_mode}'. Supported: {list(OPTIMIZER_MODES)}."
+            )
 
 
 @dataclass
@@ -203,6 +229,21 @@ class RefinementResult:
     # plateau-robust pick's own fitness), swapped (whether the robust pick
     # differs from the raw optimum), and neighbor_step_frac (for the report).
     plateau_robustness: dict | None = None
+    # Evaluation-count transparency: exactly how many candidates this run
+    # actually backtested (baseline + every genome tried across the whole
+    # search, before plateau-robustness's cheap neighbor probes, which are
+    # deliberately excluded -- see `track=False` in run_iterative_refinement).
+    total_evaluations: int = 0
+    # "Distributions, not just a winner": median vs. best across every
+    # candidate this run evaluated, for whichever metrics are computed per-
+    # candidate already (eval/first-payout pass probability from the cheap
+    # per-candidate Monte Carlo pass, max drawdown from its own backtest
+    # statistics). None only when zero candidates produced a finite result.
+    # See _compute_distribution_summary's own docstring for exactly what
+    # this is -- and, as important, what it is NOT (no per-candidate
+    # OOS/regime numbers exist inside this loop, so those are never
+    # fabricated here).
+    distribution_summary: dict | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -634,6 +675,277 @@ def _summarize_generation(gen: int, population: list[Candidate], genes: list) ->
     )
 
 
+# ---------------------------------------------------------------------------
+# Explicit optimizer modes -- TPE (Optuna) and CMA-ES.
+#
+# Both take the SAME inputs (genes, an `evaluate(genome, generation) ->
+# Candidate` closure already bound to _evaluate/run_backtest, and the same
+# RefinementConfig) and return the SAME shape the genetic-mode loop already
+# produces: (final_population, generation_history, best_ever). Everything
+# downstream of the search loop in run_iterative_refinement -- plateau-
+# robust selection, the cost-stress penalty already baked into `fitness`,
+# the final full-fidelity re-evaluation, the holdout check -- is untouched
+# by which of the three ran, because all three only ever call the same
+# `evaluate` closure to decide what a genome scores. Neither library is a
+# hard dependency of the rest of the app -- see ml_classifier_gbdt_
+# direction.py's identical lazy-import pattern for lightgbm.
+# ---------------------------------------------------------------------------
+
+def _genome_to_dict(genome: list, genes: list) -> dict:
+    return {gene.label: value for gene, value in zip(genes, genome)}
+
+
+def _run_genetic_search(
+    genes: list, evaluate: Callable, cfg: "RefinementConfig", log: ProgressCallback,
+    rng: random.Random, baseline: Candidate,
+) -> tuple[list, list["GenerationSummary"], Candidate]:
+    """The original genetic algorithm, extracted verbatim (no behavior
+    change -- see tests/test_refinement.py's full existing suite, which
+    covers this exact code unchanged) so app.optimize.multi_market_refinement
+    can reuse it for multi-market aggregate scoring instead of duplicating
+    it. Takes the already-evaluated `baseline` candidate (tracked by the
+    caller before this runs, same as every mode) and returns (population,
+    generation_history, best_ever) -- exactly what run_iterative_refinement
+    used to build inline."""
+    population: list[Candidate] = [baseline]
+    while len(population) < cfg.population_size:
+        population.append(evaluate([_random_gene_value(g, rng) for g in genes], 0))
+
+    best_ever = max(population, key=lambda c: c.fitness)
+    generation_history: list[GenerationSummary] = [_summarize_generation(0, population, genes)]
+    log(
+        f"Generation 0 (initial population of {cfg.population_size}): "
+        f"best={generation_history[0].best_fitness:.3f}  mean={generation_history[0].mean_fitness:.3f}"
+    )
+
+    for gen in range(1, cfg.generations + 1):
+        population.sort(key=lambda c: c.fitness, reverse=True)
+        elites = population[: cfg.elite_count]
+        next_pop: list[Candidate] = list(elites)
+
+        n_immigrants = max(1, round(cfg.population_size * cfg.random_immigrants_frac))
+        n_bred = max(cfg.population_size - len(elites) - n_immigrants, 0)
+
+        for _ in range(n_bred):
+            parent_a = _tournament_select(population, rng)
+            parent_b = _tournament_select(population, rng)
+            child_genome = _crossover(parent_a.genome, parent_b.genome, rng)
+            child_genome = _mutate(child_genome, genes, cfg.mutation_rate, cfg.mutation_strength, rng)
+            next_pop.append(evaluate(child_genome, gen))
+
+        while len(next_pop) < cfg.population_size:
+            next_pop.append(evaluate([_random_gene_value(g, rng) for g in genes], gen))
+
+        population = next_pop
+        gen_summary = _summarize_generation(gen, population, genes)
+        generation_history.append(gen_summary)
+
+        gen_best = max(population, key=lambda c: c.fitness)
+        if gen_best.fitness > best_ever.fitness:
+            best_ever = gen_best
+
+        log(
+            f"Generation {gen}/{cfg.generations}: best={gen_summary.best_fitness:.3f}  "
+            f"mean={gen_summary.mean_fitness:.3f}  diversity={gen_summary.diversity:.3f}  "
+            f"(best-ever={best_ever.fitness:.3f})"
+        )
+    return population, generation_history, best_ever
+
+
+def _run_tpe_search(
+    genes: list, evaluate: Callable, cfg: "RefinementConfig", log: ProgressCallback,
+) -> tuple[list["GenerationSummary"], int]:
+    """Runs TPE search via the SAME `evaluate` closure the genetic loop
+    uses. Returns (generation_history, last_batch_size) -- NOT the
+    Candidate objects themselves, since `evaluate` already appends every
+    one of them, in completion order, to the caller's own all_evaluated
+    list; the caller recovers the final "generation" as
+    all_evaluated[-last_batch_size:], exactly mirroring what the genetic
+    loop's own `population` variable holds at the end of its last
+    generation."""
+    try:
+        import optuna
+    except ImportError as exc:
+        raise RefinementError(
+            "optimizer_mode='tpe' requires the optuna package (pip install optuna) -- "
+            "it isn't a hard dependency of the rest of this app, only of TPE search."
+        ) from exc
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+    sampler = optuna.samplers.TPESampler(seed=cfg.random_seed)
+    study = optuna.create_study(direction="maximize", sampler=sampler)
+
+    batch: list[Candidate] = []
+    generation_history: list[GenerationSummary] = []
+    gen_counter = [0]
+
+    def objective(trial: "optuna.Trial") -> float:
+        genome = []
+        for gene in genes:
+            if gene.is_int:
+                v = trial.suggest_int(gene.label, int(round(gene.lo)), int(round(gene.hi)))
+            else:
+                v = trial.suggest_float(gene.label, float(gene.lo), float(gene.hi))
+            genome.append(float(v))
+        candidate = evaluate(genome, gen_counter[0])
+        batch.append(candidate)
+        if len(batch) >= cfg.population_size:
+            generation_history.append(_summarize_generation(gen_counter[0], list(batch), genes))
+            log(
+                f"TPE batch {gen_counter[0]}/{cfg.generations}: "
+                f"best={generation_history[-1].best_fitness:.3f}  mean={generation_history[-1].mean_fitness:.3f}"
+            )
+            batch.clear()
+            gen_counter[0] += 1
+        return candidate.fitness if math.isfinite(candidate.fitness) else -1e18
+
+    total_trials = cfg.population_size * (cfg.generations + 1)
+    study.optimize(objective, n_trials=total_trials, show_progress_bar=False)
+    if batch:
+        generation_history.append(_summarize_generation(gen_counter[0], list(batch), genes))
+    last_batch_size = min(cfg.population_size, total_trials)
+    return generation_history, last_batch_size
+
+
+def _run_cma_es_search(
+    genes: list, evaluate: Callable, cfg: "RefinementConfig", log: ProgressCallback,
+) -> tuple[list["GenerationSummary"], int]:
+    """Same contract as _run_tpe_search above: returns (generation_history,
+    last_batch_size), not Candidate objects."""
+    try:
+        import cma
+    except ImportError as exc:
+        raise RefinementError(
+            "optimizer_mode='cma_es' requires the cma package (pip install cma) -- "
+            "it isn't a hard dependency of the rest of this app, only of CMA-ES search."
+        ) from exc
+
+    x0 = [(gene.lo + gene.hi) / 2.0 for gene in genes]
+    spans = [(gene.hi - gene.lo) or 1.0 for gene in genes]
+    sigma0 = 0.3  # in the same normalized-by-span units bounds/scaling below use
+    # cma treats every dimension as sharing one sigma unless told otherwise --
+    # normalize each gene to a 0..1 range internally and rescale on the way
+    # out, so genes with very different spans (e.g. an RSI period 2-30 next
+    # to an ATR stop multiplier 0.5-5) don't get a badly mismatched step size.
+    es = cma.CMAEvolutionStrategy(
+        [0.5] * len(genes), sigma0,
+        {"bounds": [0.0, 1.0], "popsize": cfg.population_size, "verbose": -9,
+         # UPGRADE (reproducibility bug fix, found and root-caused via a
+         # sibling module's test failure -- see app.optimize.multi_market
+         # for the full investigation): "seed" alone seeds numpy's GLOBAL
+         # random state at construction time, but cma's default "randn"
+         # option is np.random.randn -- the SAME global function -- so
+         # every ask() after the first draws from whatever state numpy's
+         # global RNG happens to be in by then. The backtest/Monte Carlo
+         # pass this loop runs between every ask()/tell() pair is exactly
+         # the kind of code that disturbs it, so "seed" alone silently
+         # broke reproducibility for any search that ran more than one
+         # generation. An isolated np.random.RandomState instance, passed
+         # as "randn" instead, gives CMA-ES a private generator nothing
+         # else in this process can perturb -- verified by deliberately
+         # disturbing numpy's global state between ask() calls in testing
+         # and confirming the sequence stayed identical anyway.
+         "randn": np.random.RandomState(cfg.random_seed or 0).randn},
+    )
+
+    def _denormalize(unit_genome: list) -> list:
+        out = []
+        for u, gene in zip(unit_genome, genes):
+            v = gene.lo + max(0.0, min(1.0, u)) * (gene.hi - gene.lo)
+            out.append(float(round(v)) if gene.is_int else float(v))
+        return out
+
+    generation_history: list[GenerationSummary] = []
+    last_batch_size = cfg.population_size
+    gen = 0
+    while gen <= cfg.generations and not es.stop():
+        solutions = es.ask()
+        batch_candidates: list[Candidate] = []
+        penalties: list[float] = []
+        for unit_genome in solutions:
+            genome = _denormalize(unit_genome)
+            candidate = evaluate(genome, gen)
+            batch_candidates.append(candidate)
+            # cma minimizes -- feed it the negative fitness. A non-finite
+            # fitness (zero trades) becomes a large-but-finite penalty
+            # rather than +/-inf, which cma's internal covariance update
+            # cannot handle.
+            penalties.append(-candidate.fitness if math.isfinite(candidate.fitness) else 1e12)
+        es.tell(solutions, penalties)
+        generation_history.append(_summarize_generation(gen, batch_candidates, genes))
+        log(
+            f"CMA-ES generation {gen}/{cfg.generations}: "
+            f"best={generation_history[-1].best_fitness:.3f}  mean={generation_history[-1].mean_fitness:.3f}"
+        )
+        last_batch_size = len(batch_candidates)
+        gen += 1
+    return generation_history, last_batch_size
+
+
+def _compute_distribution_summary(all_evaluated: list[Candidate], cfg: "RefinementConfig") -> dict | None:
+    """"Distributions, not just a winner": median vs. best across every
+    candidate this run actually evaluated, for the metrics computed for
+    EVERY candidate already (not just the final champion) -- the cheap
+    per-candidate Monte Carlo pass's eval/first-payout probability, and
+    that candidate's own backtest max drawdown. Deliberately does NOT
+    report an OOS-pass or regime-stability distribution: neither is
+    computed per-candidate inside this search loop (only once, at the
+    very end, for the single chosen champion via the holdout check) --
+    fabricating a per-candidate number for either here would be exactly
+    the kind of invented statistic this app avoids elsewhere.
+    """
+    finite = [c for c in all_evaluated if math.isfinite(c.fitness) and c.mc_summary]
+    if not finite:
+        return None
+
+    def _pctile(values: list[float], p: float) -> float:
+        s = sorted(values)
+        if not s:
+            return float("nan")
+        k = (len(s) - 1) * p
+        f, c = math.floor(k), math.ceil(k)
+        if f == c:
+            return s[int(k)]
+        return s[f] + (s[c] - s[f]) * (k - f)
+
+    eval_pass = [c.mc_summary["evaluation_pass_probability"] for c in finite]
+    payout_pass = [c.mc_summary["first_payout_probability"] for c in finite]
+    max_dd = [
+        c.statistics.get("max_drawdown_pct") for c in finite
+        if c.statistics and c.statistics.get("max_drawdown_pct") is not None
+    ]
+    fitnesses = [c.fitness for c in finite]
+
+    # "Robust candidates" -- a deliberately simple, transparent bar: how
+    # many DIFFERENT-GENOME candidates this run evaluated cleared >=80% of
+    # the raw best fitness found anywhere. Not a re-implementation of
+    # plateau-robust selection's own neighborhood-perturbation logic
+    # (that answers "does this ONE candidate hold up to nudging its own
+    # parameters"); this instead answers "how many genuinely different
+    # points in the space this run tried are almost as good as the best
+    # one" -- a rough proxy for how wide/flat the good region of the
+    # space is, not a claim of statistical robustness.
+    best_fitness = max(fitnesses)
+    robust_threshold = best_fitness * 0.8 if best_fitness > 0 else best_fitness * 1.2
+    robust_count = sum(1 for f in fitnesses if f >= robust_threshold)
+
+    return {
+        "candidates_tested": len(all_evaluated),
+        "candidates_with_trades": len(finite),
+        "eval_pass_probability": {
+            "median": _pctile(eval_pass, 0.5), "best": max(eval_pass),
+        },
+        "first_payout_probability": {
+            "median": _pctile(payout_pass, 0.5), "best": max(payout_pass),
+        },
+        "max_drawdown_pct": (
+            {"median": _pctile(max_dd, 0.5), "best": min(max_dd)} if max_dd else None
+        ),
+        "robust_candidates": robust_count,
+        "robust_threshold_fraction_of_best": 0.8 if best_fitness > 0 else 1.2,
+    }
+
+
 _NO_PARAMS_MESSAGE = {
     "manual": (
         "No tunable numeric parameters were found in this strategy configuration. "
@@ -867,48 +1179,24 @@ def run_iterative_refinement(
             )
         log(f"Baseline fitness ({FITNESS_METRICS[cfg.fitness_metric]}): {baseline.fitness:.3f}")
 
-        population: list[Candidate] = [baseline]
-        while len(population) < cfg.population_size:
-            population.append(evaluate([_random_gene_value(g, rng) for g in genes], 0))
-
-        best_ever = max(population, key=lambda c: c.fitness)
-        generation_history: list[GenerationSummary] = [_summarize_generation(0, population, genes)]
-        log(
-            f"Generation 0 (initial population of {cfg.population_size}): "
-            f"best={generation_history[0].best_fitness:.3f}  mean={generation_history[0].mean_fitness:.3f}"
-        )
-
-        for gen in range(1, cfg.generations + 1):
-            population.sort(key=lambda c: c.fitness, reverse=True)
-            elites = population[: cfg.elite_count]
-            next_pop: list[Candidate] = list(elites)
-
-            n_immigrants = max(1, round(cfg.population_size * cfg.random_immigrants_frac))
-            n_bred = max(cfg.population_size - len(elites) - n_immigrants, 0)
-
-            for _ in range(n_bred):
-                parent_a = _tournament_select(population, rng)
-                parent_b = _tournament_select(population, rng)
-                child_genome = _crossover(parent_a.genome, parent_b.genome, rng)
-                child_genome = _mutate(child_genome, genes, cfg.mutation_rate, cfg.mutation_strength, rng)
-                next_pop.append(evaluate(child_genome, gen))
-
-            while len(next_pop) < cfg.population_size:
-                next_pop.append(evaluate([_random_gene_value(g, rng) for g in genes], gen))
-
-            population = next_pop
-            gen_summary = _summarize_generation(gen, population, genes)
-            generation_history.append(gen_summary)
-
-            gen_best = max(population, key=lambda c: c.fitness)
-            if gen_best.fitness > best_ever.fitness:
-                best_ever = gen_best
-
-            log(
-                f"Generation {gen}/{cfg.generations}: best={gen_summary.best_fitness:.3f}  "
-                f"mean={gen_summary.mean_fitness:.3f}  diversity={gen_summary.diversity:.3f}  "
-                f"(best-ever={best_ever.fitness:.3f})"
-            )
+        if cfg.optimizer_mode == "genetic":
+            population, generation_history, best_ever = _run_genetic_search(genes, evaluate, cfg, log, rng, baseline)
+        else:
+            # TPE / CMA-ES -- see OPTIMIZER_MODES and _run_tpe_search /
+            # _run_cma_es_search's own docstrings. Both call the SAME
+            # `evaluate` closure as the genetic branch above, so `baseline`
+            # (already evaluated and tracked before this if/else) and every
+            # trial they run land in `all_evaluated` in one consistent
+            # order regardless of mode.
+            mode_label = OPTIMIZER_MODES[cfg.optimizer_mode].split(" -- ")[0]
+            planned = cfg.population_size * (cfg.generations + 1)
+            log(f"Running {mode_label} search ({planned} evaluations planned)...")
+            if cfg.optimizer_mode == "tpe":
+                generation_history, last_batch_size = _run_tpe_search(genes, evaluate, cfg, log)
+            else:
+                generation_history, last_batch_size = _run_cma_es_search(genes, evaluate, cfg, log)
+            population = all_evaluated[-last_batch_size:] if last_batch_size else list(all_evaluated)
+            best_ever = max(all_evaluated, key=lambda c: c.fitness)
 
         plateau_report: dict | None = None
         if cfg.plateau_robust_selection:
@@ -963,7 +1251,8 @@ def run_iterative_refinement(
 
         leaderboard = sorted(population, key=lambda c: c.fitness, reverse=True)
         elapsed = time.time() - t0
-        log(f"Iterative Refinement complete in {elapsed:.1f}s.")
+        distribution_summary = _compute_distribution_summary(all_evaluated, cfg)
+        log(f"Iterative Refinement complete in {elapsed:.1f}s ({len(all_evaluated)} candidates evaluated).")
 
         return RefinementResult(
             refinement_config=cfg,
@@ -978,6 +1267,8 @@ def run_iterative_refinement(
             elapsed_seconds=elapsed,
             warnings=warnings,
             plateau_robustness=plateau_report,
+            total_evaluations=len(all_evaluated),
+            distribution_summary=distribution_summary,
         )
     finally:
         if tmp_dir is not None:
