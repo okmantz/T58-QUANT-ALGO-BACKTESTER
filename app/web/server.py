@@ -80,6 +80,7 @@ from app.optimize.multi_objective import (    DEFAULT_OBJECTIVES, MultiObjective
 )
 from app.backtest.adaptive_risk import build_limit_aware_preset
 from app.optimize.refinement import FITNESS_METRICS, OPTIMIZER_MODES, RefinementConfig, RefinementError, run_iterative_refinement
+from app.optimize.multi_market import AGGREGATION_METHODS, run_multi_market_search
 from app.optimize.walkforward_ga import WalkforwardGACancelled, run_walkforward_aware_refinement
 from app.orchestration.batch_test import BatchTestItem, run_batch_test
 from app.orchestration.full_pipeline import (
@@ -90,7 +91,7 @@ from app.orchestration.quick_optimize import QuickOptimizeConfig, run_quick_opti
 from app.orchestration.resource_guard import (
     HEAVY_JOB_GUARD, JOB_EVOLUTION_LAB, JOB_FORGE, JOB_FULL_PIPELINE, JOB_SEARCH_LAB, JOB_SPEED_RUN,
     JOB_WFO, JOB_WFGA, JOB_CPCV, JOB_SENSITIVITY, JOB_MULTI_OBJECTIVE, JOB_REGIME_MATRIX, JOB_PBO,
-    JOB_PARAMETER_ROBUSTNESS,
+    JOB_PARAMETER_ROBUSTNESS, JOB_MULTI_MARKET,
     JOB_MULTI_INSTRUMENT_SEARCH, JOB_MULTI_INSTRUMENT_SPEED_RUN, JOB_MULTI_INSTRUMENT_EVOLUTION,
 )
 from app.orchestration.forge import ForgeConfig, run_forge
@@ -2117,6 +2118,266 @@ def refine_job_status(job_id):
 @app.route("/refinement_reports/<path:filename>")
 def serve_refinement_report(filename):
     return send_from_directory(REFINEMENT_DIR, filename)
+
+
+# ---------------------------------------------------------------------------
+# Multi-Market Aggregate Search -- see app.optimize.multi_market's module
+# docstring. Same background-job/poll shape as Iterative Refinement above,
+# except the strategy is scored against SEVERAL markets at once (mean/
+# worst-case/mean-minus-dispersion aggregate), not one.
+# ---------------------------------------------------------------------------
+
+_MULTI_MARKET_JOBS: dict[str, dict] = {}
+_MULTI_MARKET_JOBS_LOCK = threading.Lock()
+
+
+def _multi_market_job_log(job_id: str, msg: str) -> None:
+    with _MULTI_MARKET_JOBS_LOCK:
+        job = _MULTI_MARKET_JOBS.get(job_id)
+        if job is not None:
+            job["log"].append(msg)
+
+
+def _run_multi_market_job(
+    job_id: str, dfs: dict, strategy, risk: RiskConfig, rules: PropRules,
+    mc_cfg: MonteCarloConfig, cfg: RefinementConfig, aggregation: str,
+) -> None:
+    try:
+        result = run_multi_market_search(
+            dfs, strategy, risk, rules, mc_cfg, cfg, aggregation=aggregation,
+            progress_cb=lambda msg: _multi_market_job_log(job_id, msg),
+        )
+        with _MULTI_MARKET_JOBS_LOCK:
+            job = _MULTI_MARKET_JOBS[job_id]
+            job["done"] = True
+            job["result"] = result
+    except RefinementError as exc:
+        with _MULTI_MARKET_JOBS_LOCK:
+            job = _MULTI_MARKET_JOBS[job_id]
+            job["done"] = True
+            job["error"] = str(exc)
+    except Exception as exc:  # noqa: BLE001 -- must surface on the status page, not crash the thread silently
+        log_crash("Multi-Market Aggregate Search (web)", exc=exc)
+        with _MULTI_MARKET_JOBS_LOCK:
+            job = _MULTI_MARKET_JOBS[job_id]
+            job["done"] = True
+            job["error"] = f"Unexpected error: {exc}"
+    finally:
+        HEAVY_JOB_GUARD.release(JOB_MULTI_MARKET)
+
+
+@app.route("/multi-market")
+def multi_market_form():
+    return render_template(
+        "multi_market.html",
+        stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+        saved_strategies_json=_saved_strategies_json(),
+        fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES,
+        aggregation_methods=AGGREGATION_METHODS, **_alpaca_template_context(),
+    )
+
+
+@app.route("/multi-market/start", methods=["POST"])
+def multi_market_start():
+    form = request.form
+    if not HEAVY_JOB_GUARD.try_acquire(JOB_MULTI_MARKET):
+        return render_template(
+            "multi_market.html",
+            error=(
+                f"{HEAVY_JOB_GUARD.active_name} is already running on this server. Wait for it to "
+                f"finish first."
+            ),
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+            saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS,
+            optimizer_modes=OPTIMIZER_MODES, aggregation_methods=AGGREGATION_METHODS,
+            **_alpaca_template_context(),
+        ), 409
+    try:
+        selected = form.getlist("datasets")
+        if len(selected) < 2:
+            HEAVY_JOB_GUARD.release(JOB_MULTI_MARKET)
+            return render_template(
+                "multi_market.html", error="Select at least 2 markets to score candidates against.",
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+                saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS,
+                optimizer_modes=OPTIMIZER_MODES, aggregation_methods=AGGREGATION_METHODS,
+                **_alpaca_template_context(),
+            ), 400
+
+        dfs: dict[str, pd.DataFrame] = {}
+        load_warnings: list[str] = []
+        for name in selected:
+            candidate_path = get_raw_data_dir() / name
+            if not candidate_path.exists():
+                load_warnings.append(f"{name}: file not found -- skipped.")
+                continue
+            import_result = import_csv(candidate_path)
+            if not import_result.is_valid:
+                load_warnings.append(f"{name}: could not be read as market data -- skipped.")
+                continue
+            label = Path(name).stem
+            dfs[label] = import_result.dataframe
+
+        if len(dfs) < 2:
+            HEAVY_JOB_GUARD.release(JOB_MULTI_MARKET)
+            return render_template(
+                "multi_market.html",
+                error="Fewer than 2 of the selected datasets could actually be loaded: "
+                      + "; ".join(load_warnings),
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+                saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS,
+                optimizer_modes=OPTIMIZER_MODES, aggregation_methods=AGGREGATION_METHODS,
+                **_alpaca_template_context(),
+            ), 400
+
+        strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
+        risk = RiskConfig(
+            initial_balance=float(form.get("initial_balance", 100000) or 100000),
+            risk_mode=form.get("risk_mode", "percent"),
+            risk_value=float(form.get("risk_value", 1.0) or 1.0),
+            pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+        )
+        rules = PropRules(
+            account_size=float(form.get("account_size", 100000) or 100000),
+            evaluation_profit_target_pct=float(form.get("profit_target", 8) or 8),
+            daily_loss_limit_pct=float(form.get("daily_loss", 5) or 5),
+            max_drawdown_pct=float(form.get("max_dd", 10) or 10),
+        )
+        mc_cfg = MonteCarloConfig(n_simulations=int(form.get("n_sims", 2000) or 2000))
+        cfg = RefinementConfig(
+            enabled=True,
+            fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
+            optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
+            population_size=int(form.get("population_size", 10) or 10),
+            generations=int(form.get("generations", 5) or 5),
+            elite_count=int(form.get("elite_count", 2) or 2),
+            search_monte_carlo_sims=int(form.get("search_mc_sims", 300) or 300),
+            random_seed=int(form.get("random_seed", 42) or 42),
+        )
+        aggregation = form.get("aggregation", "mean_minus_dispersion") or "mean_minus_dispersion"
+
+        # T58 BACKTEST INTEGRITY CHECK -- same pre-flight gate as every
+        # other search tool (see app.validation.integrity_check). Runs
+        # against the FIRST selected market only, on the same reasoning
+        # Search Lab's family_named mode uses for strategy=None: a check
+        # against one representative dataset catches corrupt data or a
+        # timeframe mismatch before spending compute across all of them,
+        # without needing a per-market integrity report (none of the
+        # other multi-instrument tools have one either).
+        first_df = next(iter(dfs.values()))
+        integrity_report = run_integrity_check(
+            first_df, strategy, risk, prop_rules=rules,
+            requested_timeframe=form.get("timeframe") or None,
+            data_label=next(iter(dfs.keys())),
+        )
+        if integrity_report.status == "BLOCKED":
+            HEAVY_JOB_GUARD.release(JOB_MULTI_MARKET)
+            return render_template(
+                "multi_market.html", error=integrity_report.render(),
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+                saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS,
+                optimizer_modes=OPTIMIZER_MODES, aggregation_methods=AGGREGATION_METHODS,
+                **_alpaca_template_context(),
+            ), 400
+
+        job_id = uuid.uuid4().hex[:12]
+        initial_log = [f"Loaded {len(dfs)} market(s): {', '.join(dfs.keys())}."]
+        if load_warnings:
+            initial_log.extend(load_warnings)
+        with _MULTI_MARKET_JOBS_LOCK:
+            _MULTI_MARKET_JOBS[job_id] = {
+                "log": initial_log, "done": False, "error": None, "result": None,
+                "started_at": time.time(), "markets": list(dfs.keys()), "aggregation": aggregation,
+            }
+        thread = threading.Thread(
+            target=_run_multi_market_job,
+            args=(job_id, dfs, strategy, risk, rules, mc_cfg, cfg, aggregation),
+            daemon=True,
+        )
+        thread.start()
+        return redirect(url_for("multi_market_job", job_id=job_id))
+
+    except (StrategyError, RefinementError) as exc:
+        HEAVY_JOB_GUARD.release(JOB_MULTI_MARKET)
+        return render_template(
+            "multi_market.html", error=str(exc),
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+            saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS,
+            optimizer_modes=OPTIMIZER_MODES, aggregation_methods=AGGREGATION_METHODS,
+            **_alpaca_template_context(),
+        ), 400
+    except Exception as exc:  # noqa: BLE001
+        HEAVY_JOB_GUARD.release(JOB_MULTI_MARKET)
+        return render_template(
+            "multi_market.html", error=f"Unexpected error: {exc}",
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+            saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS,
+            optimizer_modes=OPTIMIZER_MODES, aggregation_methods=AGGREGATION_METHODS,
+            **_alpaca_template_context(),
+        ), 500
+
+
+@app.route("/multi-market/job/<job_id>")
+def multi_market_job(job_id):
+    with _MULTI_MARKET_JOBS_LOCK:
+        job = _MULTI_MARKET_JOBS.get(job_id)
+    return render_template("multi_market_job.html", job_id=job_id, not_found=job is None)
+
+
+@app.route("/multi-market/job/<job_id>/status.json")
+def multi_market_job_status(job_id):
+    with _MULTI_MARKET_JOBS_LOCK:
+        job = _MULTI_MARKET_JOBS.get(job_id)
+    if job is None:
+        return jsonify({"not_found": True}), 404
+
+    result = job.get("result")
+    payload = {
+        "done": job["done"], "error": job.get("error"), "log": job["log"][-200:],
+        "markets": job.get("markets", []), "aggregation": job.get("aggregation"),
+    }
+    if result is not None:
+        payload["result"] = {
+            "aggregation": result.aggregation,
+            "fitness_metric": result.fitness_metric,
+            "markets": result.markets,
+            "total_evaluations": result.total_evaluations,
+            "elapsed_seconds": result.elapsed_seconds,
+            "warnings": result.warnings,
+            "baseline": {
+                "robustness_score": result.baseline.robustness_score,
+                "mean_fitness": result.baseline.mean_fitness,
+                "worst_case_fitness": result.baseline.worst_case_fitness,
+                "dispersion": result.baseline.dispersion,
+                "per_market": [
+                    {"market": p.market, "fitness": p.fitness, "trade_count": p.trade_count}
+                    for p in result.baseline.per_market
+                ],
+            },
+            "best": {
+                "robustness_score": result.best.robustness_score,
+                "mean_fitness": result.best.mean_fitness,
+                "worst_case_fitness": result.best.worst_case_fitness,
+                "dispersion": result.best.dispersion,
+                "config": result.best.config,
+                "per_market": [
+                    {"market": p.market, "fitness": p.fitness, "trade_count": p.trade_count}
+                    for p in result.best.per_market
+                ],
+            },
+            "generation_history": [
+                {"generation": g.generation, "best_robustness_score": g.best_robustness_score,
+                 "mean_robustness_score": g.mean_robustness_score}
+                for g in result.generation_history
+            ],
+            "leaderboard": [
+                {"robustness_score": c.robustness_score, "mean_fitness": c.mean_fitness,
+                 "worst_case_fitness": c.worst_case_fitness,
+                 "per_market": [{"market": p.market, "fitness": p.fitness} for p in c.per_market]}
+                for c in result.leaderboard[:25]
+            ],
+        }
+    return jsonify(payload)
 
 
 # ---------------------------------------------------------------------------
