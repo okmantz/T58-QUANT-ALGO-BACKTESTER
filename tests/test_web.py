@@ -755,3 +755,17 @@ def test_evolution_promote_no_confirmation_needed_when_gap_is_small(monkeypatch,
     assert r.get_json()["ok"] is True
 
 
+
+
+def test_strategy_library_page_is_reachable():
+    """BUG FIX: @app.route("/library") had gone missing from above
+    def strategy_library_page() at some point -- the view function was
+    still defined and fully working, just never actually registered
+    with Flask, so every link to it (sidebar, dashboard, the Create
+    section's Start Here page) 404'd. Guards against that regressing
+    silently again."""
+    app.config["TESTING"] = True
+    client = app.test_client()
+    r = client.get("/library")
+    assert r.status_code == 200
+    assert "renderGrid" in r.get_data(as_text=True)
