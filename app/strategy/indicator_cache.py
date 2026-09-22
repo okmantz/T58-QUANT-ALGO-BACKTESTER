@@ -92,9 +92,31 @@ def _frame_fingerprint(frame: pd.DataFrame) -> tuple:
             last_ts = frame["timestamp"].iloc[-1]
         else:
             first_ts = last_ts = None
-        return (id(frame), n, str(first_ts), str(last_ts))
+        # UPGRADE (multi-market aggregate scoring bug fix): id() is only
+        # guaranteed unique among objects alive AT THE SAME TIME -- once a
+        # short-lived DataFrame is garbage-collected, Python can and does
+        # reuse its memory address for an unrelated new object. Two
+        # DataFrames covering the same session/bar-count range (e.g. two
+        # CME futures like ES and GC on the same trading day, or just two
+        # candidates' temporary frames created and freed in sequence) can
+        # therefore share (id, n, first_ts, last_ts) despite having
+        # completely different price data -- confirmed directly: running
+        # the exact same strategy across several same-length, same-range
+        # markets back-to-back (app.optimize.multi_market's whole reason
+        # to exist) returned another market's cached indicator values for
+        # one of them often enough to make every optimizer mode's
+        # "reproducible given the same seed" guarantee fail. A cheap hash
+        # of the actual first/last close price closes the gap: it costs
+        # two scalar reads, not a full-column hash, and two genuinely
+        # different price series sharing it too is astronomically
+        # unlikely compared to sharing shape+timestamps alone.
+        if n and "close" in frame.columns:
+            price_fingerprint = (float(frame["close"].iloc[0]), float(frame["close"].iloc[-1]))
+        else:
+            price_fingerprint = None
+        return (id(frame), n, str(first_ts), str(last_ts), price_fingerprint)
     except Exception:  # noqa: BLE001 -- fingerprinting must never crash a backtest
-        return (id(frame), len(frame) if frame is not None else 0, None, None)
+        return (id(frame), len(frame) if frame is not None else 0, None, None, None)
 
 
 def get_or_compute(
