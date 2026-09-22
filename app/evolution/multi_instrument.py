@@ -24,6 +24,7 @@ whole group together as one unit for the web UI.
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
 from dataclasses import dataclass, replace
@@ -38,6 +39,29 @@ from app.search.budget_allocator import (
     normalize_evolution_record,
     pooled_cross_instrument_leaderboard,
 )
+
+
+def _resolved_workers_per_job(base_cfg: EvolutionConfig, n_concurrent: int) -> int:
+    """FIX: every EvolutionRunner in this group starts on its own thread
+    and independently calls app.orchestration.resource_guard.
+    safe_worker_count() to size its OWN ProcessPoolExecutor -- and that
+    guard has no idea any sibling runners exist, so it happily hands
+    each one up to os.cpu_count() workers and up to _MAX_MEMORY_FRACTION
+    of *currently available* memory, measured at roughly the same
+    moment (all runners start together in start_all()). With N
+    instruments running at once that's N x the intended CPU and memory
+    budget -- exactly the "whole machine froze" failure mode
+    app.orchestration.resource_guard's own docstring describes, just
+    from siblings within ONE multi-instrument job instead of from
+    separate heavy jobs stacking (which HEAVY_JOB_GUARD already
+    prevents). This mirrors the identical, already-relied-upon fix in
+    app.orchestration.multi_instrument_search._resolved_workers_per_job
+    for Search Lab's multi-instrument mode -- divide the configured
+    worker budget across however many instruments will actually run
+    concurrently, so N runners together stay within one CPU/memory
+    budget instead of each claiming a whole one. Never goes below 1."""
+    total = base_cfg.parallel_workers or (os.cpu_count() or 2)
+    return max(1, total // max(1, n_concurrent))
 
 
 @dataclass(frozen=True)
@@ -96,6 +120,15 @@ class MultiInstrumentEvolutionGroup:
             for plan in allocate_search_budget(total_evaluation_budget, [job.label for job in jobs]):
                 budget_by_label[plan.label] = plan
 
+        # FIX (worker-pool oversubscription -- see _resolved_workers_per_job's
+        # own docstring above): every job in this group runs concurrently
+        # (start_all() below starts every runner's thread with no
+        # throttling), so the per-runner worker budget must be divided
+        # across len(jobs) up front, not left at base_cfg's single-run
+        # default. This is what a run that "just force-stopped" on 2+
+        # instruments together was almost certainly hitting.
+        per_job_workers = _resolved_workers_per_job(base_cfg, len(jobs))
+
         base_dir = get_app_base_dir() / "data" / "evolution" / "multi_instrument" / group_id
         for job in jobs:
             job_dir = base_dir / job.slug
@@ -113,6 +146,7 @@ class MultiInstrumentEvolutionGroup:
                 "checkpoint_path": str(job_dir / "checkpoint.json"),
                 "tested_log_path": str(job_dir / "tested_candidates.jsonl"),
                 "knowledge_graph_path": str(job_dir / "knowledge_graph.jsonl"),
+                "parallel_workers": per_job_workers,
             }
             plan = budget_by_label.get(job.label)
             if plan is not None:
@@ -120,7 +154,11 @@ class MultiInstrumentEvolutionGroup:
                 overrides["max_generations"] = min(plan.max_generations, base_cfg.max_generations) \
                     if base_cfg.max_generations is not None else plan.max_generations
             cfg = replace(base_cfg, **overrides)
-            log_line = f"Loaded {len(df)} bars from {job.csv_path}."
+            log_line = (
+                f"Loaded {len(df)} bars from {job.csv_path}. Worker pool capped at "
+                f"{per_job_workers} process(es) for this instrument (shared across "
+                f"{len(jobs)} concurrent instruments in this group)."
+            )
             if plan is not None:
                 log_line += (
                     f" Allocated budget: population={plan.population_size}, "
