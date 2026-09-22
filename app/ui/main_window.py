@@ -65,7 +65,7 @@ from app.live_deploy.execution_engine import LiveExecutionSession, LiveExecution
 from app.monte_carlo.engine import MonteCarloConfig, MonteCarloResult, run_monte_carlo
 from app.monte_carlo.bankroll import BankrollConfig, BankrollSurvivalResult, simulate_bankroll_survival
 from app.optimize.parameter_space import RefinementError, apply_genome, extract_genome
-from app.optimize.refinement import FITNESS_METRICS, RefinementConfig, run_iterative_refinement
+from app.optimize.refinement import FITNESS_METRICS, OPTIMIZER_MODES, RefinementConfig, run_iterative_refinement
 from app.optimize.multi_objective import DEFAULT_OBJECTIVES, MultiObjectiveConfig, OBJECTIVE_DIRECTIONS, run_multi_objective_refinement
 from app.optimize.walkforward_ga import run_walkforward_aware_refinement
 from app.orchestration import pipeline_guide
@@ -7541,6 +7541,8 @@ class MainWindow:
     def _build_refine_config(self) -> RefinementConfig:
         metric_label = self.refine_metric.get_str()
         metric_key = self._refine_metric_label_to_key.get(metric_label, "eval_pass_probability")
+        optimizer_label = self.refine_optimizer_mode.get_str()
+        optimizer_key = self._optimizer_mode_label_to_key.get(optimizer_label, "genetic")
         return RefinementConfig(
             fitness_metric=metric_key,
             population_size=self.refine_population.get_int(10),
@@ -7554,6 +7556,7 @@ class MainWindow:
             cost_stress_enabled=self.refine_cost_stress_enabled.get(),
             cost_stress_multiplier=self.refine_cost_stress_multiplier.get_float(2.0),
             cost_stress_penalty_weight=self.refine_cost_stress_weight.get_float(0.35),
+            optimizer_mode=optimizer_key,
         )
 
     def _execute_refinement(self, df, strategy, risk, rules, mc_cfg, log_fn) -> dict:
@@ -7647,6 +7650,11 @@ class MainWindow:
         self.refine_metric = LabeledCombo(
             settings, "Fitness metric (what \u201cbest\u201d means)", self._refine_metric_labels,
             FITNESS_METRICS["eval_pass_probability"],
+        )
+        self._optimizer_mode_labels = list(OPTIMIZER_MODES.values())
+        self._optimizer_mode_label_to_key = {v: k for k, v in OPTIMIZER_MODES.items()}
+        self.refine_optimizer_mode = LabeledCombo(
+            settings, "Optimizer mode", self._optimizer_mode_labels, OPTIMIZER_MODES["genetic"],
         )
         self.refine_population = LabeledEntry(settings, "Population size (configs per generation)", 10)
         self.refine_generations = LabeledEntry(settings, "Generations (rounds)", 5)
