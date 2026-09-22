@@ -1,0 +1,39 @@
+{
+  "name": "T58 ES VWMA Trend Pullback -- Full Pipeline optimized (vwma31/86, ema458/244, rsi19/9, 1H), no-Sunday, risk 0.85%",
+  "timeframe": "1h",
+  "entry_conditions": {
+    "long": [
+      { "left": { "type": "day_of_week", "field": "bar_time" }, "operator": "!=", "right": { "type": "value", "value": "Sunday" } },
+      { "left": { "type": "close", "period": 1, "field": "close" }, "operator": ">", "right": { "type": "ema", "period": 458, "field": "close" } },
+      { "left": { "type": "close", "period": 5, "field": "close" }, "operator": "<", "right": { "type": "vwma", "period": 31, "field": "close" } },
+      { "left": { "type": "rsi", "period": 19, "field": "close" }, "operator": "<=", "right": { "type": "value", "value": 34.573716861434065 } }
+    ],
+    "long_connectors": ["AND", "AND", "AND"],
+    "short": [
+      { "left": { "type": "day_of_week", "field": "bar_time" }, "operator": "!=", "right": { "type": "value", "value": "Sunday" } },
+      { "left": { "type": "close", "period": 1, "field": "close" }, "operator": "<", "right": { "type": "ema", "period": 244, "field": "close" } },
+      { "left": { "type": "close", "period": 9, "field": "close" }, "operator": ">", "right": { "type": "vwma", "period": 86, "field": "close" } },
+      { "left": { "type": "rsi", "period": 9, "field": "close" }, "operator": ">=", "right": { "type": "value", "value": 82.19449073633591 } }
+    ],
+    "short_connectors": ["AND", "AND", "AND"]
+  },
+  "exit_conditions": {
+    "long": [
+      { "left": { "type": "close", "period": 3, "field": "close" }, "operator": "cross above", "right": { "type": "vwma", "period": 18, "field": "close" } }
+    ],
+    "short": [
+      { "left": { "type": "close", "period": 3, "field": "close" }, "operator": "cross below", "right": { "type": "vwma", "period": 14, "field": "close" } }
+    ]
+  },
+  "risk_management": {
+    "stop_type": "atr",
+    "stop_value": 1.7554904697329148,
+    "stop_atr_period": 19,
+    "target_type": "atr",
+    "target_value": 9.69,
+    "target_atr_period": 51,
+    "opposite_signal_exit": true,
+    "max_bars_in_trade": 14
+  },
+  "description": "Same as the original 'Full Pipeline optimized' ES1! VWMA Trend Pullback config, with a day_of_week != Sunday gate added to both long and short entries to test whether excluding Sunday sessions improves the Sunday-loss pattern observed. UNVALIDATED: re-run Steps 01-05 (walk-forward, Monte Carlo, holdout, ICIR/Bonferroni) on this exact config before drawing conclusions -- no new performance numbers have been generated for this variant. Keep risk-per-trade at 0.85% pending re-validation of risk-of-ruin under the new trade set."
+}
