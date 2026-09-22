@@ -67,6 +67,7 @@ from app.data.importer import import_csv, import_csv_bytes
 from app.data.timeframe_resample import infer_timeframe_label
 from app.web.alpaca_shared import alpaca_template_context
 from app.data.storage import get_app_base_dir, get_raw_data_dir, list_datasets_by_instrument, list_stored_datasets, store_csv_bytes
+from app.ensemble.auto_builder import AutoEnsembleError, build_diversified_ensemble
 from app.ensemble.ensemble import EnsembleError, EnsembleVoteConfig, run_ensemble_blend, run_ensemble_vote
 from app.evolution import checkpoint as evo_checkpoint
 from app.evolution.engine import EvolutionConfig, EvolutionRunner, evolution_stats_metadata
@@ -2719,6 +2720,25 @@ def full_pipeline_start():
             max_drawdown_pct=float(form.get("max_dd", 10)),
         )
 
+        # T58 BACKTEST INTEGRITY CHECK -- same pre-flight gate as Run &
+        # Report's /run route and Quick Optimize (see
+        # app.validation.integrity_check's own docstring): catches corrupt
+        # data, an unsupportable timeframe, or a confirmed lookahead leak
+        # BEFORE the 15-step pipeline spends any compute on it.
+        integrity_report = run_integrity_check(
+            df, strategy, risk, prop_rules=rules,
+            requested_timeframe=form.get("timeframe") or None,
+            data_label=active_label,
+        )
+        if integrity_report.status == "BLOCKED":
+            HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
+            return render_template(
+                "full_pipeline.html", error=integrity_report.render(),
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+                saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS,
+                prop_presets_json=_prop_presets_json(), **_alpaca_template_context(),
+            ), 400
+
         library_status_raw = (form.get("library_status") or "").strip()
         cfg = FullPipelineConfig(
             n_folds=int(form.get("n_folds", 4) or 4),
@@ -4799,6 +4819,24 @@ def quickopt_start():
         strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000)), pip_size=float(form.get("pip_size", 0.0001)))
         rules = PropRules(account_size=float(form.get("account_size", 100000)))
+
+        # T58 BACKTEST INTEGRITY CHECK -- same pre-flight gate as Run &
+        # Report's /run route (see app.validation.integrity_check's own
+        # docstring): catches corrupt data, an unsupportable timeframe, or
+        # a confirmed lookahead leak BEFORE spending GA compute on it.
+        integrity_report = run_integrity_check(
+            df, strategy, risk, prop_rules=rules,
+            requested_timeframe=form.get("timeframe") or None,
+            data_label=active_label,
+        )
+        if integrity_report.status == "BLOCKED":
+            return render_template(
+                "quick_optimize.html", error=integrity_report.render(),
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+                saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS,
+                **_alpaca_template_context(),
+            ), 400
+
         cfg = QuickOptimizeConfig(
             ga_population=int(form.get("ga_population", 16) or 16),
             ga_generations=int(form.get("ga_generations", 8) or 8),
@@ -5022,6 +5060,27 @@ def evolution_start():
             daily_loss_limit_pct=float(form.get("daily_loss", 5) or 5),
             max_drawdown_pct=float(form.get("max_dd", 10) or 10),
         )
+
+        # T58 BACKTEST INTEGRITY CHECK -- same pre-flight gate as Run &
+        # Report / Quick Optimize / Full Pipeline / Search Lab. Evolution
+        # Lab evolves within a family (no single fixed strategy to check),
+        # so `strategy=None` here -- only DATA/TIMEFRAME/ACCOUNT sections
+        # run, which is still enough to catch corrupt data or an
+        # unsupportable timeframe before a whole generational run starts.
+        integrity_report = run_integrity_check(
+            df, None, risk, prop_rules=rules,
+            requested_timeframe=form.get("timeframe") or None,
+            data_label=active_label,
+        )
+        if integrity_report.status == "BLOCKED":
+            HEAVY_JOB_GUARD.release(JOB_EVOLUTION_LAB)
+            return render_template(
+                "evolution.html", error=integrity_report.render(),
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+                families=[{"name": n, "description": family_description(n)} for n in list_families()],
+                running=False, prop_presets_json=_prop_presets_json(), **_alpaca_template_context(),
+            ), 400
+
         families_selected = form.getlist("families") or None
         cfg = EvolutionConfig(
             population_size=int(form.get("population_size", 60) or 60),
@@ -5443,8 +5502,21 @@ def evolution_multi_instrument_start():
             reset_on_breach=form.get("reset_on_breach", "on") == "on",
         )
 
+        # UPGRADE (budget field): app.search.budget_allocator was wired
+        # into MultiInstrumentEvolutionGroup as a backward-compatible
+        # opt-in param last session, but no form field ever set it --
+        # every multi-instrument run silently used the OLD N-times-the-
+        # compute behavior. Blank keeps that exact old behavior; a value
+        # here spreads the same total compute across instruments instead
+        # (see MultiInstrumentEvolutionGroup's own docstring).
+        budget_raw = (form.get("total_evaluation_budget") or "").strip()
+        total_evaluation_budget = int(budget_raw) if budget_raw else None
+
         group_id = uuid.uuid4().hex[:12]
-        group = MultiInstrumentEvolutionGroup(group_id, jobs, risk, rules, base_cfg)
+        group = MultiInstrumentEvolutionGroup(
+            group_id, jobs, risk, rules, base_cfg,
+            total_evaluation_budget=total_evaluation_budget,
+        )
         if sweep_warnings:
             group.errors["(timeframe sweep)"] = "; ".join(sweep_warnings)
         group.start_all()
@@ -5891,6 +5963,10 @@ def search_start():
         seed = int(form.get("seed", 42) or 42)
         max_candidates = int(form.get("max_candidates", 200) or 200)
         library_ref = None
+        strategy = None  # only "single"/"family_grid" build one concrete Strategy below;
+        # "family_named" searches many candidates at once and has no single
+        # strategy to check -- run_integrity_check accepts None and simply
+        # omits its STRATEGY section in that case.
         _family_exclusion_log: list = []
 
         if mode_key == "single":
@@ -5939,6 +6015,27 @@ def search_start():
             daily_loss_limit_pct=float(form.get("daily_loss", 5) or 5),
             max_drawdown_pct=float(form.get("max_dd", 10) or 10),
         )
+
+        # T58 BACKTEST INTEGRITY CHECK -- same pre-flight gate as Run &
+        # Report / Quick Optimize / Full Pipeline. `strategy` is None for
+        # "family_named" mode (no single strategy to check yet), in which
+        # case only the DATA/TIMEFRAME/ACCOUNT sections run -- still
+        # enough to catch corrupt data or an unsupportable timeframe
+        # before spending compute across the whole family.
+        integrity_report = run_integrity_check(
+            df, strategy, risk, prop_rules=rules,
+            requested_timeframe=form.get("timeframe") or None,
+            data_label=active_label,
+        )
+        if integrity_report.status == "BLOCKED":
+            HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
+            return render_template(
+                "search.html", error=integrity_report.render(),
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+                families=[{"name": n, "description": family_description(n)} for n in list_families()],
+                saved_strategies_json=_saved_strategies_json(),
+                prop_presets_json=_prop_presets_json(), **_alpaca_template_context(),
+            ), 400
 
         job_id = uuid.uuid4().hex[:12]
         db_path = str(SEARCH_DIR / f"search_{job_id}.db")
@@ -6209,6 +6306,45 @@ def search_job_promote(job_id):
         })
     except Exception as exc:  # noqa: BLE001
         return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/search/job/<job_id>/auto_ensemble", methods=["POST"])
+def search_job_auto_ensemble(job_id):
+    """UPGRADE (ensemble-builder UI button): app.ensemble.auto_builder.
+    build_diversified_ensemble has existed since the ensemble/budget/
+    integrity-check delivery but had no caller anywhere in the app --
+    Owen had to hand-pick legs on the Ensemble tab instead. This turns a
+    finished Search Lab run's own leaderboard straight into a diversified
+    3-5-leg basket with one click, reusing the exact same instrument/
+    timeframe/risk/rules the search itself just ran under."""
+    with _SEARCH_JOBS_LOCK:
+        job = _SEARCH_JOBS.get(job_id)
+    if job is None or not job.get("done") or job.get("summary") is None:
+        return jsonify({"ok": False, "error": "Job not found, not finished, or produced no results."}), 400
+
+    form = request.form
+    min_legs = int(form.get("min_legs", 3) or 3)
+    max_legs = int(form.get("max_legs", 5) or 5)
+    top_n = int(form.get("top_n", 50) or 50)
+
+    try:
+        with ResultsDB(job["db_path"]) as db:
+            records = db.leaderboard(job["summary"].run_id, stage="stage3", top_n=top_n, only_passed=False)
+        if not records:
+            return jsonify({"ok": False, "error": "No stage-3 candidates on this run's leaderboard to build an ensemble from."}), 400
+
+        result = build_diversified_ensemble(
+            job["df"], records, job["risk"], prop_rules=job["rules"],
+            mc_config=MonteCarloConfig(n_simulations=3000),
+            min_legs=min_legs, max_legs=max_legs,
+            initial_balance=job["risk"].initial_balance,
+        )
+        return jsonify({"ok": True, "result": result.to_summary_dict()})
+    except AutoEnsembleError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:  # noqa: BLE001
+        log_crash("Search Lab auto-ensemble (web)", exc=exc)
+        return jsonify({"ok": False, "error": f"Unexpected error: {exc}"}), 500
 
 
 @app.route("/search_reports/<path:filename>")
