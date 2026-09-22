@@ -79,6 +79,7 @@ from app.optimize.multi_objective import (    DEFAULT_OBJECTIVES, MultiObjective
     run_multi_objective_sweep,
 )
 from app.backtest.adaptive_risk import build_limit_aware_preset
+from app.optimize.distribution_summary import compute_distribution_summary
 from app.optimize.refinement import FITNESS_METRICS, OPTIMIZER_MODES, RefinementConfig, RefinementError, run_iterative_refinement
 from app.optimize.multi_market import AGGREGATION_METHODS, run_multi_market_search
 from app.optimize.walkforward_ga import WalkforwardGACancelled, run_walkforward_aware_refinement
@@ -1105,13 +1106,31 @@ def replay_prepare():
                 **_alpaca_template_context(),
             ), 400
 
-        strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
+        strategy_mode = form.get("strategy_mode", "manual")
+        if strategy_mode == "library":
+            library_type = form.get("library_strategy_type", "")
+            library_name = form.get("library_strategy_name", "")
+            if not library_type or not library_name:
+                raise StrategyError("Pick a saved strategy from the library first.")
+            strategy = _load_library_strategy_for_batch(library_type, library_name)
+        else:
+            strategy, _library_ref = _build_strategy(strategy_mode, form, request.files)
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000) or 100000),
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
         )
+        # UPGRADE (Interactive Replay: prop-firm presets): optional -- an
+        # account-size/risk panel for the same right-hand running-balance
+        # display below, using the same preset dropdown (app.web.static.
+        # prop-presets.js) and PropRules fields every other tool's Prop
+        # Account section already uses. Not passed into run_backtest --
+        # Replay is pure visualization of a plain backtest's own trade
+        # sequence and equity curve (see this route's own top comment),
+        # not a prop-firm evaluation/payout simulation -- account_size
+        # only sets what "the account" starts at for the balance panel.
+        prop_account_size = float(form.get("account_size", risk.initial_balance) or risk.initial_balance)
     except (StrategyError, RefinementError) as exc:
         return render_template(
             "replay.html", error=str(exc), stored_datasets=list_stored_datasets(),
@@ -1140,6 +1159,24 @@ def replay_prepare():
             "exit_time": int(pd.Timestamp(t.exit_time).timestamp()),
             "direction": t.direction, "entry_price": t.entry_price, "exit_price": t.exit_price,
             "pnl": t.pnl, "exit_reason": t.exit_reason,
+            # UPGRADE (Interactive Replay: TP/SL fields, running balance):
+            # equity_after is already tracked per-trade by the backtest
+            # engine itself (app.backtest.execution.Trade) -- exactly the
+            # "new account balance after this trade" the right-hand panel
+            # needs, not something computed here. stop_loss_price is
+            # derived from initial_risk (|entry - stop| in price units,
+            # also already tracked per-trade) -- always available whenever
+            # the trade was risk-sized off a stop. take_profit_price is
+            # only ever knowable when a take-profit was the actual reason
+            # the trade closed (exit_price IS that price then) -- for any
+            # other exit reason the strategy's TP target (if it even had
+            # one) was never reached, so there is no real number to show;
+            # left null rather than guessed.
+            "equity_after": t.equity_after,
+            "stop_loss_price": (
+                round(t.entry_price - t.direction * t.initial_risk, 6) if t.initial_risk else None
+            ),
+            "take_profit_price": (t.exit_price if t.exit_reason == "take_profit" else None),
         }
         for t in result.trades
     ]
@@ -1153,6 +1190,7 @@ def replay_prepare():
         _REPLAY_RESULTS[replay_id] = {
             "bars": bars, "trades": trades, "equity": equity,
             "label": active_label, "initial_balance": risk.initial_balance,
+            "prop_account_size": prop_account_size,
             "statistics": result.statistics.to_dict() if hasattr(result.statistics, "to_dict") else {},
         }
     return redirect(url_for("replay_view", replay_id=replay_id))
@@ -6310,6 +6348,16 @@ def evolution_status():
         "target_eval_pass_pct": status.get("target_eval_pass_pct"),
         "target_reached": status.get("target_reached", False),
         "target_reached_candidate_id": status.get("target_reached_candidate_id"),
+        # UPGRADE (distribution-based results reporting): median vs. best
+        # across this run's own leaderboard -- see
+        # app.optimize.distribution_summary's own module docstring.
+        "distribution_summary": compute_distribution_summary(
+            [
+                {"fitness": (r.fitness.final_score if r.fitness else None), "mc_summary": r.mc_summary, "statistics": r.stats}
+                for r in runner.leaderboard
+            ],
+            total_tested=status["generation"] * runner.cfg.population_size,
+        ),
         "next_step": None if status["running"] else pipeline_guide.after_evolution_stop(
             status["leaderboard_size"], total_evaluated=status["generation"] * runner.cfg.population_size,
         ),
@@ -7403,6 +7451,16 @@ def search_job_status(job_id):
             "elapsed_seconds": summary.elapsed_seconds,
             "report_html": job.get("report_html"),
             "report_json": job.get("report_json"),
+            # UPGRADE (distribution-based results reporting): median vs.
+            # best across this run's own stage3 leaderboard -- see
+            # app.optimize.distribution_summary's own module docstring.
+            # "candidates_tested" reports the total funnel size
+            # (total_candidates), not just how many reached stage3, so
+            # the funnel narrowing itself stays visible.
+            "distribution_summary": compute_distribution_summary(
+                [{**row, "fitness": row.get("composite_score")} for row in (summary.leaderboard or [])],
+                total_tested=summary.total_candidates,
+            ),
         },
         "leaderboard": leaderboard,
         "loop_mode": job.get("loop_mode", False),
