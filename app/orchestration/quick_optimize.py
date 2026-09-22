@@ -157,6 +157,15 @@ class QuickOptimizeConfig:
     ga_population: int = 16
     ga_generations: int = 8
     fitness_metric: str = "eval_pass_probability"
+    # UPGRADE (optimizer core): explicit optimizer mode -- "genetic"
+    # (default, byte-identical to every run before this field existed),
+    # or the optional TPE/CMA-ES samplers (see
+    # app.optimize.refinement.OPTIMIZER_MODES). Threaded straight into the
+    # RefinementConfig passed to run_walkforward_aware_refinement below --
+    # every downstream step (cost-stress penalty, the chained-OOS fitness,
+    # the final re-validation) runs identically regardless of which mode
+    # is picked.
+    optimizer_mode: str = "genetic"
     ga_search_mc_sims: int = 200
     final_mc_sims: int = 1000
     n_folds: int = 4
@@ -451,6 +460,7 @@ def run_quick_optimize(
         fitness_metric=cfg.fitness_metric,
         search_monte_carlo_sims=cfg.ga_search_mc_sims,
         random_seed=cfg.random_seed,
+        optimizer_mode=cfg.optimizer_mode,
     )
     ga_result = run_walkforward_aware_refinement(
         dev_df, strategy, risk, prop_rules,

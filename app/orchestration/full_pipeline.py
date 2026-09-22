@@ -131,6 +131,9 @@ class FullPipelineConfig:
     ga_population: int = 12
     ga_generations: int = 6
     ga_search_mc_sims: int = 200
+    # UPGRADE (optimizer core): see QuickOptimizeConfig.optimizer_mode's
+    # identical field/docstring -- same default, same downstream effect.
+    optimizer_mode: str = "genetic"
     fitness_metric: str = "eval_pass_probability"
     final_mc_sims: int = 10_000
     # Step 1's baseline Monte Carlo run is diagnostic only -- it's logged
@@ -816,6 +819,7 @@ def run_full_pipeline(
                 fitness_metric=cfg.fitness_metric,
                 search_monte_carlo_sims=cfg.ga_search_mc_sims,
                 random_seed=cfg.random_seed,
+                optimizer_mode=cfg.optimizer_mode,
             )
             ga_result = run_walkforward_aware_refinement(
                 dev_df, strategy, risk, prop_rules,
