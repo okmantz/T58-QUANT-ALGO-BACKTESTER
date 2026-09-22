@@ -33,6 +33,28 @@ nav a {
 }
 nav a:hover { color: var(--text); border-color: var(--border-light); background: var(--panel-2); }
 
+/* UPGRADE: a finished run previously only offered "New Run" -- no way
+   back without editing the URL by hand. .back-btn is the shared style
+   for that missing control, in the same glowing-teal treatment as this
+   app's other primary actions (see .submit-btn's identical box-shadow
+   recipe on the *_form pages) so it reads as "the other thing you can
+   do here" rather than a disabled/secondary link. Defined once, here,
+   so every *_job.html page that adds the markup gets the same look with
+   no per-page CSS -- see this file's own header comment for the list of
+   job pages this stylesheet already covers.  */
+.back-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 14px; border-radius: var(--radius-sm);
+  border: 1px solid var(--teal); background: transparent; color: var(--teal);
+  font-size: 13px; font-weight: 700; text-decoration: none; cursor: pointer;
+  box-shadow: 0 0 14px rgba(53,224,176,0.25);
+  transition: all var(--dur-fast) var(--ease);
+}
+.back-btn:hover {
+  background: var(--teal); color: #04120e; box-shadow: 0 0 22px rgba(53,224,176,0.45);
+}
+
+
 main { padding: 18px 16px 40px; max-width: 760px; margin: 0 auto; }
 
 .card {
