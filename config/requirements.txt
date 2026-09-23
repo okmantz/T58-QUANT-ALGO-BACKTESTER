@@ -48,3 +48,10 @@ pywebview>=5.0; platform_system == "Windows"
 # other platforms: pip simply skips it there, and the Forward Test tab
 # detects its absence and explains why instead of erroring.
 MetaTrader5>=5.0.45; platform_system == "Windows"
+# London Strategic Edge market-data source (app.data.london_strategic_edge_source),
+# an Alpaca-style alternative covering stocks, forex, crypto, commodities,
+# indices, ETFs and futures through one API key. Optional in spirit exactly
+# like alpaca-py's siblings above: importing this module without lse-data
+# installed raises one clear "pip install lse-data" error instead of a bare
+# ImportError traceback -- nothing else in the app depends on it.
+lse-data>=1.0.0
