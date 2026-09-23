@@ -473,6 +473,10 @@ a { color: var(--teal); }
 .t58-champion .metrics { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; margin-top: 16px; }
 .t58-champion .metric .num { font-size: 20px; font-weight: 700; }
 .t58-champion .metric .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin-top: 2px; }
+.t58-five-q { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 14px; margin-top: 16px; }
+.t58-five-q .q { border-left: 2px solid rgba(var(--teal-rgb), .35); padding-left: 10px; }
+.t58-five-q .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin-bottom: 4px; }
+.t58-five-q .val { font-size: 14px; font-weight: 600; line-height: 1.35; }
 .t58-champion .actions { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
 .t58-champion-empty { color: var(--text-dim); font-size: 13px; }
 
@@ -553,4 +557,5 @@ a { color: var(--teal); }
   .t58-main { max-width: 100%; }
   .t58-grid.cols-4, .t58-grid.cols-3 { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .t58-champion .metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .t58-five-q { grid-template-columns: repeat(2, minmax(0,1fr)); }
 }
