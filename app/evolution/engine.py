@@ -78,13 +78,14 @@ from app.backtest.adaptive_risk import build_limit_aware_preset
 from app.backtest.engine import run_backtest
 from app.backtest.risk import RiskConfig, account_size_mismatch_message, with_prop_safety_defaults
 from app.evolution import checkpoint as evo_checkpoint
+from app.evolution.alt_optimizers import build_family_bank
 from app.evolution.family_budget import FamilyBudgetTracker
 from app.evolution.knowledge_graph import DEFAULT_KG_PATH, KnowledgeGraph, feature_vector_for_spec
 from app.evolution.prop_fitness import PropFitnessBreakdown, compute_prop_fitness
 from app.evolution.surrogate import FamilySurrogateBank
 from app.monte_carlo.engine import MonteCarloConfig, run_monte_carlo
 from app.optimize.parameter_space import apply_genome, extract_genome
-from app.optimize.refinement import _mutate, _stressed_risk_config
+from app.optimize.refinement import OPTIMIZER_MODES, _mutate, _stressed_risk_config
 from app.orchestration.resource_guard import safe_worker_count
 from app.prop.simulator import PropRules, simulate_account, summarize_single_run
 from app.reports.crash_log import log_crash
@@ -310,18 +311,19 @@ def _evo_full_eval_task(
 class EvolutionConfig:
     population_size: int = 60
     elite_keep: int = 10
-    # Accepted so the web form's existing "Optimizer mode (per-family
-    # child proposals)" dropdown (see OPTIMIZER_MODES in
-    # app/optimize/refinement.py) doesn't 500 the whole Evolution Lab /
-    # Multi-Instrument Evolution start route -- every other consumer of
-    # that same dropdown (Search Lab, Quick Optimize, Full Pipeline,
-    # Walk-Forward GA) already has an `optimizer_mode` field on its own
-    # config. NOTE: this engine's own child-proposal step is still plain
-    # mutation/crossover regardless of this value -- TPE/CMA-ES child
-    # proposals per family are not implemented here yet, so changing this
-    # away from "genetic" currently has no effect on THIS engine (it's
-    # only read/stored, not branched on). Flagging rather than silently
-    # wiring in new GA behavior that wasn't part of this fix.
+    # FIX (2026-09-22): this used to be accepted-but-ignored -- the web
+    # form's "Optimizer mode (per-family child proposals)" dropdown (see
+    # OPTIMIZER_MODES in app/optimize/refinement.py) stored this value so
+    # the Evolution Lab / Multi-Instrument Evolution start route didn't
+    # 500, but EvolutionRunner never branched on it: every other consumer
+    # of that same dropdown (Search Lab, Quick Optimize, Full Pipeline,
+    # Walk-Forward GA) actually used its own `optimizer_mode`, so
+    # selecting TPE/CMA-ES here silently ran the plain genetic/GP-
+    # surrogate path with no error and no indication anything was wrong.
+    # Now wired up for real -- see app.evolution.alt_optimizers
+    # (TPEFamilyBank / CMAESFamilyBank), built by EvolutionRunner.__init__
+    # in place of the GP FamilySurrogateBank when this is "tpe"/"cma_es".
+    # "genetic" remains the exact previous default/behavior.
     optimizer_mode: str = "genetic"
     # Instrument/timeframe this run is against -- used ONLY to pick which
     # persistent, shared graveyard file stress-test failures are recorded
@@ -579,6 +581,18 @@ class EvolutionConfig:
     # desktop Evolution Lab form defaults its own checkbox to CHECKED.
     reset_on_breach: bool = False
 
+    def __post_init__(self):
+        # FIX (2026-09-22): fail fast, at config construction, on an
+        # unknown optimizer_mode -- matching RefinementConfig's own
+        # __post_init__ check for the exact same OPTIMIZER_MODES dict, so
+        # a typo/stale value errors out clearly before a run starts
+        # rather than being silently ignored (see optimizer_mode's own
+        # docstring above for the bug this whole module fixes).
+        if self.optimizer_mode not in OPTIMIZER_MODES:
+            raise ValueError(
+                f"Unknown optimizer_mode '{self.optimizer_mode}'. Supported: {list(OPTIMIZER_MODES)}."
+            )
+
 
 # A multi-year 1-minute-bar dataset (Owen's GC1! feed: ~2.04M bars) is
 # roughly this size or larger; a typical 15m/1h/daily feed is nowhere
@@ -778,12 +792,29 @@ class EvolutionRunner:
         self._target_reached_by: EvolutionCandidateRecord | None = None
         self._pool: ProcessPoolExecutor | None = None
         self._pool_tmp_dir: tempfile.TemporaryDirectory | None = None
-        self._surrogate = (
-            FamilySurrogateBank(
-                min_observations=self.cfg.surrogate_min_observations,
-                kappa=self.cfg.surrogate_kappa,
-            ) if self.cfg.surrogate_guided_search else None
-        )
+        # FIX (2026-09-22): cfg.optimizer_mode now actually selects which
+        # per-family child-proposal strategy self._surrogate is -- see
+        # cfg.optimizer_mode's own docstring and app.evolution.alt_optimizers
+        # for the bug this fixes. "genetic" (default) still builds the
+        # exact same FamilySurrogateBank as before, gated by
+        # surrogate_guided_search exactly as before -- zero behavior
+        # change for every existing run that never touched this dropdown.
+        # "tpe"/"cma_es" build a real optimizer instead, UNCONDITIONALLY
+        # (not gated by surrogate_guided_search, which is specifically the
+        # GP-surrogate toggle) -- raises immediately, before generation 0,
+        # if the optional optuna/cma package isn't installed.
+        if self.cfg.optimizer_mode == "genetic":
+            self._surrogate = (
+                FamilySurrogateBank(
+                    min_observations=self.cfg.surrogate_min_observations,
+                    kappa=self.cfg.surrogate_kappa,
+                ) if self.cfg.surrogate_guided_search else None
+            )
+        else:
+            self._surrogate = build_family_bank(
+                self.cfg.optimizer_mode, seed=self.cfg.random_seed,
+                min_observations=self.cfg.surrogate_min_observations, kappa=self.cfg.surrogate_kappa,
+            )
 
         self._load_checkpoint_if_compatible()
         self._apply_family_health_exclusions()
