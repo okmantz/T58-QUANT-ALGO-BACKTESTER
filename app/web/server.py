@@ -337,6 +337,83 @@ def _load_or_create_flask_secret_key() -> bytes:
 
 app.secret_key = _load_or_create_flask_secret_key()
 
+# UPGRADE (licensing, web app): the desktop build has always gated behind
+# app.licensing.gate.ensure_licensed() (see app/main.py) -- this build,
+# launched via run_web.py / the built T58-Web-App.exe, had no equivalent
+# at all, so anyone who received the zip/exe could open and use the full
+# app with no email/license-key prompt whatsoever. This reuses the exact
+# same app.licensing.client module the desktop activation window calls
+# (per-email, per-device, server-verified, revoke/suspend/approve all
+# already supported by license_server/ and admin_cli.py) -- just a web
+# form (below) in place of gate.py's Tkinter window, since this process
+# has no GUI toolkit loaded at all.
+#
+# Validated ONCE per server process (cached in `_license_ok_cached`)
+# rather than on every request, matching the desktop build's own
+# convention exactly (app.licensing.gate.ensure_licensed() is likewise
+# only ever called once, at launch -- see that module's docstring). A
+# revoked/expired license taking effect for an already-running server
+# means restarting it, same as it would for an already-running desktop
+# app instance.
+_license_ok_cached: bool | None = None
+
+# Paths the license gate below never blocks -- the activation page/form
+# itself (else nobody could ever activate), and the same static/PWA
+# assets the lock gate exempts (so the activation page can render with
+# its icon/manifest/theme).
+_LICENSE_GATE_EXEMPT_PREFIXES = ("/activate", "/static/", "/manifest.json", "/favicon.ico")
+
+
+@app.before_request
+def _license_gate():
+    """Runs before the account-lock gate below (registration order = the
+    order Flask calls before_request hooks in), so an unlicensed copy
+    never even reaches the optional password lock -- license comes
+    first, exactly like the desktop build's ensure_licensed() runs
+    before main_window.launch()."""
+    global _license_ok_cached
+    path = request.path
+    if any(path == p or path.startswith(p) for p in _LICENSE_GATE_EXEMPT_PREFIXES):
+        return None
+    if _license_ok_cached:
+        return None
+
+    from app.licensing import client as license_client
+    ok, message = license_client.validate()
+    _license_ok_cached = ok
+    if ok:
+        return None
+    if request.method == "GET":
+        return redirect(url_for("activate_form", next=path))
+    return jsonify({"error": "not_licensed", "message": message}), 401
+
+
+@app.route("/activate", methods=["GET"])
+def activate_form():
+    from app.licensing import client as license_client
+    if _license_ok_cached:
+        return redirect(request.args.get("next") or url_for("dashboard"))
+    state = license_client.load_state()
+    return render_template(
+        "activate.html", next=request.args.get("next") or "/dashboard",
+        error=None, email=state.email,
+    )
+
+
+@app.route("/activate/submit", methods=["POST"])
+def activate_submit():
+    global _license_ok_cached
+    from app.licensing import client as license_client
+    next_path = request.form.get("next") or "/dashboard"
+    email = request.form.get("email", "")
+    license_key = request.form.get("license_key", "")
+    ok, message = license_client.activate(email, license_key)
+    if ok:
+        _license_ok_cached = True
+        return redirect(next_path)
+    return render_template("activate.html", next=next_path, error=message, email=email), 401
+
+
 # Paths the account lock gate below never blocks, even when a password is
 # set and the browser hasn't unlocked yet: the lock page itself (else
 # nobody could ever unlock), static assets/PWA files (so the lock screen
