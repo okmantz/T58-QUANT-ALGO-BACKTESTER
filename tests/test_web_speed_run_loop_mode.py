@@ -107,16 +107,17 @@ def test_speed_run_loop_mode_can_be_stopped(monkeypatch):
     job_id = r.headers["Location"].rstrip("/").split("/")[-1]
 
     client.post(f"/speed-run/job/{job_id}/stop")
-    # FIX (CI flakiness): this used to poll with timeout=30.0. The
-    # behavior under test -- that /stop actually stops the loop -- was
+    # FIX (CI flakiness): this used to poll with timeout=30.0, then 90.0.
+    # The behavior under test -- that /stop actually stops the loop -- was
     # never in question (it passed locally every time, including a full
     # isolated re-run while diagnosing this); what varies is how long
     # the in-flight round takes to reach its own cancel_event check on a
     # slower/shared CI runner, which has nothing to do with the
-    # correctness of cancellation itself. 90s matches _poll_until_done's
-    # own default timeout used by every other test in this file, instead
-    # of this one test alone using a tighter budget than its neighbors.
-    status = _poll_until_done(client, job_id, timeout=90.0)
+    # correctness of cancellation itself. Bumped again to 180s after 90s
+    # still timed out under a loaded CI run (the full ~1900-test suite
+    # sharing the runner's CPU) -- same reasoning as the original bump,
+    # just a wider margin since 90s wasn't always enough either.
+    status = _poll_until_done(client, job_id, timeout=180.0)
     assert status["cancelled"] is True
     assert status["loop_result"]["stopped_reason"] == "cancelled"
 

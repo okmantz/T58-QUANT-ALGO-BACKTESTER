@@ -70,7 +70,15 @@ def _isolated_search_dir(tmp_path, monkeypatch):
     HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
 
 
-def _poll_until_done(client, job_id: str, timeout: float = 90.0) -> dict:
+def _poll_until_done(client, job_id: str, timeout: float = 180.0) -> dict:
+    # FIX (CI flakiness, matching test_web_speed_run_loop_mode.py's own
+    # documented history of this exact issue): this ran two real
+    # sequential instrument searches through real GA refinement, which
+    # comfortably finishes locally but can exceed a tight budget on a
+    # loaded/shared CI runner running the full test suite. Widened from
+    # 90s after that still wasn't always enough -- the behavior under
+    # test (both instruments finish and report results) was never in
+    # question, only wall-clock margin under CI load.
     deadline = time.time() + timeout
     while time.time() < deadline:
         r = client.get(f"/search/multi-instrument/job/{job_id}/status.json")
