@@ -1,0 +1,64 @@
+pandas>=2.0.0
+numpy>=1.24.0
+pytest>=7.4.0
+Flask>=3.0.0
+alpaca-py>=0.33.0
+keyring>=24.0.0
+qrcode[pil]==8.2
+requests>=2.31.0
+# Market data import: .parquet files (pyarrow) and .7z archives (py7zr).
+# .zip archives use Python's built-in zipfile, no extra dependency needed.
+# Both optional in spirit -- .csv/.tsv/.txt import works with neither
+# installed; only opening a .parquet or .7z file raises a clear
+# "pip install ..." error if the corresponding package is missing.
+pyarrow>=14.0.0
+py7zr>=0.20.0
+# Research library (research/ folder) -- extracts text from PDF papers you
+# drop in there so the Ollama AI assist can be grounded in them. Optional
+# in spirit: if this isn't installed, PDF papers are silently skipped
+# (.txt/.md papers still work with no extra dependency at all) rather than
+# the app failing to start.
+pypdf>=4.0.0
+# Portfolio Optimizer's long-only Markowitz solve (app/quant_lab/portfolio_optimizer.py)
+# and any other constrained-optimization use. Optional in spirit: the
+# unconstrained (short-selling-allowed) closed-form solver needs no
+# external library at all, and the long-only path falls back to a
+# clip-and-renormalize approximation (clearly labeled as such) if scipy
+# isn't installed, rather than failing.
+scipy>=1.11.0
+# ML Classifier strategy family (strategies/python/ml_classifier_direction.py)
+# and any other classical-ML strategy logic. Optional in spirit: importing
+# this strategy file without scikit-learn installed raises one clear
+# "pip install scikit-learn" StrategyError instead of a bare ImportError
+# traceback -- nothing else in the app depends on it.
+scikit-learn>=1.3.0
+# GBDT ML Classifier strategy family (strategies/python/ml_classifier_gbdt_direction.py).
+# Optional in spirit exactly like scikit-learn above: importing this strategy file
+# without lightgbm installed raises one clear "pip install lightgbm" error instead of a
+# bare ImportError traceback -- nothing else in the app depends on it.
+lightgbm>=4.0.0
+# Live Market's "open chart" button: opens a chromeless native window
+# instead of a browser tab when available, since Tkinter itself has no
+# way to run the real JavaScript/Canvas content Lightweight Charts needs.
+# Optional -- the app falls back to your default browser (fully
+# functional either way) if this isn't installed or fails to start.
+pywebview>=5.0; platform_system == "Windows"
+# Forward Test (MT5 Demo) tab only -- talks to a locally-running MT5
+# terminal, which only exists on Windows. Harmless to leave in on
+# other platforms: pip simply skips it there, and the Forward Test tab
+# detects its absence and explains why instead of erroring.
+MetaTrader5>=5.0.45; platform_system == "Windows"
+# London Strategic Edge market-data source (app.data.london_strategic_edge_source),
+# an Alpaca-style alternative covering stocks, forex, crypto, commodities,
+# indices, ETFs and futures through one API key. Optional in spirit exactly
+# like alpaca-py's siblings above: importing this module without lse-data
+# installed raises one clear "pip install lse-data" error instead of a bare
+# ImportError traceback -- nothing else in the app depends on it.
+#
+# NOTE: the real lse-data package on PyPI has never reached 1.0.0 (latest is
+# 0.14.0 as of Sep 2026) -- a prior ">=1.0.0" pin here was unsatisfiable and
+# made `pip install -r config/requirements.txt` fail unconditionally, on
+# every machine and every CI workflow that reads this file. Keep this pin at
+# or below the real latest release; bump it only after confirming the new
+# version actually exists on PyPI.
+lse-data>=0.14.0
