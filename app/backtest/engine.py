@@ -16,7 +16,7 @@ from app.backtest.execution import Trade, run_execution
 from app.backtest.risk import RiskConfig
 from app.backtest.statistics import BacktestStatistics, compute_statistics
 from app.data.timeframe_resample import prepare_timeframe_aligned_data
-from app.strategy.base import Strategy, StrategyResult
+from app.strategy.base import Strategy, StrategyResult, apply_days_of_week_exclusion
 
 
 @dataclass
@@ -114,6 +114,17 @@ def run_backtest(
     df, timeframe_warnings = prepare_timeframe_aligned_data(df, strategy)
 
     strat_result: StrategyResult = strategy.generate(df)
+
+    # UPGRADE (day-of-week trading restriction): forces the strategy's own
+    # signal flat (0) on any weekday it has declared excluded (Manual's
+    # config["filters"]["days_of_week"]["exclude"], Python's
+    # EXCLUDE_DAYS_OF_WEEK, or PineScript/MQL5's `// T58_EXCLUDE_DAYS=`
+    # directive -- see app.strategy.base.resolve_excluded_days_of_week for
+    # the full convention). A strategy that declares nothing here gets its
+    # signals back completely unchanged. Applied here, in the one
+    # chokepoint every tool in the app funnels through, so it works
+    # identically regardless of which tool ran the backtest.
+    strat_result.signals = apply_days_of_week_exclusion(df, strat_result.signals, strategy)
 
     condition_warnings: list[str] = []
     if getattr(strategy, "source_type", None) == "manual" and isinstance(getattr(strategy, "config", None), dict):
