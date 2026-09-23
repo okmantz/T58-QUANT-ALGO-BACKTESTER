@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Activate — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { background: var(--bg, #05070a); min-height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0; padding: 20px; }
+  .activate-card {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 14px;
+    padding: 28px 26px; width: 100%; max-width: 380px;
+  }
+  .activate-icon { font-size: 26px; margin-bottom: 6px; text-align: center; }
+  h1 { font-size: 17px; margin: 0 0 4px; color: var(--text); text-align: center; }
+  p.lede { color: var(--text-muted); font-size: 13px; margin: 0 0 20px; text-align: center; }
+  label { display: block; color: var(--text-muted); font-size: 12px; margin: 0 0 4px; }
+  input[type=email], input[type=text] {
+    width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font-size: 14px; margin-bottom: 14px;
+  }
+  input:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), 0.15); }
+  .submit-btn {
+    width: 100%; padding: 13px 20px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal);
+    color: #04120e; font-weight: 700; font-size: 14px; margin-top: 4px; cursor: pointer;
+  }
+  .error-note { color: var(--danger); font-size: 13px; margin: 14px 0 0; text-align: center; }
+  .hint { color: var(--text-muted); font-size: 11px; text-align: center; margin: 16px 0 0; }
+</style>
+</head>
+<body>
+  <form class="activate-card" method="POST" action="/activate/submit">
+    <div class="activate-icon">&#128273;</div>
+    <h1>Activate T58</h1>
+    <p class="lede">Enter the email and license key from your purchase confirmation.</p>
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email" value="{{ email or '' }}" autocomplete="email" autofocus required>
+    <label for="license_key">License key</label>
+    <input type="text" id="license_key" name="license_key" placeholder="T58-XXXX-XXXX-XXXX-XXXX" autocomplete="off" required>
+    <input type="hidden" name="next" value="{{ next }}">
+    <button class="submit-btn" type="submit">Activate</button>
+    {% if error %}<p class="error-note">{{ error }}</p>{% endif %}
+    <p class="hint">No license yet? Purchases and support are handled through Whop.</p>
+  </form>
+</body>
+</html>
