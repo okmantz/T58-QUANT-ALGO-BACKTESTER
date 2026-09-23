@@ -364,6 +364,27 @@ a { color: var(--teal); }
 .t58-grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .t58-grid.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 
+/* "Everything in <section>" link-card grids -- used by every Start Here
+   page (optimize_hub.html, validate_hub.html, section_start_here.html's
+   own .tool-grid/.tool-card serve the same role for the other sections).
+   FIX (Sep 2026): validate_hub.html used these same two class names
+   without ever defining them anywhere (not here, not in its own <style>
+   block) -- they rendered as bare, unstyled <a> tags (plain underlined
+   text) instead of cards. Centralizing the one real definition here,
+   rather than each page defining its own copy, is what actually fixes
+   that: validate_hub.html needs no template changes at all now that
+   theme.css (which it already links) supplies these.  */
+.t58-method-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.t58-method-card {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  padding: 16px; text-decoration: none; color: var(--text); display: flex; flex-direction: column; gap: 6px;
+  transition: all var(--dur-base) var(--ease);
+}
+.t58-method-card:hover { border-color: var(--teal); transform: translateY(-2px); }
+.t58-method-card .eyebrow { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); font-weight: 700; }
+.t58-method-card h3 { margin: 2px 0 0; font-size: 15px; }
+.t58-method-card p { margin: 0; font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+
 .t58-stat { background: var(--panel-3); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px; transition: transform var(--dur-base) var(--ease), border-color var(--dur-base) var(--ease); }
 .t58-stat .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
 .t58-stat .value { font-size: 22px; font-weight: 600; margin-top: 4px; }
