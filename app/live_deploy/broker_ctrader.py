@@ -48,7 +48,7 @@ try:
     from ctrader_open_api.messages.OpenApiMessages_pb2 import (
         ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq, ProtoOAGetTrendbarsReq,
         ProtoOANewOrderReq, ProtoOAClosePositionReq, ProtoOAReconcileReq,
-        ProtoOATraderReq, ProtoOAGetAccountListByAccessTokenReq,
+        ProtoOATraderReq, ProtoOAGetAccountListByAccessTokenReq, ProtoOASymbolsListReq,
     )
     from ctrader_open_api.messages.OpenApiModelMessages_pb2 import (
         ProtoOAOrderType, ProtoOATradeSide, ProtoOATrendbarPeriod,
@@ -230,16 +230,42 @@ class CTraderBrokerAdapter(BrokerAdapter):
         df = pd.DataFrame(rows).sort_values("timestamp").reset_index(drop=True)
         return df.iloc[:-1] if len(df) > 1 else df  # drop still-forming bar, matching MT5Connector's contract
 
+    def _ensure_symbol_cache(self) -> None:
+        """Populates self._symbol_cache (symbolId -> {"name": symbolName})
+        from ProtoOASymbolsListReq exactly once per connection -- the
+        per-account symbol list doesn't change mid-session (see
+        _resolve_symbol_id's own docstring). A no-op if already
+        populated."""
+        if self._symbol_cache:
+            return
+        resp = self._send_and_wait(ProtoOASymbolsListReq(ctidTraderAccountId=self.account_id))
+        for s in resp.symbol:
+            self._symbol_cache[s.symbolId] = {"name": s.symbolName}
+
     def _resolve_symbol_id(self, symbol: str) -> int:
         """cTrader addresses symbols by an integer id, not a name -- the
-        mapping is per-account (via ProtoOASymbolsListReq) and cached
-        here since it doesn't change mid-session. Left as a documented
-        TODO rather than guessed: wire this to a ProtoOASymbolsListReq
-        call and a name->id lookup the first time a symbol is needed."""
-        raise NotImplementedError(
-            "Symbol name -> cTrader symbolId lookup isn't wired up yet. Call "
-            "ProtoOASymbolsListReq(ctidTraderAccountId=...) once after connect() and cache the "
-            "name->id map on this instance before using fetch_completed_bars/place_market_order."
+        mapping is per-account and cached in self._symbol_cache (see
+        _ensure_symbol_cache) since it doesn't change mid-session.
+
+        FIX (2026-09-22): this used to unconditionally raise
+        NotImplementedError. Written against ProtoOASymbolsListReq /
+        ProtoOALightSymbol's public protobuf schema (symbolId +
+        symbolName on each entry of the response's `symbol` list) per
+        cTrader Open API's documented message definitions -- but, like
+        the rest of this adapter (see this module's own HONESTY NOTE at
+        the top), has not been run against a live cTrader account by
+        anyone on this project. Test against a demo account before
+        risking real funds on it.
+        """
+        self._ensure_symbol_cache()
+        for symbol_id, meta in self._symbol_cache.items():
+            if meta.get("name") == symbol:
+                return symbol_id
+        known = sorted(meta.get("name", "") for meta in self._symbol_cache.values())
+        raise ValueError(
+            f"cTrader symbol '{symbol}' was not found on this account. "
+            f"Known symbols ({len(known)}): {', '.join(known[:25])}"
+            + (", ..." if len(known) > 25 else "")
         )
 
     def get_open_positions(self, symbol: Optional[str] = None) -> list[OpenPosition]:
