@@ -27,7 +27,18 @@
 (function (global) {
   "use strict";
 
+  // "cursor" is not a drawing tool -- selecting it just means "no tool
+  // active", i.e. the chart's own pan/zoom/crosshair. It's first in the
+  // list, active by default, and is what every completed drawing (a
+  // finished drag-tool shape, a placed H-Line, or a finished path)
+  // auto-reverts to -- see finishDrawing()/activateCursor() below. This
+  // is the fix for "stuck after selecting a tool like Long": before
+  // this existed, the only way back to a normal clickable/pannable
+  // chart was to click the SAME tool button a second time to toggle it
+  // off; there was no dedicated pointer/cursor tool at all.
+  const CURSOR_TOOL_ID = "cursor";
   const TOOL_DEFS = [
+    { id: CURSOR_TOOL_ID, label: "Cursor", icon: "\u2196" },
     { id: "hline", label: "H-Line", icon: "\u2015" },
     { id: "trend", label: "Trend Line", icon: "/" },
     { id: "box", label: "Box", icon: "\u25ad" },
@@ -185,6 +196,7 @@
       if (CLICK_TOOLS.has(activeTool)) {
         drawings.push({ type: activeTool, points: [{ time: p.time, price: p.price }], color: TOOL_COLORS[activeTool] });
         redraw();
+        activateCursor(); // one-shot placement -- see onMouseUp's identical comment
         return;
       }
       if (activeTool === "path") {
@@ -209,21 +221,38 @@
     function onMouseUp(evt) {
       if (!activeTool || !dragStart || !DRAG_TOOLS.has(activeTool)) return;
       const p = toPoint(evt);
+      let placed = false;
       if (p.time != null && p.price != null && (p.time !== dragStart.time || p.price !== dragStart.price)) {
         drawings.push({ type: activeTool, points: [dragStart, { time: p.time, price: p.price }], color: TOOL_COLORS[activeTool] });
+        placed = true;
       }
       dragStart = null; dragDraft = null;
       redraw();
+      // One-shot tools (a single trend line, box, long/short marker, or
+      // fib retracement) revert to the cursor the moment they're placed,
+      // so placing one "Long" marker doesn't leave every next click on
+      // the chart trying to place another one. Path is multi-click by
+      // design and reverts separately, in finishPath() below.
+      if (placed) activateCursor();
     }
 
     function onDoubleClick() { finishPath(); }
     function onKeyDown(e) {
-      if ((e.key === "Escape" || e.key === "Enter") && pathDraft) finishPath();
+      if (e.key === "Escape") {
+        // Escape always backs out to the cursor tool, whatever was
+        // active -- including a click-tool (H-Line) or a drag-tool
+        // mid-drag, not just an in-progress path.
+        if (pathDraft) finishPath();
+        else activateCursor();
+        return;
+      }
+      if (e.key === "Enter" && pathDraft) finishPath();
     }
     function finishPath() {
       if (pathDraft && pathDraft.points.length >= 2) drawings.push(pathDraft);
       pathDraft = null;
       redraw();
+      activateCursor();
     }
 
     canvas.addEventListener("mousedown", onMouseDown);
@@ -234,6 +263,11 @@
     chart.timeScale().subscribeVisibleLogicalRangeChange(redraw);
 
     function setTool(toolId) {
+      // "cursor" is not a real drawing tool -- normalize it to null so
+      // every internal check below (`if (!activeTool) ...`, DRAG_TOOLS.
+      // has(activeTool), etc.) keeps working exactly as it did before
+      // the cursor tool existed.
+      if (toolId === CURSOR_TOOL_ID) toolId = null;
       if (activeTool === "path" && toolId !== "path") finishPath();
       activeTool = toolId;
       // Pointer events only capture the canvas while a tool is selected --
@@ -241,6 +275,22 @@
       // crosshair keeps working exactly as before this existed.
       canvas.style.pointerEvents = toolId ? "auto" : "none";
       canvas.style.cursor = toolId ? "crosshair" : "default";
+      highlightToolButton(toolId);
+    }
+
+    // Selects the cursor tool AND updates the toolbar's highlighted
+    // button to match -- the one function every "I'm done drawing this
+    // shape" path above calls, so the toolbar never shows a drawing
+    // tool as active while the chart has actually already reverted to
+    // plain pan/zoom/click behavior underneath it.
+    function activateCursor() { setTool(null); }
+
+    function highlightToolButton(toolId) {
+      if (!toolbarEl) return;
+      const targetId = toolId || CURSOR_TOOL_ID;
+      toolbarEl.querySelectorAll(".t58-draw-btn").forEach((b) => {
+        b.classList.toggle("active", b.dataset.tool === targetId);
+      });
     }
 
     function clearAll() {
@@ -254,19 +304,20 @@
       TOOL_DEFS.forEach((t) => {
         const btn = document.createElement("button");
         btn.type = "button";
-        btn.className = "t58-draw-btn";
+        btn.className = "t58-draw-btn" + (t.id === CURSOR_TOOL_ID ? " t58-draw-cursor" : "");
         btn.dataset.tool = t.id;
-        btn.title = t.label;
+        btn.title = t.id === CURSOR_TOOL_ID ? "Cursor (pan/zoom/select -- Esc)" : t.label;
         btn.textContent = t.icon;
+        // Clicking the ALREADY-active tool (including the cursor button
+        // itself) is a no-op toggle back to cursor, same as before;
+        // clicking any other tool switches straight to it. Highlighting
+        // is now owned entirely by setTool()/highlightToolButton(), so
+        // every path that changes tools -- a button click here, or an
+        // auto-revert after finishing a drawing -- keeps the toolbar in
+        // sync automatically instead of each call site updating classes
+        // by hand.
         btn.addEventListener("click", () => {
-          const wasActive = btn.classList.contains("active");
-          toolbarEl.querySelectorAll(".t58-draw-btn").forEach((b) => b.classList.remove("active"));
-          if (wasActive) {
-            setTool(null);
-          } else {
-            btn.classList.add("active");
-            setTool(t.id);
-          }
+          setTool(activeTool === t.id ? null : t.id);
         });
         toolbarEl.appendChild(btn);
       });
@@ -277,10 +328,10 @@
       clearBtn.textContent = "\u2715 Clear";
       clearBtn.addEventListener("click", () => {
         clearAll();
-        toolbarEl.querySelectorAll(".t58-draw-btn").forEach((b) => b.classList.remove("active"));
         setTool(null);
       });
       toolbarEl.appendChild(clearBtn);
+      highlightToolButton(null); // cursor starts active, matching activeTool's initial null
     }
 
     return { setTool, clear: clearAll, redraw };
