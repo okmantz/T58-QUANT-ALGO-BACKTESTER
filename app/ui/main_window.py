@@ -2398,18 +2398,24 @@ class MainWindow:
                 if has_numeral:
                     numeral_lbl = Label(
                         header_row, text=numeral, bg=PANEL, fg=(color or TEXT_DIM),
-                        font=_safe_font(9, "bold"), anchor="w", padx=(16, 2),
+                        font=_safe_font(9, "bold"), anchor="w",
                     )
-                    numeral_lbl.pack(side="left")
+                    # Tk's own -padx option on a widget takes a single screen
+                    # distance, not an (left, right) pair -- only the pack()
+                    # geometry manager accepts that tuple form. Passing the
+                    # tuple straight into Label(padx=...) raises
+                    # `_tkinter.TclError: bad screen distance "16 0"` the
+                    # moment a numbered section header is built.
+                    numeral_lbl.pack(side="left", padx=(16, 2))
                     label_for_text = rest
                 else:
                     label_for_text = label
                 header_text = " ".join(label_for_text.upper()) + ("   " + chev if collapsible else "")
                 header_lbl = Label(
                     header_row, text=header_text, bg=PANEL, fg=TEXT_DIM,
-                    font=_safe_font(7, "bold"), anchor="w", padx=(0 if has_numeral else 16, 0),
+                    font=_safe_font(7, "bold"), anchor="w",
                 )
-                header_lbl.pack(side="left", fill="x", expand=True)
+                header_lbl.pack(side="left", fill="x", expand=True, padx=(0 if has_numeral else 16, 0))
                 if collapsible:
                     def _toggle(_e=None, name=label):
                         if name in self._collapsed_groups:
