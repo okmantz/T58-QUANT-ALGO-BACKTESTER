@@ -310,6 +310,19 @@ def _evo_full_eval_task(
 class EvolutionConfig:
     population_size: int = 60
     elite_keep: int = 10
+    # Accepted so the web form's existing "Optimizer mode (per-family
+    # child proposals)" dropdown (see OPTIMIZER_MODES in
+    # app/optimize/refinement.py) doesn't 500 the whole Evolution Lab /
+    # Multi-Instrument Evolution start route -- every other consumer of
+    # that same dropdown (Search Lab, Quick Optimize, Full Pipeline,
+    # Walk-Forward GA) already has an `optimizer_mode` field on its own
+    # config. NOTE: this engine's own child-proposal step is still plain
+    # mutation/crossover regardless of this value -- TPE/CMA-ES child
+    # proposals per family are not implemented here yet, so changing this
+    # away from "genetic" currently has no effect on THIS engine (it's
+    # only read/stored, not branched on). Flagging rather than silently
+    # wiring in new GA behavior that wasn't part of this fix.
+    optimizer_mode: str = "genetic"
     # Instrument/timeframe this run is against -- used ONLY to pick which
     # persistent, shared graveyard file stress-test failures are recorded
     # to (see app.search.graveyard.graveyard_path_for). Previously this
