@@ -9,3 +9,12 @@ ctrader-open-api>=0.9.0
 # browser/Chromium dependency. Optional in spirit: the existing HTML report's browser
 # print-to-PDF still works without this; only the new native export button needs it.
 reportlab>=4.0.0
+
+# Evolution Lab / Search Lab / Quick Optimize / Full Pipeline / Walk-Forward GA
+# "Optimizer mode" dropdown: optional TPE and CMA-ES per-family/per-search child
+# proposal strategies (app/evolution/alt_optimizers.py, app/optimize/refinement.py).
+# Optional in spirit, same pattern as everything else in this file: "genetic" (the
+# default) needs neither package; picking "tpe" or "cma_es" without the matching
+# package installed raises a clear, actionable error before the run starts.
+optuna>=3.0.0
+cma>=3.0.0
