@@ -223,7 +223,15 @@
 <script>
   function testService(service, btn) {
     btn.disabled = true;
-    fetch('/settings/api-keys/test', {method: 'POST', body: new URLSearchParams({service})})
+    // Send whatever is currently typed in the enclosing form, not just the
+    // service name -- otherwise Test Connection checks the last SAVED
+    // key/host instead of what the user just typed, and reports "failed"
+    // until they hit Save first. Blank password fields still mean
+    // "unchanged" server-side, so this is safe even mid-edit.
+    const form = btn.closest('form');
+    const params = new URLSearchParams(form ? new FormData(form) : {});
+    params.set('service', service);
+    fetch('/settings/api-keys/test', {method: 'POST', body: params})
       .then(r => r.json())
       .then(data => {
         btn.disabled = false;
