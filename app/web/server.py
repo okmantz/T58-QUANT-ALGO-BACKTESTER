@@ -1865,16 +1865,33 @@ def api_keys_delete_broker():
 
 @app.route("/settings/api-keys/test", methods=["POST"])
 def api_keys_test_connection():
-    """Test Connection for every category. Uses whatever is CURRENTLY
-    SAVED, same reasoning as /settings/notifications/test: a connection
-    check needs the real secret, and shouldn't require Save first if the
-    person is just re-testing what's already there."""
+    """Test Connection for every category. Prefers whatever is CURRENTLY
+    TYPED in the form (the page now submits its own field values alongside
+    `service` -- see testService()/testBroker() in api_keys_settings.html),
+    falling back to whatever is already SAVED for any field left blank --
+    a blank password field means "keep the saved secret" everywhere else
+    on this page, so Test Connection honors that same convention rather
+    than treating blank as "no key". This lets a freshly pasted key/host
+    be tested immediately, without requiring Save first, while a bare
+    {"service": ...} request (no other fields present) still falls back
+    to the saved settings exactly as before."""
     service = request.form.get("service", "")
 
     if service == "ollama":
         from app.ai.ollama_client import OllamaClient
+        from app.ai.ollama_settings import OllamaSettings
         from app.ai.ollama_settings import load_settings as load_ollama_settings
-        settings = load_ollama_settings()
+        saved = load_ollama_settings()
+        if "ollama_host" in request.form:
+            settings = OllamaSettings(
+                enabled="ollama_enabled" in request.form,
+                host=request.form.get("ollama_host", "").strip() or saved.host,
+                model=request.form.get("ollama_model", "").strip() or saved.model,
+                api_key=request.form.get("ollama_api_key", "").strip() or saved.api_key,
+                vision_model=saved.vision_model,
+            )
+        else:
+            settings = saved
         if not settings.is_usable:
             return jsonify({"ok": False, "error": "Ollama isn't enabled, or no host is set."})
         ok, message = OllamaClient(settings).test_connection()
@@ -1883,18 +1900,20 @@ def api_keys_test_connection():
     if service == "alpaca":
         from app.data.alpaca_source import test_connection as test_alpaca
         from app.data.alpaca_credentials import load_credentials as load_alpaca_credentials
-        creds = load_alpaca_credentials()
-        if not creds:
+        saved = load_alpaca_credentials()
+        api_key = request.form.get("alpaca_api_key", "").strip() or (saved.api_key if saved else "")
+        secret_key = request.form.get("alpaca_secret_key", "").strip() or (saved.secret_key if saved else "")
+        if not api_key or not secret_key:
             return jsonify({"ok": False, "error": "No Alpaca credentials saved yet."})
         try:
-            message = test_alpaca(creds.api_key, creds.secret_key)
+            message = test_alpaca(api_key, secret_key)
             return jsonify({"ok": True, "message": message})
         except Exception as exc:  # noqa: BLE001
             return jsonify({"ok": False, "error": str(exc)})
 
     if service == "fred":
         from app.accounts.api_keys import load_settings as load_api_keys_settings
-        key = load_api_keys_settings().fred_api_key
+        key = request.form.get("fred_api_key", "").strip() or load_api_keys_settings().fred_api_key
         if not key:
             return jsonify({"ok": False, "error": "No FRED API key saved yet."})
         try:
@@ -1910,7 +1929,8 @@ def api_keys_test_connection():
     if service in ("openai", "claude"):
         from app.accounts.api_keys import load_settings as load_api_keys_settings
         keys = load_api_keys_settings()
-        key = keys.openai_api_key if service == "openai" else keys.claude_api_key
+        saved_key = keys.openai_api_key if service == "openai" else keys.claude_api_key
+        key = request.form.get(f"{service}_api_key", "").strip() or saved_key
         if not key:
             return jsonify({"ok": False, "error": f"No {service} API key saved yet."})
         try:
@@ -2412,6 +2432,10 @@ def live_market_page():
             mt5_status=mt5,
             has_alpaca=has_alpaca,
             replay_datasets=replay_datasets,
+            # Grouped by instrument (NQ1!, ES1!, ...) same as every other
+            # "stored dataset" picker in this app (Replay, Search, etc.) --
+            # see list_datasets_by_instrument() in app/data/storage.py.
+            dataset_groups=list_datasets_by_instrument(),
             timeframe_choices=live_market.TIMEFRAME_CHOICES_MINUTES,
             theme=request.args.get("theme", "dark"),
             initial_symbol=request.args.get("symbol") or mt5["default_symbol"] or "XAUUSD",
@@ -2423,7 +2447,7 @@ def live_market_page():
             "live_market.html",
             mt5_status={"available": False, "configured": False, "connected": False,
                         "default_symbol": "XAUUSD", "default_timeframe_minutes": 15},
-            has_alpaca=False, replay_datasets=[], timeframe_choices=live_market.TIMEFRAME_CHOICES_MINUTES,
+            has_alpaca=False, replay_datasets=[], dataset_groups=[], timeframe_choices=live_market.TIMEFRAME_CHOICES_MINUTES,
             theme=request.args.get("theme", "dark"), initial_symbol="XAUUSD", initial_timeframe=15,
             initial_source="replay", load_error=str(exc),
         )
