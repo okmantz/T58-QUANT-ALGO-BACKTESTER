@@ -25,7 +25,7 @@ from pathlib import Path
 # Fill in once this project has a public GitHub repo to check releases
 # against, e.g. "T58Trading/T58-QUANT-ALGO-BACKTESTER". Left blank means
 # "Check for Updates" reports itself as not configured instead of guessing.
-GITHUB_REPO = ""
+GITHUB_REPO = "okmantz/T58-QUANT-ALGO-BACKTESTER"
 
 _PYPROJECT_PATH = Path(__file__).resolve().parents[2] / "config" / "pyproject.toml"
 _VERSION_RE = re.compile(r'(?m)^\s*version\s*=\s*"([^"]+)"')
