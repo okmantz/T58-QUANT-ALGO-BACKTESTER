@@ -119,14 +119,27 @@ def test_direction_restriction_forces_flat_side():
     assert "bool shortEntryCond = false;" in mql
 
 
-def test_trailing_and_breakeven_emit_todo_not_fabricated_logic():
+def test_trailing_emits_real_ratcheting_code_breakeven_still_todo():
+    # UPGRADE (2026-09): trailing stop is now auto-translated as real,
+    # ratcheting stop-management code in both targets (see
+    # app.strategy.translator's module docstring) -- only break-even is
+    # still a TODO. This replaces the old test asserting a bare TODO
+    # comment for trailing stop, which is no longer the actual behavior.
     config = dict(BASIC_CONFIG)
     config["risk_management"] = dict(BASIC_CONFIG["risk_management"])
     config["risk_management"]["trailing_stop"] = {"enabled": True, "value": 1.0, "atr_period": 14}
     config["risk_management"]["break_even"] = {"enabled": True, "trigger_r": 1.0}
     pine = to_pinescript(config)
-    assert "TODO(T58): trailing stop" in pine
+    assert "TODO(T58): trailing stop" not in pine
+    assert "T58_TRAIL_ATR_MULT=1" in pine
+    assert "trailDist" in pine and "bestPriceLong" in pine
     assert "TODO(T58): break-even" in pine
+
+    mql5 = to_mql5(config)
+    assert "TODO(T58): trailing stop" not in mql5
+    assert "g_trailDist" in mql5 and "g_bestPrice" in mql5
+    assert "PositionModify" in mql5
+    assert "TODO(T58): break-even" in mql5
 
 
 @pytest.mark.parametrize("kind", ["liquidity_sweep", "break_of_structure", "fair_value_gap", "session_high", "atr_regime"])
