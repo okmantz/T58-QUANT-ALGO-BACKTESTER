@@ -1439,6 +1439,43 @@ def main():
 
     args = parser.parse_args()
 
+    # UPGRADE (licensing): the ENTIRE integration point between licensing
+    # and the rest of the app is this one check, before ANY subcommand
+    # below runs -- GUI launch and every headless/scripted flag alike.
+    # See app/licensing/client.py's module docstring for why this stays
+    # a boundary rather than something threaded through individual tabs/
+    # features: delete this package and this one call site, and nothing
+    # else in the app (backtest engine, strategy adapters, every tab)
+    # ever knows licensing existed. The Tkinter activation window only
+    # ever appears for a plain GUI launch (no flags at all, the final
+    # `else:` branch below) -- every one of the headless/scripted flags
+    # fails fast with a plain printed message instead, since a login
+    # popup has no sensible behavior in a script/cron context.
+    is_gui_launch = not any([
+        args.multi_instrument, args.search, args.wfo, args.cpcv, args.pbo, args.sensitivity,
+        args.portfolio, args.multi_objective, args.ensemble, args.wfga, args.full_pipeline, args.cli,
+    ])
+    from app.licensing import ensure_licensed
+
+    if not ensure_licensed(interactive=is_gui_launch):
+        return
+
+    # UPGRADE (licensing): the ENTIRE integration point between licensing
+    # and the rest of the app is this one check, before ANY subcommand
+    # below runs -- GUI launch and every --cli-style flag alike. See
+    # app/licensing/client.py's module docstring for why this stays a
+    # boundary rather than something threaded through individual tabs/
+    # features: delete this package and this one call site, and nothing
+    # else in the app (backtest engine, strategy adapters, every tab)
+    # ever knows licensing existed. `interactive=not args.cli` shows the
+    # Tkinter activation window only for a normal GUI launch -- every
+    # --cli-style flag fails fast with a plain message instead, since a
+    # login popup has no sensible behavior in a script/cron context.
+    from app.licensing import ensure_licensed
+
+    if not ensure_licensed(interactive=not args.cli):
+        return
+
     # Shared across every subcommand below that accepts them -- see the
     # argparse definitions above for what each means.
     prop_rule_kwargs = dict(
