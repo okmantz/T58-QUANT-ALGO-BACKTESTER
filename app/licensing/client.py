@@ -45,6 +45,40 @@ DEFAULT_SERVER_URL = "https://license.yourdomain.example.com"
 # customer from a hotel wifi outage or your server having a bad day.
 OFFLINE_GRACE_DAYS = 3
 
+# --- Master key ------------------------------------------------------------
+# A single, permanent, fully-offline override for the app's own owner --
+# added because there was no way to run the app at all before
+# license_server/ is actually deployed somewhere real (DEFAULT_SERVER_URL
+# above is a placeholder domain until then), and because the owner
+# shouldn't depend on a live server, a device binding, or an internet
+# connection just to open their own software.
+#
+# Only the SHA-256 HASH of the real key lives in this file -- never the
+# key itself -- because this file ships inside the built .exe (and, if
+# this repo is or ever becomes public, in the repo itself): matching it
+# requires knowing the actual key, not just reading this source, the same
+# way a password hash doesn't reveal the password. The key is generated,
+# handed to the owner once, and never printed/logged/stored in plaintext
+# anywhere by this module -- activate()/validate() below only ever hash
+# the entered value and compare.
+#
+# Rotate it any time, without a rebuild, by setting the
+# T58_MASTER_LICENSE_KEY_HASH environment variable to a new key's hash:
+#   python -c "import hashlib; print(hashlib.sha256(b'YOUR-NEW-KEY').hexdigest())"
+# (hash whatever activate() will actually compare against, i.e. the key
+# UPPERCASED with surrounding whitespace stripped -- see _is_master_key).
+_DEFAULT_MASTER_KEY_HASH = "c8178da7417ad10e07cbc39bf4df0daa7e389faa7a3b9d8eea9cededb13ed7b5"
+
+
+def _master_key_hash() -> str:
+    return os.environ.get("T58_MASTER_LICENSE_KEY_HASH", _DEFAULT_MASTER_KEY_HASH)
+
+
+def _is_master_key(license_key: str) -> bool:
+    if not license_key:
+        return False
+    return hashlib.sha256(license_key.strip().upper().encode("utf-8")).hexdigest() == _master_key_hash()
+
 
 @dataclass
 class LicenseState:
@@ -223,6 +257,15 @@ def activate(email: str, license_key: str) -> tuple[bool, str]:
     if not email or not license_key:
         return False, "Enter both your email and license key."
 
+    if _is_master_key(license_key):
+        # Permanent, offline activation -- no server contacted, no device
+        # binding, no expiry. See _DEFAULT_MASTER_KEY_HASH's comment above.
+        save_state(LicenseState(
+            email=email, license_key=license_key, device_id=device_id(), status="active",
+            expires_at=None, last_validated_at=datetime.now(timezone.utc).isoformat(),
+        ))
+        return True, "Activated (master key -- no license server required)."
+
     did = device_id()
     ok, body, err = _post("/activate", {"email": email, "license_key": license_key, "device_id": did})
     if not ok:
@@ -254,6 +297,11 @@ def validate() -> tuple[bool, str]:
     state = load_state()
     if not state.license_key or not state.email:
         return False, "Not activated."
+
+    if _is_master_key(state.license_key):
+        # Never contacts the server, never expires, never subject to the
+        # offline grace period -- see _DEFAULT_MASTER_KEY_HASH's comment.
+        return True, "Active (master key)."
 
     ok, body, err = _post("/validate", {
         "email": state.email, "license_key": state.license_key, "device_id": state.device_id or device_id(),
@@ -291,6 +339,9 @@ def deactivate() -> tuple[bool, str]:
     if not state.license_key:
         clear_state()
         return True, "Nothing was activated."
+    if _is_master_key(state.license_key):
+        clear_state()
+        return True, "Deactivated (master key -- nothing to free on a server)."
     ok, body, err = _post("/deactivate", {"license_key": state.license_key, "device_id": state.device_id or device_id()})
     clear_state()
     if not ok:
