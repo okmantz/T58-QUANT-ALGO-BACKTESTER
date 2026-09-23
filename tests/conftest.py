@@ -56,6 +56,26 @@ from __future__ import annotations
 import pytest
 
 from app.orchestration.resource_guard import HEAVY_JOB_GUARD
+from app.web import server as web_server_module
+
+
+@pytest.fixture(autouse=True)
+def _bypass_license_gate_by_default():
+    """UPGRADE (licensing, web app): app.web.server._license_gate blocks
+    every route until app.licensing.client.validate() succeeds -- real
+    and correct for a shipped build, but this test suite predates that
+    gate and exercises hundreds of routes directly with no license ever
+    activated. Same treatment as the pre-existing, OPT-IN account
+    password lock (which is a no-op for tests because no test ever sets
+    a password): sets the process-wide license cache to already-valid
+    before each test and clears it after, so the gate is transparent to
+    every test by default. tests/test_web_license_gate.py, which
+    specifically exercises the gate itself, resets this back to None in
+    its own fixture before testing the unlicensed path -- see that
+    file's `reset_license_cache` fixture."""
+    web_server_module._license_ok_cached = True
+    yield
+    web_server_module._license_ok_cached = None
 
 
 @pytest.fixture(autouse=True)
