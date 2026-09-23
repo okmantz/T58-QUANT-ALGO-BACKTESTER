@@ -118,13 +118,12 @@ def show_activation_window(initial_message: str = "", initial_email: str = "") -
                 bg=BG, fg=TEXT_MUTED, selectcolor=PANEL_3, activebackground=BG, activeforeground=TEXT,
                 font=_safe_font(9), anchor="w",
             ).pack(anchor="w", pady=(0, 16))
-            # NOTE: activation is always saved locally regardless of this
-            # checkbox in the current build -- there is no supported
-            # "activate for this session only" mode yet (every launch
-            # reads the same saved state). The checkbox is left visible
-            # and unwired rather than removed, since a future revision
-            # may add a true session-only mode; unchecking it today has
-            # no effect.
+            tk.Label(
+                container,
+                text="Unchecked: this license works for today's session only -- "
+                     "you'll be asked to activate again next time you open the app.",
+                bg=BG, fg=TEXT_MUTED, font=_safe_font(8), wraplength=380, justify="left",
+            ).pack(anchor="w", pady=(0, 4))
 
             self.activate_btn = tk.Button(
                 container, text="Activate", command=self._on_activate, bg=ACCENT, fg="#FFFFFF",
@@ -143,7 +142,7 @@ def show_activation_window(initial_message: str = "", initial_email: str = "") -
         def _on_activate(self):
             self.activate_btn.config(state="disabled", text="Activating...")
             self.update_idletasks()
-            ok, message = client.activate(self.email_var.get(), self.key_var.get())
+            ok, message = client.activate(self.email_var.get(), self.key_var.get(), remember=self.remember_var.get())
             if ok:
                 self.activated = True
                 self.destroy()

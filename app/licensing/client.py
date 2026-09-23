@@ -139,7 +139,38 @@ def device_id() -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 
+# Session-only override for the "Remember this license on this device"
+# checkbox (see gate.py's ActivationWindow -- previously visible but
+# completely unwired; every launch persisted regardless of its state).
+# When set, save_state()/load_state()/clear_state() all operate on this
+# in-process value instead of touching disk/keyring at all, so unchecking
+# the box means the activation genuinely does not survive past this
+# process exiting -- the next launch finds no saved license and shows
+# the activation window again, exactly like a real "session only" mode
+# should. None means "no override" (the normal, persistent path below).
+_session_state: LicenseState | None = None
+_session_only_active = False
+
+
+def _use_session_only(state: LicenseState) -> None:
+    """Called by activate() instead of a real save_state() when the
+    person unchecked "Remember this license on this device". Does NOT
+    touch whatever was already persisted on disk/keyring from a prior,
+    remembered activation -- unrelated to this session -- it only makes
+    THIS process's load_state() calls return `state` from memory until
+    the process exits or clear_state()/a remembered activate() replaces
+    it."""
+    global _session_state, _session_only_active
+    _session_state = state
+    _session_only_active = True
+
+
 def save_state(state: LicenseState) -> None:
+    global _session_state
+    if _session_only_active:
+        _session_state = state
+        return
+
     payload = asdict(state)
     key = payload.pop("license_key", "")
     _state_path().write_text(json.dumps(payload), encoding="utf-8")
@@ -163,6 +194,9 @@ def save_state(state: LicenseState) -> None:
 
 
 def load_state() -> LicenseState:
+    if _session_only_active:
+        return _session_state if _session_state is not None else LicenseState()
+
     path = _state_path()
     data: dict = {}
     if path.exists():
@@ -196,7 +230,12 @@ def load_state() -> LicenseState:
 def clear_state() -> None:
     """Used by both explicit logout/deactivation and by activate() when
     swapping to a brand-new key -- never leaves a stale key sitting in
-    the keyring/fallback file after a state change."""
+    the keyring/fallback file after a state change. Also drops any
+    session-only state and turns the override back off, so a fresh
+    activate() right after a clear starts from a clean slate either way."""
+    global _session_state, _session_only_active
+    _session_state = None
+    _session_only_active = False
     _state_path().unlink(missing_ok=True)
     _key_fallback_path().unlink(missing_ok=True)
     kr = _try_keyring()
@@ -250,17 +289,30 @@ def _error_message(code: str) -> str:
     return _ERROR_MESSAGES.get(code, f"License error: {code}")
 
 
-def activate(email: str, license_key: str) -> tuple[bool, str]:
-    """Returns (ok, message). Persists the new state locally on success."""
+def activate(email: str, license_key: str, remember: bool = True) -> tuple[bool, str]:
+    """Returns (ok, message).
+
+    `remember=True` (the default, and the only behavior that existed
+    before this parameter did) persists the activated state to the OS
+    keyring/local file exactly as before, so it's still there next
+    launch. `remember=False` is the actual implementation of the
+    activation window's "Remember this license on this device" checkbox
+    when unchecked: the license is fully usable for the REST OF THIS
+    PROCESS (validate() below sees it, every feature works normally),
+    but nothing is written to disk/keyring -- closing and reopening the
+    app finds no saved license and shows the activation window again,
+    same as a brand-new install. See _use_session_only()'s docstring for
+    the mechanics."""
     email = email.strip()
     license_key = license_key.strip().upper()
     if not email or not license_key:
         return False, "Enter both your email and license key."
+    persist = save_state if remember else _use_session_only
 
     if _is_master_key(license_key):
         # Permanent, offline activation -- no server contacted, no device
         # binding, no expiry. See _DEFAULT_MASTER_KEY_HASH's comment above.
-        save_state(LicenseState(
+        persist(LicenseState(
             email=email, license_key=license_key, device_id=device_id(), status="active",
             expires_at=None, last_validated_at=datetime.now(timezone.utc).isoformat(),
         ))
@@ -273,7 +325,7 @@ def activate(email: str, license_key: str) -> tuple[bool, str]:
     if not body.get("ok"):
         return False, _error_message(body.get("error", "unknown_error"))
 
-    save_state(LicenseState(
+    persist(LicenseState(
         email=email, license_key=license_key, device_id=did, status=body.get("status", "active"),
         expires_at=body.get("expires_at"), last_validated_at=datetime.now(timezone.utc).isoformat(),
     ))
