@@ -6035,9 +6035,22 @@ class MainWindow:
                 badge = "  ✓clean"
             else:
                 badge = "  ⚠LOOKAHEAD"
+            # Pipeline-progress stage badge (Create/Test/Optimize/Validate/
+            # Champion Check/Ready -- see app.strategy.library.
+            # compute_pipeline_progress, mirrored on the web app's Strategy
+            # Library page as a 6-pill bar). A plain Listbox can't render
+            # pills, so this shows the furthest stage actually reached
+            # plus the verdict when a Champion Check came back anything
+            # other than READY, e.g. "Stage: Optimize" or
+            # "Stage: Champion Check (NOT READY)".
+            pp = item.pipeline_progress
+            current_title = next((s["title"] for s in pp["stages"] if s["key"] == pp["current_stage"]), "Create")
+            stage_note = f"  ·  Stage: {current_title}"
+            if pp["verdict"] and pp["current_stage"] in ("champion_check", "ready") and pp["verdict"] != "READY":
+                stage_note += f" ({pp['verdict']})"
             idx = self.strategy_library_listbox.size()
             self.strategy_library_listbox.insert(
-                END, f"  [{item.status_display}]  {item.name}  ({kb:.1f} KB){badge}{suffix}"
+                END, f"  [{item.status_display}]  {item.name}  ({kb:.1f} KB){badge}{stage_note}{suffix}"
             )
             self.strategy_library_listbox.itemconfig(idx, fg=self._status_color(item.status))
 
@@ -10918,13 +10931,14 @@ class MainWindow:
 
         lse_section = self._section(
             f, "London Strategic Edge",
-            "Secure storage only -- this app doesn't know this service's API shape, so there's no working "
-            "integration behind this key yet, just a safe place to keep it.",
+            "Market data (stocks, forex, crypto, commodities, indices, ETFs, futures -- one key covers "
+            "all of them). Used by 2 Market Data's \"Fetch & Save\" flow, same as Alpaca.",
         )
         self.apikeys_lse = LabeledEntry(lse_section, "API key", saved_keys.london_strategic_edge_key, secret=True, width=44)
         lse_btn_row = Frame(lse_section, bg=PANEL)
         lse_btn_row.pack(anchor="w", padx=18, pady=(4, 4))
         self._button(lse_btn_row, "SAVE", self._save_apikeys_data, primary=True).pack(side="left")
+        self._button(lse_btn_row, "TEST CONNECTION", self._test_apikeys_lse).pack(side="left", padx=8)
         self.apikeys_lse_status = Label(lse_section, text="", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8), wraplength=820, justify="left")
         self.apikeys_lse_status.pack(anchor="w", padx=18, pady=(4, 12))
 
@@ -11052,6 +11066,33 @@ class MainWindow:
                 self.apikeys_fred_status.config(text=message, fg=(GREEN if ok else RED))
             # Direct call rather than self.root.after(0, _finish) --
             # see the identical fix (and full explanation) in
+            # _search_auto_build_ensemble's own comment above.
+            _finish()
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _test_apikeys_lse(self):
+        key = self.apikeys_lse.get_str().strip()
+        if not key:
+            self.apikeys_lse_status.config(text="No London Strategic Edge API key saved yet.", fg=AMBER)
+            return
+        self.apikeys_lse_status.config(text="Testing connection...", fg=AMBER)
+        self.root.update_idletasks()
+
+        def run():
+            try:
+                from app.data.london_strategic_edge_source import LSEFetchError, LSEImportError, test_connection
+                message = test_connection(key)
+                ok = True
+            except (LSEImportError, LSEFetchError) as exc:
+                ok, message = False, str(exc)
+            except Exception as exc:  # noqa: BLE001
+                ok, message = False, f"Could not connect to London Strategic Edge: {exc}"
+
+            def _finish():
+                self.apikeys_lse_status.config(text=message, fg=(GREEN if ok else RED))
+            # Direct call rather than self.root.after(0, _finish) -- see
+            # the identical fix (and full explanation) in
             # _search_auto_build_ensemble's own comment above.
             _finish()
 
@@ -15393,14 +15434,30 @@ class MainWindow:
     # -- Market Intelligence: News window + Best Trades window + Basic
     # Outlook button (see the section built in _build_ai_assistant_tab). --
 
+    # ForexFactory folder colors: red = High, orange = Medium, yellow = Low,
+    # gray = Holiday/non-economic -- a small colored square stands in for
+    # the folder icon in this plain-text Listbox (Tkinter Listbox items are
+    # text-only, so per-item foreground color via itemconfig is how the
+    # folder-color cue gets applied here, matching the web app's colored
+    # folder icon in app/web/templates/ai_assistant.html).
+    _NEWS_FOLDER_COLORS = {
+        "High": "#ff3b3b",
+        "Medium": "#ff9f1c",
+        "Low": "#f2d024",
+        "Holiday": "#9098a8",
+    }
+
     def _ai_populate_news_list(self, events) -> None:
         self.aiassistant_news_list.delete(0, END)
         if not events:
             self.aiassistant_news_list.insert(END, "No upcoming events (calendar unavailable or nothing scheduled).")
             return
-        for e in events[:60]:
+        for i, e in enumerate(events[:60]):
             when = e.when.strftime("%a %H:%M UTC") if getattr(e, "when", None) else "TBD"
-            self.aiassistant_news_list.insert(END, f"[{e.impact:<6}] {e.currency:<3} {when}  {e.title}")
+            self.aiassistant_news_list.insert(END, f"\u25a0 [{e.impact:<6}] {e.currency:<3} {when}  {e.title}")
+            color = self._NEWS_FOLDER_COLORS.get(e.impact)
+            if color:
+                self.aiassistant_news_list.itemconfig(i, fg=color)
 
     def _ai_populate_trades_tree(self, rankings) -> None:
         from app.ai import market_scanner
@@ -15667,7 +15724,7 @@ class MainWindow:
                 self._log_fullpipeline(f"WARNING: {w}")
 
             self._log_fullpipeline(
-                "\n" + pipeline_guide.after_full_pipeline(result.verdict, bool(result.saved_library_note))
+                "\n" + pipeline_guide.after_full_pipeline(result.verdict, bool(result.saved_library_note), result=result)
             )
 
             try:
