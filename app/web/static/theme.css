@@ -385,6 +385,21 @@ a { color: var(--teal); }
 .t58-method-card h3 { margin: 2px 0 0; font-size: 15px; }
 .t58-method-card p { margin: 0; font-size: 12px; color: var(--text-muted); line-height: 1.5; }
 
+/* Chart drawing toolbar -- shared by Live Market and Interactive Replay,
+   both of which attach app/web/static/chart_drawing_tools.js to their own
+   chart. Buttons are built dynamically by that script into whatever
+   element the page passes as its toolbar container. */
+.t58-draw-toolbar { display: flex; gap: 4px; flex-wrap: wrap; }
+.t58-draw-btn {
+  width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 6px; border: 1px solid var(--border-light); background: var(--panel-3);
+  color: var(--text); font-size: 13px; cursor: pointer; padding: 0;
+  transition: border-color var(--dur-base) var(--ease), color var(--dur-base) var(--ease);
+}
+.t58-draw-btn:hover { border-color: var(--teal); color: var(--teal); }
+.t58-draw-btn.active { border-color: var(--teal); background: rgba(var(--teal-rgb), .18); color: var(--teal); }
+.t58-draw-btn.t58-draw-clear { width: auto; padding: 0 10px; font-size: 11px; gap: 4px; }
+
 .t58-stat { background: var(--panel-3); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px; transition: transform var(--dur-base) var(--ease), border-color var(--dur-base) var(--ease); }
 .t58-stat .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
 .t58-stat .value { font-size: 22px; font-weight: 600; margin-top: 4px; }
