@@ -173,6 +173,7 @@ from app.strategy.library import (
 from app.strategy.lookahead_check import check_for_lookahead
 from app.validation.integrity_check import run_integrity_check
 from app.strategy.manual import ManualStrategy
+from app.scoring import champion_board
 from app.strategy.mql5 import MQL5Strategy
 from app.strategy.pinescript import PineScriptStrategy
 from app.strategy.python import PythonStrategy
@@ -1130,6 +1131,13 @@ def dashboard():
         has_stored_datasets=bool(list_stored_datasets()),
         has_run_history=bool(dashboard_stats.get("total_runs")),
     )
+    # Champion Board: "strongest validated candidate under your defined
+    # research criteria" -- replaces the old highest-Sharpe "best" card as
+    # the dashboard's headline. See app.scoring.champion_board's module
+    # docstring for why raw Sharpe alone never crowns a champion here.
+    board_rows = champion_board.list_board()
+    champion = champion_board.strongest_validated_candidate(board_rows)
+    snapshot = champion_board.five_question_snapshot(current, board_rows)
     return render_template(
         "dashboard.html",
         data=dashboard_stats,
@@ -1142,7 +1150,24 @@ def dashboard():
         validation_kinds=strategy_state.VALIDATION_KINDS,
         show_welcome=show_welcome,
         welcome_message=pipeline_guide.first_run_welcome() if show_welcome else None,
+        board_rows=board_rows,
+        champion=champion,
+        snapshot=snapshot,
     )
+
+
+@app.route("/champion/promote", methods=["POST"])
+def champion_promote():
+    """Explicit, manual promotion action for one Champion Board row -- see
+    app.scoring.champion_board.promote_strategy's docstring for why this
+    is never automatic. Fails loudly (as a query-string notice) with the
+    specific unmet requirement(s) rather than silently no-opping."""
+    strategy_type = (request.form.get("strategy_type") or "").strip()
+    filename = (request.form.get("filename") or "").strip()
+    if strategy_type and filename:
+        ok, message, _new_stage = champion_board.promote_strategy(strategy_type, filename)
+        return redirect(url_for("dashboard", promote_notice=message, promote_ok="1" if ok else "0"))
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/api/dashboard-data")
@@ -2040,6 +2065,43 @@ def _account_settings_page_context(**extra):
     )
     ctx.update(extra)
     return ctx
+
+
+@app.route("/data-center")
+def data_center():
+    """Dataset coverage, timeframe availability, gaps, duplicates,
+    timezone, sessions, bar counts, and per-file data health for
+    everything under data/raw/ -- see app.data.health.compute_data_center.
+    Placed in the Account nav (before Settings) per Owen's own request."""
+    from app.data.health import compute_data_center
+    report = compute_data_center()
+    return render_template(
+        "data_center.html", active_page="data_center", report=report,
+        notice=request.args.get("notice"), notice_kind=request.args.get("notice_kind", "info"),
+    )
+
+
+@app.route("/data-center/import", methods=["POST"])
+def data_center_import():
+    """Same CSV/parquet import path every other upload form in this app
+    already uses (app.data.importer.import_csv via store_csv_bytes) --
+    the Data Center just gives it its own entry point so importing and
+    reviewing data health live on the same page."""
+    file = request.files.get("data_file")
+    if not file or not file.filename:
+        return redirect(url_for("data_center", notice="Choose a CSV or parquet file first.", notice_kind="error"))
+    try:
+        content = file.read()
+        result = import_csv_bytes(content, filename=file.filename)
+        if not result.is_valid:
+            return redirect(url_for(
+                "data_center", notice=f"Could not import '{file.filename}': {'; '.join(result.errors)}",
+                notice_kind="error",
+            ))
+        store_csv_bytes(content, file.filename)
+        return redirect(url_for("data_center", notice=f"Imported '{file.filename}'.", notice_kind="success"))
+    except Exception as exc:  # noqa: BLE001
+        return redirect(url_for("data_center", notice=f"Unexpected error importing '{file.filename}': {exc}", notice_kind="error"))
 
 
 @app.route("/settings/account")
