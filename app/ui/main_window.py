@@ -10261,12 +10261,11 @@ class MainWindow:
         self.acct_profile_status = Label(profile_section, text="", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8))
         self.acct_profile_status.pack(anchor="w", padx=18, pady=(0, 8))
 
-        # ================= SUBSCRIPTION =================
+        # ================= SUBSCRIPTION (legacy notes) =================
         subscription_section = self._section(
-            f, "Subscription",
-            "Recorded locally for your own reference -- this app doesn't have a licensing "
-            "server yet, so nothing here is verified automatically. \"Check key format\" only "
-            "confirms your key LOOKS correctly formatted (XXXX-XXXX-XXXX-XXXX).",
+            f, "Subscription notes",
+            "Free-form fields for your own reference -- not verified against anything. See the "
+            "License section below for this device's REAL, server-verified activation status.",
             emphasize=True,
         )
         self.acct_sub_plan = LabeledEntry(subscription_section, "Plan", sub_saved.plan, width=32)
@@ -10283,6 +10282,43 @@ class MainWindow:
         self._button(sub_btn_row, "CHECK KEY FORMAT", self._check_license_key_format).pack(side="left", padx=8)
         self.acct_sub_status_label = Label(subscription_section, text="", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8), wraplength=760, justify="left")
         self.acct_sub_status_label.pack(anchor="w", padx=18, pady=(6, 8))
+
+        # ================= LICENSE (real, server-verified) =================
+        # UPGRADE (licensing): this is the actual activation this
+        # install is running under -- see app/licensing/client.py, the
+        # one module this section reads from. Read-only except for
+        # "Deactivate this device", which frees this license's device
+        # slot on the license server so it can be activated on a
+        # different machine (the "logout" the licensing spec asked for --
+        # there is no separate desktop login session to log out of, per
+        # the Security section below's own note, so this IS the
+        # meaningful logout action for this app).
+        license_section = self._section(
+            f, "License",
+            "This device's real, server-verified activation -- refreshed every time the app "
+            "checks in with the license server (see app/licensing for how).",
+            emphasize=True,
+        )
+        from app.licensing import client as _license_client
+        lic_state = _license_client.load_state()
+        lic_rows = Frame(license_section, bg=PANEL)
+        lic_rows.pack(anchor="w", padx=18, pady=(4, 8), fill="x")
+        for label, value in (
+            ("Email", lic_state.email or "-"),
+            ("Status", (lic_state.status or "not activated").upper()),
+            ("Expires", lic_state.expires_at or "no fixed expiry"),
+            ("Last verified", lic_state.last_validated_at or "never"),
+        ):
+            row = Frame(lic_rows, bg=PANEL)
+            row.pack(anchor="w", fill="x", pady=1)
+            Label(row, text=label, bg=PANEL, fg=TEXT_MUTED, font=_safe_font(9), width=14, anchor="w").pack(side="left")
+            Label(row, text=value, bg=PANEL, fg=(GREEN if label == "Status" and lic_state.status == "active" else TEXT), font=_safe_font(9, "bold"), anchor="w").pack(side="left")
+        lic_btn_row = Frame(license_section, bg=PANEL)
+        lic_btn_row.pack(anchor="w", padx=18, pady=(4, 4))
+        self._button(lic_btn_row, "DEACTIVATE THIS DEVICE", self._account_deactivate_license).pack(side="left")
+        self.acct_license_status_label = Label(license_section, text="", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8), wraplength=760, justify="left")
+        self.acct_license_status_label.pack(anchor="w", padx=18, pady=(6, 8))
+
 
         # ================= SECURITY =================
         security_section = self._section(
@@ -10403,6 +10439,23 @@ class MainWindow:
 
         looks_valid, message = check_license_key_format(self.acct_sub_license_key.get_str())
         self.acct_sub_status_label.config(text=message, fg=(GREEN if looks_valid else AMBER))
+
+    def _account_deactivate_license(self):
+        from tkinter import messagebox
+
+        from app.licensing import client as _license_client
+
+        if not messagebox.askyesno(
+            "Deactivate this device",
+            "This frees this license's device slot on the license server so it can be "
+            "activated on a different machine. This app will need to be reactivated the next "
+            "time it's launched. Continue?",
+        ):
+            return
+        _ok, message = _license_client.deactivate()
+        self.acct_license_status_label.config(text=message, fg=GREEN)
+        messagebox.showinfo("Deactivated", f"{message}\n\nT58 will now close -- reactivate it the next time you launch it.")
+        self.root.destroy()
 
     def _account_change_password(self):
         from app.accounts.settings import hash_password, load_account_settings, save_account_settings
