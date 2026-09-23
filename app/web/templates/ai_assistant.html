@@ -38,9 +38,14 @@
   .news-row .top { display: flex; justify-content: space-between; gap: 8px; }
   .news-row .title { color: var(--text); font-weight: 600; }
   .news-row .meta { color: var(--text-dim); font-size: 11px; margin-top: 2px; }
-  .impact-High { color: var(--coral); }
-  .impact-Medium { color: #e0b035; }
-  .impact-Low { color: var(--text-dim); }
+  /* ForexFactory folder colors: red = High, orange = Medium, yellow = Low,
+     gray = Holiday/non-economic -- matches the calendar's own color coding
+     so the impact label reads the same way it does on ForexFactory itself. */
+  .impact-High { color: #ff3b3b; }
+  .impact-Medium { color: #ff9f1c; }
+  .impact-Low { color: #f2d024; }
+  .impact-Holiday { color: #9098a8; }
+  .folder-icon { vertical-align: -1px; margin-right: 4px; }
   .countdown { font-variant-numeric: tabular-nums; color: var(--teal); }
 
   table.rank-table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -183,6 +188,17 @@ function fmtCountdown(mins) {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
+// A tiny folder glyph, colored via currentColor so it always matches
+// whichever .impact-<Level> class it's nested inside (see the CSS above) --
+// this is what gives the News panel ForexFactory's own red/orange/yellow/
+// gray folder-by-impact convention instead of just a text label.
+function folderIcon(impact) {
+  return '<svg class="folder-icon" width="13" height="11" viewBox="0 0 24 20" ' +
+    'xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">' +
+    '<path fill="currentColor" d="M2 4a2 2 0 0 1 2-2h5.2l2 2H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4z"/>' +
+    '</svg>';
+}
+
 async function loadNews() {
   const panel = document.getElementById('news-panel');
   try {
@@ -194,7 +210,7 @@ async function loadNews() {
       <div class="news-row">
         <div class="top">
           <span class="title">${escapeHtml(e.currency)} -- ${escapeHtml(e.title)}</span>
-          <span class="impact-${e.impact}">${e.impact}</span>
+          <span class="impact-${e.impact}">${folderIcon(e.impact)}${e.impact}</span>
         </div>
         <div class="meta">
           ${e.when ? new Date(e.when).toLocaleString() : 'TBD'}

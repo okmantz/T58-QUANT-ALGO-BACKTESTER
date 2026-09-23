@@ -1,0 +1,67 @@
+{#
+  Reusable "Or fetch data from London Strategic Edge" card. Include with:
+    {% include "_lse_fetch_section.html" %}
+  after setting `lse_return_to` to the Flask endpoint name for THIS page's
+  own GET route, same convention as _alpaca_fetch_section.html.
+  /data/lse/fetch and /data/lse/forget redirect back to whichever endpoint
+  the hidden lse_return_to field names, defaulting to "index" -- see
+  _lse_redirect() in app/web/server.py.
+
+  Requires the including view to have called _lse_template_context() (for
+  lse_asset_classes/lse_timeframes/lse_has_saved_key) and to pass through
+  lse_notice/lse_notice_kind from its own GET route's request.args.
+
+  Unlike Alpaca, London Strategic Edge is a single-API-key service
+  covering stocks, forex, crypto, commodities, indices, ETFs and futures
+  all through the one key -- no separate secret key, no feed/adjustment
+  concept.
+#}
+<div class="card">
+  <details{{ ' open' if lse_notice else '' }}>
+    <summary>Or fetch data from London Strategic Edge</summary>
+    <p style="font-size:12px;color:#888;margin:8px 0 10px;">
+      Pulls OHLCV candles via the London Strategic Edge API (stocks, forex, crypto, commodities,
+      indices, ETFs and futures -- one key covers all of them) and saves them into data/raw/,
+      where they'll appear in the "previously stored dataset" dropdown below. Get a free key at
+      londonstrategicedge.com/data.
+    </p>
+    <form method="post" action="/data/lse/fetch">
+      <input type="hidden" name="lse_return_to" value="{{ lse_return_to | default('index') }}">
+      <div>
+        <label>London Strategic Edge API key{{ ' (leave blank to reuse saved key)' if lse_has_saved_key else '' }}</label>
+        <input type="password" name="lse_api_key" autocomplete="off" placeholder="{{ '••••••••••• (saved)' if lse_has_saved_key else '' }}">
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#ccc;margin-top:10px;">
+        <input type="checkbox" name="lse_save_key" style="width:auto;" checked>
+        Save this key on this computer for next time
+      </label>
+      <div class="row" style="margin-top:6px;">
+        <div>
+          <label>Symbol(s), comma-separated</label>
+          <input type="text" name="lse_symbols" value="AAPL" placeholder="e.g. AAPL, EUR/USD, BTC/USD, GC">
+        </div>
+        <div>
+          <label>Timeframe</label>
+          <select name="lse_timeframe">
+            {% for tf in lse_timeframes %}
+            <option value="{{ tf }}" {{ 'selected' if tf == '1d' else '' }}>{{ tf }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <div><label>Start date</label><input type="text" name="lse_start" value="2024-01-01" placeholder="YYYY-MM-DD"></div>
+        <div><label>End date</label><input type="text" name="lse_end" value="2026-01-01" placeholder="YYYY-MM-DD"></div>
+      </div>
+      <button type="submit" class="submit-btn" style="margin-top:12px;">Fetch &amp; Save</button>
+    </form>
+    {% if lse_has_saved_key %}
+    <form method="post" action="/data/lse/forget" style="margin-top:8px;">
+      <input type="hidden" name="lse_return_to" value="{{ lse_return_to | default('index') }}">
+      <button type="submit" style="background:none;border:1px solid var(--border-light);color:#999;padding:8px 12px;border-radius:8px;font-size:12px;width:100%;">
+        Forget saved London Strategic Edge key
+      </button>
+    </form>
+    {% endif %}
+  </details>
+</div>

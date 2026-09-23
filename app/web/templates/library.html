@@ -24,6 +24,23 @@
   .strategy-card:hover { border-color: var(--teal); }
   .strategy-card .name { font-weight: 700; font-size: 14px; margin-bottom: 4px; }
   .strategy-card .meta { font-size: 11.5px; color: var(--text-muted); }
+  /* Pipeline-progress stage bar: Create -> Test -> Optimize -> Validate ->
+     Champion Check -> Ready, one small pill per stage -- filled/teal for a
+     completed stage, red for Champion Check when the verdict came back
+     NOT READY/MARGINAL (done, but not the good kind of done), dim for a
+     stage not reached yet. Gives the whole grid an at-a-glance read on
+     exactly how far along each strategy is, without opening it. */
+  .stage-bar { display: flex; gap: 3px; margin-top: 8px; }
+  .stage-pill {
+    flex: 1; height: 5px; border-radius: 3px; background: var(--border);
+  }
+  .stage-pill.done { background: var(--teal); }
+  .stage-pill.done.warn { background: var(--amber); }
+  .stage-pill.done.fail { background: var(--coral); }
+  .stage-labels { display: flex; justify-content: space-between; font-size: 8.5px; color: var(--text-dim); margin-top: 2px; }
+  .stage-labels span { flex: 1; text-align: center; }
+  .stage-labels span:first-child { text-align: left; }
+  .stage-labels span:last-child { text-align: right; }
   .badge { display: inline-block; padding: 2px 7px; border-radius: 5px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; margin-right: 4px; }
   .badge.type { background: var(--panel-3); color: #aaa; }
   .badge.status { background: rgba(53,224,176,0.15); color: var(--teal); }
@@ -105,6 +122,9 @@
   <button class="close-btn" onclick="closeDetail()">&times;</button>
   <h2 id="d-name">-</h2>
   <p style="font-size:12.5px;color:#888;" id="d-meta">-</p>
+  <div id="d-stage-bar" style="margin: 8px 0 4px;"></div>
+  <div class="stage-labels"><span>Create</span><span>Test</span><span>Optimize</span><span>Validate</span><span>Champion</span><span>Ready</span></div>
+  <p style="font-size:12px;color:var(--teal);margin:6px 0 0;" id="d-next-step"></p>
 
   <div class="detail-tabs">
     <button data-tab="code" onclick="showDetailTab('code')" class="active">Code</button>
@@ -193,6 +213,55 @@
   const STRATEGIES = {{ strategies_json | safe }};
   let currentDetail = null;
 
+  function escapeHtml(str) {
+    const d = document.createElement('div');
+    d.textContent = str == null ? '' : String(str);
+    return d.innerHTML;
+  }
+
+  // Renders the 6-pill Create/Test/Optimize/Validate/Champion Check/Ready
+  // bar for one strategy's pipeline_progress (see
+  // app.strategy.library.compute_pipeline_progress -- same shape). A
+  // strategy saved before this feature existed has no pipeline_progress
+  // at all, so this degrades to "just Create" rather than erroring.
+  // Plain-language "what to do next" for the detail panel, driven purely
+  // by which stage pipeline_progress says is next -- names the exact tab
+  // to go run, same "always tell them the next tab" convention as
+  // app.orchestration.pipeline_guide's server-side guidance text.
+  function nextStepText(pp) {
+    if (!pp) return 'Next step: run this strategy on 5 Run & Report to start tracking its pipeline progress.';
+    const verdict = pp.verdict || '';
+    switch (pp.next_stage) {
+      case 'test': return 'Next step: run this strategy on Run & Report (or Quick Optimize / Full Pipeline, which include a test) to reach the Test stage.';
+      case 'optimize': return 'Next step: run Quick Optimize (or Full Pipeline) on this strategy to reach the Optimize stage.';
+      case 'validate': return 'Next step: run CPCV / PBO (or Full Pipeline, which validates internally) to reach the Validate stage.';
+      case 'champion_check': return 'Next step: run Full Pipeline for a final READY/MARGINAL/NOT READY champion check.';
+      case 'ready': return verdict && verdict !== 'READY'
+        ? `Champion-checked as ${verdict} -- not Ready yet. Open its last Full Pipeline report for what to fix, then re-run.`
+        : 'Champion-checked -- not yet marked Ready.';
+      default: return verdict === 'READY' ? 'READY -- cleared through every stage of the pipeline.' : '';
+    }
+  }
+
+  function renderStageBar(pp) {
+    const stages = (pp && pp.stages) || [
+      {key: 'create', title: 'Create', done: true}, {key: 'test', title: 'Test', done: false},
+      {key: 'optimize', title: 'Optimize', done: false}, {key: 'validate', title: 'Validate', done: false},
+      {key: 'champion_check', title: 'Champion Check', done: false}, {key: 'ready', title: 'Ready', done: false},
+    ];
+    const verdict = (pp && pp.verdict) || '';
+    const pills = stages.map(s => {
+      let cls = 'stage-pill';
+      if (s.done) {
+        cls += ' done';
+        if (s.key === 'champion_check' && verdict && verdict !== 'READY') cls += ' warn';
+        if (s.key === 'ready' && verdict && verdict !== 'READY') cls += ' fail';
+      }
+      return `<div class="${cls}" title="${escapeHtml(s.title)}${s.done ? ' -- done' : ' -- not yet'}"></div>`;
+    }).join('');
+    return `<div class="stage-bar">${pills}</div>`;
+  }
+
   function renderGrid() {
     const q = document.getElementById('filter-search').value.toLowerCase();
     const type = document.getElementById('filter-type').value;
@@ -216,6 +285,7 @@
           <span class="badge status">${s.status_display || s.status}</span>
         </div>
         ${s.description ? `<div class="meta" style="margin-top:6px;">${s.description}</div>` : ''}
+        ${renderStageBar(s.pipeline_progress)}
         ${(s.tags || []).map(t => `<span class="tag">${t}</span>`).join('')}
       </div>
     `).join('');
@@ -229,6 +299,8 @@
     currentDetail = s;
     document.getElementById('d-name').textContent = s.name;
     document.getElementById('d-meta').textContent = `${s.type} · ${s.status_display || s.status}${s.market ? ' · ' + s.market : ''}`;
+    document.getElementById('d-stage-bar').innerHTML = renderStageBar(s.pipeline_progress);
+    document.getElementById('d-next-step').textContent = nextStepText(s.pipeline_progress);
 
     document.getElementById('set-type-1').value = s.type; document.getElementById('set-filename-1').value = s.name;
     document.getElementById('set-type-2').value = s.type; document.getElementById('set-filename-2').value = s.name;
