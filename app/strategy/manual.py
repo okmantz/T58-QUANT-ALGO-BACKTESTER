@@ -9,6 +9,18 @@ Backward compatibility:
 - The original ``indicators`` + ``long_entry``/``short_entry`` fields still work.
 - New visual-builder configs use ``entry_conditions`` / ``exit_conditions``
   and ``risk_management``.
+
+Restricting trading to certain weekdays (optional, all sources):
+  config["filters"] = {"days_of_week": {"exclude": [6]}}    # 0=Monday..
+                                                              # 6=Sunday
+  Forces this strategy's signal flat (0) on every listed weekday,
+  regardless of what its own entry/exit conditions would otherwise
+  produce -- distinct from the pre-existing `day_of_week` CONDITION kind
+  below (an entry-condition this strategy can choose to build around).
+  Python/PineScript/MQL5 strategies have their own equivalent -- see
+  app.strategy.base.resolve_excluded_days_of_week for the shared
+  mechanism used by every source type. Omitting `filters` trades every
+  day, exactly as before this existed.
 """
 from __future__ import annotations
 

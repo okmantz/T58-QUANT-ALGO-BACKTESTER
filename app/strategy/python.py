@@ -11,6 +11,20 @@ Optionally the module may also define fixed, whole-backtest exit parameters:
     TAKE_PROFIT_PIPS = <float>
     STRATEGY_NAME = "<str>"
 
+RESTRICTING TRADING TO CERTAIN WEEKDAYS (OPTIONAL)
+----------------------------------------------------
+    EXCLUDE_DAYS_OF_WEEK = [6]     # 0=Monday..6=Sunday (pandas dt.dayofweek
+                                    # convention) -- forces this strategy's
+                                    # signal flat (0) on every listed
+                                    # weekday, regardless of what
+                                    # generate_signals() itself returns for
+                                    # those bars. See app.strategy.base.
+                                    # resolve_excluded_days_of_week for the
+                                    # full mechanism (shared with Manual/
+                                    # PineScript/MQL5 strategies too).
+                                    # Omitting this trades every day, exactly
+                                    # as before this existed.
+
 DECLARING A TIMEFRAME (OPTIONAL)
 ---------------------------------
 By default, generate_signals(df) receives whatever bar size the loaded

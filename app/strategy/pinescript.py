@@ -70,6 +70,15 @@ Supported subset
   a Pine indicator AT that timeframe the way a Manual/Python strategy
   can, only expose the raw bars. Both are optional; a script with
   neither behaves exactly as before this existed.
+- Special directive comment restricting trading to certain weekdays (same
+  convention as the MQL5 adapter -- see app.strategy.base.
+  resolve_excluded_days_of_week for the shared mechanism):
+    // T58_EXCLUDE_DAYS=6          (0=Monday..6=Sunday, comma-separated;
+                                     forces this script's signal flat on
+                                     every listed weekday regardless of its
+                                     own entry/exit logic)
+  Optional; a script without it trades every day, exactly as before this
+  existed.
 
 Not supported (raises StrategyError): custom functions, arrays/matrices,
 security()/multi-timeframe requests, repainting constructs, plotting,

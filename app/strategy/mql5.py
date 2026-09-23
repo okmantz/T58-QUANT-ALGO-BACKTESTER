@@ -67,6 +67,15 @@ Supported subset
   indicator AT that timeframe the way a Manual/Python strategy can, only
   expose the raw bars. Both are optional; an EA with neither behaves
   exactly as before this existed.
+- Special directive comment restricting trading to certain weekdays (same
+  convention as the PineScript adapter -- see app.strategy.base.
+  resolve_excluded_days_of_week for the shared mechanism):
+    // T58_EXCLUDE_DAYS=6          (0=Monday..6=Sunday, comma-separated;
+                                     forces this EA's signal flat on every
+                                     listed weekday regardless of its own
+                                     entry/exit logic)
+  Optional; an EA without it trades every day, exactly as before this
+  existed.
 
 Not supported (raises StrategyError): CopyBuffer()-based indicator handles,
 custom indicators, arrays/structs, multi-symbol/multi-timeframe logic,

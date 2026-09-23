@@ -13,6 +13,7 @@ Signal convention:
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Callable
 
@@ -119,3 +120,131 @@ def signals_from_conditions(
         out[i] = position
 
     return pd.Series(out, index=index)
+
+
+# ---------------------------------------------------------------------------
+# Day-of-week trading restriction -- ONE shared, cross-source mechanism that
+# any strategy (Manual, Python, PineScript, or MQL5) can use to exclude
+# specific calendar days from trading entirely, independent of whatever
+# entry/exit logic the strategy itself contains.
+#
+# This is deliberately separate from Manual Strategy Builder's own
+# `day_of_week` CONDITION (see app.strategy.manual) -- that's an
+# entry-condition a single Manual strategy can choose to build its signal
+# around (e.g. "only enter on Tuesdays"). This is a blanket override applied
+# to the FINAL signal series AFTER strategy.generate() returns (see
+# apply_days_of_week_exclusion() below, and its one caller,
+# app.backtest.engine.run_backtest -- the one chokepoint every tool in the
+# app funnels through), so it forces flat (0) on every excluded day
+# regardless of source type or what the strategy's own logic would
+# otherwise have signaled, exactly matching a request like "don't let this
+# specific strategy trade on Sundays" without needing to touch that
+# strategy's actual entry/exit logic at all.
+#
+# Convention: 0=Monday .. 6=Sunday, matching pandas' own Series.dt.dayofweek
+# (and Manual Strategy Builder's pre-existing `day_of_week` condition, for
+# consistency across the app) -- NOT Python's calendar.weekday() (same
+# numbering, mentioned only to rule out confusion) and NOT a 1-indexed or
+# Sunday-first scheme.
+#
+# How each source declares it -- a strategy that declares nothing here is
+# completely unaffected, byte-identical to every backtest before this
+# existed:
+#
+#   Manual:      config["filters"] = {"days_of_week": {"exclude": [6]}}
+#                (a new top-level `filters` block, parallel to the
+#                existing `risk_management` block)
+#
+#   Python:      EXCLUDE_DAYS_OF_WEEK = [6]     (module-level constant,
+#                same convention as STOP_LOSS_PIPS/TIMEFRAME/
+#                RETRAIN_PER_FOLD -- see app.strategy.python's docstring)
+#
+#   PineScript:  // T58_EXCLUDE_DAYS=6           (comma-separated ints,
+#   MQL5:        // T58_EXCLUDE_DAYS=6            e.g. "0,6" for Monday
+#                and Sunday both -- same directive-comment convention as
+#                T58_SL_PIPS/T58_TIMEFRAME/T58_HTF; see app.strategy.
+#                pinescript's docstring for why a `//` directive is the
+#                mechanism for these two languages)
+# ---------------------------------------------------------------------------
+
+_EXCLUDE_DAYS_DIRECTIVE_RE = re.compile(r"T58_EXCLUDE_DAYS\s*=\s*(\S+)")
+
+
+def _coerce_day_list(raw) -> set[int]:
+    """Normalizes whatever a source handed us (a list, a single int/str,
+    or a comma-separated directive string) into a set of valid weekday
+    ints (0-6). Anything unparsable or out of range is silently dropped
+    rather than raising -- a typo'd day in a filter degrades to "no
+    restriction for that entry," not a broken backtest."""
+    if raw is None:
+        return set()
+    if isinstance(raw, (str, int)):
+        raw = [raw]
+    days: set[int] = set()
+    for item in raw:
+        try:
+            day = int(str(item).strip())
+        except (TypeError, ValueError):
+            continue
+        if 0 <= day <= 6:
+            days.add(day)
+    return days
+
+
+def resolve_excluded_days_of_week(strategy) -> set[int]:
+    """Which weekday(s) (0=Monday..6=Sunday) `strategy` has declared should
+    never trade, regardless of source type. Returns an empty set for any
+    strategy that declares nothing -- the fully backward-compatible
+    default. See the module comment above for exactly how each source
+    type declares this."""
+    source_type = getattr(strategy, "source_type", None)
+
+    if source_type == "manual":
+        config = getattr(strategy, "config", None)
+        if not isinstance(config, dict):
+            return set()
+        filters = config.get("filters", {}) or {}
+        dow = filters.get("days_of_week", {}) or {}
+        return _coerce_day_list(dow.get("exclude"))
+
+    if source_type == "python":
+        # PythonStrategy.module_attr() loads the module fresh and fails
+        # soft (returns the default) rather than raising -- see its own
+        # docstring in app.strategy.python.
+        module_attr = getattr(strategy, "module_attr", None)
+        if module_attr is None:
+            return set()
+        return _coerce_day_list(module_attr("EXCLUDE_DAYS_OF_WEEK", None))
+
+    if source_type in ("pinescript", "mql5"):
+        code = getattr(strategy, "code", None)
+        if not code:
+            return set()
+        match = _EXCLUDE_DAYS_DIRECTIVE_RE.search(code)
+        if not match:
+            return set()
+        return _coerce_day_list(match.group(1).split(","))
+
+    return set()
+
+
+def apply_days_of_week_exclusion(df: pd.DataFrame, signals: pd.Series, strategy) -> pd.Series:
+    """Forces `signals` flat (0) on every bar that falls on a weekday
+    `strategy` has excluded (see resolve_excluded_days_of_week above). A
+    strategy that excludes nothing gets `signals` back completely
+    unchanged -- byte-identical to before this feature existed. Requires
+    df's standard `timestamp` column; silently a no-op without it rather
+    than raising, since this must never be the reason a backtest that
+    isn't even using this feature breaks. Purely positional (matches by
+    row position, not by index label) since `signals` is only guaranteed
+    to be the same LENGTH as `df`, not share its index."""
+    excluded = resolve_excluded_days_of_week(strategy)
+    if not excluded or "timestamp" not in df.columns:
+        return signals
+    dow = pd.to_datetime(df["timestamp"]).dt.dayofweek.to_numpy()
+    mask = np.isin(dow, list(excluded))
+    if not mask.any():
+        return signals
+    arr = signals.to_numpy(copy=True)
+    arr[mask] = 0
+    return pd.Series(arr, index=signals.index)
