@@ -79,7 +79,23 @@ def get_universe() -> dict[str, list[str]]:
 
 
 def compute_news() -> "news_forexfactory.CalendarResult":
-    return news_forexfactory.fetch_calendar()
+    """ForexFactory's live feed merged with FRED's official release
+    calendar (when a FRED key is configured) -- see app.ai.news_fred's
+    module docstring for why this uses two sources instead of one, and
+    app.accounts.api_keys for where the FRED key comes from (the same
+    key the API Keys page's "Test Connection" already validates)."""
+    ff_result = news_forexfactory.fetch_calendar()
+    try:
+        from app.accounts.api_keys import load_settings as load_api_keys_settings
+        fred_key = load_api_keys_settings().fred_api_key
+    except Exception:  # noqa: BLE001 -- a settings-load hiccup must never take down the News panel
+        fred_key = ""
+    if not fred_key:
+        return ff_result
+
+    from app.ai import news_fred
+    fred_result = news_fred.fetch_calendar(fred_key)
+    return news_fred.merge_calendars(ff_result, fred_result)
 
 
 def compute_rankings(news_result=None) -> tuple[list, list[str]]:

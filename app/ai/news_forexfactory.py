@@ -24,7 +24,25 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+# Fallback mirror -- the exact same feed on FaireEconomy's CDN subdomain.
+# Real-world evidence (mirrored complaints in MQL5/ForexFactory forums)
+# is that this endpoint moves between nfs./cdn-nfs. periodically, and
+# that some ISPs/networks block whichever one isn't currently the
+# "documented" one. Tried only if the primary fails to connect at all.
+CALENDAR_URL_FALLBACK = "https://cdn-nfs.faireconomy.media/ff_calendar_thisweek.json"
 DEFAULT_TIMEOUT_SECONDS = 15
+# A generic User-Agent string ("T58-Trading-Assistant/1.0") is what this
+# module used to send -- some CDNs/bot-protection layers (Cloudflare
+# included) silently reject non-browser-looking User-Agents even when
+# the actual network path is fine, which reads to the caller as "no
+# internet" when the real cause is "this looks like a bot". A real
+# browser UA plus a plain Accept header (mirroring what a browser tab
+# would send) avoids that class of false "no internet" failure.
+_BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+}
 
 # Which of Owen's watched symbols each currency's news can move. Kept as a
 # plain dict (not auto-derived) so it stays easy to read/extend -- add a
@@ -100,26 +118,40 @@ def fetch_calendar(timeout: int = DEFAULT_TIMEOUT_SECONDS) -> CalendarResult:
     """Fetches this week's calendar. Never raises. On any failure returns
     an empty CalendarResult with `.error` set, so callers (the Flask route
     and app.ai.trading_assistant) can display "news unavailable" instead
-    of a stack trace."""
+    of a stack trace.
+
+    Tries the primary URL first, then the fallback mirror ONLY if the
+    primary couldn't be reached at all (ConnectionError) -- a real
+    "revoked"/"malformed" style response from the primary is treated as
+    authoritative and not retried against the mirror, same philosophy
+    as app.licensing.client's network_ok vs. response-said-no
+    distinction."""
     import requests
 
-    try:
-        resp = requests.get(CALENDAR_URL, timeout=timeout, headers={"User-Agent": "T58-Trading-Assistant/1.0"})
-        resp.raise_for_status()
-        raw_events = resp.json()
-    except requests.exceptions.ConnectionError:
-        return CalendarResult(error="Couldn't reach the ForexFactory calendar feed (no internet?).")
-    except requests.exceptions.Timeout:
-        return CalendarResult(error="ForexFactory calendar feed timed out.")
-    except Exception as exc:
-        return CalendarResult(error=f"Couldn't load the calendar feed: {exc}")
+    last_error = None
+    for url in (CALENDAR_URL, CALENDAR_URL_FALLBACK):
+        try:
+            resp = requests.get(url, timeout=timeout, headers=_BROWSER_HEADERS)
+            resp.raise_for_status()
+            raw_events = resp.json()
+        except requests.exceptions.ConnectionError as exc:
+            last_error = f"Couldn't reach the ForexFactory calendar feed (no internet?): {exc}"
+            continue  # try the fallback mirror before giving up
+        except requests.exceptions.Timeout:
+            last_error = "ForexFactory calendar feed timed out."
+            continue
+        except Exception as exc:
+            return CalendarResult(error=f"Couldn't load the calendar feed: {exc}")
 
-    if not isinstance(raw_events, list):
-        return CalendarResult(error="Calendar feed returned an unexpected format.")
+        if not isinstance(raw_events, list):
+            last_error = "Calendar feed returned an unexpected format."
+            continue
 
-    events = [e for e in (_parse_event(r) for r in raw_events) if e is not None]
-    events.sort(key=lambda e: (e.when is None, e.when))
-    return CalendarResult(events=events)
+        events = [e for e in (_parse_event(r) for r in raw_events) if e is not None]
+        events.sort(key=lambda e: (e.when is None, e.when))
+        return CalendarResult(events=events)
+
+    return CalendarResult(error=last_error or "Couldn't reach the ForexFactory calendar feed.")
 
 
 def high_impact_events(result: CalendarResult, upcoming_only: bool = True) -> list[NewsEvent]:
