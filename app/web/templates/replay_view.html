@@ -9,11 +9,13 @@
 <meta name="theme-color" content="#05070a">
 <link rel="stylesheet" href="/static/theme.css">
 <script src="/static/lightweight-charts.standalone.production.js"></script>
+<script src="/static/chart_drawing_tools.js"></script>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
-  #replay-chart { width: 100%; height: 480px; }
+  .chart-toolbar-row { display: flex; justify-content: flex-end; margin-bottom: 6px; }
+  #replay-chart { width: 100%; height: 480px; position: relative; }
   #equity-chart { width: 100%; height: 120px; }
   .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
   .controls button {
@@ -33,12 +35,12 @@
   #trade-log { background: var(--panel-3); border-radius: 8px; padding: 8px; font-family: ui-monospace, monospace; font-size: 11.5px; max-height: 160px; overflow-y: auto; margin-top: 10px; }
   .replay-layout { display: flex; gap: 14px; align-items: flex-start; }
   .replay-main { flex: 1; min-width: 0; }
-  .replay-side { width: 300px; flex-shrink: 0; position: sticky; top: 14px; }
-  @media (max-width: 900px) { .replay-layout { flex-direction: column; } .replay-side { width: 100%; position: static; } }
+  .replay-side { width: 320px; flex-shrink: 0; }
+  @media (max-width: 900px) { .replay-layout { flex-direction: column; } .replay-side { width: 100%; } }
   .balance-hero { text-align: center; padding: 14px 0; border-bottom: 1px solid var(--border); margin-bottom: 10px; }
   .balance-hero .value { font-size: 26px; font-weight: 800; }
   .balance-hero .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; }
-  #trade-ticker { max-height: 560px; overflow-y: auto; }
+  #trade-ticker, #manual-ticker { max-height: 280px; overflow-y: auto; }
   .trade-row {
     display: flex; justify-content: space-between; align-items: center; padding: 8px 4px;
     border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 12.5px;
@@ -52,6 +54,38 @@
   .trade-row .pnl.down { color: #ff6b6b; }
   .trade-row .bal { font-size: 11px; color: var(--text-muted); }
   .trade-row .tpsl { font-size: 10.5px; color: var(--text-muted); }
+  .side-card h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted);
+    margin: 0 0 8px; border-top: 1px solid var(--border); padding-top: 10px;
+  }
+  .side-card h2:first-child { border-top: none; padding-top: 0; }
+  .side-note { font-size: 11px; color: var(--text-dim, #777); margin: 0 0 8px; line-height: 1.5; }
+  .field-row { display: flex; gap: 8px; margin-bottom: 8px; }
+  .field-row > div { flex: 1; min-width: 0; }
+  .field-row label { display: block; font-size: 10.5px; color: var(--text-muted); margin-bottom: 3px; }
+  .field-row input, .field-row select {
+    width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font-size: 12.5px;
+  }
+  .mini-btn {
+    padding: 8px 10px; border-radius: 7px; border: 1px solid var(--border-light); background: var(--panel-3);
+    color: var(--text); font-weight: 700; font-size: 12px; cursor: pointer; flex: 1;
+  }
+  .mini-btn.buy { border-color: #35e0b0; color: #35e0b0; }
+  .mini-btn.sell { border-color: #ff6b6b; color: #ff6b6b; }
+  .mini-btn.apply { border-color: var(--teal); background: var(--teal); color: #04120e; width: 100%; margin-top: 4px; }
+  .mini-btn.close-pos { border-color: var(--border-light); width: 100%; margin-top: 6px; }
+  .mini-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .open-pos-box {
+    background: var(--panel-3); border-radius: 8px; padding: 10px; margin: 8px 0; font-size: 12.5px;
+    border: 1px solid var(--border-light);
+  }
+  .prop-limit-row { display: flex; justify-content: space-between; align-items: center; font-size: 12px; padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+  .prop-limit-row:last-child { border-bottom: none; }
+  .prop-limit-row .tag { font-size: 10px; padding: 2px 7px; border-radius: 10px; font-weight: 700; }
+  .prop-limit-row .tag.ok { background: rgba(53,224,176,.15); color: #35e0b0; }
+  .prop-limit-row .tag.breach { background: rgba(255,107,107,.15); color: #ff6b6b; }
+  .prop-limit-row .tag.na { background: rgba(255,255,255,.06); color: var(--text-dim,#777); }
 </style>
 </head>
 <body>
@@ -64,12 +98,23 @@
 </div>
 
 {% if not_found %}
-<div class="error">Replay data for "{{ replay_id }}" was not found (the server may have restarted since it was prepared). <a href="/replay">Start a new one</a>.</div>
+<div class="error">
+  {% if rerun_expired %}
+  This server has restarted since this replay was prepared, so its original strategy/dataset are no longer held in
+  memory and can't be re-run with new settings.
+  {% else %}
+  Replay data for "{{ replay_id }}" was not found (the server may have restarted since it was prepared).
+  {% endif %}
+  <a href="/replay">Start a new one</a>.
+</div>
 {% else %}
 
 <div class="replay-layout">
 <div class="replay-main">
 <div class="card">
+  <div class="chart-toolbar-row">
+    <div class="t58-draw-toolbar" id="replay-draw-toolbar"></div>
+  </div>
   <div id="replay-chart"></div>
   <div id="equity-chart"></div>
 
@@ -100,8 +145,61 @@
 </div>
 
 <div class="replay-side">
-<div class="card">
-  <h2 style="font-size:14px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);margin:0 0 6px;">Account</h2>
+
+<div class="card side-card">
+  <h2>Strategy</h2>
+  <div id="strategy-info" style="font-size:12.5px;color:var(--text-muted);line-height:1.7;"></div>
+
+  <h2>Risk &amp; Prop Account</h2>
+  <p class="side-note">Adjust and re-run against the exact same strategy and dataset already loaded -- no re-upload needed.</p>
+  <form id="rerun-form" method="post" action="/replay/rerun/{{ replay_id }}">
+    <div class="field-row">
+      <div><label>Starting balance</label><input type="number" name="initial_balance" id="rf-initial-balance"></div>
+      <div><label>Account size (display)</label><input type="number" name="account_size" id="rf-account-size"></div>
+    </div>
+    <div class="field-row">
+      <div><label>Risk mode</label>
+        <select name="risk_mode" id="rf-risk-mode"><option value="percent">% of balance</option><option value="fixed">Fixed lot</option></select>
+      </div>
+      <div><label>Risk value</label><input type="number" step="0.1" name="risk_value" id="rf-risk-value"></div>
+    </div>
+    <div class="field-row">
+      <div><label>Pip size</label><input type="number" step="0.00001" name="pip_size" id="rf-pip-size"></div>
+      <div><label>Profit target %</label><input type="number" step="0.1" name="profit_target" id="rf-profit-target"></div>
+    </div>
+    <div class="field-row">
+      <div><label>Daily loss limit %</label><input type="number" step="0.1" name="daily_loss" id="rf-daily-loss"></div>
+      <div><label>Max drawdown %</label><input type="number" step="0.1" name="max_dd" id="rf-max-dd"></div>
+    </div>
+    <button type="submit" class="mini-btn apply">Apply &amp; Re-run</button>
+  </form>
+
+  <div id="prop-limits" style="margin-top:10px;"></div>
+</div>
+
+<div class="card side-card">
+  <h2>Manual trading</h2>
+  <p class="side-note">Places a simulated order at the current bar's close, separate from the strategy's own trades -- for practicing entries/exits while scrubbing through the replay.</p>
+  <div class="field-row">
+    <div><label>Size (contracts/lots)</label><input type="number" step="0.01" id="manual-size" value="1"></div>
+    <div><label>$ per 1.0 price move</label><input type="number" step="0.01" id="manual-multiplier" value="1"></div>
+  </div>
+  <div class="controls" style="margin-top:0;">
+    <button class="mini-btn buy" id="manual-buy-btn" onclick="manualOrder(1)">Buy</button>
+    <button class="mini-btn sell" id="manual-sell-btn" onclick="manualOrder(-1)">Sell</button>
+  </div>
+  <div id="manual-open-position"></div>
+  <button class="mini-btn close-pos" id="manual-close-btn" onclick="closeManualPosition()" disabled>Close position</button>
+
+  <h2 style="margin-top:12px;">Manual trades</h2>
+  <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-muted);margin-bottom:6px;">
+    <span>Realized P&amp;L</span><span id="manual-realized-pnl">$0.00</span>
+  </div>
+  <div id="manual-ticker"><p style="font-size:12px;color:var(--text-dim,#777);">No manual trades yet.</p></div>
+</div>
+
+<div class="card side-card">
+  <h2>Strategy account</h2>
   <div class="balance-hero">
     <div class="value" id="side-balance">-</div>
     <div class="label">Current balance</div>
@@ -110,10 +208,11 @@
     <span>Starting: <span id="side-starting-balance">-</span></span>
     <span id="side-net-change">-</span>
   </div>
-  <h2 style="font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);margin:14px 0 6px;border-top:1px solid var(--border);padding-top:10px;">Trades, in order</h2>
-  <p style="font-size:11px;color:var(--text-dim,#777);margin:0 0 8px;">Each trade's own $ P&amp;L and the account balance right after it closed -- only trades the scrubber has already reached.</p>
+  <h2>Trades, in order</h2>
+  <p class="side-note">Each trade's own $ P&amp;L and the account balance right after it closed -- only trades the scrubber has already reached.</p>
   <div id="trade-ticker"></div>
 </div>
+
 </div>
 </div>
 
@@ -126,12 +225,23 @@
   const replayId = {{ replay_id | tojson }};
   let BARS = [], TRADES = [], EQUITY = [];
   let STARTING_BALANCE = 0;
+  let PROP_RULES = {};
+  let STRATEGY_INFO = {};
   let cursor = 0;
   let playing = false;
   let playTimer = null;
   let speedMs = 250;
 
-  let chart, candleSeries, volumeSeries, equityChart, equitySeries;
+  let chart, candleSeries, volumeSeries, equityChart, equitySeries, drawTools;
+
+  // ------------------------------------------------------------------
+  // Manual trading state -- entirely client-side; a position is a plain
+  // {direction, entryPrice, entryTime, size, multiplier} object, closed
+  // trades accumulate in manualTrades. Never touches the server or the
+  // strategy's own trade list.
+  // ------------------------------------------------------------------
+  let manualPosition = null;
+  let manualTrades = [];
 
   function fmtMoney(v) {
     if (v === null || v === undefined) return '-';
@@ -142,6 +252,10 @@
   function fmtTime(unixSeconds) {
     if (!unixSeconds) return '-';
     return new Date(unixSeconds * 1000).toLocaleString();
+  }
+  function fmtPct(v) {
+    if (v === null || v === undefined || Number.isNaN(v)) return '-';
+    return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
   }
 
   function initCharts() {
@@ -165,6 +279,34 @@
       timeScale: { visible: false }, rightPriceScale: { visible: false },
     });
     equitySeries = equityChart.addLineSeries({ color: '#35e0b0', lineWidth: 2 });
+
+    if (typeof T58ChartDrawingTools !== 'undefined') {
+      drawTools = T58ChartDrawingTools.attach(
+        chart, candleSeries, document.getElementById('replay-chart'), document.getElementById('replay-draw-toolbar')
+      );
+    }
+  }
+
+  function fillRerunForm() {
+    document.getElementById('rf-initial-balance').value = STARTING_BALANCE || '';
+    document.getElementById('rf-account-size').value = (PROP_RULES.account_size ?? STARTING_BALANCE) || '';
+    document.getElementById('rf-risk-mode').value = STRATEGY_INFO.risk_mode || 'percent';
+    document.getElementById('rf-risk-value').value = STRATEGY_INFO.risk_value ?? '';
+    document.getElementById('rf-pip-size').value = STRATEGY_INFO.pip_size ?? '';
+    document.getElementById('rf-profit-target').value = PROP_RULES.profit_target_pct ?? '';
+    document.getElementById('rf-daily-loss').value = PROP_RULES.daily_loss_pct ?? '';
+    document.getElementById('rf-max-dd').value = PROP_RULES.max_drawdown_pct ?? '';
+  }
+
+  function renderStrategyInfo() {
+    const el = document.getElementById('strategy-info');
+    const rows = [
+      ['Name', STRATEGY_INFO.name || '-'],
+      ['Source', (STRATEGY_INFO.source_type || '-').toUpperCase()],
+      ['Timeframe', STRATEGY_INFO.timeframe || '-'],
+      ['Risk', `${STRATEGY_INFO.risk_mode || '-'} \u00b7 ${STRATEGY_INFO.risk_value ?? '-'}`],
+    ];
+    el.innerHTML = rows.map(([k, v]) => `<div style="display:flex;justify-content:space-between;"><span>${k}</span><b style="color:var(--text);">${v}</b></div>`).join('');
   }
 
   function loadData() {
@@ -178,11 +320,26 @@
         BARS = data.bars || [];
         TRADES = data.trades || [];
         EQUITY = data.equity || [];
+        PROP_RULES = data.prop_rules || {};
+        STRATEGY_INFO = data.strategy_info || {};
         STARTING_BALANCE = data.prop_account_size || data.initial_balance || 0;
         document.getElementById('side-starting-balance').textContent = fmtMoney(STARTING_BALANCE);
         document.getElementById('scrubber').max = Math.max(BARS.length - 1, 0);
         candleSeries.setData(BARS);
         volumeSeries.setData(BARS.map(b => ({ time: b.time, value: b.volume, color: b.close >= b.open ? 'rgba(53,224,176,0.4)' : 'rgba(255,107,107,0.4)' })));
+        renderStrategyInfo();
+        fillRerunForm();
+        if (!BARS.length) {
+          document.getElementById('trade-log').innerHTML =
+            '<p style="color:var(--text-dim,#777);">No bars to replay -- check the dataset selected on the setup page.</p>';
+        } else if (!TRADES.length) {
+          document.getElementById('trade-log').innerHTML =
+            '<p style="color:var(--text-dim,#777);">This backtest produced 0 trades over the whole replayed window -- '
+            + 'this is the exact same result Run &amp; Report would show for this strategy/dataset/settings combination '
+            + '(Replay never computes its own separate trades). If that\'s unexpected, check the strategy\'s entry '
+            + 'conditions and timeframe against this dataset on the Run &amp; Report page, or try a longer/different '
+            + 'window on the Replay setup page.</p>';
+        }
         cursor = 0;
         renderFrame();
       });
@@ -195,6 +352,132 @@
       last = e;
     }
     return last;
+  }
+
+  // ------------------------------------------------------------------
+  // Manual trading
+  // ------------------------------------------------------------------
+  function currentClose() {
+    return BARS.length ? BARS[Math.min(cursor, BARS.length - 1)].close : null;
+  }
+
+  function manualOrder(direction) {
+    const price = currentClose();
+    if (price == null) return;
+    if (manualPosition && manualPosition.direction === direction) return; // already in this direction -- use Close to flatten first
+    if (manualPosition && manualPosition.direction !== direction) {
+      closeManualPosition(); // opposite-direction click flips: close, then open the new side
+    }
+    const size = parseFloat(document.getElementById('manual-size').value) || 1;
+    const multiplier = parseFloat(document.getElementById('manual-multiplier').value) || 1;
+    manualPosition = {
+      direction, entryPrice: price, entryTime: BARS[cursor].time, size, multiplier,
+    };
+    renderManualPanel();
+  }
+
+  function closeManualPosition() {
+    if (!manualPosition) return;
+    const price = currentClose();
+    const pnl = (price - manualPosition.entryPrice) * manualPosition.direction * manualPosition.size * manualPosition.multiplier;
+    manualTrades.push({
+      direction: manualPosition.direction, entryPrice: manualPosition.entryPrice, exitPrice: price,
+      entryTime: manualPosition.entryTime, exitTime: BARS[cursor].time, pnl,
+    });
+    manualPosition = null;
+    renderManualPanel();
+  }
+
+  function manualRealizedPnl() {
+    return manualTrades.reduce((sum, t) => sum + t.pnl, 0);
+  }
+  function manualUnrealizedPnl() {
+    if (!manualPosition) return 0;
+    const price = currentClose();
+    if (price == null) return 0;
+    return (price - manualPosition.entryPrice) * manualPosition.direction * manualPosition.size * manualPosition.multiplier;
+  }
+
+  function renderManualPanel() {
+    const openBox = document.getElementById('manual-open-position');
+    const closeBtn = document.getElementById('manual-close-btn');
+    if (manualPosition) {
+      const unreal = manualUnrealizedPnl();
+      const color = unreal >= 0 ? '#35e0b0' : '#ff6b6b';
+      openBox.innerHTML = `<div class="open-pos-box">
+        <div style="display:flex;justify-content:space-between;">
+          <span class="side ${manualPosition.direction > 0 ? 'long' : 'short'}">${manualPosition.direction > 0 ? 'LONG' : 'SHORT'} ${manualPosition.size}</span>
+          <span>entry ${manualPosition.entryPrice.toFixed(5)}</span>
+        </div>
+        <div style="margin-top:4px;color:${color};font-weight:700;">Unrealized: ${unreal >= 0 ? '+' : ''}${fmtMoney(unreal)}</div>
+      </div>`;
+      closeBtn.disabled = false;
+    } else {
+      openBox.innerHTML = '';
+      closeBtn.disabled = true;
+    }
+    document.getElementById('manual-realized-pnl').textContent = fmtMoney(manualRealizedPnl());
+    const ticker = document.getElementById('manual-ticker');
+    ticker.innerHTML = manualTrades.slice().reverse().map(t => {
+      const sideClass = t.direction > 0 ? 'long' : 'short';
+      const pnlClass = t.pnl >= 0 ? 'up' : 'down';
+      return `<div class="trade-row">
+        <div><div class="side ${sideClass}">${t.direction > 0 ? 'LONG' : 'SHORT'} ${t.entryPrice.toFixed(5)} &rarr; ${t.exitPrice.toFixed(5)}</div></div>
+        <div class="right"><div class="pnl ${pnlClass}">${t.pnl >= 0 ? '+' : ''}${fmtMoney(t.pnl)}</div></div>
+      </div>`;
+    }).join('') || '<p style="font-size:12px;color:var(--text-dim,#777);">No manual trades yet.</p>';
+  }
+
+  // ------------------------------------------------------------------
+  // Prop Account panel -- computed live from the strategy's own equity
+  // curve PLUS manual trading P&L, against whatever profit target/daily
+  // loss/max drawdown was set on the Risk & Prop Account form above.
+  // Daily loss resets at each new calendar day (by bar timestamp, in the
+  // browser's local time zone) seen in the replayed bars.
+  // ------------------------------------------------------------------
+  function renderPropLimits() {
+    const el = document.getElementById('prop-limits');
+    const target = PROP_RULES.profit_target_pct;
+    const dailyLoss = PROP_RULES.daily_loss_pct;
+    const maxDd = PROP_RULES.max_drawdown_pct;
+    if (target == null && dailyLoss == null && maxDd == null) {
+      el.innerHTML = '<p class="side-note">No prop-firm rules set on the setup form -- nothing to check against.</p>';
+      return;
+    }
+    const base = PROP_RULES.account_size || STARTING_BALANCE || 1;
+
+    let peak = base, worstDd = 0;
+    let dayKey = null, dayStartEquity = base, dailyPnlPct = 0, running = base;
+    for (let i = 0; i <= cursor && i < BARS.length; i++) {
+      const eq = equityAtOrBefore(BARS[i].time);
+      const stratPnl = eq ? (eq.equity - (STARTING_BALANCE || base)) : 0;
+      running = base + stratPnl + manualRealizedPnlUpTo(BARS[i].time) + (i === cursor ? manualUnrealizedPnl() : 0);
+      peak = Math.max(peak, running);
+      worstDd = Math.max(worstDd, (peak - running) / peak * 100);
+      const key = new Date(BARS[i].time * 1000).toDateString();
+      if (key !== dayKey) { dayKey = key; dayStartEquity = running; }
+      dailyPnlPct = (running - dayStartEquity) / dayStartEquity * 100;
+    }
+    const profitPct = (running - base) / base * 100;
+
+    const rows = [];
+    if (target != null) {
+      rows.push(rowHtml('Profit target', `${fmtPct(profitPct)} / ${target}%`, profitPct >= target ? 'ok' : 'na'));
+    }
+    if (dailyLoss != null) {
+      rows.push(rowHtml("Today's P&L", `${fmtPct(dailyPnlPct)} (limit -${dailyLoss}%)`, dailyPnlPct <= -dailyLoss ? 'breach' : 'ok'));
+    }
+    if (maxDd != null) {
+      rows.push(rowHtml('Max drawdown so far', `${worstDd.toFixed(2)}% (limit ${maxDd}%)`, worstDd >= maxDd ? 'breach' : 'ok'));
+    }
+    el.innerHTML = rows.join('');
+  }
+  function rowHtml(label, value, state) {
+    const tagText = state === 'breach' ? 'BREACHED' : (state === 'ok' ? 'OK' : '\u2014');
+    return `<div class="prop-limit-row"><span>${label}<br><b style="color:var(--text);">${value}</b></span><span class="tag ${state}">${tagText}</span></div>`;
+  }
+  function manualRealizedPnlUpTo(unixTime) {
+    return manualTrades.filter(t => t.exitTime <= unixTime).reduce((s, t) => s + t.pnl, 0);
   }
 
   function renderFrame() {
@@ -235,18 +518,6 @@
     pnlEl.textContent = fmtMoney(pnlSoFar);
     pnlEl.className = 'value ' + (pnlSoFar >= 0 ? 'up' : 'down');
 
-    // UPGRADE (Interactive Replay: live per-trade P&L + running balance):
-    // the account panel's "current balance" tracks STARTING_BALANCE (the
-    // Prop Account size set on the form, or the backtest's own initial
-    // balance if none was set) + the running sum of closed trades' own
-    // pnl -- e.g. a +$200 trade on a $50,000 starting balance shows +$200
-    // for that trade and $50,200 as the new balance right after it,
-    // exactly as asked for. This is deliberately NOT the same number as
-    // each trade's own `equity_after` field (which tracks the backtest's
-    // own internal RiskConfig.initial_balance, used for position sizing
-    // math) -- that internal balance and this display's starting balance
-    // can legitimately differ if a prop account size was set, and this
-    // panel's whole point is showing what a $X account would have done.
     const currentBalance = STARTING_BALANCE + pnlSoFar;
     document.getElementById('side-balance').textContent = fmtMoney(currentBalance);
     const netChange = currentBalance - STARTING_BALANCE;
@@ -283,6 +554,9 @@
     log.innerHTML = closedTrades.slice(-15).reverse().map(t =>
       `${fmtTime(t.exit_time)}  ${t.direction > 0 ? 'LONG' : 'SHORT'}  entry ${t.entry_price.toFixed(5)} -> exit ${t.exit_price.toFixed(5)}  ${t.pnl >= 0 ? '+' : ''}${t.pnl.toFixed(2)}  (${t.exit_reason})`
     ).join('<br>');
+
+    renderManualPanel();
+    renderPropLimits();
   }
 
   function stepFrame(delta) {

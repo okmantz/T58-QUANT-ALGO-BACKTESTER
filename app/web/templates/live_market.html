@@ -9,6 +9,7 @@
 <meta name="theme-color" content="#05070a">
 <link rel="stylesheet" href="/static/theme.css">
 <script src="/static/lightweight-charts.standalone.production.js"></script>
+<script src="/static/chart_drawing_tools.js"></script>
 <style>
   /* Live Market page only -- self-contained light/dark variables so this
      one page can follow the desktop app's theme toggle without touching
@@ -210,6 +211,7 @@
     <span class="lm-chip on" data-series="vwap">VWAP</span>
     <span class="lm-chip on" data-series="volume">VOL</span>
   </div>
+  <div class="t58-draw-toolbar" id="lm-draw-toolbar" style="position:absolute;top:8px;right:8px;z-index:6;background:var(--lm-panel);border:1px solid var(--lm-border);border-radius:8px;padding:4px;"></div>
   <div id="lm-chart"></div>
   <img class="lm-watermark" src="/static/t58-mark-transparent.png" alt="">
 </div>
@@ -273,6 +275,10 @@
     priceFormat: { type: 'volume' }, priceScaleId: 'lm-volume', color: colors.textMuted,
   });
   chart.priceScale('lm-volume').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+
+  if (typeof T58ChartDrawingTools !== 'undefined') {
+    T58ChartDrawingTools.attach(chart, candleSeries, chartEl, document.getElementById('lm-draw-toolbar'));
+  }
 
   const ema20Series = chart.addLineSeries({ color: '#35e0b0', lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
   const ema50Series = chart.addLineSeries({ color: '#8b7cff', lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
