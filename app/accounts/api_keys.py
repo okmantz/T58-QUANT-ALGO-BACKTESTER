@@ -18,12 +18,12 @@ live_settings all use). Nothing non-secret lives in this file at all --
 there's no host/model/enabled-style field for any of these four, just a
 key each.
 
-London Strategic Edge: stored as a plain opaque API key with no
-integration logic behind it (this app doesn't know that service's API
-shape) -- this is deliberately just a secure place to put the key, per
-the request that asked for it, not a working connector. Test Connection
-for it always reports "not implemented" rather than silently pretending
-to succeed.
+London Strategic Edge: stored as a plain opaque API key. UPGRADE (2026-09):
+now backed by a real integration -- app.data.london_strategic_edge_source
+fetches OHLCV candles with it (wired into the main Market Data page's "Or
+fetch data from London Strategic Edge" card, same convention as the
+Alpaca card next to it) and Test Connection performs a real, cheap
+catalog lookup instead of reporting "not implemented".
 """
 from __future__ import annotations
 

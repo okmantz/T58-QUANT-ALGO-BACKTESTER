@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -27,20 +28,57 @@ from pathlib import Path
 # "Check for Updates" reports itself as not configured instead of guessing.
 GITHUB_REPO = "okmantz/T58-QUANT-ALGO-BACKTESTER"
 
-_PYPROJECT_PATH = Path(__file__).resolve().parents[2] / "config" / "pyproject.toml"
 _VERSION_RE = re.compile(r'(?m)^\s*version\s*=\s*"([^"]+)"')
 _REQUEST_TIMEOUT_SECONDS = 6
 
+# BUGFIX (2026-09): the Account tab was showing "0.0.0" in the built Windows
+# .exe (both the desktop and web-app PyInstaller builds), even though a real
+# version has always lived in config/pyproject.toml. Root cause: neither
+# .github/workflows/build-exe.yml nor build-web-exe.yml ever passed
+# `--add-data "config;config"` to PyInstaller, so config/pyproject.toml was
+# never bundled into the frozen .exe at all -- every run of the built app
+# hit the "file not found" except-branch below and silently fell back.
+# That workflow gap is fixed separately (config/ is now bundled), but this
+# reader is also made frozen-aware directly so a future packaging change
+# can't quietly reintroduce the same silent fallback: when running from a
+# PyInstaller bundle (sys.frozen / sys._MEIPASS set), it checks the bundle's
+# extraction dir and the folder the .exe lives in, in addition to the normal
+# source-tree path used in dev. If every candidate is missing, the fallback
+# is now "1.0.0" -- a real release number -- rather than the alarming-
+# looking "0.0.0", which only ever indicated this exact bundling bug.
+_FALLBACK_VERSION = "1.0.0"
+
+
+def _candidate_pyproject_paths() -> list[Path]:
+    candidates: list[Path] = []
+    # Normal case: running from source, this file is app/accounts/app_info.py
+    # so parents[2] is the repo root.
+    candidates.append(Path(__file__).resolve().parents[2] / "config" / "pyproject.toml")
+    # PyInstaller --onefile bundle: files added via --add-data land under
+    # sys._MEIPASS (a temp extraction dir) at runtime.
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / "config" / "pyproject.toml")
+    # Frozen build in general (onefile or onedir): also check right next to
+    # the actual .exe, in case a future packaging step ships config/ as a
+    # loose folder alongside it instead of as embedded PyInstaller data.
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        candidates.append(exe_dir / "config" / "pyproject.toml")
+        candidates.append(exe_dir / "pyproject.toml")
+    return candidates
+
 
 def _read_pyproject_version() -> str:
-    try:
-        text = _PYPROJECT_PATH.read_text(encoding="utf-8")
-        match = _VERSION_RE.search(text)
-        if match:
-            return match.group(1)
-    except Exception:  # noqa: BLE001 -- a missing/unreadable pyproject.toml must never crash the Account tab
-        pass
-    return "0.0.0"
+    for path in _candidate_pyproject_paths():
+        try:
+            text = path.read_text(encoding="utf-8")
+            match = _VERSION_RE.search(text)
+            if match:
+                return match.group(1)
+        except Exception:  # noqa: BLE001 -- a missing/unreadable pyproject.toml must never crash the Account tab
+            continue
+    return _FALLBACK_VERSION
 
 
 APP_VERSION = _read_pyproject_version()
