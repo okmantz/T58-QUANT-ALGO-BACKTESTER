@@ -146,6 +146,7 @@ from app.search.strategy_space import (
 )
 from app.search.results_db import ResultsDB
 from app.strategy.base import StrategyError
+from app.data.timeframe_resample import prepare_timeframe_aligned_data, describe_resolved_timeframe
 from app.validation.cpcv import CPCVError, compute_pbo, run_cpcv
 from app.validation.sensitivity import compute_2d_heatmap
 from app.optimize.parameter_space import apply_genome, extract_genome
@@ -1074,6 +1075,15 @@ def _redirect_target(form) -> str:
 
 _REPLAY_RESULTS: dict = {}
 _REPLAY_RESULTS_LOCK = threading.Lock()
+# Separate from _REPLAY_RESULTS on purpose: that dict is returned verbatim
+# by /replay/data/<id>.json via jsonify(), so it can only ever hold plain
+# JSON-safe values. This one holds the actual df/Strategy/RiskConfig
+# objects behind a prepared replay, purely so /replay/rerun/<id> (the
+# "configure while in replay" feature) can re-run the SAME strategy
+# against the SAME dataset with new risk/prop settings without the user
+# re-uploading or re-selecting anything.
+_REPLAY_SOURCES: dict = {}
+_REPLAY_SOURCES_LOCK = threading.Lock()
 
 
 @app.route("/replay")
@@ -1082,6 +1092,106 @@ def replay_form():
         "replay.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context(),
     )
+
+
+def _describe_strategy_for_replay(strategy, risk: RiskConfig, result) -> dict:
+    """A small, JSON-safe summary of the selected strategy and its current
+    risk settings for the Interactive Replay sidebar's Strategy panel --
+    deliberately not a full config dump, just enough to confirm at a
+    glance which strategy and settings actually produced this replay's
+    trades."""
+    return {
+        "name": result.strategy_name,
+        "source_type": getattr(strategy, "source_type", "unknown"),
+        "timeframe": describe_resolved_timeframe(strategy),
+        "risk_mode": risk.risk_mode,
+        "risk_value": risk.risk_value,
+        "pip_size": risk.pip_size,
+        "initial_balance": risk.initial_balance,
+    }
+
+
+def _build_replay_payload(df, strategy, risk: RiskConfig, prop_account_size: float,
+                           prop_rules_form: dict, active_label: str, result) -> dict:
+    """Builds the exact JSON-safe dict /replay/data/<id>.json serves, from
+    an already-run BacktestResult. Shared by /replay/prepare (the first
+    run) and /replay/rerun/<id> (re-running the same strategy/dataset
+    with different risk/prop settings from the replay sidebar) so both
+    produce byte-identical payload shapes."""
+    import pandas as pd
+    bars = [
+        {
+            "time": int(pd.Timestamp(row.timestamp).timestamp()),
+            "open": float(row.open), "high": float(row.high), "low": float(row.low), "close": float(row.close),
+            "volume": float(row.volume) if hasattr(row, "volume") else 0.0,
+        }
+        for row in df.itertuples(index=False)
+    ]
+    trades = [
+        {
+            "entry_time": int(pd.Timestamp(t.entry_time).timestamp()),
+            "exit_time": int(pd.Timestamp(t.exit_time).timestamp()),
+            "direction": t.direction, "entry_price": t.entry_price, "exit_price": t.exit_price,
+            "pnl": t.pnl, "exit_reason": t.exit_reason,
+            # UPGRADE (Interactive Replay: TP/SL fields, running balance):
+            # equity_after is already tracked per-trade by the backtest
+            # engine itself (app.backtest.execution.Trade) -- exactly the
+            # "new account balance after this trade" the right-hand panel
+            # needs, not something computed here. stop_loss_price is
+            # derived from initial_risk (|entry - stop| in price units,
+            # also already tracked per-trade) -- always available whenever
+            # the trade was risk-sized off a stop. take_profit_price is
+            # only ever knowable when a take-profit was the actual reason
+            # the trade closed (exit_price IS that price then) -- for any
+            # other exit reason the strategy's TP target (if it even had
+            # one) was never reached, so there is no real number to show;
+            # left null rather than guessed.
+            "equity_after": t.equity_after,
+            "stop_loss_price": (
+                round(t.entry_price - t.direction * t.initial_risk, 6) if t.initial_risk else None
+            ),
+            "take_profit_price": (t.exit_price if t.exit_reason == "take_profit" else None),
+        }
+        for t in result.trades
+    ]
+    equity = [
+        {"time": int(pd.Timestamp(ts).timestamp()), "equity": float(eq)}
+        for ts, eq in zip(result.equity_curve["timestamp"], result.equity_curve["equity"])
+    ] if "timestamp" in result.equity_curve.columns and "equity" in result.equity_curve.columns else []
+
+    return {
+        "bars": bars, "trades": trades, "equity": equity,
+        "label": active_label, "initial_balance": risk.initial_balance,
+        "prop_account_size": prop_account_size,
+        "prop_rules": prop_rules_form,
+        "strategy_info": _describe_strategy_for_replay(strategy, risk, result),
+        "statistics": result.statistics.to_dict() if hasattr(result.statistics, "to_dict") else {},
+    }
+
+
+def _parse_replay_prop_rules(form) -> dict:
+    """The Prop Account section of both replay.html (initial setup) and
+    replay_view.html's sidebar (re-run) posts these same four fields.
+    Previously only account_size ever made it past this route -- profit
+    target / daily loss / max drawdown were collected by the form and
+    silently discarded, so Replay's Prop Account panel had nothing real
+    to show or check against. Returns plain floats/None, never raises --
+    a blank or unparsable field just means that limit isn't shown/checked,
+    not a failed request."""
+    def _f(name, default=None):
+        raw = (form.get(name) or "").strip()
+        if not raw:
+            return default
+        try:
+            return float(raw)
+        except ValueError:
+            return default
+    return {
+        "account_size": _f("account_size"),
+        "profit_target_pct": _f("profit_target"),
+        "daily_loss_pct": _f("daily_loss"),
+        "max_drawdown_pct": _f("max_dd"),
+    }
 
 
 @app.route("/replay/prepare", methods=["POST"])
@@ -1131,6 +1241,7 @@ def replay_prepare():
         # not a prop-firm evaluation/payout simulation -- account_size
         # only sets what "the account" starts at for the balance panel.
         prop_account_size = float(form.get("account_size", risk.initial_balance) or risk.initial_balance)
+        prop_rules_form = _parse_replay_prop_rules(form)
     except (StrategyError, RefinementError) as exc:
         return render_template(
             "replay.html", error=str(exc), stored_datasets=list_stored_datasets(),
@@ -1138,62 +1249,73 @@ def replay_prepare():
             **_alpaca_template_context(),
         ), 400
 
+    # FIX (Interactive Replay taking zero trades): this used to trim to
+    # max_bars BEFORE the strategy's own declared execution timeframe was
+    # resolved (see app.data.timeframe_resample) -- a strategy that
+    # declares e.g. TIMEFRAME="15m" against 1-minute data got its lookback
+    # window trimmed on the WRONG (native, pre-resample) bar count, then
+    # resampled what was left, silently handing it a much shorter history
+    # than the same strategy would see through Run & Report (which never
+    # trims at all). Resolving the timeframe alignment first and trimming
+    # the ALREADY-aligned frame -- exactly what run_backtest itself will
+    # see -- means Replay's displayed window matches what actually
+    # generated the trades, instead of a mismatched pre-resample slice.
+    df, _tf_warnings = prepare_timeframe_aligned_data(df, strategy)
     max_bars = int(form.get("max_bars", 2000) or 2000)
     if len(df) > max_bars:
         df = df.tail(max_bars).reset_index(drop=True)
 
     result = run_backtest(df, strategy, risk)
-
-    import pandas as pd
-    bars = [
-        {
-            "time": int(pd.Timestamp(row.timestamp).timestamp()),
-            "open": float(row.open), "high": float(row.high), "low": float(row.low), "close": float(row.close),
-            "volume": float(row.volume) if hasattr(row, "volume") else 0.0,
-        }
-        for row in df.itertuples(index=False)
-    ]
-    trades = [
-        {
-            "entry_time": int(pd.Timestamp(t.entry_time).timestamp()),
-            "exit_time": int(pd.Timestamp(t.exit_time).timestamp()),
-            "direction": t.direction, "entry_price": t.entry_price, "exit_price": t.exit_price,
-            "pnl": t.pnl, "exit_reason": t.exit_reason,
-            # UPGRADE (Interactive Replay: TP/SL fields, running balance):
-            # equity_after is already tracked per-trade by the backtest
-            # engine itself (app.backtest.execution.Trade) -- exactly the
-            # "new account balance after this trade" the right-hand panel
-            # needs, not something computed here. stop_loss_price is
-            # derived from initial_risk (|entry - stop| in price units,
-            # also already tracked per-trade) -- always available whenever
-            # the trade was risk-sized off a stop. take_profit_price is
-            # only ever knowable when a take-profit was the actual reason
-            # the trade closed (exit_price IS that price then) -- for any
-            # other exit reason the strategy's TP target (if it even had
-            # one) was never reached, so there is no real number to show;
-            # left null rather than guessed.
-            "equity_after": t.equity_after,
-            "stop_loss_price": (
-                round(t.entry_price - t.direction * t.initial_risk, 6) if t.initial_risk else None
-            ),
-            "take_profit_price": (t.exit_price if t.exit_reason == "take_profit" else None),
-        }
-        for t in result.trades
-    ]
-    equity = [
-        {"time": int(pd.Timestamp(ts).timestamp()), "equity": float(eq)}
-        for ts, eq in zip(result.equity_curve["timestamp"], result.equity_curve["equity"])
-    ] if "timestamp" in result.equity_curve.columns and "equity" in result.equity_curve.columns else []
+    payload = _build_replay_payload(df, strategy, risk, prop_account_size, prop_rules_form, active_label, result)
 
     replay_id = uuid.uuid4().hex[:12]
     with _REPLAY_RESULTS_LOCK:
-        _REPLAY_RESULTS[replay_id] = {
-            "bars": bars, "trades": trades, "equity": equity,
-            "label": active_label, "initial_balance": risk.initial_balance,
-            "prop_account_size": prop_account_size,
-            "statistics": result.statistics.to_dict() if hasattr(result.statistics, "to_dict") else {},
-        }
+        _REPLAY_RESULTS[replay_id] = payload
+    with _REPLAY_SOURCES_LOCK:
+        _REPLAY_SOURCES[replay_id] = {"df": df, "strategy": strategy, "risk": risk, "active_label": active_label}
     return redirect(url_for("replay_view", replay_id=replay_id))
+
+
+@app.route("/replay/rerun/<replay_id>", methods=["POST"])
+def replay_rerun(replay_id):
+    """UPGRADE (Interactive Replay: configure while in replay): re-runs
+    the SAME strategy against the SAME already-loaded dataset with new
+    risk/prop settings from the replay sidebar's own form -- no re-upload
+    or re-selection needed. Produces a NEW replay_id (the old one is left
+    intact and still viewable) so a browser back button still works.
+    404s -- with a plain explanatory page rather than a raw error -- if
+    the source strategy/dataset for `replay_id` isn't resident in memory
+    any more (a server restart since it was prepared, same limitation
+    /replay/data/<id>.json already has)."""
+    with _REPLAY_SOURCES_LOCK:
+        source = _REPLAY_SOURCES.get(replay_id)
+    if source is None:
+        return render_template(
+            "replay_view.html", replay_id=replay_id, not_found=True,
+            rerun_expired=True,
+        ), 404
+
+    form = request.form
+    old_risk = source["risk"]
+    new_risk = RiskConfig(
+        initial_balance=float(form.get("initial_balance") or old_risk.initial_balance),
+        risk_mode=form.get("risk_mode") or old_risk.risk_mode,
+        risk_value=float(form.get("risk_value") or old_risk.risk_value),
+        pip_size=float(form.get("pip_size") or old_risk.pip_size),
+    )
+    prop_account_size = float(form.get("account_size") or new_risk.initial_balance)
+    prop_rules_form = _parse_replay_prop_rules(form)
+
+    df, strategy, active_label = source["df"], source["strategy"], source["active_label"]
+    result = run_backtest(df, strategy, new_risk)
+    payload = _build_replay_payload(df, strategy, new_risk, prop_account_size, prop_rules_form, active_label, result)
+
+    new_replay_id = uuid.uuid4().hex[:12]
+    with _REPLAY_RESULTS_LOCK:
+        _REPLAY_RESULTS[new_replay_id] = payload
+    with _REPLAY_SOURCES_LOCK:
+        _REPLAY_SOURCES[new_replay_id] = {"df": df, "strategy": strategy, "risk": new_risk, "active_label": active_label}
+    return redirect(url_for("replay_view", replay_id=new_replay_id))
 
 
 @app.route("/replay/view/<replay_id>")
