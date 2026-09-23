@@ -157,15 +157,156 @@ def after_search_complete(
     )
 
 
-def after_full_pipeline(verdict: str | None, saved_to_library: bool) -> str:
+_COMPONENT_LABELS: dict[str, str] = {
+    "pass_probability": "prop-eval pass probability",
+    "first_payout_probability": "first-payout probability",
+    "risk_of_ruin": "risk of ruin",
+    "walk_forward_stability": "walk-forward / out-of-sample stability",
+    "monte_carlo_robustness": "Monte Carlo robustness",
+    "parameter_stability": "parameter stability",
+    "expectancy": "per-trade expectancy",
+    "drawdown": "drawdown vs. the prop firm's cap",
+    "parsimony": "parsimony (free-parameter count vs. edge)",
+    "cpcv_supporting": "CPCV supporting diagnostic",
+}
+
+# One concrete, actionable suggestion per scorecard component -- keyed to
+# name the exact tab/setting to try next, so "Next step" guidance never
+# bottoms out in a bare "this failed" with no path forward. Deliberately
+# short (1-2 sentences): the goal is to point Owen at the next lever to
+# pull, not to re-explain the whole metric.
+_COMPONENT_FIXES: dict[str, str] = {
+    "pass_probability": (
+        "raise win rate or profit factor (tighter entries, a better filter) or lower risk-of-ruin "
+        "overall -- Quick Optimize on this exact strategy is the fastest way to search nearby "
+        "parameter values for a stronger combination"
+    ),
+    "first_payout_probability": (
+        "the strategy passes an eval slowly even when it does pass -- try a tighter profit target or "
+        "review risk-per-trade sizing in Quick Optimize; a higher risk-per-trade (within the ruin cap) "
+        "usually speeds up time-to-payout"
+    ),
+    "risk_of_ruin": (
+        "lower risk-per-trade in the Risk step, or turn on reset_on_breach so a single bad stretch "
+        "doesn't compound -- then re-run"
+    ),
+    "walk_forward_stability": (
+        "the edge doesn't hold up out-of-sample as well as in-sample -- a classic overfitting sign. "
+        "Try fewer/simpler entry conditions, widen indicator periods so the fit isn't razor-sharp, or "
+        "load more market data (2 Market Data) so the walk-forward split has more to test against"
+    ),
+    "monte_carlo_robustness": (
+        "results swing a lot across resampled trade sequences, which usually means a handful of "
+        "outsized winners are propping up the whole edge -- check the trade list for one or two huge "
+        "wins and see if the edge survives without them"
+    ),
+    "parameter_stability": (
+        "small parameter changes swing results a lot -- a sign of curve-fitting to this exact dataset. "
+        "Run Search Lab or Evolution Lab's plateau-robust selection instead of hand-picking a single "
+        "sharp optimum"
+    ),
+    "expectancy": (
+        "average profit per trade is weak -- try a tighter stop / wider target ratio, or a different "
+        "exit rule, then re-run"
+    ),
+    "drawdown": (
+        "drawdown relative to the prop firm's cap is too aggressive -- lower risk-per-trade or tighten "
+        "the stop-loss"
+    ),
+    "parsimony": (
+        "this strategy carries more free parameters/conditions than its edge justifies -- another "
+        "overfitting red flag. Try removing its weakest entry or exit condition and re-testing to see "
+        "if performance holds with fewer moving parts"
+    ),
+    "cpcv_supporting": (
+        "the CPCV supporting diagnostic came back weak -- treat the primary generalization result with "
+        "extra caution and prefer a strategy that also does well there"
+    ),
+}
+
+
+def _weakest_scorecard_components(scorecard, n: int = 2) -> list[tuple[str, float]]:
+    """The n lowest-scoring components that actually ran (value is not
+    None), sorted worst-first -- what after_full_pipeline names as the
+    specific thing to go fix next, instead of a bare tier/score."""
+    scored = [
+        (name, comp["value"])
+        for name, comp in (scorecard.components or {}).items()
+        if comp.get("value") is not None
+    ]
+    scored.sort(key=lambda item: item[1])
+    return scored[:n]
+
+
+def after_full_pipeline(verdict: str | None, saved_to_library: bool, result=None) -> str:
+    """result: optional FullPipelineResult from this exact run. When
+    provided, a NOT READY or MARGINAL verdict gets a specific, numbers-
+    backed diagnosis (which hard gate failed, or which scorecard
+    component(s) are weakest) plus a concrete next action to try --
+    never just a bare verdict with nowhere to go. Every existing caller
+    that doesn't pass `result` keeps the exact prior (shorter, generic)
+    text -- fully backward compatible."""
     verdict = (verdict or "").upper()
     library_note = " It was saved to the Strategy Library." if saved_to_library else ""
+
     if verdict == "READY":
         return (
             f"Verdict: READY.{library_note} Next step: this is your strongest evidence yet, but it's still "
             "a backtest -- consider a short forward-test (MT5 Forward Test tab, or paper trading) before "
             "risking real capital on a prop-firm evaluation."
         )
+
+    if result is not None and getattr(result, "lookahead_hard_fail", False):
+        return (
+            "Verdict: NOT READY -- confirmed lookahead-bias leak. Next step: this strategy's signal "
+            "depends on data that hadn't happened yet as of its own bar, so every number in this report "
+            "is unreliable. Open the lookahead check log above for the exact bar/condition responsible, "
+            "fix that condition (a common cause is referencing the current, still-forming bar's close/"
+            "high/low instead of a prior one), then re-run Full Pipeline from scratch -- optimizing "
+            "or re-scoring this exact configuration won't help until the leak itself is fixed."
+        )
+
+    if result is not None and getattr(result, "risk_of_ruin_hard_fail", False):
+        ruin_pct = getattr(getattr(result, "final_mc", None), "risk_of_ruin_pct", None)
+        cap = getattr(result, "risk_of_ruin_cap", 20.0)
+        ruin_text = f"{ruin_pct:.1f}%" if ruin_pct is not None else "above the cap"
+        scorecard = getattr(result, "scorecard", None)
+        score_note = f" (T58 Score {scorecard.score:.1f}/100 -- {scorecard.tier} -- not the reason for this verdict, see below)" if scorecard is not None else ""
+        return (
+            f"Verdict: NOT READY -- risk of ruin ({ruin_text}) is above the {cap:.0f}% cap.{score_note} "
+            "This is the ONE hard safety gate in this pipeline: everything else about this strategy can "
+            "look good (win rate, profit factor, drawdown) and it will still be NOT READY until ruin "
+            "comes under the cap, because a strategy this likely to blow an account isn't tradeable "
+            "regardless of its other numbers. Next step, in order of how much each usually moves ruin: "
+            "1) lower risk-per-trade in the Risk step (this alone is usually the biggest lever -- ruin "
+            "scales roughly with the square of position size); 2) turn on reset_on_breach so a single "
+            "bad stretch doesn't compound into a full account blow-up; 3) if ruin is still too high after "
+            "that, the strategy's win rate/profit-factor may not support this account's drawdown limit at "
+            "all -- try Quick Optimize to search for a lower-risk parameter set, or treat this as a "
+            "candidate to set aside for a different (looser) prop firm's rules. After any change, "
+            "re-run Full Pipeline on the same strategy -- keep iterating until risk of ruin is confirmed "
+            "under the cap."
+        )
+
+    if result is not None and getattr(result, "scorecard", None) is not None:
+        scorecard = result.scorecard
+        weakest = _weakest_scorecard_components(scorecard)
+        weak_lines = []
+        for name, value in weakest:
+            label = _COMPONENT_LABELS.get(name, name)
+            fix = _COMPONENT_FIXES.get(name, "review this component's underlying numbers in the report above")
+            weak_lines.append(f"{label} ({value:.0f}/100) -- {fix}")
+        weak_text = " ".join(f"{i + 1}) {line}." for i, line in enumerate(weak_lines))
+        tier_word = "MARGINAL" if verdict == "MARGINAL" else "NOT READY"
+        action_word = "Try the strongest lever first" if verdict == "MARGINAL" else "Start with the weakest one"
+        return (
+            f"Verdict: {tier_word} -- T58 Score {scorecard.score:.1f}/100 ({scorecard.tier}).{library_note} "
+            f"Weakest area(s) driving this score: {weak_text} {action_word}, make one change, and re-run "
+            "Full Pipeline -- keep iterating through this same loop (change -> re-run -> check the new "
+            "weakest component) until the verdict reads READY. Don't change multiple things at once: it "
+            "makes it impossible to tell which change actually helped."
+        )
+
     if verdict == "MARGINAL":
         return (
             f"Verdict: MARGINAL.{library_note} Next step: it's not clearly ready or clearly dead. Try "

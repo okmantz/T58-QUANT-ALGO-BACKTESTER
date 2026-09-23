@@ -116,7 +116,8 @@ from app.search.robustness import WalkForwardResult, run_walk_forward
 from app.search.strategy_space import build_strategy_from_spec
 from app.strategy.base import Strategy
 from app.strategy.library import StrategyAlreadyExists, provenance_stamped_name, safe_filename_stem, \
-    save_strategy_text, set_strategy_status, record_backtest_result
+    save_strategy_text, set_strategy_status, record_backtest_result, record_optimize_result, \
+    record_validation_result, record_champion_check_result
 from app.validation.cpcv import CPCVError, CPCVResult, run_cpcv
 from app.validation.icir import ICIRGateResult, run_icir_gate_from_backtest
 from app.validation.regime_matrix import RegimeMatrixResult, build_regime_matrix
@@ -278,6 +279,7 @@ class FullPipelineResult:
     scorecard: "T58ScorecardResult | None"       # the continuous 0-100 score/tier behind `verdict`
     risk_of_ruin_hard_fail: bool                 # True if verdict is NOT READY solely because of the ruin cap
     lookahead_hard_fail: bool                    # True if verdict is NOT READY solely because of a confirmed lookahead-bias leak
+    risk_of_ruin_cap: float                      # the cap that was actually in force for this run (FullPipelineConfig.risk_of_ruin_cap) -- kept on the result so downstream guidance (pipeline_guide.after_full_pipeline) can quote the exact threshold a rejected strategy missed, even if a caller ran with a non-default cap
     parsimony: "ParsimonyResult | None"
     cpcv_result: "CPCVResult | None"             # populated if primary_robustness_method=="cpcv" OR cpcv_supporting_enabled
     cpcv_skip_reason: str | None
@@ -1251,6 +1253,27 @@ def _finish(
                 "risk_of_ruin_hard_fail": risk_of_ruin_hard_fail,
                 "lookahead_hard_fail": lookahead_hard_fail,
             })
+            # Pipeline-progress tracker (Create/Test/Optimize/Validate/
+            # Champion Check/Ready -- see app.strategy.library.
+            # compute_pipeline_progress): Full Pipeline's Step 2 GA re-
+            # optimization, Step 4/6b OOS or CPCV validation, and its own
+            # final verdict all happen inside this ONE run, so all three
+            # downstream stages get stamped here in addition to the
+            # "Test" stage record_backtest_result already covers above.
+            if refinement_ran and ga_result is not None:
+                record_optimize_result(final_source_type, filename, {
+                    "method": "full_pipeline_ga", "oos_trade_count": ga_result.best.oos_trade_count,
+                })
+            if oos_validation is not None or cpcv_result is not None:
+                record_validation_result(final_source_type, filename, {
+                    "method": "cpcv" if cpcv_result is not None else "walk_forward",
+                    "efficiency": getattr(cpcv_result, "mean_oos_metric", None) if cpcv_result is not None else getattr(oos_validation, "efficiency", None),
+                })
+            record_champion_check_result(final_source_type, filename, {
+                "verdict": verdict,
+                "t58_score": round(t58_score, 1) if t58_score is not None else None,
+                "t58_tier": t58_tier,
+            })
             saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {cfg.library_status})."
             log(f"  {saved_library_note}")
         except Exception as exc:  # noqa: BLE001 -- saving to the library is a convenience, not core output
@@ -1303,6 +1326,20 @@ def _finish(
                 "risk_of_ruin_pct": round(final_mc.risk_of_ruin_pct, 1),
                 "risk_of_ruin_hard_fail": risk_of_ruin_hard_fail,
                 "lookahead_hard_fail": lookahead_hard_fail,
+            })
+            if refinement_ran and ga_result is not None:
+                record_optimize_result("manual", filename, {
+                    "method": "full_pipeline_ga", "oos_trade_count": ga_result.best.oos_trade_count,
+                })
+            if oos_validation is not None or cpcv_result is not None:
+                record_validation_result("manual", filename, {
+                    "method": "cpcv" if cpcv_result is not None else "walk_forward",
+                    "efficiency": getattr(cpcv_result, "mean_oos_metric", None) if cpcv_result is not None else getattr(oos_validation, "efficiency", None),
+                })
+            record_champion_check_result("manual", filename, {
+                "verdict": verdict,
+                "t58_score": round(t58_score, 1) if t58_score is not None else None,
+                "t58_tier": t58_tier,
             })
             saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {cfg.library_status})."
             log(f"  {saved_library_note}")
@@ -1370,6 +1407,7 @@ def _finish(
         scorecard=scorecard,
         risk_of_ruin_hard_fail=risk_of_ruin_hard_fail,
         lookahead_hard_fail=lookahead_hard_fail,
+        risk_of_ruin_cap=cfg.risk_of_ruin_cap,
         parsimony=parsimony_result,
         cpcv_result=cpcv_result,
         cpcv_skip_reason=cpcv_skip_reason,
@@ -1628,6 +1666,25 @@ def run_full_pipeline_batch(
                     "first_payout_probability": round(result.final_mc.first_payout_probability, 1),
                     "verdict": result.verdict,
                     "report_html": str(result.report_paths["html"]),
+                })
+                from app.strategy.library import (
+                    record_optimize_result as _rec_opt,
+                    record_validation_result as _rec_val,
+                    record_champion_check_result as _rec_champ,
+                )
+                if result.refinement_ran and result.ga_result is not None:
+                    _rec_opt(strategy_type, filename, {
+                        "method": "full_pipeline_ga", "oos_trade_count": result.ga_result.best.oos_trade_count,
+                    })
+                if result.oos_validation is not None or result.cpcv_result is not None:
+                    _rec_val(strategy_type, filename, {
+                        "method": "cpcv" if result.cpcv_result is not None else "walk_forward",
+                        "efficiency": getattr(result.cpcv_result, "mean_oos_metric", None) if result.cpcv_result is not None else getattr(result.oos_validation, "efficiency", None),
+                    })
+                _rec_champ(strategy_type, filename, {
+                    "verdict": result.verdict,
+                    "t58_score": round(result.scorecard.score, 1) if result.scorecard is not None else None,
+                    "t58_tier": result.scorecard.tier if result.scorecard is not None else None,
                 })
             except Exception:  # noqa: BLE001 -- recording to the library is a convenience, not core output
                 pass

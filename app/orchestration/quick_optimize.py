@@ -108,6 +108,7 @@ from app.strategy.base import Strategy
 from app.strategy.library import (
     StrategyAlreadyExists,
     provenance_stamped_name,
+    record_optimize_result,
     safe_filename_stem,
     save_strategy_text,
     set_strategy_status,
@@ -674,6 +675,16 @@ def run_quick_optimize(
                 filename = f"{base_name}_optimized_{int(time.time())}{ext}"
                 saved_library_path = save_strategy_text(final_code_text, filename, final_source_type, overwrite=False)
             set_strategy_status(final_source_type, filename, cfg.library_status)
+            record_optimize_result(final_source_type, filename, {
+                "improved": improved,
+                "trades": len(final_bt.trades),
+                "net_profit": round(final_bt.statistics.net_profit, 2),
+                "win_rate": round(final_bt.statistics.win_rate, 1),
+                "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
+                "eval_pass_probability": round(final_mc.evaluation_pass_probability, 1),
+                "first_payout_probability": round(final_mc.first_payout_probability, 1),
+                "baseline_eval_pass_probability": round(baseline_mc.evaluation_pass_probability, 1),
+            })
             saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {cfg.library_status})."
             log(saved_library_note)
         except Exception as exc:  # noqa: BLE001 -- saving is a convenience, not the core result
@@ -702,6 +713,16 @@ def run_quick_optimize(
                 filename = f"{base_name}_optimized_{int(time.time())}.json"
                 saved_library_path = save_strategy_text(config_text, filename, "manual", overwrite=False)
             set_strategy_status("manual", filename, cfg.library_status)
+            record_optimize_result("manual", filename, {
+                "improved": improved,
+                "trades": len(final_bt.trades),
+                "net_profit": round(final_bt.statistics.net_profit, 2),
+                "win_rate": round(final_bt.statistics.win_rate, 1),
+                "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
+                "eval_pass_probability": round(final_mc.evaluation_pass_probability, 1),
+                "first_payout_probability": round(final_mc.first_payout_probability, 1),
+                "baseline_eval_pass_probability": round(baseline_mc.evaluation_pass_probability, 1),
+            })
             saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {cfg.library_status})."
             log(saved_library_note)
             final_code_text = config_text
