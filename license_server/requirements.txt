@@ -1,0 +1,9 @@
+# Everything here is stdlib-adjacent and free -- no paid service, no
+# API keys to a third-party licensing provider. Flask is the only real
+# dependency; the Standard Webhooks signature check (hmac/hashlib/base64)
+# is pure stdlib.
+Flask>=3.0.0
+
+# Uncomment if deploying behind gunicorn (recommended for anything but
+# local testing -- see README.md's deployment section):
+# gunicorn>=21.2.0
