@@ -44,11 +44,19 @@
     background: var(--lm-panel); color: var(--lm-text); border: 1px solid var(--lm-border);
     border-radius: 6px; padding: 6px 9px; font-size: 12px; font-weight: 600;
   }
-  /* Some browsers render <option> text with a system/native color instead
-     of inheriting the <select>'s own `color`, which is what made this
-     dropdown's text look washed-out/hard-to-read regardless of the theme
-     -- setting it explicitly on the options fixes that. */
-  .lm-toolbar select option { background: var(--lm-panel); color: var(--lm-text); font-weight: 600; }
+  /* The open dropdown LIST (as opposed to the closed select box) is drawn
+     by the OS/browser itself on most platforms, which ignores this app's
+     --lm-panel background and paints its own white popup regardless of
+     theme -- var(--lm-text) is a pale/near-white color in dark mode, so on
+     that forced-white popup it was rendering pale-gray-on-white and was
+     essentially unreadable. Force a plain black/near-black on the options
+     themselves (independent of theme) so they're always legible against
+     whatever background the platform actually renders; the closed select
+     box above keeps following the theme as before. */
+  .lm-toolbar select option, .lm-toolbar select optgroup {
+    background: #fff; color: #14161b; font-weight: 600;
+  }
+  .lm-toolbar select optgroup { font-weight: 800; font-style: normal; }
   .lm-toolbar label { font-size: 11px; color: var(--lm-text-muted); display: flex; align-items: center; gap: 6px; }
   .lm-btn {
     background: var(--lm-panel); color: var(--lm-text); border: 1px solid var(--lm-border);
@@ -162,8 +170,12 @@
 
   <label id="lm-replay-wrap" style="display:none;">Dataset
     <select id="lm-dataset">
-      {% for d in replay_datasets %}
-      <option value="{{ d }}" {{ 'selected' if d == initial_symbol }}>{{ d }}</option>
+      {% for g in dataset_groups %}
+      <optgroup label="{{ g.instrument }}">
+        {% for file in g.files %}
+        <option value="{{ file.full_name }}" {{ 'selected' if file.full_name == initial_symbol }}>{{ file.name }}</option>
+        {% endfor %}
+      </optgroup>
       {% endfor %}
     </select>
   </label>
