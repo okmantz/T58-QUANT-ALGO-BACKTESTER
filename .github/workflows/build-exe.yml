@@ -22,9 +22,32 @@ jobs:
       - name: Install dependencies
         shell: pwsh
         run: |
+          # pwsh does NOT stop on a failed native command (non-zero exit)
+          # the way bash does -- a failing `pip install` here would
+          # otherwise be silently ignored and the workflow would carry on
+          # to build an .exe missing whatever didn't install (this is
+          # exactly what happened when config/requirements.txt briefly had
+          # an unsatisfiable version pin: pip failed, PyInstaller still
+          # ran, and the resulting .exe crashed on first launch with
+          # "No module named 'pandas'"). Check $LASTEXITCODE after every
+          # pip call so a resolution failure stops the build immediately.
           python -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed (exit $LASTEXITCODE)" }
           pip install -r config/requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw "pip install -r config/requirements.txt failed (exit $LASTEXITCODE) -- check for an unsatisfiable version pin" }
           pip install pyinstaller
+          if ($LASTEXITCODE -ne 0) { throw "pip install pyinstaller failed (exit $LASTEXITCODE)" }
+
+      - name: Verify critical dependencies actually imported
+        shell: pwsh
+        run: |
+          # Belt-and-suspenders check: even if pip reports success, make
+          # sure every package the app actually imports at runtime is
+          # really importable before we spend time building an .exe out of
+          # it. This would have caught the pandas-missing build instantly
+          # instead of only surfacing when Owen launched the app.
+          python -c "import pandas, numpy, flask, alpaca, keyring, qrcode, requests, pyarrow, py7zr, pypdf, scipy, sklearn, lightgbm; print('All critical dependencies import OK')"
+          if ($LASTEXITCODE -ne 0) { throw "One or more required Python packages failed to import after installation -- building would produce a broken .exe. Check config/requirements.txt." }
 
       - name: Verify repository structure
         shell: pwsh
@@ -84,6 +107,8 @@ jobs:
             --windowed `
             --name "T58-Quant-Algo-Backtester" `
             --paths . `
+            --hidden-import "pandas" `
+            --hidden-import "numpy" `
             --hidden-import "app" `
             --hidden-import "app.ui" `
             --hidden-import "app.ui.main_window" `
