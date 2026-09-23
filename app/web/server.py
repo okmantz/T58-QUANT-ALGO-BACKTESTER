@@ -63,9 +63,15 @@ from app.data.alpaca_source import (
     ASSET_CLASSES, ADJUSTMENT_CHOICES, FEED_CHOICES, TIMEFRAME_LABELS,
     AlpacaFetchError, AlpacaImportError, fetch_bars, save_bars_as_csv,
 )
+from app.data.london_strategic_edge_source import (
+    TIMEFRAME_CHOICES as TIMEFRAME_CHOICES_LSE,
+    LSEFetchError, LSEImportError, fetch_candles as lse_fetch_candles,
+    save_bars_as_csv as lse_save_bars_as_csv, test_connection as lse_test_connection,
+)
 from app.data.importer import import_csv, import_csv_bytes
 from app.data.timeframe_resample import infer_timeframe_label
 from app.web.alpaca_shared import alpaca_template_context
+from app.web.lse_shared import lse_template_context
 from app.data.storage import get_app_base_dir, get_raw_data_dir, list_datasets_by_instrument, list_stored_datasets, store_csv_bytes
 from app.ensemble.auto_builder import AutoEnsembleError, build_diversified_ensemble
 from app.ensemble.ensemble import EnsembleError, EnsembleVoteConfig, run_ensemble_blend, run_ensemble_vote
@@ -160,7 +166,8 @@ from app.strategy.library import (
     STRATEGY_STATUSES, STRATEGY_TYPES, StrategyAlreadyExists, delete_many,
     delete_saved_strategy, export_library_zip_bytes, list_all_markets, list_all_tags,
     list_saved_strategies, load_strategy_text, record_backtest_result, record_lookahead_result,
-    record_search_result, rename_saved_strategy, save_strategy_bytes, save_strategy_metadata,
+    record_search_result, record_optimize_result, record_validation_result, record_champion_check_result,
+    rename_saved_strategy, save_strategy_bytes, save_strategy_metadata,
     save_strategy_text, set_strategy_status, set_strategy_tags,
 )
 from app.strategy.lookahead_check import check_for_lookahead
@@ -830,6 +837,12 @@ def _alpaca_template_context() -> dict:
     return alpaca_template_context()
 
 
+def _lse_template_context() -> dict:
+    """Thin wrapper over app.web.lse_shared.lse_template_context, mirroring
+    _alpaca_template_context() above."""
+    return lse_template_context()
+
+
 # Every page with its own "Or fetch data from Alpaca" section (see
 # _alpaca_fetch_section.html) submits to the SAME two routes below rather
 # than each having its own copy of this handler -- self-contained per page
@@ -870,9 +883,82 @@ def index():
         strategy_notice=request.args.get("strategy_notice"),
         alpaca_notice=request.args.get("alpaca_notice"),
         alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"),
+        lse_notice=request.args.get("lse_notice"),
+        lse_notice_kind=request.args.get("lse_notice_kind", "info"),
         strategy_statuses=STRATEGY_STATUSES,
-        **_alpaca_template_context(),
+        **_alpaca_template_context(), **_lse_template_context(),
     )
+
+
+def _lse_redirect(notice: str, kind: str):
+    endpoint = request.form.get("lse_return_to") or "index"
+    if endpoint not in _ALPACA_RETURN_ENDPOINTS:
+        endpoint = "index"
+    return redirect(url_for(endpoint, lse_notice=notice, lse_notice_kind=kind))
+
+
+@app.route("/data/lse/fetch", methods=["POST"])
+def data_lse_fetch():
+    """Fetches candles from London Strategic Edge and saves them into
+    data/raw/<SYMBOL>/, same convention as data_alpaca_fetch() above --
+    one key instead of two, otherwise the identical shape (plain form
+    POST, redirect-with-notice back to whichever page submitted it)."""
+    from app.accounts.api_keys import load_settings as load_api_keys_settings, save_settings as save_api_keys_settings
+
+    form = request.form
+    api_key = (form.get("lse_api_key") or "").strip()
+    save_key = form.get("lse_save_key") == "on"
+
+    existing_keys = load_api_keys_settings()
+    # A blank, masked key field means "keep using the saved one" -- the
+    # page never echoes a real saved key back into the HTML.
+    if not api_key:
+        api_key = existing_keys.london_strategic_edge_key
+
+    symbols = [s.strip() for s in (form.get("lse_symbols") or "").split(",") if s.strip()]
+    timeframe_label = form.get("lse_timeframe") or TIMEFRAME_CHOICES_LSE[0]
+    start = (form.get("lse_start") or "").strip()
+    end = (form.get("lse_end") or "").strip()
+
+    if not api_key:
+        return _lse_redirect("Enter a London Strategic Edge API key.", "error")
+    if not symbols:
+        return _lse_redirect("Enter at least one symbol.", "error")
+
+    if save_key:
+        existing_keys.london_strategic_edge_key = api_key
+        save_api_keys_settings(existing_keys)
+
+    saved_names, errors = [], []
+    for symbol in symbols:
+        try:
+            df = lse_fetch_candles(api_key, symbol, timeframe_label, start, end)
+            dest = lse_save_bars_as_csv(df, symbol, timeframe_label)
+            saved_names.append(dest.relative_to(get_raw_data_dir()).as_posix())
+        except (LSEImportError, LSEFetchError) as exc:
+            errors.append(f"{symbol}: {exc}")
+        except Exception as exc:  # pragma: no cover - defensive
+            errors.append(f"{symbol}: unexpected error ({exc})")
+
+    if saved_names and not errors:
+        notice, kind = f"Saved {len(saved_names)} file(s): {', '.join(saved_names)}.", "success"
+    elif saved_names and errors:
+        notice = f"Saved {len(saved_names)} file(s): {', '.join(saved_names)}. Failed: {'; '.join(errors)}"
+        kind = "warning"
+    else:
+        notice, kind = f"Fetch failed: {'; '.join(errors)}", "error"
+
+    return _lse_redirect(notice, kind)
+
+
+@app.route("/data/lse/forget", methods=["POST"])
+def data_lse_forget():
+    from app.accounts.api_keys import load_settings as load_api_keys_settings, save_settings as save_api_keys_settings
+
+    existing_keys = load_api_keys_settings()
+    existing_keys.london_strategic_edge_key = ""
+    save_api_keys_settings(existing_keys)
+    return _lse_redirect("Saved London Strategic Edge key removed from this computer.", "success")
 
 
 @app.route("/data/alpaca/fetch", methods=["POST"])
@@ -1423,7 +1509,7 @@ def strategy_library_page():
                 "market": s.metadata.get("market", ""), "tags": s.tags, "status": s.status,
                 "status_display": s.status_display, "last_run": s.metadata.get("last_run"),
                 "last_search": s.metadata.get("last_search"), "size_bytes": s.size_bytes,
-                "modified": s.modified,
+                "modified": s.modified, "pipeline_progress": s.pipeline_progress,
             })
     all_strategies.sort(key=lambda s: s["modified"], reverse=True)
 
@@ -2149,7 +2235,18 @@ def api_keys_test_connection():
             return jsonify({"ok": False, "error": f"{service.title()} rejected the key or is unreachable: {exc}"})
 
     if service == "london_strategic_edge":
-        return jsonify({"ok": False, "error": "No integration is implemented for this service yet -- this is just secure storage for the key."})
+        from app.accounts.api_keys import load_settings as load_api_keys_settings
+        keys = load_api_keys_settings()
+        key = request.form.get("london_strategic_edge_key", "").strip() or keys.london_strategic_edge_key
+        if not key:
+            return jsonify({"ok": False, "error": "No London Strategic Edge API key saved yet."})
+        try:
+            message = lse_test_connection(key)
+            return jsonify({"ok": True, "message": message})
+        except (LSEImportError, LSEFetchError) as exc:
+            return jsonify({"ok": False, "error": str(exc)})
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"ok": False, "error": f"Could not connect to London Strategic Edge: {exc}"})
 
     if service == "broker":
         from app.live_deploy.live_settings import load_accounts
@@ -4086,7 +4183,7 @@ def full_pipeline_job_status(job_id):
         "instrument": job.get("instrument"),
         "summary": summary,
         "next_step": (
-            pipeline_guide.after_full_pipeline(result.verdict, bool(result.saved_library_note))
+            pipeline_guide.after_full_pipeline(result.verdict, bool(result.saved_library_note), result=result)
             if result is not None else None
         ),
     })
@@ -5229,7 +5326,7 @@ def _cpcv_job_log(job_id: str, msg: str) -> None:
             job["log"].append(msg)
 
 
-def _run_cpcv_job(job_id: str, df, strategy, risk: RiskConfig, n_groups: int, n_test_groups: int, embargo_frac: float, metric: str, robustness_threshold: float, max_paths: int, prop_rules=None, strategy_name: str = "", instrument: str = "") -> None:
+def _run_cpcv_job(job_id: str, df, strategy, risk: RiskConfig, n_groups: int, n_test_groups: int, embargo_frac: float, metric: str, robustness_threshold: float, max_paths: int, prop_rules=None, strategy_name: str = "", instrument: str = "", library_ref: tuple[str, str] | None = None) -> None:
     try:
         _cpcv_job_log(job_id, f"Running CPCV: {n_groups} groups, {n_test_groups} held out per path, metric={metric}...")
         result = run_cpcv(
@@ -5250,6 +5347,19 @@ def _run_cpcv_job(job_id: str, df, strategy, risk: RiskConfig, n_groups: int, n_
             strategy_name, instrument, "cpcv",
             passed=bool(result.is_robust), summary=f"{result.n_paths} paths evaluated", report_html=report_html,
         )
+        # Pipeline-progress tracker: only when this strategy came straight
+        # from the Strategy Library (library_ref set), so a standalone/
+        # uploaded-for-this-run-only strategy with no library entry has
+        # nothing to stamp onto -- same guard every other library_ref
+        # call site in this file already uses.
+        if library_ref:
+            try:
+                record_validation_result(*library_ref, {
+                    "method": "cpcv", "n_paths": result.n_paths,
+                    "is_robust": bool(result.is_robust), "report_html": report_html,
+                })
+            except Exception:  # noqa: BLE001 -- recording to the library is a convenience, not core output
+                pass
     except CPCVError as exc:
         with _CPCV_JOBS_LOCK:
             job = _CPCV_JOBS[job_id]
@@ -5282,7 +5392,7 @@ def cpcv_start():
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_CPCV)
             return render_template("cpcv.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
-        strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
+        strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000)),
             risk_value=float(form.get("risk_value", 1.0)),
@@ -5304,7 +5414,7 @@ def cpcv_start():
                 float(form.get("robustness_threshold", 0.5) or 0.5), int(form.get("max_paths", 30) or 30),
                 prop_rules,
             ),
-            kwargs={"strategy_name": getattr(strategy, "name", "Strategy"), "instrument": active_label},
+            kwargs={"strategy_name": getattr(strategy, "name", "Strategy"), "instrument": active_label, "library_ref": library_ref},
             daemon=True,
         )
         thread.start()
