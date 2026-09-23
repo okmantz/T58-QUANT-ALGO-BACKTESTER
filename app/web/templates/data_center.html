@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Data Center — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<style>
+  .t58-health-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
+  .t58-health-dot.ok { background: var(--teal); box-shadow: 0 0 6px rgba(var(--teal-rgb),.7); }
+  .t58-health-dot.bad { background: var(--coral); box-shadow: 0 0 6px rgba(var(--coral-rgb),.7); }
+  .t58-dc-summary { display:flex; gap:24px; flex-wrap:wrap; margin-bottom: 6px; }
+  .t58-dc-summary .stat { min-width:120px; }
+  .t58-dc-summary .stat .num { font-size:22px; font-weight:700; }
+  .t58-dc-summary .stat .lbl { font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em; }
+</style>
+</head>
+<body>
+{% set active_page = 'data_center' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+
+<div class="t58-page-header">
+  <h1>Data Center</h1>
+  <p>Dataset coverage, timeframe availability, gaps, duplicates, timezone, sessions, and bar counts for everything under data/raw/ -- plus a place to import new CSV or parquet files.</p>
+</div>
+
+{% if notice %}
+<div class="t58-card" style="border-color:{{ 'var(--teal)' if notice_kind == 'success' else ('var(--coral)' if notice_kind == 'error' else 'var(--border)') }};">
+  {{ notice }}
+</div>
+{% endif %}
+
+<div class="t58-card">
+  <h2>Import data</h2>
+  <p style="color:var(--text-muted);font-size:12px;margin-top:-6px;">CSV, TSV, or parquet -- saved into data/raw/ as its own file, same as fetching from Alpaca or London Strategic Edge.</p>
+  <form method="post" action="/data-center/import" enctype="multipart/form-data" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+    <input type="file" name="data_file" accept=".csv,.tsv,.txt,.parquet" required>
+    <button type="submit" class="t58-btn primary">Import</button>
+  </form>
+</div>
+
+<div class="t58-card">
+  <h2>Overview</h2>
+  <div class="t58-dc-summary">
+    <div class="stat"><div class="num">{{ report.total_files }}</div><div class="lbl">Files</div></div>
+    <div class="stat"><div class="num">{{ "{:,}".format(report.total_bars) }}</div><div class="lbl">Total bars</div></div>
+    <div class="stat"><div class="num {{ 't58-glow-teal' if report.total_unhealthy == 0 else 't58-glow-coral' }}">{{ report.total_unhealthy }}</div><div class="lbl">Files needing attention</div></div>
+    <div class="stat"><div class="num">{{ report.instruments | length }}</div><div class="lbl">Instruments</div></div>
+  </div>
+</div>
+
+{% if report.instruments %}
+{% for g in report.instruments %}
+<div class="t58-card">
+  <h2>{{ g.instrument }}</h2>
+  <p style="color:var(--text-muted);font-size:12px;margin-top:-6px;">
+    {{ g.file_count }} file{{ 's' if g.file_count != 1 }} &middot; {{ "{:,}".format(g.total_bars) }} bars total
+    {% if g.timeframes_available %} &middot; timeframes on record: {{ g.timeframes_available | join(', ') }}{% endif %}
+    {% if g.unhealthy_count %} &middot; <span style="color:var(--coral);">{{ g.unhealthy_count }} file(s) need attention</span>{% endif %}
+  </p>
+  <table class="t58-table">
+    <thead>
+      <tr>
+        <th></th><th>File</th><th>Timeframe</th><th>Bars</th><th>Coverage</th><th>Timezone</th><th>Sessions</th><th>Issues</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for f in g.files %}
+      <tr>
+        <td><span class="t58-health-dot {{ 'ok' if f.healthy else 'bad' }}"></span></td>
+        <td>{{ f.name }}</td>
+        <td>{{ f.timeframe or '--' }}</td>
+        <td>{{ "{:,}".format(f.bar_count) if f.ok else '--' }}</td>
+        <td style="font-size:11px;">{% if f.start %}{{ f.start }} &rarr; {{ f.end }}{% else %}--{% endif %}</td>
+        <td style="font-size:11px;">{{ f.timezone or '--' }}</td>
+        <td style="font-size:11px;">{{ f.session_coverage_pct }}% of 24h</td>
+        <td style="font-size:11px;color:{{ 'var(--coral)' if (f.issues or f.error) else 'var(--text-dim)' }};">
+          {% if f.error %}{{ f.error }}{% elif f.issues %}{{ f.issues | join('; ') }}{% else %}None{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endfor %}
+{% else %}
+<div class="t58-card">
+  <div class="t58-empty">No datasets found under data/raw/ yet -- import one above, or fetch from Alpaca / London Strategic Edge on the Market Data page.</div>
+</div>
+{% endif %}
+
+</div>
+</div>
+</body>
+</html>
