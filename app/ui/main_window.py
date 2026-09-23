@@ -47,6 +47,13 @@ from app.data.alpaca_source import (
     ASSET_CLASSES, ADJUSTMENT_CHOICES, FEED_CHOICES, TIMEFRAME_LABELS,
     AlpacaFetchError, AlpacaImportError, fetch_bars, save_bars_as_csv, test_connection,
 )
+from app.data.london_strategic_edge_source import (
+    ASSET_CLASSES as LSE_ASSET_CLASSES, TIMEFRAME_CHOICES as LSE_TIMEFRAME_CHOICES,
+    LSEFetchError, LSEImportError,
+    fetch_candles as lse_fetch_candles, save_bars_as_csv as lse_save_bars_as_csv,
+    test_connection as lse_test_connection,
+)
+from app.accounts.api_keys import load_settings as load_apikeys_settings, save_settings as save_apikeys_settings
 from app.data.importer import import_csv
 from app.data.multi_timeframe import merge_multi_timeframe
 from app.data.timeframe_resample import infer_timeframe_label as _infer_timeframe_label
@@ -102,6 +109,7 @@ from app.reports.generator import generate_full_report
 from app.reports.crash_log import log_crash
 from app.reports import run_history
 from app.reports import strategy_state
+from app.scoring import champion_board
 from app.reports.refinement_report import generate_refinement_report
 from app.reports.survival_report import generate_survival_report
 from app.reports.validation_reports import (
@@ -125,6 +133,8 @@ from app.strategy.library import (
     delete_saved_strategy, export_library_zip, get_strategy_library_dir,
     list_all_markets, list_all_tags, list_misplaced_files, list_saved_strategies,
     load_strategy_text, record_backtest_result, record_lookahead_result, record_search_result,
+    record_optimize_result, record_validation_result, record_champion_check_result,
+    compute_pipeline_progress,
     rename_saved_strategy, save_strategy_bytes, save_strategy_metadata,
     save_strategy_path, save_strategy_text, set_strategy_status, set_strategy_tags, status_label,
 )
@@ -2056,6 +2066,7 @@ class MainWindow:
         self.tab_resources = Frame(self.content, bg=BG)
         self.tab_education = Frame(self.content, bg=BG)
         self.tab_graveyard = Frame(self.content, bg=BG)
+        self.tab_datacenter = Frame(self.content, bg=BG)
         self.tab_account = Frame(self.content, bg=BG)
         self.tab_api_keys = Frame(self.content, bg=BG)
         self.tab_support = Frame(self.content, bg=BG)
@@ -2192,6 +2203,7 @@ class MainWindow:
 
             (None, "SUPERHEADER", "Account", None, None),
             (None, None, "\u2460 ACCOUNT", None, METAL_BRIGHT),
+            ("datacenter", "", "\U0001F4CA Data Center", self.tab_datacenter, METAL_BRIGHT),
             ("account", "", "\u2699 Account", self.tab_account, METAL_BRIGHT),
             ("apikeys", "", "\U0001F511 API Keys", self.tab_api_keys, METAL_BRIGHT),
             ("support", "", "\U0001F6DF Support", self.tab_support, METAL_BRIGHT),
@@ -2256,6 +2268,7 @@ class MainWindow:
             ("Strategy Graveyard", self._build_graveyard_tab),
             ("Final Selection Leaderboard", self._build_leaderboard_tab),
             ("Hedge Fund Manager", self._build_hedge_fund_tab),
+            ("Data Center", self._build_data_center_tab),
             ("Account", self._build_account_tab),
             ("API Keys", self._build_api_keys_tab),
             ("Support", self._build_support_tab),
@@ -3370,18 +3383,20 @@ class MainWindow:
     def _build_dashboard_scrollable(self, parent) -> Frame:
         """Same scroll-and-wheel contract as _scrollable() (registers into
         the shared self._scroll_canvas_by_tab dispatch table, so the
-        existing global mouse-wheel binding just works here too) but the
-        backing canvas also carries the soft glowing neural background
-        above, with the real content inset by MARGIN on every side so
-        that background is genuinely visible framing the page -- Tkinter
-        widgets are fully opaque, so showing the pattern truly BEHIND
-        every card individually would need a much larger rewrite of this
-        tab's whole layout into separately-positioned canvas windows.
-        Kept as its own method (rather than changing the shared
-        _scrollable()) so this stays purely additive for the one tab
-        that asked for it.
+        existing global mouse-wheel binding just works here too).
+
+        UPGRADE (2026-09, web-parity pass): this used to also paint a
+        soft glowing "neural network" node-link backdrop behind the whole
+        tab (see the now-unused _draw_neural_background) -- purely
+        decorative, in the spirit of a knowledge-graph view. Owen asked
+        for the desktop dashboard to match the web app's actual look,
+        which has no such background; removed here rather than just left
+        unused, since "make the desktop UI look exactly like the web app"
+        specifically named this pattern. _draw_neural_background itself is
+        left in place (harmless, unreferenced) rather than deleted, in
+        case a future tab wants the same effect deliberately.
         """
-        MARGIN = 48
+        MARGIN = 24
         outer = Frame(parent, bg=BG)
         outer.pack(fill="both", expand=True)
 
@@ -3395,7 +3410,6 @@ class MainWindow:
             content_h = inner.winfo_reqheight()
             canvas_w = max(canvas.winfo_width(), 200)
             canvas.configure(scrollregion=(0, 0, canvas_w, content_h + MARGIN * 2))
-            self._draw_neural_background(canvas, canvas_w, max(canvas.winfo_height(), content_h + MARGIN * 2))
 
         def _on_canvas_configure(e):
             canvas.itemconfig(window_id, width=max(1, e.width - MARGIN * 2))
@@ -3456,18 +3470,73 @@ class MainWindow:
                 side="left", padx=8,
             )
 
-        # A dedicated variant of _scrollable() that also paints a soft,
-        # glowing neural-graph backdrop around the dashboard's content
-        # (see _build_dashboard_scrollable's docstring for why it's a
-        # framing margin rather than truly behind every card).
+        # A dedicated variant of _scrollable() -- no decorative background
+        # (see _build_dashboard_scrollable's docstring: the neural-graph
+        # backdrop this used to also paint has been removed to match the
+        # web app's actual look).
         scroll_frame = self._build_dashboard_scrollable(f)
 
-        self._dash_stats_row = Frame(scroll_frame, bg=BG)
-        self._dash_stats_row.pack(fill="x", padx=24, pady=(4, 14))
+        # ---- Five questions T58 should always answer first, plus the
+        # Champion Board -- replaces the old four flat KPI cards
+        # (Strategies tested / Eval pass rate / Best Sharpe / Leader).
+        # Uses GREEN (== web --teal, the web app's actual glow accent) via
+        # GlowCard rather than the decorative NEON_* set below, since this
+        # is the dashboard's headline panel, same role as web's
+        # .t58-champion block. ----
+        self._dash_five_q_card = GlowCard(scroll_frame, accent=GREEN, height=210)
+        self._dash_five_q_card.pack(fill="x", padx=24, pady=(4, 14))
+        self._dash_five_q_frame = self._dash_five_q_card.body
 
-        hero_wrap = Frame(scroll_frame, bg=PANEL, highlightthickness=1, highlightbackground=NEON_CYAN)
+        board_wrap = Frame(scroll_frame, bg=PANEL, highlightthickness=1, highlightbackground=GREEN)
+        board_wrap.pack(fill="both", expand=True, padx=24, pady=(0, 14))
+        Label(board_wrap, text="● CHAMPION BOARD", bg=PANEL, fg=GREEN, font=_safe_font(8, "bold")).pack(
+            anchor="w", padx=14, pady=(10, 2)
+        )
+        Label(
+            board_wrap,
+            text="Every saved strategy's Eval / Payout / OOS standing, and how far it's been explicitly "
+                 "promoted -- promotion is manual, never automatic from a raw metric.",
+            bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8), wraplength=900, justify="left",
+        ).pack(anchor="w", padx=14, pady=(0, 8))
+
+        board_style = ttk.Style(self.root)
+        board_style.configure(
+            "T58Board.Treeview", background=PANEL_2, fieldbackground=PANEL_2, foreground=TEXT,
+            rowheight=24, borderwidth=0, font=_safe_font(9),
+        )
+        board_style.configure("T58Board.Treeview.Heading", background=PANEL_3, foreground=TEXT_MUTED, font=_safe_font(8, "bold"))
+        board_style.map("T58Board.Treeview", background=[("selected", PANEL_3)])
+
+        board_columns = ("strategy", "status", "eval", "payout", "oos", "stage")
+        board_tree_frame = Frame(board_wrap, bg=PANEL)
+        board_tree_frame.pack(fill="both", expand=True, padx=14, pady=(0, 8))
+        self._dash_board_tree = ttk.Treeview(
+            board_tree_frame, columns=board_columns, show="headings", style="T58Board.Treeview", height=6,
+        )
+        board_headings = {
+            "strategy": "Strategy", "status": "Status", "eval": "Eval",
+            "payout": "Payout", "oos": "OOS", "stage": "Promotion stage",
+        }
+        for col, text in board_headings.items():
+            self._dash_board_tree.heading(col, text=text)
+            self._dash_board_tree.column(col, width=120, anchor="w")
+        self._dash_board_tree.pack(side="left", fill="both", expand=True)
+        board_tree_scrollbar = ttk.Scrollbar(
+            board_tree_frame, orient="vertical", command=self._dash_board_tree.yview, style="T58.Vertical.TScrollbar",
+        )
+        board_tree_scrollbar.pack(side="right", fill="y")
+        self._dash_board_tree.configure(yscrollcommand=board_tree_scrollbar.set)
+        self._bind_isolated_wheel(self._dash_board_tree)
+
+        board_btn_row = Frame(board_wrap, bg=PANEL)
+        board_btn_row.pack(anchor="w", padx=14, pady=(0, 12))
+        self._button(board_btn_row, "PROMOTE SELECTED", self._promote_selected_board_row, primary=True).pack(side="left")
+        self._dash_board_status = Label(board_btn_row, text="", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8), wraplength=700, justify="left")
+        self._dash_board_status.pack(side="left", padx=10)
+
+        hero_wrap = Frame(scroll_frame, bg=PANEL, highlightthickness=1, highlightbackground=GREEN)
         hero_wrap.pack(fill="x", padx=24, pady=(0, 14))
-        Label(hero_wrap, text="● PORTFOLIO EQUITY — BEST STRATEGY", bg=PANEL, fg=NEON_CYAN, font=_safe_font(8, "bold")).pack(
+        Label(hero_wrap, text="● PORTFOLIO EQUITY — BEST STRATEGY", bg=PANEL, fg=GREEN, font=_safe_font(8, "bold")).pack(
             anchor="w", padx=14, pady=(10, 4)
         )
         self._dash_hero_canvas = Canvas(hero_wrap, bg=PANEL, height=200, highlightthickness=0)
@@ -3582,31 +3651,34 @@ class MainWindow:
                 "heatmap": [[0.0] * 24 for _ in range(7)], "equity_series": [],
             }
 
-        for child in self._dash_stats_row.winfo_children():
+        for child in self._dash_five_q_frame.winfo_children():
             child.destroy()
-        best = data.get("best")
-        pass_rate = data["pass_rate"]
 
-        card1 = self._stat_card(self._dash_stats_row, "Strategies tested", str(data["total_strategies"]), accent=NEON_VIOLET)
-        card1.pack(side="left", fill="both", expand=True, padx=6)
+        try:
+            board_rows = champion_board.list_board()
+        except Exception:
+            board_rows = []
+        try:
+            snapshot = champion_board.five_question_snapshot(strategy_state.get_current_strategy(), board_rows)
+        except Exception:
+            snapshot = None
+        self._dash_board_rows_by_key = {(r["strategy_type"], r["filename"]): r for r in board_rows}
+        self._paint_five_questions(snapshot)
 
-        card2 = self._ring_stat_card(
-            self._dash_stats_row, "Eval pass rate", pass_rate,
-            accent=NEON_LIME if pass_rate >= 50 else NEON_MAGENTA,
-        )
-        card2.pack(side="left", fill="both", expand=True, padx=6)
-
-        card3 = self._stat_card(
-            self._dash_stats_row, "Best Sharpe",
-            f"{best['sharpe_ratio']:.2f}" if best else "--", accent=NEON_CYAN,
-        )
-        card3.pack(side="left", fill="both", expand=True, padx=6)
-
-        card4 = self._stat_card(
-            self._dash_stats_row, "Leader",
-            best["strategy_name"] if best else "--", accent=NEON_AMBER,
-        )
-        card4.pack(side="left", fill="both", expand=True, padx=6)
+        for row_id in self._dash_board_tree.get_children():
+            self._dash_board_tree.delete(row_id)
+        for r in board_rows:
+            self._dash_board_tree.insert(
+                "", "end", iid=f"{r['strategy_type']}::{r['filename']}",
+                values=(
+                    r["display_name"], r["status"],
+                    f"{r['eval_pct']:.0f}%" if r["eval_pct"] is not None else "--",
+                    f"{r['payout_pct']:.0f}%" if r["payout_pct"] is not None else "--",
+                    f"{r['oos_pct']:.0f}%" if r["oos_pct"] is not None else "--",
+                    r["promotion"]["stage_title"],
+                ),
+            )
+        self._dash_board_status.config(text="")
 
         self._paint_data_library()
 
@@ -3624,6 +3696,78 @@ class MainWindow:
                 f"{s['sharpe_ratio']:.2f}", f"{s['max_drawdown_pct']:.1f}%",
                 s["run_count"], "PASS" if s["single_run_passed"] else "FAIL",
             ))
+
+    def _paint_five_questions(self, snapshot):
+        """Populates the dashboard's headline GlowCard with the five
+        questions T58 should always answer first: what am I working on,
+        where is it in the process, is it working, why, and what should I
+        do next. See app.scoring.champion_board.five_question_snapshot."""
+        parent = self._dash_five_q_frame
+        if snapshot is None:
+            Label(
+                parent, text="No strategy tested yet -- run your first backtest and T58 will tell you "
+                             "what's working, why, and what to do next.",
+                bg=PANEL_2, fg=TEXT_DIM, font=_safe_font(10), wraplength=880, justify="left",
+            ).pack(anchor="w", padx=16, pady=16)
+            return
+
+        title_row = Frame(parent, bg=PANEL_2)
+        title_row.pack(fill="x", padx=16, pady=(14, 6))
+        Label(title_row, text=snapshot["what"], bg=PANEL_2, fg=TEXT, font=_safe_font(15, "bold")).pack(side="left")
+        status_color = {"READY": GREEN, "MARGINAL": AMBER, "NOT READY": RED}.get(snapshot["is_it_working"], METAL)
+        Label(
+            title_row, text=snapshot["is_it_working"], bg=PANEL_2, fg=status_color, font=_safe_font(9, "bold"),
+        ).pack(side="left", padx=(12, 0))
+
+        grid = Frame(parent, bg=PANEL_2)
+        grid.pack(fill="x", padx=16, pady=(4, 10))
+        for col in range(4):
+            grid.grid_columnconfigure(col, weight=1, uniform="fiveq")
+
+        qa = [
+            ("WHERE IS IT IN THE PROCESS?", f"{snapshot['where']} — {snapshot['where_pct']:.0f}%"),
+            ("IS IT WORKING?", snapshot["is_it_working"]),
+            ("WHY?", snapshot["why"]),
+            ("WHAT SHOULD I DO NEXT?", snapshot["next_action"]),
+        ]
+        for i, (label, value) in enumerate(qa):
+            cell = Frame(grid, bg=PANEL_2, highlightthickness=0)
+            cell.grid(row=0, column=i, sticky="nw", padx=(0 if i == 0 else 10, 0))
+            Frame(cell, bg=GREEN, width=2).pack(side="left", fill="y")
+            inner = Frame(cell, bg=PANEL_2)
+            inner.pack(side="left", fill="both", padx=(8, 0))
+            Label(inner, text=label, bg=PANEL_2, fg=TEXT_MUTED, font=_safe_font(7, "bold")).pack(anchor="w")
+            Label(
+                inner, text=value, bg=PANEL_2, fg=(GREEN if i == 3 else TEXT), font=_safe_font(9, "bold"),
+                wraplength=190, justify="left",
+            ).pack(anchor="w", pady=(2, 0))
+
+        btn_row = Frame(parent, bg=PANEL_2)
+        btn_row.pack(anchor="w", padx=16, pady=(0, 14))
+        row = snapshot["row"]
+        if row["promotion"]["can_promote"]:
+            self._button(
+                btn_row, f"PROMOTE TO {row['promotion']['next_stage_title'].upper()}",
+                lambda: self._promote_board_row(row["strategy_type"], row["filename"]), primary=True,
+            ).pack(side="left")
+        else:
+            self._button(btn_row, "OPEN VALIDATE", lambda: self._show_page("cpcv")).pack(side="left")
+
+    def _promote_board_row(self, strategy_type: str, filename: str):
+        try:
+            ok, message, _new_stage = champion_board.promote_strategy(strategy_type, filename)
+        except Exception as exc:  # pragma: no cover - defensive
+            ok, message = False, f"Unexpected error: {exc}"
+        self._dash_board_status.config(text=message, fg=(GREEN if ok else AMBER))
+        self._refresh_dashboard()
+
+    def _promote_selected_board_row(self):
+        selection = self._dash_board_tree.selection()
+        if not selection:
+            messagebox.showinfo("Promote", "Select a strategy in the Champion Board first.")
+            return
+        strategy_type, filename = selection[0].split("::", 1)
+        self._promote_board_row(strategy_type, filename)
 
     def _paint_data_library(self):
         for child in self._dash_library_frame.winfo_children():
@@ -5017,6 +5161,7 @@ class MainWindow:
         ).pack(anchor="w", padx=26)
 
         self._build_alpaca_section(f)
+        self._build_lse_section(f)
 
         self._refresh_dataset_list()
 
@@ -5210,6 +5355,172 @@ class MainWindow:
             self._set_alpaca_status(f"Unexpected error: {exc}", RED)
         finally:
             self._set_alpaca_buttons_enabled(True)
+
+    # -----------------------------------------------------------------------
+    # Tab 1 — Market Data — London Strategic Edge (LSE) API fetch
+    # -----------------------------------------------------------------------
+    # Mirrors _build_alpaca_section above field-for-field (same saved-key
+    # checkbox, TEST CONNECTION / FETCH & SAVE / FORGET SAVED KEYS button
+    # row, same worker-thread + status-label pattern) so the two data
+    # sources feel identical from the UI's point of view -- only the
+    # underlying module and its options differ (LSE is a single-API-key
+    # service with no separate secret key, no feed/adjustment concept, and
+    # its own asset-class/timeframe vocabulary; see
+    # app.data.london_strategic_edge_source). Only a single-page
+    # fetch_candles() pull is exposed here, matching the web app's own
+    # /data/lse/fetch route (fetch_history()'s deeper vault-export pull
+    # isn't wired into either UI yet). Previously only TEST CONNECTION
+    # existed for LSE on desktop (on the API Keys tab); this adds the
+    # actual FETCH & SAVE flow the Alpaca section has always had.
+
+    def _build_lse_section(self, parent):
+        section = self._section(
+            parent,
+            "Fetch data from London Strategic Edge",
+            "Another alternative to local files above — a single API key covers stocks, forex, "
+            "crypto, commodities, indices, ETFs and futures, and saves bars into data/raw/ so they "
+            "join the dataset list above, same as an Alpaca fetch.",
+        )
+
+        saved_keys = load_apikeys_settings()
+        prefill_key = saved_keys.london_strategic_edge_key or ""
+
+        self.lse_api_key = LabeledEntry(section, "London Strategic Edge API key", prefill_key, secret=True, width=32)
+        self.lse_save_key = LabeledCheckbox(
+            section, "Save this key on this computer for next time", default=True
+        )
+
+        self.lse_asset_class = LabeledCombo(section, "Asset class (informational)", LSE_ASSET_CLASSES, default=LSE_ASSET_CLASSES[0])
+        self.lse_symbols = LabeledEntry(
+            section, "Symbol(s), comma-separated (e.g. AAPL, EUR/USD, GC)", "AAPL", width=32
+        )
+        self.lse_timeframe = LabeledCombo(section, "Timeframe", LSE_TIMEFRAME_CHOICES, default="1d")
+        self.lse_start = LabeledEntry(section, "Start date (YYYY-MM-DD)", "2024-01-01")
+        self.lse_end = LabeledEntry(section, "End date (YYYY-MM-DD)", "2026-01-01")
+
+        btn_row = Frame(section, bg=PANEL)
+        btn_row.pack(anchor="w", padx=18, pady=(4, 4))
+
+        self.lse_test_btn = self._button(btn_row, "TEST CONNECTION", self._test_lse_connection)
+        self.lse_test_btn.pack(side="left")
+
+        self.lse_fetch_btn = self._button(btn_row, "FETCH & SAVE", self._fetch_lse_clicked, primary=True)
+        self.lse_fetch_btn.pack(side="left", padx=8)
+
+        self.lse_forget_btn = self._button(btn_row, "FORGET SAVED KEY", self._forget_lse_key)
+        self.lse_forget_btn.pack(side="left")
+
+        self.lse_status = Label(
+            section,
+            text="●  A London Strategic Edge account provides a single API key for data across every asset class.",
+            bg=PANEL,
+            fg=TEXT_MUTED,
+            font=_safe_font(9),
+            wraplength=760,
+            justify="left",
+        )
+        self.lse_status.pack(anchor="w", padx=18, pady=(2, 14))
+
+    def _set_lse_status(self, text, color=None):
+        self.lse_status.config(text=f"●  {text}", fg=color or TEXT_MUTED)
+        self.root.update_idletasks()
+
+    def _set_lse_buttons_enabled(self, enabled: bool):
+        state = "normal" if enabled else "disabled"
+        self.lse_test_btn.config(state=state)
+        self.lse_fetch_btn.config(state=state)
+        self.lse_forget_btn.config(state=state)
+
+    def _maybe_save_lse_key(self, api_key: str):
+        if not self.lse_save_key.get():
+            return
+        settings = load_apikeys_settings()
+        settings.london_strategic_edge_key = api_key
+        save_apikeys_settings(settings)
+
+    def _forget_lse_key(self):
+        settings = load_apikeys_settings()
+        settings.london_strategic_edge_key = ""
+        save_apikeys_settings(settings)
+        self.lse_api_key.var.set("")
+        self.lse_save_key.var.set(False)
+        self._set_lse_status("Saved key removed from this computer.", GREEN)
+
+    def _test_lse_connection(self):
+        api_key = self.lse_api_key.get_str().strip()
+        if not api_key:
+            messagebox.showwarning("Missing key", "Enter a London Strategic Edge API key first.")
+            return
+
+        self._set_lse_buttons_enabled(False)
+        self._set_lse_status("Testing connection...", AMBER)
+
+        def worker():
+            try:
+                message = lse_test_connection(api_key)
+                self._maybe_save_lse_key(api_key)
+                self._set_lse_status(message, GREEN)
+            except (LSEImportError, LSEFetchError) as exc:
+                self._set_lse_status(str(exc), RED)
+            except Exception as exc:  # pragma: no cover - defensive
+                self._set_lse_status(f"Unexpected error: {exc}", RED)
+            finally:
+                self._set_lse_buttons_enabled(True)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _fetch_lse_clicked(self):
+        api_key = self.lse_api_key.get_str().strip()
+        symbols = [s.strip() for s in self.lse_symbols.get_str().split(",") if s.strip()]
+        timeframe_label = self.lse_timeframe.get_str()
+        start = self.lse_start.get_str().strip()
+        end = self.lse_end.get_str().strip()
+
+        if not api_key:
+            messagebox.showwarning("Missing key", "Enter a London Strategic Edge API key first.")
+            return
+        if not symbols:
+            messagebox.showwarning("Missing symbol", "Enter at least one symbol (comma-separated for more than one).")
+            return
+
+        self._set_lse_buttons_enabled(False)
+        threading.Thread(
+            target=self._fetch_lse_pipeline,
+            args=(api_key, symbols, timeframe_label, start, end),
+            daemon=True,
+        ).start()
+
+    def _fetch_lse_pipeline(self, api_key, symbols, timeframe_label, start, end):
+        try:
+            self._maybe_save_lse_key(api_key)
+            saved_paths = []
+            for i, symbol in enumerate(symbols, start=1):
+                self._set_lse_status(f"Fetching {symbol} ({i}/{len(symbols)})...", AMBER)
+                df = lse_fetch_candles(api_key, symbol, timeframe_label, start, end)
+                dest = lse_save_bars_as_csv(df, symbol, timeframe_label)
+                saved_paths.append(dest)
+                self._set_lse_status(f"Saved {symbol}: {len(df):,} bars -> {dest.name}", GREEN)
+
+            self._refresh_dataset_list()
+            if len(saved_paths) == 1:
+                self._select_datasets(saved_paths, silent=True)
+                self._set_lse_status(
+                    f"Done. {saved_paths[0].name} is now the active dataset.", GREEN
+                )
+            else:
+                names = ", ".join(p.name for p in saved_paths)
+                self._set_lse_status(
+                    f"Done. Saved {len(saved_paths)} file(s): {names}. "
+                    "Ctrl/Cmd-click them in the list above to combine as multi-timeframe, "
+                    "or pick just one.",
+                    GREEN,
+                )
+        except (LSEImportError, LSEFetchError) as exc:
+            self._set_lse_status(str(exc), RED)
+        except Exception as exc:  # pragma: no cover - defensive
+            self._set_lse_status(f"Unexpected error: {exc}", RED)
+        finally:
+            self._set_lse_buttons_enabled(True)
 
     def _refresh_dataset_list(self):
         self.dataset_listbox.delete(0, END)
@@ -10188,6 +10499,143 @@ class MainWindow:
             self.hf_progress.stop()
 
     # -----------------------------------------------------------------------
+    # Data Center -- desktop parity for the web app's Data Center page
+    # (app.web.server.data_center / templates/data_center.html): dataset
+    # coverage, timeframe availability, gaps, duplicates, timezone,
+    # sessions, and bar counts for everything under data/raw/, plus a CSV/
+    # parquet import button. Shares app.data.health.compute_data_center
+    # with the web app so the two can never disagree about a file's health.
+    # -----------------------------------------------------------------------
+
+    def _build_data_center_tab(self):
+        f = self._scrollable(self.tab_datacenter)
+        self._page_header(
+            f, "ACCOUNT", "Data Center",
+            "Dataset coverage, timeframe availability, gaps, duplicates, timezone, sessions, and bar "
+            "counts for everything under data/raw/ -- plus a place to import new CSV or parquet files.",
+        )
+
+        import_section = self._section(
+            f, "Import data", "CSV, TSV, or parquet -- saved into data/raw/ as its own file, same as "
+            "fetching from Alpaca or London Strategic Edge.",
+        )
+        import_btn_row = Frame(import_section, bg=PANEL)
+        import_btn_row.pack(anchor="w", padx=18, pady=(4, 4))
+        self._button(import_btn_row, "IMPORT CSV / PARQUET...", self._data_center_import_clicked, primary=True).pack(side="left")
+        self.datacenter_import_status = Label(import_section, text="", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8), wraplength=820, justify="left")
+        self.datacenter_import_status.pack(anchor="w", padx=18, pady=(4, 12))
+
+        summary_section = self._section(f, "Overview", "")
+        self.datacenter_summary_frame = Frame(summary_section, bg=PANEL)
+        self.datacenter_summary_frame.pack(fill="x", padx=18, pady=(0, 12))
+
+        self.datacenter_groups_frame = Frame(f, bg=BG)
+        self.datacenter_groups_frame.pack(fill="both", expand=True, padx=24, pady=(0, 20))
+
+        refresh_row = Frame(f, bg=BG)
+        refresh_row.pack(fill="x", padx=24, pady=(0, 10))
+        self._button(refresh_row, "REFRESH", self._refresh_data_center).pack(side="left")
+
+        self._refresh_data_center()
+
+    def _data_center_import_clicked(self):
+        path = filedialog.askopenfilename(
+            title="Import market data",
+            filetypes=[("Market data", "*.csv *.tsv *.txt *.parquet"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            dest = store_csv_path(path)
+            self.datacenter_import_status.config(text=f"Imported '{Path(path).name}' -> {dest.name}.", fg=GREEN)
+        except Exception as exc:  # pragma: no cover - defensive
+            self.datacenter_import_status.config(text=f"Could not import '{Path(path).name}': {exc}", fg=RED)
+        self._refresh_data_center()
+        try:
+            self._refresh_dataset_list()
+        except Exception:
+            pass
+
+    def _refresh_data_center(self):
+        from app.data.health import compute_data_center
+
+        for child in self.datacenter_summary_frame.winfo_children():
+            child.destroy()
+        for child in self.datacenter_groups_frame.winfo_children():
+            child.destroy()
+
+        try:
+            report = compute_data_center()
+        except Exception as exc:  # pragma: no cover - defensive
+            Label(
+                self.datacenter_groups_frame, text=f"Could not compute data health: {exc}",
+                bg=BG, fg=RED, font=_safe_font(9),
+            ).pack(anchor="w")
+            return
+
+        stats = [
+            ("Files", str(report["total_files"])),
+            ("Total bars", f"{report['total_bars']:,}"),
+            ("Files needing attention", str(report["total_unhealthy"])),
+            ("Instruments", str(len(report["instruments"]))),
+        ]
+        for i, (label, value) in enumerate(stats):
+            cell = Frame(self.datacenter_summary_frame, bg=PANEL)
+            cell.pack(side="left", padx=(0 if i == 0 else 24, 0))
+            color = RED if label == "Files needing attention" and value != "0" else TEXT
+            Label(cell, text=value, bg=PANEL, fg=color, font=_safe_font(16, "bold")).pack(anchor="w")
+            Label(cell, text=label.upper(), bg=PANEL, fg=TEXT_MUTED, font=_safe_font(7, "bold")).pack(anchor="w")
+
+        if not report["instruments"]:
+            Label(
+                self.datacenter_groups_frame,
+                text="No datasets found under data/raw/ yet -- import one above, or fetch data from Alpaca/"
+                     "London Strategic Edge on the Market Data tab.",
+                bg=BG, fg=TEXT_DIM, font=_safe_font(9), wraplength=880, justify="left",
+            ).pack(anchor="w", pady=8)
+            return
+
+        for group in report["instruments"]:
+            group_wrap = Frame(self.datacenter_groups_frame, bg=PANEL, highlightthickness=1, highlightbackground=BORDER)
+            group_wrap.pack(fill="x", pady=(0, 10))
+            header = Frame(group_wrap, bg=PANEL)
+            header.pack(fill="x", padx=14, pady=(10, 4))
+            Label(header, text=group["instrument"], bg=PANEL, fg=TEXT, font=_safe_font(11, "bold")).pack(side="left")
+            tf_text = ", ".join(group["timeframes_available"]) if group["timeframes_available"] else "unknown"
+            Label(
+                header, text=f"  {group['file_count']} file(s) · {group['total_bars']:,} bars · timeframes: {tf_text}",
+                bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8),
+            ).pack(side="left")
+            if group["unhealthy_count"]:
+                Label(
+                    header, text=f"  ⚠ {group['unhealthy_count']} need attention", bg=PANEL, fg=AMBER, font=_safe_font(8, "bold"),
+                ).pack(side="left")
+
+            for file_info in group["files"]:
+                row = Frame(group_wrap, bg=PANEL_2)
+                row.pack(fill="x", padx=14, pady=1)
+                dot_color = GREEN if file_info["healthy"] else RED
+                Label(row, text="●", bg=PANEL_2, fg=dot_color, font=_safe_font(9)).pack(side="left", padx=(0, 6))
+                Label(row, text=file_info["name"], bg=PANEL_2, fg=TEXT, font=_safe_font(9)).pack(side="left")
+                detail_bits = [f"{file_info['bar_count']:,} bars"]
+                if file_info.get("timeframe"):
+                    detail_bits.append(file_info["timeframe"])
+                if file_info.get("timezone"):
+                    detail_bits.append(file_info["timezone"])
+                if file_info.get("session_coverage_pct"):
+                    detail_bits.append(f"{file_info['session_coverage_pct']:.0f}% of hours covered")
+                Label(
+                    row, text="  —  " + " · ".join(detail_bits), bg=PANEL_2, fg=TEXT_MUTED, font=_safe_font(8),
+                ).pack(side="left")
+                if file_info.get("issues"):
+                    Label(
+                        row, text="  " + "; ".join(file_info["issues"]), bg=PANEL_2, fg=AMBER, font=_safe_font(8),
+                        wraplength=500, justify="left",
+                    ).pack(side="left")
+                if file_info.get("error"):
+                    Label(row, text="  " + file_info["error"], bg=PANEL_2, fg=RED, font=_safe_font(8)).pack(side="left")
+
+    # -----------------------------------------------------------------------
     # Account -- desktop parity for the web app's Account section
     # (currently just notification settings; see app.web.notifications).
     # Self-contained settings page, not tied to any run.
@@ -11739,6 +12187,33 @@ class MainWindow:
                 passed=bool(result.is_robust), summary=f"{result.n_paths} paths evaluated",
                 report_html=f"file://{self._last_cpcv_html_path.resolve()}",
             )
+            # UPGRADE (library_ref): the web app's own /cpcv route also
+            # stamps last_validation onto the Strategy Library entry (see
+            # app.web.server._run_cpcv_job), which is what
+            # compute_pipeline_progress uses to advance a strategy's
+            # Create/Test/Optimize/Validate/Champion Check/Ready funnel to
+            # "Validate". This desktop tab previously only recorded into
+            # the separate validation-checklist store above -- a strategy
+            # run through this tab never showed "Validate" done in the
+            # Strategy Library, even though the exact same CPCV run did
+            # when triggered from the web app. self._active_library_strategy
+            # is the same (strategy_type, filename) pointer Run & Report's
+            # own record_backtest_result call already relies on (set
+            # whenever the currently-configured Step 01 strategy was
+            # loaded from the library) -- None for a one-off/uploaded
+            # strategy, exactly like every other library_ref call site.
+            active_lib_strategy = getattr(self, "_active_library_strategy", None)
+            if active_lib_strategy:
+                lib_mode, lib_filename = active_lib_strategy
+                try:
+                    record_validation_result(lib_mode, lib_filename, {
+                        "method": "cpcv", "n_paths": result.n_paths,
+                        "is_robust": bool(result.is_robust),
+                        "efficiency": getattr(result, "mean_oos_metric", None),
+                        "report_html": f"file://{self._last_cpcv_html_path.resolve()}",
+                    })
+                except (FileNotFoundError, ValueError):
+                    pass  # strategy was renamed/deleted mid-run -- not worth failing the run over
         except StrategyError as exc:
             self._log_cpcv(f"\nStrategy error: {exc}")
         except CPCVError as exc:
