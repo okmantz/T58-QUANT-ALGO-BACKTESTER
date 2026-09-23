@@ -278,6 +278,16 @@ class SearchStageConfig:
     workers: int | None = None                # None = os.cpu_count()
     random_seed: int = 42
 
+    # UPGRADE (per-family optimizer choice): which search algorithm Stage
+    # 2's GA refinement itself uses per candidate -- see
+    # app.optimize.refinement.RefinementConfig.optimizer_mode /
+    # OPTIMIZER_MODES for the supported values (genetic/tpe/cma_es) and
+    # what each does. Exposed here (rather than only on QuickOptimizeConfig/
+    # FullPipelineConfig) so Search Lab/Evolution Lab's own "Optimizer
+    # mode" dropdown actually reaches Stage 2 instead of always running
+    # the genetic default regardless of what was selected.
+    optimizer_mode: str = "genetic"
+
     # UPGRADE (prop-firm reset-on-breach as the search basis): when True,
     # every Monte Carlo pass this stage runs (Stage 2's GA inner-loop
     # scoring AND Stage 3's full-fidelity validation MC), plus each
@@ -542,6 +552,7 @@ def _stage2_task(
         cost_stress_enabled=refine_kwargs.get("cost_stress_enabled", True),
         cost_stress_multiplier=refine_kwargs.get("cost_stress_multiplier", 2.0),
         cost_stress_penalty_weight=refine_kwargs.get("cost_stress_penalty_weight", 0.35),
+        optimizer_mode=refine_kwargs.get("optimizer_mode", "genetic"),
     )
     try:
         result = run_iterative_refinement(df, strategy, risk, prop_rules, mc_cfg, refine_cfg, progress_cb=None)
@@ -1218,6 +1229,7 @@ def run_search(
                 "cost_stress_multiplier": stage_cfg.cost_stress_multiplier,
                 "cost_stress_penalty_weight": stage_cfg.cost_stress_penalty_weight,
                 "reset_on_breach": stage_cfg.reset_on_breach,
+                "optimizer_mode": stage_cfg.optimizer_mode,
             }
             futures = {
                 pool_box[0].submit(
