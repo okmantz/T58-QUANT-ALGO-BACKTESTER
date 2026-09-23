@@ -78,20 +78,34 @@ supported rather than silently emit code that looks right and isn't):
 
   Supported risk management: fixed-pips or ATR-multiple stop/target
   (rendered as REAL broker-facing exit orders, not just a comment
-  directive), max-bars-in-trade, a single daily clock-time exit, and
+  directive), an ATR-multiple trailing stop (rendered as real,
+  ratcheting-only stop-management code -- see the trailing-stop note
+  below), max-bars-in-trade, a single daily clock-time exit, and
   long/short/both direction restriction.
+
+  Trailing stop IS auto-coded (UPGRADE, 2026-09): it renders as real
+  stop-management logic in both targets, matching
+  app.backtest.execution.py's own semantics exactly -- distance is an
+  ATR multiple sampled ONCE at entry (not recalculated every bar/tick),
+  and the stop only ever ratchets toward price (best price reached since
+  entry, minus/plus that fixed distance), never away from it, combined
+  with (never loosening) whatever fixed/ATR initial stop is also
+  configured. PineScript computes this with `var` state ratcheting a
+  stop level fed into `strategy.exit`'s `stop=` argument; MQL5 computes
+  it with global state and `trade.PositionModify()` calls in `OnTick`.
 
   NOT auto-coded (each is instead surfaced as a clearly labeled TODO
   comment naming the exact configured values, non-fatal -- see
-  _UNSUPPORTED_RISK_NOTE): trailing stop and break-even. Both require
-  stateful, position-lifecycle-aware logic (a mutable stop level that
-  moves as the trade develops) that is easy to get subtly wrong, and a
-  subtly wrong stop on a live account is exactly the failure mode this
-  codebase is built to avoid (see app/strategy/pinescript.py's own
-  "fail loudly rather than silently produce an inaccurate ... result"
-  principle) -- so these are flagged for the trader to wire up natively
-  in their platform's own trailing-stop/break-even mechanism instead of
-  guessing at translated stateful code.
+  _risk_todo_lines): break-even. Moving the stop to entry once a
+  profit trigger is reached is simple enough in isolation, but T58's own
+  break-even logic interacts with trailing stop and partial-exit state
+  in ways that are easy to get subtly wrong in a hand-ported second
+  implementation, and a subtly wrong stop on a live account is exactly
+  the failure mode this codebase is built to avoid (see
+  app/strategy/pinescript.py's own "fail loudly rather than silently
+  produce an inaccurate ... result" principle) -- so this one is still
+  flagged for the trader to wire up natively in their platform's own
+  break-even mechanism instead of guessing at translated stateful code.
 
   NOT supported at all (raises TranslationError naming the construct,
   before any code is emitted): the Manual Builder's SMC-style/session/
@@ -373,12 +387,6 @@ def _pine_escape(text: str) -> str:
 
 def _risk_todo_lines(parsed: ParsedStrategy, comment_prefix: str) -> list[str]:
     lines: list[str] = []
-    if parsed.trailing_enabled:
-        lines.append(
-            f"{comment_prefix} TODO(T58): trailing stop not auto-translated -- configure a "
-            f"{_fmt_num(parsed.trailing_value)} x ATR({parsed.trailing_atr_period}) trailing stop "
-            "natively on this platform."
-        )
     if parsed.breakeven_enabled:
         lines.append(
             f"{comment_prefix} TODO(T58): break-even not auto-translated -- move the stop to entry "
@@ -555,7 +563,7 @@ def to_pinescript(config: dict) -> str:
     lines.append('strategy.close("Short", when=shortExitCond)')
     lines.append("")
 
-    if parsed.stop_type or parsed.target_type:
+    if parsed.stop_type or parsed.target_type or parsed.trailing_enabled:
         lines.append('pipSize = input.float(0.0001, title="Pip Size (match your instrument, e.g. 0.01 for gold)")')
         if parsed.stop_type == "fixed":
             lines.append(f"// T58_SL_PIPS={_fmt_num(parsed.stop_value)}")
@@ -578,6 +586,37 @@ def to_pinescript(config: dict) -> str:
         sl_short_arg = "strategy.position_avg_price + slDist" if parsed.stop_type else "na"
         tp_arg = "strategy.position_avg_price + tpDist" if parsed.target_type else "na"
         tp_short_arg = "strategy.position_avg_price - tpDist" if parsed.target_type else "na"
+
+        if parsed.trailing_enabled:
+            # Trailing stop -- matches app.backtest.execution.py's own semantics
+            # exactly: T58_TRAIL_ATR_MULT is sampled ONCE at entry (not
+            # recalculated every bar) and the stop only ever ratchets toward
+            # price (the best close/high/low reached since entry, minus/plus
+            # that fixed distance), never away from it -- combined with
+            # (never loosening) whatever fixed/ATR initial stop is set above.
+            lines.append(f"// T58_TRAIL_ATR_MULT={_fmt_num(parsed.trailing_value)}")
+            lines.append(f"// T58_TRAIL_ATR_PERIOD={parsed.trailing_atr_period}")
+            lines.append("var float trailDist = na")
+            lines.append("var float bestPriceLong = na")
+            lines.append("var float bestPriceShort = na")
+            lines.append("justEnteredLong = strategy.position_size > 0 and strategy.position_size[1] <= 0")
+            lines.append("justEnteredShort = strategy.position_size < 0 and strategy.position_size[1] >= 0")
+            lines.append("if justEnteredLong")
+            lines.append(f"    trailDist := ta.atr({parsed.trailing_atr_period}) * {_fmt_num(parsed.trailing_value)}")
+            lines.append("    bestPriceLong := strategy.position_avg_price")
+            lines.append("if justEnteredShort")
+            lines.append(f"    trailDist := ta.atr({parsed.trailing_atr_period}) * {_fmt_num(parsed.trailing_value)}")
+            lines.append("    bestPriceShort := strategy.position_avg_price")
+            lines.append("if strategy.position_size > 0")
+            lines.append("    bestPriceLong := math.max(nz(bestPriceLong, high), high)")
+            lines.append("if strategy.position_size < 0")
+            lines.append("    bestPriceShort := math.min(nz(bestPriceShort, low), low)")
+            lines.append("trailStopLong = strategy.position_size > 0 and not na(trailDist) ? bestPriceLong - trailDist : na")
+            lines.append("trailStopShort = strategy.position_size < 0 and not na(trailDist) ? bestPriceShort + trailDist : na")
+            lines.append(f"slFinalLong = na(trailStopLong) ? {sl_arg} : (na({sl_arg}) ? trailStopLong : math.max({sl_arg}, trailStopLong))")
+            lines.append(f"slFinalShort = na(trailStopShort) ? {sl_short_arg} : (na({sl_short_arg}) ? trailStopShort : math.min({sl_short_arg}, trailStopShort))")
+            sl_arg, sl_short_arg = "slFinalLong", "slFinalShort"
+
         lines.append(f'strategy.exit("Long Exit", from_entry="Long", stop={sl_arg}, limit={tp_arg})')
         lines.append(f'strategy.exit("Short Exit", from_entry="Short", stop={sl_short_arg}, limit={tp_short_arg})')
         lines.append("")
@@ -721,6 +760,7 @@ def to_mql5(config: dict) -> str:
     for period in filter(None, [
         parsed.stop_atr_period if parsed.stop_type == "atr" else None,
         parsed.target_atr_period if parsed.target_type == "atr" else None,
+        parsed.trailing_atr_period if parsed.trailing_enabled else None,
     ]):
         if period in risk_atr_handles:
             continue
@@ -751,6 +791,16 @@ def to_mql5(config: dict) -> str:
     if parsed.max_bars_in_trade:
         lines.append(f"// T58_MAX_BARS_IN_TRADE={parsed.max_bars_in_trade}")
         lines.append("int barsInTrade = 0;")
+    if parsed.trailing_enabled:
+        # Trailing stop -- matches app.backtest.execution.py's own semantics:
+        # T58_TRAIL_ATR_MULT is sampled ONCE at entry (not recalculated
+        # every tick) and the stop only ever ratchets toward price (the
+        # best high/low reached since entry, minus/plus that fixed
+        # distance), never away from it.
+        lines.append(f"// T58_TRAIL_ATR_MULT={_fmt_num(parsed.trailing_value)}")
+        lines.append(f"// T58_TRAIL_ATR_PERIOD={parsed.trailing_atr_period}")
+        lines.append("double g_trailDist = 0;")
+        lines.append("double g_bestPrice = 0;")
     lines.append("")
 
     lines.append("int OnInit()")
@@ -798,6 +848,25 @@ def to_mql5(config: dict) -> str:
     lines.append("   if (PositionSelect(_Symbol))")
     lines.append("   {")
     lines.append("      long posType = PositionGetInteger(POSITION_TYPE);")
+    if parsed.trailing_enabled:
+        lines.append("      // Trailing stop: ratchet toward price, never away -- g_trailDist was")
+        lines.append("      // captured once at entry below, not recalculated here.")
+        lines.append("      if (posType == POSITION_TYPE_BUY)")
+        lines.append("      {")
+        lines.append("         double curHigh = iHigh(_Symbol, PERIOD_CURRENT, 0);")
+        lines.append("         if (curHigh > g_bestPrice) g_bestPrice = curHigh;")
+        lines.append("         double candidate = g_bestPrice - g_trailDist;")
+        lines.append("         double curSL = PositionGetDouble(POSITION_SL);")
+        lines.append("         if (curSL == 0 || candidate > curSL) trade.PositionModify(_Symbol, candidate, PositionGetDouble(POSITION_TP));")
+        lines.append("      }")
+        lines.append("      else if (posType == POSITION_TYPE_SELL)")
+        lines.append("      {")
+        lines.append("         double curLow = iLow(_Symbol, PERIOD_CURRENT, 0);")
+        lines.append("         if (g_bestPrice == 0 || curLow < g_bestPrice) g_bestPrice = curLow;")
+        lines.append("         double candidate = g_bestPrice + g_trailDist;")
+        lines.append("         double curSL = PositionGetDouble(POSITION_SL);")
+        lines.append("         if (curSL == 0 || candidate < curSL) trade.PositionModify(_Symbol, candidate, PositionGetDouble(POSITION_TP));")
+        lines.append("      }")
     lines.append("      if (posType == POSITION_TYPE_BUY && longExitCond) trade.PositionClose(_Symbol);")
     lines.append("      if (posType == POSITION_TYPE_SELL && shortExitCond) trade.PositionClose(_Symbol);")
     lines.append("      return;")
@@ -833,12 +902,20 @@ def to_mql5(config: dict) -> str:
     sl_long = "ask - slDist" if parsed.stop_type else "0"
     tp_long = "ask + tpDist" if parsed.target_type else "0"
     lines.append(f'      trade.Buy(LotSize, _Symbol, ask, {sl_long}, {tp_long});')
+    if parsed.trailing_enabled:
+        trail_atr_expr = f"{risk_atr_handles[parsed.trailing_atr_period]}[0]"
+        lines.append(f"      g_trailDist = {trail_atr_expr} * {_fmt_num(parsed.trailing_value)};")
+        lines.append("      g_bestPrice = ask;")
     lines.append("   }")
     lines.append("   else if (shortEntryCond)")
     lines.append("   {")
     sl_short = "bid + slDist" if parsed.stop_type else "0"
     tp_short = "bid - tpDist" if parsed.target_type else "0"
     lines.append(f'      trade.Sell(LotSize, _Symbol, bid, {sl_short}, {tp_short});')
+    if parsed.trailing_enabled:
+        trail_atr_expr = f"{risk_atr_handles[parsed.trailing_atr_period]}[0]"
+        lines.append(f"      g_trailDist = {trail_atr_expr} * {_fmt_num(parsed.trailing_value)};")
+        lines.append("      g_bestPrice = bid;")
     lines.append("   }")
     lines.append("}")
     lines.append("")

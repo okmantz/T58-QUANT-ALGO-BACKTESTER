@@ -344,6 +344,13 @@ class StoredStrategy:
     def tags(self) -> list[str]:
         return list(self.metadata.get("tags") or [])
 
+    @property
+    def pipeline_progress(self) -> dict[str, Any]:
+        """Create -> Test -> Optimize -> Validate -> Champion Check ->
+        Ready progress for this strategy, derived from its metadata -- see
+        compute_pipeline_progress() below."""
+        return compute_pipeline_progress(self.metadata)
+
 
 def list_misplaced_files(strategy_type: str) -> list[str]:
     """Filenames sitting inside strategy_type's own folder that don't have
@@ -690,6 +697,146 @@ def record_search_result(strategy_type: str, filename: str, result: dict[str, An
         })
     """
     return save_strategy_metadata(strategy_type, filename, {"last_search": result}, merge=True)
+
+
+def record_optimize_result(strategy_type: str, filename: str, result: dict[str, Any]) -> Path:
+    """Convenience wrapper for stamping a Quick Optimize (or Full
+    Pipeline's own GA re-optimization step) outcome onto a saved strategy
+    as "last_optimize", e.g.:
+
+        record_optimize_result("python", "fvg_v1.py", {
+            "improved": True, "net_profit": 34973.31, "win_rate": 51.7,
+            "eval_pass_probability": 71.2,
+        })
+
+    This is what the Strategy Library's pipeline-progress tracker (see
+    compute_pipeline_progress below) checks to mark the "Optimize" stage
+    complete -- before this existed, Quick Optimize saved a strategy's
+    code/status but stamped no metadata at all, so the dashboard had no
+    way to tell a Quick-Optimized strategy apart from one that had never
+    left Manual Builder."""
+    return save_strategy_metadata(strategy_type, filename, {"last_optimize": result}, merge=True)
+
+
+def record_validation_result(strategy_type: str, filename: str, result: dict[str, Any]) -> Path:
+    """Convenience wrapper for stamping a deeper-validation outcome (CPCV/
+    PBO, walk-forward-optimization out-of-sample check, or Full
+    Pipeline's own Step 5 OOS/CPCV step) onto a saved strategy as
+    "last_validation", e.g.:
+
+        record_validation_result("python", "fvg_v1.py", {
+            "method": "cpcv", "pbo": 34.2, "efficiency": 61.5,
+        })
+
+    Checked by compute_pipeline_progress below to mark the "Validate"
+    stage complete."""
+    return save_strategy_metadata(strategy_type, filename, {"last_validation": result}, merge=True)
+
+
+def record_champion_check_result(strategy_type: str, filename: str, result: dict[str, Any]) -> Path:
+    """Convenience wrapper for stamping the final READY/MARGINAL/NOT READY
+    champion-check verdict (Full Pipeline's own _make_verdict, or a
+    dedicated Champion Check action) onto a saved strategy as
+    "last_champion_check", e.g.:
+
+        record_champion_check_result("python", "fvg_v1.py", {
+            "verdict": "READY", "t58_score": 78.4, "t58_tier": "Strong",
+        })
+
+    Checked by compute_pipeline_progress below to mark the "Champion
+    Check" stage complete, and (only when verdict == "READY") the final
+    "Ready" stage too -- this is the one stage compute_pipeline_progress
+    treats as conditional rather than just "did this step run", since a
+    strategy can be champion-checked and still come back NOT READY."""
+    return save_strategy_metadata(strategy_type, filename, {"last_champion_check": result}, merge=True)
+
+
+# ---------------------------------------------------------------------------
+# Pipeline-progress tracker -- Create -> Test -> Optimize -> Validate ->
+# Champion Check -> Ready, the six stages Owen asked the Strategy Library
+# dashboard to visibly track per strategy (distinct from, and finer-
+# grained than, the six-stage STRATEGY_STATUSES/PIPELINE_STAGE_LABELS
+# funnel above, which is a single status a person sets deliberately --
+# this instead derives directly from which tools have actually TOUCHED
+# this strategy, so it can never drift out of sync with reality the way a
+# manually-set status can).
+#
+# Purely derived from whatever metadata is already on the sidecar --
+# last_run (Run & Report / Quick Optimize / Full Pipeline / Forge all
+# already call record_backtest_result), last_optimize (Quick Optimize's
+# and Full Pipeline's GA step, see record_optimize_result), last_search
+# (Search Lab, an alternate route into the same "explored parameter
+# space" stage), last_validation (CPCV/PBO or a primary walk-forward/OOS
+# check, see record_validation_result), and last_champion_check (Full
+# Pipeline's final verdict, see record_champion_check_result). A
+# strategy with none of these is simply at "Create" -- exactly a fresh
+# Manual Builder draft or upload, matching STRATEGY_STATUSES' "draft".
+# ---------------------------------------------------------------------------
+
+PIPELINE_STAGE_NAMES = ("create", "test", "optimize", "validate", "champion_check", "ready")
+PIPELINE_STAGE_TITLES: dict[str, str] = {
+    "create": "Create",
+    "test": "Test",
+    "optimize": "Optimize",
+    "validate": "Validate",
+    "champion_check": "Champion Check",
+    "ready": "Ready",
+}
+
+
+def compute_pipeline_progress(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Given a strategy's metadata dict (StoredStrategy.metadata, or any
+    dict shaped like a .meta.json sidecar), return:
+
+        {
+            "stages": [{"key", "title", "done"}, ...],   # in stage order
+            "current_stage": "optimize",                  # furthest stage reached
+            "next_stage": "validate",                     # first not-yet-done stage, or None if Ready
+            "verdict": "NOT READY" | "MARGINAL" | "READY" | None,
+        }
+
+    Never raises -- a strategy with no metadata at all comes back as
+    everything False except "create", same as a fresh draft."""
+    last_run = metadata.get("last_run") or {}
+    last_optimize = metadata.get("last_optimize") or {}
+    last_search = metadata.get("last_search") or {}
+    last_validation = metadata.get("last_validation") or {}
+    last_champion_check = metadata.get("last_champion_check") or {}
+
+    tested = bool(last_run)
+    optimized = bool(last_optimize) or bool(last_search)
+    validated = bool(last_validation)
+    champion_checked = bool(last_champion_check)
+    # Full Pipeline's record_backtest_result already stamps "verdict" onto
+    # last_run too (see run_full_pipeline) -- fall back to that when a
+    # dedicated champion-check record isn't present, so a strategy run
+    # only through Full Pipeline (not a separate Champion Check action)
+    # still shows READY/MARGINAL/NOT READY correctly.
+    verdict = str(last_champion_check.get("verdict") or last_run.get("verdict") or "").upper() or None
+    ready = champion_checked and verdict == "READY"
+
+    stages = [
+        {"key": "create", "title": PIPELINE_STAGE_TITLES["create"], "done": True},
+        {"key": "test", "title": PIPELINE_STAGE_TITLES["test"], "done": tested},
+        {"key": "optimize", "title": PIPELINE_STAGE_TITLES["optimize"], "done": optimized},
+        {"key": "validate", "title": PIPELINE_STAGE_TITLES["validate"], "done": validated},
+        {"key": "champion_check", "title": PIPELINE_STAGE_TITLES["champion_check"], "done": champion_checked},
+        {"key": "ready", "title": PIPELINE_STAGE_TITLES["ready"], "done": ready},
+    ]
+
+    current_stage = "create"
+    for stage in stages:
+        if stage["done"]:
+            current_stage = stage["key"]
+
+    next_stage = next((s["key"] for s in stages if not s["done"]), None)
+
+    return {
+        "stages": stages,
+        "current_stage": current_stage,
+        "next_stage": next_stage,
+        "verdict": verdict,
+    }
 
 
 # ---------------------------------------------------------------------------
