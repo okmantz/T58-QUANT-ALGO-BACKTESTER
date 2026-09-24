@@ -1599,9 +1599,54 @@ def main():
             **prop_rule_kwargs, **slippage_kwargs,
         )
     else:
-        from app.ui.main_window import launch  # lazy: only needed for the GUI path
-
+        launch = _import_main_window_with_splash()
         launch()
+
+
+def _import_main_window_with_splash():
+    """Shows an immediate "Starting..." window, then imports
+    app.ui.main_window (returns its launch() function) while that window
+    is up, then closes it.
+
+    PERF/UX (Sep 2026): added after reports that the desktop app "does
+    nothing" for several seconds right after the license activation
+    window closes -- see app/licensing/gate.py's ActivationWindow, whose
+    own window.destroy() happens BEFORE this import runs. That gap was
+    never a hang: `from app.ui.main_window import launch` is what
+    actually pulls in pandas/numpy plus the 100+ first-party app.*
+    modules main_window.py imports at module level (strategy engine,
+    optimizer, evolution, quant lab, ...), which is real, unavoidable
+    import/compile work -- worse in a PyInstaller --onefile build, which
+    is why that build mode was switched to --onedir in
+    .github/workflows/build-exe.yml (--onefile re-extracts that entire
+    bundle to a temp folder on every single launch, on top of this).
+    This splash doesn't make the import itself faster; it just means the
+    person sees "Starting T58..." instead of an apparently-frozen
+    screen for those same few seconds."""
+    import tkinter as tk
+
+    splash = tk.Tk()
+    splash.title("T58 Quant Algo Backtester")
+    splash.configure(bg="#05070A")
+    splash.overrideredirect(True)
+    width, height = 320, 120
+    x = (splash.winfo_screenwidth() - width) // 2
+    y = (splash.winfo_screenheight() - height) // 2
+    splash.geometry(f"{width}x{height}+{x}+{y}")
+    tk.Label(
+        splash, text="T58 QUANT ALGO BACKTESTER", bg="#05070A", fg="#7B3DFF",
+        font=("Segoe UI", 11, "bold"),
+    ).pack(pady=(28, 6))
+    tk.Label(
+        splash, text="Starting...", bg="#05070A", fg="#8A93A6", font=("Segoe UI", 10),
+    ).pack()
+    splash.update()  # force it to actually paint before the slow import below
+
+    try:
+        from app.ui.main_window import launch  # lazy: only needed for the GUI path -- see this function's docstring
+    finally:
+        splash.destroy()
+    return launch
 
 
 if __name__ == "__main__":
