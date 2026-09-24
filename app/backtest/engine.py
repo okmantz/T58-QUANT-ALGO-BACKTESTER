@@ -13,10 +13,10 @@ import pandas as pd
 
 from app.backtest.adaptive_risk import AdaptiveRiskConfig
 from app.backtest.execution import Trade, run_execution
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, position_sizing_deviation_message
 from app.backtest.statistics import BacktestStatistics, compute_statistics
 from app.data.timeframe_resample import prepare_timeframe_aligned_data
-from app.strategy.base import Strategy, StrategyResult, apply_days_of_week_exclusion
+from app.strategy.base import Strategy, StrategyResult, apply_days_of_week_exclusion, apply_regime_exclusion
 
 
 @dataclass
@@ -126,6 +126,14 @@ def run_backtest(
     # identically regardless of which tool ran the backtest.
     strat_result.signals = apply_days_of_week_exclusion(df, strat_result.signals, strategy)
 
+    # UPGRADE (regime-conditional-trading primitive): same chokepoint,
+    # same "declares nothing -> completely unchanged" convention as the
+    # day-of-week exclusion just above -- see app.strategy.base.
+    # apply_regime_exclusion/resolve_excluded_regimes for what a strategy
+    # can declare and how app.validation.regime_matrix's own regime
+    # detection is reused to enforce it.
+    strat_result.signals = apply_regime_exclusion(df, strat_result.signals, strategy)
+
     condition_warnings: list[str] = []
     if getattr(strategy, "source_type", None) == "manual" and isinstance(getattr(strategy, "config", None), dict):
         # Catches a class of bug the GA-gene-bounds fix in
@@ -158,11 +166,19 @@ def run_backtest(
 
     stats = compute_statistics(trades, equity_curve, initial_balance=risk.initial_balance)
 
+    # UPGRADE (buried-position-sizing-deviation): computed from `stats`,
+    # which only exists AFTER the catch_warnings block above closes --
+    # unlike condition_warnings/timeframe_warnings, this can't be raised
+    # as a RuntimeWarning inside run_execution itself, so it's appended
+    # here instead. See app.backtest.risk.position_sizing_deviation_
+    # message for what triggers it; None (the common case) adds nothing.
+    sizing_warning = position_sizing_deviation_message(stats.to_dict())
+
     return BacktestResult(
         strategy_name=strat_result.name,
         trades=trades,
         equity_curve=equity_curve,
         statistics=stats,
         initial_balance=risk.initial_balance,
-        warnings=timeframe_warnings + condition_warnings + execution_warnings,
+        warnings=timeframe_warnings + condition_warnings + execution_warnings + ([sizing_warning] if sizing_warning else []),
     )

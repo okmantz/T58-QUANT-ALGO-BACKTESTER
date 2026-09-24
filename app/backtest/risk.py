@@ -361,6 +361,68 @@ def has_impossible_condition(warnings: "list[str]") -> bool:
     return any(IMPOSSIBLE_CONDITION_MARKER in w for w in warnings)
 
 
+# UPGRADE (buried-position-sizing-deviation): the % of trades computed
+# by app.backtest.statistics.compute_risk_reconciliation, below which a
+# report's muted informational note stays the only place this shows up.
+# At/above this, it's escalated into an actual warning on
+# BacktestResult.warnings (see app.backtest.engine.run_backtest) -- the
+# same mechanism has_instrument_scale_mismatch/has_impossible_condition
+# above already use, so it shows up in the report's real "Execution
+# warnings" banner and gets a chance to be scored into a verdict/result,
+# not just a line a report has to be scrolled to.
+POSITION_SIZING_DEVIATION_WARNING_THRESHOLD_PCT = 20.0
+_POSITION_SIZING_DEVIATION_MARKER = "Position-sizing deviation:"
+
+
+def has_position_sizing_deviation(warnings: "list[str]") -> bool:
+    """True if any warning in `warnings` is position_sizing_deviation_
+    message's own warning -- lets a caller escalate it the same
+    prominent way Full Pipeline/Quick Optimize already escalate
+    has_instrument_scale_mismatch, without re-deriving the stats."""
+    return any(_POSITION_SIZING_DEVIATION_MARKER in w for w in warnings)
+
+
+def position_sizing_deviation_message(
+    stats: dict, threshold_pct: float = POSITION_SIZING_DEVIATION_WARNING_THRESHOLD_PCT,
+) -> str | None:
+    """Surfaces app.backtest.statistics.compute_risk_reconciliation's
+    pct_trades_position_capped / pct_trades_risk_overshoot as an actual
+    warning once either one is material, instead of leaving them as
+    numbers a report table computes but nothing ever flags: a strategy
+    that looks fine on INTENDED risk (RiskConfig.risk_value) can behave
+    very differently at the real, rounded size actually taken -- common
+    on instruments with coarse per-contract/point granularity (e.g.
+    MNQ's $2/point) combined with whole-contract position-size rounding.
+
+    Checked per-direction against `threshold_pct` rather than summed --
+    "10% capped + 10% overshoot" describes two much smaller, opposite
+    problems, not one material combined one (see compute_risk_
+    reconciliation's docstring for what each direction actually means).
+    Returns None when neither direction is material, e.g. every trade
+    with no intended_risk_dollars recorded at all (no message to give)."""
+    pct_capped = stats.get("pct_trades_position_capped", 0.0) or 0.0
+    pct_overshoot = stats.get("pct_trades_risk_overshoot", 0.0) or 0.0
+    if pct_capped < threshold_pct and pct_overshoot < threshold_pct:
+        return None
+    if pct_capped >= pct_overshoot:
+        pct, direction = pct_capped, (
+            "sized BELOW the configured risk target (a max-position-size cap or adaptive-risk "
+            "throttle engaging, or whole-contract rounding on a coarse-granularity instrument)"
+        )
+    else:
+        pct, direction = pct_overshoot, (
+            "realized MORE loss than their own actual configured stop risk (almost always a "
+            "gap-through fill -- see the gap-loss warning above, if also shown)"
+        )
+    return (
+        f"{_POSITION_SIZING_DEVIATION_MARKER} {pct:.0f}% of trades {direction}. A strategy that "
+        "looks fine on INTENDED risk can behave very differently at the REAL, rounded size actually "
+        "taken. See the risk reconciliation table in the report (avg_intended_risk_dollars vs "
+        "avg_actual_stop_risk_dollars) before trusting the headline eval-pass/risk-of-ruin numbers "
+        "at face value."
+    )
+
+
 def instrument_scale_mismatch_message(pip_size: float) -> str:
     """Shared, actionable explanation shown wherever
     has_instrument_scale_mismatch() is True -- one copy of the wording so
