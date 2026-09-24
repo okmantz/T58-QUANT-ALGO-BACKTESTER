@@ -1,0 +1,27 @@
+{
+  "name": "NQ RSI+Bollinger Reversion, ADX<25 gate (rsi14 30/70, bb20)",
+  "timeframe": "15m",
+  "entry_conditions": {
+    "long": [
+      {"left": {"type": "rsi", "period": 42, "field": "close"}, "operator": "<", "right": {"type": "value", "value": 29.196934738888775}},
+      {"left": {"type": "close", "period": 2, "field": "close"}, "operator": "<", "right": {"type": "bollinger_lower", "period": 6, "field": "close"}},
+      {"left": {"type": "adx", "period": 20, "field": "close"}, "operator": "<", "right": {"type": "value", "value": 28.533862358223868}}
+    ],
+    "long_connectors": ["AND", "AND"],
+    "short": [
+      {"left": {"type": "rsi", "period": 13, "field": "close"}, "operator": ">", "right": {"type": "value", "value": 84.58672404529865}},
+      {"left": {"type": "close", "period": 2, "field": "close"}, "operator": ">", "right": {"type": "bollinger_upper", "period": 53, "field": "close"}},
+      {"left": {"type": "adx", "period": 9, "field": "close"}, "operator": "<", "right": {"type": "value", "value": 21.78758437281455}}
+    ],
+    "short_connectors": ["AND", "AND"]
+  },
+  "exit_conditions": {
+    "long": [{"left": {"type": "rsi", "period": 37, "field": "close"}, "operator": ">", "right": {"type": "value", "value": 64.28933546915914}}],
+    "short": [{"left": {"type": "rsi", "period": 36, "field": "close"}, "operator": "<", "right": {"type": "value", "value": 70.23708738678356}}]
+  },
+  "risk_management": {
+    "stop_type": "atr", "stop_value": 0.957382594298801, "stop_atr_period": 22,
+    "target_type": "atr", "target_value": 5.153098742962764, "target_atr_period": 4,
+    "opposite_signal_exit": true, "max_bars_in_trade": 32
+  }
+}
