@@ -8,9 +8,23 @@
     } catch (e) {}
   })();
 </script>
-<div class="t58-sidebar">
+<!-- Mobile-only top bar: hamburger toggle for the off-canvas sidebar drawer.
+     Hidden entirely above the 760px breakpoint (see theme.css). -->
+<div class="t58-mobile-topbar">
+  <button id="t58-mobile-menu-btn" class="t58-mobile-menu-btn" type="button"
+          aria-label="Open menu" aria-controls="t58-sidebar" aria-expanded="false">
+    <span></span><span></span><span></span>
+  </button>
+  <div class="t58-mobile-topbar-brand">
+    <div class="mark">T58</div>
+    <span>T58 Quant Algo Backtester</span>
+  </div>
+</div>
+<div id="t58-sidebar-backdrop" class="t58-sidebar-backdrop"></div>
+
+<div class="t58-sidebar" id="t58-sidebar">
   <div class="t58-brand">
-    <div class="mark">T5</div>
+    <div class="mark">T58</div>
     <div>
       <div class="name">T58 Quant Algo Backtester</div>
       <div class="sub">T58 Trading</div>
@@ -303,9 +317,6 @@
       <a href="/start-here/account" data-accent="" class="t58-nav-item {{ 'active' if active_page == 'start_here_account' else '' }}" style="font-weight:600;">
         <span class="t58-nav-icon">&#128161;</span><span class="label">Start Here</span>
       </a>
-      <a href="/data-center" class="t58-nav-item {{ 'active' if active_page == 'data_center' else '' }}">
-        <span class="t58-nav-icon">&#128202;</span><span class="label">Data Center</span>
-      </a>
       <a href="/settings/account" class="t58-nav-item {{ 'active' if active_page == 'account_settings' else '' }}">
         <span class="t58-nav-icon">&#9881;</span><span class="label">Account Settings</span>
       </a>
@@ -314,6 +325,9 @@
       </a>
       <a href="/settings/notifications" class="t58-nav-item {{ 'active' if active_page == 'notification_settings' else '' }}">
         <span class="t58-nav-icon">&#128276;</span><span class="label">Notification Settings</span>
+      </a>
+      <a href="/data-center" class="t58-nav-item {{ 'active' if active_page == 'data_center' else '' }}">
+        <span class="t58-nav-icon">&#128202;</span><span class="label">Data Center</span>
       </a>
       <a href="/support" class="t58-nav-item {{ 'active' if active_page == 'support' else '' }}">
         <span class="t58-nav-icon">&#128172;</span><span class="label">Support</span>

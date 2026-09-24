@@ -58,6 +58,9 @@
   .status-PASS { color: var(--coral); }
   .dir-long { color: var(--teal); }
   .dir-short { color: var(--coral); }
+  .dir-bullish { color: var(--teal); }
+  .dir-bearish { color: var(--coral); }
+  .dir-neutral { color: var(--text-muted); }
 
   .oai-chat { grid-column: 1 / -1; }
   #chat-log { flex: 1; min-height: 260px; max-height: 420px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; }
@@ -244,9 +247,10 @@ async function loadRankings() {
         <td>${r.momentum_pct > 0 ? '+' : ''}${r.momentum_pct}%</td>
         <td>${r.atr_normalized_move} ATR</td>
         <td>${escapeHtml(r.zone)}</td>
+        <td class="dir-${r.fundamental_bias}">${escapeHtml(r.fundamental_bias || 'neutral')}</td>
       </tr>`).join('');
     panel.innerHTML = `<table class="rank-table">
-      <thead><tr><th>Sym</th><th>Class</th><th>Score</th><th>Status</th><th>Dir</th><th>Move</th><th>ATR</th><th>Zone</th></tr></thead>
+      <thead><tr><th>Sym</th><th>Class</th><th>Score</th><th>Status</th><th>Dir</th><th>Move</th><th>ATR</th><th>Zone</th><th>Fundamentals</th></tr></thead>
       <tbody>${rows}</tbody></table>`;
   } catch (err) {
     panel.innerHTML = `<div><small class="err">Failed to load rankings: ${escapeHtml(String(err))}</small></div>`;

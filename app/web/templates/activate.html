@@ -32,6 +32,12 @@
   }
   .error-note { color: var(--danger); font-size: 13px; margin: 14px 0 0; text-align: center; }
   .hint { color: var(--text-muted); font-size: 11px; text-align: center; margin: 16px 0 0; }
+  .remember-row {
+    display: flex; align-items: flex-start; gap: 8px; margin: 0 0 8px;
+    font-size: 12px; color: var(--text-muted); cursor: pointer;
+  }
+  .remember-row input[type=checkbox] { margin: 2px 0 0; width: 15px; height: 15px; flex-shrink: 0; accent-color: var(--teal); }
+  .remember-row span { text-align: left; }
 </style>
 </head>
 <body>
@@ -43,6 +49,11 @@
     <input type="email" id="email" name="email" value="{{ email or '' }}" autocomplete="email" autofocus required>
     <label for="license_key">License key</label>
     <input type="text" id="license_key" name="license_key" placeholder="T58-XXXX-XXXX-XXXX-XXXX" autocomplete="off" required>
+    <label class="remember-row" for="remember">
+      <input type="checkbox" id="remember" name="remember" value="1" checked>
+      <span>Remember this license on this device</span>
+    </label>
+    <p class="hint" style="margin:0 0 14px;">Unchecked: this license works for today's session only -- you'll be asked to activate again next time you open the app.</p>
     <input type="hidden" name="next" value="{{ next }}">
     <button class="submit-btn" type="submit">Activate</button>
     {% if error %}<p class="error-note">{{ error }}</p>{% endif %}

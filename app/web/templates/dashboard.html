@@ -111,6 +111,27 @@
 </div>
 {% endif %}
 
+<!-- ---- Current strategy performance snapshot ---- -->
+{% if current_strategy %}
+<div class="t58-card">
+  <h2>Current strategy &mdash; performance</h2>
+  {% if current_metrics %}
+  <div class="t58-grid cols-4" style="gap:10px;">
+    <div class="t58-metric-box"><div class="lbl">Win rate</div><div class="val">{{ "%.1f"|format(current_metrics.win_rate) }}%</div></div>
+    <div class="t58-metric-box"><div class="lbl">Eval pass probability</div><div class="val">{{ "%.1f"|format(current_metrics.eval_pass_probability) }}%</div></div>
+    <div class="t58-metric-box"><div class="lbl">First payout probability</div><div class="val">{{ "%.1f"|format(current_metrics.get('first_payout_probability', 0)) }}%</div></div>
+    <div class="t58-metric-box"><div class="lbl">Sharpe ratio</div><div class="val">{{ "%.2f"|format(current_metrics.sharpe_ratio) }}</div></div>
+    <div class="t58-metric-box"><div class="lbl">Net P&amp;L</div><div class="val {{ 't58-glow-teal' if current_metrics.net_profit >= 0 else 't58-glow-coral' }}">${{ "{:,.0f}".format(current_metrics.net_profit) }}</div></div>
+    <div class="t58-metric-box"><div class="lbl">Profit factor</div><div class="val">{{ "%.2f"|format(current_metrics.profit_factor) }}</div></div>
+    <div class="t58-metric-box"><div class="lbl">Max drawdown</div><div class="val">{{ "%.1f"|format(current_metrics.max_drawdown_pct) }}%</div></div>
+    <div class="t58-metric-box"><div class="lbl">Risk of ruin</div><div class="val">{{ "%.1f"|format(current_metrics.risk_of_ruin_pct) }}%</div></div>
+  </div>
+  {% else %}
+  <div class="t58-empty">No backtest recorded yet for {{ current_strategy.strategy_name }} on {{ current_strategy.instrument }} -- run it once and these numbers will fill in.</div>
+  {% endif %}
+</div>
+{% endif %}
+
 <!-- ---- Workflow shortcuts ---- -->
 <div class="t58-card">
   <h2>Your workflow</h2>
