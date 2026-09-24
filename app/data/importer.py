@@ -567,6 +567,164 @@ def _auto_map_columns(columns: list[str], raw: "pd.DataFrame | None" = None) -> 
     return mapping
 
 
+_TICK_MARKER_VALUES = {"A", "B", "T", "C", "Q"}
+
+
+def _detect_trade_type_column(raw: pd.DataFrame, mapping: dict[str, str]) -> Optional[str]:
+    """Looks for a column carrying an ask/bid/trade marker (the common
+    "DataType" column in NxCore/CQG/eSignal-style tick & quote exports:
+    A=ask, B=bid, T=trade -- see _aggregate_ticks_to_ohlcv). Only
+    considers columns not already claimed by the standard mapping, and
+    only ones whose entire set of distinct values is a small subset of
+    the known marker letters, so this never misfires on an ordinary
+    OHLCV file's own columns."""
+    used = set(mapping.values())
+    for col in raw.columns:
+        if col in used:
+            continue
+        try:
+            values = raw[col].dropna().astype(str).str.strip().str.upper()
+            unique = set(values.unique())
+        except Exception:
+            continue
+        if not unique or len(unique) > 3:
+            continue
+        if unique.issubset(_TICK_MARKER_VALUES):
+            return col
+    return None
+
+
+def _is_probable_tick_stream(timestamps: pd.Series, min_rows: int = 20) -> bool:
+    """True when `timestamps` looks like a raw tick/quote feed (many
+    observations packed into a tiny span) rather than one row per
+    already-formed OHLC bar.
+
+    A genuine one-row-per-bar file (1-minute, hourly, daily bars) always
+    has an average spacing matching its own bar size -- seconds at the
+    very fastest for a real bar timeframe this app supports. A tick/quote
+    stream, by contrast, packs dozens to thousands of observations into
+    a handful of seconds. Requiring BOTH a large row count and a tiny
+    average gap keeps this from ever firing on a legitimate low-volume
+    daily/weekly close-only series.
+    """
+    ts = pd.to_datetime(timestamps, errors="coerce").dropna()
+    if len(ts) < min_rows:
+        return False
+    ts = ts.sort_values()
+    span = ts.iloc[-1] - ts.iloc[0]
+    if span <= pd.Timedelta(0):
+        return False
+    avg_gap = span / (len(ts) - 1)
+    return avg_gap < pd.Timedelta(seconds=5)
+
+
+_TICK_BAR_INTERVAL_CANDIDATES_SECONDS = (
+    1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 3600 * 4, 3600 * 24,
+)
+
+
+def _choose_tick_bar_interval(timestamps: pd.Series, target_max_bars: int = 200) -> pd.Timedelta:
+    """Picks the smallest supported bar interval that keeps the resulting
+    bar count under `target_max_bars`, so a short tick sample (Owen's
+    MNQ/MGC exports run 51 seconds / ~6.5 minutes respectively) still
+    gets many small bars instead of being crushed into one giant bar by
+    blindly defaulting to something like 1-minute or 1-hour."""
+    ts = timestamps.sort_values()
+    span = ts.iloc[-1] - ts.iloc[0]
+    if span <= pd.Timedelta(0):
+        return pd.Timedelta(seconds=1)
+    for seconds in _TICK_BAR_INTERVAL_CANDIDATES_SECONDS:
+        interval = pd.Timedelta(seconds=seconds)
+        if span / interval <= target_max_bars:
+            return interval
+    return pd.Timedelta(seconds=_TICK_BAR_INTERVAL_CANDIDATES_SECONDS[-1])
+
+
+def _aggregate_ticks_to_ohlcv(
+    raw: pd.DataFrame, mapping: dict[str, str]
+) -> "tuple[pd.DataFrame, dict] | None":
+    """Turns a raw tick/quote stream (one row per observation, a single
+    price column, no open/high/low) into proper OHLCV bars.
+
+    Prefers actual executed trades (a detected ask/bid/trade marker
+    column's "T" rows) over bid/ask quotes when there are enough of them
+    to build bars from, since a quote is never an actual traded price.
+    Falls back to using every row (bid+ask+trade blended) when no
+    marker column is found, or too few trade rows exist to bar from
+    on their own.
+
+    Returns None (caller keeps the original "missing required column"
+    error) if there's nothing usable to aggregate. Otherwise returns
+    (bars_df, meta) where meta describes what happened, for a clear
+    warning message rather than a silent transformation.
+    """
+    ts_col = mapping.get("timestamp")
+    price_col = mapping.get("close")
+    if ts_col is None or price_col is None:
+        return None
+
+    timestamps = _coerce_timestamp_series(raw[ts_col])
+    prices = pd.to_numeric(raw[price_col], errors="coerce")
+    vol_col = mapping.get("volume")
+    volumes = (
+        pd.to_numeric(raw[vol_col], errors="coerce")
+        if vol_col is not None
+        else pd.Series(0.0, index=raw.index)
+    )
+
+    if not _is_probable_tick_stream(timestamps):
+        return None
+
+    valid = timestamps.notna() & prices.notna()
+
+    trade_col = _detect_trade_type_column(raw, mapping)
+    used_trade_filter = False
+    marker_kind = None
+    if trade_col is not None:
+        markers = raw[trade_col].astype(str).str.strip().str.upper()
+        is_trade = markers == "T"
+        if "T" in set(markers.dropna().unique()) and int(is_trade.sum()) >= 5:
+            valid = valid & is_trade
+            used_trade_filter = True
+            marker_kind = "trade"
+
+    n_ticks_used = int(valid.sum())
+    if n_ticks_used < 2:
+        return None
+
+    working = pd.DataFrame(
+        {
+            "timestamp": timestamps[valid],
+            "price": prices[valid],
+            "volume": volumes[valid].fillna(0.0),
+        }
+    ).sort_values("timestamp")
+
+    interval = _choose_tick_bar_interval(working["timestamp"])
+
+    grouped = working.set_index("timestamp").resample(interval)
+    ohlc = grouped["price"].agg(["first", "max", "min", "last"])
+    ohlc.columns = ["open", "high", "low", "close"]
+    vol = grouped["volume"].sum()
+    bars = ohlc.join(vol.rename("volume")).dropna(subset=["open"])
+    bars = bars.reset_index()
+
+    if bars.empty:
+        return None
+
+    span = working["timestamp"].max() - working["timestamp"].min()
+    meta = {
+        "n_ticks_used": n_ticks_used,
+        "n_ticks_total": int(len(raw)),
+        "n_bars": int(len(bars)),
+        "interval": interval,
+        "span": span,
+        "used_trade_filter": used_trade_filter,
+        "marker_kind": marker_kind or ("blended bid/ask/trade" if trade_col is not None else "single price column"),
+    }
+    return bars, meta
+
+
 def _coerce_timestamp_series(series: pd.Series) -> pd.Series:
     """Parses a raw timestamp column/index into real datetimes, handling
     epoch-integer timestamps as well as ordinary date strings.
@@ -661,6 +819,55 @@ def import_csv(
 
     if manual_mapping:
         mapping.update(manual_mapping)
+
+    # -----------------------------------------------------------------
+    # Tick/quote stream detection (UPGRADE): a raw tick or Level-1
+    # quote export (e.g. an NxCore/CQG/eSignal-style "Timestamp, Price,
+    # Volume, DataType, Correction, MarketState" time & sales file) has
+    # a timestamp and a single price column but no open/high/low --
+    # exactly the shape that used to fail here with "Could not identify
+    # required column(s): ['open', 'high', 'low']" even though the file
+    # is perfectly good data, just not pre-aggregated into bars. Only
+    # attempted when open/high/low are ALL missing (a file that already
+    # has real OHLC columns is never second-guessed) and only fires when
+    # the data actually looks like a tick stream (see
+    # _is_probable_tick_stream) rather than a legitimate one-row-per-bar
+    # close-only series.
+    # -----------------------------------------------------------------
+    if (
+        "timestamp" in mapping
+        and "close" in mapping
+        and not manual_mapping
+        and all(col not in mapping for col in ("open", "high", "low"))
+    ):
+        aggregated = _aggregate_ticks_to_ohlcv(raw, mapping)
+        if aggregated is not None:
+            raw, tick_meta = aggregated
+            mapping = {
+                "timestamp": "timestamp",
+                "open": "open",
+                "high": "high",
+                "low": "low",
+                "close": "close",
+                "volume": "volume",
+            }
+            price_kind = (
+                "executed trade" if tick_meta["used_trade_filter"] else tick_meta["marker_kind"]
+            )
+            issues.append(
+                ValidationIssue(
+                    "warning",
+                    f"Detected a tick/quote-level data file (timestamp + a single "
+                    f"price column, no open/high/low) rather than pre-built OHLCV "
+                    f"bars. Aggregated {tick_meta['n_ticks_used']} of "
+                    f"{tick_meta['n_ticks_total']} row(s) ({price_kind} prices) "
+                    f"spanning {tick_meta['span']} into {tick_meta['n_bars']} "
+                    f"{tick_meta['interval']} bar(s). This span is very short for "
+                    f"a backtest -- treat the resulting dataset as a small sample, "
+                    f"not a full historical dataset, unless a longer tick export "
+                    f"was intended.",
+                )
+            )
 
     required = [
         "timestamp",
