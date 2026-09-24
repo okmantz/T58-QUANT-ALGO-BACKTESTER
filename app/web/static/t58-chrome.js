@@ -381,6 +381,71 @@ function t58DetectPipSize(opts) {
     });
 }
 
+/* UPGRADE (instrument-metadata-had-no-ui, web app): web-side counterpart
+   to the desktop app's "Or pick a known instrument (auto-fills pip size +
+   $/point)" dropdown (see app.ui.main_window.MainWindow/RunContextPanel's
+   _apply_instrument_spec). Fetches app.data.instrument_specs.
+   KNOWN_INSTRUMENTS once (via /data/instrument-specs) and caches it on
+   window, since it only changes with a new app release -- every picker on
+   every page shares the one fetch rather than each re-requesting it. */
+var _t58InstrumentSpecsCache = null;
+function _t58FetchInstrumentSpecs(cb) {
+  if (_t58InstrumentSpecsCache) { cb(_t58InstrumentSpecsCache); return; }
+  fetch('/data/instrument-specs')
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      _t58InstrumentSpecsCache = data.instruments || [];
+      cb(_t58InstrumentSpecsCache);
+    })
+    .catch(function () { cb([]); });
+}
+
+/* Populates a <select> (by id) with the known instrument symbols, once,
+   on page load. Leaves a first "(none -- set manually)" option in place
+   if the select already has one. */
+function t58PopulateInstrumentPicker(selectId) {
+  var select = document.getElementById(selectId);
+  if (!select) return;
+  _t58FetchInstrumentSpecs(function (instruments) {
+    instruments.forEach(function (inst) {
+      var opt = document.createElement('option');
+      opt.value = inst.symbol;
+      opt.textContent = inst.symbol + ' -- ' + inst.description + ' (' + inst.exchange + ')';
+      select.appendChild(opt);
+    });
+  });
+}
+
+/* opts:
+     selectEl        - the <select> element the person just changed (this)
+     pipFieldId       - id of the numeric <input name="pip_size"> to fill in
+     contractFieldId  - id of the numeric <input name="contract_size"> to fill in
+     statusId         - optional id of a <p>/<span> to show a confirmation in
+   Mirrors MainWindow._apply_instrument_spec exactly: sets pip_size AND
+   contract_size ($/point) from the picked symbol's spec, leaving every
+   other risk field untouched. A blank/"(none)" selection does nothing. */
+function t58ApplyInstrumentSpec(opts) {
+  var symbol = opts.selectEl && opts.selectEl.value;
+  if (!symbol) return;
+  var pipField = document.getElementById(opts.pipFieldId);
+  var contractField = opts.contractFieldId ? document.getElementById(opts.contractFieldId) : null;
+  var statusEl = opts.statusId ? document.getElementById(opts.statusId) : null;
+  _t58FetchInstrumentSpecs(function (instruments) {
+    var spec = null;
+    for (var i = 0; i < instruments.length; i++) {
+      if (instruments[i].symbol === symbol) { spec = instruments[i]; break; }
+    }
+    if (!spec) return;
+    if (pipField) pipField.value = spec.pip_size;
+    if (contractField) contractField.value = spec.contract_size;
+    if (statusEl) {
+      statusEl.style.color = '#b4ffcb';
+      statusEl.textContent = 'Applied ' + spec.symbol + ' (' + spec.description + ', ' + spec.exchange + '): '
+        + 'pip_size=' + spec.pip_size + ', $' + spec.contract_size + '/point per contract.';
+    }
+  });
+}
+
 /* Checks or unchecks every checkbox inside the given container id --
    backs the "Select All" / "Clear All" buttons added to the Evolution
    Lab (and multi-instrument Evolution Lab) family checklists. */
