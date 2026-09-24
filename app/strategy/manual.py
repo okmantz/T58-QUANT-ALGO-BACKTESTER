@@ -21,6 +21,27 @@ Restricting trading to certain weekdays (optional, all sources):
   app.strategy.base.resolve_excluded_days_of_week for the shared
   mechanism used by every source type. Omitting `filters` trades every
   day, exactly as before this existed.
+
+Restricting trading during specific market regimes (optional, all sources):
+  config["filters"] = {"regime_exclude": [{"volatility": "extreme"}]}
+  Forces this strategy's signal flat (0) on every bar classified into
+  one of the listed regime cells -- one dict per cell, each naming one
+  or more of app.validation.regime_matrix.label_regimes's four
+  dimensions (trend/volatility/session/environment); a bar is excluded
+  if it matches ALL keys within any ONE listed cell (AND within a cell,
+  OR across cells), e.g. [{"volatility": "extreme"}, {"trend":
+  "strong_bearish", "environment": "compression"}] excludes extreme-
+  volatility bars OR (strongly-bearish AND compressed) bars. This is the
+  buildable-strategy-rule counterpart to the Regime Survival Matrix
+  report's previously informational-only "candidates to disable" list --
+  feed RegimeCellResult.dims straight in here (or into an
+  EXCLUDE_REGIMES list for Python, or a T58_EXCLUDE_REGIMES= directive
+  for PineScript/MQL5) to actually gate a strategy off in the regimes it
+  already lost money in, using this pipeline's own multi-dimensional
+  regime detection instead of a single hand-picked indicator. See
+  app.strategy.base.resolve_excluded_regimes/apply_regime_exclusion for
+  the shared mechanism used by every source type. Omitting `filters`
+  trades every regime, exactly as before this existed.
 """
 from __future__ import annotations
 

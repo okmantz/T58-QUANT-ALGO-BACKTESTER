@@ -248,3 +248,153 @@ def apply_days_of_week_exclusion(df: pd.DataFrame, signals: pd.Series, strategy)
     arr = signals.to_numpy(copy=True)
     arr[mask] = 0
     return pd.Series(arr, index=signals.index)
+
+
+# ---------------------------------------------------------------------------
+# UPGRADE (regime-conditional-trading primitive): turns
+# app.validation.regime_matrix.RegimeMatrixResult.disable_regimes()'s
+# previously informational-only "N regime(s) flagged as candidates to
+# disable" output into an actual, buildable strategy rule -- see
+# resolve_excluded_regimes's docstring below for the full rationale.
+# Mirrors resolve_excluded_days_of_week/apply_days_of_week_exclusion's
+# exact shape (same three source-type conventions, same "declares
+# nothing -> completely unchanged" default) so both filters are learned
+# once and applied twice.
+# ---------------------------------------------------------------------------
+
+_EXCLUDE_REGIMES_DIRECTIVE_RE = re.compile(r"T58_EXCLUDE_REGIMES\s*=\s*([^\n]+)")
+
+
+def _coerce_regime_cells(raw) -> list[dict]:
+    """Normalizes a regime-exclusion spec into a list of {dim: value}
+    dicts -- one dict per excluded CELL (a bar is excluded if it matches
+    every key within any ONE cell; see apply_regime_exclusion). Accepts:
+      - a list of dicts already in that shape (the manual-config and
+        Python EXCLUDE_REGIMES convention)
+      - a list of strings, each a comma-separated set of "dim:value"
+        pairs forming one cell (the PineScript/MQL5 directive
+        convention, where cells are ';'-separated in the source line)
+      - None/empty -> [] (nothing excluded)
+    Silently drops anything it can't parse rather than raising -- like
+    _coerce_day_list, this must never be the reason an otherwise-fine
+    backtest fails."""
+    if not raw:
+        return []
+    cells: list[dict] = []
+    for item in raw:
+        if isinstance(item, dict):
+            cell = {str(k): str(v) for k, v in item.items() if k and v not in (None, "")}
+            if cell:
+                cells.append(cell)
+        elif isinstance(item, str):
+            cell = {}
+            for pair in item.split(","):
+                if ":" not in pair:
+                    continue
+                dim, _, value = pair.partition(":")
+                dim, value = dim.strip(), value.strip()
+                if dim and value:
+                    cell[dim] = value
+            if cell:
+                cells.append(cell)
+    return cells
+
+
+def resolve_excluded_regimes(strategy) -> list[dict]:
+    """Which regime cell(s) `strategy` has declared it should never take
+    a NEW entry in, regardless of source type -- returns [] (trade every
+    regime) for a strategy that declares nothing, the fully backward-
+    compatible default that leaves every existing strategy/config/test
+    completely unaffected.
+
+    Before this existed, app.validation.regime_matrix.RegimeMatrixResult.
+    disable_regimes() (the Regime Survival Matrix's own "which regime(s)
+    should this strategy avoid" answer, built from this pipeline's real
+    four-dimension trend/volatility/session/environment classification --
+    see that module's docstring) was informational only: it showed up in
+    the report and nothing else ever acted on it. This is the buildable-
+    strategy-rule counterpart -- feed a disabled cell's own
+    RegimeCellResult.dims dict straight into one of:
+      manual:              config["filters"]["regime_exclude"] = [dims, ...]
+      python:               EXCLUDE_REGIMES = [dims, ...]           (module-level)
+      pinescript/mql5:      // T58_EXCLUDE_REGIMES=dim:value,dim:value;dim:value
+    and app.strategy.base.apply_regime_exclusion (called from the same
+    engine chokepoint as apply_days_of_week_exclusion) will actually gate
+    new entries off during those regimes going forward -- using this
+    pipeline's own multi-dimensional detection instead of a single
+    hand-picked indicator (e.g. a plain ADX gate)."""
+    source_type = getattr(strategy, "source_type", None)
+
+    if source_type == "manual":
+        config = getattr(strategy, "config", None)
+        if not isinstance(config, dict):
+            return []
+        filters = config.get("filters", {}) or {}
+        return _coerce_regime_cells(filters.get("regime_exclude"))
+
+    if source_type == "python":
+        module_attr = getattr(strategy, "module_attr", None)
+        if module_attr is None:
+            return []
+        return _coerce_regime_cells(module_attr("EXCLUDE_REGIMES", None))
+
+    if source_type in ("pinescript", "mql5"):
+        code = getattr(strategy, "code", None)
+        if not code:
+            return []
+        match = _EXCLUDE_REGIMES_DIRECTIVE_RE.search(code)
+        if not match:
+            return []
+        return _coerce_regime_cells(match.group(1).split(";"))
+
+    return []
+
+
+def apply_regime_exclusion(df: pd.DataFrame, signals: pd.Series, strategy) -> pd.Series:
+    """Forces `signals` flat (0) on every bar classified into a regime
+    cell `strategy` has excluded (see resolve_excluded_regimes above),
+    using app.validation.regime_matrix.label_regimes's same four-
+    dimension, purely backward-looking classification the Regime
+    Survival Matrix report already computes -- fit fresh on THIS `df`,
+    matching that report's own "quantile over the whole dataset being
+    backtested" convention (see that module's docstring). A strategy
+    that excludes nothing gets `signals` back completely unchanged --
+    byte-identical to before this feature existed, and skips computing
+    regime labels at all (this classification isn't free) in that
+    common case.
+
+    The import from app.validation is local rather than top-level so
+    every OTHER backtest -- the overwhelming majority, which use neither
+    this nor app.validation at all -- doesn't pay for a module-load
+    dependency it never needed; app.validation.regime_matrix already
+    imports FROM app.strategy.base's sibling app.backtest.engine, so a
+    top-level import here would also be a real circular-import risk, not
+    just a style preference.
+
+    Never raises: a data shape label_regimes can't classify (too few
+    bars to form its quantile bins, a missing OHLC column) degrades to
+    "nothing excluded" rather than breaking an otherwise-fine backtest
+    -- this must never be the reason a run that barely uses this feature
+    fails outright."""
+    excluded_cells = resolve_excluded_regimes(strategy)
+    if not excluded_cells:
+        return signals
+    from app.validation.regime_matrix import label_regimes
+    try:
+        labels, _ = label_regimes(df)
+    except Exception:
+        return signals
+    mask = np.zeros(len(df), dtype=bool)
+    for cell in excluded_cells:
+        cell_mask = np.ones(len(df), dtype=bool)
+        for dim, value in cell.items():
+            if dim not in labels.columns:
+                cell_mask[:] = False
+                break
+            cell_mask &= (labels[dim] == value).to_numpy()
+        mask |= cell_mask
+    if not mask.any():
+        return signals
+    arr = signals.to_numpy(copy=True)
+    arr[mask] = 0
+    return pd.Series(arr, index=signals.index)
