@@ -396,6 +396,18 @@ class RegimeMatrixResult:
         output to skip taking new signals while in one of them."""
         return [c for c in self.cells if c.recommend_disable]
 
+    def as_exclude_filter(self) -> list[dict]:
+        """UPGRADE (regime-conditional-trading primitive): disable_
+        regimes()'s cells, reduced to the bare list[dict] shape
+        app.strategy.base.resolve_excluded_regimes actually consumes --
+        e.g. strategy.config["filters"]["regime_exclude"] = regime_
+        result.as_exclude_filter() (manual), or the equivalent for
+        EXCLUDE_REGIMES (Python) / a T58_EXCLUDE_REGIMES= directive
+        (PineScript/MQL5). Turns this report's previously informational-
+        only "N regime(s) flagged as candidates to disable" into the
+        exact filter that actually gates them off at backtest time."""
+        return [c.dims for c in self.disable_regimes()]
+
     def render_table(self) -> str:
         dims_label = " x ".join(d.title() for d in self.primary_dimensions)
         lines = [f"Regime Survival Matrix ({dims_label})", ""]
