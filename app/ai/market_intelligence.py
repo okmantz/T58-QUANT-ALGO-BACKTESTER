@@ -19,17 +19,24 @@ and web already depend on app.web.live_market for other features, so
 importing it from the desktop side here is not a new dependency.
 
 Macro bias caveat (same one the web dashboard surfaces in `macro_note`):
-this app has no fundamentals/rates/positioning data source, so
-macro_bias_by_symbol is a plain technical PROXY (daily EMA50 vs EMA200
-trend), not a true fundamental read. compute_market_structure_notes()
-below is a SEPARATE, complementary signal -- real, deterministic
-BOS/ChoCH (break of structure / change of character) and Wyckoff
-spring/upthrust/SOS/SOW + phase detection (app.quant_lab.market_structure,
-ported from the HyperTA project's Structures module) -- fed into Owen
-AI's chat context (see app.ai.trading_assistant.build_context) so the
-model has real computed structure facts for its top-ranked symbols
-instead of only an EMA-cross proxy, or having to eyeball structure from
-price alone.
+this app has no live rates/positioning feed, so `macro_bias_by_symbol` is a
+plain technical PROXY (daily EMA50 vs EMA200 trend) and is what
+t58_strategy_engine's score is actually computed from -- that hasn't
+changed. `fundamental_bias_by_symbol` (Sep 2026) is a second, independent
+read built from recent FRED/ForexFactory data surprises (actual vs.
+forecast on already-released high/medium-impact events -- see
+app.ai.news_forexfactory.recent_data_surprise_bias_by_currency), carried
+on each ranking and passed into Owen AI chat's context so the model can
+reason about technical and fundamental agreeing/conflicting, rather than
+being blended into the technical score itself (which stays deterministic
+and unchanged). compute_market_structure_notes() below is a further,
+separate signal again -- real, deterministic BOS/ChoCH (break of
+structure / change of character) and Wyckoff spring/upthrust/SOS/SOW +
+phase detection (app.quant_lab.market_structure, ported from the HyperTA
+project's Structures module) -- fed into Owen AI's chat context (see
+app.ai.trading_assistant.build_context) so the model has real computed
+structure facts for its top-ranked symbols instead of only an EMA-cross
+proxy, or having to eyeball structure from price alone.
 """
 from __future__ import annotations
 
@@ -78,6 +85,45 @@ def get_universe() -> dict[str, list[str]]:
     return market_scanner.DEFAULT_UNIVERSE
 
 
+# Base/quote for the standard FX pairs in DEFAULT_UNIVERSE/CURRENCY_TO_SYMBOLS
+# -- lets fundamental_bias_by_symbol() apply the right sign convention (base
+# strength = bullish pair, quote strength = bearish pair). Deliberately
+# excludes metals (XAUUSD/XAGUSD), crypto (BTCUSD/ETHUSD) and equity indices
+# (US30/NAS100/SPX500): a USD data surprise doesn't move those with a
+# reliable, well-known sign the way it does a standard FX pair (gold and
+# crypto are usually but not always inversely correlated to USD strength;
+# indices can go either way depending on the regime), so guessing a
+# direction for them would be asserting a "fact" this app can't actually
+# back up. Those symbols get "neutral" from fundamental_bias_for_symbol
+# below rather than a fabricated call.
+FX_PAIR_BASE_QUOTE: dict[str, tuple[str, str]] = {
+    "EURUSD": ("EUR", "USD"), "GBPUSD": ("GBP", "USD"), "AUDUSD": ("AUD", "USD"),
+    "NZDUSD": ("NZD", "USD"), "USDJPY": ("USD", "JPY"), "USDCAD": ("USD", "CAD"),
+    "USDCHF": ("USD", "CHF"), "EURJPY": ("EUR", "JPY"), "EURGBP": ("EUR", "GBP"),
+    "GBPJPY": ("GBP", "JPY"),
+}
+_BIAS_SCORE = {"bullish": 1, "neutral": 0, "bearish": -1}
+
+
+def fundamental_bias_for_symbol(symbol: str, currency_bias: dict[str, str]) -> str:
+    """Combines two currencies' recent-data-surprise biases (see
+    app.ai.news_forexfactory.recent_data_surprise_bias_by_currency) into a
+    directional call on the pair itself: base-currency strength is bullish
+    for the pair, quote-currency strength is bearish for it. Symbols with
+    no known base/quote convention (see FX_PAIR_BASE_QUOTE's docstring)
+    return "neutral" rather than a guess."""
+    pair = FX_PAIR_BASE_QUOTE.get(symbol)
+    if not pair:
+        return "neutral"
+    base, quote = pair
+    total = _BIAS_SCORE.get(currency_bias.get(base, "neutral"), 0) - _BIAS_SCORE.get(currency_bias.get(quote, "neutral"), 0)
+    if total > 0:
+        return "bullish"
+    if total < 0:
+        return "bearish"
+    return "neutral"
+
+
 def compute_news() -> "news_forexfactory.CalendarResult":
     """ForexFactory's live feed merged with FRED's official release
     calendar (when a FRED key is configured) -- see app.ai.news_fred's
@@ -109,9 +155,12 @@ def compute_rankings(news_result=None) -> tuple[list, list[str]]:
     if news_result is None:
         news_result = compute_news()
     news_risk = {s: news_forexfactory.news_risk_for_symbol(news_result, s) for s in all_symbols}
+    currency_bias = news_forexfactory.recent_data_surprise_bias_by_currency(news_result)
+    fundamental_bias = {s: fundamental_bias_for_symbol(s, currency_bias) for s in all_symbols}
 
     return market_scanner.rank_markets(
         universe, bar_fetcher=bar_fetcher, macro_bias_by_symbol=macro_bias, news_risk_by_symbol=news_risk,
+        fundamental_bias_by_symbol=fundamental_bias,
     )
 
 

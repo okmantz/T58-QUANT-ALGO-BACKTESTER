@@ -20,8 +20,9 @@ the app calculates" split as everywhere else in this package.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 # Fallback mirror -- the exact same feed on FaireEconomy's CDN subdomain.
@@ -185,3 +186,82 @@ def news_risk_for_symbol(result: CalendarResult, symbol: str, within_minutes: fl
         if event.impact == "Medium":
             level = "medium"
     return level
+
+
+# ---------------------------------------------------------------------------
+# Recent-data-surprise bias (Sep 2026): a second, FUNDAMENTAL-flavored proxy
+# alongside app.ai.market_intelligence.daily_trend_bias's technical one.
+# Owen asked for Best Markets to "also draw from FRED and Forex Factory" --
+# this is that: for each currency, compares already-released actual vs.
+# forecast on recent High/Medium impact events and scores whether the data
+# has been surprising bullish or bearish for that currency.
+#
+# Deliberately narrow, and labeled as a proxy rather than a real fundamental
+# model: it only reads the numbers the calendar feed already gives us
+# (actual vs. forecast), it has no idea which release matters most this
+# week, and its "higher is bullish" assumption is wrong for a small set of
+# indicators (unemployment/claims-style releases), which LOWER_IS_BETTER_
+# KEYWORDS below corrects for by name -- anything not in that list defaults
+# to "higher actual than forecast = bullish for the currency". FRED-sourced
+# events (see app.ai.news_fred) rarely populate actual/forecast -- FRED's
+# calendar is name+date only -- so in practice this mostly scores
+# ForexFactory's numbers; FRED still contributes event coverage/timing.
+LOWER_IS_BETTER_KEYWORDS = (
+    "unemployment", "jobless claims", "initial claims", "continuing claims",
+)
+DEFAULT_SURPRISE_LOOKBACK_HOURS = 96.0
+
+
+def _parse_calendar_number(raw: str) -> float | None:
+    """Parses a ForexFactory-style actual/forecast string ("3.2%", "175K",
+    "-0.3%", "1.75M") into a bare float. Returns None for blank/dash
+    ("not yet released") or anything unparseable -- callers must treat
+    that as "no surprise to score", never as zero."""
+    s = (raw or "").strip().replace(",", "")
+    if not s or s in ("-", "\u2014"):
+        return None
+    match = re.match(r"^([+-]?\d*\.?\d+)\s*([KMB%]?)$", s, re.IGNORECASE)
+    if not match:
+        return None
+    value = float(match.group(1))
+    multiplier = {"k": 1e3, "m": 1e6, "b": 1e9}.get(match.group(2).lower(), 1.0)
+    return value * multiplier
+
+
+def recent_data_surprise_bias_by_currency(
+    result: CalendarResult,
+    lookback_hours: float = DEFAULT_SURPRISE_LOOKBACK_HOURS,
+) -> dict[str, str]:
+    """Returns {currency: "bullish" | "bearish" | "neutral"} from already-
+    released High/Medium impact events in the last `lookback_hours`. A
+    currency with no scorable recent releases simply doesn't appear in the
+    returned dict (callers should default missing currencies to
+    "neutral"), rather than this function inventing a bias from nothing."""
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=lookback_hours)
+    scores: dict[str, float] = {}
+
+    for event in result.events:
+        if event.impact not in ("High", "Medium") or event.when is None:
+            continue
+        if not (cutoff <= event.when <= now):
+            continue
+        actual = _parse_calendar_number(event.actual)
+        forecast = _parse_calendar_number(event.forecast)
+        if actual is None or forecast is None or actual == forecast:
+            continue
+        sign = 1.0 if actual > forecast else -1.0
+        if any(kw in event.title.lower() for kw in LOWER_IS_BETTER_KEYWORDS):
+            sign = -sign
+        weight = 2.0 if event.impact == "High" else 1.0
+        scores[event.currency] = scores.get(event.currency, 0.0) + sign * weight
+
+    biases: dict[str, str] = {}
+    for currency, score in scores.items():
+        if score > 0.5:
+            biases[currency] = "bullish"
+        elif score < -0.5:
+            biases[currency] = "bearish"
+        else:
+            biases[currency] = "neutral"
+    return biases

@@ -58,6 +58,7 @@ class MarketRanking:
     atr_normalized_move: float
     t58_assessment: "t58.T58Assessment"
     snapshot: "t58.MarketSnapshot"
+    fundamental_bias: str = "neutral"
 
 
 def fetch_symbol_bars(symbol: str, bar_fetcher: BarFetcher, h1_count: int = 300, m15_count: int = 200) -> SymbolFetchResult:
@@ -103,6 +104,7 @@ def rank_markets(
     bar_fetcher: BarFetcher,
     macro_bias_by_symbol: dict[str, str] | None = None,
     news_risk_by_symbol: dict[str, str] | None = None,
+    fundamental_bias_by_symbol: dict[str, str] | None = None,
 ) -> tuple[list[MarketRanking], list[str]]:
     """Scans every symbol in `universe`, returns (rankings sorted best
     first by T58 score then ATR-normalized move, list of per-symbol error
@@ -110,9 +112,16 @@ def rank_markets(
     should come from app.ai.trading_assistant's macro read (see that
     module) -- defaults every symbol to "neutral" if not supplied, which
     will correctly keep every assessment at WAIT/PASS rather than
-    inventing a directional bias from price action alone."""
+    inventing a directional bias from price action alone.
+    fundamental_bias_by_symbol (see app.ai.news_forexfactory.
+    recent_data_surprise_bias_by_currency) is a second, independent read
+    from recent FRED/ForexFactory data surprises -- carried on each
+    MarketRanking for display/chat context, not blended into
+    t58_assessment's score itself (that engine is technical-only by
+    design; see app.ai.market_intelligence's module docstring)."""
     macro_bias_by_symbol = macro_bias_by_symbol or {}
     news_risk_by_symbol = news_risk_by_symbol or {}
+    fundamental_bias_by_symbol = fundamental_bias_by_symbol or {}
     rankings: list[MarketRanking] = []
     errors: list[str] = []
 
@@ -137,6 +146,7 @@ def rank_markets(
                 atr_normalized_move=_atr_normalized_move(fetched.h1),
                 t58_assessment=assessment,
                 snapshot=snapshot,
+                fundamental_bias=fundamental_bias_by_symbol.get(symbol, "neutral"),
             ))
 
     rankings.sort(key=lambda r: (r.t58_assessment.score, r.atr_normalized_move), reverse=True)
@@ -158,4 +168,5 @@ def ranking_to_dict(r: MarketRanking) -> dict:
         "target": r.t58_assessment.target,
         "missing": r.t58_assessment.missing,
         "news_risk": r.snapshot.news_risk,
+        "fundamental_bias": r.fundamental_bias,
     }

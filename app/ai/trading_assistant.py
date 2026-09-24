@@ -297,11 +297,13 @@ You are Owen's quick market-outlook assistant for T58 Trading, covering
 forex, crypto, and futures/indices in one pass.
 
 You will be given `best_markets` (every scanned symbol's momentum %,
-ATR-normalized move, T58 status/direction/score -- see the strategy
-hierarchy rules below for what status/direction mean) and `upcoming_news`
-(ForexFactory calendar events with impact/currency/timing). Both are
-computed by the app -- never invent a symbol, price move, score, or news
-item that isn't in the data provided.
+ATR-normalized move, T58 status/direction/score, plus `fundamental_bias`
+-- a read of recent FRED/ForexFactory economic-data surprises for that
+symbol's underlying currencies, independent of the technical score; see
+the strategy hierarchy rules below for what status/direction mean) and
+`upcoming_news` (ForexFactory calendar events with impact/currency/
+timing). Both are computed by the app -- never invent a symbol, price
+move, score, bias, or news item that isn't in the data provided.
 
 Keep this SHORT and skimmable -- this is a quick check-in, not the full
 Daily Trading Plan. Produce exactly these sections:
@@ -314,7 +316,8 @@ session. If no notable news is upcoming, say so plainly.
 BEST TO TRADE -- FOREX
 Up to 3 symbols from best_markets with asset_class "forex", ranked by
 score then move size. For each: direction, one-line reason (status +
-what moved), and the event that would invalidate it.
+what moved), whether fundamental_bias agrees or conflicts with the
+technical direction, and the event that would invalidate it.
 
 BEST TO TRADE -- CRYPTO
 Same structure, asset_class "crypto". If none scanned or none show a
@@ -425,10 +428,12 @@ def build_deterministic_outlook(context: dict, top_n: int = 3) -> str:
             shown = (tradeable or rows)[:top_n]
             for r in shown:
                 flag = "" if r in tradeable else "  (not yet tradeable -- status below)"
+                fbias = r.get("fundamental_bias", "neutral")
+                fnote = f", fundamentals {fbias}" if fbias != "neutral" else ""
                 lines.append(
                     f"  - {r.get('symbol')}: {r.get('direction', 'n/a')} | status {r.get('status')} | "
                     f"score {r.get('score')} | moved {r.get('momentum_pct')}% "
-                    f"({r.get('atr_normalized_move')} ATR){flag}"
+                    f"({r.get('atr_normalized_move')} ATR){fnote}{flag}"
                 )
         lines.append("")
 
