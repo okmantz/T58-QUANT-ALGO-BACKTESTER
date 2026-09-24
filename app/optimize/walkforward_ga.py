@@ -102,14 +102,18 @@ class _CodeStrategyShim:
 def _chained_fitness(
     strategy_to_run, slices: list[pd.DataFrame], risk_to_use: RiskConfig,
     prop_rules: PropRules, mc_cfg: MonteCarloConfig, fitness_metric: str,
-    adaptive_risk=None,
+    adaptive_risk=None, risk_of_ruin_cap: float | None = None,
 ) -> tuple[float, int]:
     """Backtests `strategy_to_run` (a fixed, already-built genome) on every
     fold's held-out test slice, chains the resulting trades into one
     equity curve, and scores that with the same fitness metric everywhere
     else in this app uses. Module-level (not a closure) so it can be
     called identically from the main process (serial path) or from inside
-    a worker process (parallel path) with no duplicated logic."""
+    a worker process (parallel path) with no duplicated logic.
+
+    risk_of_ruin_cap: forwarded straight to compute_fitness -- see
+    app.optimize.refinement._apply_ruin_penalty. None (default) means no
+    penalty, byte-identical to before this parameter existed."""
     all_trades: list[Trade] = []
     for test_df in slices:
         bt = run_backtest(test_df, strategy_to_run, risk_to_use, adaptive_risk=adaptive_risk)
@@ -129,7 +133,7 @@ def _chained_fitness(
     single_run = simulate_account(pnls, dates, prop_rules, reset_on_breach=mc_cfg.reset_on_breach)
     mc = run_monte_carlo(all_trades, prop_rules, mc_cfg)
     prop_summary = summarize_single_run(single_run)
-    fitness = compute_fitness(stats.to_dict(), prop_summary, mc, fitness_metric)
+    fitness = compute_fitness(stats.to_dict(), prop_summary, mc, fitness_metric, risk_of_ruin_cap=risk_of_ruin_cap)
     return (fitness if math.isfinite(fitness) else float("-inf")), len(all_trades)
 
 
@@ -148,7 +152,7 @@ def _ga_worker_init(
     genes: list, test_slice_paths: list[str], risk_kwargs: dict, prop_kwargs: dict,
     tmp_dir_path: str, search_mc_kwargs: dict, fitness_metric: str,
     cost_stress_enabled: bool, cost_stress_multiplier: float, cost_stress_penalty_weight: float,
-    adaptive_risk=None,
+    adaptive_risk=None, risk_of_ruin_cap: float | None = None,
 ) -> None:
     global _GA_WORKER
     # BUG FIX (2026-09): dataclasses.asdict() -- used at the pool-creation
@@ -189,6 +193,7 @@ def _ga_worker_init(
         "cost_stress_multiplier": cost_stress_multiplier,
         "cost_stress_penalty_weight": cost_stress_penalty_weight,
         "adaptive_risk": adaptive_risk,
+        "risk_of_ruin_cap": risk_of_ruin_cap,
     }
 
 
@@ -206,13 +211,13 @@ def _ga_eval_task(genome: list) -> tuple[float, int]:
     strategy = _ga_worker_build(genome)
     fitness, trade_count = _chained_fitness(
         strategy, w["test_slices"], w["risk"], w["prop_rules"], w["search_mc_cfg"], w["fitness_metric"],
-        w.get("adaptive_risk"),
+        w.get("adaptive_risk"), w.get("risk_of_ruin_cap"),
     )
     if w["cost_stress_enabled"] and w["cost_stress_penalty_weight"] > 0 and math.isfinite(fitness):
         stressed_risk = _stressed_risk_config(w["risk"], w["cost_stress_multiplier"])
         stressed_fitness, _ = _chained_fitness(
             strategy, w["test_slices"], stressed_risk, w["prop_rules"], w["search_mc_cfg"], w["fitness_metric"],
-            w.get("adaptive_risk"),
+            w.get("adaptive_risk"), w.get("risk_of_ruin_cap"),
         )
         fitness = apply_cost_stress_penalty(fitness, stressed_fitness, w["cost_stress_penalty_weight"])
     return fitness, trade_count
@@ -405,13 +410,13 @@ def run_walkforward_aware_refinement(
             candidate_strategy = build(genome)
             fitness, trade_count = _chained_fitness(
                 candidate_strategy, test_slices, risk, prop_rules, search_mc_cfg, cfg.fitness_metric,
-                adaptive_risk,
+                adaptive_risk, cfg.risk_of_ruin_cap,
             )
             if cfg.cost_stress_enabled and cfg.cost_stress_penalty_weight > 0 and math.isfinite(fitness):
                 stressed_risk = _stressed_risk_config(risk, cfg.cost_stress_multiplier)
                 stressed_fitness, _ = _chained_fitness(
                     candidate_strategy, test_slices, stressed_risk, prop_rules, search_mc_cfg, cfg.fitness_metric,
-                    adaptive_risk,
+                    adaptive_risk, cfg.risk_of_ruin_cap,
                 )
                 fitness = apply_cost_stress_penalty(fitness, stressed_fitness, cfg.cost_stress_penalty_weight)
             return fitness, trade_count
@@ -425,7 +430,10 @@ def run_walkforward_aware_refinement(
             dates = [t.entry_time for t in bt.trades]
             single_run = simulate_account(pnls, dates, prop_rules, reset_on_breach=search_mc_cfg.reset_on_breach)
             mc = run_monte_carlo(bt.trades, prop_rules, search_mc_cfg)
-            fitness = compute_fitness(bt.statistics.to_dict(), summarize_single_run(single_run), mc, cfg.fitness_metric)
+            fitness = compute_fitness(
+                bt.statistics.to_dict(), summarize_single_run(single_run), mc, cfg.fitness_metric,
+                risk_of_ruin_cap=cfg.risk_of_ruin_cap,
+            )
             return fitness if math.isfinite(fitness) else float("-inf")
 
         class _Cand:
@@ -505,7 +513,7 @@ def run_walkforward_aware_refinement(
                         asdict(risk), asdict(prop_rules), str(pool_tmp_dir),
                         asdict(search_mc_cfg), cfg.fitness_metric,
                         cfg.cost_stress_enabled, cfg.cost_stress_multiplier, cfg.cost_stress_penalty_weight,
-                        adaptive_risk,
+                        adaptive_risk, cfg.risk_of_ruin_cap,
                     ),
                     # Runs from a background thread in real usage (the
                     # desktop GUI's Full Pipeline / Walk-Forward-Aware GA
@@ -546,6 +554,47 @@ def run_walkforward_aware_refinement(
 
             baseline = make([g.base_value for g in genes])
             total_evaluations[0] += 1
+
+            # UPGRADE (auto-shrink on low trade count): a wider search (more
+            # population/generations) tries more candidates, which directly
+            # raises the Bonferroni-corrected significance bar every
+            # candidate has to clear afterward (see app.validation.icir,
+            # and FullPipelineConfig/QuickOptimizeConfig's n_candidates_
+            # tested calculations) -- punishing exactly the naturally-
+            # selective strategy families whose chained-OOS trade count is
+            # already thin. The baseline's own trade_count (computed above,
+            # independent of how many generations run) is the cheapest
+            # possible signal for "does this data/strategy combination
+            # support a search this wide": if it's below
+            # min_oos_trades_per_candidate, generations are reduced
+            # proportionally BEFORE any generation actually runs, for every
+            # optimizer_mode (genetic/tpe/cma_es all read cfg.generations),
+            # rather than searching wide first and finding out only at the
+            # significance gate that it never had enough data to justify
+            # that many trials.
+            if (
+                cfg.auto_shrink_on_low_trades
+                and cfg.generations > 1
+                and 0 < baseline.trade_count < cfg.min_oos_trades_per_candidate
+            ):
+                shrink_ratio = baseline.trade_count / cfg.min_oos_trades_per_candidate
+                shrunk_generations = max(1, math.ceil(cfg.generations * shrink_ratio))
+                if shrunk_generations < cfg.generations:
+                    auto_shrink_note = (
+                        f"Auto-shrink: the baseline configuration produced only "
+                        f"{baseline.trade_count} chained out-of-sample trade(s) across "
+                        f"{len(test_slices)} fold(s) (want {cfg.min_oos_trades_per_candidate}+ to "
+                        f"justify a search this wide) -- reduced generations from {cfg.generations} "
+                        f"to {shrunk_generations} so this search doesn't inflate the number of "
+                        "candidates tried (and therefore the Bonferroni-corrected significance bar "
+                        "every candidate has to clear -- see app.validation.icir) beyond what this "
+                        "much data can actually support. Add more historical data, use a higher-"
+                        "frequency signal, or set RefinementConfig.auto_shrink_on_low_trades=False "
+                        "to search the full configured width anyway."
+                    )
+                    log(f"  {auto_shrink_note}")
+                    warnings.append(auto_shrink_note)
+                    cfg = replace(cfg, generations=shrunk_generations)
 
             if cfg.optimizer_mode == "genetic":
                 population = [baseline]

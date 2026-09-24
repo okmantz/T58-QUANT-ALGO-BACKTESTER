@@ -160,6 +160,32 @@ class RefinementConfig:
     # way, via the optional `optuna` / `cma` packages respectively.
     optimizer_mode: str = "genetic"
 
+    # UPGRADE (GA-searches-what-it's-graded-on): when set, every fitness
+    # evaluation this GA runs (see compute_fitness's risk_of_ruin_cap
+    # param) erodes its score for elevated Monte Carlo risk of ruin,
+    # steepening sharply once ruin passes this cap -- the same cap
+    # app.orchestration.full_pipeline._make_verdict uses as its post-hoc
+    # hard-fail threshold (FullPipelineConfig.risk_of_ruin_cap), so the
+    # search is finally penalized DURING the search for the exact same
+    # thing that would otherwise veto its winner after the fact. None
+    # (the default) disables the penalty entirely -- byte-identical
+    # fitness values to every run before this field existed.
+    risk_of_ruin_cap: float | None = None
+
+    # UPGRADE (auto-shrink on low trade count): when the baseline
+    # configuration's own chained-OOS trade count comes in below
+    # min_oos_trades_per_candidate, run_walkforward_aware_refinement
+    # automatically reduces `generations` (proportionally to how far
+    # short the baseline fell) before searching -- see that function's
+    # own "Auto-shrink" note for the full reasoning (a wider search tries
+    # more candidates, which raises the Bonferroni-corrected significance
+    # bar every candidate has to clear via app.validation.icir, without
+    # any more data to actually support that many independent trials).
+    # True is the default; set False to always search the full configured
+    # width regardless of how thin the trade count looks.
+    auto_shrink_on_low_trades: bool = True
+    min_oos_trades_per_candidate: int = 30
+
     def __post_init__(self):
         self.population_size = max(int(self.population_size), 4)
         self.generations = max(int(self.generations), 1)
@@ -366,31 +392,97 @@ def _fastest_payout_score(mc: MonteCarloResult) -> float:
     return speed_component * safety_gate * 100.0  # 0..100 scale, consistent with the other metrics here
 
 
-def compute_fitness(stats: dict, prop_summary: dict | None, mc: MonteCarloResult, metric: str) -> float:
+# Metrics that already fold a hand-tuned risk-of-ruin term directly into
+# their own score -- see composite_prop_score and _prop_guide_score just
+# above. _apply_ruin_penalty skips these so the same risk never gets
+# penalized twice under two different names.
+_RUIN_AWARE_METRICS = frozenset({"composite_prop_score", "prop_guide_score"})
+
+
+def _apply_ruin_penalty(fitness: float, mc: "MonteCarloResult", risk_of_ruin_cap: float, metric: str) -> float:
+    """UPGRADE (GA-searches-what-it's-graded-on): the pipeline's hard
+    safety gate (see app.orchestration.full_pipeline._make_verdict) vetoes
+    any final candidate whose Monte Carlo risk of ruin exceeds
+    risk_of_ruin_cap, but every fitness metric except composite_prop_score/
+    prop_guide_score used to score the GA's OWN search on eval-pass
+    probability (or net profit, Sharpe, etc.) alone -- risk of ruin was
+    invisible to the search itself. That let the GA spend its whole budget
+    converging on a "winner" that Step 3's post-hoc gate then threw away,
+    every single run: wasted search budget, not a metric problem.
+
+    This erodes `fitness` by a FRACTION of itself (the same metric-agnostic
+    approach as apply_cost_stress_penalty just below, so it works whether
+    `metric` is a raw dollar figure, a ratio, or a 0-100 probability)
+    based on how this genome's own Monte Carlo risk of ruin compares to
+    risk_of_ruin_cap:
+      - at/below the cap: a gentle, linear erosion (up to 30% right at the
+        cap) -- enough to give the GA a real gradient pointing away from
+        ruin risk well before a genome gets anywhere near disqualifying,
+        without overwhelming the metric it's actually trying to optimize.
+      - above the cap: a much steeper erosion (30% ramping to ~95% once
+        ruin has roughly doubled the cap) -- a genome in the zone
+        _make_verdict would hard-fail should already score far worse
+        DURING search, not just get vetoed after the fact.
+
+    Only applied when the caller passes a real risk_of_ruin_cap (see
+    compute_fitness's own default of None) -- every existing caller that
+    doesn't pass one keeps byte-identical fitness values to before this
+    existed.
+    """
+    if metric in _RUIN_AWARE_METRICS:
+        return fitness
+    if not math.isfinite(fitness) or fitness <= 0:
+        return fitness  # nothing to erode -- matches apply_cost_stress_penalty's own guard
+    if risk_of_ruin_cap is None or risk_of_ruin_cap <= 0:
+        return fitness
+    ruin = mc.risk_of_ruin_pct
+    if not math.isfinite(ruin) or ruin <= 0:
+        return fitness
+    if ruin <= risk_of_ruin_cap:
+        frac = 0.30 * (ruin / risk_of_ruin_cap)
+    else:
+        over_frac = min((ruin - risk_of_ruin_cap) / max(risk_of_ruin_cap, 1e-9), 1.0)
+        frac = 0.30 + 0.65 * over_frac
+    return fitness * (1.0 - min(frac, 0.95))
+
+
+def compute_fitness(
+    stats: dict, prop_summary: dict | None, mc: MonteCarloResult, metric: str,
+    risk_of_ruin_cap: float | None = None,
+) -> float:
+    """risk_of_ruin_cap: when provided, erodes the raw metric score by
+    app.optimize.refinement._apply_ruin_penalty's fractional ruin penalty
+    before returning it -- see that function's docstring. None (the
+    default) is byte-identical to every caller of this function from
+    before that penalty existed."""
     if metric == "net_profit":
-        return float(stats.get("net_profit", 0.0))
-    if metric == "profit_factor":
+        fitness = float(stats.get("net_profit", 0.0))
+    elif metric == "profit_factor":
         pf = stats.get("profit_factor", 0.0)
-        return 10.0 if pf == float("inf") else float(pf)
-    if metric == "sharpe_ratio":
-        return float(stats.get("sharpe_ratio", 0.0))
-    if metric == "eval_pass_probability":
-        return float(mc.evaluation_pass_probability)
-    if metric == "first_payout_probability":
-        return float(mc.first_payout_probability)
-    if metric == "fastest_payout":
-        return _fastest_payout_score(mc)
-    if metric == "expected_payout":
-        return float(mc.expected_payout)
-    if metric == "composite_prop_score":
-        return float(
+        fitness = 10.0 if pf == float("inf") else float(pf)
+    elif metric == "sharpe_ratio":
+        fitness = float(stats.get("sharpe_ratio", 0.0))
+    elif metric == "eval_pass_probability":
+        fitness = float(mc.evaluation_pass_probability)
+    elif metric == "first_payout_probability":
+        fitness = float(mc.first_payout_probability)
+    elif metric == "fastest_payout":
+        fitness = _fastest_payout_score(mc)
+    elif metric == "expected_payout":
+        fitness = float(mc.expected_payout)
+    elif metric == "composite_prop_score":
+        fitness = float(
             mc.evaluation_pass_probability * 0.5
             + mc.first_payout_probability * 0.3
             - mc.risk_of_ruin_pct * 0.2
         )
-    if metric == "prop_guide_score":
-        return _prop_guide_score(stats, mc)
-    raise RefinementError(f"Unknown fitness metric '{metric}'.")
+    elif metric == "prop_guide_score":
+        fitness = _prop_guide_score(stats, mc)
+    else:
+        raise RefinementError(f"Unknown fitness metric '{metric}'.")
+    if risk_of_ruin_cap is not None:
+        fitness = _apply_ruin_penalty(fitness, mc, risk_of_ruin_cap, metric)
+    return fitness
 
 
 def _stressed_risk_config(risk: RiskConfig, multiplier: float) -> RiskConfig:
