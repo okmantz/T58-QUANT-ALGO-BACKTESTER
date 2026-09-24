@@ -138,6 +138,38 @@
     });
   }
 
+  /* Mobile hamburger: toggles the off-canvas sidebar drawer open/closed,
+     closes on backdrop click, on Escape, or after tapping a nav link. */
+  function initMobileMenu() {
+    var btn = document.getElementById("t58-mobile-menu-btn");
+    var sidebar = document.getElementById("t58-sidebar");
+    var backdrop = document.getElementById("t58-sidebar-backdrop");
+    if (!btn || !sidebar || !backdrop) return;
+
+    function closeMenu() {
+      sidebar.classList.remove("open");
+      backdrop.classList.remove("open");
+      btn.setAttribute("aria-expanded", "false");
+    }
+    function openMenu() {
+      sidebar.classList.add("open");
+      backdrop.classList.add("open");
+      btn.setAttribute("aria-expanded", "true");
+    }
+
+    btn.addEventListener("click", function () {
+      if (sidebar.classList.contains("open")) closeMenu();
+      else openMenu();
+    });
+    backdrop.addEventListener("click", closeMenu);
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") closeMenu();
+    });
+    sidebar.querySelectorAll("a.t58-nav-item").forEach(function (a) {
+      a.addEventListener("click", closeMenu);
+    });
+  }
+
   window.T58Chrome = { animateNumbers: animateNumbers };
 
   document.addEventListener("DOMContentLoaded", function () {
@@ -146,6 +178,7 @@
     animateNumbers();
     initThemeToggle();
     initGlobalSearch();
+    initMobileMenu();
   });
 })();
 
