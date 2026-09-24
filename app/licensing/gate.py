@@ -47,6 +47,7 @@ def show_activation_window(initial_message: str = "", initial_email: str = "") -
     GUI launch actually needs to show this window -- see this module's
     own docstring."""
     import tkinter as tk
+    from pathlib import Path
     from tkinter import ttk
 
     def _safe_font(size=10, weight="normal"):
@@ -65,9 +66,32 @@ def show_activation_window(initial_message: str = "", initial_email: str = "") -
             self.activated = False
             self.title("T58 Quant Algo Backtester — Activation")
             self.configure(bg=BG)
-            self.geometry("440x420")
+            width, height = 440, 460
+            self.update_idletasks()
+            x = (self.winfo_screenwidth() - width) // 2
+            y = (self.winfo_screenheight() - height) // 2
+            self.geometry(f"{width}x{height}+{x}+{y}")
             self.resizable(False, False)
             self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+            # Same T58 mark the main app window uses (app.ui.main_window's
+            # MainWindow.__init__ does the identical iconphoto call against
+            # this same asset) -- so the activation screen carries the same
+            # branding as the rest of the app instead of a default Tk icon,
+            # matching the web app's favicon in spirit.
+            try:
+                icon_path = Path(__file__).resolve().parents[2] / "app" / "ui" / "assets" / "t58_mark_medium.png"
+                if icon_path.exists():
+                    self._icon_image = tk.PhotoImage(file=str(icon_path))
+                    self.iconphoto(True, self._icon_image)
+            except Exception:
+                pass
+
+            # A thin gradient-ish accent strip along the top -- the closest
+            # plain-Tkinter equivalent of the web activation card's colored
+            # top border/glow (real CSS gradients and border-radius aren't
+            # available here).
+            tk.Frame(self, bg=ACCENT, height=3).pack(fill="x", side="top")
 
             style = ttk.Style(self)
             try:
@@ -76,21 +100,24 @@ def show_activation_window(initial_message: str = "", initial_email: str = "") -
                 pass
             style.configure("T58.TEntry", fieldbackground=PANEL_3, foreground=TEXT, insertcolor=TEXT, bordercolor=BORDER)
 
-            container = tk.Frame(self, bg=BG, padx=32, pady=28)
+            container = tk.Frame(self, bg=BG, padx=32, pady=26)
             container.pack(fill="both", expand=True)
 
             tk.Label(
+                container, text="\U0001F511", bg=BG, fg=TEXT, font=_safe_font(22),
+            ).pack(anchor="center")
+            tk.Label(
                 container, text="T58 QUANT ALGO BACKTESTER", bg=BG, fg=ACCENT,
                 font=_safe_font(11, "bold"),
-            ).pack(anchor="w")
+            ).pack(anchor="center", pady=(2, 0))
             tk.Label(
                 container, text="Activate your license", bg=BG, fg=TEXT,
                 font=_safe_font(18, "bold"),
-            ).pack(anchor="w", pady=(4, 2))
+            ).pack(anchor="center", pady=(6, 2))
             tk.Label(
                 container, text="Enter the email and license key from your purchase confirmation.",
-                bg=BG, fg=TEXT_MUTED, font=_safe_font(9), wraplength=380, justify="left",
-            ).pack(anchor="w", pady=(0, 16))
+                bg=BG, fg=TEXT_MUTED, font=_safe_font(9), wraplength=380, justify="center",
+            ).pack(anchor="center", pady=(0, 16))
 
             self.status_var = tk.StringVar(value=initial_message)
             self.status_label = tk.Label(
@@ -128,13 +155,16 @@ def show_activation_window(initial_message: str = "", initial_email: str = "") -
             self.activate_btn = tk.Button(
                 container, text="Activate", command=self._on_activate, bg=ACCENT, fg="#FFFFFF",
                 font=_safe_font(11, "bold"), relief="flat", padx=10, pady=10, cursor="hand2",
+                activebackground="#6A2EE0", activeforeground="#FFFFFF", bd=0,
             )
             self.activate_btn.pack(fill="x")
+            self.activate_btn.bind("<Enter>", lambda _e: self.activate_btn.config(bg="#6A2EE0"))
+            self.activate_btn.bind("<Leave>", lambda _e: self.activate_btn.config(bg=ACCENT))
 
             tk.Label(
                 container, text="No license yet? Purchases and support are handled through Whop.",
-                bg=BG, fg=TEXT_MUTED, font=_safe_font(8), pady=14,
-            ).pack(anchor="w")
+                bg=BG, fg=TEXT_MUTED, font=_safe_font(8), pady=14, wraplength=380, justify="center",
+            ).pack(anchor="center")
 
             self.bind("<Return>", lambda _e: self._on_activate())
             email_entry.focus_set()
