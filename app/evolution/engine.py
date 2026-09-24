@@ -83,7 +83,7 @@ from app.evolution.family_budget import FamilyBudgetTracker
 from app.evolution.knowledge_graph import DEFAULT_KG_PATH, KnowledgeGraph, feature_vector_for_spec
 from app.evolution.prop_fitness import PropFitnessBreakdown, compute_prop_fitness
 from app.evolution.surrogate import FamilySurrogateBank
-from app.monte_carlo.engine import MonteCarloConfig, run_monte_carlo
+from app.monte_carlo.engine import MonteCarloConfig, default_method_for_adaptive_risk, run_monte_carlo
 from app.optimize.parameter_space import apply_genome, extract_genome
 from app.optimize.refinement import OPTIMIZER_MODES, _mutate, _stressed_risk_config
 from app.orchestration.resource_guard import safe_worker_count
@@ -259,7 +259,15 @@ def _evo_full_eval_task(
     trade_pnls = [t.pnl for t in bt.trades]
     trade_dates = [t.entry_time for t in bt.trades]
 
-    mc_cfg = MonteCarloConfig(n_simulations=mc_sims, random_seed=random_seed, reset_on_breach=reset_on_breach)
+    # UPGRADE (regime-aware-throttle-vs-iid-resampling mismatch): see
+    # app.monte_carlo.engine.default_method_for_adaptive_risk's docstring
+    # -- block_bootstrap preserves the local run-clustering
+    # adaptive_risk's regime-aware throttle is built to react to, which
+    # the i.i.d. default explicitly discards.
+    mc_cfg = MonteCarloConfig(
+        method=default_method_for_adaptive_risk(adaptive_risk),
+        n_simulations=mc_sims, random_seed=random_seed, reset_on_breach=reset_on_breach,
+    )
     mc = run_monte_carlo(bt.trades, prop_rules, mc_cfg)
     mc_summary = {
         "evaluation_pass_probability": mc.evaluation_pass_probability,
