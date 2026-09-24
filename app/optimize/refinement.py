@@ -1333,7 +1333,7 @@ def run_iterative_refinement(
             log("Running out-of-sample holdout check on the optimized configuration...")
             try:
                 holdout_comparison = run_holdout_comparison(
-                    df, build(best_ever.genome), risk, holdout_frac=0.2,
+                    df, build(best_ever.genome), risk, holdout_frac=0.2, adaptive_risk=adaptive_risk,
                 )
             except Exception:
                 warnings.append(
