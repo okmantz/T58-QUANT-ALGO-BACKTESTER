@@ -23,6 +23,7 @@ phone (as opposed to browsing to one) is out of scope for this MVP.
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import random
@@ -69,6 +70,7 @@ from app.data.london_strategic_edge_source import (
     save_bars_as_csv as lse_save_bars_as_csv, test_connection as lse_test_connection,
 )
 from app.data.importer import import_csv, import_csv_bytes
+from app.data.instrument_specs import KNOWN_INSTRUMENTS
 from app.data.timeframe_resample import infer_timeframe_label
 from app.web.alpaca_shared import alpaca_template_context
 from app.web.lse_shared import lse_template_context
@@ -1054,6 +1056,26 @@ def data_detect_pip_size():
         return jsonify({"error": f"Couldn't detect: {exc}"}), 400
 
 
+@app.route("/data/instrument-specs")
+def data_instrument_specs():
+    """UPGRADE (instrument-metadata-had-no-ui, web app): the web-side
+    counterpart to the desktop app's "Or pick a known instrument
+    (auto-fills pip size + $/point)" dropdown (see MainWindow.
+    _apply_instrument_spec / RunContextPanel._apply_instrument_spec).
+    A static, tiny, no-auth-needed list -- fetched once by t58-chrome.js
+    (see t58PopulateInstrumentPicker) and cached client-side rather than
+    re-fetched per page, since app.data.instrument_specs.KNOWN_INSTRUMENTS
+    only changes with a new app release, never per-request."""
+    return jsonify({
+        "instruments": [
+            {"symbol": s, "description": spec.description, "exchange": spec.exchange,
+             "pip_size": spec.pip_size, "contract_size": spec.contract_size,
+             "tick_size": spec.tick_size, "tick_value": spec.tick_value}
+            for s, spec in sorted(KNOWN_INSTRUMENTS.items())
+        ],
+    })
+
+
 @app.route("/mobile-access")
 def mobile_access():
     """Shows the same LAN address + QR code the console banner prints
@@ -1423,7 +1445,7 @@ def replay_prepare():
             initial_balance=float(form.get("initial_balance", 100000) or 100000),
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
-            pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+            pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         # UPGRADE (Interactive Replay: prop-firm presets): optional -- an
         # account-size/risk panel for the same right-hand running-balance
@@ -1496,6 +1518,7 @@ def replay_rerun(replay_id):
         risk_mode=form.get("risk_mode") or old_risk.risk_mode,
         risk_value=float(form.get("risk_value") or old_risk.risk_value),
         pip_size=float(form.get("pip_size") or old_risk.pip_size),
+        contract_size=(float(form.get("contract_size")) if form.get("contract_size") else old_risk.contract_size),
     )
     prop_account_size = float(form.get("account_size") or new_risk.initial_balance)
     prop_rules_form = _parse_replay_prop_rules(form)
@@ -1674,7 +1697,7 @@ def batch_test_saved_strategies_route():
         commission_per_trade=float(form.get("commission", 0)),
         slippage_pips=float(form.get("slippage_pips", 0.5)),
         spread_pips=float(form.get("spread_pips", 1.0)),
-        pip_size=float(form.get("pip_size", 0.0001)),
+        pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
     )
     payout_cap = form.get("payout_cap", "").strip()
     rules = PropRules(
@@ -1836,7 +1859,7 @@ def run_pipeline():
             commission_per_trade=float(form.get("commission", 0)),
             slippage_pips=float(form.get("slippage_pips", 0.5)),
             spread_pips=float(form.get("spread_pips", 1.0)),
-            pip_size=float(form.get("pip_size", 0.0001)),
+            pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
             reset_on_breach=reset_on_breach,
         )
 
@@ -3105,7 +3128,7 @@ def refine_start():
             commission_per_trade=float(form.get("commission", 0)),
             slippage_pips=float(form.get("slippage_pips", 0.5)),
             spread_pips=float(form.get("spread_pips", 1.0)),
-            pip_size=float(form.get("pip_size", 0.0001)),
+            pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         rules = PropRules(
             account_size=float(form.get("account_size", 100000)),
@@ -3348,7 +3371,7 @@ def multi_market_start():
             initial_balance=float(form.get("initial_balance", 100000) or 100000),
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
-            pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+            pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         rules = PropRules(
             account_size=float(form.get("account_size", 100000) or 100000),
@@ -3690,7 +3713,7 @@ def full_pipeline_start_batch():
             commission_per_trade=float(form.get("commission", 0)),
             slippage_pips=float(form.get("slippage_pips", 0.5)),
             spread_pips=float(form.get("spread_pips", 1.0)),
-            pip_size=float(form.get("pip_size", 0.0001)),
+            pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         rules = PropRules(
             account_size=float(form.get("account_size", 100000)),
@@ -3897,7 +3920,7 @@ def full_pipeline_schedule_batch():
             commission_per_trade=float(form.get("commission", 0)),
             slippage_pips=float(form.get("slippage_pips", 0.5)),
             spread_pips=float(form.get("spread_pips", 1.0)),
-            pip_size=float(form.get("pip_size", 0.0001)),
+            pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         rules = PropRules(
             account_size=float(form.get("account_size", 100000)),
@@ -4094,7 +4117,7 @@ def full_pipeline_start():
             commission_per_trade=float(form.get("commission", 0)),
             slippage_pips=float(form.get("slippage_pips", 0.5)),
             spread_pips=float(form.get("spread_pips", 1.0)),
-            pip_size=float(form.get("pip_size", 0.0001)),
+            pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         rules = PropRules(
             account_size=float(form.get("account_size", 100000)),
@@ -4348,7 +4371,7 @@ def wfo_start():
             commission_per_trade=float(form.get("commission", 0)),
             slippage_pips=float(form.get("slippage_pips", 0.5)),
             spread_pips=float(form.get("spread_pips", 1.0)),
-            pip_size=float(form.get("pip_size", 0.0001)),
+            pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         rules = PropRules(
             account_size=float(form.get("account_size", 100000)),
@@ -4557,7 +4580,7 @@ def mo_start():
             commission_per_trade=float(form.get("commission", 0)),
             slippage_pips=float(form.get("slippage_pips", 0.5)),
             spread_pips=float(form.get("spread_pips", 1.0)),
-            pip_size=float(form.get("pip_size", 0.0001)),
+            pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         rules = PropRules(
             account_size=float(form.get("account_size", 100000)),
@@ -4729,7 +4752,7 @@ def wfga_start():
             commission_per_trade=float(form.get("commission", 0)),
             slippage_pips=float(form.get("slippage_pips", 0.5)),
             spread_pips=float(form.get("spread_pips", 1.0)),
-            pip_size=float(form.get("pip_size", 0.0001)),
+            pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         rules = PropRules(
             account_size=float(form.get("account_size", 100000)),
@@ -4898,7 +4921,7 @@ def portfolio_run():
             initial_balance=float(form.get("initial_balance", 100000)),
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0)),
-            pip_size=float(form.get("pip_size", 0.0001)),
+            pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
 
         legs: list[InstrumentLeg] = []
@@ -4975,6 +4998,53 @@ def serve_portfolio_report(filename):
 _REGIME_DIMENSIONS = ("trend", "volatility", "session", "environment")
 
 
+def _apply_regime_exclusion_to_strategy(strategy, exclude_cells: list[dict]):
+    """UPGRADE (regime-exclusion-primitive-had-no-ui): builds a NEW
+    strategy object of the same source_type as `strategy`, with
+    `exclude_cells` (RegimeMatrixResult.as_exclude_filter()'s own output
+    shape) merged in as its regime-exclusion filter -- mirrors
+    app.strategy.base.resolve_excluded_regimes's three source-type
+    conventions exactly, in reverse (that function READS the filter this
+    WRITES). Returns (new_strategy, new_source_text, file_extension) so
+    the caller can both re-run a backtest/regime-matrix pass against the
+    new strategy immediately, and offer the person the updated source to
+    copy back into the editor or save to the library.
+
+    Raises StrategyError for a source_type this can't be edited for
+    (there is none today, but future strategy types should fail loudly
+    here rather than silently doing nothing)."""
+    source_type = getattr(strategy, "source_type", None)
+
+    if source_type == "manual":
+        new_cfg = copy.deepcopy(strategy.config)
+        filters = new_cfg.setdefault("filters", {})
+        existing = list(filters.get("regime_exclude") or [])
+        for cell in exclude_cells:
+            if cell not in existing:
+                existing.append(cell)
+        filters["regime_exclude"] = existing
+        text = json.dumps(new_cfg, indent=2)
+        return ManualStrategy(new_cfg), text, "json"
+
+    if source_type == "python":
+        code = strategy.file_path.read_text(encoding="utf-8")
+        # A later top-level assignment simply overrides an earlier one
+        # when the module executes, so appending is safe even if the
+        # strategy already declares its own EXCLUDE_REGIMES.
+        new_code = code.rstrip("\n") + f"\n\nEXCLUDE_REGIMES = {exclude_cells!r}\n"
+        return build_strategy_from_code("python", new_code), new_code, "py"
+
+    if source_type in ("pinescript", "mql5"):
+        code = strategy.code
+        cell_strs = [",".join(f"{k}:{v}" for k, v in cell.items()) for cell in exclude_cells]
+        directive_value = ";".join(cell_strs)
+        new_code = code.rstrip("\n") + f"\n// T58_EXCLUDE_REGIMES={directive_value}\n"
+        ext = "pine" if source_type == "pinescript" else "mq5"
+        return build_strategy_from_code(source_type, new_code), new_code, ext
+
+    raise StrategyError(f"Cannot apply a regime exclusion to strategy type '{source_type}'.")
+
+
 @app.route("/regime-matrix")
 def regime_matrix_form():
     return render_template(
@@ -4998,7 +5068,7 @@ def regime_matrix_run():
             initial_balance=float(form.get("initial_balance", 100000)),
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0)),
-            pip_size=float(form.get("pip_size", 0.0001)),
+            pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
 
         dim_a = form.get("dimension_a", "volatility")
@@ -5019,15 +5089,51 @@ def regime_matrix_run():
             passed=None, summary=f"{len(result.cells)} regime cell(s) analyzed",
         )
 
-        return render_template("regime_matrix.html", **ctx(result={
-            "dataset": active_label,
-            "dimensions": list(result.primary_dimensions),
-            "cells": sorted([c.to_dict() for c in result.cells], key=lambda c: c["net_profit"], reverse=True),
-            "single_dimension": {k: [c.to_dict() for c in v] for k, v in result.single_dimension.items()},
-            "disable_regimes": [c.to_dict() for c in result.disable_regimes()],
-            "notes": result.notes,
-            "table_text": result.render_table(),
-        }), **_alpaca_template_context())
+        # -------------------------------------------------------------
+        # UPGRADE (regime-exclusion-primitive-had-no-ui): the "Recommended
+        # OFF regimes" list used to be purely informational. Checking this
+        # box on the form re-runs the SAME matrix against a copy of the
+        # strategy with those exact cells wired into its regime-exclusion
+        # filter (see app.strategy.base.apply_regime_exclusion), so the
+        # person sees a real before/after rather than having to hand-build
+        # the filter themselves -- and gets the updated strategy source
+        # back to copy into the editor or save to the library.
+        # -------------------------------------------------------------
+        result_after = None
+        updated_strategy_text = None
+        updated_strategy_mode = None
+        exclusion_error = None
+        if form.get("apply_recommended_exclusions") and result.disable_regimes():
+            exclude_cells = result.as_exclude_filter()
+            try:
+                excluded_strategy, updated_strategy_text, _ext = _apply_regime_exclusion_to_strategy(
+                    strategy, exclude_cells,
+                )
+                updated_strategy_mode = getattr(strategy, "source_type", None)
+                result_after = run_regime_matrix(df, excluded_strategy, risk, dimensions=(dim_a, dim_b))
+            except StrategyError as exc:
+                exclusion_error = str(exc)
+
+        def _serialize(r):
+            if r is None:
+                return None
+            return {
+                "dataset": active_label,
+                "dimensions": list(r.primary_dimensions),
+                "cells": sorted([c.to_dict() for c in r.cells], key=lambda c: c["net_profit"], reverse=True),
+                "single_dimension": {k: [c.to_dict() for c in v] for k, v in r.single_dimension.items()},
+                "disable_regimes": [c.to_dict() for c in r.disable_regimes()],
+                "notes": r.notes,
+                "table_text": r.render_table(),
+            }
+
+        return render_template("regime_matrix.html", **ctx(
+            result=_serialize(result),
+            result_after=_serialize(result_after),
+            updated_strategy_text=updated_strategy_text,
+            updated_strategy_mode=updated_strategy_mode,
+            exclusion_error=exclusion_error,
+        ), **_alpaca_template_context())
     except StrategyError as exc:
         return render_template("regime_matrix.html", **ctx(error=str(exc)), **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
@@ -5112,7 +5218,7 @@ def payout_probability_run():
             initial_balance=float(form.get("initial_balance", 100000)),
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0)),
-            pip_size=float(form.get("pip_size", 0.0001)),
+            pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         rules = PropRules(
             account_size=float(form.get("account_size", 100000)),
@@ -5246,7 +5352,7 @@ def prop_firm_recommender_run():
             initial_balance=float(form.get("initial_balance", 100000)),
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0)),
-            pip_size=float(form.get("pip_size", 0.0001)),
+            pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
 
         bt_result = run_backtest(df, strategy, risk)
@@ -5464,7 +5570,7 @@ def cpcv_start():
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000)),
             risk_value=float(form.get("risk_value", 1.0)),
-            pip_size=float(form.get("pip_size", 0.0001)),
+            pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         prop_rules = PropRules(account_size=float(form.get("initial_balance", 100000)))
         job_id = uuid.uuid4().hex[:12]
@@ -5680,7 +5786,7 @@ def pbo_start():
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000)),
             risk_value=float(form.get("risk_value", 1.0)),
-            pip_size=float(form.get("pip_size", 0.0001)),
+            pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         prop_rules = PropRules(account_size=float(form.get("initial_balance", 100000)))
         job_id = uuid.uuid4().hex[:12]
@@ -5852,7 +5958,7 @@ def sensitivity_start():
             HEAVY_JOB_GUARD.release(JOB_SENSITIVITY)
             return render_template("sensitivity.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
         strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
-        risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000)), pip_size=float(form.get("pip_size", 0.0001)))
+        risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000)), pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None))
         rules = PropRules(account_size=float(form.get("account_size", 100000)))
         mc_cfg = MonteCarloConfig(n_simulations=int(form.get("mc_sims", 500) or 500))
 
@@ -6042,7 +6148,7 @@ def parameter_robustness_start():
                 "parameter_robustness.html", error=dataset_error, stored_datasets=list_stored_datasets(),
                 dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
         strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
-        risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000)), pip_size=float(form.get("pip_size", 0.0001)))
+        risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000)), pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None))
         rules = PropRules(account_size=float(form.get("account_size", 100000)))
         mc_cfg = MonteCarloConfig(n_simulations=int(form.get("mc_sims", 500) or 500))
 
@@ -6214,7 +6320,7 @@ def quickopt_start():
         if dataset_error:
             return render_template("quick_optimize.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context()), 400
         strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
-        risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000)), pip_size=float(form.get("pip_size", 0.0001)))
+        risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000)), pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None))
         rules = PropRules(account_size=float(form.get("account_size", 100000)))
 
         # T58 BACKTEST INTEGRITY CHECK -- same pre-flight gate as Run &
@@ -6451,7 +6557,7 @@ def evolution_start():
             commission_per_trade=float(form.get("commission", 0) or 0),
             slippage_pips=float(form.get("slippage_pips", 0.5) or 0.5),
             spread_pips=float(form.get("spread_pips", 1.0) or 1.0),
-            pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+            pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         rules = PropRules(
             account_size=float(form.get("account_size", 100000) or 100000),
@@ -6883,7 +6989,7 @@ def evolution_multi_instrument_start():
             commission_per_trade=float(form.get("commission", 0) or 0),
             slippage_pips=float(form.get("slippage_pips", 0.5) or 0.5),
             spread_pips=float(form.get("spread_pips", 1.0) or 1.0),
-            pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+            pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         rules = PropRules(
             account_size=float(form.get("account_size", 100000) or 100000),
@@ -7084,7 +7190,7 @@ def research_agent_start():
             return render_template("research_agent.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), ai_enabled=False, ai_host="", ai_model="", **_alpaca_template_context()), 400
 
         strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
-        risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000) or 100000), pip_size=float(form.get("pip_size", 0.0001) or 0.0001))
+        risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000) or 100000), pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None))
         rules = PropRules(account_size=float(form.get("account_size", 100000) or 100000))
         question = (form.get("question") or "").strip()
         if not question:
@@ -7220,7 +7326,7 @@ def research_loop_start():
 
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000) or 100000),
-            pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+            pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         rules = PropRules(account_size=float(form.get("account_size", 100000) or 100000))
         settings = OllamaSettings(
@@ -7347,7 +7453,7 @@ def forward_test_start():
             initial_balance=float(form.get("initial_balance", 100000) or 100000),
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
-            pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+            pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         cfg = ForwardTestConfig(
             symbol=form.get("symbol", "").strip() or "EURUSD",
@@ -7448,7 +7554,7 @@ def deploy_live_start():
             initial_balance=float(form.get("initial_balance", 100000) or 100000),
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
-            pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+            pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         rules = PropRules(
             account_size=float(form.get("account_size", 100000) or 100000),
@@ -7612,7 +7718,7 @@ def search_start():
             initial_balance=float(form.get("initial_balance", 100000) or 100000),
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
-            pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+            pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         rules = PropRules(
             account_size=float(form.get("account_size", 100000) or 100000),
@@ -8162,7 +8268,7 @@ def research_run():
         risk = RiskConfig(
             initial_balance=float(form.get("account_size", 100000) or 100000),
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
-            pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+            pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         rules = PropRules(
             account_size=float(form.get("account_size", 100000) or 100000),
@@ -8285,7 +8391,7 @@ def forge_start():
             initial_balance=float(form.get("initial_balance", 100000) or 100000),
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
-            pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+            pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         rules = PropRules(
             account_size=float(form.get("account_size", 100000) or 100000),
@@ -8601,6 +8707,21 @@ def _run_multi_search_loop_job(
                 "total_candidates": chosen.summary.total_candidates if chosen else None,
                 "stage3_survivors": chosen.summary.stage3_survivors if chosen else None,
                 "report_html": report_html,
+                # UPGRADE (loop-mode-search-lab-had-no-save-button): the
+                # non-loop path above stashes these three so
+                # search_multi_instrument_job_save_to_library can look a
+                # candidate up without trusting a client-supplied db
+                # path. Loop Mode never set them, so its own results
+                # never had a champion_candidate_id for the job page's
+                # JS to key its "Save Champion to Library" button off of
+                # (see search_multi_instrument_job.html's renderResults)
+                # -- the button simply never rendered. Both modes write
+                # into the SAME _MULTI_SEARCH_JOBS store and are read by
+                # the SAME save_to_library route, so filling these in is
+                # the whole fix; no new route needed.
+                "champion_candidate_id": chosen.summary.champion_candidate_id if chosen else None,
+                "db_path": chosen.summary.db_path if chosen else None,
+                "run_id": chosen.summary.run_id if chosen else None,
             }
 
         with _MULTI_SEARCH_JOBS_LOCK:
@@ -8738,7 +8859,7 @@ def search_multi_instrument_start():
         )
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000) or 100000),
-            pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+            pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         rules = PropRules(
             account_size=float(form.get("initial_balance", 100000) or 100000),
@@ -8867,7 +8988,9 @@ def search_multi_instrument_job_save_to_library(job_id):
     """UPGRADE (search-lab-has-no-save-to-library): multi-instrument
     counterpart to search_job_save_to_library above. `label` selects
     which instrument/timeframe's own db_path/run_id (stashed on
-    per_instrument[label] by _run_multi_search_job) to save from;
+    per_instrument[label] by _run_multi_search_job -- and, since the
+    loop-mode-save-button fix, by _run_multi_search_loop_job too, since
+    both write into this same _MULTI_SEARCH_JOBS store) to save from;
     `candidate_id` defaults to that instrument's own champion so the
     common "save the champion" click needs nothing else, but can name any
     other stage3 candidate_id from that instrument's own leaderboard."""
@@ -9017,7 +9140,7 @@ def speed_run_start():
             initial_balance=float(form.get("initial_balance", 100000)),
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0)),
-            pip_size=float(form.get("pip_size", 0.0001)),
+            pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         rules = PropRules(
             account_size=float(form.get("account_size", 100000)),
@@ -9302,7 +9425,7 @@ def overnight_autopilot_start():
             initial_balance=float(form.get("initial_balance", 100000)),
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0)),
-            pip_size=float(form.get("pip_size", 0.0001)),
+            pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         rules = PropRules(
             account_size=float(form.get("account_size", 100000)),
@@ -9530,7 +9653,7 @@ def speed_run_multi_instrument_start():
             initial_balance=float(form.get("initial_balance", 100000) or 100000),
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
-            pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+            pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
         rules = PropRules(
             account_size=float(form.get("account_size", 100000) or 100000),
