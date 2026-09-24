@@ -304,6 +304,57 @@ def test_run_against_existing_stored_dataset_without_new_upload(tmp_path, monkey
         f.unlink()
 
 
+def test_run_wires_contract_size_from_form_into_risk_config(tmp_path, monkeypatch):
+    """UPGRADE (instrument-metadata-had-no-ui, web app): the new
+    "Or pick a known instrument" dropdown fills a contract_size form
+    field that used to not exist on any web page at all -- confirms
+    /run's RiskConfig actually picks it up (matching the desktop app's
+    long-standing build_risk_config behavior), and that omitting it
+    (the pre-existing default) still leaves RiskConfig.contract_size
+    as None rather than erroring."""
+    monkeypatch.setattr(storage, "get_app_base_dir", lambda: tmp_path)
+    storage.store_csv_bytes(_make_bigger_csv(3), "stored.csv")
+    client = app.test_client()
+
+    captured = {}
+    import app.web.server as server_module
+    real_run_backtest = server_module.run_backtest
+
+    def _spy_run_backtest(df, strategy, risk, *args, **kwargs):
+        captured["risk"] = risk
+        return real_run_backtest(df, strategy, risk, *args, **kwargs)
+
+    monkeypatch.setattr(server_module, "run_backtest", _spy_run_backtest)
+
+    base_data = {
+        "existing_dataset": "stored.csv",
+        "strategy_mode": "manual", "sma_fast": "5", "sma_slow": "15", "sl_pips": "20", "tp_pips": "40",
+        "account_size": "100000", "profit_target": "8", "daily_loss": "5", "max_dd": "10",
+        "dd_type": "trailing", "consistency": "30", "min_days": "5", "payout_freq": "14",
+        "payout_threshold": "0", "buffer": "0", "payout_cap": "",
+        "initial_balance": "100000", "risk_mode": "percent", "risk_value": "1.0",
+        "max_trades_day": "10", "commission": "0", "slippage_pips": "0.5",
+        "spread_pips": "1.0", "pip_size": "1.0",
+        "n_sims": "50", "mc_method": "bootstrap",
+    }
+
+    # contract_size supplied (e.g. from picking "MNQ" in the new dropdown).
+    r = client.post("/run", data={**base_data, "contract_size": "2.0"}, content_type="multipart/form-data")
+    assert r.status_code == 200
+    assert captured["risk"].contract_size == 2.0
+    for f in REPORTS_DIR.glob("report_*"):
+        f.unlink()
+
+    # contract_size omitted (every pre-existing form submission, and any
+    # page where the person didn't use the instrument picker) -- must
+    # still default to None, not error or silently pick up a stale value.
+    r = client.post("/run", data=base_data, content_type="multipart/form-data")
+    assert r.status_code == 200
+    assert captured["risk"].contract_size is None
+    for f in REPORTS_DIR.glob("report_*"):
+        f.unlink()
+
+
 _LEAKY_PYTHON_STRATEGY = '''
 import pandas as pd
 

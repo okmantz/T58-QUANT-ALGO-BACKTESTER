@@ -170,6 +170,62 @@ def test_multi_instrument_search_loop_mode_end_to_end(_isolated_raw_data_dir):
     assert HEAVY_JOB_GUARD.active_name is None
 
 
+def test_multi_instrument_search_loop_mode_save_to_library(_isolated_raw_data_dir, tmp_path, monkeypatch):
+    """FIX (loop-mode-search-lab-had-no-save-button): Loop Mode's own
+    per-instrument results must carry champion_candidate_id/db_path/
+    run_id -- previously they were entirely absent (the non-loop path
+    set them, _run_multi_search_loop_job never did), so
+    search_multi_instrument_job.html's JS never rendered a "Save
+    Champion to Library" button for a Loop Mode run, and even a direct
+    POST to /save_to_library would have failed with "candidate_id is
+    required". Confirms both: the fields are now present, AND a real
+    POST to the existing save_to_library route (same route the non-loop
+    path already used -- both write into the same _MULTI_SEARCH_JOBS
+    store) actually saves the champion."""
+    monkeypatch.setattr("app.strategy.library.get_app_base_dir", lambda: tmp_path / "app_base")
+
+    _trending_csv(_isolated_raw_data_dir / "eurusd.csv", seed=1)
+    _trending_csv(_isolated_raw_data_dir / "gbpusd.csv", seed=2)
+
+    client = app.test_client()
+    r = client.post(
+        "/search/multi-instrument/start",
+        data={
+            "datasets": ["eurusd.csv", "gbpusd.csv"],
+            "loop_mode": "on", "loop_target_eval_pass_pct": "0",  # trivially easy -- guarantees a winner
+            "loop_max_rounds": "1", "loop_stall_rounds": "1",
+            **_FAST_FIELDS,
+        },
+    )
+    assert r.status_code == 302
+    job_id = r.headers["Location"].rstrip("/").split("/")[-1]
+
+    data = _poll_until_done(client, job_id)
+    assert data["error"] is None
+
+    saved_any = False
+    for label, res in data["results"].items():
+        assert res["error"] is None
+        # The three fields the save-to-library route needs must now be
+        # present for every completed instrument, exactly like the
+        # non-loop path already provides.
+        assert res.get("db_path"), f"{label} missing db_path"
+        assert res.get("run_id"), f"{label} missing run_id"
+        if not res.get("champion_candidate_id"):
+            continue  # this instrument's loop didn't land a champion -- nothing to save
+        save_resp = client.post(
+            f"/search/multi-instrument/job/{job_id}/save_to_library",
+            data={"label": label},
+        )
+        assert save_resp.status_code == 200, save_resp.get_data(as_text=True)
+        save_data = save_resp.get_json()
+        assert save_data["ok"] is True, save_data
+        assert save_data["filename"]
+        saved_any = True
+
+    assert saved_any, "no instrument produced a champion to actually exercise the save path"
+
+
 def test_multi_instrument_search_loop_mode_can_be_stopped(_isolated_raw_data_dir, monkeypatch):
     def _slow_run_search(*args, **kwargs):
         from app.search.batch_runner import run_search as _actual

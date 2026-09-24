@@ -154,3 +154,89 @@ def test_as_exclude_filter_matches_disable_regimes_dims():
     if result is None:
         pytest.skip("Not enough valid bars to classify any regime on this synthetic dataset.")
     assert result.as_exclude_filter() == [c.dims for c in result.disable_regimes()]
+
+
+# ---------------------------------------------------------------------------
+# UPGRADE (regime-exclusion-primitive-had-no-ui): app.web.server.
+# _apply_regime_exclusion_to_strategy -- the web route's "bake the
+# recommended exclusion into a copy of the strategy" helper. Confirms
+# each source_type's round-trip through resolve_excluded_regimes (the
+# same reader apply_regime_exclusion uses at backtest time) rather than
+# just eyeballing the generated text.
+# ---------------------------------------------------------------------------
+
+def test_apply_regime_exclusion_to_manual_strategy_merges_filter():
+    from app.web.server import _apply_regime_exclusion_to_strategy
+
+    strategy = ManualStrategy(_always_long_config())
+    cells = [{"trend": "strong_bullish"}, {"volatility": "extreme"}]
+    new_strategy, text, ext = _apply_regime_exclusion_to_strategy(strategy, cells)
+
+    assert ext == "json"
+    assert resolve_excluded_regimes(new_strategy) == cells
+    # The original strategy object must be untouched.
+    assert resolve_excluded_regimes(strategy) == []
+    # The returned text is valid, re-loadable JSON with the filter baked in.
+    import json
+    reloaded = ManualStrategy(json.loads(text))
+    assert resolve_excluded_regimes(reloaded) == cells
+
+
+def test_apply_regime_exclusion_to_manual_strategy_preserves_existing_filters():
+    """An existing regime_exclude list (from an earlier pass) must be
+    preserved and merged with, not clobbered."""
+    from app.web.server import _apply_regime_exclusion_to_strategy
+
+    strategy = ManualStrategy(_always_long_config(regime_exclude=[{"session": "asia"}]))
+    new_strategy, _text, _ext = _apply_regime_exclusion_to_strategy(strategy, [{"trend": "strong_bullish"}])
+    assert resolve_excluded_regimes(new_strategy) == [
+        {"session": "asia"}, {"trend": "strong_bullish"},
+    ]
+
+
+def test_apply_regime_exclusion_to_python_strategy(tmp_path):
+    from app.strategy.python import PythonStrategy
+    from app.web.server import _apply_regime_exclusion_to_strategy
+
+    code = (
+        "def generate_signals(df):\n"
+        "    import pandas as pd\n"
+        "    return pd.Series(1, index=df.index)\n"
+    )
+    p = tmp_path / "strat.py"
+    p.write_text(code)
+    strategy = PythonStrategy(p)
+    cells = [{"environment": "trending"}]
+
+    new_strategy, text, ext = _apply_regime_exclusion_to_strategy(strategy, cells)
+
+    assert ext == "py"
+    assert "EXCLUDE_REGIMES" in text
+    assert resolve_excluded_regimes(new_strategy) == cells
+
+
+def test_apply_regime_exclusion_to_pinescript_strategy():
+    from app.strategy.pinescript import PineScriptStrategy
+    from app.web.server import _apply_regime_exclusion_to_strategy
+
+    strategy = PineScriptStrategy("//@version=5\nstrategy(\"t\")\n")
+    cells = [{"trend": "strong_bullish", "volatility": "high"}, {"session": "asia"}]
+
+    new_strategy, text, ext = _apply_regime_exclusion_to_strategy(strategy, cells)
+
+    assert ext == "pine"
+    assert "T58_EXCLUDE_REGIMES=" in text
+    assert resolve_excluded_regimes(new_strategy) == cells
+
+
+def test_apply_regime_exclusion_to_mql5_strategy():
+    from app.strategy.mql5 import MQL5Strategy
+    from app.web.server import _apply_regime_exclusion_to_strategy
+
+    strategy = MQL5Strategy("void OnTick() {}\n")
+    cells = [{"volatility": "low"}]
+
+    new_strategy, text, ext = _apply_regime_exclusion_to_strategy(strategy, cells)
+
+    assert ext == "mq5"
+    assert resolve_excluded_regimes(new_strategy) == cells

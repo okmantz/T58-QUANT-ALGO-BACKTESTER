@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
+
 from app.search.batch_runner import SearchStageConfig, run_search
 from app.search.strategy_space import generate_search_space
 from app.backtest.risk import RiskConfig as _RiskConfig
@@ -48,6 +50,73 @@ def test_regime_matrix_run_rejects_identical_dimensions():
         r = client.post("/regime-matrix/run", data=data, content_type="multipart/form-data")
     assert r.status_code == 400
     assert b"DIFFERENT dimensions" in r.data
+
+
+def _always_long_manual_json():
+    import json
+    return json.dumps({
+        "name": "always long",
+        "long_entry": "close > 0", "long_exit": "close < -999999",
+        "short_entry": "close < -999999", "short_exit": "close > 0",
+        "stop_loss_pips": 50, "take_profit_pips": 100,
+    })
+
+
+def _regime_exclusion_csv(path):
+    """A synthetic dataset with a clearly-losing whipsaw segment (high
+    volatility, no follow-through) followed by a clean trend -- built so
+    an always-in-the-market strategy has at least one regime cell worth
+    recommending OFF, exercising the apply_recommended_exclusions path
+    end to end rather than depending on whichever real regime a bundled
+    sample CSV happens to produce."""
+    import numpy as np
+    rng = np.random.default_rng(7)
+    n = 4000
+    ts = pd.date_range("2023-01-01", periods=n, freq="15min")
+    whipsaw = np.cumsum(rng.normal(0, 3.0, n // 2))       # noisy, no drift -- should be a losing regime
+    trend = np.linspace(0, 60, n - n // 2) + np.cumsum(rng.normal(0, 0.3, n - n // 2))
+    price = 1900 + np.concatenate([whipsaw, whipsaw[-1] + trend])
+    high = price + np.abs(rng.normal(0.4, 0.2, n))
+    low = price - np.abs(rng.normal(0.4, 0.2, n))
+    df = pd.DataFrame({
+        "timestamp": ts, "open": price, "high": high, "low": low, "close": price, "volume": 100.0,
+    })
+    df.to_csv(path, index=False)
+    return path
+
+
+def test_regime_matrix_apply_recommended_exclusions_end_to_end(tmp_path):
+    """UPGRADE (regime-exclusion-primitive-had-no-ui): checking the new
+    'apply the recommended-OFF regimes' box must re-run the matrix
+    against a strategy with those regimes actually gated off, and hand
+    back the updated strategy source -- not just print the recommendation
+    as before."""
+    csv_path = _regime_exclusion_csv(tmp_path / "whipsaw_then_trend.csv")
+    client = app.test_client()
+    with open(csv_path, "rb") as f:
+        data = {
+            "csv_file": (f, "whipsaw_then_trend.csv"),
+            "strategy_mode": "manual",
+            "strategy_code": _always_long_manual_json(),
+            "sma_fast": "10", "sma_slow": "30", "sl_pips": "20", "tp_pips": "40",
+            "initial_balance": "100000", "risk_mode": "percent", "risk_value": "1.0",
+            "pip_size": "0.0001", "dimension_a": "volatility", "dimension_b": "environment",
+            "apply_recommended_exclusions": "on",
+        }
+        r = client.post("/regime-matrix/run", data=data, content_type="multipart/form-data")
+    assert r.status_code == 200
+    body = r.get_data(as_text=True)
+    assert "Not enough bars" not in body
+    if "Recommended OFF regimes" in body:
+        # At least one regime was flagged -- the before/after comparison
+        # and the updated, exclusion-baked strategy must both render.
+        assert "After excluding the recommended regimes" in body
+        assert "Updated strategy" in body
+        assert "regime_exclude" in body
+    else:
+        # No regime happened to get flagged on this run -- must still
+        # render cleanly with no error, not silently break.
+        assert "Couldn&#39;t apply the recommended exclusions" not in body
 
 
 def test_family_diversity_form_loads_with_no_runs():
