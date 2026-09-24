@@ -70,6 +70,25 @@
 <script>
   const jobId = {{ job_id | tojson }};
 
+  function saveToLibrary(label, btn) {
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    const body = new URLSearchParams({label: label});
+    fetch(`/search/multi-instrument/job/${jobId}/save_to_library`, {method: 'POST', body})
+      .then(r => r.json())
+      .then(data => {
+        if (data.ok) {
+          btn.textContent = 'Saved ✓';
+          btn.title = data.filename;
+        } else {
+          btn.disabled = false;
+          btn.textContent = 'Save Champion to Library';
+          alert('Save failed: ' + data.error);
+        }
+      })
+      .catch(err => { btn.disabled = false; btn.textContent = 'Save Champion to Library'; alert('Save failed: ' + err); });
+  }
+
   function renderResults(data) {
     const tbody = document.getElementById('results-body');
     tbody.innerHTML = '';
@@ -87,9 +106,12 @@
       } else {
         const bestTag = label === data.best_label ? '<span class="badge-best">BEST</span>' : '';
         const champLink = r.report_html ? `<a href="${r.report_html}" target="_blank">Leaderboard &rarr;</a>` : '';
+        const saveBtn = r.champion_candidate_id
+          ? `<button class="promote-btn" onclick="saveToLibrary('${label}', this)">Save Champion to Library</button>`
+          : '';
         tr.innerHTML = `<td>${label}${bestTag}</td><td>${r.total_candidates}</td><td>${r.stage1_survivors}</td>` +
           `<td>${r.stage2_survivors}</td><td>${r.stage3_survivors}</td>` +
-          `<td>${r.champion_candidate_id || '(none)'}</td><td>${champLink}</td>`;
+          `<td>${r.champion_candidate_id || '(none)'}</td><td>${champLink} ${saveBtn}</td>`;
       }
       tbody.appendChild(tr);
     });

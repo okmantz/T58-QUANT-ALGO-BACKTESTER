@@ -115,6 +115,25 @@
       .catch(err => { btn.disabled = false; btn.textContent = 'Promote'; alert('Promotion failed: ' + err); });
   }
 
+  function saveToLibrary(candidateId, btn) {
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    const body = new URLSearchParams({candidate_id: candidateId});
+    fetch(`/search/job/${jobId}/save_to_library`, {method: 'POST', body})
+      .then(r => r.json())
+      .then(data => {
+        if (data.ok) {
+          btn.textContent = 'Saved ✓';
+          btn.title = data.filename;
+        } else {
+          btn.disabled = false;
+          btn.textContent = 'Save to Library';
+          alert('Save failed: ' + data.error);
+        }
+      })
+      .catch(err => { btn.disabled = false; btn.textContent = 'Save to Library'; alert('Save failed: ' + err); });
+  }
+
   function renderLeaderboard(rows) {
     const tbody = document.getElementById('leaderboard-body');
     tbody.innerHTML = '';
@@ -136,7 +155,8 @@
         <td>${fmt(row.total_trades, 0)}</td>
         <td>${fmt(row.eval_pass_pct, 1)}%</td>
         <td>${badge}</td>
-        <td><button class="promote-btn" onclick="promote('${row.candidate_id}', this)">Promote</button></td>`;
+        <td><button class="promote-btn" onclick="promote('${row.candidate_id}', this)">Promote</button>
+          <button class="promote-btn" onclick="saveToLibrary('${row.candidate_id}', this)">Save to Library</button></td>`;
       tbody.appendChild(tr);
     });
     document.getElementById('leaderboard-card').style.display = rows.length ? 'block' : 'none';
