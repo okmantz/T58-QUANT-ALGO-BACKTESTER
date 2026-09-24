@@ -23,7 +23,7 @@ import math
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from app.data.storage import get_app_base_dir
 
@@ -137,6 +137,7 @@ def record_run(report: dict, paths: dict, backtest_result=None) -> None:
             "profit_factor": float(stats.get("profit_factor", 0.0) or 0.0) if math.isfinite(stats.get("profit_factor", 0.0) or 0.0) else 0.0,
             "sharpe_ratio": float(stats.get("sharpe_ratio", 0.0) or 0.0) if math.isfinite(stats.get("sharpe_ratio", 0.0) or 0.0) else 0.0,
             "eval_pass_probability": float(mc.get("evaluation_pass_probability", 0.0) or 0.0),
+            "first_payout_probability": float(mc.get("first_payout_probability", 0.0) or 0.0),
             "risk_of_ruin_pct": float(mc.get("risk_of_ruin_pct", 0.0) or 0.0),
             "expected_payout": float(mc.get("expected_payout", 0.0) or 0.0),
             "single_run_passed": bool(prop_single.get("evaluation_pass_pct", 0.0) == 100.0),
@@ -154,6 +155,27 @@ def record_run(report: dict, paths: dict, backtest_result=None) -> None:
 
 def _strategy_key(entry: dict) -> tuple[str, str]:
     return (entry.get("strategy_name", ""), entry.get("source_type", ""))
+
+
+def latest_run_for(strategy_name: str, instrument: str) -> Optional[dict]:
+    """Most recent run_history row for a given (strategy_name, instrument)
+    pair, matched case-insensitively. Used by the Dashboard's "current
+    strategy" metrics box -- strategy_state only tracks the name/instrument/
+    timeframe the person marked current, not any performance numbers, so
+    this is how those numbers (win rate, Sharpe, eval-pass %, first-payout
+    %, net P&L) get attached to that card. Returns None if this strategy
+    has never actually been run."""
+    name_l = (strategy_name or "").strip().lower()
+    instrument_l = (instrument or "").strip().lower()
+    if not name_l or not instrument_l:
+        return None
+    best = None
+    for r in load_runs():
+        if (r.get("strategy_name", "").strip().lower() == name_l
+                and (r.get("instrument", "").strip().lower() == instrument_l)):
+            if best is None or r["timestamp"] >= best["timestamp"]:
+                best = r
+    return best
 
 
 def _jaccard(a: list[str], b: list[str]) -> float:
