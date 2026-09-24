@@ -196,7 +196,7 @@ def run_cli(
 
     print("Running out-of-sample holdout check...")
     try:
-        holdout_comparison = run_holdout_comparison(df, strategy, risk, holdout_frac=0.2)
+        holdout_comparison = run_holdout_comparison(df, strategy, risk, holdout_frac=0.2, adaptive_risk=adaptive_risk)
     except Exception as exc:
         print(f"  Holdout check skipped: {exc}")
         holdout_comparison = None
