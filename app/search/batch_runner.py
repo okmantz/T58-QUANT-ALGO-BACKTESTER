@@ -47,6 +47,7 @@ that writes to the results database.
 """
 from __future__ import annotations
 
+import json
 import math
 import multiprocessing
 import os
@@ -81,6 +82,7 @@ from app.search.robustness import (
     deflated_sharpe_ratio, parameter_neighborhood_robustness, run_walk_forward,
 )
 from app.search.strategy_space import SearchSpace, build_strategy_from_spec
+from app.strategy.library import StrategyAlreadyExists, save_strategy_metadata, save_strategy_text, set_strategy_status
 from app.strategy.lookahead_check import check_for_lookahead
 
 ProgressCallback = Callable[[str], None]
@@ -1471,3 +1473,73 @@ def promote_champion(
         }
     finally:
         shutil.rmtree(promote_tmp_dir, ignore_errors=True)
+
+
+def save_search_candidate_to_library(
+    db_path: str, run_id: str, candidate_id: str, library_status: str = "draft",
+    filename_prefix: str = "searchlab",
+) -> dict:
+    """UPGRADE (search-lab-has-no-save-to-library): the missing
+    counterpart to promote_champion above -- that function re-validates a
+    Stage 3 survivor and writes a REPORT, but was never wired to actually
+    save the candidate's own strategy definition anywhere a person could
+    find and reuse it afterward (Search Lab's run/report files, unlike
+    Evolution Lab's, aren't the Strategy Library). Mirrors app.evolution.
+    engine.EvolutionRunner._maybe_save_to_library's exact shape (a manual
+    config as pretty-printed JSON, or python/pinescript/mql5 source as-is;
+    same "search-lab" tag convention as that function's "evolution-lab"
+    tag) so a candidate saved through either path is found and filtered
+    the same way in the Strategy Library / Dashboard afterward.
+
+    Works identically for a single-instrument or multi-instrument Search
+    Lab run -- both write through the SAME ResultsDB/stage3 record shape
+    (see app.search.results_db.ResultsDB.get_candidate and
+    _spec_from_record above), so this function needs no separate
+    multi-instrument variant; a multi-instrument run's per-instrument
+    `db_path` is passed exactly as a single-instrument run's is.
+
+    Raises ValueError for a candidate not found at stage3, or with no
+    stored config/source to save (same conditions promote_champion
+    already checks) -- and re-raises StrategyAlreadyExists (from
+    app.strategy.library) rather than silently overwriting an existing
+    file, since a candidate ID is only unique within its own run, not
+    globally across every run's saves.
+
+    Returns {"path": <saved file path>, "filename": ..., "strategy_type": ...}."""
+    with ResultsDB(db_path) as db:
+        record = db.get_candidate(candidate_id, run_id=run_id, stage="stage3")
+    if record is None:
+        raise ValueError(f"Candidate '{candidate_id}' not found in run '{run_id}' at stage3.")
+
+    spec = _spec_from_record(record)
+    source_type = spec.get("source_type", "manual")
+    family = record.get("family") or "strategy"
+    base_name = f"{filename_prefix}_{run_id[:10]}_{family}_{candidate_id[-6:]}"
+
+    if source_type == "manual":
+        config = spec.get("config")
+        if not config:
+            raise ValueError(f"Candidate '{candidate_id}' has no stored configuration to save.")
+        text = json.dumps(config, indent=2)
+        filename = f"{base_name}.json"
+        strategy_type = "manual"
+    else:
+        code_text = spec.get("code_text")
+        if not code_text:
+            raise ValueError(f"Candidate '{candidate_id}' has no stored source code to save.")
+        text = code_text
+        extension = spec.get("code_extension") or {"python": "py", "pinescript": "pine", "mql5": "mq5"}.get(source_type, "txt")
+        filename = f"{base_name}.{extension.lstrip('.')}"
+        strategy_type = source_type
+
+    saved_path = save_strategy_text(text, filename, strategy_type, overwrite=False)
+    set_strategy_status(strategy_type, filename, library_status)
+    save_strategy_metadata(
+        strategy_type, filename,
+        {
+            "tags": ["search-lab"],
+            "description": f"Search Lab run {run_id}, family '{family}', candidate {candidate_id}",
+        },
+        merge=True,
+    )
+    return {"path": saved_path, "filename": filename, "strategy_type": strategy_type}
