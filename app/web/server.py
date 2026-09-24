@@ -136,7 +136,9 @@ from app.reports.validation_reports import (
 from app.reports import run_history
 from app.reports import strategy_state
 from app.scoring.t58_scorecard import score_from_results
-from app.search.batch_runner import SearchCancelled, SearchStageConfig, promote_champion, run_search
+from app.search.batch_runner import (
+    SearchCancelled, SearchStageConfig, promote_champion, run_search, save_search_candidate_to_library,
+)
 from app.orchestration.loop_runner import (
     ForgeLoopConfig, SearchLoopConfig, SpeedRunLoopConfig, run_forge_loop, run_search_loop, run_speed_run_loop,
 )
@@ -1941,7 +1943,7 @@ def run_pipeline():
         mc_result = run_monte_carlo(bt_result.trades, rules, mc_cfg)
 
         try:
-            holdout_comparison = run_holdout_comparison(df, strategy, risk, holdout_frac=0.2)
+            holdout_comparison = run_holdout_comparison(df, strategy, risk, holdout_frac=0.2, adaptive_risk=adaptive_risk)
         except Exception:
             holdout_comparison = None
 
@@ -7921,6 +7923,42 @@ def search_job_promote(job_id):
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+@app.route("/search/job/<job_id>/save_to_library", methods=["POST"])
+def search_job_save_to_library(job_id):
+    """UPGRADE (search-lab-has-no-save-to-library): the counterpart to
+    search_job_promote above -- that route re-validates a candidate into
+    a report; this one actually saves its strategy definition into the
+    Strategy Library (Manual Builder / Strategy Library tab), which
+    promote alone never did. Works identically for a multi-instrument
+    Search Lab job -- see save_search_candidate_to_library's own
+    docstring for why no separate route is needed for that case."""
+    with _SEARCH_JOBS_LOCK:
+        job = _SEARCH_JOBS.get(job_id)
+    if job is None or not job.get("done") or job.get("summary") is None:
+        return jsonify({"ok": False, "error": "Job not found, not finished, or produced no results."}), 400
+
+    candidate_id = request.form.get("candidate_id")
+    if not candidate_id and request.is_json:
+        candidate_id = (request.get_json(silent=True) or {}).get("candidate_id")
+    if not candidate_id:
+        return jsonify({"ok": False, "error": "candidate_id is required."}), 400
+
+    try:
+        result = save_search_candidate_to_library(job["db_path"], job["summary"].run_id, candidate_id)
+        with _SEARCH_JOBS_LOCK:
+            job.setdefault("saved_to_library", {})[candidate_id] = result["filename"]
+        return jsonify({
+            "ok": True,
+            "filename": result["filename"],
+            "strategy_type": result["strategy_type"],
+            "message": f"Saved to the Strategy Library as {result['filename']}.",
+        })
+    except StrategyAlreadyExists:
+        return jsonify({"ok": False, "error": "A strategy with this name is already saved in the library."}), 409
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 @app.route("/search/job/<job_id>/auto_ensemble", methods=["POST"])
 def search_job_auto_ensemble(job_id):
     """UPGRADE (ensemble-builder UI button): app.ensemble.auto_builder.
@@ -8474,6 +8512,12 @@ def _run_multi_search_job(
                 "stage3_survivors": s.stage3_survivors,
                 "champion_candidate_id": s.champion_candidate_id,
                 "report_html": f"/search_reports_multi/{job_id}/{label.replace('/', '_')}/{report_paths['html'].name}",
+                # UPGRADE (search-lab-has-no-save-to-library): db_path/run_id
+                # so search_multi_job_save_to_library below can look this
+                # instrument's own champion candidate back up without
+                # trusting a client-supplied db path.
+                "db_path": s.db_path,
+                "run_id": s.run_id,
             }
 
         best = best_result_across_instruments(results)
@@ -8816,6 +8860,47 @@ def search_multi_instrument_job_status(job_id):
 @app.route("/search_reports_multi/<job_id>/<path:filename>")
 def serve_search_report_multi(job_id, filename):
     return send_from_directory(SEARCH_DIR / "multi_instrument" / job_id, filename)
+
+
+@app.route("/search/multi-instrument/job/<job_id>/save_to_library", methods=["POST"])
+def search_multi_instrument_job_save_to_library(job_id):
+    """UPGRADE (search-lab-has-no-save-to-library): multi-instrument
+    counterpart to search_job_save_to_library above. `label` selects
+    which instrument/timeframe's own db_path/run_id (stashed on
+    per_instrument[label] by _run_multi_search_job) to save from;
+    `candidate_id` defaults to that instrument's own champion so the
+    common "save the champion" click needs nothing else, but can name any
+    other stage3 candidate_id from that instrument's own leaderboard."""
+    with _MULTI_SEARCH_JOBS_LOCK:
+        job = _MULTI_SEARCH_JOBS.get(job_id)
+    if job is None or not job.get("done"):
+        return jsonify({"ok": False, "error": "Job not found or not finished."}), 400
+
+    label = request.form.get("label")
+    results = job.get("results") or {}
+    instrument_result = results.get(label) if label else None
+    if not instrument_result or instrument_result.get("error"):
+        return jsonify({"ok": False, "error": f"No results for instrument/timeframe '{label}'."}), 400
+
+    candidate_id = request.form.get("candidate_id") or instrument_result.get("champion_candidate_id")
+    if not candidate_id:
+        return jsonify({"ok": False, "error": "candidate_id is required (and this instrument has no champion to default to)."}), 400
+
+    try:
+        result = save_search_candidate_to_library(
+            instrument_result["db_path"], instrument_result["run_id"], candidate_id,
+            filename_prefix=f"searchlab_multi_{label.replace('/', '_')}",
+        )
+        return jsonify({
+            "ok": True,
+            "filename": result["filename"],
+            "strategy_type": result["strategy_type"],
+            "message": f"Saved to the Strategy Library as {result['filename']}.",
+        })
+    except StrategyAlreadyExists:
+        return jsonify({"ok": False, "error": "A strategy with this name is already saved in the library."}), 409
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 # ---------------------------------------------------------------------------
