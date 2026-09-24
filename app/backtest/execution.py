@@ -35,7 +35,7 @@ from dataclasses import dataclass, asdict
 import numpy as np
 import pandas as pd
 
-from app.backtest.adaptive_risk import AdaptiveRiskConfig, AdaptiveRiskState
+from app.backtest.adaptive_risk import AdaptiveRiskConfig, AdaptiveRiskState, volatility_percentile_series
 from app.backtest.risk import RiskConfig
 
 
@@ -161,6 +161,16 @@ def run_execution(
     _atr_for_mismatch_check = (
         pd.Series(_true_range).rolling(14, min_periods=1).mean().to_numpy()
     )
+    # Only computed when a rule actually needs it (see
+    # AdaptiveRiskConfig.uses_volatility_trigger) -- reuses the SAME ATR
+    # series above rather than computing a second one, so the volatility-
+    # percentile throttle and the pip/ATR-scale-mismatch check are always
+    # looking at identical numbers.
+    _vol_percentile_arr = None
+    if adaptive_risk is not None and adaptive_risk.uses_volatility_trigger():
+        _vol_percentile_arr = volatility_percentile_series(
+            _atr_for_mismatch_check, lookback_bars=adaptive_risk.volatility_lookback_bars,
+        )
 
     open_trade: dict | None = None
     fallback_stop_count = 0
@@ -669,8 +679,12 @@ def run_execution(
                 adaptive_multiplier = 1.0
                 adaptive_rules_active: list[str] = []
                 if adaptive_risk is not None and adaptive_risk.enabled:
-                    adaptive_multiplier = adaptive_state.active_multiplier(adaptive_risk)
-                    adaptive_rules_active = adaptive_state.active_rule_labels(adaptive_risk)
+                    current_vol_pct = None
+                    if _vol_percentile_arr is not None:
+                        _v = _vol_percentile_arr[i]
+                        current_vol_pct = float(_v) if not math.isnan(_v) else None
+                    adaptive_multiplier = adaptive_state.active_multiplier(adaptive_risk, current_vol_pct)
+                    adaptive_rules_active = adaptive_state.active_rule_labels(adaptive_risk, current_vol_pct)
                     size *= adaptive_multiplier
 
                 if not math.isfinite(size) or size <= 0:

@@ -8,6 +8,7 @@ distances via `pip_size`.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
@@ -22,6 +23,25 @@ class RiskConfig:
     spread_pips: float = 0.0
     pip_size: float = 0.0001            # price move that equals "1 pip" (e.g. 0.0001 for EURUSD)
     max_position_size: float | None = None  # cap on units, None = unlimited
+    # UPGRADE (Sep 2026 -- futures lot-size realism): every unit above is
+    # continuous/fractional by default (correct for FX/CFD-style
+    # instruments, which really can be sized to an arbitrary fraction of a
+    # lot). A real futures contract cannot -- ES/NQ/GC trade in whole
+    # contracts only. Before this field existed, position_size() below
+    # would happily size a trade to e.g. 37.5 "units", silently reporting
+    # backtest P&L more precise than any account could actually place live
+    # -- for a small account risking a modest % against a big-point-value
+    # contract (ES = $50/point, NQ = $20/point, GC = $100/point in this
+    # engine's "1 unit = $1 per pip_size move" terms), the gap between
+    # continuous and whole-contract sizing is often the difference between
+    # 0 and 1 contracts, not a rounding rumor. None (default) reproduces
+    # every backtest before this field existed, byte for byte, since it's
+    # the correct setting for FX/CFD-style instruments. Set this to the
+    # number of "units" that make up ONE real contract for a futures
+    # instrument (e.g. 50.0 for ES, 20.0 for NQ, 100.0 for GC, given
+    # pip_size=1.0 for all three -- see app.backtest.risk.suggest_pip_size)
+    # to have position_size() floor to the nearest whole contract instead.
+    contract_size: float | None = None
     daily_loss_limit_pct: float | None = None  # % of initial_balance; once a day's REALIZED
     # pnl breaches -this, no new entries are taken for the rest of that calendar day.
     # None = disabled (no circuit breaker; this was the only behavior before this field
@@ -120,7 +140,9 @@ class RiskConfig:
         return max(equity_for_sizing * (self.risk_value / 100.0), 0.0)
 
     def position_size(self, current_equity: float, stop_loss_pips: float) -> float:
-        """Units such that a full stop-out loses exactly `risk_amount`."""
+        """Units such that a full stop-out loses (at most, after whole-
+        contract rounding -- see contract_size's own docstring)
+        `risk_amount`."""
         if not stop_loss_pips or stop_loss_pips <= 0:
             stop_loss_pips = 10.0  # sane fallback so sizing never divides by zero
         stop_distance = stop_loss_pips * self.pip_size
@@ -128,6 +150,19 @@ class RiskConfig:
         units = risk_amt / stop_distance if stop_distance > 0 else 0.0
         if self.max_position_size is not None:
             units = min(units, self.max_position_size)
+        if self.contract_size:
+            # Floor, never round/ceil: rounding up could risk MORE than
+            # risk_amount at the stop, which defeats the point of sizing
+            # off a risk amount in the first place. A trade whose intended
+            # risk doesn't even reach one whole contract sizes to exactly
+            # 0 (skipped) rather than a fractional contract no real
+            # account could place -- e.g. a $50k account risking 0.25%
+            # ($125) with a 10-point ES stop wants 12.5 "units" here, but
+            # ES's contract_size=50 means that trade correctly can't be
+            # taken at all without either more risk per trade or a micro
+            # contract (MES, contract_size=5) instead.
+            lots = math.floor(units / self.contract_size + 1e-9)
+            units = max(lots, 0) * self.contract_size
         return max(units, 0.0)
 
     def max_trade_loss(self, equity_at_entry: float) -> float:

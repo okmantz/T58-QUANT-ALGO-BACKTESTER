@@ -31,12 +31,34 @@ stop-loss/take-profit placement, and they are evaluated only at the
 moment a new position is opened (this engine trades one position at a
 time -- see app.backtest.execution's module docstring -- so there is
 never a "resize an open position" case to handle).
+
+UPGRADE (Sep 2026) -- volatility-regime throttle: every trigger above is
+REACTIVE -- it only fires after a losing streak, a bad day, or a
+drawdown has already been realized. None of them could have prevented
+the specific failure mode seen across the ES/NQ/GC full-pipeline runs
+that motivated this change: a strategy sized off calm-market ATR getting
+its account BLOWN by a single extreme-volatility event (the March 2020
+COVID crash, in all three cases) before any losing-streak/drawdown
+trigger had a chance to react -- the damage was done within one or two
+bars of the regime shift starting. `volatility_percentile` (see
+AdaptiveRiskRule.trigger's own docstring below and
+volatility_percentile_series further down) is the one trigger in this
+module that looks at PRICE data instead of trade outcomes, specifically
+so a rule CAN cut size pre-emptively the moment realized volatility
+itself becomes unusual, independent of whether the account has lost
+anything yet.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-_VALID_TRIGGERS = {"consecutive_losses", "daily_loss_pct", "daily_profit_pct", "progress_to_target_pct", "drawdown_pct"}
+import numpy as np
+import pandas as pd
+
+_VALID_TRIGGERS = {
+    "consecutive_losses", "daily_loss_pct", "daily_profit_pct", "progress_to_target_pct", "drawdown_pct",
+    "volatility_percentile",
+}
 
 
 class AdaptiveRiskError(Exception):
@@ -58,6 +80,21 @@ class AdaptiveRiskRule:
     #                             own realized-equity PEAK (all-time, not reset daily) -- this is the trigger
     #                             that targets a prop firm's overall max-drawdown floor specifically, as
     #                             opposed to daily_loss_pct which only looks at today.
+    # "volatility_percentile"  -- threshold = a percentile 0-100. Fires when the CURRENT bar's realized
+    #                             volatility (ATR) sits at or above this percentile of its own trailing
+    #                             history (see volatility_percentile_series below) -- i.e. "today is more
+    #                             violent than {threshold}% of the recent past", regardless of what the
+    #                             account's own trade outcomes have been so far. This is the one trigger in
+    #                             this module that looks at PRICE data instead of realized P&L -- every
+    #                             other trigger only knows about closed trades, which is exactly why none of
+    #                             them can react BEFORE a volatility spike does damage (see this module's
+    #                             top docstring and the Sep 2026 update note below it): a strategy can be on
+    #                             a clean winning streak, at zero drawdown, right up to the bar a regime
+    #                             shift (a 2020-COVID-crash-style vol spike) blows through a stop sized off
+    #                             calm-market ATR. Requires the caller (app.backtest.execution.run_execution)
+    #                             to pass current_vol_percentile at each entry decision -- a rule using this
+    #                             trigger is simply never active (multiplier 1.0) if that isn't supplied,
+    #                             same fail-safe convention as progress_to_target_pct without a target amount.
     risk_multiplier: float   # position-size multiplier for new entries while this rule is active (e.g. 0.5 = half size)
     label: str = ""          # optional human-readable name, surfaced in reports/UI only
 
@@ -79,10 +116,19 @@ class AdaptiveRiskConfig:
     profit_target_amount: float | None = None   # required only by "progress_to_target_pct" rules; in account
     # currency (e.g. initial_balance * evaluation_profit_target_pct / 100 -- the caller computes this from
     # whatever PropRules/target the backtest is being run against, since this module has no PropRules dependency).
+    volatility_lookback_bars: int = 2000        # only consulted if any rule uses "volatility_percentile" --
+    # see volatility_percentile_series's docstring for what this controls and the trade-off in changing it.
 
     def __post_init__(self):
         if self.rules and not all(isinstance(r, AdaptiveRiskRule) for r in self.rules):
             self.rules = [r if isinstance(r, AdaptiveRiskRule) else AdaptiveRiskRule(**r) for r in self.rules]
+
+    def uses_volatility_trigger(self) -> bool:
+        """True if any rule needs a per-bar volatility percentile computed
+        and passed in -- lets app.backtest.execution.run_execution skip
+        that computation entirely (see volatility_percentile_series) for
+        the common case where no rule uses it."""
+        return self.enabled and any(r.trigger == "volatility_percentile" for r in self.rules)
 
 
 @dataclass
@@ -127,7 +173,10 @@ class AdaptiveRiskState:
         current_balance = self.initial_balance + self.cumulative_realized_pnl
         return max(0.0, (peak - current_balance) / self.initial_balance * 100.0)
 
-    def _rule_active(self, rule: AdaptiveRiskRule, profit_target_amount: float | None) -> bool:
+    def _rule_active(
+        self, rule: AdaptiveRiskRule, profit_target_amount: float | None,
+        current_vol_percentile: float | None = None,
+    ) -> bool:
         if rule.trigger == "consecutive_losses":
             return self.consecutive_losses >= rule.threshold
         if rule.trigger == "daily_loss_pct":
@@ -143,30 +192,78 @@ class AdaptiveRiskState:
             return progress_pct >= rule.threshold
         if rule.trigger == "drawdown_pct":
             return self.current_drawdown_pct() >= rule.threshold
+        if rule.trigger == "volatility_percentile":
+            if current_vol_percentile is None:
+                return False
+            return current_vol_percentile >= rule.threshold
         return False
 
-    def active_multiplier(self, config: AdaptiveRiskConfig) -> float:
+    def active_multiplier(self, config: AdaptiveRiskConfig, current_vol_percentile: float | None = None) -> float:
         """The product of every currently-triggered rule's multiplier --
-        1.0 (no de-risking) if this config is disabled or no rule fires."""
+        1.0 (no de-risking) if this config is disabled or no rule fires.
+        current_vol_percentile: this bar's ATR percentile-rank (0-100)
+        against its own trailing history -- see volatility_percentile_
+        series below. Only consulted by "volatility_percentile" rules;
+        every other trigger ignores it."""
         if not config.enabled or not config.rules:
             return 1.0
         mult = 1.0
         for rule in config.rules:
-            if self._rule_active(rule, config.profit_target_amount):
+            if self._rule_active(rule, config.profit_target_amount, current_vol_percentile):
                 mult *= rule.risk_multiplier
         return mult
 
-    def active_rule_labels(self, config: AdaptiveRiskConfig) -> list[str]:
+    def active_rule_labels(self, config: AdaptiveRiskConfig, current_vol_percentile: float | None = None) -> list[str]:
         """Which rules are currently firing -- used to annotate a trade
         with WHY its size was scaled, for report transparency."""
         if not config.enabled:
             return []
-        return [rule.label for rule in config.rules if self._rule_active(rule, config.profit_target_amount)]
+        return [
+            rule.label for rule in config.rules
+            if self._rule_active(rule, config.profit_target_amount, current_vol_percentile)
+        ]
+
+
+def volatility_percentile_series(atr_values, lookback_bars: int = 2000) -> np.ndarray:
+    """For each bar, the percentile rank (0-100) of that bar's ATR against
+    the trailing `lookback_bars` bars of ATR (itself included) -- e.g. 97
+    means "this bar's realized volatility is higher than 97% of the last
+    `lookback_bars` bars". Causal/no-lookahead: bar i's percentile only
+    ever looks at bars <= i, exactly like the ATR values it's ranking.
+
+    lookback_bars is deliberately a BAR count, not a time span, since this
+    module has no timeframe awareness of its own -- the caller (Full
+    Pipeline / Quick Optimize / a hand-built RiskConfig run) picks a value
+    appropriate to the execution timeframe actually in use. The default
+    (2000 bars) is a deliberately long reference window: a short one
+    re-normalizes to a new volatility regime within days, which would
+    have already treated the meat of the March 2020 crash as "normal" by
+    the time it mattered -- a long window keeps the pre-crash calm period
+    dominant in the comparison, so a genuine regime-shift spike still
+    reads as an extreme percentile instead of the new normal. This is a
+    real trade-off, not a free parameter: too long and the throttle is
+    slow to ever accept a durably higher-volatility regime as normal
+    afterward; too short and it fails to catch the exact spike it exists
+    for. Tune per instrument/timeframe if the default doesn't fit.
+
+    Returns a plain numpy float array, same length as `atr_values`, NaN
+    for any leading bar with fewer than 2 ATR observations available
+    (percentile rank is undefined with fewer than 2 points) -- callers
+    should treat a NaN here as "no rule fires" (see
+    AdaptiveRiskState._rule_active's current_vol_percentile is None
+    handling), not as 0.
+    """
+    atr_series = pd.Series(np.asarray(atr_values, dtype=float))
+    window = max(int(lookback_bars), 2)
+    pct = atr_series.rolling(window, min_periods=2).rank(pct=True) * 100.0
+    return pct.to_numpy()
 
 def build_limit_aware_preset(
     prop_rules,
     daily_profit_lock_pct: float | None = 80.0,
     account_size: float | None = None,
+    volatility_throttle_enabled: bool = True,
+    volatility_lookback_bars: int = 2000,
 ) -> AdaptiveRiskConfig:
     """One-click "risk throttling that targets THIS metric" preset,
     built directly from a strategy's own PropRules instead of asking a
@@ -197,6 +294,19 @@ def build_limit_aware_preset(
     profit_target_amount used by any progress_to_target_pct rule a
     caller adds on top of this preset -- not used by this preset itself,
     exposed only so callers can share one account size across both.
+
+    volatility_throttle_enabled: adds two graduated "volatility_percentile"
+    rules (see AdaptiveRiskRule.trigger's own docstring) on top of the
+    reactive rules above -- half size once realized ATR is at/above the
+    85th percentile of its own trailing history, quarter size at/above
+    the 97th. True by default: this is the fix for the specific failure
+    mode (a calm-market-sized stop getting blown through by a sudden
+    volatility spike, before any losing-streak/drawdown trigger could
+    react) that motivated adding this trigger at all -- see this
+    module's top docstring. Set False to reproduce this preset's exact
+    prior behavior. volatility_lookback_bars is passed straight through
+    to volatility_percentile_series -- see that function's docstring for
+    the reasoning behind its default and the trade-off in changing it.
     """
     rules = [
         # Daily-loss floor: prop_rules.daily_loss_limit_pct is the hard
@@ -223,6 +333,15 @@ def build_limit_aware_preset(
             risk_multiplier=0.5, label="Quartered: 75% of the way to the overall max-drawdown limit",
         ),
     ]
+    if volatility_throttle_enabled:
+        rules.append(AdaptiveRiskRule(
+            trigger="volatility_percentile", threshold=85.0, risk_multiplier=0.5,
+            label="Halved: realized volatility (ATR) at/above its own 85th trailing percentile",
+        ))
+        rules.append(AdaptiveRiskRule(
+            trigger="volatility_percentile", threshold=97.0, risk_multiplier=0.25,
+            label="Quartered: realized volatility (ATR) at/above its own 97th trailing percentile",
+        ))
     if daily_profit_lock_pct is not None:
         lock_threshold_pct_of_balance = prop_rules.daily_loss_limit_pct * (daily_profit_lock_pct / 100.0)
         rules.append(AdaptiveRiskRule(
@@ -230,4 +349,4 @@ def build_limit_aware_preset(
             risk_multiplier=0.0,
             label=f"Locked for the day: banked profit >= {daily_profit_lock_pct:g}% of the daily-loss limit's size",
         ))
-    return AdaptiveRiskConfig(enabled=True, rules=rules)
+    return AdaptiveRiskConfig(enabled=True, rules=rules, volatility_lookback_bars=volatility_lookback_bars)
