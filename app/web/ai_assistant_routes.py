@@ -17,13 +17,14 @@ required) as a fallback; forex/futures simply show "no data" with a clear
 reason rather than a stack trace, exactly like the Live Market tab does.
 
 Macro bias caveat (surfaced honestly in the API's `macro_note` field and
-worth knowing before trusting the rankings): this app has no fundamentals/
-rates/positioning data source, so macro_bias_by_symbol is a plain
-technical PROXY (daily EMA50 vs EMA200 trend), not a true fundamental
-read. Ask T58 AI chat directly for a fundamental macro take -- the model
-can reason about that from its own knowledge/training even though the
-deterministic engine can't compute it -- and treat the scanner's status
-column as technical-only until you do.
+worth knowing before trusting the rankings): each ranking's technical
+bias/status is still a plain PROXY (daily EMA50 vs EMA200 trend), not a
+true fundamental read -- that scoring hasn't changed. Since Sep 2026 each
+ranking also carries a `fundamental_bias` field built from recent FRED/
+ForexFactory data surprises (see app.ai.market_intelligence's docstring
+and app.ai.news_forexfactory.recent_data_surprise_bias_by_currency) --
+Owen AI chat can reason about the two agreeing or conflicting; ask it
+directly for that read.
 """
 from __future__ import annotations
 
@@ -131,8 +132,10 @@ def api_rankings():
         "rankings": [market_scanner.ranking_to_dict(r) for r in rankings],
         "errors": errors,
         "macro_note": (
-            "Bias shown is a technical proxy (daily 50/200 EMA trend), not fundamental macro analysis -- "
-            "ask the chat for a fundamental read."
+            "Technical bias (used for each symbol's score) is a proxy: daily 50/200 EMA trend. "
+            "\"fundamental_bias\" alongside it comes from recent FRED/ForexFactory data surprises "
+            "(actual vs. forecast on released high/medium-impact releases) -- ask the chat how the "
+            "two agree or conflict for a fuller read."
         ),
     })
 

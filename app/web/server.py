@@ -415,7 +415,8 @@ def activate_submit():
     next_path = request.form.get("next") or "/dashboard"
     email = request.form.get("email", "")
     license_key = request.form.get("license_key", "")
-    ok, message = license_client.activate(email, license_key)
+    remember = request.form.get("remember") == "1"
+    ok, message = license_client.activate(email, license_key, remember=remember)
     if ok:
         _license_ok_cached = True
         return redirect(next_path)
@@ -1113,9 +1114,11 @@ def dashboard():
     current = strategy_state.get_current_strategy()
     checklist = None
     score = None
+    current_metrics = None
     if current:
         checklist = strategy_state.get_checklist(current["strategy_name"], current["instrument"])
         score = strategy_state.robustness_score(current["strategy_name"], current["instrument"])
+        current_metrics = run_history.latest_run_for(current["strategy_name"], current["instrument"])
     dashboard_stats = run_history.dashboard_data()
     # Fix up report_html links before they reach the template -- see
     # _dashboard_report_url's docstring for why the raw stored value
@@ -1143,6 +1146,7 @@ def dashboard():
         data=dashboard_stats,
         dataset_groups=list_datasets_by_instrument(),
         current_strategy=current,
+        current_metrics=current_metrics,
         checklist=checklist,
         robustness=score,
         validation_labels=strategy_state.VALIDATION_LABELS,
