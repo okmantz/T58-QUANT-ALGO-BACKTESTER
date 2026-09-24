@@ -34,6 +34,7 @@ import app.evolution.checkpoint as evo_checkpoint
 from app.backtest.adaptive_risk import AdaptiveRiskConfig, AdaptiveRiskError, AdaptiveRiskRule
 from app.backtest.engine import run_backtest, run_holdout_comparison
 from app.backtest.risk import RiskConfig, suggest_pip_size, with_prop_safety_defaults
+from app.data.instrument_specs import known_instrument_symbols, get_instrument_spec
 from app.backtest.statistics import net_profit_reset_note
 import app.ai.ollama_settings as ollama_settings_module
 from app.ai.ollama_settings import OllamaSettings
@@ -1256,6 +1257,20 @@ class RunContextPanel:
         self.r_slippage = LabeledEntry(section, "Slippage (pips)", 0.5)
         self.r_spread = LabeledEntry(section, "Spread (pips)", 1.0)
         self.r_pip_size = LabeledEntry(section, "Pip size (e.g. 0.0001 FX)", 0.0001)
+        # UPGRADE (instrument-metadata-had-no-ui): same wiring as the main
+        # Step 04 Risk & Execution tab's matching dropdown (see
+        # MainWindow._apply_instrument_spec's docstring) -- this run's own
+        # independent copy, since RunContextPanel's whole point is that a
+        # tab's settings never leak into or out of another tab's.
+        self.r_instrument = LabeledCombo(
+            section, "Or pick a known instrument (auto-fills pip size + $/point)",
+            ["(none -- set manually)"] + known_instrument_symbols(),
+            default="(none -- set manually)",
+        )
+        self.r_instrument.combo.bind("<<ComboboxSelected>>", lambda _e: self._apply_instrument_spec())
+        self.r_contract_size = LabeledEntry(
+            section, "Contract $/point (blank = not lot-rounded; auto-filled by instrument pick above)", "",
+        )
 
         pip_row = Frame(section, bg=PANEL)
         pip_row.pack(anchor="w", padx=18, pady=(0, 10))
@@ -1558,6 +1573,7 @@ class RunContextPanel:
         )
 
     def build_risk_config(self) -> RiskConfig:
+        contract_size_str = self.r_contract_size.get_str().strip()
         return RiskConfig(
             initial_balance=self.r_initial_balance.get_float(self._default_account_size),
             risk_mode=self.r_risk_mode.get_str().strip() or "percent",
@@ -1567,6 +1583,20 @@ class RunContextPanel:
             slippage_pips=self.r_slippage.get_float(0.5),
             spread_pips=self.r_spread.get_float(1.0),
             pip_size=self.r_pip_size.get_float(0.0001),
+            contract_size=float(contract_size_str) if contract_size_str else None,
+        )
+
+    def _apply_instrument_spec(self):
+        symbol = self.r_instrument.var.get()
+        spec = get_instrument_spec(symbol)
+        if spec is None:
+            return
+        self.r_pip_size.var.set(str(spec.pip_size))
+        self.r_contract_size.var.set(str(spec.contract_size))
+        self.pip_detect_status.config(
+            text=f"Applied {spec.symbol} ({spec.description}, {spec.exchange}): "
+                 f"pip_size={spec.pip_size}, ${spec.contract_size}/point per contract.",
+            fg=GREEN,
         )
 
     def _detect_pip_size_from_data(self):
@@ -7739,6 +7769,24 @@ class MainWindow:
         self.r_pip_size = LabeledEntry(
             section, "Pip size (e.g. 0.0001 FX)", 0.0001
         )
+        # UPGRADE (instrument-metadata-had-no-ui): app.data.instrument_specs
+        # was built to remove exactly the "I had to hand-derive and
+        # hardcode MES=$5, MNQ=$2, MGC=$10 myself" tedium (see that
+        # module's own docstring) but was never actually wired into any
+        # UI anywhere -- this dropdown is that wiring. Picking a known
+        # instrument fills BOTH pip_size and the new contract $/point
+        # field below from KNOWN_INSTRUMENTS; leaving it on "(none)"
+        # changes nothing (both fields keep working exactly as before,
+        # entered by hand).
+        self.r_instrument = LabeledCombo(
+            section, "Or pick a known instrument (auto-fills pip size + $/point)",
+            ["(none -- set manually)"] + known_instrument_symbols(),
+            default="(none -- set manually)",
+        )
+        self.r_instrument.combo.bind("<<ComboboxSelected>>", lambda _e: self._apply_instrument_spec())
+        self.r_contract_size = LabeledEntry(
+            section, "Contract $/point (blank = not lot-rounded; auto-filled by instrument pick above)", "",
+        )
         pip_detect_row = Frame(section, bg=PANEL)
         pip_detect_row.pack(anchor="w", padx=18, pady=(0, 8))
         self._button(
@@ -7819,7 +7867,26 @@ class MainWindow:
             profit_target_amount=balance * target_pct / 100.0,
         )
 
+    def _apply_instrument_spec(self):
+        """Shared by both the main Step 04 Risk & Execution tab and every
+        RunContextPanel-embedded tab's own risk section (see that class's
+        matching method) -- looks up the picked symbol in
+        app.data.instrument_specs.KNOWN_INSTRUMENTS and fills pip_size +
+        the new contract $/point field from it."""
+        symbol = self.r_instrument.var.get()
+        spec = get_instrument_spec(symbol)
+        if spec is None:
+            return
+        self.r_pip_size.var.set(str(spec.pip_size))
+        self.r_contract_size.var.set(str(spec.contract_size))
+        self.pip_detect_status.config(
+            text=f"Applied {spec.symbol} ({spec.description}, {spec.exchange}): "
+                 f"pip_size={spec.pip_size}, ${spec.contract_size}/point per contract.",
+            fg=GREEN,
+        )
+
     def _build_risk_config(self) -> RiskConfig:
+        contract_size_str = self.r_contract_size.get_str().strip()
         return RiskConfig(
             initial_balance=self.r_initial_balance.get_float(100000),
             risk_mode=self.r_risk_mode.get_str().strip() or "percent",
@@ -7829,6 +7896,7 @@ class MainWindow:
             slippage_pips=self.r_slippage.get_float(0.5),
             spread_pips=self.r_spread.get_float(1.0),
             pip_size=self.r_pip_size.get_float(0.0001),
+            contract_size=float(contract_size_str) if contract_size_str else None,
         )
 
     def _detect_pip_size_from_data(self, status_label=None):
