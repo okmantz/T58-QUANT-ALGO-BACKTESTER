@@ -96,7 +96,7 @@ from app.backtest.risk import (
     instrument_scale_mismatch_message,
     with_prop_safety_defaults,
 )
-from app.monte_carlo.engine import MonteCarloConfig, MonteCarloResult, run_monte_carlo
+from app.monte_carlo.engine import MonteCarloConfig, MonteCarloResult, default_method_for_adaptive_risk, run_monte_carlo
 from app.optimize.code_parameter_space import patched_source_for_strategy
 from app.optimize.parameter_space import RefinementError
 from app.optimize.refinement import RefinementConfig, preflight_signal_check
@@ -441,7 +441,7 @@ def run_quick_optimize(
     simulate_account(baseline_pnls, baseline_dates, prop_rules, reset_on_breach=cfg.reset_on_breach)  # surfaces any account-sim issues early
     baseline_mc = run_monte_carlo(
         baseline_bt.trades, prop_rules,
-        MonteCarloConfig(n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
+        MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
     )
     log(
         f"Baseline: {len(baseline_bt.trades)} trades, net ${baseline_bt.statistics.net_profit:,.2f}, "
@@ -465,7 +465,7 @@ def run_quick_optimize(
     )
     ga_result = run_walkforward_aware_refinement(
         dev_df, strategy, risk, prop_rules,
-        MonteCarloConfig(n_simulations=cfg.ga_search_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
+        MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=cfg.ga_search_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
         refinement_config=refine_cfg,
         n_folds=cfg.n_folds, window_mode=cfg.window_mode,
         progress_cb=lambda m: log(f"  {m}"),
@@ -534,7 +534,7 @@ def run_quick_optimize(
         log(f"  !!! {invalid_condition_warning}")
     final_mc = run_monte_carlo(
         final_bt.trades, prop_rules,
-        MonteCarloConfig(n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
+        MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
         # MC-004: these trades came straight out of this run's own GA
         # search over this same data -- see run_monte_carlo's docstring.
         selection_bias_caveat=(ga_result.best.oos_trade_count > 0),
@@ -581,7 +581,12 @@ def run_quick_optimize(
     icir_gate_skip_reason = None
     significance_note = None
     try:
-        n_candidates_tested = cfg.ga_population * (cfg.ga_generations + 1) if mutated_by_ga else 1
+        # FIX (Bonferroni-vs-actual-evaluations): use the GA's own
+        # total_evaluations (how many genomes it actually backtested)
+        # rather than the CONFIGURED population*(generations+1) budget --
+        # see app.orchestration.full_pipeline's identical fix for why
+        # these two can now differ (auto-shrink-on-low-trades, AI-assist).
+        n_candidates_tested = max(1, ga_result.total_evaluations) if mutated_by_ga else 1
         icir_gate = run_icir_gate_from_backtest(
             dev_df, final_strategy, risk, n_tests=n_candidates_tested, holdout_frac=cfg.holdout_frac,
         )
@@ -624,7 +629,7 @@ def run_quick_optimize(
             if holdout_trades > 0:
                 holdout_mc = run_monte_carlo(
                     holdout_bt.trades, prop_rules,
-                    MonteCarloConfig(n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
+                    MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
                     selection_bias_caveat=False,  # this slice was never used to select/score the winner
                 )
                 holdout_eval_pass_probability = holdout_mc.evaluation_pass_probability

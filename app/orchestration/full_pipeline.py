@@ -100,9 +100,10 @@ from app.backtest.risk import (
     account_size_mismatch_message,
     has_impossible_condition,
     has_instrument_scale_mismatch,
+    position_sizing_deviation_message,
     with_prop_safety_defaults,
 )
-from app.monte_carlo.engine import MonteCarloConfig, MonteCarloResult, run_monte_carlo
+from app.monte_carlo.engine import MonteCarloConfig, MonteCarloResult, default_method_for_adaptive_risk, run_monte_carlo
 from app.optimize.code_parameter_space import patched_source_for_strategy
 from app.optimize.parameter_space import RefinementError
 from app.optimize.refinement import RefinementConfig, preflight_signal_check
@@ -451,6 +452,19 @@ def _make_verdict(
             "a primary generalization test already ran."
         )
 
+    # UPGRADE (buried-position-sizing-deviation): informational, not
+    # gated/scored -- same treatment as the ICIR gate note just above --
+    # but now actually said in the verdict, not just left as a number in
+    # a report table nothing points at. See app.backtest.risk.position_
+    # sizing_deviation_message; this is also already in `reasons`'
+    # sibling BacktestResult.warnings (final_bt.warnings) whenever it
+    # fired, so this line specifically calls it out as relevant to THIS
+    # verdict rather than requiring a person to notice it buried there.
+    if statistics is not None:
+        sizing_note = position_sizing_deviation_message(statistics.to_dict())
+        if sizing_note:
+            reasons.append(f"Supporting diagnostic: {sizing_note}")
+
     reasons.append(scorecard.render_line())
     for name, comp in scorecard.components.items():
         if comp["value"] is not None:
@@ -657,7 +671,7 @@ def run_full_pipeline(
     baseline_single_run = simulate_account(pnls, dates, prop_rules, reset_on_breach=cfg.reset_on_breach)
     baseline_mc = run_monte_carlo(
         baseline_bt.trades, prop_rules,
-        MonteCarloConfig(n_simulations=cfg.baseline_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
+        MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=cfg.baseline_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
     )
     log(
         format_run_summary_line(
@@ -822,10 +836,16 @@ def run_full_pipeline(
                 search_monte_carlo_sims=cfg.ga_search_mc_sims,
                 random_seed=cfg.random_seed,
                 optimizer_mode=cfg.optimizer_mode,
+                # UPGRADE (GA-searches-what-it's-graded-on): the search
+                # itself is now penalized for elevated Monte Carlo risk of
+                # ruin using the SAME cap _make_verdict hard-vetoes on
+                # below, instead of only finding out after Step 2 already
+                # picked a "winner" -- see RefinementConfig.risk_of_ruin_cap.
+                risk_of_ruin_cap=cfg.risk_of_ruin_cap,
             )
             ga_result = run_walkforward_aware_refinement(
                 dev_df, strategy, risk, prop_rules,
-                MonteCarloConfig(n_simulations=cfg.ga_search_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
+                MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=cfg.ga_search_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
                 refinement_config=refine_cfg,
                 n_folds=cfg.n_folds, window_mode=cfg.window_mode,
                 progress_cb=lambda m: log(f"  {m}"),
@@ -929,7 +949,7 @@ def run_full_pipeline(
         final_single_run = simulate_account(pnls, dates, prop_rules, reset_on_breach=cfg.reset_on_breach)
         final_mc = run_monte_carlo(
             final_bt.trades, prop_rules,
-            MonteCarloConfig(n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
+            MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
             # MC-004: these trades came from Step 2's GA search over this
             # same dev_df when refinement actually ran -- see
             # run_monte_carlo's docstring. Steps 4-6 below provide the
@@ -1023,7 +1043,18 @@ def run_full_pipeline(
         try:
             n_candidates_tested = 1  # the baseline itself always counts as one candidate tried
             if refinement_ran and ga_result is not None:
-                n_candidates_tested = cfg.ga_population * (cfg.ga_generations + 1)
+                # FIX (Bonferroni-vs-actual-evaluations): ga_result.total_
+                # evaluations is how many genomes the GA actually
+                # backtested -- population*(generations+1) is only the
+                # CONFIGURED budget, which now can be smaller than that
+                # whenever auto-shrink-on-low-trades reduced generations
+                # (see RefinementConfig.auto_shrink_on_low_trades) or
+                # larger whenever AI-assist/parallel evaluation added
+                # extra candidates. Bonferroni-correcting for the budget
+                # instead of what actually ran either under- or over-
+                # states how many independent trials this significance
+                # gate needs to account for.
+                n_candidates_tested = max(1, ga_result.total_evaluations)
             icir_gate = run_icir_gate_from_backtest(
                 df, final_strategy, risk, n_tests=n_candidates_tested, holdout_frac=cfg.holdout_frac,
             )
