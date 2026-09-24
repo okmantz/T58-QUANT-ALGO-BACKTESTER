@@ -57,6 +57,36 @@ class MonteCarloConfig:
     reset_on_breach: bool = False
 
 
+def default_method_for_adaptive_risk(adaptive_risk) -> str:
+    """UPGRADE (regime-aware-throttle-vs-iid-resampling mismatch): the
+    i.i.d. `bootstrap` method (this engine's own long-standing default --
+    see MonteCarloConfig.method) explicitly discards any real streakiness/
+    regime-clustering a strategy's trade sequence has (see run_monte_
+    carlo's methodology_note below). That's a real mismatch once a
+    regime-aware adaptive-risk throttle is in play (app.backtest.
+    adaptive_risk's volatility_percentile trigger): the throttle's whole
+    value proposition is that bad conditions cluster in TIME, but an i.i.d.
+    resample scatters every trade's P&L independently across simulated
+    paths, so the very clustering the throttle is built to react to never
+    shows up in the ruin estimate it's supposed to be protecting.
+    `block_bootstrap` preserves local runs of consecutive trades instead,
+    which is the whole point of it existing as an option already.
+
+    Returns "block_bootstrap" whenever `adaptive_risk` is a real, enabled
+    AdaptiveRiskConfig (checked via getattr so this also accepts a plain
+    None or any object without an `enabled` attribute), else "bootstrap"
+    -- this engine's unchanged default. Callers that build a
+    MonteCarloConfig alongside an adaptive_risk they're about to pass to
+    the SAME backtest should use this instead of hardcoding "bootstrap",
+    e.g.:
+        MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), ...)
+    A caller that wants the old i.i.d. behavior regardless can still pass
+    method="bootstrap" explicitly."""
+    if adaptive_risk is not None and getattr(adaptive_risk, "enabled", False):
+        return "block_bootstrap"
+    return "bootstrap"
+
+
 @dataclass
 class MonteCarloResult:
     n_simulations: int
