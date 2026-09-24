@@ -111,6 +111,47 @@
 </div>
 {% endif %}
 
+{% if exclusion_error %}
+<div class="error">Couldn't apply the recommended exclusions: {{ exclusion_error }}</div>
+{% endif %}
+
+{% if result_after %}
+<div class="card">
+  <h2>After excluding the recommended regimes</h2>
+  <p class="help">Same strategy, same data, but every new entry is skipped while the strategy is in one of the
+    regimes flagged above -- via <code>filters.regime_exclude</code> (manual) / <code>EXCLUDE_REGIMES</code>
+    (Python) / a <code>T58_EXCLUDE_REGIMES=</code> directive (PineScript/MQL5). Compare against the table above.</p>
+  <table class="matrix">
+    <tr><th>Regime</th><th>Trades</th><th>Win Rate</th><th>PF</th><th>Return</th><th>DD</th><th>Verdict</th></tr>
+    {% for c in result_after.cells %}
+    <tr class="{{ 'disable' if c.recommend_disable else ('keep' if c.n_trades >= 15 else 'unproven') }}">
+      <td>{{ c.label }}</td>
+      <td>{{ c.n_trades }}</td>
+      <td>{{ '%.0f' % c.win_rate }}%</td>
+      <td>{{ '%.2f' % c.profit_factor }}</td>
+      <td>{{ '%+.1f' % c.return_pct }}%</td>
+      <td>{{ '%.1f' % c.max_drawdown_pct }}%</td>
+      <td class="verdict">{{ 'DISABLE' if c.recommend_disable else ('keep' if c.n_trades >= 15 else 'unproven') }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% if result_after.disable_regimes %}
+  <div class="notice" style="margin-top:12px;">
+    Still flagged even after exclusion: {{ result_after.disable_regimes | map(attribute='label') | join(', ') }}
+    -- consider a second pass, or that this strategy's edge doesn't hold outside these regimes at all.
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Updated strategy ({{ updated_strategy_mode }})</h2>
+  <p class="help">The regime exclusion is baked into this copy. Copy it into the strategy editor above (and re-run,
+    or check "save to library" once a save option is on the page you brought it to) to keep it.</p>
+  <textarea id="updated-strategy-text" readonly style="min-height:180px;">{{ updated_strategy_text }}</textarea>
+  <button type="button" onclick="t58UseUpdatedStrategy()" style="margin-top:6px;background:none;border:1px solid var(--border-light);color:var(--teal);padding:9px 12px;border-radius:8px;font-size:13px;width:100%;">Load into strategy editor above</button>
+</div>
+{% endif %}
+
 {% if alpaca_notice %}
 <div class="{{ 'error' if alpaca_notice_kind == 'error' else ('warning' if alpaca_notice_kind == 'warning' else 'notice') }}">{{ alpaca_notice }}</div>
 {% endif %}
@@ -190,6 +231,15 @@
     </div>
     <button type="button" onclick="t58DetectPipSize({statusId:'rm_pip_detect_status', pipFieldId:'rm_pip_size_field', fileSelector:'input[name=csv_file]', datasetSelector:'select[name=existing_dataset]'})" style="margin-top:6px;background:none;border:1px solid var(--border-light);color:var(--teal);padding:9px 12px;border-radius:8px;font-size:13px;width:100%;">Detect pip size from data</button>
     <p id="rm_pip_detect_status" style="font-size:12px;margin-top:6px;"></p>
+    <div class="row" style="margin-top:8px;">
+      <div><label>Or pick a known instrument (auto-fills pip size + $/point)</label>
+        <select id="rm_instrument_select" onchange="t58ApplyInstrumentSpec({selectEl:this, pipFieldId:'rm_pip_size_field', contractFieldId:'rm_contract_size_field', statusId:'rm_pip_detect_status'})">
+          <option value="">(none -- set manually)</option>
+        </select>
+      </div>
+      <div><label>Contract $/point (blank = not lot-rounded)</label><input type="number" step="0.01" name="contract_size" id="rm_contract_size_field" value=""></div>
+    </div>
+    <script>document.addEventListener('DOMContentLoaded', function () { t58PopulateInstrumentPicker('rm_instrument_select'); });</script>
   </div>
 
   <div class="card">
@@ -213,6 +263,10 @@
         </select>
       </div>
     </div>
+    <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;margin-top:12px;">
+      <input type="checkbox" name="apply_recommended_exclusions">
+      Also apply the recommended-OFF regimes and show a before/after comparison, plus an updated strategy with the exclusion baked in
+    </label>
   </div>
 
   <button class="submit-btn" type="submit">Run Regime Survival Matrix</button>
@@ -266,6 +320,23 @@
     reader.onload = () => { document.getElementById('strategy_code').value = reader.result; };
     reader.readAsText(file);
   });
+
+  // UPGRADE (regime-exclusion-primitive-had-no-ui): pulls the
+  // just-computed "updated strategy" (baseline + the recommended
+  // regime exclusion baked in -- see regime_matrix_run's
+  // apply_recommended_exclusions handling) back into the strategy
+  // editor above, switching to the right tab so the paste-text
+  // precedence in _build_strategy actually picks it up on the next
+  // submit, rather than leaving the person to copy/paste it by hand.
+  function t58UseUpdatedStrategy() {
+    const mode = {{ updated_strategy_mode | default('') | tojson }};
+    const text = document.getElementById('updated-strategy-text').value;
+    if (!mode || !text) return;
+    const targetTab = document.querySelector(`#strategy-tabs button[data-mode="${mode}"]`);
+    if (targetTab) targetTab.click();
+    document.getElementById('strategy_code').value = text;
+    document.getElementById('strategy_code').scrollIntoView({behavior: 'smooth', block: 'center'});
+  }
 
   tabs.forEach(btn => btn.addEventListener('click', () => {
     tabs.forEach(b => b.classList.remove('active'));

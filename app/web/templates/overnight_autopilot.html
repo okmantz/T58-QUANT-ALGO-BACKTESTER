@@ -87,6 +87,15 @@
     </div>
     <button type="button" onclick="t58DetectPipSize({statusId:'oa_pip_detect_status', pipFieldId:'oa_pip_size_field', fileSelector:'input[name=csv_file]', datasetSelector:'select[name=existing_dataset]'})" style="margin-top:6px;background:none;border:1px solid var(--border-light);color:var(--teal);padding:9px 12px;border-radius:8px;font-size:13px;width:100%;">Detect pip size from data</button>
     <p id="oa_pip_detect_status" style="font-size:12px;margin-top:6px;"></p>
+    <div class="row" style="margin-top:8px;">
+      <div><label>Or pick a known instrument (auto-fills pip size + $/point)</label>
+        <select id="oa_instrument_select" onchange="t58ApplyInstrumentSpec({selectEl:this, pipFieldId:'oa_pip_size_field', contractFieldId:'oa_contract_size_field', statusId:'oa_pip_detect_status'})">
+          <option value="">(none -- set manually)</option>
+        </select>
+      </div>
+      <div><label>Contract $/point (blank = not lot-rounded)</label><input type="number" step="0.01" name="contract_size" id="oa_contract_size_field" value=""></div>
+    </div>
+    <script>document.addEventListener('DOMContentLoaded', function () { t58PopulateInstrumentPicker('oa_instrument_select'); });</script>
     <div class="row">
       <div><label>Eval profit target (%)</label><input type="number" step="0.1" name="profit_target" value="8"></div>
       <div><label>Daily loss limit (%)</label><input type="number" step="0.1" name="daily_loss" value="5"></div>

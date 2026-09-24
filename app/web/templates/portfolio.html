@@ -140,8 +140,17 @@
       <div><label>Risk mode</label>
         <select name="risk_mode"><option value="percent">% of balance</option><option value="fixed">Fixed lot</option></select>
       </div>
-      <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" value="0.0001"></div>
+      <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" id="pf_pip_size_field" value="0.0001"></div>
     </div>
+    <div class="row" style="margin-top:8px;">
+      <div><label>Or pick a known instrument (auto-fills pip size + $/point)</label>
+        <select id="pf_instrument_select" onchange="t58ApplyInstrumentSpec({selectEl:this, pipFieldId:'pf_pip_size_field', contractFieldId:'pf_contract_size_field'})">
+          <option value="">(none -- set manually)</option>
+        </select>
+      </div>
+      <div><label>Contract $/point (blank = not lot-rounded)</label><input type="number" step="0.01" name="contract_size" id="pf_contract_size_field" value=""></div>
+    </div>
+    <script>document.addEventListener('DOMContentLoaded', function () { t58PopulateInstrumentPicker('pf_instrument_select'); });</script>
   </div>
 
   <div class="card">

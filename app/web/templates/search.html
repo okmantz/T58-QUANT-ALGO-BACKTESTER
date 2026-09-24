@@ -397,6 +397,15 @@
     </div>
     <button type="button" onclick="searchDetectPipSize()" style="margin-top:6px;background:none;border:1px solid var(--border-light);color:var(--teal);padding:9px 12px;border-radius:8px;font-size:13px;width:100%;">Detect pip size from data</button>
     <p id="search_pip_detect_status" style="font-size:12px;margin-top:6px;"></p>
+    <div class="row" style="margin-top:8px;">
+      <div><label>Or pick a known instrument (auto-fills pip size + $/point)</label>
+        <select id="search_instrument_select" onchange="t58ApplyInstrumentSpec({selectEl:this, pipFieldId:'search_pip_size_field', contractFieldId:'search_contract_size_field', statusId:'search_pip_detect_status'})">
+          <option value="">(none -- set manually)</option>
+        </select>
+      </div>
+      <div><label>Contract $/point (blank = not lot-rounded)</label><input type="number" step="0.01" name="contract_size" id="search_contract_size_field" value=""></div>
+    </div>
+    <script>document.addEventListener('DOMContentLoaded', function () { t58PopulateInstrumentPicker('search_instrument_select'); });</script>
   </div>
 
   <div class="card">

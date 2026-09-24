@@ -151,6 +151,15 @@
     </div>
     <button type="button" onclick="smiDetectPipSize()" style="margin-top:6px;background:none;border:1px solid var(--border-light);color:var(--teal);padding:9px 12px;border-radius:8px;font-size:13px;width:100%;">Detect pip size from data</button>
     <p id="smi_pip_detect_status" style="font-size:12px;margin-top:6px;"></p>
+    <div class="row" style="margin-top:8px;">
+      <div><label>Or pick a known instrument (auto-fills pip size + $/point)</label>
+        <select id="smi_instrument_select" onchange="t58ApplyInstrumentSpec({selectEl:this, pipFieldId:'smi_pip_size_field', contractFieldId:'smi_contract_size_field', statusId:'smi_pip_detect_status'})">
+          <option value="">(none -- set manually)</option>
+        </select>
+      </div>
+      <div><label>Contract $/point (blank = not lot-rounded)</label><input type="number" step="0.01" name="contract_size" id="smi_contract_size_field" value=""></div>
+    </div>
+    <script>document.addEventListener('DOMContentLoaded', function () { t58PopulateInstrumentPicker('smi_instrument_select'); });</script>
     <label>Max instruments running at once</label>
     <input type="number" name="max_concurrent" value="2">
     <p class="help">Each concurrent instrument gets its own worker-process pool, split from your CPU budget -- 2 is a safe default on most machines; raise it only if you know this machine has CPU/RAM to spare.</p>

@@ -116,8 +116,17 @@
     </div>
     <div class="row">
       <div><label>Max drawdown %</label><input type="number" step="0.1" name="max_dd" value="10"></div>
-      <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" value="0.0001"></div>
+      <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" id="mm_pip_size_field" value="0.0001"></div>
     </div>
+    <div class="row" style="margin-top:8px;">
+      <div><label>Or pick a known instrument (auto-fills pip size + $/point)</label>
+        <select id="mm_instrument_select" onchange="t58ApplyInstrumentSpec({selectEl:this, pipFieldId:'mm_pip_size_field', contractFieldId:'mm_contract_size_field'})">
+          <option value="">(none -- set manually)</option>
+        </select>
+      </div>
+      <div><label>Contract $/point (blank = not lot-rounded)</label><input type="number" step="0.01" name="contract_size" id="mm_contract_size_field" value=""></div>
+    </div>
+    <script>document.addEventListener('DOMContentLoaded', function () { t58PopulateInstrumentPicker('mm_instrument_select'); });</script>
   </div>
 
   <div class="card">
