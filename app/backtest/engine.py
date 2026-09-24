@@ -41,6 +41,7 @@ def run_holdout_comparison(
     strategy: Strategy,
     risk: RiskConfig,
     holdout_frac: float = 0.2,
+    adaptive_risk=None,
 ) -> dict:
     """
     Chronological in-sample / out-of-sample split, run ONCE.
@@ -59,7 +60,17 @@ def run_holdout_comparison(
     style question: "does this exact strategy, as written, keep working on
     data it has never touched?" A strategy whose edge is real should degrade
     gracefully, not evaporate or invert, on the holdout segment.
-    """
+
+    FIX (holdout-comparison-ignored-adaptive-risk): `adaptive_risk` used to
+    be silently dropped here even when the CALLER's main backtest of this
+    same strategy+risk used it -- despite this function's own promise to
+    run "the identical strategy + risk config" on each half. A strategy
+    that an adaptive-risk throttle had suppressed down to almost no trading
+    in the main run could then show up here trading completely normally
+    (no throttle applied), producing wildly inconsistent, confusing
+    trade counts/statistics for what's supposed to be the same
+    configuration. None (the default) is byte-identical to before this
+    parameter existed."""
     n = len(df)
     split_idx = int(n * (1 - holdout_frac))
     split_idx = max(1, min(split_idx, n - 1)) if n > 1 else n
@@ -67,8 +78,8 @@ def run_holdout_comparison(
     in_sample_df = df.iloc[:split_idx].reset_index(drop=True)
     holdout_df = df.iloc[split_idx:].reset_index(drop=True)
 
-    in_sample_result = run_backtest(in_sample_df, strategy, risk) if len(in_sample_df) else None
-    holdout_result = run_backtest(holdout_df, strategy, risk) if len(holdout_df) else None
+    in_sample_result = run_backtest(in_sample_df, strategy, risk, adaptive_risk=adaptive_risk) if len(in_sample_df) else None
+    holdout_result = run_backtest(holdout_df, strategy, risk, adaptive_risk=adaptive_risk) if len(holdout_df) else None
 
     return {
         "holdout_frac": holdout_frac,
