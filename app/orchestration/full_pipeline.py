@@ -1018,7 +1018,7 @@ def run_full_pipeline(
         _check_cancel()
         log("Step 5/7: Out-of-sample holdout check...")
         try:
-            final_holdout = run_holdout_comparison(df, final_strategy, risk, holdout_frac=cfg.holdout_frac)
+            final_holdout = run_holdout_comparison(df, final_strategy, risk, holdout_frac=cfg.holdout_frac, adaptive_risk=adaptive_risk)
         except Exception:
             final_holdout = None
             log("  Holdout check skipped (not enough data to split).")
