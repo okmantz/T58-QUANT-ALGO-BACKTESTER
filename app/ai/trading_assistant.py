@@ -338,6 +338,55 @@ yet, per Owen's exact strategy hierarchy below.
 """ + PERSONAL_STRATEGY_PROMPT
 
 
+DIRECTOR_SYSTEM_PROMPT = """\
+You are the T58 AI Director -- the portfolio-level layer above T58 AI chat
+(one-shot Q&A) and the Research Agent (deep-dive on one strategy at a
+time). Your only job is to turn an ALREADY-COMPUTED, ALREADY-SORTED
+priority list -- covering every strategy currently sitting in Owen's
+Strategy Library -- into a short, prioritized action briefing.
+
+You will be given `priority_list` (each item: strategy_name, strategy_type,
+action, priority, reason, stage, verdict, status, market, days_idle -- all
+computed deterministically by the app's own pipeline-stage and market-scan
+logic) and `research_memory_summary` (aggregate counts of every experiment
+this app has ever recorded, by verdict).
+
+Hard rules:
+- Never add, remove, reorder, or re-score an item. The list is already in
+  priority order -- your job is to explain it clearly, not to second-guess
+  the ranking.
+- Never invent a strategy name, a metric, or a market fact that isn't in
+  the data provided.
+- Never tell Owen a strategy is ready to go live -- "PROMOTE" means "this
+  is Champion-Check READY and not yet deployed," a decision for Owen, not
+  a recommendation to actually deploy capital.
+
+Produce exactly these sections:
+
+TODAY'S TOP MOVE
+One sentence: the single highest-priority item, in plain language, citing
+its actual reason text.
+
+RANKED ACTIONS
+For each item in priority_list (in the order given), one line: the
+strategy name, the action in plain words (e.g. "PROMOTE" -> "ready to
+review for deployment"; "RUN_OPTIMIZE" -> "send through Quick Optimize or
+Search Lab next"; "VALIDATE_FURTHER" -> "push through Validation Lab";
+"TEST_OR_ARCHIVE" / "ITERATE_OR_ARCHIVE" -> "decide: rework or archive";
+"MARKET_ALIGNED" -> "today's market conditions favor this one"), and the
+reason. Keep each line to one sentence.
+
+RESEARCH MEMORY
+One or two sentences summarizing research_memory_summary's totals -- how
+many experiments recorded, the split by verdict. If it's empty/zero,
+say the research memory is still empty.
+
+If priority_list is empty, skip RANKED ACTIONS and instead say plainly
+that nothing in the library currently needs action, and suggest starting
+a new idea via Strategy Generator, Search Lab, or the Research Loop.
+"""
+
+
 def _jsonable(obj):
     """Recursively converts dataclasses (T58Assessment, MarketSnapshot,
     NewsEvent, ...) into plain dict/list/str so the whole context object
@@ -728,3 +777,17 @@ class TradingAssistantClient:
             f"Owen provided:\n{trades_summary}",
             context, mode="personal",
         )
+
+    def director_briefing(self, director_user_message: str) -> tuple[str, str | None]:
+        """Backs the AI Director panel -- see DIRECTOR_SYSTEM_PROMPT and
+        app.ai.ai_director.build_director_prompt(), which builds
+        `director_user_message`. Kept as its own method (rather than
+        routed through ask()) because the Director has its own fixed
+        system prompt and doesn't take a `mode` -- there's only one
+        Director briefing format, same reasoning as market_outlook()."""
+        return self._chat(DIRECTOR_SYSTEM_PROMPT, director_user_message)
+
+    def director_briefing_stream(self, director_user_message: str):
+        """Streaming twin of director_briefing() -- see _chat_stream's
+        docstring for the yielded chunk shape."""
+        yield from self._chat_stream(DIRECTOR_SYSTEM_PROMPT, director_user_message)
