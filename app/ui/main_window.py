@@ -15754,6 +15754,62 @@ class MainWindow:
 
         self._ai_last_rankings = None
 
+        # ------------------------------------------------------------
+        # AI Director -- portfolio-level view across the WHOLE Strategy
+        # Library (every .py/.pine/.mq5/.json strategy saved, at every
+        # pipeline stage), backed by app.ai.ai_director. Desktop parity
+        # for the web app's AI Director panel (app/web/templates/
+        # ai_assistant.html) -- same deterministic-priority-list-first,
+        # Ollama-narrates-on-top posture as Basic Outlook above: the
+        # ranking itself never depends on Ollama being on.
+        # ------------------------------------------------------------
+        director_section = self._section(
+            f, "AI Director",
+            "Surveys every strategy in the Strategy Library (pipeline stage, verdict, how long it's "
+            "sat idle) plus today's Best Trades scan, and ranks what's actually worth doing next -- "
+            "computed by the app, not guessed by the model. REFRESH PRIORITIES recomputes the table "
+            "only; GENERATE DIRECTOR'S BRIEFING also writes a narrative summary to the log below.",
+            emphasize=True,
+        )
+        director_btn_row = Frame(director_section, bg=PANEL)
+        director_btn_row.pack(anchor="w", padx=18, pady=(4, 4))
+        self.aidirector_refresh_btn = self._button(director_btn_row, "REFRESH PRIORITIES", self._ai_refresh_director)
+        self.aidirector_refresh_btn.pack(side="left")
+        self.aidirector_briefing_btn = self._button(
+            director_btn_row, "GENERATE DIRECTOR'S BRIEFING", self._ai_generate_director_briefing, primary=True,
+        )
+        self.aidirector_briefing_btn.pack(side="left", padx=(8, 0))
+
+        director_tree_frame = Frame(director_section, bg=PANEL)
+        director_tree_frame.pack(fill="both", expand=True, padx=18, pady=(4, 4))
+        director_columns = ("rank", "strategy", "type", "action", "priority", "reason")
+        self.aidirector_tree = ttk.Treeview(
+            director_tree_frame, columns=director_columns, show="headings", style="T58.Treeview", height=8,
+        )
+        director_headings = {
+            "rank": "#", "strategy": "Strategy", "type": "Type", "action": "Action",
+            "priority": "Priority", "reason": "Why",
+        }
+        director_widths = {"rank": 30, "strategy": 180, "type": 70, "action": 130, "priority": 60, "reason": 340}
+        for col, text in director_headings.items():
+            self.aidirector_tree.heading(col, text=text)
+            self.aidirector_tree.column(col, width=director_widths.get(col, 100), anchor="w")
+        self.aidirector_tree.pack(side="left", fill="both", expand=True)
+        director_scroll = ttk.Scrollbar(
+            director_tree_frame, orient="vertical", command=self.aidirector_tree.yview, style="T58.Vertical.TScrollbar",
+        )
+        director_scroll.pack(side="right", fill="y")
+        self.aidirector_tree.configure(yscrollcommand=director_scroll.set)
+        self._bind_isolated_wheel(self.aidirector_tree)
+
+        self.aidirector_status = Label(
+            director_section, text="Click REFRESH PRIORITIES to scan the Strategy Library.",
+            bg=PANEL, fg=TEXT_DIM, font=_safe_font(8), anchor="w",
+        )
+        self.aidirector_status.pack(anchor="w", padx=18, pady=(0, 14))
+
+        self._ai_last_directives = None
+
         vision_section = self._section(
             f, "Vision model (screenshot analysis only)",
             "Separate from the chat model above -- screenshot analysis needs a multimodal model.",
@@ -16098,6 +16154,100 @@ class MainWindow:
             self.aiassistant_outlook_status.config(text="", fg=TEXT_DIM)
 
         self._ai_run_async(self.aiassistant_outlook_btn, work, done)
+
+    # -- AI Director: portfolio-level priority list across the whole
+    # Strategy Library (see app.ai.ai_director, and the section built in
+    # _build_ai_assistant_tab above). --
+
+    def _ai_compute_director_directives(self):
+        """Shared by REFRESH PRIORITIES and GENERATE DIRECTOR'S BRIEFING.
+        Reuses the Best Trades panel's cached rankings if already scanned
+        this session (same convention as _ai_watchlist) rather than
+        forcing a second network scan; falls back to a fresh scan if
+        nothing's cached yet. Never raises: a library or market-data
+        failure just means an empty/partial directive list, same
+        fail-soft posture as every other AI Assistant tab action."""
+        from app.ai import ai_director, experiment_memory, market_scanner
+        from app.strategy import library
+
+        try:
+            strategies = library.list_saved_strategies()
+        except Exception:
+            strategies = []
+
+        rankings = getattr(self, "_ai_last_rankings", None)
+        if rankings is None:
+            try:
+                from app.ai import market_intelligence
+                rankings, _errors = market_intelligence.compute_rankings()
+                self._ai_last_rankings = rankings
+                self._ai_populate_trades_tree(rankings)
+            except Exception:
+                rankings = []
+        ranking_dicts = [market_scanner.ranking_to_dict(r) for r in (rankings or [])]
+
+        try:
+            memory_counts = experiment_memory.get_summary_counts()
+        except Exception:
+            memory_counts = {"total": 0, "by_verdict": {}, "top_strategies": {}}
+
+        directives = ai_director.compute_directives(strategies, rankings=ranking_dicts)
+        self._ai_last_directives = directives
+        return directives, memory_counts
+
+    def _ai_populate_director_tree(self, directives) -> None:
+        for row in self.aidirector_tree.get_children():
+            self.aidirector_tree.delete(row)
+        if not directives:
+            self.aidirector_status.config(
+                text="Nothing in the Strategy Library needs action right now -- start a new idea via "
+                     "Strategy Generator, Search Lab, or the Research Loop.",
+                fg=TEXT_DIM,
+            )
+            return
+        for i, d in enumerate(directives, start=1):
+            self.aidirector_tree.insert("", END, values=(
+                i, d.strategy_name, d.strategy_type, d.action, f"{d.priority:.0f}", d.reason,
+            ))
+        self.aidirector_status.config(text=f"{len(directives)} item(s) ranked by priority.", fg=TEXT_DIM)
+
+    def _ai_refresh_director(self):
+        def work():
+            directives, _memory_counts = self._ai_compute_director_directives()
+            return directives
+
+        self._ai_run_async(self.aidirector_refresh_btn, work, self._ai_populate_director_tree)
+
+    def _ai_generate_director_briefing(self):
+        """Refreshes the priority table, then writes a combined
+        deterministic-list + (if Ollama's on) narrative briefing to the
+        chat log below -- same "deterministic always, narrative on top"
+        pattern as _ai_generate_outlook."""
+        self.aidirector_status.config(text="Surveying the Strategy Library and today's markets...", fg=TEXT_DIM)
+        self._ai_append_output("Owen", "[Generate Director's Briefing]")
+
+        def work():
+            from app.ai import ai_director, trading_assistant as ta_module
+
+            directives, memory_counts = self._ai_compute_director_directives()
+            deterministic = ai_director.build_deterministic_briefing(directives, memory_counts)
+            settings = self._build_ollama_settings("aiassistant")
+            if not settings.is_usable:
+                note = "\n\n(Ollama isn't enabled -- showing the deterministic priority list only. Turn on AI Assist above for a narrative briefing too.)"
+                return directives, deterministic + note
+            client = ta_module.TradingAssistantClient(settings)
+            user_message = ai_director.build_director_prompt(directives, memory_counts)
+            reply, error = client.director_briefing(user_message)
+            if error:
+                return directives, deterministic + f"\n\n(Ollama narrative unavailable: {error})"
+            return directives, deterministic + "\n\n--- T58 AI Director's briefing ---\n" + reply
+
+        def done(result):
+            directives, text = result
+            self._ai_populate_director_tree(directives)
+            self._ai_append_output("T58 AI Director", text)
+
+        self._ai_run_async(self.aidirector_briefing_btn, work, done)
 
     def _ai_analyze_chart_screenshot(self):
         path = filedialog.askopenfilename(
