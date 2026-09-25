@@ -29,6 +29,77 @@ from app.reports.trade_chart import build_trade_chart_html
 from app.reports import run_history
 
 
+def _headline_risk_flags(
+    concentration: dict, verdict_reasons: list[str] | None, statistics: "BacktestStatistics | None" = None,
+) -> list[str]:
+    """Promotes two specific findings out of the report's diagnostic
+    tables/verdict_reasons list into short, impossible-to-miss strings,
+    meant to render as a prominent banner (see _headline_warnings_banner)
+    rather than requiring someone to read the full concentration-check
+    table or scroll through every verdict_reasons line.
+
+    Added 2026-09-24 after an external RoboQuant comparison: a Full
+    Pipeline report had BOTH of these findings on record (one trade was
+    31.8% of gross profit and net profit went negative without it; the
+    ICIR/Bonferroni significance gate couldn't even run) but neither was
+    visible anywhere except by reading the raw JSON closely -- the
+    verdict banner and headline metrics looked like an ordinary pass.
+    """
+    flags: list[str] = []
+
+    best_pct = concentration.get("best_trade_pct_of_gross_profit") or 0.0
+    net_excl_trade = concentration.get("net_profit_excluding_best_trade")
+    if net_excl_trade is not None and net_excl_trade < 0:
+        flags.append(
+            f"\u26a0 Single-trade concentration: the best trade is {best_pct:.0f}% of all gross profit -- "
+            f"remove it and net profit goes NEGATIVE (${net_excl_trade:,.0f}). This result is not a "
+            "repeatable process; it is one trade."
+        )
+    elif best_pct >= 25.0:
+        flags.append(
+            f"\u26a0 Single-trade concentration: the best trade is {best_pct:.0f}% of all gross profit. "
+            "Treat this result as fragile until it holds up on more trades."
+        )
+
+    if verdict_reasons:
+        icir_failed = any(
+            "did NOT pass the ICIR" in r or "not enough" in r.lower() and "icir" in r.lower()
+            for r in verdict_reasons
+        )
+        icir_unavailable = any("ICIR / signal-decay" in r and "couldn't run" in r for r in verdict_reasons)
+        if icir_failed or icir_unavailable:
+            flags.append(
+                "\u26a0 Signal significance UNPROVEN: too few trades/distinct periods to run the "
+                "ICIR / signal-decay / Bonferroni-corrected significance gate. Treat this strategy's "
+                "edge as unverified, not merely 'not yet tested'."
+            )
+
+    total_trades = getattr(statistics, "total_trades", None) if statistics is not None else None
+    if total_trades is not None and total_trades < 50:
+        flags.append(
+            f"\u26a0 Small sample: only {total_trades} trade(s) in this backtest. Headline win rate, "
+            "profit factor, and Monte Carlo results all inherit this same thin sample."
+        )
+
+    return flags
+
+
+def _headline_warnings_banner(flags: list[str]) -> str:
+    if not flags:
+        return ""
+    items = "".join(f"<li>{f}</li>" for f in flags)
+    # Deliberately its own CSS class, not verdict-banner: this fires for
+    # ANY report (concentration/small-sample checks need no verdict at
+    # all), so it must never look like -- or be mistaken by a test/reader
+    # for -- the Full-Pipeline-only verdict banner right below it.
+    return (
+        '<div class="risk-flags-banner">'
+        '<div class="verdict-title">\u26a0 Headline risk flags</div>'
+        f"<ul>{items}</ul>"
+        "</div>"
+    )
+
+
 def build_report(
     strategy_name: str,
     strategy_source_type: str,
@@ -44,8 +115,9 @@ def build_report(
     verdict: str | None = None,
     verdict_reasons: list[str] | None = None,
     final_parameters: dict[str, str] | None = None,
+    baseline_parameters: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    return {
+    report = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "strategy": {
             "name": strategy_name,
@@ -65,6 +137,13 @@ def build_report(
         "verdict": verdict,
         "verdict_reasons": list(verdict_reasons) if verdict_reasons else None,
         "final_parameters": dict(final_parameters) if final_parameters else None,
+        # PARAMETER-FIDELITY FIX (2026-09-24): the pre-GA values for the
+        # same gene set as final_parameters, so a reader can see exactly
+        # which parameters the search moved and by how much, instead of
+        # only ever seeing the (possibly very different) end result under
+        # a strategy name that still describes the ORIGINAL values. None
+        # whenever final_parameters itself is None, or the GA never ran.
+        "baseline_parameters": dict(baseline_parameters) if baseline_parameters else None,
         # Every dollar figure in this report is a direct function of this
         # config (risk % per trade, spread/slippage/commission assumptions,
         # initial balance, max trades/day). Without it recorded here, a
@@ -101,6 +180,17 @@ def build_report(
         "prop_firm_single_run": summarize_single_run(prop_single_run),
         "monte_carlo": monte_carlo_result.to_dict(),
     }
+    # HEADLINE-RISK-FLAGS (2026-09-24): see _headline_risk_flags's own
+    # docstring. Computed once, here, from data already in `report`/
+    # `verdict_reasons`/`backtest_result.statistics` so every current and
+    # future caller/consumer of this dict (HTML report, JSON, any web/
+    # desktop summary card that reads this report) gets it for free,
+    # rather than each one needing its own re-derivation of "is this
+    # fragile" from the raw tables.
+    report["headline_warnings"] = _headline_risk_flags(
+        report["concentration_check"], verdict_reasons, getattr(backtest_result, "statistics", None),
+    )
+    return report
 
 
 def export_json(report: dict, path: str | Path) -> Path:
@@ -252,6 +342,16 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   .verdict-banner.verdict-ready {{ background: #ecfdf3; border-color: #12b76a; }}
   .verdict-banner.verdict-marginal {{ background: #fff4e5; border-color: #f0b429; }}
   .verdict-banner.verdict-not-ready {{ background: #fef3f2; border-color: #f04438; }}
+  .risk-flags-banner {{
+    border-radius: 6px; padding: 14px 18px; margin: 16px 0 20px; border-left: 4px solid #f04438;
+    background: #fef3f2;
+  }}
+  .risk-flags-banner .verdict-title {{
+    font-weight: 700; font-size: 14px; text-transform: uppercase; letter-spacing: .04em;
+    margin-bottom: 8px; color: #b42318;
+  }}
+  .risk-flags-banner ul {{ margin: 0; padding-left: 18px; }}
+  .risk-flags-banner li {{ font-size: 13px; margin-bottom: 4px; }}
   .verdict-banner .verdict-title {{
     font-weight: 700; font-size: 14px; text-transform: uppercase; letter-spacing: .04em;
     margin-bottom: 8px;
@@ -274,6 +374,8 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 Instrument: {instrument} &middot; Timeframe: {timeframe} &middot; Period: {period_start} → {period_end}</p>
 
 {warnings_section}
+
+{headline_warnings_section}
 
 {verdict_section}
 
@@ -430,19 +532,53 @@ def _verdict_section(verdict: str | None, verdict_reasons: list[str] | None) -> 
     )
 
 
-def _final_parameters_section(final_parameters: dict[str, str] | None) -> str:
+def _final_parameters_section(final_parameters: dict[str, str] | None, baseline_parameters: dict[str, str] | None = None) -> str:
     """Renders the exact parameter values the Full Pipeline's search
     settled on (SL/TP pips, indicator periods, etc.) next to the metrics
     that show whether that specific configuration passes -- without this,
     the report showed final performance numbers with no way to see what
-    configuration actually produced them."""
+    configuration actually produced them.
+
+    When `baseline_parameters` is also given (2026-09-24 PARAMETER-
+    FIDELITY FIX -- see app.orchestration.full_pipeline._finish's own
+    comment for the confusion this closes), renders a Baseline vs Final
+    comparison instead of Final alone, with changed rows visibly flagged,
+    so a strategy whose name/label describes one set of parameters but
+    was actually backtested against GA-mutated ones can't be mistaken for
+    "the same strategy" elsewhere (e.g. a comparison run in another tool)
+    without that being obvious from the report itself."""
     if not final_parameters:
         return ""
-    rows = "".join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in final_parameters.items())
+    if not baseline_parameters:
+        rows = "".join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in final_parameters.items())
+        return (
+            "<h2>Final Parameters (Full Pipeline Search Result)</h2>"
+            '<p class="muted">The exact tunable values this report\'s numbers were produced with, after the walk-forward-aware search.</p>'
+            f"<table><tr><th>Parameter</th><th>Value</th></tr>{rows}</table>"
+        )
+    any_changed = False
+    rows_parts = []
+    for k, final_v in final_parameters.items():
+        base_v = baseline_parameters.get(k)
+        changed = base_v is not None and base_v != final_v
+        any_changed = any_changed or changed
+        row_class = ' class="param-changed"' if changed else ""
+        rows_parts.append(f"<tr{row_class}><td>{k}</td><td>{base_v if base_v is not None else '\u2013'}</td><td>{final_v}</td></tr>")
+    rows = "".join(rows_parts)
+    banner = (
+        '<p class="muted param-changed-banner"><strong>The GA search changed one or more parameters '
+        "from what was originally supplied</strong> -- this report's backtest ran against the FINAL "
+        "column below, not the Baseline column. If you're comparing this result against a backtest run "
+        "elsewhere (another tool, a manual re-check) using the strategy's ORIGINAL/supplied parameters, "
+        "you are comparing two different rules, not the same one at a different account size.</p>"
+        if any_changed else
+        '<p class="muted">The GA search did not move any parameter away from what was originally supplied.</p>'
+    )
     return (
         "<h2>Final Parameters (Full Pipeline Search Result)</h2>"
-        '<p class="muted">The exact tunable values this report\'s numbers were produced with, after the walk-forward-aware search.</p>'
-        f"<table><tr><th>Parameter</th><th>Value</th></tr>{rows}</table>"
+        '<p class="muted">The exact tunable values this report\'s numbers were produced with, after the walk-forward-aware search, next to what was originally supplied.</p>'
+        f"{banner}"
+        f"<table><tr><th>Parameter</th><th>Baseline (supplied)</th><th>Final (backtested)</th></tr>{rows}</table>"
     )
 
 
@@ -694,7 +830,8 @@ def export_html(
         generated_at=report["generated_at"],
         warnings_section=_warnings_section(report.get("execution_warnings")),
         verdict_section=_verdict_section(report.get("verdict"), report.get("verdict_reasons")),
-        final_parameters_section=_final_parameters_section(report.get("final_parameters")),
+        headline_warnings_section=_headline_warnings_banner(report.get("headline_warnings") or []),
+        final_parameters_section=_final_parameters_section(report.get("final_parameters"), report.get("baseline_parameters")),
         risk_config_table=_risk_config_table(report.get("risk_config")),
         risk_reconciliation_section=_risk_reconciliation_section(report["historical_backtest"]["statistics"]),
         eval_pass=mc["evaluation_pass_probability"],
@@ -771,6 +908,7 @@ def generate_full_report(
     verdict: str | None = None,
     verdict_reasons: list[str] | None = None,
     final_parameters: dict[str, str] | None = None,
+    baseline_parameters: dict[str, str] | None = None,
 ) -> dict[str, Path]:
     """Builds the report dict and writes JSON + summary CSV + trades CSV + HTML to output_dir.
 
@@ -780,15 +918,17 @@ def generate_full_report(
     complete report; that tab just falls back to a short explanatory note
     instead of a chart.
 
-    verdict / verdict_reasons / final_parameters are only ever populated by
-    the Full Pipeline (see app.orchestration.full_pipeline) -- every other
-    caller omits them and gets exactly the same report as before.
+    verdict / verdict_reasons / final_parameters / baseline_parameters are
+    only ever populated by the Full Pipeline (see
+    app.orchestration.full_pipeline) -- every other caller omits them and
+    gets exactly the same report as before.
     """
     report = build_report(
         strategy_name, strategy_source_type, instrument, timeframe, backtest_period,
         backtest_result, prop_rules, prop_single_run, monte_carlo_result,
         holdout_comparison=holdout_comparison, risk_config=risk_config,
         verdict=verdict, verdict_reasons=verdict_reasons, final_parameters=final_parameters,
+        baseline_parameters=baseline_parameters,
     )
     output_dir = Path(output_dir)
     paths = {
