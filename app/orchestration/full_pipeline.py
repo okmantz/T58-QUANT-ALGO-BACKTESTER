@@ -207,6 +207,41 @@ class FullPipelineConfig:
     # longer the only thing standing between "READY" and "NOT READY".
     risk_of_ruin_cap: float = 20.0
 
+    # -- Pipeline reorg: minimum trade-count floor for READY (2026-09-24) -
+    # Found via an external RoboQuant comparison: a strategy that scored
+    # well enough for the "READY" tier on just 40 trades over a 6-year
+    # window (one trade responsible for a third of its entire gross
+    # profit, and too few distinct periods for the ICIR/Bonferroni
+    # significance gate to even run) is not something the T58 Score alone
+    # protects against -- that score is about the QUALITY of the evidence
+    # it was given, not whether there was ENOUGH of it. This is a second,
+    # separate hard floor (not scored/weighted like the rest -- either the
+    # sample is big enough to trust or it isn't): a strategy that would
+    # otherwise land on "READY" is capped at "MARGINAL" when its final
+    # backtest's total_trades falls short of this, with the reason spelled
+    # out in verdict_reasons. Does not affect MARGINAL/NOT READY verdicts
+    # (a strategy already below READY isn't made worse by a thin sample --
+    # that's already reflected in its score).
+    min_trades_for_ready: int = 100
+
+    # -- Lock-parameters / fixed-backtest mode (2026-09-24) --------------
+    # Found via an external RoboQuant comparison: comparing "the same
+    # strategy" between T58 and another tool is only valid when NEITHER
+    # side silently re-optimizes it -- Full Pipeline's GA search (Step 2)
+    # otherwise always tries to improve on whatever was supplied, which
+    # is exactly right for finding a strategy but wrong for reproducing
+    # or cross-checking one you already have fixed parameters for. When
+    # True, Step 2 is skipped entirely (same "skipped" bookkeeping/report
+    # fields as the existing pip-scale-mismatch/impossible-condition
+    # fast-skips just below use) and every later step runs against the
+    # SUPPLIED strategy exactly as given -- final_parameters/baseline_
+    # parameters stay empty and the report title is never tagged
+    # "GA-modified" (see _finish's mutated_by_ga), because nothing was
+    # mutated. Steps 1, 3-7 (baseline backtest, re-validated Monte Carlo,
+    # OOS/holdout checks, verdict) still run normally against that fixed
+    # configuration.
+    skip_optimization: bool = False
+
     # -- Pipeline reorg: one canonical robustness test (Option A) --------
     # "walk_forward" (default -- unchanged behavior) keeps using Step 4's
     # existing run_walk_forward result as the scorecard's
@@ -333,6 +368,7 @@ def _make_verdict(
     cpcv_primary_result: "CPCVResult | None" = None,
     cpcv_supporting_result: "CPCVResult | None" = None,
     lookahead_bug_detected: bool = False,
+    min_trades_for_ready: int = 100,
 ) -> tuple[str, list[str], "T58ScorecardResult", bool, bool]:
     """Pipeline reorg item #1: the verdict is now a hard safety gate
     (risk of ruin, and -- FIX (audit) -- a confirmed lookahead-bias leak)
@@ -477,6 +513,20 @@ def _make_verdict(
         verdict = "MARGINAL"
     else:
         verdict = "NOT READY"
+
+    # -- Minimum trade-count floor for READY (see FullPipelineConfig.
+    # min_trades_for_ready's own docstring for why this exists) ----------
+    total_trades = getattr(statistics, "total_trades", None) if statistics is not None else None
+    if verdict == "READY" and total_trades is not None and total_trades < min_trades_for_ready:
+        verdict = "MARGINAL"
+        reasons.append(
+            f"CAPPED AT MARGINAL: the T58 Score alone would have called this READY, but the final "
+            f"backtest only produced {total_trades} trade(s), below the {min_trades_for_ready}-trade "
+            "floor this pipeline requires before trusting a result enough to call it READY -- a small "
+            "sample can look strong by chance (or on the strength of one or two outsized trades) "
+            "regardless of how good its score is. See FullPipelineConfig.min_trades_for_ready."
+        )
+
     return verdict, reasons, scorecard, False, False
 
 
@@ -805,7 +855,15 @@ def run_full_pipeline(
     # and searching for "better" parameters around dead logic is exactly
     # as wasted as searching around an unreliable pip_size.
     impossible_condition = has_impossible_condition(baseline_bt.warnings)
-    if instrument_mismatch or impossible_condition:
+    if cfg.skip_optimization:
+        refinement_skip_reason = (
+            "Skipped optimization search: FullPipelineConfig.skip_optimization is set (lock-"
+            "parameters / fixed-backtest mode). Every step below ran against the SUPPLIED "
+            "strategy exactly as given -- no parameter was changed from what was provided."
+        )
+        log(f"  Optimization skipped: {refinement_skip_reason}")
+        ga_result = None
+    elif instrument_mismatch or impossible_condition:
         if instrument_mismatch:
             refinement_skip_reason = (
                 "Skipped optimization search: the baseline run flagged a pip_size/"
@@ -1141,6 +1199,7 @@ def run_full_pipeline(
             risk_of_ruin_cap=cfg.risk_of_ruin_cap, parsimony=parsimony_result,
             cpcv_primary_result=cpcv_primary_result, cpcv_supporting_result=cpcv_supporting_result,
             lookahead_bug_detected=lookahead_bug_detected,
+            min_trades_for_ready=cfg.min_trades_for_ready,
         )
 
         elapsed = time.time() - t0
@@ -1197,6 +1256,13 @@ def _finish(
         provenance_stamped_name(display_name, origin="full_pipeline", seed=cfg.random_seed)
         if mutated_by_ga else display_name
     )
+    # PARAMETER-FIDELITY FIX (2026-09-24): make the report's own title say
+    # when the backtested parameters are NOT the ones display_name/save_
+    # name describe -- see the baseline_parameters comment further below
+    # for the exact confusion this closes. Only the title changes here;
+    # save_name (what gets written to disk) is untouched.
+    if mutated_by_ga:
+        final_strategy_name = f"{display_name} (Full Pipeline, GA-modified parameters -- see Final vs Baseline Parameters)"
 
     # Pipeline reorg: every record_backtest_result() call below also
     # stamps these three fields into the strategy's "last_run" metadata
@@ -1211,10 +1277,28 @@ def _finish(
     parsimony_score = parsimony_result.score if parsimony_result is not None else None
 
     final_parameters = None
+    baseline_parameters = None
     if ga_result is not None and ga_result.genes:
         final_parameters = {
             gene.label: (str(int(round(value))) if gene.is_int else f"{value:.4f}".rstrip("0").rstrip("."))
             for gene, value in zip(ga_result.genes, ga_result.best.genome)
+        }
+        # PARAMETER-FIDELITY FIX (2026-09-24): found via an external
+        # RoboQuant comparison -- the GA can (and, on that comparison's ES
+        # strategy, did) mutate periods/thresholds far away from whatever
+        # was originally supplied, while final_strategy_name below kept
+        # showing the SUPPLIED strategy's static, hand-typed name (which
+        # can itself have specific parameter values baked into it, e.g.
+        # "...optimized (vwma31/86, ema458/244, rsi19/9, 1H)..."). Anyone
+        # comparing this report's headline numbers against a backtest of
+        # the ORIGINALLY-NAMED parameters elsewhere was silently comparing
+        # two different rules. baseline_parameters (each gene's pre-GA
+        # value, already tracked on GeneMeta/CodeGene.base_value for the
+        # search bounds themselves) lets the report show both sets side
+        # by side instead of only the final one.
+        baseline_parameters = {
+            gene.label: (str(int(round(gene.base_value))) if gene.is_int else f"{gene.base_value:.4f}".rstrip("0").rstrip("."))
+            for gene in ga_result.genes
         }
 
     # BUGFIX (2026-09-19): `final_strategy` (the Strategy object) is a local
@@ -1253,6 +1337,7 @@ def _finish(
         verdict=verdict,
         verdict_reasons=verdict_reasons,
         final_parameters=final_parameters,
+        baseline_parameters=baseline_parameters,
     )
 
     saved_library_path = None
