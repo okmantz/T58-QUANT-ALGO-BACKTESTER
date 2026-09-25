@@ -51,13 +51,13 @@ def _headline_risk_flags(
     net_excl_trade = concentration.get("net_profit_excluding_best_trade")
     if net_excl_trade is not None and net_excl_trade < 0:
         flags.append(
-            f"\u26a0 Single-trade concentration: the best trade is {best_pct:.0f}% of all gross profit -- "
+            f"⚠ Single-trade concentration: the best trade is {best_pct:.0f}% of all gross profit -- "
             f"remove it and net profit goes NEGATIVE (${net_excl_trade:,.0f}). This result is not a "
             "repeatable process; it is one trade."
         )
     elif best_pct >= 25.0:
         flags.append(
-            f"\u26a0 Single-trade concentration: the best trade is {best_pct:.0f}% of all gross profit. "
+            f"⚠ Single-trade concentration: the best trade is {best_pct:.0f}% of all gross profit. "
             "Treat this result as fragile until it holds up on more trades."
         )
 
@@ -69,7 +69,7 @@ def _headline_risk_flags(
         icir_unavailable = any("ICIR / signal-decay" in r and "couldn't run" in r for r in verdict_reasons)
         if icir_failed or icir_unavailable:
             flags.append(
-                "\u26a0 Signal significance UNPROVEN: too few trades/distinct periods to run the "
+                "⚠ Signal significance UNPROVEN: too few trades/distinct periods to run the "
                 "ICIR / signal-decay / Bonferroni-corrected significance gate. Treat this strategy's "
                 "edge as unverified, not merely 'not yet tested'."
             )
@@ -77,7 +77,7 @@ def _headline_risk_flags(
     total_trades = getattr(statistics, "total_trades", None) if statistics is not None else None
     if total_trades is not None and total_trades < 50:
         flags.append(
-            f"\u26a0 Small sample: only {total_trades} trade(s) in this backtest. Headline win rate, "
+            f"⚠ Small sample: only {total_trades} trade(s) in this backtest. Headline win rate, "
             "profit factor, and Monte Carlo results all inherit this same thin sample."
         )
 
@@ -94,7 +94,7 @@ def _headline_warnings_banner(flags: list[str]) -> str:
     # for -- the Full-Pipeline-only verdict banner right below it.
     return (
         '<div class="risk-flags-banner">'
-        '<div class="verdict-title">\u26a0 Headline risk flags</div>'
+        '<div class="verdict-title">⚠ Headline risk flags</div>'
         f"<ul>{items}</ul>"
         "</div>"
     )
@@ -286,7 +286,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
     border-bottom: 2px solid var(--accent-dark); padding-bottom: 6px;
   }}
   table {{ border-collapse: collapse; width: 100%; margin-top: 4px; background: var(--panel);
-           box-shadow: 0 1px 2px rgba(16,24,40,0.04); border-radius: 6px; overflow: hidden; }}
+            box-shadow: 0 1px 2px rgba(16,24,40,0.04); border-radius: 6px; overflow: hidden; }}
   td, th {{ border-bottom: 1px solid var(--line); padding: 8px 12px; font-size: 13px; text-align: left; }}
   tr:last-child td {{ border-bottom: none; }}
   th {{ background: #f1f2f5; font-weight: 600; color: #374151; }}
@@ -300,7 +300,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   .card .value {{ font-size:26px; font-weight:700; margin-top:6px; color: var(--accent-dark); }}
   .muted {{ color: var(--muted); font-size: 12px; }}
   .chart {{ border: 1px solid var(--line); background: var(--panel); padding: 12px;
-            margin-top: 8px; border-radius: 8px; box-shadow: 0 1px 3px rgba(16,24,40,0.05); }}
+             margin-top: 8px; border-radius: 8px; box-shadow: 0 1px 3px rgba(16,24,40,0.05); }}
   .chart-row {{ display:flex; gap:16px; flex-wrap:wrap; }}
   .chart-row .chart {{ flex: 1 1 340px; }}
   .chart svg {{ width: 100%; height: auto; display:block; }}
@@ -400,14 +400,14 @@ Instrument: {instrument} &middot; Timeframe: {timeframe} &middot; Period: {perio
   <div class="card"><div class="label">Expected Payout</div><div class="value">${expected_payout:,.0f}</div></div>
   <div class="card"><div class="label">Risk of Ruin</div><div class="value">{risk_of_ruin:.1f}%</div></div>
 </div>
-<p class="muted">"Risk of Ruin" is the probability that max drawdown is breached at <b>some point</b> across the full simulated path -- including after passing the evaluation and collecting payouts -- not just during the evaluation phase. It will not generally match Evaluation Pass Probability, and a strategy can be likely to pass yet still likely to eventually blow the account well downstream. "Failure Before Payout" (above) is the more relevant number for "will this specific attempt work."</p>
+<p class="muted">"Risk of Ruin" is the probability that max drawdown is breached at <b>some point</b> across the full simulated path -- including after passing the evaluation and collecting payou[...]
 
 {reset_chain_headline_section}
 
 {final_parameters_section}
 
 <h2>Historical Backtest Statistics</h2>
-<p class="muted">Computed over the full, uninterrupted trade sequence with prop-firm rules (daily loss limit, max drawdown, etc.) <b>not</b> enforced. Compare against "Prop-Firm Single-Run Result" below, which walks these same trades forward and stops the account the moment a rule is actually breached -- a strategy can look profitable here and still fail outright there.</p>
+<p class="muted">Computed over the full, uninterrupted trade sequence with prop-firm rules (daily loss limit, max drawdown, etc.) <b>not</b> enforced. Compare against "Prop-Firm Single-Run Result[...]
 {reset_chain_banner}
 {backtest_table}
 
@@ -416,7 +416,7 @@ Instrument: {instrument} &middot; Timeframe: {timeframe} &middot; Period: {perio
 {concentration_table}
 
 <h2>Cost Ladder</h2>
-<p class="muted">The same trade sequence above, re-costed at increasing added round-turn friction. A real edge should degrade gracefully as costs rise; an edge that only exists at 0% added cost is the cost model doing the lying for you.</p>
+<p class="muted">The same trade sequence above, re-costed at increasing added round-turn friction. A real edge should degrade gracefully as costs rise; an edge that only exists at 0% added cost i[...]
 {cost_ladder_table}
 
 <h2>Equity Curve (Historical Backtest)</h2>
@@ -428,7 +428,7 @@ Instrument: {instrument} &middot; Timeframe: {timeframe} &middot; Period: {perio
 {rules_table}
 
 <h2>Prop-Firm Single-Run Result (Historical Sequence)</h2>
-<p class="muted">Same trades as above, but the account stops the instant a prop-firm rule is breached (this run may therefore reflect fewer effective trading days than the historical stats above).</p>
+<p class="muted">Same trades as above, but the account stops the instant a prop-firm rule is breached (this run may therefore reflect fewer effective trading days than the historical stats above)[...]
 {single_run_table}
 
 <h2>Monte Carlo Simulation ({n_sims:,} simulated accounts)</h2>
@@ -447,7 +447,7 @@ Instrument: {instrument} &middot; Timeframe: {timeframe} &middot; Period: {perio
 {trade_chart_html}
 </div><!-- /tab-tradechart -->
 
-<p class="footer-note muted">Report generated by T58 Trading — Quant Algo Backtester. All figures are simulated estimates based on historical data and resampling; past performance and simulated outcomes do not guarantee future results.</p>
+<p class="footer-note muted">Report generated by T58 Trading — Quant Algo Backtester. All figures are simulated estimates based on historical data and resampling; past performance and simulated[...]
 </div>
 <script src="https://cdn.plot.ly/plotly-2.32.0.min.js" charset="utf-8"></script>
 <script>
@@ -563,7 +563,7 @@ def _final_parameters_section(final_parameters: dict[str, str] | None, baseline_
         changed = base_v is not None and base_v != final_v
         any_changed = any_changed or changed
         row_class = ' class="param-changed"' if changed else ""
-        rows_parts.append(f"<tr{row_class}><td>{k}</td><td>{base_v if base_v is not None else '\u2013'}</td><td>{final_v}</td></tr>")
+        rows_parts.append(f"<tr{row_class}><td>{k}</td><td>{base_v if base_v is not None else '–'}</td><td>{final_v}</td></tr>")
     rows = "".join(rows_parts)
     banner = (
         '<p class="muted param-changed-banner"><strong>The GA search changed one or more parameters '
@@ -642,7 +642,7 @@ def _holdout_section(holdout: dict | None) -> str:
         + "</table>"
     )
     return f"""<h2>Out-of-Sample Holdout Check</h2>
-<p class="muted">The final {frac:.0f}% of bars chronologically ({out_period[0]} &rarr; {out_period[1]}) were withheld and run through the exact same strategy and risk settings as the earlier {100-frac:.0f}% ({in_period[0]} &rarr; {in_period[1]}), with no re-tuning between the two. A real edge should degrade gracefully here, not invert or vanish -- if the holdout column looks nothing like the in-sample column, the in-sample result was likely overfit to that specific period.</p>
+<p class="muted">The final {frac:.0f}% of bars chronologically ({out_period[0]} &rarr; {out_period[1]}) were withheld and run through the exact same strategy and risk settings as the earlier {100[...]
 {table}"""
 
 
@@ -698,7 +698,7 @@ def _risk_reconciliation_section(stats: dict) -> str:
             "share is large.</p>"
         )
     return f"""<h2>Risk Reconciliation</h2>
-<p class="muted">Reconciles the risk % you configured against what actually happened to it on a trade-by-trade basis -- two different, independent gaps to watch for: sizing that comes in UNDER your target (a cap/throttle shrinking the position) and realized losses that come in OVER a trade's own stop (a gap-through fill).</p>
+<p class="muted">Reconciles the risk % you configured against what actually happened to it on a trade-by-trade basis -- two different, independent gaps to watch for: sizing that comes in UNDER yo[...]
 {table}
 {cap_note}{overshoot_note}"""
 
