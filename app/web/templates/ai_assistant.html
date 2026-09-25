@@ -123,6 +123,20 @@
     </div>
 
     <div class="oai-panel oai-chat" style="grid-column: 1 / -1;">
+      <h2>AI Director <span class="refresh" onclick="loadDirector()">refresh</span></h2>
+      <p style="color:var(--text-dim); font-size:12px; margin:0 0 8px;">
+        Surveys every strategy in the Strategy Library (pipeline stage, verdict, how long it's sat idle)
+        plus today's Best Markets scan, and ranks what's actually worth doing next -- computed by the app,
+        not guessed by the model.
+      </p>
+      <div id="director-panel"><div>Loading...</div></div>
+      <div class="chat-toolbar" style="margin-top:8px;">
+        <button class="btn" id="director-btn" onclick="generateDirectorBriefing()">Generate Director's Briefing</button>
+      </div>
+      <div id="director-reply" style="white-space:pre-wrap; font-size:13px; line-height:1.55; background:var(--panel-3); border:1px solid var(--border); border-radius:10px; padding:12px; margin-top:8px; display:none;"></div>
+    </div>
+
+    <div class="oai-panel oai-chat" style="grid-column: 1 / -1;">
       <h2>Basic Outlook</h2>
       <div class="chat-toolbar">
         <button class="btn" id="outlook-btn" onclick="generateOutlook()">Generate Basic Outlook</button>
@@ -254,6 +268,90 @@ async function loadRankings() {
       <tbody>${rows}</tbody></table>`;
   } catch (err) {
     panel.innerHTML = `<div><small class="err">Failed to load rankings: ${escapeHtml(String(err))}</small></div>`;
+  }
+}
+
+const DIRECTOR_ACTION_LABELS = {
+  PROMOTE: 'Promote (Ready, review for deployment)',
+  RUN_OPTIMIZE: 'Run Optimize (Quick Optimize / Search Lab)',
+  VALIDATE_FURTHER: 'Validate Further (Validation Lab)',
+  TEST_OR_ARCHIVE: 'Test or Archive',
+  ITERATE_OR_ARCHIVE: 'Iterate or Archive',
+  MARKET_ALIGNED: 'Market-Aligned Today',
+};
+
+async function loadDirector() {
+  const panel = document.getElementById('director-panel');
+  try {
+    const res = await fetch('/assistant/api/director');
+    const data = await res.json();
+    const directives = data.directives || [];
+    if (!directives.length) {
+      panel.innerHTML = `<div>Nothing in the Strategy Library needs action right now. Start a new idea via Strategy Generator, Search Lab, or the Research Loop.</div>`;
+      return;
+    }
+    const rows = directives.map((d, i) => `
+      <tr>
+        <td>${i + 1}</td>
+        <td>${escapeHtml(d.strategy_name)}</td>
+        <td>${escapeHtml(d.strategy_type)}</td>
+        <td>${escapeHtml(DIRECTOR_ACTION_LABELS[d.action] || d.action)}</td>
+        <td>${d.priority}</td>
+        <td>${escapeHtml(d.reason)}</td>
+      </tr>`).join('');
+    panel.innerHTML = `<table class="rank-table">
+      <thead><tr><th>#</th><th>Strategy</th><th>Type</th><th>Action</th><th>Priority</th><th>Why</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+  } catch (err) {
+    panel.innerHTML = `<div><small class="err">Failed to load AI Director: ${escapeHtml(String(err))}</small></div>`;
+  }
+}
+
+async function generateDirectorBriefing() {
+  const btn = document.getElementById('director-btn');
+  const reply = document.getElementById('director-reply');
+  btn.disabled = true;
+  btn.textContent = 'Generating...';
+  reply.style.display = 'block';
+  reply.textContent = 'Surveying the Strategy Library and today\'s markets...';
+  let fullReply = '';
+  try {
+    const res = await fetch('/assistant/api/director/stream', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    if (!res.body || !res.body.getReader) throw new Error('no-stream-support');
+    reply.textContent = '';
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let sawError = null;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let chunk;
+        try { chunk = JSON.parse(line); } catch (e) { continue; }
+        if (chunk.error) { sawError = chunk.error; break; }
+        if (chunk.text) { fullReply += chunk.text; reply.textContent = fullReply; }
+      }
+      if (sawError) break;
+    }
+    if (sawError) reply.textContent = sawError;
+  } catch (err) {
+    // Fallback: the older blocking endpoint (also includes the always-on
+    // deterministic list as a prefix, same posture as Basic Outlook).
+    try {
+      const data = await (await fetch('/assistant/api/director')).json();
+      reply.textContent = data.text || data.error || 'No briefing returned.';
+    } catch (err2) {
+      reply.textContent = 'Request failed: ' + err2;
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Generate Director's Briefing";
+    loadDirector();
   }
 }
 
@@ -421,8 +519,10 @@ async function saveSettings() {
 document.getElementById('ollama-dot').className = 'status-dot ' + ('{{ "ok" if ollama_enabled else "off" }}');
 loadNews();
 loadRankings();
+loadDirector();
 setInterval(loadNews, 5 * 60 * 1000);
 setInterval(loadRankings, 60 * 1000);
+setInterval(loadDirector, 5 * 60 * 1000);
 </script>
 </body>
 </html>
