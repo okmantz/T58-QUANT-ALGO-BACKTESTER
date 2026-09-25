@@ -169,8 +169,21 @@ losses/no-trades avoided, best and worst decision, best setup, missed
 opportunity, execution grade, discipline grade, what the market taught,
 up to 3 specific things to improve, and themes/levels to watch tomorrow."""
 
-T58_GROUP_SYSTEM_PROMPT = PERSONAL_STRATEGY_PROMPT
-PERSONAL_MODE_SYSTEM_PROMPT = PERSONAL_STRATEGY_PROMPT + "\n\n" + PERSONAL_ASSISTANT_PROMPT
+CAPABILITY_GROUNDING_NOTE = """\
+ENGINE CAPABILITIES: the context JSON's `engine_capabilities` field lists
+the real, currently-supported Python indicator functions, manual/JSON
+strategy condition types, PineScript ta.* functions, and MQL5 indicator
+calls -- introspected directly from this app's own parser code, not
+hand-typed, so it's always current. If asked whether T58 supports a given
+indicator, condition type, or scripting construct, check this list before
+answering: if it's there, confirm it's supported (and which language(s));
+if it isn't, say plainly that it isn't currently supported rather than
+guessing either way."""
+
+T58_GROUP_SYSTEM_PROMPT = PERSONAL_STRATEGY_PROMPT + "\n\n" + CAPABILITY_GROUNDING_NOTE
+PERSONAL_MODE_SYSTEM_PROMPT = (
+    PERSONAL_STRATEGY_PROMPT + "\n\n" + PERSONAL_ASSISTANT_PROMPT + "\n\n" + CAPABILITY_GROUNDING_NOTE
+)
 
 # ---------------------------------------------------------------------------
 # Screenshot analysis instructions -- appended to PERSONAL_MODE_SYSTEM_PROMPT
@@ -415,13 +428,23 @@ def build_context(rankings: list, news_events: list, watchlist_symbols: list[str
     deterministic BOS/ChoCH/Wyckoff facts for a handful of symbols,
     alongside (not replacing) each ranking's own EMA-cross macro_bias
     proxy -- so the model has computed structure to reason from instead
-    of eyeballing it from price alone."""
+    of eyeballing it from price alone.
+
+    `engine_capabilities` (see app.ai.capability_reference.chat_capability_note,
+    added Sep 2026) is the real, introspected list of indicators/condition
+    types/PineScript ta.* functions/MQL5 indicator calls this app's engine
+    actually supports -- included on every turn so the model can answer
+    "does T58 support X?" by checking this list instead of guessing, the
+    same bug class Roboquant's own changelog documents them hitting and
+    fixing in their AI assistant."""
+    from app.ai import capability_reference
     from app.ai.market_scanner import ranking_to_dict
 
     return {
         "best_markets": [ranking_to_dict(r) for r in rankings],
         "watchlist_symbols": watchlist_symbols or [],
         "market_structure": market_structure_by_symbol or {},
+        "engine_capabilities": capability_reference.chat_capability_note(),
         "upcoming_news": [
             {
                 "title": e.title,
