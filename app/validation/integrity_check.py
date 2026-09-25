@@ -43,6 +43,7 @@ import numpy as np
 import pandas as pd
 
 from app.backtest.risk import RiskConfig
+from app.data.instrument_specs import get_instrument_spec, guess_instrument_symbol
 from app.data.timeframe_resample import (
     TimeframeError,
     infer_timeframe_label,
@@ -171,6 +172,7 @@ def run_integrity_check(
     data_label: str = "uploaded dataset",
     holdout_frac: float = 0.2,
     tick_value: float | None = None,
+    instrument_symbol: str | None = None,
 ) -> IntegrityReport:
     """Runs every check and returns a single IntegrityReport. `strategy`
     is optional (a caller checking data alone, before a strategy is even
@@ -178,8 +180,28 @@ def run_integrity_check(
     `requested_timeframe`, if omitted, defaults to whatever `strategy`
     itself declares (see app.data.timeframe_resample.
     resolve_strategy_declaration) or, failing that, the data's own native
-    timeframe (i.e. "no resample requested")."""
+    timeframe (i.e. "no resample requested").
+
+    `instrument_symbol`: an explicit known futures root symbol (see
+    app.data.instrument_specs.KNOWN_INSTRUMENTS), e.g. "ES". If omitted,
+    this function tries to guess one from `data_label` itself (a dataset
+    filename/ticker often names the instrument, e.g. "ES1!/futures_ES.F_
+    1m.parquet") via app.data.instrument_specs.guess_instrument_symbol.
+    Either way, a resolved symbol enables two checks that were previously
+    impossible to do at all (see the EXECUTION/ACCOUNT sections below):
+    catching a $0 commission on a real futures instrument (2026-09-24
+    upgrade -- found via an external RoboQuant comparison on ES that this
+    check would have caught before the backtest ever ran), and flagging
+    that position sizes are being computed as continuous/fractional units
+    rather than real whole contracts. Neither check runs at all when no
+    symbol can be resolved either way (an unfamiliar instrument, FX, or a
+    non-futures market) -- this is intentionally conservative rather than
+    guessing at an unfamiliar instrument's economics.
+    """
     sections: dict[str, list[IntegrityCheckLine]] = {}
+
+    resolved_symbol = instrument_symbol or guess_instrument_symbol(data_label)
+    instrument_spec = get_instrument_spec(resolved_symbol) if resolved_symbol else None
 
     # ---------------------------------------------------------------
     # DATA
@@ -316,23 +338,82 @@ def run_integrity_check(
     # ---------------------------------------------------------------
     # EXECUTION
     # ---------------------------------------------------------------
+    # ZERO-COMMISSION-ON-FUTURES (2026-09-24): found via an external
+    # RoboQuant comparison -- a Full Pipeline report on ES ran at
+    # commission_per_trade=0.0 (RiskConfig's own generic default, never
+    # overridden for this run) and looked like a solid winner; the exact
+    # same strategy at a realistic ~$4-5/round-turn commission was a
+    # loser (see the report's own cost-ladder diagnostic). A known
+    # futures instrument backtested at literally $0 commission is not a
+    # "maybe" -- it is definitely wrong, so this is CRITICAL (blocks the
+    # backtest), not just a warning, per Owen's own framing of the fix.
+    zero_commission_on_futures = (
+        instrument_spec is not None and risk.commission_per_trade == 0.0
+    )
+    commission_line = IntegrityCheckLine(
+        not zero_commission_on_futures,
+        "Commission",
+        f"${risk.commission_per_trade:g}/trade"
+        + (
+            f" -- $0 on a known futures instrument ({instrument_spec.symbol}); a realistic round-turn "
+            f"is roughly ${instrument_spec.default_commission_round_turn:g}. Every dollar figure in this "
+            "backtest is unrealistically optimistic until this is set."
+            if zero_commission_on_futures else ""
+        ),
+        critical=zero_commission_on_futures,
+    )
     sections["EXECUTION"] = [
-        IntegrityCheckLine(True, "Commission", f"${risk.commission_per_trade:g}/trade"),
+        commission_line,
         IntegrityCheckLine(True, "Slippage", f"{risk.slippage_pips:g} pips"),
         IntegrityCheckLine(True, "Intrabar resolution", source_label),
         IntegrityCheckLine(True, "TP/SL conflict handling", "STOP-FIRST (see app.backtest.execution)"),
     ]
+    if zero_commission_on_futures:
+        return _blocked(
+            f"$0 commission on a known futures instrument ({instrument_spec.symbol}).",
+            f"This backtest is configured with commission_per_trade=0.0 against {instrument_spec.symbol} "
+            f"({instrument_spec.description}), a real futures contract with real per-trade costs -- a "
+            f"realistic round-turn commission is roughly ${instrument_spec.default_commission_round_turn:g}. "
+            "Backtesting at $0 commission makes a marginal or losing strategy look profitable; set a "
+            "realistic commission (selecting this instrument from the Instrument dropdown fills one in "
+            "automatically) before running this backtest. No performance results were produced.",
+        )
 
     # ---------------------------------------------------------------
     # ACCOUNT
     # ---------------------------------------------------------------
     max_position_ok = risk.max_position_size is None or risk.max_position_size > 0
+    # WHOLE-CONTRACT-SIZING (2026-09-24): also found via the same external
+    # comparison -- without contract_size set, position_size() computes a
+    # continuous/fractional "units" figure that always hits the intended
+    # risk % exactly, which is NOT how a real futures account trades (ES,
+    # NQ, GC, etc. only ever trade in whole contracts). This is a WARNING,
+    # not a block: it's a realism gap, not a wrong number the way $0
+    # commission is, and plenty of legitimate reasons exist to model an
+    # instrument as continuous. But left unset, trade counts and P&L can
+    # differ substantially from what a real, whole-contract account would
+    # see -- exactly the kind of gap that made a 40-trade T58 backtest and
+    # a 139-trade RoboQuant backtest of "the same" ES strategy hard to
+    # compare.
+    contract_size_unset_on_futures = instrument_spec is not None and risk.contract_size is None
     account_lines = [
         IntegrityCheckLine(True, "Starting balance", f"${risk.initial_balance:,.0f}"),
         IntegrityCheckLine(max_position_ok, "Contract sizing", "PASS" if max_position_ok else "FAIL (max_position_size <= 0)"),
         IntegrityCheckLine(tick_value is not None, "Tick value", f"${tick_value:g}" if tick_value is not None else "not specified"),
         IntegrityCheckLine(True, "Max position", f"{risk.max_position_size:g}" if risk.max_position_size else "unlimited"),
         IntegrityCheckLine(prop_rules is not None, "Prop rules", "Loaded" if prop_rules is not None else "Not provided"),
+        IntegrityCheckLine(
+            not contract_size_unset_on_futures,
+            "Whole-contract sizing",
+            (
+                f"contract_size not set for a known futures instrument ({instrument_spec.symbol}) -- "
+                "position sizes are being computed as continuous/fractional units, not real whole "
+                f"contracts (each {instrument_spec.symbol} contract = ${instrument_spec.contract_size:g}/point). "
+                "Trade count and P&L can differ materially from a real account. Select this instrument from "
+                "the Instrument dropdown to fix, or set contract_size directly."
+                if contract_size_unset_on_futures else "n/a (no known futures instrument resolved, or already set)"
+            ),
+        ),
     ]
     sections["ACCOUNT"] = account_lines
 
