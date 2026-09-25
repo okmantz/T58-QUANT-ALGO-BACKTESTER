@@ -3740,6 +3740,7 @@ def full_pipeline_start_batch():
             library_status=library_status_raw or None,
             parallel_search=form.get("parallel_search", "on") == "on",
             reset_on_breach=form.get("reset_on_breach", "on") == "on",
+            skip_optimization=form.get("skip_optimization") == "on",
         )
 
         ollama_settings = None
@@ -3947,6 +3948,7 @@ def full_pipeline_schedule_batch():
             library_status=library_status_raw or None,
             parallel_search=form.get("parallel_search", "on") == "on",
             reset_on_breach=form.get("reset_on_breach", "on") == "on",
+            skip_optimization=form.get("skip_optimization") == "on",
         )
         ollama_settings = None
         if form.get("ai_enabled") == "on":
@@ -4164,6 +4166,7 @@ def full_pipeline_start():
             library_status=library_status_raw or None,
             parallel_search=form.get("parallel_search", "on") == "on",
             reset_on_breach=form.get("reset_on_breach", "on") == "on",
+            skip_optimization=form.get("skip_optimization") == "on",
         )
 
         ollama_settings = None
