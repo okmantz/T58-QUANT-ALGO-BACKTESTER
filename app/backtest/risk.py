@@ -405,10 +405,35 @@ def position_sizing_deviation_message(
     if pct_capped < threshold_pct and pct_overshoot < threshold_pct:
         return None
     if pct_capped >= pct_overshoot:
-        pct, direction = pct_capped, (
-            "sized BELOW the configured risk target (a max-position-size cap or adaptive-risk "
-            "throttle engaging, or whole-contract rounding on a coarse-granularity instrument)"
-        )
+        # ADAPTIVE-RISK-ATTRIBUTION: compute_risk_reconciliation now hands
+        # back direct trade-level evidence of whether the adaptive-risk
+        # throttle was the actual driver, instead of this message having
+        # to hedge across three unverified possibilities. Only named
+        # explicitly once the evidence supports it (throttle active on at
+        # least `threshold_pct` of entries AND materially shrinking size);
+        # otherwise the cause is left to the remaining, still-unverified
+        # possibilities (a position cap or whole-contract rounding), with
+        # adaptive risk dropped from the list since the trades themselves
+        # show it wasn't the (main) cause here.
+        pct_adaptive_active = stats.get("pct_trades_adaptive_throttle_active", 0.0) or 0.0
+        avg_adaptive_multiplier = stats.get("avg_adaptive_risk_multiplier", 1.0)
+        if avg_adaptive_multiplier is None:
+            avg_adaptive_multiplier = 1.0
+        adaptive_is_driver = pct_adaptive_active >= threshold_pct and avg_adaptive_multiplier < 0.98
+        if adaptive_is_driver:
+            direction = (
+                f"sized BELOW the configured risk target -- driven mainly by the adaptive-risk "
+                f"throttle, active on {pct_adaptive_active:.0f}% of entries with an average size "
+                f"multiplier of {avg_adaptive_multiplier:.2f}x (see Adaptive Risk in the report for "
+                "which rule(s) fired)"
+            )
+        else:
+            direction = (
+                "sized BELOW the configured risk target (a max-position-size cap, whole-contract "
+                "rounding on a coarse-granularity instrument, or another sizing constraint -- the "
+                "trade data rules out the adaptive-risk throttle as the cause here)"
+            )
+        pct = pct_capped
     else:
         pct, direction = pct_overshoot, (
             "realized MORE loss than their own actual configured stop risk (almost always a "

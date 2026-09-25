@@ -77,6 +77,18 @@ class BacktestStatistics:
     avg_realized_loss_on_losers: float = 0.0
     pct_trades_position_capped: float = 0.0
     pct_trades_risk_overshoot: float = 0.0
+    # ADAPTIVE-RISK-ATTRIBUTION (2026-09-24): pct_trades_position_capped
+    # above previously left "why" as an unresolved three-way guess (max-
+    # position-size cap? adaptive-risk throttle? whole-contract rounding?)
+    # for anyone reading the report -- these two fields answer the
+    # "adaptive-risk throttle" branch of that guess directly from the
+    # trades themselves (Trade.adaptive_risk_multiplier / .adaptive_risk_
+    # rules_active), instead of leaving it as a hedge. Both are exactly
+    # 1.0 / 0.0 whenever no AdaptiveRiskConfig was passed to run_backtest
+    # at all (every existing report/test that never used this feature is
+    # unaffected).
+    avg_adaptive_risk_multiplier: float = 1.0
+    pct_trades_adaptive_throttle_active: float = 0.0
     # RISK-RECON: reconciles "how much you told the system you're willing
     # to risk" (RiskConfig.risk_value, e.g. 0.5% of a $50k account = a
     # $250 target -- see Trade.intended_risk_dollars) against what actually
@@ -274,12 +286,24 @@ def compute_risk_reconciliation(trades: list[Trade]) -> dict:
     ]
     pct_overshoot = float(sum(overshoot_flags) / len(overshoot_flags) * 100) if overshoot_flags else 0.0
 
+    # ADAPTIVE-RISK-ATTRIBUTION: direct evidence (not a guess) of how much
+    # of any "sized BELOW target" gap above is explained by the
+    # adaptive-risk throttle specifically -- see Trade.adaptive_risk_
+    # multiplier's own docstring. Both default to "throttle wasn't a
+    # factor" (1.0 / 0.0%) when no AdaptiveRiskConfig was active.
+    adaptive_multipliers = [t.adaptive_risk_multiplier for t in trades if t.adaptive_risk_multiplier is not None]
+    avg_adaptive_multiplier = float(np.mean(adaptive_multipliers)) if adaptive_multipliers else 1.0
+    adaptive_active_flags = [bool(t.adaptive_risk_rules_active) for t in trades]
+    pct_adaptive_active = float(sum(adaptive_active_flags) / len(adaptive_active_flags) * 100) if adaptive_active_flags else 0.0
+
     return {
         "avg_intended_risk_dollars": avg_intended,
         "avg_actual_stop_risk_dollars": avg_actual_stop,
         "avg_realized_loss_on_losers": avg_realized_loss,
         "pct_trades_position_capped": pct_capped,
         "pct_trades_risk_overshoot": pct_overshoot,
+        "avg_adaptive_risk_multiplier": avg_adaptive_multiplier,
+        "pct_trades_adaptive_throttle_active": pct_adaptive_active,
     }
 
 
@@ -524,6 +548,8 @@ def compute_statistics(
         avg_intended_risk_dollars=risk_recon["avg_intended_risk_dollars"],
         avg_actual_stop_risk_dollars=risk_recon["avg_actual_stop_risk_dollars"],
         avg_realized_loss_on_losers=risk_recon["avg_realized_loss_on_losers"],
+        avg_adaptive_risk_multiplier=risk_recon["avg_adaptive_risk_multiplier"],
+        pct_trades_adaptive_throttle_active=risk_recon["pct_trades_adaptive_throttle_active"],
         pct_trades_position_capped=risk_recon["pct_trades_position_capped"],
         pct_trades_risk_overshoot=risk_recon["pct_trades_risk_overshoot"],
     )
