@@ -238,6 +238,7 @@
         <div><label>Search-phase MC sims</label><input type="number" name="ga_search_mc_sims" value="200"></div>
         <div><label>Final MC sims</label><input type="number" name="final_mc_sims" value="10000"></div>
       </div>
+      <label class="checkbox-row" style="background:rgba(80,160,255,0.08);border:1px solid rgba(80,160,255,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="skip_optimization">Lock parameters -- skip the GA search entirely and backtest exactly what's supplied (use this to compare against another tool/platform on the identical rule, with no re-optimization)</label>
       <label class="checkbox-row"><input type="checkbox" name="parallel_search" checked>Parallelize GA search across CPU cores</label>
       <label class="checkbox-row" style="background:rgba(255,200,80,0.08);border:1px solid rgba(255,200,80,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="adaptive_risk_enabled">Enable adaptive, limit-aware position sizing (throttles risk as the account nears its daily-loss/max-drawdown limits)</label>
       <label class="checkbox-row" style="background:rgba(120,200,120,0.08);border:1px solid rgba(120,200,120,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="reset_on_breach" checked>Reset-on-breach: score on the basis that a blown account gets a fresh eval and keeps going, not a dead end (recommended)</label>
