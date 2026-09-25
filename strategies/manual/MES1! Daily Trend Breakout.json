@@ -1,0 +1,43 @@
+{
+  "name": "T58 ES(MES) Daily Trend-Aligned Donchian Breakout",
+  "entry_conditions": {
+    "long": [
+      {
+        "left": {"type": "close", "period": 1, "field": "close"},
+        "operator": ">",
+        "right": {"type": "ema", "period": 100, "field": "close"}
+      },
+      {
+        "left": {"type": "close", "period": 1, "field": "close"},
+        "operator": "cross above",
+        "right": {"type": "donchian_upper", "period": 20, "field": "close"}
+      }
+    ],
+    "long_connectors": ["AND"],
+    "short": [
+      {
+        "left": {"type": "close", "period": 1, "field": "close"},
+        "operator": "<",
+        "right": {"type": "ema", "period": 100, "field": "close"}
+      },
+      {
+        "left": {"type": "close", "period": 1, "field": "close"},
+        "operator": "cross below",
+        "right": {"type": "donchian_lower", "period": 20, "field": "close"}
+      }
+    ],
+    "short_connectors": ["AND"]
+  },
+  "exit_conditions": {"long": [], "short": []},
+  "risk_management": {
+    "stop_type": "atr",
+    "stop_value": 2.0,
+    "stop_atr_period": 14,
+    "target_type": "atr",
+    "target_value": 3.0,
+    "target_atr_period": 14,
+    "opposite_signal_exit": false,
+    "max_bars_in_trade": 15
+  },
+  "description": "Daily-bar (1d) trend-aligned breakout: long when close > EMA(100) and closes above the prior 20-day high; mirrored short. ATR(14) stop at 2.0x, target at 3.0x (1.5:1 R:R), 15-day time-stop. DESIGNED FOR MICRO CONTRACTS (MES), NOT full-size ES -- full-size ES's daily-ATR stop is too large to size sanely on a $50K account. Backtest 2020-01 to 2026-09 on MES at 1% risk/trade, $4.20->1.42 commission and 1-tick slippage: 103 trades, 55.3% win rate, profit factor 1.57, +18% return, 4.6% max drawdown. Monte Carlo (5,000 sims) against a $50K/6% target/2% daily-loss/4% max-DD rule set: 72.8% eval-pass probability, 64.4% first-payout probability, median 22 days to pass, 35 days to first payout. Parameter-perturbation check (+/-20-30% on EMA period and ATR stop/target multiples): every neighbor stayed profit-factor > 1.0 (range 1.1-1.57). CAVEAT: walk-forward across 6 overlapping yearly windows was profitable in 4 of 6 -- it lost money in the 2022 whipsaw bear market (only 4 trades, PF 0.01) and was flat/slightly negative on a small 2025-26 holdout sample (5 trades). Set RiskConfig: instrument MES, risk 1.0% of equity/trade, daily_loss_limit_pct 2.0, max_account_drawdown_pct 4.0, commission_per_trade ~1.42, slippage ~1 tick (0.25pt)."
+}
