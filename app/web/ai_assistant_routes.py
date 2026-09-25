@@ -33,7 +33,7 @@ import time
 
 from flask import Blueprint, Response, jsonify, render_template, request
 
-from app.ai import market_intelligence, market_scanner, news_forexfactory, t58_strategy_engine as t58
+from app.ai import ai_director, market_intelligence, market_scanner, news_forexfactory, t58_strategy_engine as t58
 from app.ai import trading_assistant
 from app.ai.ollama_settings import OllamaSettings, load_settings as load_ollama_settings, save_settings as save_ollama_settings
 
@@ -285,6 +285,86 @@ def api_outlook():
     else:
         text = deterministic + "\n\n--- T58 AI's read ---\n" + reply
     return jsonify({"text": text, "error": None})
+
+
+def _compute_director_directives():
+    """Shared by /api/director and /api/director/stream. Surveys the
+    WHOLE Strategy Library (all three languages) plus today's Best
+    Markets scan, and returns (directives, memory_counts) -- see
+    app.ai.ai_director for the deterministic scoring itself. Never
+    raises: a library/DB read failure just means an empty directive list
+    (the deterministic text below already handles that gracefully),
+    never a 500 for the panel."""
+    from app.ai import experiment_memory
+    from app.strategy import library
+
+    try:
+        strategies = library.list_saved_strategies()
+    except Exception:
+        strategies = []
+    rankings, _errors = _cached("rankings", _CACHE_TTL_RANKINGS, _compute_rankings)
+    ranking_dicts = [market_scanner.ranking_to_dict(r) for r in rankings] if rankings else []
+    try:
+        memory_counts = experiment_memory.get_summary_counts()
+    except Exception:
+        memory_counts = {"total": 0, "by_verdict": {}, "top_strategies": {}}
+    directives = ai_director.compute_directives(strategies, rankings=ranking_dicts)
+    return directives, memory_counts
+
+
+@ai_assistant_bp.route("/api/director")
+def api_director():
+    """Backs the AI Director panel. Always returns the deterministic
+    priority list + fallback text (every figure computed by
+    app.strategy.library / app.ai.market_scanner / app.ai.experiment_memory);
+    appends Ollama's narrative briefing on top only if it's enabled/
+    reachable -- identical fallback posture to /api/outlook."""
+    directives, memory_counts = _compute_director_directives()
+    deterministic = ai_director.build_deterministic_briefing(directives, memory_counts)
+    payload = {"directives": [d.to_dict() for d in directives], "memory_counts": memory_counts}
+
+    settings = load_ollama_settings()
+    if not settings.is_usable:
+        text = deterministic + "\n\n(Ollama isn't enabled -- showing the deterministic priority list only. " \
+            "Turn it on in Ollama settings below for a narrative briefing too.)"
+        payload.update({"text": text, "error": None})
+        return jsonify(payload)
+
+    client = trading_assistant.TradingAssistantClient(settings)
+    user_message = ai_director.build_director_prompt(directives, memory_counts)
+    reply, error = client.director_briefing(user_message)
+    if error:
+        text = deterministic + f"\n\n(Ollama narrative unavailable: {error})"
+    else:
+        text = deterministic + "\n\n--- T58 AI Director's briefing ---\n" + reply
+    payload.update({"text": text, "error": None})
+    return jsonify(payload)
+
+
+@ai_assistant_bp.route("/api/director/stream", methods=["POST"])
+def api_director_stream():
+    """Streaming twin of /api/director's Ollama narrative half -- same
+    newline-delimited-JSON convention as /api/chat/stream. The browser is
+    expected to have already rendered the deterministic list from a
+    prior /api/director call before triggering this; this endpoint only
+    ever streams the narrative briefing text."""
+    directives, memory_counts = _compute_director_directives()
+    settings = load_ollama_settings()
+    if not settings.is_usable:
+        def generate_off():
+            import json as _json
+            yield _json.dumps({"error": "Ollama isn't enabled -- turn it on in Ollama settings below."}) + "\n"
+        return Response(generate_off(), mimetype="application/x-ndjson")
+
+    client = trading_assistant.TradingAssistantClient(settings)
+    user_message = ai_director.build_director_prompt(directives, memory_counts)
+
+    def generate():
+        import json as _json
+        for chunk in client.director_briefing_stream(user_message):
+            yield _json.dumps(chunk) + "\n"
+
+    return Response(generate(), mimetype="application/x-ndjson")
 
 
 @ai_assistant_bp.route("/api/analyze-screenshot", methods=["POST"])
