@@ -1593,9 +1593,19 @@ class RunContextPanel:
             return
         self.r_pip_size.var.set(str(spec.pip_size))
         self.r_contract_size.var.set(str(spec.contract_size))
+        # COMMISSION-DEFAULT-UPGRADE (2026-09-24): only fills in a realistic
+        # commission when the field is still at its 0 default -- never
+        # overwrites a rate the user already typed in. Mirrors app.data.
+        # instrument_specs.apply_instrument_spec's own rule for the web/
+        # backend path, so a strategy picked from this dropdown can no
+        # longer end up silently backtested at $0 commission.
+        commission_note = ""
+        if self.r_commission.get_float(0) == 0.0:
+            self.r_commission.var.set(str(spec.default_commission_round_turn))
+            commission_note = f", commission=${spec.default_commission_round_turn:g}/trade"
         self.pip_detect_status.config(
             text=f"Applied {spec.symbol} ({spec.description}, {spec.exchange}): "
-                 f"pip_size={spec.pip_size}, ${spec.contract_size}/point per contract.",
+                 f"pip_size={spec.pip_size}, ${spec.contract_size}/point per contract{commission_note}.",
             fg=GREEN,
         )
 
@@ -7879,9 +7889,19 @@ class MainWindow:
             return
         self.r_pip_size.var.set(str(spec.pip_size))
         self.r_contract_size.var.set(str(spec.contract_size))
+        # COMMISSION-DEFAULT-UPGRADE (2026-09-24): only fills in a realistic
+        # commission when the field is still at its 0 default -- never
+        # overwrites a rate the user already typed in. Mirrors app.data.
+        # instrument_specs.apply_instrument_spec's own rule for the web/
+        # backend path, so a strategy picked from this dropdown can no
+        # longer end up silently backtested at $0 commission.
+        commission_note = ""
+        if self.r_commission.get_float(0) == 0.0:
+            self.r_commission.var.set(str(spec.default_commission_round_turn))
+            commission_note = f", commission=${spec.default_commission_round_turn:g}/trade"
         self.pip_detect_status.config(
             text=f"Applied {spec.symbol} ({spec.description}, {spec.exchange}): "
-                 f"pip_size={spec.pip_size}, ${spec.contract_size}/point per contract.",
+                 f"pip_size={spec.pip_size}, ${spec.contract_size}/point per contract{commission_note}.",
             fg=GREEN,
         )
 
