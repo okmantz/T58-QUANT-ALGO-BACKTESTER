@@ -123,3 +123,74 @@ def test_to_dict_round_trips_status_and_text():
     assert d["status"] == STATUS_VALID
     assert "DATA" in d["sections"]
     assert "T58 BACKTEST INTEGRITY CHECK" in d["text"]
+
+
+def test_zero_commission_on_known_futures_blocks(): 
+    """2026-09-24 upgrade: the exact gap found via an external RoboQuant
+    comparison on ES -- commission_per_trade=0.0 against a real futures
+    instrument must BLOCK, not just warn."""
+    df = _clean_1m_df(n=500)
+    report = run_integrity_check(
+        df, None, RiskConfig(commission_per_trade=0.0),
+        data_label="ES1!/futures_ES.F_1m.parquet",
+    )
+    assert report.status == STATUS_BLOCKED
+    assert "ES" in report.blocking_reason
+    assert "commission" in report.blocking_reason.lower()
+
+
+def test_zero_commission_on_known_futures_via_explicit_symbol_blocks():
+    df = _clean_1m_df(n=500)
+    report = run_integrity_check(
+        df, None, RiskConfig(commission_per_trade=0.0),
+        data_label="some_opaque_dataset_name.parquet",
+        instrument_symbol="MNQ",
+    )
+    assert report.status == STATUS_BLOCKED
+    assert "MNQ" in report.blocking_reason
+
+
+def test_nonzero_commission_on_known_futures_passes():
+    df = _clean_1m_df(n=500)
+    report = run_integrity_check(
+        df, None, RiskConfig(commission_per_trade=4.20),
+        data_label="ES1!/futures_ES.F_1m.parquet",
+    )
+    assert report.status == STATUS_VALID
+    execution = {l.label: l for l in report.sections["EXECUTION"]}
+    assert execution["Commission"].ok is True
+
+
+def test_zero_commission_on_unrecognized_instrument_does_not_block():
+    """No known futures symbol resolvable -> can't tell, so this check
+    must not fire (avoids false positives on FX/crypto/unfamiliar data)."""
+    df = _clean_1m_df(n=500)
+    report = run_integrity_check(
+        df, None, RiskConfig(commission_per_trade=0.0),
+        data_label="EURUSD_1m.csv",
+    )
+    assert report.status == STATUS_VALID
+
+
+def test_contract_size_unset_on_futures_warns_but_does_not_block():
+    df = _clean_1m_df(n=500)
+    report = run_integrity_check(
+        df, None, RiskConfig(commission_per_trade=4.20, contract_size=None),
+        data_label="ES1!/futures_ES.F_1m.parquet",
+    )
+    assert report.status == STATUS_VALID
+    account = {l.label: l for l in report.sections["ACCOUNT"]}
+    line = account["Whole-contract sizing"]
+    assert line.ok is False
+    assert line.critical is False
+    assert "ES" in line.detail
+
+
+def test_contract_size_set_on_futures_no_warning():
+    df = _clean_1m_df(n=500)
+    report = run_integrity_check(
+        df, None, RiskConfig(commission_per_trade=4.20, contract_size=50.0),
+        data_label="ES1!/futures_ES.F_1m.parquet",
+    )
+    account = {l.label: l for l in report.sections["ACCOUNT"]}
+    assert account["Whole-contract sizing"].ok is True

@@ -77,3 +77,93 @@ def test_mutated_manual_config_saved_under_stamped_name(tmp_path):
         assert saved["name"].startswith("sma cross [")
         assert "full_pipeline" in saved["name"]
         assert "seed=11" in saved["name"]
+
+
+def test_report_flags_ga_modified_parameters_and_shows_baseline(tmp_path):
+    """2026-09-24 PARAMETER-FIDELITY FIX: found via an external RoboQuant
+    comparison -- when the GA actually changes a manual strategy's
+    parameters, the SAVED REPORT (not just the library filename covered
+    above) must say so in its own title and carry both the baseline
+    (originally-supplied) and final (GA-mutated) parameter values, so a
+    reader can't mistake one for a backtest of the other."""
+    df = _trending_df()
+    strategy = ManualStrategy(_sma_config())
+    cfg = FullPipelineConfig(
+        ga_population=4, ga_generations=1, ga_search_mc_sims=20, final_mc_sims=200,
+        n_folds=3, save_to_library=True, random_seed=11,
+    )
+    result = run_full_pipeline(df, strategy, RiskConfig(), PropRules(), tmp_path / "fp_out2", cfg,
+                                report_basename="param_fidelity_test")
+    report = json.loads(result.report_paths["json"].read_text())
+
+    if result.refinement_ran and result.ga_result is not None and result.ga_result.best.oos_trade_count > 0:
+        # This is the "mutated_by_ga" branch -- the title must flag it,
+        # and baseline_parameters must be present with the same keys as
+        # final_parameters (whether or not any individual value actually
+        # moved -- see the "no values moved" case in the section renderer).
+        assert "GA-modified parameters" in report["strategy"]["name"]
+        assert report["final_parameters"] is not None
+        assert report["baseline_parameters"] is not None
+        assert set(report["baseline_parameters"].keys()) == set(report["final_parameters"].keys())
+    else:
+        # No mutation happened (or refinement didn't run at all) -- the
+        # title must stay exactly as before this fix, with no baseline
+        # section clutter for a report where nothing needs comparing.
+        assert "GA-modified parameters" not in report["strategy"]["name"]
+
+
+def test_final_parameters_section_flags_changed_rows():
+    from app.reports.generator import _final_parameters_section
+
+    baseline = {"ema.period": "20", "rsi.period": "14"}
+    final = {"ema.period": "35", "rsi.period": "14"}
+    html = _final_parameters_section(final, baseline)
+    assert "param-changed" in html
+    assert "GA search changed one or more parameters" in html
+    assert "35" in html and "20" in html  # both baseline and final values shown
+
+
+def test_final_parameters_section_no_baseline_falls_back_to_final_only():
+    from app.reports.generator import _final_parameters_section
+
+    html = _final_parameters_section({"ema.period": "35"}, None)
+    assert "Baseline" not in html
+    assert "35" in html
+
+
+def test_final_parameters_section_no_changes_says_so():
+    from app.reports.generator import _final_parameters_section
+
+    same = {"ema.period": "20"}
+    html = _final_parameters_section(dict(same), dict(same))
+    assert "param-changed" not in html
+    assert "did not move any parameter" in html
+
+
+def test_skip_optimization_mode_never_mutates_parameters(tmp_path):
+    """2026-09-24 lock-parameters / fixed-backtest mode: found via an
+    external RoboQuant comparison -- comparing "the same strategy"
+    against another tool is only valid when Full Pipeline's GA search
+    doesn't quietly change it first. skip_optimization=True must skip
+    Step 2 entirely and leave the report describing exactly the supplied
+    parameters, with no GA-modified tag and no baseline/final split."""
+    df = _trending_df()
+    strategy = ManualStrategy(_sma_config())
+    cfg = FullPipelineConfig(
+        ga_population=4, ga_generations=1, ga_search_mc_sims=20, final_mc_sims=200,
+        n_folds=3, save_to_library=False, random_seed=11, skip_optimization=True,
+    )
+    result = run_full_pipeline(df, strategy, RiskConfig(), PropRules(), tmp_path / "fp_skip_opt", cfg,
+                                report_basename="skip_optimization_test")
+
+    assert result.refinement_ran is False
+    assert result.ga_result is None
+    assert "skip_optimization" in (result.refinement_skip_reason or "")
+    # The final config must be byte-identical to what was supplied -- no
+    # GA winner was ever substituted in.
+    assert result.final_config == strategy.config
+
+    report = json.loads(result.report_paths["json"].read_text())
+    assert "GA-modified parameters" not in report["strategy"]["name"]
+    assert report["final_parameters"] is None
+    assert report["baseline_parameters"] is None

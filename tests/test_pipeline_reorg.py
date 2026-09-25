@@ -132,7 +132,104 @@ def test_make_verdict_never_requires_every_metric_to_pass_simultaneously():
 
 
 # ---------------------------------------------------------------------------
-# #4 -- CPCV/regime wiring, Option A
+# Minimum trade-count floor for READY (2026-09-24) -- see
+# FullPipelineConfig.min_trades_for_ready's own docstring for why this
+# exists: found via an external RoboQuant comparison where a strategy on
+# just 40 trades over 6 years, with one trade responsible for a third of
+# its gross profit, would otherwise have scored well enough to be
+# considered for READY.
+# ---------------------------------------------------------------------------
+
+def _elite_leaning_mc_and_wf():
+    from dataclasses import dataclass
+
+    @dataclass
+    class _FakeMC:
+        evaluation_pass_probability: float = 95.0
+        first_payout_probability: float = 90.0
+        risk_of_ruin_pct: float = 2.0
+        return_percentiles: dict = None
+
+        def __post_init__(self):
+            if self.return_percentiles is None:
+                self.return_percentiles = {25: 10.0, 50: 15.0, 75: 20.0}
+
+    @dataclass
+    class _FakeWF:
+        n_folds: int = 6
+        walk_forward_efficiency: float = 0.9
+        is_stable: bool = True
+        stability_threshold: float = 0.4
+
+    return _FakeMC(), _FakeWF()
+
+
+def _fake_statistics(total_trades: int):
+    from dataclasses import dataclass
+
+    @dataclass
+    class _FakeStats:
+        total_trades: int
+
+        def to_dict(self):
+            return {}
+
+    return _FakeStats(total_trades=total_trades)
+
+
+def test_min_trades_floor_caps_thin_sample_at_marginal():
+    mc, wf = _elite_leaning_mc_and_wf()
+    verdict, reasons, scorecard, hard_fail, lookahead_hard_fail = _make_verdict(
+        mc, wf, icir_gate=None, risk_of_ruin_cap=20.0,
+        statistics=_fake_statistics(40), min_trades_for_ready=100,
+    )
+    assert scorecard.tier in ("Elite", "Strong"), "test setup should have earned READY on the score alone"
+    assert verdict == "MARGINAL"
+    assert any("CAPPED AT MARGINAL" in r for r in reasons)
+    assert any("40 trade" in r for r in reasons)
+
+
+def test_min_trades_floor_does_not_affect_a_healthy_sample():
+    mc, wf = _elite_leaning_mc_and_wf()
+    verdict, reasons, scorecard, hard_fail, lookahead_hard_fail = _make_verdict(
+        mc, wf, icir_gate=None, risk_of_ruin_cap=20.0,
+        statistics=_fake_statistics(250), min_trades_for_ready=100,
+    )
+    assert verdict == "READY"
+    assert not any("CAPPED AT MARGINAL" in r for r in reasons)
+
+
+def test_min_trades_floor_never_downgrades_an_already_marginal_verdict():
+    """A strategy that wasn't going to be READY anyway shouldn't get an
+    extra, misleading 'capped' reason attached -- its score already
+    explains the verdict."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class _WeakMC:
+        evaluation_pass_probability: float = 40.0
+        first_payout_probability: float = 20.0
+        risk_of_ruin_pct: float = 15.0
+        return_percentiles: dict = None
+
+        def __post_init__(self):
+            if self.return_percentiles is None:
+                self.return_percentiles = {25: -2.0, 50: 1.0, 75: 3.0}
+
+    verdict, reasons, scorecard, hard_fail, lookahead_hard_fail = _make_verdict(
+        _WeakMC(), None, icir_gate=None, risk_of_ruin_cap=20.0,
+        statistics=_fake_statistics(10), min_trades_for_ready=100,
+    )
+    assert verdict != "READY"
+    assert not any("CAPPED AT MARGINAL" in r for r in reasons)
+
+
+def test_min_trades_floor_is_configurable_via_full_pipeline_config():
+    assert FullPipelineConfig().min_trades_for_ready == 100
+    assert FullPipelineConfig(min_trades_for_ready=10).min_trades_for_ready == 10
+
+
+
 # ---------------------------------------------------------------------------
 
 def test_cpcv_as_supporting_diagnostic_does_not_replace_walk_forward(tmp_path):
