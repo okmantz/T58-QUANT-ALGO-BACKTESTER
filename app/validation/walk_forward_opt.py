@@ -72,8 +72,10 @@ from app.optimize.refinement import (
     compute_fitness,
     preflight_signal_check,
 )
+from app.orchestration.resource_guard import safe_worker_count
 from app.prop.simulator import PropRules, simulate_account, summarize_single_run
 from app.strategy.base import Strategy
+from concurrent.futures import ThreadPoolExecutor
 
 ProgressCallback = Callable[[str], None]
 
@@ -248,11 +250,33 @@ def _optimize_on_window(
         fitness = compute_fitness(bt.statistics.to_dict(), prop_summary, mc, refine_cfg.fitness_metric)
         return fitness if math.isfinite(fitness) else float("-inf")
 
+    # PERFORMANCE FIX (WFO slowness): every evaluate() call below is a full
+    # backtest + prop simulation + Monte Carlo re-run, and this GA used to
+    # call them one at a time in a plain Python loop -- for n_folds folds
+    # each running population_size + generations*population_size of these
+    # sequentially, that's easily 100-200+ fully independent, CPU-heavy
+    # calls done back to back with zero overlap. Each evaluate() call only
+    # reads train_df/risk/prop_rules/mc_config/refine_cfg (never mutates
+    # them) and builds its own fresh candidate_strategy from genome, so a
+    # whole batch of them is embarrassingly parallel -- the same pattern
+    # already used for Speed Run's Phase 2 validation and Search Lab's
+    # parallel_search. run_backtest/pandas/numpy release the GIL for their
+    # actual numeric work, so a ThreadPoolExecutor (no per-worker data
+    # copy, unlike a process pool) gives a real wall-clock speedup here.
+    _max_workers = safe_worker_count(train_df, requested=None)
+
+    def evaluate_many(genomes: list[list]) -> list[float]:
+        if len(genomes) <= 1 or _max_workers <= 1:
+            return [evaluate(g) for g in genomes]
+        with ThreadPoolExecutor(max_workers=min(_max_workers, len(genomes))) as pool:
+            return list(pool.map(evaluate, genomes))
+
     baseline_genome = [g.base_value for g in genes]
-    population = [(baseline_genome, evaluate(baseline_genome))]
-    while len(population) < refine_cfg.population_size:
-        g = [_random_gene_value(gene, rng) for gene in genes]
-        population.append((g, evaluate(g)))
+    candidate_genomes = [baseline_genome]
+    while len(candidate_genomes) < refine_cfg.population_size:
+        candidate_genomes.append([_random_gene_value(gene, rng) for gene in genes])
+    fitnesses = evaluate_many(candidate_genomes)
+    population = list(zip(candidate_genomes, fitnesses))
 
     best_genome, best_fitness = max(population, key=lambda p: p[1])
 
@@ -271,15 +295,18 @@ def _optimize_on_window(
                 self.fitness = fitness
 
         cand_pop = [_Cand(g, f) for g, f in population]
+        bred_genomes = []
         for _ in range(n_bred):
             pa = _tournament_select(cand_pop, rng)
             pb = _tournament_select(cand_pop, rng)
             child = _crossover(pa.genome, pb.genome, rng)
             child = _mutate(child, genes, refine_cfg.mutation_rate, refine_cfg.mutation_strength, rng)
-            next_pop.append((child, evaluate(child)))
-        while len(next_pop) < refine_cfg.population_size:
-            g = [_random_gene_value(gene, rng) for gene in genes]
-            next_pop.append((g, evaluate(g)))
+            bred_genomes.append(child)
+        while len(bred_genomes) + len(next_pop) < refine_cfg.population_size:
+            bred_genomes.append([_random_gene_value(gene, rng) for gene in genes])
+
+        bred_fitnesses = evaluate_many(bred_genomes)
+        next_pop.extend(zip(bred_genomes, bred_fitnesses))
 
         population = next_pop
         gen_best_genome, gen_best_fitness = max(population, key=lambda p: p[1])
