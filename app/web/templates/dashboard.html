@@ -59,7 +59,7 @@
       <button type="submit" class="t58-btn primary">Promote to {{ snapshot.row.promotion.next_stage_title }} &rarr;</button>
     </form>
     {% else %}
-    <a class="t58-btn primary" href="/validate">Open Validate &rarr;</a>
+    <a class="t58-btn primary" href="{{ snapshot.next_action_href or '/validate' }}">Continue &rarr;</a>
     {% endif %}
     <a class="t58-btn ghost" href="/forward-test">Forward test</a>
   </div>

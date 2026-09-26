@@ -219,8 +219,8 @@
     return d.innerHTML;
   }
 
-  // Renders the 6-pill Create/Test/Optimize/Validate/Champion Check/Ready
-  // bar for one strategy's pipeline_progress (see
+  // Renders the 7-pill Create/Test/Optimize/Validate/Champion/Forward
+  // Test/Deploy bar for one strategy's pipeline_progress (see
   // app.strategy.library.compute_pipeline_progress -- same shape). A
   // strategy saved before this feature existed has no pipeline_progress
   // at all, so this degrades to "just Create" rather than erroring.
@@ -229,17 +229,18 @@
   // to go run, same "always tell them the next tab" convention as
   // app.orchestration.pipeline_guide's server-side guidance text.
   function nextStepText(pp) {
-    if (!pp) return 'Next step: run this strategy on 5 Run & Report to start tracking its pipeline progress.';
+    if (!pp) return 'Next step: run this strategy on Run & Report to start tracking its pipeline progress.';
     const verdict = pp.verdict || '';
     switch (pp.next_stage) {
       case 'test': return 'Next step: run this strategy on Run & Report (or Quick Optimize / Full Pipeline, which include a test) to reach the Test stage.';
       case 'optimize': return 'Next step: run Quick Optimize (or Full Pipeline) on this strategy to reach the Optimize stage.';
-      case 'validate': return 'Next step: run CPCV / PBO (or Full Pipeline, which validates internally) to reach the Validate stage.';
-      case 'champion_check': return 'Next step: run Full Pipeline for a final READY/MARGINAL/NOT READY champion check.';
-      case 'ready': return verdict && verdict !== 'READY'
+      case 'validate': return 'Next step: run CPCV / PBO / Sensitivity / Walk-Forward Opt / Walk-Forward GA / Regime Matrix (or Full Pipeline, which validates internally) to reach the Validate stage.';
+      case 'champion_check': return verdict && verdict !== 'READY'
         ? `Champion-checked as ${verdict} -- not Ready yet. Open its last Full Pipeline report for what to fix, then re-run.`
-        : 'Champion-checked -- not yet marked Ready.';
-      default: return verdict === 'READY' ? 'READY -- cleared through every stage of the pipeline.' : '';
+        : 'Next step: run Full Pipeline for a final READY/MARGINAL/NOT READY champion check.';
+      case 'forward_test': return 'Next step: run this strategy through Forward Test (e.g. the MT5 bridge) to reach the Forward Test stage.';
+      case 'deploy': return 'Next step: deploy this strategy live to reach the final Deploy stage.';
+      default: return verdict === 'READY' || !pp.next_stage ? 'Deployed -- cleared through every stage of the pipeline.' : '';
     }
   }
 
@@ -247,7 +248,8 @@
     const stages = (pp && pp.stages) || [
       {key: 'create', title: 'Create', done: true}, {key: 'test', title: 'Test', done: false},
       {key: 'optimize', title: 'Optimize', done: false}, {key: 'validate', title: 'Validate', done: false},
-      {key: 'champion_check', title: 'Champion Check', done: false}, {key: 'ready', title: 'Ready', done: false},
+      {key: 'champion_check', title: 'Champion', done: false},
+      {key: 'forward_test', title: 'Forward Test', done: false}, {key: 'deploy', title: 'Deploy', done: false},
     ];
     const verdict = (pp && pp.verdict) || '';
     const pills = stages.map(s => {
@@ -255,7 +257,6 @@
       if (s.done) {
         cls += ' done';
         if (s.key === 'champion_check' && verdict && verdict !== 'READY') cls += ' warn';
-        if (s.key === 'ready' && verdict && verdict !== 'READY') cls += ' fail';
       }
       return `<div class="${cls}" title="${escapeHtml(s.title)}${s.done ? ' -- done' : ' -- not yet'}"></div>`;
     }).join('');
