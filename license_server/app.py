@@ -49,6 +49,7 @@ import hmac
 import hashlib
 import os
 import time
+from datetime import datetime, timezone
 from functools import wraps
 
 from flask import Flask, jsonify, request
@@ -95,6 +96,19 @@ def _check_license(email: str, license_key: str, device_id: str, allow_bind: boo
     if not email or not license_key or not device_id:
         return 400, {"ok": False, "error": "email, license_key, and device_id are all required."}
 
+    # SHARED TRIAL KEYS (2026-09-26): a trial_key is not tied to any one
+    # email at creation, so it can never be found in the `licenses` table
+    # -- check it FIRST and hand off to the dedicated trial flow (see
+    # db.redeem_trial) rather than falling through to "not_found" below.
+    # This means the existing app/client code -- which already only
+    # knows how to POST email/license_key/device_id to /activate and
+    # /validate and read back {ok, status, expires_at} -- needs zero
+    # changes to support a trial key; it's just another string someone
+    # can type into the same "license key" field.
+    trial_key = db.get_trial_key(license_key.strip().upper())
+    if trial_key is not None:
+        return _check_trial(trial_key, email, device_id)
+
     lic = db.get_license(license_key.strip().upper())
     if lic is None:
         return 404, {"ok": False, "error": "not_found"}
@@ -118,6 +132,35 @@ def _check_license(email: str, license_key: str, device_id: str, allow_bind: boo
 
     db.touch_validated(lic["license_key"])
     return 200, {"ok": True, **_license_public_view(lic)}
+
+
+def _check_trial(trial_key: dict, email: str, device_id: str):
+    """The trial-key half of _check_license -- see db.redeem_trial for
+    the actual per-person-once-per-3-days rule. Response shape matches
+    _license_public_view exactly (status/email/plan/expires_at) so the
+    client can't tell a trial redemption apart from a normal license
+    response and needs no special-case handling for it."""
+    ip_address = request.headers.get("X-Forwarded-For", request.remote_addr or "")
+    try:
+        redemption = db.redeem_trial(trial_key["trial_key"], email, device_id, ip_address=ip_address)
+    except db.TrialConflict as exc:
+        reason = "This trial key has already been used on a different device." if exc.reason == "device" \
+            else "This trial key has already been used with a different email address."
+        return 403, {"ok": False, "error": "trial_already_used", "message": reason}
+    except ValueError as exc:
+        return 403, {"ok": False, "error": "trial_invalid", "message": str(exc)}
+
+    expires = datetime.fromisoformat(redemption["expires_at"])
+    if expires <= datetime.now(timezone.utc):
+        return 403, {
+            "ok": False, "error": "expired",
+            "status": "expired", "email": redemption["email"], "plan": "trial",
+            "expires_at": redemption["expires_at"],
+        }
+    return 200, {
+        "ok": True, "status": "active", "email": redemption["email"], "plan": "trial",
+        "expires_at": redemption["expires_at"],
+    }
 
 
 @app.route("/activate", methods=["POST"])
@@ -189,6 +232,60 @@ def admin_get_license(license_key):
     if lic is None:
         return jsonify({"ok": False, "error": "not_found"}), 404
     return jsonify({"ok": True, "license": lic})
+
+
+# ---------------------------------------------------------------------------
+# Admin: shared trial keys (see db.redeem_trial for the actual rule)
+# ---------------------------------------------------------------------------
+
+@app.route("/admin/trial-keys", methods=["POST"])
+@require_admin
+def admin_create_trial_key():
+    data = request.get_json(silent=True) or request.form
+    trial_key = (data.get("trial_key") or "").strip()
+    if not trial_key:
+        return jsonify({"ok": False, "error": "trial_key is required."}), 400
+    days = int(data.get("days") or 3)
+    try:
+        tk = db.create_trial_key(trial_key, days=days)
+    except Exception as exc:  # sqlite3.IntegrityError on a duplicate key phrase
+        return jsonify({"ok": False, "error": f"Could not create trial key: {exc}"}), 400
+    return jsonify({"ok": True, "trial_key": tk}), 201
+
+
+@app.route("/admin/trial-keys", methods=["GET"])
+@require_admin
+def admin_list_trial_keys():
+    return jsonify({"ok": True, "trial_keys": db.list_trial_keys()})
+
+
+@app.route("/admin/trial-keys/<trial_key>/disable", methods=["POST"])
+@require_admin
+def admin_disable_trial_key(trial_key):
+    tk = db.set_trial_key_status(trial_key, "disabled")
+    if tk is None:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    return jsonify({"ok": True, "trial_key": tk})
+
+
+@app.route("/admin/trial-keys/<trial_key>/enable", methods=["POST"])
+@require_admin
+def admin_enable_trial_key(trial_key):
+    tk = db.set_trial_key_status(trial_key, "active")
+    if tk is None:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    return jsonify({"ok": True, "trial_key": tk})
+
+
+@app.route("/admin/trial-redemptions", methods=["GET"])
+@require_admin
+def admin_list_trial_redemptions():
+    """Every (device, email) pair that has ever redeemed a trial, newest
+    first -- this is Owen's own visibility into potential trial-key
+    abuse (e.g. many redemptions from the same ip_address in a short
+    window), since device_id/email alone can't be hard-blocked across a
+    fresh pairing of both (see db.redeem_trial's docstring)."""
+    return jsonify({"ok": True, "redemptions": db.list_trial_redemptions()})
 
 
 def _admin_set_status_route(license_key, status):

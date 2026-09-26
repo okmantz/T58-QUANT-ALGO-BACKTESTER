@@ -73,6 +73,18 @@ def main() -> int:
     p_extend.add_argument("license_key")
     p_extend.add_argument("--days", type=int, required=True)
 
+    p_trial_create = sub.add_parser("trial-create", help="Register a new shareable trial key (e.g. T58-TRIAL-3DAY)")
+    p_trial_create.add_argument("trial_key")
+    p_trial_create.add_argument("--days", type=int, default=3)
+
+    sub.add_parser("trial-list", help="List all registered trial keys")
+
+    for name in ("trial-enable", "trial-disable"):
+        p = sub.add_parser(name, help=f"{'Re-enable' if name == 'trial-enable' else 'Disable'} a trial key (redemptions already made are unaffected either way)")
+        p.add_argument("trial_key")
+
+    sub.add_parser("trial-redemptions", help="List everyone who has redeemed a trial (device/email/expiry/IP) -- your visibility into sharing abuse")
+
     args = parser.parse_args()
 
     if not args.token:
@@ -93,6 +105,16 @@ def main() -> int:
         result = _request("POST", f"{base}/admin/licenses/{args.license_key}/{args.command}", args.token)
     elif args.command == "extend":
         result = _request("POST", f"{base}/admin/licenses/{args.license_key}/extend", args.token, {"days": args.days})
+    elif args.command == "trial-create":
+        result = _request("POST", f"{base}/admin/trial-keys", args.token, {"trial_key": args.trial_key, "days": args.days})
+    elif args.command == "trial-list":
+        result = _request("GET", f"{base}/admin/trial-keys", args.token)
+    elif args.command == "trial-enable":
+        result = _request("POST", f"{base}/admin/trial-keys/{args.trial_key}/enable", args.token)
+    elif args.command == "trial-disable":
+        result = _request("POST", f"{base}/admin/trial-keys/{args.trial_key}/disable", args.token)
+    elif args.command == "trial-redemptions":
+        result = _request("GET", f"{base}/admin/trial-redemptions", args.token)
     else:
         parser.print_help()
         return 1
