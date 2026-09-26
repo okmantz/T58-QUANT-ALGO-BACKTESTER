@@ -1134,16 +1134,46 @@ def user_manual():
     return render_template("user_manual.html", active_page="user_manual")
 
 
+def _find_library_match_for_current_strategy(strategy_name: str):
+    """Best-effort bridge between the Dashboard's "current strategy"
+    (tracked by app.reports.strategy_state as a free-text
+    strategy_name/instrument pair -- see set_current_strategy, which has
+    no library_ref of its own) and an actual saved Strategy Library
+    entry, so the Dashboard can show the SAME real, tool-usage-derived
+    pipeline_progress (compute_pipeline_progress) that the Strategy
+    Library page already shows per row, instead of nothing at all.
+    Matches by filename stem first (exact, case-insensitive), then by
+    the strategy's own declared "name" in its metadata/config (covers a
+    saved file whose filename was auto-stamped and no longer matches the
+    strategy's display name). Returns the StoredStrategy or None."""
+    if not strategy_name:
+        return None
+    target = strategy_name.strip().lower()
+    best_by_display_name = None
+    for stored in list_saved_strategies():
+        stem = Path(stored.name).stem.strip().lower()
+        if stem == target:
+            return stored
+        display_name = str(stored.metadata.get("name") or "").strip().lower()
+        if display_name and display_name == target and best_by_display_name is None:
+            best_by_display_name = stored
+    return best_by_display_name
+
+
 @app.route("/dashboard")
 def dashboard():
     current = strategy_state.get_current_strategy()
     checklist = None
     score = None
     current_metrics = None
+    current_pipeline_progress = None
     if current:
         checklist = strategy_state.get_checklist(current["strategy_name"], current["instrument"])
         score = strategy_state.robustness_score(current["strategy_name"], current["instrument"])
         current_metrics = run_history.latest_run_for(current["strategy_name"], current["instrument"])
+        matched = _find_library_match_for_current_strategy(current["strategy_name"])
+        if matched is not None:
+            current_pipeline_progress = matched.pipeline_progress
     dashboard_stats = run_history.dashboard_data()
     # Fix up report_html links before they reach the template -- see
     # _dashboard_report_url's docstring for why the raw stored value
@@ -1174,6 +1204,7 @@ def dashboard():
         current_metrics=current_metrics,
         checklist=checklist,
         robustness=score,
+        pipeline_progress=current_pipeline_progress,
         validation_labels=strategy_state.VALIDATION_LABELS,
         validation_hrefs=strategy_state.VALIDATION_HREFS,
         validation_kinds=strategy_state.VALIDATION_KINDS,
@@ -4313,7 +4344,7 @@ def _wfo_job_log(job_id: str, msg: str) -> None:
 def _run_wfo_job(
     job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, mc_cfg: MonteCarloConfig,
     n_folds: int, window_mode: str, train_frac: float, embargo_bars: int, refine_cfg: RefinementConfig,
-    strategy_name: str = "", instrument: str = "",
+    strategy_name: str = "", instrument: str = "", library_ref: tuple[str, str] | None = None,
 ) -> None:
     try:
         result = run_walk_forward_optimization(
@@ -4334,6 +4365,13 @@ def _run_wfo_job(
         # No strict pass/fail verdict is computed by this tool -- passed=None
         # records that it *ran*, without inventing a threshold it doesn't set.
         strategy_state.record_validation(strategy_name, instrument, "wfo", passed=None, summary=summary, report_html=report_html)
+        if library_ref:
+            try:
+                record_validation_result(*library_ref, {
+                    "method": "wfo", "efficiency": eff, "n_folds": n_folds, "report_html": report_html,
+                })
+            except Exception:  # noqa: BLE001 -- recording to the library is a convenience, not core output
+                pass
     except RefinementError as exc:
         with _WFO_JOBS_LOCK:
             job = _WFO_JOBS[job_id]
@@ -4407,7 +4445,7 @@ def wfo_start():
                 int(form.get("n_folds", 5) or 5), form.get("window_mode", "rolling"),
                 float(form.get("train_frac", 0.6) or 0.6), int(form.get("embargo_bars", 0) or 0), refine_cfg,
             ),
-            kwargs={"strategy_name": getattr(strategy, "name", "Strategy"), "instrument": active_label},
+            kwargs={"strategy_name": getattr(strategy, "name", "Strategy"), "instrument": active_label, "library_ref": library_ref},
             daemon=True,
         )
         thread.start()
@@ -4697,7 +4735,7 @@ def _wfga_job_log(job_id: str, msg: str) -> None:
 def _run_wfga_job(
     job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, mc_cfg: MonteCarloConfig,
     refine_cfg: RefinementConfig, n_folds: int, window_mode: str, train_frac: float,
-    strategy_name: str = "", instrument: str = "",
+    strategy_name: str = "", instrument: str = "", library_ref: tuple[str, str] | None = None,
 ) -> None:
     try:
         result = run_walkforward_aware_refinement(
@@ -4715,6 +4753,13 @@ def _run_wfga_job(
         gap = getattr(result, "overfitting_gap", None)
         summary = f"overfitting gap {gap:.2f}" if gap is not None else f"{n_folds} folds, walk-forward-aware GA"
         strategy_state.record_validation(strategy_name, instrument, "wfga", passed=None, summary=summary, report_html=report_html)
+        if library_ref:
+            try:
+                record_validation_result(*library_ref, {
+                    "method": "wfga", "overfitting_gap": gap, "n_folds": n_folds, "report_html": report_html,
+                })
+            except Exception:  # noqa: BLE001 -- recording to the library is a convenience, not core output
+                pass
     except RefinementError as exc:
         with _WFGA_JOBS_LOCK:
             job = _WFGA_JOBS[job_id]
@@ -4809,7 +4854,7 @@ def wfga_start():
                 job_id, df, strategy, risk, rules, mc_cfg, refine_cfg,
                 int(form.get("n_folds", 4) or 4), form.get("window_mode", "rolling"), float(form.get("train_frac", 0.6) or 0.6),
             ),
-            kwargs={"strategy_name": getattr(strategy, "name", "Strategy"), "instrument": active_label},
+            kwargs={"strategy_name": getattr(strategy, "name", "Strategy"), "instrument": active_label, "library_ref": library_ref},
             daemon=True,
         )
         thread.start()
@@ -5071,7 +5116,7 @@ def regime_matrix_run():
         if dataset_error:
             return render_template("regime_matrix.html", **ctx(error=dataset_error), **_alpaca_template_context()), 400
 
-        strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
+        strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000)),
             risk_mode=form.get("risk_mode", "percent"),
@@ -5097,6 +5142,13 @@ def regime_matrix_run():
             getattr(strategy, "name", "Strategy"), active_label, "regime_matrix",
             passed=None, summary=f"{len(result.cells)} regime cell(s) analyzed",
         )
+        if library_ref:
+            try:
+                record_validation_result(*library_ref, {
+                    "method": "regime_matrix", "n_cells": len(result.cells),
+                })
+            except Exception:  # noqa: BLE001 -- recording to the library is a convenience, not core output
+                pass
 
         # -------------------------------------------------------------
         # UPGRADE (regime-exclusion-primitive-had-no-ui): the "Recommended
@@ -5672,7 +5724,7 @@ def _pbo_job_log(job_id: str, msg: str) -> None:
             job["log"].append(msg)
 
 
-def _run_pbo_job(job_id: str, df, specs: list[dict], risk: RiskConfig, n_groups: int, n_test_groups: int, embargo_frac: float, metric: str, max_paths: int, prop_rules=None, strategy_name: str = "", instrument: str = "") -> None:
+def _run_pbo_job(job_id: str, df, specs: list[dict], risk: RiskConfig, n_groups: int, n_test_groups: int, embargo_frac: float, metric: str, max_paths: int, prop_rules=None, strategy_name: str = "", instrument: str = "", library_ref: tuple[str, str] | None = None) -> None:
     try:
         _pbo_job_log(job_id, f"Running PBO across {len(specs)} candidate(s): {n_groups} groups, {n_test_groups} held out per path, metric={metric}...")
         result = compute_pbo(
@@ -5695,6 +5747,17 @@ def _run_pbo_job(job_id: str, df, specs: list[dict], risk: RiskConfig, n_groups:
             strategy_name, instrument, "pbo",
             passed=bool(result.pbo < 0.5), summary=f"PBO {result.pbo * 100:.1f}% across {result.n_candidates} candidates", report_html=report_html,
         )
+        # Pipeline-progress: only the form's own candidate (index 0 of
+        # `specs`, see pbo_start) has a library_ref -- library-pool and
+        # perturbed-variant candidates are comparison-only, not "the
+        # strategy being validated" from this tool's own perspective.
+        if library_ref:
+            try:
+                record_validation_result(*library_ref, {
+                    "method": "pbo", "pbo": result.pbo, "n_candidates": result.n_candidates, "report_html": report_html,
+                })
+            except Exception:  # noqa: BLE001 -- recording to the library is a convenience, not core output
+                pass
     except CPCVError as exc:
         with _PBO_JOBS_LOCK:
             job = _PBO_JOBS[job_id]
@@ -5780,8 +5843,7 @@ def pbo_start():
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_PBO)
             return render_template("pbo.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
-        strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
-
+        strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         pool_refs = [r for r in form.getlist("pool_strategy") if r]
         n_variants = int(form.get("n_perturbed_variants", 0) or 0)
         seed = int(form.get("seed", 42) or 42)
@@ -5817,7 +5879,7 @@ def pbo_start():
                 float(form.get("embargo_frac", 0.01) or 0.01), form.get("metric", "sharpe_ratio"),
                 int(form.get("max_paths", 30) or 30), prop_rules,
             ),
-            kwargs={"strategy_name": getattr(strategy, "name", "Strategy"), "instrument": active_label},
+            kwargs={"strategy_name": getattr(strategy, "name", "Strategy"), "instrument": active_label, "library_ref": library_ref},
             daemon=True,
         )
         thread.start()
@@ -5879,7 +5941,7 @@ def _sens_job_log(job_id: str, msg: str) -> None:
             job["log"].append(msg)
 
 
-def _run_sensitivity_job(job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, mc_cfg: MonteCarloConfig, metric: str, pct_range: float, n_steps: int, max_params: int, strategy_name: str = "", instrument: str = "") -> None:
+def _run_sensitivity_job(job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, mc_cfg: MonteCarloConfig, metric: str, pct_range: float, n_steps: int, max_params: int, strategy_name: str = "", instrument: str = "", library_ref: tuple[str, str] | None = None) -> None:
     try:
         _sens_job_log(job_id, f"Sweeping up to {max_params} tunable parameter(s), {n_steps} steps each, metric={metric}...")
         results = compute_1d_sensitivity(df, strategy, risk, rules, mc_cfg, metric=metric, pct_range=pct_range, n_steps=n_steps, max_params=max_params)
@@ -5902,6 +5964,13 @@ def _run_sensitivity_job(job_id: str, df, strategy, risk: RiskConfig, rules: Pro
             strategy_name, instrument, "sensitivity",
             passed=None, summary=f"{len(results)} parameter(s) swept", report_html=report_html,
         )
+        if library_ref:
+            try:
+                record_validation_result(*library_ref, {
+                    "method": "sensitivity", "n_parameters_swept": len(results), "report_html": report_html,
+                })
+            except Exception:  # noqa: BLE001 -- recording to the library is a convenience, not core output
+                pass
     except RefinementError as exc:
         with _SENS_JOBS_LOCK:
             job = _SENS_JOBS[job_id]
@@ -5970,7 +6039,7 @@ def sensitivity_start():
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_SENSITIVITY)
             return render_template("sensitivity.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
-        strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
+        strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000)), pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None), commission_per_trade=float(form.get("commission", 0) or 0))
         rules = PropRules(account_size=float(form.get("account_size", 100000)))
         mc_cfg = MonteCarloConfig(n_simulations=int(form.get("mc_sims", 500) or 500))
@@ -5987,7 +6056,7 @@ def sensitivity_start():
                 job_id, df, strategy, risk, rules, mc_cfg, form.get("metric", "profit_factor"),
                 float(form.get("pct_range", 0.5) or 0.5), int(form.get("n_steps", 9) or 9), int(form.get("max_params", 8) or 8),
             ),
-            kwargs={"strategy_name": getattr(strategy, "name", "Strategy"), "instrument": active_label},
+            kwargs={"strategy_name": getattr(strategy, "name", "Strategy"), "instrument": active_label, "library_ref": library_ref},
             daemon=True,
         )
         thread.start()
@@ -6095,6 +6164,7 @@ def _run_param_robustness_job(
     job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, mc_cfg: MonteCarloConfig,
     metric: str, pass_threshold_pct: float, pct_range: float, n_steps_1d: int, n_steps_2d: int,
     max_params: int, n_heatmap_pairs: int, strategy_name: str = "", instrument: str = "",
+    library_ref: tuple[str, str] | None = None,
 ) -> None:
     try:
         _param_robustness_job_log(
@@ -6122,6 +6192,14 @@ def _run_param_robustness_job(
             strategy_name, instrument, "parameter_robustness",
             passed=None, summary=f"Parameter Robustness Score {result.parameter_robustness_score:.1f}/100",
         )
+        if library_ref:
+            try:
+                record_validation_result(*library_ref, {
+                    "method": "parameter_robustness", "score": result.parameter_robustness_score,
+                    "n_cliffs_detected": result.n_cliffs_detected,
+                })
+            except Exception:  # noqa: BLE001 -- recording to the library is a convenience, not core output
+                pass
     except RefinementError as exc:
         with _PARAM_ROBUSTNESS_JOBS_LOCK:
             job = _PARAM_ROBUSTNESS_JOBS[job_id]
@@ -6160,7 +6238,7 @@ def parameter_robustness_start():
             return render_template(
                 "parameter_robustness.html", error=dataset_error, stored_datasets=list_stored_datasets(),
                 dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
-        strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
+        strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000)), pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None), commission_per_trade=float(form.get("commission", 0) or 0))
         rules = PropRules(account_size=float(form.get("account_size", 100000)))
         mc_cfg = MonteCarloConfig(n_simulations=int(form.get("mc_sims", 500) or 500))
@@ -6179,7 +6257,7 @@ def parameter_robustness_start():
                 int(form.get("n_steps_1d", 9) or 9), int(form.get("n_steps_2d", 7) or 7),
                 int(form.get("max_params", 6) or 6), int(form.get("n_heatmap_pairs", 1) or 1),
             ),
-            kwargs={"strategy_name": getattr(strategy, "name", "Strategy"), "instrument": active_label},
+            kwargs={"strategy_name": getattr(strategy, "name", "Strategy"), "instrument": active_label, "library_ref": library_ref},
             daemon=True,
         )
         thread.start()
@@ -6332,7 +6410,7 @@ def quickopt_start():
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             return render_template("quick_optimize.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context()), 400
-        strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
+        strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000)), pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None), commission_per_trade=float(form.get("commission", 0) or 0))
         rules = PropRules(account_size=float(form.get("account_size", 100000)))
 
@@ -6368,6 +6446,13 @@ def quickopt_start():
             # behavior. See QuickOptimizeConfig.reserve_holdout's docstring.
             reserve_holdout=form.get("reserve_holdout") == "on",
             holdout_frac=float(form.get("holdout_frac", 0.2) or 0.2),
+            # VERSIONING (stop-making-copies): only meaningful when the
+            # input strategy actually came from the Strategy Library
+            # (library_ref set) -- an ad-hoc/uploaded strategy has no
+            # existing file to replace, so this is silently ignored by
+            # run_quick_optimize itself when library_ref is None.
+            library_ref=library_ref,
+            replace_existing=form.get("replace_existing") == "on",
         )
         job_id = uuid.uuid4().hex[:12]
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
@@ -7455,7 +7540,7 @@ def forward_test_start():
             return jsonify({"ok": False, "error": "Select a saved MT5 account first (add one under Settings -> API Keys)."}), 400
 
         try:
-            strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
+            strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         except (StrategyError, RefinementError) as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
 
@@ -7488,6 +7573,7 @@ def forward_test_start():
             return jsonify({"ok": False, "error": message}), 400
         _FORWARD_TEST_SESSION["session"] = session
         _FORWARD_TEST_SESSION["log"] = log
+        _FORWARD_TEST_SESSION["library_ref"] = library_ref
         return jsonify({"ok": True, "message": message})
 
 
@@ -7498,6 +7584,24 @@ def forward_test_stop():
         if session is None:
             return jsonify({"ok": False, "error": "Nothing is running."})
         session.stop()
+        # Pipeline-progress: only when the strategy being forward-tested
+        # came straight from the Strategy Library (library_ref set at
+        # start time) -- an ad-hoc/uploaded-for-this-session strategy has
+        # nothing to stamp onto, same guard every other library_ref call
+        # site in this file already uses. Only worth recording if at
+        # least one trade actually closed -- a session started and
+        # immediately stopped isn't a meaningful forward test.
+        library_ref = _FORWARD_TEST_SESSION.get("library_ref")
+        s = session.status
+        if library_ref and s.n_trades_closed > 0:
+            try:
+                from app.strategy.library import record_forward_test_result
+                record_forward_test_result(*library_ref, {
+                    "platform": "mt5", "n_trades_closed": s.n_trades_closed,
+                    "win_rate": s.win_rate, "net_pnl": s.net_pnl,
+                })
+            except Exception:  # noqa: BLE001 -- recording to the library is a convenience, not core output
+                pass
         return jsonify({"ok": True})
 
 
@@ -7556,7 +7660,7 @@ def deploy_live_start():
             return jsonify({"ok": False, "error": "Select a saved broker account first (add one under Settings -> API Keys)."}), 400
 
         try:
-            strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
+            strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         except (StrategyError, RefinementError) as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
 
@@ -7596,6 +7700,21 @@ def deploy_live_start():
             return jsonify({"ok": False, "error": message}), 400
         _LIVE_DEPLOY_SESSION["session"] = session
         _LIVE_DEPLOY_SESSION["log"] = log
+        # Pipeline-progress: actually typing "DEPLOY LIVE" and successfully
+        # starting a session is itself the meaningful milestone for this
+        # stage -- unlike Forward Test (which waits for at least one closed
+        # trade), a live deployment can run indefinitely, so waiting for
+        # /deploy-live/stop before recording anything would mean the
+        # Dashboard never shows "Deployed" for a strategy that's happily
+        # trading live right now.
+        if library_ref:
+            try:
+                from app.strategy.library import record_deploy_result
+                record_deploy_result(*library_ref, {
+                    "broker": account_id, "account_size": rules.account_size,
+                })
+            except Exception:  # noqa: BLE001 -- recording to the library is a convenience, not core output
+                pass
         return jsonify({"ok": True, "message": message})
 
 

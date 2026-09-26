@@ -246,6 +246,26 @@ def api_daily_brief():
     return jsonify({"reply": reply, "error": error})
 
 
+@ai_assistant_bp.route("/api/trade-of-the-day")
+def api_trade_of_the_day():
+    """One-button "best trade of the day for MES/MNQ/MGC" -- scans exactly
+    app.ai.market_scanner.DEFAULT_UNIVERSE["micro_futures"] (not the full
+    AI Assistant universe) so the reply is never diluted by unrelated
+    forex/crypto rankings, then hands Ollama the SAME real, deterministic
+    T58 checklist + concrete entry/stop/target price levels every other
+    AI Assistant reply is grounded in -- see
+    app.ai.trading_assistant.TradingAssistantClient.trade_of_the_day's own
+    docstring for why Ollama is never asked to invent a price level."""
+    micro_futures_universe = {"micro_futures": market_scanner.DEFAULT_UNIVERSE["micro_futures"]}
+    news_result = _cached("news", _CACHE_TTL_NEWS, _compute_news)
+    rankings, errors = market_intelligence.compute_rankings(news_result=news_result, universe=micro_futures_universe)
+    structure_notes = _structure_notes_for(rankings)
+    context = trading_assistant.build_context(rankings, news_result.events, market_structure_by_symbol=structure_notes)
+    client = trading_assistant.TradingAssistantClient(load_ollama_settings())
+    reply, error = client.trade_of_the_day(context)
+    return jsonify({"reply": reply, "error": error, "fetch_errors": errors})
+
+
 @ai_assistant_bp.route("/api/watchlist", methods=["POST"])
 def api_watchlist():
     data = request.get_json(force=True, silent=True) or {}
