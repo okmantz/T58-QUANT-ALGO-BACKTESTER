@@ -89,12 +89,23 @@ def test_speed_run_non_loop_path_is_unaffected():
 
 
 def test_speed_run_loop_mode_can_be_stopped(monkeypatch):
-    def _slow_run_speed_run(*args, **kwargs):
-        from app.orchestration.speed_run import run_speed_run as _actual
-        time.sleep(0.5)
-        return _actual(*args, **kwargs)
+    import app.orchestration.speed_run as speed_run_module
 
-    monkeypatch.setattr("app.orchestration.speed_run.run_speed_run", _slow_run_speed_run)
+    # BUG FIX (CI hang -> "did not finish within 30.0s"): this used to do
+    # `from app.orchestration.speed_run import run_speed_run as _actual`
+    # *inside* _slow_run_speed_run, i.e. re-resolved at call time. But by
+    # the time the wrapper is invoked, monkeypatch has already replaced
+    # that exact module attribute with the wrapper itself, so `_actual`
+    # was just `_slow_run_speed_run` again -- infinite self-recursion
+    # (each level sleeping 0.5s) until RecursionError, hundreds of
+    # seconds later. Capture the real function once, before patching.
+    _real_run_speed_run = speed_run_module.run_speed_run
+
+    def _slow_run_speed_run(*args, **kwargs):
+        time.sleep(0.5)
+        return _real_run_speed_run(*args, **kwargs)
+
+    monkeypatch.setattr(speed_run_module, "run_speed_run", _slow_run_speed_run)
 
     client = app.test_client()
     with open(SAMPLE_CSV, "rb") as f:

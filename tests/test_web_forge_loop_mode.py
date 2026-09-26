@@ -75,16 +75,24 @@ def test_forge_loop_mode_end_to_end():
 
 
 def test_forge_loop_mode_can_be_stopped(monkeypatch):
-    import app.orchestration.loop_runner as loop_runner_module
+    import app.orchestration.forge as forge_module
 
-    real_run_forge = loop_runner_module.run_forge if hasattr(loop_runner_module, "run_forge") else None
+    # BUG FIX (CI hang -> "forge job ... did not finish within Xs"): this
+    # used to do `from app.orchestration.forge import run_forge as
+    # _actual_run_forge` *inside* _slow_run_forge, i.e. re-resolved at
+    # call time. By the time the wrapper runs, monkeypatch has already
+    # replaced that exact module attribute with the wrapper itself, so
+    # `_actual_run_forge` was just `_slow_run_forge` again -- infinite
+    # self-recursion (each level sleeping 0.5s) until RecursionError,
+    # hundreds of seconds later, well past this test's poll timeout.
+    # Capture the real function once, before patching, instead.
+    _real_run_forge = forge_module.run_forge
 
     def _slow_run_forge(*args, **kwargs):
-        from app.orchestration.forge import run_forge as _actual_run_forge
         time.sleep(0.5)
-        return _actual_run_forge(*args, **kwargs)
+        return _real_run_forge(*args, **kwargs)
 
-    monkeypatch.setattr("app.orchestration.forge.run_forge", _slow_run_forge)
+    monkeypatch.setattr(forge_module, "run_forge", _slow_run_forge)
 
     client = app.test_client()
     with open(SAMPLE_CSV, "rb") as f:
