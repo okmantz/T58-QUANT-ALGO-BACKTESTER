@@ -107,17 +107,18 @@ def test_speed_run_loop_mode_can_be_stopped(monkeypatch):
     job_id = r.headers["Location"].rstrip("/").split("/")[-1]
 
     client.post(f"/speed-run/job/{job_id}/stop")
-    # FIX (CI flakiness): this used to poll with timeout=30.0, then 90.0.
-    # The behavior under test -- that /stop actually stops the loop -- was
-    # never in question (it passed locally every time, including a full
-    # isolated re-run while diagnosing this); what varies is how long
-    # the in-flight round takes to reach its own cancel_event check on a
-    # slower/shared CI runner, which has nothing to do with the
-    # correctness of cancellation itself. Bumped again to 180s after 90s
-    # still timed out under a loaded CI run (the full ~1900-test suite
-    # sharing the runner's CPU) -- same reasoning as the original bump,
-    # just a wider margin since 90s wasn't always enough either.
-    status = _poll_until_done(client, job_id, timeout=180.0)
+    # FIX (CI flakiness, root-caused): the timeout here used to be bumped
+    # repeatedly (30s -> 90s -> 180s) chasing what looked like CI
+    # flakiness. The real cause was app.orchestration.speed_run.
+    # run_speed_run's Phase 2 validation step never forwarding
+    # cancel_event into its run_full_pipeline calls, so an in-flight
+    # validation had no way to notice /stop and ran to completion
+    # regardless of how long that took. Now that cancel_event is
+    # forwarded (and checked between each of run_full_pipeline's 7
+    # steps), a stop takes well under a second in practice -- this
+    # timeout is just a generous ceiling, not a reflection of expected
+    # stop latency.
+    status = _poll_until_done(client, job_id, timeout=30.0)
     assert status["cancelled"] is True
     assert status["loop_result"]["stopped_reason"] == "cancelled"
 
