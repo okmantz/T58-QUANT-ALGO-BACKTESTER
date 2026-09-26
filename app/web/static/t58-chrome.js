@@ -417,18 +417,26 @@ function t58PopulateInstrumentPicker(selectId) {
 }
 
 /* opts:
-     selectEl        - the <select> element the person just changed (this)
-     pipFieldId       - id of the numeric <input name="pip_size"> to fill in
-     contractFieldId  - id of the numeric <input name="contract_size"> to fill in
-     statusId         - optional id of a <p>/<span> to show a confirmation in
+     selectEl          - the <select> element the person just changed (this)
+     pipFieldId        - id of the numeric <input name="pip_size"> to fill in
+     contractFieldId   - id of the numeric <input name="contract_size"> to fill in
+     commissionFieldId - optional id of the numeric <input name="commission"> to fill in
+     statusId          - optional id of a <p>/<span> to show a confirmation in
    Mirrors MainWindow._apply_instrument_spec exactly: sets pip_size AND
    contract_size ($/point) from the picked symbol's spec, leaving every
-   other risk field untouched. A blank/"(none)" selection does nothing. */
+   other risk field untouched. A blank/"(none)" selection does nothing.
+   COMMISSION-DEFAULT-UPGRADE (2026-09-26): when commissionFieldId is
+   given, also fills a realistic round-turn commission -- but ONLY when
+   that field is still at its 0/blank default, exactly like the desktop
+   app's own _apply_instrument_spec -- never overwrites a rate the user
+   already typed in. This closes the "$0 commission on a known futures
+   instrument" gap for every web page that offers this dropdown. */
 function t58ApplyInstrumentSpec(opts) {
   var symbol = opts.selectEl && opts.selectEl.value;
   if (!symbol) return;
   var pipField = document.getElementById(opts.pipFieldId);
   var contractField = opts.contractFieldId ? document.getElementById(opts.contractFieldId) : null;
+  var commissionField = opts.commissionFieldId ? document.getElementById(opts.commissionFieldId) : null;
   var statusEl = opts.statusId ? document.getElementById(opts.statusId) : null;
   _t58FetchInstrumentSpecs(function (instruments) {
     var spec = null;
@@ -438,10 +446,15 @@ function t58ApplyInstrumentSpec(opts) {
     if (!spec) return;
     if (pipField) pipField.value = spec.pip_size;
     if (contractField) contractField.value = spec.contract_size;
+    var commissionNote = '';
+    if (commissionField && (parseFloat(commissionField.value) || 0) === 0) {
+      commissionField.value = spec.default_commission_round_turn;
+      commissionNote = ', commission=$' + spec.default_commission_round_turn + '/trade';
+    }
     if (statusEl) {
       statusEl.style.color = '#b4ffcb';
       statusEl.textContent = 'Applied ' + spec.symbol + ' (' + spec.description + ', ' + spec.exchange + '): '
-        + 'pip_size=' + spec.pip_size + ', $' + spec.contract_size + '/point per contract.';
+        + 'pip_size=' + spec.pip_size + ', $' + spec.contract_size + '/point per contract' + commissionNote + '.';
     }
   });
 }
