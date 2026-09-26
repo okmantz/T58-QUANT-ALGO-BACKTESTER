@@ -46,6 +46,7 @@ import json
 import re
 import shutil
 import sys
+import time
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -520,6 +521,88 @@ def save_strategy_bytes(content: bytes, filename: str, strategy_type: str, overw
     return dest
 
 
+def save_strategy_replacing_version(
+    text: str, strategy_type: str, filename: str,
+) -> Path:
+    """Overwrite an EXISTING saved strategy's content in place, archiving
+    the version being replaced first (into a `.versions/` sibling
+    directory, tracked in metadata as "version_history") instead of
+    silently discarding it -- and, critically, WITHOUT touching any of
+    that file's existing pipeline-progress metadata (last_run/
+    last_optimize/last_validation/last_champion_check/last_forward_test/
+    last_deploy).
+
+    This is the "replace" side of the Quick Optimize / Full Pipeline /
+    etc. "replace this strategy or save as a new copy?" choice: every one
+    of those tools used to ALWAYS write a new, provenance-stamped filename
+    for anything it produced (see provenance_stamped_name), so running a
+    strategy through Optimize, then Full Pipeline, then a validation tool
+    left three-plus near-duplicate files in the library, each starting
+    its own pipeline-progress tracking from zero -- exactly why the
+    Dashboard/Strategy Library's stage progress could look "stuck":
+    the tool that just ran had recorded its result onto a DIFFERENT file
+    than the one being looked at. Calling this instead of
+    save_strategy_text(..., overwrite=True) keeps everything the person
+    has done to a strategy attached to the one file they think of as
+    "the strategy," while still never losing a prior version outright.
+
+    Raises FileNotFoundError if `filename` doesn't already exist -- this
+    function is only for REPLACING something that exists; use
+    save_strategy_text for a brand new file.
+    """
+    t = _normalize_type(strategy_type)
+    name = _ensure_extension(filename, t)
+    d = get_strategy_library_dir(t)
+    dest = d / name
+    if not dest.exists():
+        raise FileNotFoundError(f"No saved {t} strategy named '{name}' to replace.")
+
+    versions_dir = d / ".versions" / name
+    versions_dir.mkdir(parents=True, exist_ok=True)
+    ts = int(time.time())
+    archived_path = versions_dir / f"{ts}{Path(name).suffix}"
+    # Extremely unlikely on a single-file replace, but two replaces within
+    # the same wall-clock second must never collide and silently drop the
+    # first version's archive.
+    n = 1
+    while archived_path.exists():
+        archived_path = versions_dir / f"{ts}-{n}{Path(name).suffix}"
+        n += 1
+    archived_path.write_text(dest.read_text(encoding="utf-8"), encoding="utf-8")
+
+    dest.write_text(text, encoding="utf-8")
+
+    existing_meta = load_strategy_metadata(t, name)
+    history = list(existing_meta.get("version_history") or [])
+    history.append({"path": str(archived_path.relative_to(d)), "replaced_at": ts})
+    save_strategy_metadata(t, name, {"version_history": history}, merge=True)
+    return dest
+
+
+def list_strategy_versions(strategy_type: str, filename: str) -> list[dict[str, Any]]:
+    """The archived-version history save_strategy_replacing_version has
+    built up for this strategy, oldest first. Each entry's "path" is
+    relative to this strategy_type's library directory (pass it to
+    load_strategy_version to read that snapshot's content back)."""
+    t = _normalize_type(strategy_type)
+    name = _ensure_extension(filename, t)
+    meta = load_strategy_metadata(t, name)
+    return list(meta.get("version_history") or [])
+
+
+def load_strategy_version(strategy_type: str, relative_path: str) -> str:
+    """Read back one archived version's content by the relative "path"
+    list_strategy_versions returned for it."""
+    t = _normalize_type(strategy_type)
+    base = get_strategy_library_dir(t)
+    candidate = (base / relative_path).resolve()
+    if base.resolve() not in candidate.parents:
+        raise FileNotFoundError("Invalid version path.")
+    if not candidate.is_file():
+        raise FileNotFoundError("That archived version no longer exists.")
+    return candidate.read_text(encoding="utf-8")
+
+
 def save_strategy_text(text: str, filename: str, strategy_type: str, overwrite: bool = False) -> Path:
     """Write pasted/edited strategy source text into the persistent library
     (used by the web app, where a strategy may arrive as pasted text rather
@@ -751,6 +834,33 @@ def record_champion_check_result(strategy_type: str, filename: str, result: dict
     return save_strategy_metadata(strategy_type, filename, {"last_champion_check": result}, merge=True)
 
 
+def record_forward_test_result(strategy_type: str, filename: str, result: dict[str, Any]) -> Path:
+    """Convenience wrapper for stamping a Forward Test (paper/live-adjacent
+    dry run, e.g. the MT5 bridge) outcome onto a saved strategy as
+    "last_forward_test", e.g.:
+
+        record_forward_test_result("python", "fvg_v1.py", {
+            "platform": "mt5", "days_run": 14, "net_profit": 412.30,
+        })
+
+    Checked by compute_pipeline_progress below to mark the "Forward Test"
+    stage complete."""
+    return save_strategy_metadata(strategy_type, filename, {"last_forward_test": result}, merge=True)
+
+
+def record_deploy_result(strategy_type: str, filename: str, result: dict[str, Any]) -> Path:
+    """Convenience wrapper for stamping a Deploy Live action onto a saved
+    strategy as "last_deploy", e.g.:
+
+        record_deploy_result("python", "fvg_v1.py", {
+            "broker": "MT5 demo", "account_size": 100000,
+        })
+
+    Checked by compute_pipeline_progress below to mark the final "Deploy"
+    stage complete."""
+    return save_strategy_metadata(strategy_type, filename, {"last_deploy": result}, merge=True)
+
+
 # ---------------------------------------------------------------------------
 # Pipeline-progress tracker -- Create -> Test -> Optimize -> Validate ->
 # Champion Check -> Ready, the six stages Owen asked the Strategy Library
@@ -773,14 +883,31 @@ def record_champion_check_result(strategy_type: str, filename: str, result: dict
 # Manual Builder draft or upload, matching STRATEGY_STATUSES' "draft".
 # ---------------------------------------------------------------------------
 
-PIPELINE_STAGE_NAMES = ("create", "test", "optimize", "validate", "champion_check", "ready")
+PIPELINE_STAGE_NAMES = ("create", "test", "optimize", "validate", "champion_check", "forward_test", "deploy")
 PIPELINE_STAGE_TITLES: dict[str, str] = {
     "create": "Create",
     "test": "Test",
     "optimize": "Optimize",
     "validate": "Validate",
-    "champion_check": "Champion Check",
-    "ready": "Ready",
+    "champion_check": "Champion",
+    "forward_test": "Forward Test",
+    "deploy": "Deploy",
+}
+# Where the dashboard's "what should I do next" button should point for
+# each not-yet-done stage. One primary route per stage (the tool named
+# first in Owen's own spec for that stage); a strategy can still reach
+# "done" for a stage via any of the other tools compute_pipeline_progress
+# below checks (e.g. "validate" also completes via CPCV/PBO/sensitivity/
+# regime survival/Full Pipeline, not just Walk-Forward Opt) -- this is
+# only which link the button shows, never a restriction on which tool
+# counts.
+PIPELINE_STAGE_NEXT_HREF: dict[str, str] = {
+    "test": "/",                      # Run & Report (Full Pipeline also completes this stage)
+    "optimize": "/quick-optimize",
+    "validate": "/cpcv",
+    "champion_check": "/family-diversity",
+    "forward_test": "/forward-test",
+    "deploy": "/deploy-live",
 }
 
 
@@ -791,7 +918,9 @@ def compute_pipeline_progress(metadata: dict[str, Any]) -> dict[str, Any]:
         {
             "stages": [{"key", "title", "done"}, ...],   # in stage order
             "current_stage": "optimize",                  # furthest stage reached
-            "next_stage": "validate",                     # first not-yet-done stage, or None if Ready
+            "next_stage": "validate",                     # first not-yet-done stage, or None if Deploy is done
+            "next_href": "/cpcv",                          # where the dashboard's next-step button should point
+            "progress_pct": 33.3,                          # % of the 6 non-"create" stages completed
             "verdict": "NOT READY" | "MARGINAL" | "READY" | None,
         }
 
@@ -802,18 +931,21 @@ def compute_pipeline_progress(metadata: dict[str, Any]) -> dict[str, Any]:
     last_search = metadata.get("last_search") or {}
     last_validation = metadata.get("last_validation") or {}
     last_champion_check = metadata.get("last_champion_check") or {}
+    last_forward_test = metadata.get("last_forward_test") or {}
+    last_deploy = metadata.get("last_deploy") or {}
 
     tested = bool(last_run)
     optimized = bool(last_optimize) or bool(last_search)
     validated = bool(last_validation)
     champion_checked = bool(last_champion_check)
+    forward_tested = bool(last_forward_test)
+    deployed = bool(last_deploy)
     # Full Pipeline's record_backtest_result already stamps "verdict" onto
     # last_run too (see run_full_pipeline) -- fall back to that when a
     # dedicated champion-check record isn't present, so a strategy run
     # only through Full Pipeline (not a separate Champion Check action)
     # still shows READY/MARGINAL/NOT READY correctly.
     verdict = str(last_champion_check.get("verdict") or last_run.get("verdict") or "").upper() or None
-    ready = champion_checked and verdict == "READY"
 
     stages = [
         {"key": "create", "title": PIPELINE_STAGE_TITLES["create"], "done": True},
@@ -821,7 +953,8 @@ def compute_pipeline_progress(metadata: dict[str, Any]) -> dict[str, Any]:
         {"key": "optimize", "title": PIPELINE_STAGE_TITLES["optimize"], "done": optimized},
         {"key": "validate", "title": PIPELINE_STAGE_TITLES["validate"], "done": validated},
         {"key": "champion_check", "title": PIPELINE_STAGE_TITLES["champion_check"], "done": champion_checked},
-        {"key": "ready", "title": PIPELINE_STAGE_TITLES["ready"], "done": ready},
+        {"key": "forward_test", "title": PIPELINE_STAGE_TITLES["forward_test"], "done": forward_tested},
+        {"key": "deploy", "title": PIPELINE_STAGE_TITLES["deploy"], "done": deployed},
     ]
 
     current_stage = "create"
@@ -830,11 +963,15 @@ def compute_pipeline_progress(metadata: dict[str, Any]) -> dict[str, Any]:
             current_stage = stage["key"]
 
     next_stage = next((s["key"] for s in stages if not s["done"]), None)
+    non_create = stages[1:]
+    progress_pct = round(100.0 * sum(1 for s in non_create if s["done"]) / len(non_create), 1)
 
     return {
         "stages": stages,
         "current_stage": current_stage,
         "next_stage": next_stage,
+        "next_href": PIPELINE_STAGE_NEXT_HREF.get(next_stage) if next_stage else None,
+        "progress_pct": progress_pct,
         "verdict": verdict,
     }
 
