@@ -117,8 +117,8 @@ from app.search.robustness import WalkForwardResult, run_walk_forward
 from app.search.strategy_space import build_strategy_from_spec
 from app.strategy.base import Strategy
 from app.strategy.library import StrategyAlreadyExists, provenance_stamped_name, safe_filename_stem, \
-    save_strategy_text, set_strategy_status, record_backtest_result, record_optimize_result, \
-    record_validation_result, record_champion_check_result
+    save_strategy_replacing_version, save_strategy_text, set_strategy_status, record_backtest_result, \
+    record_optimize_result, record_validation_result, record_champion_check_result
 from app.validation.cpcv import CPCVError, CPCVResult, run_cpcv
 from app.validation.icir import ICIRGateResult, run_icir_gate_from_backtest
 from app.validation.regime_matrix import RegimeMatrixResult, build_regime_matrix
@@ -276,6 +276,19 @@ class FullPipelineConfig:
     # is byte-identical to every run before this field existed; the web/
     # desktop Full Pipeline form defaults its own checkbox to CHECKED.
     reset_on_breach: bool = False
+
+    # VERSIONING (stop-making-copies fix): same fields/contract as
+    # QuickOptimizeConfig.library_ref/replace_existing (see that class's
+    # docstring for the full rationale) -- when the strategy Full
+    # Pipeline is running came from the Strategy Library, library_ref is
+    # its (strategy_type, filename), and replace_existing=True makes the
+    # save step in _finish overwrite that SAME file in place (archiving
+    # the version being replaced, carrying forward last_run/
+    # last_optimize/last_validation/etc.) instead of writing yet another
+    # provenance-stamped copy. False (default) is byte-identical to every
+    # run before these fields existed.
+    library_ref: tuple[str, str] | None = None
+    replace_existing: bool = False
 
 
 @dataclass
@@ -1386,64 +1399,118 @@ def _finish(
     saved_library_note = None
     if cfg.save_to_library and final_source_type in ("python", "pinescript", "mql5") and final_code_text:
         ext = {"python": ".py", "pinescript": ".pine", "mql5": ".mq5"}[final_source_type]
-        base_name = safe_filename_stem(save_name, "full_pipeline_strategy")
-        filename = f"{base_name}_pipeline{ext}"
-        try:
+        status_to_set = cfg.library_status or _VERDICT_TO_LIBRARY_STATUS.get(verdict, "tested_passed")
+        if cfg.replace_existing and cfg.library_ref:
+            # VERSIONING: same in-place-replace this Full Pipeline run
+            # started from gets applied to what it produces too -- see
+            # app.orchestration.quick_optimize's identical branch (and
+            # app.strategy.library.save_strategy_replacing_version's own
+            # docstring) for the full rationale. Archives the version
+            # being replaced and carries forward every existing
+            # pipeline-progress field on that file instead of starting a
+            # fresh, disconnected copy.
+            ref_type, ref_filename = cfg.library_ref
             try:
-                saved_library_path = save_strategy_text(final_code_text, filename, final_source_type, overwrite=False)
-            except StrategyAlreadyExists:
-                filename = f"{base_name}_pipeline_{int(time.time())}{ext}"
-                saved_library_path = save_strategy_text(final_code_text, filename, final_source_type, overwrite=False)
-            set_strategy_status(final_source_type, filename, cfg.library_status or _VERDICT_TO_LIBRARY_STATUS.get(verdict, "tested_passed"))
-            record_backtest_result(final_source_type, filename, {
-                "trades": len(final_bt.trades),
-                "net_profit": round(final_bt.statistics.net_profit, 2),
-                "win_rate": round(final_bt.statistics.win_rate, 1),
-                "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
-                "eval_pass_probability": round(final_mc.evaluation_pass_probability, 1),
-                "first_payout_probability": round(final_mc.first_payout_probability, 1),
-                "verdict": verdict,
-                "report_html": str(report_paths["html"]),
-                "t58_score": round(t58_score, 1) if t58_score is not None else None,
-                "t58_tier": t58_tier,
-                "parsimony_score": round(parsimony_score, 1) if parsimony_score is not None else None,
-                "risk_of_ruin_pct": round(final_mc.risk_of_ruin_pct, 1),
-                "risk_of_ruin_hard_fail": risk_of_ruin_hard_fail,
-                "lookahead_hard_fail": lookahead_hard_fail,
-                # ADDED (2026-09-26): first-payout economics from the
-                # full-history single run (see full_history_single_run
-                # above) -- the Strategy Library couldn't show either of
-                # these before because nothing recorded them here.
-                "first_payout_amount": full_history_single_run.first_payout_amount,
-                "days_to_first_payout": full_history_single_run.first_payout_day_index,
-                "total_payouts_full_history": len(full_history_single_run.payouts),
-            })
-            # Pipeline-progress tracker (Create/Test/Optimize/Validate/
-            # Champion Check/Ready -- see app.strategy.library.
-            # compute_pipeline_progress): Full Pipeline's Step 2 GA re-
-            # optimization, Step 4/6b OOS or CPCV validation, and its own
-            # final verdict all happen inside this ONE run, so all three
-            # downstream stages get stamped here in addition to the
-            # "Test" stage record_backtest_result already covers above.
-            if refinement_ran and ga_result is not None:
-                record_optimize_result(final_source_type, filename, {
-                    "method": "full_pipeline_ga", "oos_trade_count": ga_result.best.oos_trade_count,
+                saved_library_path = save_strategy_replacing_version(final_code_text, ref_type, ref_filename)
+                filename = ref_filename
+                set_strategy_status(ref_type, filename, status_to_set)
+                record_backtest_result(ref_type, filename, {
+                    "trades": len(final_bt.trades),
+                    "net_profit": round(final_bt.statistics.net_profit, 2),
+                    "win_rate": round(final_bt.statistics.win_rate, 1),
+                    "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
+                    "eval_pass_probability": round(final_mc.evaluation_pass_probability, 1),
+                    "first_payout_probability": round(final_mc.first_payout_probability, 1),
+                    "verdict": verdict,
+                    "report_html": str(report_paths["html"]),
+                    "t58_score": round(t58_score, 1) if t58_score is not None else None,
+                    "t58_tier": t58_tier,
+                    "parsimony_score": round(parsimony_score, 1) if parsimony_score is not None else None,
+                    "risk_of_ruin_pct": round(final_mc.risk_of_ruin_pct, 1),
+                    "risk_of_ruin_hard_fail": risk_of_ruin_hard_fail,
+                    "lookahead_hard_fail": lookahead_hard_fail,
+                    "first_payout_amount": full_history_single_run.first_payout_amount,
+                    "days_to_first_payout": full_history_single_run.first_payout_day_index,
+                    "total_payouts_full_history": len(full_history_single_run.payouts),
                 })
-            if oos_validation is not None or cpcv_result is not None:
-                record_validation_result(final_source_type, filename, {
-                    "method": "cpcv" if cpcv_result is not None else "walk_forward",
-                    "efficiency": getattr(cpcv_result, "mean_oos_metric", None) if cpcv_result is not None else getattr(oos_validation, "efficiency", None),
+                if refinement_ran and ga_result is not None:
+                    record_optimize_result(ref_type, filename, {
+                        "method": "full_pipeline_ga", "oos_trade_count": ga_result.best.oos_trade_count,
+                    })
+                if oos_validation is not None or cpcv_result is not None:
+                    record_validation_result(ref_type, filename, {
+                        "method": "cpcv" if cpcv_result is not None else "walk_forward",
+                        "efficiency": getattr(cpcv_result, "mean_oos_metric", None) if cpcv_result is not None else getattr(oos_validation, "efficiency", None),
+                    })
+                record_champion_check_result(ref_type, filename, {
+                    "verdict": verdict,
+                    "t58_score": round(t58_score, 1) if t58_score is not None else None,
+                    "t58_tier": t58_tier,
                 })
-            record_champion_check_result(final_source_type, filename, {
-                "verdict": verdict,
-                "t58_score": round(t58_score, 1) if t58_score is not None else None,
-                "t58_tier": t58_tier,
-            })
-            saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {cfg.library_status})."
-            log(f"  {saved_library_note}")
-        except Exception as exc:  # noqa: BLE001 -- saving to the library is a convenience, not core output
-            saved_library_note = f"Could not save to the Strategy Library: {exc}"
-            log(f"  {saved_library_note}")
+                saved_library_note = f"Replaced '{filename}' in the Strategy Library (previous version archived, status: {status_to_set})."
+                log(f"  {saved_library_note}")
+            except Exception as exc:  # noqa: BLE001 -- saving to the library is a convenience, not core output
+                saved_library_note = f"Could not replace the Strategy Library entry: {exc}"
+                log(f"  {saved_library_note}")
+        else:
+            base_name = safe_filename_stem(save_name, "full_pipeline_strategy")
+            filename = f"{base_name}_pipeline{ext}"
+            try:
+                try:
+                    saved_library_path = save_strategy_text(final_code_text, filename, final_source_type, overwrite=False)
+                except StrategyAlreadyExists:
+                    filename = f"{base_name}_pipeline_{int(time.time())}{ext}"
+                    saved_library_path = save_strategy_text(final_code_text, filename, final_source_type, overwrite=False)
+                set_strategy_status(final_source_type, filename, status_to_set)
+                record_backtest_result(final_source_type, filename, {
+                    "trades": len(final_bt.trades),
+                    "net_profit": round(final_bt.statistics.net_profit, 2),
+                    "win_rate": round(final_bt.statistics.win_rate, 1),
+                    "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
+                    "eval_pass_probability": round(final_mc.evaluation_pass_probability, 1),
+                    "first_payout_probability": round(final_mc.first_payout_probability, 1),
+                    "verdict": verdict,
+                    "report_html": str(report_paths["html"]),
+                    "t58_score": round(t58_score, 1) if t58_score is not None else None,
+                    "t58_tier": t58_tier,
+                    "parsimony_score": round(parsimony_score, 1) if parsimony_score is not None else None,
+                    "risk_of_ruin_pct": round(final_mc.risk_of_ruin_pct, 1),
+                    "risk_of_ruin_hard_fail": risk_of_ruin_hard_fail,
+                    "lookahead_hard_fail": lookahead_hard_fail,
+                    # ADDED (2026-09-26): first-payout economics from the
+                    # full-history single run (see full_history_single_run
+                    # above) -- the Strategy Library couldn't show either of
+                    # these before because nothing recorded them here.
+                    "first_payout_amount": full_history_single_run.first_payout_amount,
+                    "days_to_first_payout": full_history_single_run.first_payout_day_index,
+                    "total_payouts_full_history": len(full_history_single_run.payouts),
+                })
+                # Pipeline-progress tracker (Create/Test/Optimize/Validate/
+                # Champion Check/Ready -- see app.strategy.library.
+                # compute_pipeline_progress): Full Pipeline's Step 2 GA re-
+                # optimization, Step 4/6b OOS or CPCV validation, and its own
+                # final verdict all happen inside this ONE run, so all three
+                # downstream stages get stamped here in addition to the
+                # "Test" stage record_backtest_result already covers above.
+                if refinement_ran and ga_result is not None:
+                    record_optimize_result(final_source_type, filename, {
+                        "method": "full_pipeline_ga", "oos_trade_count": ga_result.best.oos_trade_count,
+                    })
+                if oos_validation is not None or cpcv_result is not None:
+                    record_validation_result(final_source_type, filename, {
+                        "method": "cpcv" if cpcv_result is not None else "walk_forward",
+                        "efficiency": getattr(cpcv_result, "mean_oos_metric", None) if cpcv_result is not None else getattr(oos_validation, "efficiency", None),
+                    })
+                record_champion_check_result(final_source_type, filename, {
+                    "verdict": verdict,
+                    "t58_score": round(t58_score, 1) if t58_score is not None else None,
+                    "t58_tier": t58_tier,
+                })
+                saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {cfg.library_status})."
+                log(f"  {saved_library_note}")
+            except Exception as exc:  # noqa: BLE001 -- saving to the library is a convenience, not core output
+                saved_library_note = f"Could not save to the Strategy Library: {exc}"
+                log(f"  {saved_library_note}")
     elif cfg.save_to_library and final_source_type == "manual" and final_config:
         # Manual Strategy Builder / Search Lab / Evolution Lab configs are
         # dicts, not source files -- but app.strategy.library already has a
@@ -1458,64 +1525,113 @@ def _finish(
         # code" action downstream (e.g. Speed Run's candidate list) has
         # something to show for a manual-builder winner too, not just for
         # python/pinescript/mql5 ones.
-        base_name = safe_filename_stem(save_name, "full_pipeline_strategy")
-        filename = f"{base_name}_pipeline.json"
-        # 2026-09-17 naming-drift fix, continued: overwrite the saved
-        # JSON's own "name" field with save_name too when mutated --
-        # otherwise the file on disk would still claim the ORIGINAL
-        # (now-inaccurate) name internally even though its filename was
-        # fixed. Mirrors app.orchestration.quick_optimize's identical fix.
+        status_to_set = cfg.library_status or _VERDICT_TO_LIBRARY_STATUS.get(verdict, "tested_passed")
         config_to_save = dict(final_config)
-        if mutated_by_ga:
-            config_to_save["name"] = save_name
-        config_text = json.dumps(config_to_save, indent=2)
-        try:
+        if cfg.replace_existing and cfg.library_ref:
+            ref_type, ref_filename = cfg.library_ref
+            config_text = json.dumps(config_to_save, indent=2)
             try:
-                saved_library_path = save_strategy_text(config_text, filename, "manual", overwrite=False)
-            except StrategyAlreadyExists:
-                filename = f"{base_name}_pipeline_{int(time.time())}.json"
-                saved_library_path = save_strategy_text(config_text, filename, "manual", overwrite=False)
-            set_strategy_status("manual", filename, cfg.library_status or _VERDICT_TO_LIBRARY_STATUS.get(verdict, "tested_passed"))
-            record_backtest_result("manual", filename, {
-                "trades": len(final_bt.trades),
-                "net_profit": round(final_bt.statistics.net_profit, 2),
-                "win_rate": round(final_bt.statistics.win_rate, 1),
-                "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
-                "eval_pass_probability": round(final_mc.evaluation_pass_probability, 1),
-                "first_payout_probability": round(final_mc.first_payout_probability, 1),
-                "verdict": verdict,
-                "report_html": str(report_paths["html"]),
-                "t58_score": round(t58_score, 1) if t58_score is not None else None,
-                "t58_tier": t58_tier,
-                "parsimony_score": round(parsimony_score, 1) if parsimony_score is not None else None,
-                "risk_of_ruin_pct": round(final_mc.risk_of_ruin_pct, 1),
-                "risk_of_ruin_hard_fail": risk_of_ruin_hard_fail,
-                "lookahead_hard_fail": lookahead_hard_fail,
-                "first_payout_amount": full_history_single_run.first_payout_amount,
-                "days_to_first_payout": full_history_single_run.first_payout_day_index,
-                "total_payouts_full_history": len(full_history_single_run.payouts),
-            })
-            if refinement_ran and ga_result is not None:
-                record_optimize_result("manual", filename, {
-                    "method": "full_pipeline_ga", "oos_trade_count": ga_result.best.oos_trade_count,
+                saved_library_path = save_strategy_replacing_version(config_text, ref_type, ref_filename)
+                filename = ref_filename
+                set_strategy_status(ref_type, filename, status_to_set)
+                record_backtest_result(ref_type, filename, {
+                    "trades": len(final_bt.trades),
+                    "net_profit": round(final_bt.statistics.net_profit, 2),
+                    "win_rate": round(final_bt.statistics.win_rate, 1),
+                    "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
+                    "eval_pass_probability": round(final_mc.evaluation_pass_probability, 1),
+                    "first_payout_probability": round(final_mc.first_payout_probability, 1),
+                    "verdict": verdict,
+                    "report_html": str(report_paths["html"]),
+                    "t58_score": round(t58_score, 1) if t58_score is not None else None,
+                    "t58_tier": t58_tier,
+                    "parsimony_score": round(parsimony_score, 1) if parsimony_score is not None else None,
+                    "risk_of_ruin_pct": round(final_mc.risk_of_ruin_pct, 1),
+                    "risk_of_ruin_hard_fail": risk_of_ruin_hard_fail,
+                    "lookahead_hard_fail": lookahead_hard_fail,
+                    "first_payout_amount": full_history_single_run.first_payout_amount,
+                    "days_to_first_payout": full_history_single_run.first_payout_day_index,
+                    "total_payouts_full_history": len(full_history_single_run.payouts),
                 })
-            if oos_validation is not None or cpcv_result is not None:
-                record_validation_result("manual", filename, {
-                    "method": "cpcv" if cpcv_result is not None else "walk_forward",
-                    "efficiency": getattr(cpcv_result, "mean_oos_metric", None) if cpcv_result is not None else getattr(oos_validation, "efficiency", None),
+                if refinement_ran and ga_result is not None:
+                    record_optimize_result(ref_type, filename, {
+                        "method": "full_pipeline_ga", "oos_trade_count": ga_result.best.oos_trade_count,
+                    })
+                if oos_validation is not None or cpcv_result is not None:
+                    record_validation_result(ref_type, filename, {
+                        "method": "cpcv" if cpcv_result is not None else "walk_forward",
+                        "efficiency": getattr(cpcv_result, "mean_oos_metric", None) if cpcv_result is not None else getattr(oos_validation, "efficiency", None),
+                    })
+                record_champion_check_result(ref_type, filename, {
+                    "verdict": verdict,
+                    "t58_score": round(t58_score, 1) if t58_score is not None else None,
+                    "t58_tier": t58_tier,
                 })
-            record_champion_check_result("manual", filename, {
-                "verdict": verdict,
-                "t58_score": round(t58_score, 1) if t58_score is not None else None,
-                "t58_tier": t58_tier,
-            })
-            saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {cfg.library_status})."
-            log(f"  {saved_library_note}")
-            final_code_text = config_text
-            final_code_ext = ".json"
-        except Exception as exc:  # noqa: BLE001 -- saving to the library is a convenience, not core output
-            saved_library_note = f"Could not save to the Strategy Library: {exc}"
-            log(f"  {saved_library_note}")
+                saved_library_note = f"Replaced '{filename}' in the Strategy Library (previous version archived, status: {status_to_set})."
+                log(f"  {saved_library_note}")
+                final_code_text = config_text
+                final_code_ext = ".json"
+            except Exception as exc:  # noqa: BLE001 -- saving to the library is a convenience, not core output
+                saved_library_note = f"Could not replace the Strategy Library entry: {exc}"
+                log(f"  {saved_library_note}")
+        else:
+            base_name = safe_filename_stem(save_name, "full_pipeline_strategy")
+            filename = f"{base_name}_pipeline.json"
+            # 2026-09-17 naming-drift fix, continued: overwrite the saved
+            # JSON's own "name" field with save_name too when mutated --
+            # otherwise the file on disk would still claim the ORIGINAL
+            # (now-inaccurate) name internally even though its filename was
+            # fixed. Mirrors app.orchestration.quick_optimize's identical fix.
+            if mutated_by_ga:
+                config_to_save["name"] = save_name
+            config_text = json.dumps(config_to_save, indent=2)
+            try:
+                try:
+                    saved_library_path = save_strategy_text(config_text, filename, "manual", overwrite=False)
+                except StrategyAlreadyExists:
+                    filename = f"{base_name}_pipeline_{int(time.time())}.json"
+                    saved_library_path = save_strategy_text(config_text, filename, "manual", overwrite=False)
+                set_strategy_status("manual", filename, status_to_set)
+                record_backtest_result("manual", filename, {
+                    "trades": len(final_bt.trades),
+                    "net_profit": round(final_bt.statistics.net_profit, 2),
+                    "win_rate": round(final_bt.statistics.win_rate, 1),
+                    "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
+                    "eval_pass_probability": round(final_mc.evaluation_pass_probability, 1),
+                    "first_payout_probability": round(final_mc.first_payout_probability, 1),
+                    "verdict": verdict,
+                    "report_html": str(report_paths["html"]),
+                    "t58_score": round(t58_score, 1) if t58_score is not None else None,
+                    "t58_tier": t58_tier,
+                    "parsimony_score": round(parsimony_score, 1) if parsimony_score is not None else None,
+                    "risk_of_ruin_pct": round(final_mc.risk_of_ruin_pct, 1),
+                    "risk_of_ruin_hard_fail": risk_of_ruin_hard_fail,
+                    "lookahead_hard_fail": lookahead_hard_fail,
+                    "first_payout_amount": full_history_single_run.first_payout_amount,
+                    "days_to_first_payout": full_history_single_run.first_payout_day_index,
+                    "total_payouts_full_history": len(full_history_single_run.payouts),
+                })
+                if refinement_ran and ga_result is not None:
+                    record_optimize_result("manual", filename, {
+                        "method": "full_pipeline_ga", "oos_trade_count": ga_result.best.oos_trade_count,
+                    })
+                if oos_validation is not None or cpcv_result is not None:
+                    record_validation_result("manual", filename, {
+                        "method": "cpcv" if cpcv_result is not None else "walk_forward",
+                        "efficiency": getattr(cpcv_result, "mean_oos_metric", None) if cpcv_result is not None else getattr(oos_validation, "efficiency", None),
+                    })
+                record_champion_check_result("manual", filename, {
+                    "verdict": verdict,
+                    "t58_score": round(t58_score, 1) if t58_score is not None else None,
+                    "t58_tier": t58_tier,
+                })
+                saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {cfg.library_status})."
+                log(f"  {saved_library_note}")
+                final_code_text = config_text
+                final_code_ext = ".json"
+            except Exception as exc:  # noqa: BLE001 -- saving to the library is a convenience, not core output
+                saved_library_note = f"Could not save to the Strategy Library: {exc}"
+                log(f"  {saved_library_note}")
     elif final_source_type == "manual":
         saved_library_note = (
             "Manual Strategy Builder configuration produced, but nothing was saved (saving to the "
