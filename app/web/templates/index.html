@@ -455,7 +455,7 @@
         <div><label>Max trades/day</label><input type="number" name="max_trades_day" value="10"></div>
       </div>
       <div class="row">
-        <div><label>Commission ($)</label><input type="number" step="0.01" name="commission" value="0"></div>
+        <div><label>Commission ($)</label><input type="number" step="0.01" name="commission" id="commission_field" value="0"></div>
         <div><label>Slippage (pips)</label><input type="number" step="0.1" name="slippage_pips" value="0.5"></div>
       </div>
       <div class="row">
@@ -466,7 +466,7 @@
       <p id="pip_detect_status" style="font-size:12px;margin-top:6px;"></p>
     <div class="row" style="margin-top:8px;">
       <div><label>Or pick a known instrument (auto-fills pip size + $/point)</label>
-        <select id="instrument_select" onchange="t58ApplyInstrumentSpec({selectEl:this, pipFieldId:'pip_size_field', contractFieldId:'contract_size_field', statusId:'pip_detect_status'})">
+        <select id="instrument_select" onchange="t58ApplyInstrumentSpec({selectEl:this, pipFieldId:'pip_size_field', contractFieldId:'contract_size_field', commissionFieldId:'commission_field', statusId:'pip_detect_status'})">
           <option value="">(none -- set manually)</option>
         </select>
       </div>

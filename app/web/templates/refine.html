@@ -170,6 +170,9 @@
       <div><label>Max drawdown %</label><input type="number" step="0.1" name="max_dd" value="10"></div>
       <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" id="refine_pip_size_field" value="0.0001"></div>
     </div>
+    <div class="row">
+      <div><label>Commission per trade ($)</label><input type="number" step="0.01" name="commission" value="0"></div>
+    </div>
     <button type="button" onclick="detectPipSizeRefine()" style="margin-top:6px;background:none;border:1px solid var(--border-light);color:var(--teal);padding:9px 12px;border-radius:8px;font-size:13px;width:100%;">Detect pip size from data</button>
     <p id="refine_pip_detect_status" style="font-size:12px;margin-top:6px;"></p>
     <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;background:rgba(255,200,80,0.08);border:1px solid rgba(255,200,80,0.35);border-radius:8px;padding:8px 10px;margin-top:10px;"><input type="checkbox" name="adaptive_risk_enabled" style="width:auto;">Enable adaptive, limit-aware position sizing (applied to the baseline, every GA candidate, and the final re-run)</label>
