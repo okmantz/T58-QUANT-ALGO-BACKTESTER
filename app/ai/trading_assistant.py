@@ -768,6 +768,31 @@ class TradingAssistantClient:
             context, mode="personal",
         )
 
+    def trade_of_the_day(self, context: dict) -> tuple[str, str | None]:
+        """Backs the AI Assistant's "Trade of the Day (MES/MNQ/MGC)" button
+        -- a focused version of daily_brief() scoped to exactly Owen's
+        three CME micro futures (context's best_markets/rankings are
+        expected to already be scanned from just
+        app.ai.market_scanner.DEFAULT_UNIVERSE["micro_futures"], see
+        app.web.ai_assistant_routes.api_trade_of_the_day). The prompt is
+        explicit that entry_price/stop_price/target_price on each ranking's
+        t58_assessment (computed by app.ai.t58_strategy_engine.assess --
+        see that function's own comment on why these are only ever
+        non-None when status is READY) are the ONLY numbers to quote back;
+        Ollama is not asked to, and must not, calculate or estimate a
+        price level of its own."""
+        return self.ask(
+            "Scan MES, MNQ and MGC against my exact strategy and tell me the single best trade of the day, if "
+            "one genuinely exists right now -- use the IDEAL PERSONAL RESPONSE FORMAT for whichever of these "
+            "three has the highest-quality setup. If more than one is READY, cover each briefly but lead with "
+            "the strongest. If none is READY, say so plainly (WAIT/DEVELOPING/PASS as appropriate for each) and "
+            "state exactly what's still missing for each symbol -- do not manufacture a trade that isn't there. "
+            "When a symbol's status is READY, its entry_price/stop_price/target_price fields in the data below "
+            "are the entry, stop loss and take profit to state -- quote them exactly as given (rounded sensibly "
+            "for the instrument), never calculate or estimate your own price level.",
+            context, mode="personal",
+        )
+
     def watchlist(self, context: dict) -> tuple[str, str | None]:
         return self.ask(
             "Generate my personal watchlist in the exact format specified, using only the symbols "

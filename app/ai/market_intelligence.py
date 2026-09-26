@@ -144,11 +144,13 @@ def compute_news() -> "news_forexfactory.CalendarResult":
     return news_fred.merge_calendars(ff_result, fred_result)
 
 
-def compute_rankings(news_result=None) -> tuple[list, list[str]]:
+def compute_rankings(news_result=None, universe: dict[str, list[str]] | None = None) -> tuple[list, list[str]]:
     """Returns (rankings, errors). Pass an already-fetched `news_result`
     (e.g. from a caller that also needs it separately) to avoid a second
-    calendar fetch."""
-    universe = get_universe()
+    calendar fetch. Pass `universe` to scan a specific subset instead of
+    the full get_universe() (e.g. app.web.ai_assistant_routes.
+    api_trade_of_the_day scans just DEFAULT_UNIVERSE["micro_futures"])."""
+    universe = universe if universe is not None else get_universe()
     all_symbols = [s for symbols in universe.values() for s in symbols]
     macro_bias = {s: daily_trend_bias(s) for s in all_symbols}
 

@@ -31,6 +31,7 @@ from app.strategy.indicators import atr, ema
 # ---------------------------------------------------------------------------
 SWING_LOOKBACK = 3          # bars each side for a fractal swing high/low
 DEALING_RANGE_LOOKBACK = 50  # bars used to define the current premium/discount range
+STOP_BUFFER_FRAC = 0.0005   # extra room beyond the swept pool for a stop, as a fraction of price (~5 ticks on ES-sized instruments; small enough not to distort R:R, large enough to not sit exactly on the wick)
 SWEEP_LOOKBACK_BARS = 20     # how recently a swing point must have formed to count as "live" liquidity
 DISPLACEMENT_ATR_MULT = 1.4  # an M15 candle this many multiples of its own ATR counts as "displacement"
 
@@ -64,6 +65,21 @@ class LiquidityContext:
     def nearest_unswept_ssl(self) -> LiquidityPool | None:
         pools = [p for p in self.ssl if not p.swept]
         return min(pools, key=lambda p: p.price) if pools else None
+
+    def most_recently_swept_bsl(self) -> LiquidityPool | None:
+        """The BSL pool whose sweep just validated a long setup -- i.e. the
+        lowest swept pool, since that's the one price most recently pushed
+        through on its way to sweeping liquidity below. Used for stop-loss
+        placement: a genuine sweep-and-reclaim long invalidates if price
+        re-visits and breaks back below that same low."""
+        pools = [p for p in self.bsl if p.swept]
+        return min(pools, key=lambda p: p.price) if pools else None
+
+    def most_recently_swept_ssl(self) -> LiquidityPool | None:
+        """Mirror of most_recently_swept_bsl for a short setup's stop --
+        the highest swept SSL pool."""
+        pools = [p for p in self.ssl if p.swept]
+        return max(pools, key=lambda p: p.price) if pools else None
 
 
 @dataclass
@@ -110,6 +126,19 @@ class T58Assessment:
     missing: list[str]
     invalidation: str
     target: str
+    # ADDED (2026-09-26, "trade of the day" feature): concrete numeric
+    # levels for the exact three prices Owen actually wants out of this
+    # (entry / stop loss / take profit) -- computed here, deterministically,
+    # from price levels this module ALREADY had (LiquidityPool.price,
+    # EMAContext.price) rather than anything invented. All three are None
+    # unless status == "READY": per the doc's own "DIRECTION != ENTRY"
+    # rule, there is no valid entry to price up for anything less than
+    # READY, and Ollama is instructed (see app.ai.trading_assistant's
+    # trade_of_the_day prompt) to echo these numbers verbatim rather than
+    # generate its own.
+    entry_price: float | None = None
+    stop_price: float | None = None
+    target_price: float | None = None
 
 
 def _swing_points(frame: pd.DataFrame, lookback: int = SWING_LOOKBACK) -> tuple[list[LiquidityPool], list[LiquidityPool]]:
@@ -367,7 +396,33 @@ def assess(snapshot: MarketSnapshot) -> T58Assessment:
     else:
         invalidation = "No directional thesis to invalidate -- macro is neutral."
 
+    # ADDED (2026-09-26): concrete entry/stop/target numbers, READY only
+    # (see T58Assessment.entry_price's own docstring for why). Entry is
+    # simply the current price -- by the time every other gate is green,
+    # M15 has already confirmed the reversal back in the macro direction,
+    # so there is no earlier "better" price left to wait for; a resting
+    # limit order at the swept level itself would be entering ON the
+    # sweep, before confirmation, which is exactly the premature entry
+    # the doc's checklist exists to prevent. Stop sits just beyond the
+    # swept pool that validated the setup (the sweep's own low/high is
+    # the one level whose failure genuinely invalidates the thesis);
+    # target is the opposing liquidity pool already computed above.
+    entry_price = stop_price = target_price = None
+    if status == "READY":
+        entry_price = snapshot.price
+        if direction == "long":
+            swept = snapshot.liquidity.most_recently_swept_bsl()
+            if swept is not None:
+                stop_price = swept.price - abs(snapshot.price) * STOP_BUFFER_FRAC
+        elif direction == "short":
+            swept = snapshot.liquidity.most_recently_swept_ssl()
+            if swept is not None:
+                stop_price = swept.price + abs(snapshot.price) * STOP_BUFFER_FRAC
+        if target_pool is not None:
+            target_price = target_pool.price
+
     return T58Assessment(
         symbol=snapshot.symbol, direction=direction, status=status, score=score,
         checklist=checklist, missing=missing, invalidation=invalidation, target=target,
+        entry_price=entry_price, stop_price=stop_price, target_price=target_price,
     )

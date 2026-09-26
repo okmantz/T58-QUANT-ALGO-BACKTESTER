@@ -39,6 +39,15 @@ DEFAULT_UNIVERSE: dict[str, list[str]] = {
     "forex": ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "XAUUSD"],
     "crypto": ["BTCUSD", "ETHUSD"],
     "futures": ["US30", "NAS100", "SPX500"],  # MT5 CFD naming varies by broker; adjust to match your symbol list
+    # ADDED (2026-09-26, "trade of the day" feature): Owen's own three CME
+    # micro futures, using the exact ticker roots app.data.instrument_specs
+    # already defines (MES/MNQ/MGC) rather than the CFD-style index names
+    # above -- see app.web.ai_assistant_routes.api_trade_of_the_day, which
+    # scans exactly this group. MT5 broker symbol suffixes still vary
+    # (e.g. "MES" vs "MES1!" vs a contract-month suffix); adjust to match
+    # your broker's actual symbol list the same way the futures group
+    # above already notes.
+    "micro_futures": ["MES", "MNQ", "MGC"],
 }
 
 
@@ -169,4 +178,15 @@ def ranking_to_dict(r: MarketRanking) -> dict:
         "missing": r.t58_assessment.missing,
         "news_risk": r.snapshot.news_risk,
         "fundamental_bias": r.fundamental_bias,
+        # ADDED (2026-09-26, "trade of the day" feature): the concrete
+        # numeric levels app.ai.t58_strategy_engine.assess() computes
+        # (non-None only when status == "READY", see that function's own
+        # comment) -- without these here, a caller building an Ollama
+        # context from this dict (e.g. build_context) would have no
+        # entry/stop/target numbers to hand the model at all, and asking
+        # it to "quote entry_price" against a dict that doesn't have the
+        # key would just invite it to guess one instead.
+        "entry_price": r.t58_assessment.entry_price,
+        "stop_price": r.t58_assessment.stop_price,
+        "target_price": r.t58_assessment.target_price,
     }
