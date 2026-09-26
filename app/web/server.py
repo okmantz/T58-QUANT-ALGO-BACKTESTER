@@ -4202,6 +4202,8 @@ def full_pipeline_start():
             parallel_search=form.get("parallel_search", "on") == "on",
             reset_on_breach=form.get("reset_on_breach", "on") == "on",
             skip_optimization=form.get("skip_optimization") == "on",
+            library_ref=library_ref,
+            replace_existing=form.get("replace_existing") == "on",
         )
 
         ollama_settings = None
