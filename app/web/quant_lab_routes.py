@@ -318,6 +318,7 @@ def strategy_health():
         + '<label for="retune_csv">Market data (.csv) -- only needed if re-tuning</label><input type="file" id="retune_csv" name="retune_csv">'
         + _field("risk_value", "Risk value (%)", "number", "1.0")
         + _field("pip_size", "Pip size", "number", "0.0001")
+        + _field("commission", "Commission per trade ($)", "number", "0")
         + _field("account_size", "Account size ($) -- also used as initial balance", "number", "100000")
         + _field("profit_target", "Eval profit target (%)", "number", "8")
         + _field("daily_loss", "Daily loss limit (%)", "number", "5")
@@ -373,6 +374,7 @@ def strategy_health():
                     initial_balance=float(request.form.get("account_size", 100000) or 100000),
                     risk_value=float(request.form.get("risk_value", 1.0) or 1.0),
                     pip_size=float(request.form.get("pip_size", 0.0001) or 0.0001),
+                    commission_per_trade=float(request.form.get("commission", 0) or 0),
                 )
                 rules = PropRules(
                     account_size=float(request.form.get("account_size", 100000) or 100000),
@@ -440,6 +442,7 @@ def portfolio_composer():
         + '<label for="data_csv">Market data for every leg (CSV)</label><input type="file" id="data_csv" name="data_csv" accept=".csv">'
         + _field("min_legs", "Min legs", "number", "2") + _field("max_legs", "Max legs", "number", "4")
         + _field("max_evaluations", "Max evaluations", "number", "60")
+        + _field("commission", "Commission per trade ($, applied to every leg)", "number", "0")
     )
     result_html, error = None, None
     if request.method == "POST":
@@ -454,7 +457,8 @@ def portfolio_composer():
                 raise ValueError("Choose at least 2 strategies.")
             df = _load_ohlcv_upload("data_csv")
             by_name = {s.name: s for s in candidates_list}
-            legs = [InstrumentLeg(name=n, df=df, strategy=load_strategy_object(by_name[n]), risk=RiskConfig()) for n in names]
+            leg_risk = RiskConfig(commission_per_trade=float(request.form.get("commission", 0) or 0))
+            legs = [InstrumentLeg(name=n, df=df, strategy=load_strategy_object(by_name[n]), risk=leg_risk) for n in names]
             result = compose_portfolio(
                 legs, min_legs=int(request.form["min_legs"]), max_legs=int(request.form["max_legs"]),
                 max_evaluations=int(request.form["max_evaluations"]), portfolio_config=PortfolioConfig(),

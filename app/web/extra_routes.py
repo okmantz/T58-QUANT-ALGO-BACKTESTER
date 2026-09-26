@@ -121,6 +121,7 @@ def compare_run():
         initial_balance=float(form.get("account_size", 100000) or 100000),
         risk_value=float(form.get("risk_value", 1.0) or 1.0),
         pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+        commission_per_trade=float(form.get("commission", 0) or 0),
     )
     prop_rules = _prop_rules_from_form(form)
 
