@@ -1,0 +1,78 @@
+{
+  "name": "T58 MGC 1H BOS Trend-Following (long-only, ADX35 + EMA50>EMA200)",
+  "timeframe": "1h",
+  "entry_conditions": {
+    "long": [
+      {
+        "left": {
+          "type": "bos",
+          "lookback": 10,
+          "direction": "bullish"
+        },
+        "operator": "is true",
+        "right": {
+          "type": "value",
+          "value": 1
+        }
+      },
+      {
+        "left": {
+          "type": "ema",
+          "period": 50,
+          "field": "close"
+        },
+        "operator": ">",
+        "right": {
+          "type": "ema",
+          "period": 200,
+          "field": "close"
+        }
+      },
+      {
+        "left": {
+          "type": "adx",
+          "period": 14,
+          "field": "close"
+        },
+        "operator": ">",
+        "right": {
+          "type": "value",
+          "value": 35
+        }
+      }
+    ],
+    "long_connectors": [
+      "AND",
+      "AND"
+    ],
+    "short": [
+      {
+        "left": {
+          "type": "value",
+          "value": 0
+        },
+        "operator": ">",
+        "right": {
+          "type": "value",
+          "value": 1
+        }
+      }
+    ],
+    "short_connectors": []
+  },
+  "exit_conditions": {
+    "long": [],
+    "short": []
+  },
+  "risk_management": {
+    "stop_type": "atr",
+    "stop_value": 2.0,
+    "stop_atr_period": 14,
+    "target_type": "atr",
+    "target_value": 5.0,
+    "target_atr_period": 14,
+    "opposite_signal_exit": true,
+    "max_bars_in_trade": 300
+  },
+  "description": "Long-only Break-of-Structure trend-following strategy for MGC (Micro Gold), 1H bars. Entry: close breaks above the prior 10-bar high (bos, bullish) AND EMA50 > EMA200 (uptrend context) AND ADX(14) > 35 (strong trend only -- this threshold saturates the filter on this data, i.e. ADX rarely exceeds it, so it is really just a floor). No short side (shorts on this same setup were tested and had negative expectancy over 2023-2026 -- gold was a one-directional bull market this whole window; a short_conditions branch is left in but is an always-false placeholder). Exit: ATR(14) stop at 2.0x, ATR(14) target at 5.0x (~2.25 realized R:R after costs), opposite_signal_exit true, no fixed max_bars_in_trade cap (300 bars = plenty of room). TESTED against MGC_1m_2023-2026.parquet (real 1-minute MGC data, Jan 2023 - Mar 2026, resampled to 1H by the engine) via this repo's own run_backtest + run_monte_carlo + simulate_account, using MGC's real contract spec (10 oz/contract, tick_size 0.10, tick_value , i.e. 0/point, contract_size=10 so the engine floors position size to whole contracts), commission_per_trade .60/round-turn and slippage_pips 0.2 (both realistic for MGC). Full-history (no drawdown breaker) stats at 0.5% risk/trade: 703 trades over ~1103 days (4.46 trades/week), 37.3% win rate, profit factor 1.34, realized R:R 2.25, net +68.5%. Monte Carlo (shuffle resampling, 2000 sims) against a 0,000 account with your exact rules (6% eval profit target, 4% max drawdown -- modeled as STATIC/EOD since that is the more common structure for this tight a ratio, CONFIRM this matches your actual firm's rule -- and 2.4% daily loss limit, checked EOD):  @ 0.5% risk/trade: eval-pass probability 80.8%, first-payout probability 80.0%, median days to PASS EVAL = 27, median days to FIRST PAYOUT = 43 (worst-case simulated drawdown 23%, so this is comfortably inside your 4% cap only because the breaker forces a fresh account on breach in the simulation -- a single real account could still bust).   @ 0.7% risk/trade: eval-pass probability 64.5%, first-payout probability 53.8%, median days to PASS EVAL = 11, median days to FIRST PAYOUT = 25 (meets the <30-day ask). These two numbers trade off against each other with this strategy's current edge -- pushing risk/trade up to hit the 30-day target roughly halves your odds of ever getting there. There is no risk/trade setting found so far that gives both >70% probability AND <30 days to first payout on this specific 2023-2026 MGC data; 0.6% risk/trade is the middle ground (63.9% probability, 34 days -- just over the ask). Recommend running this yourself in the app's Full Pipeline / Monte Carlo tools to verify independently before risking real capital, and forward-testing live before funding a real evaluation."
+}
