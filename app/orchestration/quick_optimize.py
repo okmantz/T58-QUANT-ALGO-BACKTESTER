@@ -110,6 +110,7 @@ from app.strategy.library import (
     provenance_stamped_name,
     record_optimize_result,
     safe_filename_stem,
+    save_strategy_replacing_version,
     save_strategy_text,
     set_strategy_status,
 )
@@ -220,6 +221,22 @@ class QuickOptimizeConfig:
     # Pipeline run -- not so this tool can claim to replace that run.
     reserve_holdout: bool = False
     holdout_frac: float = 0.2
+
+    # VERSIONING (stop-making-copies fix): when the strategy being
+    # optimized came from the Strategy Library, library_ref is its
+    # (strategy_type, filename) -- set by the caller (see
+    # app.web.server.quickopt_start) whenever _build_strategy resolved
+    # one. replace_existing, when True AND library_ref is set, makes the
+    # save step below overwrite that SAME file in place (via
+    # app.strategy.library.save_strategy_replacing_version, which
+    # archives the version being replaced rather than discarding it, and
+    # carries forward last_run/last_validation/etc. instead of resetting
+    # them) INSTEAD OF always writing a new provenance-stamped filename.
+    # False (the default) is byte-identical to every run before these
+    # fields existed. Ignored (treated as False) when library_ref is None
+    # -- there's nothing to replace for an ad-hoc/uploaded strategy.
+    library_ref: tuple[str, str] | None = None
+    replace_existing: bool = False
 
 
 @dataclass
@@ -671,70 +688,123 @@ def run_quick_optimize(
     saved_library_note = None
     if cfg.save_to_library and final_source_type in ("python", "pinescript", "mql5") and final_code_text:
         ext = _EXT_FOR_SOURCE[final_source_type]
-        base_name = safe_filename_stem(save_name, "optimized_strategy")
-        filename = f"{base_name}_optimized{ext}"
-        try:
+        if cfg.replace_existing and cfg.library_ref:
+            # VERSIONING: overwrite the SAME file the input strategy came
+            # from, in place -- archiving the version being replaced
+            # (see save_strategy_replacing_version) and keeping every
+            # pipeline-progress field that file already had, instead of
+            # writing yet another provenance-stamped copy that starts
+            # tracking from zero.
+            ref_type, ref_filename = cfg.library_ref
             try:
-                saved_library_path = save_strategy_text(final_code_text, filename, final_source_type, overwrite=False)
-            except StrategyAlreadyExists:
-                filename = f"{base_name}_optimized_{int(time.time())}{ext}"
-                saved_library_path = save_strategy_text(final_code_text, filename, final_source_type, overwrite=False)
-            set_strategy_status(final_source_type, filename, cfg.library_status)
-            record_optimize_result(final_source_type, filename, {
-                "improved": improved,
-                "trades": len(final_bt.trades),
-                "net_profit": round(final_bt.statistics.net_profit, 2),
-                "win_rate": round(final_bt.statistics.win_rate, 1),
-                "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
-                "eval_pass_probability": round(final_mc.evaluation_pass_probability, 1),
-                "first_payout_probability": round(final_mc.first_payout_probability, 1),
-                "baseline_eval_pass_probability": round(baseline_mc.evaluation_pass_probability, 1),
-            })
-            saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {cfg.library_status})."
-            log(saved_library_note)
-        except Exception as exc:  # noqa: BLE001 -- saving is a convenience, not the core result
-            saved_library_note = f"Could not save to the Strategy Library: {exc}"
-            log(saved_library_note)
+                saved_library_path = save_strategy_replacing_version(final_code_text, ref_type, ref_filename)
+                filename = ref_filename
+                set_strategy_status(ref_type, filename, cfg.library_status)
+                record_optimize_result(ref_type, filename, {
+                    "improved": improved,
+                    "trades": len(final_bt.trades),
+                    "net_profit": round(final_bt.statistics.net_profit, 2),
+                    "win_rate": round(final_bt.statistics.win_rate, 1),
+                    "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
+                    "eval_pass_probability": round(final_mc.evaluation_pass_probability, 1),
+                    "first_payout_probability": round(final_mc.first_payout_probability, 1),
+                    "baseline_eval_pass_probability": round(baseline_mc.evaluation_pass_probability, 1),
+                })
+                saved_library_note = f"Replaced '{filename}' in the Strategy Library (previous version archived, status: {cfg.library_status})."
+                log(saved_library_note)
+            except Exception as exc:  # noqa: BLE001 -- saving is a convenience, not the core result
+                saved_library_note = f"Could not replace the Strategy Library entry: {exc}"
+                log(saved_library_note)
+        else:
+            base_name = safe_filename_stem(save_name, "optimized_strategy")
+            filename = f"{base_name}_optimized{ext}"
+            try:
+                try:
+                    saved_library_path = save_strategy_text(final_code_text, filename, final_source_type, overwrite=False)
+                except StrategyAlreadyExists:
+                    filename = f"{base_name}_optimized_{int(time.time())}{ext}"
+                    saved_library_path = save_strategy_text(final_code_text, filename, final_source_type, overwrite=False)
+                set_strategy_status(final_source_type, filename, cfg.library_status)
+                record_optimize_result(final_source_type, filename, {
+                    "improved": improved,
+                    "trades": len(final_bt.trades),
+                    "net_profit": round(final_bt.statistics.net_profit, 2),
+                    "win_rate": round(final_bt.statistics.win_rate, 1),
+                    "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
+                    "eval_pass_probability": round(final_mc.evaluation_pass_probability, 1),
+                    "first_payout_probability": round(final_mc.first_payout_probability, 1),
+                    "baseline_eval_pass_probability": round(baseline_mc.evaluation_pass_probability, 1),
+                })
+                saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {cfg.library_status})."
+                log(saved_library_note)
+            except Exception as exc:  # noqa: BLE001 -- saving is a convenience, not the core result
+                saved_library_note = f"Could not save to the Strategy Library: {exc}"
+                log(saved_library_note)
     elif cfg.save_to_library and final_source_type == "manual" and final_config:
         # Same fix as app.orchestration.full_pipeline._finish -- manual/
         # Search-Lab configs are dicts, not files, but app.strategy.library
         # already has a first-class "manual" type that stores exactly this
         # shape as JSON, so there's no real reason this used to give up.
-        base_name = safe_filename_stem(save_name, "optimized_strategy")
-        filename = f"{base_name}_optimized.json"
-        # Point (3), continued: overwrite the saved JSON's own "name" field
-        # with save_name too when mutated -- otherwise the file on disk
-        # would still claim the ORIGINAL (now-inaccurate) name internally
-        # even though its filename was fixed, which is exactly the
-        # "stale name, mutated body" state that caused the original bug.
         config_to_save = dict(final_config)
-        if mutated_by_ga:
-            config_to_save["name"] = save_name
-        config_text = json.dumps(config_to_save, indent=2)
-        try:
+        if cfg.replace_existing and cfg.library_ref:
+            ref_type, ref_filename = cfg.library_ref
+            config_text = json.dumps(config_to_save, indent=2)
             try:
-                saved_library_path = save_strategy_text(config_text, filename, "manual", overwrite=False)
-            except StrategyAlreadyExists:
-                filename = f"{base_name}_optimized_{int(time.time())}.json"
-                saved_library_path = save_strategy_text(config_text, filename, "manual", overwrite=False)
-            set_strategy_status("manual", filename, cfg.library_status)
-            record_optimize_result("manual", filename, {
-                "improved": improved,
-                "trades": len(final_bt.trades),
-                "net_profit": round(final_bt.statistics.net_profit, 2),
-                "win_rate": round(final_bt.statistics.win_rate, 1),
-                "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
-                "eval_pass_probability": round(final_mc.evaluation_pass_probability, 1),
-                "first_payout_probability": round(final_mc.first_payout_probability, 1),
-                "baseline_eval_pass_probability": round(baseline_mc.evaluation_pass_probability, 1),
-            })
-            saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {cfg.library_status})."
-            log(saved_library_note)
-            final_code_text = config_text
-            final_code_ext = ".json"
-        except Exception as exc:  # noqa: BLE001 -- saving is a convenience, not the core result
-            saved_library_note = f"Could not save to the Strategy Library: {exc}"
-            log(saved_library_note)
+                saved_library_path = save_strategy_replacing_version(config_text, ref_type, ref_filename)
+                filename = ref_filename
+                set_strategy_status(ref_type, filename, cfg.library_status)
+                record_optimize_result(ref_type, filename, {
+                    "improved": improved,
+                    "trades": len(final_bt.trades),
+                    "net_profit": round(final_bt.statistics.net_profit, 2),
+                    "win_rate": round(final_bt.statistics.win_rate, 1),
+                    "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
+                    "eval_pass_probability": round(final_mc.evaluation_pass_probability, 1),
+                    "first_payout_probability": round(final_mc.first_payout_probability, 1),
+                    "baseline_eval_pass_probability": round(baseline_mc.evaluation_pass_probability, 1),
+                })
+                saved_library_note = f"Replaced '{filename}' in the Strategy Library (previous version archived, status: {cfg.library_status})."
+                log(saved_library_note)
+                final_code_text = config_text
+                final_code_ext = ".json"
+            except Exception as exc:  # noqa: BLE001 -- saving is a convenience, not the core result
+                saved_library_note = f"Could not replace the Strategy Library entry: {exc}"
+                log(saved_library_note)
+        else:
+            base_name = safe_filename_stem(save_name, "optimized_strategy")
+            filename = f"{base_name}_optimized.json"
+            # Point (3), continued: overwrite the saved JSON's own "name" field
+            # with save_name too when mutated -- otherwise the file on disk
+            # would still claim the ORIGINAL (now-inaccurate) name internally
+            # even though its filename was fixed, which is exactly the
+            # "stale name, mutated body" state that caused the original bug.
+            if mutated_by_ga:
+                config_to_save["name"] = save_name
+            config_text = json.dumps(config_to_save, indent=2)
+            try:
+                try:
+                    saved_library_path = save_strategy_text(config_text, filename, "manual", overwrite=False)
+                except StrategyAlreadyExists:
+                    filename = f"{base_name}_optimized_{int(time.time())}.json"
+                    saved_library_path = save_strategy_text(config_text, filename, "manual", overwrite=False)
+                set_strategy_status("manual", filename, cfg.library_status)
+                record_optimize_result("manual", filename, {
+                    "improved": improved,
+                    "trades": len(final_bt.trades),
+                    "net_profit": round(final_bt.statistics.net_profit, 2),
+                    "win_rate": round(final_bt.statistics.win_rate, 1),
+                    "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
+                    "eval_pass_probability": round(final_mc.evaluation_pass_probability, 1),
+                    "first_payout_probability": round(final_mc.first_payout_probability, 1),
+                    "baseline_eval_pass_probability": round(baseline_mc.evaluation_pass_probability, 1),
+                })
+                saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {cfg.library_status})."
+                log(saved_library_note)
+                final_code_text = config_text
+                final_code_ext = ".json"
+            except Exception as exc:  # noqa: BLE001 -- saving is a convenience, not the core result
+                saved_library_note = f"Could not save to the Strategy Library: {exc}"
+                log(saved_library_note)
     elif final_source_type == "manual":
         saved_library_note = (
             "Manual Strategy Builder configuration produced, but nothing was saved (saving to the "
