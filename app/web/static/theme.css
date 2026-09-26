@@ -238,7 +238,16 @@ a { color: var(--teal); }
 }
 .t58-nav-group[open] summary .chev { transform: rotate(90deg); }
 .t58-nav-group summary:hover { color: var(--text-muted); }
-.t58-nav-group-items { display: flex; flex-direction: column; gap: 2px; padding-bottom: 4px; }
+/* FIX (all sidebar groups showing as open on launch): this used to be a
+   bare `.t58-nav-group-items { display: flex; ... }` with no [open]
+   scoping, which overrode the browser's native details-content-hidden-
+   when-closed behavior -- so every group's items rendered regardless of
+   whether that group's <details> was actually open, making the whole
+   sidebar look permanently expanded no matter what t58-chrome.js's
+   restoreNavGroups() (or a fresh visit's all-closed default) set. Scoping
+   this to [open] restores real collapse/expand. */
+.t58-nav-group:not([open]) .t58-nav-group-items { display: none; }
+.t58-nav-group[open] .t58-nav-group-items { display: flex; flex-direction: column; gap: 2px; padding-bottom: 4px; }
 
 .t58-nav-section-label {
   padding: 6px 10px 2px; font-size: 10px; font-weight: 700; letter-spacing: .09em;
