@@ -302,6 +302,12 @@ class FullPipelineResult:
     final_mc: MonteCarloResult
     final_holdout: dict | None
 
+    # Full-history (complete df, not just dev_df) backtest/single-run used
+    # for the HTML report's chart and payout stats -- see the comment above
+    # full_history_bt's own computation. Equal to final_bt/final_single_run
+    # whenever reserve_true_holdout is off (dev_df already is the full df).
+    full_history_single_run: AccountSimResult
+
     oos_validation: WalkForwardResult | None
     oos_validation_skip_reason: str | None
 
@@ -1005,6 +1011,40 @@ def run_full_pipeline(
         pnls = [t.pnl for t in final_bt.trades]
         dates = [t.entry_time for t in final_bt.trades]
         final_single_run = simulate_account(pnls, dates, prop_rules, reset_on_breach=cfg.reset_on_breach)
+
+        # -- Full-history backtest for reporting/charting only ---------------
+        # final_bt above is intentionally dev_df-only when reserve_true_holdout
+        # is on, so the READY/MARGINAL/NOT READY verdict, t58_score, and
+        # final_mc never see the reserved holdout tail before Step 5 -- that
+        # separation is the whole point of the holdout design (see the
+        # comment above dev_df's own definition) and must not change. But the
+        # final HTML report's interactive trade chart and "single historical
+        # run" prop-firm summary were BOTH built from that same dev_df-only
+        # final_bt, plotted against price_df=df (the FULL dataset) -- so the
+        # chart's price line ran all the way to the end while its trade
+        # markers and equity curve simply stopped wherever dev_df ended,
+        # rendering as a flat line for the reserved tail. That flat line was
+        # never "the strategy hit its profit target and stopped trading" --
+        # run_backtest has no profit-target-based halting at all, and
+        # app.prop.simulator.simulate_account already transitions
+        # evaluation -> funded and keeps walking every remaining trade,
+        # tracking payout cycles, rather than stopping there -- it was
+        # purely this dev-only-data-plotted-against-full-length-price-axis
+        # mismatch. full_history_bt/full_history_single_run below re-run the
+        # SAME final strategy across the complete `df` purely so the report
+        # reflects it, without touching final_bt/final_single_run/final_mc's
+        # dev-only inputs anywhere above or below this block.
+        if cfg.reserve_true_holdout and len(dev_df) < len(df):
+            full_history_bt = run_backtest(df, final_strategy, risk, adaptive_risk=adaptive_risk)
+            full_history_pnls = [t.pnl for t in full_history_bt.trades]
+            full_history_dates = [t.entry_time for t in full_history_bt.trades]
+            full_history_single_run = simulate_account(
+                full_history_pnls, full_history_dates, prop_rules, reset_on_breach=cfg.reset_on_breach,
+            )
+        else:
+            full_history_bt = final_bt
+            full_history_single_run = final_single_run
+
         final_mc = run_monte_carlo(
             final_bt.trades, prop_rules,
             MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
@@ -1208,6 +1248,7 @@ def run_full_pipeline(
             refinement_ran, refinement_skip_reason, ga_result,
             final_source_type, final_config, final_code_text, final_code_ext,
             final_bt, final_single_run, final_mc, final_holdout,
+            full_history_bt, full_history_single_run,
             oos_validation, oos_skip_reason, icir_gate, icir_gate_skip_reason, verdict, verdict_reasons,
             scorecard, risk_of_ruin_hard_fail, lookahead_hard_fail, parsimony_result,
             cpcv_primary_result or cpcv_supporting_result, cpcv_skip_reason, regime_result, regime_skip_reason,
@@ -1224,6 +1265,7 @@ def _finish(
     refinement_ran, refinement_skip_reason, ga_result,
     final_source_type, final_config, final_code_text, final_code_ext,
     final_bt, final_single_run, final_mc, final_holdout,
+    full_history_bt, full_history_single_run,
     oos_validation, oos_skip_reason, icir_gate, icir_gate_skip_reason, verdict, verdict_reasons,
     scorecard, risk_of_ruin_hard_fail, lookahead_hard_fail, parsimony_result, cpcv_result, cpcv_skip_reason,
     regime_result, regime_skip_reason,
@@ -1326,9 +1368,9 @@ def _finish(
         instrument=instrument,
         timeframe=describe_resolved_timeframe(_report_strategy, df),
         backtest_period=period,
-        backtest_result=final_bt,
+        backtest_result=full_history_bt,
         prop_rules=prop_rules,
-        prop_single_run=final_single_run,
+        prop_single_run=full_history_single_run,
         monte_carlo_result=final_mc,
         basename=report_basename,
         holdout_comparison=final_holdout,
@@ -1368,6 +1410,13 @@ def _finish(
                 "risk_of_ruin_pct": round(final_mc.risk_of_ruin_pct, 1),
                 "risk_of_ruin_hard_fail": risk_of_ruin_hard_fail,
                 "lookahead_hard_fail": lookahead_hard_fail,
+                # ADDED (2026-09-26): first-payout economics from the
+                # full-history single run (see full_history_single_run
+                # above) -- the Strategy Library couldn't show either of
+                # these before because nothing recorded them here.
+                "first_payout_amount": full_history_single_run.first_payout_amount,
+                "days_to_first_payout": full_history_single_run.first_payout_day_index,
+                "total_payouts_full_history": len(full_history_single_run.payouts),
             })
             # Pipeline-progress tracker (Create/Test/Optimize/Validate/
             # Champion Check/Ready -- see app.strategy.library.
@@ -1442,6 +1491,9 @@ def _finish(
                 "risk_of_ruin_pct": round(final_mc.risk_of_ruin_pct, 1),
                 "risk_of_ruin_hard_fail": risk_of_ruin_hard_fail,
                 "lookahead_hard_fail": lookahead_hard_fail,
+                "first_payout_amount": full_history_single_run.first_payout_amount,
+                "days_to_first_payout": full_history_single_run.first_payout_day_index,
+                "total_payouts_full_history": len(full_history_single_run.payouts),
             })
             if refinement_ran and ga_result is not None:
                 record_optimize_result("manual", filename, {
@@ -1514,6 +1566,7 @@ def _finish(
         final_single_run=final_single_run,
         final_mc=final_mc,
         final_holdout=final_holdout,
+        full_history_single_run=full_history_single_run,
         oos_validation=oos_validation,
         oos_validation_skip_reason=oos_skip_reason,
         icir_gate=icir_gate,
@@ -1782,6 +1835,9 @@ def run_full_pipeline_batch(
                     "first_payout_probability": round(result.final_mc.first_payout_probability, 1),
                     "verdict": result.verdict,
                     "report_html": str(result.report_paths["html"]),
+                    "first_payout_amount": result.full_history_single_run.first_payout_amount,
+                    "days_to_first_payout": result.full_history_single_run.first_payout_day_index,
+                    "total_payouts_full_history": len(result.full_history_single_run.payouts),
                 })
                 from app.strategy.library import (
                     record_optimize_result as _rec_opt,

@@ -79,7 +79,7 @@ import tempfile
 import threading
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -88,7 +88,7 @@ import pandas as pd
 
 from app.backtest.risk import RiskConfig
 from app.orchestration.full_pipeline import (
-    FullPipelineConfig, FullPipelineResult, run_full_pipeline,
+    FullPipelineCancelled, FullPipelineConfig, FullPipelineResult, run_full_pipeline,
 )
 from app.prop.simulator import PropRules
 from app.reports.crash_log import log_crash
@@ -463,6 +463,19 @@ def run_speed_run(
                 df, strategy, risk, prop_rules, output_dir / "speed_run",
                 fp_cfg, progress_cb=None, instrument=instrument,
                 report_basename=f"speed_run_{cid}",
+                # FIX (CI flakiness / stop-doesn't-stop): this call used to
+                # omit cancel_event entirely, so a Phase 2 validation
+                # already in flight when /stop was pressed had no way to
+                # notice -- it ran to completion no matter how long that
+                # took (a full walk-forward-aware GA + Monte Carlo +
+                # holdout check), which is exactly why the web test's poll
+                # timeout kept needing to be bumped (30s -> 90s -> 180s)
+                # without ever actually fixing the underlying behavior.
+                # run_full_pipeline already checks cancel_event between
+                # each of its 7 steps and raises FullPipelineCancelled --
+                # forwarding it here is what makes an in-flight validation
+                # actually stoppable.
+                cancel_event=cancel_event,
             )
             with log_lock:
                 log(
@@ -471,6 +484,13 @@ def run_speed_run(
                     f"payout {result.final_mc.first_payout_probability:.1f}%)"
                 )
             return SpeedRunCandidateResult(candidate_id=cid, family=family, pipeline_result=result)
+        except FullPipelineCancelled:
+            # Not a candidate failure -- let it propagate so the polling
+            # loop below can tell "stopped by user" apart from "this
+            # candidate genuinely failed validation" instead of logging
+            # a misleading "FAILED validation" line for every in-flight
+            # candidate at the moment /stop was pressed.
+            raise
         except Exception as exc:  # noqa: BLE001 -- one candidate's failure must not sink the others
             with log_lock:
                 log(f"  {cid}: FAILED validation -- {exc}")
@@ -481,8 +501,20 @@ def run_speed_run(
     results: list[SpeedRunCandidateResult] = []
     with ThreadPoolExecutor(max_workers=n_concurrent) as pool:
         futures = {pool.submit(validate_one, row): row for row in top}
-        for fut in as_completed(futures):
-            results.append(fut.result())
+        pending = set(futures)
+        # FIX (CI flakiness / stop-doesn't-stop): this used to be
+        # `for fut in as_completed(futures)`, which only checks
+        # cancel_event AFTER a future finishes -- with cancel_event now
+        # forwarded into run_full_pipeline above, in-flight validations
+        # notice promptly, but this loop still needs to poll for that
+        # rather than block indefinitely waiting for the next completion.
+        while pending:
+            done, pending = wait(pending, timeout=1.0)
+            for fut in done:
+                try:
+                    results.append(fut.result())
+                except FullPipelineCancelled:
+                    pass
             if cancel_event is not None and cancel_event.is_set():
                 pool.shutdown(wait=False, cancel_futures=True)
                 break
