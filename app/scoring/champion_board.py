@@ -158,11 +158,30 @@ class PromotionState:
     promoted_at: dict[str, float] = field(default_factory=dict)  # stage -> unix ts
 
     def to_dict(self) -> dict:
+        stage_idx = PROMOTION_STAGES.index(self.stage)
+        base_pct = 100.0 * stage_idx / (len(PROMOTION_STAGES) - 1)
+        # PARTIAL-CREDIT FIX: this used to be base_pct alone, so a
+        # strategy sitting at "candidate" with every single "advance to
+        # validated" requirement already met (backtested, CPCV/PBO/WFO
+        # run, lookahead clean) still showed the exact same 0% as a
+        # strategy nobody had touched -- running CPCV visibly did
+        # nothing until someone also clicked Promote. Blending in how
+        # much of the NEXT stage's requirements are already satisfied
+        # makes the number move the moment a real tool run lands,
+        # without changing what "stage" (the confirmed, promoted state)
+        # actually is -- can_promote/next_stage_title still gate the
+        # explicit Promote action exactly as before.
+        if self.requirements and self.next_stage is not None:
+            band_width = 100.0 / (len(PROMOTION_STAGES) - 1)
+            met_frac = sum(1 for r in self.requirements if r.met) / len(self.requirements)
+            stage_pct = round(base_pct + band_width * met_frac, 1)
+        else:
+            stage_pct = round(base_pct, 1)
         return {
             "stage": self.stage,
             "stage_title": self.stage_title,
-            "stage_index": PROMOTION_STAGES.index(self.stage),
-            "stage_pct": round(100.0 * PROMOTION_STAGES.index(self.stage) / (len(PROMOTION_STAGES) - 1), 1),
+            "stage_index": stage_idx,
+            "stage_pct": stage_pct,
             "next_stage": self.next_stage,
             "next_stage_title": self.next_stage_title,
             "can_promote": self.can_promote,
@@ -444,6 +463,24 @@ def _diagnose_why(row: dict[str, Any]) -> str:
     return f"{label} is the weakest area at {value:.0f}%."
 
 
+# Where the dashboard's "what should I do next" button should point,
+# keyed by the PromotionRequirement.key it's addressing (see
+# _requirements_for_next_stage above) -- used only when a stage has
+# unmet requirements; can_promote's own "Promote" button (which posts to
+# /champion/promote) still handles the fully-met case.
+_REQUIREMENT_HREF: dict[str, str] = {
+    "backtested": "/",                 # Run & Report
+    "validated_run": "/cpcv",
+    "lookahead_clean": "/library",      # fix/replace the flagged code, not a tool run
+    "eval_threshold": "/quick-optimize",
+    "payout_threshold": "/quick-optimize",
+    "oos_threshold": "/cpcv",
+    "not_rejected": "/",                # re-run Full Pipeline for a fresh Champion Check
+    "champion_check_ready": "/",
+    "min_duration": "/forward-test",
+}
+
+
 def _next_action(row: dict[str, Any]) -> str:
     promo = row["promotion"]
     if promo["can_promote"] and promo["next_stage_title"]:
@@ -454,6 +491,24 @@ def _next_action(row: dict[str, Any]) -> str:
     if row.get("verdict") == "NOT READY":
         return "Go back to Search Lab or Evolution Lab for a different candidate."
     return "Run a Champion Check (Full Pipeline) to get a verdict."
+
+
+def _next_action_href(row: dict[str, Any]) -> str:
+    """Dynamic counterpart to _next_action's text -- FIX (dashboard "Open
+    Validate" always pointed at /validate no matter what stage or unmet
+    requirement was actually next): this used to be hardcoded in
+    dashboard.html itself; now it's derived from the same unmet-
+    requirements list _next_action reads, so the button actually goes
+    where the text says."""
+    promo = row["promotion"]
+    if promo["can_promote"]:
+        return ""  # template shows the Promote button instead, not a link
+    unmet = [r for r in promo["requirements"] if not r["met"]]
+    if unmet:
+        return _REQUIREMENT_HREF.get(unmet[0]["key"], "/validate")
+    if row.get("verdict") == "NOT READY":
+        return "/search"
+    return "/"
 
 
 def five_question_snapshot(current: Optional[dict], rows: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
@@ -484,5 +539,6 @@ def five_question_snapshot(current: Optional[dict], rows: list[dict[str, Any]]) 
         "is_it_working": row.get("status", "DEVELOPING"),
         "why": _diagnose_why(row),
         "next_action": _next_action(row),
+        "next_action_href": _next_action_href(row),
         "row": row,
     }
