@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 import app.web.server as server_module
-from app.web.server import _SEARCH_JOBS, app
+from app.web.server import app
 from app.orchestration.resource_guard import HEAVY_JOB_GUARD, JOB_EVOLUTION_LAB, JOB_SEARCH_LAB
 
 SAMPLE_CSV = Path(__file__).resolve().parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv"
@@ -67,8 +67,11 @@ def _cleanup_search_artifacts(tmp_path, monkeypatch):
     isolated_search_dir = tmp_path / "search"
     isolated_search_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(server_module, "SEARCH_DIR", isolated_search_dir)
+    # MIGRATED (2026-09, JOB_MANAGER cleanup): see the identical note in
+    # tests/test_web_speed_run_loop_mode.py -- Search Lab jobs now live in
+    # the shared JOB_MANAGER, which has no blanket .clear() and needs
+    # none (each job id is a fresh uuid).
     yield
-    _SEARCH_JOBS.clear()
 
 
 def _poll_until_done(client, job_id: str, timeout: float = 60.0) -> dict:

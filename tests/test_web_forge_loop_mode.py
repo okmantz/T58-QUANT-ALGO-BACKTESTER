@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 import app.web.server as server_module
-from app.web.server import _FORGE_JOBS, app
+from app.web.server import app
 from app.orchestration.resource_guard import HEAVY_JOB_GUARD, JOB_FORGE
 
 SAMPLE_CSV = Path(__file__).resolve().parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv"
@@ -33,8 +33,11 @@ def _cleanup_forge_artifacts(tmp_path, monkeypatch):
     isolated_forge_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(server_module, "FORGE_DIR", isolated_forge_dir)
     monkeypatch.setattr("app.search.graveyard.get_app_base_dir", lambda: tmp_path)
+    # MIGRATED (2026-09, JOB_MANAGER cleanup): see the identical note in
+    # tests/test_web_speed_run_loop_mode.py -- Forge jobs now live in the
+    # shared JOB_MANAGER, which has no blanket .clear() and needs none
+    # (each job id is a fresh uuid).
     yield
-    _FORGE_JOBS.clear()
 
 
 def _poll_until_done(client, job_id: str, timeout: float = 120.0) -> dict:

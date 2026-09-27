@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 import app.web.server as server_module
-from app.web.server import _SPEEDRUN_JOBS, app
+from app.web.server import app
 
 SAMPLE_CSV = Path(__file__).resolve().parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv"
 
@@ -30,8 +30,14 @@ def _cleanup_speedrun_artifacts(tmp_path, monkeypatch):
     isolated_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(server_module, "SPEEDRUN_DIR", isolated_dir)
     monkeypatch.setattr(server_module, "SPEEDRUN_REPORTS_DIR", isolated_dir / "speed_run")
+    # MIGRATED (2026-09, JOB_MANAGER cleanup): this used to clear the
+    # module's own _SPEEDRUN_JOBS dict here. Speed Run jobs now live in
+    # the shared JOB_MANAGER (see app.web.job_manager), which has no
+    # blanket .clear() (it's a real shared singleton, not a per-tool
+    # test fixture) -- nothing here needs it anyway, since every job id
+    # is a fresh uuid and JOB_MANAGER.prune() is what keeps the real
+    # server's job dict from growing unbounded in production.
     yield
-    _SPEEDRUN_JOBS.clear()
 
 
 def _poll_until_done(client, job_id: str, timeout: float = 90.0) -> dict:
