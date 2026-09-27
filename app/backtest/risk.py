@@ -192,6 +192,31 @@ class RiskConfig:
             units = max(lots, 0) * self.contract_size
         return max(units, 0.0)
 
+    def sizing_floored_to_zero_contracts(self, current_equity: float, stop_loss_pips: float) -> bool:
+        """True when this trade's intended risk was real and positive
+        (there WAS money to risk and a real stop distance to size against)
+        but contract_size whole-lot rounding brought it down to exactly 0
+        -- i.e. THIS specific reason for a skipped entry, as opposed to a
+        genuinely degenerate stop distance (NaN/zero/negative) or no
+        money at all. See run_execution's own zero-size-floor warning:
+        without distinguishing this case, a run where every single entry
+        gets silently floored to 0 whole contracts (risk_value too small
+        for this instrument's contract_size given the strategy's stop
+        width) reports "0 trades" with no indication of why, which is
+        indistinguishable from a strategy that simply never signals."""
+        if not self.contract_size or not stop_loss_pips or stop_loss_pips <= 0:
+            return False
+        stop_distance = stop_loss_pips * self.pip_size
+        if stop_distance <= 0:
+            return False
+        risk_amt = self.risk_amount(current_equity)
+        if risk_amt <= 0:
+            return False
+        units = risk_amt / stop_distance
+        if self.max_position_size is not None:
+            units = min(units, self.max_position_size)
+        return units > 0 and math.floor(units / self.contract_size + 1e-9) <= 0
+
     def max_trade_loss(self, equity_at_entry: float) -> float:
         """Hard dollar ceiling on how much a single trade may realistically
         lose, regardless of how it was sized or how far price gapped past

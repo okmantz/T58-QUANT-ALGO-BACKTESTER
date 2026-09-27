@@ -2005,6 +2005,15 @@ def run_pipeline():
         # Monte Carlo layer, so checking it never actually kept the raw
         # backtest itself trading past the first blown account.
         reset_on_breach = form.get("reset_on_breach") == "on"
+        reset_on_target = form.get("reset_on_target") == "on"
+        # See RiskConfig.reset_on_target's own docstring -- reuses the
+        # same "Profit Target %" field the Prop Rules section below
+        # already collects (PropRules.evaluation_profit_target_pct)
+        # rather than asking for a second, duplicate number: the raw
+        # engine's payout target and the eval-pass profit target are the
+        # same number in Owen's own mental model ("how much profit before
+        # this counts as a win").
+        profit_target_pct_for_reset = float(form.get("profit_target", 8)) if reset_on_target else None
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000)),
             risk_mode=form.get("risk_mode", "percent"),
@@ -2015,6 +2024,7 @@ def run_pipeline():
             spread_pips=float(form.get("spread_pips", 1.0)),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
             reset_on_breach=reset_on_breach,
+            reset_on_target=reset_on_target, profit_target_pct=profit_target_pct_for_reset,
         )
 
         payout_cap = form.get("payout_cap", "").strip()
@@ -2181,6 +2191,10 @@ def run_pipeline():
                 "reset_on_breach": mc_result.reset_on_breach,
                 "mean_attempts_per_path": mc_result.mean_attempts_per_path,
                 "median_attempts_per_path": mc_result.median_attempts_per_path,
+                "payout_count": bt_result.statistics.payout_count,
+                "total_payout_amount": bt_result.statistics.total_payout_amount,
+                "zero_size_contract_floor_count": bt_result.equity_curve.attrs.get("zero_size_contract_floor_count", 0),
+                "execution_warnings": bt_result.warnings,
                 "report_html": f"/reports/{paths['html'].name}",
                 "report_json": f"/reports/{paths['json'].name}",
                 "report_csv": f"/reports/{paths['summary_csv'].name}",

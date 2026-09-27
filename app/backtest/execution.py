@@ -174,6 +174,7 @@ def run_execution(
 
     open_trade: dict | None = None
     fallback_stop_count = 0
+    zero_size_contract_floor_count = 0  # see RiskConfig.sizing_floored_to_zero_contracts
     pip_scale_mismatch_count = 0
     pip_scale_mismatch_worst_ratio = None  # smallest (stop_distance / entry_price) seen, for the warning
     atr_scale_mismatch_count = 0
@@ -733,6 +734,8 @@ def run_execution(
                     # Degenerate sizing (e.g. an ATR-based stop distance
                     # that rounds to ~0 for this bar) — skip this entry
                     # rather than opening a trade with an invalid size.
+                    if risk.sizing_floored_to_zero_contracts(equity, sizing_pips):
+                        zero_size_contract_floor_count += 1
                     pass  # n_today unchanged; no-op, kept for readability
                 else:
                     if used_fallback_stop:
@@ -834,6 +837,7 @@ def run_execution(
     equity_df.attrs["account_reset_events"] = reset_events
     equity_df.attrs["payout_events"] = [ev for ev in reset_events if ev.get("kind") == "payout"]
     equity_df.attrs["breach_events"] = [ev for ev in reset_events if ev.get("kind", "breach") == "breach"]
+    equity_df.attrs["zero_size_contract_floor_count"] = zero_size_contract_floor_count
 
     _breach_events = equity_df.attrs["breach_events"]
     _payout_events = equity_df.attrs["payout_events"]
@@ -915,6 +919,27 @@ def run_execution(
             "was used instead purely for sane position sizing and account "
             "protection. Add a real stop loss / STOP_LOSS_PIPS to the "
             "strategy for accurate results.",
+            RuntimeWarning,
+        )
+
+    if zero_size_contract_floor_count:
+        import warnings
+        pct_of_signals = (
+            f" ({zero_size_contract_floor_count / max(len(trades) + zero_size_contract_floor_count, 1) * 100:.0f}% "
+            "of all potential entries)" if trades else " (every potential entry this run)"
+        )
+        warnings.warn(
+            f"{zero_size_contract_floor_count} potential entr{'y' if zero_size_contract_floor_count == 1 else 'ies'}"
+            f"{pct_of_signals} were skipped because position sizing rounded DOWN to 0 whole "
+            f"contracts of this instrument (RiskConfig.contract_size={risk.contract_size:g}) at your "
+            f"configured risk -- risk_value is too small to afford even ONE contract given this "
+            "strategy's stop distance. This is the single most common reason a real, previously-"
+            "profitable strategy suddenly shows 0 (or near-0) trades: the same strategy tested "
+            "WITHOUT contract_size set (continuous/fractional sizing) can look completely normal, "
+            "since fractional contracts aren't real but aren't floored to zero either. Fix by "
+            "raising risk_value, switching to that instrument's micro contract (e.g. MGC instead of "
+            "GC, MES instead of ES -- see app.data.instrument_specs), increasing account size, or "
+            "tightening the strategy's stop distance.",
             RuntimeWarning,
         )
 
