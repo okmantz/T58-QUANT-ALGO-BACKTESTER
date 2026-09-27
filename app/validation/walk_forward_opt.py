@@ -219,6 +219,7 @@ def _optimize_on_window(
     refine_cfg: RefinementConfig,
     tmp_dir: Path | None,
     rng: random.Random,
+    progress_cb: ProgressCallback | None = None,
 ) -> tuple[list, list[float] | None, str | None]:
     """
     Runs a self-contained GA search on `train_df` only. Returns
@@ -271,15 +272,34 @@ def _optimize_on_window(
         with ThreadPoolExecutor(max_workers=min(_max_workers, len(genomes))) as pool:
             return list(pool.map(evaluate, genomes))
 
+    def report(msg: str) -> None:
+        if progress_cb:
+            progress_cb(msg)
+
     baseline_genome = [g.base_value for g in genes]
     candidate_genomes = [baseline_genome]
     while len(candidate_genomes) < refine_cfg.population_size:
         candidate_genomes.append([_random_gene_value(gene, rng) for gene in genes])
+    report(
+        f"    evaluating initial population ({len(candidate_genomes)} candidate(s))..."
+    )
     fitnesses = evaluate_many(candidate_genomes)
     population = list(zip(candidate_genomes, fitnesses))
 
     best_genome, best_fitness = max(population, key=lambda p: p[1])
+    report(f"    generation 0/{refine_cfg.generations}: best fitness so far = {best_fitness:.4f}")
 
+    # PROGRESS FIX (WFO "hangs forever"): this loop is where the vast
+    # majority of a fold's wall-clock time actually goes -- each
+    # generation is population_size full backtests + Monte Carlo runs,
+    # and this used to run completely silently until the WHOLE fold
+    # finished. On a large dataset (e.g. millions of 1-minute bars) one
+    # fold can legitimately take many minutes; with no progress line in
+    # between, the job log just sat static on "Fold N/M: optimizing on X
+    # train bars..." the entire time, which is indistinguishable from a
+    # genuine hang from the person's side. Logging one line per
+    # generation (with the running best fitness) makes it visibly alive
+    # and gives a sense of how much longer it has left.
     for _gen in range(refine_cfg.generations):
         population.sort(key=lambda p: p[1], reverse=True)
         elites = population[: refine_cfg.elite_count]
@@ -312,6 +332,10 @@ def _optimize_on_window(
         gen_best_genome, gen_best_fitness = max(population, key=lambda p: p[1])
         if gen_best_fitness > best_fitness:
             best_genome, best_fitness = gen_best_genome, gen_best_fitness
+        report(
+            f"    generation {_gen + 1}/{refine_cfg.generations}: "
+            f"this-gen best = {gen_best_fitness:.4f}, overall best = {best_fitness:.4f}"
+        )
 
     return best_genome, [g.base_value for g in genes], None
 
@@ -489,6 +513,7 @@ def run_walk_forward_optimization(
             log(f"Fold {fold.fold_index + 1}/{len(raw_folds)}: optimizing on {len(fold.train_df)} train bars...")
             best_genome, gene_base_values, warn = _optimize_on_window(
                 fold.train_df, strategy, risk, prop_rules, mc_config, refine_cfg, tmp_dir, rng,
+                progress_cb=log,
             )
             if warn:
                 warnings.append(f"Fold {fold.fold_index}: {warn}")
@@ -539,9 +564,14 @@ def run_walk_forward_optimization(
         # In-sample reference: one GA run on the FULL dataset, for an
         # apples-to-apples "in-sample vs chained-OOS" efficiency ratio.
         in_sample_fitness = None
+        log(
+            "Computing in-sample reference (one more GA run on the full "
+            f"dataset, {len(df)} bars) for the OOS-efficiency comparison..."
+        )
         try:
             full_genome, full_gene_bases, _w = _optimize_on_window(
                 df, strategy, risk, prop_rules, mc_config, refine_cfg, tmp_dir, random.Random(random_seed),
+                progress_cb=log,
             )
             if full_gene_bases is not None:
                 genes, build = _build_adapter(strategy, tmp_dir)

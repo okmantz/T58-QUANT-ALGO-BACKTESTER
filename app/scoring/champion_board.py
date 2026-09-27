@@ -400,6 +400,14 @@ def list_board(strategy_type: Optional[str] = None) -> list[dict[str, Any]]:
                 "strategy_type": t,
                 "filename": item.name,
                 "display_name": Path(item.name).stem,
+                # The strategy's own declared "name" from its saved
+                # metadata/config, if any -- distinct from the filename,
+                # which is often auto-stamped and no longer matches what
+                # the person actually calls the strategy elsewhere in the
+                # app (Dashboard's tracked "current strategy" name, run
+                # history, etc). See match_current_to_row() below for why
+                # this is needed.
+                "metadata_name": str(item.metadata.get("name") or "").strip(),
                 **dims,
                 "strength": _composite_strength(dims),
                 "promotion": promo.to_dict(),
@@ -511,23 +519,76 @@ def _next_action_href(row: dict[str, Any]) -> str:
     return "/"
 
 
+def match_current_to_row(current: Optional[dict], rows: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Resolves strategy_state.get_current_strategy()'s dict to the ONE
+    Champion Board row it actually refers to, or None if no board row
+    matches at all (e.g. a one-off strategy never saved to the library).
+
+    FIX (2026-09): this used to match ONLY on
+    ``Path(r["filename"]).stem == name or r["filename"] == name`` --
+    i.e. it assumed the "current strategy" display name was itself a
+    filename. That's frequently false: a strategy set current from the
+    Dashboard scorecard (or after a Full Pipeline run) is usually tracked
+    under a long, tool-generated display name (e.g. "T58 Gold Trend
+    Breakout -- Full Pipeline optimized (bos59/15, ema75-66 & 20-93,
+    adx28-53, 1H), set risk at 0.6%"), which will almost never equal the
+    saved file's own name. When the match failed, the caller silently
+    fell back to the board's own strongest validated candidate --
+    meaning the Dashboard's "What am I working on" panel could show a
+    COMPLETELY different, unrelated strategy than the one actually
+    marked current right below it.
+
+    Matching now tries, in order of how much it can be trusted:
+      1. Library identity (current["library_type"] + ["library_filename"]),
+         set by app.web.server whenever it could resolve the tracked
+         strategy to an actual saved file -- exact and immune to display
+         name drift.
+      2. Filename stem match against the display name (covers a current
+         strategy whose display name genuinely IS its filename).
+      3. The saved strategy's own declared metadata "name" field against
+         the display name (covers the common case above: an auto-stamped
+         filename that no longer matches what the strategy is called).
+    """
+    if not current:
+        return None
+
+    lib_type = (current.get("library_type") or "").strip().lower()
+    lib_filename = (current.get("library_filename") or "").strip().lower()
+    if lib_type and lib_filename:
+        for r in rows:
+            if r["strategy_type"].strip().lower() == lib_type and r["filename"].strip().lower() == lib_filename:
+                return r
+        # A library identity was recorded but no board row matches it
+        # anymore (e.g. the file was since deleted/renamed) -- don't fall
+        # through to a name-based guess against a DIFFERENT strategy that
+        # might coincidentally share the display name; report "no match"
+        # honestly instead.
+        return None
+
+    name = (current.get("strategy_name") or "").strip().lower()
+    if not name:
+        return None
+    for r in rows:
+        if Path(r["filename"]).stem.strip().lower() == name or r["filename"].strip().lower() == name:
+            return r
+    for r in rows:
+        if r.get("metadata_name", "").strip().lower() == name:
+            return r
+    return None
+
+
 def five_question_snapshot(current: Optional[dict], rows: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
     """Answers the five questions the dashboard's first screen should
     always answer: what am I working on, where is it in the process, is
     it working, why, and what should I do next. `current` is
     strategy_state.get_current_strategy()'s dict (or None); when set, this
-    prefers the matching board row so the dashboard reflects whatever the
-    person is actually focused on, falling back to the board's own
-    strongest validated candidate when nothing is tracked. Returns None
-    only when there is genuinely nothing to show (empty library)."""
-    row = None
-    if current:
-        name = (current.get("strategy_name") or "").strip().lower()
-        for r in rows:
-            if Path(r["filename"]).stem.strip().lower() == name or r["filename"].strip().lower() == name:
-                row = r
-                break
-    if row is None:
+    prefers the matching board row (see match_current_to_row) so the
+    dashboard reflects whatever the person is actually focused on,
+    falling back to the board's own strongest validated candidate ONLY
+    when nothing is tracked at all. Returns None only when there is
+    genuinely nothing to show (empty library)."""
+    row = match_current_to_row(current, rows)
+    if row is None and not current:
         row = strongest_validated_candidate(rows) or (rows[0] if rows else None)
     if row is None:
         return None

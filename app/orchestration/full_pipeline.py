@@ -562,6 +562,32 @@ _VERDICT_TO_LIBRARY_STATUS = {
 }
 
 
+def _library_save_note_suffix(verdict: str, verdict_reasons: list[str]) -> str:
+    """A short, human-readable explanation appended to the log line shown
+    right after Full Pipeline saves/replaces a Strategy Library entry.
+
+    FIX (2026-09): before this existed, the log only ever said something
+    like "...status: tested_failed" with no reason attached -- confusing
+    whenever the Dashboard's single-run pass/fail pill (a DIFFERENT,
+    narrower check -- see run_history.record_run's single_run_passed,
+    which only reflects whether ONE historical run cleared prop-firm
+    rules) showed "pass" for the very same strategy. Full Pipeline's
+    verdict is a fuller check -- Monte Carlo risk of ruin, out-of-sample
+    validation, trade-count floor, T58 Score -- and it and the single-run
+    pill CAN legitimately disagree; the fix is explaining why, right
+    where the status gets set, not leaving it unexplained."""
+    if verdict == "READY":
+        return ""
+    headline = verdict_reasons[0] if verdict_reasons else ""
+    return (
+        f" Full Pipeline verdict: {verdict}"
+        + (f" -- {headline}" if headline else "")
+        + " (this is a fuller check than the Dashboard scorecard's single-run pass/fail pill, which only "
+          "reflects one historical run and doesn't weigh Monte Carlo risk of ruin, out-of-sample "
+          "validation, or trade count -- the two can disagree)."
+    )
+
+
 class FullPipelineCancelled(Exception):
     """Raised out of run_full_pipeline when a caller-supplied cancel_event
     is set between steps -- see run_full_pipeline's cancel_event param.
@@ -1447,7 +1473,7 @@ def _finish(
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
                     "t58_tier": t58_tier,
                 })
-                saved_library_note = f"Replaced '{filename}' in the Strategy Library (previous version archived, status: {status_to_set})."
+                saved_library_note = f"Replaced '{filename}' in the Strategy Library (previous version archived, status: {status_to_set})." + _library_save_note_suffix(verdict, verdict_reasons)
                 log(f"  {saved_library_note}")
             except Exception as exc:  # noqa: BLE001 -- saving to the library is a convenience, not core output
                 saved_library_note = f"Could not replace the Strategy Library entry: {exc}"
@@ -1506,7 +1532,7 @@ def _finish(
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
                     "t58_tier": t58_tier,
                 })
-                saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {cfg.library_status})."
+                saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {status_to_set})." + _library_save_note_suffix(verdict, verdict_reasons)
                 log(f"  {saved_library_note}")
             except Exception as exc:  # noqa: BLE001 -- saving to the library is a convenience, not core output
                 saved_library_note = f"Could not save to the Strategy Library: {exc}"
@@ -1567,7 +1593,7 @@ def _finish(
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
                     "t58_tier": t58_tier,
                 })
-                saved_library_note = f"Replaced '{filename}' in the Strategy Library (previous version archived, status: {status_to_set})."
+                saved_library_note = f"Replaced '{filename}' in the Strategy Library (previous version archived, status: {status_to_set})." + _library_save_note_suffix(verdict, verdict_reasons)
                 log(f"  {saved_library_note}")
                 final_code_text = config_text
                 final_code_ext = ".json"
@@ -1625,7 +1651,7 @@ def _finish(
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
                     "t58_tier": t58_tier,
                 })
-                saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {cfg.library_status})."
+                saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {status_to_set})." + _library_save_note_suffix(verdict, verdict_reasons)
                 log(f"  {saved_library_note}")
                 final_code_text = config_text
                 final_code_ext = ".json"

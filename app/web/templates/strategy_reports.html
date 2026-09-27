@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Strategy reports — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<style>
+  .t58-report-row {
+    display: flex; align-items: center; gap: 12px; padding: 12px 4px;
+    border-bottom: 1px solid var(--border);
+  }
+  .t58-report-row:last-child { border-bottom: none; }
+  .t58-report-row .tool { font-weight: 600; min-width: 150px; }
+  .t58-report-row .meta { color: var(--text-muted); font-size: 12px; flex: 1; }
+  .t58-report-row .links a { margin-left: 10px; }
+</style>
+</head>
+<body>
+{% set active_page = 'strategy_reports' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+
+<div class="t58-page-header">
+  <h1>Strategy reports</h1>
+  <p>Every test recorded against one strategy, in one place -- pulled from
+    reports/by_strategy/{{ folder_name }}/, a mirror this app keeps
+    alongside each tool's own report folder. See a report's own page for
+    full detail; this is the "what's been tested here, and why did it
+    pass or fail" overview.</p>
+</div>
+
+{% if not strategy_name and not folder_name %}
+<div class="t58-card">
+  <div class="t58-empty">
+    No strategy specified, and nothing is currently tracked as the Dashboard's
+    "current strategy". Open this page from the Strategy Library (a strategy's
+    own "Reports" link) or from the Dashboard's current-strategy card instead.
+  </div>
+</div>
+{% else %}
+
+<div class="t58-card">
+  <h2>{{ strategy_name or folder_name }}{% if instrument %} &middot; {{ instrument }}{% endif %}</h2>
+  <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">
+    Folder: reports/by_strategy/{{ folder_name }}/
+    {% if library_type and library_filename %} &middot; Library entry: {{ library_type }}/{{ library_filename }}{% endif %}
+  </div>
+
+  {% if reports %}
+  <div>
+    {% for r in reports %}
+    <div class="t58-report-row">
+      <span class="t58-status {{ 'validated' if r.passed == true else ('rejected' if r.passed == false else 'optimized') }}">
+        {{ r.tool }}
+      </span>
+      <div class="meta">
+        {{ r.summary or 'ran, no strict pass/fail verdict' }}
+        &middot; {{ r.instrument }}
+        {% if r.recorded_at_display %}&middot; {{ r.recorded_at_display }}{% endif %}
+      </div>
+      <div class="links">
+        {% if r.files.html %}
+        <a href="/reports/by-strategy/{{ folder_name }}/{{ r.files.html }}" target="_blank">report &rarr;</a>
+        {% endif %}
+        {% if r.files.json %}
+        <a href="/reports/by-strategy/{{ folder_name }}/{{ r.files.json }}" target="_blank">json &rarr;</a>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="t58-empty">Nothing recorded here yet. Run this strategy through Run &amp; Report or any Validate-stage tool (CPCV, Walk-Forward Opt, Sensitivity, Walk-Forward GA) and its report will show up here.</div>
+  {% endif %}
+
+  <div class="actions" style="margin-top:12px;">
+    <a class="t58-btn secondary" href="/validate">Open Validate &rarr;</a>
+    <a class="t58-btn ghost" href="/library">Open Strategy Library &rarr;</a>
+  </div>
+</div>
+{% endif %}
+
+</div>
+</div>
+</body>
+</html>

@@ -59,6 +59,37 @@ def _heatmap_grid(trades, equity_before: float) -> list[list[float]]:
     return [[round(v, 2) for v in row] for row in grid]
 
 
+def _library_match_for_run(strategy_name: str, source_type: str) -> Optional[tuple[str, str]]:
+    """Best-effort (strategy_type, filename) resolution for a just-recorded
+    run's strategy -- same matching approach as _lookup_tags just below
+    (filename-stem match, falling back to the strategy's own declared
+    metadata "name"), reused here so the per-strategy report folder (see
+    app.reports.strategy_folder) keys on the same stable library identity
+    app.reports.strategy_state now uses for the validation checklist,
+    instead of fragmenting by display name. Returns None for a one-off
+    strategy never saved to the library."""
+    try:
+        from app.strategy.library import list_saved_strategies
+    except Exception:
+        return None
+    try:
+        stype = source_type if source_type in ("python", "pinescript", "mql5", "manual") else None
+        types = [stype] if stype else None
+        target = (strategy_name or "").strip().lower()
+        if not target:
+            return None
+        best = None
+        for item in (list_saved_strategies(stype) if stype else list_saved_strategies()):
+            stem = Path(item.name).stem.strip().lower()
+            if stem == target or item.name.strip().lower() == target:
+                return (item.strategy_type, item.name)
+            if best is None and str(item.metadata.get("name") or "").strip().lower() == target:
+                best = (item.strategy_type, item.name)
+        return best
+    except Exception:
+        return None
+
+
 def _lookup_tags(strategy_name: str, source_type: str) -> list[str]:
     """Best-effort tag lookup from the strategy library. Manual strategies
     and one-off uploads that were never saved to the library simply get no
@@ -149,6 +180,26 @@ def record_run(report: dict, paths: dict, backtest_result=None) -> None:
         runs = load_runs()
         runs.append(entry)
         _save_runs(runs)
+
+        # Per-strategy consolidated report folder (item 4): mirrors this
+        # run's report into reports/by_strategy/<strategy>/ alongside
+        # every validation tool's reports for the same strategy -- see
+        # app.reports.strategy_folder's module docstring. Best-effort and
+        # independent of the history write above succeeding.
+        try:
+            from app.reports.strategy_folder import record_report
+
+            matched = _library_match_for_run(entry["strategy_name"], entry["source_type"])
+            record_report(
+                entry["strategy_name"], entry["instrument"],
+                "full_pipeline" if "(Full Pipeline)" in entry["strategy_name"] else "run_and_report",
+                library_type=(matched[0] if matched else ""), library_filename=(matched[1] if matched else ""),
+                passed=entry["single_run_passed"],
+                summary=f"{entry['trades']} trade(s), net P/L ${entry['net_profit']:,.2f}",
+                source_files={"html": paths.get("html", ""), "json": paths.get("json", "")},
+            )
+        except Exception:
+            pass
     except Exception:
         pass
 

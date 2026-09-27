@@ -137,6 +137,8 @@ from app.reports.validation_reports import (
 )
 from app.reports import run_history
 from app.reports import strategy_state
+from app.reports import strategy_folder
+from app.web.job_manager import JobManager
 from app.scoring.t58_scorecard import score_from_results
 from app.search.batch_runner import (
     SearchCancelled, SearchStageConfig, promote_champion, run_search, save_search_candidate_to_library,
@@ -193,6 +195,14 @@ from app.web import live_market
 BASE_DIR = get_app_base_dir()
 REPORTS_DIR = BASE_DIR / "reports"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+# Shared background-job tracker (item 2) -- see app.web.job_manager's
+# module docstring. Walk-Forward Opt and CPCV are migrated onto this one
+# instance below; every other job-based tool in this file still uses its
+# own hand-rolled dict+lock for now (see that docstring for why this is
+# an incremental migration, not a big-bang rewrite of all of them).
+JOB_MANAGER = JobManager()
+
 SEARCH_DIR = BASE_DIR / "reports" / "search"
 SEARCH_DIR.mkdir(parents=True, exist_ok=True)
 FORGE_DIR = BASE_DIR / "reports" / "forge"
@@ -1134,6 +1144,23 @@ def user_manual():
     return render_template("user_manual.html", active_page="user_manual")
 
 
+def _get_stored_strategy(strategy_type: str, filename: str):
+    """Exact (strategy_type, filename) lookup -- the fast, unambiguous
+    counterpart to _find_library_match_for_current_strategy's fuzzy
+    name-based search below, used whenever a caller already has a
+    library_ref on hand (e.g. current_strategy.json's own
+    library_type/library_filename fields) instead of just a display
+    name. Returns the StoredStrategy or None if it's since been
+    renamed/deleted."""
+    if not strategy_type or not filename:
+        return None
+    target = filename.strip().lower()
+    for stored in list_saved_strategies(strategy_type):
+        if stored.name.strip().lower() == target:
+            return stored
+    return None
+
+
 def _find_library_match_for_current_strategy(strategy_name: str):
     """Best-effort bridge between the Dashboard's "current strategy"
     (tracked by app.reports.strategy_state as a free-text
@@ -1168,10 +1195,18 @@ def dashboard():
     current_metrics = None
     current_pipeline_progress = None
     if current:
-        checklist = strategy_state.get_checklist(current["strategy_name"], current["instrument"])
-        score = strategy_state.robustness_score(current["strategy_name"], current["instrument"])
+        _lib_kwargs = {"library_type": current.get("library_type", ""), "library_filename": current.get("library_filename", "")}
+        checklist = strategy_state.get_checklist(current["strategy_name"], current["instrument"], **_lib_kwargs)
+        score = strategy_state.robustness_score(current["strategy_name"], current["instrument"], **_lib_kwargs)
         current_metrics = run_history.latest_run_for(current["strategy_name"], current["instrument"])
-        matched = _find_library_match_for_current_strategy(current["strategy_name"])
+        # Prefer the library identity stored on `current` itself (set at
+        # /current-strategy/set time -- exact); only re-derive it with the
+        # fuzzy name-based lookup for a current_strategy.json written
+        # before that field existed.
+        if current.get("library_type") and current.get("library_filename"):
+            matched = _get_stored_strategy(current["library_type"], current["library_filename"])
+        else:
+            matched = _find_library_match_for_current_strategy(current["strategy_name"])
         if matched is not None:
             current_pipeline_progress = matched.pipeline_progress
     dashboard_stats = run_history.dashboard_data()
@@ -1256,13 +1291,29 @@ def set_current_strategy():
     """Explicit only -- the person picks a strategy off the Dashboard
     scorecard (or the Champion card) and marks it current. Nothing here
     infers a current strategy from just running a backtest, so a stray
-    one-off test never silently hijacks the checklist."""
+    one-off test never silently hijacks the checklist.
+
+    FIX (2026-09): also resolves this strategy to an actual saved
+    Strategy Library entry (the same best-effort lookup the Dashboard's
+    pipeline-progress card already used, see
+    _find_library_match_for_current_strategy) and stores that
+    (strategy_type, filename) alongside the display name. That library
+    identity is what later validation runs (CPCV/WFO/Sensitivity/WFGA/
+    Regime Matrix) are recorded against too, so "current strategy" and
+    "what am I working on" -- and the validation checklist -- all agree
+    on the same strategy instead of independently guessing from a display
+    name that changes across pipeline stages."""
     form = request.form
     name = (form.get("strategy_name") or "").strip()
     instrument = (form.get("instrument") or "").strip()
     timeframe = (form.get("timeframe") or "").strip()
     if name and instrument:
-        strategy_state.set_current_strategy(name, instrument, timeframe)
+        matched = _find_library_match_for_current_strategy(name)
+        strategy_state.set_current_strategy(
+            name, instrument, timeframe,
+            library_type=matched.strategy_type if matched else "",
+            library_filename=matched.name if matched else "",
+        )
     return redirect(url_for("dashboard"))
 
 
@@ -1291,8 +1342,9 @@ def validate_hub():
     checklist = None
     score = None
     if current:
-        checklist = strategy_state.get_checklist(current["strategy_name"], current["instrument"])
-        score = strategy_state.robustness_score(current["strategy_name"], current["instrument"])
+        _lib_kwargs = {"library_type": current.get("library_type", ""), "library_filename": current.get("library_filename", "")}
+        checklist = strategy_state.get_checklist(current["strategy_name"], current["instrument"], **_lib_kwargs)
+        score = strategy_state.robustness_score(current["strategy_name"], current["instrument"], **_lib_kwargs)
     return render_template(
         "validate_hub.html", active_page="validate_hub", current_strategy=current,
         checklist=checklist, robustness=score,
@@ -1311,6 +1363,74 @@ def get_saved_strategy(strategy_type, filename):
     except (ValueError, FileNotFoundError) as exc:
         return Response(str(exc), status=404, mimetype="text/plain")
     return Response(text, mimetype="text/plain")
+
+
+@app.route("/reports/by-strategy")
+def strategy_reports_page():
+    """Item 4: "all of the tests and reports for one strategy in its
+    individual folder". Every validation tool (CPCV/WFO/Sensitivity/
+    WFGA) and the main Run & Report / Full Pipeline backtest each write
+    their report into their own tool-specific reports/ subfolder --
+    this page reads the ONE consolidated copy app.reports.strategy_folder
+    mirrors every one of those into (reports/by_strategy/<strategy>/),
+    so a single page (and a single folder on disk, if you'd rather just
+    browse it directly) answers "what's been tested here, and why did it
+    pass or fail" without knowing which of the ~5 different tool-specific
+    folders to look in.
+
+    Resolves the strategy either from ?type=&filename= (a specific saved
+    Strategy Library entry -- what the Strategy Library page's own link
+    passes) or, with neither given, from whatever's currently tracked as
+    the Dashboard's "current strategy"."""
+    lib_type = (request.args.get("type") or "").strip()
+    lib_filename = (request.args.get("filename") or "").strip()
+    strategy_name = (request.args.get("strategy_name") or "").strip()
+    instrument = (request.args.get("instrument") or "").strip()
+
+    if not (lib_type and lib_filename) and not strategy_name:
+        current = strategy_state.get_current_strategy()
+        if current:
+            lib_type = current.get("library_type", "")
+            lib_filename = current.get("library_filename", "")
+            strategy_name = current["strategy_name"]
+            instrument = current["instrument"]
+
+    if lib_type and lib_filename and not strategy_name:
+        stored = _get_stored_strategy(lib_type, lib_filename)
+        strategy_name = str(stored.metadata.get("name") or "").strip() if stored else Path(lib_filename).stem
+        # instrument is NOT needed to resolve the folder when a library
+        # identity is given -- strategy_folder.strategy_slug() keys on
+        # library_type/library_filename alone in that case (see its
+        # docstring) -- so leaving it blank here is fine; it's used only
+        # for display on this page, not for the lookup.
+
+    reports = []
+    if strategy_name or (lib_type and lib_filename):
+        raw_reports = strategy_folder.list_reports(strategy_name, instrument, library_type=lib_type, library_filename=lib_filename)
+        for r in reversed(raw_reports):  # newest first
+            r = dict(r)
+            try:
+                r["recorded_at_display"] = time.strftime("%Y-%m-%d %H:%M", time.localtime(r.get("recorded_at", 0)))
+            except Exception:
+                r["recorded_at_display"] = ""
+            reports.append(r)
+
+    return render_template(
+        "strategy_reports.html", active_page="strategy_reports",
+        strategy_name=strategy_name, instrument=instrument,
+        library_type=lib_type, library_filename=lib_filename,
+        reports=reports,
+        folder_name=(strategy_folder.strategy_slug(strategy_name, instrument, library_type=lib_type, library_filename=lib_filename) if (strategy_name or (lib_type and lib_filename)) else ""),
+    )
+
+
+@app.route("/reports/by-strategy/<slug>/<path:filename>")
+def serve_strategy_report_file(slug, filename):
+    """Serves one copied report file out of a strategy's consolidated
+    folder -- the slug is exactly what app.reports.strategy_folder.
+    strategy_slug() computes, matching the folder_name the page above
+    links with."""
+    return send_from_directory(strategy_folder.reports_root() / slug, filename)
 
 
 def _redirect_target(form) -> str:
@@ -3075,17 +3195,6 @@ def _run_search_loop_job(
 # few hundred backtests is too slow for a single request/response cycle.
 # ---------------------------------------------------------------------------
 
-_REFINEMENT_JOBS: dict[str, dict] = {}
-_REFINEMENT_JOBS_LOCK = threading.Lock()
-
-
-def _refinement_job_log(job_id: str, msg: str) -> None:
-    with _REFINEMENT_JOBS_LOCK:
-        job = _REFINEMENT_JOBS.get(job_id)
-        if job is not None:
-            job["log"].append(msg)
-
-
 def _run_refinement_job(
     job_id: str, df, strategy, risk: RiskConfig, rules: PropRules,
     mc_cfg: MonteCarloConfig, cfg: RefinementConfig, active_label: str,
@@ -3095,7 +3204,7 @@ def _run_refinement_job(
     try:
         result = run_iterative_refinement(
             df, strategy, risk, rules, mc_cfg, cfg,
-            progress_cb=lambda msg: _refinement_job_log(job_id, msg),
+            progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
             adaptive_risk=adaptive_risk,
         )
         period = (str(df["timestamp"].iloc[0]), str(df["timestamp"].iloc[-1]))
@@ -3115,24 +3224,17 @@ def _run_refinement_job(
                 })
             except (FileNotFoundError, ValueError):
                 pass
-        with _REFINEMENT_JOBS_LOCK:
-            job = _REFINEMENT_JOBS[job_id]
-            job["done"] = True
-            job["result"] = result
-            job["report_html"] = f"/refinement_reports/{paths['html'].name}"
-            job["report_json"] = f"/refinement_reports/{paths['json'].name}"
-            best_file_key = "best_config_json" if "best_config_json" in paths else "best_strategy_file"
-            job["best_file"] = f"/refinement_reports/{paths[best_file_key].name}"
+        best_file_key = "best_config_json" if "best_config_json" in paths else "best_strategy_file"
+        JOB_MANAGER.finish(
+            job_id, result=result,
+            report_html=f"/refinement_reports/{paths['html'].name}",
+            report_json=f"/refinement_reports/{paths['json'].name}",
+            best_file=f"/refinement_reports/{paths[best_file_key].name}",
+        )
     except RefinementError as exc:
-        with _REFINEMENT_JOBS_LOCK:
-            job = _REFINEMENT_JOBS[job_id]
-            job["done"] = True
-            job["error"] = str(exc)
+        JOB_MANAGER.fail(job_id, str(exc))
     except Exception as exc:  # noqa: BLE001 -- must surface on the status page, not crash the thread silently
-        with _REFINEMENT_JOBS_LOCK:
-            job = _REFINEMENT_JOBS[job_id]
-            job["done"] = True
-            job["error"] = f"Unexpected error: {exc}"
+        JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
 
 
 @app.route("/refine")
@@ -3203,15 +3305,11 @@ def refine_start():
             optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
         )
 
-        job_id = uuid.uuid4().hex[:12]
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
-        with _REFINEMENT_JOBS_LOCK:
-            _REFINEMENT_JOBS[job_id] = {
-                "log": initial_log, "done": False, "error": None, "result": None,
-                "started_at": time.time(), "instrument": active_label,
-            }
+        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label)
+        JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         thread = threading.Thread(
             target=_run_refinement_job,
             args=(job_id, df, strategy, risk, rules, mc_cfg, cfg, active_label, library_ref),
@@ -3229,8 +3327,7 @@ def refine_start():
 
 @app.route("/refine/job/<job_id>")
 def refine_job(job_id):
-    with _REFINEMENT_JOBS_LOCK:
-        job = _REFINEMENT_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return render_template("refine_job.html", job_id=job_id, not_found=True), 404
     return render_template("refine_job.html", job_id=job_id, not_found=False)
@@ -3238,8 +3335,7 @@ def refine_job(job_id):
 
 @app.route("/refine/job/<job_id>/status.json")
 def refine_job_status(job_id):
-    with _REFINEMENT_JOBS_LOCK:
-        job = _REFINEMENT_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return jsonify({"found": False}), 404
 
@@ -3297,17 +3393,6 @@ def serve_refinement_report(filename):
 # worst-case/mean-minus-dispersion aggregate), not one.
 # ---------------------------------------------------------------------------
 
-_MULTI_MARKET_JOBS: dict[str, dict] = {}
-_MULTI_MARKET_JOBS_LOCK = threading.Lock()
-
-
-def _multi_market_job_log(job_id: str, msg: str) -> None:
-    with _MULTI_MARKET_JOBS_LOCK:
-        job = _MULTI_MARKET_JOBS.get(job_id)
-        if job is not None:
-            job["log"].append(msg)
-
-
 def _run_multi_market_job(
     job_id: str, dfs: dict, strategy, risk: RiskConfig, rules: PropRules,
     mc_cfg: MonteCarloConfig, cfg: RefinementConfig, aggregation: str,
@@ -3315,23 +3400,14 @@ def _run_multi_market_job(
     try:
         result = run_multi_market_search(
             dfs, strategy, risk, rules, mc_cfg, cfg, aggregation=aggregation,
-            progress_cb=lambda msg: _multi_market_job_log(job_id, msg),
+            progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
         )
-        with _MULTI_MARKET_JOBS_LOCK:
-            job = _MULTI_MARKET_JOBS[job_id]
-            job["done"] = True
-            job["result"] = result
+        JOB_MANAGER.finish(job_id, result=result)
     except RefinementError as exc:
-        with _MULTI_MARKET_JOBS_LOCK:
-            job = _MULTI_MARKET_JOBS[job_id]
-            job["done"] = True
-            job["error"] = str(exc)
+        JOB_MANAGER.fail(job_id, str(exc))
     except Exception as exc:  # noqa: BLE001 -- must surface on the status page, not crash the thread silently
         log_crash("Multi-Market Aggregate Search (web)", exc=exc)
-        with _MULTI_MARKET_JOBS_LOCK:
-            job = _MULTI_MARKET_JOBS[job_id]
-            job["done"] = True
-            job["error"] = f"Unexpected error: {exc}"
+        JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
     finally:
         HEAVY_JOB_GUARD.release(JOB_MULTI_MARKET)
 
@@ -3451,15 +3527,11 @@ def multi_market_start():
                 **_alpaca_template_context(),
             ), 400
 
-        job_id = uuid.uuid4().hex[:12]
         initial_log = [f"Loaded {len(dfs)} market(s): {', '.join(dfs.keys())}."]
         if load_warnings:
             initial_log.extend(load_warnings)
-        with _MULTI_MARKET_JOBS_LOCK:
-            _MULTI_MARKET_JOBS[job_id] = {
-                "log": initial_log, "done": False, "error": None, "result": None,
-                "started_at": time.time(), "markets": list(dfs.keys()), "aggregation": aggregation,
-            }
+        job_id = JOB_MANAGER.create(log=initial_log, markets=list(dfs.keys()), aggregation=aggregation)
+        JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         thread = threading.Thread(
             target=_run_multi_market_job,
             args=(job_id, dfs, strategy, risk, rules, mc_cfg, cfg, aggregation),
@@ -3490,15 +3562,13 @@ def multi_market_start():
 
 @app.route("/multi-market/job/<job_id>")
 def multi_market_job(job_id):
-    with _MULTI_MARKET_JOBS_LOCK:
-        job = _MULTI_MARKET_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     return render_template("multi_market_job.html", job_id=job_id, not_found=job is None)
 
 
 @app.route("/multi-market/job/<job_id>/status.json")
 def multi_market_job_status(job_id):
-    with _MULTI_MARKET_JOBS_LOCK:
-        job = _MULTI_MARKET_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return jsonify({"not_found": True}), 404
 
@@ -3559,17 +3629,6 @@ def multi_market_job_status(job_id):
 # this is the single slowest thing the app can run.
 # ---------------------------------------------------------------------------
 
-_FULLPIPELINE_JOBS: dict[str, dict] = {}
-_FULLPIPELINE_JOBS_LOCK = threading.Lock()
-
-
-def _fullpipeline_job_log(job_id: str, msg: str) -> None:
-    with _FULLPIPELINE_JOBS_LOCK:
-        job = _FULLPIPELINE_JOBS.get(job_id)
-        if job is not None:
-            job["log"].append(msg)
-
-
 def _run_fullpipeline_job(
     job_id: str, df, strategy, risk: RiskConfig, rules: PropRules,
     cfg: FullPipelineConfig, active_label: str, ollama_settings: OllamaSettings | None,
@@ -3578,48 +3637,30 @@ def _run_fullpipeline_job(
     try:
         result = run_full_pipeline(
             df, strategy, risk, rules, FULL_PIPELINE_DIR, cfg,
-            progress_cb=lambda msg: _fullpipeline_job_log(job_id, msg),
+            progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
             instrument=active_label, ollama_settings=ollama_settings,
             report_basename=f"full_pipeline_{job_id}",
             cancel_event=cancel_event,
         )
-        with _FULLPIPELINE_JOBS_LOCK:
-            job = _FULLPIPELINE_JOBS[job_id]
-            job["done"] = True
-            job["result"] = result
-            job["report_html"] = f"/full_pipeline_reports/{Path(result.report_paths['html']).name}"
-            job["report_json"] = f"/full_pipeline_reports/{Path(result.report_paths['json']).name}"
+        JOB_MANAGER.finish(
+            job_id, result=result,
+            report_html=f"/full_pipeline_reports/{Path(result.report_paths['html']).name}",
+            report_json=f"/full_pipeline_reports/{Path(result.report_paths['json']).name}",
+        )
         notify_job_finished(
             notify_webhook_url, "Full Pipeline",
             f"verdict={getattr(result, 'verdict', '?')}, instrument={active_label}",
             job_url=f"/full-pipeline/job/{job_id}",
         )
     except FullPipelineCancelled:
-        with _FULLPIPELINE_JOBS_LOCK:
-            job = _FULLPIPELINE_JOBS[job_id]
-            job["done"] = True
-            job["cancelled"] = True
+        JOB_MANAGER.finish(job_id, cancelled=True)
         notify_job_finished(notify_webhook_url, "Full Pipeline", "Stopped by request", job_url=f"/full-pipeline/job/{job_id}")
     except Exception as exc:  # noqa: BLE001 -- must surface on the status page, not crash the thread silently
         log_crash("Full Pipeline (web)", exc=exc)
-        with _FULLPIPELINE_JOBS_LOCK:
-            job = _FULLPIPELINE_JOBS[job_id]
-            job["done"] = True
-            job["error"] = f"Unexpected error: {exc}"
+        JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
         notify_job_finished(notify_webhook_url, "Full Pipeline", f"FAILED -- {exc}", job_url=f"/full-pipeline/job/{job_id}")
     finally:
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
-
-
-_FULLPIPELINE_BATCH_JOBS: dict[str, dict] = {}
-_FULLPIPELINE_BATCH_JOBS_LOCK = threading.Lock()
-
-
-def _fullpipeline_batch_job_log(job_id: str, msg: str) -> None:
-    with _FULLPIPELINE_BATCH_JOBS_LOCK:
-        job = _FULLPIPELINE_BATCH_JOBS.get(job_id)
-        if job is not None:
-            job["log"].append(msg)
 
 
 def _load_library_strategy_for_batch(mode: str, name: str):
@@ -3642,7 +3683,7 @@ def _run_fullpipeline_batch_job(
         summary = run_full_pipeline_batch(
             df, batch_items, risk, rules, FULL_PIPELINE_DIR, cfg=cfg,
             instrument=active_label, ollama_settings=ollama_settings,
-            progress_cb=lambda msg: _fullpipeline_batch_job_log(job_id, msg),
+            progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
             max_parallel_strategies=1,
             cancel_event=cancel_event,
         )
@@ -3657,11 +3698,7 @@ def _run_fullpipeline_batch_job(
             }
             for o in summary.outcomes
         ]
-        with _FULLPIPELINE_BATCH_JOBS_LOCK:
-            job = _FULLPIPELINE_BATCH_JOBS[job_id]
-            job["done"] = True
-            job["outcomes"] = outcomes
-            job["elapsed_seconds"] = summary.elapsed_seconds
+        JOB_MANAGER.finish(job_id, outcomes=outcomes, elapsed_seconds=summary.elapsed_seconds)
         n_ready = sum(1 for o in outcomes if o["ok"])
         notify_job_finished(
             notify_webhook_url, "Full Pipeline (batch)",
@@ -3669,17 +3706,11 @@ def _run_fullpipeline_batch_job(
             job_url=f"/full-pipeline/batch-job/{job_id}",
         )
     except FullPipelineBatchCancelled:
-        with _FULLPIPELINE_BATCH_JOBS_LOCK:
-            job = _FULLPIPELINE_BATCH_JOBS[job_id]
-            job["done"] = True
-            job["cancelled"] = True
+        JOB_MANAGER.finish(job_id, cancelled=True)
         notify_job_finished(notify_webhook_url, "Full Pipeline (batch)", "Cancelled by user.", job_url=f"/full-pipeline/batch-job/{job_id}")
     except Exception as exc:  # noqa: BLE001 -- must surface on the status page, not crash the thread silently
         log_crash("Full Pipeline batch (web)", exc=exc)
-        with _FULLPIPELINE_BATCH_JOBS_LOCK:
-            job = _FULLPIPELINE_BATCH_JOBS[job_id]
-            job["done"] = True
-            job["error"] = f"Unexpected error: {exc}"
+        JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
         notify_job_finished(notify_webhook_url, "Full Pipeline (batch)", f"FAILED -- {exc}", job_url=f"/full-pipeline/batch-job/{job_id}")
     finally:
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
@@ -3786,19 +3817,17 @@ def full_pipeline_start_batch():
                 model=form.get("ai_model", "llama3.1") or "llama3.1",
             )
 
-        job_id = uuid.uuid4().hex[:12]
         initial_log = [f"Loaded {len(df)} bars from {active_label}.", f"Queued {len(batch_items)} strateg{'y' if len(batch_items) == 1 else 'ies'} for the Full Pipeline batch."]
         if import_note:
             initial_log.append(import_note)
         if load_errors:
             initial_log.append(f"{len(load_errors)} selected strateg{'y' if len(load_errors) == 1 else 'ies'} failed to load and were skipped: " + "; ".join(load_errors))
-        with _FULLPIPELINE_BATCH_JOBS_LOCK:
-            cancel_event = threading.Event()
-            _FULLPIPELINE_BATCH_JOBS[job_id] = {
-                "log": initial_log, "done": False, "error": None, "outcomes": None,
-                "started_at": time.time(), "instrument": active_label, "total": len(batch_items),
-                "cancel_event": cancel_event, "cancelled": False,
-            }
+        cancel_event = threading.Event()
+        job_id = JOB_MANAGER.create(
+            log=initial_log, outcomes=None, instrument=active_label, total=len(batch_items),
+            cancel_event=cancel_event, cancelled=False,
+        )
+        JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         thread = threading.Thread(
             target=_run_fullpipeline_batch_job,
             args=(job_id, df, batch_items, risk, rules, cfg, active_label, ollama_settings, cancel_event),
@@ -3886,14 +3915,11 @@ def _run_scheduled_fullpipeline_batch(schedule_id: str, delay_seconds: float, la
         time.sleep(10.0)
         guard_waited += 10.0
 
-    job_id = uuid.uuid4().hex[:12]
-    with _FULLPIPELINE_BATCH_JOBS_LOCK:
-        cancel_event = threading.Event()
-        _FULLPIPELINE_BATCH_JOBS[job_id] = {
-            "log": launch_kwargs["initial_log"], "done": False, "error": None, "outcomes": None,
-            "started_at": time.time(), "instrument": launch_kwargs["active_label"], "total": len(launch_kwargs["batch_items"]),
-            "cancel_event": cancel_event, "cancelled": False,
-        }
+    cancel_event = threading.Event()
+    job_id = JOB_MANAGER.create(
+        log=launch_kwargs["initial_log"], outcomes=None, instrument=launch_kwargs["active_label"],
+        total=len(launch_kwargs["batch_items"]), cancel_event=cancel_event, cancelled=False,
+    )
     with _SCHEDULED_JOBS_LOCK:
         entry = _SCHEDULED_JOBS.get(schedule_id)
         if entry is not None:
@@ -4059,8 +4085,7 @@ def full_pipeline_schedule_cancel(schedule_id):
 
 @app.route("/full-pipeline/batch-job/<job_id>")
 def full_pipeline_batch_job(job_id):
-    with _FULLPIPELINE_BATCH_JOBS_LOCK:
-        job = _FULLPIPELINE_BATCH_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return render_template("full_pipeline_batch_job.html", job_id=job_id, not_found=True), 404
     return render_template("full_pipeline_batch_job.html", job_id=job_id, not_found=False, total=job["total"])
@@ -4077,13 +4102,12 @@ def full_pipeline_batch_job_stop(job_id):
     roughly a second in the parallel pool path (see
     _drain_batch_pool_futures) -- whichever the batch happens to be
     running in."""
-    with _FULLPIPELINE_BATCH_JOBS_LOCK:
-        job = _FULLPIPELINE_BATCH_JOBS.get(job_id)
-        if job is None:
-            return jsonify({"ok": False, "error": "Job not found."}), 404
-        if job.get("done"):
-            return jsonify({"ok": True, "already_done": True})
-        cancel_event = job.get("cancel_event")
+    job = JOB_MANAGER.get(job_id)
+    if job is None:
+        return jsonify({"ok": False, "error": "Job not found."}), 404
+    if job.get("done"):
+        return jsonify({"ok": True, "already_done": True})
+    cancel_event = job.get("cancel_event")
     if cancel_event is not None:
         cancel_event.set()
     return jsonify({"ok": True})
@@ -4091,8 +4115,7 @@ def full_pipeline_batch_job_stop(job_id):
 
 @app.route("/full-pipeline/batch-job/<job_id>/status.json")
 def full_pipeline_batch_job_status(job_id):
-    with _FULLPIPELINE_BATCH_JOBS_LOCK:
-        job = _FULLPIPELINE_BATCH_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return jsonify({"found": False}), 404
     return jsonify({
@@ -4218,17 +4241,12 @@ def full_pipeline_start():
             except Exception:
                 pass  # best-effort -- a save failure shouldn't block the run itself
 
-        job_id = uuid.uuid4().hex[:12]
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
         cancel_event = threading.Event()
-        with _FULLPIPELINE_JOBS_LOCK:
-            _FULLPIPELINE_JOBS[job_id] = {
-                "log": initial_log, "done": False, "error": None, "result": None,
-                "started_at": time.time(), "instrument": active_label,
-                "cancel_event": cancel_event, "cancelled": False,
-            }
+        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label, cancel_event=cancel_event, cancelled=False)
+        JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         thread = threading.Thread(
             target=_run_fullpipeline_job,
             args=(job_id, df, strategy, risk, rules, cfg, active_label, ollama_settings),
@@ -4249,8 +4267,7 @@ def full_pipeline_start():
 
 @app.route("/full-pipeline/job/<job_id>")
 def full_pipeline_job(job_id):
-    with _FULLPIPELINE_JOBS_LOCK:
-        job = _FULLPIPELINE_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return render_template("full_pipeline_job.html", job_id=job_id, not_found=True), 404
     return render_template("full_pipeline_job.html", job_id=job_id, not_found=False)
@@ -4263,11 +4280,10 @@ def full_pipeline_job_stop(job_id):
     the 7 steps, so this stops the run at the next step boundary rather
     than instantly, same tradeoff the batch job's stop button already
     makes."""
-    with _FULLPIPELINE_JOBS_LOCK:
-        job = _FULLPIPELINE_JOBS.get(job_id)
-        if job is None:
-            return jsonify({"found": False}), 404
-        cancel_event = job.get("cancel_event")
+    job = JOB_MANAGER.get(job_id)
+    if job is None:
+        return jsonify({"found": False}), 404
+    cancel_event = job.get("cancel_event")
     if cancel_event is not None:
         cancel_event.set()
     return jsonify({"found": True, "stopping": True})
@@ -4275,8 +4291,7 @@ def full_pipeline_job_stop(job_id):
 
 @app.route("/full-pipeline/job/<job_id>/status.json")
 def full_pipeline_job_status(job_id):
-    with _FULLPIPELINE_JOBS_LOCK:
-        job = _FULLPIPELINE_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return jsonify({"found": False}), 404
 
@@ -4330,17 +4345,12 @@ def serve_fullpipeline_report(filename):
 # window, applies the winner UNCHANGED to that fold's held-out test window,
 # and chains every fold's OOS trades into one continuous result. Same
 # background-job/poll shape as the other slow tabs above.
+#
+# MIGRATED (item 2): this tool's job tracking is backed by the shared
+# JOB_MANAGER (app.web.job_manager) instead of a dedicated
+# dict-plus-lock, as the reference migration other job types can follow
+# the same way -- see JobManager's own module docstring.
 # ---------------------------------------------------------------------------
-
-_WFO_JOBS: dict[str, dict] = {}
-_WFO_JOBS_LOCK = threading.Lock()
-
-
-def _wfo_job_log(job_id: str, msg: str) -> None:
-    with _WFO_JOBS_LOCK:
-        job = _WFO_JOBS.get(job_id)
-        if job is not None:
-            job["log"].append(msg)
 
 
 def _run_wfo_job(
@@ -4352,21 +4362,20 @@ def _run_wfo_job(
         result = run_walk_forward_optimization(
             df, strategy, risk, rules, mc_cfg, n_folds=n_folds, window_mode=window_mode,
             train_frac=train_frac, embargo_bars=embargo_bars, refine_cfg=refine_cfg,
-            progress_cb=lambda msg: _wfo_job_log(job_id, msg),
+            progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
         )
         paths = generate_walk_forward_report(WFO_DIR, result, basename=f"walk_forward_opt_{job_id}")
         report_html = f"/wfo_reports/{Path(paths['html']).name}"
-        with _WFO_JOBS_LOCK:
-            job = _WFO_JOBS[job_id]
-            job["done"] = True
-            job["result"] = result
-            job["report_html"] = report_html
-            job["report_json"] = f"/wfo_reports/{Path(paths['json']).name}"
+        JOB_MANAGER.finish(job_id, result=result, report_html=report_html, report_json=f"/wfo_reports/{Path(paths['json']).name}")
         eff = getattr(result, "out_of_sample_efficiency", None)
         summary = f"OOS efficiency {eff:.2f}" if eff is not None else f"{n_folds} folds completed"
         # No strict pass/fail verdict is computed by this tool -- passed=None
         # records that it *ran*, without inventing a threshold it doesn't set.
-        strategy_state.record_validation(strategy_name, instrument, "wfo", passed=None, summary=summary, report_html=report_html)
+        strategy_state.record_validation(
+            strategy_name, instrument, "wfo", passed=None, summary=summary, report_html=report_html,
+            library_type=(library_ref[0] if library_ref else ""), library_filename=(library_ref[1] if library_ref else ""),
+            report_files=paths,
+        )
         if library_ref:
             try:
                 record_validation_result(*library_ref, {
@@ -4375,15 +4384,9 @@ def _run_wfo_job(
             except Exception:  # noqa: BLE001 -- recording to the library is a convenience, not core output
                 pass
     except RefinementError as exc:
-        with _WFO_JOBS_LOCK:
-            job = _WFO_JOBS[job_id]
-            job["done"] = True
-            job["error"] = str(exc)
+        JOB_MANAGER.fail(job_id, str(exc))
     except Exception as exc:  # noqa: BLE001
-        with _WFO_JOBS_LOCK:
-            job = _WFO_JOBS[job_id]
-            job["done"] = True
-            job["error"] = f"Unexpected error: {exc}"
+        JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
     finally:
         HEAVY_JOB_GUARD.release(JOB_WFO)
 
@@ -4434,12 +4437,16 @@ def wfo_start():
             fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
         )
 
-        job_id = uuid.uuid4().hex[:12]
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
-        with _WFO_JOBS_LOCK:
-            _WFO_JOBS[job_id] = {"log": initial_log, "done": False, "error": None, "result": None, "started_at": time.time(), "instrument": active_label}
+        # MIGRATED (item 2): job tracking now goes through the shared
+        # JOB_MANAGER instead of a hand-rolled _WFO_JOBS dict + lock --
+        # see app.web.job_manager's module docstring for why, and this
+        # route (plus CPCV's below) as the reference other job types can
+        # follow the same way.
+        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label)
+        JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
         thread = threading.Thread(
             target=_run_wfo_job,
             args=(
@@ -4462,8 +4469,7 @@ def wfo_start():
 
 @app.route("/walk-forward-opt/job/<job_id>")
 def wfo_job(job_id):
-    with _WFO_JOBS_LOCK:
-        job = _WFO_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return render_template("wfo_job.html", job_id=job_id, not_found=True), 404
     return render_template("wfo_job.html", job_id=job_id, not_found=False)
@@ -4471,8 +4477,7 @@ def wfo_job(job_id):
 
 @app.route("/walk-forward-opt/job/<job_id>/status.json")
 def wfo_job_status(job_id):
-    with _WFO_JOBS_LOCK:
-        job = _WFO_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return jsonify({"found": False}), 404
     result = job.get("result")
@@ -4497,40 +4502,18 @@ def serve_wfo_report(filename):
 # number. Same background-job/poll shape as the other slow tabs.
 # ---------------------------------------------------------------------------
 
-_MO_JOBS: dict[str, dict] = {}
-_MO_JOBS_LOCK = threading.Lock()
-
-
-def _mo_job_log(job_id: str, msg: str) -> None:
-    with _MO_JOBS_LOCK:
-        job = _MO_JOBS.get(job_id)
-        if job is not None:
-            job["log"].append(msg)
-
-
 def _run_mo_job(job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, mc_cfg: MonteCarloConfig, mo_cfg: MultiObjectiveConfig) -> None:
     try:
         result = run_multi_objective_refinement(
             df, strategy, risk, rules, mc_cfg, mo_cfg,
-            progress_cb=lambda msg: _mo_job_log(job_id, msg),
+            progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
         )
         paths = generate_multi_objective_report(MULTI_OBJ_DIR, result, basename=f"multi_objective_{job_id}")
-        with _MO_JOBS_LOCK:
-            job = _MO_JOBS[job_id]
-            job["done"] = True
-            job["result"] = result
-            job["report_html"] = f"/mo_reports/{Path(paths['html']).name}"
-            job["report_json"] = f"/mo_reports/{Path(paths['json']).name}"
+        JOB_MANAGER.finish(job_id, result=result, report_html=f"/mo_reports/{Path(paths['html']).name}", report_json=f"/mo_reports/{Path(paths['json']).name}")
     except RefinementError as exc:
-        with _MO_JOBS_LOCK:
-            job = _MO_JOBS[job_id]
-            job["done"] = True
-            job["error"] = str(exc)
+        JOB_MANAGER.fail(job_id, str(exc))
     except Exception as exc:  # noqa: BLE001
-        with _MO_JOBS_LOCK:
-            job = _MO_JOBS[job_id]
-            job["done"] = True
-            job["error"] = f"Unexpected error: {exc}"
+        JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
 
 
 def _run_mo_sweep_job(
@@ -4548,7 +4531,7 @@ def _run_mo_sweep_job(
     try:
         sweep = run_multi_objective_sweep(
             df, strategy, risk, rules, mc_cfg, timeframes, mo_cfg,
-            progress_cb=lambda msg: _mo_job_log(job_id, msg),
+            progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
         )
         sweep_results = {}
         first_result = None
@@ -4569,29 +4552,23 @@ def _run_mo_sweep_job(
                 "elapsed_seconds": result.elapsed_seconds,
                 "report_html": report_html,
             }
-        with _MO_JOBS_LOCK:
-            job = _MO_JOBS[job_id]
-            job["done"] = True
-            job["result"] = first_result
-            job["report_html"] = sweep_results.get(next(iter(sweep_results), ""), {}).get("report_html")
-            job["sweep_results"] = sweep_results
-            if sweep.skipped:
-                job["log"].append(
-                    "Skipped from the timeframe sweep: "
-                    + "; ".join(f"{s.requested_label} ({s.reason})" for s in sweep.skipped)
-                )
-            for label, err in sweep.errors.items():
-                job["log"].append(f"[{label}] could not be searched: {err}")
+        if sweep.skipped:
+            JOB_MANAGER.log(
+                job_id,
+                "Skipped from the timeframe sweep: "
+                + "; ".join(f"{s.requested_label} ({s.reason})" for s in sweep.skipped),
+            )
+        for label, err in sweep.errors.items():
+            JOB_MANAGER.log(job_id, f"[{label}] could not be searched: {err}")
+        JOB_MANAGER.finish(
+            job_id, result=first_result,
+            report_html=sweep_results.get(next(iter(sweep_results), ""), {}).get("report_html"),
+            sweep_results=sweep_results,
+        )
     except RefinementError as exc:
-        with _MO_JOBS_LOCK:
-            job = _MO_JOBS[job_id]
-            job["done"] = True
-            job["error"] = str(exc)
+        JOB_MANAGER.fail(job_id, str(exc))
     except Exception as exc:  # noqa: BLE001
-        with _MO_JOBS_LOCK:
-            job = _MO_JOBS[job_id]
-            job["done"] = True
-            job["error"] = f"Unexpected error: {exc}"
+        JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
     finally:
         HEAVY_JOB_GUARD.release(JOB_MULTI_OBJECTIVE)
 
@@ -4646,12 +4623,11 @@ def mo_start():
             reset_on_breach=form.get("reset_on_breach") == "on",
         )
 
-        job_id = uuid.uuid4().hex[:12]
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
-        with _MO_JOBS_LOCK:
-            _MO_JOBS[job_id] = {"log": initial_log, "done": False, "error": None, "result": None, "started_at": time.time(), "instrument": active_label}
+        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label)
+        JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         # FIX (multi-timeframe sweep): "Timeframes to test" runs the SAME
         # NSGA-II search once per requested timeframe (df resampled per
         # timeframe -- see app.data.timeframe_sweep) and reports every
@@ -4678,8 +4654,7 @@ def mo_start():
 
 @app.route("/multi-objective/job/<job_id>")
 def mo_job(job_id):
-    with _MO_JOBS_LOCK:
-        job = _MO_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return render_template("multi_objective_job.html", job_id=job_id, not_found=True), 404
     return render_template("multi_objective_job.html", job_id=job_id, not_found=False)
@@ -4687,8 +4662,7 @@ def mo_job(job_id):
 
 @app.route("/multi-objective/job/<job_id>/status.json")
 def mo_job_status(job_id):
-    with _MO_JOBS_LOCK:
-        job = _MO_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return jsonify({"found": False}), 404
     result = job.get("result")
@@ -4723,17 +4697,6 @@ def serve_mo_report(filename):
 # Same background-job/poll shape as the other slow tabs.
 # ---------------------------------------------------------------------------
 
-_WFGA_JOBS: dict[str, dict] = {}
-_WFGA_JOBS_LOCK = threading.Lock()
-
-
-def _wfga_job_log(job_id: str, msg: str) -> None:
-    with _WFGA_JOBS_LOCK:
-        job = _WFGA_JOBS.get(job_id)
-        if job is not None:
-            job["log"].append(msg)
-
-
 def _run_wfga_job(
     job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, mc_cfg: MonteCarloConfig,
     refine_cfg: RefinementConfig, n_folds: int, window_mode: str, train_frac: float,
@@ -4742,19 +4705,18 @@ def _run_wfga_job(
     try:
         result = run_walkforward_aware_refinement(
             df, strategy, risk, rules, mc_cfg, refine_cfg, n_folds=n_folds, window_mode=window_mode,
-            train_frac=train_frac, progress_cb=lambda msg: _wfga_job_log(job_id, msg),
+            train_frac=train_frac, progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
         )
         paths = generate_walkforward_ga_report(WFGA_DIR, result, basename=f"walkforward_ga_{job_id}")
         report_html = f"/wfga_reports/{Path(paths['html']).name}"
-        with _WFGA_JOBS_LOCK:
-            job = _WFGA_JOBS[job_id]
-            job["done"] = True
-            job["result"] = result
-            job["report_html"] = report_html
-            job["report_json"] = f"/wfga_reports/{Path(paths['json']).name}"
+        JOB_MANAGER.finish(job_id, result=result, report_html=report_html, report_json=f"/wfga_reports/{Path(paths['json']).name}")
         gap = getattr(result, "overfitting_gap", None)
         summary = f"overfitting gap {gap:.2f}" if gap is not None else f"{n_folds} folds, walk-forward-aware GA"
-        strategy_state.record_validation(strategy_name, instrument, "wfga", passed=None, summary=summary, report_html=report_html)
+        strategy_state.record_validation(
+            strategy_name, instrument, "wfga", passed=None, summary=summary, report_html=report_html,
+            library_type=(library_ref[0] if library_ref else ""), library_filename=(library_ref[1] if library_ref else ""),
+            report_files=paths,
+        )
         if library_ref:
             try:
                 record_validation_result(*library_ref, {
@@ -4763,15 +4725,9 @@ def _run_wfga_job(
             except Exception:  # noqa: BLE001 -- recording to the library is a convenience, not core output
                 pass
     except RefinementError as exc:
-        with _WFGA_JOBS_LOCK:
-            job = _WFGA_JOBS[job_id]
-            job["done"] = True
-            job["error"] = str(exc)
+        JOB_MANAGER.fail(job_id, str(exc))
     except Exception as exc:  # noqa: BLE001
-        with _WFGA_JOBS_LOCK:
-            job = _WFGA_JOBS[job_id]
-            job["done"] = True
-            job["error"] = f"Unexpected error: {exc}"
+        JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
     finally:
         HEAVY_JOB_GUARD.release(JOB_WFGA)
 
@@ -4844,12 +4800,11 @@ def wfga_start():
             fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
         )
 
-        job_id = uuid.uuid4().hex[:12]
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
-        with _WFGA_JOBS_LOCK:
-            _WFGA_JOBS[job_id] = {"log": initial_log, "done": False, "error": None, "result": None, "started_at": time.time(), "instrument": active_label}
+        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label)
+        JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         thread = threading.Thread(
             target=_run_wfga_job,
             args=(
@@ -4871,8 +4826,7 @@ def wfga_start():
 
 @app.route("/walk-forward-ga/job/<job_id>")
 def wfga_job(job_id):
-    with _WFGA_JOBS_LOCK:
-        job = _WFGA_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return render_template("wfga_job.html", job_id=job_id, not_found=True), 404
     return render_template("wfga_job.html", job_id=job_id, not_found=False)
@@ -4880,8 +4834,7 @@ def wfga_job(job_id):
 
 @app.route("/walk-forward-ga/job/<job_id>/status.json")
 def wfga_job_status(job_id):
-    with _WFGA_JOBS_LOCK:
-        job = _WFGA_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return jsonify({"found": False}), 404
     result = job.get("result")
@@ -5143,6 +5096,7 @@ def regime_matrix_run():
         strategy_state.record_validation(
             getattr(strategy, "name", "Strategy"), active_label, "regime_matrix",
             passed=None, summary=f"{len(result.cells)} regime cell(s) analyzed",
+            library_type=(library_ref[0] if library_ref else ""), library_filename=(library_ref[1] if library_ref else ""),
         )
         if library_ref:
             try:
@@ -5552,39 +5506,28 @@ def serve_ensemble_report(filename):
 # already-tried candidates (e.g. a Search Lab leaderboard or a Refinement
 # run's final generation) as input rather than a single strategy config, so
 # it isn't wired up here yet -- see WEB_PARITY_ROADMAP.md.
+#
+# MIGRATED (item 2): backed by the shared JOB_MANAGER, same as WFO above.
 # ---------------------------------------------------------------------------
-
-_CPCV_JOBS: dict[str, dict] = {}
-_CPCV_JOBS_LOCK = threading.Lock()
-
-
-def _cpcv_job_log(job_id: str, msg: str) -> None:
-    with _CPCV_JOBS_LOCK:
-        job = _CPCV_JOBS.get(job_id)
-        if job is not None:
-            job["log"].append(msg)
 
 
 def _run_cpcv_job(job_id: str, df, strategy, risk: RiskConfig, n_groups: int, n_test_groups: int, embargo_frac: float, metric: str, robustness_threshold: float, max_paths: int, prop_rules=None, strategy_name: str = "", instrument: str = "", library_ref: tuple[str, str] | None = None) -> None:
     try:
-        _cpcv_job_log(job_id, f"Running CPCV: {n_groups} groups, {n_test_groups} held out per path, metric={metric}...")
+        JOB_MANAGER.log(job_id, f"Running CPCV: {n_groups} groups, {n_test_groups} held out per path, metric={metric}...")
         result = run_cpcv(
             df, lambda: strategy, risk, n_groups=n_groups, n_test_groups=n_test_groups,
             embargo_frac=embargo_frac, metric=metric, robustness_threshold=robustness_threshold, max_paths=max_paths,
             prop_rules=prop_rules,
         )
-        _cpcv_job_log(job_id, f"Done: {result.n_paths} paths evaluated.")
+        JOB_MANAGER.log(job_id, f"Done: {result.n_paths} paths evaluated.")
         paths = generate_cpcv_report(CPCV_DIR, result, basename=f"cpcv_{job_id}")
         report_html = f"/cpcv_reports/{Path(paths['html']).name}"
-        with _CPCV_JOBS_LOCK:
-            job = _CPCV_JOBS[job_id]
-            job["done"] = True
-            job["result"] = result
-            job["report_html"] = report_html
-            job["report_json"] = f"/cpcv_reports/{Path(paths['json']).name}"
+        JOB_MANAGER.finish(job_id, result=result, report_html=report_html, report_json=f"/cpcv_reports/{Path(paths['json']).name}")
         strategy_state.record_validation(
             strategy_name, instrument, "cpcv",
             passed=bool(result.is_robust), summary=f"{result.n_paths} paths evaluated", report_html=report_html,
+            library_type=(library_ref[0] if library_ref else ""), library_filename=(library_ref[1] if library_ref else ""),
+            report_files=paths,
         )
         # Pipeline-progress tracker: only when this strategy came straight
         # from the Strategy Library (library_ref set), so a standalone/
@@ -5600,15 +5543,9 @@ def _run_cpcv_job(job_id: str, df, strategy, risk: RiskConfig, n_groups: int, n_
             except Exception:  # noqa: BLE001 -- recording to the library is a convenience, not core output
                 pass
     except CPCVError as exc:
-        with _CPCV_JOBS_LOCK:
-            job = _CPCV_JOBS[job_id]
-            job["done"] = True
-            job["error"] = str(exc)
+        JOB_MANAGER.fail(job_id, str(exc))
     except Exception as exc:  # noqa: BLE001
-        with _CPCV_JOBS_LOCK:
-            job = _CPCV_JOBS[job_id]
-            job["done"] = True
-            job["error"] = f"Unexpected error: {exc}"
+        JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
     finally:
         HEAVY_JOB_GUARD.release(JOB_CPCV)
 
@@ -5639,12 +5576,11 @@ def cpcv_start():
             commission_per_trade=float(form.get("commission", 0) or 0),
         )
         prop_rules = PropRules(account_size=float(form.get("initial_balance", 100000)))
-        job_id = uuid.uuid4().hex[:12]
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
-        with _CPCV_JOBS_LOCK:
-            _CPCV_JOBS[job_id] = {"log": initial_log, "done": False, "error": None, "result": None, "started_at": time.time(), "instrument": active_label}
+        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label)
+        JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         thread = threading.Thread(
             target=_run_cpcv_job,
             args=(
@@ -5669,8 +5605,7 @@ def cpcv_start():
 
 @app.route("/cpcv/job/<job_id>")
 def cpcv_job(job_id):
-    with _CPCV_JOBS_LOCK:
-        job = _CPCV_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return render_template("cpcv_job.html", job_id=job_id, not_found=True), 404
     return render_template("cpcv_job.html", job_id=job_id, not_found=False)
@@ -5678,8 +5613,7 @@ def cpcv_job(job_id):
 
 @app.route("/cpcv/job/<job_id>/status.json")
 def cpcv_job_status(job_id):
-    with _CPCV_JOBS_LOCK:
-        job = _CPCV_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return jsonify({"found": False}), 404
     result = job.get("result")
@@ -5715,33 +5649,17 @@ def serve_cpcv_report(filename):
 # perturbed variant on top of the form strategy.
 # ---------------------------------------------------------------------------
 
-_PBO_JOBS: dict[str, dict] = {}
-_PBO_JOBS_LOCK = threading.Lock()
-
-
-def _pbo_job_log(job_id: str, msg: str) -> None:
-    with _PBO_JOBS_LOCK:
-        job = _PBO_JOBS.get(job_id)
-        if job is not None:
-            job["log"].append(msg)
-
-
 def _run_pbo_job(job_id: str, df, specs: list[dict], risk: RiskConfig, n_groups: int, n_test_groups: int, embargo_frac: float, metric: str, max_paths: int, prop_rules=None, strategy_name: str = "", instrument: str = "", library_ref: tuple[str, str] | None = None) -> None:
     try:
-        _pbo_job_log(job_id, f"Running PBO across {len(specs)} candidate(s): {n_groups} groups, {n_test_groups} held out per path, metric={metric}...")
+        JOB_MANAGER.log(job_id, f"Running PBO across {len(specs)} candidate(s): {n_groups} groups, {n_test_groups} held out per path, metric={metric}...")
         result = compute_pbo(
             df, specs, risk, n_groups=n_groups, n_test_groups=n_test_groups,
             embargo_frac=embargo_frac, metric=metric, max_paths=max_paths, prop_rules=prop_rules,
         )
-        _pbo_job_log(job_id, f"Done: {result.n_paths} paths evaluated, PBO = {result.pbo * 100:.1f}%.")
+        JOB_MANAGER.log(job_id, f"Done: {result.n_paths} paths evaluated, PBO = {result.pbo * 100:.1f}%.")
         paths = generate_pbo_report(PBO_DIR, result, basename=f"pbo_{job_id}")
         report_html = f"/pbo_reports/{Path(paths['html']).name}"
-        with _PBO_JOBS_LOCK:
-            job = _PBO_JOBS[job_id]
-            job["done"] = True
-            job["result"] = result
-            job["report_html"] = report_html
-            job["report_json"] = f"/pbo_reports/{Path(paths['json']).name}"
+        JOB_MANAGER.finish(job_id, result=result, report_html=report_html, report_json=f"/pbo_reports/{Path(paths['json']).name}")
         # PBO is diagnostic (how likely is picking a winner among these
         # candidates to be noise), not itself a pass/fail gate -- a LOW
         # pbo is the good outcome, so "passed" tracks that directly.
@@ -5761,15 +5679,9 @@ def _run_pbo_job(job_id: str, df, specs: list[dict], risk: RiskConfig, n_groups:
             except Exception:  # noqa: BLE001 -- recording to the library is a convenience, not core output
                 pass
     except CPCVError as exc:
-        with _PBO_JOBS_LOCK:
-            job = _PBO_JOBS[job_id]
-            job["done"] = True
-            job["error"] = str(exc)
+        JOB_MANAGER.fail(job_id, str(exc))
     except Exception as exc:  # noqa: BLE001
-        with _PBO_JOBS_LOCK:
-            job = _PBO_JOBS[job_id]
-            job["done"] = True
-            job["error"] = f"Unexpected error: {exc}"
+        JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
     finally:
         HEAVY_JOB_GUARD.release(JOB_PBO)
 
@@ -5866,13 +5778,12 @@ def pbo_start():
             commission_per_trade=float(form.get("commission", 0) or 0),
         )
         prop_rules = PropRules(account_size=float(form.get("initial_balance", 100000)))
-        job_id = uuid.uuid4().hex[:12]
         initial_log = [f"Loaded {len(df)} bars from {active_label}.", f"Candidate pool: {len(specs)} ({1} form strategy + {len(pool_specs)} library + {len(variant_specs)} perturbed)."]
         if import_note:
             initial_log.append(import_note)
         initial_log.extend(pool_warnings)
-        with _PBO_JOBS_LOCK:
-            _PBO_JOBS[job_id] = {"log": initial_log, "done": False, "error": None, "result": None, "started_at": time.time(), "instrument": active_label}
+        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label)
+        JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         thread = threading.Thread(
             target=_run_pbo_job,
             args=(
@@ -5896,8 +5807,7 @@ def pbo_start():
 
 @app.route("/pbo/job/<job_id>")
 def pbo_job(job_id):
-    with _PBO_JOBS_LOCK:
-        job = _PBO_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return render_template("pbo_job.html", job_id=job_id, not_found=True), 404
     return render_template("pbo_job.html", job_id=job_id, not_found=False)
@@ -5905,8 +5815,7 @@ def pbo_job(job_id):
 
 @app.route("/pbo/job/<job_id>/status.json")
 def pbo_job_status(job_id):
-    with _PBO_JOBS_LOCK:
-        job = _PBO_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return jsonify({"found": False}), 404
     result = job.get("result")
@@ -5932,39 +5841,28 @@ def serve_pbo_report(filename):
 # than the auto-picked-pairs shortcut Parameter Robustness already offers.
 # ---------------------------------------------------------------------------
 
-_SENS_JOBS: dict[str, dict] = {}
-_SENS_JOBS_LOCK = threading.Lock()
-
-
-def _sens_job_log(job_id: str, msg: str) -> None:
-    with _SENS_JOBS_LOCK:
-        job = _SENS_JOBS.get(job_id)
-        if job is not None:
-            job["log"].append(msg)
-
-
 def _run_sensitivity_job(job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, mc_cfg: MonteCarloConfig, metric: str, pct_range: float, n_steps: int, max_params: int, strategy_name: str = "", instrument: str = "", library_ref: tuple[str, str] | None = None) -> None:
     try:
-        _sens_job_log(job_id, f"Sweeping up to {max_params} tunable parameter(s), {n_steps} steps each, metric={metric}...")
+        JOB_MANAGER.log(job_id, f"Sweeping up to {max_params} tunable parameter(s), {n_steps} steps each, metric={metric}...")
         results = compute_1d_sensitivity(df, strategy, risk, rules, mc_cfg, metric=metric, pct_range=pct_range, n_steps=n_steps, max_params=max_params)
-        _sens_job_log(job_id, f"Done: swept {len(results)} parameter(s).")
+        JOB_MANAGER.log(job_id, f"Done: swept {len(results)} parameter(s).")
         paths = generate_sensitivity_report(SENSITIVITY_DIR, results, basename=f"sensitivity_{job_id}")
         report_html = f"/sensitivity_reports/{Path(paths['html']).name}"
-        with _SENS_JOBS_LOCK:
-            job = _SENS_JOBS[job_id]
-            job["done"] = True
-            job["results"] = results
-            job["report_html"] = report_html
-            job["report_json"] = f"/sensitivity_reports/{Path(paths['json']).name}"
-            # Kept for an on-demand 2D heatmap requested from the job page --
-            # see _run_sensitivity_heatmap_job below. Not put in the JSON
-            # status payload (df/strategy objects aren't serializable).
-            job["_ctx"] = {"df": df, "strategy": strategy, "risk": risk, "rules": rules, "mc_cfg": mc_cfg, "metric": metric}
+        # Kept for an on-demand 2D heatmap requested from the job page --
+        # see _run_sensitivity_heatmap_job below. Not put in the JSON
+        # status payload (df/strategy objects aren't serializable).
+        JOB_MANAGER.finish(
+            job_id, results=results, report_html=report_html,
+            report_json=f"/sensitivity_reports/{Path(paths['json']).name}",
+            _ctx={"df": df, "strategy": strategy, "risk": risk, "rules": rules, "mc_cfg": mc_cfg, "metric": metric},
+        )
         # This tool is diagnostic (flags cliffs vs. stable plateaus per
         # parameter) rather than pass/fail -- passed=None records that it ran.
         strategy_state.record_validation(
             strategy_name, instrument, "sensitivity",
             passed=None, summary=f"{len(results)} parameter(s) swept", report_html=report_html,
+            library_type=(library_ref[0] if library_ref else ""), library_filename=(library_ref[1] if library_ref else ""),
+            report_files=paths,
         )
         if library_ref:
             try:
@@ -5974,53 +5872,35 @@ def _run_sensitivity_job(job_id: str, df, strategy, risk: RiskConfig, rules: Pro
             except Exception:  # noqa: BLE001 -- recording to the library is a convenience, not core output
                 pass
     except RefinementError as exc:
-        with _SENS_JOBS_LOCK:
-            job = _SENS_JOBS[job_id]
-            job["done"] = True
-            job["error"] = str(exc)
+        JOB_MANAGER.fail(job_id, str(exc))
     except Exception as exc:  # noqa: BLE001
-        with _SENS_JOBS_LOCK:
-            job = _SENS_JOBS[job_id]
-            job["done"] = True
-            job["error"] = f"Unexpected error: {exc}"
+        JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
     finally:
         HEAVY_JOB_GUARD.release(JOB_SENSITIVITY)
 
 
 def _run_sensitivity_heatmap_job(job_id: str, param_a: str, param_b: str, pct_range: float, n_steps: int) -> None:
-    with _SENS_JOBS_LOCK:
-        job = _SENS_JOBS.get(job_id)
-        ctx = job.get("_ctx") if job else None
+    job = JOB_MANAGER.get(job_id)
+    ctx = job.get("_ctx") if job else None
     if job is None or ctx is None:
         return
     try:
-        _sens_job_log(job_id, f"Running 2D heatmap for {param_a} x {param_b}...")
+        JOB_MANAGER.log(job_id, f"Running 2D heatmap for {param_a} x {param_b}...")
         heatmap = compute_2d_heatmap(
             ctx["df"], ctx["strategy"], ctx["risk"], ctx["rules"], ctx["mc_cfg"],
             param_a, param_b, metric=ctx["metric"], pct_range=pct_range, n_steps=n_steps,
         )
         results = job.get("results") or []
         paths = generate_sensitivity_report(SENSITIVITY_DIR, results, heatmap, basename=f"sensitivity_{job_id}")
-        with _SENS_JOBS_LOCK:
-            job = _SENS_JOBS[job_id]
-            job["heatmap_done"] = True
-            job["heatmap_running"] = False
-            job["heatmap_error"] = None
-            job["heatmap"] = heatmap
-            job["report_html"] = f"/sensitivity_reports/{Path(paths['html']).name}"
-        _sens_job_log(job_id, "2D heatmap done.")
+        JOB_MANAGER.update(
+            job_id, heatmap_done=True, heatmap_running=False, heatmap_error=None,
+            heatmap=heatmap, report_html=f"/sensitivity_reports/{Path(paths['html']).name}",
+        )
+        JOB_MANAGER.log(job_id, "2D heatmap done.")
     except RefinementError as exc:
-        with _SENS_JOBS_LOCK:
-            job = _SENS_JOBS[job_id]
-            job["heatmap_done"] = True
-            job["heatmap_running"] = False
-            job["heatmap_error"] = str(exc)
+        JOB_MANAGER.update(job_id, heatmap_done=True, heatmap_running=False, heatmap_error=str(exc))
     except Exception as exc:  # noqa: BLE001
-        with _SENS_JOBS_LOCK:
-            job = _SENS_JOBS[job_id]
-            job["heatmap_done"] = True
-            job["heatmap_running"] = False
-            job["heatmap_error"] = f"Unexpected error: {exc}"
+        JOB_MANAGER.update(job_id, heatmap_done=True, heatmap_running=False, heatmap_error=f"Unexpected error: {exc}")
 
 
 @app.route("/sensitivity")
@@ -6046,12 +5926,11 @@ def sensitivity_start():
         rules = PropRules(account_size=float(form.get("account_size", 100000)))
         mc_cfg = MonteCarloConfig(n_simulations=int(form.get("mc_sims", 500) or 500))
 
-        job_id = uuid.uuid4().hex[:12]
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
-        with _SENS_JOBS_LOCK:
-            _SENS_JOBS[job_id] = {"log": initial_log, "done": False, "error": None, "results": None, "started_at": time.time(), "instrument": active_label, "heatmap_done": False, "heatmap_error": None, "heatmap": None, "_ctx": None}
+        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label, results=None, heatmap_done=False, heatmap_error=None, heatmap=None, _ctx=None)
+        JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         thread = threading.Thread(
             target=_run_sensitivity_job,
             args=(
@@ -6073,8 +5952,7 @@ def sensitivity_start():
 
 @app.route("/sensitivity/job/<job_id>")
 def sensitivity_job(job_id):
-    with _SENS_JOBS_LOCK:
-        job = _SENS_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return render_template("sensitivity_job.html", job_id=job_id, not_found=True), 404
     return render_template("sensitivity_job.html", job_id=job_id, not_found=False)
@@ -6082,8 +5960,7 @@ def sensitivity_job(job_id):
 
 @app.route("/sensitivity/job/<job_id>/status.json")
 def sensitivity_job_status(job_id):
-    with _SENS_JOBS_LOCK:
-        job = _SENS_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return jsonify({"found": False}), 404
     results = job.get("results")
@@ -6112,22 +5989,17 @@ def sensitivity_job_status(job_id):
 
 @app.route("/sensitivity/job/<job_id>/heatmap", methods=["POST"])
 def sensitivity_job_heatmap(job_id):
-    with _SENS_JOBS_LOCK:
-        job = _SENS_JOBS.get(job_id)
-        if job is None or job.get("_ctx") is None:
-            return jsonify({"ok": False, "error": "This job has no data available for a 2D heatmap (still running, or it failed)."}), 400
-        available = {r.gene_label for r in (job.get("results") or [])}
+    job = JOB_MANAGER.get(job_id)
+    if job is None or job.get("_ctx") is None:
+        return jsonify({"ok": False, "error": "This job has no data available for a 2D heatmap (still running, or it failed)."}), 400
+    available = {r.gene_label for r in (job.get("results") or [])}
     form = request.form
     param_a, param_b = form.get("param_a", ""), form.get("param_b", "")
     if not param_a or not param_b or param_a == param_b:
         return jsonify({"ok": False, "error": "Pick two different parameters."}), 400
     if param_a not in available or param_b not in available:
         return jsonify({"ok": False, "error": "Unknown parameter label -- pick from the discovered list."}), 400
-    with _SENS_JOBS_LOCK:
-        job["heatmap_done"] = False
-        job["heatmap_error"] = None
-        job["heatmap"] = None
-        job["heatmap_running"] = True
+    JOB_MANAGER.update(job_id, heatmap_done=False, heatmap_error=None, heatmap=None, heatmap_running=True)
     thread = threading.Thread(
         target=_run_sensitivity_heatmap_job,
         args=(job_id, param_a, param_b, float(form.get("pct_range", 0.5) or 0.5), int(form.get("n_steps", 7) or 7)),
@@ -6151,17 +6023,6 @@ def serve_sensitivity_report(filename):
 # purely the job-queue/rendering wiring, same shape as Sensitivity above.
 # ---------------------------------------------------------------------------
 
-_PARAM_ROBUSTNESS_JOBS: dict[str, dict] = {}
-_PARAM_ROBUSTNESS_JOBS_LOCK = threading.Lock()
-
-
-def _param_robustness_job_log(job_id: str, msg: str) -> None:
-    with _PARAM_ROBUSTNESS_JOBS_LOCK:
-        job = _PARAM_ROBUSTNESS_JOBS.get(job_id)
-        if job is not None:
-            job["log"].append(msg)
-
-
 def _run_param_robustness_job(
     job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, mc_cfg: MonteCarloConfig,
     metric: str, pass_threshold_pct: float, pct_range: float, n_steps_1d: int, n_steps_2d: int,
@@ -6169,7 +6030,7 @@ def _run_param_robustness_job(
     library_ref: tuple[str, str] | None = None,
 ) -> None:
     try:
-        _param_robustness_job_log(
+        JOB_MANAGER.log(
             job_id,
             f"Sweeping up to {max_params} tunable parameter(s) individually, then heatmapping the "
             f"{n_heatmap_pairs} most sensitive pair(s), metric={metric}, pass threshold={pass_threshold_pct:g}%...",
@@ -6179,15 +6040,12 @@ def _run_param_robustness_job(
             max_params=max_params, pct_range=pct_range, n_steps_1d=n_steps_1d, n_steps_2d=n_steps_2d,
             n_heatmap_pairs=n_heatmap_pairs,
         )
-        _param_robustness_job_log(
+        JOB_MANAGER.log(
             job_id,
             f"Done: {result.n_parameters_checked} parameter(s) checked, {result.n_cliffs_detected} "
             f"cliff(s) detected. Parameter Robustness Score: {result.parameter_robustness_score:.1f}/100.",
         )
-        with _PARAM_ROBUSTNESS_JOBS_LOCK:
-            job = _PARAM_ROBUSTNESS_JOBS[job_id]
-            job["done"] = True
-            job["result"] = result
+        JOB_MANAGER.finish(job_id, result=result)
         # Diagnostic, not pass/fail on its own -- passed=None records that it ran, same convention
         # as Sensitivity's own record_validation call above.
         strategy_state.record_validation(
@@ -6203,15 +6061,9 @@ def _run_param_robustness_job(
             except Exception:  # noqa: BLE001 -- recording to the library is a convenience, not core output
                 pass
     except RefinementError as exc:
-        with _PARAM_ROBUSTNESS_JOBS_LOCK:
-            job = _PARAM_ROBUSTNESS_JOBS[job_id]
-            job["done"] = True
-            job["error"] = str(exc)
+        JOB_MANAGER.fail(job_id, str(exc))
     except Exception as exc:  # noqa: BLE001
-        with _PARAM_ROBUSTNESS_JOBS_LOCK:
-            job = _PARAM_ROBUSTNESS_JOBS[job_id]
-            job["done"] = True
-            job["error"] = f"Unexpected error: {exc}"
+        JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
     finally:
         HEAVY_JOB_GUARD.release(JOB_PARAMETER_ROBUSTNESS)
 
@@ -6245,12 +6097,11 @@ def parameter_robustness_start():
         rules = PropRules(account_size=float(form.get("account_size", 100000)))
         mc_cfg = MonteCarloConfig(n_simulations=int(form.get("mc_sims", 500) or 500))
 
-        job_id = uuid.uuid4().hex[:12]
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
-        with _PARAM_ROBUSTNESS_JOBS_LOCK:
-            _PARAM_ROBUSTNESS_JOBS[job_id] = {"log": initial_log, "done": False, "error": None, "result": None, "started_at": time.time(), "instrument": active_label}
+        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label)
+        JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         thread = threading.Thread(
             target=_run_param_robustness_job,
             args=(
@@ -6278,8 +6129,7 @@ def parameter_robustness_start():
 
 @app.route("/parameter-robustness/job/<job_id>")
 def parameter_robustness_job(job_id):
-    with _PARAM_ROBUSTNESS_JOBS_LOCK:
-        job = _PARAM_ROBUSTNESS_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return render_template("parameter_robustness_job.html", job_id=job_id, not_found=True), 404
     return render_template("parameter_robustness_job.html", job_id=job_id, not_found=False)
@@ -6287,8 +6137,7 @@ def parameter_robustness_job(job_id):
 
 @app.route("/parameter-robustness/job/<job_id>/status.json")
 def parameter_robustness_job_status(job_id):
-    with _PARAM_ROBUSTNESS_JOBS_LOCK:
-        job = _PARAM_ROBUSTNESS_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return jsonify({"found": False}), 404
     result = job.get("result")
@@ -7247,30 +7096,13 @@ def evolution_multi_instrument_promote(group_id):
 # at whatever machine on your LAN is running Ollama).
 # ---------------------------------------------------------------------------
 
-_AGENT_JOBS: dict[str, dict] = {}
-_AGENT_JOBS_LOCK = threading.Lock()
-
-
-def _agent_job_log(job_id: str, msg: str) -> None:
-    with _AGENT_JOBS_LOCK:
-        job = _AGENT_JOBS.get(job_id)
-        if job is not None:
-            job["log"].append(msg)
-
-
 def _run_agent_job(job_id: str, question: str, ctx: ResearchAgentContext, settings: OllamaSettings) -> None:
     try:
         agent = ResearchAgent(settings)
-        result = agent.run(question, ctx, progress_cb=lambda msg: _agent_job_log(job_id, msg))
-        with _AGENT_JOBS_LOCK:
-            job = _AGENT_JOBS[job_id]
-            job["done"] = True
-            job["result"] = result
+        result = agent.run(question, ctx, progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg))
+        JOB_MANAGER.finish(job_id, result=result)
     except Exception as exc:  # noqa: BLE001
-        with _AGENT_JOBS_LOCK:
-            job = _AGENT_JOBS[job_id]
-            job["done"] = True
-            job["error"] = f"Unexpected error: {exc}"
+        JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
 
 
 @app.route("/research-agent")
@@ -7329,12 +7161,11 @@ def research_agent_start():
             uploaded_reports=uploaded_reports,
         )
 
-        job_id = uuid.uuid4().hex[:12]
         job_log = [f"Loaded {len(df)} bars from {active_label}.", f"Question: {question}"]
         if uploaded_reports:
             job_log.append(f"Uploaded {len(uploaded_reports)} report/screenshot file(s): " + ", ".join(p.name for p in uploaded_reports))
-        with _AGENT_JOBS_LOCK:
-            _AGENT_JOBS[job_id] = {"log": job_log, "done": False, "error": None, "result": None, "started_at": time.time()}
+        job_id = JOB_MANAGER.create(log=job_log)
+        JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         thread = threading.Thread(target=_run_agent_job, args=(job_id, question, ctx, settings), daemon=True)
         thread.start()
         return redirect(url_for("research_agent_job", job_id=job_id))
@@ -7346,8 +7177,7 @@ def research_agent_start():
 
 @app.route("/research-agent/job/<job_id>")
 def research_agent_job(job_id):
-    with _AGENT_JOBS_LOCK:
-        job = _AGENT_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return render_template("research_agent_job.html", job_id=job_id, not_found=True), 404
     return render_template("research_agent_job.html", job_id=job_id, not_found=False)
@@ -7355,8 +7185,7 @@ def research_agent_job(job_id):
 
 @app.route("/research-agent/job/<job_id>/status.json")
 def research_agent_job_status(job_id):
-    with _AGENT_JOBS_LOCK:
-        job = _AGENT_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return jsonify({"found": False}), 404
     result = job.get("result")

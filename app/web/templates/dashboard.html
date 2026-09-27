@@ -63,6 +63,21 @@
     {% endif %}
     <a class="t58-btn ghost" href="/forward-test">Forward test</a>
   </div>
+  {% elif current_strategy %}
+  <!-- FIX (2026-09): current_strategy is tracked, but it hasn't been
+       matched to a Champion Board row (it's a one-off strategy never
+       saved to the Strategy Library, or its saved file was since
+       renamed/deleted). This used to silently fall back to showing an
+       UNRELATED strategy's five-question panel here -- actively
+       misleading, since it looked like this panel and the "Current
+       strategy" card below it disagreed about what you're working on.
+       Showing an honest "not on the Champion Board yet" state instead. -->
+  <div class="title-row"><h3 style="color:var(--text-dim);font-weight:500;">{{ current_strategy.strategy_name }}</h3></div>
+  <div class="t58-champion-empty">Tracked as your current strategy, but not on the Champion Board yet -- save it to the Strategy Library (Run &amp; Report's "Save to library" option, or Full Pipeline's) to get a stage, verdict, and next-action here.</div>
+  <div class="actions">
+    <a class="t58-btn secondary" href="/library">Open Strategy Library &rarr;</a>
+    <a class="t58-btn ghost" href="/validate">Open Validate &rarr;</a>
+  </div>
   {% else %}
   <div class="title-row"><h3 style="color:var(--text-dim);font-weight:500;">No strategy tested yet</h3></div>
   <div class="t58-champion-empty">Run your first backtest, and T58 will tell you what's working, why, and what to do next.</div>
@@ -99,6 +114,7 @@
   </div>
   <div class="actions" style="margin-top:12px;">
     <a class="t58-btn secondary" href="/validate">Open Validate &rarr;</a>
+    <a class="t58-btn ghost" href="/reports/by-strategy">All reports for this strategy &rarr;</a>
     <form method="post" action="/current-strategy/clear" style="display:inline;">
       <button type="submit" class="t58-btn ghost sm">Stop tracking</button>
     </form>
@@ -218,7 +234,7 @@
       <thead>
         <tr>
           <th>Strategy</th><th>Instrument</th><th>Trades</th><th>Net P/L</th>
-          <th>Win %</th><th>Sharpe</th><th>Max DD</th><th>Runs</th><th>Result</th><th>Current</th><th></th>
+          <th>Win %</th><th>Sharpe</th><th>Max DD</th><th>Runs</th><th title="Whether this ONE historical run cleared your prop-firm rules -- not the same as a Full Pipeline verdict, which also weighs Monte Carlo risk of ruin, out-of-sample validation, and trade count. A strategy can show 'pass' here and still be tagged tested_failed in the Strategy Library if the fuller pipeline check catches something this single run doesn't.">Single-run pass&nbsp;&#9432;</th><th>Current</th><th></th>
         </tr>
       </thead>
       <tbody>
