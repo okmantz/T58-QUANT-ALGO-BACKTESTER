@@ -51,6 +51,23 @@ def _fast_stage_cfg(**overrides) -> SearchStageConfig:
         stage1_top_n=6, ga_population=4, ga_generations=1, ga_search_sims=30,
         stage2_top_n=3, full_mc_sims=50, walk_forward_folds=0, robustness_neighbors=0,
         workers=1, random_seed=42,
+        # FIX (2026-09-27): plateau-robust selection's cost is
+        # `plateau_finalist_pool * 2 * len(genes)` FULL extra
+        # evaluations PER Stage 1 survivor (see SearchStageConfig's own
+        # docstring on these two fields) -- completely independent of
+        # ga_population/ga_generations/ga_search_sims above, which is
+        # exactly why this file's tests silently went from this
+        # docstring's promised "few seconds" to 10-50+ seconds each
+        # without any of those small/fast knobs actually changing. This
+        # file is about Search Lab's own orchestration (stage plumbing,
+        # DB persistence, auto-relax, diversity caps, etc.), not about
+        # plateau-robust selection itself (see
+        # tests/test_plateau_robust_selection.py for that, and
+        # tests/test_batch_runner_plateau_robust.py below for proof this
+        # DOES still reach Stage 2 when turned on) -- so keep it off by
+        # default here to actually stay fast, and let an individual test
+        # opt back in via **overrides when it specifically wants it.
+        plateau_robust_selection=False,
     )
     base.update(overrides)
     return SearchStageConfig(**base)
