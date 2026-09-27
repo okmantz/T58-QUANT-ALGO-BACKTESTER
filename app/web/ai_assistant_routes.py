@@ -29,7 +29,10 @@ directly for that read.
 from __future__ import annotations
 
 import base64
+import functools
+import logging
 import time
+import traceback
 
 from flask import Blueprint, Response, jsonify, render_template, request
 
@@ -39,10 +42,51 @@ from app.ai.ollama_settings import OllamaSettings, load_settings as load_ollama_
 
 ai_assistant_bp = Blueprint("ai_assistant", __name__, url_prefix="/assistant")
 
+_logger = logging.getLogger(__name__)
+
 _CACHE_TTL_NEWS = 300      # seconds -- the calendar doesn't change second to second
 _CACHE_TTL_RANKINGS = 60   # seconds -- bounds how often we hammer the MT5/Alpaca connection
 _CACHE_TTL_STRUCTURE = 300  # seconds -- daily-bar BOS/ChoCH/Wyckoff facts don't change within a minute
 _cache: dict = {}
+
+
+def _json_safe(view):
+    """BUGFIX (Sep 2026): every route in this blueprint used to have zero
+    exception handling. Any unhandled exception anywhere in the
+    rankings/news/context/Ollama pipeline (a bad symbol, a flaky data
+    feed, a genuine bug) fell straight through to Flask's DEFAULT error
+    handler, which renders an HTML page -- not JSON. Every button on the
+    AI Assistant page does `(await fetch(...)).json()`, so an HTML
+    response there throws "Unexpected token '<' ... is not valid JSON"
+    in the browser and the button looks dead, with zero indication of
+    what actually broke ("Generate Basic Outlook" reported exactly this
+    symptom). This decorator is the one place that guarantee is now
+    enforced: ANY exception raised by a wrapped view is caught here and
+    turned into a normal 200 JSON response carrying the real error
+    message (never swallowed silently -- also logged server-side with
+    the full traceback for anything deeper than a bad symbol/timeout),
+    so a caller's existing `data.error || data.text || ...` fallback
+    handling already in ai_assistant.html's JS just works instead of the
+    fetch throwing. Apply this to EVERY route in this blueprint that can
+    touch live data, Ollama, or the strategy engine -- i.e. all of them
+    except the plain HTML page route.
+    """
+
+    @functools.wraps(view)
+    def wrapped(*args, **kwargs):
+        try:
+            return view(*args, **kwargs)
+        except Exception as exc:  # noqa: BLE001 -- deliberately broad: this is the last line of defense
+            _logger.exception("AI Assistant route %s failed", view.__name__)
+            message = f"{type(exc).__name__}: {exc}"
+            return jsonify({
+                "error": message,
+                "reply": "", "text": "", "rankings": [], "events": [],
+                "traceback": traceback.format_exc(limit=6),
+            })
+
+    return wrapped
+
 
 
 def _cached(key: str, ttl: float, compute):
@@ -106,6 +150,7 @@ def dashboard():
 
 
 @ai_assistant_bp.route("/api/news")
+@_json_safe
 def api_news():
     result = _cached("news", _CACHE_TTL_NEWS, _compute_news)
     if result.error:
@@ -126,6 +171,7 @@ def api_news():
 
 
 @ai_assistant_bp.route("/api/rankings")
+@_json_safe
 def api_rankings():
     rankings, errors = _cached("rankings", _CACHE_TTL_RANKINGS, _compute_rankings)
     return jsonify({
@@ -141,6 +187,7 @@ def api_rankings():
 
 
 @ai_assistant_bp.route("/api/snapshot/<symbol>")
+@_json_safe
 def api_snapshot(symbol: str):
     h1 = _bar_fetcher(symbol, 60, 300)
     m15 = _bar_fetcher(symbol, 15, 200)
@@ -163,6 +210,7 @@ def api_snapshot(symbol: str):
 
 
 @ai_assistant_bp.route("/api/settings", methods=["GET", "POST"])
+@_json_safe
 def api_settings():
     if request.method == "POST":
         data = request.get_json(force=True, silent=True) or {}
@@ -183,6 +231,7 @@ def api_settings():
 
 
 @ai_assistant_bp.route("/api/chat", methods=["POST"])
+@_json_safe
 def api_chat():
     data = request.get_json(force=True, silent=True) or {}
     message = (data.get("message") or "").strip()
@@ -204,6 +253,7 @@ def api_chat():
 
 
 @ai_assistant_bp.route("/api/chat/stream", methods=["POST"])
+@_json_safe
 def api_chat_stream():
     """Streaming twin of /api/chat -- same context/history handling, but
     the Ollama reply is forwarded to the browser as it's generated
@@ -236,6 +286,7 @@ def api_chat_stream():
 
 
 @ai_assistant_bp.route("/api/daily-brief")
+@_json_safe
 def api_daily_brief():
     rankings, _errors = _cached("rankings", _CACHE_TTL_RANKINGS, _compute_rankings)
     news_result = _cached("news", _CACHE_TTL_NEWS, _compute_news)
@@ -247,6 +298,7 @@ def api_daily_brief():
 
 
 @ai_assistant_bp.route("/api/trade-of-the-day")
+@_json_safe
 def api_trade_of_the_day():
     """One-button "best trade of the day for MES/MNQ/MGC" -- scans exactly
     app.ai.market_scanner.DEFAULT_UNIVERSE["micro_futures"] (not the full
@@ -267,6 +319,7 @@ def api_trade_of_the_day():
 
 
 @ai_assistant_bp.route("/api/watchlist", methods=["POST"])
+@_json_safe
 def api_watchlist():
     data = request.get_json(force=True, silent=True) or {}
     symbols = data.get("symbols") or []
@@ -279,6 +332,7 @@ def api_watchlist():
 
 
 @ai_assistant_bp.route("/api/outlook")
+@_json_safe
 def api_outlook():
     """Backs the page's "Generate Basic Outlook" button -- see
     app.ai.trading_assistant.MARKET_OUTLOOK_SYSTEM_PROMPT /
@@ -333,6 +387,7 @@ def _compute_director_directives():
 
 
 @ai_assistant_bp.route("/api/director")
+@_json_safe
 def api_director():
     """Backs the AI Director panel. Always returns the deterministic
     priority list + fallback text (every figure computed by
@@ -362,6 +417,7 @@ def api_director():
 
 
 @ai_assistant_bp.route("/api/director/stream", methods=["POST"])
+@_json_safe
 def api_director_stream():
     """Streaming twin of /api/director's Ollama narrative half -- same
     newline-delimited-JSON convention as /api/chat/stream. The browser is
@@ -388,6 +444,7 @@ def api_director_stream():
 
 
 @ai_assistant_bp.route("/api/analyze-screenshot", methods=["POST"])
+@_json_safe
 def api_analyze_screenshot():
     """Chart screenshot -> exact trading plan, or trade screenshot ->
     session-review breakdown. Expects multipart/form-data: `image` (the
@@ -422,6 +479,7 @@ def api_analyze_screenshot():
 
 
 @ai_assistant_bp.route("/api/pre-trade-check", methods=["POST"])
+@_json_safe
 def api_pre_trade_check():
     data = request.get_json(force=True, silent=True) or {}
     symbol = (data.get("symbol") or "").strip()
@@ -433,3 +491,83 @@ def api_pre_trade_check():
     client = trading_assistant.TradingAssistantClient(load_ollama_settings())
     reply, error = client.pre_trade_check(context, symbol)
     return jsonify({"reply": reply, "error": error})
+
+
+@ai_assistant_bp.route("/api/analyze-symbol")
+@_json_safe
+def api_analyze_symbol():
+    """Backs the "Analyze a Symbol" chart-picker button -- pick ANY
+    symbol (not limited to the fixed AI Assistant universe or the
+    micro_futures Trade-of-the-Day universe) and get Owen's exact T58
+    checklist plus concrete entry/stop/target price levels for it,
+    using live data + today's news, exactly the same way trade_of_the_day
+    does for its fixed three symbols. Always returns the deterministic
+    report (see app.ai.trading_assistant.build_deterministic_symbol_report
+    -- every figure computed by app.ai.t58_strategy_engine.assess, never
+    invented); Ollama's narrative is appended on top only if it's
+    enabled/reachable, same fallback posture as /api/outlook.
+    Query param: ?symbol=ES1! (case-sensitive match to however your data
+    feed names it -- same convention as every other symbol field in this
+    app)."""
+    symbol = (request.args.get("symbol") or "").strip()
+    if not symbol:
+        return jsonify({"error": "Missing 'symbol' query parameter.", "reply": "", "text": ""}), 400
+
+    h1 = _bar_fetcher(symbol, 60, 300)
+    m15 = _bar_fetcher(symbol, 15, 200)
+    if h1 is None or h1.empty or len(h1) < 60:
+        return jsonify({
+            "error": f"No usable H1 data for '{symbol}' (need at least 60 bars). Check the symbol name "
+                     f"matches your data feed/MT5 exactly, and that MT5/Alpaca is connected.",
+            "reply": "", "text": "",
+        })
+
+    news_result = _cached("news", _CACHE_TTL_NEWS, _compute_news)
+    macro_bias = market_intelligence.daily_trend_bias(symbol)
+    news_risk = news_forexfactory.news_risk_for_symbol(news_result, symbol)
+    snapshot = t58.build_market_snapshot(
+        symbol=symbol, h1_frame=h1, m15_frame=m15, macro_bias=macro_bias, news_risk=news_risk,
+    )
+    assessment = t58.assess(snapshot)
+
+    fundamental_bias = "neutral"
+    try:
+        currency_bias = news_forexfactory.recent_data_surprise_bias_by_currency(news_result)
+        fundamental_bias = market_intelligence.fundamental_bias_for_symbol(symbol, currency_bias)
+    except Exception:
+        pass  # cosmetic-only field; never let a currency-mapping miss break the whole analysis
+
+    ranking_dict = {
+        "symbol": symbol,
+        "asset_class": "custom",
+        "score": assessment.score,
+        "status": assessment.status,
+        "direction": assessment.direction,
+        "momentum_pct": round(market_scanner._momentum_pct(h1), 3),
+        "atr_normalized_move": round(market_scanner._atr_normalized_move(h1), 2),
+        "zone": snapshot.location.zone,
+        "ema_alignment": snapshot.ema.alignment,
+        "target": assessment.target,
+        "missing": assessment.missing,
+        "news_risk": snapshot.news_risk,
+        "fundamental_bias": fundamental_bias,
+        "entry_price": assessment.entry_price,
+        "stop_price": assessment.stop_price,
+        "target_price": assessment.target_price,
+    }
+
+    deterministic = trading_assistant.build_deterministic_symbol_report(ranking_dict)
+    settings = load_ollama_settings()
+    if not settings.is_usable:
+        text = deterministic + "\n\n(Ollama isn't enabled -- showing deterministic data only.)"
+        return jsonify({"text": text, "error": None, "assessment": ranking_dict})
+
+    rankings, _errors = _cached("rankings", _CACHE_TTL_RANKINGS, _compute_rankings)
+    context = trading_assistant.build_context(rankings, news_result.events, symbol_assessment=ranking_dict)
+    client = trading_assistant.TradingAssistantClient(settings)
+    reply, error = client.analyze_symbol(context, symbol)
+    if error:
+        text = deterministic + f"\n\n(Ollama narrative unavailable: {error})"
+    else:
+        text = deterministic + "\n\n--- T58 AI's read ---\n" + reply
+    return jsonify({"text": text, "error": None, "assessment": ranking_dict})

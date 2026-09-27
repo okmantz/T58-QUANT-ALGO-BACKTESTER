@@ -15702,6 +15702,20 @@ class MainWindow:
         self.aiassistant_refresh_trades_btn = self._button(mi_btn_row, "REFRESH BEST TRADES", self._ai_refresh_rankings)
         self.aiassistant_refresh_trades_btn.pack(side="left", padx=(8, 0))
 
+        # Analyze a Symbol: pick ANY symbol (not limited to the fixed
+        # Best Trades universe or the Trade-of-the-Day MES/MNQ/MGC set)
+        # and get the exact same T58 checklist + entry/stop/target -- web
+        # equivalent is analyzeSymbol() in ai_assistant.html.
+        symbol_picker_row = Frame(mi_section, bg=PANEL)
+        symbol_picker_row.pack(anchor="w", fill="x", padx=18, pady=(0, 4))
+        self.aiassistant_symbol_picker = LabeledEntry(symbol_picker_row, "Analyze a Symbol", "")
+        self.aiassistant_symbol_picker.pack(side="left", padx=(0, 8))
+        self.aiassistant_symbol_picker_btn = self._button(
+            symbol_picker_row, "ANALYZE", self._ai_analyze_symbol,
+        )
+        self.aiassistant_symbol_picker_btn.pack(side="left")
+
+
         mi_windows_row = Frame(mi_section, bg=PANEL)
         mi_windows_row.pack(fill="both", expand=True, padx=18, pady=(4, 14))
 
@@ -16166,6 +16180,72 @@ class MainWindow:
             self.aiassistant_outlook_status.config(text="", fg=TEXT_DIM)
 
         self._ai_run_async(self.aiassistant_outlook_btn, work, done)
+
+    def _ai_analyze_symbol(self):
+        """Handler for the ANALYZE button next to the Analyze a Symbol
+        entry -- desktop equivalent of api_analyze_symbol() in
+        app.web.ai_assistant_routes / analyzeSymbol() in ai_assistant.html.
+        Works for any symbol the connected data feed knows, not just the
+        fixed Best Trades / Trade-of-the-Day universes."""
+        symbol = self.aiassistant_symbol_picker.get_str().strip()
+        if not symbol:
+            messagebox.showinfo("Analyze a Symbol", "Type a symbol first (e.g. ES1!, XAUUSD, BTCUSD).")
+            return
+        self._ai_append_output("Owen", f"[Analyze Symbol: {symbol}]")
+
+        def work():
+            from app.ai import market_intelligence, market_scanner, news_forexfactory
+            from app.ai import t58_strategy_engine as t58
+            from app.ai import trading_assistant as ta_module
+
+            h1 = market_intelligence.bar_fetcher(symbol, 60, 300)
+            m15 = market_intelligence.bar_fetcher(symbol, 15, 200)
+            if h1 is None or h1.empty or len(h1) < 60:
+                raise RuntimeError(
+                    f"No usable H1 data for '{symbol}' (need at least 60 bars). Check the symbol name "
+                    f"matches your data feed/MT5 exactly, and that MT5/Alpaca is connected."
+                )
+            news_result = market_intelligence.compute_news()
+            macro_bias = market_intelligence.daily_trend_bias(symbol)
+            news_risk = news_forexfactory.news_risk_for_symbol(news_result, symbol)
+            snapshot = t58.build_market_snapshot(
+                symbol=symbol, h1_frame=h1, m15_frame=m15, macro_bias=macro_bias, news_risk=news_risk,
+            )
+            assessment = t58.assess(snapshot)
+            try:
+                currency_bias = news_forexfactory.recent_data_surprise_bias_by_currency(news_result)
+                fundamental_bias = market_intelligence.fundamental_bias_for_symbol(symbol, currency_bias)
+            except Exception:
+                fundamental_bias = "neutral"
+            ranking_dict = {
+                "symbol": symbol, "asset_class": "custom", "score": assessment.score,
+                "status": assessment.status, "direction": assessment.direction,
+                "momentum_pct": round(market_scanner._momentum_pct(h1), 3),
+                "atr_normalized_move": round(market_scanner._atr_normalized_move(h1), 2),
+                "zone": snapshot.location.zone, "ema_alignment": snapshot.ema.alignment,
+                "target": assessment.target, "missing": assessment.missing,
+                "news_risk": snapshot.news_risk, "fundamental_bias": fundamental_bias,
+                "entry_price": assessment.entry_price, "stop_price": assessment.stop_price,
+                "target_price": assessment.target_price,
+            }
+            deterministic = ta_module.build_deterministic_symbol_report(ranking_dict)
+            settings = self._build_ollama_settings("aiassistant")
+            if not settings.is_usable:
+                return deterministic + "\n\n(Ollama isn't enabled -- showing deterministic data only.)"
+            rankings, errors = market_intelligence.compute_rankings(news_result=news_result)
+            context = ta_module.build_context(
+                rankings=rankings, news_events=news_result.events, symbol_assessment=ranking_dict,
+            )
+            client = ta_module.TradingAssistantClient(settings)
+            reply, error = client.analyze_symbol(context, symbol)
+            if error:
+                return deterministic + f"\n\n(Ollama narrative unavailable: {error})"
+            return deterministic + "\n\n--- T58 AI's read ---\n" + reply
+
+        self._ai_run_async(
+            self.aiassistant_symbol_picker_btn, work,
+            lambda text: self._ai_append_output(f"T58 AI -- {symbol} Analysis", text),
+        )
 
     # -- AI Director: portfolio-level priority list across the whole
     # Strategy Library (see app.ai.ai_director, and the section built in

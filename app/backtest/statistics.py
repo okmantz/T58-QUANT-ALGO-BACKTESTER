@@ -53,7 +53,21 @@ class BacktestStatistics:
     # mechanically "buy a new account" mid-run (see RiskConfig.
     # reset_on_breach / app.backtest.execution.run_execution). 0 for any
     # backtest that never used reset_on_breach -- byte-identical default,
-    # purely additive.
+    # purely additive. Counts breach events ONLY -- see payout_count for
+    # the profit-target twin below; the two are tracked separately so a
+    # good payout is never reported as if it were a bad breach.
+
+    payout_count: int = 0
+    total_payout_amount: float = 0.0
+    # UPGRADE (2026-09-27): the profit-target twin of account_reset_count
+    # above (see RiskConfig.reset_on_target / profit_target_pct). 0/0.0
+    # for any backtest that never used reset_on_target -- byte-identical
+    # default, purely additive. payout_count is how many times the raw
+    # backtest crossed its configured profit target and had the excess
+    # withdrawn; total_payout_amount is the sum $ withdrawn across all of
+    # them. These are NOT breaches and are never folded into
+    # account_reset_count/is_reset_chain, which describe the loss side
+    # only.
 
     is_reset_chain: bool = False
     final_segment_net_profit: float = 0.0
@@ -232,8 +246,19 @@ def _trade_reset_segment_ids(trades: list[Trade], equity_df: pd.DataFrame) -> np
     equity curve (there, the reset bar's own equity has already been reset
     to initial_balance, so `>=` is correct for that series; a trade is a
     discrete event that either caused the reset or came after it, not a
-    continuously-updated row that IS the reset)."""
-    events = equity_df.attrs.get("account_reset_events") if equity_df is not None else None
+    continuously-updated row that IS the reset).
+
+    BREACH events only (kind == "breach", or no "kind" key at all for
+    backward compatibility with equity curves built before payout events
+    existed) -- unlike _reset_segment_ids above (used for drawdown, where
+    a payout SHOULD reset the peak-equity reference the same as a breach
+    does), a payout does not end the account or start a new one: it is
+    the same account, still trading, that just had some profit withdrawn.
+    Segmenting trade attribution at a payout would wrongly report only
+    the trades since the last payout as "the current account's" trades.
+    """
+    all_events = equity_df.attrs.get("account_reset_events") if equity_df is not None else None
+    events = [ev for ev in all_events if ev.get("kind", "breach") == "breach"] if all_events else None
     if not events or not trades:
         return None
     reset_ats = [ev["reset_at"] for ev in events]
@@ -479,6 +504,18 @@ def compute_statistics(
     max_daily_dd = _periodic_max_drawdown(equity_curve, "1D", seg_id)
     max_weekly_dd = _periodic_max_drawdown(equity_curve, "1W", seg_id)
     account_reset_count = int(seg_id[-1]) if seg_id is not None and len(seg_id) else 0
+    # FIX (2026-09-27): seg_id above segments on EVERY reset-type event
+    # (breach AND payout combined -- correct for drawdown, see
+    # _reset_segment_ids' own docstring) but account_reset_count must
+    # report breaches only, or a profitable run using reset_on_target
+    # would misleadingly show up as if the account had been repeatedly
+    # blown. Recount directly from the tagged event list instead of
+    # trusting the combined segment id.
+    _all_reset_events = equity_curve.attrs.get("account_reset_events") or []
+    account_reset_count = sum(1 for ev in _all_reset_events if ev.get("kind", "breach") == "breach")
+    _payout_events = equity_curve.attrs.get("payout_events") or [ev for ev in _all_reset_events if ev.get("kind") == "payout"]
+    payout_count = len(_payout_events)
+    total_payout_amount = float(sum(ev.get("payout_amount", 0.0) for ev in _payout_events))
 
     trade_seg_id = _trade_reset_segment_ids(trades, equity_curve)
     if trade_seg_id is not None and len(trade_seg_id):
@@ -542,6 +579,7 @@ def compute_statistics(
         average_r=average_r, risk_reward=risk_reward,
         sharpe_ratio=sharpe_ratio, sortino_ratio=sortino_ratio, calmar_ratio=calmar_ratio,
         total_trades=len(trades), account_reset_count=account_reset_count,
+        payout_count=payout_count, total_payout_amount=total_payout_amount,
         is_reset_chain=account_reset_count > 0,
         final_segment_net_profit=final_segment_net_profit,
         final_segment_trade_count=final_segment_trade_count,

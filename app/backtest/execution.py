@@ -182,7 +182,16 @@ def run_execution(
     clamped_loss_count = 0
     account_blown = False
     account_blown_at = None
-    reset_events: list[dict] = []  # populated only when risk.reset_on_breach is True
+    reset_events: list[dict] = []  # populated when risk.reset_on_breach and/or risk.reset_on_target is True
+    # kind="breach" entries: account crossed the loss floor. kind="payout"
+    # entries: account crossed the profit target and had the excess
+    # withdrawn (see risk.reset_on_target / risk.profit_target_pct
+    # below). Sharing one list keeps drawdown segmentation
+    # (app.backtest.statistics._reset_segment_ids) correct across BOTH
+    # kinds of "this account's equity reference point just changed"
+    # event with no separate code path; the "kind" field is what lets
+    # reporting tell a good payout apart from a bad breach.
+    payout_target_baseline = risk.initial_balance  # advances by profit_target_pct-of-initial_balance after each payout
     daily_limit_amount = (
         risk.initial_balance * (risk.daily_loss_limit_pct / 100.0)
         if risk.daily_loss_limit_pct is not None
@@ -608,6 +617,7 @@ def run_execution(
                     _settle_exit(open_trade, closes[i], "account_blown_forced_close", direction, i)
                     open_trade = None
                 reset_events.append({
+                    "kind": "breach",
                     "reset_at": breach_at,
                     "equity_before_reset": breach_equity,
                     "equity_after_forced_close": equity,
@@ -621,6 +631,38 @@ def run_execution(
             else:
                 account_blown = True
                 account_blown_at = _restore_tz(ts[i])
+
+        # --- profit-target payout (see RiskConfig.reset_on_target) ---
+        # The breach circuit breaker above handles the LOSS side of "this
+        # account's story just ended, but the run should keep going
+        # anyway" -- this is the same idea for the PROFIT side, which
+        # previously didn't exist at all: nothing in this engine ever
+        # recognized "the account hit its profit target" as an event,
+        # so a strategy that reached target simply kept accumulating
+        # equity on the same never-reset number for the rest of the
+        # dataset (this is why an equity curve could visibly go flat --
+        # or, in the mark-to-market display, just keep silently climbing
+        # -- the moment a big early winning streak was through: nothing
+        # was WRONG, there was just no concept of "bank the win and keep
+        # trading" on this side). Checked against REALIZED equity only
+        # (never the mark-to-market value computed above) so an open
+        # position's still-floating profit is never withdrawn out from
+        # under it -- only money that has actually settled through
+        # _settle_exit.
+        if (
+            risk.reset_on_target and risk.profit_target_pct and risk.profit_target_pct > 0 and not account_blown
+            and equity >= payout_target_baseline * (1 + risk.profit_target_pct / 100.0)
+        ):
+            payout_amount = equity - payout_target_baseline
+            reset_events.append({
+                "kind": "payout",
+                "reset_at": _restore_tz(ts[i]),
+                "equity_before_payout": equity,
+                "payout_amount": payout_amount,
+                "equity_after_payout": payout_target_baseline,
+            })
+            equity = payout_target_baseline
+            equity_arr[i] = equity
 
         # --- consider new entry ---
         day_realized_pnl = pnl_today_sum[bar_date]
@@ -790,19 +832,35 @@ def run_execution(
     # list when reset_on_breach is False or no reset ever fired) so callers
     # don't need to guard against a missing key.
     equity_df.attrs["account_reset_events"] = reset_events
+    equity_df.attrs["payout_events"] = [ev for ev in reset_events if ev.get("kind") == "payout"]
+    equity_df.attrs["breach_events"] = [ev for ev in reset_events if ev.get("kind", "breach") == "breach"]
 
-    if reset_events:
+    _breach_events = equity_df.attrs["breach_events"]
+    _payout_events = equity_df.attrs["payout_events"]
+    if _breach_events:
         import warnings
         warnings.warn(
-            f"{len(reset_events)} account reset(s) occurred (reset_on_breach=True): "
+            f"{len(_breach_events)} account reset(s) occurred (reset_on_breach=True): "
             "the account crossed the configured account-survivability floor "
-            f"{len(reset_events)} time(s) and was mechanically restarted at "
+            f"{len(_breach_events)} time(s) and was mechanically restarted at "
             "initial_balance each time, exactly like buying a new funded "
             "account, rather than being halted for the remainder of the run. "
             "Every trade after the first reset belongs to a DIFFERENT "
             "simulated account than the one before it -- see "
-            "equity_df.attrs['account_reset_events'] for when each reset "
+            "equity_df.attrs['breach_events'] for when each reset "
             "happened and what the account's equity was at that point.",
+            RuntimeWarning,
+        )
+    if _payout_events:
+        total_payout = sum(ev["payout_amount"] for ev in _payout_events)
+        import warnings
+        warnings.warn(
+            f"{len(_payout_events)} payout(s) taken (reset_on_target=True): the account crossed "
+            f"its configured profit target {len(_payout_events)} time(s) and had the profit above "
+            f"baseline withdrawn each time (${total_payout:,.2f} total across all payouts) rather "
+            "than left to accumulate on an ever-growing equity number -- these are NOT breaches or "
+            "losses. See equity_df.attrs['payout_events'] for when each payout happened and how much "
+            "was withdrawn.",
             RuntimeWarning,
         )
 

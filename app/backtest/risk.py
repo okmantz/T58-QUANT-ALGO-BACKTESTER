@@ -93,6 +93,33 @@ class RiskConfig:
     # active PropRules.max_drawdown_pct so the raw backtest and the prop
     # simulation agree on where the account actually dies.
     reset_on_breach: bool = False
+    # UPGRADE (2026-09-27): the profit-target twin of reset_on_breach
+    # above. Before this existed, execution.py had literally no concept
+    # of a profit target -- only a breach (loss floor) could ever end an
+    # "account" mid-run. In practice that meant a strategy that reached
+    # its eval/funded profit target just kept trading on the SAME ever-
+    # growing equity number forever, which is not how a real prop
+    # account behaves (a real account either gets its profit paid out,
+    # funded-stage, or is mechanically replaced by a fresh eval purchase
+    # once passed) -- and, worse, gave no way to see how the strategy
+    # performs across MANY such cycles the way reset_on_breach already
+    # does for the loss side. profit_target_pct/reset_on_target close
+    # that gap the same way: None/False = fully disabled, byte-identical
+    # to every backtest before this field existed.
+    profit_target_pct: float | None = None
+    # % of initial_balance in REALIZED profit (never floating/open P&L --
+    # see run_execution's payout check) that triggers a payout event once
+    # reset_on_target is True. Each payout withdraws the profit above the
+    # current baseline (equity is brought back down to that baseline,
+    # exactly like a funded account being paid out or a passed eval being
+    # "cashed in") and the SAME dollar profit_target_pct-of-initial_balance
+    # gain is required again for the next one -- so the run keeps trading
+    # and can rack up any number of payouts, rather than stalling flat the
+    # instant the target is first hit. Never forces the open position
+    # closed (a payout is not an account termination) and is completely
+    # independent of reset_on_breach -- a run can have both, either, or
+    # neither enabled.
+    reset_on_target: bool = False
     # FIX (2026-09-18): every optimization tab already offers a
     # "reset-on-breach" checkbox ("score on the basis that a blown account
     # gets a fresh eval and keeps going, not a dead end") and threads it

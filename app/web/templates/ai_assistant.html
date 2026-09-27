@@ -146,6 +146,16 @@
     </div>
 
     <div class="oai-panel oai-chat" style="grid-column: 1 / -1;">
+      <h2>Analyze a Symbol</h2>
+      <div class="chat-toolbar">
+        <input type="text" id="symbol-picker-input" placeholder="e.g. ES1!, XAUUSD, BTCUSD" style="flex:1; min-width:160px; background:var(--panel); border:1px solid var(--border-light); border-radius:8px; color:var(--text); padding:8px 10px; font-size:13px;">
+        <button class="btn" id="symbol-picker-btn" onclick="analyzeSymbol()">Analyze</button>
+        <small style="color:var(--text-dim);">Any symbol your data feed knows -- pulls live bars + today's news and runs Owen's exact T58 checklist, with an exact entry/stop/target the moment (and only when) it's genuinely READY.</small>
+      </div>
+      <div id="symbol-picker-reply" style="white-space:pre-wrap; font-size:13px; line-height:1.55; background:var(--panel-3); border:1px solid var(--border); border-radius:10px; padding:12px; display:none;"></div>
+    </div>
+
+    <div class="oai-panel oai-chat" style="grid-column: 1 / -1;">
       <h2>Screenshot Analysis</h2>
       <div class="chat-toolbar">
         <input type="file" id="shot-file" accept="image/*" style="color:var(--text-muted); font-size:12px;">
@@ -501,6 +511,30 @@ async function generateOutlook() {
   } finally {
     btn.disabled = false;
     btn.textContent = 'Generate Basic Outlook';
+  }
+}
+
+async function analyzeSymbol() {
+  const input = document.getElementById('symbol-picker-input');
+  const btn = document.getElementById('symbol-picker-btn');
+  const reply = document.getElementById('symbol-picker-reply');
+  const symbol = (input.value || '').trim();
+  reply.style.display = 'block';
+  if (!symbol) {
+    reply.textContent = 'Type a symbol first (e.g. ES1!, XAUUSD, BTCUSD).';
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = 'Analyzing...';
+  reply.textContent = `Pulling live data + news for ${symbol}...`;
+  try {
+    const data = await (await fetch('/assistant/api/analyze-symbol?symbol=' + encodeURIComponent(symbol))).json();
+    reply.textContent = data.text || data.error || 'No analysis returned.';
+  } catch (err) {
+    reply.textContent = 'Request failed: ' + err;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Analyze';
   }
 }
 

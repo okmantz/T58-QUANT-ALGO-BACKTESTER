@@ -415,7 +415,7 @@ def _jsonable(obj):
     return obj
 
 
-def build_context(rankings: list, news_events: list, watchlist_symbols: list[str] | None = None, market_structure_by_symbol: dict[str, str] | None = None) -> dict:
+def build_context(rankings: list, news_events: list, watchlist_symbols: list[str] | None = None, market_structure_by_symbol: dict[str, str] | None = None, symbol_assessment: dict | None = None) -> dict:
     """Assembles the one structured object handed to the model each turn
     -- rankings from app.ai.market_scanner, events from
     app.ai.news_forexfactory, both already-computed facts. Kept small and
@@ -440,7 +440,7 @@ def build_context(rankings: list, news_events: list, watchlist_symbols: list[str
     from app.ai import capability_reference
     from app.ai.market_scanner import ranking_to_dict
 
-    return {
+    ctx = {
         "best_markets": [ranking_to_dict(r) for r in rankings],
         "watchlist_symbols": watchlist_symbols or [],
         "market_structure": market_structure_by_symbol or {},
@@ -457,6 +457,13 @@ def build_context(rankings: list, news_events: list, watchlist_symbols: list[str
             for e in news_events[:15]
         ],
     }
+    if symbol_assessment is not None:
+        # See analyze_symbol()/api_analyze_symbol: the single-symbol
+        # "Analyze a Symbol" chart-picker result, kept separate from
+        # best_markets so a one-off arbitrary-symbol lookup never gets
+        # blended into (or mistaken for) the fixed-universe rankings.
+        ctx["symbol_assessment"] = symbol_assessment
+    return ctx
 
 
 def build_deterministic_outlook(context: dict, top_n: int = 3) -> str:
@@ -519,6 +526,49 @@ def build_deterministic_outlook(context: dict, top_n: int = 3) -> str:
             lines.append(f"  - {m.get('symbol')}: EXTENDED -- avoid chasing")
 
     return "\n".join(lines).rstrip()
+
+
+def build_deterministic_symbol_report(ranking_dict: dict) -> str:
+    """Plain-text IDEAL PERSONAL RESPONSE FORMAT report for exactly ONE
+    symbol, built with zero Ollama call -- same "always works with no
+    setup" posture as build_deterministic_outlook, used by the "Analyze a
+    Symbol" chart-picker feature (app.web.ai_assistant_routes.
+    api_analyze_symbol) both as the whole reply when Ollama is off/
+    unreachable and as the grounding facts handed to Ollama when it IS
+    reachable. `ranking_dict` is one app.ai.market_scanner.ranking_to_dict
+    output -- entry_price/stop_price/target_price are only ever non-None
+    when status == "READY" (see T58Assessment's own comment); never
+    invented here."""
+    status = ranking_dict.get("status", "WAIT")
+    direction = ranking_dict.get("direction", "none")
+    lines = [
+        f"[{ranking_dict.get('symbol')}]",
+        f"Macro/Direction: {direction}",
+        f"EMA Alignment: {ranking_dict.get('ema_alignment')}",
+        f"Location/Zone: {ranking_dict.get('zone')}",
+        f"Fundamental bias: {ranking_dict.get('fundamental_bias', 'neutral')}",
+        f"News risk: {ranking_dict.get('news_risk', 'none')}",
+        f"Score: {ranking_dict.get('score')}",
+        f"Target liquidity: {ranking_dict.get('target')}",
+    ]
+    missing = ranking_dict.get("missing") or []
+    if missing:
+        lines.append("Still missing: " + "; ".join(missing))
+    lines.append(f"Status: {status}")
+    if status == "READY":
+        lines.append(
+            f"Entry: {ranking_dict.get('entry_price')}  "
+            f"Stop: {ranking_dict.get('stop_price')}  "
+            f"Target: {ranking_dict.get('target_price')}"
+        )
+        lines.append(
+            "(These three numbers are computed directly from the app's own swing/EMA levels -- "
+            "never invented or estimated.)"
+        )
+    else:
+        lines.append("No entry/stop/target -- direction without entry conditions is not a trade (see "
+                      "\"DIRECTION != ENTRY\"). Wait for the missing item(s) above.")
+    return "\n".join(lines)
 
 
 class TradingAssistantClient:
@@ -790,6 +840,28 @@ class TradingAssistantClient:
             "When a symbol's status is READY, its entry_price/stop_price/target_price fields in the data below "
             "are the entry, stop loss and take profit to state -- quote them exactly as given (rounded sensibly "
             "for the instrument), never calculate or estimate your own price level.",
+            context, mode="personal",
+        )
+
+    def analyze_symbol(self, context: dict, symbol: str) -> tuple[str, str | None]:
+        """Backs the AI Assistant's "Analyze a Symbol" chart-picker button
+        -- Owen (or any user) types/picks ANY symbol (not limited to the
+        fixed MES/MNQ/MGC universe), and this produces the exact same
+        IDEAL PERSONAL RESPONSE FORMAT trade_of_the_day() uses, scoped to
+        that one symbol. `context["symbol_assessment"]` (see
+        app.web.ai_assistant_routes.api_analyze_symbol) carries the single
+        ranking dict for `symbol` -- its entry_price/stop_price/
+        target_price are the ONLY numbers to quote, exactly as given,
+        exactly like trade_of_the_day; Ollama must never calculate or
+        estimate a price level of its own, and must not report READY
+        unless that dict's own status says READY."""
+        return self.ask(
+            f"Analyze {symbol} right now against my exact strategy using the IDEAL PERSONAL RESPONSE "
+            f"FORMAT. Use symbol_assessment in the data below -- it is the ONLY source for this symbol's "
+            f"status/direction/entry/stop/target; do not blend in any other symbol from best_markets. If "
+            f"symbol_assessment's status is READY, quote its entry_price/stop_price/target_price exactly "
+            f"as given (rounded sensibly for the instrument) -- never calculate or estimate your own price "
+            f"level. If it is anything other than READY, say so plainly and state exactly what's missing.",
             context, mode="personal",
         )
 
