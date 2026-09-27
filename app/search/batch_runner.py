@@ -315,6 +315,31 @@ class SearchStageConfig:
     # disables the cap -- exactly today's behavior, unchanged.
     max_per_family_stage1: int | None = None
 
+    # FIX (2026-09-27, "CI/Search Lab suddenly takes forever"): _stage2_task
+    # builds a RefinementConfig for every Stage 1 survivor but never passed
+    # these two through, so every Stage 2 refinement silently ran with
+    # RefinementConfig's own defaults (plateau_robust_selection=True,
+    # plateau_finalist_pool=5) NO MATTER what ga_population/ga_generations/
+    # ga_search_sims this config was tuned to. Plateau-robust selection's
+    # cost is `plateau_finalist_pool * 2 * len(genes)` FULL extra
+    # evaluations on top of the population/generations search itself (see
+    # app.optimize.refinement._select_plateau_robust) -- for a strategy
+    # with a handful of tunable genes that's dozens of extra full
+    # backtest+Monte-Carlo evaluations per Stage 1 survivor, regardless of
+    # how cheap the caller tried to make the actual GA. This is exactly
+    # why a Search Lab config deliberately scaled down for a fast run (or
+    # this file's own small/fast test fixtures) still took 10-50x longer
+    # than its population/generations/sims would suggest, and why CI's
+    # test suite -- which runs several such small Search Lab runs end to
+    # end -- started intermittently blowing well past its 30-minute test
+    # timeout. Defaults here match RefinementConfig's own defaults exactly
+    # (byte-identical behavior for anyone not explicitly overriding these),
+    # but now a caller that wants a genuinely fast/cheap run (this file's
+    # own tests included) has an actual knob to turn it down instead of
+    # silently paying full plateau-robustness cost every single time.
+    plateau_robust_selection: bool = True
+    plateau_finalist_pool: int = 5
+
     def __post_init__(self):
         self.min_trades = max(int(self.min_trades), 1)
         self.min_profit_factor = max(float(self.min_profit_factor), 0.0)
@@ -555,6 +580,8 @@ def _stage2_task(
         cost_stress_multiplier=refine_kwargs.get("cost_stress_multiplier", 2.0),
         cost_stress_penalty_weight=refine_kwargs.get("cost_stress_penalty_weight", 0.35),
         optimizer_mode=refine_kwargs.get("optimizer_mode", "genetic"),
+        plateau_robust_selection=refine_kwargs.get("plateau_robust_selection", True),
+        plateau_finalist_pool=refine_kwargs.get("plateau_finalist_pool", 5),
     )
     try:
         result = run_iterative_refinement(df, strategy, risk, prop_rules, mc_cfg, refine_cfg, progress_cb=None)
@@ -1232,6 +1259,8 @@ def run_search(
                 "cost_stress_penalty_weight": stage_cfg.cost_stress_penalty_weight,
                 "reset_on_breach": stage_cfg.reset_on_breach,
                 "optimizer_mode": stage_cfg.optimizer_mode,
+                "plateau_robust_selection": stage_cfg.plateau_robust_selection,
+                "plateau_finalist_pool": stage_cfg.plateau_finalist_pool,
             }
             futures = {
                 pool_box[0].submit(
