@@ -22,19 +22,24 @@ jobs:
   # PyInstaller. Windows runners are dramatically slower than Linux for
   # this kind of numpy/pandas-heavy workload (no manylinux wheels to
   # reuse as-is, slower filesystem/process-spawn overhead for a suite
-  # this size), so a suite that runs in a few minutes on Linux (see
-  # build.yml, which already gates every push this same way) could take
-  # well over an hour here -- and because the exe build itself couldn't
-  # even START until that finished, the whole workflow sat "in progress"
-  # the entire time with no visible sign of whether it was working or
-  # stuck. Splitting the test gate into its OWN fast ubuntu-latest job
-  # that the Windows build job depends on (needs:) keeps exactly the
-  # same protection (a red test suite still blocks the release exe --
-  # see the windows job's own comment) while removing the slow-OS
-  # re-run entirely from the critical path.
+  # this size), so a suite that takes 25-30+ minutes on Linux (see
+  # build.yml, which already gates every push this same way -- and see
+  # that workflow's own timeout-minutes comment for how that runtime has
+  # grown as the suite grew) could take well over an hour here -- and
+  # because the exe build itself couldn't even START until that finished,
+  # the whole workflow sat "in progress" the entire time with no visible
+  # sign of whether it was working or stuck. Splitting the test gate into
+  # its OWN fast ubuntu-latest job that the Windows build job depends on
+  # (needs:) keeps exactly the same protection (a red test suite still
+  # blocks the release exe -- see the windows job's own comment) while
+  # removing the slow-OS re-run entirely from the critical path.
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # See build.yml's matching timeout-minutes comment: 30 was too tight
+    # once the suite grew past ~2000 tests and started getting killed by
+    # the timeout itself (shown as "cancelled") rather than by a real
+    # failure. 60 gives real headroom.
+    timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

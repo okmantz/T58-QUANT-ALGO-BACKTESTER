@@ -23,10 +23,19 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    # A real hang here should fail loudly within half an hour, not run
-    # for hours (GitHub's own default job timeout is 360 minutes --
-    # indistinguishable from "stuck" to anyone watching the Actions tab).
-    timeout-minutes: 30
+    # A real hang here should fail loudly, not run for hours (GitHub's own
+    # default job timeout is 360 minutes -- indistinguishable from "stuck"
+    # to anyone watching the Actions tab). This was originally set to 30,
+    # but the suite has since grown (2000+ tests across all the family/
+    # indicator expansion rounds, plus inherently slow background-job/
+    # loop-mode tests -- Search Lab, Evolution Lab multi-instrument, Speed
+    # Run, Forge, Overnight Autopilot) to the point where a normal, healthy
+    # run now legitimately takes 25-30+ minutes on GitHub's hosted runners.
+    # That left runs getting killed by the timeout itself (shown as
+    # "cancelled", not "failure") rather than by any real problem --
+    # 60 gives real headroom above the suite's actual current runtime
+    # while still catching a genuine multi-hour hang.
+    timeout-minutes: 60
     strategy:
       matrix:
         python-version: ["3.10", "3.11"]
