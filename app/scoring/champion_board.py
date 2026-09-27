@@ -39,9 +39,27 @@ from typing import Any, Optional
 
 from app.strategy.library import (
     STRATEGY_TYPES,
+    VALIDATION_STEP_METHODS,
     list_saved_strategies,
     save_strategy_metadata,
 )
+
+# Human-readable names for VALIDATION_STEP_METHODS -- cross-reference
+# app.reports.strategy_state.VALIDATION_LABELS, which names the same 5
+# tools for the Validate hub's own checklist. Kept as a separate literal
+# (not imported) for the same reason app.strategy.library.
+# VALIDATION_STEP_METHODS is a separate literal there: this module already
+# depends on app.strategy.library at import time, and app.reports.
+# strategy_state is a different subsystem this module has never needed to
+# import before -- if a 6th method is ever added, update all three
+# spots (here, library.py, strategy_state.py) together.
+_VALIDATION_METHOD_LABELS: dict[str, str] = {
+    "cpcv": "CPCV",
+    "wfo": "Walk-Forward Opt",
+    "wfga": "Walk-Forward GA",
+    "sensitivity": "Sensitivity",
+    "regime_matrix": "Regime Survival Matrix",
+}
 
 # ---------------------------------------------------------------------------
 # Promotion stages
@@ -207,16 +225,36 @@ def _requirements_for_next_stage(metadata: dict[str, Any], current_stage: str) -
     verdict = str(last_champion_check.get("verdict") or last_run.get("verdict") or "").upper()
 
     if current_stage == "candidate":
+        # UPGRADE (2026-09, "5 validation steps" progress fix): this used
+        # to be a single "validated_run" requirement satisfied by bool(
+        # last_validation) -- true the instant ANY ONE of the 5 deeper-
+        # validation tools ran, since last_validation is always just the
+        # most recent call's result (see library.record_validation_result).
+        # That meant running CPCV alone already satisfied this whole
+        # requirement, and running Sensitivity or Walk-Forward Opt
+        # afterward changed nothing here -- exactly Owen's report of the
+        # Dashboard percentage sitting flat at 37.5% after real validation
+        # work. Now each of the 5 VALIDATION_STEP_METHODS is its own named
+        # requirement, checked against the accumulating
+        # "validation_methods_run" record -- so met_frac (and therefore
+        # stage_pct, see PromotionState.to_dict above) moves after EACH
+        # test, and the unmet list names exactly which of the 5 are still
+        # outstanding instead of one vague "run a deeper check" line.
+        validation_methods_run = metadata.get("validation_methods_run") or {}
+        method_requirements = [
+            PromotionRequirement(
+                f"validated_{method}", f"{_VALIDATION_METHOD_LABELS[method]} has been run",
+                method in validation_methods_run,
+                "" if method in validation_methods_run else "Not yet run -- open the Validate hub to run it.",
+            )
+            for method in VALIDATION_STEP_METHODS
+        ]
         return [
             PromotionRequirement(
                 "backtested", "Has at least one recorded backtest",
                 bool(last_run), "Run this strategy through Run & Report or Full Pipeline first." if not last_run else "",
             ),
-            PromotionRequirement(
-                "validated_run", "A deeper validation check has been run (CPCV / PBO / Walk-Forward)",
-                bool(last_validation),
-                "" if last_validation else "Run CPCV or Walk-Forward Opt against this strategy.",
-            ),
+            *method_requirements,
             PromotionRequirement(
                 "lookahead_clean", "No confirmed lookahead-bias leak",
                 lookahead.get("clean") is not False,
@@ -478,13 +516,25 @@ def _diagnose_why(row: dict[str, Any]) -> str:
 # /champion/promote) still handles the fully-met case.
 _REQUIREMENT_HREF: dict[str, str] = {
     "backtested": "/",                 # Run & Report
-    "validated_run": "/cpcv",
+    # FIX (2026-09): every "validated_<method>" requirement (one per
+    # VALIDATION_STEP_METHODS -- see _requirements_for_next_stage's
+    # "candidate" branch above) points at "/validate", the actual Validate
+    # hub that lists and links all 5 tools with a live pass/pending
+    # checklist -- not straight at one specific tool (the old single
+    # "validated_run": "/cpcv" silently hid the other 4 from the person).
+    **{f"validated_{m}": "/validate" for m in VALIDATION_STEP_METHODS},
     "lookahead_clean": "/library",      # fix/replace the flagged code, not a tool run
     "eval_threshold": "/quick-optimize",
     "payout_threshold": "/quick-optimize",
     "oos_threshold": "/cpcv",
-    "not_rejected": "/",                # re-run Full Pipeline for a fresh Champion Check
-    "champion_check_ready": "/",
+    # FIX (2026-09): "not_rejected"/"champion_check_ready" used to point at
+    # "/" (Run & Report), which never produces a Champion Check verdict at
+    # all -- record_champion_check_result is only ever called from Full
+    # Pipeline's own final verdict step (app.orchestration.full_pipeline).
+    # "/full-pipeline" is where "move on to the champion checks" actually
+    # leads.
+    "not_rejected": "/full-pipeline",
+    "champion_check_ready": "/full-pipeline",
     "min_duration": "/forward-test",
 }
 
