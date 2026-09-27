@@ -38,6 +38,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable, Optional
 
 import numpy as np
 import pandas as pd
@@ -49,7 +50,7 @@ from app.prop.simulator import PropRules
 from app.strategy.base import Strategy
 from app.validation.sensitivity import (
     Sensitivity1DResult, Sensitivity2DResult, compute_1d_sensitivity, compute_2d_heatmap,
-    list_tunable_parameters,
+    compute_base_metric, list_tunable_parameters,
 )
 
 # eval_pass_probability (and first_payout_probability) are already
@@ -190,6 +191,7 @@ def compute_parameter_robustness(
     cliff_threshold_pct: float = 40.0,
     n_heatmap_pairs: int = 1,
     tmp_dir: Path | None = None,
+    progress_cb: Optional[Callable[[str], None]] = None,
 ) -> ParameterRobustnessResult:
     """
     Runs a 1D sensitivity sweep on every tunable parameter (up to
@@ -204,6 +206,24 @@ def compute_parameter_robustness(
     value" -- pass a different metric (e.g. a raw profit_factor) together
     with a threshold on THAT metric's own scale if that's the more
     relevant lens for a given strategy.
+
+    PERFORMANCE (2026-09, "buffering indefinitely" fix): at default
+    settings this is up to 6 parameters x 9 steps (1D) + 7x7 (2D) = ~103
+    full backtest+Monte-Carlo evaluations. Before this fix, every one of
+    those ran strictly one at a time with zero progress feedback, PLUS
+    the "current, unperturbed value" baseline was silently recomputed
+    from scratch 7 extra times (once per parameter, once per heatmap
+    pair) even though it's the exact same number every time -- on a
+    multi-year 1-minute dataset this could genuinely run for a very long
+    time while looking, from the UI, indistinguishable from a hang. Now:
+    the baseline is computed exactly ONCE (compute_base_metric) and
+    reused everywhere; the independent evaluations within each sweep/
+    heatmap run on a bounded thread pool (see
+    app.validation.sensitivity._executor_for) instead of one at a time;
+    and progress_cb (wired through to both compute_1d_sensitivity and
+    compute_2d_heatmap) reports real status as each parameter/row
+    finishes, so a job page has something to show throughout instead of
+    going silent for the whole run.
     """
     genes_available = list_tunable_parameters(strategy, tmp_dir)
     if not genes_available:
@@ -211,10 +231,13 @@ def compute_parameter_robustness(
             "This strategy has no tunable numeric parameters to score for robustness."
         )
 
+    base_metric = compute_base_metric(df, strategy, risk, prop_rules, mc_config, metric=metric, tmp_dir=tmp_dir)
+
     per_param = compute_1d_sensitivity(
         df, strategy, risk, prop_rules, mc_config, metric=metric,
         pct_range=pct_range, n_steps=n_steps_1d, max_params=max_params,
         cliff_threshold_pct=cliff_threshold_pct, tmp_dir=tmp_dir,
+        progress_cb=progress_cb, base_metric=base_metric,
     )
 
     per_param_scores: list[float] = []
@@ -243,6 +266,7 @@ def compute_parameter_robustness(
             df, strategy, risk, prop_rules, mc_config,
             gene_label_a=a_label, gene_label_b=b_label, metric=metric,
             pct_range=pct_range, n_steps=n_steps_2d, tmp_dir=tmp_dir,
+            progress_cb=progress_cb, base_metric=base_metric,
         )
         pair_heatmaps.append(_summarize_pair(heatmap, pass_threshold_pct))
 
