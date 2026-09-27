@@ -49,6 +49,23 @@ jobs:
           python -c "import pandas, numpy, flask, alpaca, keyring, qrcode, requests, pyarrow, py7zr, pypdf, scipy, sklearn, lightgbm; print('All critical dependencies import OK')"
           if ($LASTEXITCODE -ne 0) { throw "One or more required Python packages failed to import after installation -- building would produce a broken .exe. Check config/requirements.txt." }
 
+      - name: Run test suite
+        shell: pwsh
+        run: |
+          # GATE (2026-09): this build produces the actual downloadable
+          # .exe attached to GitHub Releases -- before this step existed,
+          # a failing test suite never blocked it (only the separate,
+          # non-release build.yml ran pytest at all), so a broken commit
+          # could still ship a broken build to a paying customer while
+          # build.yml sat red on the very same commit. Same
+          # fail-fast-on-$LASTEXITCODE discipline as every other step in
+          # this workflow -- a red test suite must stop the build here,
+          # before PyInstaller ever runs.
+          pip install pytest
+          if ($LASTEXITCODE -ne 0) { throw "pip install pytest failed (exit $LASTEXITCODE)" }
+          pytest -q tests
+          if ($LASTEXITCODE -ne 0) { throw "Test suite failed (exit $LASTEXITCODE) -- refusing to build a release .exe from a red test suite. Fix the failing test(s) or, if truly unrelated to this build, investigate before re-running." }
+
       - name: Verify repository structure
         shell: pwsh
         run: |
