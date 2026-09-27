@@ -68,6 +68,16 @@ from app.data.storage import get_app_base_dir
 # scope limit) failed every time.
 STRATEGY_TYPES = ("python", "pinescript", "mql5", "manual")
 
+# The 5 deeper-validation methods the "Validate" stage actually tracks --
+# CONCEPTUALLY the same 5 tests as app.reports.strategy_state.VALIDATION_KINDS
+# (the Validate hub's own checklist: /validate), kept as a separate constant
+# here (not imported) so this module -- which the Champion Board and every
+# job route already depend on -- never has to import app.reports at module
+# load time. If a 6th validation method is ever added to the hub, add it
+# here too so the Dashboard's promotion percentage and the hub's X/5
+# checklist keep agreeing on what "done" means.
+VALIDATION_STEP_METHODS = ("cpcv", "wfo", "wfga", "sensitivity", "regime_matrix")
+
 _EXTENSIONS = {
     "python": ".py",
     "pinescript": ".pine",
@@ -812,8 +822,35 @@ def record_validation_result(strategy_type: str, filename: str, result: dict[str
         })
 
     Checked by compute_pipeline_progress below to mark the "Validate"
-    stage complete."""
-    return save_strategy_metadata(strategy_type, filename, {"last_validation": result}, merge=True)
+    stage complete.
+
+    UPGRADE (2026-09, "5 validation steps" progress fix): a strategy
+    typically gets run through SEVERAL of the 5 VALIDATION_STEP_METHODS
+    (CPCV, WFO, WFGA, Sensitivity, Regime Survival Matrix) one after
+    another -- but "last_validation" is, by design, only ever the MOST
+    RECENT call's result. Before this fix, that meant running CPCV then
+    Sensitivity then WFO left no record anywhere that CPCV or Sensitivity
+    had ever run at all, so anything gating on "how much validation work
+    has actually been done" (see champion_board's per-method promotion
+    requirements) saw only whichever one method happened to run last --
+    the Dashboard's progress percentage could sit motionless across
+    several real test runs, or even flicker, depending purely on call
+    order. This now ALSO accumulates into "validation_methods_run" -- a
+    dict of every distinct method (keyed by result["method"]) that has
+    EVER been recorded for this strategy, merged in (never erased by a
+    later call for a DIFFERENT method) -- so running more of the 5 tests
+    always visibly moves the needle, in any order, regardless of which
+    one ran most recently.
+    """
+    existing = load_strategy_metadata(strategy_type, filename)
+    methods_run = dict(existing.get("validation_methods_run") or {})
+    method = result.get("method")
+    if method:
+        methods_run[method] = {**result, "recorded_at": time.time()}
+    return save_strategy_metadata(strategy_type, filename, {
+        "last_validation": result,
+        "validation_methods_run": methods_run,
+    }, merge=True)
 
 
 def record_champion_check_result(strategy_type: str, filename: str, result: dict[str, Any]) -> Path:
@@ -904,8 +941,22 @@ PIPELINE_STAGE_TITLES: dict[str, str] = {
 PIPELINE_STAGE_NEXT_HREF: dict[str, str] = {
     "test": "/",                      # Run & Report (Full Pipeline also completes this stage)
     "optimize": "/quick-optimize",
-    "validate": "/cpcv",
-    "champion_check": "/family-diversity",
+    # FIX (2026-09): this used to point straight at "/cpcv" -- clicking
+    # the dashboard's "Validate" next-step button jumped directly into
+    # ONE of the 5 deeper-validation tools (CPCV) with no indication that
+    # 4 more (WFO, WFGA, Sensitivity, Regime Survival Matrix) exist or
+    # matter. "/validate" is the actual Validate hub (validate_hub.html)
+    # that already lists and links all 5 with a live pass/pending
+    # checklist -- pointing here instead is what actually shows "which 5
+    # steps I had to complete."
+    "validate": "/validate",
+    # FIX (2026-09): this pointed at "/family-diversity", which has
+    # nothing to do with producing a Champion Check verdict --
+    # record_champion_check_result is only ever called from Full
+    # Pipeline's own final verdict step (see app.orchestration.
+    # full_pipeline), so that's the actual next stop for "run the
+    # Champion Check."
+    "champion_check": "/full-pipeline",
     "forward_test": "/forward-test",
     "deploy": "/deploy-live",
 }
@@ -919,8 +970,10 @@ def compute_pipeline_progress(metadata: dict[str, Any]) -> dict[str, Any]:
             "stages": [{"key", "title", "done"}, ...],   # in stage order
             "current_stage": "optimize",                  # furthest stage reached
             "next_stage": "validate",                     # first not-yet-done stage, or None if Deploy is done
-            "next_href": "/cpcv",                          # where the dashboard's next-step button should point
+            "next_href": "/validate",                      # where the dashboard's next-step button should point
             "progress_pct": 33.3,                          # % of the 6 non-"create" stages completed
+            "validation_methods_done": 2,                  # how many of the 5 deeper-validation tests have run
+            "validation_methods_total": 5,
             "verdict": "NOT READY" | "MARGINAL" | "READY" | None,
         }
 
@@ -930,13 +983,30 @@ def compute_pipeline_progress(metadata: dict[str, Any]) -> dict[str, Any]:
     last_optimize = metadata.get("last_optimize") or {}
     last_search = metadata.get("last_search") or {}
     last_validation = metadata.get("last_validation") or {}
+    validation_methods_run = metadata.get("validation_methods_run") or {}
     last_champion_check = metadata.get("last_champion_check") or {}
     last_forward_test = metadata.get("last_forward_test") or {}
     last_deploy = metadata.get("last_deploy") or {}
 
     tested = bool(last_run)
     optimized = bool(last_optimize) or bool(last_search)
-    validated = bool(last_validation)
+    validation_methods_done = sum(1 for m in VALIDATION_STEP_METHODS if m in validation_methods_run)
+    validation_methods_total = len(VALIDATION_STEP_METHODS)
+    # UPGRADE (2026-09, "5 validation steps" progress fix): this used to be
+    # bool(last_validation) -- and last_validation is always just the MOST
+    # RECENT validation call's result (see record_validation_result above),
+    # so the very first of the 5 deeper-validation tools to run (e.g. CPCV)
+    # silently marked this entire stage complete. Owen's own report: CPCV
+    # took the dashboard to 37.5%, then running Sensitivity and Walk-
+    # Forward Opt afterward left it at exactly 37.5% -- because as far as
+    # this function was concerned "validate" was already 100% done and had
+    # nowhere further to go. Now the stage isn't done until ALL 5 tracked
+    # methods (VALIDATION_STEP_METHODS) have actually run, matching the
+    # checklist the Validate hub (/validate) already shows -- so running
+    # each additional one keeps moving both the checkmark and progress_pct
+    # (see the partial-credit blend below) instead of flat-lining after
+    # the first.
+    validated = validation_methods_done >= validation_methods_total and bool(last_validation)
     champion_checked = bool(last_champion_check)
     forward_tested = bool(last_forward_test)
     deployed = bool(last_deploy)
@@ -964,7 +1034,19 @@ def compute_pipeline_progress(metadata: dict[str, Any]) -> dict[str, Any]:
 
     next_stage = next((s["key"] for s in stages if not s["done"]), None)
     non_create = stages[1:]
-    progress_pct = round(100.0 * sum(1 for s in non_create if s["done"]) / len(non_create), 1)
+    # PARTIAL-CREDIT: every other stage is still a plain 0-or-1 (it either
+    # ran or it didn't), but "validate" now contributes its own fraction
+    # of the 5 tracked methods completed so far -- so progress_pct visibly
+    # ticks up after EACH of the 5 validation tests, not just once the
+    # whole stage flips from not-done to done. Mirrors the same
+    # partial-credit pattern app.scoring.champion_board.PromotionState
+    # already uses for its own stage_pct.
+    validate_credit = (
+        1.0 if validated
+        else (validation_methods_done / validation_methods_total if validation_methods_total else 0.0)
+    )
+    full_credit = sum(1 for s in non_create if s["done"] and s["key"] != "validate")
+    progress_pct = round(100.0 * (full_credit + validate_credit) / len(non_create), 1)
 
     return {
         "stages": stages,
@@ -972,6 +1054,8 @@ def compute_pipeline_progress(metadata: dict[str, Any]) -> dict[str, Any]:
         "next_stage": next_stage,
         "next_href": PIPELINE_STAGE_NEXT_HREF.get(next_stage) if next_stage else None,
         "progress_pct": progress_pct,
+        "validation_methods_done": validation_methods_done,
+        "validation_methods_total": validation_methods_total,
         "verdict": verdict,
     }
 
