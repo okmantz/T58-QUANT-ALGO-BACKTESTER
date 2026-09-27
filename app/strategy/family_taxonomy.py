@@ -172,6 +172,12 @@ _SKELETON_TO_GROUP: dict[str, str] = {
     "intermarket_correlation_trend": "relative_strength",
     "carry_rollover_trend": "trend_following",
     "multi_day_swing_trend_continuation": "trend_following",
+    # -- Expansion round 9 (Sep 2026): IB-contraction opening-range breakout,
+    # generalizing the reconstructed RoboQuant-style "IVB" strategy. This is
+    # a volatility-STATE hypothesis (narrow-IB-before-expansion), the same
+    # class as volatility_contraction_squeeze/keltner_squeeze_breakout/
+    # ttm_squeeze_momentum_breakout above -- not a plain "breakout" family.
+    "ib_contraction_breakout": "volatility_contraction",
 }
 
 # Path 2a: app.strategy.dna active_tags() -> canonical group. Checked in
