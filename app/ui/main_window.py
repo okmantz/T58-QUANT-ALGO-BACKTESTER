@@ -12520,6 +12520,7 @@ class MainWindow:
             sweeps = compute_1d_sensitivity(
                 df, strategy, risk, rules, mc_cfg, metric=metric,
                 pct_range=self.sens_pct_range.get_float(0.5), n_steps=self.sens_steps.get_int(9),
+                progress_cb=self._log_sens,
             )
             for r in sweeps:
                 flag = " <-- CLIFF" if r.cliff_detected else ""
@@ -12529,7 +12530,7 @@ class MainWindow:
             a_label, b_label = self.sens_heatmap_a.get_str().strip(), self.sens_heatmap_b.get_str().strip()
             if a_label and b_label:
                 self._log_sens(f"Running 2D heatmap for {a_label} x {b_label}...")
-                heatmap = compute_2d_heatmap(df, strategy, risk, rules, mc_cfg, a_label, b_label, metric=metric)
+                heatmap = compute_2d_heatmap(df, strategy, risk, rules, mc_cfg, a_label, b_label, metric=metric, progress_cb=self._log_sens)
 
             paths = generate_sensitivity_report(OUTPUT_DIR / "sensitivity", sweeps, heatmap)
             self._last_sens_html_path = paths["html"]
@@ -12680,6 +12681,7 @@ class MainWindow:
                 n_steps_1d=self.pr_n_steps_1d.get_int(9),
                 n_steps_2d=self.pr_n_steps_2d.get_int(7),
                 n_heatmap_pairs=self.pr_n_heatmap_pairs.get_int(1),
+                progress_cb=self._log_pr,
             )
 
             verdict, color_name = self._pr_verdict_for(result.parameter_robustness_score)
