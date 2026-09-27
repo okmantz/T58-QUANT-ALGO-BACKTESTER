@@ -3053,17 +3053,6 @@ def api_live_market_trades():
 # a single-user local/LAN tool (same trust model as the rest of this server).
 # ---------------------------------------------------------------------------
 
-_SEARCH_JOBS: dict[str, dict] = {}
-_SEARCH_JOBS_LOCK = threading.Lock()
-
-
-def _job_log(job_id: str, msg: str) -> None:
-    with _SEARCH_JOBS_LOCK:
-        job = _SEARCH_JOBS.get(job_id)
-        if job is not None:
-            job["log"].append(msg)
-
-
 def _run_search_job(
     job_id: str, df, risk: RiskConfig, rules: PropRules, space, stage_cfg: SearchStageConfig,
     instrument: str, db_path: str, library_ref: tuple[str, str] | None = None,
@@ -3073,7 +3062,7 @@ def _run_search_job(
         summary = run_search(
             df, risk, rules, space, stage_cfg, db_path=db_path,
             instrument=instrument, timeframe=infer_timeframe_label(df),
-            progress_cb=lambda msg: _job_log(job_id, msg),
+            progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
             cancel_event=cancel_event,
         )
         report_paths = generate_search_report(
@@ -3090,30 +3079,19 @@ def _run_search_job(
                 })
             except (FileNotFoundError, ValueError):
                 pass  # base strategy was renamed/deleted mid-search -- don't fail the job over it
-        with _SEARCH_JOBS_LOCK:
-            job = _SEARCH_JOBS[job_id]
-            job["done"] = True
-            job["summary"] = summary
-            job["db_path"] = db_path
-            job["df"] = df
-            job["risk"] = risk
-            job["rules"] = rules
-            job["report_html"] = f"/search_reports/{report_paths['html'].name}"
-            job["report_json"] = f"/search_reports/{report_paths['json'].name}"
+        JOB_MANAGER.finish(
+            job_id, summary=summary, db_path=db_path, df=df, risk=risk, rules=rules,
+            report_html=f"/search_reports/{report_paths['html'].name}",
+            report_json=f"/search_reports/{report_paths['json'].name}",
+        )
     except SearchCancelled:
         # A deliberate STOP, not a crash -- surface it as a clean "stopped"
         # state on the job status page instead of the red error banner.
-        with _SEARCH_JOBS_LOCK:
-            job = _SEARCH_JOBS[job_id]
-            job["done"] = True
-            job["cancelled"] = True
-            job["log"].append("Search Lab run stopped by user.")
+        JOB_MANAGER.log(job_id, "Search Lab run stopped by user.")
+        JOB_MANAGER.finish(job_id, cancelled=True)
     except Exception as exc:  # noqa: BLE001 -- a search job must fail visibly on the status page, not crash a thread silently
         log_crash("Search Lab (web)", exc=exc)
-        with _SEARCH_JOBS_LOCK:
-            job = _SEARCH_JOBS[job_id]
-            job["done"] = True
-            job["error"] = str(exc)
+        JOB_MANAGER.fail(job_id, str(exc))
     finally:
         HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
 
@@ -3126,7 +3104,7 @@ def _run_search_loop_job(
     """Search Lab's "Loop Mode" job -- the same background-job/poll-for-
     status shape as _run_search_job above, but driving
     app.orchestration.loop_runner.run_search_loop (repeated rounds) instead
-    of a single run_search() call. Reuses the SAME _SEARCH_JOBS dict/status
+    of a single run_search() call. Reuses the SAME JOB_MANAGER entry/status
     page/stop button as a normal Search Lab job so the UI doesn't need a
     second job-tracking system -- job["loop_result"] and job["loop_rounds"]
     are the loop-specific additions; job["summary"] is kept updated with
@@ -3135,13 +3113,14 @@ def _run_search_loop_job(
     is still running across many rounds, not just once it fully finishes.
     """
     def on_round(round_result) -> None:
-        with _SEARCH_JOBS_LOCK:
-            job = _SEARCH_JOBS.get(job_id)
-            if job is None:
-                return
-            job["summary"] = round_result.summary
-            job["loop_rounds"] = job.get("loop_rounds", 0) + 1
-            job["loop_last_round"] = {
+        job = JOB_MANAGER.get(job_id)
+        if job is None:
+            return
+        JOB_MANAGER.update(
+            job_id,
+            summary=round_result.summary,
+            loop_rounds=job.get("loop_rounds", 0) + 1,
+            loop_last_round={
                 "round_index": round_result.round_index,
                 "family": round_result.family or "all",
                 "max_candidates": round_result.max_candidates,
@@ -3149,13 +3128,14 @@ def _run_search_loop_job(
                 "best_value": round_result.best_value,
                 "best_candidate_id": round_result.best_candidate_id,
                 "widened_after_this_round": round_result.widened_after_this_round,
-            }
+            },
+        )
 
     try:
         result = run_search_loop(
             df, risk, rules, stage_cfg, db_dir=loop_dir, loop_cfg=loop_cfg,
             instrument=instrument, timeframe=infer_timeframe_label(df),
-            progress_cb=lambda msg: _job_log(job_id, msg),
+            progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
             cancel_event=cancel_event, on_round=on_round,
             # Scoped to this instrument's own search directory (same one
             # Search Lab's own runs and this loop's own past rounds write
@@ -3165,27 +3145,22 @@ def _run_search_loop_job(
             # effect) keeps tests that redirect SEARCH_DIR fully hermetic.
             family_health_search_dir=family_health_dir, family_health_evolution_dir=family_health_dir,
         )
-        with _SEARCH_JOBS_LOCK:
-            job = _SEARCH_JOBS[job_id]
-            job["done"] = True
-            job["loop_result"] = result
-            job["db_path"] = (
+        extra = {
+            "loop_result": result,
+            "db_path": (
                 result.winner_round.summary.db_path if result.winner_round else
                 (result.rounds[-1].summary.db_path if result.rounds else None)
-            )
-            job["df"] = df
-            job["risk"] = risk
-            job["rules"] = rules
-            if result.stopped_reason == "cancelled":
-                job["cancelled"] = True
-            elif result.stopped_reason == "error":
-                job["error"] = result.error
+            ),
+            "df": df, "risk": risk, "rules": rules,
+        }
+        if result.stopped_reason == "cancelled":
+            extra["cancelled"] = True
+        elif result.stopped_reason == "error":
+            extra["error"] = result.error
+        JOB_MANAGER.finish(job_id, **extra)
     except Exception as exc:  # noqa: BLE001 -- a loop job must fail visibly on the status page, not crash a thread silently
         log_crash("Search Lab Loop Mode (web)", exc=exc)
-        with _SEARCH_JOBS_LOCK:
-            job = _SEARCH_JOBS[job_id]
-            job["done"] = True
-            job["error"] = str(exc)
+        JOB_MANAGER.fail(job_id, str(exc))
     finally:
         HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
 
@@ -6157,45 +6132,22 @@ def parameter_robustness_job_status(job_id):
 # job/poll pattern as the other GA-driven tabs.
 # ---------------------------------------------------------------------------
 
-_QUICKOPT_JOBS: dict[str, dict] = {}
-_QUICKOPT_JOBS_LOCK = threading.Lock()
-
-
-def _quickopt_job_log(job_id: str, msg: str) -> None:
-    with _QUICKOPT_JOBS_LOCK:
-        job = _QUICKOPT_JOBS.get(job_id)
-        if job is not None:
-            job["log"].append(msg)
-
-
 def _run_quickopt_job(
     job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, cfg: QuickOptimizeConfig,
     cancel_event: threading.Event | None = None,
 ) -> None:
     try:
         result = run_quick_optimize(
-            df, strategy, risk, rules, cfg, progress_cb=lambda msg: _quickopt_job_log(job_id, msg),
+            df, strategy, risk, rules, cfg, progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
             cancel_event=cancel_event,
         )
-        with _QUICKOPT_JOBS_LOCK:
-            job = _QUICKOPT_JOBS[job_id]
-            job["done"] = True
-            job["result"] = result
+        JOB_MANAGER.finish(job_id, result=result)
     except WalkforwardGACancelled:
-        with _QUICKOPT_JOBS_LOCK:
-            job = _QUICKOPT_JOBS[job_id]
-            job["done"] = True
-            job["cancelled"] = True
+        JOB_MANAGER.finish(job_id, cancelled=True)
     except RefinementError as exc:
-        with _QUICKOPT_JOBS_LOCK:
-            job = _QUICKOPT_JOBS[job_id]
-            job["done"] = True
-            job["error"] = str(exc)
+        JOB_MANAGER.fail(job_id, str(exc))
     except Exception as exc:  # noqa: BLE001
-        with _QUICKOPT_JOBS_LOCK:
-            job = _QUICKOPT_JOBS[job_id]
-            job["done"] = True
-            job["error"] = f"Unexpected error: {exc}"
+        JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
 
 
 def _run_quickopt_sweep_job(
@@ -6213,45 +6165,36 @@ def _run_quickopt_sweep_job(
     try:
         sweep = run_quick_optimize_sweep(
             df, strategy, risk, rules, timeframes, cfg,
-            progress_cb=lambda msg: _quickopt_job_log(job_id, msg), cancel_event=cancel_event,
+            progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg), cancel_event=cancel_event,
         )
-        with _QUICKOPT_JOBS_LOCK:
-            job = _QUICKOPT_JOBS[job_id]
-            job["done"] = True
-            job["result"] = sweep.best_result
-            job["best_timeframe"] = sweep.best_timeframe
-            job["sweep_timeframes"] = {
-                label: {
-                    "optimized_eval_pass_probability": res.optimized_eval_pass_probability,
-                    "optimized_win_rate": res.optimized_win_rate,
-                    "optimized_net_profit": res.optimized_net_profit,
-                    "optimized_trades": res.optimized_trades,
-                    "is_best": label == sweep.best_timeframe,
-                }
-                for label, res in sweep.per_timeframe.items()
+        sweep_timeframes = {
+            label: {
+                "optimized_eval_pass_probability": res.optimized_eval_pass_probability,
+                "optimized_win_rate": res.optimized_win_rate,
+                "optimized_net_profit": res.optimized_net_profit,
+                "optimized_trades": res.optimized_trades,
+                "is_best": label == sweep.best_timeframe,
             }
-            if sweep.skipped:
-                job["log"].append(
-                    "Skipped from the timeframe sweep: "
-                    + "; ".join(f"{s.requested_label} ({s.reason})" for s in sweep.skipped)
-                )
-            for label, err in sweep.errors.items():
-                job["log"].append(f"[{label}] could not be optimized: {err}")
+            for label, res in sweep.per_timeframe.items()
+        }
+        if sweep.skipped:
+            JOB_MANAGER.log(
+                job_id,
+                "Skipped from the timeframe sweep: "
+                + "; ".join(f"{s.requested_label} ({s.reason})" for s in sweep.skipped),
+            )
+        for label, err in sweep.errors.items():
+            JOB_MANAGER.log(job_id, f"[{label}] could not be optimized: {err}")
+        JOB_MANAGER.finish(
+            job_id, result=sweep.best_result, best_timeframe=sweep.best_timeframe,
+            sweep_timeframes=sweep_timeframes,
+        )
     except WalkforwardGACancelled:
-        with _QUICKOPT_JOBS_LOCK:
-            job = _QUICKOPT_JOBS[job_id]
-            job["done"] = True
-            job["cancelled"] = True
+        JOB_MANAGER.finish(job_id, cancelled=True)
     except RefinementError as exc:
-        with _QUICKOPT_JOBS_LOCK:
-            job = _QUICKOPT_JOBS[job_id]
-            job["done"] = True
-            job["error"] = str(exc)
+        JOB_MANAGER.fail(job_id, str(exc))
     except Exception as exc:  # noqa: BLE001
-        with _QUICKOPT_JOBS_LOCK:
-            job = _QUICKOPT_JOBS[job_id]
-            job["done"] = True
-            job["error"] = f"Unexpected error: {exc}"
+        JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
 
 
 @app.route("/quick-optimize")
@@ -6310,17 +6253,12 @@ def quickopt_start():
             library_ref=library_ref,
             replace_existing=form.get("replace_existing") == "on",
         )
-        job_id = uuid.uuid4().hex[:12]
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
         cancel_event = threading.Event()
-        with _QUICKOPT_JOBS_LOCK:
-            _QUICKOPT_JOBS[job_id] = {
-                "log": initial_log, "done": False, "error": None, "result": None,
-                "started_at": time.time(), "instrument": active_label,
-                "cancel_event": cancel_event, "cancelled": False,
-            }
+        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label, cancel_event=cancel_event, cancelled=False)
+        JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
         # FIX (multi-timeframe sweep): "Timeframes to test" runs the SAME
         # GA once per requested timeframe (df resampled per timeframe --
         # see app.data.timeframe_sweep) and keeps the winner, exactly like
@@ -6344,8 +6282,7 @@ def quickopt_start():
 
 @app.route("/quick-optimize/job/<job_id>")
 def quickopt_job(job_id):
-    with _QUICKOPT_JOBS_LOCK:
-        job = _QUICKOPT_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return render_template("quick_optimize_job.html", job_id=job_id, not_found=True), 404
     return render_template("quick_optimize_job.html", job_id=job_id, not_found=False)
@@ -6356,11 +6293,10 @@ def quickopt_job_stop(job_id):
     """Signals cancellation to a running Quick Optimize job -- checked
     once per GA generation (see run_walkforward_aware_refinement's
     cancel_event param), so this stops at the next generation boundary."""
-    with _QUICKOPT_JOBS_LOCK:
-        job = _QUICKOPT_JOBS.get(job_id)
-        if job is None:
-            return jsonify({"found": False}), 404
-        cancel_event = job.get("cancel_event")
+    job = JOB_MANAGER.get(job_id)
+    if job is None:
+        return jsonify({"found": False}), 404
+    cancel_event = job.get("cancel_event")
     if cancel_event is not None:
         cancel_event.set()
     return jsonify({"found": True, "stopping": True})
@@ -6368,8 +6304,7 @@ def quickopt_job_stop(job_id):
 
 @app.route("/quick-optimize/job/<job_id>/status.json")
 def quickopt_job_status(job_id):
-    with _QUICKOPT_JOBS_LOCK:
-        job = _QUICKOPT_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return jsonify({"found": False}), 404
     result = job.get("result")
@@ -7720,8 +7655,7 @@ def search_start():
                 prop_presets_json=_prop_presets_json(), **_alpaca_template_context(),
             ), 400
 
-        job_id = uuid.uuid4().hex[:12]
-        db_path = str(SEARCH_DIR / f"search_{job_id}.db")
+        db_path = str(SEARCH_DIR / f"search_{uuid.uuid4().hex[:12]}.db")
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
@@ -7764,17 +7698,15 @@ def search_start():
                     families=[{"name": n, "description": family_description(n)} for n in list_families()],
                     saved_strategies_json=_saved_strategies_json(),
                     prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
-            sweep_job_id = uuid.uuid4().hex[:12]
             sweep_log = initial_log + describe_skipped(expansion, active_label) + [
                 f"Timeframe sweep of {active_label}: searching {len(sweep_jobs)} timeframe target(s): "
                 + ", ".join(f"{j.instrument}/{j.timeframe}" for j in sweep_jobs),
             ]
-            with _MULTI_SEARCH_JOBS_LOCK:
-                _MULTI_SEARCH_JOBS[sweep_job_id] = {
-                    "log": sweep_log, "done": False, "error": None, "results": None,
-                    "best_label": None, "champion_report": None,
-                    "labels": [f"{j.instrument}/{j.timeframe}" for j in sweep_jobs], "loop_mode": False,
-                }
+            sweep_job_id = JOB_MANAGER.create(
+                log=sweep_log, results=None, best_label=None, champion_report=None,
+                labels=[f"{j.instrument}/{j.timeframe}" for j in sweep_jobs], loop_mode=False,
+            )
+            JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
             thread = threading.Thread(
                 target=_run_multi_search_job,
                 args=(sweep_job_id, sweep_jobs, space, risk, rules, stage_cfg, min(len(sweep_jobs), 3)),
@@ -7795,20 +7727,18 @@ def search_start():
                 starting_max_candidates=max_candidates,
                 seed=seed,
             )
-            loop_dir = str(SEARCH_DIR / f"loop_{job_id}")
             initial_log.append(
                 f"Loop mode ON -- will repeat Search Lab rounds (widening on stall) until a candidate "
                 f"clears {loop_cfg.target_eval_pass_pct:.0f}%, {loop_cfg.max_rounds} rounds run, or the "
                 f"time budget is used up."
             )
-            with _SEARCH_JOBS_LOCK:
-                _SEARCH_JOBS[job_id] = {
-                    "log": initial_log,
-                    "done": False, "error": None, "summary": None, "cancelled": False,
-                    "started_at": time.time(), "instrument": active_label, "mode": mode_key,
-                    "cancel_event": cancel_event, "loop_mode": True, "loop_rounds": 0,
-                    "loop_last_round": None, "loop_result": None,
-                }
+            job_id = JOB_MANAGER.create(
+                log=initial_log, summary=None, cancelled=False, instrument=active_label, mode=mode_key,
+                cancel_event=cancel_event, loop_mode=True, loop_rounds=0,
+                loop_last_round=None, loop_result=None,
+            )
+            JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
+            loop_dir = str(SEARCH_DIR / f"loop_{job_id}")
             thread = threading.Thread(
                 target=_run_search_loop_job,
                 args=(job_id, df, risk, rules, stage_cfg, active_label, loop_dir, loop_cfg, cancel_event),
@@ -7818,13 +7748,11 @@ def search_start():
             thread.start()
             return redirect(url_for("search_job", job_id=job_id))
 
-        with _SEARCH_JOBS_LOCK:
-            _SEARCH_JOBS[job_id] = {
-                "log": initial_log,
-                "done": False, "error": None, "summary": None, "cancelled": False,
-                "started_at": time.time(), "instrument": active_label, "mode": mode_key,
-                "cancel_event": cancel_event, "loop_mode": False,
-            }
+        job_id = JOB_MANAGER.create(
+            log=initial_log, summary=None, cancelled=False, instrument=active_label, mode=mode_key,
+            cancel_event=cancel_event, loop_mode=False,
+        )
+        JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
         thread = threading.Thread(
             target=_run_search_job,
             args=(job_id, df, risk, rules, space, stage_cfg, active_label, db_path, library_ref, cancel_event),
@@ -7859,8 +7787,7 @@ def search_start():
 
 @app.route("/search/job/<job_id>")
 def search_job(job_id):
-    with _SEARCH_JOBS_LOCK:
-        job = _SEARCH_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return render_template("search_job.html", job_id=job_id, not_found=True), 404
     return render_template("search_job.html", job_id=job_id, not_found=False)
@@ -7873,13 +7800,12 @@ def search_job_stop(job_id):
     _drain_futures/check_cancelled -- this can take up to ~1s to be
     noticed, same latency as Evolution Lab's stop button). A no-op,
     not an error, if the job is already done or was never found."""
-    with _SEARCH_JOBS_LOCK:
-        job = _SEARCH_JOBS.get(job_id)
-        if job is None:
-            return jsonify({"ok": False, "error": "Job not found."}), 404
-        if job.get("done"):
-            return jsonify({"ok": True, "already_done": True})
-        cancel_event = job.get("cancel_event")
+    job = JOB_MANAGER.get(job_id)
+    if job is None:
+        return jsonify({"ok": False, "error": "Job not found."}), 404
+    if job.get("done"):
+        return jsonify({"ok": True, "already_done": True})
+    cancel_event = job.get("cancel_event")
     if cancel_event is not None:
         cancel_event.set()
     return jsonify({"ok": True})
@@ -7887,8 +7813,7 @@ def search_job_stop(job_id):
 
 @app.route("/search/job/<job_id>/status.json")
 def search_job_status(job_id):
-    with _SEARCH_JOBS_LOCK:
-        job = _SEARCH_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return jsonify({"found": False}), 404
 
@@ -7966,8 +7891,7 @@ def search_job_status(job_id):
 
 @app.route("/search/job/<job_id>/promote", methods=["POST"])
 def search_job_promote(job_id):
-    with _SEARCH_JOBS_LOCK:
-        job = _SEARCH_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None or not job.get("done") or job.get("summary") is None:
         return jsonify({"ok": False, "error": "Job not found, not finished, or produced no results."}), 400
 
@@ -7983,14 +7907,15 @@ def search_job_promote(job_id):
             job["df"], job["risk"], job["rules"],
             output_dir=str(SEARCH_DIR / "champion" / job_id),
         )
-        with _SEARCH_JOBS_LOCK:
-            job.setdefault("promoted", {})[candidate_id] = {
-                "html": f"/search_reports_champion/{job_id}/{result['report_paths']['html'].name}",
-                "json": f"/search_reports_champion/{job_id}/{result['report_paths']['json'].name}",
-            }
+        promoted = dict(job.get("promoted") or {})
+        promoted[candidate_id] = {
+            "html": f"/search_reports_champion/{job_id}/{result['report_paths']['html'].name}",
+            "json": f"/search_reports_champion/{job_id}/{result['report_paths']['json'].name}",
+        }
+        JOB_MANAGER.update(job_id, promoted=promoted)
         return jsonify({
             "ok": True,
-            "report_html": job["promoted"][candidate_id]["html"],
+            "report_html": promoted[candidate_id]["html"],
             "next_step": (
                 "Champion report generated above. Next step: if you want a walk-forward-optimized "
                 "re-validation with a READY/MARGINAL/NOT READY verdict, save this candidate to the "
@@ -8010,8 +7935,7 @@ def search_job_save_to_library(job_id):
     promote alone never did. Works identically for a multi-instrument
     Search Lab job -- see save_search_candidate_to_library's own
     docstring for why no separate route is needed for that case."""
-    with _SEARCH_JOBS_LOCK:
-        job = _SEARCH_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None or not job.get("done") or job.get("summary") is None:
         return jsonify({"ok": False, "error": "Job not found, not finished, or produced no results."}), 400
 
@@ -8023,8 +7947,9 @@ def search_job_save_to_library(job_id):
 
     try:
         result = save_search_candidate_to_library(job["db_path"], job["summary"].run_id, candidate_id)
-        with _SEARCH_JOBS_LOCK:
-            job.setdefault("saved_to_library", {})[candidate_id] = result["filename"]
+        saved = dict(job.get("saved_to_library") or {})
+        saved[candidate_id] = result["filename"]
+        JOB_MANAGER.update(job_id, saved_to_library=saved)
         return jsonify({
             "ok": True,
             "filename": result["filename"],
@@ -8046,8 +7971,7 @@ def search_job_auto_ensemble(job_id):
     finished Search Lab run's own leaderboard straight into a diversified
     3-5-leg basket with one click, reusing the exact same instrument/
     timeframe/risk/rules the search itself just ran under."""
-    with _SEARCH_JOBS_LOCK:
-        job = _SEARCH_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None or not job.get("done") or job.get("summary") is None:
         return jsonify({"ok": False, "error": "Job not found, not finished, or produced no results."}), 400
 
@@ -8096,17 +8020,6 @@ def serve_search_champion_report(job_id, filename):
 # Search Lab above.
 # ---------------------------------------------------------------------------
 
-_FORGE_JOBS: dict[str, dict] = {}
-_FORGE_JOBS_LOCK = threading.Lock()
-
-
-def _forge_job_log(job_id: str, msg: str) -> None:
-    with _FORGE_JOBS_LOCK:
-        job = _FORGE_JOBS.get(job_id)
-        if job is not None:
-            job["log"].append(msg)
-
-
 def _run_forge_job(
     job_id: str, df, risk: RiskConfig, rules: PropRules, config: ForgeConfig,
     instrument: str, db_path: str, graveyard_path: str,
@@ -8116,25 +8029,16 @@ def _run_forge_job(
         result = run_forge(
             df, risk, rules, config, db_path=db_path,
             instrument=instrument, timeframe=infer_timeframe_label(df), graveyard_path=graveyard_path,
-            progress_cb=lambda msg: _forge_job_log(job_id, msg),
+            progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
             cancel_event=cancel_event,
         )
-        with _FORGE_JOBS_LOCK:
-            job = _FORGE_JOBS[job_id]
-            job["done"] = True
-            job["result"] = result
+        JOB_MANAGER.finish(job_id, result=result)
     except SearchCancelled:
-        with _FORGE_JOBS_LOCK:
-            job = _FORGE_JOBS[job_id]
-            job["done"] = True
-            job["cancelled"] = True
-            job["log"].append("Forge Strategy run stopped by user.")
+        JOB_MANAGER.log(job_id, "Forge Strategy run stopped by user.")
+        JOB_MANAGER.finish(job_id, cancelled=True)
     except Exception as exc:  # noqa: BLE001 -- must fail visibly on the status page, not crash the thread silently
         log_crash("Forge Strategy (web)", exc=exc)
-        with _FORGE_JOBS_LOCK:
-            job = _FORGE_JOBS[job_id]
-            job["done"] = True
-            job["error"] = str(exc)
+        JOB_MANAGER.fail(job_id, str(exc))
     finally:
         HEAVY_JOB_GUARD.release(JOB_FORGE)
 
@@ -8152,52 +8056,52 @@ def _run_forge_loop_job(
     leaderboard rendering on the status page works unchanged while a loop
     is still running across many rounds."""
     def on_round(round_result) -> None:
-        with _FORGE_JOBS_LOCK:
-            job = _FORGE_JOBS.get(job_id)
-            if job is None:
-                return
-            job["result"] = round_result.result
-            job["loop_rounds"] = job.get("loop_rounds", 0) + 1
-            job["loop_last_round"] = {
+        job = JOB_MANAGER.get(job_id)
+        if job is None:
+            return
+        JOB_MANAGER.update(
+            job_id,
+            result=round_result.result,
+            loop_rounds=job.get("loop_rounds", 0) + 1,
+            loop_last_round={
                 "round_index": round_result.round_index,
                 "n_hypotheses": round_result.n_hypotheses,
                 "excluded_families": round_result.excluded_families,
                 "champion_pass_rate_pct": round_result.champion_pass_rate_pct,
                 "champion_candidate_id": round_result.champion_candidate_id,
                 "widened_after_this_round": round_result.widened_after_this_round,
-            }
+            },
+        )
 
     try:
         result = run_forge_loop(
             df, risk, rules, db_dir=loop_dir, loop_cfg=loop_cfg,
             instrument=instrument, timeframe=infer_timeframe_label(df),
-            progress_cb=lambda msg: _forge_job_log(job_id, msg),
+            progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
             cancel_event=cancel_event, on_round=on_round,
             family_health_search_dir=str(SEARCH_DIR), family_health_evolution_dir=str(SEARCH_DIR),
         )
-        with _FORGE_JOBS_LOCK:
-            job = _FORGE_JOBS[job_id]
-            job["done"] = True
-            job["loop_result"] = result
-            # Prefer the WINNING round's result on the status page once the
-            # loop finishes; on_round already kept job["result"] updated to
-            # the latest round throughout the run, so this only matters
-            # when a later (non-winning) round ran after the winner -- it
-            # never does today (the loop breaks immediately on a winner),
-            # but is the more correct choice either way.
-            chosen = result.winner_round or (result.rounds[-1] if result.rounds else None)
-            job["result"] = chosen.result if chosen else job.get("result")
-            job["loop_rounds"] = len(result.rounds)
-            if result.stopped_reason == "cancelled":
-                job["cancelled"] = True
-            elif result.stopped_reason == "error":
-                job["error"] = result.error
+        # Prefer the WINNING round's result on the status page once the
+        # loop finishes; on_round already kept job["result"] updated to
+        # the latest round throughout the run, so this only matters
+        # when a later (non-winning) round ran after the winner -- it
+        # never does today (the loop breaks immediately on a winner),
+        # but is the more correct choice either way.
+        job = JOB_MANAGER.get(job_id) or {}
+        chosen = result.winner_round or (result.rounds[-1] if result.rounds else None)
+        extra = {
+            "loop_result": result,
+            "result": chosen.result if chosen else job.get("result"),
+            "loop_rounds": len(result.rounds),
+        }
+        if result.stopped_reason == "cancelled":
+            extra["cancelled"] = True
+        elif result.stopped_reason == "error":
+            extra["error"] = result.error
+        JOB_MANAGER.finish(job_id, **extra)
     except Exception as exc:  # noqa: BLE001 -- must fail visibly on the status page, not crash the thread silently
         log_crash("Forge Strategy Loop Mode (web)", exc=exc)
-        with _FORGE_JOBS_LOCK:
-            job = _FORGE_JOBS[job_id]
-            job["done"] = True
-            job["error"] = str(exc)
+        JOB_MANAGER.fail(job_id, str(exc))
     finally:
         HEAVY_JOB_GUARD.release(JOB_FORGE)
 
@@ -8374,8 +8278,6 @@ def forge_start():
             max_drawdown_pct=float(form.get("max_dd", 10) or 10),
         )
 
-        job_id = uuid.uuid4().hex[:12]
-        db_path = str(FORGE_DIR / f"forge_{job_id}.db")
         # Shared, persistent graveyard path -- deliberately NOT one unique
         # file per job. A per-job graveyard file was the bug that made the
         # "map of dead strategy space" pointless: every run wrote its
@@ -8406,20 +8308,19 @@ def forge_start():
                 seed=seed,
                 base_config=config,
             )
+            job_id = JOB_MANAGER.create(
+                log=initial_log, instrument=active_label, cancelled=False,
+                cancel_event=cancel_event, graveyard_path=graveyard_path,
+                loop_mode=True, loop_rounds=0, loop_last_round=None, loop_result=None,
+            )
+            JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
             loop_dir = str(FORGE_DIR / f"loop_{job_id}")
-            initial_log.append(
+            JOB_MANAGER.log(
+                job_id,
                 f"Loop mode ON -- will repeat Forge rounds (searching deeper on stall) until a "
                 f"champion clears {loop_cfg.target_pass_rate_pct:.0f}%, {loop_cfg.max_rounds} rounds "
-                f"run, or the time budget is used up."
+                f"run, or the time budget is used up.",
             )
-            with _FORGE_JOBS_LOCK:
-                _FORGE_JOBS[job_id] = {
-                    "log": initial_log,
-                    "done": False, "error": None, "result": None, "cancelled": False,
-                    "started_at": time.time(), "instrument": active_label,
-                    "cancel_event": cancel_event, "graveyard_path": graveyard_path,
-                    "loop_mode": True, "loop_rounds": 0, "loop_last_round": None, "loop_result": None,
-                }
             thread = threading.Thread(
                 target=_run_forge_loop_job,
                 args=(job_id, df, risk, rules, active_label, loop_dir, loop_cfg, cancel_event),
@@ -8428,13 +8329,12 @@ def forge_start():
             thread.start()
             return redirect(url_for("forge_job", job_id=job_id))
 
-        with _FORGE_JOBS_LOCK:
-            _FORGE_JOBS[job_id] = {
-                "log": initial_log,
-                "done": False, "error": None, "result": None, "cancelled": False,
-                "started_at": time.time(), "instrument": active_label,
-                "cancel_event": cancel_event, "graveyard_path": graveyard_path, "loop_mode": False,
-            }
+        job_id = JOB_MANAGER.create(
+            log=initial_log, instrument=active_label, cancelled=False,
+            cancel_event=cancel_event, graveyard_path=graveyard_path, loop_mode=False,
+        )
+        JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
+        db_path = str(FORGE_DIR / f"forge_{job_id}.db")
         thread = threading.Thread(
             target=_run_forge_job,
             args=(job_id, df, risk, rules, config, active_label, db_path, graveyard_path, cancel_event),
@@ -8454,8 +8354,7 @@ def forge_start():
 
 @app.route("/forge/job/<job_id>")
 def forge_job(job_id):
-    with _FORGE_JOBS_LOCK:
-        job = _FORGE_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return render_template("forge_job.html", job_id=job_id, not_found=True), 404
     return render_template("forge_job.html", job_id=job_id, not_found=False)
@@ -8463,11 +8362,10 @@ def forge_job(job_id):
 
 @app.route("/forge/job/<job_id>/stop", methods=["POST"])
 def forge_job_stop(job_id):
-    with _FORGE_JOBS_LOCK:
-        job = _FORGE_JOBS.get(job_id)
-        if job is None:
-            return jsonify({"ok": False, "error": "Job not found."}), 404
-        cancel_event = job.get("cancel_event")
+    job = JOB_MANAGER.get(job_id)
+    if job is None:
+        return jsonify({"ok": False, "error": "Job not found."}), 404
+    cancel_event = job.get("cancel_event")
     if cancel_event is not None:
         cancel_event.set()
     return jsonify({"ok": True})
@@ -8475,8 +8373,7 @@ def forge_job_stop(job_id):
 
 @app.route("/forge/job/<job_id>/status.json")
 def forge_job_status(job_id):
-    with _FORGE_JOBS_LOCK:
-        job = _FORGE_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return jsonify({"found": False}), 404
 
@@ -8552,17 +8449,6 @@ def graveyard_view():
 # multi-select instead of one dataset picker.
 # ---------------------------------------------------------------------------
 
-_MULTI_SEARCH_JOBS: dict[str, dict] = {}
-_MULTI_SEARCH_JOBS_LOCK = threading.Lock()
-
-
-def _multi_job_log(job_id: str, label: str, msg: str) -> None:
-    with _MULTI_SEARCH_JOBS_LOCK:
-        job = _MULTI_SEARCH_JOBS.get(job_id)
-        if job is not None:
-            job["log"].append(f"[{label}] {msg}")
-
-
 def _run_multi_search_job(
     job_id: str, jobs: list[InstrumentJob], space, risk: RiskConfig, rules: PropRules,
     stage_cfg: SearchStageConfig, max_concurrent: int,
@@ -8572,7 +8458,7 @@ def _run_multi_search_job(
         results = run_multi_instrument_search(
             jobs, space, risk, rules, stage_cfg, db_dir,
             max_concurrent_instruments=max_concurrent,
-            progress_cb=lambda label, msg: _multi_job_log(job_id, label, msg),
+            progress_cb=lambda label, msg: JOB_MANAGER.log(job_id, f"[{label}] {msg}"),
         )
         per_instrument = {}
         for label, res in results.items():
@@ -8616,18 +8502,10 @@ def _run_multi_search_job(
             except Exception:  # noqa: BLE001 -- a champion-promotion hiccup must not hide the otherwise-successful search results
                 pass
 
-        with _MULTI_SEARCH_JOBS_LOCK:
-            job = _MULTI_SEARCH_JOBS[job_id]
-            job["done"] = True
-            job["results"] = per_instrument
-            job["best_label"] = best_label
-            job["champion_report"] = champion_report
+        JOB_MANAGER.finish(job_id, results=per_instrument, best_label=best_label, champion_report=champion_report)
     except Exception as exc:  # noqa: BLE001
         log_crash("Multi-Instrument Search (web)", exc=exc)
-        with _MULTI_SEARCH_JOBS_LOCK:
-            job = _MULTI_SEARCH_JOBS[job_id]
-            job["done"] = True
-            job["error"] = str(exc)
+        JOB_MANAGER.fail(job_id, str(exc))
     finally:
         HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_SEARCH)
 
@@ -8653,7 +8531,7 @@ def _run_multi_search_loop_job(
         results = run_multi_instrument_search_loop(
             jobs, risk, rules, stage_cfg, loop_cfg, db_dir,
             max_concurrent_instruments=max_concurrent,
-            progress_cb=lambda label, msg: _multi_job_log(job_id, label, msg),
+            progress_cb=lambda label, msg: JOB_MANAGER.log(job_id, f"[{label}] {msg}"),
             cancel_event=cancel_event,
         )
         per_instrument = {}
@@ -8690,28 +8568,22 @@ def _run_multi_search_loop_job(
                 # JS to key its "Save Champion to Library" button off of
                 # (see search_multi_instrument_job.html's renderResults)
                 # -- the button simply never rendered. Both modes write
-                # into the SAME _MULTI_SEARCH_JOBS store and are read by
-                # the SAME save_to_library route, so filling these in is
-                # the whole fix; no new route needed.
+                # into the SAME JOB_MANAGER entry and are read by the
+                # SAME save_to_library route, so filling these in is the
+                # whole fix; no new route needed.
                 "champion_candidate_id": chosen.summary.champion_candidate_id if chosen else None,
                 "db_path": chosen.summary.db_path if chosen else None,
                 "run_id": chosen.summary.run_id if chosen else None,
             }
 
-        with _MULTI_SEARCH_JOBS_LOCK:
-            job = _MULTI_SEARCH_JOBS[job_id]
-            job["done"] = True
-            job["results"] = per_instrument
-            job["cancelled"] = any(
-                r.loop_result is not None and r.loop_result.stopped_reason == "cancelled"
-                for r in results.values()
-            )
+        cancelled = any(
+            r.loop_result is not None and r.loop_result.stopped_reason == "cancelled"
+            for r in results.values()
+        )
+        JOB_MANAGER.finish(job_id, results=per_instrument, cancelled=cancelled)
     except Exception as exc:  # noqa: BLE001
         log_crash("Multi-Instrument Search Loop Mode (web)", exc=exc)
-        with _MULTI_SEARCH_JOBS_LOCK:
-            job = _MULTI_SEARCH_JOBS[job_id]
-            job["done"] = True
-            job["error"] = str(exc)
+        JOB_MANAGER.fail(job_id, str(exc))
     finally:
         HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_SEARCH)
 
@@ -8841,7 +8713,6 @@ def search_multi_instrument_start():
         )
         max_concurrent = int(form.get("max_concurrent", 2) or 2)
 
-        job_id = uuid.uuid4().hex[:12]
         loop_mode_on = form.get("loop_mode") == "on"
         if loop_mode_on:
             time_budget_raw = (form.get("loop_time_budget_hours") or "").strip()
@@ -8855,17 +8726,16 @@ def search_multi_instrument_start():
                 seed=int(form.get("seed", 42) or 42),
             )
             cancel_event = threading.Event()
-            with _MULTI_SEARCH_JOBS_LOCK:
-                _MULTI_SEARCH_JOBS[job_id] = {
-                    "log": [f"Loop mode ON -- searching {len(jobs)} instrument/timeframe target(s) "
-                            f"independently until each clears {loop_cfg.target_eval_pass_pct:.0f}%: " +
-                            ", ".join(f"{j.instrument}/{j.timeframe}" for j in jobs)]
-                           + sweep_warnings + _family_exclusion_log,
-                    "done": False, "error": None, "results": None,
-                    "best_label": None, "champion_report": None,
-                    "labels": [f"{j.instrument}/{j.timeframe}" for j in jobs],
-                    "cancel_event": cancel_event, "loop_mode": True, "cancelled": False,
-                }
+            job_id = JOB_MANAGER.create(
+                log=[f"Loop mode ON -- searching {len(jobs)} instrument/timeframe target(s) "
+                     f"independently until each clears {loop_cfg.target_eval_pass_pct:.0f}%: " +
+                     ", ".join(f"{j.instrument}/{j.timeframe}" for j in jobs)]
+                    + sweep_warnings + _family_exclusion_log,
+                results=None, best_label=None, champion_report=None,
+                labels=[f"{j.instrument}/{j.timeframe}" for j in jobs],
+                cancel_event=cancel_event, loop_mode=True, cancelled=False,
+            )
+            JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
             thread = threading.Thread(
                 target=_run_multi_search_loop_job,
                 args=(job_id, jobs, loop_cfg, risk, rules, stage_cfg, max_concurrent, cancel_event),
@@ -8874,16 +8744,15 @@ def search_multi_instrument_start():
             thread.start()
             return redirect(url_for("search_multi_instrument_job", job_id=job_id))
 
-        with _MULTI_SEARCH_JOBS_LOCK:
-            _MULTI_SEARCH_JOBS[job_id] = {
-                "log": [f"Searching {len(jobs)} instrument/timeframe target(s): " +
-                        ", ".join(f"{j.instrument}/{j.timeframe}" for j in jobs)]
-                       + sweep_warnings + _family_exclusion_log,
-                "done": False, "error": None, "results": None,
-                "best_label": None, "champion_report": None,
-                "labels": [f"{j.instrument}/{j.timeframe}" for j in jobs],
-                "loop_mode": False,
-            }
+        job_id = JOB_MANAGER.create(
+            log=[f"Searching {len(jobs)} instrument/timeframe target(s): " +
+                 ", ".join(f"{j.instrument}/{j.timeframe}" for j in jobs)]
+                + sweep_warnings + _family_exclusion_log,
+            results=None, best_label=None, champion_report=None,
+            labels=[f"{j.instrument}/{j.timeframe}" for j in jobs],
+            loop_mode=False,
+        )
+        JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
         thread = threading.Thread(
             target=_run_multi_search_job,
             args=(job_id, jobs, space, risk, rules, stage_cfg, max_concurrent),
@@ -8909,8 +8778,7 @@ def search_multi_instrument_start():
 
 @app.route("/search/multi-instrument/job/<job_id>")
 def search_multi_instrument_job(job_id):
-    with _MULTI_SEARCH_JOBS_LOCK:
-        job = _MULTI_SEARCH_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return render_template("search_multi_instrument_job.html", job_id=job_id, not_found=True), 404
     return render_template("search_multi_instrument_job.html", job_id=job_id, not_found=False)
@@ -8921,13 +8789,12 @@ def search_multi_instrument_job_stop(job_id):
     """Only meaningful for a Loop Mode job -- the non-loop multi-instrument
     search path has no cancel_event (each instrument's single run_search
     call has always run to completion). A no-op, not an error, otherwise."""
-    with _MULTI_SEARCH_JOBS_LOCK:
-        job = _MULTI_SEARCH_JOBS.get(job_id)
-        if job is None:
-            return jsonify({"ok": False, "error": "Job not found."}), 404
-        if job.get("done"):
-            return jsonify({"ok": True, "already_done": True})
-        cancel_event = job.get("cancel_event")
+    job = JOB_MANAGER.get(job_id)
+    if job is None:
+        return jsonify({"ok": False, "error": "Job not found."}), 404
+    if job.get("done"):
+        return jsonify({"ok": True, "already_done": True})
+    cancel_event = job.get("cancel_event")
     if cancel_event is not None:
         cancel_event.set()
     return jsonify({"ok": True})
@@ -8935,8 +8802,7 @@ def search_multi_instrument_job_stop(job_id):
 
 @app.route("/search/multi-instrument/job/<job_id>/status.json")
 def search_multi_instrument_job_status(job_id):
-    with _MULTI_SEARCH_JOBS_LOCK:
-        job = _MULTI_SEARCH_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return jsonify({"found": False}), 404
     return jsonify({
@@ -8965,12 +8831,11 @@ def search_multi_instrument_job_save_to_library(job_id):
     which instrument/timeframe's own db_path/run_id (stashed on
     per_instrument[label] by _run_multi_search_job -- and, since the
     loop-mode-save-button fix, by _run_multi_search_loop_job too, since
-    both write into this same _MULTI_SEARCH_JOBS store) to save from;
+    both write into the same JOB_MANAGER entry) to save from;
     `candidate_id` defaults to that instrument's own champion so the
     common "save the champion" click needs nothing else, but can name any
     other stage3 candidate_id from that instrument's own leaderboard."""
-    with _MULTI_SEARCH_JOBS_LOCK:
-        job = _MULTI_SEARCH_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None or not job.get("done"):
         return jsonify({"ok": False, "error": "Job not found or not finished."}), 400
 
@@ -9011,36 +8876,19 @@ def search_multi_instrument_job_save_to_library(job_id):
 # the same way the desktop Speed Run tab wires it up to Tkinter.
 # ---------------------------------------------------------------------------
 
-_SPEEDRUN_JOBS: dict[str, dict] = {}
-_SPEEDRUN_JOBS_LOCK = threading.Lock()
-
-
-def _speedrun_job_log(job_id: str, msg: str) -> None:
-    with _SPEEDRUN_JOBS_LOCK:
-        job = _SPEEDRUN_JOBS.get(job_id)
-        if job is not None:
-            job["log"].append(msg)
-
-
 def _run_speedrun_job(
     job_id: str, df, risk: RiskConfig, rules: PropRules, cfg: SpeedRunConfig, active_label: str,
 ) -> None:
     try:
         result = run_speed_run(
             df, risk, rules, SPEEDRUN_DIR, cfg,
-            progress_cb=lambda msg: _speedrun_job_log(job_id, msg),
+            progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
             instrument=active_label,
         )
-        with _SPEEDRUN_JOBS_LOCK:
-            job = _SPEEDRUN_JOBS[job_id]
-            job["done"] = True
-            job["result"] = result
+        JOB_MANAGER.finish(job_id, result=result)
     except Exception as exc:  # noqa: BLE001 -- must surface on the status page, not crash the thread silently
         log_crash("Speed Run (web)", exc=exc)
-        with _SPEEDRUN_JOBS_LOCK:
-            job = _SPEEDRUN_JOBS[job_id]
-            job["done"] = True
-            job["error"] = f"Unexpected error: {exc}"
+        JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
     finally:
         HEAVY_JOB_GUARD.release(JOB_SPEED_RUN)
 
@@ -9060,26 +8908,22 @@ def _run_speedrun_loop_job(
     try:
         result = run_speed_run_loop(
             df, risk, rules, output_dir=loop_dir, loop_cfg=loop_cfg,
-            instrument=active_label, progress_cb=lambda msg: _speedrun_job_log(job_id, msg),
+            instrument=active_label, progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
             cancel_event=cancel_event,
         )
         chosen = result.winner_round or (result.rounds[-1] if result.rounds else None)
-        with _SPEEDRUN_JOBS_LOCK:
-            job = _SPEEDRUN_JOBS[job_id]
-            job["done"] = True
-            job["loop_result"] = result
-            job["result"] = chosen.result if chosen else None
-            job["loop_rounds"] = len(result.rounds)
-            if result.stopped_reason == "cancelled":
-                job["cancelled"] = True
-            elif result.stopped_reason == "error":
-                job["error"] = result.error
+        extra = {
+            "loop_result": result, "result": chosen.result if chosen else None,
+            "loop_rounds": len(result.rounds),
+        }
+        if result.stopped_reason == "cancelled":
+            extra["cancelled"] = True
+        elif result.stopped_reason == "error":
+            extra["error"] = result.error
+        JOB_MANAGER.finish(job_id, **extra)
     except Exception as exc:  # noqa: BLE001 -- must surface on the status page, not crash the thread silently
         log_crash("Speed Run Loop Mode (web)", exc=exc)
-        with _SPEEDRUN_JOBS_LOCK:
-            job = _SPEEDRUN_JOBS[job_id]
-            job["done"] = True
-            job["error"] = f"Unexpected error: {exc}"
+        JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
     finally:
         HEAVY_JOB_GUARD.release(JOB_SPEED_RUN)
 
@@ -9139,7 +8983,6 @@ def speed_run_start():
             reset_on_breach=form.get("reset_on_breach", "on") == "on",
         )
 
-        job_id = uuid.uuid4().hex[:12]
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
@@ -9156,20 +8999,19 @@ def speed_run_start():
                 seed=cfg.random_seed,
                 base_config=cfg,
             )
+            cancel_event = threading.Event()
+            job_id = JOB_MANAGER.create(
+                log=initial_log, instrument=active_label, cancel_event=cancel_event,
+                loop_mode=True, loop_rounds=0, loop_result=None, cancelled=False,
+            )
+            JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
             loop_dir = str(SPEEDRUN_DIR / f"loop_{job_id}")
-            initial_log.append(
+            JOB_MANAGER.log(
+                job_id,
                 f"Loop mode ON -- will repeat Speed Run rounds (raising the candidate cap and "
                 f"validation width on a stall) until a round finds a winner, {loop_cfg.max_rounds} "
-                f"rounds run, or the time budget is used up."
+                f"rounds run, or the time budget is used up.",
             )
-            cancel_event = threading.Event()
-            with _SPEEDRUN_JOBS_LOCK:
-                _SPEEDRUN_JOBS[job_id] = {
-                    "log": initial_log, "done": False, "error": None, "result": None,
-                    "started_at": time.time(), "instrument": active_label,
-                    "cancel_event": cancel_event, "loop_mode": True, "loop_rounds": 0,
-                    "loop_result": None, "cancelled": False,
-                }
             thread = threading.Thread(
                 target=_run_speedrun_loop_job,
                 args=(job_id, df, risk, rules, active_label, loop_dir, loop_cfg, cancel_event),
@@ -9178,11 +9020,8 @@ def speed_run_start():
             thread.start()
             return redirect(url_for("speed_run_job", job_id=job_id))
 
-        with _SPEEDRUN_JOBS_LOCK:
-            _SPEEDRUN_JOBS[job_id] = {
-                "log": initial_log, "done": False, "error": None, "result": None,
-                "started_at": time.time(), "instrument": active_label, "loop_mode": False,
-            }
+        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label, loop_mode=False)
+        JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
         thread = threading.Thread(
             target=_run_speedrun_job, args=(job_id, df, risk, rules, cfg, active_label), daemon=True,
         )
@@ -9199,8 +9038,7 @@ def speed_run_start():
 
 @app.route("/speed-run/job/<job_id>")
 def speed_run_job(job_id):
-    with _SPEEDRUN_JOBS_LOCK:
-        job = _SPEEDRUN_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return render_template("speed_run_job.html", job_id=job_id, not_found=True), 404
     return render_template("speed_run_job.html", job_id=job_id, not_found=False)
@@ -9212,13 +9050,12 @@ def speed_run_job_stop(job_id):
     path has no cancel_event at all (one bounded discover-then-validate
     pass has always run to completion; see _run_speedrun_job above). A
     no-op, not an error, for a non-loop job or one already finished."""
-    with _SPEEDRUN_JOBS_LOCK:
-        job = _SPEEDRUN_JOBS.get(job_id)
-        if job is None:
-            return jsonify({"ok": False, "error": "Job not found."}), 404
-        if job.get("done"):
-            return jsonify({"ok": True, "already_done": True})
-        cancel_event = job.get("cancel_event")
+    job = JOB_MANAGER.get(job_id)
+    if job is None:
+        return jsonify({"ok": False, "error": "Job not found."}), 404
+    if job.get("done"):
+        return jsonify({"ok": True, "already_done": True})
+    cancel_event = job.get("cancel_event")
     if cancel_event is not None:
         cancel_event.set()
     return jsonify({"ok": True})
@@ -9226,8 +9063,7 @@ def speed_run_job_stop(job_id):
 
 @app.route("/speed-run/job/<job_id>/status.json")
 def speed_run_job_status(job_id):
-    with _SPEEDRUN_JOBS_LOCK:
-        job = _SPEEDRUN_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return jsonify({"found": False}), 404
 
@@ -9338,35 +9174,20 @@ def serve_speedrun_report_loop(job_id, filename):
 # running on the same Windows machine as a logged-in MT5 demo terminal.
 # ---------------------------------------------------------------------------
 
-_AUTOPILOT_JOBS: dict[str, dict] = {}
-_AUTOPILOT_JOBS_LOCK = threading.Lock()
 AUTOPILOT_DIR = BASE_DIR / "reports" / "autopilot"
 AUTOPILOT_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def _autopilot_job_log(job_id: str, msg: str) -> None:
-    with _AUTOPILOT_JOBS_LOCK:
-        job = _AUTOPILOT_JOBS.get(job_id)
-        if job is not None:
-            job["log"].append(msg)
 
 
 def _run_autopilot_job(job_id: str, df, risk: RiskConfig, rules: PropRules, active_label: str, cfg: AutopilotConfig) -> None:
     try:
         result = run_overnight_autopilot(
             df, risk, rules, SPEEDRUN_DIR, cfg,
-            progress_cb=lambda msg: _autopilot_job_log(job_id, msg), instrument=active_label,
+            progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg), instrument=active_label,
         )
-        with _AUTOPILOT_JOBS_LOCK:
-            job = _AUTOPILOT_JOBS[job_id]
-            job["done"] = True
-            job["result"] = result
+        JOB_MANAGER.finish(job_id, result=result)
     except Exception as exc:  # noqa: BLE001 -- must surface on the status page, not crash the thread silently
         log_crash("Overnight Autopilot (web)", exc=exc)
-        with _AUTOPILOT_JOBS_LOCK:
-            job = _AUTOPILOT_JOBS[job_id]
-            job["done"] = True
-            job["error"] = f"Unexpected error: {exc}"
+        JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
     finally:
         HEAVY_JOB_GUARD.release(JOB_SPEED_RUN)
 
@@ -9430,15 +9251,11 @@ def overnight_autopilot_start():
             report_dir=AUTOPILOT_DIR,
         )
 
-        job_id = uuid.uuid4().hex[:12]
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
-        with _AUTOPILOT_JOBS_LOCK:
-            _AUTOPILOT_JOBS[job_id] = {
-                "log": initial_log, "done": False, "error": None, "result": None,
-                "started_at": time.time(), "instrument": active_label,
-            }
+        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label)
+        JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
         thread = threading.Thread(
             target=_run_autopilot_job, args=(job_id, df, risk, rules, active_label, autopilot_cfg), daemon=True,
         )
@@ -9454,8 +9271,7 @@ def overnight_autopilot_start():
 
 @app.route("/overnight-autopilot/job/<job_id>")
 def overnight_autopilot_job(job_id):
-    with _AUTOPILOT_JOBS_LOCK:
-        job = _AUTOPILOT_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return render_template("overnight_autopilot_job.html", job_id=job_id, not_found=True), 404
     return render_template("overnight_autopilot_job.html", job_id=job_id, not_found=False)
@@ -9463,8 +9279,7 @@ def overnight_autopilot_job(job_id):
 
 @app.route("/overnight-autopilot/job/<job_id>/status.json")
 def overnight_autopilot_job_status(job_id):
-    with _AUTOPILOT_JOBS_LOCK:
-        job = _AUTOPILOT_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return jsonify({"found": False}), 404
 
@@ -9514,16 +9329,7 @@ def serve_autopilot_report(filename):
 # fanned out across a dataset multi-select instead of one dataset picker.
 # ---------------------------------------------------------------------------
 
-_MULTI_SPEEDRUN_JOBS: dict[str, dict] = {}
-_MULTI_SPEEDRUN_JOBS_LOCK = threading.Lock()
 MULTI_SPEEDRUN_DIR = BASE_DIR / "reports" / "speed_run" / "multi_instrument"
-
-
-def _multi_speedrun_log(job_id: str, label: str, msg: str) -> None:
-    with _MULTI_SPEEDRUN_JOBS_LOCK:
-        job = _MULTI_SPEEDRUN_JOBS.get(job_id)
-        if job is not None:
-            job["log"].append(f"[{label}] {msg}")
 
 
 def _run_multi_speedrun_job(
@@ -9534,7 +9340,7 @@ def _run_multi_speedrun_job(
         job_dir = MULTI_SPEEDRUN_DIR / job_id
         results = run_multi_instrument_speed_run(
             jobs, risk, rules, cfg, job_dir, max_concurrent_instruments=max_concurrent,
-            progress_cb=lambda label, msg: _multi_speedrun_log(job_id, label, msg),
+            progress_cb=lambda label, msg: JOB_MANAGER.log(job_id, f"[{label}] {msg}"),
         )
         per_instrument = {}
         for label, res in results.items():
@@ -9563,17 +9369,10 @@ def _run_multi_speedrun_job(
             }
 
         best = best_speed_run_across_instruments(results)
-        with _MULTI_SPEEDRUN_JOBS_LOCK:
-            job = _MULTI_SPEEDRUN_JOBS[job_id]
-            job["done"] = True
-            job["results"] = per_instrument
-            job["best_label"] = best.label if best is not None else None
+        JOB_MANAGER.finish(job_id, results=per_instrument, best_label=(best.label if best is not None else None))
     except Exception as exc:  # noqa: BLE001
         log_crash("Multi-Instrument Speed Run (web)", exc=exc)
-        with _MULTI_SPEEDRUN_JOBS_LOCK:
-            job = _MULTI_SPEEDRUN_JOBS[job_id]
-            job["done"] = True
-            job["error"] = str(exc)
+        JOB_MANAGER.fail(job_id, str(exc))
     finally:
         HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_SPEED_RUN)
 
@@ -9655,14 +9454,13 @@ def speed_run_multi_instrument_start():
         )
         max_concurrent = int(form.get("max_concurrent_instruments", 2) or 2)
 
-        job_id = uuid.uuid4().hex[:12]
-        with _MULTI_SPEEDRUN_JOBS_LOCK:
-            _MULTI_SPEEDRUN_JOBS[job_id] = {
-                "log": [f"Running Speed Run on {len(jobs)} instrument/timeframe target(s): " +
-                        ", ".join(f"{j.instrument}/{j.timeframe}" for j in jobs)],
-                "done": False, "error": None, "results": None, "best_label": None,
-                "labels": [f"{j.instrument}/{j.timeframe}" for j in jobs],
-            }
+        job_id = JOB_MANAGER.create(
+            log=[f"Running Speed Run on {len(jobs)} instrument/timeframe target(s): " +
+                 ", ".join(f"{j.instrument}/{j.timeframe}" for j in jobs)],
+            results=None, best_label=None,
+            labels=[f"{j.instrument}/{j.timeframe}" for j in jobs],
+        )
+        JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
         thread = threading.Thread(
             target=_run_multi_speedrun_job, args=(job_id, jobs, risk, rules, cfg, max_concurrent),
             daemon=True,
@@ -9681,8 +9479,7 @@ def speed_run_multi_instrument_start():
 
 @app.route("/speed-run/multi-instrument/job/<job_id>")
 def speed_run_multi_instrument_job(job_id):
-    with _MULTI_SPEEDRUN_JOBS_LOCK:
-        job = _MULTI_SPEEDRUN_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return render_template("speed_run_multi_instrument_job.html", job_id=job_id, not_found=True), 404
     return render_template("speed_run_multi_instrument_job.html", job_id=job_id, not_found=False)
@@ -9690,8 +9487,7 @@ def speed_run_multi_instrument_job(job_id):
 
 @app.route("/speed-run/multi-instrument/job/<job_id>/status.json")
 def speed_run_multi_instrument_job_status(job_id):
-    with _MULTI_SPEEDRUN_JOBS_LOCK:
-        job = _MULTI_SPEEDRUN_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return jsonify({"found": False}), 404
     return jsonify({
@@ -9713,18 +9509,14 @@ def serve_speedrun_report_multi(job_id, filename):
 # tagged DRAFT and nothing here ever runs generated code automatically.
 # Needs no market data at all, unlike everything else in this file -- it
 # only drafts source code, it doesn't backtest it.
+#
+# MIGRATED (2026-09, JOB_MANAGER cleanup): this used to be its own
+# hand-rolled _GENSTRAT_JOBS dict + _GENSTRAT_JOBS_LOCK + a dedicated
+# _genstrat_job_progress() helper just to update two fields under that
+# lock -- now the shared JOB_MANAGER (see app.web.job_manager's module
+# docstring, and _run_wfo_job/_run_cpcv_job for the original reference
+# migration) does all of that generically.
 # ---------------------------------------------------------------------------
-
-_GENSTRAT_JOBS: dict[str, dict] = {}
-_GENSTRAT_JOBS_LOCK = threading.Lock()
-
-
-def _genstrat_job_progress(job_id: str, tokens: int, elapsed: float) -> None:
-    with _GENSTRAT_JOBS_LOCK:
-        job = _GENSTRAT_JOBS.get(job_id)
-        if job is not None:
-            job["tokens"] = tokens
-            job["elapsed"] = elapsed
 
 
 def _run_genstrat_job(
@@ -9738,24 +9530,15 @@ def _run_genstrat_job(
             settings, language, idea,
             timeout=stall_timeout, max_total_seconds=max_total,
             num_ctx=num_ctx, num_predict=num_predict,
-            progress_cb=lambda tokens, elapsed: _genstrat_job_progress(job_id, tokens, elapsed),
+            progress_cb=lambda tokens, elapsed: JOB_MANAGER.update(job_id, tokens=tokens, elapsed=elapsed),
         )
-        with _GENSTRAT_JOBS_LOCK:
-            job = _GENSTRAT_JOBS[job_id]
-            job["done"] = True
-            if result.code is None:
-                job["error"] = result.error or "Generation failed."
-            else:
-                job["code"] = result.code
-                job["filename_hint"] = result.filename_hint
-                job["language"] = language
-                job["idea"] = idea
+        if result.code is None:
+            JOB_MANAGER.fail(job_id, result.error or "Generation failed.")
+        else:
+            JOB_MANAGER.finish(job_id, code=result.code, filename_hint=result.filename_hint, language=language, idea=idea)
     except Exception as exc:  # noqa: BLE001 -- must surface on the status page, not crash the thread silently
         log_crash("Generate Strategies (web)", exc=exc)
-        with _GENSTRAT_JOBS_LOCK:
-            job = _GENSTRAT_JOBS[job_id]
-            job["done"] = True
-            job["error"] = f"Unexpected error: {exc}"
+        JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
 
 
 @app.route("/generate-strategies")
@@ -9794,12 +9577,8 @@ def generate_strategies_start():
     stall_timeout = int(form.get("stall_timeout", DEFAULT_TIMEOUT_SECONDS) or DEFAULT_TIMEOUT_SECONDS)
     max_total = int(form.get("max_total", DEFAULT_MAX_TOTAL_SECONDS) or DEFAULT_MAX_TOTAL_SECONDS)
 
-    job_id = uuid.uuid4().hex[:12]
-    with _GENSTRAT_JOBS_LOCK:
-        _GENSTRAT_JOBS[job_id] = {
-            "done": False, "error": None, "code": None, "filename_hint": None, "language": language,
-            "idea": idea, "tokens": 0, "elapsed": 0.0, "started_at": time.time(),
-        }
+    job_id = JOB_MANAGER.create(code=None, filename_hint=None, language=language, idea=idea, tokens=0, elapsed=0.0)
+    JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
     thread = threading.Thread(
         target=_run_genstrat_job,
         args=(job_id, settings, language, idea, num_ctx, num_predict, stall_timeout, max_total),
@@ -9811,8 +9590,7 @@ def generate_strategies_start():
 
 @app.route("/generate-strategies/job/<job_id>")
 def generate_strategies_job(job_id):
-    with _GENSTRAT_JOBS_LOCK:
-        job = _GENSTRAT_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return render_template("generate_strategies_job.html", job_id=job_id, not_found=True), 404
     return render_template("generate_strategies_job.html", job_id=job_id, not_found=False)
@@ -9820,8 +9598,7 @@ def generate_strategies_job(job_id):
 
 @app.route("/generate-strategies/job/<job_id>/status.json")
 def generate_strategies_job_status(job_id):
-    with _GENSTRAT_JOBS_LOCK:
-        job = _GENSTRAT_JOBS.get(job_id)
+    job = JOB_MANAGER.get(job_id)
     if job is None:
         return jsonify({"found": False}), 404
     return jsonify({
