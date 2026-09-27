@@ -6,9 +6,60 @@ on:
     tags: [ "v*" ]
   workflow_dispatch: {}
 
+# FIX (2026-09, "this has been loading/compiling for over an hour --
+# that's not normal"): see build.yml's own concurrency block for the
+# full reasoning -- the short version is that several commits pushed
+# close together used to each queue their own complete run of this
+# workflow with nothing canceling the older, now-stale one.
+concurrency:
+  group: build-web-exe-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # FIX (2026-09, root cause of the hour-plus hangs): this workflow's
+  # "Run test suite" gate against the FULL 2000+-test suite used to run
+  # directly on windows-latest, inside the same job that then runs
+  # PyInstaller. Windows runners are dramatically slower than Linux for
+  # this kind of numpy/pandas-heavy workload (no manylinux wheels to
+  # reuse as-is, slower filesystem/process-spawn overhead for a suite
+  # this size), so a suite that runs in a few minutes on Linux (see
+  # build.yml, which already gates every push this same way) could take
+  # well over an hour here -- and because the exe build itself couldn't
+  # even START until that finished, the whole workflow sat "in progress"
+  # the entire time with no visible sign of whether it was working or
+  # stuck. Splitting the test gate into its OWN fast ubuntu-latest job
+  # that the Windows build job depends on (needs:) keeps exactly the
+  # same protection (a red test suite still blocks the release exe --
+  # see the windows job's own comment) while removing the slow-OS
+  # re-run entirely from the critical path.
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: config/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r config/requirements.txt
+          pip install pytest
+      - name: Run test suite
+        run: pytest -q tests
+
   build-windows-web-exe:
+    needs: test
     runs-on: windows-latest
+    # The exe build itself (dependency install + PyInstaller packaging,
+    # no test suite anymore -- see the `test` job above) should be well
+    # under this; a real hang here now fails loudly instead of running
+    # for hours.
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -18,6 +69,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: config/requirements.txt
 
       - name: Install dependencies
         shell: pwsh
@@ -48,23 +101,6 @@ jobs:
           # instead of only surfacing when Owen launched the app.
           python -c "import pandas, numpy, flask, alpaca, keyring, qrcode, requests, pyarrow, py7zr, pypdf, scipy, sklearn, lightgbm; print('All critical dependencies import OK')"
           if ($LASTEXITCODE -ne 0) { throw "One or more required Python packages failed to import after installation -- building would produce a broken .exe. Check config/requirements.txt." }
-
-      - name: Run test suite
-        shell: pwsh
-        run: |
-          # GATE (2026-09): this build produces the actual downloadable
-          # T58-Web-App.exe attached to GitHub Releases -- before this
-          # step existed, a failing test suite never blocked it (only the
-          # separate, non-release build.yml ran pytest at all), so a
-          # broken commit could still ship a broken build to a paying
-          # customer while build.yml sat red on the very same commit.
-          # Same fail-fast-on-$LASTEXITCODE discipline as every other step
-          # in this workflow -- a red test suite must stop the build here,
-          # before PyInstaller ever runs.
-          pip install pytest
-          if ($LASTEXITCODE -ne 0) { throw "pip install pytest failed (exit $LASTEXITCODE)" }
-          pytest -q tests
-          if ($LASTEXITCODE -ne 0) { throw "Test suite failed (exit $LASTEXITCODE) -- refusing to build a release .exe from a red test suite. Fix the failing test(s) or, if truly unrelated to this build, investigate before re-running." }
 
       - name: Verify repository structure
         shell: pwsh

@@ -6,9 +6,27 @@ on:
   pull_request:
     branches: [ main ]
 
+# FIX (2026-09, "CI has been running for over an hour" / "not normal"):
+# with no concurrency group, every push queued its own full run of this
+# workflow with nothing canceling the previous one -- so a few commits
+# pushed back to back (exactly the "Add files via upload" pattern that
+# triggered this fix) left SEVERAL of these sitting "in progress" at
+# once, each competing for the same limited pool of hosted runners.
+# Scoping the group to the branch and setting cancel-in-progress means a
+# newer push cancels whatever stale run was still going for an older
+# commit on the same branch, instead of both grinding along in parallel
+# indefinitely.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    # A real hang here should fail loudly within half an hour, not run
+    # for hours (GitHub's own default job timeout is 360 minutes --
+    # indistinguishable from "stuck" to anyone watching the Actions tab).
+    timeout-minutes: 30
     strategy:
       matrix:
         python-version: ["3.10", "3.11"]
@@ -18,6 +36,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: config/requirements.txt
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
