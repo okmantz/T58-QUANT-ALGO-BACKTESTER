@@ -61,11 +61,33 @@ def test_fresh_strategy_starts_at_candidate_and_cannot_promote():
 def test_candidate_to_validated_requires_backtest_and_validation():
     md = {"last_run": {"eval_pass_probability": 80}}
     state = cb.evaluate_promotion(md)
-    # Backtested, but no deeper validation run yet -> still blocked.
+    # Backtested, but none of the 5 deeper validation methods run yet ->
+    # still blocked, and each of the 5 shows up as its own unmet
+    # requirement (not one generic "validated_run" boolean) so the UI can
+    # name exactly which tools are still outstanding.
     assert state.can_promote is False
     req_by_key = {r.key: r for r in state.requirements}
     assert req_by_key["backtested"].met is True
-    assert req_by_key["validated_run"].met is False
+    for method in library.VALIDATION_STEP_METHODS:
+        assert req_by_key[f"validated_{method}"].met is False
+
+
+def test_candidate_to_validated_partial_credit_increases_per_method():
+    """PARTIAL-CREDIT FIX (2026-09): running each additional one of the 5
+    validation methods should move stage_pct forward on its own, not just
+    flip a single boolean once and then sit still no matter how many more
+    of the 5 run afterward."""
+    stype, fname = _seed()
+    library.save_strategy_metadata(stype, fname, {"last_run": {"eval_pass_probability": 80}}, merge=True)
+    pct_before = cb.evaluate_promotion(library.load_strategy_metadata(stype, fname)).to_dict()["stage_pct"]
+
+    library.record_validation_result(stype, fname, {"method": "cpcv", "efficiency": 0.6})
+    pct_after_one = cb.evaluate_promotion(library.load_strategy_metadata(stype, fname)).to_dict()["stage_pct"]
+    assert pct_after_one > pct_before
+
+    library.record_validation_result(stype, fname, {"method": "sensitivity"})
+    pct_after_two = cb.evaluate_promotion(library.load_strategy_metadata(stype, fname)).to_dict()["stage_pct"]
+    assert pct_after_two > pct_after_one
 
 
 def test_promote_strategy_blocked_reports_specific_reason():
@@ -80,8 +102,11 @@ def test_promote_strategy_succeeds_once_requirements_met():
     stype, fname = _seed()
     library.save_strategy_metadata(stype, fname, {
         "last_run": {"eval_pass_probability": 80},
-        "last_validation": {"method": "cpcv", "efficiency": 0.6},
     }, merge=True)
+    # All 5 tracked validation methods must have run (see
+    # library.VALIDATION_STEP_METHODS), not just any one of them.
+    for method in library.VALIDATION_STEP_METHODS:
+        library.record_validation_result(stype, fname, {"method": method, "efficiency": 0.6})
     ok, message, new_stage = cb.promote_strategy(stype, fname)
     assert ok is True
     assert new_stage == "validated"
@@ -101,9 +126,10 @@ def test_cannot_skip_a_stage():
     # only ever advances one stage at a time.
     library.save_strategy_metadata(stype, fname, {
         "last_run": {"eval_pass_probability": 95, "first_payout_probability": 90, "verdict": "READY"},
-        "last_validation": {"method": "cpcv", "efficiency": 0.9},
         "last_champion_check": {"verdict": "READY", "t58_score": 95},
     }, merge=True)
+    for method in library.VALIDATION_STEP_METHODS:
+        library.record_validation_result(stype, fname, {"method": method, "efficiency": 0.9})
     ok, _msg, new_stage = cb.promote_strategy(stype, fname)
     assert ok is True
     assert new_stage == "validated"  # one stage, not champion_candidate
