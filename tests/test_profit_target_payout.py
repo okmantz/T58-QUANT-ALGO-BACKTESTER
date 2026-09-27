@@ -137,3 +137,47 @@ def test_breach_and_payout_can_coexist_and_are_counted_separately():
     stats = compute_statistics(trades, equity_df, risk.initial_balance)
     assert stats.payout_count >= 1
     assert stats.account_reset_count >= 1
+
+
+def test_zero_size_contract_floor_warns_instead_of_silently_reporting_zero_trades():
+    """REGRESSION TEST (Owen's "T58 Gold Trend Breakout" strategy, Sep
+    2026): a strategy risking only 0.6% of a $100k account against GC's
+    real contract_size (100 -- $100/point) with an ATR-based stop wide
+    enough that one whole contract's risk exceeds that 0.6% budget floors
+    EVERY entry to 0 contracts and silently reports 0 trades, with
+    nothing telling the user why. The exact same strategy backtested
+    WITHOUT contract_size set (continuous/fractional sizing) trades
+    completely normally -- this is not a strategy-logic bug, it's a
+    risk-value-vs-instrument-lot-size mismatch that the engine must
+    surface, not swallow silently."""
+    ts = pd.date_range("2024-01-01 09:00", periods=5, freq="D")
+    rows = [
+        (ts[0], 2000.0, 2010.0, 1990.0, 2005.0, 1000.0),
+        (ts[1], 2005.0, 2020.0, 1995.0, 2015.0, 1000.0),
+        (ts[2], 2015.0, 2030.0, 2005.0, 2025.0, 1000.0),
+        (ts[3], 2025.0, 2040.0, 2015.0, 2035.0, 1000.0),
+        (ts[4], 2035.0, 2050.0, 2025.0, 2045.0, 1000.0),
+    ]
+    df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    signals = pd.Series([1, 0, 1, 0, 1])
+
+    # A wide (88-point) stop with GC's real contract_size at a small 0.6%
+    # risk budget on $100k: $600 risk / (88 * $100/pt) << 1 contract.
+    risk_realistic = RiskConfig(
+        initial_balance=100_000.0, risk_mode="percent", risk_value=0.6,
+        pip_size=1.0, contract_size=100.0,
+    )
+    with pytest.warns(RuntimeWarning, match="rounded DOWN to 0 whole"):
+        trades, equity_df = run_execution(df, signals, risk_realistic, stop_loss_pips=88, take_profit_pips=None)
+    assert len(trades) == 0
+    assert equity_df.attrs["zero_size_contract_floor_count"] > 0
+
+    # The identical strategy WITHOUT contract_size (continuous sizing)
+    # must trade normally -- proving the strategy itself is fine and this
+    # is purely a whole-contract-realism vs. risk-value mismatch.
+    risk_fractional = RiskConfig(
+        initial_balance=100_000.0, risk_mode="percent", risk_value=0.6, pip_size=1.0,
+    )
+    trades2, equity_df2 = run_execution(df, signals, risk_fractional, stop_loss_pips=88, take_profit_pips=None)
+    assert len(trades2) > 0
+    assert equity_df2.attrs["zero_size_contract_floor_count"] == 0
