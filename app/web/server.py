@@ -5844,7 +5844,10 @@ def serve_pbo_report(filename):
 def _run_sensitivity_job(job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, mc_cfg: MonteCarloConfig, metric: str, pct_range: float, n_steps: int, max_params: int, strategy_name: str = "", instrument: str = "", library_ref: tuple[str, str] | None = None) -> None:
     try:
         JOB_MANAGER.log(job_id, f"Sweeping up to {max_params} tunable parameter(s), {n_steps} steps each, metric={metric}...")
-        results = compute_1d_sensitivity(df, strategy, risk, rules, mc_cfg, metric=metric, pct_range=pct_range, n_steps=n_steps, max_params=max_params)
+        results = compute_1d_sensitivity(
+            df, strategy, risk, rules, mc_cfg, metric=metric, pct_range=pct_range, n_steps=n_steps, max_params=max_params,
+            progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
+        )
         JOB_MANAGER.log(job_id, f"Done: swept {len(results)} parameter(s).")
         paths = generate_sensitivity_report(SENSITIVITY_DIR, results, basename=f"sensitivity_{job_id}")
         report_html = f"/sensitivity_reports/{Path(paths['html']).name}"
@@ -5889,6 +5892,7 @@ def _run_sensitivity_heatmap_job(job_id: str, param_a: str, param_b: str, pct_ra
         heatmap = compute_2d_heatmap(
             ctx["df"], ctx["strategy"], ctx["risk"], ctx["rules"], ctx["mc_cfg"],
             param_a, param_b, metric=ctx["metric"], pct_range=pct_range, n_steps=n_steps,
+            progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
         )
         results = job.get("results") or []
         paths = generate_sensitivity_report(SENSITIVITY_DIR, results, heatmap, basename=f"sensitivity_{job_id}")
@@ -6039,6 +6043,7 @@ def _run_param_robustness_job(
             df, strategy, risk, rules, mc_cfg, metric=metric, pass_threshold_pct=pass_threshold_pct,
             max_params=max_params, pct_range=pct_range, n_steps_1d=n_steps_1d, n_steps_2d=n_steps_2d,
             n_heatmap_pairs=n_heatmap_pairs,
+            progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
         )
         JOB_MANAGER.log(
             job_id,
