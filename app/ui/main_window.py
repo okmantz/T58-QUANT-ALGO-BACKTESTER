@@ -10312,9 +10312,11 @@ class MainWindow:
                 log("")
                 log(f"Note: {n}")
             # Matches app.web.server's own /regime-matrix route's record_validation call.
+            _active_lib = getattr(self, "_active_library_strategy", None)
             strategy_state.record_validation(
                 getattr(strategy, "name", "Strategy"), self.regime_context.instrument_label(), "regime_matrix",
                 passed=None, summary=f"{len(result.cells)} regime cell(s) analyzed",
+                library_type=(_active_lib[0] if _active_lib else ""), library_filename=(_active_lib[1] if _active_lib else ""),
             )
         except StrategyError as exc:
             log(f"Strategy error: {exc}")
@@ -12066,9 +12068,11 @@ class MainWindow:
             summary = f"OOS efficiency {eff:.2f}" if eff is not None else f"{self.wfo_folds.get_int(5)} folds completed"
             # No strict pass/fail verdict is computed by this tool -- passed=None
             # records that it *ran*, matching app.web.server's own /walk-forward-opt route.
+            _active_lib = getattr(self, "_active_library_strategy", None)
             strategy_state.record_validation(
                 getattr(strategy, "name", "Strategy"), self.wfo_context.instrument_label(), "wfo",
                 passed=None, summary=summary, report_html=f"file://{self._last_wfo_html_path.resolve()}",
+                library_type=(_active_lib[0] if _active_lib else ""), library_filename=(_active_lib[1] if _active_lib else ""),
             )
         except StrategyError as exc:
             self._log_wfo(f"\nStrategy error: {exc}")
@@ -12270,10 +12274,12 @@ class MainWindow:
             for k, p in paths.items():
                 self._log_cpcv(f"  {k}: {p}")
             # Matches app.web.server's own /cpcv route's record_validation call.
+            _active_lib = getattr(self, "_active_library_strategy", None)
             strategy_state.record_validation(
                 getattr(strategy_builder(), "name", "Strategy"), self.cpcv_context.instrument_label(), "cpcv",
                 passed=bool(result.is_robust), summary=f"{result.n_paths} paths evaluated",
                 report_html=f"file://{self._last_cpcv_html_path.resolve()}",
+                library_type=(_active_lib[0] if _active_lib else ""), library_filename=(_active_lib[1] if _active_lib else ""),
             )
             # UPGRADE (library_ref): the web app's own /cpcv route also
             # stamps last_validation onto the Strategy Library entry (see
@@ -12533,10 +12539,12 @@ class MainWindow:
                 self._log_sens(f"  {k}: {p}")
             # This tool is diagnostic, not pass/fail -- passed=None records that it
             # ran, matching app.web.server's own /sensitivity route.
+            _active_lib = getattr(self, "_active_library_strategy", None)
             strategy_state.record_validation(
                 getattr(strategy, "name", "Strategy"), self.sensitivity_context.instrument_label(), "sensitivity",
                 passed=None, summary=f"{len(sweeps)} parameter(s) swept",
                 report_html=f"file://{self._last_sens_html_path.resolve()}",
+                library_type=(_active_lib[0] if _active_lib else ""), library_filename=(_active_lib[1] if _active_lib else ""),
             )
         except StrategyError as exc:
             self._log_sens(f"\nStrategy error: {exc}")
@@ -13329,9 +13337,11 @@ class MainWindow:
             gap = getattr(result, "overfitting_gap", None)
             summary = f"overfitting gap {gap:.2f}" if gap is not None else f"{self.wfga_folds.get_int(4)} folds, walk-forward-aware GA"
             # Matches app.web.server's own /walk-forward-ga route's record_validation call.
+            _active_lib = getattr(self, "_active_library_strategy", None)
             strategy_state.record_validation(
                 getattr(strategy, "name", "Strategy"), self.wfga_context.instrument_label(), "wfga",
                 passed=None, summary=summary, report_html=f"file://{self._last_wfga_html_path.resolve()}",
+                library_type=(_active_lib[0] if _active_lib else ""), library_filename=(_active_lib[1] if _active_lib else ""),
             )
         except StrategyError as exc:
             self._log_wfga(f"\nStrategy error: {exc}")
