@@ -2321,6 +2321,15 @@ class MainWindow:
         if self._custom_titlebar_active:
             self._build_resize_grip()
 
+        # Floating Project Chat (same projects/history as the web widget --
+        # see app/ui/project_chat_panel.py). Optional: a failure here must
+        # never stop the app from starting.
+        try:
+            from app.ui.project_chat_panel import ProjectChatPanel
+            self._project_chat = ProjectChatPanel(self.root)
+        except Exception:  # noqa: BLE001
+            self._project_chat = None
+
     def _pump_splash(self, status: str) -> None:
         """Best-effort: updates the boot splash's status text and pumps
         the Tk event loop once, so the splash's glow animation actually
