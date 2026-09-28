@@ -247,9 +247,16 @@
       div.className = "t58-pc-job";
       var title = document.createElement("div");
       title.className = "t58-pc-job-title";
-      title.innerHTML = "<span>" + escapeHtml(job.job_id) + "</span>" +
+      title.innerHTML = "<span>" + escapeHtml(job.tool || job.job_id) + "</span>" +
         "<span class=\"t58-pc-job-status " + status + "\">" + escapeHtml(status) + "</span>";
       div.appendChild(title);
+
+      if (job.progress && job.progress.banner) {
+        var banner = document.createElement("div");
+        banner.className = "t58-pc-job-banner";
+        banner.textContent = job.progress.banner;
+        div.appendChild(banner);
+      }
 
       var meta = document.createElement("div");
       meta.className = "t58-pc-job-meta";
