@@ -114,6 +114,12 @@ def _job_summary(job: dict) -> dict:
     if isinstance(started_at, (int, float)):
         safe["elapsed_seconds"] = round(_time.time() - started_at, 1)
     safe["has_result"] = job.get("result") is not None
+    tracker = job.get("_tracker")
+    if tracker is not None:
+        try:
+            safe["progress"] = tracker.snapshot().to_dict()  # e.g. "Phase 2 · Breeding · 1,240 candidates · 38/s"
+        except Exception:  # noqa: BLE001 -- telemetry must never break the feed
+            pass
     return safe
 
 
@@ -131,8 +137,15 @@ def _activity_summary_lines(project_id: str) -> list[str]:
             status = f"failed ({job['error']})"
         elif job.get("cancelled"):
             status = "cancelled"
-        label = job.get("instrument") or job.get("tool") or job["job_id"]
-        lines.append(f"Job {job['job_id']} ({label}): {status}")
+        label = " ".join(x for x in (job.get("tool"), job.get("instrument")) if x) or job["job_id"]
+        line = f"Job {job['job_id']} ({label}): {status}"
+        tracker = job.get("_tracker")
+        if tracker is not None and not job.get("done"):
+            try:
+                line += f" -- {tracker.snapshot().banner}"
+            except Exception:  # noqa: BLE001
+                pass
+        lines.append(line)
     return lines
 
 

@@ -75,6 +75,8 @@ import time
 import uuid
 from typing import Any, Callable, Optional
 
+from app.orchestration.run_progress import ProgressTracker
+
 
 class JobManager:
     """Thread-safe tracker for background jobs identified by a short hex
@@ -91,6 +93,22 @@ class JobManager:
         # so a test (or a future second JobManager) can register its own
         # getter without affecting any other instance.
         self._active_project_getter: Optional[Callable[[], Optional[str]]] = None
+        self._reapers: list[Callable[[], None]] = []
+
+    def add_reaper(self, fn: Callable[[], None]) -> None:
+        """Registers a callable that closes out jobs whose owner never calls
+        finish()/fail() itself (Evolution Lab's runner owns its own thread and
+        is only noticed stopping when something polls it). Run before every
+        list_jobs(), so the Activity feed never shows a dead run as running.
+        Must be idempotent; an exception in one is ignored."""
+        self._reapers.append(fn)
+
+    def _run_reapers(self) -> None:
+        for fn in list(self._reapers):
+            try:
+                fn()
+            except Exception:
+                pass  # a broken reaper must never break the feed
 
     def set_active_project_getter(self, getter: Optional[Callable[[], Optional[str]]]) -> None:
         """Registers the function create() calls (with no arguments) to
@@ -119,6 +137,7 @@ class JobManager:
         unless a getter has actually been registered AND returns
         something truthy for the current call."""
         job_id = uuid.uuid4().hex[:12]
+        progress_kind = initial.pop("progress_kind", None)
         job = {
             "log": [],
             "done": False,
@@ -128,6 +147,18 @@ class JobManager:
             "project_id": None,
         }
         job.update(initial)
+        if progress_kind:
+            # Live phase/counter telemetry -- see app.orchestration.run_progress.
+            # Opt-in per job type via create(progress_kind="search"|"speed_run"|
+            # "evolution"); jobs that don't ask for it are completely unaffected.
+            try:
+                tracker = ProgressTracker(progress_kind)
+            except ValueError:
+                tracker = None  # a typo'd kind must never stop a real job from starting
+            if tracker is not None:
+                for line in job.get("log") or []:
+                    tracker.feed(line)  # lines seeded via create(log=[...]) count too
+                job["_tracker"] = tracker
         if job.get("project_id") is None and self._active_project_getter is not None:
             try:
                 job["project_id"] = self._active_project_getter()
@@ -150,8 +181,12 @@ class JobManager:
         state) -- a progress line is never worth raising over."""
         with self._lock:
             job = self._jobs.get(job_id)
-            if job is not None:
-                job["log"].append(message)
+            if job is None:
+                return
+            job["log"].append(message)
+            tracker = job.get("_tracker")
+        if tracker is not None:
+            tracker.feed(message)  # outside our lock: the tracker has its own
 
     def update(self, job_id: str, **fields: Any) -> None:
         """Merges fields into a job's stored dict. Silently does nothing
@@ -165,12 +200,42 @@ class JobManager:
         """update() plus done=True -- the single call every job runner's
         success path should end on, so "did this job finish" is never
         ambiguous."""
-        self.update(job_id, done=True, **fields)
+        self.update(job_id, **{"finished_at": time.time(), **fields, "done": True})
+        self._freeze_tracker(job_id)
 
     def fail(self, job_id: str, error: str) -> None:
         """update() plus done=True, error=<message> -- the single call
         every job runner's except-block should end on."""
-        self.update(job_id, done=True, error=error)
+        self.update(job_id, finished_at=time.time(), done=True, error=error)
+        self._freeze_tracker(job_id)
+
+    def _freeze_tracker(self, job_id: str) -> None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            tracker = job.get("_tracker") if job is not None else None
+        if tracker is not None:
+            tracker.finish()
+
+    def feed_progress(self, job_id: str, line: str) -> None:
+        """Feeds a progress line to the job's tracker WITHOUT appending it to
+        the job's log -- for a long-lived job (Evolution Lab runs for days)
+        whose own log is already kept, capped, elsewhere, so the tracker
+        can follow it without this dict growing without bound. Silently does
+        nothing for an unknown job or one without a tracker."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            tracker = job.get("_tracker") if job is not None else None
+        if tracker is not None:
+            tracker.feed(line)
+
+    def get_progress(self, job_id: str) -> Optional[dict[str, Any]]:
+        """Live phase/counter snapshot (see app.orchestration.run_progress)
+        for a job created with ``progress_kind``, else None -- including for
+        an unknown job id. Never raises."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            tracker = job.get("_tracker") if job is not None else None
+        return tracker.snapshot().to_dict() if tracker is not None else None
 
     def prune(self, max_age_seconds: float) -> int:
         """Evicts finished (done=True) jobs whose started_at is older
@@ -199,6 +264,7 @@ class JobManager:
         read-only and non-destructive -- it never prunes or mutates
         anything, so it's safe to call from a polling route on every
         request. ``limit`` caps how many are returned after sorting."""
+        self._run_reapers()  # outside the lock: reapers call finish(), which takes it
         with self._lock:
             snapshot = [
                 {"job_id": jid, **job} for jid, job in self._jobs.items()

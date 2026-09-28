@@ -54,6 +54,7 @@ from app.web.options_outlook_routes import options_outlook_bp
 from app.web.hedge_fund_routes import hedge_fund_bp
 from app.web.risk_sweep_routes import risk_sweep_bp
 from app.web.project_routes import project_bp
+from app.web.telemetry_routes import telemetry_bp, set_evolution_source
 from app.ai.ollama_settings import load_settings as load_ollama_settings
 from app.ai.ollama_settings import save_settings as save_ollama_settings
 from app.ai.research_agent import ResearchAgentContext, ResearchAgent
@@ -531,6 +532,7 @@ app.register_blueprint(extra_bp)
 # app/web/risk_sweep_routes.py's module docstring.
 app.register_blueprint(risk_sweep_bp)
 app.register_blueprint(project_bp)
+app.register_blueprint(telemetry_bp)
 # Belt-and-suspenders alongside run_web.py's own call (this module can also
 # be run directly via `python -m app.web.server`, which never goes through
 # run_web.py) -- idempotent either way. See app.reports.crash_log.
@@ -6390,9 +6392,57 @@ _EVOLUTION_LOG: list[str] = []
 _EVOLUTION_LOG_MAX = 500
 
 
+# Evolution Lab isn't a JOB_MANAGER job (its EvolutionRunner owns its own
+# thread and a capped log), but it registers ONE lightweight entry there per
+# run so it shows up in the Project Chat Activity tab, gets tagged with the
+# active project like every other tool, and feeds the live phase banner (see
+# app.orchestration.run_progress). Its log lines are fed to the tracker only,
+# never appended to the job's own log -- a days-long run would grow it
+# without bound, and _EVOLUTION_LOG already keeps the capped copy.
+_EVOLUTION_JOB_ID: str | None = None
+# True only once the runner has actually been started. Between the job being
+# registered and runner.start() (both under _EVOLUTION_LOCK) the runner "isn't
+# running", and a poll landing in that window must not mistake it for a
+# finished run and close the brand-new job.
+_EVOLUTION_STARTED = False
+
+
 def _evolution_log(msg: str) -> None:
     _EVOLUTION_LOG.append(msg)
     del _EVOLUTION_LOG[:-_EVOLUTION_LOG_MAX]
+    job_id = _EVOLUTION_JOB_ID
+    if job_id:
+        JOB_MANAGER.feed_progress(job_id, msg)
+
+
+def _finish_evolution_job(job_id: str | None = None) -> None:
+    """Marks a run's JOB_MANAGER entry finished (idempotent -- safe to call
+    from every place that notices the runner has stopped). Callers that
+    already looked at the runner pass the job id they read TOGETHER with it,
+    so a run started in between is never closed by mistake."""
+    job_id = job_id or _EVOLUTION_JOB_ID
+    if not job_id:
+        return
+    job = JOB_MANAGER.get(job_id)
+    if job is not None and not job.get("done"):
+        JOB_MANAGER.finish(job_id)
+
+
+def _reap_evolution_job() -> None:
+    """JobManager reaper: closes the entry once the runner has stopped on its
+    own (finished, target reached, or crashed) even if nobody is polling."""
+    with _EVOLUTION_LOCK:
+        runner, job_id, started = _EVOLUTION_RUNNER, _EVOLUTION_JOB_ID, _EVOLUTION_STARTED
+    if runner is not None and started and job_id and not runner.is_running:
+        _finish_evolution_job(job_id)
+
+
+JOB_MANAGER.add_reaper(_reap_evolution_job)
+
+
+# The telemetry blueprint (equity swarm for the current elite) can't import
+# this module -- circular -- so it is handed a getter instead.
+set_evolution_source(lambda: _EVOLUTION_RUNNER)
 
 
 # Lets HEAVY_JOB_GUARD self-heal if Evolution Lab's slot ever gets stuck
@@ -6418,7 +6468,7 @@ def evolution_form():
 
 @app.route("/evolution/start", methods=["POST"])
 def evolution_start():
-    global _EVOLUTION_RUNNER
+    global _EVOLUTION_RUNNER, _EVOLUTION_JOB_ID, _EVOLUTION_STARTED
     form = request.form
     with _EVOLUTION_LOCK:
         if _EVOLUTION_RUNNER is not None and _EVOLUTION_RUNNER.is_running:
@@ -6561,11 +6611,19 @@ def evolution_start():
             return redirect(url_for("evolution_multi_instrument_job", group_id=group_id))
 
         with _EVOLUTION_LOCK:
+            _finish_evolution_job()  # close out any previous run's entry first
+            _EVOLUTION_STARTED = False
+            _EVOLUTION_JOB_ID = JOB_MANAGER.create(
+                instrument=active_label, tool="Evolution Lab", progress_kind="evolution",
+            )
+            JOB_MANAGER.prune(max_age_seconds=6 * 3600)
             _EVOLUTION_RUNNER = EvolutionRunner(df, risk, rules, cfg, progress_cb=_evolution_log)
             _EVOLUTION_RUNNER.start()
+            _EVOLUTION_STARTED = True
         return redirect(url_for("evolution_form"))
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_EVOLUTION_LAB)
+        _finish_evolution_job()  # don't leave a phantom "running" entry in the Activity feed
         log_crash("Evolution Lab (web)", exc=exc)
         return render_template("evolution.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), families=[{"name": n, "description": family_description(n)} for n in list_families()], running=False, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 500
 
@@ -6573,7 +6631,7 @@ def evolution_start():
 @app.route("/evolution/stop", methods=["POST"])
 def evolution_stop():
     with _EVOLUTION_LOCK:
-        runner = _EVOLUTION_RUNNER
+        runner, job_id = _EVOLUTION_RUNNER, _EVOLUTION_JOB_ID
     if runner is not None:
         # Blocks up to 5s for the run loop to actually exit (now realistic
         # -- see EvolutionRunner._drain_futures -- instead of the old
@@ -6583,6 +6641,7 @@ def evolution_stop():
         # means the very next page load already reflects STOPPED.
         if runner.stop_and_wait(timeout=5.0):
             HEAVY_JOB_GUARD.release(JOB_EVOLUTION_LAB)
+            _finish_evolution_job(job_id)
     return redirect(url_for("evolution_form"))
 
 
@@ -6738,7 +6797,7 @@ def evolution_promote():
 @app.route("/evolution/status.json")
 def evolution_status():
     with _EVOLUTION_LOCK:
-        runner = _EVOLUTION_RUNNER
+        runner, job_id, started = _EVOLUTION_RUNNER, _EVOLUTION_JOB_ID, _EVOLUTION_STARTED
     if runner is None:
         return jsonify({"running": False, "started": False, "log": [], "leaderboard": [], "journal": []})
     status = runner.status()
@@ -6749,9 +6808,12 @@ def evolution_status():
         # some other job already holds/released it (release() is a no-op
         # unless this name is the current holder).
         HEAVY_JOB_GUARD.release(JOB_EVOLUTION_LAB)
+        if started:
+            _finish_evolution_job(job_id)
     leaderboard = [r.to_checkpoint_dict() for r in runner.leaderboard]
     return jsonify({
         "started": True,
+        "progress": JOB_MANAGER.get_progress(job_id) if job_id else None,
         "running": status["running"],
         "generation": status["generation"],
         "leaderboard_size": status["leaderboard_size"],
@@ -7755,7 +7817,7 @@ def search_start():
             job_id = JOB_MANAGER.create(
                 log=initial_log, summary=None, cancelled=False, instrument=active_label, mode=mode_key,
                 cancel_event=cancel_event, loop_mode=True, loop_rounds=0,
-                loop_last_round=None, loop_result=None,
+                loop_last_round=None, loop_result=None, tool="Search Lab", progress_kind="search",
             )
             JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
             loop_dir = str(SEARCH_DIR / f"loop_{job_id}")
@@ -7770,7 +7832,7 @@ def search_start():
 
         job_id = JOB_MANAGER.create(
             log=initial_log, summary=None, cancelled=False, instrument=active_label, mode=mode_key,
-            cancel_event=cancel_event, loop_mode=False,
+            cancel_event=cancel_event, loop_mode=False, tool="Search Lab", progress_kind="search",
         )
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
         thread = threading.Thread(
@@ -8905,7 +8967,10 @@ def _run_speedrun_job(
             progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
             instrument=active_label,
         )
-        JOB_MANAGER.finish(job_id, result=result)
+        # df/risk are kept (same as Search Lab's finish above) so the equity
+        # swarm can redraw the winner's siblings after the run -- released
+        # with the job by JOB_MANAGER.prune().
+        JOB_MANAGER.finish(job_id, result=result, df=df, risk=risk)
     except Exception as exc:  # noqa: BLE001 -- must surface on the status page, not crash the thread silently
         log_crash("Speed Run (web)", exc=exc)
         JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
@@ -9023,6 +9088,7 @@ def speed_run_start():
             job_id = JOB_MANAGER.create(
                 log=initial_log, instrument=active_label, cancel_event=cancel_event,
                 loop_mode=True, loop_rounds=0, loop_result=None, cancelled=False,
+                tool="Speed Run", progress_kind="speed_run",
             )
             JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
             loop_dir = str(SPEEDRUN_DIR / f"loop_{job_id}")
@@ -9040,7 +9106,10 @@ def speed_run_start():
             thread.start()
             return redirect(url_for("speed_run_job", job_id=job_id))
 
-        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label, loop_mode=False)
+        job_id = JOB_MANAGER.create(
+            log=initial_log, instrument=active_label, loop_mode=False,
+            tool="Speed Run", progress_kind="speed_run",
+        )
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
         thread = threading.Thread(
             target=_run_speedrun_job, args=(job_id, df, risk, rules, cfg, active_label), daemon=True,
