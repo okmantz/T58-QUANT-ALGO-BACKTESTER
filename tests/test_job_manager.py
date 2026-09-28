@@ -111,3 +111,122 @@ def test_count_reflects_current_job_dict_size():
     jm.create()
     jm.create()
     assert jm.count() == 2
+
+
+# ---------------------------------------------------------------------------
+# project_id auto-tagging (added for the Project Chat feature -- see
+# app.orchestration.projects / app.web.project_routes)
+# ---------------------------------------------------------------------------
+
+def test_create_defaults_project_id_to_none_with_no_getter_registered():
+    jm = JobManager()
+    job_id = jm.create()
+    assert jm.get(job_id)["project_id"] is None
+
+
+def test_create_auto_tags_project_id_from_registered_getter():
+    jm = JobManager()
+    jm.set_active_project_getter(lambda: "proj-123")
+    try:
+        job_id = jm.create(instrument="EURUSD")
+        assert jm.get(job_id)["project_id"] == "proj-123"
+    finally:
+        jm.set_active_project_getter(None)
+
+
+def test_create_explicit_project_id_overrides_the_getter():
+    jm = JobManager()
+    jm.set_active_project_getter(lambda: "proj-from-getter")
+    try:
+        job_id = jm.create(project_id="proj-explicit")
+        assert jm.get(job_id)["project_id"] == "proj-explicit"
+    finally:
+        jm.set_active_project_getter(None)
+
+
+def test_create_with_no_active_project_leaves_project_id_none():
+    jm = JobManager()
+    jm.set_active_project_getter(lambda: None)
+    try:
+        job_id = jm.create()
+        assert jm.get(job_id)["project_id"] is None
+    finally:
+        jm.set_active_project_getter(None)
+
+
+def test_create_survives_a_broken_getter():
+    """A getter that raises must never break job creation itself -- see
+    create()'s own try/except around the call."""
+    jm = JobManager()
+
+    def broken():
+        raise RuntimeError("no request context")
+
+    jm.set_active_project_getter(broken)
+    try:
+        job_id = jm.create()  # must not raise
+        assert jm.get(job_id)["project_id"] is None
+    finally:
+        jm.set_active_project_getter(None)
+
+
+def test_set_active_project_getter_none_unregisters_it():
+    jm = JobManager()
+    jm.set_active_project_getter(lambda: "proj-123")
+    jm.set_active_project_getter(None)
+    job_id = jm.create()
+    assert jm.get(job_id)["project_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# list_jobs() -- the read-only feed app.web.project_routes polls
+# ---------------------------------------------------------------------------
+
+def test_list_jobs_returns_each_job_with_its_own_job_id():
+    jm = JobManager()
+    job_id = jm.create(instrument="EURUSD")
+    jobs = jm.list_jobs()
+    assert len(jobs) == 1
+    assert jobs[0]["job_id"] == job_id
+    assert jobs[0]["instrument"] == "EURUSD"
+
+
+def test_list_jobs_sorted_newest_first():
+    jm = JobManager()
+    old = jm.create()
+    jm._jobs[old]["started_at"] = time.time() - 100
+    new = jm.create()
+    jobs = jm.list_jobs()
+    assert [j["job_id"] for j in jobs] == [new, old]
+
+
+def test_list_jobs_filters_by_project_id():
+    jm = JobManager()
+    a = jm.create(project_id="proj-a")
+    jm.create(project_id="proj-b")
+    jobs = jm.list_jobs(project_id="proj-a")
+    assert [j["job_id"] for j in jobs] == [a]
+
+
+def test_list_jobs_with_no_project_id_returns_every_job_regardless_of_tag():
+    jm = JobManager()
+    jm.create(project_id="proj-a")
+    jm.create(project_id="proj-b")
+    jm.create()  # untagged
+    assert len(jm.list_jobs()) == 3
+
+
+def test_list_jobs_respects_limit_after_sorting():
+    jm = JobManager()
+    for _ in range(5):
+        jm.create()
+    assert len(jm.list_jobs(limit=2)) == 2
+
+
+def test_list_jobs_returns_copies_not_live_dicts():
+    jm = JobManager()
+    job_id = jm.create()
+    snapshot = jm.list_jobs()[0]
+    snapshot["done"] = True
+    assert jm.get(job_id)["done"] is False
+
