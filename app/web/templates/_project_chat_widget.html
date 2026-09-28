@@ -1,0 +1,127 @@
+<!--
+  Floating "Project Chat" widget -- ever-present across every page that
+  includes _sidebar.html (see that file's own include of this partial).
+  Self-contained: its own scoped CSS (prefixed t58-pc- to avoid colliding
+  with page-specific styles) and its own JS file (/static/project_chat.js).
+
+  Two tabs:
+    - Chat: persistent, memory-carrying conversation with Ollama, scoped
+      to whichever "project" is active (see app.web.project_routes).
+    - Activity: read-only feed of background jobs (Search Lab, WFO,
+      CPCV, etc.) started while this project was active -- see
+      app.web.job_manager.JobManager.list_jobs. No delegation/controls
+      here yet, by design (see app.ai.project_chat's module docstring).
+-->
+<div id="t58-pc-launcher" class="t58-pc-launcher" title="Project Chat" role="button" aria-label="Open Project Chat">
+  <span class="t58-pc-launcher-icon" aria-hidden="true">&#128172;</span>
+</div>
+
+<div id="t58-pc-panel" class="t58-pc-panel" hidden>
+  <div class="t58-pc-header">
+    <select id="t58-pc-project-select" class="t58-pc-project-select" aria-label="Active project"></select>
+    <button id="t58-pc-new-project" type="button" class="t58-pc-icon-btn" title="New project">+</button>
+    <button id="t58-pc-rename-project" type="button" class="t58-pc-icon-btn" title="Rename project">&#9998;</button>
+    <button id="t58-pc-delete-project" type="button" class="t58-pc-icon-btn" title="Delete project">&#128465;</button>
+    <button id="t58-pc-close" type="button" class="t58-pc-icon-btn t58-pc-close" title="Close">&times;</button>
+  </div>
+
+  <div class="t58-pc-tabs">
+    <button type="button" class="t58-pc-tab active" data-tab="chat">Chat</button>
+    <button type="button" class="t58-pc-tab" data-tab="activity">Activity</button>
+  </div>
+
+  <div id="t58-pc-empty" class="t58-pc-empty" hidden>
+    No project yet. Click <strong>+</strong> to start one -- your chat history and job activity
+    will be saved to it.
+  </div>
+
+  <div id="t58-pc-tab-chat" class="t58-pc-tab-panel">
+    <div id="t58-pc-messages" class="t58-pc-messages"></div>
+    <div id="t58-pc-typing" class="t58-pc-typing" hidden>Thinking&hellip;</div>
+    <form id="t58-pc-form" class="t58-pc-form">
+      <textarea id="t58-pc-input" class="t58-pc-input" placeholder="Ask about this project&hellip;" rows="1"></textarea>
+      <button type="submit" class="t58-pc-send">Send</button>
+    </form>
+  </div>
+
+  <div id="t58-pc-tab-activity" class="t58-pc-tab-panel" hidden>
+    <div id="t58-pc-activity-list" class="t58-pc-activity-list"></div>
+  </div>
+</div>
+
+<style>
+  .t58-pc-launcher {
+    position: fixed; right: 18px; bottom: 18px; z-index: 9000;
+    width: 52px; height: 52px; border-radius: 50%;
+    background: var(--teal); color: #04120e;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4); cursor: pointer; user-select: none;
+    font-size: 22px;
+  }
+  .t58-pc-launcher:hover { filter: brightness(1.08); }
+
+  .t58-pc-panel {
+    position: fixed; right: 18px; bottom: 82px; z-index: 9001;
+    width: min(360px, calc(100vw - 32px)); height: min(520px, calc(100vh - 140px));
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 14px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+    display: flex; flex-direction: column; overflow: hidden;
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  .t58-pc-header {
+    display: flex; align-items: center; gap: 6px; padding: 10px; border-bottom: 1px solid var(--border);
+    background: var(--panel-3);
+  }
+  .t58-pc-project-select {
+    flex: 1; min-width: 0; padding: 7px 8px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--panel); color: var(--text); font-size: 13px;
+  }
+  .t58-pc-icon-btn {
+    flex: 0 0 auto; width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--panel); color: var(--text-muted); font-size: 14px; cursor: pointer;
+  }
+  .t58-pc-icon-btn:hover { color: var(--text); }
+  .t58-pc-close { font-size: 18px; }
+
+  .t58-pc-tabs { display: flex; gap: 4px; padding: 8px 10px 0; }
+  .t58-pc-tab {
+    flex: 1; padding: 7px 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .03em;
+    border: 1px solid var(--border-light); border-bottom: none; border-radius: 8px 8px 0 0;
+    background: var(--panel-3); color: var(--text-muted); cursor: pointer;
+  }
+  .t58-pc-tab.active { background: var(--panel-2); color: var(--teal); border-color: var(--border); }
+
+  .t58-pc-empty { padding: 16px; color: var(--text-muted); font-size: 13px; text-align: center; }
+
+  .t58-pc-tab-panel { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+  .t58-pc-messages { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+  .t58-pc-msg { max-width: 85%; padding: 8px 10px; border-radius: 10px; font-size: 13px; line-height: 1.4; white-space: pre-wrap; }
+  .t58-pc-msg.user { align-self: flex-end; background: var(--teal-dim); color: var(--text); }
+  .t58-pc-msg.assistant { align-self: flex-start; background: var(--panel-3); color: var(--text); border: 1px solid var(--border); }
+  .t58-pc-msg.error { align-self: center; background: var(--coral-dim); color: var(--text); font-size: 12px; }
+
+  .t58-pc-typing { padding: 0 12px 6px; color: var(--text-muted); font-size: 12px; }
+
+  .t58-pc-form { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--border); }
+  .t58-pc-input {
+    flex: 1; resize: none; max-height: 90px; padding: 8px 10px; border-radius: 8px;
+    border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 13px;
+  }
+  .t58-pc-send {
+    padding: 0 14px; border-radius: 8px; border: 1px solid var(--teal); background: var(--teal);
+    color: #04120e; font-weight: 600; font-size: 13px; cursor: pointer;
+  }
+  .t58-pc-send:disabled { opacity: 0.5; cursor: default; }
+
+  .t58-pc-activity-list { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+  .t58-pc-job { padding: 8px 10px; border-radius: 8px; background: var(--panel-3); border: 1px solid var(--border); font-size: 12px; }
+  .t58-pc-job-title { display: flex; justify-content: space-between; gap: 8px; font-weight: 600; color: var(--text); }
+  .t58-pc-job-status.running { color: var(--amber); }
+  .t58-pc-job-status.done { color: var(--teal); }
+  .t58-pc-job-status.failed, .t58-pc-job-status.cancelled { color: var(--coral); }
+  .t58-pc-job-meta { color: var(--text-muted); margin-top: 3px; }
+  .t58-pc-job-log { margin-top: 4px; color: var(--text-dim); font-family: ui-monospace, Menlo, monospace; font-size: 11px; white-space: pre-wrap; }
+  .t58-pc-activity-empty { color: var(--text-muted); font-size: 13px; text-align: center; padding: 20px 10px; }
+</style>
