@@ -160,3 +160,78 @@ def guess_instrument_symbol(label: str | None) -> str | None:
         if re.search(rf"(?<![A-Z]){re.escape(symbol)}(?![A-Z])", text):
             return symbol
     return None
+
+
+@dataclass(frozen=True)
+class MarketRiskResolution:
+    """What resolve_risk_per_market decided for ONE market, in a form both
+    the run log and the form's "Detect from data" button can show."""
+    label: str
+    pip_size: float
+    contract_size: float | None
+    commission_per_trade: float
+    symbol: str | None          # known root symbol matched from the label, or None
+    pip_source: str             # "instrument spec" | "detected from price data" | "shared setting"
+    note: str = ""
+
+    def describe(self) -> str:
+        contract = f", ${self.contract_size:g}/point" if self.contract_size else ", not lot-rounded"
+        sym = f" [{self.symbol}]" if self.symbol else ""
+        extra = f" -- {self.note}" if self.note else ""
+        return (f"{self.label}{sym}: pip size {self.pip_size:g}{contract}, commission "
+                f"${self.commission_per_trade:g} ({self.pip_source}){extra}")
+
+
+def resolve_risk_per_market(
+    dfs: dict, base_risk: RiskConfig, auto_detect: bool = True,
+) -> tuple[dict, list]:
+    """Builds ONE RiskConfig per market instead of stamping a single
+    pip_size/contract_size/commission on every instrument.
+
+    Why: a multi-instrument run (ES + GC + MGC, or several FX pairs plus a
+    JPY pair) shares exactly one RiskConfig, so at most one of the markets
+    ever had the right price scale. The rest got a fixed-pips stop that was
+    nonsense for their price level, or a contract size from a different
+    contract entirely -- which then either sized positions to 0 contracts or
+    made the whole run untrustworthy.
+
+    auto_detect=True, per market:
+      1. If the label names a known contract (see KNOWN_INSTRUMENTS), use
+         that spec's pip_size / contract_size (and its default commission,
+         but only when the shared commission is still exactly 0.0 -- an
+         explicit nonzero commission is never overwritten).
+      2. Otherwise detect pip_size from the market's own price data
+         (app.backtest.risk.suggest_pip_size) and clear contract_size, since
+         a contract size typed for a different instrument would be wrong here.
+    auto_detect=False keeps `base_risk` for every market unchanged (the old
+    behavior), still reported so the log says what was used.
+
+    Returns ({label: RiskConfig}, [MarketRiskResolution, ...]). Never raises
+    for a bad frame -- suggest_pip_size falls back to its own default.
+    """
+    from app.backtest.risk import suggest_pip_size
+
+    risks: dict = {}
+    report: list = []
+    for label, df in dfs.items():
+        if not auto_detect:
+            risks[label] = base_risk
+            report.append(MarketRiskResolution(
+                label, base_risk.pip_size, base_risk.contract_size, base_risk.commission_per_trade,
+                None, "shared setting"))
+            continue
+        symbol = guess_instrument_symbol(label)
+        spec = get_instrument_spec(symbol) if symbol else None
+        if spec is not None:
+            risk = apply_instrument_spec(base_risk, spec.symbol)
+            report.append(MarketRiskResolution(
+                label, risk.pip_size, risk.contract_size, risk.commission_per_trade,
+                spec.symbol, "instrument spec"))
+        else:
+            detected = suggest_pip_size(df)
+            risk = replace(base_risk, pip_size=detected, contract_size=None)
+            report.append(MarketRiskResolution(
+                label, detected, None, risk.commission_per_trade, None, "detected from price data",
+                note="no known contract in the name, so positions are not lot-rounded"))
+        risks[label] = risk
+    return risks, report
