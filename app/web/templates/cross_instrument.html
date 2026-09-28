@@ -63,7 +63,7 @@
 
   <div class="card">
     <h2>1. Instruments (pick 2 or more)</h2>
-    <p class="help">Every dataset you've uploaded or fetched is listed here. Choose the markets you want <em>one</em> strategy to generalize across (e.g. ES, NQ and GC, or several FX pairs). All selected instruments share the pip size / commission below, so group instruments that share them.</p>
+    <p class="help">Every dataset you've uploaded or fetched is listed here. Choose the markets you want <em>one</em> strategy to generalize across (e.g. ES, NQ and GC, or several FX pairs). Each instrument gets its own pip size, $/point and commission (see section 3), so you can mix them freely.</p>
     {% if stored_datasets %}
     <div class="dataset-list" id="ci-datasets-list" data-t58-multiselect data-noun="instruments" data-empty-text="None selected -- pick 2 or more">
       {% for g in dataset_groups %}
@@ -133,7 +133,13 @@
     </div>
     <div class="row">
       <div><label>Spread (pips)</label><input type="number" step="0.1" name="spread_pips" value="1.0"></div>
-      <div><label>Pip size, all instruments (ES/NQ futures = 1.0, FX = 0.0001)</label><input type="number" step="0.0001" name="pip_size" id="ci_pip_size_field" value="0.0001"></div>
+      <div><label>Pip size, fallback only (used when auto-detect below is off)</label><input type="number" step="0.0001" name="pip_size" id="ci_pip_size_field" value="0.0001"></div>
+    </div>
+    <div class="checkbox-row" style="margin-top:8px;background:rgba(120,200,120,0.08);border:1px solid rgba(120,200,120,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="auto_pip" id="ci_auto_pip" checked><label for="ci_auto_pip" style="margin:0;">Detect pip size, $/point and commission per instrument from each dataset (recommended when the instruments differ)</label></div>
+    <div style="margin-top:8px;">
+      <button type="button" id="ci_detect_btn" class="save-btn" style="padding:7px 12px;border-radius:8px;border:1px solid var(--teal);background:none;color:var(--teal);cursor:pointer;">Detect pip size from data</button>
+      <span class="help" style="margin-left:8px;">Shows what each ticked instrument will use. Nothing is saved.</span>
+      <div id="ci_detect_out" class="help" style="margin-top:6px;white-space:pre-line;"></div>
     </div>
     <div class="row" style="margin-top:8px;">
       <div><label>Or pick a known instrument (auto-fills pip size + $/point)</label>
@@ -193,6 +199,26 @@
     if (!a || !b) return;
     a.addEventListener('input', function () { b.value = a.value; });
     b.addEventListener('input', function () { a.value = b.value; });
+  })();
+</script>
+<script>
+  (function () {
+    var btn = document.getElementById('ci_detect_btn'), out = document.getElementById('ci_detect_out');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var fd = new FormData();
+      document.querySelectorAll('input[name="datasets"]:checked').forEach(function (c) { fd.append('datasets', c.value); });
+      var com = document.getElementById('ci_commission_field'); if (com) fd.append('commission', com.value || '0');
+      out.textContent = 'Detecting...'; btn.disabled = true;
+      fetch('/cross-instrument/detect', { method: 'POST', body: fd })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d.error) { out.textContent = d.error; return; }
+          out.textContent = d.markets.map(function (m) { return m.text; }).concat(d.problems || []).join('\n');
+        })
+        .catch(function () { out.textContent = 'Could not reach the server.'; })
+        .finally(function () { btn.disabled = false; });
+    });
   })();
 </script>
 <script src="/static/prop-presets.js"></script>

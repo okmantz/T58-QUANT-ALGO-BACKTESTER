@@ -95,7 +95,8 @@
 
   document.getElementById('cancel-btn').addEventListener('click', function () {
     this.disabled = true; this.textContent = 'Cancelling…';
-    fetch(`/cross-instrument/job/${jobId}/cancel`, { method: 'POST' }).catch(() => {});
+    fetch(`/cross-instrument/job/${jobId}/cancel`, { method: 'POST' })
+      .catch(() => { showStopped('Lost contact with the server', 'Could not reach the server to cancel. It has most likely stopped.'); });
   });
 
   function saveCandidate(rank, btn) {
@@ -116,11 +117,24 @@
     document.getElementById('finished-back-btn').style.display = 'block';
   }
 
+  function showStopped(title, message) {
+    finish(title);
+    const card = document.getElementById('error-card');
+    card.style.display = 'block'; card.textContent = message;
+  }
+
+  let failedPolls = 0;
   function poll() {
     fetch(`/cross-instrument/job/${jobId}/status.json`)
       .then(r => r.json())
       .then(data => {
-        if (data.not_found) return;
+        failedPolls = 0;
+        if (data.not_found) {
+          // Server restarted (or crashed and came back) -- the job is gone for good. Used to just stop
+          // polling, leaving the spinner and Cancel button on screen forever with no way out.
+          showStopped('Search lost', 'This search is no longer running -- the server was restarted or crashed while it was working, so its progress was lost. Start a new search.');
+          return;
+        }
         document.getElementById('log').textContent = (data.log || []).join('\n');
 
         if (data.error) {
@@ -179,7 +193,15 @@
 
         setTimeout(poll, 1500);
       })
-      .catch(() => setTimeout(poll, 3000));
+      .catch(() => {
+        failedPolls += 1;
+        // ~45s of no answer at all: the server is down. Stop pretending it's still searching.
+        if (failedPolls >= 15) {
+          showStopped('Lost contact with the server', 'The server stopped answering, so it has most likely crashed or been closed. Restart the app, then start a new search.');
+          return;
+        }
+        setTimeout(poll, 3000);
+      });
   }
   poll();
 </script>

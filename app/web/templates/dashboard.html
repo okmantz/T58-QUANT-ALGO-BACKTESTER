@@ -196,7 +196,7 @@
             <button type="submit" class="t58-btn ghost sm">Promote &rarr; {{ r.promotion.next_stage_title }}</button>
           </form>
           {% elif r.promotion.next_stage_title %}
-          <span style="font-size:11px;color:var(--text-dim);" title="{{ r.promotion.requirements | selectattr('met', 'equalto', false) | map(attribute='label') | join('; ') }}">Not yet eligible for {{ r.promotion.next_stage_title }}</span>
+          <span style="font-size:11px;color:var(--text-dim);" title="{{ r.promotion.requirements | selectattr('met', 'equalto', false) | map(attribute='label') | join('; ') }}">Not yet eligible for {{ r.promotion.next_stage_title }}{% set unmet = r.promotion.requirements | rejectattr('met') | list %}{% if unmet %} -- {{ unmet | length }} check{{ '' if unmet | length == 1 else 's' }} still to run</span> <a href="/validate" style="font-size:11px;">Open Validate hub &rarr;</a>{% else %}</span>{% endif %}
           {% else %}
           <span style="font-size:11px;color:var(--teal);">&#9733; Final stage</span>
           {% endif %}
