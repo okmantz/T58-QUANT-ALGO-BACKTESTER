@@ -115,6 +115,7 @@ def _score_across_markets(
     config: dict, dfs: dict, risk: RiskConfig, rules: PropRules, mc_cfg: MonteCarloConfig,
     metric: str, aggregation: str, adaptive_risk=None, early_exit: bool = True,
     backtest_counter: list | None = None, error_log: list | None = None,
+    risk_by_market: dict | None = None, check_cancel=None,
 ) -> tuple[list, float, float, float, float]:
     """Backtests ONE candidate config against every market. A fresh strategy
     instance is built per market (same statefulness discipline as
@@ -123,13 +124,16 @@ def _score_across_markets(
     per_market: list[MarketScore] = []
     dead = False
     for label, df in dfs.items():
+        if check_cancel is not None:
+            check_cancel()   # per market, not just per candidate -- a finalist/holdout pass is many long backtests
+        market_risk = (risk_by_market or {}).get(label, risk)
         if dead and early_exit:
             per_market.append(MarketScore(label, float("-inf"), 0, evaluated=False))
             continue
         try:
             strategy = ManualStrategy(copy.deepcopy(config))
             fitness, stats, _p, _m, bt_result, _mc, _single = _evaluate(
-                df, strategy, risk, rules, mc_cfg, metric, keep_full=False, adaptive_risk=adaptive_risk,
+                df, strategy, market_risk, rules, mc_cfg, metric, keep_full=False, adaptive_risk=adaptive_risk,
             )
             trades = len(bt_result.trades) if bt_result is not None else int((stats or {}).get("total_trades", 0) or 0)
         except Exception as exc:  # noqa: BLE001 -- one bad candidate/market must not kill the whole search
@@ -219,6 +223,7 @@ def run_cross_instrument_search(
     adaptive_risk=None,
     progress_cb: ProgressCallback | None = None,
     cancel_check: CancelCheck | None = None,
+    risk_by_market: dict | None = None,
 ) -> CrossInstrumentResult:
     def log(msg: str) -> None:
         if progress_cb:
@@ -227,6 +232,8 @@ def run_cross_instrument_search(
     def check_cancel() -> None:
         if cancel_check and cancel_check():
             raise CrossInstrumentCancelled("Cross-instrument search cancelled.")
+
+    check_cancel_fn = check_cancel
 
     if len(dfs) < 2:
         raise RefinementError("Cross-instrument search needs at least 2 instruments selected.")
@@ -287,6 +294,7 @@ def run_cross_instrument_search(
         per_market, mean, worst, disp, robust = _score_across_markets(
             config, dev_dfs, risk, prop_rules, screen_cfg, fitness_metric, aggregation,
             adaptive_risk=adaptive_risk, early_exit=True, backtest_counter=backtests, error_log=errors,
+            risk_by_market=risk_by_market, check_cancel=check_cancel_fn,
         )
         meta = space.meta.get(cid, {})
         scored.append(CrossInstrumentCandidate(
@@ -324,6 +332,7 @@ def run_cross_instrument_search(
         per_market, mean, worst, disp, robust = _score_across_markets(
             c.config, dev_dfs, risk, prop_rules, mc_config, fitness_metric, aggregation,
             adaptive_risk=adaptive_risk, early_exit=False, backtest_counter=backtests, error_log=errors,
+            risk_by_market=risk_by_market, check_cancel=check_cancel_fn,
         )
         final.append(CrossInstrumentCandidate(
             candidate_id=c.candidate_id, family=c.family, params=c.params, config=c.config,
@@ -333,7 +342,16 @@ def run_cross_instrument_search(
     final.sort(key=lambda c: c.robustness_score, reverse=True)
 
     # -- Stage 3 (optional): tune the winner's parameters across markets ---
-    if refine_winner and final and final[0].is_viable:
+    per_market_risk_differs = bool(risk_by_market) and len({
+        (r.pip_size, r.contract_size, r.commission_per_trade) for r in risk_by_market.values()
+    }) > 1
+    if refine_winner and per_market_risk_differs:
+        warnings.append(
+            "Skipped the optional refinement step: it scores every market with ONE shared risk setup, but these "
+            "instruments each need their own pip size / contract size. Re-run the winner through Full Pipeline "
+            "per instrument to tune it."
+        )
+    elif refine_winner and final and final[0].is_viable:
         check_cancel()
         winner = final[0]
         log(f"Refining the top candidate ({winner.family}) with the multi-market optimizer...")
@@ -373,6 +391,7 @@ def run_cross_instrument_search(
             per_market, _mean, _worst, _disp, robust = _score_across_markets(
                 c.config, holdout_dfs, risk, prop_rules, mc_config, fitness_metric, aggregation,
                 adaptive_risk=adaptive_risk, early_exit=False, backtest_counter=backtests, error_log=errors,
+                risk_by_market=risk_by_market, check_cancel=check_cancel_fn,
             )
             c.holdout_per_market = per_market
             c.holdout_robustness = robust
