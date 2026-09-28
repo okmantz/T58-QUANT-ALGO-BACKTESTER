@@ -12,8 +12,9 @@
       app.web.job_manager.JobManager.list_jobs. No delegation/controls
       here yet, by design (see app.ai.project_chat's module docstring).
 -->
-<div id="t58-pc-launcher" class="t58-pc-launcher" title="Project Chat" role="button" aria-label="Open Project Chat">
-  <span class="t58-pc-launcher-icon" aria-hidden="true">&#128172;</span>
+<div id="t58-pc-launcher" class="t58-pc-launcher" title="Open Project Chat" role="button" tabindex="0"
+     aria-label="Open Project Chat" aria-expanded="false" aria-controls="t58-pc-panel">
+  <span id="t58-pc-launcher-icon" class="t58-pc-launcher-icon" aria-hidden="true">&#128172;</span>
 </div>
 
 <div id="t58-pc-panel" class="t58-pc-panel" hidden>
@@ -22,7 +23,7 @@
     <button id="t58-pc-new-project" type="button" class="t58-pc-icon-btn" title="New project">+</button>
     <button id="t58-pc-rename-project" type="button" class="t58-pc-icon-btn" title="Rename project">&#9998;</button>
     <button id="t58-pc-delete-project" type="button" class="t58-pc-icon-btn" title="Delete project">&#128465;</button>
-    <button id="t58-pc-close" type="button" class="t58-pc-icon-btn t58-pc-close" title="Close">&times;</button>
+    <button id="t58-pc-close" type="button" class="t58-pc-icon-btn t58-pc-close" title="Collapse chat" aria-label="Collapse chat">&#8211;</button>
   </div>
 
   <div class="t58-pc-tabs">
@@ -59,6 +60,13 @@
     font-size: 22px;
   }
   .t58-pc-launcher:hover { filter: brightness(1.08); }
+  .t58-pc-launcher.open { background: var(--panel-3); color: var(--text); border: 1px solid var(--border-light); }
+
+  /* An explicit `display:` in the rules below beats the browser's built-in [hidden] rule, which is
+     why the panel used to stay expanded no matter what. Restore [hidden] for every widget element. */
+  #t58-pc-panel[hidden], .t58-pc-tab-panel[hidden], .t58-pc-empty[hidden], .t58-pc-typing[hidden] {
+    display: none !important;
+  }
 
   .t58-pc-panel {
     position: fixed; right: 18px; bottom: 82px; z-index: 9001;

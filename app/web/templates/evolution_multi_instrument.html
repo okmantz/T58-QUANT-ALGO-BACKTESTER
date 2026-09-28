@@ -73,7 +73,7 @@
     <h2>1. Instruments (pick 2 or more)</h2>
     <p class="help">Every dataset you've previously uploaded or fetched shows up here -- upload more from the Run &amp; Report or Search Lab pages first if what you want isn't listed yet.</p>
     {% if stored_datasets %}
-    <div class="dataset-list">
+    <div class="dataset-list" id="mi-evo-datasets-list" data-t58-multiselect data-noun="datasets" data-empty-text="None selected -- pick 2 or more">
       {% for g in dataset_groups %}
       <div class="dataset-group-label" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-dim);margin:10px 0 4px;">{{ g.instrument }}</div>
       {% for file in g.files %}
@@ -85,7 +85,6 @@
       {% endfor %}
       {% endfor %}
     </div>
-    <div class="selected-count" id="selected-count">0 selected</div>
     {% else %}
     <div class="empty-note">No stored datasets yet -- upload at least two on the Run &amp; Report or Search Lab pages first, then come back here.</div>
     {% endif %}
@@ -235,11 +234,7 @@
     </script>
 
     <label style="margin-top:10px;">Strategy families to search (none checked = every family)</label>
-    <div class="row" style="margin:2px 0 8px;">
-      <button type="button" class="submit-btn" style="padding:6px 10px;font-size:12px;" onclick="t58SetCheckboxes('mi-evo-families-list', true)">Select All</button>
-      <button type="button" class="submit-btn" style="padding:6px 10px;font-size:12px;" onclick="t58SetCheckboxes('mi-evo-families-list', false)">Clear All</button>
-    </div>
-    <div id="mi-evo-families-list">
+    <div id="mi-evo-families-list" data-t58-multiselect data-noun="families" data-empty-text="None selected -- every family is searched">
     {% for fam in families %}
     <div class="checkbox-row"><input type="checkbox" name="families" value="{{ fam.name }}" id="mfam_{{ loop.index }}"><label for="mfam_{{ loop.index }}" style="margin:0;">{{ fam.description }} [{{ fam.name }}]</label></div>
     {% endfor %}
@@ -297,5 +292,6 @@
 <script>
   initPropFirmPresetDropdown('evomi_prop_preset_select', { account_size: 'account_size', profit_target: 'profit_target', daily_loss: 'daily_loss', max_dd: 'max_dd' });
 </script>
+<script src="/static/t58-multiselect.js"></script>
 </body>
 </html>

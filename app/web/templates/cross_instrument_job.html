@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cross-Instrument Search — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<link rel="stylesheet" href="/static/job-theme.css">
+<style>
+  .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .pill.good { background: #123b1c; color: #7ee08a; }
+  .pill.warn { background: #3a2f12; color: #ffcf7a; }
+  .pill.bad { background: #3b1616; color: #ff9d9d; }
+  .pill.muted { background: #1c222b; color: #9aa4b2; }
+  .save-btn { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--teal); background: none; color: var(--teal); font-size: 12px; cursor: pointer; }
+  .save-btn:disabled { opacity: .55; cursor: default; }
+  .mk { white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  .notes { font-size: 12px; color: #999; line-height: 1.55; margin-top: 10px; }
+  .cancel-btn { margin-top: 10px; padding: 8px 14px; border-radius: 8px; border: 1px solid #6b2323; background: none; color: #ff9d9d; cursor: pointer; }
+</style>
+</head>
+<body>
+<header><h1>T58 Quant Algo Backtester — Cross-Instrument Search</h1></header>
+<nav>
+  <a href="/cross-instrument" class="back-btn">&larr; New Search</a>
+</nav>
+<main>
+
+{% if not_found %}
+<div class="error">Job "{{ job_id }}" was not found (the server may have restarted since it ran).</div>
+{% else %}
+
+<div class="card">
+  <h2 id="status-title"><span class="spinner" id="spinner"></span>Searching&hellip;</h2>
+  <div id="log">Starting&hellip;</div>
+  <button class="cancel-btn" id="cancel-btn" type="button">Cancel search</button>
+</div>
+
+<div class="card" id="summary-card" style="display:none;">
+  <h2>Best strategy across all instruments</h2>
+  <div class="headline">
+    <div class="stat"><div class="label">Family</div><div class="value" id="s-family" style="font-size:16px;">-</div></div>
+    <div class="stat"><div class="label">Combined score</div><div class="value" id="s-score">-</div></div>
+    <div class="stat"><div class="label">Weakest instrument</div><div class="value" id="s-worst">-</div></div>
+    <div class="stat"><div class="label">Holdout</div><div class="value" id="s-holdout" style="font-size:14px;">-</div></div>
+  </div>
+  <h3 style="font-size:13px;color:#999;margin-top:16px;">Per-instrument breakdown</h3>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Instrument</th><th>Search-period fitness</th><th>Trades</th><th>Holdout fitness</th><th>Holdout trades</th></tr></thead>
+      <tbody id="per-market-body"></tbody>
+    </table>
+  </div>
+  <p class="notes" id="s-detail"></p>
+</div>
+
+<div class="card" id="leaderboard-card" style="display:none;">
+  <h2>Finalists</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>#</th><th>Family</th><th>Combined</th><th>Mean</th><th>Worst</th><th>Per instrument</th><th>Holdout</th><th></th></tr></thead>
+      <tbody id="leaderboard-body"></tbody>
+    </table>
+  </div>
+  <p class="notes">Fitness values are scored per instrument first, then combined. A finalist that trades nothing on any instrument never makes this list. Save a finalist to the Strategy Library, then send it through Full Pipeline or CPCV before trusting it.</p>
+</div>
+
+<div class="error" id="error-card" style="display:none;"></div>
+<div class="card" id="warn-card" style="display:none;"><h2>Notes</h2><div class="notes" id="warn-body" style="margin-top:0;"></div></div>
+<button class="back-btn" id="finished-back-btn" style="display:none;" onclick="window.location.href='/cross-instrument'">&larr; New Search</button>
+
+{% endif %}
+</main>
+
+{% if not not_found %}
+<script>
+  const jobId = {{ job_id | tojson }};
+  const fmt = (v, d) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d === undefined ? 2 : d);
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  function verdictPill(text) {
+    if (!text || text === 'no holdout') return '<span class="pill muted">no holdout</span>';
+    const cls = text.startsWith('held up') ? 'good' : (text.startsWith('FAILED') ? 'bad' : 'warn');
+    return `<span class="pill ${cls}">${esc(text)}</span>`;
+  }
+
+  function marketMap(list) {
+    const m = {};
+    (list || []).forEach(p => { m[p.market] = p; });
+    return m;
+  }
+
+  document.getElementById('cancel-btn').addEventListener('click', function () {
+    this.disabled = true; this.textContent = 'Cancelling…';
+    fetch(`/cross-instrument/job/${jobId}/cancel`, { method: 'POST' }).catch(() => {});
+  });
+
+  function saveCandidate(rank, btn) {
+    btn.disabled = true; btn.textContent = 'Saving…';
+    fetch(`/cross-instrument/job/${jobId}/save/${rank}`, { method: 'POST' })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) { btn.textContent = 'Saved to library'; }
+        else { btn.disabled = false; btn.textContent = 'Save to library'; alert(d.error || 'Could not save.'); }
+      })
+      .catch(() => { btn.disabled = false; btn.textContent = 'Save to library'; alert('Could not save.'); });
+  }
+
+  function finish(spinnerText) {
+    document.getElementById('spinner').style.display = 'none';
+    document.getElementById('cancel-btn').style.display = 'none';
+    document.getElementById('status-title').lastChild.textContent = spinnerText;
+    document.getElementById('finished-back-btn').style.display = 'block';
+  }
+
+  function poll() {
+    fetch(`/cross-instrument/job/${jobId}/status.json`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.not_found) return;
+        document.getElementById('log').textContent = (data.log || []).join('\n');
+
+        if (data.error) {
+          finish('Search stopped');
+          const card = document.getElementById('error-card');
+          card.style.display = 'block'; card.textContent = data.error;
+          return;
+        }
+
+        if (data.done && data.result) {
+          const r = data.result;
+          finish(`Search complete (${r.markets.join(', ')})`);
+          const board = r.leaderboard || [];
+
+          if (r.warnings && r.warnings.length) {
+            document.getElementById('warn-card').style.display = 'block';
+            document.getElementById('warn-body').innerHTML = r.warnings.map(w => `<div>• ${esc(w)}</div>`).join('');
+          }
+
+          if (!board.length) {
+            const card = document.getElementById('error-card');
+            card.style.display = 'block';
+            card.textContent = `None of the ${r.candidates_generated} candidates traded on every selected instrument, so there is no cross-instrument winner. See the notes below for what to try.`;
+            return;
+          }
+
+          const best = board[0];
+          document.getElementById('summary-card').style.display = 'block';
+          document.getElementById('s-family').textContent = best.family;
+          document.getElementById('s-score').textContent = fmt(best.robustness_score, 2);
+          document.getElementById('s-worst').textContent = fmt(best.worst_case_fitness, 1);
+          document.getElementById('s-holdout').innerHTML = verdictPill(best.holdout_verdict);
+          const hold = marketMap(best.holdout_per_market);
+          document.getElementById('per-market-body').innerHTML = best.per_market.map(p => {
+            const h = hold[p.market];
+            return `<tr><td>${esc(p.market)}</td><td>${fmt(p.fitness, 1)}</td><td>${p.trade_count}</td>` +
+                   `<td>${h ? fmt(h.fitness, 1) : '—'}</td><td>${h ? h.trade_count : '—'}</td></tr>`;
+          }).join('');
+          document.getElementById('s-detail').textContent =
+            `${r.candidates_viable} of ${r.candidates_generated} candidates traded on every instrument · ` +
+            `${r.total_backtests} backtests · metric: ${r.fitness_metric} · combined via ${r.aggregation} · ` +
+            `${r.elapsed_seconds}s` + (r.holdout_frac ? ` · last ${Math.round(r.holdout_frac * 100)}% held out` : '');
+
+          document.getElementById('leaderboard-card').style.display = 'block';
+          document.getElementById('leaderboard-body').innerHTML = board.map(c =>
+            `<tr><td>${c.rank}</td><td>${esc(c.family)}</td><td>${fmt(c.robustness_score, 2)}</td>` +
+            `<td>${fmt(c.mean_fitness, 1)}</td><td>${fmt(c.worst_case_fitness, 1)}</td>` +
+            `<td class="mk">${c.per_market.map(p => esc(p.market) + ': ' + fmt(p.fitness, 1)).join('<br>')}</td>` +
+            `<td>${verdictPill(c.holdout_verdict)}</td>` +
+            `<td><button class="save-btn" data-rank="${c.rank}">Save to library</button></td></tr>`
+          ).join('');
+          document.querySelectorAll('.save-btn').forEach(b =>
+            b.addEventListener('click', () => saveCandidate(Number(b.dataset.rank), b)));
+          return;
+        }
+
+        setTimeout(poll, 1500);
+      })
+      .catch(() => setTimeout(poll, 3000));
+  }
+  poll();
+</script>
+{% endif %}
+{% include '_project_chat_embed.html' %}
+</body>
+</html>

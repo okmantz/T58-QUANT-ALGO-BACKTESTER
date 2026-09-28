@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cross-Instrument Search — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  .card p.help { font-size: 12px; color: #888; margin: 0 0 10px; line-height: 1.5; }
+  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  input[type=text], input[type=number], select {
+    width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font-size: 15px;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(53,224,176,0.15); }
+  .row { display: flex; gap: 10px; }
+  .row > div { flex: 1; }
+  .dataset-row { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 6px; }
+  .dataset-name { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
+  .dataset-size { margin-left: auto; font-size: 11px; }
+  .empty-note { color: #888; font-size: 13px; padding: 10px; }
+  .checkbox-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+  .checkbox-row input { width: auto; }
+  .submit-btn {
+    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: #04120e;
+    font-size: 16px; font-weight: 700; margin-top: 6px; box-shadow: 0 0 22px rgba(53,224,176,0.35);
+  }
+  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; white-space: pre-line; }
+  details summary { font-size: 13px; color: #999; cursor: pointer; }
+  .flow { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+  .flow span { padding: 4px 9px; border-radius: 999px; border: 1px solid var(--border-light); background: var(--panel-3); }
+</style>
+</head>
+<body>
+{% set active_page = 'cross_instrument' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Cross-instrument search</h1>
+  <p>Pick several instruments and let the app find the one strategy that works across <em>all</em> of them.
+  Every candidate is backtested on every instrument you select, scored per instrument, and ranked on the combined
+  result &mdash; a strategy that only works on one market, or trades nothing on another, is thrown out.</p>
+  <div class="flow"><span>Generate candidates</span><span>Score on every instrument</span><span>Rank by combined score</span><span>Re-test finalists</span><span>Untouched holdout check</span></div>
+</div>
+
+{% if error %}
+<div class="error">{{ error }}</div>
+{% endif %}
+
+<form method="post" action="/cross-instrument/start">
+
+  <div class="card">
+    <h2>1. Instruments (pick 2 or more)</h2>
+    <p class="help">Every dataset you've uploaded or fetched is listed here. Choose the markets you want <em>one</em> strategy to generalize across (e.g. ES, NQ and GC, or several FX pairs). All selected instruments share the pip size / commission below, so group instruments that share them.</p>
+    {% if stored_datasets %}
+    <div class="dataset-list" id="ci-datasets-list" data-t58-multiselect data-noun="instruments" data-empty-text="None selected -- pick 2 or more">
+      {% for g in dataset_groups %}
+      <div class="dataset-group-label">{{ g.instrument }}</div>
+      {% for file in g.files %}
+      <label class="dataset-row">
+        <input type="checkbox" name="datasets" value="{{ file.full_name }}">
+        <span class="dataset-name">{{ file.name }}</span>
+        <span class="dataset-size">{{ (file.size_bytes / 1024) | round(0, 'floor') | int }} KB</span>
+      </label>
+      {% endfor %}
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-note">No stored datasets yet -- upload or fetch at least two on the Run &amp; Report page first, then come back here.</div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>2. Strategy families to search</h2>
+    <p class="help">Each family is a different trading idea (trend breakout, RSI reversion, VWAP reversion, ...). Leave everything unchecked to search all of them.</p>
+    <div id="ci-families-list" data-t58-multiselect data-noun="families" data-empty-text="None selected -- every family is searched">
+      {% for fam in families %}
+      <div class="checkbox-row"><input type="checkbox" name="families" value="{{ fam.name }}" id="cifam_{{ loop.index }}"><label for="cifam_{{ loop.index }}">{{ fam.description }} [{{ fam.name }}]</label></div>
+      {% endfor %}
+    </div>
+    <div class="row">
+      <div>
+        <label>Candidates to test</label>
+        <input type="number" name="max_candidates" value="60" min="2" max="400">
+      </div>
+      <div>
+        <label>Finalists to re-test in depth</label>
+        <input type="number" name="finalists" value="5" min="1" max="15">
+      </div>
+    </div>
+    <p class="help" style="margin-top:6px;">Cost scales as candidates &times; instruments &times; backtests. 60 candidates across 3 instruments is about 180 backtests in the first pass.</p>
+  </div>
+
+  <div class="card">
+    <h2>3. Prop account &amp; risk (applied to every instrument)</h2>
+    <div class="row">
+      <div>
+        <label>Prop firm preset (optional shortcut)</label>
+        <select id="ci_prop_preset_select"><option value="">-- or enter rules manually below --</option></select>
+      </div>
+      <div><label>Account size ($)</label><input type="number" name="account_size" id="ci_account_size" value="100000"></div>
+      <div><label>Initial balance ($)</label><input type="number" name="initial_balance" id="ci_initial_balance" value="100000"></div>
+    </div>
+    <div class="row">
+      <div><label>Evaluation profit target (%)</label><input type="number" step="0.1" name="profit_target" value="8"></div>
+      <div><label>Daily loss limit (%)</label><input type="number" step="0.1" name="daily_loss" value="5"></div>
+    </div>
+    <div class="row">
+      <div><label>Max drawdown (%)</label><input type="number" step="0.1" name="max_dd" value="10"></div>
+      <div><label>Max trades/day</label><input type="number" name="max_trades_day" value="10"></div>
+    </div>
+    <div class="row">
+      <div><label>Risk mode</label>
+        <select name="risk_mode"><option value="percent">% of balance</option><option value="fixed">Fixed $</option></select>
+      </div>
+      <div><label>Risk per trade (% or $)</label><input type="number" step="0.1" name="risk_value" value="1.0"></div>
+    </div>
+    <div class="row">
+      <div><label>Commission per trade ($)</label><input type="number" step="0.01" name="commission" id="ci_commission_field" value="0"></div>
+      <div><label>Slippage (pips)</label><input type="number" step="0.1" name="slippage_pips" value="0.5"></div>
+    </div>
+    <div class="row">
+      <div><label>Spread (pips)</label><input type="number" step="0.1" name="spread_pips" value="1.0"></div>
+      <div><label>Pip size, all instruments (ES/NQ futures = 1.0, FX = 0.0001)</label><input type="number" step="0.0001" name="pip_size" id="ci_pip_size_field" value="0.0001"></div>
+    </div>
+    <div class="row" style="margin-top:8px;">
+      <div><label>Or pick a known instrument (auto-fills pip size + $/point)</label>
+        <select id="ci_instrument_select" onchange="t58ApplyInstrumentSpec({selectEl:this, pipFieldId:'ci_pip_size_field', contractFieldId:'ci_contract_size_field', commissionFieldId:'ci_commission_field'})">
+          <option value="">(none -- set manually)</option>
+        </select>
+      </div>
+      <div><label>Contract $/point (blank = not lot-rounded)</label><input type="number" step="0.01" name="contract_size" id="ci_contract_size_field" value=""></div>
+    </div>
+    <script>document.addEventListener('DOMContentLoaded', function () { t58PopulateInstrumentPicker('ci_instrument_select'); });</script>
+    <div class="checkbox-row" style="margin-top:12px;background:rgba(120,200,120,0.08);border:1px solid rgba(120,200,120,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="reset_on_breach" checked><label style="margin:0;">Reset-on-breach: score every candidate on the basis that a blown account gets a fresh eval and keeps going (recommended)</label></div>
+  </div>
+
+  <div class="card">
+    <h2>4. How to score across instruments</h2>
+    <label>Combined-score method</label>
+    <select name="aggregation">
+      {% for key, label in aggregation_methods.items() %}
+      <option value="{{ key }}" {{ 'selected' if key == 'mean_minus_dispersion' else '' }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <label>Fitness metric (scored on each instrument before combining)</label>
+    <select name="fitness_metric">
+      {% for key, label in fitness_metrics.items() %}
+      <option value="{{ key }}" {{ 'selected' if key == 'eval_pass_probability' else '' }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <div class="row">
+      <div>
+        <label>Holdout: reserve the last % of every instrument, untouched (0 = off)</label>
+        <input type="number" name="holdout_pct" value="20" min="0" max="40">
+      </div>
+    </div>
+    <p class="help" style="margin-top:6px;">The search never sees the holdout slice. Finalists are scored on it afterwards, so you can tell a real cross-market edge from a lucky fit.</p>
+    <div class="checkbox-row"><input type="checkbox" name="refine_winner"><label style="margin:0;">After finding the winner, fine-tune its parameters across all instruments (slower)</label></div>
+    <details style="margin-top:10px;">
+      <summary>Advanced</summary>
+      <div class="row">
+        <div><label>Monte Carlo sims while screening</label><input type="number" name="screen_sims" value="150"></div>
+        <div><label>Monte Carlo sims for finalists</label><input type="number" name="n_sims" value="1000"></div>
+      </div>
+      <div class="row">
+        <div><label>Random seed</label><input type="number" name="random_seed" value="42"></div>
+      </div>
+    </details>
+  </div>
+
+  <button class="submit-btn" type="submit">Find the best strategy across these instruments</button>
+</form>
+
+</div>
+</div>
+<script>
+  // Account size and initial balance are the same dollar account -- keep them in sync.
+  (function () {
+    var a = document.getElementById('ci_account_size'), b = document.getElementById('ci_initial_balance');
+    if (!a || !b) return;
+    a.addEventListener('input', function () { b.value = a.value; });
+    b.addEventListener('input', function () { a.value = b.value; });
+  })();
+</script>
+<script src="/static/prop-presets.js"></script>
+<script>
+  initPropFirmPresetDropdown('ci_prop_preset_select', { account_size: 'account_size', profit_target: 'profit_target', daily_loss: 'daily_loss', max_dd: 'max_dd' });
+</script>
+<script src="/static/t58-multiselect.js"></script>
+</body>
+</html>

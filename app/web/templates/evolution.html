@@ -292,11 +292,7 @@
     </script>
 
     <label style="margin-top:10px;">Strategy families to search (none checked = every family)</label>
-    <div class="row" style="margin:2px 0 8px;">
-      <button type="button" class="submit-btn" style="padding:6px 10px;font-size:12px;" onclick="t58SetCheckboxes('evo-families-list', true)">Select All</button>
-      <button type="button" class="submit-btn" style="padding:6px 10px;font-size:12px;" onclick="t58SetCheckboxes('evo-families-list', false)">Clear All</button>
-    </div>
-    <div id="evo-families-list">
+    <div id="evo-families-list" data-t58-multiselect data-noun="families" data-empty-text="None selected -- every family is searched">
     {% for fam in families %}
     <div class="checkbox-row"><input type="checkbox" name="families" value="{{ fam.name }}" id="fam_{{ loop.index }}"><label for="fam_{{ loop.index }}" style="margin:0;">{{ fam.description }} [{{ fam.name }}]</label></div>
     {% endfor %}
@@ -625,5 +621,6 @@
     b.addEventListener('input', () => { a.value = b.value; });
   })();
 </script>
+<script src="/static/t58-multiselect.js"></script>
 </body>
 </html>
