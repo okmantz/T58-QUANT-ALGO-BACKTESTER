@@ -53,6 +53,7 @@ from app.web.ai_assistant_routes import ai_assistant_bp
 from app.web.options_outlook_routes import options_outlook_bp
 from app.web.hedge_fund_routes import hedge_fund_bp
 from app.web.risk_sweep_routes import risk_sweep_bp
+from app.web.project_routes import project_bp
 from app.ai.ollama_settings import load_settings as load_ollama_settings
 from app.ai.ollama_settings import save_settings as save_ollama_settings
 from app.ai.research_agent import ResearchAgentContext, ResearchAgent
@@ -138,7 +139,7 @@ from app.reports.validation_reports import (
 from app.reports import run_history
 from app.reports import strategy_state
 from app.reports import strategy_folder
-from app.web.job_manager import JobManager
+from app.web.job_manager import JOB_MANAGER
 from app.scoring.t58_scorecard import score_from_results
 from app.search.batch_runner import (
     SearchCancelled, SearchStageConfig, promote_champion, run_search, save_search_candidate_to_library,
@@ -201,7 +202,11 @@ REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 # instance below; every other job-based tool in this file still uses its
 # own hand-rolled dict+lock for now (see that docstring for why this is
 # an incremental migration, not a big-bang rewrite of all of them).
-JOB_MANAGER = JobManager()
+# NOTE: JOB_MANAGER is now the shared singleton imported from
+# app.web.job_manager (see that module's bottom) rather than constructed
+# here -- moved so app.web.project_routes can import the same instance
+# without a circular import. Behavior for every existing call site in
+# this file is unchanged: same object, same methods.
 
 SEARCH_DIR = BASE_DIR / "reports" / "search"
 SEARCH_DIR.mkdir(parents=True, exist_ok=True)
@@ -525,6 +530,7 @@ app.register_blueprint(extra_bp)
 # fully implemented and tested but had no route calling it; see
 # app/web/risk_sweep_routes.py's module docstring.
 app.register_blueprint(risk_sweep_bp)
+app.register_blueprint(project_bp)
 # Belt-and-suspenders alongside run_web.py's own call (this module can also
 # be run directly via `python -m app.web.server`, which never goes through
 # run_web.py) -- idempotent either way. See app.reports.crash_log.
