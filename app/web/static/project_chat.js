@@ -14,6 +14,7 @@
 
   var API_BASE = "/api/projects";
   var ACTIVITY_POLL_MS = 4000;
+  var OPEN_KEY = "t58_project_chat_open";   // remembered per browser: "1" = expanded, anything else = collapsed
 
   var state = {
     project: null,       // full project dict {id, name, chat_history, ...} or null
@@ -43,8 +44,27 @@
   // Panel open/close
   // -------------------------------------------------------------------
 
+  function rememberOpen(isOpen) {
+    try { window.localStorage.setItem(OPEN_KEY, isOpen ? "1" : "0"); } catch (e) { /* storage blocked: fine */ }
+  }
+
+  function wasOpen() {
+    try { return window.localStorage.getItem(OPEN_KEY) === "1"; } catch (e) { return false; }
+  }
+
+  function setLauncherState(isOpen) {
+    els.launcher.classList.toggle("open", isOpen);
+    els.launcher.setAttribute("aria-expanded", isOpen ? "true" : "false");
+    var label = isOpen ? "Collapse Project Chat" : "Open Project Chat";
+    els.launcher.title = label;
+    els.launcher.setAttribute("aria-label", label);
+    if (els.launcherIcon) els.launcherIcon.innerHTML = isOpen ? "&#9662;" : "&#128172;";
+  }
+
   function openPanel() {
     els.panel.hidden = false;
+    setLauncherState(true);
+    rememberOpen(true);
     refreshProjectList().then(function () {
       if (state.project) {
         showTab("chat");
@@ -54,7 +74,14 @@
 
   function closePanel() {
     els.panel.hidden = true;
+    setLauncherState(false);
+    rememberOpen(false);
     stopActivityPolling();
+  }
+
+  // Clicking the floating bubble collapses the panel when it is open and expands it when it is not.
+  function togglePanel() {
+    if (els.panel.hidden) { openPanel(); } else { closePanel(); }
   }
 
   function showTab(name) {
@@ -313,7 +340,12 @@
     els.sendBtn = els.form.querySelector(".t58-pc-send");
     els.activityList = $("t58-pc-activity-list");
 
-    els.launcher.addEventListener("click", openPanel);
+    els.launcherIcon = $("t58-pc-launcher-icon");
+
+    els.launcher.addEventListener("click", togglePanel);
+    els.launcher.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); togglePanel(); }
+    });
     els.closeBtn.addEventListener("click", closePanel);
     els.newBtn.addEventListener("click", createProject);
     els.renameBtn.addEventListener("click", renameProject);
@@ -336,6 +368,9 @@
       els.input.style.height = "auto";
       els.input.style.height = Math.min(els.input.scrollHeight, 90) + "px";
     });
+
+    // Start collapsed (out of the way) unless it was left open on the last page.
+    if (wasOpen()) { openPanel(); } else { closePanel(); }
   }
 
   if (document.readyState === "loading") {
