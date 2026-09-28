@@ -26,6 +26,7 @@ from flask import Blueprint, jsonify, redirect, render_template, request, send_f
 
 from app.backtest.risk import RiskConfig, with_prop_safety_defaults
 from app.data.importer import import_csv
+from app.data.instrument_specs import resolve_risk_per_market
 from app.data.storage import get_raw_data_dir, list_datasets_by_instrument, list_stored_datasets
 from app.live_deploy.broker_registry import SUPPORTED_PLATFORMS
 from app.live_deploy.prop_firms import PROP_FIRMS
@@ -308,6 +309,43 @@ def _run_cross_instrument_job(job_id: str, kwargs: dict) -> None:
         HEAVY_JOB_GUARD.release(JOB_CROSS_INSTRUMENT)
 
 
+@extra_bp.route("/cross-instrument/detect", methods=["POST"])
+def cross_instrument_detect():
+    """AJAX behind the form's "Detect pip size from data" button: for every
+    ticked dataset, what pip size / $-per-point / commission would each one
+    get. Read-only -- nothing is saved or started."""
+    selected = request.form.getlist("datasets")
+    if not selected:
+        return jsonify({"error": "Tick at least one instrument first."}), 400
+    dfs, problems = {}, []
+    for name in selected:
+        path = get_raw_data_dir() / name
+        try:
+            imported = import_csv(path) if path.exists() else None
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"{name}: {exc}")
+            continue
+        if imported is None or not imported.is_valid:
+            problems.append(f"{name}: could not be read as market data.")
+            continue
+        dfs[Path(name).stem] = imported.dataframe
+    if not dfs:
+        return jsonify({"error": "None of the ticked datasets could be read. " + " ".join(problems)}), 400
+    try:
+        base_commission = float(request.form.get("commission", 0) or 0)
+    except ValueError:
+        base_commission = 0.0
+    _risks, report = resolve_risk_per_market(dfs, RiskConfig(commission_per_trade=base_commission), auto_detect=True)
+    return jsonify({
+        "markets": [
+            {"label": r.label, "symbol": r.symbol, "pip_size": r.pip_size, "contract_size": r.contract_size,
+             "commission": r.commission_per_trade, "source": r.pip_source, "text": r.describe()}
+            for r in report
+        ],
+        "problems": problems,
+    })
+
+
 @extra_bp.route("/cross-instrument/start", methods=["POST"])
 def cross_instrument_start():
     form = request.form
@@ -357,9 +395,15 @@ def cross_instrument_start():
             max_drawdown_pct=float(form.get("max_dd", 10) or 10),
         )
         risk = with_prop_safety_defaults(risk, rules)
+        # Each instrument gets ITS OWN pip size / contract size / commission
+        # (known contract name first, price-data detection otherwise) instead
+        # of one shared value that was only ever right for one of them.
+        auto_pip = form.get("auto_pip", "on") == "on"
+        risk_by_market, risk_report = resolve_risk_per_market(dfs, risk, auto_detect=auto_pip)
+        risk_by_market = {label: with_prop_safety_defaults(r, rules) for label, r in risk_by_market.items()}
         holdout_pct = max(0.0, min(40.0, float(form.get("holdout_pct", 20) or 0)))
         kwargs = dict(
-            dfs=dfs, risk=risk, prop_rules=rules,
+            dfs=dfs, risk=risk, prop_rules=rules, risk_by_market=risk_by_market,
             mc_config=MonteCarloConfig(
                 n_simulations=max(50, int(form.get("n_sims", 1000) or 1000)), reset_on_breach=reset_on_breach,
             ),
@@ -375,7 +419,8 @@ def cross_instrument_start():
         )
 
         job_id = JOB_MANAGER.create(
-            log=[f"Loaded {len(dfs)} instrument(s): {', '.join(dfs)}."] + load_warnings,
+            log=[f"Loaded {len(dfs)} instrument(s): {', '.join(dfs)}."] + load_warnings
+                + ["Risk setup per instrument:"] + ["  " + r.describe() for r in risk_report],
             markets=list(dfs), aggregation=kwargs["aggregation"], tool=JOB_CROSS_INSTRUMENT,
             cancelled=False,
         )
