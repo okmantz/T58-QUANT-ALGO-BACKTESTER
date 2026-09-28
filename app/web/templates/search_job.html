@@ -26,6 +26,9 @@
 <div class="error">Job "{{ job_id }}" was not found (the server may have restarted since it ran).</div>
 {% else %}
 
+{% set progress_url = '/api/telemetry/job/' ~ job_id ~ '/progress' %}
+{% include '_phase_banner.html' %}
+
 <div class="card">
   <h2 id="status-title"><span class="spinner" id="spinner"></span>Search running&hellip;</h2>
   <div id="log">Starting&hellip;</div>
@@ -35,6 +38,9 @@
     <button class="stop-btn" type="submit" id="stop-btn">Stop</button>
   </form>
 </div>
+
+{% set swarm_url = '/api/telemetry/swarm/job/' ~ job_id %}
+{% include '_swarm_panel.html' %}
 
 <div class="card" id="summary-card" style="display:none;">
   <h2>Funnel result</h2>
@@ -324,5 +330,6 @@
   }
 </script>
 {% endif %}
+{% include '_project_chat_embed.html' %}
 </body>
 </html>

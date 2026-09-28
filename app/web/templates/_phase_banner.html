@@ -1,0 +1,12 @@
+{# Live phase banner. Set before including:
+     progress_url  -- JSON endpoint returning the progress snapshot
+     progress_key  -- (optional) key inside that JSON that holds the snapshot,
+                      for endpoints (like /evolution/status.json) that embed it. #}
+<link rel="stylesheet" href="/static/telemetry.css">
+<div class="t58-tm-card t58-tm-banner" data-t58-phase-banner data-progress-url="{{ progress_url }}"
+     {% if progress_key %}data-progress-key="{{ progress_key }}"{% endif %} hidden>
+  <div class="t58-tm-banner-text" data-role="text">Starting&hellip;</div>
+  <div class="t58-tm-pips" data-role="pips" aria-hidden="true"></div>
+  <div class="t58-tm-stats" data-role="stats"></div>
+</div>
+<script src="/static/telemetry.js" defer></script>

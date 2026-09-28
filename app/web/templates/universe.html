@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Universe Map — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<link rel="stylesheet" href="/static/telemetry.css">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .t58-tm-toolbar label { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--text-muted); margin: 0; cursor: pointer; }
+</style>
+</head>
+<body>
+{% set active_page = 'universe' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Universe map</h1>
+  <p>Every strategy this app has tested, one dot each, clustered by hypothesis family. Bright teal dots survived the whole funnel; grey dots died early. Hover (or touch) a dot for its symbol, timeframe, profit and drawdown.</p>
+</div>
+
+<div class="t58-tm-card" data-t58-universe>
+  <div class="t58-tm-toolbar" data-role="sources">
+    <label><input type="checkbox" value="search" checked> Search Lab</label>
+    <label><input type="checkbox" value="evolution" checked> Evolution Lab</label>
+    <label><input type="checkbox" value="library" checked> Strategy Library</label>
+  </div>
+  <p class="t58-tm-status" data-role="status">Loading&hellip;</p>
+  <div class="t58-tm-canvas-wrap" data-role="wrap"><canvas data-role="canvas" height="400"></canvas></div>
+  <div class="t58-tm-legend" data-role="legend"></div>
+  <p class="t58-tm-note">Clusters are the canonical families from the Family Diversity page. Inside a cluster the best-scoring strategies sit nearest the centre. Search Lab and Evolution Lab dots show the most recent runs; profit is each strategy's backtest net profit on the data it was tested on.</p>
+</div>
+
+{% include '_survivors_strip.html' %}
+
+</div>
+</div>
+</body>
+</html>

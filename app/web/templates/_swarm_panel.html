@@ -1,0 +1,10 @@
+{# Equity-curve swarm. Set before including:
+     swarm_url -- endpoint returning {status, done, total, swarm, reason} #}
+<link rel="stylesheet" href="/static/telemetry.css">
+<div class="t58-tm-card" data-t58-swarm data-swarm-url="{{ swarm_url }}" hidden>
+  <h2>Candidate equity swarm</h2>
+  <p class="t58-tm-status" data-role="status"></p>
+  <div class="t58-tm-canvas-wrap" data-role="wrap"><canvas data-role="canvas" height="300"></canvas></div>
+  <p class="t58-tm-note" data-role="note"></p>
+</div>
+<script src="/static/telemetry.js" defer></script>

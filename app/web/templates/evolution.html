@@ -74,6 +74,11 @@
     </form>
     {% endif %}
   </div>
+
+{% set progress_url = '/evolution/status.json' %}{% set progress_key = 'progress' %}
+{% include '_phase_banner.html' %}
+{% set swarm_url = '/api/telemetry/swarm/evolution' %}
+{% include '_swarm_panel.html' %}
 </div>
 
 <div class="card" id="distribution-card" style="display:none;">

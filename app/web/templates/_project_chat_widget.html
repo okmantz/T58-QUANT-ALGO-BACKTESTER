@@ -105,6 +105,11 @@
   .t58-pc-typing { padding: 0 12px 6px; color: var(--text-muted); font-size: 12px; }
 
   .t58-pc-form { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--border); }
+  /* Many pages define bare `textarea { min-height:140px }` / `select { width:100% }`
+     rules for their own forms; pin every property that could leak into the widget. */
+  .t58-pc-input, .t58-pc-project-select { box-sizing: border-box; min-height: 0; margin: 0; }
+  .t58-pc-input { height: auto; min-width: 0; width: auto; font-family: inherit; line-height: 1.35; }
+  .t58-pc-icon-btn, .t58-pc-send, .t58-pc-tab { margin: 0; }
   .t58-pc-input {
     flex: 1; resize: none; max-height: 90px; padding: 8px 10px; border-radius: 8px;
     border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 13px;
@@ -121,6 +126,7 @@
   .t58-pc-job-status.running { color: var(--amber); }
   .t58-pc-job-status.done { color: var(--teal); }
   .t58-pc-job-status.failed, .t58-pc-job-status.cancelled { color: var(--coral); }
+  .t58-pc-job-banner { margin-top: 4px; font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--teal); }
   .t58-pc-job-meta { color: var(--text-muted); margin-top: 3px; }
   .t58-pc-job-log { margin-top: 4px; color: var(--text-dim); font-family: ui-monospace, Menlo, monospace; font-size: 11px; white-space: pre-wrap; }
   .t58-pc-activity-empty { color: var(--text-muted); font-size: 13px; text-align: center; padding: 20px 10px; }
