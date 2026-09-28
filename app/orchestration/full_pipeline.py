@@ -376,6 +376,31 @@ def _spec_for_code(source_type: str, code_text: str, extension: str) -> dict:
     return {"source_type": source_type, "code_text": code_text, "code_extension": extension}
 
 
+def _holdout_untestable_note(holdout: dict | None) -> str | None:
+    """A holdout that produced ZERO trades while the in-sample run traded
+    proves nothing either way -- it is not a pass. Before this check the
+    verdict was silent about it, so a strategy could show a strong headline
+    (in-sample backtest + Monte Carlo resampled from those same trades) with
+    an empty out-of-sample check and nothing in the report saying so. The
+    usual cause on futures is position sizing flooring every entry to 0
+    whole contracts in the holdout period (price level / volatility rose, so
+    one contract's stop risk now exceeds the per-trade risk budget)."""
+    if not holdout:
+        return None
+    hs = holdout.get("holdout_statistics") or {}
+    ins = holdout.get("in_sample_statistics") or {}
+    if (hs.get("total_trades") or 0) == 0 and (ins.get("total_trades") or 0) > 0:
+        return (
+            "HOLDOUT UNTESTED: the strategy took 0 trades in the untouched holdout period "
+            f"({(holdout.get('holdout_period') or ['?', '?'])[0]} to {(holdout.get('holdout_period') or ['?', '?'])[1]}) "
+            f"after taking {ins.get('total_trades')} in-sample, so the holdout confirms nothing. Check the "
+            "execution warnings: if entries were skipped because sizing rounded down to 0 contracts, the "
+            "stop is too wide for your risk budget at that period's price/volatility (tighten the stop, "
+            "raise risk-per-trade, or use a smaller contract)."
+        )
+    return None
+
+
 def _make_verdict(
     final_mc: MonteCarloResult,
     oos_validation: WalkForwardResult | None,
@@ -388,6 +413,7 @@ def _make_verdict(
     cpcv_supporting_result: "CPCVResult | None" = None,
     lookahead_bug_detected: bool = False,
     min_trades_for_ready: int = 100,
+    holdout: dict | None = None,
 ) -> tuple[str, list[str], "T58ScorecardResult", bool, bool]:
     """Pipeline reorg item #1: the verdict is now a hard safety gate
     (risk of ruin, and -- FIX (audit) -- a confirmed lookahead-bias leak)
@@ -487,6 +513,13 @@ def _make_verdict(
             f"FullPipelineConfig.risk_of_ruin_cap)."
         )
         reasons.append(f"For reference, {scorecard.render_line()} (not the reason for this verdict).")
+        _hold_note = _holdout_untestable_note(holdout)
+        if _hold_note:
+            reasons.append(_hold_note)
+        reasons.append(
+            "This verdict does NOT lock the strategy: it can still be sent through the Validate hub "
+            "(CPCV, Walk-Forward, Sensitivity, Regime Matrix) to see where it is weak."
+        )
         return "NOT READY", reasons, scorecard, True, False
 
     if oos_validation is None and cpcv_primary_result is None:
@@ -545,6 +578,13 @@ def _make_verdict(
             "sample can look strong by chance (or on the strength of one or two outsized trades) "
             "regardless of how good its score is. See FullPipelineConfig.min_trades_for_ready."
         )
+
+    _hold_note = _holdout_untestable_note(holdout)
+    if _hold_note:
+        reasons.append(_hold_note)
+        if verdict == "READY":
+            verdict = "MARGINAL"
+            reasons.append("CAPPED AT MARGINAL: a strategy is not called READY while its holdout check is empty.")
 
     return verdict, reasons, scorecard, False, False
 
@@ -1279,6 +1319,7 @@ def run_full_pipeline(
             cpcv_primary_result=cpcv_primary_result, cpcv_supporting_result=cpcv_supporting_result,
             lookahead_bug_detected=lookahead_bug_detected,
             min_trades_for_ready=cfg.min_trades_for_ready,
+            holdout=final_holdout,
         )
 
         elapsed = time.time() - t0

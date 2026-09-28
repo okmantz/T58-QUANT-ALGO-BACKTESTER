@@ -267,25 +267,49 @@ def after_full_pipeline(verdict: str | None, saved_to_library: bool, result=None
         )
 
     if result is not None and getattr(result, "risk_of_ruin_hard_fail", False):
-        ruin_pct = getattr(getattr(result, "final_mc", None), "risk_of_ruin_pct", None)
+        final_mc = getattr(result, "final_mc", None)
+        ruin_pct = getattr(final_mc, "risk_of_ruin_pct", None)
         cap = getattr(result, "risk_of_ruin_cap", 20.0)
         ruin_text = f"{ruin_pct:.1f}%" if ruin_pct is not None else "above the cap"
         scorecard = getattr(result, "scorecard", None)
-        score_note = f" (T58 Score {scorecard.score:.1f}/100 -- {scorecard.tier} -- not the reason for this verdict, see below)" if scorecard is not None else ""
+        score_note = f" (T58 Score {scorecard.score:.1f}/100 -- {scorecard.tier})" if scorecard is not None else ""
+        reset_already_on = bool(getattr(final_mc, "reset_on_breach", False))
+
+        # Was the trade flow itself starved by contract rounding? Then LOWERING
+        # risk (the usual first lever) makes things worse, not better.
+        texts = [str(w) for w in (getattr(result, "warnings", None) or [])]
+        texts += [str(w) for w in (getattr(getattr(result, "final_bt", None), "warnings", None) or [])]
+        sizing_floor = any("rounded DOWN to 0 whole contracts" in t for t in texts)
+        hold = getattr(result, "final_holdout", None) or {}
+        hold_trades = (hold.get("holdout_statistics") or {}).get("total_trades")
+        holdout_empty = hold_trades == 0
+
+        steps = []
+        if sizing_floor or holdout_empty:
+            steps.append(
+                "Fix trade flow first: entries were skipped because one whole contract's stop risk is bigger "
+                "than your risk-per-trade budget" + (", and the holdout period took 0 trades" if holdout_empty else "")
+                + ". Do NOT lower risk-per-trade here -- that skips even more entries. Tighten the stop "
+                "(fewer ATRs), raise risk-per-trade, or use the micro contract"
+            )
+        steps.append(
+            "Ruin here means 'the account touched its max-drawdown floor in at least one simulated path'. "
+            + ("Reset-on-breach is already ON, so a path that breaches is rebought and continues -- the number "
+               "measures how often you would need a rebuy, not permanent loss. " if reset_already_on else
+               "Turn on reset-on-breach if you plan to rebuy after a breach. ")
+            + "If the drawdown limit is tight (4% trailing is far tighter than most), ruin stays high for almost "
+              "any strategy: compare the strategy's own max drawdown against the firm's limit"
+        )
+        if not (sizing_floor or holdout_empty):
+            steps.append("Lower risk-per-trade in the Risk step (ruin scales roughly with the square of position size)")
+        steps.append("Quick Optimize can search for a lower-drawdown parameter set, or treat this as a candidate for a looser prop firm's rules")
+        steps_text = " ".join(f"{i + 1}) {t}." for i, t in enumerate(steps))
         return (
-            f"Verdict: NOT READY -- risk of ruin ({ruin_text}) is above the {cap:.0f}% cap.{score_note} "
-            "This is the ONE hard safety gate in this pipeline: everything else about this strategy can "
-            "look good (win rate, profit factor, drawdown) and it will still be NOT READY until ruin "
-            "comes under the cap, because a strategy this likely to blow an account isn't tradeable "
-            "regardless of its other numbers. Next step, in order of how much each usually moves ruin: "
-            "1) lower risk-per-trade in the Risk step (this alone is usually the biggest lever -- ruin "
-            "scales roughly with the square of position size); 2) turn on reset_on_breach so a single "
-            "bad stretch doesn't compound into a full account blow-up; 3) if ruin is still too high after "
-            "that, the strategy's win rate/profit-factor may not support this account's drawdown limit at "
-            "all -- try Quick Optimize to search for a lower-risk parameter set, or treat this as a "
-            "candidate to set aside for a different (looser) prop firm's rules. After any change, "
-            "re-run Full Pipeline on the same strategy -- keep iterating until risk of ruin is confirmed "
-            "under the cap."
+            f"Verdict: NOT READY -- risk of ruin ({ruin_text}) is above the {cap:.0f}% cap{score_note}. "
+            "This is the one hard safety gate in the pipeline. NOT READY does not lock anything: you can still "
+            "open the Validate hub and run CPCV, Walk-Forward, Sensitivity and the Regime Matrix on this strategy "
+            "to see exactly where it is weak. Next steps, in order: " + steps_text
+            + " After any change, re-run Full Pipeline on the same strategy."
         )
 
     if result is not None and getattr(result, "scorecard", None) is not None:
