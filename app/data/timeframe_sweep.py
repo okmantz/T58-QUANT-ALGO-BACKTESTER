@@ -48,6 +48,11 @@ from app.data.timeframe_resample import (
 # target would just be the native data again, under a second name.
 DEFAULT_SWEEP_TIMEFRAMES: tuple[str, ...] = ("5m", "15m", "30m", "1h", "4h")
 
+# Same list, named for what it means at call sites that want "every bar size
+# this app is meant to trade on" (5m/15m/30m/1h/4h) rather than "a starting
+# point for a form field".
+ALL_TRADING_TIMEFRAMES: tuple[str, ...] = DEFAULT_SWEEP_TIMEFRAMES
+
 # A sweep target with fewer bars than this is skipped rather than handed
 # to a search/evolution/optimization tool that would just fail on it (or
 # worse, "succeed" on statistically meaningless sample size) -- 30 is a
@@ -191,3 +196,23 @@ def write_sweep_targets_to_raw(targets: list[SweepTarget], base_label: str) -> l
         target.dataframe.to_csv(dest, index=False)
         paths.append(dest)
     return paths
+
+
+def stamp_manual_timeframe(strategy, label: str):
+    """Returns `strategy` unchanged unless it is a manual (JSON builder)
+    strategy, in which case returns a COPY whose top-level "timeframe" key
+    is `label`. Anything saved from a sweep run then keeps trading on the
+    bar size it was found on, wherever it is re-run later (the engine
+    resamples to a strategy's declared timeframe -- see
+    app.data.timeframe_resample). Python/PineScript/MQL5 strategies are
+    returned as-is; declare their timeframe with TIMEFRAME= / T58_TIMEFRAME=.
+    """
+    if getattr(strategy, "source_type", None) == "manual" and isinstance(getattr(strategy, "config", None), dict):
+        import json
+
+        from app.strategy.manual import ManualStrategy
+
+        stamped = json.loads(json.dumps(strategy.config))
+        stamped["timeframe"] = label
+        return ManualStrategy(stamped)
+    return strategy
