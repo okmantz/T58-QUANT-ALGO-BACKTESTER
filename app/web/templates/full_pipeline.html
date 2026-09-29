@@ -299,6 +299,12 @@
     <p class="help" style="margin-top:4px;">Validates the dataset and selected strategies right now, then waits until this clock time (today, or tomorrow if it's already passed) before actually starting -- so you can queue an overnight batch without staying up for it. Runs today if the time hasn't passed yet, otherwise tomorrow.</p>
   </div>
 
+  <div class="card">
+    <h2>Timeframes to test (optional)</h2>
+    <p style="font-size:12px;color:#888;">Leave blank to run once on the loaded data's own bar size. Enter e.g. <b>5m, 15m, 30m, 1h, 4h</b> and the ENTIRE pipeline (baseline, GA, holdout, verdict) runs once per timeframe, resampled from the loaded file even if it is 1-minute data. The best verdict (then T58 score, then eval-pass %) becomes the headline result; every timeframe keeps its own report. Not used by the batch buttons. Runtime scales with the number of timeframes.</p>
+    <input type="text" name="expand_timeframes" placeholder="e.g. 5m, 15m, 30m, 1h, 4h">
+  </div>
+
   <button class="submit-btn" type="submit">Run Full Pipeline</button>
   <button class="submit-btn batch-run" type="submit" formaction="/full-pipeline/start-batch" style="margin-top:10px;">Run Full Pipeline (Batch — Selected Above)</button>
   <button class="submit-btn schedule-run" type="submit" formaction="/full-pipeline/schedule-batch" style="margin-top:10px;">Schedule Batch Run (at time above)</button>

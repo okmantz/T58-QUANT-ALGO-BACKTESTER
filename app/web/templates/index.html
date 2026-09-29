@@ -130,6 +130,24 @@
   {% if result.payout_count %}
   <p style="font-size:12px;color:#7be08a;margin-top:10px;">{{ result.payout_count }} payout(s) taken this run (reset-on-target was ON) -- ${{ "{:,.0f}".format(result.total_payout_amount) }} withdrawn total, trading continued afterward each time.</p>
   {% endif %}
+  {% if result.timeframe_sweep %}
+  <div style="margin:10px 0;border:1px solid #33506b;background:#12202e;border-radius:8px;padding:10px 12px;">
+    <b style="font-size:13px;">Timeframe comparison</b> <span style="font-size:12px;color:#888;">(report below is for the &#9733; row)</span>
+    <div style="overflow-x:auto;"><table style="width:100%;font-size:12px;margin-top:6px;">
+      <tr><th align="left">TF</th><th>Bars</th><th>Trades</th><th>Net profit</th><th>Win %</th><th>Max DD %</th><th>Eval pass %</th><th>Payout %</th><th>Ruin %</th></tr>
+      {% for r in result.timeframe_sweep.rows %}
+      <tr style="{{ 'font-weight:700;' if r.is_best else '' }}text-align:center;">
+        <td align="left">{{ r.label }}{{ ' &#9733;'|safe if r.is_best else '' }}</td><td>{{ r.bars }}</td><td>{{ r.trades }}</td>
+        <td>${{ "{:,.0f}".format(r.net_profit) }}</td><td>{{ "%.1f"|format(r.win_rate) }}</td><td>{{ "%.1f"|format(r.max_dd_pct) }}</td>
+        <td>{{ "%.1f"|format(r.eval_pass_probability) }}</td><td>{{ "%.1f"|format(r.first_payout_probability) }}</td><td>{{ "%.1f"|format(r.risk_of_ruin_pct) }}</td>
+      </tr>
+      {% endfor %}
+    </table></div>
+    {% if result.timeframe_sweep.note %}<p style="font-size:12px;color:#ffcf7a;margin-top:6px;">{{ result.timeframe_sweep.note }}</p>{% endif %}
+    {% for k, v in result.timeframe_sweep.errors.items() %}<p style="font-size:12px;color:#c99;">{{ k }}: {{ v }}</p>{% endfor %}
+    {% for x in result.timeframe_sweep.skipped %}<p style="font-size:12px;color:#c99;">Skipped {{ x }}</p>{% endfor %}
+  </div>
+  {% endif %}
   <p style="font-size:12px;color:#888;margin-bottom:10px;">Ran against: <b>{{ result.active_dataset }}</b></p>
   <div class="headline">
     <div class="stat"><div class="label">Eval Pass Probability</div><div class="value">{{ "%.1f"|format(result.eval_pass_prob) }}%</div></div>
@@ -491,6 +509,11 @@
     </details>
   </div>
 
+  <div class="card">
+    <h2 style="font-size:16px;">Timeframes to test (optional)</h2>
+    <p style="font-size:12px;color:#888;">Leave blank to run on the loaded file's own bar size. Enter e.g. <b>5m, 15m, 30m, 1h, 4h</b> to resample the loaded data (even 1-minute data) to each bar size, run the strategy on every one, and get the full report for the best. A comparison table shows all of them.</p>
+    <input type="text" name="expand_timeframes" placeholder="e.g. 5m, 15m, 30m, 1h, 4h">
+  </div>
   <div class="card">
     <details>
       <summary>5. Monte Carlo</summary>

@@ -31,6 +31,15 @@
 
 <div id="verdict-banner-wrap" style="display:none;"><div class="verdict-banner" id="verdict-banner"></div></div>
 
+<div class="card" id="sweep-card" style="display:none;">
+  <h2>Timeframe sweep</h2>
+  <p class="note" id="sweep-note"></p>
+  <div style="overflow-x:auto;"><table style="width:100%;font-size:13px;">
+    <thead><tr><th align="left">Timeframe</th><th>Verdict</th><th>T58 score</th><th>Eval pass</th><th>Ruin</th><th>Trades</th><th>Net profit</th><th>Report</th></tr></thead>
+    <tbody id="sweep-tbody"></tbody>
+  </table></div>
+</div>
+
 <div class="card" id="summary-card" style="display:none;">
   <h2>Baseline vs. final</h2>
   <div class="headline">
@@ -102,6 +111,29 @@
             const nextStepEl = document.getElementById('next-step');
             nextStepEl.textContent = data.next_step;
             nextStepEl.style.display = 'block';
+          }
+          if (data.sweep_timeframes) {
+            document.getElementById('sweep-card').style.display = 'block';
+            document.getElementById('sweep-note').textContent =
+              `Headline result below is the ${data.best_timeframe} run (best verdict, then T58 score, then eval-pass %). ` +
+              'Picking the best of several timeframes on the same history is a mild selection effect -- confirm on a forward test.' +
+              ((data.sweep_skipped || []).length ? ' Skipped: ' + data.sweep_skipped.join('; ') : '');
+            const tb = document.getElementById('sweep-tbody');
+            tb.innerHTML = '';
+            Object.keys(data.sweep_timeframes).forEach(label => {
+              const r = data.sweep_timeframes[label];
+              const tr = document.createElement('tr');
+              tr.style.textAlign = 'center';
+              if (r.is_best) tr.style.fontWeight = '700';
+              if (r.verdict === 'ERROR') {
+                tr.innerHTML = `<td align="left">${label}</td><td colspan="7">failed: ${r.error}</td>`;
+              } else {
+                tr.innerHTML = `<td align="left">${label}${r.is_best ? ' \u2605' : ''}</td><td>${r.verdict}</td>` +
+                  `<td>${fmt(r.t58_score, 1)}</td><td>${fmt(r.eval_pass_probability, 1)}%</td><td>${fmt(r.risk_of_ruin_pct, 1)}%</td>` +
+                  `<td>${r.trades}</td><td>${money(r.net_profit)}</td><td><a href="${r.report_html}" target="_blank">open</a></td>`;
+              }
+              tb.appendChild(tr);
+            });
           }
           const s = data.summary;
           if (s) {
