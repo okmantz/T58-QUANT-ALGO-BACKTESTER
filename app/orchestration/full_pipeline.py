@@ -1899,6 +1899,102 @@ def _batch_item_worker(
         return (i, label, False, None, str(exc))
 
 
+@dataclass
+class FullPipelineSweepResult:
+    per_timeframe: dict          # label -> FullPipelineResult
+    best_timeframe: str
+    best_result: "FullPipelineResult"
+    skipped: list = field(default_factory=list)
+    errors: dict = field(default_factory=dict)
+
+
+_VERDICT_RANK = {"READY": 2, "MARGINAL": 1, "NOT READY": 0}
+
+
+def _sweep_rank(result: "FullPipelineResult") -> tuple:
+    score = getattr(getattr(result, "scorecard", None), "score", None)
+    return (
+        _VERDICT_RANK.get(result.verdict, 0),
+        score if score is not None else -1.0,
+        result.final_mc.evaluation_pass_probability,
+    )
+
+
+def run_full_pipeline_sweep(
+    df: pd.DataFrame,
+    strategy: Strategy,
+    risk: RiskConfig,
+    prop_rules: PropRules,
+    output_dir: str | Path,
+    timeframes: list[str],
+    cfg: FullPipelineConfig | None = None,
+    progress_cb: ProgressCallback | None = None,
+    instrument: str = "unknown",
+    ollama_settings: "OllamaSettings | None" = None,
+    report_basename: str = "full_pipeline_report",
+    cancel_event: threading.Event | None = None,
+) -> FullPipelineSweepResult:
+    """Runs the ENTIRE Full Pipeline once per requested timeframe, each on
+    `df` resampled to that bar size (so one 1-minute file can be judged on
+    5m/15m/30m/1h/4h), and returns every result plus the winner.
+
+    Winner = verdict (READY > MARGINAL > NOT READY), then T58 score, then
+    eval-pass probability. Each timeframe keeps its own full report
+    (`<report_basename>__<label>`). Manual strategies are stamped with the
+    timeframe they were found on so a saved winner keeps trading on it.
+    In-place replace is disabled for sweeps (several timeframes must not
+    all overwrite one library file). An empty/unusable timeframe list
+    falls back to one native run. FullPipelineCancelled propagates.
+    """
+    from app.data.timeframe_sweep import build_timeframe_sweep, stamp_manual_timeframe
+
+    cfg = cfg or FullPipelineConfig()
+    plan = build_timeframe_sweep(df, timeframes or [])
+    pairs = [(t.label, t.dataframe) for t in plan.targets] if plan.targets else [("native", df)]
+    sweeping = bool(plan.targets)
+    run_cfg = replace(cfg, replace_existing=False, library_ref=None) if sweeping and len(pairs) > 1 else cfg
+
+    def log(msg: str) -> None:
+        if progress_cb:
+            progress_cb(msg)
+
+    results: dict = {}
+    errors: dict = {}
+    for label, target_df in pairs:
+        if cancel_event is not None and cancel_event.is_set():
+            raise FullPipelineCancelled("Full Pipeline sweep stopped by request.")
+        log(f"=== Timeframe {label}: starting Full Pipeline ({len(target_df):,} bars) ===")
+        run_strategy = stamp_manual_timeframe(strategy, label) if sweeping else strategy
+        try:
+            results[label] = run_full_pipeline(
+                target_df, run_strategy, risk, prop_rules, output_dir, run_cfg,
+                progress_cb=(lambda m, _l=label: log(f"[{_l}] {m}")),
+                instrument=instrument, ollama_settings=ollama_settings,
+                report_basename=f"{report_basename}__{label}" if sweeping else report_basename,
+                cancel_event=cancel_event,
+            )
+        except FullPipelineCancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 -- one bad timeframe must not kill the rest
+            errors[label] = str(exc)
+            log(f"[{label}] skipped -- {exc}")
+
+    if not results:
+        detail = "; ".join(f"{k}: {v}" for k, v in errors.items()) or "no timeframe could be resampled from this dataset."
+        raise RefinementError(f"Full Pipeline's timeframe sweep produced no usable timeframe -- {detail}")
+
+    best = max(results, key=lambda k: _sweep_rank(results[k]))
+    if sweeping and len(results) > 1:
+        results[best].warnings.append(
+            f"Timeframe sweep: {best} was the best of {len(results)} timeframes tested on the same history "
+            "(verdict, then T58 score, then eval-pass probability). Choosing a winner among several is a "
+            "mild selection effect -- confirm it on data this run never saw (forward test) before going live."
+        )
+    return FullPipelineSweepResult(
+        per_timeframe=results, best_timeframe=best, best_result=results[best], skipped=plan.skipped, errors=errors,
+    )
+
+
 def run_full_pipeline_batch(
     df: pd.DataFrame,
     items: list[FullPipelineBatchItem],
