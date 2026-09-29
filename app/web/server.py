@@ -109,6 +109,7 @@ from app.orchestration.forge import ForgeConfig, run_forge
 from app.research import director as research_director
 from app.evolution.multi_instrument import EvolutionInstrumentJob, MultiInstrumentEvolutionGroup
 from app.data.timeframe_sweep import DEFAULT_SWEEP_TIMEFRAMES, parse_sweep_timeframes
+from app.orchestration.report_timeframe_sweep import run_report_timeframe_sweep
 from app.orchestration.multi_timeframe_jobs import (
     describe_skipped, evolution_jobs_from_expansion, expand_dataset_across_timeframes,
     search_jobs_from_expansion,
@@ -2091,6 +2092,32 @@ def run_pipeline():
                 saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context(),
             ), 400
 
+        # Timeframe sweep: run the strategy on each requested bar size
+        # (5m/15m/30m/1h/4h...) resampled from the loaded file (e.g. 1m
+        # MGC), then continue the normal report flow on the WINNING one.
+        timeframe_sweep = None
+        sweep_labels = parse_sweep_timeframes(form.get("expand_timeframes", ""))
+        if sweep_labels:
+            sweep = run_report_timeframe_sweep(
+                df, strategy, risk, rules, sweep_labels, adaptive_risk=adaptive_risk,
+                n_sims=int(form.get("n_sims", 5000)), mc_method=form.get("mc_method", "bootstrap"),
+                reset_on_breach=reset_on_breach,
+            )
+            if sweep.best_df is None:
+                detail = "; ".join(f"{k}: {v}" for k, v in sweep.errors.items()) or "no requested timeframe could be built from this dataset"
+                skipped = "; ".join(f"{x.requested_label}: {x.reason}" for x in sweep.skipped)
+                return render_template(
+                    "index.html", error=f"Timeframe sweep produced no tradable timeframe -- {detail}. {skipped}".strip(),
+                    stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+                    saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context(),
+                ), 400
+            df, strategy = sweep.best_df, sweep.best_strategy
+            timeframe_sweep = {
+                "rows": [r.to_dict() for r in sweep.rows], "best": sweep.best_label,
+                "skipped": [f"{x.requested_label}: {x.reason}" for x in sweep.skipped],
+                "errors": sweep.errors, "note": sweep.selection_note,
+            }
+
         bt_result = run_backtest(df, strategy, risk, adaptive_risk=adaptive_risk)
         if adaptive_risk is not None:
             # Surfaced in the report's own warnings section (not just the
@@ -2181,6 +2208,7 @@ def run_pipeline():
             **_alpaca_template_context(),
             result={
                 "active_dataset": active_label,
+                "timeframe_sweep": timeframe_sweep,
                 "import_note": import_note,
                 "lookahead_warning": lookahead_warning,
                 "integrity_check": integrity_report.render(),
@@ -3660,6 +3688,59 @@ def _run_fullpipeline_job(
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
 
 
+def _run_fullpipeline_sweep_job(
+    job_id: str, df, strategy, risk: RiskConfig, rules: PropRules,
+    cfg: FullPipelineConfig, active_label: str, ollama_settings: OllamaSettings | None,
+    expand_labels: list, cancel_event: threading.Event | None = None, notify_webhook_url: str | None = None,
+) -> None:
+    """Full Pipeline once per requested timeframe (5m/15m/30m/1h/4h...),
+    all resampled from the one loaded file. The job's `result` is the WINNING
+    timeframe's FullPipelineResult, so the existing status page/summary work
+    unchanged; `sweep_timeframes` adds the side-by-side table."""
+    from app.orchestration.full_pipeline import run_full_pipeline_sweep
+    try:
+        sweep = run_full_pipeline_sweep(
+            df, strategy, risk, rules, FULL_PIPELINE_DIR, expand_labels, cfg,
+            progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
+            instrument=active_label, ollama_settings=ollama_settings,
+            report_basename=f"full_pipeline_{job_id}", cancel_event=cancel_event,
+        )
+        best = sweep.best_result
+        table = {}
+        for label, r in sweep.per_timeframe.items():
+            table[label] = {
+                "verdict": r.verdict,
+                "t58_score": getattr(getattr(r, "scorecard", None), "score", None),
+                "eval_pass_probability": r.final_mc.evaluation_pass_probability,
+                "risk_of_ruin_pct": r.final_mc.risk_of_ruin_pct,
+                "trades": len(r.final_bt.trades),
+                "net_profit": r.final_bt.statistics.net_profit,
+                "is_best": label == sweep.best_timeframe,
+                "report_html": f"/full_pipeline_reports/{Path(r.report_paths['html']).name}",
+            }
+        for label, why in sweep.errors.items():
+            table[label] = {"verdict": "ERROR", "error": why, "is_best": False}
+        JOB_MANAGER.finish(
+            job_id, result=best,
+            report_html=f"/full_pipeline_reports/{Path(best.report_paths['html']).name}",
+            report_json=f"/full_pipeline_reports/{Path(best.report_paths['json']).name}",
+            sweep_timeframes=table, best_timeframe=sweep.best_timeframe,
+            sweep_skipped=[f"{s.requested_label}: {s.reason}" for s in sweep.skipped],
+        )
+        notify_job_finished(
+            notify_webhook_url, "Full Pipeline (timeframe sweep)",
+            f"best={sweep.best_timeframe}, verdict={best.verdict}, instrument={active_label}",
+            job_url=f"/full-pipeline/job/{job_id}",
+        )
+    except FullPipelineCancelled:
+        JOB_MANAGER.finish(job_id, cancelled=True)
+    except Exception as exc:  # noqa: BLE001
+        log_crash("Full Pipeline sweep (web)", exc=exc)
+        JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
+    finally:
+        HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
+
+
 def _load_library_strategy_for_batch(mode: str, name: str):
     """Loads one Strategy Library entry by (type, filename) into a runnable
     Strategy object -- the manual-JSON case needs its own branch (it isn't
@@ -4244,12 +4325,22 @@ def full_pipeline_start():
         cancel_event = threading.Event()
         job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label, cancel_event=cancel_event, cancelled=False)
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)
-        thread = threading.Thread(
-            target=_run_fullpipeline_job,
-            args=(job_id, df, strategy, risk, rules, cfg, active_label, ollama_settings),
-            kwargs={"cancel_event": cancel_event, "notify_webhook_url": form.get("notify_webhook_url")},
-            daemon=True,
-        )
+        expand_labels = parse_sweep_timeframes(form.get("expand_timeframes", ""))
+        if expand_labels:
+            JOB_MANAGER.log(job_id, f"Timeframe sweep requested: {', '.join(expand_labels)} (resampled from the loaded data).")
+            thread = threading.Thread(
+                target=_run_fullpipeline_sweep_job,
+                args=(job_id, df, strategy, risk, rules, cfg, active_label, ollama_settings, expand_labels),
+                kwargs={"cancel_event": cancel_event, "notify_webhook_url": form.get("notify_webhook_url")},
+                daemon=True,
+            )
+        else:
+            thread = threading.Thread(
+                target=_run_fullpipeline_job,
+                args=(job_id, df, strategy, risk, rules, cfg, active_label, ollama_settings),
+                kwargs={"cancel_event": cancel_event, "notify_webhook_url": form.get("notify_webhook_url")},
+                daemon=True,
+            )
         thread.start()
         return redirect(url_for("full_pipeline_job", job_id=job_id))
 
@@ -4325,6 +4416,9 @@ def full_pipeline_job_status(job_id):
         "log": job["log"],
         "instrument": job.get("instrument"),
         "summary": summary,
+        "sweep_timeframes": job.get("sweep_timeframes"),
+        "best_timeframe": job.get("best_timeframe"),
+        "sweep_skipped": job.get("sweep_skipped"),
         "next_step": (
             pipeline_guide.after_full_pipeline(result.verdict, bool(result.saved_library_note), result=result)
             if result is not None else None
