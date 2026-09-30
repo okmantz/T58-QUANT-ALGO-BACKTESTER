@@ -95,6 +95,7 @@ def test_account_blown_halts_new_trades():
     risk = RiskConfig(
         initial_balance=10_000.0, risk_mode="percent", risk_value=50.0,  # deliberately reckless sizing
         pip_size=1.0, max_account_drawdown_pct=10.0,  # blown once equity <= $9,000
+        halt_on_breach=True,  # legacy permanent halt is now opt-in (default is: reset and keep trading)
     )
     with pytest.warns(RuntimeWarning, match="Account BLOWN"):
         trades, equity_df = run_execution(df, signals, risk, stop_loss_pips=25, take_profit_pips=None)
@@ -194,9 +195,10 @@ def test_reset_on_breach_resumes_trading_after_a_blown_account():
     assert reset_events[0]["equity_before_reset"] == pytest.approx(6400.0, abs=1e-6)
 
 
-def test_reset_on_breach_false_is_byte_identical_to_before():
-    """reset_on_breach defaults to False and must reproduce the permanent-
-    halt behavior exactly -- this is purely additive."""
+def test_halt_on_breach_true_reproduces_the_legacy_permanent_halt():
+    """halt_on_breach=True (opt-in) reproduces the old permanent-halt
+    behavior exactly. The DEFAULT no longer halts -- see
+    tests/test_trade_until_data_ends.py."""
     ts = pd.date_range("2024-01-01 09:00", periods=6, freq="D")
     rows = [
         (ts[0], 100.0, 100.2, 99.8, 100.0, 1000.0),
@@ -210,7 +212,7 @@ def test_reset_on_breach_false_is_byte_identical_to_before():
     signals = pd.Series([1, 0, 1, 1, 1, 1])
     risk = RiskConfig(
         initial_balance=10_000.0, risk_mode="percent", risk_value=50.0,
-        pip_size=1.0, max_account_drawdown_pct=10.0,  # reset_on_breach left at its False default
+        pip_size=1.0, max_account_drawdown_pct=10.0, halt_on_breach=True,
     )
     with pytest.warns(RuntimeWarning, match="Account BLOWN"):
         trades, equity_df = run_execution(df, signals, risk, stop_loss_pips=25, take_profit_pips=None)

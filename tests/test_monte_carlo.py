@@ -43,18 +43,24 @@ def test_monte_carlo_empty_trades_raises():
         run_monte_carlo([], PropRules(), MonteCarloConfig(n_simulations=10))
 
 def test_reset_on_breach_off_is_byte_identical_to_before():
-    """MonteCarloConfig.reset_on_breach defaults to False -- every
-    existing caller (which never sets it) must see identical output to
-    before this field existed."""
+    """An explicit reset_on_breach=False reproduces the original single-
+    attempt-per-path output exactly. (The DEFAULT is now True -- see
+    test_reset_on_breach_is_on_by_default -- so this opts out explicitly.)"""
     trades = _mock_trades(90, seed_pnls=[300, -700] * 45)
     rules = PropRules(account_size=10000, evaluation_profit_target_pct=5, daily_loss_limit_pct=50,
                        max_drawdown_pct=50, min_trading_days=1, consistency_rule_pct=None)
-    cfg = MonteCarloConfig(n_simulations=150, method="bootstrap", random_seed=7)
+    cfg = MonteCarloConfig(n_simulations=150, method="bootstrap", random_seed=7, reset_on_breach=False)
     result = run_monte_carlo(trades, rules, cfg)
     assert result.reset_on_breach is False
     assert result.mean_attempts_per_path == 1.0
     assert result.median_attempts_per_path == 1.0
     assert "reset_on_breach was ON" not in result.methodology_note
+
+
+def test_reset_on_breach_is_on_by_default():
+    """Monte Carlo paths keep going after a bust (fresh account) instead of
+    ending at the first breach -- consistent with the raw backtest engine."""
+    assert MonteCarloConfig().reset_on_breach is True
 
 
 def test_reset_on_breach_chains_within_each_resampled_path():
