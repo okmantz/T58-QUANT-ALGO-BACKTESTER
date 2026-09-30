@@ -1,0 +1,59 @@
+diff --git a/.github/workflows/build-exe.yml b/.github/workflows/build-exe.yml
+index 9bc94a0..138906f 100644
+--- a/.github/workflows/build-exe.yml
++++ b/.github/workflows/build-exe.yml
+@@ -171,6 +171,7 @@ jobs:
+             --hidden-import "app.ui" `
+             --hidden-import "app.ui.main_window" `
+             --hidden-import "app.ui.condition_builder" `
++            --hidden-import "app.ui.onboarding_tour" `
+             --hidden-import "app.strategy" `
+             --hidden-import "app.strategy.manual" `
+             --hidden-import "app.strategy.expr" `
+diff --git a/app/ui/main_window.py b/app/ui/main_window.py
+index 17fd811..6b79728 100644
+--- a/app/ui/main_window.py
++++ b/app/ui/main_window.py
+@@ -2567,6 +2567,18 @@ class MainWindow:
+         lbl.configure(bg=bg, fg=_blend_hex(TEXT_MUTED, color, 0.7) if entering else TEXT_MUTED)
+         self._draw_nav_accent(key, "hover" if entering else "idle")
+ 
++    def _start_onboarding_tour(self):
++        """Dashboard "Take the tour" button (also what first-run launch uses)."""
++        try:
++            from app.ui.onboarding_tour import OnboardingTour
++            tour = getattr(self, "_onboarding_tour", None)
++            if tour is not None and tour.card is not None:
++                return  # already running
++            self._onboarding_tour = OnboardingTour(self)
++            self._onboarding_tour.start()
++        except Exception:
++            pass
++
+     def _show_page(self, key: str):
+         group = self._group_header_for_key(key)
+         if group and group in getattr(self, "_collapsed_groups", set()):
+@@ -3483,6 +3495,9 @@ class MainWindow:
+             "Live stats across every strategy that has been run through the app -- "
+             "desktop, mobile web, and Search Lab all feed this automatically.",
+         )
++        tour_row = Frame(f, bg=BG)
++        tour_row.pack(anchor="w", padx=24, pady=(0, 6))
++        self._button(tour_row, "\U0001F393 TAKE THE 60-SECOND TOUR", self._start_onboarding_tour).pack(side="left")
+ 
+         # First-run welcome -- shown only for a genuinely fresh install (no
+         # market data ever loaded AND no backtest ever run, per
+@@ -21219,6 +21234,13 @@ def launch():
+         _apply_dark_titlebar(root)
+     except Exception:
+         pass
++    # First-run guided tour: shown once (see app/ui/onboarding_tour.py). Any
++    # failure here must never stop the app from opening.
++    try:
++        from app.ui.onboarding_tour import maybe_start_tour
++        root.after(1200, lambda: maybe_start_tour(window))
++    except Exception:
++        pass
+     root.mainloop()
+ 
+ 
