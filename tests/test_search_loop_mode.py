@@ -85,7 +85,34 @@ def test_loop_stops_with_target_reached_on_an_easy_trending_market(tmp_path):
     assert len(result.rounds) == 1  # found it on round 1 -- never needed to widen
 
 
-def test_loop_widens_after_stalling_then_hits_max_rounds_on_flat_data(tmp_path):
+def test_loop_widens_after_stalling_then_hits_max_rounds_on_flat_data(tmp_path, monkeypatch):
+    """FIX (2026-09-30, CI red on 1503179): this used to run the REAL
+    backtest/prop-sim/Monte Carlo pipeline on random-noise data and rely on
+    it never producing a gate-passing candidate, so round 1 would "stall".
+    Since the trade-until-data-ends / reset-on-breach change, noise data can
+    legitimately clear the gate with a small eval-pass % (each round even
+    scores a bit higher, because every round reseeds), so the loop saw
+    steady "improvement", never stalled, and never widened -- correct loop
+    behavior, but it broke the test's hidden assumption.
+
+    What this test actually verifies is the loop's own stall -> widen ->
+    max_rounds logic, so run_search is stubbed to return a summary whose
+    leaderboard has no qualifying candidate (a guaranteed stall every
+    round). That makes the test deterministic and independent of backtest
+    numerics -- the same stubbing pattern the cancel/error tests below use.
+    """
+    from app.search.batch_runner import SearchSummary
+
+    def _stalled_run_search(df, risk, prop_rules, space, stage_cfg, db_path, **kwargs):
+        return SearchSummary(
+            run_id="stub", mode="family", family=None,
+            total_candidates=0, stage1_survivors=0, stage2_survivors=0, stage3_survivors=0,
+            champion_candidate_id=None, elapsed_seconds=0.0, db_path=str(db_path),
+            leaderboard=[], graveyard_path=None,
+        )
+
+    monkeypatch.setattr("app.orchestration.loop_runner.run_search", _stalled_run_search)
+
     df = _flat_df()
     loop_cfg = SearchLoopConfig(
         target_eval_pass_pct=99.9,  # effectively unreachable
@@ -102,8 +129,9 @@ def test_loop_widens_after_stalling_then_hits_max_rounds_on_flat_data(tmp_path):
     assert len(result.rounds) == 3
     assert result.winner_round is None
     assert result.winner_candidate_id is None
-    # Round 1 stalled (no target) -> should have widened for round 2 onward.
+    # Round 1 stalled (no qualifying candidate) -> should have widened for round 2 onward.
     assert result.rounds[0].family == "trend_breakout"
+    assert result.rounds[0].widened_after_this_round is True
     assert result.rounds[1].family is None  # widened to "every family"
     assert result.rounds[1].max_candidates == 10
 
