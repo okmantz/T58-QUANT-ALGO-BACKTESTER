@@ -171,6 +171,7 @@ jobs:
             --hidden-import "app.ui" `
             --hidden-import "app.ui.main_window" `
             --hidden-import "app.ui.condition_builder" `
+            --hidden-import "app.ui.onboarding_tour" `
             --hidden-import "app.strategy" `
             --hidden-import "app.strategy.manual" `
             --hidden-import "app.strategy.expr" `
