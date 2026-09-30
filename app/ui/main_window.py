@@ -239,7 +239,8 @@ THEMES = {
     # see the note above.
     "dark": {
         "BG": "#05070A",             # == web --bg
-        "PANEL": "#0D1017",          # == web --panel
+        "PANEL": "#10141C",          # card surface == web --panel-2 (web cards sit on --panel-2, not --panel)
+        "SIDEBAR": "#0D1017",        # sidebar / title strip == web --panel
         "PANEL_2": "#10141C",        # == web --panel-2
         "PANEL_3": "#151A24",        # == web --panel-3
         "PANEL_HOVER": "#1B212C",    # hover state for interactive surfaces (buttons, rows)
@@ -255,10 +256,15 @@ THEMES = {
         "RED": "#FF6F6F",            # == web --coral -- fail/danger/destructive everywhere
         "BLUE": "#6FA8FF",
         "AMBER": "#F0B429",          # == web --amber -- warning everywhere
-        "ACCENT": "#7B3DFF",          # == web --violet -- primary brand accent (T58 brand purple)
-        "ACCENT_HOVER": "#905CFF",
-        "ACCENT_DIM": "#261650",      # low-opacity-style accent for subtle fills/left-bars
-        "ACCENT_INK": "#0C0A16",     # near-black used as text on top of the bright accent
+        # WEB-PARITY MAKEOVER: the primary accent is now the web app's teal --
+        # every primary button, focus ring, selected-stage highlight and
+        # default nav highlight on the web is --teal, so the desktop's was
+        # the one place that read as a different product (violet).
+        "ACCENT": "#35E0B0",          # == web --teal -- primary accent / CTA
+        "ACCENT_HOVER": "#5BEBC4",
+        "ACCENT_DIM": "#0F3D34",      # low-opacity-style accent for subtle fills/left-bars
+        "ACCENT_INK": "#04120E",     # == web primary-button ink (near-black on bright teal)
+        "VIOLET": "#7B3DFF",         # == web --violet (brand purple: live/info, brand-mark gradient)
         # Neon accent set -- used for the glowing card borders / ring progress /
         # per-metric coloring on the Dashboard tab, matching the neon-dark
         # reference mockups. Kept separate from the semantic GREEN/RED/AMBER above
@@ -277,6 +283,7 @@ THEMES = {
     "light": {
         "BG": "#F5F7FA",             # == web light --bg
         "PANEL": "#FFFFFF",          # == web light --panel
+        "SIDEBAR": "#FFFFFF",
         "PANEL_2": "#FFFFFF",        # == web light --panel-2
         "PANEL_3": "#EEF2F6",        # == web light --panel-3
         "PANEL_HOVER": "#E3E8EF",
@@ -292,10 +299,11 @@ THEMES = {
         "RED": "#E0453F",            # == web light --coral
         "BLUE": "#2C64D6",
         "AMBER": "#B8790F",          # == web light --amber
-        "ACCENT": "#602BEF",         # == web light --violet
-        "ACCENT_HOVER": "#5024C9",
-        "ACCENT_DIM": "#E0D6FC",
+        "ACCENT": "#0F9F78",         # == web light --teal
+        "ACCENT_HOVER": "#0A7259",
+        "ACCENT_DIM": "#D3F0E7",
         "ACCENT_INK": "#FFFFFF",
+        "VIOLET": "#602BEF",         # == web light --violet
         # Same decorative role as the dark theme's neon set, deliberately
         # darkened/desaturated from true neon so they stay legible as text
         # and card borders against a near-white background instead of
@@ -365,6 +373,9 @@ apply_theme(CURRENT_THEME)
 
 FONT = "Segoe UI"
 MONO = "Consolas"
+
+# Sidebar width in px -- == web theme.css --sidebar-w (240px).
+SIDEBAR_WIDTH = 240
 
 # Kill-switch for the custom borderless title bar (see MainWindow.__init__
 # and _build_custom_titlebar) -- flip to False to fall back to the native
@@ -877,6 +888,87 @@ class GlowCard(Canvas):
         else:
             self.coords(self._window_id, pad + 1, pad + 1)
             self.itemconfigure(self._window_id, width=inner_w, height=inner_h)
+
+
+class RoundedCard(Frame):
+    """Auto-sizing card with a rounded 1px border -- the desktop twin of the
+    web app's .t58-card (theme.css: panel-2 fill, 1px --border, rounded).
+
+    Unlike GlowCard (fixed height, glow halo), this grows with whatever is
+    packed into `.body`, so it can back ordinary form/section cards. The
+    border is painted on a Canvas that sits *behind* `.body`; `.body` is
+    inset just far enough that its square corners stay inside the rounded
+    outline. Redraws are coalesced with after_idle so resizing a window
+    with dozens of cards doesn't thrash.
+    """
+
+    def __init__(self, parent, fill=None, border=None, radius=12, inset=4):
+        try:
+            outer_bg = str(parent.cget("bg"))
+        except Exception:
+            outer_bg = BG
+        super().__init__(parent, bg=outer_bg, highlightthickness=0, bd=0)
+        self._fill = fill if fill is not None else PANEL
+        self._border = border if border is not None else BORDER
+        self._radius = radius
+        self._last_size = (0, 0)
+        self._redraw_job = None
+        self._canvas = Canvas(self, bg=outer_bg, highlightthickness=0, bd=0)
+        self._canvas.place(x=0, y=0, relwidth=1, relheight=1)
+        self.body = Frame(self, bg=self._fill, highlightthickness=0, bd=0)
+        self.body.pack(fill="both", expand=True, padx=inset, pady=inset)
+        self.bind("<Configure>", self._on_configure)
+
+    def set_border(self, color: str):
+        self._border = color
+        self._schedule_redraw()
+
+    def _on_configure(self, event):
+        size = (event.width, event.height)
+        if size == self._last_size:
+            return
+        self._last_size = size
+        self._schedule_redraw()
+
+    def _schedule_redraw(self):
+        if self._redraw_job is not None:
+            return
+        try:
+            self._redraw_job = self.after_idle(self._redraw)
+        except Exception:
+            self._redraw_job = None
+
+    def _redraw(self):
+        self._redraw_job = None
+        try:
+            w, h = self._last_size
+            if w < 14 or h < 14:
+                return
+            c = self._canvas
+            c.delete("all")
+            r = max(0.0, min(float(self._radius), w / 2 - 1, h / 2 - 1))
+            x0, y0, x1, y1 = 0.5, 0.5, w - 1.5, h - 1.5
+            pts = [
+                x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r,
+                x1, y1 - r, x1, y1, x1 - r, y1, x0 + r, y1,
+                x0, y1, x0, y1 - r, x0, y0 + r, x0, y0,
+            ]
+            c.create_polygon(pts, smooth=True, splinesteps=16, fill=self._fill, outline=self._border, width=1)
+        except Exception:
+            pass  # widget destroyed mid-redraw (e.g. theme toggle rebuild) -- nothing to paint
+
+
+def _card(parent, border=None, fill=None, radius=12):
+    """Drop-in for `Frame(parent, bg=PANEL, highlightthickness=1,
+    highlightbackground=...)` that renders as a rounded web-style card.
+    Returns the inner body Frame; its pack/grid/place calls are forwarded to
+    the outer card so callers can position it exactly like the old Frame."""
+    card = RoundedCard(parent, fill=fill, border=border, radius=radius)
+    body = card.body
+    for name in ("pack", "grid", "place", "pack_forget", "grid_forget", "grid_remove", "place_forget"):
+        setattr(body, name, getattr(card, name))
+    body._t58_card = card
+    return body
 
 
 class RingProgress(Canvas):
@@ -1738,8 +1830,17 @@ class MainWindow:
                 self.root.iconphoto(True, self._icon_image)
         except Exception:
             pass
-        self.root.geometry("1000x760")
-        self.root.minsize(900, 680)
+        # Web-parity layout has a 240px sidebar (like the web app's), so the
+        # old 1000x760 default left only ~760px for content and clipped the
+        # dashboard cards -- open larger, but never bigger than the screen.
+        try:
+            _sw, _sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+            _w = min(1440, max(1100, _sw - 120))
+            _h = min(900, max(700, _sh - 140))
+        except Exception:
+            _w, _h = 1280, 820
+        self.root.geometry(f"{_w}x{_h}")
+        self.root.minsize(1000, 680)
 
         # UPGRADE (Sep 2026, "ugly blue banner" fix, final attempt): three
         # earlier rounds of _apply_dark_titlebar() tried to recolor
@@ -1993,37 +2094,36 @@ class MainWindow:
         if self._custom_titlebar_active:
             self._build_custom_titlebar()
 
-        # Main application shell.
+        # Main application shell -- mirrors the web app's layout (theme.css
+        # .t58-shell): a full-height sidebar on the left (brand, search, nav,
+        # footer controls), and a main column on the right (stage stepper on
+        # top, page content below). Previously this was a tall header bar
+        # over a padded sidebar+content split, which is what made the
+        # desktop read as a different product from the web build.
         shell = Frame(self.root, bg=BG)
         shell.pack(fill="both", expand=True)
 
-        self._build_header(shell)
-        self._pump_splash("Building navigation...")
-
-        # ---------------------------------------------------------------
-        # Sidebar navigation + page switcher (replaces the old top-tab
-        # ttk.Notebook). Each page is a plain Frame; only one is gridded
-        # into the content area at a time via _show_page(). This gives us
-        # full control over the nav's look (icons, active glow, grouping)
-        # that ttk.Notebook can't offer, especially for vertical tabs.
-        # ---------------------------------------------------------------
-        body = Frame(shell, bg=BG)
-        body.pack(fill="both", expand=True, padx=18, pady=(0, 18))
-
-        # The sidebar itself scrolls: with 18 tabs + section dividers, the
-        # full nav list is taller than the sidebar's available height on
-        # this app's default/minimum window size, and a fixed (non-
-        # scrolling) sidebar simply clips whatever doesn't fit off the
-        # bottom -- every tab must stay reachable no matter the window
-        # size, so a mouse-wheel-scrollable canvas backs the nav list
-        # instead of relying on padding alone to make it fit.
-        self.sidebar = Frame(body, bg=PANEL, width=196)
+        self.sidebar = Frame(shell, bg=SIDEBAR, width=SIDEBAR_WIDTH)
         self.sidebar.pack(side="left", fill="y")
         self.sidebar.pack_propagate(False)
+        Frame(shell, bg=BORDER, width=1).pack(side="left", fill="y")  # sidebar border-right
 
-        self._sidebar_canvas = Canvas(self.sidebar, bg=PANEL, highlightthickness=0)
+        main_col = Frame(shell, bg=BG)
+        main_col.pack(side="left", fill="both", expand=True)
+
+        # Brand + search (top) and theme/settings footer (bottom) are packed
+        # into the sidebar BEFORE the scrolling nav canvas, so they keep
+        # their space and the nav list takes whatever is left.
+        self._build_sidebar_chrome(self.sidebar)
+        self._pump_splash("Building navigation...")
+        self._build_header(main_col)  # persistent stage stepper
+
+        # The nav list itself scrolls: with 18+ tabs + section dividers it is
+        # taller than the sidebar on a small window, and every tab must stay
+        # reachable at any window size.
+        self._sidebar_canvas = Canvas(self.sidebar, bg=SIDEBAR, highlightthickness=0)
         self._sidebar_canvas.pack(side="left", fill="both", expand=True)
-        self._sidebar_inner = Frame(self._sidebar_canvas, bg=PANEL)
+        self._sidebar_inner = Frame(self._sidebar_canvas, bg=SIDEBAR)
         self._sidebar_window_id = self._sidebar_canvas.create_window(
             (0, 0), window=self._sidebar_inner, anchor="nw",
         )
@@ -2041,22 +2141,19 @@ class MainWindow:
             elif getattr(event, "num", None) == 5:
                 delta = 1
             self._sidebar_canvas.yview_scroll(delta, "units")
-            # Without "break", this event still propagates from the
-            # widget bindtag up through "all" to the global content-area
-            # dispatcher bound in _scrollable() (self.root.bind_all), so
-            # scrolling the sidebar ALSO scrolled whatever page happened
-            # to be active underneath it at the same time -- the sidebar
-            # "kind of" scrolled but felt tied to the current page because
-            # both scrolled together. Returning "break" here stops the
-            # event once the sidebar has handled it.
+            # "break" stops the event propagating to the global content-area
+            # wheel dispatcher bound in _scrollable(), so scrolling the
+            # sidebar doesn't also scroll whichever page is underneath.
             return "break"
 
         for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
             self._sidebar_canvas.bind(seq, _sidebar_wheel)
             self._sidebar_inner.bind(seq, _sidebar_wheel)
 
+        body = Frame(main_col, bg=BG)
+        body.pack(fill="both", expand=True)
         self.content = Frame(body, bg=BG)
-        self.content.pack(side="left", fill="both", expand=True, padx=(14, 0))
+        self.content.pack(side="left", fill="both", expand=True)
 
         self.tab_dashboard = Frame(self.content, bg=BG)
         self.tab_ai_assistant = Frame(self.content, bg=BG)
@@ -2149,9 +2246,9 @@ class MainWindow:
         # color -- nothing about what a tab does changed).
         self._nav_items = [
             (None, None, "OVERVIEW", None, None),
-            ("dashboard", "", "Dashboard", self.tab_dashboard, NEON_VIOLET),
-            ("aiassistant", "", "AI Assistant", self.tab_ai_assistant, NEON_CYAN),
-            ("manual", "", "User Manual", self.tab_manual, METAL_BRIGHT),
+            ("dashboard", "", "Dashboard", self.tab_dashboard, GREEN),
+            ("aiassistant", "", "AI Assistant", self.tab_ai_assistant, GREEN),
+            ("manual", "", "User Manual", self.tab_manual, GREEN),
 
             (None, "SUPERHEADER", "Strategy Lab", None, None),
             (None, None, "\u2460 CREATE", None, NEON_VIOLET),
@@ -2174,7 +2271,7 @@ class MainWindow:
             ("propfirmrec", "", "7  Prop-Firm Recommender", self.tab_prop_recommender, NEON_CYAN),
 
             (None, None, "\u2462 OPTIMIZE", None, BLUE),
-            ("optimizehub", "", "\u2261 Overview / Picker", self.tab_optimize_hub, BLUE),
+            ("optimizehub", "", "Start Here", self.tab_optimize_hub, BLUE),
             ("fullpipeline", "", "Full Pipeline (all-in-one)", self.tab_fullpipeline, BLUE),
             ("quickoptimize", "", "\u26a1 Quick Optimize", self.tab_quickoptimize, BLUE),
             ("search", "", "Search Lab", self.tab_search, BLUE),
@@ -2186,7 +2283,7 @@ class MainWindow:
             ("risksweep", "", "\U0001F4CA Risk Sweep", self.tab_risksweep, BLUE),
 
             (None, None, "\u2463 VALIDATE", None, NEON_AMBER),
-            ("validatehub", "", "\u2261 Overview / Checklist", self.tab_validate_hub, NEON_AMBER),
+            ("validatehub", "", "Start Here", self.tab_validate_hub, NEON_AMBER),
             ("wfo", "", "Walk-Forward Optimization", self.tab_wfo, NEON_AMBER),
             ("wfga", "", "Walk-Forward GA", self.tab_wfga, NEON_AMBER),
             ("cpcv", "", "CPCV", self.tab_cpcv, NEON_AMBER),
@@ -2362,6 +2459,40 @@ class MainWindow:
                 return current_header
         return None
 
+    # Per-row glyphs -- the same codepoints the web sidebar (_sidebar.html)
+    # uses for the same tools, so the two builds read identically.
+    _NAV_ICONS = {
+        "dashboard": "\u2302", "aiassistant": "\u2609", "manual": "\U0001F4D6",
+        "genstrat": "\u2726", "researchagent": "\u2609", "researchdirector": "\U0001F50D",
+        "researchloop": "\u21bb", "speedrun": "\u26a1", "speedrunmulti": "\u26a1", "forge": "\u26a1",
+        "strategy": "\U0001F4DA",
+        "strategyconfig": "\u2699", "data": "\u25a4", "prop": "\u2696", "risk": "\u26a0",
+        "run": "\u25b6", "payout": "\u2696", "propfirmrec": "\U0001F3C6",
+        "optimizehub": "\U0001F4A1", "fullpipeline": "\u26a1", "quickoptimize": "\u26a1",
+        "search": "\u25a4", "evolution": "\u2694", "multiobj": "\u2726", "searchmulti": "\u25a4",
+        "evolutionmulti": "\u2694", "refine": "\u267b", "risksweep": "\u2696",
+        "validatehub": "\U0001F4A1", "wfo": "\u21bb", "wfga": "\u21bb", "cpcv": "\u22a2",
+        "pbo": "\u22a2", "sensitivity": "\u22a2", "paramrobustness": "\u22a2",
+        "regimematrix": "\u2609", "montecarlo": "\u2696",
+        "leaderboard": "\U0001F3C6",
+        "familydiversity": "\u2726", "portfolio": "\u25eb", "ensemble": "\u25eb",
+        "autopilot_pointer": "\u26a1", "compare": "\u2696", "strathealth_pointer": "\U0001F4C8",
+        "forwardtest": "\u25ef", "deploylive": "\u26a0", "livemarket": "\u25cf",
+        "graveyard": "\U0001F480",
+        "quantlab": "\u2696", "optionsoutlook": "\u25eb", "hedgefund": "\u2696",
+        "datacenter": "\U0001F4CA", "account": "\u2699", "apikeys": "\U0001F511",
+        "support": "\U0001F6DF", "education": "\U0001F393", "resources": "\U0001F393",
+    }
+    # Plain top-level rows (Dashboard / AI Assistant / User Manual): bold, teal,
+    # and -- like the web's un-accented .t58-nav-item -- no resting left bar.
+    _NAV_TOP_LEVEL = {"dashboard", "aiassistant", "manual"}
+    # Leading glyph or "1  " step-number that older labels carried inline; the
+    # icon column now shows the glyph, and the web sidebar doesn't number rows.
+    _NAV_LABEL_PREFIX_RE = re.compile(r"^(?:[\u2190-\u2bff\u2600-\u27bf\U0001F000-\U0001FAFF]+\s*|\d+\s{2,})")
+
+    def _nav_hover_bg(self) -> str:
+        return PANEL_2 if CURRENT_THEME == "dark" else PANEL_3
+
     def _build_sidebar_nav(self):
         def _wheel(event):
             delta = -1 if getattr(event, "delta", 0) > 0 else 1
@@ -2372,20 +2503,9 @@ class MainWindow:
             self._sidebar_canvas.yview_scroll(delta, "units")
             return "break"  # see the matching note on _sidebar_wheel above
 
-        # UPGRADE: every collapsible group now starts CLOSED, full stop --
-        # no exception for whichever tab happens to be active. This used
-        # to auto-open the active tab's group ("only the group containing
-        # whichever tab is currently active starts open"), which is
-        # exactly the "some tabs are still open with subcategories
-        # exposed" clutter reported: a plain restart of the app (active
-        # page = dashboard, which lives in the always-open OVERVIEW
-        # section) shouldn't normally trigger this, but navigating to any
-        # page inside a group and then reopening/refreshing the window
-        # left that one group expanded, and once a group was toggled open
-        # by hand it also stayed open across rebuilds for the rest of the
-        # session. "OVERVIEW" (Dashboard / User Manual) is still the one
-        # section that's always open -- it's only 2 items and one of them
-        # (Dashboard) is the app's home page.
+        # Every collapsible group starts CLOSED (matches the web sidebar,
+        # which also launches fully condensed); groups auto-open when a page
+        # inside them is shown (see _show_page).
         if not hasattr(self, "_collapsed_groups"):
             self._collapsed_groups = {
                 lbl_text for k, icon, lbl_text, _frame, _color in self._nav_items
@@ -2393,179 +2513,167 @@ class MainWindow:
             }
 
         # Rebuilding from scratch on every toggle is simple and cheap here
-        # (~30 widgets total) -- far less code/risk than trying to
-        # incrementally pack/unpack a subset of already-built rows.
+        # (~30 widgets total).
         for w in list(self._sidebar_inner.winfo_children()):
             w.destroy()
-        self._nav_buttons: dict[str, Label] = {}
+        self._nav_buttons: dict[str, tuple] = {}
 
-        first_section = True
         section_collapsed = False
         for key, _icon, label, frame, color in self._nav_items:
             if key is None and _icon == "SUPERHEADER":
-                # An umbrella label sitting ABOVE a run of ordinary
-                # section headers (e.g. "Strategy Lab" above CREATE...
-                # STRATEGY GRAVEYARD) -- always visible regardless of
-                # whichever group happened to render right before it,
-                # and never itself collapsible.
-                super_row = Frame(self._sidebar_inner, bg=PANEL)
-                super_row.pack(fill="x", pady=(18, 2))
+                # Web: .t58-nav-divider + .t58-nav-section-label ("Strategy Lab" etc.)
+                wrap = Frame(self._sidebar_inner, bg=SIDEBAR)
+                wrap.pack(fill="x", pady=(6, 0))
+                Frame(wrap, bg=BORDER, height=1).pack(fill="x", padx=8, pady=(0, 8))
                 Label(
-                    super_row, text=label.upper(), bg=PANEL, fg=TEXT_MUTED,
+                    wrap, text=label.upper(), bg=SIDEBAR, fg=TEXT_DIM,
                     font=_safe_font(8, "bold"), anchor="w", padx=10,
                 ).pack(fill="x")
-                Canvas(super_row, bg=BORDER, height=1, highlightthickness=0).pack(fill="x", padx=10, pady=(3, 0))
-                first_section = False
                 continue
             if key is None and _icon == "SUBHEADER":
-                # A subtle, non-collapsible sub-header inside the current
-                # group (e.g. "Champion Checks" / "Live Markets" inside
-                # DEPLOYMENT) -- unlike a real section header below, this
-                # does NOT toggle/reset collapse state; it just hides
-                # along with the rest of the group when that group is
-                # collapsed.
+                # Web: .t58-nav-subheader -- tiny label inside a group; hides with it.
                 if section_collapsed:
                     continue
-                sub_row = Frame(self._sidebar_inner, bg=PANEL)
-                sub_row.pack(fill="x", padx=8, pady=(10, 2))
                 Label(
-                    sub_row, text=label.upper(), bg=PANEL, fg=TEXT_DIM,
+                    self._sidebar_inner, text=label.upper(), bg=SIDEBAR, fg=TEXT_DIM,
                     font=_safe_font(7, "bold"), anchor="w", padx=14,
-                ).pack(fill="x")
+                ).pack(fill="x", padx=6, pady=(8, 2))
                 continue
             if key is None:
-                # A named, clickable section header (small-caps,
-                # letter-spaced, muted) with a chevron showing open/closed
-                # state -- every group is both labeled AND a real dropdown,
-                # which is what actually makes a long list like this read
-                # as organized instead of messy.
-                #
-                # A leading circled numeral (\u2460 "\u2460"..\u2473 "\u2473", i.e. \u2460-20)
-                # renders as its own bright, accent-colored label instead of
-                # being swallowed into the same muted/letter-spaced text as
-                # the rest of the header -- Strategy Lab's steps 1-7, Quant
-                # Lab's 1-3, and Account's 1-2 all use this, so the numeral
-                # visibly pops against the grey header instead of blending
-                # into it. `color` (5th tuple field, normally an item's row
-                # color) doubles as the numeral's accent color for header
-                # tuples -- falls back to TEXT_DIM (i.e. no visible accent)
-                # if a numbered header omits it.
                 collapsible = label != "OVERVIEW"
                 section_collapsed = collapsible and label in self._collapsed_groups
-                header_row = Frame(self._sidebar_inner, bg=PANEL, cursor=("hand2" if collapsible else "arrow"))
-                header_row.pack(fill="x", pady=(14 if not first_section else 4, 4))
-                chev = "\u25b8" if section_collapsed else "\u25be"
+                if not collapsible:
+                    continue  # the plain top-level rows have no header on the web either
+                # Web: <summary> = numeral (teal) | NAME | chevron, space-between.
+                header_row = Frame(self._sidebar_inner, bg=SIDEBAR, cursor="hand2")
+                header_row.pack(fill="x", padx=6, pady=(4, 0))
                 numeral, _sep, rest = label.partition(" ")
                 has_numeral = len(numeral) == 1 and "\u2460" <= numeral <= "\u2473"
-                if has_numeral:
-                    numeral_lbl = Label(
-                        header_row, text=numeral, bg=PANEL, fg=(color or TEXT_DIM),
-                        font=_safe_font(9, "bold"), anchor="w",
-                    )
-                    # Tk's own -padx option on a widget takes a single screen
-                    # distance, not an (left, right) pair -- only the pack()
-                    # geometry manager accepts that tuple form. Passing the
-                    # tuple straight into Label(padx=...) raises
-                    # `_tkinter.TclError: bad screen distance "16 0"` the
-                    # moment a numbered section header is built.
-                    numeral_lbl.pack(side="left", padx=(16, 2))
-                    label_for_text = rest
-                else:
-                    label_for_text = label
-                header_text = " ".join(label_for_text.upper()) + ("   " + chev if collapsible else "")
-                header_lbl = Label(
-                    header_row, text=header_text, bg=PANEL, fg=TEXT_DIM,
-                    font=_safe_font(7, "bold"), anchor="w",
+                name_text = (rest if has_numeral else label).upper()
+                left = Label(
+                    header_row, text=(numeral if has_numeral else ""), bg=SIDEBAR, fg=GREEN,
+                    font=_safe_font(10), width=2, anchor="w",
                 )
-                header_lbl.pack(side="left", fill="x", expand=True, padx=(0 if has_numeral else 16, 0))
-                if collapsible:
-                    def _toggle(_e=None, name=label):
-                        if name in self._collapsed_groups:
-                            self._collapsed_groups.discard(name)
-                        else:
-                            self._collapsed_groups.add(name)
-                        self._build_sidebar_nav()
-                    header_row.bind("<Button-1>", _toggle)
-                    header_lbl.bind("<Button-1>", _toggle)
-                    if has_numeral:
-                        numeral_lbl.bind("<Button-1>", _toggle)
-                first_section = False
+                left.pack(side="left", padx=(8, 0), pady=(8, 6))
+                right = Label(
+                    header_row, text=("\u25b8" if section_collapsed else "\u25be"), bg=SIDEBAR, fg=TEXT_DIM,
+                    font=_safe_font(8), width=2, anchor="e",
+                )
+                right.pack(side="right", padx=(0, 8))
+                mid = Label(
+                    header_row, text=name_text, bg=SIDEBAR, fg=TEXT_DIM,
+                    font=_safe_font(8, "bold"), anchor="center",
+                )
+                mid.pack(side="left", fill="x", expand=True)
+
+                def _toggle(_e=None, name=label):
+                    if name in self._collapsed_groups:
+                        self._collapsed_groups.discard(name)
+                    else:
+                        self._collapsed_groups.add(name)
+                    self._build_sidebar_nav()
+
+                def _hdr_hover(entering, widgets=(header_row, left, mid, right)):
+                    for w in widgets:
+                        w.configure(bg=(self._nav_hover_bg() if entering else SIDEBAR))
+
+                for w in (header_row, left, mid, right):
+                    w.bind("<Button-1>", _toggle)
+                    w.bind("<Enter>", lambda _e, f=_hdr_hover: f(True))
+                    w.bind("<Leave>", lambda _e, f=_hdr_hover: f(False))
+                    for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                        w.bind(seq, _wheel)
                 continue
             if section_collapsed:
                 continue
-            row = Frame(self._sidebar_inner, bg=PANEL, cursor="hand2")
-            row.pack(fill="x", padx=8, pady=1)
-            # height=1 is deliberate: a Tkinter Canvas with no explicit
-            # height defaults to a large platform size (the actual bug
-            # that made every sidebar row balloon in height and pushed
-            # tabs off the bottom of the screen). pack(fill="y") below
-            # still correctly stretches this to match the row's real
-            # height, which is set by the label -- height=1 just stops
-            # the canvas's OWN natural size from inflating that row in
-            # the first place.
-            accent = Canvas(row, bg=PANEL, width=6, height=1, highlightthickness=0)
+
+            top = key in self._NAV_TOP_LEVEL
+            # Web .t58-nav-item: [3px accent bar][icon][label], 1px ring that
+            # only shows when active.
+            row = Frame(
+                self._sidebar_inner, bg=SIDEBAR, cursor="hand2",
+                highlightthickness=1, highlightbackground=SIDEBAR,
+            )
+            row.pack(fill="x", padx=6, pady=1)
+            # height=1 is deliberate: a Canvas with no explicit height
+            # defaults to a large platform size and would balloon every row.
+            accent = Canvas(row, bg=SIDEBAR, width=3, height=1, highlightthickness=0)
             accent.pack(side="left", fill="y")
             accent.bind("<Configure>", lambda _e, k=key: self._draw_nav_accent(k))
+            icon_lbl = Label(
+                row, text=self._NAV_ICONS.get(key, ""), bg=SIDEBAR, fg=color,
+                font=_safe_font(10), width=2, anchor="center",
+            )
+            icon_lbl.pack(side="left", padx=(8, 0))
+            row._t58_icon = icon_lbl
+            text = self._NAV_LABEL_PREFIX_RE.sub("", label)
             lbl = Label(
-                row, text=f"   {label}", bg=PANEL, fg=TEXT_MUTED,
-                font=_safe_font(9), anchor="w", padx=6, pady=6,
+                row, text=text, bg=SIDEBAR, fg=TEXT_MUTED,
+                font=_safe_font(10, "bold" if (top or text == "Start Here") else "normal"),
+                anchor="w", justify="left", padx=6, pady=6,
+                wraplength=SIDEBAR_WIDTH - 82,
             )
             lbl.pack(side="left", fill="x", expand=True)
-            for widget in (row, accent, lbl):
+            for widget in (row, accent, icon_lbl, lbl):
                 widget.bind("<Button-1>", lambda _e, k=key: self._show_page(k))
                 widget.bind("<Enter>", lambda _e, k=key: self._on_nav_hover(k, True))
+                widget.bind("<Leave>", lambda _e, k=key: self._on_nav_hover(k, False))
                 for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
                     widget.bind(seq, _wheel)
-                widget.bind("<Leave>", lambda _e, k=key: self._on_nav_hover(k, False))
             self._nav_buttons[key] = (row, accent, lbl, color)
+            self._paint_nav_row(key, "active" if key == getattr(self, "active_page", "dashboard") else "idle")
+
+    def _paint_nav_row(self, key: str, state: str):
+        """One sidebar row's colors for idle / hover / active -- the web
+        sidebar's .t58-nav-item states: hover = panel tint; active = accent-
+        tinted fill + accent ring + accent text; resting accent rows keep a
+        faint left bar in their section color."""
+        if key not in self._nav_buttons:
+            return
+        row, accent, lbl, color = self._nav_buttons[key]
+        icon = getattr(row, "_t58_icon", None)
+        if state == "active":
+            bg = _blend_hex(SIDEBAR, color, 0.10)
+            ring = _blend_hex(SIDEBAR, color, 0.35)
+            fg = color
+        elif state == "hover":
+            bg = ring = self._nav_hover_bg()
+            fg = TEXT
+        else:
+            bg = ring = SIDEBAR
+            fg = TEXT_MUTED
+        try:
+            row.configure(bg=bg, highlightbackground=ring)
+            lbl.configure(bg=bg, fg=fg)
+            accent.configure(bg=bg)
+            if icon is not None:
+                icon.configure(bg=bg, fg=color)
+        except Exception:
+            return
+        self._draw_nav_accent(key, state)
 
     def _draw_nav_accent(self, key: str, state: str | None = None):
-        """Paints one sidebar row's accent strip -- a soft, per-tab-colored
-        glow bar rather than one flat purple line for every tab. `state`
-        is "idle" / "hover" / "active"; omitted (e.g. on a <Configure>
-        resize event) means "whatever this row's current state already
-        is," re-derived from self.active_page.
-        """
+        """Paints one row's 3px left accent bar. `state` is "idle" / "hover"
+        / "active"; omitted (e.g. on a <Configure> resize) means "whatever
+        this row's current state already is"."""
         if key not in self._nav_buttons:
             return
         row, accent, _lbl, color = self._nav_buttons[key]
         if state is None:
             state = "active" if key == getattr(self, "active_page", "dashboard") else "idle"
         accent.delete("all")
-        w = max(accent.winfo_width(), 8)
-        h = max(accent.winfo_height(), 24)
+        h = max(accent.winfo_height(), 20)
         bg = str(row.cget("bg"))
         accent.configure(bg=bg)
-        cx = w / 2
-
-        if state == "active":
-            # A soft outward halo (matching the GlowCard/NeuralProgress
-            # glow technique elsewhere in this app) behind a solid,
-            # full-brightness core bar -- reads as "this tab is lit up in
-            # its own color," not just "there's a purple line here."
-            for half_width, alpha in ((3.6, 0.12), (2.6, 0.22), (1.8, 0.4)):
-                accent.create_rectangle(
-                    cx - half_width, 2, cx + half_width, h - 2,
-                    fill=_blend_hex(bg, color, alpha), outline="",
-                )
-            accent.create_rectangle(cx - 1.4, 3, cx + 1.4, h - 3, fill=color, outline="")
-        elif state == "hover":
-            accent.create_rectangle(cx - 2.2, 3, cx + 2.2, h - 3, fill=_blend_hex(bg, color, 0.55), outline="")
-        else:
-            # Idle rows still carry a faint, permanent tint of their own
-            # color instead of going fully gray -- enough to give each
-            # section of the sidebar its own quiet identity at a glance,
-            # without competing with whichever tab is actually active.
-            accent.create_rectangle(cx - 1.0, 4, cx + 1.0, h - 4, fill=_blend_hex(bg, color, 0.32), outline="")
+        if key in self._NAV_TOP_LEVEL and state != "active":
+            return  # plain top-level rows have no resting bar (web: no data-accent)
+        fill = color if state == "active" else _blend_hex(bg, color, 0.55)
+        accent.create_rectangle(0, 0, 3, h, fill=fill, outline="")
 
     def _on_nav_hover(self, key, entering):
         if key == self.active_page:
             return
-        row, accent, lbl, color = self._nav_buttons[key]
-        bg = PANEL_3 if entering else PANEL
-        row.configure(bg=bg)
-        lbl.configure(bg=bg, fg=_blend_hex(TEXT_MUTED, color, 0.7) if entering else TEXT_MUTED)
-        self._draw_nav_accent(key, "hover" if entering else "idle")
+        self._paint_nav_row(key, "hover" if entering else "idle")
 
     def _show_page(self, key: str):
         group = self._group_header_for_key(key)
@@ -2573,34 +2681,21 @@ class MainWindow:
             self._collapsed_groups.discard(group)
             self._build_sidebar_nav()
         self.active_page = key
-        for k, (row, accent, lbl, color) in self._nav_buttons.items():
-            active = k == key
-            bg = PANEL_2 if active else PANEL
-            row.configure(bg=bg)
-            lbl.configure(bg=bg, fg=color if active else TEXT_MUTED)
-            self._draw_nav_accent(k, "active" if active else "idle")
+        for k in list(self._nav_buttons):
+            self._paint_nav_row(k, "active" if k == key else "idle")
         self._update_stage_stepper()
         for k, _icon, _label, frame, _color in self._nav_items:
             if k == key:
                 frame.lift()
         if key == "dashboard":
-            # UPGRADE (2026-09-03, smoothness): this used to call
-            # _refresh_dashboard() synchronously, right here, before
-            # _show_page even returns -- so clicking "Dashboard" in the
-            # sidebar blocked the whole click handler (nav highlight
-            # update included) until run_history.dashboard_data() finished
-            # reading/parsing run_history.json AND build_graph() finished
-            # its pairwise strategy-similarity scoring (quadratic in the
-            # number of distinct strategies ever tested). With enough run
-            # history that's a real, visible freeze between clicking the
-            # tab and anything on screen changing -- the actual mechanism
-            # behind "choppy when a new tab loads," not just a rendering
-            # style issue. Deferred one tick via .after(1, ...) instead:
-            # the tab switch above (nav highlights, frame.lift()) paints
-            # immediately, and the heavier data load/repaint happens right
-            # after, once the now-visible-but-still-stale frame has
-            # already been drawn to the screen.
+            # Deferred one tick so the tab switch paints immediately and the
+            # heavier data load/repaint happens right after (see the
+            # 2026-09-03 smoothness note this replaces in git history).
             self.root.after(1, self._refresh_dashboard)
+        elif key == "validatehub":
+            # The Validate Start Here checklist is built from results other
+            # tabs record -- rebuild on every visit so it is never stale.
+            self.root.after(1, self._refresh_validate_hub)
 
     def _configure_styles(self):
         style = ttk.Style(self.root)
@@ -2636,19 +2731,32 @@ class MainWindow:
             ],
         )
 
+        # Slim, arrowless scrollbar -- the web app's minimal dark scrollbar
+        # rather than clam's chunky arrow-button default.
+        style.layout(
+            "T58.Vertical.TScrollbar",
+            [("Vertical.Scrollbar.trough", {
+                "sticky": "ns",
+                "children": [("Vertical.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})],
+            })],
+        )
         style.configure(
             "T58.Vertical.TScrollbar",
             background=BORDER_LIGHT,
-            troughcolor=PANEL,
-            bordercolor=PANEL,
-            arrowcolor=TEXT_DIM,
+            troughcolor=BG,
+            bordercolor=BG,
+            lightcolor=BORDER_LIGHT,
+            darkcolor=BORDER_LIGHT,
             gripcount=0,
-            width=14,
+            width=10,
             relief="flat",
+            borderwidth=0,
         )
         style.map(
             "T58.Vertical.TScrollbar",
-            background=[("active", ACCENT), ("pressed", ACCENT_HOVER)],
+            background=[("pressed", TEXT_MUTED), ("active", TEXT_DIM)],
+            lightcolor=[("pressed", TEXT_MUTED), ("active", TEXT_DIM)],
+            darkcolor=[("pressed", TEXT_MUTED), ("active", TEXT_DIM)],
         )
 
         style.configure(
@@ -2657,7 +2765,7 @@ class MainWindow:
             background=PANEL_3,
             foreground=TEXT,
             arrowcolor=TEXT_MUTED,
-            bordercolor=BORDER,
+            bordercolor=BORDER_LIGHT,
             lightcolor=PANEL_3,
             darkcolor=PANEL_3,
             selectbackground=PANEL_3,
@@ -2669,6 +2777,7 @@ class MainWindow:
             fieldbackground=[("readonly", PANEL_3)],
             foreground=[("readonly", TEXT)],
             background=[("readonly", PANEL_3)],
+            bordercolor=[("focus", ACCENT)],
         )
         self.root.option_add("*TCombobox*Listbox.background", PANEL_3)
         self.root.option_add("*TCombobox*Listbox.foreground", TEXT)
@@ -2683,6 +2792,30 @@ class MainWindow:
             darkcolor=ACCENT,
         )
 
+        # Tables -- the web's flat table look: no outer frame, flat muted
+        # header, roomy rows, accent-tinted selection. Covers the two custom
+        # names the Dashboard uses plus the stock "Treeview" so any tab that
+        # never named a style still matches.
+        sel_bg = _blend_hex(PANEL, ACCENT, 0.16)
+        for name in ("Treeview", "T58.Treeview", "T58Board.Treeview"):
+            style.configure(
+                name, background=PANEL, fieldbackground=PANEL, foreground=TEXT,
+                rowheight=28, borderwidth=0, relief="flat",
+                bordercolor=PANEL, lightcolor=PANEL, darkcolor=PANEL, font=_safe_font(9),
+            )
+            style.map(
+                name,
+                background=[("selected", sel_bg)],
+                foreground=[("selected", TEXT)],
+            )
+            style.layout(name, [("Treeview.treearea", {"sticky": "nswe"})])  # drop clam's outer border
+            style.configure(
+                f"{name}.Heading", background=PANEL, foreground=TEXT_MUTED, relief="flat",
+                borderwidth=0, bordercolor=BORDER, lightcolor=PANEL, darkcolor=PANEL,
+                padding=(8, 8), font=_safe_font(9, "bold"),
+            )
+            style.map(f"{name}.Heading", background=[("active", PANEL_3)])
+
     # Global top bar -- one persistent strip above the sidebar/content
     # split (every tab, every page). Requested layout: brand + tagline on
     # the left, a global search box in the middle (strategies / reports /
@@ -2690,106 +2823,53 @@ class MainWindow:
     # status + theme toggle + settings gear on the right, matching the
     # web app's own top-of-page status/branding so the two builds read as
     # the same product rather than two different apps.
-    _SEARCH_PLACEHOLDER = "\u2315  Search strategies, reports, datasets, runs..."
+    _SEARCH_PLACEHOLDER = "Search strategies, datasets, reports, runs..."
 
-    def _build_header(self, parent):
-        header = Frame(parent, bg=BG, height=98)
-        header.pack(fill="x", padx=18, pady=(16, 8))
-        header.pack_propagate(False)
+    def _draw_brand_mark(self, cv: Canvas):
+        """The web sidebar's .t58-brand .mark: a rounded cyan->violet
+        gradient tile with "T58" in near-black. Tk has no gradients, so it is
+        painted column by column, with the corner columns shortened to round
+        the tile."""
+        w, h, r = 34, 28, 8
+        x0, y0 = 1, 1
+        for i in range(w):
+            t = i / (w - 1)
+            color = _blend_hex(NEON_CYAN, VIOLET, t)
+            edge = min(i, w - 1 - i)
+            inset = 0.0 if edge >= r else r - math.sqrt(max(r * r - (r - edge - 0.5) ** 2, 0.0))
+            cv.create_line(x0 + i, y0 + inset, x0 + i, y0 + h - inset, fill=color)
+        cv.create_text(x0 + w / 2, y0 + h / 2, text="T58", fill="#04120E", font=_safe_font(8, "bold"))
 
-        # -- Left: brand mark + platform tagline --------------------------
-        mark = Frame(header, bg=BG)
-        mark.pack(side="left", fill="y")
-
-        logo_shown = False
-        try:
-            logo_path = _asset_path("t58_mark_medium.png")
-            if logo_path.exists():
-                self._logo_image = PhotoImage(file=str(logo_path))
-                Label(mark, image=self._logo_image, bg=BG).pack(anchor="w", pady=(6, 2))
-                logo_shown = True
-        except Exception:
-            logo_shown = False
-
-        if not logo_shown:
-            Label(
-                mark,
-                text="T58",
-                bg=BG,
-                fg=METAL_BRIGHT,
-                font=_safe_font(32, "bold"),
-            ).pack(anchor="w")
-
-        sub_row = Frame(mark, bg=BG)
-        sub_row.pack(anchor="w", pady=(0, 2))
-        Frame(sub_row, bg=ACCENT, width=10, height=2).pack(side="left", pady=(3, 0))
+    def _build_sidebar_chrome(self, sidebar):
+        """Brand block + search box (top of the sidebar) and the engine
+        status / theme / settings footer (bottom) -- what used to live in a
+        separate tall header bar, moved to where the web app keeps it."""
+        # -- Brand ---------------------------------------------------------
+        brand = Frame(sidebar, bg=SIDEBAR)
+        brand.pack(fill="x", padx=10, pady=(14, 8))
+        mark = Canvas(brand, width=36, height=30, bg=SIDEBAR, highlightthickness=0)
+        mark.pack(side="left", padx=(8, 10))
+        self._draw_brand_mark(mark)
+        txt = Frame(brand, bg=SIDEBAR)
+        txt.pack(side="left", fill="x", expand=True)
         Label(
-            sub_row,
-            text="QUANT RESEARCH & PROP INTELLIGENCE PLATFORM",
-            bg=BG,
-            fg=TEXT_MUTED,
-            font=_safe_font(8, "bold"),
-        ).pack(side="left", padx=(6, 0))
-
-        # -- Right: engine status / theme / settings, stacked ------------
-        right = Frame(header, bg=BG)
-        right.pack(side="right", fill="y")
-
-        status_row = Frame(right, bg=BG)
-        status_row.pack(anchor="e", pady=(11, 4))
+            txt, text="T58 Quant Algo Backtester", bg=SIDEBAR, fg=TEXT, font=_safe_font(10, "bold"),
+            anchor="w", justify="left", wraplength=150,
+        ).pack(anchor="w")
         Label(
-            status_row, text="\u25CF", bg=BG, fg=GREEN, font=_safe_font(9),
-        ).pack(side="left", padx=(0, 5))
-        Label(
-            status_row, text="Engine Online", bg=BG, fg=TEXT_MUTED, font=_safe_font(9, "bold"),
-        ).pack(side="left")
+            txt, text="T58 TRADING", bg=SIDEBAR, fg=TEXT_DIM, font=_safe_font(7, "bold"), anchor="w",
+        ).pack(anchor="w", pady=(1, 0))
 
-        toggle_row = Frame(right, bg=BG)
-        toggle_row.pack(anchor="e", pady=(0, 4))
-
-        theme_icon = "\u263D" if CURRENT_THEME == "dark" else "\u2600"
-        theme_btn = Label(
-            toggle_row, text=f" {theme_icon} ", bg=PANEL_2, fg=TEXT_MUTED, font=_safe_font(10, "bold"),
-            padx=8, pady=4, highlightthickness=1, highlightbackground=BORDER_LIGHT, cursor="hand2",
-        )
-        theme_btn.pack(side="left", padx=(0, 6))
-        theme_btn.bind("<Button-1>", lambda _e: self._toggle_theme())
-        theme_btn.bind("<Enter>", lambda _e: theme_btn.configure(bg=PANEL_HOVER, fg=TEXT))
-        theme_btn.bind("<Leave>", lambda _e: theme_btn.configure(bg=PANEL_2, fg=TEXT_MUTED))
-
-        gear_btn = Label(
-            toggle_row, text=" \u2699 ", bg=PANEL_2, fg=TEXT_MUTED, font=_safe_font(10, "bold"),
-            padx=8, pady=4, highlightthickness=1, highlightbackground=BORDER_LIGHT, cursor="hand2",
-        )
-        gear_btn.pack(side="left")
-        gear_btn.bind("<Button-1>", lambda _e: self._open_settings_popup())
-        gear_btn.bind("<Enter>", lambda _e: gear_btn.configure(bg=PANEL_HOVER, fg=TEXT))
-        gear_btn.bind("<Leave>", lambda _e: gear_btn.configure(bg=PANEL_2, fg=TEXT_MUTED))
-
-        Label(
-            right,
-            text="HISTORICAL DATA  \u2022  STRATEGY  \u2022  RISK  \u2022  SIMULATION",
-            bg=BG,
-            fg=TEXT_DIM,
-            font=_safe_font(7),
-        ).pack(anchor="e", pady=(0, 2))
-        # -- Center: global search -----------------------------------------
-        # Packed last so it fills whatever width is left between the
-        # already-packed left/right sides, rather than needing an explicit
-        # width guess that would either clip on a small window or leave a
-        # gap on a large one.
-        search_wrap = Frame(header, bg=BG)
-        search_wrap.pack(side="left", fill="both", expand=True, padx=24)
-        search_inner = Frame(search_wrap, bg=BG)
-        search_inner.place(relx=0.5, rely=0.5, anchor="center", relwidth=0.86)
-
+        # -- Global search (strategies / reports / datasets / runs) --------
+        search_wrap = Frame(sidebar, bg=SIDEBAR)
+        search_wrap.pack(fill="x", padx=16, pady=(2, 10))
         self._global_search_var = StringVar(value=self._SEARCH_PLACEHOLDER)
         search_entry = Entry(
-            search_inner, textvariable=self._global_search_var, bg=PANEL_2, fg=TEXT_DIM,
-            insertbackground=TEXT, relief="flat", font=_safe_font(10),
+            search_wrap, textvariable=self._global_search_var, bg=PANEL_3, fg=TEXT_DIM,
+            insertbackground=TEXT, relief="flat", font=_safe_font(9),
             highlightthickness=1, highlightbackground=BORDER_LIGHT, highlightcolor=ACCENT,
         )
-        search_entry.pack(fill="x", ipady=7, padx=1)
+        search_entry.pack(fill="x", ipady=6)
         self._global_search_entry = search_entry
 
         def _on_focus_in(_e):
@@ -2806,8 +2886,40 @@ class MainWindow:
         search_entry.bind("<FocusOut>", _on_focus_out)
         search_entry.bind("<Return>", lambda _e: self._run_global_search())
 
-        Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=18, pady=(0, 12))
+        # -- Footer: engine status, theme toggle, settings (packed to the
+        # bottom BEFORE the nav canvas so they never get squeezed out) ------
+        footer = Frame(sidebar, bg=SIDEBAR)
+        footer.pack(side="bottom", fill="x", padx=12, pady=(6, 12))
 
+        def _footer_button(text, command):
+            btn = Label(
+                footer, text=text, bg=PANEL_3, fg=TEXT_MUTED, font=_safe_font(9, "bold"),
+                padx=10, pady=7, anchor="w", cursor="hand2",
+                highlightthickness=1, highlightbackground=BORDER_LIGHT,
+            )
+            btn.pack(fill="x", pady=(4, 0))
+            btn.bind("<Button-1>", lambda _e: command())
+            btn.bind("<Enter>", lambda _e: btn.configure(bg=PANEL_HOVER, fg=TEXT))
+            btn.bind("<Leave>", lambda _e: btn.configure(bg=PANEL_3, fg=TEXT_MUTED))
+            return btn
+
+        theme_icon = "\u263D" if CURRENT_THEME == "dark" else "\u2600"
+        theme_name = "Dark" if CURRENT_THEME == "dark" else "Light"
+        _footer_button("\u2699  Settings", self._open_settings_popup)
+        _footer_button(f"{theme_icon}  {theme_name} theme", self._toggle_theme)
+
+        status_row = Frame(footer, bg=SIDEBAR)
+        status_row.pack(fill="x", pady=(0, 4))
+        Label(status_row, text="\u25CF", bg=SIDEBAR, fg=GREEN, font=_safe_font(8)).pack(side="left", padx=(2, 5))
+        Label(
+            status_row, text="Engine Online", bg=SIDEBAR, fg=TEXT_MUTED, font=_safe_font(8, "bold"),
+        ).pack(side="left")
+
+    def _build_header(self, parent):
+        """The main column's top strip: just the persistent stage stepper.
+        (Brand, search, engine status and the theme/settings buttons moved
+        into the sidebar -- see _build_sidebar_chrome -- to match the web
+        layout.)"""
         self._build_stage_stepper(parent)
 
     # The 8-stage journey (matches the web app's own t58-chrome.js
@@ -2821,10 +2933,11 @@ class MainWindow:
         ("Create", "speedrun", {"genstrat", "researchagent", "researchdirector", "researchloop",
                                  "speedrun", "speedrunmulti", "forge", "strategy"}),
         ("Test", "run", {"strategyconfig", "data", "prop", "risk", "run", "payout", "propfirmrec"}),
-        ("Optimize", "fullpipeline", {"fullpipeline", "search", "evolution", "multiobj", "refine"}),
-        ("Validate", "wfo", {"wfo", "wfga", "cpcv", "pbo", "sensitivity", "paramrobustness",
+        ("Optimize", "fullpipeline", {"optimizehub", "fullpipeline", "quickoptimize", "search", "searchmulti", "evolution",
+                                     "evolutionmulti", "multiobj", "refine", "risksweep"}),
+        ("Validate", "wfo", {"validatehub", "wfo", "wfga", "cpcv", "pbo", "sensitivity", "paramrobustness",
                               "regimematrix", "montecarlo"}),
-        ("Champion", "familydiversity", {"familydiversity", "portfolio", "ensemble"}),
+        ("Champion", "familydiversity", {"familydiversity", "portfolio", "ensemble", "leaderboard"}),
         ("Forward Test", "forwardtest", {"forwardtest"}),
         ("Deploy", "deploylive", {"deploylive"}),
         ("Monitor", "livemarket", {"livemarket"}),
@@ -2834,21 +2947,28 @@ class MainWindow:
         """Desktop counterpart to the web app's persistent Create-Test-
         Optimize-...-Monitor sequence banner (t58-chrome.js buildStepper) --
         same 8 stages, same wayfinding-not-checklist framing, just a Tk
-        row of clickable labels instead of injected HTML."""
-        bar = Frame(parent, bg=BG)
-        bar.pack(fill="x", padx=18, pady=(0, 10))
+        row of clickable pills instead of injected HTML."""
+        wrap = Frame(parent, bg=BG)
+        wrap.pack(fill="x")
+        bar = Frame(wrap, bg=BG)
+        bar.pack(fill="x", padx=16, pady=(8, 8))
         self._stage_stepper_labels: dict[str, Label] = {}
         for i, (name, landing_key, _keys) in enumerate(self._STAGE_DEFS):
             lbl = Label(
-                bar, text=name.upper(), bg=BG, fg=TEXT_DIM, font=_safe_font(8, "bold"), cursor="hand2",
+                bar, text=name.upper(), bg=BG, fg=TEXT_DIM, font=_safe_font(8, "bold"),
+                cursor="hand2", padx=8, pady=3,
             )
             lbl.pack(side="left")
             lbl.bind("<Button-1>", lambda _e, k=landing_key: self._show_page(k))
-            lbl.bind("<Enter>", lambda _e, l=lbl, n=name: l.configure(fg=TEXT) if self._current_stage_name() != n else None)
+            lbl.bind(
+                "<Enter>",
+                lambda _e, l=lbl, n=name: l.configure(fg=TEXT_MUTED, bg=PANEL_2) if self._current_stage_name() != n else None,
+            )
             lbl.bind("<Leave>", lambda _e: self._update_stage_stepper())
             self._stage_stepper_labels[name] = lbl
             if i < len(self._STAGE_DEFS) - 1:
-                Label(bar, text="  \u2192  ", bg=BG, fg=TEXT_DIM, font=_safe_font(8)).pack(side="left")
+                Label(bar, text="\u2192", bg=BG, fg=BORDER_LIGHT, font=_safe_font(8)).pack(side="left")
+        Frame(wrap, bg=BORDER, height=1).pack(fill="x")  # border under the stepper (web: .t58-stepper)
         self._update_stage_stepper()
 
     def _current_stage_name(self) -> str | None:
@@ -2862,16 +2982,17 @@ class MainWindow:
         """Repaints the stage stepper's highlight to match self.active_page --
         called from _show_page (same place the sidebar's own active-row
         highlight is repainted) so the two never disagree about which
-        stage is current."""
+        stage is current. Current stage = teal text on a faint teal pill,
+        like the web's .t58-stepper a.current."""
         labels = getattr(self, "_stage_stepper_labels", None)
         if not labels:
             return
         current = self._current_stage_name()
         for name, lbl in labels.items():
             if name == current:
-                lbl.configure(fg=ACCENT)
+                lbl.configure(fg=GREEN, bg=_blend_hex(BG, GREEN, 0.10))
             else:
-                lbl.configure(fg=TEXT_DIM)
+                lbl.configure(fg=TEXT_DIM, bg=BG)
 
     def _open_settings_popup(self):
         """Minimal settings surface behind the top bar's gear icon.
@@ -3016,41 +3137,22 @@ class MainWindow:
             messagebox.showerror("Couldn't open result", str(exc))
 
     def _page_header(self, parent, eyebrow, title, description=""):
+        """Web .t58-page-header: a plain 18px title over a 12px muted
+        description -- no eyebrow line, no rule (the stage stepper already
+        says where you are). `eyebrow` is accepted for call-site
+        compatibility but deliberately not rendered."""
         box = Frame(parent, bg=BG)
-        box.pack(fill="x", padx=24, pady=(20, 16))
-
-        eyebrow_row = Frame(box, bg=BG)
-        eyebrow_row.pack(anchor="w")
-
-        Frame(eyebrow_row, bg=ACCENT, width=14, height=2).pack(side="left", pady=(4, 0))
-        Label(
-            eyebrow_row,
-            text=eyebrow.upper(),
-            bg=BG,
-            fg=ACCENT_HOVER,
-            font=_safe_font(8, "bold"),
-        ).pack(side="left", padx=(7, 0))
+        box.pack(fill="x", padx=16, pady=(16, 10))
 
         Label(
-            box,
-            text=title,
-            bg=BG,
-            fg=METAL_BRIGHT,
-            font=_safe_font(21, "bold"),
-        ).pack(anchor="w", pady=(5, 3))
+            box, text=title, bg=BG, fg=TEXT, font=_safe_font(14, "bold"), anchor="w", justify="left",
+        ).pack(anchor="w")
 
         if description:
             Label(
-                box,
-                text=description,
-                bg=BG,
-                fg=TEXT_MUTED,
-                font=_safe_font(9),
-                wraplength=900,
-                justify="left",
-            ).pack(anchor="w")
-
-        Frame(box, bg=BORDER, height=1).pack(fill="x", pady=(14, 0))
+                box, text=description, bg=BG, fg=TEXT_MUTED, font=_safe_font(9),
+                wraplength=1000, justify="left", anchor="w",
+            ).pack(anchor="w", pady=(4, 0))
 
     def _condition_list_buttons(self, parent, clist: "ConditionList", pady):
         """+ Add Condition / Undo / Redo row for one ConditionList -- shared
@@ -3064,10 +3166,11 @@ class MainWindow:
         return row
 
     def _button(self, parent, text, command, primary: bool = False, width: int | None = None) -> Button:
-        """Builds one themed Button (primary/accent style or the default
-        panel style) with hand-rolled hover recoloring -- Tk's native
-        Button only recolors on click (activebackground), not on hover.
-        Shared by every tab in the app (~190 call sites)."""
+        """Builds one themed Button with hand-rolled hover recoloring -- Tk's
+        native Button only recolors on click, not on hover. Styled after the
+        web's .t58-btn: primary = solid teal with near-black ink; default =
+        panel-3 fill with a --border-light outline. Shared by every tab in
+        the app (~190 call sites)."""
         kwargs = {
             "text": text,
             "command": command,
@@ -3077,14 +3180,15 @@ class MainWindow:
             "cursor": "hand2",
             "padx": 16,
             "pady": 8,
+            "disabledforeground": TEXT_DIM,
         }
 
         if primary:
             kwargs.update(
                 bg=ACCENT,
-                fg="#FFFFFF",
+                fg=ACCENT_INK,
                 activebackground=ACCENT_HOVER,
-                activeforeground="#FFFFFF",
+                activeforeground=ACCENT_INK,
                 highlightthickness=0,
             )
             hover_bg, idle_bg = ACCENT_HOVER, ACCENT
@@ -3093,10 +3197,10 @@ class MainWindow:
                 bg=PANEL_3,
                 fg=TEXT,
                 activebackground=PANEL_HOVER,
-                activeforeground=METAL_BRIGHT,
+                activeforeground=TEXT,
                 highlightthickness=1,
-                highlightbackground=BORDER,
-                highlightcolor=BORDER_LIGHT,
+                highlightbackground=BORDER_LIGHT,
+                highlightcolor=ACCENT,
             )
             hover_bg, idle_bg = PANEL_HOVER, PANEL_3
 
@@ -3105,8 +3209,6 @@ class MainWindow:
 
         btn = Button(parent, **kwargs)
 
-        # Tk's native Button only recolors on click (activebackground), not on
-        # hover, so real cursor-follows-affordance feedback is added by hand.
         def _on_enter(_e, b=btn, c=hover_bg):
             if str(b["state"]) != "disabled":
                 b.configure(bg=c)
@@ -3180,27 +3282,25 @@ class MainWindow:
         return inner
 
     def _section(self, parent, title, subtitle="", emphasize=False):
-        """A card-style container. `emphasize=True` marks the one primary
-        action card on a tab (e.g. the run/import card) with a left accent
-        bar, so each screen has a single clear focal point instead of every
-        panel competing at the same visual weight."""
+        """A rounded web-style card (.t58-card: panel fill, 1px border).
+        `emphasize=True` marks the one primary action card on a tab with a
+        teal-tinted border (the web's .t58-champion treatment) so each
+        screen still has one clear focal point."""
         wrap = Frame(parent, bg=BG)
-        wrap.pack(fill="x", padx=24, pady=7)
+        wrap.pack(fill="x", padx=16, pady=7)
 
-        if emphasize:
-            Frame(wrap, bg=ACCENT, width=3).pack(side="left", fill="y")
-
-        box = Frame(wrap, bg=PANEL, highlightthickness=1, highlightbackground=BORDER)
-        box.pack(side="left", fill="both", expand=True)
+        card = RoundedCard(wrap, fill=PANEL, border=(_blend_hex(BORDER, GREEN, 0.55) if emphasize else BORDER))
+        card.pack(fill="both", expand=True)
+        box = card.body
 
         title_row = Frame(box, bg=PANEL)
-        title_row.pack(fill="x", padx=18, pady=(14, 2))
+        title_row.pack(fill="x", padx=14, pady=(10, 2))
 
         Label(
             title_row,
             text=title.upper(),
             bg=PANEL,
-            fg=ACCENT_HOVER if emphasize else METAL,
+            fg=GREEN if emphasize else TEXT_MUTED,
             font=_safe_font(9, "bold"),
         ).pack(side="left")
 
@@ -3209,11 +3309,11 @@ class MainWindow:
                 box,
                 text=subtitle,
                 bg=PANEL,
-                fg=TEXT_DIM,
-                font=_safe_font(8),
-                wraplength=820,
+                fg=TEXT_MUTED,
+                font=_safe_font(9),
+                wraplength=920,
                 justify="left",
-            ).pack(anchor="w", padx=18, pady=(0, 8))
+            ).pack(anchor="w", padx=14, pady=(0, 8))
 
         return box
 
@@ -3270,7 +3370,7 @@ class MainWindow:
             value_font_size, card_height = 15, 108
         else:
             value_font_size, card_height = 12, 124
-        card = GlowCard(parent, accent=accent or color, height=card_height)
+        card = GlowCard(parent, accent=_blend_hex(BORDER, (accent or color), 0.35), glow=False, height=card_height)
         Label(card.body, text=label.upper(), bg=PANEL_2, fg=TEXT_MUTED, font=_safe_font(8, "bold")).pack(
             anchor="w", padx=14, pady=(12, 3)
         )
@@ -3445,7 +3545,7 @@ class MainWindow:
         left in place (harmless, unreferenced) rather than deleted, in
         case a future tab wants the same effect deliberately.
         """
-        MARGIN = 24
+        MARGIN = 16  # vertical breathing room only; cards supply their own 16px side padding
         outer = Frame(parent, bg=BG)
         outer.pack(fill="both", expand=True)
 
@@ -3453,7 +3553,7 @@ class MainWindow:
         scrollbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview, style="T58.Vertical.TScrollbar")
         inner = Frame(canvas, bg=BG)
 
-        window_id = canvas.create_window((MARGIN, MARGIN), window=inner, anchor="nw")
+        window_id = canvas.create_window((0, MARGIN), window=inner, anchor="nw")
 
         def _sync_scrollregion(_e=None):
             content_h = inner.winfo_reqheight()
@@ -3461,7 +3561,7 @@ class MainWindow:
             canvas.configure(scrollregion=(0, 0, canvas_w, content_h + MARGIN * 2))
 
         def _on_canvas_configure(e):
-            canvas.itemconfig(window_id, width=max(1, e.width - MARGIN * 2))
+            canvas.itemconfig(window_id, width=max(1, e.width))
             _sync_scrollregion()
 
         inner.bind("<Configure>", _sync_scrollregion)
@@ -3533,12 +3633,12 @@ class MainWindow:
         # is the dashboard's headline panel, same role as web's
         # .t58-champion block. ----
         self._dash_five_q_card = GlowCard(scroll_frame, accent=GREEN, height=210)
-        self._dash_five_q_card.pack(fill="x", padx=24, pady=(4, 14))
+        self._dash_five_q_card.pack(fill="x", padx=16, pady=(4, 14))
         self._dash_five_q_frame = self._dash_five_q_card.body
 
-        board_wrap = Frame(scroll_frame, bg=PANEL, highlightthickness=1, highlightbackground=GREEN)
-        board_wrap.pack(fill="both", expand=True, padx=24, pady=(0, 14))
-        Label(board_wrap, text="● CHAMPION BOARD", bg=PANEL, fg=GREEN, font=_safe_font(8, "bold")).pack(
+        board_wrap = _card(scroll_frame, border=BORDER)
+        board_wrap.pack(fill="both", expand=True, padx=16, pady=(0, 14))
+        Label(board_wrap, text="CHAMPION BOARD", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(9, "bold")).pack(
             anchor="w", padx=14, pady=(10, 2)
         )
         Label(
@@ -3548,13 +3648,7 @@ class MainWindow:
             bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8), wraplength=900, justify="left",
         ).pack(anchor="w", padx=14, pady=(0, 8))
 
-        board_style = ttk.Style(self.root)
-        board_style.configure(
-            "T58Board.Treeview", background=PANEL_2, fieldbackground=PANEL_2, foreground=TEXT,
-            rowheight=24, borderwidth=0, font=_safe_font(9),
-        )
-        board_style.configure("T58Board.Treeview.Heading", background=PANEL_3, foreground=TEXT_MUTED, font=_safe_font(8, "bold"))
-        board_style.map("T58Board.Treeview", background=[("selected", PANEL_3)])
+        # Table styles: see _configure_styles.
 
         board_columns = ("strategy", "status", "eval", "payout", "oos", "stage")
         board_tree_frame = Frame(board_wrap, bg=PANEL)
@@ -3567,8 +3661,8 @@ class MainWindow:
             "payout": "Payout", "oos": "OOS", "stage": "Promotion stage",
         }
         for col, text in board_headings.items():
-            self._dash_board_tree.heading(col, text=text)
-            self._dash_board_tree.column(col, width=120, anchor="w")
+            self._dash_board_tree.heading(col, text=text, anchor="w")
+            self._dash_board_tree.column(col, width=(230 if col == "strategy" else 110), anchor="w")
         self._dash_board_tree.pack(side="left", fill="both", expand=True)
         board_tree_scrollbar = ttk.Scrollbar(
             board_tree_frame, orient="vertical", command=self._dash_board_tree.yview, style="T58.Vertical.TScrollbar",
@@ -3583,54 +3677,47 @@ class MainWindow:
         self._dash_board_status = Label(board_btn_row, text="", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8), wraplength=700, justify="left")
         self._dash_board_status.pack(side="left", padx=10)
 
-        hero_wrap = Frame(scroll_frame, bg=PANEL, highlightthickness=1, highlightbackground=GREEN)
-        hero_wrap.pack(fill="x", padx=24, pady=(0, 14))
-        Label(hero_wrap, text="● PORTFOLIO EQUITY — BEST STRATEGY", bg=PANEL, fg=GREEN, font=_safe_font(8, "bold")).pack(
+        hero_wrap = _card(scroll_frame, border=BORDER)
+        hero_wrap.pack(fill="x", padx=16, pady=(0, 14))
+        Label(hero_wrap, text="PORTFOLIO EQUITY — BEST STRATEGY", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(9, "bold")).pack(
             anchor="w", padx=14, pady=(10, 4)
         )
         self._dash_hero_canvas = Canvas(hero_wrap, bg=PANEL, height=200, highlightthickness=0)
         self._dash_hero_canvas.pack(fill="x", padx=14, pady=(0, 14))
 
-        universe_wrap = Frame(scroll_frame, bg=PANEL, highlightthickness=1, highlightbackground=NEON_CYAN)
-        universe_wrap.pack(fill="x", padx=24, pady=(0, 14))
-        Label(universe_wrap, text="● STRATEGY UNIVERSE", bg=PANEL, fg=NEON_CYAN, font=_safe_font(8, "bold")).pack(
+        universe_wrap = _card(scroll_frame, border=BORDER)
+        universe_wrap.pack(fill="x", padx=16, pady=(0, 14))
+        Label(universe_wrap, text="STRATEGY UNIVERSE", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(9, "bold")).pack(
             anchor="w", padx=14, pady=(10, 4)
         )
         self._dash_universe_canvas = Canvas(universe_wrap, bg=PANEL, height=220, highlightthickness=0)
         self._dash_universe_canvas.pack(fill="x", padx=14, pady=(0, 14))
 
         charts_row = Frame(scroll_frame, bg=BG)
-        charts_row.pack(fill="x", padx=24, pady=(0, 14))
+        charts_row.pack(fill="x", padx=16, pady=(0, 14))
 
-        equity_wrap = Frame(charts_row, bg=PANEL, highlightthickness=1, highlightbackground=NEON_CYAN)
+        equity_wrap = _card(charts_row, border=BORDER)
         equity_wrap.pack(side="left", fill="both", expand=True, padx=(0, 7))
-        Label(equity_wrap, text="● EQUITY CURVES — TOP STRATEGIES", bg=PANEL, fg=NEON_CYAN, font=_safe_font(8, "bold")).pack(
+        Label(equity_wrap, text="EQUITY CURVES — TOP STRATEGIES", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(9, "bold")).pack(
             anchor="w", padx=14, pady=(10, 4)
         )
         self._dash_equity_canvas = Canvas(equity_wrap, bg=PANEL, height=180, highlightthickness=0)
         self._dash_equity_canvas.pack(fill="both", expand=True, padx=14, pady=(0, 14))
 
-        heatmap_wrap = Frame(charts_row, bg=PANEL, highlightthickness=1, highlightbackground=NEON_MAGENTA)
+        heatmap_wrap = _card(charts_row, border=BORDER)
         heatmap_wrap.pack(side="left", fill="both", expand=True, padx=(7, 0))
-        Label(heatmap_wrap, text="● WEEKDAY x HOUR PNL (ALL RUNS)", bg=PANEL, fg=NEON_MAGENTA, font=_safe_font(8, "bold")).pack(
+        Label(heatmap_wrap, text="WEEKDAY x HOUR PNL (ALL RUNS)", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(9, "bold")).pack(
             anchor="w", padx=14, pady=(10, 4)
         )
         self._dash_heatmap_canvas = Canvas(heatmap_wrap, bg=PANEL, height=180, highlightthickness=0)
         self._dash_heatmap_canvas.pack(fill="both", expand=True, padx=14, pady=(0, 14))
 
-        table_wrap = Frame(scroll_frame, bg=PANEL, highlightthickness=1, highlightbackground=NEON_VIOLET)
-        table_wrap.pack(fill="both", expand=True, padx=24, pady=(0, 20))
-        Label(table_wrap, text="● STRATEGY SCORECARD", bg=PANEL, fg=NEON_VIOLET, font=_safe_font(8, "bold")).pack(
+        table_wrap = _card(scroll_frame, border=BORDER)
+        table_wrap.pack(fill="both", expand=True, padx=16, pady=(0, 20))
+        Label(table_wrap, text="STRATEGY SCORECARD", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(9, "bold")).pack(
             anchor="w", padx=14, pady=(10, 6)
         )
 
-        style = ttk.Style(self.root)
-        style.configure(
-            "T58.Treeview", background=PANEL_2, fieldbackground=PANEL_2, foreground=TEXT,
-            rowheight=24, borderwidth=0, font=_safe_font(9),
-        )
-        style.configure("T58.Treeview.Heading", background=PANEL_3, foreground=TEXT_MUTED, font=_safe_font(8, "bold"))
-        style.map("T58.Treeview", background=[("selected", PANEL_3)])
 
         columns = ("strategy", "instrument", "trades", "net", "win", "sharpe", "dd", "runs", "result")
         tree_frame = Frame(table_wrap, bg=PANEL)
@@ -3641,8 +3728,8 @@ class MainWindow:
             "win": "Win %", "sharpe": "Sharpe", "dd": "Max DD", "runs": "Runs", "result": "Result",
         }
         for col, text in headings.items():
-            self._dash_tree.heading(col, text=text)
-            self._dash_tree.column(col, width=100, anchor="w")
+            self._dash_tree.heading(col, text=text, anchor="w")
+            self._dash_tree.column(col, width=(230 if col == "strategy" else 100), anchor="w")
         self._dash_tree.pack(side="left", fill="both", expand=True)
         # Scorecard often holds more strategies than the fixed 8-row height
         # shows at once -- without its own scrollbar, anything past row 8
@@ -3656,9 +3743,9 @@ class MainWindow:
         self._dash_tree.configure(yscrollcommand=dash_tree_scrollbar.set)
         self._bind_isolated_wheel(self._dash_tree)
 
-        library_wrap = Frame(scroll_frame, bg=PANEL, highlightthickness=1, highlightbackground=NEON_VIOLET)
-        library_wrap.pack(fill="x", padx=24, pady=(0, 20))
-        Label(library_wrap, text="● MARKET DATA LIBRARY — data/raw, BY INSTRUMENT", bg=PANEL, fg=NEON_VIOLET, font=_safe_font(8, "bold")).pack(
+        library_wrap = _card(scroll_frame, border=BORDER)
+        library_wrap.pack(fill="x", padx=16, pady=(0, 20))
+        Label(library_wrap, text="MARKET DATA LIBRARY — data/raw, BY INSTRUMENT", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(9, "bold")).pack(
             anchor="w", padx=14, pady=(10, 4)
         )
         self._dash_library_frame = Frame(library_wrap, bg=PANEL)
@@ -18052,73 +18139,183 @@ class MainWindow:
             row = self._section(f, label, desc)
             self._button(row, f"OPEN {label.upper()}", lambda k=key: self._show_page(k)).pack(anchor="w", padx=18, pady=(2, 12))
 
+    def _link_card_grid(self, parent, cards, columns: int = 3):
+        """The web's .t58-method-grid: a grid of clickable cards (title +
+        one-line description). Hover turns the border teal like the web's
+        .t58-method-card:hover. `cards` is [(title, description, nav_key)]."""
+        grid = Frame(parent, bg=PANEL)
+        grid.pack(fill="x", padx=10, pady=(2, 10))
+        for c in range(columns):
+            grid.columnconfigure(c, weight=1, uniform="linkcards")
+        for i, (title, desc, nav_key) in enumerate(cards):
+            body = _card(grid, border=BORDER, fill=PANEL_2)
+            body.grid(row=i // columns, column=i % columns, sticky="nsew", padx=5, pady=5)
+            card = body._t58_card
+            head = Label(
+                body, text=title, bg=PANEL_2, fg=TEXT, font=_safe_font(10, "bold"),
+                anchor="w", justify="left", wraplength=230, cursor="hand2",
+            )
+            head.pack(anchor="w", padx=10, pady=(10, 2))
+            sub = Label(
+                body, text=desc, bg=PANEL_2, fg=TEXT_MUTED, font=_safe_font(9),
+                anchor="w", justify="left", wraplength=230, cursor="hand2",
+            )
+            sub.pack(anchor="w", padx=10, pady=(0, 10))
+            for w in (body, head, sub):
+                w.bind("<Button-1>", lambda _e, k=nav_key: self._show_page(k))
+                w.bind("<Enter>", lambda _e, cd=card: cd.set_border(GREEN))
+                w.bind("<Leave>", lambda _e, cd=card: cd.set_border(BORDER))
+        return grid
+
     def _build_validate_hub_tab(self):
         f = self._scrollable(self.tab_validate_hub)
+        self._validate_hub_inner = f
+        self._populate_validate_hub(f)
+
+    def _refresh_validate_hub(self):
+        """Rebuild the Validate Start Here content from what the validation
+        tabs have recorded so far -- called every time the page is shown, so
+        the checklist is never a stale startup snapshot."""
+        f = getattr(self, "_validate_hub_inner", None)
+        if f is None:
+            return
+        try:
+            for child in list(f.winfo_children()):
+                child.destroy()
+            self._populate_validate_hub(f)
+        except Exception:
+            pass
+
+    def _populate_validate_hub(self, f):
+        """Desktop twin of the web /validate page (validate_hub.html): intro
+        card, the current strategy's checks-run summary, the validation
+        checklist with Run / Re-run buttons, the "once validated" actions, and
+        the "Everything in Validate" card grid. Every card here opens its
+        real tab via _show_page -- there are no URL links to go stale."""
         self._page_header(
-            f,
-            "VALIDATE / Overview \u2022 Checklist",
-            "\u2261 Validation checklist",
-            "Aggregates what Walk-Forward Optimization, Walk-Forward GA, CPCV, Sensitivity, "
-            "and Regime Survival Matrix have already found for whichever strategy is marked "
-            "\"current\" -- nothing here re-runs or duplicates those tools. Mark a strategy "
-            "current from the Dashboard's Strategy Scorecard (\"Set as current\") first.",
+            f, "", "Validate \u2014 Start Here",
+            "Is this strategy actually robust, or did it just get lucky on one backtest? This checklist is "
+            "built entirely from validation tools you've already run -- nothing here is re-computed or guessed.",
         )
+
+        intro = self._section(f, "What this section is for")
+        Label(
+            intro,
+            text=(
+                "Validate exists to catch a strategy that only looked good because of luck on one backtest. "
+                "The checklist below aggregates results from WFO, WFGA, CPCV, PBO, Sensitivity, and the Regime "
+                "Survival Matrix for whichever strategy is marked current -- it never re-runs or guesses at "
+                "those results, so run the checks you need first if the checklist below shows them as pending."
+            ),
+            bg=PANEL, fg=TEXT_MUTED, font=_safe_font(9), wraplength=900, justify="left", anchor="w",
+        ).pack(anchor="w", padx=14, pady=(0, 10))
 
         from app.reports import strategy_state
 
-        current_section = self._section(f, "Current strategy", emphasize=True)
         current = None
         try:
             current = strategy_state.get_current_strategy()
         except Exception:
             pass
-        if current:
-            score = strategy_state.robustness_score(current["strategy_name"], current["instrument"])
-            Label(
-                current_section,
-                text=f"{current['strategy_name']}  ({current['instrument']})",
-                bg=PANEL, fg=TEXT, font=_safe_font(12, "bold"), anchor="w",
-            ).pack(anchor="w", padx=18, pady=(2, 2))
-            Label(
-                current_section,
-                text=(
-                    f"{score['ran_count']}/{score['total_count']} checks run"
-                    + (f"  --  {score['passed_count']}/{score['decided_count']} passed" if score["decided_count"] else "")
-                ),
-                bg=PANEL, fg=TEXT_MUTED, font=_safe_font(9), anchor="w",
-            ).pack(anchor="w", padx=18, pady=(0, 12))
 
-            checklist = strategy_state.get_checklist(current["strategy_name"], current["instrument"])
-            labels = {
-                "wfo": ("Walk-Forward Optimization", "wfo"), "wfga": ("Walk-Forward GA", "wfga"),
-                "cpcv": ("CPCV", "cpcv"), "sensitivity": ("Sensitivity", "sensitivity"),
-                "regime_matrix": ("Regime Survival Matrix", "regimematrix"),
-            }
-            for kind, (label, nav_key) in labels.items():
-                entry = checklist.get(kind, {"ran": False})
-                row = Frame(current_section, bg=PANEL)
-                row.pack(fill="x", padx=18, pady=3)
-                if not entry.get("ran"):
-                    marker, color = "\u25cb  NOT RUN", TEXT_DIM
-                elif entry.get("passed") is True:
-                    marker, color = "\u25cf  PASSED", GREEN
-                elif entry.get("passed") is False:
-                    marker, color = "\u25cf  FAILED", RED
-                else:
-                    marker, color = "\u25cf  RAN", AMBER
-                Label(row, text=marker, bg=PANEL, fg=color, font=_safe_font(9, "bold"), width=12, anchor="w").pack(side="left")
-                Label(row, text=label, bg=PANEL, fg=TEXT, font=_safe_font(9), anchor="w").pack(side="left", padx=(0, 8))
-                if entry.get("summary"):
-                    Label(row, text=entry["summary"], bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8), anchor="w").pack(side="left")
-                self._button(row, "OPEN", lambda k=nav_key: self._show_page(k)).pack(side="right")
-        else:
+        # Which nav tab each checklist kind opens (web: VALIDATION_HREFS).
+        nav_for_kind = {
+            "wfo": "wfo", "wfga": "wfga", "cpcv": "cpcv",
+            "sensitivity": "sensitivity", "regime_matrix": "regimematrix",
+        }
+
+        if not current:
+            empty = self._section(f, "Current strategy", emphasize=True)
             Label(
-                current_section,
-                text="No strategy marked current yet. Run a backtest, then use \"Set as current\" "
-                     "on the Dashboard's Strategy Scorecard.",
-                bg=PANEL, fg=TEXT_MUTED, font=_safe_font(9), anchor="w", wraplength=880, justify="left",
-            ).pack(anchor="w", padx=18, pady=(2, 12))
-            self._button(current_section, "OPEN DASHBOARD", lambda: self._show_page("dashboard")).pack(anchor="w", padx=18, pady=(0, 12))
+                empty,
+                text="No strategy is marked current yet. Go to the Dashboard, find a strategy in the scorecard, "
+                     "and click \"Set as current\" to start tracking its validation checklist here.",
+                bg=PANEL, fg=TEXT_MUTED, font=_safe_font(9), wraplength=880, justify="left", anchor="w",
+            ).pack(anchor="w", padx=14, pady=(2, 8))
+            self._button(empty, "OPEN DASHBOARD", lambda: self._show_page("dashboard")).pack(anchor="w", padx=14, pady=(0, 12))
+        else:
+            lib_kwargs = {
+                "library_type": current.get("library_type", ""),
+                "library_filename": current.get("library_filename", ""),
+            }
+            checklist = {}
+            score = {"ran_count": 0, "total_count": len(strategy_state.VALIDATION_KINDS), "decided_count": 0}
+            try:
+                checklist = strategy_state.get_checklist(current["strategy_name"], current["instrument"], **lib_kwargs)
+                score = strategy_state.robustness_score(current["strategy_name"], current["instrument"], **lib_kwargs)
+            except Exception:
+                pass
+
+            hero = self._section(f, "Validating", emphasize=True)
+            Label(
+                hero, text=f"{current['strategy_name']}  \u00b7  {current['instrument']}",
+                bg=PANEL, fg=TEXT, font=_safe_font(13, "bold"), anchor="w",
+            ).pack(anchor="w", padx=14, pady=(2, 8))
+            stats = Frame(hero, bg=PANEL)
+            stats.pack(anchor="w", padx=14, pady=(0, 12))
+            left = Frame(stats, bg=PANEL)
+            left.pack(side="left", padx=(0, 28))
+            Label(left, text=f"{score.get('ran_count', 0)}/{score.get('total_count', 0)}", bg=PANEL, fg=GREEN,
+                  font=_safe_font(20, "bold")).pack(anchor="w")
+            Label(left, text="CHECKS RUN", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8, "bold")).pack(anchor="w")
+            if score.get("decided_count"):
+                pct = score.get("pct_passed_of_decided", 0)
+                right = Frame(stats, bg=PANEL)
+                right.pack(side="left")
+                Label(right, text=f"{pct}%", bg=PANEL, fg=(GREEN if pct >= 50 else RED),
+                      font=_safe_font(20, "bold")).pack(anchor="w")
+                Label(right, text=f"PASSED (OF {score['decided_count']} WITH A VERDICT)", bg=PANEL, fg=TEXT_MUTED,
+                      font=_safe_font(8, "bold")).pack(anchor="w")
+
+            cl = self._section(f, "Validation checklist")
+            for kind in strategy_state.VALIDATION_KINDS:
+                check = checklist.get(kind, {"ran": False})
+                ran, passed = bool(check.get("ran")), check.get("passed")
+                if not ran:
+                    dot, dot_color, detail = "\u25cb", TEXT_DIM, "Not run yet for this strategy."
+                elif passed is None:
+                    dot, dot_color = "\u25cf", VIOLET
+                    detail = f"Ran \u2014 {check.get('summary') or 'no strict pass/fail verdict for this tool'}."
+                elif passed:
+                    dot, dot_color, detail = "\u2713", GREEN, f"Passed \u2014 {check.get('summary')}."
+                else:
+                    dot, dot_color, detail = "\u2715", RED, f"Did not pass \u2014 {check.get('summary')}."
+                row = Frame(cl, bg=PANEL)
+                row.pack(fill="x", padx=14, pady=(2, 2))
+                Frame(cl, bg=BORDER, height=1).pack(fill="x", padx=14)
+                Label(row, text=dot, bg=PANEL, fg=dot_color, font=_safe_font(11, "bold"), width=3).pack(side="left")
+                textcol = Frame(row, bg=PANEL)
+                textcol.pack(side="left", fill="x", expand=True, padx=(4, 8), pady=8)
+                Label(textcol, text=strategy_state.VALIDATION_LABELS.get(kind, kind), bg=PANEL, fg=TEXT,
+                      font=_safe_font(10, "bold"), anchor="w").pack(anchor="w")
+                Label(textcol, text=detail, bg=PANEL, fg=TEXT_MUTED, font=_safe_font(9), anchor="w",
+                      justify="left", wraplength=620).pack(anchor="w", pady=(2, 0))
+                self._button(
+                    row, "Re-run" if ran else "Run", lambda k=nav_for_kind.get(kind, "validatehub"): self._show_page(k),
+                    primary=not ran,
+                ).pack(side="right", pady=6)
+
+            done = self._section(f, "Once validated")
+            actions = Frame(done, bg=PANEL)
+            actions.pack(anchor="w", padx=14, pady=(2, 12))
+            self._button(actions, "Multi-Asset Portfolio", lambda: self._show_page("portfolio")).pack(side="left", padx=(0, 8))
+            self._button(actions, "Multi-Strategy Ensemble", lambda: self._show_page("ensemble")).pack(side="left", padx=(0, 8))
+            self._button(actions, "Forward Test \u2192", lambda: self._show_page("forwardtest")).pack(side="left")
+
+        everything = self._section(f, "Everything in Validate")
+        self._link_card_grid(everything, [
+            ("Start Here", "This page.", "validatehub"),
+            ("Walk-Forward Optimization", "Trains and tests on rolling, non-overlapping windows through time.", "wfo"),
+            ("Walk-Forward GA", "Walk-forward validation using the genetic-algorithm search.", "wfga"),
+            ("CPCV", "Combinatorial purged cross-validation -- many train/test path combinations.", "cpcv"),
+            ("PBO", "Probability of backtest overfitting.", "pbo"),
+            ("Sensitivity", "How much results change with small parameter perturbations.", "sensitivity"),
+            ("Parameter Stability / Robustness Map",
+             "Visualizes the whole neighborhood around your parameters, not just one point.", "paramrobustness"),
+            ("Regime Survival Matrix",
+             "Does the strategy survive across different market regimes, not just one period?", "regimematrix"),
+            ("Monte Carlo / Payout Probability", "Simulated odds of actually reaching a funded payout.", "montecarlo"),
+        ])
 
     def _open_autopilot_report(self):
         if self._last_autopilot_report_path:

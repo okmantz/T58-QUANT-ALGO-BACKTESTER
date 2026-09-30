@@ -25,18 +25,18 @@ from tkinter import Frame, Label, Entry, StringVar, ttk
 # ---------------------------------------------------------------------------
 # Palette (kept local to avoid a circular import with main_window.py)
 # ---------------------------------------------------------------------------
-PANEL_2 = "#171B25"
-PANEL_3 = "#1E232E"
-PANEL_HOVER = "#242A37"
-BORDER = "#272C38"
-BORDER_LIGHT = "#3D4453"
-TEXT = "#E9EBEF"
-TEXT_DIM = "#5C6472"
-GREEN = "#3ED685"
-RED = "#F0596A"
+PANEL_2 = "#151A24"      # == web --panel-3 (rows sit on a --panel-2 card)
+PANEL_3 = "#1B212C"
+PANEL_HOVER = "#222936"
+BORDER = "#1C2230"       # == web --border
+BORDER_LIGHT = "#2A3242" # == web --border-light
+TEXT = "#E7EBF2"         # == web --text
+TEXT_DIM = "#5B6478"     # == web --text-dim
+GREEN = "#35E0B0"        # == web --teal
+RED = "#FF6F6F"          # == web --coral
 BLUE = "#6FA8FF"
-ACCENT = "#7C6FFF"
-ACCENT_HOVER = "#9089FF"
+ACCENT = "#35E0B0"       # == web --teal (primary accent)
+ACCENT_HOVER = "#5BEBC4"
 FONT = "Segoe UI"
 
 # ---------------------------------------------------------------------------
