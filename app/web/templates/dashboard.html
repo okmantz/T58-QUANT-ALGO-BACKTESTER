@@ -21,6 +21,9 @@
 <div class="t58-page-header">
   <h1>Dashboard</h1>
   <p>Live stats across every strategy run through the app -- desktop, web, and Search Lab all feed this.</p>
+  <!-- First-run guided tour (see /static/t58-tour.js). Auto-starts once per
+       browser after activation; this button replays it any time. -->
+  <button type="button" class="t58-btn ghost sm" data-t58-tour-start style="margin-top:10px;">&#127891; Take the 60-second tour</button>
 </div>
 
 {% if show_welcome %}
@@ -279,6 +282,7 @@
 </div>
 
 <script src="/static/graph.js"></script>
+<script src="/static/t58-tour.js" defer></script>
 <script>
   const DATA = {{ data | tojson | safe }};
 

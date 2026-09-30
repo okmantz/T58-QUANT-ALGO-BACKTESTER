@@ -61,6 +61,18 @@ _VALID_TRIGGERS = {
 }
 
 
+# UPGRADE (2026-09-29, "trade until the data ends"): these triggers are
+# computed from REALIZED, all-time state that only changes when a trade
+# closes. A 0.0 multiplier on one of them is therefore a permanent latch --
+# no trades means the trigger can never clear -- which silently ended whole
+# multi-year backtests. They are floored at a small "probe" size so the
+# strategy keeps taking (tiny) trades and can earn its way out. Triggers
+# that release on their own (daily_* next day, volatility_percentile when
+# the market calms) may still be 0.0.
+SELF_LOCKING_TRIGGERS = frozenset({"consecutive_losses", "drawdown_pct", "progress_to_target_pct"})
+MIN_PROBE_MULTIPLIER = 0.05
+
+
 class AdaptiveRiskError(Exception):
     """Raised for an invalid adaptive-risk rule or config."""
 
@@ -147,6 +159,18 @@ class AdaptiveRiskState:
         if self.peak_realized_balance <= 0:
             self.peak_realized_balance = self.initial_balance
 
+    def reset(self) -> None:
+        """Back to a brand-new account's state. Called by run_execution
+        whenever an account is reset (breach) or paid out (profit target),
+        so an all-time trigger (drawdown_pct / progress_to_target_pct) can
+        never stay latched from the PREVIOUS account and keep throttling
+        -- or, with a 0.0 multiplier, completely silencing -- every
+        entry for the rest of a multi-year dataset."""
+        self.consecutive_losses = 0
+        self.day_realized_pnl = 0.0
+        self.cumulative_realized_pnl = 0.0
+        self.peak_realized_balance = self.initial_balance
+
     def record_trade_close(self, pnl: float, is_new_day: bool) -> None:
         if is_new_day:
             self.day_realized_pnl = 0.0
@@ -210,7 +234,10 @@ class AdaptiveRiskState:
         mult = 1.0
         for rule in config.rules:
             if self._rule_active(rule, config.profit_target_amount, current_vol_percentile):
-                mult *= rule.risk_multiplier
+                m = rule.risk_multiplier
+                if rule.trigger in SELF_LOCKING_TRIGGERS and m < MIN_PROBE_MULTIPLIER:
+                    m = MIN_PROBE_MULTIPLIER
+                mult *= m
         return mult
 
     def active_rule_labels(self, config: AdaptiveRiskConfig, current_vol_percentile: float | None = None) -> list[str]:

@@ -54,7 +54,7 @@ class MonteCarloConfig:
     # attempt in the chain" rather than "the one attempt" -- see
     # MonteCarloResult's new attempts_* fields for the chain-level detail
     # that distinction papers over.
-    reset_on_breach: bool = False
+    reset_on_breach: bool = True  # 2026-09-29: paths keep going after a bust (fresh account) -- log, don't stop
 
 
 def default_method_for_adaptive_risk(adaptive_risk) -> str:

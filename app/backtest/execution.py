@@ -199,6 +199,17 @@ def run_execution(
         else None
     )
     blown_floor = risk.account_blown_floor()  # None if no floor configured
+    # UPGRADE (2026-09-29, "trade until the data ends"): unless a caller
+    # explicitly opts into the legacy permanent halt (RiskConfig.halt_on_breach),
+    # a breach starts a fresh account and the run keeps trading to the last bar.
+    halt_on_breach = bool(getattr(risk, "halt_on_breach", False))
+    min_contract_rescue_count = 0
+    blocked_daily_limit_count = 0
+    blocked_cooldown_count = 0
+    blocked_max_trades_count = 0
+    blocked_halted_count = 0
+    blocked_adaptive_zero_count = 0
+    last_entry_bar_idx = -1
 
     # EXEC-002: bar index the most recently CLOSED (fully closed, not
     # partial) position exited on -- -10**9 sentinel so the very first
@@ -598,8 +609,8 @@ def run_execution(
         # to prevent. Any already-open trade still manages normally
         # (stop/target/signal exits) -- only NEW entries are blocked.
         if not account_blown and (equity <= 0 or (blown_floor is not None and equity <= blown_floor)):
-            if risk.reset_on_breach:
-                # RESET-ON-BREACH (see RiskConfig.reset_on_breach): a
+            if not halt_on_breach:
+                # RESET-ON-BREACH (now the engine default, see RiskConfig.reset_on_breach): a
                 # prop-firm evaluator who "doesn't care about blowing
                 # accounts, as long as I can make money before" mechanically
                 # buys a new account and keeps going rather than treating
@@ -617,6 +628,7 @@ def run_execution(
                     direction = open_trade["direction"]
                     _settle_exit(open_trade, closes[i], "account_blown_forced_close", direction, i)
                     open_trade = None
+                _floor_txt = f"${blown_floor:,.2f}" if blown_floor is not None else "$0"
                 reset_events.append({
                     "kind": "breach",
                     "reset_at": breach_at,
@@ -626,9 +638,16 @@ def run_execution(
                         (risk.initial_balance - breach_equity) / risk.initial_balance * 100.0
                         if risk.initial_balance else None
                     ),
+                    "message": (
+                        f"{breach_at}: ACCOUNT BREACH #{sum(1 for e in reset_events if e.get('kind') == 'breach') + 1} - "
+                        f"equity ${breach_equity:,.2f} fell to the loss floor ({_floor_txt}). "
+                        f"Fresh ${risk.initial_balance:,.2f} account started; trading continues."
+                    ),
                 })
                 equity = risk.initial_balance
                 equity_arr[i] = equity
+                payout_target_baseline = risk.initial_balance
+                adaptive_state.reset()  # a new account must not inherit the old one's throttle state
             else:
                 account_blown = True
                 account_blown_at = _restore_tz(ts[i])
@@ -661,9 +680,16 @@ def run_execution(
                 "equity_before_payout": equity,
                 "payout_amount": payout_amount,
                 "equity_after_payout": payout_target_baseline,
+                "message": (
+                    f"{_restore_tz(ts[i])}: PROFIT TARGET REACHED #{sum(1 for e in reset_events if e.get('kind') == 'payout') + 1} - "
+                    f"equity ${equity:,.2f} hit {risk.profit_target_pct:g}% target; "
+                    f"${payout_amount:,.2f} banked as a payout. Account reset to "
+                    f"${payout_target_baseline:,.2f}; trading continues."
+                ),
             })
             equity = payout_target_baseline
             equity_arr[i] = equity
+            adaptive_state.reset()  # "progress to target" / drawdown triggers start over
 
         # --- consider new entry ---
         day_realized_pnl = pnl_today_sum[bar_date]
@@ -685,6 +711,8 @@ def run_execution(
         cooldown_active = (i - last_close_bar_idx) < risk.reentry_cooldown_bars
         if open_trade is None and sig[i] != 0 and not daily_limit_breached and not account_blown and not cooldown_active:
             n_today = trades_today_count[bar_date]
+            if n_today >= risk.max_trades_per_day:
+                blocked_max_trades_count += 1
             if n_today < risk.max_trades_per_day:
                 direction = int(sig[i])
                 raw_price = closes[i]
@@ -718,6 +746,19 @@ def run_execution(
                     sizing_pips = stop_loss_pips or 0
                 intended_risk_dollars = risk.risk_amount(equity)
                 size = risk.position_size(equity, sizing_pips)
+                # DEAD-LOCK RESCUE (2026-09-29): with whole-contract sizing, a
+                # small drawdown can drop equity just under the level that
+                # affords ONE contract at the configured risk %. With no
+                # trades, equity can never climb back, so the run silently
+                # stops for the rest of the dataset (e.g. 2% of $49,762 is
+                # $995 < the $1,000 one ES contract needs). If a fresh
+                # account WOULD afford one contract with this exact config,
+                # trade the 1-contract minimum -- never more risk than the
+                # configured % of the starting balance.
+                if size <= 0 and risk.contract_size and 0 < equity < risk.initial_balance:
+                    if risk.position_size(risk.initial_balance, sizing_pips) >= risk.contract_size:
+                        size = float(risk.contract_size)
+                        min_contract_rescue_count += 1
 
                 adaptive_multiplier = 1.0
                 adaptive_rules_active: list[str] = []
@@ -734,6 +775,8 @@ def run_execution(
                     # Degenerate sizing (e.g. an ATR-based stop distance
                     # that rounds to ~0 for this bar) — skip this entry
                     # rather than opening a trade with an invalid size.
+                    if adaptive_multiplier <= 0:
+                        blocked_adaptive_zero_count += 1
                     if risk.sizing_floored_to_zero_contracts(equity, sizing_pips):
                         zero_size_contract_floor_count += 1
                     pass  # n_today unchanged; no-op, kept for readability
@@ -808,6 +851,15 @@ def run_execution(
                         "adaptive_rules_active": adaptive_rules_active,
                     }
                     trades_today_count[bar_date] = n_today + 1
+                    last_entry_bar_idx = i
+
+        elif open_trade is None and sig[i] != 0:
+            if account_blown:
+                blocked_halted_count += 1
+            elif daily_limit_breached:
+                blocked_daily_limit_count += 1
+            elif cooldown_active:
+                blocked_cooldown_count += 1
 
     # close any still-open trade at final bar close
     if open_trade is not None:
@@ -838,6 +890,18 @@ def run_execution(
     equity_df.attrs["payout_events"] = [ev for ev in reset_events if ev.get("kind") == "payout"]
     equity_df.attrs["breach_events"] = [ev for ev in reset_events if ev.get("kind", "breach") == "breach"]
     equity_df.attrs["zero_size_contract_floor_count"] = zero_size_contract_floor_count
+    equity_df.attrs["min_contract_rescue_count"] = min_contract_rescue_count
+    equity_df.attrs["entry_block_counts"] = {
+        "engine_halted": blocked_halted_count,
+        "daily_loss_limit": blocked_daily_limit_count,
+        "reentry_cooldown": blocked_cooldown_count,
+        "max_trades_per_day": blocked_max_trades_count,
+        "zero_contract_sizing": zero_size_contract_floor_count,
+        "adaptive_risk_zero_size": blocked_adaptive_zero_count,
+    }
+    # Plain-language, chronological log of every account reset / payout, so a
+    # report can show exactly when and why the account restarted.
+    equity_df.attrs["account_reset_log"] = [ev["message"] for ev in reset_events if ev.get("message")]
 
     _breach_events = equity_df.attrs["breach_events"]
     _payout_events = equity_df.attrs["payout_events"]
@@ -851,8 +915,9 @@ def run_execution(
             "account, rather than being halted for the remainder of the run. "
             "Every trade after the first reset belongs to a DIFFERENT "
             "simulated account than the one before it -- see "
-            "equity_df.attrs['breach_events'] for when each reset "
-            "happened and what the account's equity was at that point.",
+            "equity_df.attrs['account_reset_log'] for when each reset "
+            "happened and what the account's equity was at that point. First: "
+            + " | ".join(ev["message"] for ev in _breach_events[:3] if ev.get("message")),
             RuntimeWarning,
         )
     if _payout_events:
@@ -867,6 +932,29 @@ def run_execution(
             "was withdrawn.",
             RuntimeWarning,
         )
+
+    # STALL DIAGNOSTIC (2026-09-29): the engine is meant to trade to the last
+    # bar. If it opened its last position in the first three quarters of the
+    # data even though the strategy kept signalling afterwards, say so and
+    # say WHY, instead of leaving a silent multi-year gap in the trade chart.
+    if n > 20:
+        _sig_arr = np.asarray(sig)
+        _late_signal_bars = int(np.count_nonzero(_sig_arr[last_entry_bar_idx + 1:]))
+        _gap_days = float((ts[n - 1] - ts[max(last_entry_bar_idx, 0)]) / np.timedelta64(1, "D"))
+        # A real stall is a LONG stretch of calendar time with no entries; a
+        # short dataset where the strategy just held a position is not one.
+        if _late_signal_bars > 0 and last_entry_bar_idx < int(n * 0.75) and _gap_days >= 14:
+            _blocks = ", ".join(
+                f"{k.replace('_', ' ')}={v:,}" for k, v in equity_df.attrs["entry_block_counts"].items() if v
+            ) or "none of the engine's own entry blocks fired -- the strategy's signal itself was the limit"
+            import warnings
+            _when = _restore_tz(ts[last_entry_bar_idx]) if last_entry_bar_idx >= 0 else "never"
+            warnings.warn(
+                f"TRADING STALL: the last entry was at {_when} "
+                f"({(last_entry_bar_idx + 1) / n * 100:.0f}% of the way through the data) although the strategy "
+                f"signalled on {_late_signal_bars:,} later bar(s). Entries blocked by: {_blocks}.",
+                RuntimeWarning,
+            )
 
     if account_blown:
         import warnings
@@ -919,6 +1007,18 @@ def run_execution(
             "was used instead purely for sane position sizing and account "
             "protection. Add a real stop loss / STOP_LOSS_PIPS to the "
             "strategy for accurate results.",
+            RuntimeWarning,
+        )
+
+    if min_contract_rescue_count:
+        import warnings
+        warnings.warn(
+            f"{min_contract_rescue_count:,} entr{'y' if min_contract_rescue_count == 1 else 'ies'} used the "
+            f"1-contract minimum (contract_size={risk.contract_size:g}) because equity had dipped just below "
+            "what your risk % affords for one whole contract. Without this the run would have stopped trading "
+            "for the rest of the dataset (equity can never recover without trades). Risk per trade on these "
+            "entries is capped at your configured % of the STARTING balance. Raise risk_value, use the micro "
+            "contract, or enlarge the account if you want exact %-of-equity sizing.",
             RuntimeWarning,
         )
 

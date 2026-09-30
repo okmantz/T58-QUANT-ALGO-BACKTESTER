@@ -92,7 +92,22 @@ class RiskConfig:
     # enforced beyond the per-trade cap above). Typically set from the
     # active PropRules.max_drawdown_pct so the raw backtest and the prop
     # simulation agree on where the account actually dies.
-    reset_on_breach: bool = False
+    reset_on_breach: bool = True
+    # UPGRADE (2026-09-29, "trade until the data ends"): the raw backtest
+    # engine now NEVER stops trading before the last bar of the dataset.
+    # Breaching the loss floor is logged as a "breach" event, a fresh
+    # account is started at initial_balance, and trading continues -- see
+    # run_execution. This used to be opt-in (default False) and its
+    # permanent-halt behavior is what made a strategy take a few trades at
+    # the very start of a multi-year dataset and then never trade again.
+    # `reset_on_breach` is kept for backward compatibility with every saved
+    # config / UI form that passes it, but the raw engine no longer honors
+    # False as "halt" -- use `halt_on_breach` below if you truly want the
+    # legacy permanent-halt behavior (it exists for tests and for anyone
+    # who wants to see exactly where the FIRST account would have died).
+    # The post-hoc scoring layers (simulate_account / Monte Carlo) still
+    # read reset_on_breach themselves for their own pass/fail accounting.
+    halt_on_breach: bool = False
     # UPGRADE (2026-09-27): the profit-target twin of reset_on_breach
     # above. Before this existed, execution.py had literally no concept
     # of a profit target -- only a breach (loss floor) could ever end an
@@ -119,7 +134,14 @@ class RiskConfig:
     # closed (a payout is not an account termination) and is completely
     # independent of reset_on_breach -- a run can have both, either, or
     # neither enabled.
-    reset_on_target: bool = False
+    reset_on_target: bool = True
+    # UPGRADE (2026-09-29): now ON by default. Whenever a profit target is
+    # known (profit_target_pct set directly, or filled in from the prop
+    # rules' evaluation_profit_target_pct by with_prop_safety_defaults),
+    # reaching it is logged as a "payout" event, the profit above baseline
+    # is banked, and trading continues on a fresh baseline -- the engine
+    # never idles once a target is hit. With no target configured this is
+    # a no-op (there is nothing to reach).
     # FIX (2026-09-18): every optimization tab already offers a
     # "reset-on-breach" checkbox ("score on the basis that a blown account
     # gets a fresh eval and keeps going, not a dead end") and threads it
@@ -301,6 +323,13 @@ def with_prop_safety_defaults(risk: "RiskConfig", prop_rules) -> "RiskConfig":
         daily_loss = getattr(prop_rules, "daily_loss_limit_pct", None)
         if daily_loss is not None:
             updates["daily_loss_limit_pct"] = daily_loss
+    if risk.profit_target_pct is None and risk.reset_on_target:
+        # Same number the prop-firm verdict scores against: reaching it is
+        # a logged payout/"target reached" event and trading continues,
+        # rather than the run going quiet once the account has "won".
+        eval_target = getattr(prop_rules, "evaluation_profit_target_pct", None)
+        if eval_target:
+            updates["profit_target_pct"] = float(eval_target)
     account_size = getattr(prop_rules, "account_size", None)
     if account_size is not None and risk.initial_balance != account_size:
         updates["initial_balance"] = account_size
