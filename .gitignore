@@ -10,6 +10,18 @@ data/config/alpaca_credentials.json
 data/config/ollama_settings.json
 data/config/mt5_settings.json
 data/config/mt5_password.txt
+# Fallback files used when the OS keyring is unavailable -- these hold real
+# secrets (license key, API keys, bot tokens) and must never be committed.
+data/config/license_key.txt
+data/config/license_state.json
+data/config/api_key_*.txt
+data/config/notification_*
+.flask_secret_key
+# Per-machine runtime state (rebuilt automatically)
+data/config/row_count_cache.json
+data/config/ui_theme.json
+data/config/current_strategy.json
+data/config/onboarding_tour.json
 *.env
 .env.*
 
