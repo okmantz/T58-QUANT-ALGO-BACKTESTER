@@ -1,0 +1,91 @@
+name: web-cross-platform
+
+# Proves the web app runs on Windows, macOS AND Linux: installs dependencies from
+# config/requirements.txt, runs the web/storage/startup tests, then starts the real
+# server and requests every main page over HTTP (scripts/web_smoke_test.py).
+# The optional "bundle" job (manual run only) builds a standalone app folder per OS.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: web-cross-platform-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: web ${{ matrix.os }} / py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: config/requirements.txt
+      - name: Install libomp (macOS, needed by lightgbm)
+        if: runner.os == 'macOS'
+        run: brew install libomp
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r config/requirements.txt
+      - name: Web, storage and startup tests
+        shell: bash
+        run: >
+          pytest -q -p no:cacheprovider
+          tests/test_web.py tests/test_web_license_gate.py tests/test_storage.py
+          tests/test_validate_hub_links.py tests/test_startup_speed_and_desktop_parity.py
+          tests/test_cross_platform_web.py tests/test_start_here_sections.py
+      - name: Start the real server and request every main page
+        shell: bash
+        run: python scripts/web_smoke_test.py
+
+  bundle:
+    name: bundle ${{ matrix.os }}
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install libomp (macOS)
+        if: runner.os == 'macOS'
+        run: brew install libomp
+      - name: Install dependencies and PyInstaller
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r config/requirements.txt pyinstaller
+      - name: Build standalone web app
+        shell: bash
+        run: >
+          pyinstaller --noconfirm --onedir --name T58-Web-App
+          --add-data "app/web/templates${{ runner.os == 'Windows' && ';' || ':' }}app/web/templates"
+          --add-data "app/web/static${{ runner.os == 'Windows' && ';' || ':' }}app/web/static"
+          --add-data "app/ui/assets${{ runner.os == 'Windows' && ';' || ':' }}app/ui/assets"
+          --add-data "config${{ runner.os == 'Windows' && ';' || ':' }}config"
+          --add-data "strategies${{ runner.os == 'Windows' && ';' || ':' }}strategies"
+          --hidden-import pandas --hidden-import numpy --hidden-import flask
+          run_web.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: T58-Web-App-${{ runner.os }}
+          path: dist/T58-Web-App
