@@ -59,7 +59,7 @@ from app.data.importer import import_csv
 from app.data.multi_timeframe import merge_multi_timeframe
 from app.data.timeframe_resample import infer_timeframe_label as _infer_timeframe_label
 from app.data.pairs import PairDataError, merge_pair_series
-from app.data.storage import EMPTY_DATASET_BYTES, list_datasets_by_instrument, list_stored_datasets, store_csv_path
+from app.data.storage import EMPTY_DATASET_BYTES, get_raw_data_dir, list_datasets_by_instrument, list_stored_datasets, store_csv_path
 from app.ensemble.ensemble import EnsembleError, EnsembleVoteConfig, run_ensemble_blend, run_ensemble_vote
 import app.forward_test.mt5_settings as mt5_settings_module
 from app.forward_test.mt5_settings import MT5Settings
@@ -1379,7 +1379,7 @@ class RunContextPanel:
         self.dataset_listbox.delete(0, END)
         self._stored_datasets = list_stored_datasets()
         by_name = {ds.name: i for i, ds in enumerate(self._stored_datasets)}
-        groups = list_datasets_by_instrument()
+        groups = list_datasets_by_instrument(count_rows=False)  # PERF: pickers never need row counts
         self._dataset_row_map = {}
         self._dataset_index_to_row = {}
         row = 0
@@ -2155,6 +2155,7 @@ class MainWindow:
         self.content = Frame(body, bg=BG)
         self.content.pack(side="left", fill="both", expand=True)
 
+        self._all_tab_frames: list = []
         self.tab_dashboard = Frame(self.content, bg=BG)
         self.tab_ai_assistant = Frame(self.content, bg=BG)
         self.tab_manual = Frame(self.content, bg=BG)
@@ -2209,6 +2210,11 @@ class MainWindow:
         self.tab_support = Frame(self.content, bg=BG)
         self.tab_hedge_fund = Frame(self.content, bg=BG)
         self.tab_leaderboard = Frame(self.content, bg=BG)
+        self.tab_stratlibrary = Frame(self.content, bg=BG)
+        self.tab_replay = Frame(self.content, bg=BG)
+        # One 'Start Here' page per section (same content as the web app's /start-here/<section>).
+        from app.orchestration.section_guides import DESKTOP_SECTIONS
+        self._starthere_frames = {sec: Frame(self.content, bg=BG) for sec in DESKTOP_SECTIONS}
 
         for f in (
             self.tab_dashboard, self.tab_ai_assistant, self.tab_manual, self.tab_resources, self.tab_education, self.tab_strategyconfig, self.tab_data, self.tab_strategy, self.tab_prop,
@@ -2223,8 +2229,14 @@ class MainWindow:
             self.tab_evolution, self.tab_researchagent, self.tab_regime_matrix, self.tab_family_diversity,
             self.tab_quantlab, self.tab_options_outlook,
             self.tab_graveyard, self.tab_account, self.tab_api_keys, self.tab_support, self.tab_hedge_fund, self.tab_leaderboard,
+            self.tab_stratlibrary, self.tab_replay, *self._starthere_frames.values(),
         ):
-            f.place(in_=self.content, x=0, y=0, relwidth=1, relheight=1)
+            # PERF: only the ACTIVE tab is ever mapped (see _show_page). They used to all be
+            # placed on top of each other and stay mapped, so every window resize / repaint
+            # laid out and redrew ~8,800 widgets across all 65 tabs instead of just the
+            # visible one. Frames are still built fully (their widgets exist), just not
+            # on screen until their page is shown.
+            self._all_tab_frames.append(f)
 
         # Every entry is (key, icon, label, frame, color). `icon` is kept
         # in the tuple shape for backward compatibility but no longer
@@ -2252,6 +2264,7 @@ class MainWindow:
 
             (None, "SUPERHEADER", "Strategy Lab", None, None),
             (None, None, "\u2460 CREATE", None, NEON_VIOLET),
+            ("starthere_create", "", "Start Here", self._starthere_frames["create"], NEON_VIOLET),
             ("genstrat", "", "Generate Strategies (AI)", self.tab_genstrat, NEON_VIOLET),
             ("researchagent", "", "Research Agent", self.tab_researchagent, NEON_VIOLET),
             ("researchdirector", "", "\U0001F50D Research Director", self.tab_research_director, NEON_VIOLET),
@@ -2259,9 +2272,11 @@ class MainWindow:
             ("speedrun", "", "\u26a1 Speed Run", self.tab_speedrun, NEON_VIOLET),
             ("speedrunmulti", "", "\u26a1 Multi-Instrument Speed Run", self.tab_speedrun_multi, NEON_VIOLET),
             ("forge", "", "\u26a1 Forge Strategy", self.tab_forge, NEON_LIME),
+            ("stratlibrary", "", "Strategy Library", self.tab_stratlibrary, NEON_VIOLET),
             ("strategy", "", "Strategy Builder", self.tab_strategy, NEON_VIOLET),
 
             (None, None, "\u2461 TEST", None, NEON_CYAN),
+            ("starthere_test", "", "Start Here", self._starthere_frames["test"], NEON_CYAN),
             ("strategyconfig", "", "1  Strategy Configuration", self.tab_strategyconfig, NEON_CYAN),
             ("data", "", "2  Market Data", self.tab_data, NEON_CYAN),
             ("prop", "", "3  Prop-Firm Rules", self.tab_prop, NEON_CYAN),
@@ -2297,6 +2312,7 @@ class MainWindow:
             ("leaderboard", "", "\U0001F3C6 Final Selection Leaderboard", self.tab_leaderboard, NEON_LIME),
 
             (None, None, "\u2464 CHAMPION", None, NEON_MAGENTA),
+            ("starthere_champion", "", "Start Here", self._starthere_frames["champion"], NEON_MAGENTA),
             ("familydiversity", "", "Family Diversity", self.tab_family_diversity, NEON_MAGENTA),
             ("portfolio", "", "Multi-Asset Portfolio", self.tab_portfolio, NEON_MAGENTA),
             ("ensemble", "", "Multi-Strategy Ensemble", self.tab_ensemble, NEON_MAGENTA),
@@ -2310,6 +2326,7 @@ class MainWindow:
             # section; Quant Lab's Strategy Health tool) pending a fully
             # separate screen for each.
             (None, None, "\u2465 DEPLOYMENT", None, NEON_LIME),
+            ("starthere_deployment", "", "Start Here", self._starthere_frames["deployment"], NEON_LIME),
             (None, "SUBHEADER", "Champion Checks", None, None),
             ("autopilot_pointer", "", "\u26a1 Overnight Autopilot", self.tab_speedrun, NEON_LIME),
             ("compare", "", "\u2696 Compare Strategies", self.tab_compare, NEON_LIME),
@@ -2318,6 +2335,7 @@ class MainWindow:
             ("forwardtest", "", "Forward Test (MT5)", self.tab_forwardtest, NEON_LIME),
             ("deploylive", "", "Deploy Live", self.tab_deploylive, RED),
             ("livemarket", "", "Monitor (Live Market)", self.tab_livemarket, NEON_CYAN),
+            ("replay", "", "Interactive Replay", self.tab_replay, NEON_CYAN),
 
             # "SUPERHEADER" (icon field) marks a subtle, always-visible,
             # non-collapsible umbrella label ABOVE a run of ordinary
@@ -2326,10 +2344,12 @@ class MainWindow:
             # "Strategy Lab, steps 1-7" without changing how any of those
             # groups collapse/expand on their own. See _build_sidebar_nav.
             (None, None, "\u2466 STRATEGY GRAVEYARD", None, METAL_BRIGHT),
+            ("starthere_graveyard", "", "Start Here", self._starthere_frames["graveyard"], METAL_BRIGHT),
             ("graveyard", "", "\U0001F480 Strategy Graveyard", self.tab_graveyard, METAL_BRIGHT),
 
             (None, "SUPERHEADER", "Quant Lab", None, None),
             (None, None, "\u2460 QUANT LAB", None, NEON_CYAN),
+            ("starthere_quantlab", "", "Start Here", self._starthere_frames["quantlab"], NEON_CYAN),
             ("quantlab", "", "Quant Lab (translator, stat arb, options, more)", self.tab_quantlab, METAL_BRIGHT),
 
             (None, None, "\u2461 OPTIONS", None, NEON_LIME),
@@ -2340,6 +2360,7 @@ class MainWindow:
 
             (None, "SUPERHEADER", "Account", None, None),
             (None, None, "\u2460 ACCOUNT", None, METAL_BRIGHT),
+            ("starthere_account", "", "Start Here", self._starthere_frames["account"], METAL_BRIGHT),
             ("datacenter", "", "\U0001F4CA Data Center", self.tab_datacenter, METAL_BRIGHT),
             ("account", "", "\u2699 Account", self.tab_account, METAL_BRIGHT),
             ("apikeys", "", "\U0001F511 API Keys", self.tab_api_keys, METAL_BRIGHT),
@@ -2409,6 +2430,9 @@ class MainWindow:
             ("Account", self._build_account_tab),
             ("API Keys", self._build_api_keys_tab),
             ("Support", self._build_support_tab),
+            ("Start Here pages", self._build_start_here_tabs),
+            ("Strategy Library", self._build_strategy_library_tab),
+            ("Interactive Replay", self._build_replay_tab),
         ):
             self._pump_splash(f"Loading {label}...")
             builder()
@@ -2482,6 +2506,10 @@ class MainWindow:
         "quantlab": "\u2696", "optionsoutlook": "\u25eb", "hedgefund": "\u2696",
         "datacenter": "\U0001F4CA", "account": "\u2699", "apikeys": "\U0001F511",
         "support": "\U0001F6DF", "education": "\U0001F393", "resources": "\U0001F393",
+        "stratlibrary": "\U0001F4DA", "replay": "\u23ef",
+        "starthere_create": "\U0001F4A1", "starthere_test": "\U0001F4A1", "starthere_champion": "\U0001F4A1",
+        "starthere_deployment": "\U0001F4A1", "starthere_graveyard": "\U0001F4A1",
+        "starthere_quantlab": "\U0001F4A1", "starthere_account": "\U0001F4A1",
     }
     # Plain top-level rows (Dashboard / AI Assistant / User Manual): bold, teal,
     # and -- like the web's un-accented .t58-nav-item -- no resting left bar.
@@ -2680,18 +2708,40 @@ class MainWindow:
         if group and group in getattr(self, "_collapsed_groups", set()):
             self._collapsed_groups.discard(group)
             self._build_sidebar_nav()
+        if getattr(self, "active_page", None) == "replay" and key != "replay":
+            try:
+                from app.ui import extra_tabs
+                extra_tabs._rp_stop(self)
+            except Exception:
+                pass
         self.active_page = key
         for k in list(self._nav_buttons):
             self._paint_nav_row(k, "active" if k == key else "idle")
         self._update_stage_stepper()
-        for k, _icon, _label, frame, _color in self._nav_items:
-            if k == key:
-                frame.lift()
+        target = self._tab_frame_by_key.get(key)
+        if target is not None:
+            for other in self._all_tab_frames:
+                if other is not target and other.winfo_manager():
+                    other.place_forget()
+            target.place(in_=self.content, x=0, y=0, relwidth=1, relheight=1)
+            target.lift()
+            # Geometry for a frame that was never on screen is only computed once it is
+            # mapped -- do it now so charts/canvases sized in the deferred refresh below
+            # (after(1, ...)) see real widths instead of Tk's 1px default.
+            self.content.update_idletasks()
         if key == "dashboard":
             # Deferred one tick so the tab switch paints immediately and the
             # heavier data load/repaint happens right after (see the
             # 2026-09-03 smoothness note this replaces in git history).
             self.root.after(1, self._refresh_dashboard)
+        elif key == "datacenter" and not getattr(self, "_datacenter_scanned", True):
+            self.root.after(50, self._refresh_data_center)
+        elif key == "stratlibrary":
+            from app.ui import extra_tabs
+            self.root.after(1, lambda: extra_tabs._lib_refresh(self))
+        elif key == "replay":
+            from app.ui import extra_tabs
+            self.root.after(1, lambda: extra_tabs._rp_load_lists(self))
         elif key == "validatehub":
             # The Validate Start Here checklist is built from results other
             # tabs record -- rebuild on every visit so it is never stale.
@@ -2759,6 +2809,10 @@ class MainWindow:
             darkcolor=[("pressed", TEXT_MUTED), ("active", TEXT_DIM)],
         )
 
+        style.configure(
+            "T58.Horizontal.TScale", background=ACCENT, troughcolor=PANEL_3, bordercolor=BORDER,
+            lightcolor=ACCENT, darkcolor=ACCENT, borderwidth=0, sliderlength=18,
+        )
         style.configure(
             "T58.TCombobox",
             fieldbackground=PANEL_3,
@@ -2931,16 +2985,16 @@ class MainWindow:
     # like the web version, it doesn't claim per-strategy completion.
     _STAGE_DEFS = [
         ("Create", "speedrun", {"genstrat", "researchagent", "researchdirector", "researchloop",
-                                 "speedrun", "speedrunmulti", "forge", "strategy"}),
-        ("Test", "run", {"strategyconfig", "data", "prop", "risk", "run", "payout", "propfirmrec"}),
+                                 "speedrun", "speedrunmulti", "forge", "strategy", "stratlibrary", "starthere_create"}),
+        ("Test", "run", {"starthere_test", "strategyconfig", "data", "prop", "risk", "run", "payout", "propfirmrec"}),
         ("Optimize", "fullpipeline", {"optimizehub", "fullpipeline", "quickoptimize", "search", "searchmulti", "evolution",
                                      "evolutionmulti", "multiobj", "refine", "risksweep"}),
         ("Validate", "wfo", {"validatehub", "wfo", "wfga", "cpcv", "pbo", "sensitivity", "paramrobustness",
                               "regimematrix", "montecarlo"}),
-        ("Champion", "familydiversity", {"familydiversity", "portfolio", "ensemble", "leaderboard"}),
-        ("Forward Test", "forwardtest", {"forwardtest"}),
+        ("Champion", "familydiversity", {"starthere_champion", "familydiversity", "portfolio", "ensemble", "leaderboard"}),
+        ("Forward Test", "forwardtest", {"starthere_deployment", "forwardtest"}),
         ("Deploy", "deploylive", {"deploylive"}),
-        ("Monitor", "livemarket", {"livemarket"}),
+        ("Monitor", "livemarket", {"livemarket", "replay"}),
     ]
 
     def _build_stage_stepper(self, parent):
@@ -3584,6 +3638,10 @@ class MainWindow:
             "desktop, mobile web, and Search Lab all feed this automatically.",
         )
 
+        tour_row = Frame(f, bg=BG)
+        tour_row.pack(fill="x", padx=16, pady=(0, 6))
+        self._button(tour_row, "\U0001F393  Take the 60-second tour", self._replay_tour).pack(side="left")
+
         # First-run welcome -- shown only for a genuinely fresh install (no
         # market data ever loaded AND no backtest ever run, per
         # app.orchestration.pipeline_guide.should_show_first_run_welcome --
@@ -3743,14 +3801,6 @@ class MainWindow:
         self._dash_tree.configure(yscrollcommand=dash_tree_scrollbar.set)
         self._bind_isolated_wheel(self._dash_tree)
 
-        library_wrap = _card(scroll_frame, border=BORDER)
-        library_wrap.pack(fill="x", padx=16, pady=(0, 20))
-        Label(library_wrap, text="MARKET DATA LIBRARY — data/raw, BY INSTRUMENT", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(9, "bold")).pack(
-            anchor="w", padx=14, pady=(10, 4)
-        )
-        self._dash_library_frame = Frame(library_wrap, bg=PANEL)
-        self._dash_library_frame.pack(fill="x", padx=14, pady=(0, 14))
-
         self._refresh_dashboard()
 
     def _refresh_dashboard(self):
@@ -3816,7 +3866,6 @@ class MainWindow:
             )
         self._dash_board_status.config(text="")
 
-        self._paint_data_library()
 
         self.root.after(30, lambda: self._paint_universe(data["graph"]))
         self.root.after(30, lambda: self._paint_hero_equity(data["equity_series"]))
@@ -3904,53 +3953,6 @@ class MainWindow:
             return
         strategy_type, filename = selection[0].split("::", 1)
         self._promote_board_row(strategy_type, filename)
-
-    def _paint_data_library(self):
-        for child in self._dash_library_frame.winfo_children():
-            child.destroy()
-        try:
-            groups = list_datasets_by_instrument()
-        except Exception:
-            groups = []
-
-        if not groups:
-            Label(
-                self._dash_library_frame,
-                text="No CSVs found under data/raw/ yet — upload one from the Data tab, or drop "
-                     "files into instrument subfolders there.",
-                bg=PANEL, fg=TEXT_DIM, font=_safe_font(9), wraplength=760, justify="left",
-            ).pack(anchor="w", pady=4)
-            return
-
-        n_cols = 3
-        grid = Frame(self._dash_library_frame, bg=PANEL)
-        grid.pack(fill="x")
-        for col in range(n_cols):
-            grid.grid_columnconfigure(col, weight=1, uniform="lib")
-
-        for i, g in enumerate(groups):
-            cell = Frame(grid, bg=PANEL_2, highlightthickness=1, highlightbackground=BORDER)
-            cell.grid(row=i // n_cols, column=i % n_cols, sticky="ew", padx=4, pady=4)
-
-            top = Frame(cell, bg=PANEL_2)
-            top.pack(fill="x", padx=10, pady=(8, 2))
-            Label(top, text=g["instrument"], bg=PANEL_2, fg=TEXT, font=_safe_font(9, "bold")).pack(side="left")
-            Label(
-                top, text=f"{g['file_count']} file{'s' if g['file_count'] != 1 else ''}",
-                bg=PANEL_2, fg=TEXT_DIM, font=_safe_font(7),
-            ).pack(side="right")
-
-            detail_text = f"{g['total_rows']:,} rows total"
-            Label(cell, text=detail_text, bg=PANEL_2, fg=TEXT_MUTED, font=_safe_font(8)).pack(
-                anchor="w", padx=10, pady=(0, 2)
-            )
-            if g["empty_count"]:
-                Label(
-                    cell, text=f"⚠ {g['empty_count']} empty file{'s' if g['empty_count'] != 1 else ''} (0 rows)",
-                    bg=PANEL_2, fg=AMBER, font=_safe_font(7, "bold"),
-                ).pack(anchor="w", padx=10, pady=(0, 8))
-            else:
-                Frame(cell, bg=PANEL_2, height=6).pack()
 
     def _paint_universe(self, graph):
         c = self._dash_universe_canvas
@@ -5666,7 +5668,7 @@ class MainWindow:
         # Grouped by instrument folder (e.g. data/raw/EURUSD/...) rather than
         # a flat mtime-sorted list, so opening the Data tab actually shows
         # "the different instrument folders" instead of one long file list.
-        groups = list_datasets_by_instrument()
+        groups = list_datasets_by_instrument(count_rows=False)  # PERF: pickers never need row counts
         self._dataset_row_map: dict[int, int] = {}      # listbox row -> _stored_datasets index
         self._dataset_index_to_row: dict[int, int] = {}  # _stored_datasets index -> listbox row
         row = 0
@@ -10722,7 +10724,16 @@ class MainWindow:
         refresh_row.pack(fill="x", padx=24, pady=(0, 10))
         self._button(refresh_row, "REFRESH", self._refresh_data_center).pack(side="left")
 
-        self._refresh_data_center()
+        # PERF: the health scan parses every dataset with pandas (tens of
+        # seconds for a few hundred MB). It no longer runs at startup -- it
+        # runs in the background the first time this tab is opened (see
+        # _show_page) and on REFRESH.
+        self._datacenter_scanned = False
+        self._datacenter_scanning = False
+        Label(
+            self.datacenter_groups_frame, text="Open this tab to scan your datasets.",
+            bg=BG, fg=TEXT_DIM, font=_safe_font(9),
+        ).pack(anchor="w", pady=8)
 
     def _data_center_import_clicked(self):
         path = filedialog.askopenfilename(
@@ -10743,18 +10754,47 @@ class MainWindow:
             pass
 
     def _refresh_data_center(self):
-        from app.data.health import compute_data_center
-
+        """Scans datasets on a worker thread (never blocks the UI), then
+        paints on the Tk main thread."""
+        if getattr(self, "_datacenter_scanning", False):
+            return
+        self._datacenter_scanning = True
         for child in self.datacenter_summary_frame.winfo_children():
             child.destroy()
         for child in self.datacenter_groups_frame.winfo_children():
             child.destroy()
+        Label(
+            self.datacenter_groups_frame, text="Scanning datasets...", bg=BG, fg=TEXT_MUTED, font=_safe_font(9),
+        ).pack(anchor="w", pady=8)
 
+        def _work():
+            try:
+                from app.data.health import compute_data_center
+                report, error = compute_data_center(), None
+            except Exception as exc:  # pragma: no cover - defensive
+                report, error = None, exc
+            try:
+                from app.ui import tk_safety
+                tk_safety.call_soon(lambda: self._paint_data_center(report, error))
+            except Exception:
+                self._datacenter_scanning = False  # window closed mid-scan
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _paint_data_center(self, report, error=None):
+        self._datacenter_scanning = False
+        self._datacenter_scanned = True
         try:
-            report = compute_data_center()
-        except Exception as exc:  # pragma: no cover - defensive
+            for child in self.datacenter_summary_frame.winfo_children():
+                child.destroy()
+            for child in self.datacenter_groups_frame.winfo_children():
+                child.destroy()
+        except Exception:
+            return  # widgets gone (e.g. theme rebuild) -- nothing to paint into
+
+        if error is not None or report is None:
             Label(
-                self.datacenter_groups_frame, text=f"Could not compute data health: {exc}",
+                self.datacenter_groups_frame, text=f"Could not compute data health: {error}",
                 bg=BG, fg=RED, font=_safe_font(9),
             ).pack(anchor="w")
             return
@@ -12435,7 +12475,7 @@ class MainWindow:
             n_candidates = self.pbo_n_candidates.get_int(5)
             specs = [{"source_type": strategy.source_type,
                       "config": dict(strategy.config)} if strategy.source_type == "manual"
-                     else {"source_type": strategy.source_type, "code_text": Path(strategy.file_path).read_text(),
+                     else {"source_type": strategy.source_type, "code_text": Path(strategy.file_path).read_text(encoding="utf-8"),
                            "code_extension": Path(strategy.file_path).suffix}]
 
             if strategy.source_type == "manual":
@@ -18172,6 +18212,30 @@ class MainWindow:
         self._validate_hub_inner = f
         self._populate_validate_hub(f)
 
+    def _replay_tour(self):
+        """Dashboard 'Take the tour' button -- starts the guided tour on demand."""
+        try:
+            from app.ui.onboarding_tour import OnboardingTour
+            existing = getattr(self, "_tour", None)
+            if existing is not None and getattr(existing, "card", None) is not None:
+                return
+            self._tour = OnboardingTour(self)
+            self._tour.start()
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("Tour", f"Could not start the tour: {exc}")
+
+    def _build_start_here_tabs(self):
+        from app.ui import extra_tabs
+        extra_tabs.build_start_here_tabs(self)
+
+    def _build_strategy_library_tab(self):
+        from app.ui import extra_tabs
+        extra_tabs.build_strategy_library_tab(self)
+
+    def _build_replay_tab(self):
+        from app.ui import extra_tabs
+        extra_tabs.build_replay_tab(self)
+
     def _refresh_validate_hub(self):
         """Rebuild the Validate Start Here content from what the validation
         tabs have recorded so far -- called every time the page is shown, so
@@ -21388,19 +21452,44 @@ def _apply_dark_titlebar(root: Tk) -> None:
         pass  # cosmetic only -- never let this block launch or a theme toggle
 
 
-def launch():
+def launch(root: "Tk | None" = None, splash=None):
+    """Starts the desktop app. `root`/`splash` are passed by app.main so the
+    startup splash is already on screen (and stays up, with live status)
+    until this window is fully built; both default to None for callers that
+    just want the app (tests, other entry points)."""
     _make_dpi_aware()
-    root = Tk()
+    if root is None:
+        root = Tk()
+    if splash is not None:
+        root._t58_splash = splash  # consumed by MainWindow._pump_splash
+    # Stability layer (thread-safe widget updates, bounded log widgets, crash capture)
+    # -- installed before anything else touches Tk. See app/ui/tk_safety.py.
+    try:
+        from app.ui import tk_safety
+        tk_safety.install(root)
+    except Exception:
+        pass
     _apply_tk_scaling(root)
     _force_dwm_composition(root)
     root.withdraw()  # hidden while the real window builds -- avoids showing a half-built window
 
     window = MainWindow(root)
+    if splash is not None:
+        splash.close()
+        root._t58_splash = None
 
     root.deiconify()
     try:
         root.lift()
         root.focus_force()
+    except Exception:
+        pass
+    # First launch: the person lands on the Dashboard and the guided tour
+    # starts immediately (shown once per install; replay it any time with
+    # "Take the tour" on the Dashboard).
+    try:
+        from app.ui.onboarding_tour import maybe_start_tour
+        root.after(250, lambda: maybe_start_tour(window))
     except Exception:
         pass
     # UPGRADE (Sep 2026 UI pass, round 3): this used to run BEFORE

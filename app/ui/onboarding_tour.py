@@ -34,7 +34,7 @@ BORDER = "#1C2230"
 TEXT = "#E7EBF2"
 TEXT_MUTED = "#8A93A6"
 GREEN = "#35E0B0"
-ACCENT = "#7B3DFF"
+ACCENT = "#35E0B0"
 
 FLAG_NAME = "onboarding_tour.json"
 FLAG_VERSION = 1
@@ -177,7 +177,7 @@ class OnboardingTour:
             return
         self.i = 0
         self.card = tk.Frame(self.root, bg=PANEL_2, highlightthickness=1, highlightbackground=GREEN)
-        self.card.place(relx=1.0, rely=1.0, anchor="se", x=-28, y=-28)
+        self.card.place(relx=1.0, rely=1.0, anchor="se", x=-28, y=-96)  # clear of the floating chat button
         for seq, fn in (("<Escape>", lambda e: self.finish("skipped")),
                         ("<Right>", lambda e: self.go(self.i + 1)),
                         ("<Left>", lambda e: self.go(self.i - 1))):
