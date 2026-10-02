@@ -206,7 +206,7 @@ def export_trades_csv(backtest_result: BacktestResult, path: str | Path) -> Path
     path.parent.mkdir(parents=True, exist_ok=True)
     rows = [t.to_dict() for t in backtest_result.trades]
     if not rows:
-        path.write_text("no trades generated\n")
+        path.write_text("no trades generated\n", encoding="utf-8")
         return path
     fieldnames = list(rows[0].keys())
     with open(path, "w", newline="", encoding="utf-8") as f:
