@@ -1457,23 +1457,15 @@ def main():
     ])
     from app.licensing import ensure_licensed
 
+    if is_gui_launch:
+        # While the person looks at / fills in the activation window (or while the
+        # license check runs), import the heavy UI modules and warm the dataset
+        # cache in the background, so the app opens almost instantly afterwards.
+        _start_gui_prewarm()
+
+    # The ONE licensing check for the whole app (GUI and every --cli-style flag).
+    # It used to run twice back to back -- two license-server round trips per launch.
     if not ensure_licensed(interactive=is_gui_launch):
-        return
-
-    # UPGRADE (licensing): the ENTIRE integration point between licensing
-    # and the rest of the app is this one check, before ANY subcommand
-    # below runs -- GUI launch and every --cli-style flag alike. See
-    # app/licensing/client.py's module docstring for why this stays a
-    # boundary rather than something threaded through individual tabs/
-    # features: delete this package and this one call site, and nothing
-    # else in the app (backtest engine, strategy adapters, every tab)
-    # ever knows licensing existed. `interactive=not args.cli` shows the
-    # Tkinter activation window only for a normal GUI launch -- every
-    # --cli-style flag fails fast with a plain message instead, since a
-    # login popup has no sensible behavior in a script/cron context.
-    from app.licensing import ensure_licensed
-
-    if not ensure_licensed(interactive=not args.cli):
         return
 
     # Shared across every subcommand below that accepts them -- see the
@@ -1599,54 +1591,47 @@ def main():
             **prop_rule_kwargs, **slippage_kwargs,
         )
     else:
-        launch = _import_main_window_with_splash()
-        launch()
+        _launch_gui()
 
 
-def _import_main_window_with_splash():
-    """Shows an immediate "Starting..." window, then imports
-    app.ui.main_window (returns its launch() function) while that window
-    is up, then closes it.
+def _start_gui_prewarm() -> None:
+    """Background thread: import the UI + heavy libraries and fill the dataset
+    row-count cache while the license window is open / being checked."""
+    import threading
 
-    PERF/UX (Sep 2026): added after reports that the desktop app "does
-    nothing" for several seconds right after the license activation
-    window closes -- see app/licensing/gate.py's ActivationWindow, whose
-    own window.destroy() happens BEFORE this import runs. That gap was
-    never a hang: `from app.ui.main_window import launch` is what
-    actually pulls in pandas/numpy plus the 100+ first-party app.*
-    modules main_window.py imports at module level (strategy engine,
-    optimizer, evolution, quant lab, ...), which is real, unavoidable
-    import/compile work -- worse in a PyInstaller --onefile build, which
-    is why that build mode was switched to --onedir in
-    .github/workflows/build-exe.yml (--onefile re-extracts that entire
-    bundle to a temp folder on every single launch, on top of this).
-    This splash doesn't make the import itself faster; it just means the
-    person sees "Starting T58..." instead of an apparently-frozen
-    screen for those same few seconds."""
+    def _work():
+        try:
+            import numpy  # noqa: F401
+            import pandas  # noqa: F401
+            import app.ui.main_window  # noqa: F401
+            from app.data.storage import list_datasets_by_instrument
+            list_datasets_by_instrument()
+        except Exception:
+            pass  # purely an optimisation -- the real launch path imports everything itself
+
+    threading.Thread(target=_work, daemon=True, name="t58-prewarm").start()
+
+
+def _launch_gui() -> None:
+    """Shows the startup splash immediately, then imports and builds the main
+    window while it stays up. One hidden Tk root owns the splash (a Toplevel)
+    AND becomes the main window's root, so the person sees one continuous
+    "starting" screen instead of blank gaps between steps."""
     import tkinter as tk
 
-    splash = tk.Tk()
-    splash.title("T58 Quant Algo Backtester")
-    splash.configure(bg="#05070A")
-    splash.overrideredirect(True)
-    width, height = 320, 120
-    x = (splash.winfo_screenwidth() - width) // 2
-    y = (splash.winfo_screenheight() - height) // 2
-    splash.geometry(f"{width}x{height}+{x}+{y}")
-    tk.Label(
-        splash, text="T58 QUANT ALGO BACKTESTER", bg="#05070A", fg="#7B3DFF",
-        font=("Segoe UI", 11, "bold"),
-    ).pack(pady=(28, 6))
-    tk.Label(
-        splash, text="Starting...", bg="#05070A", fg="#8A93A6", font=("Segoe UI", 10),
-    ).pack()
-    splash.update()  # force it to actually paint before the slow import below
-
+    root = tk.Tk()
+    root.withdraw()
+    splash = None
     try:
-        from app.ui.main_window import launch  # lazy: only needed for the GUI path -- see this function's docstring
-    finally:
-        splash.destroy()
-    return launch
+        from app.ui.splash import StartupSplash
+        splash = StartupSplash(root)
+        splash.set_status("Loading\u2026")
+    except Exception:
+        splash = None  # a splash problem must never stop the app from starting
+
+    from app.ui.main_window import launch  # usually already imported by the prewarm thread
+
+    launch(root=root, splash=splash)
 
 
 if __name__ == "__main__":
