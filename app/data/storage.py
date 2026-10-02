@@ -1,9 +1,11 @@
 """Persistent local market-data storage for development and packaged builds."""
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,10 +43,26 @@ def get_app_base_dir() -> Path:
             probe.unlink(missing_ok=True)
             return preferred
         except OSError:
-            local_app_data = os.environ.get("LOCALAPPDATA")
-            fallback = Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local"
-            return fallback / "T58 Prop Algo Backtester"
+            return user_data_dir()
     return Path(__file__).resolve().parents[2]
+
+
+def user_data_dir() -> Path:
+    """Per-user writable data folder, using each OS's own convention (used when
+    the folder next to the executable is read-only -- e.g. inside a macOS .app
+    bundle, /usr/local/bin, or Program Files):
+      Windows: %LOCALAPPDATA%\\T58 Prop Algo Backtester   (unchanged from before)
+      macOS:   ~/Library/Application Support/T58 Prop Algo Backtester
+      Linux:   $XDG_DATA_HOME or ~/.local/share/T58 Prop Algo Backtester
+    """
+    name = "T58 Prop Algo Backtester"
+    if sys.platform.startswith("win"):
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        return (Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local") / name
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / name
+    xdg = os.environ.get("XDG_DATA_HOME")
+    return (Path(xdg) if xdg else Path.home() / ".local" / "share") / name
 
 
 def _seed_bundled_raw_data(raw_dir: Path) -> None:
@@ -115,47 +133,135 @@ def list_stored_datasets() -> list[StoredDataset]:
 EMPTY_DATASET_BYTES = 32
 
 
+# ---------------------------------------------------------------------------
+# Row-count cache (PERF, Oct 2026). _quick_row_count used to re-read every
+# byte of every dataset (hundreds of MB of CSV) each time it was called -- and
+# the desktop app called it ~25 times during startup (once per tab's dataset
+# list, plus the Data Center and Dashboard), which is what made launching take
+# over a minute. A file's row count can only change if the file itself
+# changes, so it is cached by (size, mtime) -- in memory for the session and
+# in data/config/row_count_cache.json across launches -- and only recounted
+# when the file actually changes.
+# ---------------------------------------------------------------------------
+_ROW_COUNT_CACHE: dict[str, list[int]] | None = None
+_ROW_COUNT_CACHE_DIRTY = False
+_ROW_COUNT_LOCK = threading.Lock()
+ROWS_NOT_COUNTED = -2  # list views that skip counting report this instead of a number
+
+
+def _row_cache_path() -> Path:
+    return get_app_base_dir() / "data" / "config" / "row_count_cache.json"
+
+
+def _load_row_cache() -> dict[str, list[int]]:
+    global _ROW_COUNT_CACHE
+    if _ROW_COUNT_CACHE is None:
+        cache: dict[str, list[int]] = {}
+        try:
+            raw = json.loads(_row_cache_path().read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                cache = {k: v for k, v in raw.items() if isinstance(v, list) and len(v) == 3}
+        except Exception:
+            cache = {}  # missing/corrupt cache just means a one-time recount
+        _ROW_COUNT_CACHE = cache
+    return _ROW_COUNT_CACHE
+
+
+def flush_row_count_cache() -> None:
+    """Persist newly counted rows. Best-effort: never raises."""
+    global _ROW_COUNT_CACHE_DIRTY
+    with _ROW_COUNT_LOCK:
+        if not _ROW_COUNT_CACHE_DIRTY or _ROW_COUNT_CACHE is None:
+            return
+        try:
+            path = _row_cache_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(_ROW_COUNT_CACHE), encoding="utf-8")
+            tmp.replace(path)
+            _ROW_COUNT_CACHE_DIRTY = False
+        except Exception:
+            pass
+
+
+def _cached_row_count(path: Path) -> int | None:
+    """Cached count if the file is unchanged since it was counted, else None."""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    with _ROW_COUNT_LOCK:
+        hit = _load_row_cache().get(str(path))
+    if hit and hit[0] == st.st_size and hit[1] == st.st_mtime_ns:
+        return hit[2]
+    return None
+
+
+def _count_newlines(path: Path) -> int:
+    """Newline count via large block reads -- an order of magnitude faster
+    than iterating a file line by line in Python."""
+    count = 0
+    last = b""
+    with open(path, "rb") as f:
+        while True:
+            block = f.read(8 * 1024 * 1024)
+            if not block:
+                break
+            count += block.count(b"\n")
+            last = block[-1:]
+    if last and last != b"\n":
+        count += 1  # final line with no trailing newline still counts as a line
+    return count
+
+
 def _quick_row_count(path: Path) -> int:
-    """Cheap row count, without loading the file through pandas -- this
-    runs once per file every time the dashboard loads, so it needs to stay
-    fast even for multi-megabyte files.
+    """Cheap row count, without loading the file through pandas. Cached by
+    (size, mtime) -- see the cache note above.
 
     .parquet is a binary columnar format, not newline-delimited text --
-    counting b"\\n" bytes in it (the old behavior here) produced a
-    meaningless number instead of a row count. pyarrow can read a
-    .parquet file's row count straight out of its footer metadata without
-    decoding any actual column data, which is just as cheap as the
-    line-count trick for text formats.
+    pyarrow reads its row count straight from the footer metadata without
+    decoding any column data.
 
-    .zip/.7z archives are binary too, and unlike .parquet there's no cheap
-    metadata field to read a row count from without actually decompressing
-    the member inside -- too slow to do on every dashboard refresh for
-    every archive on disk. Returns -1 (a "count unknown, don't decompress
-    just to render a number" sentinel) rather than running the plain
-    newline-count fallback below, which on compressed bytes produces a
-    number that looks like a row count but means nothing.
+    .zip/.7z archives are binary too, with no cheap metadata row count --
+    returns -1 (a "count unknown, don't decompress just to render a number"
+    sentinel) rather than a meaningless newline count over compressed bytes.
     """
-    if path.suffix.lower() == ".parquet":
-        try:
-            import pyarrow.parquet as pq
-            return pq.ParquetFile(path).metadata.num_rows
-        except Exception:
-            return 0
-    if path.suffix.lower() in SUPPORTED_ARCHIVE_EXTENSIONS:
+    global _ROW_COUNT_CACHE_DIRTY
+    suffix = path.suffix.lower()
+    if suffix in SUPPORTED_ARCHIVE_EXTENSIONS:
         return -1
+    cached = _cached_row_count(path)
+    if cached is not None:
+        return cached
     try:
-        with open(path, "rb") as f:
-            count = sum(1 for _ in f)
-        return max(count - 1, 0)
+        st = path.stat()
+        if suffix == ".parquet":
+            try:
+                import pyarrow.parquet as pq
+                rows = pq.ParquetFile(path).metadata.num_rows
+            except Exception:
+                return 0
+        else:
+            rows = max(_count_newlines(path) - 1, 0)
     except OSError:
         return 0
+    with _ROW_COUNT_LOCK:
+        _load_row_cache()[str(path)] = [st.st_size, st.st_mtime_ns, rows]
+        _ROW_COUNT_CACHE_DIRTY = True
+    return rows
 
 
-def list_datasets_by_instrument() -> list[dict]:
+def list_datasets_by_instrument(count_rows: bool = True) -> list[dict]:
     """Groups list_stored_datasets() by its top-level data/raw/ subfolder
     (the instrument), for the Dashboard's "Market Data Library" card --
     this is what actually makes the data Owen already has on disk visible
-    in the app, independent of whether any backtest has been run yet."""
+    in the app, independent of whether any backtest has been run yet.
+
+    `count_rows=False` (PERF) is for plain dataset PICKERS that only need
+    names and an "empty" flag: it uses an already-cached count when there is
+    one and otherwise reports ROWS_NOT_COUNTED instead of reading the file.
+    Only a file small enough to hold no data at all is flagged empty without
+    counting (size check), so nothing is hidden or mislabeled."""
     raw_dir = get_raw_data_dir()
     groups: dict[str, list[dict]] = {}
     for ds in list_stored_datasets():
@@ -163,7 +269,13 @@ def list_datasets_by_instrument() -> list[dict]:
             parts = ds.name.split("/")
             instrument = parts[0] if len(parts) > 1 else "(ungrouped)"
             try:
-                rows = _quick_row_count(ds.path)
+                if count_rows:
+                    rows = _quick_row_count(ds.path)
+                else:
+                    cached = _cached_row_count(ds.path)
+                    rows = cached if cached is not None else (
+                        -1 if ds.path.suffix.lower() in SUPPORTED_ARCHIVE_EXTENSIONS else ROWS_NOT_COUNTED
+                    )
             except Exception:
                 # A single unreadable/locked/mid-write file must never
                 # blank out every other dataset in the list -- every page
@@ -188,6 +300,8 @@ def list_datasets_by_instrument() -> list[dict]:
             # dataset must still show up.
             continue
 
+    if count_rows:
+        flush_row_count_cache()
     result = []
     for instrument in sorted(groups.keys()):
         files = sorted(groups[instrument], key=lambda x: x["name"])

@@ -139,21 +139,72 @@ def compute_file_health(path: Path, relative_name: str) -> FileHealth:
     return fh
 
 
+_HEALTH_CACHE_NAME = "data_health_cache.json"
+
+
+def _health_cache_path() -> Path:
+    from app.data.storage import get_app_base_dir
+    return get_app_base_dir() / "data" / "config" / _HEALTH_CACHE_NAME
+
+
+def _load_health_cache() -> dict[str, Any]:
+    try:
+        import json
+        raw = json.loads(_health_cache_path().read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        return {}  # missing/corrupt cache just means a one-time full scan
+
+
+def _save_health_cache(cache: dict[str, Any]) -> None:
+    try:
+        import json
+        path = _health_cache_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(cache), encoding="utf-8")
+        tmp.replace(path)
+    except Exception:
+        pass  # best-effort
+
+
+def _health_from_dict(d: dict[str, Any]) -> FileHealth:
+    from dataclasses import fields
+    names = {f.name for f in fields(FileHealth)}
+    return FileHealth(**{k: v for k, v in d.items() if k in names})
+
+
 def compute_data_center() -> dict[str, Any]:
     """Full Data Center report: every stored dataset's health, grouped by
     instrument, plus per-instrument timeframe-availability and an overall
     summary. Read-only -- never modifies anything on disk."""
     raw_dir = get_raw_data_dir()
     files_by_health: list[FileHealth] = []
+    cache = _load_health_cache()
+    cache_dirty = False
     for ds in list_stored_datasets():
         try:
-            files_by_health.append(compute_file_health(ds.path, ds.name))
+            # PERF: a file's health only changes if the file changes, so reuse the
+            # last result while (size, mtime) are unchanged -- re-scanning hundreds
+            # of MB of CSV with pandas on every visit is what made this tab slow.
+            st = ds.path.stat()
+            key = [st.st_size, st.st_mtime_ns]
+            hit = cache.get(ds.name)
+            if hit and hit.get("key") == key:
+                files_by_health.append(_health_from_dict(hit["health"]))
+                continue
+            fh = compute_file_health(ds.path, ds.name)
+            files_by_health.append(fh)
+            cache[ds.name] = {"key": key, "health": fh.to_dict()}
+            cache_dirty = True
         except Exception as exc:  # noqa: BLE001 -- one bad file must not blank the whole report
             files_by_health.append(FileHealth(
                 name=ds.name, instrument=ds.name.split("/")[0] if "/" in ds.name else "(ungrouped)",
                 size_bytes=ds.size_bytes, ok=False, error=f"Unexpected error: {exc}",
             ))
 
+    if cache_dirty:
+        _save_health_cache(cache)
     groups: dict[str, list[FileHealth]] = {}
     for fh in files_by_health:
         groups.setdefault(fh.instrument, []).append(fh)
