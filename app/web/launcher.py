@@ -29,7 +29,9 @@ import time
 import webbrowser
 from pathlib import Path
 
-from app.web.network_info import PORT, get_lan_ip, is_running_under_wine, print_startup_banner, qr_code_file
+from app.web.network_info import (
+    PORT, find_free_port, get_lan_ip, is_running_under_wine, print_startup_banner, qr_code_file, set_active_port,
+)
 
 
 def _qr_image_path(url: str) -> Path | None:
@@ -111,8 +113,15 @@ def main() -> None:
     # succeeding before we've at least tried to explain what's happening.
     from app.web.server import app  # noqa: WPS433
 
+    # Port 5000 may be taken (macOS 12+ runs AirPlay Receiver on it by default, or a
+    # previous copy is still running) -- use the next free port instead of failing.
+    port = find_free_port(PORT)
+    set_active_port(port)
+    if port != PORT:
+        print(f"Port {PORT} is already in use (on macOS this is usually AirPlay Receiver) -- using {port} instead.", flush=True)
+
     ip = get_lan_ip()
-    url = f"http://{ip}:{PORT}"
+    url = f"http://{ip}:{port}"
     qr_path = qr_code_file(url)
 
     def _open_things_once_server_is_up() -> None:
@@ -124,7 +133,7 @@ def main() -> None:
         # way the old file-based popup did. That file-based popup is kept
         # below too (some people like a standalone image window), but the
         # browser tab is now the primary, always-reliable path.
-        webbrowser.open(f"http://127.0.0.1:{PORT}/mobile-access")
+        webbrowser.open(f"http://127.0.0.1:{port}/mobile-access")
         if qr_path is not None:
             _open_qr_image(qr_path)
 
@@ -132,7 +141,7 @@ def main() -> None:
 
     print_startup_banner(url, qr_path)
     try:
-        app.run(host="0.0.0.0", port=PORT, debug=False)
+        app.run(host="0.0.0.0", port=port, debug=False)
     except OSError as exc:
         # Most common real-world case: port 5000 already in use, either by
         # a previous copy of this same app still running in the
@@ -142,7 +151,7 @@ def main() -> None:
         print(flush=True)
         print("=" * 64, flush=True)
         print(f"  Could not start the server: {exc}", flush=True)
-        print("  This almost always means port 5000 is already in use --", flush=True)
+        print(f"  This almost always means port {port} is already in use --", flush=True)
         print("  either another copy of this app is already running (check", flush=True)
         print("  for another console window with this same banner already", flush=True)
         print("  open), or something else on this PC is using that port.", flush=True)

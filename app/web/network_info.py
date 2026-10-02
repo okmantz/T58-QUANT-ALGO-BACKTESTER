@@ -39,7 +39,37 @@ import subprocess
 import sys
 from pathlib import Path
 
-PORT = 5000
+PORT = 5000  # preferred port
+
+# The port the server is ACTUALLY listening on. Normally PORT, but if 5000 is
+# taken (on macOS 12+ the AirPlay Receiver service holds it by default) the
+# launcher picks the next free one and records it here, so every URL / QR code
+# the app shows is correct.
+_active_port = PORT
+
+
+def set_active_port(port: int) -> None:
+    global _active_port
+    _active_port = int(port)
+
+
+def get_active_port() -> int:
+    return _active_port
+
+
+def find_free_port(start: int = PORT, tries: int = 25) -> int:
+    """First port >= start that can be bound on all interfaces. Falls back to
+    `start` if none is found (the server will then report the real error)."""
+    for port in range(start, start + tries):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.bind(("0.0.0.0", port))
+            return port
+        except OSError:
+            continue
+        finally:
+            s.close()
+    return start
 
 # Tailscale hands out addresses from this carrier-grade-NAT block to every
 # device on a user's "tailnet" -- used both to validate the tailscale CLI's
@@ -99,8 +129,8 @@ def get_lan_ip() -> str:
         s.close()
 
 
-def lan_url(port: int = PORT) -> str:
-    return f"http://{get_lan_ip()}:{port}"
+def lan_url(port: int | None = None) -> str:
+    return f"http://{get_lan_ip()}:{port or _active_port}"
 
 
 def _tailscale_binary() -> str | None:
@@ -187,9 +217,9 @@ def get_tailscale_ip() -> str | None:
     return None
 
 
-def tailscale_url(port: int = PORT) -> str | None:
+def tailscale_url(port: int | None = None) -> str | None:
     ip = get_tailscale_ip()
-    return f"http://{ip}:{port}" if ip else None
+    return f"http://{ip}:{port or _active_port}" if ip else None
 
 
 def qr_code_data_uri(url: str) -> str | None:
@@ -289,7 +319,7 @@ def startup_banner_lines(url: str, qr_path: Path | None) -> list[str]:
             "  cellular data -- as long as the SAME Tailscale account is",
             "  signed in on your phone's Tailscale app too. Use this",
             "  address instead of the one above once you're off this Wi-Fi:",
-            f"      http://{ts_addr}:{PORT}",
+            f"      http://{ts_addr}:{_active_port}",
         ]
     else:
         lines += [
