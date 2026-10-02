@@ -105,6 +105,29 @@ address and a QR code. Away from home, [Tailscale](https://tailscale.com)
 details on the app's own **Phone access** page. Full walkthrough:
 [`HOW_TO_OPEN_ON_YOUR_PHONE.md`](HOW_TO_OPEN_ON_YOUR_PHONE.md).
 
+**Web app on any operating system (Windows, macOS, Linux):** the web app is
+plain Python + Flask + a browser, so it runs anywhere Python 3.10+ does —
+no Tk, no Windows-only packages (MetaTrader5/pywebview are installed on
+Windows only, automatically). One command, same on every OS:
+
+| OS | Start it |
+| --- | --- |
+| Windows | double-click `run_web.bat` |
+| macOS | double-click `run_web.command` (first time: right-click → Open). If it won't open because the file lost its executable flag (happens when files are uploaded through the GitHub website), run `bash run_web.command` in Terminal once, or `chmod +x run_web.command run_web.sh` |
+| Linux | `bash run_web.sh` |
+| Any (manual) | `pip install -r config/requirements.txt` then `python run_web.py` |
+
+The first run creates a private `.venv` and installs the dependencies; later
+runs start immediately. If port 5000 is busy (macOS uses it for AirPlay
+Receiver) the app automatically picks the next free port and shows the right
+address and QR code. Where your data lives when the install folder is
+read-only: Windows `%LOCALAPPDATA%`, macOS `~/Library/Application Support`,
+Linux `~/.local/share` (folder `T58 Prop Algo Backtester`).
+`python scripts/web_smoke_test.py` starts the real server and checks every
+main page; the **web-cross-platform** GitHub Action runs that plus the web
+tests on Windows, macOS and Linux for every push, and (run manually) can
+build a standalone app folder per OS.
+
 ## Core workflow — Run & Report
 
 1. **Upload Market Data** — CSV/TSV/Parquet/`.zip`/`.7z`, auto column
