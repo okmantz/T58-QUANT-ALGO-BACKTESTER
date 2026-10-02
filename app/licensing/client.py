@@ -45,6 +45,16 @@ DEFAULT_SERVER_URL = "https://license.yourdomain.example.com"
 # customer from a hotel wifi outage or your server having a bad day.
 OFFLINE_GRACE_DAYS = 3
 
+# Startup speed (Oct 2026). validate() used to block every launch on a network round
+# trip (10s timeout) -- and main() called it twice, plus a third time right after
+# activating. Now: a launch within FAST_START_MAX_AGE_HOURS of the last successful
+# online check opens immediately and re-verifies in the background (a revoked /
+# expired license is still caught: the background check records the new status, and
+# the next launch then does a full blocking validate). Shorter timeout when a real
+# check is needed.
+FAST_START_MAX_AGE_HOURS = 6.0
+VALIDATE_TIMEOUT_S = 6.0
+
 # --- Master key ------------------------------------------------------------
 # A single, permanent, fully-offline override for the app's own owner --
 # added because there was no way to run the app at all before
@@ -357,7 +367,7 @@ def validate() -> tuple[bool, str]:
 
     ok, body, err = _post("/validate", {
         "email": state.email, "license_key": state.license_key, "device_id": state.device_id or device_id(),
-    })
+    }, timeout=VALIDATE_TIMEOUT_S)
     if ok:
         if body.get("ok"):
             state.status = body.get("status", "active")
@@ -379,6 +389,25 @@ def validate() -> tuple[bool, str]:
         except ValueError:
             pass
     return False, f"Couldn't reach the license server, and the offline grace period has run out. Reconnect to the internet and try again. ({err})"
+
+
+def validate_fast_start() -> tuple[bool, str]:
+    """validate(), but never makes the person wait on the network at launch
+    when they were verified online recently -- see FAST_START_MAX_AGE_HOURS."""
+    state = load_state()
+    if state.license_key and state.email and state.status == "active" and state.last_validated_at:
+        if _is_master_key(state.license_key):
+            return True, "Active (master key)."
+        try:
+            last = datetime.fromisoformat(state.last_validated_at)
+            age_h = (datetime.now(timezone.utc) - last).total_seconds() / 3600.0
+        except ValueError:
+            age_h = None
+        if age_h is not None and 0 <= age_h <= FAST_START_MAX_AGE_HOURS:
+            import threading
+            threading.Thread(target=validate, daemon=True, name="t58-license-recheck").start()
+            return True, "Active (verified recently)."
+    return validate()
 
 
 def deactivate() -> tuple[bool, str]:
