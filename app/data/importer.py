@@ -246,7 +246,7 @@ def _bytes_of(path_or_buffer) -> bytes:
     return data
 
 
-def _pick_data_member(names: list[str]) -> str:
+def _pick_data_member(names: list[str], skip: "set[str] | None" = None) -> str:
     """Given the member names inside a zip/7z archive, pick the one that's
     actually the market-data file -- skips directories, macOS junk
     (__MACOSX/.DS_Store), and anything without a recognized data
@@ -258,13 +258,29 @@ def _pick_data_member(names: list[str]) -> str:
     several match we prefer the one that looks most like a data export
     (contains a digit, e.g. an OHLCV period suffix) over a generic name
     like 'data.csv'.
+
+    skip: member names to skip outright -- used by the zip-bomb guard
+    (_guard_zip_sizes) for members that declare more than
+    _ZIP_MEMBER_MAX_BYTES of uncompressed data. Each skipped member is
+    reported as a clear error; if the skip leaves no usable candidate,
+    the ValueError names the oversized member(s) instead of the generic
+    "no file found" message.
     """
+    skipped = {n for n in (skip or ()) if n in names}
     candidates = [
         n for n in names
-        if not n.endswith("/") and "__MACOSX" not in n and not Path(n).name.startswith(".")
+        if n not in skipped
+        and not n.endswith("/") and "__MACOSX" not in n and not Path(n).name.startswith(".")
         and Path(n).suffix.lower() in SUPPORTED_DATA_EXTENSIONS
     ]
     if not candidates:
+        if skipped:
+            names_str = ", ".join(sorted(skipped)[:5])
+            raise ValueError(
+                f"Skipped archive member(s) larger than the 1 GB per-file import "
+                f"cap ({names_str}) -- and nothing else usable remained in the "
+                "archive. Re-export the data as a smaller slice and try again."
+            )
         raise ValueError(
             f"No .csv/.tsv/.txt/.parquet file found inside the archive (contents: {names[:10]})."
         )
@@ -381,8 +397,37 @@ def _read_member_bytes(member_name: str, member_bytes: bytes) -> pd.DataFrame:
 
 def _read_zip(path_or_buffer) -> pd.DataFrame:
     with zipfile.ZipFile(io.BytesIO(_bytes_of(path_or_buffer))) as zf:
-        member = _pick_data_member(zf.namelist())
+        _guard_zip_sizes(zf)  # zip-bomb caps -- see below
+        member = _pick_data_member(zf.namelist(), skip=set(getattr(zf, "_t58_skipped_oversized", ())))
         return _read_member_bytes(member, zf.read(member))
+
+
+# P0-7 (Oct 2026) -- zip-bomb guard: _read_zip used to read the picked
+# member into RAM unbounded. A malicious archive can DECLARE gigabytes
+# of uncompressed data while only costing megabytes on the wire, so the
+# caps run on the DECLARED sizes from the zip headers BEFORE any member
+# bytes are read. A member claiming >1 GB is skipped (the importer then
+# picks another data member, or reports "no usable file" if none
+# remains); an archive declaring >4 GB total is refused outright.
+_ZIP_MEMBER_MAX_BYTES = 1 * 1024 * 1024 * 1024  # 1 GB per member
+_ZIP_TOTAL_MAX_BYTES = 4 * 1024 * 1024 * 1024  # 4 GB declared total
+
+
+def _guard_zip_sizes(zf: "zipfile.ZipFile") -> None:
+    members = [info for info in zf.infolist() if not info.is_dir()]
+    total = sum(info.file_size for info in members)
+    if total > _ZIP_TOTAL_MAX_BYTES:
+        raise ValueError(
+            f"Refusing to import archive: it declares {total / (1024 ** 3):.1f} GB "
+            "of uncompressed data, above the 4 GB total cap. Re-export a "
+            "smaller slice of the data and try again."
+        )
+    oversized = [info.filename for info in members if info.file_size > _ZIP_MEMBER_MAX_BYTES]
+    if oversized:
+        # Mark oversized members so _pick_data_member (below) skips them
+        # like it skips directories and macOS junk; if nothing usable is
+        # left it raises its normal "no file found" ValueError.
+        zf._t58_skipped_oversized = oversized  # noqa: SLF001 -- private attr, same-object cache only
 
 
 def _read_7z(path_or_buffer) -> pd.DataFrame:
@@ -787,6 +832,13 @@ def import_csv(
     """
 
     issues: list[ValidationIssue] = []
+    # P2-8 (Oct 2026) -- drop accounting for the >50% guardrail below.
+    # Each entry is (rows_dropped, human-readable reason). Rows dropped by
+    # ANY validation step accumulate here; if the final tally says more
+    # than half the input rows were dropped, import_csv raises instead of
+    # returning a quietly-gutted DataFrame.
+    dropped_rows: list[tuple[int, str]] = []
+    n_input_rows = 0
 
     try:
         raw = _read_raw_file(path_or_buffer)
@@ -801,6 +853,8 @@ def import_csv(
                 )
             ],
         )
+
+    n_input_rows = len(raw)
 
     if raw.empty:
         return ImportResult(
@@ -927,6 +981,7 @@ def import_csv(
                 f"unparsable timestamps.",
             )
         )
+        dropped_rows.append((bad_ts, "unparsable timestamps"))
 
         df = df.dropna(
             subset=["timestamp"]
@@ -982,6 +1037,7 @@ def import_csv(
                 f"non-numeric OHLC values.",
             )
         )
+        dropped_rows.append((bad_ohlc, "non-numeric OHLC values"))
 
         df = df.dropna(
             subset=[
@@ -1018,6 +1074,7 @@ def import_csv(
                 f"timestamp row(s) (kept first).",
             )
         )
+        dropped_rows.append((dupes, "duplicate timestamps (kept first)"))
 
         df = df.drop_duplicates(
             subset=["timestamp"],
@@ -1049,6 +1106,7 @@ def import_csv(
                 f"checks.",
             )
         )
+        dropped_rows.append((n_bad_logic, "failed OHLC logical integrity checks (high<low etc.)"))
 
         df = df[~bad_logic]
 
@@ -1133,6 +1191,28 @@ def import_csv(
     # ---------------------------------------------------------
     # Final cleanup
     # ---------------------------------------------------------
+
+    # P2-8 (Oct 2026) -- drop-rate guardrail: validation above silently
+    # dropped rows (bad timestamps, non-numeric OHLC, dupes, integrity
+    # failures) and returned whatever survived. A file that loses more
+    # than half its rows is almost certainly the wrong file/format for
+    # this app, and backtesting the surviving scrap silently is how
+    # "validated strategies" get built on garbage. So this is a hard
+    # ValueError, not another warning -- callers that must be resilient
+    # (web upload routes) should catch it and surface the message.
+    # Exactly 50% is allowed (boundary case); tick aggregation legitimately
+    # reduces the row count and is NOT counted here, only validation drops.
+    total_dropped = sum(n for n, _ in dropped_rows)
+    if n_input_rows > 0 and total_dropped > n_input_rows / 2:
+        reasons = "; ".join(f"{n:,} ({r})" for n, r in dropped_rows if n)
+        raise ValueError(
+            f"Import refused: {total_dropped:,} of {n_input_rows:,} input rows "
+            f"({total_dropped / n_input_rows:.0%}) were dropped during validation "
+            f"-- more than half the file. Reasons: {reasons}. The file is "
+            "probably the wrong instrument or format for this app; check the "
+            "column mapping or the source export instead of backtesting a "
+            "mostly-empty dataset."
+        )
 
     df = df.reset_index(
         drop=True

@@ -11,6 +11,12 @@ from pathlib import Path
 
 from app.data.importer import SUPPORTED_ARCHIVE_EXTENSIONS
 
+# werkzeug ships with Flask (a hard dependency of the web edition), so
+# this import needs no requirements-file change -- the same sanitize
+# step runs identically on the desktop path. (Dependency pinning is a
+# separate audit item; requirements files are left untouched here.)
+from werkzeug.utils import secure_filename
+
 # Every extension the importer (app.data.importer.SUPPORTED_DATA_EXTENSIONS,
 # plus SUPPORTED_ARCHIVE_EXTENSIONS) can actually read as tabular market
 # data. list_stored_datasets() and the bundled-data seeder below used to
@@ -320,15 +326,66 @@ def list_datasets_by_instrument(count_rows: bool = True) -> list[dict]:
     return result
 
 
+def sanitize_stored_filename(filename: str) -> str:
+    """Sanitize a user- (or browser-) supplied filename before it is ever
+    joined onto the data directory. Strips path components ("../",
+    absolute paths, Windows drive letters) via werkzeug's
+    secure_filename. Raises ValueError if nothing usable remains (e.g.
+    a filename that was pure traversal like "../../..")."""
+    cleaned = secure_filename((filename or "").strip().replace("\\", "/").split("/")[-1])
+    if not cleaned or cleaned in (".", ".."):
+        raise ValueError(f"Rejected unsafe upload filename: {filename!r}")
+    return cleaned
+
+
+def _contained_within(directory: Path, candidate: Path) -> bool:
+    """True iff candidate, fully resolved (symlinks and all), still lives
+    inside directory. The second line of defense after sanitize: catches
+    any symlink trickery that survives filename sanitizing."""
+    try:
+        base = directory.resolve()
+        target = candidate.resolve()
+    except OSError:
+        return False
+    return target == base or base in target.parents
+
+
 def _unique_destination(raw_dir: Path, filename: str) -> Path:
+    # Containment check on the final path: even a fully-sanitized name
+    # must never resolve outside raw_dir (defense against symlink games
+    # on raw_dir itself). Rejects with ValueError instead of writing.
     dest = raw_dir / filename
     if not dest.exists():
+        if not _contained_within(raw_dir, dest):
+            raise ValueError(f"Refusing to write outside the data directory: {filename!r}")
         return dest
     stem, suffix = dest.stem, dest.suffix
     i = 2
     while (raw_dir / f"{stem} ({i}){suffix}").exists():
         i += 1
-    return raw_dir / f"{stem} ({i}){suffix}"
+    dest = raw_dir / f"{stem} ({i}){suffix}"
+    if not _contained_within(raw_dir, dest):
+        raise ValueError(f"Refusing to write outside the data directory: {filename!r}")
+    return dest
+
+
+def resolve_stored_dataset(name: str) -> Path | None:
+    """Resolve a user-supplied stored-dataset name (e.g. the web edition's
+    "existing_dataset" form field) to a real file inside data/raw/, or
+    return None if the name is unsafe or doesn't exist. Callers should
+    treat None as "no such dataset" (400/404), never as a path to open.
+    This is the read-side companion to store_csv_bytes' write-side
+    sanitizing: both funnel through sanitize_stored_filename +
+    resolve-and-contain so a traversal payload can't read or write
+    outside data/raw/."""
+    try:
+        cleaned = sanitize_stored_filename(name)
+    except ValueError:
+        return None
+    candidate = get_raw_data_dir() / cleaned
+    if not _contained_within(get_raw_data_dir(), candidate):
+        return None
+    return candidate if candidate.exists() else None
 
 
 def store_csv_path(source_path: str | Path) -> Path:
@@ -348,6 +405,9 @@ def store_csv_path(source_path: str | Path) -> Path:
 def store_csv_bytes(content: bytes, filename: str) -> Path:
     """Write uploaded CSV bytes into persistent data/raw/."""
     raw_dir = get_raw_data_dir()
-    dest = _unique_destination(raw_dir, filename)
+    # Write-side path-traversal fix (P0-7): sanitize the browser-supplied
+    # filename BEFORE joining it onto the data directory; a traversal
+    # payload like "../../app.py" becomes a harmless flat name or raises.
+    dest = _unique_destination(raw_dir, sanitize_stored_filename(filename))
     dest.write_bytes(content)
     return dest
