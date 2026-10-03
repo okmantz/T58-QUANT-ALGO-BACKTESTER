@@ -784,7 +784,7 @@ def run_full_pipeline(
 
     lookahead_summary = None
     lookahead_bug_detected = False
-    if strategy.source_type in ("python", "pinescript", "mql5"):
+    if strategy.source_type in ("manual", "python", "pinescript", "mql5"):
         try:
             from app.strategy.lookahead_check import check_for_lookahead
             lookahead_result = check_for_lookahead(strategy, dev_df, max_signal_checkpoints=8)
@@ -1070,7 +1070,7 @@ def run_full_pipeline(
         # trusting the earlier check's target strategy instance to still be
         # representative. Cheap: a handful of truncated re-generate() calls,
         # same cost class as the baseline check above.
-        if final_source_type in ("python", "pinescript", "mql5"):
+        if final_source_type in ("manual", "python", "pinescript", "mql5"):
             try:
                 from app.strategy.lookahead_check import check_for_lookahead
                 final_lookahead_result = check_for_lookahead(final_strategy, dev_df, max_signal_checkpoints=8)
