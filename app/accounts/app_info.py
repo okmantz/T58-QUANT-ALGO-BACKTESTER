@@ -15,6 +15,7 @@ from this app's sandboxed network egress list, same as api.anthropic.com.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -146,3 +147,187 @@ def check_for_updates() -> UpdateCheckResult:
         )
     except Exception as exc:  # noqa: BLE001
         return UpdateCheckResult(configured=True, checked=False, current_version=APP_VERSION, error=f"Could not check for updates: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# In-app update DOWNLOAD (P1-7, Oct 2026)
+#
+# check_for_updates() above stays check-ONLY (the default path -- the
+# Account tab never downloads anything on its own). download_update()
+# below is the explicit, user-confirmed second step: it fetches the
+# latest release's Windows asset from GitHub Releases and verifies its
+# SHA-256 against the release's published checksum file before handing
+# the file back.
+#
+# Rules, deliberately strict:
+#   1. confirmed must be True (the UI's "Yes, download this update"
+#      button passes it) -- a False here returns an error, never a file.
+#      There is NO silent/auto install anywhere in this module.
+#   2. If the release publishes no recognizable checksum asset, the
+#      download is REFUSED: an unverifiable binary is not installed,
+#      period.
+#   3. On checksum mismatch the downloaded bytes are DELETED and the
+#      error says so -- a corrupted or tampered binary never sits on
+#      disk looking ready to run.
+#   4. The returned file is NOT executed and does NOT replace anything:
+#      the user runs/installs it themselves. This module never
+#      self-modifies a running app.
+# ---------------------------------------------------------------------------
+
+_DOWNLOAD_TIMEOUT_SECONDS = 30
+_DOWNLOAD_CHUNK_BYTES = 1024 * 1024  # 1 MB chunks -- a 350 MB exe never sits whole in RAM twice
+
+
+@dataclass
+class UpdateDownloadResult:
+    ok: bool
+    path: str = ""          # where the verified asset was saved ("" unless ok)
+    version: str = ""       # the release tag it came from
+    asset_name: str = ""
+    verified: bool = False  # True only when sha256 matched the published checksum
+    error: str = ""
+
+
+def _github_api_json(url: str) -> dict:
+    req = urllib.request.Request(
+        url,
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "T58-QUANT-ALGO-BACKTESTER"},
+    )
+    with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT_SECONDS) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _pick_release_asset(assets: list[dict]) -> dict | None:
+    """Pick the Windows install asset from a release's asset list:
+    prefer a *.exe (the PyInstaller onefile build), fall back to *.zip."""
+    exes = [a for a in assets if str(a.get("name", "")).lower().endswith(".exe")]
+    zips = [a for a in assets if str(a.get("name", "")).lower().endswith(".zip")]
+    if exes:
+        # Prefer the asset whose name mentions windows if there are several.
+        for a in exes:
+            if "windows" in str(a.get("name", "")).lower():
+                return a
+        return exes[0]
+    return zips[0] if zips else None
+
+
+def _find_checksum_asset(assets: list[dict]) -> dict | None:
+    """Find the release's published checksum file (SHA256SUMS.txt,
+    checksums.txt, or an asset with 'sha256'/'checksum' in the name)."""
+    for a in assets:
+        name = str(a.get("name", "")).lower()
+        if "sha256" in name or "checksum" in name:
+            return a
+    return None
+
+
+def _published_sha256_for(checksum_text: str, asset_name: str) -> str | None:
+    """Parse a checksum file's '<hex> <filename>' lines for asset_name."""
+    for line in checksum_text.splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 2 and parts[1].lstrip("*") == asset_name:
+            digest = parts[0].strip().lower()
+            if re.fullmatch(r"[0-9a-f]{64}", digest):
+                return digest
+    return None
+
+
+def _download_bytes(url: str, hasher: "hashlib._Hash | None" = None) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": "T58-QUANT-ALGO-BACKTESTER"})
+    chunks: list[bytes] = []
+    with urllib.request.urlopen(req, timeout=_DOWNLOAD_TIMEOUT_SECONDS) as resp:
+        while True:
+            chunk = resp.read(_DOWNLOAD_CHUNK_BYTES)
+            if not chunk:
+                break
+            if hasher is not None:
+                hasher.update(chunk)
+            chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def download_update(confirmed: bool, download_dir: "str | Path | None" = None) -> UpdateDownloadResult:
+    """Download the latest release's asset with SHA-256 verification.
+
+    confirmed: must be True -- the caller passes this only after an
+        explicit user confirmation ("Yes, download the update"). False
+        always returns an error; nothing is downloaded, installed, or
+        modified.
+    download_dir: where to save the verified asset (defaults to the
+        user's Downloads folder, falling back to a temp dir).
+    """
+    if not confirmed:
+        return UpdateDownloadResult(
+            ok=False,
+            error="Update download refused: it requires an explicit user confirmation "
+                  "(this app never downloads or installs updates on its own).",
+        )
+    if not GITHUB_REPO:
+        return UpdateDownloadResult(
+            ok=False, error="Update downloads aren't configured -- no GitHub repo is set "
+                            "(see app.accounts.app_info.GITHUB_REPO)."
+        )
+    check = check_for_updates()
+    if check.error or not check.checked:
+        return UpdateDownloadResult(ok=False, error=f"Could not check for updates: {check.error or 'unknown'}")
+    if not check.update_available:
+        return UpdateDownloadResult(
+            ok=False, version=check.latest_version,
+            error=f"Already on the latest version ({check.current_version}) -- nothing to download.",
+        )
+    try:
+        release = _github_api_json(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest")
+        assets = release.get("assets") or []
+        asset = _pick_release_asset(assets)
+        if asset is None or not asset.get("browser_download_url"):
+            return UpdateDownloadResult(
+                ok=False, version=check.latest_version,
+                error="The latest release has no downloadable .exe/.zip asset.",
+            )
+        asset_name = str(asset["name"])
+        checksum_asset = _find_checksum_asset(assets)
+        if checksum_asset is None or not checksum_asset.get("browser_download_url"):
+            return UpdateDownloadResult(
+                ok=False, version=check.latest_version, asset_name=asset_name,
+                error="The latest release publishes no checksum file -- refusing to "
+                      "download an unverifiable binary. (The release needs a "
+                      "SHA256SUMS.txt-style asset for in-app updates to work.)",
+            )
+        checksum_text = _download_bytes(str(checksum_asset["browser_download_url"])).decode("utf-8", errors="replace")
+        expected = _published_sha256_for(checksum_text, asset_name)
+        if expected is None:
+            return UpdateDownloadResult(
+                ok=False, version=check.latest_version, asset_name=asset_name,
+                error=f"The release's checksum file has no entry for {asset_name!r} -- "
+                      "refusing to download an unverifiable binary.",
+            )
+
+        target_dir = Path(download_dir) if download_dir else (Path.home() / "Downloads")
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:  # noqa: BLE001
+            import tempfile
+            target_dir = Path(tempfile.mkdtemp(prefix="t58-update-"))
+        dest = target_dir / f"T58-Update-{check.latest_version}-{asset_name}"
+
+        hasher = hashlib.sha256()
+        body = _download_bytes(str(asset["browser_download_url"]), hasher=hasher)
+        actual = hasher.hexdigest()
+        if actual != expected:
+            return UpdateDownloadResult(
+                ok=False, version=check.latest_version, asset_name=asset_name,
+                error=f"CHECKSUM MISMATCH for {asset_name}: expected {expected}, got {actual}. "
+                      "The download was discarded and nothing was written to disk -- do not "
+                      "install this release from any other source either.",
+            )
+        dest.write_bytes(body)
+        return UpdateDownloadResult(
+            ok=True, path=str(dest), version=check.latest_version,
+            asset_name=asset_name, verified=True,
+        )
+    except urllib.error.HTTPError as exc:
+        return UpdateDownloadResult(
+            ok=False, error=f"GitHub returned an error ({exc.code}) while downloading the update."
+        )
+    except Exception as exc:  # noqa: BLE001
+        return UpdateDownloadResult(ok=False, error=f"Update download failed: {exc}")
