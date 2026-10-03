@@ -82,6 +82,8 @@ import json
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from shutil import rmtree
+from tempfile import mkdtemp
 
 import pandas as pd
 
@@ -536,7 +538,12 @@ def run_quick_optimize(
         final_spec = {"source_type": "manual", "config": final_config}
     else:
         final_spec = {"source_type": final_source_type, "code_text": final_code_text, "code_extension": final_code_ext}
-    final_strategy = build_strategy_from_spec(final_spec)
+    # FIX (quick-optimize-python-tmpdir): Python strategies need a writable tmp_dir
+    # (PythonStrategy only accepts a file path) -- build_strategy_from_spec raises
+    # StrategySpaceError without one. Same mkdtemp + end-of-function rmtree pattern
+    # as Full Pipeline's final_tmp_dir; tmp_dir is unused for manual/pinescript/mql5.
+    final_tmp_dir = Path(mkdtemp(prefix="t58_quick_optimize_")) if final_source_type != "manual" else None
+    final_strategy = build_strategy_from_spec(final_spec, final_tmp_dir)
     final_bt = run_backtest(dev_df, final_strategy, risk, adaptive_risk=adaptive_risk)
     warnings.extend(final_bt.warnings)
     if instrument_mismatch_warning is None and has_instrument_scale_mismatch(final_bt.warnings):
@@ -835,6 +842,12 @@ def run_quick_optimize(
         )
     except Exception:
         pass  # T58 Research Memory is a bonus record -- never let it affect a completed Quick Optimize run
+
+    # FIX (quick-optimize-python-tmpdir, cont'd): clean up the candidate .py
+    # written for the final Python strategy -- mirrors Full Pipeline's
+    # end-of-run rmtree(final_tmp_dir).
+    if final_tmp_dir is not None:
+        rmtree(final_tmp_dir, ignore_errors=True)
 
     return QuickOptimizeResult(
         strategy_display_name=display_name,
