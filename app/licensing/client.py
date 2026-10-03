@@ -64,30 +64,55 @@ VALIDATE_TIMEOUT_S = 6.0
 # connection just to open their own software.
 #
 # Only the SHA-256 HASH of the real key lives in this file -- never the
-# key itself -- because this file ships inside the built .exe (and, if
-# this repo is or ever becomes public, in the repo itself): matching it
-# requires knowing the actual key, not just reading this source, the same
-# way a password hash doesn't reveal the password. The key is generated,
-# handed to the owner once, and never printed/logged/stored in plaintext
-# anywhere by this module -- activate()/validate() below only ever hash
-# the entered value and compare.
+# key itself: matching it requires knowing the actual key, not just
+# reading this source, the same way a password hash doesn't reveal the
+# password. The key is handed to the owner once and never
+# printed/logged/stored in plaintext anywhere by this module --
+# activate()/validate() below only ever hash the entered value and
+# compare (UPPERCASED with surrounding whitespace stripped -- see
+# _is_master_key).
 #
-# Rotate it any time, without a rebuild, by setting the
-# T58_MASTER_LICENSE_KEY_HASH environment variable to a new key's hash:
-#   python -c "import hashlib; print(hashlib.sha256(b'YOUR-NEW-KEY').hexdigest())"
-# (hash whatever activate() will actually compare against, i.e. the key
-# UPPERCASED with surrounding whitespace stripped -- see _is_master_key).
-_DEFAULT_MASTER_KEY_HASH = "c8178da7417ad10e07cbc39bf4df0daa7e389faa7a3b9d8eea9cededb13ed7b5"
+# UN-REVOCABLE BY DESIGN (Owen's explicit call, Oct 2026): this hash
+# ships inside the built .exe (and lives in the repo), so anyone holding
+# the matching key gets permanent offline activation in every build that
+# contains this hash, forever. Rotation = replace _DEFAULT_MASTER_KEY_HASH
+# with the new key's SHA-256, rebuild, re-ship; old builds keep honoring
+# the old hash until they are replaced. The T58_MASTER_LICENSE_KEY_HASH
+# environment variable overrides the hardcoded value when set (e.g. a
+# per-build hash injected at release time) without editing this file.
+# Precedence: env var > _DEFAULT_MASTER_KEY_HASH below > error hint when
+# neither is configured.
+_DEFAULT_MASTER_KEY_HASH = "fcfe701fc0367a1328746e744805a96d76e8b2c1a06638908a0fa6c92a327ea0"
 
 
-def _master_key_hash() -> str:
-    return os.environ.get("T58_MASTER_LICENSE_KEY_HASH", _DEFAULT_MASTER_KEY_HASH)
+def _master_key_hash() -> str | None:
+    """The effective master-key hash, or None if none is configured.
+    Precedence: T58_MASTER_LICENSE_KEY_HASH env var (when set) >
+    _DEFAULT_MASTER_KEY_HASH above (when non-empty) > None."""
+    env_value = os.environ.get("T58_MASTER_LICENSE_KEY_HASH", "").strip()
+    if env_value:
+        return env_value
+    return _DEFAULT_MASTER_KEY_HASH or None
 
 
 def _is_master_key(license_key: str) -> bool:
-    if not license_key:
+    configured = _master_key_hash()
+    if not configured or not license_key:
         return False
-    return hashlib.sha256(license_key.strip().upper().encode("utf-8")).hexdigest() == _master_key_hash()
+    return hashlib.sha256(license_key.strip().upper().encode("utf-8")).hexdigest() == configured
+
+
+def master_key_configured() -> bool:
+    """Whether a master key hash is available in this environment."""
+    return _master_key_hash() is not None
+
+
+_MASTER_KEY_UNSET_HINT = (
+    "If this was a master-key attempt: no master key is configured in this build. "
+    "Set the T58_MASTER_LICENSE_KEY_HASH environment variable (to the SHA-256 hash "
+    "of the key, uppercased and stripped) at build/startup time before a master key "
+    "can activate anything. See app/licensing/client.py for how to compute the hash."
+)
 
 
 @dataclass
@@ -321,7 +346,9 @@ def activate(email: str, license_key: str, remember: bool = True) -> tuple[bool,
 
     if _is_master_key(license_key):
         # Permanent, offline activation -- no server contacted, no device
-        # binding, no expiry. See _DEFAULT_MASTER_KEY_HASH's comment above.
+        # binding, no expiry. The hash lives ONLY in the
+        # T58_MASTER_LICENSE_KEY_HASH environment variable (see the
+        # comment on _master_key_hash above).
         persist(LicenseState(
             email=email, license_key=license_key, device_id=device_id(), status="active",
             expires_at=None, last_validated_at=datetime.now(timezone.utc).isoformat(),
@@ -331,9 +358,16 @@ def activate(email: str, license_key: str, remember: bool = True) -> tuple[bool,
     did = device_id()
     ok, body, err = _post("/activate", {"email": email, "license_key": license_key, "device_id": did})
     if not ok:
-        return False, f"Couldn't reach the license server: {err}"
+        return False, f"Couldn't reach the license server: {err}{'' if master_key_configured() else ' ' + _MASTER_KEY_UNSET_HINT}"
     if not body.get("ok"):
-        return False, _error_message(body.get("error", "unknown_error"))
+        msg = _error_message(body.get("error", "unknown_error"))
+        if not master_key_configured():
+            # A master-key attempt is indistinguishable from a wrong key
+            # here -- the only way to tell the operator what to do is to
+            # say so on every failed activation when no master key is
+            # configured.
+            msg += " " + _MASTER_KEY_UNSET_HINT
+        return False, msg
 
     persist(LicenseState(
         email=email, license_key=license_key, device_id=did, status=body.get("status", "active"),
@@ -362,7 +396,7 @@ def validate() -> tuple[bool, str]:
 
     if _is_master_key(state.license_key):
         # Never contacts the server, never expires, never subject to the
-        # offline grace period -- see _DEFAULT_MASTER_KEY_HASH's comment.
+        # offline grace period -- see _master_key_hash's comment.
         return True, "Active (master key)."
 
     ok, body, err = _post("/validate", {
