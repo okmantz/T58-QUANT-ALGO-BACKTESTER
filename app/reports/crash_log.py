@@ -17,6 +17,8 @@ user AppData folder -- see app.data.storage.get_app_base_dir).
 """
 from __future__ import annotations
 
+import logging
+import logging.handlers
 import threading
 import traceback
 from datetime import datetime, timezone
@@ -25,11 +27,78 @@ from typing import Optional
 
 from app.data.storage import get_app_base_dir
 
+# P2-8 (Oct 2026): everything that used to be print() or an unrotated
+# append-only file now goes through standard logging with rotation:
+# 5 MB per file, 3 backups. crash_log.txt keeps its name and location
+# (data/logs/crash_log.txt) so old runbooks still point at the right
+# file -- it just rotates now instead of growing forever.
+LOG_MAX_BYTES = 5 * 1024 * 1024
+LOG_BACKUP_COUNT = 3
 
-def crash_log_path() -> Path:
+
+def logs_dir() -> Path:
     p = get_app_base_dir() / "data" / "logs"
     p.mkdir(parents=True, exist_ok=True)
-    return p / "crash_log.txt"
+    return p
+
+
+def crash_log_path() -> Path:
+    return logs_dir() / "crash_log.txt"
+
+
+def setup_rotating_logging(name: str = "t58") -> logging.Logger:
+    """Configure process-wide logging once: a RotatingFileHandler
+    (LOG_MAX_BYTES x LOG_BACKUP_COUNT) on data/logs/<name>.log plus a
+    plain stderr handler, idempotent across repeated calls. Entry
+    points (run_app.py / run_web.py / cli.py) call this at startup;
+    every other module just does logging.getLogger(__name__)."""
+    logger = logging.getLogger(name)
+    if getattr(logger, "_t58_rotating_configured", False):
+        return logger
+    logger.setLevel(logging.INFO)
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+    file_handler = logging.handlers.RotatingFileHandler(
+        logs_dir() / f"{name}.log",
+        maxBytes=LOG_MAX_BYTES,
+        backupCount=LOG_BACKUP_COUNT,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(formatter)
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    logger.addHandler(stream_handler)
+    logger.propagate = False
+    logger._t58_rotating_configured = True  # noqa: SLF001 -- same-module idempotency flag
+    return logger
+
+
+_crash_logger: logging.Logger | None = None
+_crash_logger_lock = threading.Lock()
+
+
+def _get_crash_logger() -> logging.Logger:
+    """The crash log as a rotating logger on the SAME crash_log.txt path
+    the old append-only writer used -- public behavior (function names,
+    file location) is unchanged; the file now rotates."""
+    global _crash_logger
+    with _crash_logger_lock:
+        if _crash_logger is None:
+            _crash_logger = logging.getLogger("t58.crash")
+            _crash_logger.setLevel(logging.ERROR)
+            handler = logging.handlers.RotatingFileHandler(
+                crash_log_path(),
+                maxBytes=LOG_MAX_BYTES,
+                backupCount=LOG_BACKUP_COUNT,
+                encoding="utf-8",
+            )
+            handler.setFormatter(logging.Formatter("%(message)s"))
+            _crash_logger.addHandler(handler)
+            _crash_logger.propagate = False
+        return _crash_logger
 
 
 _WRITE_LOCK = threading.Lock()
@@ -46,7 +115,9 @@ def log_crash(component: str, exc: Optional[BaseException] = None, extra: Option
         traceback.format_exc() -- only meaningful when called from
         inside an `except:` block.
     """
-    path = crash_log_path()
+    # P2-8 (Oct 2026): the record now goes through the rotating crash
+    # logger instead of a raw append to crash_log.txt -- same file, same
+    # content shape, but it rotates (5 MB x 3) instead of growing forever.
     try:
         ts = datetime.now(timezone.utc).isoformat()
         if exc is not None:
@@ -57,12 +128,10 @@ def log_crash(component: str, exc: Optional[BaseException] = None, extra: Option
         if extra:
             lines.append(extra.rstrip() + "\n")
         lines.append(tb)
-        with _WRITE_LOCK:
-            with open(path, "a", encoding="utf-8") as f:
-                f.writelines(lines)
+        _get_crash_logger().error("".join(lines))
     except Exception:
         pass  # logging a crash must never itself raise
-    return path
+    return crash_log_path()
 
 
 _HOOK_INSTALLED = False

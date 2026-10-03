@@ -647,10 +647,14 @@ def _holdout_section(holdout: dict | None) -> str:
 
 
 def _downsample(values: list[float], max_points: int = 400) -> list[float]:
-    if len(values) <= max_points:
+    n = len(values)
+    if n <= max_points:
         return values
-    step = len(values) / max_points
-    return [values[int(i * step)] for i in range(max_points)]
+    step = n / max_points
+    idx = [int(i * step) for i in range(max_points)]
+    if idx[-1] != n - 1:
+        idx.append(n - 1)
+    return [values[i] for i in idx]
 
 
 def _risk_config_table(risk_config: dict | None) -> str:
