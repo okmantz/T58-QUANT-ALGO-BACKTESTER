@@ -32,6 +32,39 @@ already exists:
                                           IS the primary test (that would double-count the same
                                           evidence in two components -- see section 40/41 of the
                                           pipeline reorg plan on avoiding exactly this).
+    T58 conformance                5     t58_conformance_score() below -- NEW (P2-9/M8, 2026-10-03):
+                                          fraction of the strategy's entry conditions that reference
+                                          Market Structure / Liquidity / Supply-Demand primitives
+                                          (resolved via app.strategy.dna tags) plus a premium/
+                                          discount alignment sub-check (concept from
+                                          app.ai.t58_strategy_engine). See "WHAT THE SCORE MEASURES"
+                                          below -- this component deliberately measures something
+                                          DIFFERENT from every row above it.
+
+WHAT THE SCORE MEASURES -- READ BEFORE REINTERPRETING IT
+
+The ten pre-existing components above (pass probability, first payout
+probability, risk of ruin, walk-forward stability, Monte Carlo robustness,
+parameter stability, expectancy, drawdown, parsimony, CPCV-supporting)
+measure PROP-SURVIVAL: can this strategy plausibly pass a prop-firm
+evaluation and get paid without breaching the firm's rules. They say
+nothing about whether the strategy trades the way Owen's T58 framework
+(Market Structure, Liquidity, Supply & Demand) says to trade -- a pure
+RSI-mean-reversion bot can score Elite here without a single structural
+idea in it.
+
+`t58_conformance` (new, weight 5) measures FRAMEWORK CONFORMANCE instead:
+how much of the strategy's entry logic is expressed in Market Structure
+/ Liquidity / Supply-Demand primitives, and whether its long/short
+entries align with premium/discount location (longs want discount,
+shorts want premium -- the dealing-range rule from
+app.ai.t58_strategy_engine). A high total score with low conformance is
+a working strategy that does NOT trade the T58 way; a high conformance
+with a low total score is a T58-faithful strategy the prop-survival
+evidence rejects. The two readings complement each other; neither
+redefines the other, and the old score's meaning is unchanged -- when
+`t58_conformance` isn't supplied, compute_t58_score() re-normalizes over
+the other components exactly as before (byte-identical results).
 
 Tiers, also verbatim from the Masterclass material:
 
@@ -73,6 +106,15 @@ _WEIGHTS: dict[str, float] = {
     "drawdown": 10.0,
     "parsimony": 5.0,
     "cpcv_supporting": 5.0,
+    # t58_conformance: weight 5.0 -- deliberately tiebreaker-class, like
+    # parsimony. Conformance is a property of the strategy's DESIGN (how
+    # T58-faithful its entry logic is), not performance evidence, so it
+    # should nudge rankings toward framework-faithful strategies without
+    # overriding the prop-survival components (pass probability 25, first
+    # payout 20, ruin 20) that decide whether a strategy can actually get
+    # paid. Missing-aware like everything else: strategies scored without
+    # a strategy text/config simply omit it and re-normalize.
+    "t58_conformance": 5.0,
 }
 
 _TIERS: list[tuple[float, str]] = [
@@ -86,7 +128,7 @@ def _clip(v: float, lo: float = 0.0, hi: float = 100.0) -> float:
 
 @dataclass
 class T58ScorecardInputs:
-    """All eight components, already expressed 0-100 ('higher is always
+    """All components, already expressed 0-100 ('higher is always
     better', including risk_of_ruin and drawdown -- see score_from_results
     for how those two get inverted onto this scale before they arrive
     here). None for a component means 'not computed' -- the final score
@@ -104,6 +146,10 @@ class T58ScorecardInputs:
     drawdown: float | None = None
     parsimony: float | None = None
     cpcv_supporting: float | None = None
+    # NEW (P2-9/M8): 0-100 T58 framework-conformance value, e.g. from
+    # t58_conformance_score() below. None (the default) keeps the
+    # pre-existing prop-survival-only score byte-identical.
+    t58_conformance: float | None = None
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -136,8 +182,8 @@ def tier_for_score(score: float) -> str:
 def compute_t58_score(inputs: T58ScorecardInputs) -> T58ScorecardResult:
     """Weighted sum over whatever components are present, RE-NORMALIZED
     to the weight actually available (see T58ScorecardInputs docstring
-    for why a missing check isn't scored as a failing one). All 8
-    components present and maxed would score exactly 100; all 8 present
+    for why a missing check isn't scored as a failing one). Every component
+    present and maxed would score exactly 100; every component present
     and floored (0 everywhere, risk_of_ruin term also at its floor of 0)
     would score exactly 0. Positive and negative weights are handled
     the same way: a component's "value" is always 0-100 'higher is
@@ -267,6 +313,172 @@ def _cpcv_score(cpcv_result) -> float | None:
     return _clip((mean_oos / mean_is) * 100.0)
 
 
+# ---------------------------------------------------------------------------
+# t58_conformance -- NEW component (P2-9 / M8 fix, 2026-10-03).
+#
+# Every other component on this scorecard measures PROP-SURVIVAL (see
+# "WHAT THE SCORE MEASURES" in the module docstring). This one measures
+# FRAMEWORK CONFORMANCE: how much of the strategy's entry logic is
+# expressed in T58 primitives -- Market Structure, Liquidity, and
+# Supply/Demand -- rather than in generic momentum/volatility terms.
+#
+# Primitive resolution goes through app.strategy.dna's EXISTING entry
+# genes (no vocabulary changes in dna.py were needed):
+#   - entry.market_structure -- its keyword list already covers market
+#     structure ("break of structure", "bos", "choch", "swing high/low",
+#     "higher_high", ...) AND supply/demand ("supply zone", "demand
+#     zone", "order block").
+#   - entry.liquidity -- covers liquidity ("liquidity sweep",
+#     "stop hunt", "equal highs/lows", "inducement", ...) and, via the
+#     same gene, fair value gaps.
+# Together the two tags span all three T58 pillars.
+#
+# Premium/discount alignment sub-check: a real premium/discount concept
+# EXISTS in this codebase -- app.ai.t58_strategy_engine's dealing-range
+# LocationContext (zone in {"premium", "discount", "equilibrium"}) plus
+# its alignment rule "longs prefer discount, shorts prefer premium"
+# (t58_strategy_engine.py, T58Assessment logic). This sub-check mirrors
+# that rule at the scorecard level (a documented keyword mapping here,
+# NOT an import of the AI layer, keeping app.scoring dependency-free of
+# app.ai): each entry side scores 100 when its conditions reference the
+# favored zone without the opposing one, 0 when they reference the
+# opposing zone without the favored one, and 50 (neutral) otherwise.
+# ---------------------------------------------------------------------------
+
+# dna.py tags (as "section.gene") that count as T58 primitives.
+_T58_PRIMITIVE_TAGS = ("entry.market_structure", "entry.liquidity")
+
+# Minimal scorecard-local supplement (NOT added to dna.py): dna.py's
+# keyword vocabulary predates the swing_bos/swing_choch indicator kinds
+# added by the P2-9 fix, so its word-boundary matcher doesn't fire on
+# them ("swing_bos" doesn't match the "bos" keyword). Those two kinds are
+# thin wrappers around app.quant_lab.market_structure's real
+# fractal-swing detectors, so a condition referencing them IS
+# referencing a Market Structure primitive. This mapping lives here, in
+# the scorecard module, leaving dna.py's shared vocabulary untouched.
+_T58_KIND_SUPPLEMENT = ("swing_bos", "swing_choch")
+
+# Premium/discount location vocabulary for the alignment sub-check.
+_PREMIUM_KEYWORDS = ("premium", "dealing range", "dealing_range")
+_DISCOUNT_KEYWORDS = ("discount",)
+
+# 80/20 split between the two sub-measures: primitive coverage is the
+# component's core; premium/discount alignment is a small modifier.
+_CONFORMANCE_PRIMITIVE_WEIGHT = 0.8
+_CONFORMANCE_PD_WEIGHT = 0.2
+
+
+def _dna_references_t58_primitives(text: str) -> bool:
+    """True when app.strategy.dna tags `text` with a Market Structure /
+    Liquidity / Supply-Demand primitive gene (see _T58_PRIMITIVE_TAGS),
+    or when it references one of the scorecard-local supplementary kind
+    names in _T58_KIND_SUPPLEMENT."""
+    # Lazy import keeps app.scoring import-light; dna.py itself only
+    # needs the stdlib, so there is no import cycle either way.
+    from app.strategy.dna import extract_dna_from_text
+
+    text = text or ""
+    if any(kind in text.lower() for kind in _T58_KIND_SUPPLEMENT):
+        return True
+    dna = extract_dna_from_text(text)
+    return any(dna.entry.get(tag.split(".", 1)[1], False) for tag in _T58_PRIMITIVE_TAGS)
+
+
+def _premium_discount_side_score(text: str, favored: tuple[str, ...], opposed: tuple[str, ...]) -> float:
+    """100/0/50 alignment of one entry side's text against the
+    premium/discount rule: favored zone mentioned without the opposed
+    zone -> 100; opposed without favored -> 0; both/neither -> 50."""
+    t = (text or "").lower()
+    has_favored = any(k in t for k in favored)
+    has_opposed = any(k in t for k in opposed)
+    if has_favored and not has_opposed:
+        return 100.0
+    if has_opposed and not has_favored:
+        return 0.0
+    return 50.0
+
+
+def _premium_discount_alignment(long_text: str, short_text: str) -> float:
+    """Premium/discount ALIGNMENT sub-check (0-100), mirroring
+    app.ai.t58_strategy_engine's rule: longs want discount, shorts want
+    premium. A side that never mentions premium/discount location at all
+    scores neutral 50 -- not mentioning location isn't misalignment, it
+    just isn't evidence of alignment."""
+    long_score = _premium_discount_side_score(long_text, _DISCOUNT_KEYWORDS, _PREMIUM_KEYWORDS)
+    short_score = _premium_discount_side_score(short_text, _PREMIUM_KEYWORDS, _DISCOUNT_KEYWORDS)
+    return (long_score + short_score) / 2.0
+
+
+def t58_conformance_score(
+    strategy_text: str | None = None,
+    *,
+    strategy_type: str = "manual",
+    long_entry_texts: list[str] | None = None,
+    short_entry_texts: list[str] | None = None,
+) -> float | None:
+    """0-100 T58 framework-conformance for one strategy, or None when no
+    strategy text was supplied at all (missing-aware -- the scorecard
+    re-normalizes without this component rather than scoring it 0).
+
+    Two modes:
+      per-condition (preferred) -- pass `long_entry_texts` /
+      `short_entry_texts` (one text per Manual entry condition, e.g.
+      json.dumps of each condition dict): the primary measure is the
+      FRACTION of entry conditions referencing T58 primitives, and the
+      premium/discount alignment sub-check is scored per side.
+      whole-text (fallback) -- pass `strategy_text` (Python/PineScript/
+      MQL5 source, or a Manual config dict dumped to JSON): primitive
+      coverage is binary (100 if any primitive gene fires on the whole
+      text, else 0) and the alignment sub-check is neutral 50, because
+      directional alignment needs per-side conditions to judge.
+      `strategy_type` is accepted for symmetry with
+      app.strategy.dna.extract_dna; only "manual" enables the
+      per-condition path, but the per-condition lists work regardless
+      of type when supplied.
+
+    Final: 100 * (0.8 * primitive_fraction + 0.2 * pd_alignment/100)."""
+    long_texts = [t for t in (long_entry_texts or []) if t]
+    short_texts = [t for t in (short_entry_texts or []) if t]
+
+    if long_texts or short_texts:
+        all_texts = long_texts + short_texts
+        primitive_fraction = (
+            sum(1 for t in all_texts if _dna_references_t58_primitives(t)) / len(all_texts)
+        )
+        pd_alignment = _premium_discount_alignment(" ".join(long_texts), " ".join(short_texts)) / 100.0
+    elif strategy_text:
+        primitive_fraction = 1.0 if _dna_references_t58_primitives(strategy_text) else 0.0
+        # Whole-text mode can't judge directional alignment -- neutral.
+        pd_alignment = 0.5
+    else:
+        return None
+
+    return _clip(
+        100.0
+        * (
+            _CONFORMANCE_PRIMITIVE_WEIGHT * primitive_fraction
+            + _CONFORMANCE_PD_WEIGHT * pd_alignment
+        )
+    )
+
+
+def t58_conformance_for_manual_config(config: dict) -> float | None:
+    """Convenience: score a Manual Strategy Builder config dict by
+    extracting each entry condition's own text (long + short sides) and
+    running the per-condition path of t58_conformance_score(). Returns
+    None when the config has no entry conditions to judge."""
+    import json
+
+    entries = (config or {}).get("entry_conditions", {}) or {}
+    long_conds = entries.get("long", []) or []
+    short_conds = entries.get("short", []) or []
+    long_texts = [json.dumps(c, default=str) for c in long_conds]
+    short_texts = [json.dumps(c, default=str) for c in short_conds]
+    if not long_texts and not short_texts:
+        return None
+    return t58_conformance_score(long_entry_texts=long_texts, short_entry_texts=short_texts)
+
+
 def score_from_results(
     mc_result=None,
     walk_forward_result=None,
@@ -275,6 +487,8 @@ def score_from_results(
     prop_max_drawdown_pct: float | None = None,
     parsimony_result=None,
     cpcv_supporting_result=None,
+    t58_conformance: float | None = None,
+    manual_config: dict | None = None,
 ) -> T58ScorecardResult:
     """Convenience entry point: pass whichever of this app's own result
     objects you already have in hand (any/all may be None -- a partial
@@ -291,7 +505,12 @@ def score_from_results(
     generalization test; if CPCV itself is this run's primary test,
     pass its efficiency through `walk_forward_result`-shaped scoring
     instead (see app.orchestration.full_pipeline) so it isn't counted
-    twice."""
+    twice. `t58_conformance` accepts a precomputed 0-100 framework-
+    conformance value (see t58_conformance_score()); `manual_config`
+    accepts a Manual Strategy Builder config dict from which the
+    per-condition conformance is derived when `t58_conformance` isn't
+    given. Omit both and the component is simply absent -- the pre-
+    existing prop-survival-only score is unchanged."""
     pass_probability = getattr(mc_result, "evaluation_pass_probability", None)
     first_payout_probability = getattr(mc_result, "first_payout_probability", None)
     risk_of_ruin_pct = getattr(mc_result, "risk_of_ruin_pct", None)
@@ -313,6 +532,14 @@ def score_from_results(
     parsimony_score = getattr(parsimony_result, "score", None) if parsimony_result is not None else None
     cpcv_supporting_score = _cpcv_score(cpcv_supporting_result) if cpcv_supporting_result is not None else None
 
+    # NEW (P2-9/M8): T58 framework-conformance. An explicit 0-100 value
+    # wins; otherwise derive it per-condition from a Manual config; when
+    # neither is supplied the component stays None and the score
+    # re-normalizes over the pre-existing prop-survival components alone
+    # (old behavior byte-identical).
+    if t58_conformance is None and manual_config is not None:
+        t58_conformance = t58_conformance_for_manual_config(manual_config)
+
     inputs = T58ScorecardInputs(
         pass_probability=pass_probability,
         first_payout_probability=first_payout_probability,
@@ -324,5 +551,6 @@ def score_from_results(
         drawdown=_drawdown_score(max_drawdown_pct, prop_max_drawdown_pct),
         parsimony=parsimony_score,
         cpcv_supporting=cpcv_supporting_score,
+        t58_conformance=t58_conformance,
     )
     return compute_t58_score(inputs)
