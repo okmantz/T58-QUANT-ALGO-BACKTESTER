@@ -27,8 +27,21 @@ from app.prop.simulator import PropRules, precompute_day_structure, simulate_acc
 @dataclass
 class MonteCarloConfig:
     n_simulations: int = 10_000
-    method: str = "bootstrap"        # "shuffle" | "bootstrap" | "block_bootstrap"
-    block_size: int = 5              # used when method == "block_bootstrap"
+    # P1-5: "block_bootstrap" is the default resampling. The old i.i.d.
+    # "bootstrap" default destroyed the session clustering, regime
+    # dependence, and loss-streak structure the drawdown gates actually
+    # evaluate -- the pass probability being optimized was computed on
+    # paths a real strategy would never produce. Explicit opt-out:
+    # method="bootstrap" reproduces the pre-fix i.i.d. behavior exactly.
+    method: str = "block_bootstrap"  # "shuffle" | "bootstrap" | "block_bootstrap"
+    # Block size used when method == "block_bootstrap". None (default) =
+    # auto: scaled to typical trades/day from the trade timestamps --
+    # max(2, round(n_trades / n_trading_days)) -- so a block approximates
+    # one trading day and preserves day-level clustering. An explicit int
+    # overrides the heuristic. NOTE: session-conditioned block resampling
+    # is NOT implemented -- _resample_pnls has no session labels, so
+    # blocks are contiguous circular slices of the trade sequence.
+    block_size: int | None = None
     slippage_stress_pct: float = 0.0  # extra % cost applied to every trade
     # Session/volatility-aware slippage (app.monte_carlo.slippage_model) -- applied ONCE to the
     # historical trade pool before resampling, independent of and in addition to
@@ -58,33 +71,24 @@ class MonteCarloConfig:
 
 
 def default_method_for_adaptive_risk(adaptive_risk) -> str:
-    """UPGRADE (regime-aware-throttle-vs-iid-resampling mismatch): the
-    i.i.d. `bootstrap` method (this engine's own long-standing default --
-    see MonteCarloConfig.method) explicitly discards any real streakiness/
-    regime-clustering a strategy's trade sequence has (see run_monte_
-    carlo's methodology_note below). That's a real mismatch once a
-    regime-aware adaptive-risk throttle is in play (app.backtest.
-    adaptive_risk's volatility_percentile trigger): the throttle's whole
-    value proposition is that bad conditions cluster in TIME, but an i.i.d.
-    resample scatters every trade's P&L independently across simulated
-    paths, so the very clustering the throttle is built to react to never
-    shows up in the ruin estimate it's supposed to be protecting.
-    `block_bootstrap` preserves local runs of consecutive trades instead,
-    which is the whole point of it existing as an option already.
+    """P1-5: block bootstrap is now this engine's default resampling for
+    every caller (see MonteCarloConfig.method) -- the i.i.d. `bootstrap`
+    method explicitly discards any real streakiness/regime-clustering a
+    strategy's trade sequence has (see run_monte_carlo's methodology_note
+    below), which is a real mismatch once a regime-aware adaptive-risk
+    throttle is in play (app.backtest.adaptive_risk's volatility_percentile
+    trigger): the throttle's whole value proposition is that bad conditions
+    cluster in TIME, but an i.i.d. resample scatters every trade's P&L
+    independently across simulated paths, so the very clustering the
+    throttle is built to react to never shows up in the ruin estimate it's
+    supposed to be protecting. `block_bootstrap` preserves local runs of
+    consecutive trades instead.
 
-    Returns "block_bootstrap" whenever `adaptive_risk` is a real, enabled
-    AdaptiveRiskConfig (checked via getattr so this also accepts a plain
-    None or any object without an `enabled` attribute), else "bootstrap"
-    -- this engine's unchanged default. Callers that build a
-    MonteCarloConfig alongside an adaptive_risk they're about to pass to
-    the SAME backtest should use this instead of hardcoding "bootstrap",
-    e.g.:
-        MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), ...)
-    A caller that wants the old i.i.d. behavior regardless can still pass
-    method="bootstrap" explicitly."""
-    if adaptive_risk is not None and getattr(adaptive_risk, "enabled", False):
-        return "block_bootstrap"
-    return "bootstrap"
+    Returns "block_bootstrap" always now (both branches) -- kept as a
+    function (rather than deleted) so every existing caller keeps working
+    unchanged. A caller that wants the old i.i.d. behavior regardless can
+    still pass method="bootstrap" explicitly."""
+    return "block_bootstrap"
 
 
 @dataclass
@@ -167,6 +171,9 @@ class MonteCarloResult:
 
 
 def _max_losing_streak(pnls: np.ndarray) -> int:
+    # P2-7: breakeven (pnl <= 0) counts as non-winning here -- consistent
+    # with app.backtest.statistics' win-rate/max-consecutive-losers, which
+    # likewise treat breakeven as a loss for streak purposes.
     best = cur = 0
     for p in pnls:
         cur = cur + 1 if p <= 0 else 0
@@ -174,21 +181,56 @@ def _max_losing_streak(pnls: np.ndarray) -> int:
     return best
 
 
-def _resample_pnls(rng: np.random.Generator, pnls: np.ndarray, cfg: MonteCarloConfig) -> np.ndarray:
-    n = len(pnls)
-    if cfg.method == "shuffle":
-        return rng.permutation(pnls)
-    if cfg.method == "block_bootstrap":
-        blocks = max(1, n // cfg.block_size)
-        out = []
-        while len(out) < n:
-            start = rng.integers(0, n)
-            block = [pnls[(start + j) % n] for j in range(cfg.block_size)]
-            out.extend(block)
-        return np.array(out[:n])
+def _effective_block_size(cfg: MonteCarloConfig, n_trades: int, n_trading_days: int | None) -> int:
+    """P1-5: resolves the block size for block bootstrap. An explicit
+    cfg.block_size always wins; otherwise scale to typical trades/day from
+    the trade timestamps: max(2, round(n_trades / n_trading_days)). When
+    the day count is unknown (e.g. _resample_pnls called without dates),
+    fall back to treating each trade as its own day, which lands on the
+    max(2, ...) floor -- documented here so the fallback is visible."""
+    if getattr(cfg, "block_size", None):
+        return int(cfg.block_size)
+    days = n_trading_days if n_trading_days and n_trading_days > 0 else n_trades
+    return max(2, round(n_trades / days)) if days else 2
+
+
+def _resample_indices(rng: np.random.Generator, n: int, method: str, block_size: int) -> np.ndarray:
+    """Index array implementing each resampling method. Block bootstrap
+    uses contiguous circular blocks (wrapping at the end of the sequence);
+    session-conditioned block resampling is NOT implemented -- this
+    function never sees session labels, so blocks are plain contiguous
+    slices. Returning indices (rather than values) lets callers resample
+    parallel per-trade arrays (P&L + initial risk) with the same draw."""
+    if method == "shuffle":
+        return rng.permutation(n)
+    if method == "block_bootstrap":
+        idx: list[int] = []
+        while len(idx) < n:
+            start = int(rng.integers(0, n))
+            idx.extend((start + j) % n for j in range(block_size))
+        return np.array(idx[:n])
     # default: iid bootstrap with replacement
-    idx = rng.integers(0, n, size=n)
-    return pnls[idx]
+    return rng.integers(0, n, size=n)
+
+
+def _resample_pnls(
+    rng: np.random.Generator, pnls: np.ndarray, cfg: MonteCarloConfig,
+    n_trading_days: int | None = None,
+) -> np.ndarray:
+    n = len(pnls)
+    block_size = _effective_block_size(cfg, n, n_trading_days)
+    return np.asarray(pnls)[_resample_indices(rng, n, cfg.method, block_size)]
+
+
+def _trade_dollar_risk(t: Trade) -> float:
+    """Per-trade initial dollar risk for the P1-3 floating-drawdown proxy:
+    the configured dollar risk when known, else initial_risk (price units)
+    times size, else 0.0."""
+    if getattr(t, "intended_risk_dollars", None):
+        return float(t.intended_risk_dollars)
+    if getattr(t, "initial_risk", None):
+        return float(t.initial_risk) * float(getattr(t, "size", 0.0) or 0.0)
+    return 0.0
 
 
 def _apply_slippage_stress(pnls: np.ndarray, stress_pct: float) -> np.ndarray:
@@ -268,7 +310,10 @@ def _reset_on_breach_note(cfg: "MonteCarloConfig") -> str:
     )
 
 
-def _methodology_note(cfg: "MonteCarloConfig", n_trades: int, selection_bias_caveat: bool) -> str:
+def _methodology_note(
+    cfg: "MonteCarloConfig", n_trades: int, selection_bias_caveat: bool,
+    n_trading_days: int | None = None,
+) -> str:
     """MC-004: plain-language description of what THIS run's resampling
     actually did, so evaluation_pass_probability isn't read as a
     stronger claim than it is. Two things this deliberately calls out
@@ -293,6 +338,19 @@ def _methodology_note(cfg: "MonteCarloConfig", n_trades: int, selection_bias_cav
     histories?" -- a materially narrower question than the headline
     number alone suggests.
 
+    (3) P1-3: the account simulator trails drawdown on REALIZED balance
+    only (trade-close equity) -- it does not model floating intrabar
+    drawdown against the trailing peak. For prop firms whose trailing
+    drawdown is enforced on real-time floating equity, this UNDERSTATES
+    how often the account would actually fail: a simulated path that
+    survives here could easily have breached mid-trade in reality, and
+    neither the pass probability nor the risk-of-ruin above accounts for
+    it. To degrade the check toward that stricter reality, re-run with
+    PropRules(floating_drawdown_mode="adverse"), which assumes every
+    trade drew down to its full initial risk before closing -- a
+    documented, deliberately conservative approximation, not a measured
+    floating-equity series.
+
     selection_bias_caveat: True when the caller knows (or can't rule
     out) that these trades came from a search/optimization step that
     already selected them for scoring well -- in that case this Monte
@@ -300,6 +358,7 @@ def _methodology_note(cfg: "MonteCarloConfig", n_trades: int, selection_bias_cav
     selection bias already exists in the input trades, not independent
     out-of-sample evidence on its own.
     """
+    block_size = _effective_block_size(cfg, n_trades, n_trading_days)
     method_descriptions = {
         "bootstrap": (
             f"resampled {cfg.n_simulations:,} times with i.i.d. bootstrap (each of the "
@@ -313,7 +372,7 @@ def _methodology_note(cfg: "MonteCarloConfig", n_trades: int, selection_bias_cav
         ),
         "block_bootstrap": (
             f"resampled {cfg.n_simulations:,} times with block bootstrap (block size "
-            f"{cfg.block_size}, preserving short local runs of the {n_trades} historical "
+            f"{block_size}, preserving short local runs of the {n_trades} historical "
             "trades rather than treating each one as fully independent)"
         ),
     }
@@ -325,6 +384,19 @@ def _methodology_note(cfg: "MonteCarloConfig", n_trades: int, selection_bias_cav
         "trading-day calendar every time (only the P&L order/values vary -- trade timing and "
         "frequency do not). This measures robustness to trade-ordering on this exact trade "
         "sequence, not an independent out-of-sample test."
+    )
+    # P1-3: honest paragraph -- the sim trails on realized balance only.
+    note += (
+        " Drawdown-modeling caveat: the account simulator trails drawdown on REALIZED "
+        "balance only (trade-close equity) -- it does not model floating intrabar drawdown "
+        "against the trailing peak. For prop firms whose trailing drawdown is enforced on "
+        "real-time floating equity, this UNDERSTATES how often the account would actually "
+        "fail: a simulated path that survives here could have breached mid-trade in reality, "
+        "and neither the pass probability nor the risk-of-ruin above accounts for it. "
+        "Re-run with PropRules(floating_drawdown_mode=\"adverse\") to degrade the check "
+        "with each trade's initial risk as a conservative floating-drawdown proxy "
+        "(documented approximation -- assumes every trade drew down to its full initial "
+        "risk before closing)."
     )
     if selection_bias_caveat:
         note += (
@@ -358,6 +430,18 @@ def run_monte_carlo(
     rng = np.random.default_rng(cfg.random_seed)
     base_pnls = apply_session_volatility_slippage(trades, cfg.session_slippage)
     base_dates = [pd.Timestamp(t.entry_time).normalize() for t in trades]
+    n_trading_days = len(set(base_dates))
+    # P1-5: effective block size scaled to typical trades/day (see
+    # _effective_block_size); resolved once here so the methodology note
+    # reports the number actually used.
+    eff_block_size = _effective_block_size(cfg, len(trades), n_trading_days)
+    # P1-3: per-trade initial dollar risks, resampled WITH the P&Ls (same
+    # index draw) so each simulated path keeps each trade's own risk
+    # paired with its P&L. Only consumed when
+    # rules.floating_drawdown_mode == "adverse"; all-zero/None otherwise,
+    # which keeps that check a no-op (byte-identical to not passing it).
+    base_risks = np.array([_trade_dollar_risk(t) for t in trades], dtype=float)
+    has_risks = bool(np.any(base_risks > 0))
     # Every simulation below reassigns the SAME fixed calendar dates
     # (base_dates never changes) to a resampled sequence of P&L values --
     # only sim_pnls' order/values differ per simulation. That means the
@@ -380,12 +464,15 @@ def run_monte_carlo(
     sum_total_attempts = 0
 
     for _ in range(cfg.n_simulations):
-        sim_pnls = _resample_pnls(rng, base_pnls, cfg)
+        sim_idx = _resample_indices(rng, len(base_pnls), cfg.method, eff_block_size)
+        sim_pnls = base_pnls[sim_idx]
         sim_pnls = _apply_slippage_stress(sim_pnls, cfg.slippage_stress_pct)
+        sim_risks = base_risks[sim_idx] if has_risks else None
 
         result = simulate_account(
             sim_pnls, base_dates, rules, _day_structure=day_structure,
             reset_on_breach=cfg.reset_on_breach,
+            trade_initial_risks=sim_risks,
         )
 
         passed_flags.append(result.passed_evaluation)
@@ -448,7 +535,7 @@ def run_monte_carlo(
         days_to_payout_distribution=days_to_first_payout_list,
         return_distribution=return_arr.tolist(),
         drawdown_distribution=dd_arr.tolist(),
-        methodology_note=_methodology_note(cfg, len(trades), selection_bias_caveat),
+        methodology_note=_methodology_note(cfg, len(trades), selection_bias_caveat, n_trading_days=n_trading_days),
         reset_on_breach=cfg.reset_on_breach,
         mean_attempts_per_path=float(attempts_arr.mean()) if len(attempts_arr) else 0.0,
         median_attempts_per_path=pct(attempts_arr, 50),

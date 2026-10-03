@@ -62,12 +62,12 @@ class BankrollConfig:
     starting_bankroll: float = 1_000.0
     reset_economics: ResetEconomics = field(default_factory=ResetEconomics)
     n_simulations: int = 5_000
-    # Block bootstrap is the recommended default here specifically (unlike
-    # MonteCarloConfig's plain-Monte-Carlo default of i.i.d. "bootstrap"):
-    # a bankroll question is exactly the case where destroying real
-    # streakiness/regime-clustering matters most -- a bad week smeared
-    # randomly across the simulated chain understates how often a trader
-    # actually runs out of money during one continuous rough patch.
+    # Block bootstrap is the default here (consistent with MonteCarloConfig,
+    # whose default is now also block bootstrap): a bankroll question is
+    # exactly the case where destroying real streakiness/regime-clustering
+    # matters most -- a bad week smeared randomly across the simulated chain
+    # understates how often a trader actually runs out of money during one
+    # continuous rough patch.
     method: str = "block_bootstrap"          # "shuffle" | "bootstrap" | "block_bootstrap"
     block_size: int = 5
     slippage_stress_pct: float = 0.0
