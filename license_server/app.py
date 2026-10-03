@@ -37,10 +37,15 @@ Whop subscription webhook (see README.md for how to point Whop at this):
                          without you doing anything by hand. On
                          membership.went_valid for an existing (e.g.
                          previously lapsed) license, reactivates it.
-                         A brand-new membership with no matching license
-                         yet is logged, not auto-created -- see README.md
-                         for why key issuance for a NEW customer still
-                         has one manual (or admin_cli.py-scripted) step.
+                         A brand-new membership with a usable email in the
+                         payload is AUTO-ISSUED (same _issue_new_license
+                         path as admin_cli.py: create key + deliver the
+                         license email via SMTP_HOST/... env config) --
+                         this is what fulfills a sale while Owen sleeps.
+                         If the payload has no email, or the delivery
+                         email fails, the key (already created) is logged
+                         loudly for manual delivery -- admin_cli.py stays
+                         as the manual fallback.
 """
 from __future__ import annotations
 
@@ -201,6 +206,84 @@ def deactivate():
 
 
 # ---------------------------------------------------------------------------
+# License delivery email (P1-7, Oct 2026)
+#
+# Minimal SMTP-via-env mailer -- no new dependency (stdlib smtplib).
+# Configure on the server host with:
+#   SMTP_HOST       e.g. smtp.gmail.com (required)
+#   SMTP_PORT       default 587 (STARTTLS); use 465 for implicit TLS
+#   SMTP_USER       login username (required)
+#   SMTP_PASS       login password / app password (required)
+#   SMTP_FROM       From: header, e.g. "T58 Trading <licenses@t58trading.com>"
+#                   (defaults to SMTP_USER)
+# If SMTP_HOST is unset, _send_license_email raises RuntimeError with a
+# clear message instead of pretending the mail went out -- the webhook
+# below catches it, logs it, and leaves the (already-created) key for
+# manual delivery via admin_cli.py, so a missing mail config can never
+# silently eat a paid sale's key delivery.
+# ---------------------------------------------------------------------------
+
+def _send_license_email(to_email: str, license_key: str, plan: str = "") -> None:
+    host = os.environ.get("SMTP_HOST", "").strip()
+    user = os.environ.get("SMTP_USER", "").strip()
+    password = os.environ.get("SMTP_PASS", "")
+    sender = os.environ.get("SMTP_FROM", "").strip() or user
+    if not host:
+        raise RuntimeError(
+            "License-delivery email NOT sent: SMTP_HOST is not set on the license "
+            "server. Set SMTP_HOST/PORT/USER/PASS/FROM (see license_server/app.py) "
+            "or deliver the key manually with admin_cli.py."
+        )
+    if not (user and password):
+        raise RuntimeError(
+            "License-delivery email NOT sent: SMTP_USER/SMTP_PASS are not both set. "
+            "See license_server/app.py for the required env vars."
+        )
+    import smtplib
+    from email.message import EmailMessage
+
+    plan_line = f"Plan: {plan}\n" if plan else ""
+    msg = EmailMessage()
+    msg["From"] = sender
+    msg["To"] = to_email
+    msg["Subject"] = "Your T58 Quant Algo Backtester license key"
+    msg.set_content(
+        "Thanks for your purchase -- here is your license key for the T58 Quant Algo Backtester:\n\n"
+        f"    {license_key}\n\n"
+        f"{plan_line}"
+        "Enter it in the app's activation window along with this email address. "
+        "If you didn't just buy T58, ignore this email."
+    )
+    port = int(os.environ.get("SMTP_PORT", "587") or 587)
+    if port == 465:
+        with smtplib.SMTP_SSL(host, port, timeout=20) as smtp:
+            smtp.login(user, password)
+            smtp.send_message(msg)
+    else:
+        with smtplib.SMTP(host, port, timeout=20) as smtp:
+            smtp.ehlo()
+            smtp.starttls()
+            smtp.ehlo()
+            smtp.login(user, password)
+            smtp.send_message(msg)
+
+
+def _issue_new_license(email: str, plan: str = "", days: "int | None" = None,
+                       whop_membership_id: "str | None" = None) -> dict:
+    """The ONE issuance code path: creates the license row AND attempts
+    the delivery email. Both admin_create_license (manual fallback) and
+    the Whop webhook (automatic) call this -- a sale fulfilled manually
+    gets exactly the same record + email a webhook sale gets.
+    Returns the license dict; raises RuntimeError (from _send_license_email)
+    if the key was created but the email could not be sent -- callers must
+    catch that, because the key EXISTS by then and must not be issued twice.
+    """
+    lic = db.create_license(email, plan=plan, days=days, whop_membership_id=whop_membership_id)
+    _send_license_email(email, lic["license_key"], plan=plan or "")
+    return lic
+
+
+# ---------------------------------------------------------------------------
 # Admin
 # ---------------------------------------------------------------------------
 
@@ -215,7 +298,14 @@ def admin_create_license():
     days = data.get("days")
     days = int(days) if days not in (None, "") else None
     whop_membership_id = data.get("whop_membership_id") or None
-    lic = db.create_license(email, plan=plan, days=days, whop_membership_id=whop_membership_id)
+    lic = None
+    try:
+        lic = _issue_new_license(email, plan=plan, days=days, whop_membership_id=whop_membership_id)
+    except RuntimeError as exc:
+        # The key was created; the email failed. Return 201 with the key
+        # so the admin can deliver it manually instead of re-creating.
+        return jsonify({"ok": True, "license": lic,
+                        "email_failed": str(exc)}), 201
     return jsonify({"ok": True, "license": lic}), 201
 
 
@@ -394,6 +484,25 @@ def _extract_whop_identifiers(payload: dict) -> tuple[str | None, str | None]:
     return membership_id, email
 
 
+def _extract_whop_plan(payload: dict) -> str:
+    """Best-effort plan/product label from the Whop payload for the
+    license record and the delivery email -- returns "" when the payload
+    carries nothing recognizable. Never raises."""
+    try:
+        data = payload.get("data", payload) or {}
+        for key in ("plan", "plan_name", "product_name", "product", "name"):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            if isinstance(value, dict):
+                inner = value.get("name") or value.get("title")
+                if isinstance(inner, str) and inner.strip():
+                    return inner.strip()
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
 @app.route("/webhook/whop", methods=["POST"])
 def webhook_whop():
     raw_body = request.get_data()
@@ -422,15 +531,36 @@ def webhook_whop():
     if event_type.endswith("went_valid"):
         if lic is not None and lic["status"] in ("revoked", "expired", "suspended"):
             db.set_status(lic["license_key"], "active")
-        # A brand-new membership with no existing license is logged for
-        # the admin to issue a key for (via admin_cli.py) -- see
-        # README.md's "New customer flow" section for why this one step
-        # stays manual rather than guessing at auto-delivery.
+        # P1-7 (Oct 2026) -- automatic key issuance: a brand-new paid
+        # membership now goes through the SAME issuance path as
+        # admin_cli/admin_create_license (create key + deliver the email),
+        # so a sale at 3 AM fulfills itself. admin_cli.py stays as the
+        # manual fallback (and for keys that need custom plans/days).
+        if lic is None and email:
+            plan = _extract_whop_plan(payload)
+            try:
+                new_lic = _issue_new_license(email, plan=plan, whop_membership_id=membership_id)
+            except RuntimeError as exc:
+                # Key created, email failed -- log LOUDLY (this is money)
+                # and still 200 so Whop doesn't retry into a duplicate key.
+                # Deliver manually with admin_cli.py / re-send from the DB.
+                app.logger.error(
+                    "Whop membership.went_valid: license %s created for %s "
+                    "but delivery email FAILED (%s) -- deliver manually.",
+                    membership_id, email, exc,
+                )
+                return jsonify({"ok": True, "matched": False, "issued": True,
+                                "email_failed": str(exc)})
+            app.logger.info(
+                "Whop membership.went_valid: issued license %s to %s (membership %s).",
+                new_lic["license_key"], email, membership_id,
+            )
+            return jsonify({"ok": True, "matched": True, "issued": True})
         if lic is None:
             app.logger.info(
-                "Whop membership.went_valid with no matching T58 license yet "
-                "(membership_id=%s, email=%s) -- issue one with admin_cli.py.",
-                membership_id, email,
+                "Whop membership.went_valid with no email in the payload "
+                "(membership_id=%s) -- cannot auto-issue; issue one with admin_cli.py.",
+                membership_id,
             )
         return jsonify({"ok": True, "matched": lic is not None})
 
