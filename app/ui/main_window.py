@@ -30,6 +30,15 @@ from tkinter import (
     Checkbutton, PhotoImage, Toplevel,
 )
 
+# Optional OS drag-and-drop for market-data folders: tkinterdnd2 wires Tk
+# up as a native file-drop target, but it is NOT a hard dependency --
+# when it isn't installed the DnD setup (_maybe_enable_folder_dnd) is a
+# silent no-op and the IMPORT FOLDER buttons remain the way in.
+try:
+    import tkinterdnd2
+except ImportError:  # pragma: no cover - optional dependency
+    tkinterdnd2 = None
+
 import app.evolution.checkpoint as evo_checkpoint
 from app.backtest.adaptive_risk import AdaptiveRiskConfig, AdaptiveRiskError, AdaptiveRiskRule
 from app.backtest.engine import run_backtest, run_holdout_comparison
@@ -5278,6 +5287,10 @@ class MainWindow:
         ).pack(side="left")
 
         self._button(
+            btn_row, "IMPORT FOLDER...", lambda: self._import_folder_clicked("data")
+        ).pack(side="left", padx=8)
+
+        self._button(
             btn_row, "REFRESH LIST", self._refresh_dataset_list
         ).pack(side="left", padx=8)
 
@@ -5300,6 +5313,8 @@ class MainWindow:
 
         self._build_alpaca_section(f)
         self._build_lse_section(f)
+
+        self._maybe_enable_folder_dnd()
 
         self._refresh_dataset_list()
 
@@ -5825,6 +5840,157 @@ class MainWindow:
                 "Import complete",
                 f"Imported and stored {len(imported)} file(s) in data/raw/.",
             )
+
+    # -----------------------------------------------------------------------
+    # Folder import — shared by the Market Data ("data") and Data Center
+    # ("datacenter") tabs
+    # -----------------------------------------------------------------------
+
+    def _import_folder_clicked(self, tab: str):
+        """IMPORT FOLDER... button: pick a folder and import every
+        recognized file under it (recursively) through the shared
+        app.data.folder_import pipeline -- CSV, TSV, TXT, and parquet land
+        in data/raw/ exactly as if each had been imported individually."""
+        folder = filedialog.askdirectory(title="Import market-data folder")
+        if not folder:
+            return
+        self._run_folder_import_async([folder], [], tab)
+
+    def _folder_import_status_label(self, tab: str):
+        """The status label the import summary lands on -- the tab that
+        started the import owns it. getattr-defensive because the tabs
+        build in sequence."""
+        label = self.data_status if tab == "data" else getattr(self, "datacenter_import_status", None)
+        return label if label is not None else getattr(self, "data_status", None)
+
+    def _run_folder_import_async(self, folders: list[str], files: list[str], tab: str):
+        """Runs the folder/file import off the UI thread (a folder can be
+        hundreds of MB) and paints the result on the Tk main thread via
+        tk_safety.call_soon -- the same worker-thread pattern the Data
+        Center health scan uses in _refresh_data_center."""
+        if getattr(self, "_folder_import_running", False):
+            messagebox.showinfo(
+                "Import in progress",
+                "A folder import is already running -- wait for it to finish.",
+            )
+            return
+        self._folder_import_running = True
+        status = self._folder_import_status_label(tab)
+        if status is not None:
+            status.config(text="●  Importing folder(s)...", fg=AMBER)
+
+        def _work():
+            try:
+                # Lazy import: app.data.folder_import pulls pandas-level
+                # weight only when an import actually runs.
+                from app.data.folder_import import (
+                    RECOGNIZED_SUFFIXES, FileImportOutcome, FolderImportReport,
+                    import_file_bytes, import_folder_tree,
+                )
+                report = FolderImportReport()
+                for folder in folders:
+                    report.outcomes.extend(import_folder_tree(folder).outcomes)
+                for path in files:
+                    name = os.path.basename(path)
+                    if Path(name).suffix.lower() not in RECOGNIZED_SUFFIXES:
+                        report.outcomes.append(
+                            FileImportOutcome(name, "skipped",
+                                              f"unrecognized type '{Path(name).suffix or '(none)'}'")
+                        )
+                        continue
+                    try:
+                        content = Path(path).read_bytes()
+                    except Exception as exc:  # noqa: BLE001 -- report, don't crash the batch
+                        report.outcomes.append(FileImportOutcome(name, "failed", f"read error: {exc}"))
+                        continue
+                    report.outcomes.append(import_file_bytes(name, content))
+            except Exception as exc:  # pragma: no cover - defensive
+                from app.data.folder_import import FileImportOutcome, FolderImportReport
+                report = FolderImportReport(
+                    [FileImportOutcome("(import)", "failed", f"importer crashed: {exc}")]
+                )
+            try:
+                from app.ui import tk_safety
+                tk_safety.call_soon(lambda: self._finish_folder_import(report, tab))
+            except Exception:
+                self._folder_import_running = False  # window closed mid-import
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _finish_folder_import(self, report, tab: str):
+        """Runs on the Tk main thread: paints the summary on the owning
+        tab's status label, shows the per-file breakdown, and refreshes
+        both dataset lists so the new files appear without a restart."""
+        self._folder_import_running = False
+        summary = report.summary_line()
+        status = self._folder_import_status_label(tab)
+        color = GREEN if not report.failed else (AMBER if report.imported else RED)
+        if status is not None:
+            try:
+                status.config(text=f"●  Folder import: {summary}", fg=color)
+            except Exception:
+                pass  # widgets gone (e.g. theme rebuild) -- nothing to paint into
+
+        detail = report.detail_lines(max_lines=40)
+        body = summary + ("\n\n" + "\n".join(detail) if detail else "")
+        if not report.outcomes:
+            messagebox.showinfo("Folder import", "No files found -- nothing was imported.")
+        elif len(report.outcomes) > 12:
+            # Many files: the scrollable read-only Text dialog (the same
+            # viewer the strategy tabs use for code/config), not a giant
+            # messagebox.
+            self._show_text_viewer("Folder import — results", body)
+        else:
+            messagebox.showinfo("Folder import complete", body)
+
+        # New files land in data/raw/ -- refresh both pickers. Guarded like
+        # _data_center_import_clicked: either list may not exist yet.
+        for refresh in (self._refresh_dataset_list, self._refresh_data_center):
+            try:
+                refresh()
+            except Exception:
+                pass
+
+    def _on_data_files_dropped(self, event, tab: str):
+        """<<Drop>> callback for the optional tkinterdnd2 drop targets on
+        the data tabs. Folders go through the same background folder-import
+        handler as the IMPORT FOLDER buttons; loose files go through the
+        same per-file pipeline (validate + store into data/raw/)."""
+        raw = getattr(event, "data", "") or ""
+        try:
+            paths = list(self.root.tk.splitlist(raw))
+        except Exception:
+            paths = [p for p in raw.replace("{", "").replace("}", "").split() if p]
+        folders = [p for p in paths if os.path.isdir(p)]
+        files = [p for p in paths if os.path.isfile(p)]
+        if folders or files:
+            self._run_folder_import_async(folders, files, tab)
+        return "copy"  # DnD callback contract: report the action taken
+
+    def _maybe_enable_folder_dnd(self):
+        """Optional OS drag-and-drop: drop market-data folders (or loose
+        data files) onto either data tab to import them. tkinterdnd2 is NOT
+        a hard dependency -- importing it monkeypatches every Tk widget
+        with drop_target_register/dnd_bind, and require() loads the native
+        tkdnd package into this interpreter. When the package isn't
+        installed this is a silent no-op and the IMPORT FOLDER buttons
+        remain the way in."""
+        if getattr(self, "_folder_dnd_enabled", False):
+            return
+        if tkinterdnd2 is None:
+            return
+        try:
+            tkinterdnd2.require(self.root)
+        except Exception:
+            return  # native tkdnd unavailable on this platform -- skip silently
+        ok = True
+        for frame, tab in ((self.tab_data, "data"), (self.tab_datacenter, "datacenter")):
+            try:
+                frame.drop_target_register(tkinterdnd2.DND_FILES)
+                frame.dnd_bind("<<Drop>>", lambda event, t=tab: self._on_data_files_dropped(event, t))
+            except Exception:
+                ok = False  # keep whatever did register; the buttons still work
+        self._folder_dnd_enabled = ok
 
     # -----------------------------------------------------------------------
     # Tab 2 — Strategy
@@ -10710,6 +10876,7 @@ class MainWindow:
         import_btn_row = Frame(import_section, bg=PANEL)
         import_btn_row.pack(anchor="w", padx=18, pady=(4, 4))
         self._button(import_btn_row, "IMPORT CSV / PARQUET...", self._data_center_import_clicked, primary=True).pack(side="left")
+        self._button(import_btn_row, "IMPORT FOLDER...", lambda: self._import_folder_clicked("datacenter")).pack(side="left", padx=(8, 0))
         self.datacenter_import_status = Label(import_section, text="", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8), wraplength=820, justify="left")
         self.datacenter_import_status.pack(anchor="w", padx=18, pady=(4, 12))
 
@@ -10730,6 +10897,7 @@ class MainWindow:
         # _show_page) and on REFRESH.
         self._datacenter_scanned = False
         self._datacenter_scanning = False
+        self._maybe_enable_folder_dnd()
         Label(
             self.datacenter_groups_frame, text="Open this tab to scan your datasets.",
             bg=BG, fg=TEXT_DIM, font=_safe_font(9),
