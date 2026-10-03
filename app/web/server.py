@@ -13,8 +13,13 @@ Store / Play Store submission required.
 
 Run:
     python -m app.web.server
-    -> serves on http://0.0.0.0:5000
-    -> on your phone (same Wi-Fi), open http://<your-computer's-LAN-IP>:5000
+    -> serves on http://127.0.0.1:5000 (loopback only, by default)
+    -> for LAN/phone access: python -m app.web.server --host 0.0.0.0
+       (or set T58_WEB_HOST=0.0.0.0), then on your phone (same Wi-Fi),
+       open http://<your-computer's-LAN-IP>:5000
+    -> the T58-Web-App.exe launcher (app/web/launcher.py) still binds
+       the LAN address itself -- that is its whole product (QR code ->
+       phone on the same Wi-Fi).
 
 To make it reachable from anywhere (not just local Wi-Fi), deploy this
 Flask app to any small host (Render, Railway, Fly.io, a VPS, etc.) -- see
@@ -72,11 +77,12 @@ from app.data.london_strategic_edge_source import (
     save_bars_as_csv as lse_save_bars_as_csv, test_connection as lse_test_connection,
 )
 from app.data.importer import import_csv, import_csv_bytes
+from app.data.folder_import import import_uploaded_files
 from app.data.instrument_specs import KNOWN_INSTRUMENTS
 from app.data.timeframe_resample import infer_timeframe_label
 from app.web.alpaca_shared import alpaca_template_context
 from app.web.lse_shared import lse_template_context
-from app.data.storage import get_app_base_dir, get_raw_data_dir, list_datasets_by_instrument, list_stored_datasets, store_csv_bytes
+from app.data.storage import get_app_base_dir, get_raw_data_dir, list_datasets_by_instrument, list_stored_datasets, resolve_stored_dataset, store_csv_bytes
 from app.ensemble.auto_builder import AutoEnsembleError, build_diversified_ensemble
 from app.ensemble.ensemble import EnsembleError, EnsembleVoteConfig, run_ensemble_blend, run_ensemble_vote
 from app.evolution import checkpoint as evo_checkpoint
@@ -324,6 +330,14 @@ SPEEDRUN_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
+# P0-7 (Oct 2026) -- upload size cap: the web edition had NO request-size
+# limit at all; a single oversized POST (CSV/zip upload) was fully loaded
+# into RAM. 256 MB gives real market-data uploads (a 1-minute ES CSV for
+# several years is tens of MB) plenty of headroom while keeping one bad
+# request from exhausting a modest VPS. Zip members get their own,
+# tighter per-member/total caps inside app.data.importer (_read_zip).
+app.config["MAX_CONTENT_LENGTH"] = 256 * 1024 * 1024
+
 # UPGRADE (Evolution Lab optimizer_mode): a Jinja GLOBAL rather than
 # passing optimizer_modes=OPTIMIZER_MODES through every one of Evolution
 # Lab's ~13 render_template("evolution.html"/"evolution_multi_instrument
@@ -365,6 +379,73 @@ def _load_or_create_flask_secret_key() -> bytes:
 
 
 app.secret_key = _load_or_create_flask_secret_key()
+
+# P2-8 (Oct 2026) -- minimal CSRF protection. Flask-WTF is NOT a
+# dependency of this project (and requirements files are frozen for this
+# fix round), so this is a small hand-rolled session-token check:
+#
+#   * Every session gets a random `csrf_token` (stored server-side in the
+#     signed session cookie).
+#   * Templates can render it with {{ csrf_token() }} and either include
+#     it as a hidden `_csrf_token` form field or send it as the
+#     `X-CSRF-Token` header on fetch()/XHR POSTs.
+#   * On POST/PUT/PATCH/DELETE the token must match -- OR the request
+#     must be same-origin (Origin/Referer host == our host), which covers
+#     the app's own pages while they adopt the token progressively.
+#   * A cross-origin browser request (the actual CSRF attack shape --
+#     browsers always send Origin on POST) is rejected with 403.
+#   * Non-browser clients (curl, scripts, the desktop license flow) send
+#     no Origin/Referer and are allowed through -- they can't be forged
+#     cross-site requests.
+#   * Exempt: /health, /static/*, /mobile-access (read-only QR page),
+#     and /webhook/* (the Whop webhook has its own HMAC-SHA256 signature
+#     verification -- a shared secret beats a session token there).
+_CSRF_SAFE_PATHS = frozenset({"/health", "/mobile-access"})
+_CSRF_SAFE_PREFIXES = ("/static", "/webhook/")
+
+
+def _ensure_csrf_token() -> None:
+    import secrets
+
+    if "csrf_token" not in session:
+        session["csrf_token"] = secrets.token_hex(32)
+
+
+@app.before_request
+def _csrf_issue_token():
+    _ensure_csrf_token()
+
+
+app.jinja_env.globals["csrf_token"] = lambda: session.get("csrf_token", "")
+
+
+@app.before_request
+def _csrf_check():
+    if request.method not in ("POST", "PUT", "PATCH", "DELETE"):
+        return None
+    path = request.path or ""
+    if path in _CSRF_SAFE_PATHS or any(path.startswith(prefix) for prefix in _CSRF_SAFE_PREFIXES):
+        return None
+    import secrets
+    from urllib.parse import urlparse
+
+    presented = request.headers.get("X-CSRF-Token")
+    if not presented and request.form:
+        presented = request.form.get("_csrf_token")
+    expected = session.get("csrf_token")
+    if expected and presented and secrets.compare_digest(str(presented), str(expected)):
+        return None
+    origin = request.headers.get("Origin") or request.headers.get("Referer")
+    if origin:
+        try:
+            if (urlparse(origin).hostname or "").lower() == (request.host or "").split(":")[0].lower():
+                return None
+        except Exception:  # noqa: BLE001
+            pass
+        return jsonify({"ok": False, "error": "CSRF check failed: cross-origin state-changing request."}), 403
+    # No Origin/Referer header at all: not a browser, can't be a forged
+    # cross-site request -- allow (covers curl/scripts/API clients).
+    return None
 
 # UPGRADE (licensing, web app): the desktop build has always gated behind
 # app.licensing.gate.ensure_licensed() (see app/main.py) -- this build,
@@ -758,8 +839,11 @@ def _resolve_dataset(form, files):
         active_label = f.filename
 
     if active_df is None and existing_choice:
-        candidate = get_raw_data_dir() / existing_choice
-        if candidate.exists():
+        # Read-side path-traversal fix (P0-7): resolve_stored_dataset
+        # sanitizes + resolve-and-contains; a traversal payload yields
+        # None ("no such dataset") instead of a read outside data/raw/.
+        candidate = resolve_stored_dataset(existing_choice)
+        if candidate is not None:
             result = import_csv(candidate)
             if result.is_valid:
                 active_df = result.dataframe
@@ -2335,6 +2419,97 @@ def data_center_import():
         return redirect(url_for("data_center", notice=f"Imported '{file.filename}'.", notice_kind="success"))
     except Exception as exc:  # noqa: BLE001
         return redirect(url_for("data_center", notice=f"Unexpected error importing '{file.filename}': {exc}", notice_kind="error"))
+
+
+# ---------------------------------------------------------------------------
+# v2 (Oct 2026) -- folder import, WEB half. The browser walks a dropped or
+# picked folder client-side (see the "Import folder" card in
+# data_center.html) and POSTs ONE file per request to this endpoint. The
+# desktop half of the same feature lives in app.data.folder_import.
+# ---------------------------------------------------------------------------
+
+
+def _sanitize_upload_relpath(relpath):
+    """Turn a client-supplied relative path into a safe, flat name.
+
+    Defense in depth -- app.data.folder_import and store_csv_bytes()
+    sanitize again on their side. Strips Windows drive letters and
+    backslashes, drops '.', '..' and empty segments, and never returns an
+    empty or absolute path (falls back to a generic name). The folder
+    structure is kept with '/' separators so the per-file report stays
+    readable; flattening onto data/raw/ happens in store_csv_bytes()
+    (v1 path-traversal fix).
+    """
+    raw = (relpath or "").replace("\\", "/").strip()
+    if len(raw) > 2 and raw[1] == ":":
+        raw = raw[2:]
+    parts = [
+        seg.strip()
+        for seg in raw.split("/")
+        if seg.strip() not in ("", ".", "..")
+    ]
+    name = "/".join(parts)
+    return (name or "upload.csv")[:255]
+
+
+@app.route("/data-center/import-folder", methods=["POST"])
+def data_center_import_folder():
+    """Single-file step of the Data Center folder import.
+
+    Multipart fields: `data_file` (the file bytes), `relpath`
+    (client-relative path, e.g. "subdir/futures_ES_1m.csv"), optional
+    `batch_id` (client-generated, groups one folder drop in the logs).
+
+    CSRF: enforced by the global `_csrf_check` before_request hook -- the
+    same mechanism the single-file `/data-center/import` endpoint relies
+    on. The page's fetch() presents the session token as the
+    `X-CSRF-Token` header, which the hook accepts verbatim.
+
+    Size: rejected with JSON `{"ok": false, "error": ...}` (never a 413
+    page) when the request's Content-Length OR the actual bytes read
+    exceed the app's MAX_CONTENT_LENGTH (256MB).
+
+    Returns JSON -- never a redirect or a traceback page:
+      ok:   {"ok": true, "name": ..., "status": "imported"|"skipped"|"failed",
+             "detail": ...}
+      fail: {"ok": false, "error": ...}
+    """
+    try:
+        max_bytes = app.config.get("MAX_CONTENT_LENGTH") or 256 * 1024 * 1024
+        limit_mb = max_bytes // (1024 * 1024)
+        # Defense-in-depth layer 1: the declared Content-Length header,
+        # checked before touching the multipart body.
+        content_length = request.content_length
+        if content_length is not None and content_length > max_bytes:
+            return (
+                jsonify({"ok": False, "error": f"Upload exceeds the {limit_mb}MB per-file limit."}),
+                413,
+            )
+        file = request.files.get("data_file")
+        if not file or not file.filename:
+            return (
+                jsonify({"ok": False, "error": "No file received (expected multipart field 'data_file')."}),
+                400,
+            )
+        relpath = _sanitize_upload_relpath(request.form.get("relpath") or file.filename)
+        # Defense-in-depth layer 2: the actual bytes. Bounded read so an
+        # oversized chunked upload (no Content-Length) can't blow memory.
+        content = file.read(max_bytes + 1)
+        if len(content) > max_bytes:
+            return (
+                jsonify({"ok": False, "error": f"'{relpath}' exceeds the {limit_mb}MB per-file limit."}),
+                413,
+            )
+        report = import_uploaded_files([(relpath, content)])
+        outcome = report.outcomes[0] if report.outcomes else None
+        if outcome is None:
+            return jsonify({"ok": False, "error": "Import pipeline returned no result."}), 500
+        return jsonify(
+            {"ok": True, "name": outcome.name, "status": outcome.status, "detail": outcome.detail}
+        )
+    except Exception as exc:  # noqa: BLE001 -- JSON, never a traceback/500 page
+        app.logger.exception("data-center folder import failed")
+        return jsonify({"ok": False, "error": f"Unexpected import error: {exc}"}), 500
 
 
 @app.route("/settings/account")
@@ -4802,8 +4977,10 @@ def _resolve_leg_dataset(form, files, prefix: str):
         raise StrategyError(f"'{uploaded.filename}': {'; '.join(result.errors)}")
     existing_choice = (form.get(f"{prefix}_existing_dataset") or "").strip()
     if existing_choice:
-        candidate = get_raw_data_dir() / existing_choice
-        if candidate.exists():
+        # Read-side path-traversal fix (P0-7): see _resolve_dataset --
+        # sanitize + resolve-and-contain; traversal yields None.
+        candidate = resolve_stored_dataset(existing_choice)
+        if candidate is not None:
             # Read via the real path (not raw bytes) so the importer's
             # extension dispatch sees the actual .parquet/.tsv/etc suffix
             # instead of losing it the way a bare BytesIO would.
@@ -9664,10 +9841,30 @@ def main():
     # was never a QR code generated on THIS entry point to begin with, only
     # on the separate `run_web.py` launcher). Now both entry points print
     # the identical LAN-address-and-QR-code banner.
+    #
+    # P2-8 (Oct 2026): this entry point now binds 127.0.0.1 (loopback)
+    # by DEFAULT -- the old 0.0.0.0 default exposed the whole app to the
+    # LAN with no access control. Bind 0.0.0.0 only explicitly:
+    #   python -m app.web.server --host 0.0.0.0
+    # or:  T58_WEB_HOST=0.0.0.0 python -m app.web.server
+    # (The phone-edition launcher, app/web/launcher.py, intentionally
+    # keeps its own LAN bind -- that IS its product: phone on the same
+    # Wi-Fi via QR code -- and is unchanged by this.)
+    import argparse
+
+    parser = argparse.ArgumentParser(description="T58 Quant Algo Backtester (web edition)")
+    parser.add_argument("--host", default=None,
+                        help="Interface to bind (default 127.0.0.1; use 0.0.0.0 for LAN access). "
+                             "Also settable via the T58_WEB_HOST environment variable.")
+    args, _ = parser.parse_known_args()
+    host = (args.host or os.environ.get("T58_WEB_HOST", "") or "").strip() or "127.0.0.1"
+
     url = lan_url()
     qr_path = qr_code_file(url)
     print_startup_banner(url, qr_path)
-    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
+    if host == "0.0.0.0":
+        print("WARNING: bound to 0.0.0.0 -- the app is reachable from your local network.", flush=True)
+    app.run(host=host, port=5000, debug=False, threaded=True)
 
 
 if __name__ == "__main__":
