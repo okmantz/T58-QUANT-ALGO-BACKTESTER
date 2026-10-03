@@ -92,8 +92,8 @@ def resolve_fitness_weights(weights: "dict | str | None") -> dict:
 class PropFitnessBreakdown:
     """Every component that went into the final score, so the UI/journal
     can show *why* a candidate ranked where it did, not just the number."""
-    pass_probability: float           # 0..1, Monte Carlo evaluation-pass probability
-    payout_probability: float         # 0..1, Monte Carlo first-payout probability
+    pass_probability: float           # 0..1, Monte Carlo PER-ATTEMPT evaluation-pass probability (single-account odds, not chain-level)
+    payout_probability: float         # 0..1, Monte Carlo per-attempt first-payout probability
     robustness: float                 # 0..1, parameter-neighborhood stability ratio
     oos_consistency: float            # 0..1, walk-forward efficiency (clipped)
     drawdown_pct: float                # raw max drawdown %, used as the divisor
@@ -143,8 +143,19 @@ def compute_prop_fitness(
     weights: "dict | str | None" = None,    # None/"balanced" reproduces the original unweighted formula exactly
 ) -> PropFitnessBreakdown:
     w = resolve_fitness_weights(weights)
-    pass_probability = max(0.0, min(1.0, mc_summary.get("evaluation_pass_probability", 0.0) / 100.0))
-    payout_probability = max(0.0, min(1.0, mc_summary.get("first_payout_probability", 0.0) / 100.0))
+    # P0-1: rank on PER-ATTEMPT (single-account) odds, not the chain-level
+    # "did >=1 rebuy attempt in the chain ever pass" number -- under the
+    # default reset_on_breach posture the chain-level figure is inflated
+    # almost by construction (a long enough chain eventually clears a low
+    # bar), so ranking on it aims the search at a mirage. The chain-level
+    # fields stay populated upstream for reporting; they just no longer
+    # drive selection here. Falls back to the chain-level field for
+    # summaries that predate per-attempt tracking (identical when
+    # reset_on_breach is off, so non-reset runs are byte-identical).
+    _chain_pass = mc_summary.get("evaluation_pass_probability", 0.0)
+    _chain_payout = mc_summary.get("first_payout_probability", 0.0)
+    pass_probability = max(0.0, min(1.0, mc_summary.get("per_attempt_pass_probability", _chain_pass) / 100.0))
+    payout_probability = max(0.0, min(1.0, mc_summary.get("per_attempt_payout_probability", _chain_payout) / 100.0))
     robustness = float(robustness_dict["stability_ratio"]) if robustness_dict else 0.5
     robustness = max(0.0, min(1.0, robustness))
     # walk-forward efficiency is test/train metric ratio -- can run above 1

@@ -272,6 +272,11 @@ def _evo_full_eval_task(
     mc_summary = {
         "evaluation_pass_probability": mc.evaluation_pass_probability,
         "first_payout_probability": mc.first_payout_probability,
+        # P0-1: per-attempt (single-account) odds carried alongside the
+        # chain-level reporting fields, so compute_prop_fitness ranks on
+        # the honest number.
+        "per_attempt_pass_probability": mc.per_attempt_pass_probability,
+        "per_attempt_payout_probability": mc.per_attempt_payout_probability,
     }
     single_run = simulate_account(trade_pnls, trade_dates, prop_rules, reset_on_breach=reset_on_breach)
     summarize_single_run(single_run)  # surfaces prop-sim issues early; summary itself not needed downstream here
@@ -390,6 +395,12 @@ class EvolutionConfig:
     robustness_neighbors: int = 4
     robustness_perturbation_frac: float = 0.15
     robustness_min_stability: float = 0.4
+    # P1-4 locked OOS holdout (Forge pattern -- see
+    # app.orchestration.forge): the last locked_holdout_frac of `df` is
+    # reserved in EvolutionRunner.__init__ and never seen during
+    # evolution/selection; only evaluate_champion_on_locked_holdout()
+    # touches it, for the final champion check.
+    locked_holdout_frac: float = 0.2
     walk_forward_folds: int = 4
     walk_forward_metric: str = "eval_pass_probability"
 
@@ -724,7 +735,8 @@ class EvolutionRunner:
         cfg: EvolutionConfig | None = None,
         progress_cb=None,
     ):
-        self.df = df
+        # (self.df is assigned below, after self.cfg exists -- P1-4 locked
+        # holdout split needs cfg.locked_holdout_frac.)
         self.progress_cb = progress_cb
         # RISK-001: detect (and log) a RiskConfig.initial_balance /
         # PropRules.account_size mismatch BEFORE with_prop_safety_defaults
@@ -749,6 +761,32 @@ class EvolutionRunner:
         self.risk = with_prop_safety_defaults(risk, prop_rules)
         self.prop_rules = prop_rules
         self.cfg = cfg or EvolutionConfig()
+        # P1-4: locked OOS holdout, reserved BEFORE generation 0 (Forge
+        # pattern -- see app.orchestration.forge). Evolution/selection
+        # below only ever see the dev slice (self.df); the last
+        # locked_holdout_frac of bars is locked away in
+        # self.locked_holdout_df until evaluate_champion_on_locked_holdout().
+        # The split is chronological: the tail (most recent bars) is the
+        # honest OOS slice. NOTE: checkpoint fingerprints now cover the dev
+        # slice, so a checkpoint saved before this split will not resume
+        # (it was computed against data this run is no longer allowed to
+        # select on) -- it starts a fresh run instead of silently reusing
+        # a selection-biased history. df=None is tolerated (as before --
+        # some callers construct the runner for risk-wiring only); both
+        # slices stay None and the holdout method will refuse to run.
+        if df is None:
+            self.df = None
+            self.locked_holdout_df = None
+        else:
+            _n = len(df)
+            _split_idx = max(1, min(int(_n * (1 - self.cfg.locked_holdout_frac)), _n - 1)) if _n > 1 else _n
+            self.df = df.iloc[:_split_idx].reset_index(drop=True)
+            self.locked_holdout_df = df.iloc[_split_idx:].reset_index(drop=True)
+            self._log(
+                f"Reserved the final {self.cfg.locked_holdout_frac:.0%} of the dataset "
+                f"({len(self.locked_holdout_df):,} bars) as a locked out-of-sample holdout -- "
+                f"evolution runs on the first {len(self.df):,} bars only."
+            )
         # FIX (2026-09-18): see RiskConfig.reset_on_breach's docstring --
         # self.cfg.reset_on_breach was already threaded into the post-hoc
         # simulate_account/MonteCarloConfig scoring layer (see this file's
@@ -1136,6 +1174,70 @@ class EvolutionRunner:
         )
         pareto_frontier_for_finalists(reports)
         return [r.to_dict() for r in reports]
+
+    def evaluate_champion_on_locked_holdout(
+        self, candidate=None, mc_sims: int | None = None,
+    ) -> dict:
+        """P1-4: the final champion check on the locked holdout slice --
+        the last locked_holdout_frac of bars that evolution/selection never
+        saw (see __init__). Backtests the champion's spec on
+        self.locked_holdout_df, then runs the single-run prop sim and a
+        full Monte Carlo on those holdout trades, and returns the holdout
+        stats dict. Call once, after the run stops, not every generation.
+
+        candidate: an EvolutionCandidateRecord (or anything with a `.spec`
+        attribute); defaults to the current leaderboard champion.
+        mc_sims: Monte Carlo simulation count for the holdout check;
+        defaults to self.cfg.mc_sims.
+        """
+        rec = candidate if candidate is not None else (self.leaderboard[0] if self.leaderboard else None)
+        if rec is None:
+            raise ValueError("No champion to evaluate: the leaderboard is empty.")
+        if self.locked_holdout_df is None or not len(self.locked_holdout_df):
+            raise ValueError("No locked holdout available: this runner was constructed without data (df=None).")
+        spec = rec.spec if hasattr(rec, "spec") else rec.get("spec")
+        if not spec:
+            raise ValueError("Champion record has no strategy spec to evaluate.")
+        n_sims = mc_sims if mc_sims is not None else self.cfg.mc_sims
+        self._log(
+            f"Evaluating champion on the locked holdout ({len(self.locked_holdout_df):,} bars "
+            f"never seen during evolution)..."
+        )
+        strategy = build_strategy_from_spec(spec)
+        bt = run_backtest(self.locked_holdout_df, strategy, self.risk)
+        trade_pnls = [t.pnl for t in bt.trades]
+        trade_dates = [t.entry_time for t in bt.trades]
+        single_run = simulate_account(
+            trade_pnls, trade_dates, self.prop_rules,
+            reset_on_breach=self.cfg.reset_on_breach,
+        )
+        mc = run_monte_carlo(
+            bt.trades, self.prop_rules,
+            MonteCarloConfig(
+                method=default_method_for_adaptive_risk(self.adaptive_risk),
+                n_simulations=n_sims, random_seed=self.cfg.random_seed,
+                reset_on_breach=self.cfg.reset_on_breach,
+            ),
+        )
+        holdout = {
+            "n_bars": len(self.locked_holdout_df),
+            "n_trades": len(bt.trades),
+            "statistics": bt.statistics.to_dict(),
+            "single_run": summarize_single_run(single_run),
+            "evaluation_pass_probability": mc.evaluation_pass_probability,
+            "per_attempt_pass_probability": mc.per_attempt_pass_probability,
+            "first_payout_probability": mc.first_payout_probability,
+            "per_attempt_payout_probability": mc.per_attempt_payout_probability,
+            "risk_of_ruin_pct": mc.risk_of_ruin_pct,
+            "n_simulations": mc.n_simulations,
+            "methodology_note": mc.methodology_note,
+        }
+        self._log(
+            f"Locked holdout: {holdout['n_trades']} trades, per-attempt pass "
+            f"{holdout['per_attempt_pass_probability']:.1f}%, per-attempt payout "
+            f"{holdout['per_attempt_payout_probability']:.1f}%, RoR {holdout['risk_of_ruin_pct']:.1f}%."
+        )
+        return holdout
 
     def tested_candidates(self, limit: int = 500) -> list[dict]:
         """The "what was actually tested" record -- every candidate the
