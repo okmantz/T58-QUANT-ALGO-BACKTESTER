@@ -215,6 +215,37 @@ jobs:
           Write-Host "Path: $($exe.FullName)"
           Write-Host "Size: $($exe.Length) bytes"
 
+      - name: Code-sign the executable (optional)
+        shell: pwsh
+        run: |
+          # P0-7 (Oct 2026): sign the built web .exe with signtool so
+          # Windows SmartScreen doesn't block every non-technical buyer.
+          # Runs BEFORE packaging so the signed exe is what gets copied.
+          #
+          # Owen has NO code-signing certificate yet: until the SIGN_CERT
+          # (base64-encoded .pfx) and SIGN_CERT_PASSWORD repository secrets
+          # are created, this step prints the notice below and EXITS 0 --
+          # the build is NOT broken by the missing cert; it just ships
+          # unsigned. To enable signing, add the two secrets and this step
+          # signs dist\T58-Web-App.exe in place.
+          $certB64 = "${{ secrets.SIGN_CERT }}"
+          if ([string]::IsNullOrWhiteSpace($certB64)) {
+            Write-Host "SIGN_CERT secret is not set -- skipping code signing (no certificate configured yet). The build continues UNSIGNED."
+            exit 0
+          }
+          $pfxPath = Join-Path $env:RUNNER_TEMP "t58-sign-cert.pfx"
+          try {
+            [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($certB64))
+            $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+              Select-Object -First 1 -ExpandProperty FullName
+            if (-not $signtool) { throw "signtool.exe not found -- install the Windows SDK on the runner image." }
+            & $signtool sign /f $pfxPath /p "${{ secrets.SIGN_CERT_PASSWORD }}" /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "dist\T58-Web-App.exe"
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed (exit $LASTEXITCODE)." }
+            Write-Host "Signed dist\T58-Web-App.exe."
+          } finally {
+            Remove-Item $pfxPath -Force -ErrorAction SilentlyContinue
+          }
+
       - name: Create application package
         shell: pwsh
         run: |
