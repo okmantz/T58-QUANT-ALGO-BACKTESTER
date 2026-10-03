@@ -268,6 +268,20 @@ class SearchStageConfig:
     stage3_max_drawdown_buffer_mult: float = 1.5
     stage3_require_positive_net: bool = False
 
+    # P1-4 acceptance floor on the thing being optimized: Stage 3's gate
+    # is stability, not level -- without these, a candidate with an
+    # arbitrarily low pass probability can pass and become champion.
+    # Scales match MonteCarloResult's own 0-100 fields. NOTE the mixed
+    # magnitudes are per the fix spec: 70.0 means 70%, 0.5 means 0.5%.
+    min_eval_pass_probability: float = 70.0
+    min_first_payout_probability: float = 0.5
+
+    # P1-4 locked OOS holdout (Forge pattern -- see
+    # app.orchestration.forge): the last locked_holdout_frac of `df` is
+    # reserved at run_search() start and never touched by Stages 0-3;
+    # only promote_champion evaluates on it, first, before the report.
+    locked_holdout_frac: float = 0.2
+
     full_mc_sims: int = 3000
     walk_forward_folds: int = 4
     walk_forward_metric: str = "eval_pass_probability"
@@ -369,6 +383,14 @@ class SearchSummary:
     db_path: str
     leaderboard: list = field(default_factory=list)
     graveyard_path: str | None = None
+    # P1-4: how the input df was split for this run -- Stages 0-3 ran on
+    # the first (1 - locked_holdout_frac) of bars; the last
+    # locked_holdout_frac was locked for promote_champion. Recorded so a
+    # later promote_champion call can re-derive the identical locked slice
+    # from the same full df even though run_search never returns it.
+    locked_holdout_frac: float = 0.2
+    dev_bars: int = 0
+    locked_bars: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -680,6 +702,11 @@ def _stage3_task(candidate_id: str, spec: dict, cfg: dict) -> dict:
     mc_summary = {
         "evaluation_pass_probability": mc_result.evaluation_pass_probability,
         "first_payout_probability": mc_result.first_payout_probability,
+        # P0-1: per-attempt (single-account) odds carried alongside the
+        # chain-level reporting fields, so Stage 4's composite_score and
+        # the acceptance floor below rank on the honest number.
+        "per_attempt_pass_probability": mc_result.per_attempt_pass_probability,
+        "per_attempt_payout_probability": mc_result.per_attempt_payout_probability,
         "expected_payout": mc_result.expected_payout,
         "risk_of_ruin_pct": mc_result.risk_of_ruin_pct,
         "median_drawdown_pct": mc_result.median_drawdown_pct,
@@ -753,11 +780,36 @@ def _stage3_task(candidate_id: str, spec: dict, cfg: dict) -> dict:
                     f"{cfg['robustness_min_stability']:.2f} -- may be fit to noise in this window."
                 )
 
+    # P1-4 acceptance floor: rank on per-attempt (single-account) odds and
+    # require the candidate to clear BOTH floors -- a candidate below
+    # either fails Stage 3 no matter how stable/robust it looks. Scales
+    # are MonteCarloResult's 0-100 fields; cfg defaults come from
+    # SearchStageConfig.min_eval_pass_probability /
+    # min_first_payout_probability.
+    per_attempt_pass = mc_summary.get(
+        "per_attempt_pass_probability", mc_summary.get("evaluation_pass_probability", 0.0))
+    per_attempt_payout = mc_summary.get(
+        "per_attempt_payout_probability", mc_summary.get("first_payout_probability", 0.0))
+    min_eval_floor = cfg.get("min_eval_pass_probability", 70.0)
+    min_payout_floor = cfg.get("min_first_payout_probability", 0.5)
+    if per_attempt_pass < min_eval_floor:
+        notes.append(
+            f"Per-attempt eval pass probability {per_attempt_pass:.1f}% below "
+            f"acceptance floor {min_eval_floor:.1f}% -- failed Stage 3 on level, not stability."
+        )
+    if per_attempt_payout < min_payout_floor:
+        notes.append(
+            f"Per-attempt first-payout probability {per_attempt_payout:.1f}% below "
+            f"acceptance floor {min_payout_floor:.1f}% -- failed Stage 3 on level, not stability."
+        )
+
     passed = (
         not lookahead.bug_detected
         and (wf_result is None or wf_result.is_stable)
         and (robustness is None or robustness.is_stable)
         and math.isfinite(fitness)
+        and per_attempt_pass >= min_eval_floor
+        and per_attempt_payout >= min_payout_floor
     )
 
     return {
@@ -978,11 +1030,25 @@ def run_search(
     # the RiskConfig Stage 1/2/3 actually backtest every candidate against.
     risk = replace(risk, reset_on_breach=stage_cfg.reset_on_breach)
 
+    # P1-4: locked OOS holdout, reserved BEFORE any stage runs (Forge
+    # pattern -- see app.orchestration.forge). Stages 0-3 below only ever
+    # see `dev_df`; the last locked_holdout_frac of bars is locked away
+    # until promote_champion's first evaluation. The split is
+    # chronological (tail = most recent bars = the honest OOS slice).
+    n_bars = len(df)
+    split_idx = max(1, min(int(n_bars * (1 - stage_cfg.locked_holdout_frac)), n_bars - 1)) if n_bars > 1 else n_bars
+    dev_df = df.iloc[:split_idx].reset_index(drop=True)
+    locked_df = df.iloc[split_idx:].reset_index(drop=True)
+    log(
+        f"Reserved the final {stage_cfg.locked_holdout_frac:.0%} of the dataset ({len(locked_df):,} bars) as a "
+        f"locked out-of-sample holdout -- Stages 0-3 below run on the first {len(dev_df):,} bars only."
+    )
+
     run_id = uuid.uuid4().hex[:12]
     t0 = time.time()
     workers = stage_cfg.workers or max(os.cpu_count() or 2, 1)
     workers = max(1, min(workers, len(space.candidates)))
-    # Each worker process below loads its OWN full copy of `df` (see
+    # Each worker process below loads its OWN full copy of `dev_df` (see
     # _init_worker) -- on a large dataset (e.g. years of 1-minute bars),
     # os.cpu_count() workers each holding a full copy can exhaust system
     # memory well before it exhausts CPU, especially if another heavy job
@@ -990,10 +1056,10 @@ def run_search(
     # to what's actually safe given this dataset's size and currently
     # available memory rather than trusting the caller's/CPU count blindly.
     # See app.orchestration.resource_guard for the full rationale.
-    safe_workers = safe_worker_count(df, requested=workers, max_candidates_in_flight=len(space.candidates))
+    safe_workers = safe_worker_count(dev_df, requested=workers, max_candidates_in_flight=len(space.candidates))
     if safe_workers < workers:
         log(
-            f"Reducing worker processes from {workers} to {safe_workers} -- {len(df):,} bars is "
+            f"Reducing worker processes from {workers} to {safe_workers} -- {len(dev_df):,} bars is "
             f"large enough that {workers} full copies of it (one per worker) would risk exhausting "
             f"available memory. Install 'psutil' for a more precise estimate; for now this uses a "
             f"conservative fallback."
@@ -1005,7 +1071,7 @@ def run_search(
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="t58_search_"))
     df_path = tmp_dir / "data.pkl"
-    df.to_pickle(df_path)
+    dev_df.to_pickle(df_path)
     risk_kwargs = asdict(risk)
     prop_kwargs = asdict(prop_rules)
 
@@ -1044,7 +1110,7 @@ def run_search(
             # to what this comment used to say.
             mp_context=multiprocessing.get_context("spawn"),
         )
-        _warm_up_pool(pool, workers, len(df), log)
+        _warm_up_pool(pool, workers, len(dev_df), log)
         return pool
 
     pool_box = [_make_pool()]
@@ -1228,6 +1294,8 @@ def run_search(
                     return SearchSummary(
                         run_id, space.mode, space.family, len(space.candidates), 0, 0, 0,
                         None, time.time() - t0, str(db_path), [],
+                        locked_holdout_frac=stage_cfg.locked_holdout_frac,
+                        dev_bars=len(dev_df), locked_bars=len(locked_df),
                     )
                 log(
                     f"No candidates survived Stage 1 even after automatically loosening the filters "
@@ -1248,6 +1316,8 @@ def run_search(
                 return SearchSummary(
                     run_id, space.mode, space.family, len(space.candidates), 0, 0, 0,
                     None, time.time() - t0, str(db_path), [],
+                    locked_holdout_frac=stage_cfg.locked_holdout_frac,
+                    dev_bars=len(dev_df), locked_bars=len(locked_df),
                 )
 
             # ---------------- Stage 2: GA refinement ----------------
@@ -1298,6 +1368,8 @@ def run_search(
                 return SearchSummary(
                     run_id, space.mode, space.family, len(space.candidates), len(survivors1), 0, 0,
                     None, time.time() - t0, str(db_path), [],
+                    locked_holdout_frac=stage_cfg.locked_holdout_frac,
+                    dev_bars=len(dev_df), locked_bars=len(locked_df),
                 )
 
             # ---------------- Stage 3: validation gate ----------------
@@ -1312,6 +1384,9 @@ def run_search(
                 "stage3_min_profit_factor": stage_cfg.stage3_min_profit_factor,
                 "stage3_max_drawdown_buffer_mult": stage_cfg.stage3_max_drawdown_buffer_mult,
                 "stage3_require_positive_net": stage_cfg.stage3_require_positive_net,
+                # P1-4 acceptance floor (enforced in _stage3_task's `passed`).
+                "min_eval_pass_probability": stage_cfg.min_eval_pass_probability,
+                "min_first_payout_probability": stage_cfg.min_first_payout_probability,
                 "walk_forward_folds": stage_cfg.walk_forward_folds,
                 "walk_forward_metric": stage_cfg.walk_forward_metric,
                 "walk_forward_min_efficiency": stage_cfg.walk_forward_min_efficiency,
@@ -1373,9 +1448,12 @@ def run_search(
         }
         mc = rec.get("mc_summary") or {}
         if rec.get("passed_stage3_gate"):
+            # P0-1: rank on per-attempt (single-account) odds, not the
+            # chain-level "did >=1 rebuy attempt ever pass" number -- the
+            # chain-level fields stay in mc_summary for reporting only.
             rec["composite_score"] = (
-                mc.get("evaluation_pass_probability", 0.0) * 0.35
-                + mc.get("first_payout_probability", 0.0) * 0.25
+                mc.get("per_attempt_pass_probability", mc.get("evaluation_pass_probability", 0.0)) * 0.35
+                + mc.get("per_attempt_payout_probability", mc.get("first_payout_probability", 0.0)) * 0.25
                 - mc.get("risk_of_ruin_pct", 0.0) * 0.15
                 + dsr.probabilistic_sharpe * 100 * 0.25
             )
@@ -1416,6 +1494,8 @@ def run_search(
         champion_candidate_id=champion["candidate_id"] if champion else None,
         elapsed_seconds=elapsed, db_path=str(db_path), leaderboard=leaderboard,
         graveyard_path=str(graveyard_path) if graveyard_path else None,
+        locked_holdout_frac=stage_cfg.locked_holdout_frac,
+        dev_bars=len(dev_df), locked_bars=len(locked_df),
     )
 
 
@@ -1427,6 +1507,8 @@ def promote_champion(
     db_path: str, run_id: str, candidate_id: str, df: pd.DataFrame,
     risk: RiskConfig, prop_rules: PropRules, output_dir: str, mc_sims: int = 10000,
     reset_on_breach: bool = False,
+    locked_df: pd.DataFrame | None = None,
+    locked_holdout_frac: float = 0.2,
 ) -> dict:
     """
     Re-runs one chosen Stage 3 survivor through the app's EXISTING,
@@ -1436,6 +1518,14 @@ def promote_champion(
     exact same report format every other strategy in this app already
     produces, rather than a search-specific artifact nobody's used to
     reading yet.
+
+    P1-4: BEFORE the report, the champion is first evaluated on the
+    locked out-of-sample holdout slice -- the last `locked_holdout_frac`
+    of bars, which run_search()'s Stages 0-3 never saw -- and those
+    holdout stats are returned alongside as `locked_holdout`. Pass
+    `locked_df` explicitly when you have run_search()'s exact reserved
+    slice; otherwise it is re-derived as the tail `locked_holdout_frac`
+    of `df` (same chronological split run_search used).
     """
     with ResultsDB(db_path) as db:
         record = db.get_candidate(candidate_id, run_id=run_id, stage="stage3")
@@ -1462,6 +1552,44 @@ def promote_champion(
     promote_tmp_dir = Path(tempfile.mkdtemp(prefix="t58_promote_"))
     try:
         strategy = build_strategy_from_spec(spec, promote_tmp_dir)
+
+        # P1-4: locked-holdout FIRST evaluation -- data Stages 0-3 never
+        # saw. Re-derive the tail slice when the caller didn't pass the
+        # exact reserved one (same chronological split as run_search).
+        if locked_df is None:
+            _n = len(df)
+            _split = max(1, min(int(_n * (1 - locked_holdout_frac)), _n - 1)) if _n > 1 else _n
+            locked_df = df.iloc[_split:].reset_index(drop=True)
+        locked_holdout: dict | None = None
+        if len(locked_df):
+            try:
+                locked_bt = run_backtest(
+                    locked_df, build_strategy_from_spec(spec, promote_tmp_dir), risk)
+                locked_trades = locked_bt.trades
+                locked_single = simulate_account(
+                    [t.pnl for t in locked_trades], [t.entry_time for t in locked_trades],
+                    prop_rules, reset_on_breach=reset_on_breach,
+                )
+                locked_mc = run_monte_carlo(
+                    locked_trades, prop_rules,
+                    MonteCarloConfig(n_simulations=mc_sims, reset_on_breach=reset_on_breach),
+                )
+                locked_holdout = {
+                    "n_bars": len(locked_df),
+                    "n_trades": len(locked_trades),
+                    "statistics": locked_bt.statistics.to_dict(),
+                    "single_run": summarize_single_run(locked_single),
+                    "evaluation_pass_probability": locked_mc.evaluation_pass_probability,
+                    "per_attempt_pass_probability": locked_mc.per_attempt_pass_probability,
+                    "first_payout_probability": locked_mc.first_payout_probability,
+                    "per_attempt_payout_probability": locked_mc.per_attempt_payout_probability,
+                    "risk_of_ruin_pct": locked_mc.risk_of_ruin_pct,
+                    "n_simulations": locked_mc.n_simulations,
+                    "methodology_note": locked_mc.methodology_note,
+                }
+            except Exception:  # noqa: BLE001 -- same policy as the holdout check below
+                locked_holdout = None
+
         bt_result = run_backtest(df, strategy, risk)
         trade_pnls = [t.pnl for t in bt_result.trades]
         trade_dates = [t.entry_time for t in bt_result.trades]
@@ -1498,7 +1626,7 @@ def promote_champion(
         )
         return {
             "candidate_id": candidate_id, "spec": spec, "config": spec.get("config"),
-            "report_paths": paths,
+            "report_paths": paths, "locked_holdout": locked_holdout,
         }
     finally:
         shutil.rmtree(promote_tmp_dir, ignore_errors=True)
