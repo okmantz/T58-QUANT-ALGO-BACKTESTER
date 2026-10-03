@@ -463,17 +463,30 @@ def compute_fitness(
     elif metric == "sharpe_ratio":
         fitness = float(stats.get("sharpe_ratio", 0.0))
     elif metric == "eval_pass_probability":
-        fitness = float(mc.evaluation_pass_probability)
+        # P0-1: rank on per-attempt (single-account) odds, not the
+        # chain-level "did >=1 rebuy attempt ever pass" number -- the
+        # metric NAME is kept so every caller/UI selecting by name keeps
+        # working; only the underlying read changed. Falls back to the
+        # chain-level field when per-attempt tracking is unavailable
+        # (identical when reset_on_breach is off).
+        _per = getattr(mc, "per_attempt_pass_probability", None)
+        fitness = float(_per if _per is not None else mc.evaluation_pass_probability)
     elif metric == "first_payout_probability":
-        fitness = float(mc.first_payout_probability)
+        # P0-1: same swap for the payout leg of the ranking.
+        _per = getattr(mc, "per_attempt_payout_probability", None)
+        fitness = float(_per if _per is not None else mc.first_payout_probability)
     elif metric == "fastest_payout":
         fitness = _fastest_payout_score(mc)
     elif metric == "expected_payout":
         fitness = float(mc.expected_payout)
     elif metric == "composite_prop_score":
+        # P0-1: both ranking legs read per-attempt (single-account) odds;
+        # chain-level fields remain in the result for reporting only.
+        _per_pass = getattr(mc, "per_attempt_pass_probability", None)
+        _per_payout = getattr(mc, "per_attempt_payout_probability", None)
         fitness = float(
-            mc.evaluation_pass_probability * 0.5
-            + mc.first_payout_probability * 0.3
+            (_per_pass if _per_pass is not None else mc.evaluation_pass_probability) * 0.5
+            + (_per_payout if _per_payout is not None else mc.first_payout_probability) * 0.3
             - mc.risk_of_ruin_pct * 0.2
         )
     elif metric == "prop_guide_score":
@@ -531,6 +544,11 @@ def _mc_summary(mc: MonteCarloResult) -> dict:
     return {
         "evaluation_pass_probability": mc.evaluation_pass_probability,
         "first_payout_probability": mc.first_payout_probability,
+        # P0-1: per-attempt (single-account) odds carried alongside the
+        # chain-level reporting fields, so dict-based ranking paths
+        # (compute_prop_fitness et al.) can select on the honest number.
+        "per_attempt_pass_probability": mc.per_attempt_pass_probability,
+        "per_attempt_payout_probability": mc.per_attempt_payout_probability,
         "failure_before_payout_probability": mc.failure_before_payout_probability,
         "expected_payout": mc.expected_payout,
         "risk_of_ruin_pct": mc.risk_of_ruin_pct,
