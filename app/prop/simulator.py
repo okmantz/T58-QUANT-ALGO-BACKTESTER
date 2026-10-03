@@ -33,8 +33,39 @@ class PropRules:
     min_trading_days: int = 5
     payout_threshold_pct: float = 0.0               # extra profit % (above account size) required before 1st payout eligibility, funded stage
     payout_cap_pct: float | None = None             # max % of available profit withdrawable per payout (None = 100%)
-    payout_frequency_days: int = 14                 # min days between payouts
+    # P2-7: payout_frequency_days counts TRADE DAYS (days with >= 1 trade),
+    # not calendar days -- day indices in simulate_account are ordinals
+    # over trade days only, so a "14-day" frequency is 14 trading days.
+    payout_frequency_days: int = 14                 # min trade-days between payouts
     required_buffer_pct: float = 0.0                # profit buffer that must be maintained above account_size before payout
+    # P2-6 (Topstep-style payout gate): a payout additionally requires at
+    # least `winning_days_for_payout` distinct funded-stage days each with
+    # day-PnL >= `min_winning_day_profit`. Defaults (5, 0.0) reproduce
+    # today's looser behavior in practice (any funded run that reaches
+    # payout eligibility almost always has >= 5 non-negative days), while
+    # letting a firm-accurate gate be configured (e.g. Topstep: 5 days of
+    # $150+ -> winning_days_for_payout=5, min_winning_day_profit=150).
+    # NOTE: not strictly byte-identical to the pre-gate code in the
+    # pathological case (a payout-eligible run with < 5 non-negative
+    # funded-stage days); see simulate_account's funded payout branch.
+    winning_days_for_payout: int = 5
+    min_winning_day_profit: float = 0.0
+    # P2-6 (inactivity rule, e.g. FTMO's 30-day rule): fail the account
+    # with reason "inactivity" when more than this many CALENDAR days with
+    # no trades pass between two trade days. None (default) = rule off,
+    # byte-identical to before this field existed.
+    max_inactive_days: int | None = None
+    # P1-3: WHAT balance the drawdown failure checks trail on.
+    #   "realized" (default): today's behavior, byte-identical -- checks
+    #   run against realized trade-close balance only.
+    #   "adverse": degrades the max-drawdown failure check with each
+    #   trade's initial risk (see simulate_account's trade_initial_risks
+    #   parameter) as a floating-drawdown proxy -- see the comment at the
+    #   check itself for exactly what approximation this is.
+    # ADAPTATION (audit asked for `drawdown_check_mode: str = "realized"`):
+    # that name is already taken by the intrabar/eod WHEN-to-check field
+    # above, so this orthogonal WHAT-to-trail axis gets its own name.
+    floating_drawdown_mode: str = "realized"        # "realized" | "adverse"
     max_position_size: float | None = None          # informational cap on units (enforced in RiskConfig)
 
     # -- live-execution-only fields (added for Deploy Live / execution_engine.py) --------------
@@ -105,6 +136,8 @@ class AccountSimResult:
     failed: bool
     failure_reason: str | None
     failure_day_index: int | None
+    # P2-7: days_to_pass counts TRADE DAYS (days with >= 1 trade from the
+    # attempt's first trade day), not calendar days.
     days_to_pass: int | None
     first_payout_day_index: int | None
     first_payout_amount: float | None
@@ -191,6 +224,7 @@ def simulate_account(
     rules: PropRules,
     _day_structure: "DayStructure | None" = None,
     reset_on_breach: bool = False,
+    trade_initial_risks: "list[float] | None" = None,
 ) -> AccountSimResult:
     """
     trade_pnls: P&L of each trade (account-currency $), in chronological order
@@ -227,6 +261,12 @@ def simulate_account(
     consumes `attempts` to answer "does a trader with $X survive this
     chain to a payout," precisely so this function stays a pure mechanical
     rules engine, not an economics one.
+
+    trade_initial_risks: optional per-trade initial dollar risk, same
+    order/length as trade_pnls (e.g. Trade.intended_risk_dollars, or
+    initial_risk * size). Only used when
+    rules.floating_drawdown_mode == "adverse" (see P1-3 below); None
+    (default) keeps the check a no-op, byte-identical to not passing it.
     """
     if len(trade_pnls) == 0:
         return AccountSimResult(
@@ -275,6 +315,8 @@ def simulate_account(
         failure_day_index = None
         attempt_start_day_idx = day_index_per_trade[i]
         attempt_last_day_idx = attempt_start_day_idx
+        prev_day_idx: int | None = None             # P2-6: previous trade day, for the inactivity gap check
+        funded_start_day_idx: int | None = None     # P2-6: trade-day index the eval was passed on (winning-day gate scope)
         daily_pnl: dict = {}
         day_profit_history: dict = {}
         payouts_this_attempt: list[PayoutEvent] = []
@@ -292,6 +334,21 @@ def simulate_account(
             attempt_last_day_idx = cur_day_idx
             last_day_idx_reached = cur_day_idx
 
+            # P2-6 inactivity rule: calendar-day gap with no trades between
+            # two trade days. gap_days - 1 = fully inactive days in between;
+            # fail once that EXCEEDS max_inactive_days (e.g. 30 -> a 31+
+            # trade-less-day gap fails, matching FTMO's "no trading activity
+            # for 30 days"). Per-attempt: each attempt is a fresh account, so
+            # no gap is measured across the attempt boundary. None = off.
+            if rules.max_inactive_days is not None and prev_day_idx is not None and prev_day_idx != cur_day_idx:
+                gap_days = (day_dates[cur_day_idx] - day_dates[prev_day_idx]).days
+                if gap_days - 1 > rules.max_inactive_days:
+                    failed = True
+                    failure_reason = "inactivity"
+                    failure_day_index = cur_day_idx
+                    break
+            prev_day_idx = cur_day_idx
+
             balance += pnl
             daily_pnl[cur_day_idx] = daily_pnl.get(cur_day_idx, 0.0) + pnl
             day_profit_history[cur_day_idx] = day_profit_history.get(cur_day_idx, 0.0) + pnl
@@ -306,12 +363,16 @@ def simulate_account(
                 j += 1
                 continue
 
+            # P0-2: static-drawdown ruin must be measured against the STATIC
+            # floor (account_size-relative), not the ratcheting trailing
+            # peak. Only "trailing" firms anchor to trailing_peak.
             trailing_peak = max(trailing_peak, balance)
             if rules.drawdown_type == "trailing":
                 dd_floor = trailing_peak * (1 - rules.max_drawdown_pct / 100.0)
+                current_dd_pct = max(0.0, (trailing_peak - balance) / trailing_peak * 100.0) if trailing_peak else 0.0
             else:
                 dd_floor = static_floor
-            current_dd_pct = max(0.0, (trailing_peak - balance) / trailing_peak * 100.0) if trailing_peak else 0.0
+                current_dd_pct = max(0.0, (rules.account_size - balance) / rules.account_size * 100.0) if rules.account_size else 0.0
             overall_max_dd_pct_reached = max(overall_max_dd_pct_reached, current_dd_pct)
 
             # --- Failure checks (apply in both evaluation and funded stages) ---
@@ -326,6 +387,30 @@ def simulate_account(
                 failure_reason = f"max_drawdown ({rules.drawdown_type})"
                 failure_day_index = cur_day_idx
                 break
+
+            # P1-3: trailing-DD-on-floating approximation. The realized
+            # checks above trail on trade-close balance only, which
+            # understates failures for firms that enforce trailing drawdown
+            # on real-time floating equity. When
+            # floating_drawdown_mode == "adverse" (opt-in; default
+            # "realized" skips this entirely), degrade the check with this
+            # trade's initial risk as a floating-DD proxy: the trade is
+            # assumed to have drawn down to its FULL initial risk intrabar
+            # before closing at `balance`, so the worst implied floating
+            # balance is (balance before this trade) - initial_risk. This
+            # is deliberately conservative -- a real trade's MAE is usually
+            # smaller than its full stop, but can also exceed it on a gap,
+            # and the sim has no per-trade MAE (see audit P2-5). Without
+            # trade_initial_risks (or all-zero risks) this reduces to the
+            # already-checked realized balance and can never fire spuriously.
+            if rules.floating_drawdown_mode == "adverse" and trade_initial_risks is not None:
+                risk_j = float(trade_initial_risks[j]) if j < len(trade_initial_risks) else 0.0
+                adverse_balance = balance - pnl - risk_j
+                if adverse_balance <= dd_floor:
+                    failed = True
+                    failure_reason = f"max_drawdown ({rules.drawdown_type}, adverse-floating proxy)"
+                    failure_day_index = cur_day_idx
+                    break
 
             # --- Evaluation pass check ---
             if stage == "evaluation":
@@ -342,6 +427,7 @@ def simulate_account(
                         passed_evaluation = True
                         days_to_pass = trading_days_so_far
                         payout_baseline_balance = balance
+                        funded_start_day_idx = cur_day_idx  # P2-6: winning-day gate counts funded-stage days from here
                         last_payout_day_index = cur_day_idx  # start payout clock from pass date
 
             # --- Funded stage payout check ---
@@ -349,8 +435,24 @@ def simulate_account(
                 profit_since_baseline = balance - payout_baseline_balance
                 required_profit = rules.account_size * (rules.payout_threshold_pct / 100.0) \
                     + rules.account_size * (rules.required_buffer_pct / 100.0)
+                # P2-7: trade-days, not calendar days (cur_day_idx is an
+                # ordinal over days with >= 1 trade).
                 days_since_last_payout = cur_day_idx - last_payout_day_index
-                if profit_since_baseline > required_profit and days_since_last_payout >= rules.payout_frequency_days:
+                # P2-6 Topstep-style gate: at least `winning_days_for_payout`
+                # funded-stage days each with day-PnL >= min_winning_day_profit
+                # (breakeven days count at the 0.0 default). Scoped to the
+                # funded stage (days since the eval was passed), not the
+                # whole attempt.
+                _funded_from = funded_start_day_idx if funded_start_day_idx is not None else cur_day_idx
+                winning_days = sum(
+                    1 for d, p in day_profit_history.items()
+                    if d >= _funded_from and p >= rules.min_winning_day_profit
+                )
+                # P2-7: `>=` (was `>`) -- a balance landing exactly on the
+                # payout target is eligible, not one cent short of it.
+                if (profit_since_baseline >= required_profit
+                        and days_since_last_payout >= rules.payout_frequency_days
+                        and winning_days >= rules.winning_days_for_payout):
                     withdrawable = profit_since_baseline - rules.account_size * (rules.required_buffer_pct / 100.0)
                     if rules.payout_cap_pct is not None:
                         withdrawable = min(withdrawable, profit_since_baseline * (rules.payout_cap_pct / 100.0))
@@ -369,7 +471,14 @@ def simulate_account(
                             first_payout_amount_attempt = withdrawable
                         payout_baseline_balance = balance
                         last_payout_day_index = cur_day_idx
-                        trailing_peak = max(trailing_peak, balance)
+                        # P0-3: a payout must never move the account closer
+                        # to its own drawdown floor -- the withdrawal nets
+                        # out of the trailing peak, so a just-paid account
+                        # can't breach trailing DD as a consequence of
+                        # being paid. (If the target firm does NOT net
+                        # withdrawals out of its trailing threshold, this
+                        # needs a per-firm flag instead of a revert.)
+                        trailing_peak = max(trailing_peak - withdrawable, balance)
 
             j += 1
 
