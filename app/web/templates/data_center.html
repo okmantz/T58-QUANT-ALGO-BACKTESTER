@@ -16,6 +16,16 @@
   .t58-dc-summary .stat { min-width:120px; }
   .t58-dc-summary .stat .num { font-size:22px; font-weight:700; }
   .t58-dc-summary .stat .lbl { font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em; }
+  .t58-folder-drop { border:2px dashed var(--border); border-radius:10px; padding:28px 18px; text-align:center; cursor:pointer; transition:border-color .15s, background .15s; }
+  .t58-folder-drop.dragging { border-color:var(--teal); background:rgba(var(--teal-rgb),.06); }
+  .t58-folder-drop .hint { color:var(--text-muted); font-size:12px; margin-top:6px; }
+  .t58-folder-progress { height:8px; border-radius:4px; background:var(--border); overflow:hidden; margin:10px 0 6px; display:none; }
+  .t58-folder-progress .bar { height:100%; width:0%; background:var(--teal); transition:width .2s; }
+  .t58-folder-log { max-height:220px; overflow-y:auto; font-size:12px; border:1px solid var(--border); border-radius:8px; padding:8px 10px; margin-top:10px; display:none; font-family:ui-monospace,Menlo,Consolas,monospace; }
+  .t58-folder-log .ok { color:var(--teal); }
+  .t58-folder-log .skip { color:var(--text-muted); }
+  .t58-folder-log .fail { color:var(--coral); }
+  .t58-folder-summary { display:none; margin-top:12px; padding:10px 12px; border:1px solid var(--border); border-radius:8px; font-size:13px; }
 </style>
 </head>
 <body>
@@ -42,6 +52,31 @@
     <input type="file" name="data_file" accept=".csv,.tsv,.txt,.parquet" required>
     <button type="submit" class="t58-btn primary">Import</button>
   </form>
+</div>
+
+<div class="t58-card">
+  <h2>Import folder</h2>
+  <p style="color:var(--text-muted);font-size:12px;margin-top:-6px;">
+    Drop a folder (or pick one) to import every dataset inside it -- subfolders included.
+    Recognized types: <b>.csv, .tsv, .txt, .parquet</b> (anything else is skipped, never imported).
+    Files upload <b>one at a time</b>, each under the <b>256MB per-file limit</b>.
+  </p>
+  <div id="t58-folder-drop" class="t58-folder-drop" role="button" tabindex="0" aria-label="Drop a folder here or click to choose one">
+    <div style="font-size:14px;">&#128193; Drag &amp; drop a folder here, or click to choose one</div>
+    <div class="hint">Browsers that can't enumerate dropped folders fall back to plain file selection (relative paths unavailable).</div>
+  </div>
+  <div style="margin-top:10px;">
+    <label class="t58-btn" for="t58-folder-picker" style="cursor:pointer;">Choose folder</label>
+    <input type="file" id="t58-folder-picker" webkitdirectory directory multiple style="display:none;">
+  </div>
+  <div id="t58-folder-progress" class="t58-folder-progress"><div class="bar" id="t58-folder-bar"></div></div>
+  <div id="t58-folder-counter" style="font-size:12px;color:var(--text-muted);"></div>
+  <div id="t58-folder-log" class="t58-folder-log"></div>
+  <div id="t58-folder-summary" class="t58-folder-summary"></div>
+  <div id="t58-folder-actions" style="margin-top:10px;display:none;">
+    <button type="button" class="t58-btn primary" id="t58-folder-reload">Reload Data Center</button>
+    <span id="t58-folder-autoreload" style="font-size:12px;color:var(--text-muted);margin-left:8px;"></span>
+  </div>
 </div>
 
 <div class="t58-card">
@@ -96,5 +131,253 @@
 
 </div>
 </div>
+<script>
+(function () {
+  "use strict";
+  var CSRF_TOKEN = {{ csrf_token()|tojson }};
+  var ENDPOINT = "/data-center/import-folder";
+
+  var dropZone = document.getElementById("t58-folder-drop");
+  var picker = document.getElementById("t58-folder-picker");
+  var progressWrap = document.getElementById("t58-folder-progress");
+  var progressBar = document.getElementById("t58-folder-bar");
+  var counter = document.getElementById("t58-folder-counter");
+  var logBox = document.getElementById("t58-folder-log");
+  var summaryBox = document.getElementById("t58-folder-summary");
+  var actionsBox = document.getElementById("t58-folder-actions");
+  var reloadBtn = document.getElementById("t58-folder-reload");
+  var autoreloadNote = document.getElementById("t58-folder-autoreload");
+
+  var running = false;
+  var reloadTimer = null;
+
+  function logLine(cls, text) {
+    logBox.style.display = "block";
+    var div = document.createElement("div");
+    div.className = cls;
+    div.textContent = text;
+    logBox.appendChild(div);
+    // Keep the DOM bounded on very large folders.
+    while (logBox.children.length > 300) logBox.removeChild(logBox.firstChild);
+    logBox.scrollTop = logBox.scrollHeight;
+  }
+
+  function setProgress(done, total, currentName) {
+    progressWrap.style.display = "block";
+    progressBar.style.width = total ? Math.round((done / total) * 100) + "%" : "0%";
+    counter.textContent = total
+      ? "Uploading " + done + " / " + total + (currentName ? " -- " + currentName : "")
+      : "";
+  }
+
+  // ---- Folder enumeration: DataTransferItem tree-walk, picker fallback ----
+  function walkEntry(entry, prefix) {
+    return new Promise(function (resolve, reject) {
+      if (entry.isFile) {
+        entry.file(
+          function (file) { resolve([{ file: file, relpath: prefix + file.name }]); },
+          reject
+        );
+      } else if (entry.isDirectory) {
+        var reader = entry.createReader();
+        var out = [];
+        (function readBatch() {
+          reader.readEntries(function (batch) {
+            if (!batch.length) { resolve(out); return; }
+            var chain = Promise.resolve();
+            batch.forEach(function (child) {
+              chain = chain.then(function () {
+                return walkEntry(child, prefix + entry.name + "/").then(function (kids) {
+                  out = out.concat(kids);
+                });
+              });
+            });
+            chain.then(readBatch, reject);
+          }, reject);
+        })();
+      } else {
+        resolve([]);
+      }
+    });
+  }
+
+  function filesFromDrop(dataTransfer) {
+    var items = dataTransfer.items ? Array.prototype.slice.call(dataTransfer.items) : [];
+    var entries = items
+      .map(function (it) { return it.webkitGetAsEntry ? it.webkitGetAsEntry() : null; })
+      .filter(function (e) { return !!e; });
+    if (!entries.length) {
+      // Fallback: flat file list (relative paths unavailable).
+      return Promise.resolve(
+        Array.prototype.slice.call(dataTransfer.files || []).map(function (f) {
+          return { file: f, relpath: f.name };
+        })
+      );
+    }
+    var chain = Promise.resolve([]);
+    entries.forEach(function (entry) {
+      chain = chain.then(function (acc) {
+        return walkEntry(entry, "").then(function (kids) { return acc.concat(kids); });
+      });
+    });
+    return chain;
+  }
+
+  function filesFromPicker(input) {
+    return Array.prototype.slice.call(input.files || []).map(function (f) {
+      return { file: f, relpath: f.webkitRelativePath || f.name };
+    });
+  }
+
+  // ---- One file per request, strictly sequential (concurrency 1) ----
+  function uploadOne(entry, batchId) {
+    var fd = new FormData();
+    fd.append("data_file", entry.file, entry.file.name);
+    fd.append("relpath", entry.relpath);
+    fd.append("batch_id", batchId);
+    return fetch(ENDPOINT, {
+      method: "POST",
+      headers: { "X-CSRF-Token": CSRF_TOKEN },
+      body: fd
+    }).then(function (resp) {
+      return resp.json().catch(function () {
+        return { ok: false, error: "Server returned a non-JSON response (HTTP " + resp.status + ")." };
+      });
+    });
+  }
+
+  function tally(results, data, entry) {
+    var label = entry.relpath;
+    if (data && data.ok) {
+      if (data.status === "imported") {
+        results.imported += 1;
+        logLine("ok", "\u2713 " + label + " -- imported" + (data.detail ? " (" + data.detail + ")" : ""));
+      } else if (data.status === "skipped") {
+        results.skipped += 1;
+        results.problems.push({ kind: "skipped", name: label, reason: data.detail || "" });
+        logLine("skip", "\u2013 " + label + " -- skipped" + (data.detail ? ": " + data.detail : ""));
+      } else {
+        results.failed += 1;
+        results.problems.push({ kind: "failed", name: label, reason: data.detail || "" });
+        logLine("fail", "\u2717 " + label + " -- failed" + (data.detail ? ": " + data.detail : ""));
+      }
+    } else {
+      results.failed += 1;
+      var reason = (data && data.error) || "request failed";
+      results.problems.push({ kind: "failed", name: label, reason: reason });
+      logLine("fail", "\u2717 " + label + " -- " + reason);
+    }
+  }
+
+  function runUpload(entries) {
+    if (running) return;
+    if (!entries.length) {
+      counter.textContent = "No files found in that drop.";
+      return;
+    }
+    running = true;
+    clearTimeout(reloadTimer);
+    logBox.innerHTML = "";
+    summaryBox.style.display = "none";
+    actionsBox.style.display = "none";
+    var batchId = "folder-" + Date.now().toString(36);
+    var results = { imported: 0, skipped: 0, failed: 0, problems: [] };
+    var total = entries.length;
+    var chain = Promise.resolve();
+    entries.forEach(function (entry, idx) {
+      chain = chain.then(function () {
+        setProgress(idx, total, entry.relpath);
+        return uploadOne(entry, batchId)
+          .catch(function (err) {
+            return { ok: false, error: String((err && err.message) || err) };
+          })
+          .then(function (data) {
+            tally(results, data, entry);
+            setProgress(idx + 1, total, "");
+          });
+      });
+    });
+    chain.then(function () {
+      running = false;
+      setProgress(total, total, "");
+      counter.textContent = "Done: " + total + " file" + (total === 1 ? "" : "s") + " uploaded.";
+      showSummary(results);
+    });
+  }
+
+  function showSummary(results) {
+    summaryBox.style.display = "block";
+    summaryBox.innerHTML = "";
+    var head = document.createElement("div");
+    head.innerHTML =
+      "<b>Import complete.</b> " +
+      "<span style='color:var(--teal);'>" + results.imported + " imported</span>, " +
+      "<span style='color:var(--text-muted);'>" + results.skipped + " skipped</span>, " +
+      "<span style='color:var(--coral);'>" + results.failed + " failed</span>.";
+    summaryBox.appendChild(head);
+    if (results.problems.length) {
+      var ul = document.createElement("ul");
+      ul.style.cssText = "margin:8px 0 0;padding-left:18px;font-size:12px;";
+      results.problems.slice(0, 40).forEach(function (p) {
+        var li = document.createElement("li");
+        li.textContent = "[" + p.kind + "] " + p.name + (p.reason ? " -- " + p.reason : "");
+        ul.appendChild(li);
+      });
+      if (results.problems.length > 40) {
+        var more = document.createElement("li");
+        more.textContent = "... and " + (results.problems.length - 40) + " more (see the log above).";
+        ul.appendChild(more);
+      }
+      summaryBox.appendChild(ul);
+    }
+    actionsBox.style.display = "block";
+    // Auto-reload the Data Center so the new datasets show up, after the
+    // user has had 3 seconds to read the summary. Manual click wins.
+    var remaining = 3;
+    autoreloadNote.textContent = "Reloading in " + remaining + "s\u2026";
+    reloadTimer = setInterval(function () {
+      remaining -= 1;
+      if (remaining <= 0) {
+        clearInterval(reloadTimer);
+        window.location.reload();
+      } else {
+        autoreloadNote.textContent = "Reloading in " + remaining + "s\u2026";
+      }
+    }, 1000);
+  }
+
+  reloadBtn.addEventListener("click", function () {
+    clearInterval(reloadTimer);
+    window.location.reload();
+  });
+
+  // ---- Wire up drop zone + picker ----
+  ["dragenter", "dragover"].forEach(function (ev) {
+    dropZone.addEventListener(ev, function (e) {
+      e.preventDefault();
+      dropZone.classList.add("dragging");
+    });
+  });
+  ["dragleave", "drop"].forEach(function (ev) {
+    dropZone.addEventListener(ev, function (e) {
+      e.preventDefault();
+      dropZone.classList.remove("dragging");
+    });
+  });
+  dropZone.addEventListener("drop", function (e) {
+    if (running) return;
+    filesFromDrop(e.dataTransfer).then(runUpload);
+  });
+  dropZone.addEventListener("click", function () { if (!running) picker.click(); });
+  dropZone.addEventListener("keydown", function (e) {
+    if ((e.key === "Enter" || e.key === " ") && !running) { e.preventDefault(); picker.click(); }
+  });
+  picker.addEventListener("change", function () {
+    if (running) return;
+    runUpload(filesFromPicker(picker));
+    picker.value = ""; // allow re-picking the same folder
+  });
+})();
+</script>
 </body>
 </html>
