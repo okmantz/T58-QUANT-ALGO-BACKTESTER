@@ -48,19 +48,32 @@ class RiskConfig:
     # existed). This is the correct, supported way to give a strategy a daily-loss cutoff --
     # a strategy's own generate_signals() cannot implement this itself (see app/strategy/
     # python.py) because it never sees realized trade outcomes, only price data.
-    reentry_cooldown_bars: int = 0
+    prop_daily_loss_is_breach: bool = False
+    # P1-2: daily-loss semantics switch. False (default) = byte-identical
+    # to the historical behavior: a daily-loss-limit forced close only
+    # blocks NEW entries for the rest of that day, and trading resumes
+    # the next morning. True = the forced close is treated the way most
+    # real prop firms treat it -- the account is BLOWN
+    # (app.backtest.execution sets account_blown, so no new trades open
+    # for the rest of the run, exactly like hitting
+    # max_account_drawdown_pct), matching the post-hoc prop simulator's
+    # hard-fail reading of a daily-loss breach.
+    reentry_cooldown_bars: int = 1
     # FIX (EXEC-002): after an open position is stopped out (or hits its
     # take-profit) intrabar, app.backtest.execution used to let a brand
     # new position open in the SAME direction on that exact same bar's
     # close, with no cooldown at all, as long as the strategy's signal
     # hadn't gone flat -- i.e. a whipsaw bar that clips a tight stop and
     # then closes back at a level the strategy still signals on produced
-    # TWO trades and re-exposed the same risk within one bar. That
-    # behavior is still the default (0 = no cooldown, byte-for-byte the
-    # original behavior, so nothing changes for any existing caller/
-    # saved config unless this is explicitly set), but it is now an
-    # explicit, documented, configurable choice instead of a silent one.
-    # Setting this to N>0 blocks any NEW entry for N bars (measured from
+    # TWO trades and re-exposed the same risk within one bar.
+    # P2-1: the default is now 1, not 0 -- a whipsaw bar that clips the
+    # stop intrabar can no longer re-open on that same bar's close; the
+    # earliest reentry is the next bar. This is the minimal honest
+    # cooldown (same-bar reentry inflated trade counts up to 2x). Set
+    # explicitly to 0 to opt back into the original, unconditional
+    # same-bar reentry -- it is still available as a deliberate choice,
+    # just no longer the default.
+    # Setting this to N blocks any NEW entry for N bars (measured from
     # the bar the previous position closed on, inclusive) regardless of
     # what the strategy's signal says -- see app.backtest.execution's
     # module docstring for the exact accounting.
@@ -107,6 +120,26 @@ class RiskConfig:
     # who wants to see exactly where the FIRST account would have died).
     # The post-hoc scoring layers (simulate_account / Monte Carlo) still
     # read reset_on_breach themselves for their own pass/fail accounting.
+    news_blackout_csv: str | None = None
+    # P2-6: path to a CSV with one YYYY-MM-DD date per line (blank lines
+    # and #-comments ignored). When set, run_execution blocks ALL new
+    # entries on those dates -- the backtest-path equivalent of the
+    # news-blackout gate the live engine already enforces. None
+    # (default) = disabled, byte-identical to every run before this
+    # field existed.
+    block_weekend_hold: bool = False
+    # P2-6: when True, any open position is force-closed at the close of
+    # the week's last bar (Friday for normal market data) and no new
+    # entries are taken until Monday -- the backtest-path equivalent of
+    # the live engine's weekend-hold ban. False (default) = byte-
+    # identical to every run before this field existed.
+    max_contracts: int | None = None
+    # P2-6: cap on whole contracts per position, enforced in
+    # position_size() after whole-contract flooring (so it is expressed
+    # in the same whole-contract units a real account can place; with no
+    # contract_size set, one "contract" is one sizing unit). None
+    # (default) = off, byte-identical to every run before this field
+    # existed.
     halt_on_breach: bool = False
     # UPGRADE (2026-09-27): the profit-target twin of reset_on_breach
     # above. Before this existed, execution.py had literally no concept
@@ -212,6 +245,10 @@ class RiskConfig:
             # contract (MES, contract_size=5) instead.
             lots = math.floor(units / self.contract_size + 1e-9)
             units = max(lots, 0) * self.contract_size
+        if self.max_contracts is not None:
+            # P2-6: cap on whole contracts (with no contract_size set,
+            # one "contract" is one sizing unit). None = off.
+            units = min(units, self.max_contracts * (self.contract_size or 1.0))
         return max(units, 0.0)
 
     def sizing_floored_to_zero_contracts(self, current_equity: float, stop_loss_pips: float) -> bool:
@@ -245,7 +282,15 @@ class RiskConfig:
         its stop. Real prop firms/brokers cap the damage one trade can do
         (negative-balance protection, firm-level daily/overall loss
         floors) -- a simulated trade should never be able to blow past
-        that on its own."""
+        that on its own.
+
+        TAIL-RISK CAVEAT (P2-7): the 3x-intended-risk fallback below
+        prevents impossible -$2.5M single-trade prints, but a real
+        limit-move gap can cost 10x+ intended risk -- so the clamp
+        understates genuine tail risk by construction. Widen it with
+        max_loss_per_trade_pct (a % of initial_balance) when the
+        instrument/timeframe is gap-prone, rather than trusting the
+        clamped number as the worst case."""
         if self.max_loss_per_trade_pct is not None:
             return max(self.initial_balance * (self.max_loss_per_trade_pct / 100.0), 0.0)
         return self.risk_amount(equity_at_entry) * 3.0

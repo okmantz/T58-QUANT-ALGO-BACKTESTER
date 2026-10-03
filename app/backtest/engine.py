@@ -126,6 +126,28 @@ def run_backtest(
 
     strat_result: StrategyResult = strategy.generate(df)
 
+    # P2-4 (warmup bars): a strategy may declare WARMUP_BARS = N so its
+    # first N signals are forced flat (0). Indicators are seeded on NaN
+    # (or, worse, fillna'd to a garbage constant like RSI.fillna(50)) and
+    # must not trade before their longest lookback has real data behind
+    # it -- e.g. an EMA(200) on daily bars trades on 200 days of garbage
+    # without this. 0 (default) = unchanged.
+    warmup_bars = int(getattr(strategy, "WARMUP_BARS", 0) or 0)  # per-strategy; 0 = unchanged
+    if warmup_bars > 0:
+        arr = strat_result.signals.to_numpy(copy=True); arr[:warmup_bars] = 0
+        strat_result.signals = pd.Series(arr, index=strat_result.signals.index)
+
+    # P0-5 (lookahead gate): run the behavioral lookahead check on every
+    # backtest, not just Full Pipeline's gated paths. Best-effort -- a
+    # check failure must never break the backtest itself, so exceptions
+    # are swallowed here (same posture as full_pipeline's gate).
+    _lookahead_result = None
+    try:
+        from app.strategy.lookahead_check import check_for_lookahead
+        _lookahead_result = check_for_lookahead(strategy, df)
+    except Exception:
+        _lookahead_result = None
+
     # UPGRADE (day-of-week trading restriction): forces the strategy's own
     # signal flat (0) on any weekday it has declared excluded (Manual's
     # config["filters"]["days_of_week"]["exclude"], Python's
@@ -160,6 +182,16 @@ def run_backtest(
 
     with _warnings_module.catch_warnings(record=True) as caught:
         _warnings_module.simplefilter("always", RuntimeWarning)
+        # P0-5: emit the lookahead verdict as a RuntimeWarning INSIDE the
+        # catch_warnings block so engine.py's existing funnel carries it
+        # into BacktestResult.warnings (the report's snippet calls
+        # warnings.warn directly; this placement is what makes that
+        # funnel actually catch it).
+        if _lookahead_result is not None and _lookahead_result.bug_detected:
+            _warnings_module.warn(
+                "LOOKAHEAD BIAS DETECTED: " + _lookahead_result.summary(),
+                RuntimeWarning,
+            )
         trades, equity_curve = run_execution(
             df=df,
             signals=strat_result.signals,

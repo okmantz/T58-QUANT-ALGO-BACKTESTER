@@ -46,6 +46,13 @@ does NOT implement everything app.backtest.execution.run_execution does:
     ranking candidates against each other, not a substitute for the real
     number.
 
+Whole-contract flooring (RiskConfig.contract_size) IS mirrored here --
+see _position_size_vec: a trade whose intended risk doesn't reach one
+whole contract sizes to 0 whole contracts and is skipped, exactly like
+the real engine. (This was the one previously-undocumented divergence;
+it is now parity, verified by
+tests/test_vectorized_fastpath.py::test_position_size_parity_with_contract_size.)
+
 Any candidate ineligible for this fast path (or that this module errors
 on) MUST fall back to the existing scalar `_stage1_task` path -- see
 `app.search.batch_runner._stage1_task_batch`. Every survivor of Stage 1,
@@ -120,6 +127,10 @@ def _position_size_vec(equity: np.ndarray, sizing_pips: np.ndarray, risk: RiskCo
     units = np.where(stop_distance > 0, risk_amt / stop_distance, 0.0)
     if risk.max_position_size is not None:
         units = np.minimum(units, risk.max_position_size)
+    if risk.contract_size:
+        # Parity with RiskConfig.position_size: floor to whole contracts, never round up.
+        lots = np.floor(units / risk.contract_size + 1e-9)
+        units = np.maximum(lots, 0.0) * risk.contract_size
     return np.maximum(units, 0.0)
 
 
@@ -183,6 +194,10 @@ def run_vectorized_batch(
     equity = np.full(k, risk.initial_balance, dtype=np.float64)
     in_pos = np.zeros(k, dtype=bool)
     direction = np.zeros(k, dtype=np.int8)
+    # P2-1 parity with app.backtest.execution: per-candidate bar index
+    # of the most recent full close, so RiskConfig.reentry_cooldown_bars
+    # blocks same-bar reentry here exactly like the scalar engine.
+    last_close_bar = np.full(k, -10 ** 9, dtype=np.int64)
     entry_price = np.zeros(k, dtype=np.float64)
     entry_ts = np.empty(k, dtype=ts.dtype)
     equity_at_entry = np.zeros(k, dtype=np.float64)
@@ -260,12 +275,17 @@ def run_vectorized_batch(
                 equity[exit_mask] = new_equity
                 in_pos[exit_mask] = False
                 direction[exit_mask] = 0
+                last_close_bar[idxs] = i  # P2-1: EXEC-002 cooldown parity
                 stop_price[exit_mask] = np.nan
                 take_price[exit_mask] = np.nan
 
         flat = ~in_pos
         under_daily_cap = trades_today_count[day_idx[i]] < risk.max_trades_per_day
-        want_entry = flat & under_daily_cap & (sig_i != 0)
+        # P2-1: mirror the scalar engine's reentry cooldown exactly --
+        # with the default reentry_cooldown_bars=1, the close bar itself
+        # is blocked and the next bar is the earliest reentry.
+        cooldown_ok = (i - last_close_bar) >= risk.reentry_cooldown_bars
+        want_entry = flat & under_daily_cap & cooldown_ok & (sig_i != 0)
         if want_entry.any():
             idxs = np.nonzero(want_entry)[0]
             d = sig_i[idxs].astype(np.int8).astype(np.float64)

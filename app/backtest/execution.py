@@ -20,12 +20,15 @@ EXPLICIT EXECUTION ASSUMPTIONS (documented here so none of these are silent):
   - Same-bar stop-out-then-reentry: if a position closes intrabar (stop,
     target, or forced daily-loss close) and the strategy's signal for
     that same bar is still non-flat, a fresh position in the same
-    direction is allowed to open at that bar's own close. This is the
+    direction is allowed to open at that bar's own close. This was the
     ORIGINAL, default behavior (RiskConfig.reentry_cooldown_bars == 0),
-    preserved exactly for backward compatibility -- but it is now an
-    explicit, configurable choice: set reentry_cooldown_bars to N>0 to
-    block any new entry for N bars after a position closes, regardless
-    of what the signal says. See RiskConfig.reentry_cooldown_bars.
+    preserved exactly for backward compatibility -- but the default is
+    now 1 (no same-bar reentry; earliest reentry is the next bar), and
+    the original behavior is still available as an explicit,
+    configurable choice: set reentry_cooldown_bars to 0 to opt back
+    into it, or to N>0 to block any new entry for N bars after a
+    position closes, regardless of what the signal says. See
+    RiskConfig.reentry_cooldown_bars.
 """
 from __future__ import annotations
 
@@ -68,6 +71,14 @@ class Trade:
     # configured. See app.backtest.statistics.compute_risk_reconciliation
     # for the aggregated view surfaced in every report. None only for a
     # trade whose sizing produced no finite risk_amount (equity <= 0).
+    worst_price: float | None = None
+    # P2-5: the most ADVERSE price the trade's bar extremes ever reached
+    # while the position was open (low for a long, high for a short) --
+    # the mirror of the engine-internal best_price tracking. Feeds
+    # per-trade MAE (max adverse excursion in currency) in
+    # app.backtest.statistics.compute_statistics. None for trades built
+    # by paths that don't track it (e.g. the vectorized Stage-1 fast
+    # path, which settles without intrabar extremes).
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -209,6 +220,10 @@ def run_execution(
     blocked_max_trades_count = 0
     blocked_halted_count = 0
     blocked_adaptive_zero_count = 0
+    blocked_news_blackout_count = 0  # P2-6: entries refused on a news-blackout date
+    blocked_weekend_hold_count = 0   # P2-6: entries refused while the weekend-hold block is latched
+    weekend_close_count = 0          # P2-6: positions force-closed on a week's last bar
+    weekend_entry_block = False      # P2-6: latched at a week-end close, cleared on Monday
     last_entry_bar_idx = -1
 
     # EXEC-002: bar index the most recently CLOSED (fully closed, not
@@ -216,10 +231,11 @@ def run_execution(
     # entry of the run is never blocked by "no previous close yet". Only
     # `_settle_exit` (a full close) updates this; `_settle_partial_exit`
     # deliberately does not, since the position it's called from is
-    # still open, not re-entered. With the default
-    # risk.reentry_cooldown_bars == 0, `i - last_close_bar_idx >= 0` is
-    # true the instant a position closes, reproducing the original
-    # (no-cooldown) behavior exactly -- this is purely additive.
+    # still open, not re-entered. With risk.reentry_cooldown_bars == 0,
+    # `i - last_close_bar_idx >= 0` is true the instant a position
+    # closes, reproducing the original (no-cooldown) behavior exactly --
+    # the current default is 1 (blocks the same bar's close only); set 0
+    # explicitly to opt back into the original unconditional behavior.
     last_close_bar_idx = -10 ** 9
 
     def _clamp_loss(pnl_value: float, equity_at_entry: float) -> float:
@@ -282,7 +298,17 @@ def run_execution(
     # dict key (pnl_today / trades_today), so a plain numpy datetime64
     # day-floor value works identically as a dict key and is computed
     # ONCE, vectorized, outside the loop instead of n times inside it.
-    bar_dates = pd.DatetimeIndex(ts).normalize().to_numpy()
+    # P2-3 (UTC-day fix): `ts` above was tz-stripped to UTC, so
+    # normalizing it directly keys max_trades_per_day / pnl_today_sum /
+    # the daily-loss circuit breaker off UTC days (19:00-19:00 CT for
+    # Chicago-aware data). Re-attach the input column's original tz
+    # first so "a day" is the wall-clock calendar day the data was
+    # recorded in -- the same day app.backtest.statistics'
+    # _periodic_max_drawdown attributes P&L to.
+    _ts_for_days = df["timestamp"]
+    if _ts_tz is not None:
+        _ts_for_days = pd.DatetimeIndex(ts).tz_localize("UTC").tz_convert(_ts_tz)
+    bar_dates = pd.DatetimeIndex(_ts_for_days).normalize().to_numpy()
 
     # UPGRADE (speed): trades_today / pnl_today used to be plain dicts keyed
     # by the numpy.datetime64 in bar_dates, with a hash + dict lookup (get(),
@@ -300,6 +326,53 @@ def run_execution(
     trades_today_count = np.zeros(len(_unique_days), dtype=np.int64)
     pnl_today_sum = np.zeros(len(_unique_days), dtype=np.float64)
     day_has_pnl = np.zeros(len(_unique_days), dtype=bool)
+
+    # P2-6 (news blackout): path to a CSV with one YYYY-MM-DD date per
+    # line (blank lines and #-comments ignored). When set, run_execution
+    # blocks ALL new entries on those dates -- the backtest-path
+    # equivalent of the news-blackout gate the live engine already
+    # enforces. Parsed once, up front. None (default) = disabled,
+    # byte-identical to every run before this field existed.
+    # NOTE: bar_dates can be an object array of tz-aware Timestamps
+    # (pandas 3.x), which np.isin(datetime64) silently misses -- compare
+    # plain datetime.date objects instead, which is unambiguous.
+    _news_blackout_bar = np.zeros(n, dtype=bool)
+    _news_csv = getattr(risk, "news_blackout_csv", None)
+    if _news_csv:
+        _news_blackout_dates: set = set()
+        try:
+            with open(_news_csv, "r", encoding="utf-8") as _f:
+                for _line in _f:
+                    _s = _line.strip()
+                    if _s and not _s.startswith("#"):
+                        _news_blackout_dates.add(pd.Timestamp(_s).date())
+        except (OSError, ValueError) as _e:
+            import warnings
+            warnings.warn(
+                f"news_blackout_csv '{_news_csv}' could not be read/parsed ({_e}); "
+                "news blackout is DISABLED for this run -- no dates will be blocked.",
+                RuntimeWarning,
+            )
+        if _news_blackout_dates:
+            _bar_day_dates = pd.DatetimeIndex(bar_dates).date
+            _news_blackout_bar = np.fromiter(
+                (d in _news_blackout_dates for d in _bar_day_dates),
+                dtype=bool, count=n,
+            )
+
+    # P2-6 (weekend hold): bar_dates above is wall-clock (see the P2-3
+    # fix), so day-of-week here is the calendar day the data was recorded
+    # in, not UTC. _week_ends_at[i] is True when the next bar belongs to
+    # a new week -- Friday for normal market data (next bar Monday),
+    # Thursday before a Friday holiday, Sunday for weekend-traded
+    # instruments. False (default) = the whole feature is off,
+    # byte-identical to every run before it existed.
+    _weekend_hold = bool(getattr(risk, "block_weekend_hold", False))
+    _dow = pd.DatetimeIndex(bar_dates).dayofweek.to_numpy()  # Mon=0..Sun=6
+    _week_ends_at = np.zeros(n, dtype=bool)
+    if n:
+        _week_ends_at[-1] = True
+        _week_ends_at[:-1] = _dow[1:] <= _dow[:-1]
 
     sl_dist_vals = stop_loss_distance.values if stop_loss_distance is not None else None
     tp_dist_vals = take_profit_distance.values if take_profit_distance is not None else None
@@ -371,6 +444,7 @@ def run_execution(
             adaptive_risk_multiplier=open_pos["adaptive_multiplier"],
             adaptive_risk_rules_active=tuple(open_pos["adaptive_rules_active"]),
             intended_risk_dollars=open_pos.get("intended_risk_dollars"),
+            worst_price=open_pos.get("worst_price"),
         ))
         bar_date_ = day_idx[i]
         adaptive_state.record_trade_close(pnl, is_new_day=not day_has_pnl[bar_date_])
@@ -418,6 +492,7 @@ def run_execution(
             adaptive_risk_multiplier=open_pos["adaptive_multiplier"],
             adaptive_risk_rules_active=tuple(open_pos["adaptive_rules_active"]),
             intended_risk_dollars=open_pos.get("intended_risk_dollars"),
+            worst_price=open_pos.get("worst_price"),
         ))
         open_pos["size"] -= partial_size
         bar_date_ = day_idx[i]
@@ -466,6 +541,13 @@ def run_execution(
     for i in range(n):
         bar_date = day_idx[i]
 
+        # P2-6 (weekend hold): a new week clears the weekend entry block
+        # (latched when a position was force-closed on the week's last
+        # bar). Saturday/Sunday bars stay blocked via weekend_blocked_today
+        # below even though the latch is only set at week-end.
+        if _weekend_hold and _dow[i] == 0:
+            weekend_entry_block = False
+
         # --- manage open trade: trailing stop / break-even, then stop/take intrabar ---
         if open_trade is not None:
             direction = open_trade["direction"]
@@ -475,6 +557,16 @@ def run_execution(
                 open_trade["best_price"] = max(open_trade["best_price"], favorable_extreme)
             else:
                 open_trade["best_price"] = min(open_trade["best_price"], favorable_extreme)
+
+            # P2-5: mirror best_price (favorable extreme) with worst_price
+            # (adverse extreme) so max adverse excursion (MAE) is
+            # computable per trade in app.backtest.statistics. Defined
+            # here, once, so the daily-loss check below reuses it.
+            adverse_extreme = lows[i] if direction == 1 else highs[i]
+            if direction == 1:
+                open_trade["worst_price"] = min(open_trade["worst_price"], adverse_extreme)
+            else:
+                open_trade["worst_price"] = max(open_trade["worst_price"], adverse_extreme)
 
             # Mark-to-market daily-loss check, using the ADVERSE intrabar
             # extreme (low for a long, high for a short) rather than the
@@ -486,8 +578,8 @@ def run_execution(
             # floor intrabar. Checking only realized same-day P&L (the
             # old behavior) silently let strategies "survive" daily-loss
             # breaches that a real funded account would have been
-            # stopped out of.
-            adverse_extreme = lows[i] if direction == 1 else highs[i]
+            # stopped out of. (adverse_extreme is defined once, next to
+            # the best_price/worst_price tracking above.)
             floating_adverse_pnl = (adverse_extreme - open_trade["entry_price"]) * open_trade["size"] * direction
             day_realized_so_far = pnl_today_sum[bar_date]
             if (
@@ -500,6 +592,17 @@ def run_execution(
                 _settle_exit(open_trade, adverse_extreme, "daily_loss_limit_forced_close", direction, i)
                 open_trade = None
                 force_closed_count += 1
+                if getattr(risk, "prop_daily_loss_is_breach", False):
+                    # P1-2: most real prop firms TERMINATE the account on
+                    # a daily-loss breach -- not just "no new entries for
+                    # the rest of the day". Mark it blown (no new trades
+                    # for the rest of the run, exactly like hitting
+                    # max_account_drawdown_pct) instead of merely
+                    # blocking entries. False (default) = byte-identical
+                    # to the historical force-close-and-keep-trading
+                    # behavior.
+                    account_blown = True
+                    account_blown_at = _restore_tz(ts[i])
                 equity_arr[i] = equity
                 continue
 
@@ -580,6 +683,18 @@ def run_execution(
                 # close, and the end-of-data close) now goes through.
                 _settle_exit(open_trade, exit_price, reason, direction, i)
                 open_trade = None
+
+            # P2-6 (weekend hold): still open at the close of the week's
+            # last bar -> force-close at the close, mirroring the live
+            # engine's weekend-hold ban. The intrabar stop/take/signal
+            # exits just above take precedence -- they really happened
+            # first. Latches weekend_entry_block so no new position opens
+            # until Monday (cleared at the top of the loop).
+            if open_trade is not None and _weekend_hold and _week_ends_at[i]:
+                _settle_exit(open_trade, closes[i], "weekend_hold_forced_close", direction, i)
+                open_trade = None
+                weekend_close_count += 1
+                weekend_entry_block = True
 
         # --- mark-to-market equity curve point for this bar ---
         # Realized equity plus the floating P&L of any still-open
@@ -703,13 +818,19 @@ def run_execution(
         # that clips a tight stop and then closes back at a level the
         # strategy still signals on produced two trades and re-exposed
         # the same risk within one bar, with no cooldown and no way to
-        # configure one. reentry_cooldown_bars defaults to 0, under which
-        # `i - last_close_bar_idx >= 0` is true the instant a position
-        # closes -- byte-identical to the original (undocumented,
-        # unconditional) behavior. Setting it to N>0 blocks any new entry
-        # until N bars after the previous close, regardless of signal.
+        # configure one. reentry_cooldown_bars defaults to 1, under which
+        # the same bar's close is blocked but the next bar is allowed;
+        # set it explicitly to 0 for byte-identical original
+        # (undocumented, unconditional) same-bar reentry, or to N>0 to
+        # block any new entry until N bars after the previous close,
+        # regardless of signal.
         cooldown_active = (i - last_close_bar_idx) < risk.reentry_cooldown_bars
-        if open_trade is None and sig[i] != 0 and not daily_limit_breached and not account_blown and not cooldown_active:
+        # P2-6 gates: no new entries on news-blackout dates, and none
+        # while the weekend-hold block is active (weekend bars themselves
+        # or the latch set by a week-end force-close, until Monday).
+        news_blackout_today = bool(_news_blackout_bar[i])
+        weekend_blocked_today = _weekend_hold and (_dow[i] >= 5 or weekend_entry_block)
+        if open_trade is None and sig[i] != 0 and not daily_limit_breached and not account_blown and not cooldown_active and not news_blackout_today and not weekend_blocked_today:
             n_today = trades_today_count[bar_date]
             if n_today >= risk.max_trades_per_day:
                 blocked_max_trades_count += 1
@@ -842,6 +963,7 @@ def run_execution(
                         "take_price": take_price,
                         "equity_at_entry": equity,
                         "best_price": entry_price,
+                        "worst_price": entry_price,
                         "initial_risk": initial_risk,
                         "intended_risk_dollars": intended_risk_dollars,
                         "breakeven_done": False,
@@ -860,6 +982,10 @@ def run_execution(
                 blocked_daily_limit_count += 1
             elif cooldown_active:
                 blocked_cooldown_count += 1
+            elif news_blackout_today:
+                blocked_news_blackout_count += 1
+            elif weekend_blocked_today:
+                blocked_weekend_hold_count += 1
 
     # close any still-open trade at final bar close
     if open_trade is not None:
@@ -898,7 +1024,10 @@ def run_execution(
         "max_trades_per_day": blocked_max_trades_count,
         "zero_contract_sizing": zero_size_contract_floor_count,
         "adaptive_risk_zero_size": blocked_adaptive_zero_count,
+        "news_blackout": blocked_news_blackout_count,
+        "weekend_hold": blocked_weekend_hold_count,
     }
+    equity_df.attrs["weekend_hold_close_count"] = weekend_close_count
     # Plain-language, chronological log of every account reset / payout, so a
     # report can show exactly when and why the account restarted.
     equity_df.attrs["account_reset_log"] = [ev["message"] for ev in reset_events if ev.get("message")]
@@ -1040,6 +1169,15 @@ def run_execution(
             "raising risk_value, switching to that instrument's micro contract (e.g. MGC instead of "
             "GC, MES instead of ES -- see app.data.instrument_specs), increasing account size, or "
             "tightening the strategy's stop distance.",
+            RuntimeWarning,
+        )
+
+    if risk.commission_per_trade == 0.0 and risk.slippage_pips == 0.0 and risk.spread_pips == 0.0:
+        import warnings
+        warnings.warn(
+            "ZERO FRICTION: commission, slippage, AND spread are all 0.0 -- every trade is filled "
+            "at the exact quoted price. Real fills are never free; use apply_instrument_spec() or set "
+            "these explicitly before trusting net profit.",
             RuntimeWarning,
         )
 

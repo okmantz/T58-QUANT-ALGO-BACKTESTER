@@ -134,6 +134,16 @@ class BacktestStatistics:
     # All 0.0 for a backtest with no trades carrying initial_risk/
     # intended_risk_dollars (e.g. a strategy that defines no stop at all).
 
+    avg_mae_dollars: float = 0.0
+    max_mae_dollars: float = 0.0
+    # P2-5: max adverse excursion (MAE) in currency -- the worst
+    # unrealized loss each trade suffered while open (entry-to-worst-
+    # price move x size), from the execution engine's worst_price
+    # tracking. avg/max across trades that recorded one; 0.0 for a run
+    # with no worst_price data at all (e.g. vectorized fast-path
+    # trades, which don't track it). Purely additive -- every existing
+    # report/test that never reads these fields is unaffected.
+
     def to_dict(self) -> dict:
         return asdict(self)
 
@@ -430,11 +440,32 @@ def net_profit_reset_note(stats: "BacktestStatistics") -> str:
     )
 
 
+def _bars_per_year_from_equity_curve(equity_curve: pd.DataFrame) -> float:
+    """Auto-derives bars/year from the equity curve's own timestamp
+    column: round(365.25*24*3600 / median_bar_seconds). Falls back to 252
+    (trading days/year) when timestamps are missing or there are fewer
+    than 2 bars -- the honest unknown, noted here rather than guessed
+    silently. Used by compute_statistics when its bars_per_year argument
+    is left as None (the default)."""
+    try:
+        ts = pd.to_datetime(equity_curve["timestamp"], errors="coerce")
+        deltas = ts.diff().dropna().dt.total_seconds()
+        deltas = deltas[np.isfinite(deltas) & (deltas > 0)]
+        if len(deltas) < 1:
+            return 252.0
+        median_bar_seconds = float(deltas.median())
+        if median_bar_seconds <= 0:
+            return 252.0
+        return round(365.25 * 24 * 3600 / median_bar_seconds)
+    except Exception:
+        return 252.0
+
+
 def compute_statistics(
     trades: list[Trade],
     equity_curve: pd.DataFrame,
     initial_balance: float,
-    bars_per_year: float = 252 * 78,  # rough default for intraday FX; overridable
+    bars_per_year: float | None = None,  # None = auto-derive from the equity curve's timestamps
 ) -> BacktestStatistics:
     if not trades:
         return BacktestStatistics(
@@ -477,6 +508,9 @@ def compute_statistics(
             profit_factor=0, expectancy=0, average_r=0, risk_reward=0,
             sharpe_ratio=0, sortino_ratio=0, calmar_ratio=0, total_trades=len(trades),
         )
+    # P2-7: breakeven (pnl == 0) counts as a LOSS here -- win_rate is
+    # really a "winning rate" over strictly-positive trades; the
+    # complementary bucket is "non-winning", not strictly "losing".
     wins = pnls[pnls > 0]
     losses = pnls[pnls <= 0]
 
@@ -554,16 +588,41 @@ def compute_statistics(
         average_r = float(average_trade / avg_risk) if avg_risk else 0.0
     risk_reward = float(abs(average_winner / average_loser)) if average_loser != 0 else float("inf") if average_winner > 0 else 0.0
 
-    # Risk-adjusted ratios computed on per-trade returns (simple, MVP-appropriate approach)
-    trade_returns = pnls / initial_balance if initial_balance else pnls
-    mean_ret = trade_returns.mean()
-    std_ret = trade_returns.std(ddof=1) if len(trade_returns) > 1 else 0.0
-    downside = trade_returns[trade_returns < 0]
-    downside_std = downside.std(ddof=1) if len(downside) > 1 else 0.0
-
-    sharpe_ratio = float((mean_ret / std_ret) * np.sqrt(len(trade_returns))) if std_ret else 0.0
-    sortino_ratio = float((mean_ret / downside_std) * np.sqrt(len(trade_returns))) if downside_std else 0.0
+    # Risk-adjusted ratios, annualized off the BAR-level equity curve
+    # (P1-1): the old per-trade sqrt(N_trades) scaling was a t-statistic,
+    # not a Sharpe -- two strategies with identical per-trade return
+    # distributions but 400 vs 100 trades reported Sharpes differing by
+    # 2x for the same edge. Bar-level annualization compares strategies
+    # on the same footing regardless of trade frequency. bars_per_year
+    # defaults to None = auto-derived from the equity curve's timestamps
+    # (see _bars_per_year_from_equity_curve); pass an explicit number to
+    # pin it, exactly as before this parameter existed.
+    if bars_per_year is None:
+        bars_per_year = _bars_per_year_from_equity_curve(equity_curve)
+    bar_rets = equity_curve["equity"].pct_change().dropna()
+    bar_rets = bar_rets[np.isfinite(bar_rets)]
+    if len(bar_rets) > 1 and bar_rets.std(ddof=1):
+        sharpe_ratio = float(bar_rets.mean() / bar_rets.std(ddof=1) * np.sqrt(bars_per_year))
+        downside = bar_rets[bar_rets < 0]
+        sortino_ratio = float(bar_rets.mean() / downside.std(ddof=1) * np.sqrt(bars_per_year)) if len(downside) > 1 and downside.std(ddof=1) else 0.0
+    else:
+        sharpe_ratio = sortino_ratio = 0.0
     calmar_ratio = float(return_pct / max_drawdown_pct) if max_drawdown_pct else 0.0
+
+    # P2-5: max adverse excursion (MAE) in currency per trade, from the
+    # execution engine's worst_price tracking (the adverse extreme while
+    # the trade was open). Trades without a recorded worst_price (e.g.
+    # from the vectorized fast path, which doesn't track it) are excluded
+    # from the average rather than counted as zero-excursion.
+    mae_values = []
+    for t in trades:
+        wp = getattr(t, "worst_price", None)
+        t_size = getattr(t, "size", 0.0) or 0.0
+        if wp is None or not np.isfinite(wp) or not t_size:
+            continue
+        mae_values.append(max((t.entry_price - wp) * t.direction * t_size, 0.0))
+    avg_mae_dollars = float(np.mean(mae_values)) if mae_values else 0.0
+    max_mae_dollars = float(np.max(mae_values)) if mae_values else 0.0
 
     return BacktestStatistics(
         net_profit=net_profit, gross_profit=gross_profit, gross_loss=gross_loss,
@@ -590,6 +649,8 @@ def compute_statistics(
         pct_trades_adaptive_throttle_active=risk_recon["pct_trades_adaptive_throttle_active"],
         pct_trades_position_capped=risk_recon["pct_trades_position_capped"],
         pct_trades_risk_overshoot=risk_recon["pct_trades_risk_overshoot"],
+        avg_mae_dollars=avg_mae_dollars,
+        max_mae_dollars=max_mae_dollars,
     )
 
 
@@ -658,8 +719,9 @@ def compute_cost_ladder(trades: list, rungs_pct: list[float] | None = None) -> l
 
     rungs_pct: extra ROUND-TURN cost, as a fraction of notional (entry
     price x size), applied on top of whatever commission/spread/slippage
-    the backtest already modeled. Defaults to 0%, 0.05%, 0.10%, 0.25% per
-    side (i.e. the exact ladder the falsification-kit methodology uses).
+    the backtest already modeled -- charged ONCE per trade, not per side.
+    Defaults to 0%, 0.05%, 0.10%, 0.25% per round-turn trade (i.e. the
+    exact ladder the falsification-kit methodology uses).
     """
     if rungs_pct is None:
         rungs_pct = [0.0, 0.0005, 0.0010, 0.0025]
@@ -674,6 +736,9 @@ def compute_cost_ladder(trades: list, rungs_pct: list[float] | None = None) -> l
     for rung in rungs_pct:
         extra_cost = notionals * rung
         pnls = base_pnls - extra_cost
+        # P2-7: as in compute_statistics, breakeven (pnls == 0) lands in
+        # the "non-winning" bucket -- win_rate here counts strictly
+        # positive trades only.
         gross_profit = float(pnls[pnls > 0].sum())
         gross_loss = float(pnls[pnls <= 0].sum())
         profit_factor = (gross_profit / abs(gross_loss)) if gross_loss != 0 else (float("inf") if gross_profit > 0 else 0.0)
