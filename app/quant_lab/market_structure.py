@@ -59,7 +59,9 @@ def _ensure_ohlc(df: pd.DataFrame) -> pd.DataFrame:
         if col not in out.columns:
             raise MarketStructureError(f"DataFrame must contain a '{col}' column.")
     out["timestamp"] = pd.to_datetime(out["timestamp"])
-    return out.sort_values("timestamp").reset_index(drop=True)
+    # Same stability rationale as calculate_swing_points below: a stable sort
+    # keeps duplicate-timestamp input rows in input order, deterministically.
+    return out.sort_values("timestamp", kind="stable").reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +90,20 @@ def calculate_swing_points(df: pd.DataFrame, *, left: int = 5, right: int = 5) -
             rows.append({"timestamp": ohlc.at[i, "timestamp"], "price": float(lows[i]), "kind": "low", "index": i})
     if not rows:
         return pd.DataFrame(columns=["timestamp", "price", "kind", "index"])
-    return pd.DataFrame(rows).sort_values("timestamp").reset_index(drop=True)
+    # FIX (swing-sort-stability): the old bare sort_values("timestamp") used
+    # quicksort, which is NOT stable -- a bar that is simultaneously a fractal
+    # high and a fractal low produced its two swing rows in nondeterministic
+    # order depending on frame length, flipping downstream bos/choch
+    # attribution between full and truncated runs (verified on MGC 15m).
+    # Deterministic tie-break: lows before highs; kind="stable" on top so the
+    # result cannot depend on input order either.
+    out = pd.DataFrame(rows)
+    out["_kind_order"] = out["kind"].map({"low": 0, "high": 1})
+    return (
+        out.sort_values(["timestamp", "_kind_order"], kind="stable")
+        .drop(columns=["_kind_order"])
+        .reset_index(drop=True)
+    )
 
 
 def _label_swing_structure(swings: pd.DataFrame) -> pd.DataFrame:
@@ -317,7 +332,10 @@ def calculate_wyckoff_events(
         return pd.DataFrame(columns=cols)
     return (
         pd.DataFrame(rows).drop_duplicates(subset=["timestamp", "event"], keep="first")
-        .sort_values("timestamp").reset_index(drop=True)
+        # Deterministic tie-break on event name; same stability rationale as
+        # calculate_swing_points -- previously same-timestamp events could
+        # flip order between runs of different frame lengths.
+        .sort_values(["timestamp", "event"], kind="stable").reset_index(drop=True)
     )
 
 
