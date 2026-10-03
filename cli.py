@@ -512,4 +512,12 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # P2-8 (Oct 2026): rotating file logging (5 MB x 3) for headless/CI
+    # runs -- see run_app.py. Safe no-op if the logs dir isn't writable.
+    try:
+        from app.reports.crash_log import setup_rotating_logging
+
+        setup_rotating_logging("t58-cli")
+    except Exception:  # noqa: BLE001
+        pass
     sys.exit(main())

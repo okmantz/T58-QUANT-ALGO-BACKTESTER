@@ -17,10 +17,13 @@ from __future__ import annotations
 
 import multiprocessing
 
-from app.reports.crash_log import install_thread_excepthook
+from app.reports.crash_log import install_thread_excepthook, setup_rotating_logging
 from app.web.launcher import run
 
 if __name__ == "__main__":
+    # P2-8 (Oct 2026): process-wide rotating logging (5 MB x 3) on
+    # data/logs/t58-web.log -- see run_app.py.
+    setup_rotating_logging("t58-web")
     # See run_app.py for why this is required in a packaged .exe: Search
     # Lab's ProcessPoolExecutor workers re-launch this frozen executable,
     # and without freeze_support() each re-launch falls through to main()

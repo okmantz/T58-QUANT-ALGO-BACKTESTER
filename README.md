@@ -136,6 +136,15 @@ build a standalone app folder per OS.
    GBPUSD, indices, etc.) ship under `data/raw`. Multiple files can be
    selected for multi-timeframe analysis (e.g. 60m bias + 15m zone + 5m
    entry). Alpaca API fetch is also supported for US equities/crypto.
+
+   **About downloads & data (buyers read this):** the release zips ship
+   with the full historical datasets under `data/raw/` bundled in --
+   redistribution of this market data is licensed, so it travels with the
+   app. You can also add more data any time after install: in the desktop
+   app use the "Import folder..." button on the Market Data tab (or drag a
+   folder onto the tab), and in the web app use the drag-and-drop folder
+   zone in the Data Center -- every recognized file is run through the
+   standard importer with per-file results.
 2. **Import/Create a Strategy** — four formats, all reduced to the same
    standardized signal series:
    - **Manual Builder** — a full no-code visual builder: entry conditions

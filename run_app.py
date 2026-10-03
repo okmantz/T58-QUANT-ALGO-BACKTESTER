@@ -25,9 +25,13 @@ from __future__ import annotations
 import multiprocessing
 
 from app.main import main
-from app.reports.crash_log import install_thread_excepthook
+from app.reports.crash_log import install_thread_excepthook, setup_rotating_logging
 
 if __name__ == "__main__":
+    # P2-8 (Oct 2026): process-wide logging from the first line --
+    # RotatingFileHandler (5 MB x 3) on data/logs/t58.log, replacing the
+    # old print()-only output and the unrotated crash_log.txt.
+    setup_rotating_logging("t58")
     # Catches any exception that kills a background thread (Evolution Lab,
     # Full Pipeline, Speed Run, Search Lab all run on one) and writes it to
     # data/logs/crash_log.txt immediately -- independent of the GUI, so a
