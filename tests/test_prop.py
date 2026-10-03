@@ -50,12 +50,128 @@ def test_funded_account_reaches_payout():
         payout_frequency_days=1,
         payout_threshold_pct=1,
         required_buffer_pct=0,
+        # P2-6: only 3 funded-stage days here, so relax the Topstep-style
+        # winning-day gate (default 5) to keep this a payout-mechanics test.
+        winning_days_for_payout=2,
     )
     dates = [pd.Timestamp("2024-01-01"), pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-03")]
     pnls = [600, 200, 200]  # passes eval on day 1, then accrues funded profit for payout
     result = simulate_account(pnls, dates, rules)
     assert result.passed_evaluation
     assert result.reached_first_payout
+
+
+def test_winning_day_gate_blocks_short_funded_run_by_default():
+    """P2-6: the default winning_days_for_payout=5 gate blocks a payout on
+    a funded run with fewer than 5 non-negative funded-stage days, even
+    when profit and frequency conditions are met."""
+    rules = PropRules(
+        account_size=10000,
+        evaluation_profit_target_pct=5,
+        daily_loss_limit_pct=100,
+        max_drawdown_pct=100,
+        consistency_rule_pct=None,
+        min_trading_days=1,
+        payout_frequency_days=1,
+        payout_threshold_pct=1,
+        required_buffer_pct=0,
+    )
+    dates = [pd.Timestamp("2024-01-01"), pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-03")]
+    pnls = [600, 200, 200]
+    result = simulate_account(pnls, dates, rules)
+    assert result.passed_evaluation
+    assert not result.reached_first_payout
+
+
+def test_payout_gate_uses_gte_not_strict_gt():
+    """P2-7: a balance landing exactly on the payout target is eligible."""
+    rules = PropRules(
+        account_size=10000,
+        evaluation_profit_target_pct=5,
+        daily_loss_limit_pct=100,
+        max_drawdown_pct=100,
+        consistency_rule_pct=None,
+        min_trading_days=1,
+        payout_frequency_days=0,
+        payout_threshold_pct=1,
+        winning_days_for_payout=1,
+    )
+    dates = [pd.Timestamp("2024-01-01"), pd.Timestamp("2024-01-02")]
+    result = simulate_account([600, 100], dates, rules)  # exactly +100 (1%) over baseline on day 2
+    assert result.reached_first_payout
+
+
+def test_static_drawdown_measured_from_account_size_not_peak():
+    """P0-2: a static-DD account that never touches its floor must report
+    0% drawdown even after banking profit first (+2000, -1400 used to
+    report 11.67% against the ratcheting peak)."""
+    rules = PropRules(
+        account_size=10000, max_drawdown_pct=10, drawdown_type="static",
+        daily_loss_limit_pct=100, evaluation_profit_target_pct=100,
+    )
+    dates = [pd.Timestamp("2024-01-01"), pd.Timestamp("2024-01-02")]
+    result = simulate_account([2000, -1400], dates, rules)
+    assert not result.failed
+    assert result.max_drawdown_pct_reached == 0.0
+
+
+def test_payout_does_not_breach_trailing_drawdown():
+    """P0-3: a payout nets out of the trailing peak -- a $500 payout
+    followed by a -$10 trade must not fail the account on trailing DD."""
+    rules = PropRules(
+        account_size=10000, evaluation_profit_target_pct=5, max_drawdown_pct=4,
+        drawdown_type="trailing", daily_loss_limit_pct=100, consistency_rule_pct=None,
+        min_trading_days=1, payout_frequency_days=0, payout_threshold_pct=0,
+        winning_days_for_payout=1,
+    )
+    dates = [pd.Timestamp("2024-01-01"), pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-03")]
+    result = simulate_account([600, 500, -10], dates, rules)
+    assert len(result.payouts) == 1
+    assert not result.failed
+    assert result.failure_reason is None
+
+
+def test_inactivity_rule_fails_after_max_inactive_days():
+    """P2-6: a calendar-day gap with no trades exceeding max_inactive_days
+    fails the account with reason 'inactivity'."""
+    rules = PropRules(
+        account_size=10000, daily_loss_limit_pct=100, max_drawdown_pct=100,
+        evaluation_profit_target_pct=100, max_inactive_days=30,
+    )
+    dates = [pd.Timestamp("2024-01-01"), pd.Timestamp("2024-02-05")]  # 35-day gap
+    result = simulate_account([100, 100], dates, rules)
+    assert result.failed
+    assert result.failure_reason == "inactivity"
+
+
+def test_inactivity_rule_off_by_default():
+    rules = PropRules(
+        account_size=10000, daily_loss_limit_pct=100, max_drawdown_pct=100,
+        evaluation_profit_target_pct=100,
+    )
+    dates = [pd.Timestamp("2024-01-01"), pd.Timestamp("2024-02-05")]  # 35-day gap
+    result = simulate_account([100, 100], dates, rules)
+    assert not result.failed
+
+
+def test_adverse_floating_drawdown_proxy():
+    """P1-3: with floating_drawdown_mode='adverse', a trade assumed to have
+    drawn down to its full initial risk intrabar fails the account even
+    though its realized close stayed above the floor."""
+    dates = [pd.Timestamp("2024-01-01"), pd.Timestamp("2024-01-02")]
+    base = dict(
+        account_size=10000, max_drawdown_pct=4, drawdown_type="trailing",
+        daily_loss_limit_pct=100, evaluation_profit_target_pct=100,
+    )
+    adverse = simulate_account(
+        [300, -100], dates, PropRules(**base, floating_drawdown_mode="adverse"),
+        trade_initial_risks=[0, 800],
+    )
+    assert adverse.failed
+    assert "adverse-floating proxy" in adverse.failure_reason
+    # Default "realized" mode is byte-identical: no failure.
+    realized = simulate_account([300, -100], dates, PropRules(**base), trade_initial_risks=[0, 800])
+    assert not realized.failed
 
 
 def test_no_trades_returns_safe_default():

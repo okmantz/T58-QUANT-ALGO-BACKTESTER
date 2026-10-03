@@ -52,6 +52,11 @@ def _fast_stage_cfg(**overrides) -> SearchStageConfig:
         stage1_top_n=6, ga_population=4, ga_generations=1, ga_search_sims=30,
         stage2_top_n=3, full_mc_sims=50, walk_forward_folds=0, robustness_neighbors=0,
         workers=1, random_seed=42,
+        # P1-4 (2026-10-03): these loop-mechanics tests need Stage 3 to
+        # pass low-probability candidates the way it did before the
+        # acceptance floor existed -- the floor itself is covered by the
+        # batch_runner/search tests, not here.
+        min_eval_pass_probability=0.0, min_first_payout_probability=0.0,
     )
     base.update(overrides)
     return SearchStageConfig(**base)

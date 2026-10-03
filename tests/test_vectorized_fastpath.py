@@ -159,3 +159,24 @@ def test_is_vectorizable_rejects_dynamic_stop_shapes():
     assert not is_vectorizable(StrategyResult(**base, take_profit_distance=pd.Series([0.5])))
     assert not is_vectorizable(StrategyResult(**base, trailing_stop_distance=pd.Series([0.5])))
     assert not is_vectorizable(StrategyResult(**base, breakeven_trigger_r=1.5))
+
+
+def test_position_size_parity_with_contract_size():
+    """P0-4: _position_size_vec must floor to whole contracts exactly like
+    RiskConfig.position_size -- a trade whose intended risk doesn't reach
+    one whole contract sizes to 0 (skipped), never a fractional contract."""
+    equities = np.array([10_000.0, 50_000.0, 5_000.0, 20_000.0, 0.0])
+    pips = np.array([10.0, 25.0, 5.0, 50.0, 10.0])
+    for contract_size in (50.0, 5.0):
+        risk = RiskConfig(
+            initial_balance=50_000.0, risk_mode="percent", risk_value=1.0,
+            pip_size=1.0, contract_size=contract_size,
+        )
+        vec_size = _position_size_vec(equities, pips, risk)
+        for eq, pip, vs in zip(equities, pips, vec_size):
+            assert vs == pytest.approx(risk.position_size(eq, pip), abs=1e-9)
+        # flooring never rounds up: every nonzero size is a whole multiple
+        # of contract_size
+        for vs in vec_size:
+            if vs > 0:
+                assert vs / contract_size == pytest.approx(round(vs / contract_size), abs=1e-9)

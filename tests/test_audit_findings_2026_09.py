@@ -192,15 +192,40 @@ class TestExec002ReentryCooldown:
         )
         return trades
 
-    def test_default_reproduces_original_no_cooldown_behavior(self):
-        """Backward compatibility: reentry_cooldown_bars defaults to 0,
-        which must reproduce the ORIGINAL (undocumented) same-bar
-        reentry behavior byte-for-byte -- a stop-out on bar 1 followed by
-        a fresh same-direction entry at that same bar's close."""
+    def test_explicit_zero_reproduces_original_no_cooldown_behavior(self):
+        """Backward compatibility: reentry_cooldown_bars=0 explicitly set
+        must reproduce the ORIGINAL (undocumented) same-bar reentry
+        behavior byte-for-byte -- a stop-out on bar 1 followed by a fresh
+        same-direction entry at that same bar's close."""
         trades = self._run(cooldown=0)
         assert len(trades) == 2
         assert trades[0].exit_reason == "stop_loss"
         assert trades[0].exit_time == trades[1].entry_time
+
+    def test_default_now_blocks_same_bar_reentry(self):
+        """P2-1: the default is now reentry_cooldown_bars=1 -- a stop-out
+        on bar 1 can no longer re-enter at that same bar's close, even
+        though the signal is still on. The cooldown only blocks the
+        close bar itself, so the next bar (still signalling) re-enters:
+        the second trade's entry must NOT be the same bar as the first
+        trade's exit."""
+        df = self._whipsaw_df()
+        sig = pd.Series([1, 1, 1, 0, 0])
+        risk = RiskConfig(
+            initial_balance=10_000.0, risk_value=1.0, pip_size=1.0,
+            spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0,
+        )
+        assert risk.reentry_cooldown_bars == 1
+        trades, _ = run_execution(
+            df=df, signals=sig, risk=risk,
+            stop_loss_pips=2.0, take_profit_pips=None,
+            stop_loss_distance=None, take_profit_distance=None,
+            trailing_stop_distance=None, breakeven_trigger_r=None, partial_exit_config=None,
+            adaptive_risk=None,
+        )
+        assert len(trades) == 2
+        assert trades[0].exit_reason == "stop_loss"
+        assert trades[1].entry_time != trades[0].exit_time
 
     def test_cooldown_suppresses_same_bar_reentry(self):
         trades = self._run(cooldown=2)
