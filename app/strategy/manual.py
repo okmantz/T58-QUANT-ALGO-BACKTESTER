@@ -201,6 +201,12 @@ class ManualStrategy(Strategy):
         period = max(int(operand.get("period", 14) or 14), 1)
         lookback = max(int(operand.get("lookback", period) or period), 1)
         direction = str(operand.get("direction", "both")).lower().strip()
+        if kind in {"swing_bos", "swing_choch"} and "lookback" not in operand:
+            # The fractal swing window defaults to the detectors' own
+            # left=right=5 (app.quant_lab.market_structure), not the
+            # generic indicator period -- an explicit `lookback` on the
+            # operand still overrides this.
+            lookback = 5
 
         tf = operand.get("timeframe")
         if tf and kind not in {"value", "constant", "number"}:
@@ -276,7 +282,13 @@ class ManualStrategy(Strategy):
                     "vwma", "adl", "chaikin_oscillator",
                     "fisher_transform", "fisher_transform_signal",
                     "connors_rsi", "adr",
-                    "news_minutes_since_high_impact", "news_minutes_until_high_impact"}:
+                    "news_minutes_since_high_impact", "news_minutes_until_high_impact",
+                    # Market-structure round: real fractal-swing BOS/ChoCH
+                    # events via app.quant_lab.market_structure -- see
+                    # app.strategy.indicators._swing_structure_event. The
+                    # `lookback` operand doubles as the fractal swing
+                    # window (defaults to the detectors' own 5 below).
+                    "swing_bos", "swing_choch"}:
             return build_indicator_series(work, kind, period=period, column=field, lookback=lookback)
 
         if kind == "time_of_day":

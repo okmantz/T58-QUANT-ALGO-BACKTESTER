@@ -489,7 +489,7 @@ def ichimoku(frame: pd.DataFrame, tenkan_period: int = 9, kijun_period: int = 26
     kijun = (high.rolling(kijun_period, min_periods=kijun_period).max() + low.rolling(kijun_period, min_periods=kijun_period).min()) / 2.0
     senkou_a = ((tenkan + kijun) / 2.0).shift(kijun_period)
     senkou_b = ((high.rolling(senkou_b_period, min_periods=senkou_b_period).max() + low.rolling(senkou_b_period, min_periods=senkou_b_period).min()) / 2.0).shift(kijun_period)
-    chikou = close.shift(-kijun_period)
+    chikou = close.shift(kijun_period)
     return tenkan, kijun, senkou_a, senkou_b, chikou
 
 
@@ -1033,6 +1033,60 @@ def crossunder(a: pd.Series, b: pd.Series) -> pd.Series:
     return (a < b) & (a.shift(1) >= b.shift(1))
 
 
+# ---------------------------------------------------------------------------
+# Market-structure round: swing_bos / swing_choch.
+#
+# These two kinds are thin wrappers around the REAL fractal-swing
+# detectors in app.quant_lab.market_structure (calculate_hh_ll_structure),
+# not reimplementations: the labeling (HH/HL/LH/LL), trend tracking, and
+# BOS-vs-ChoCH classification all live in that module. This wrapper only
+# converts the detector's event table into a causal per-bar signal series.
+#
+# Causality: a fractal swing point at position i is only CONFIRMED once
+# `right` bars have printed after it (the detector needs those bars to
+# know i is a local extreme). The event is therefore emitted at the
+# confirmation bar (index + right) -- the first bar on which a live trader
+# could have known the swing existed. Emitting it at the swing's own bar
+# would be `right` bars of lookahead. Same convention as the Manual
+# builder's swing_high/swing_low operands (see app/strategy/manual.py),
+# which shift their centered-window detection forward by the same amount.
+#
+# Caching: no extra cache is added here. These kinds are dispatched
+# through build_indicator_series() like every other kind, so they ride
+# app.strategy.indicator_cache's process-local memoization, keyed by
+# (dataframe fingerprint [id + len + first/last timestamp + first/last
+# close], kind, period, column, lookback) and bounded at 256 MB / 20k
+# entries -- the fractal O(n*window) detection runs once per unique
+# (data, kind, params) combination per worker process.
+#
+# Precondition (module-wide convention): `frame` is in chronological bar
+# order -- the detector's positional `index` values map onto frame
+# positions 1:1 only then, exactly like every rolling indicator here.
+# ---------------------------------------------------------------------------
+def _swing_structure_event(frame: pd.DataFrame, event: str, window: int) -> pd.Series:
+    """Binary (1.0/0.0) event series: 1.0 on bars where the real
+    fractal-swing detector confirms a fresh `event` ("bos" or "choch")."""
+    # Lazy import: indicators.py is imported by nearly everything, so it
+    # stays dependency-light; app.quant_lab.market_structure itself only
+    # needs pandas/numpy and imports nothing from app.strategy.
+    from app.quant_lab.market_structure import calculate_hh_ll_structure
+
+    out = pd.Series(0.0, index=frame.index)
+    window = max(int(window), 1)
+    if len(frame) < 2 * window + 1:
+        return out  # too short for even one fractal swing -- no events
+    structure = calculate_hh_ll_structure(frame, left=window, right=window)
+    if structure.empty:
+        return out
+    hits = structure.loc[structure["event"] == event, "index"].to_numpy()
+    n = len(out)
+    for pos in hits:
+        confirm = int(pos) + window  # confirmation bar: no lookahead
+        if 0 <= confirm < n:
+            out.iloc[confirm] = 1.0
+    return out
+
+
 def build_indicator_series(frame: pd.DataFrame, kind: str, period: int = 14, column: str = "close", lookback: int | None = None) -> pd.Series:
     """Thin caching wrapper -- see app.strategy.indicator_cache for why.
     The actual per-kind math is unchanged, in _build_indicator_series_uncached
@@ -1246,6 +1300,15 @@ def _build_indicator_series_uncached(frame: pd.DataFrame, kind: str, period: int
         return news_feature_column(frame, "minutes_since_high_impact_news")
     if kind == "news_minutes_until_high_impact":
         return news_feature_column(frame, "minutes_until_high_impact_news")
+    # Market-structure round: real fractal-swing BOS/ChoCH events via
+    # app.quant_lab.market_structure (see _swing_structure_event above).
+    # `lookback` doubles as the fractal swing window (left=right); when
+    # the caller doesn't specify one, fall back to the detectors' own
+    # default of 5 rather than the generic indicator period of 14.
+    if kind == "swing_bos":
+        return _swing_structure_event(frame, "bos", window=(lookback or 5))
+    if kind == "swing_choch":
+        return _swing_structure_event(frame, "choch", window=(lookback or 5))
     raise KeyError(kind)
 
 

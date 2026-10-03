@@ -57,6 +57,19 @@ compatible with) the older, fully manual pattern the next section
 describes, for a strategy that wants to do its own resampling by hand
 instead.
 
+WARMUP BARS (OPTIONAL)
+----------------------
+Indicators need history before their values are real: an EMA(200) on
+daily bars is garbage for its first 200 bars (usually NaN, sometimes
+worse if you fillna'd it). Declare WARMUP_BARS = N (an integer class
+attribute, default 0) and the engine forces your strategy's first N
+signals flat (0) before anything else sees them. Set it to at least
+your longest indicator lookback. 0 (the default) leaves every signal
+untouched, exactly as before.
+
+    WARMUP_BARS = 200             # don't trade until 200 bars of real
+                                  # indicator history exist
+
 DYNAMIC (per-trade) STOPS AND TARGETS
 --------------------------------------
 Many real strategies compute a stop/target that depends on the specific
