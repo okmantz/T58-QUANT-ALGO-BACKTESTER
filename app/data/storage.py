@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import sys
@@ -10,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.data.importer import SUPPORTED_ARCHIVE_EXTENSIONS
+
+logger = logging.getLogger(__name__)
 
 # werkzeug ships with Flask (a hard dependency of the web edition), so
 # this import needs no requirements-file change -- the same sanitize
@@ -100,6 +103,41 @@ def get_raw_data_dir() -> Path:
     raw_dir.mkdir(parents=True, exist_ok=True)
     _seed_bundled_raw_data(raw_dir)
     return raw_dir
+
+
+def data_dir_status() -> str:
+    """One-line status of the resolved market-data dir, e.g.
+    "Market data: 129 files found in /path/to/data/raw" -- the string the
+    data-center page renders so a missing/empty bundle is diagnosable at a
+    glance. Lightweight: directory scan only (rglob + is_file, no file
+    reads, no row counts). Never raises."""
+    try:
+        raw_dir = get_raw_data_dir()
+        count = sum(1 for p in raw_dir.rglob("*") if p.is_file())
+        return f"Market data: {count} files found in {raw_dir}"
+    except Exception:
+        return "Market data: status check failed"
+
+
+def log_data_dir_status() -> str:
+    """Startup self-check (Oct 2026): INFO-log the resolved data dir,
+    whether it already existed before this launch, and how many dataset
+    files were found. Called once when the web app starts (see
+    app/web/server.py) -- the frozen bundle used to ship with zero market
+    data and nothing logged it, so the gap was invisible. Returns the same
+    one-line status data_dir_status() returns. Never raises: a diagnostic
+    must not be able to break startup."""
+    raw_dir = get_app_base_dir() / "data" / "raw"
+    existed_before = raw_dir.exists()
+    try:
+        status = data_dir_status()
+    except Exception:
+        status = "Market data: status check failed"
+    logger.info(
+        "Data dir: %s (existed before startup=%s) -- %s",
+        raw_dir, existed_before, status,
+    )
+    return status
 
 
 @dataclass
@@ -374,16 +412,38 @@ def resolve_stored_dataset(name: str) -> Path | None:
     "existing_dataset" form field) to a real file inside data/raw/, or
     return None if the name is unsafe or doesn't exist. Callers should
     treat None as "no such dataset" (400/404), never as a path to open.
-    This is the read-side companion to store_csv_bytes' write-side
-    sanitizing: both funnel through sanitize_stored_filename +
-    resolve-and-contain so a traversal payload can't read or write
-    outside data/raw/."""
-    try:
-        cleaned = sanitize_stored_filename(name)
-    except ValueError:
+
+    The dataset pickers submit the POSIX-style RELATIVE path
+    list_stored_datasets() reported (e.g. "NQ1!/NQ1!_2024.csv" for a file
+    in an instrument subfolder -- see StoredDataset.name), so the name is
+    validated segment-by-segment and the instrument folder is preserved:
+    "" / "." / ".." segments, absolute paths, and Windows drive letters
+    are rejected outright, and the joined path must still resolve inside
+    data/raw/ (the _contained_within check below catches any symlink
+    trickery). Note this deliberately does NOT run the segments through
+    sanitize_stored_filename()/secure_filename: that helper mints safe
+    NEW names on the write path, and it strips characters (e.g. "!" in
+    the real "NQ1!"/"MGC1!" instrument folders) that legitimate on-disk
+    dataset paths contain -- the read path must match existing names
+    exactly.
+
+    (Regression, Oct 2026: v2's first version of this function sanitized
+    the whole submitted name down to its basename, so every dataset
+    living in an instrument subfolder -- i.e. everything the grouped
+    dataset dropdown shows -- resolved to None and could never be
+    selected in the web app. Introduced in d1a7228, wired into
+    _resolve_dataset/_resolve_leg_dataset by ce0ef2f.)"""
+    raw = (name or "").strip().replace("\\", "/")
+    # Absolute POSIX paths and Windows drive-letter paths can never live
+    # inside data/raw/ -- reject before splitting into segments.
+    if raw.startswith("/") or (len(raw) > 1 and raw[1] == ":" and raw[0].isalpha()):
         return None
-    candidate = get_raw_data_dir() / cleaned
-    if not _contained_within(get_raw_data_dir(), candidate):
+    parts = [p.strip() for p in raw.split("/")]
+    if not parts or any(p in ("", ".", "..") for p in parts):
+        return None
+    raw_dir = get_raw_data_dir()
+    candidate = raw_dir.joinpath(*parts)
+    if not _contained_within(raw_dir, candidate):
         return None
     return candidate if candidate.exists() else None
 
