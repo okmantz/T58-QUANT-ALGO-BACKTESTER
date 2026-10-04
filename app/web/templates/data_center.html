@@ -48,6 +48,7 @@
 <div class="t58-card">
   <h2>Import data</h2>
   <p style="color:var(--text-muted);font-size:12px;margin-top:-6px;">CSV, TSV, or parquet -- saved into data/raw/ as its own file, same as fetching from Alpaca or London Strategic Edge.</p>
+  <p style="color:var(--text-muted);font-size:12px;margin-top:-6px;">One file per upload, max <b>256MB per file</b>. Importing a whole dataset folder (hundreds of MB in total)? Use <b>Import folder</b> below instead -- files are sent one at a time, so there is no total size cap.</p>
   <form method="post" action="/data-center/import" enctype="multipart/form-data" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
     <input type="file" name="data_file" accept=".csv,.tsv,.txt,.parquet" required>
     <button type="submit" class="t58-btn primary">Import</button>
@@ -59,7 +60,7 @@
   <p style="color:var(--text-muted);font-size:12px;margin-top:-6px;">
     Drop a folder (or pick one) to import every dataset inside it -- subfolders included.
     Recognized types: <b>.csv, .tsv, .txt, .parquet</b> (anything else is skipped, never imported).
-    Files upload <b>one at a time</b>, each under the <b>256MB per-file limit</b>.
+    Files upload <b>one at a time</b>, each under the <b>256MB per-file limit</b> -- there is no total size cap for the folder.
   </p>
   <div id="t58-folder-drop" class="t58-folder-drop" role="button" tabindex="0" aria-label="Drop a folder here or click to choose one">
     <div style="font-size:14px;">&#128193; Drag &amp; drop a folder here, or click to choose one</div>
@@ -87,6 +88,9 @@
     <div class="stat"><div class="num {{ 't58-glow-teal' if report.total_unhealthy == 0 else 't58-glow-coral' }}">{{ report.total_unhealthy }}</div><div class="lbl">Files needing attention</div></div>
     <div class="stat"><div class="num">{{ report.instruments | length }}</div><div class="lbl">Instruments</div></div>
   </div>
+  {% if data_status %}
+  <p style="color:var(--text-muted);font-size:12px;margin:8px 0 0;">&#128190; {{ data_status }}</p>
+  {% endif %}
 </div>
 
 {% if report.instruments %}
@@ -136,6 +140,10 @@
   "use strict";
   var CSRF_TOKEN = {{ csrf_token()|tojson }};
   var ENDPOINT = "/data-center/import-folder";
+  // v4 Worker 3: mirrors app.config["MAX_CONTENT_LENGTH"] in app/web/server.py.
+  // Files over this are rejected in the browser up-front with a clear message
+  // instead of being uploaded and then refused by the server.
+  var PER_FILE_LIMIT_BYTES = 256 * 1024 * 1024;
 
   var dropZone = document.getElementById("t58-folder-drop");
   var picker = document.getElementById("t58-folder-picker");
@@ -162,11 +170,22 @@
     logBox.scrollTop = logBox.scrollHeight;
   }
 
-  function setProgress(done, total, currentName) {
+  function fmtMB(bytes) {
+    if (bytes === null || bytes === undefined) return "";
+    return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+  }
+
+  function setProgress(done, total, entry) {
     progressWrap.style.display = "block";
     progressBar.style.width = total ? Math.round((done / total) * 100) + "%" : "0%";
+    var label = "";
+    if (entry) {
+      label = entry.relpath;
+      var sz = entry.file && entry.file.size;
+      if (sz) label += " (" + fmtMB(sz) + ")";
+    }
     counter.textContent = total
-      ? "Uploading " + done + " / " + total + (currentName ? " -- " + currentName : "")
+      ? "Uploading " + done + " / " + total + (label ? " -- " + label : "")
       : "";
   }
 
@@ -251,6 +270,7 @@
     if (data && data.ok) {
       if (data.status === "imported") {
         results.imported += 1;
+        results.bytes += (entry.file && entry.file.size) || 0;
         logLine("ok", "\u2713 " + label + " -- imported" + (data.detail ? " (" + data.detail + ")" : ""));
       } else if (data.status === "skipped") {
         results.skipped += 1;
@@ -281,26 +301,38 @@
     summaryBox.style.display = "none";
     actionsBox.style.display = "none";
     var batchId = "folder-" + Date.now().toString(36);
-    var results = { imported: 0, skipped: 0, failed: 0, problems: [] };
+    var results = { imported: 0, skipped: 0, failed: 0, problems: [], bytes: 0 };
     var total = entries.length;
     var chain = Promise.resolve();
     entries.forEach(function (entry, idx) {
       chain = chain.then(function () {
-        setProgress(idx, total, entry.relpath);
+        setProgress(idx, total, entry);
+        // Reject over-limit files in the browser, before any bytes are sent:
+        // an over-256MB file can never succeed server-side, and skipping the
+        // doomed upload keeps a big folder ingest from stalling on it.
+        if (entry.file && entry.file.size > PER_FILE_LIMIT_BYTES) {
+          var overMsg = "exceeds the 256MB per-file limit (" + fmtMB(entry.file.size) + ") -- not uploaded";
+          results.failed += 1;
+          results.problems.push({ kind: "failed", name: entry.relpath, reason: overMsg });
+          logLine("fail", "\u2717 " + entry.relpath + " -- " + overMsg);
+          setProgress(idx + 1, total, null);
+          return;
+        }
         return uploadOne(entry, batchId)
           .catch(function (err) {
             return { ok: false, error: String((err && err.message) || err) };
           })
           .then(function (data) {
             tally(results, data, entry);
-            setProgress(idx + 1, total, "");
+            setProgress(idx + 1, total, null);
           });
       });
     });
     chain.then(function () {
       running = false;
-      setProgress(total, total, "");
-      counter.textContent = "Done: " + total + " file" + (total === 1 ? "" : "s") + " uploaded.";
+      setProgress(total, total, null);
+      counter.textContent = "Done: " + total + " file" + (total === 1 ? "" : "s") +
+        " (" + fmtMB(results.bytes) + " imported) uploaded.";
       showSummary(results);
     });
   }
