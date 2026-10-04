@@ -82,7 +82,7 @@ from app.data.instrument_specs import KNOWN_INSTRUMENTS
 from app.data.timeframe_resample import infer_timeframe_label
 from app.web.alpaca_shared import alpaca_template_context
 from app.web.lse_shared import lse_template_context
-from app.data.storage import get_app_base_dir, get_raw_data_dir, list_datasets_by_instrument, list_stored_datasets, resolve_stored_dataset, store_csv_bytes
+from app.data.storage import get_app_base_dir, get_raw_data_dir, list_datasets_by_instrument, list_stored_datasets, resolve_stored_dataset, store_csv_bytes, data_dir_status, log_data_dir_status
 from app.ensemble.auto_builder import AutoEnsembleError, build_diversified_ensemble
 from app.ensemble.ensemble import EnsembleError, EnsembleVoteConfig, run_ensemble_blend, run_ensemble_vote
 from app.evolution import checkpoint as evo_checkpoint
@@ -249,6 +249,15 @@ REGIME_DIR.mkdir(parents=True, exist_ok=True)
 SPEEDRUN_DIR = BASE_DIR / "reports" / "speed_run"
 SPEEDRUN_DIR.mkdir(parents=True, exist_ok=True)
 
+# Startup self-check (Oct 2026): resolve the market-data dir, log it at
+# INFO with existence + file count. Runs once at import because every
+# web-app start path -- the frozen launcher, `python run_web.py`,
+# `python -m app.web.server`, the smoke test -- imports this module.
+# Never raises: log_data_dir_status() is fully defensive. (The
+# data-center page computes its own fresh status per view -- see the
+# data_center() route -- so the page reflects imports done since startup.)
+log_data_dir_status()
+
 # Maps each known report directory to the URL prefix that actually serves
 # it (see the @app.route("/..._reports/<path:filename>") handlers spread
 # throughout this file). Used by _dashboard_report_url below -- see that
@@ -337,6 +346,30 @@ app = Flask(__name__, static_folder="static", template_folder="templates")
 # request from exhausting a modest VPS. Zip members get their own,
 # tighter per-member/total caps inside app.data.importer (_read_zip).
 app.config["MAX_CONTENT_LENGTH"] = 256 * 1024 * 1024
+
+
+# v4 Worker 3 (Oct 2026) -- clean 413s: with MAX_CONTENT_LENGTH set,
+# Flask/Werkzeug raises RequestEntityTooLarge (HTTP 413) before a route
+# ever sees an oversized body, and its DEFAULT response is a bare HTML
+# error page. A user uploading a >256MB file through the single-file
+# `/data-center/import` form would hit exactly that page (the folder
+# importer already returns its own JSON 413 via its Content-Length
+# pre-check, but a Content-Length/body mismatch can still raise here).
+# This handler keeps the 256MB cap but makes the rejection legible:
+# the single-file form POST gets the app's own notice redirect back to
+# the Data Center, and everything else gets a JSON 413 -- never a bare
+# error page or a traceback.
+@app.errorhandler(413)
+def _upload_too_large(exc):
+    limit_mb = (app.config.get("MAX_CONTENT_LENGTH") or 256 * 1024 * 1024) // (1024 * 1024)
+    message = (
+        f"Upload exceeds the {limit_mb}MB per-file limit. Importing a whole "
+        "dataset folder? Use 'Import folder' on the Data Center -- files are "
+        "sent one at a time, so there is no total size cap."
+    )
+    if request.path == "/data-center/import":
+        return redirect(url_for("data_center", notice=message, notice_kind="error"))
+    return jsonify({"ok": False, "error": message}), 413
 
 # UPGRADE (Evolution Lab optimizer_mode): a Jinja GLOBAL rather than
 # passing optimizer_modes=OPTIMIZER_MODES through every one of Evolution
@@ -2395,6 +2428,9 @@ def data_center():
     return render_template(
         "data_center.html", active_page="data_center", report=report,
         notice=request.args.get("notice"), notice_kind=request.args.get("notice_kind", "info"),
+        # Fresh per page view (cheap: directory scan only) so the count
+        # reflects imports done since startup, not just launch time.
+        data_status=data_dir_status(),
     )
 
 
@@ -2403,12 +2439,36 @@ def data_center_import():
     """Same CSV/parquet import path every other upload form in this app
     already uses (app.data.importer.import_csv via store_csv_bytes) --
     the Data Center just gives it its own entry point so importing and
-    reviewing data health live on the same page."""
+    reviewing data health live on the same page.
+
+    Size is enforced exactly like the folder-import endpoint below (v4
+    Worker 3): the declared Content-Length is checked before touching the
+    multipart body, then the body itself is read with a bound so an
+    oversized chunked upload can't blow memory. An oversized single file
+    redirects back with the per-file-limit notice (Flask's own 413
+    handler `_upload_too_large` covers any remaining path, e.g. a
+    Content-Length/body mismatch)."""
+    max_bytes = app.config.get("MAX_CONTENT_LENGTH") or 256 * 1024 * 1024
+    limit_mb = max_bytes // (1024 * 1024)
+    too_big_notice = (
+        f"That file is over the {limit_mb}MB per-file limit. To import a "
+        "whole dataset folder (hundreds of MB in total), use 'Import folder' "
+        "below -- files upload one at a time, so there is no total size cap."
+    )
+    # Defense-in-depth layer 1: the declared Content-Length header,
+    # checked before touching the multipart body.
+    content_length = request.content_length
+    if content_length is not None and content_length > max_bytes:
+        return redirect(url_for("data_center", notice=too_big_notice, notice_kind="error"))
     file = request.files.get("data_file")
     if not file or not file.filename:
         return redirect(url_for("data_center", notice="Choose a CSV or parquet file first.", notice_kind="error"))
     try:
-        content = file.read()
+        # Defense-in-depth layer 2: the actual bytes. Bounded read so an
+        # oversized chunked upload (no Content-Length) can't blow memory.
+        content = file.read(max_bytes + 1)
+        if len(content) > max_bytes:
+            return redirect(url_for("data_center", notice=too_big_notice, notice_kind="error"))
         result = import_csv_bytes(content, filename=file.filename)
         if not result.is_valid:
             return redirect(url_for(

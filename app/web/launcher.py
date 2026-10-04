@@ -113,6 +113,15 @@ def main() -> None:
     # succeeding before we've at least tried to explain what's happening.
     from app.web.server import app  # noqa: WPS433
 
+    # Startup market-data self-check (Oct 2026): importing app.web.server
+    # above already INFO-logged the resolved data dir + file count; echo the
+    # one-liner to the console too so a double-clicked .exe user sees it
+    # right in the window. data_dir_status() never raises (it returns a
+    # "check failed" string on error), so this can't break startup.
+    from app.data.storage import data_dir_status  # noqa: WPS433
+
+    print(data_dir_status(), flush=True)
+
     # Port 5000 may be taken (macOS 12+ runs AirPlay Receiver on it by default, or a
     # previous copy is still running) -- use the next free port instead of failing.
     port = find_free_port(PORT)
