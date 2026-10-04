@@ -74,6 +74,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r config/requirements.txt pyinstaller
+      # Frozen market data (Oct 2026): the frozen app seeds its writable
+      # data/raw from sys._MEIPASS/data/raw (see
+      # app/data/storage.py::_seed_bundled_raw_data), but the bundle used to
+      # ship zero market data -- recent artifacts were 114-230 MB instead of
+      # ~1 GB. Bundle data/raw (+ the tiny data/examples) below. NOTE: the
+      # whole `data/` dir is deliberately NOT bundled -- it contains tracked
+      # credential/secret files (data/config/...) and run state that must
+      # never ship inside a downloadable artifact.
       - name: Build standalone web app
         shell: bash
         run: >
@@ -83,6 +91,8 @@ jobs:
           --add-data "app/ui/assets${{ runner.os == 'Windows' && ';' || ':' }}app/ui/assets"
           --add-data "config${{ runner.os == 'Windows' && ';' || ':' }}config"
           --add-data "strategies${{ runner.os == 'Windows' && ';' || ':' }}strategies"
+          --add-data "data/raw${{ runner.os == 'Windows' && ';' || ':' }}data/raw"
+          --add-data "data/examples${{ runner.os == 'Windows' && ';' || ':' }}data/examples"
           --hidden-import pandas --hidden-import numpy --hidden-import flask
           run_web.py
       - uses: actions/upload-artifact@v4
