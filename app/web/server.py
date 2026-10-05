@@ -7862,6 +7862,8 @@ def search_start():
             walk_forward_folds=int(form.get("walk_forward_folds", 4) or 4),
             robustness_neighbors=int(form.get("robustness_neighbors", 6) or 6),
             fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
+            # B1-2 (w4-forge): Stage 3 payout acceptance floor, 0-100 scale
+            min_first_payout_probability=float(form.get("min_first_payout_probability", 50.0) or 50.0),
             workers=int(workers_raw) if workers_raw else None,
             random_seed=seed,
             reset_on_breach=form.get("reset_on_breach") == "on",
