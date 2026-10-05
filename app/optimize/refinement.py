@@ -55,6 +55,7 @@ import numpy as np
 from app.backtest.adaptive_risk import AdaptiveRiskConfig
 from app.backtest.engine import BacktestResult, run_backtest, run_holdout_comparison
 from app.backtest.risk import RiskConfig
+from app.analysis.exit_quality import analyze_exit_quality
 from app.monte_carlo.engine import MonteCarloConfig, MonteCarloResult, run_monte_carlo
 from app.optimize.code_parameter_space import discover_code_genes, materialize_code_strategy, patched_source_for_strategy
 from app.optimize.parameter_space import GeneMeta, RefinementError, apply_genome, extract_genome
@@ -94,6 +95,16 @@ FITNESS_METRICS: dict[str, str] = {
     "net_profit": "Long-Term Net Profit ($) -- for long-term trading, no prop firm",
     "profit_factor": "Profit Factor",
     "sharpe_ratio": "Sharpe Ratio",
+    # PART-A PORT #1 (2026-10-04): ranks candidates on EXIT quality, not
+    # entry quality -- minimizes the average R give-back (MFE peak minus
+    # what each trade actually captured). The diagnosis behind it: a
+    # strategy with MFE +2.1R and realized +0.3R scores "mediocre" on every
+    # entry-focused metric; give_back_r = +1.8R says the entries are fine
+    # and the exits are the whole problem. Needs per-trade MFE evidence
+    # (Trade.mfe_price); candidates without it score -inf. Wired through
+    # compute_fitness's trades= kwarg below (only _evaluate threads trades
+    # through today).
+    "avg_give_back_r": "Avg Give-Back (R) -- minimize MFE given back per trade; targets EXIT improvement",
 }
 
 # Explicit optimizer modes. All three run through the exact SAME
@@ -399,6 +410,30 @@ def _fastest_payout_score(mc: MonteCarloResult) -> float:
 _RUIN_AWARE_METRICS = frozenset({"composite_prop_score", "prop_guide_score"})
 
 
+def _give_back_fitness(trades) -> float:
+    """Fitness for the PART-A PORT #1 refinement objective
+    (avg_give_back_r). The optimizer MAXIMIZES fitness, so the average R
+    give-back (lower-is-better) is negated: a candidate that keeps more of
+    each trade's MFE peak outranks one that gives it back.
+
+    Returns -inf when there is no MFE evidence to rank on (no trades at
+    all, or trades without mfe_price/initial_risk) -- the same "cannot be
+    scored" convention _evaluate already uses for a run with zero trades.
+    Note the downstream guards this inherits: apply_cost_stress_penalty and
+    _apply_ruin_penalty both return nominal unchanged for fitness <= 0, so
+    cost-stress/ruin blending is a no-op for this metric -- ranking is
+    purely by exit quality, as documented in FITNESS_METRICS.
+    """
+    if not trades:
+        return float("-inf")
+    analysis = analyze_exit_quality(trades)
+    overall = analysis.get("overall") or {}
+    avg = overall.get("avg_give_back_r")
+    if avg is None:
+        return float("-inf")
+    return -float(avg)
+
+
 def _apply_ruin_penalty(fitness: float, mc: "MonteCarloResult", risk_of_ruin_cap: float, metric: str) -> float:
     """UPGRADE (GA-searches-what-it's-graded-on): the pipeline's hard
     safety gate (see app.orchestration.full_pipeline._make_verdict) vetoes
@@ -449,12 +484,19 @@ def _apply_ruin_penalty(fitness: float, mc: "MonteCarloResult", risk_of_ruin_cap
 def compute_fitness(
     stats: dict, prop_summary: dict | None, mc: MonteCarloResult, metric: str,
     risk_of_ruin_cap: float | None = None,
+    trades: list | None = None,
 ) -> float:
     """risk_of_ruin_cap: when provided, erodes the raw metric score by
     app.optimize.refinement._apply_ruin_penalty's fractional ruin penalty
     before returning it -- see that function's docstring. None (the
     default) is byte-identical to every caller of this function from
-    before that penalty existed."""
+    before that penalty existed.
+
+    trades: the backtest's Trade objects, threaded through by callers that
+    have them (see _evaluate). Only used by metrics that need per-trade
+    evidence -- today that is avg_give_back_r (PART-A PORT #1). Callers
+    that don't pass trades and select avg_give_back_r get -inf
+    ("cannot be scored on exit quality")."""
     if metric == "net_profit":
         fitness = float(stats.get("net_profit", 0.0))
     elif metric == "profit_factor":
@@ -491,6 +533,11 @@ def compute_fitness(
         )
     elif metric == "prop_guide_score":
         fitness = _prop_guide_score(stats, mc)
+    elif metric == "avg_give_back_r":
+        # PART-A PORT #1: rank on exit quality (negated average R
+        # give-back). trades is None for callers that don't have per-trade
+        # evidence available -> -inf, see _give_back_fitness.
+        fitness = _give_back_fitness(trades)
     else:
         raise RefinementError(f"Unknown fitness metric '{metric}'.")
     if risk_of_ruin_cap is not None:
@@ -610,7 +657,10 @@ def _evaluate(
     mc_result = run_monte_carlo(bt_result.trades, prop_rules, mc_cfg)
     prop_summary = summarize_single_run(single_run)
 
-    fitness = compute_fitness(bt_result.statistics.to_dict(), prop_summary, mc_result, metric)
+    fitness = compute_fitness(
+        bt_result.statistics.to_dict(), prop_summary, mc_result, metric,
+        trades=bt_result.trades,
+    )
     if not math.isfinite(fitness):
         fitness = float("-inf")
 
@@ -624,6 +674,7 @@ def _evaluate(
             stressed_mc = run_monte_carlo(stressed_bt.trades, prop_rules, mc_cfg)
             stressed_fitness = compute_fitness(
                 stressed_bt.statistics.to_dict(), summarize_single_run(stressed_single_run), stressed_mc, metric,
+                trades=stressed_bt.trades,
             )
         else:
             stressed_fitness = float("-inf")
