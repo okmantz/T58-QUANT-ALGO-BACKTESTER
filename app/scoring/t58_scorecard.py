@@ -8,10 +8,13 @@ invented here, only a documented way of weighting and combining what
 already exists:
 
     Metric                      Weight   Source
-    Pass probability              25     app.monte_carlo.engine.MonteCarloResult.pass_probability_ci95
-                                          LOWER bound (Wilson 95%) -- gates on the pessimistic end of
+    Pass probability              25     app.monte_carlo.engine.MonteCarloResult.per_attempt_pass_ci95
+                                          LOWER bound (Wilson 95% on per-attempt, single-account odds --
+                                          the chain-level pass_probability_ci95 is inflated by mechanical
+                                          rebuys and is only a fallback for results built before the
+                                          per-attempt fields existed). Gates on the pessimistic end of
                                           MC noise, not the point estimate
-    First payout probability      20     ...payout_probability_ci95 lower bound (same reason)
+    First payout probability      20     ...per_attempt_payout_ci95 lower bound (same reason)
     Risk of ruin                 -20     ...risk_of_ruin_pct (subtracted)
     Walk-forward stability        15     app.search.robustness.WalkForwardResult.walk_forward_efficiency
                                           (or CPCV, if that's the run's chosen primary generalization
@@ -481,6 +484,45 @@ def t58_conformance_for_manual_config(config: dict) -> float | None:
     return t58_conformance_score(long_entry_texts=long_texts, short_entry_texts=short_texts)
 
 
+def _nonzero_ci(ci) -> bool:
+    """True when a (lo, hi) interval is present and non-zero -- a present
+    (0.0, 0.0) interval means "unknown" (a result built before the field
+    existed), not a genuine all-fail run."""
+    if ci is None:
+        return False
+    try:
+        return not (float(ci[0]) == 0.0 and float(ci[1]) == 0.0)
+    except (TypeError, ValueError, IndexError):
+        return False
+
+
+def _preferred_pass_ci(mc_result):
+    """v6 (2026-10-04): the CI the acceptance verdict gates on -- the
+    PER-ATTEMPT pass interval when present, else the legacy chain-level
+    interval, else None (caller falls back to the point estimate).
+    Returns the (lo, hi) tuple, never the point estimate."""
+    ci = getattr(mc_result, "per_attempt_pass_ci95", None)
+    if _nonzero_ci(ci):
+        return ci
+    ci = getattr(mc_result, "pass_probability_ci95", None)
+    if _nonzero_ci(ci):
+        return ci
+    return None
+
+
+def _preferred_payout_ci(mc_result):
+    """v6 (2026-10-04): payout-leg twin of _preferred_pass_ci -- the
+    PER-ATTEMPT first-payout interval when present, else the legacy
+    chain-level interval, else None."""
+    ci = getattr(mc_result, "per_attempt_payout_ci95", None)
+    if _nonzero_ci(ci):
+        return ci
+    ci = getattr(mc_result, "payout_probability_ci95", None)
+    if _nonzero_ci(ci):
+        return ci
+    return None
+
+
 def score_from_results(
     mc_result=None,
     walk_forward_result=None,
@@ -517,19 +559,26 @@ def score_from_results(
     # estimate. A point estimate vs a hard acceptance bar flips inside MC
     # noise (69.2% vs 70% is the same measurement), so the verdict only
     # treats the bar as cleared when the PESSIMISTIC end of the sampling
-    # noise clears it too. Falls back to the point estimate for results
-    # built before the CI fields existed (e.g. deserialized old results)
-    # -- but a present (0.0, 0.0) CI means "unknown", so only a non-zero
-    # interval is trusted; a genuine all-fail run reports its lower bound
-    # as 0.0 anyway, which the point estimate would give too.
+    # noise clears it too.
+    # v6 (2026-10-04): gate on the PER-ATTEMPT CI lower bound -- the
+    # chain-level pass_probability_ci95 interval is inflated almost by
+    # construction once reset_on_breach is on (a long enough rebuy chain
+    # eventually clears a low bar), so preferring it would let the
+    # verdict answer "did a mechanical rebuyer eventually pass" instead
+    # of "would ONE account attempt pass." Falls back to the chain-level
+    # interval, and then to the point estimate, for results built before
+    # the per-attempt fields existed -- but a present (0.0, 0.0) CI means
+    # "unknown", so only a non-zero interval is trusted; a genuine
+    # all-fail run reports its lower bound as 0.0 anyway, which the point
+    # estimate would give too.
     pass_probability = getattr(mc_result, "evaluation_pass_probability", None)
     first_payout_probability = getattr(mc_result, "first_payout_probability", None)
     risk_of_ruin_pct = getattr(mc_result, "risk_of_ruin_pct", None)
-    _pass_ci = getattr(mc_result, "pass_probability_ci95", None)
-    if _pass_ci is not None and not (float(_pass_ci[0]) == 0.0 and float(_pass_ci[1]) == 0.0):
+    _pass_ci = _preferred_pass_ci(mc_result)
+    if _pass_ci is not None:
         pass_probability = float(_pass_ci[0])
-    _payout_ci = getattr(mc_result, "payout_probability_ci95", None)
-    if _payout_ci is not None and not (float(_payout_ci[0]) == 0.0 and float(_payout_ci[1]) == 0.0):
+    _payout_ci = _preferred_payout_ci(mc_result)
+    if _payout_ci is not None:
         first_payout_probability = float(_payout_ci[0])
 
     walk_forward_stability = None
