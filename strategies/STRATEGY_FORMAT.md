@@ -85,6 +85,117 @@ Two builder behaviors worth knowing:
 If you can click it in the builder, the engine can read it — the builder
 only offers constructs the backtester supports.
 
+### The JSON format (for hand-written or shared manual strategies)
+
+A manual strategy is a JSON object. The files in `strategies/manual/`
+(e.g. `ES1! VWMA Trend Pullback.json`) are exactly this format, and the
+app loads them through the Strategy Library as `strategy_type: "manual"`
+— the JSON is parsed into a config dict and run by the same Manual engine
+as builder-made strategies. You can write one by hand, share it, or
+export one from the builder and edit it.
+
+```json
+{
+  "name": "My Pullback",
+  "timeframe": "1h",
+  "entry_conditions": {
+    "long": [
+      {
+        "left":     { "type": "close", "period": 1, "field": "close" },
+        "operator": ">",
+        "right":    { "type": "ema", "period": 200, "field": "close" }
+      },
+      {
+        "left":     { "type": "rsi", "period": 14, "field": "close" },
+        "operator": "<=",
+        "right":    { "type": "value", "value": 40 }
+      }
+    ],
+    "long_connectors": ["AND"],
+    "short": [
+      {
+        "left":     { "type": "close", "period": 1, "field": "close" },
+        "operator": "<",
+        "right":    { "type": "ema", "period": 200, "field": "close" }
+      }
+    ]
+  },
+  "exit_conditions": {
+    "long": [
+      {
+        "left":     { "type": "close", "period": 1, "field": "close" },
+        "operator": "cross above",
+        "right":    { "type": "vwma", "period": 20, "field": "close" }
+      }
+    ],
+    "short": []
+  },
+  "risk_management": {
+    "stop_type": "atr",
+    "stop_value": 1.5,
+    "stop_atr_period": 14,
+    "target_type": "atr",
+    "target_value": 3.0,
+    "target_atr_period": 14,
+    "opposite_signal_exit": true,
+    "max_bars_in_trade": 20
+  },
+  "filters": {
+    "days_of_week": { "exclude": [6] }
+  }
+}
+```
+
+How the engine reads it, field by field:
+
+- **`entry_conditions.long` / `.short`** — arrays of conditions. Each
+  condition is `{left, operator, right}` where `left`/`right` are
+  **operands** and `operator` is a comparison. All conditions in one side
+  must agree to fire an entry for that side.
+- **Operands** — `{ "type": ..., "period": ..., "field": ... }`:
+  - `"type": "close"` (also `"open"`, `"high"`, `"low"`) with
+    `"period": N` = that price N bars ago (`period: 1` = current bar).
+    `"field"` is accepted but the price types read their own series.
+  - `"type": "ema" | "vwma" | "rsi" | "sma" | "atr" | …` — any indicator
+    the engine knows (same set the builder offers, incl. the v7
+    additions), computed on `"field"` (usually `"close"`) with
+    `"period"`. Unknown types raise a clear error listing what's
+    supported.
+  - `"type": "value", "value": 40` — a constant number.
+  - Time/session operands (`"session_high"`, `"previous_day_high"`,
+    `"liquidity_sweep"`, `"time_of_day"`, `"day_of_week"`, …) take extra
+    keys per operand — the builder writes them correctly; copy an
+    existing file's shape when hand-writing one.
+- **Operators** — `">"`, `">="`, `"<"`, `"<="`, `"=="`, `"!="`
+  (word aliases like `"greater than"` also work), `"cross above"` /
+  `"cross below"` (true only on the bar the cross happens), `"is true"` /
+  `"is false"`. Anything else raises `Unsupported condition operator`.
+- **`long_connectors` / `short_connectors`** — `"AND"` / `"OR"` between
+  consecutive conditions (one fewer than the condition count; missing
+  entries default to `"AND"`).
+- **`exit_conditions.long` / `.short`** — same condition shape; true =
+  close that side's position. Empty array = no rule-based exits (position
+  still closes on opposite signal, stop, target, or time exit).
+- **`risk_management`** —
+  - `stop_type` / `target_type`: `"atr"` (multiple of ATR — `stop_value`
+    × ATR(`stop_atr_period`)) or `"pips"` (fixed pip distance). ATR is
+    the scale-safe choice; see the pip_size note in the universal
+    contract.
+  - `opposite_signal_exit`: `true` = opposite entry reverses the
+    position (default); `false` = only exits/stops/targets close it.
+  - `max_bars_in_trade`: force-close after N bars (omit or 0 = no limit).
+- **`filters`** (optional) — `{ "days_of_week": { "exclude": [6] } }`
+  forces signals flat on those weekdays (0=Monday…6=Sunday);
+  `{ "regime_exclude": [{ "volatility": "extreme" }] }` forces signals
+  flat on bars in those market regimes (same cells the Regime Survival
+  Matrix reports).
+- **`timeframe`** — `"1h"` resamples the loaded data to 1h bars before
+  anything runs; omit it to trade the file's native bar size.
+
+A malformed file fails loudly: not-valid-JSON, unknown indicator type,
+or unsupported operator each raise a named error instead of backtesting
+something you didn't write.
+
 ---
 
 ## 2. Python (`.py`)
@@ -338,7 +449,8 @@ builder, not directives.
 
 1. **One required entry point per language** — `generate_signals(df)`
    (Python); at least one `strategy.entry(...)` (Pine);
-   `trade.Buy/Sell(...)` or `OrderSend(...)` inside an `if` (MQL5).
+   `trade.Buy/Sell(...)` or `OrderSend(...)` inside an `if` (MQL5);
+   a JSON with `entry_conditions.long` or `.short` non-empty (Manual).
    Missing it = immediate, named error.
 2. **Only the listed indicators/functions.** Anything else fails to load
    on purpose — a rejected strategy beats a silently mis-backtested one.
