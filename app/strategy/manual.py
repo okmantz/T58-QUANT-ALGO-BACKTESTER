@@ -360,7 +360,7 @@ class ManualStrategy(Strategy):
         if kind == "ib_contraction_ratio":
             return self._ib_contraction_series(work, operand, lookback)
 
-        if kind in {"atr_regime", "volatility_regime"}:
+        if kind in {"atr_regime", "volatility_regime", "atr_expansion", "atr_contraction"}:
             return self._regime_series(work, kind, period, operand)
 
         raise StrategyError(f"Unsupported visual-builder condition source '{kind}'.")
@@ -517,11 +517,22 @@ class ManualStrategy(Strategy):
         expansion_mult = float(operand.get("expansion_mult", 1.25) or 1.25)
         contraction_mult = float(operand.get("contraction_mult", 0.75) or 0.75)
         atr = build_indicator_series(work, "atr", period, "close")
-        if kind == "atr_regime":
+        if kind in ("atr_regime", "atr_expansion", "atr_contraction"):
             baseline = atr.rolling(max(period * 3, period + 1), min_periods=period).mean()
             out = pd.Series(0, index=work.index, dtype=int)
             out[atr > baseline * expansion_mult] = 1
             out[atr < baseline * contraction_mult] = -1
+            # A6: dedicated 1/0 legs of the tristate atr_regime flag.
+            # "is true" on the raw tristate treats -1 as true (bool(-1)
+            # is True in Python), so a contraction gate written against
+            # atr_regime would also fire on expansions. These terminals
+            # exist so each leg is addressable WITHOUT changing the
+            # global "is true" semantics in _compare -- other callers
+            # rely on those.
+            if kind == "atr_expansion":
+                return (out == 1).astype(int)
+            if kind == "atr_contraction":
+                return (out == -1).astype(int)
             return out
         returns = work["close"].pct_change()
         vol = returns.rolling(period, min_periods=period).std()
