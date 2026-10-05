@@ -8,8 +8,10 @@ invented here, only a documented way of weighting and combining what
 already exists:
 
     Metric                      Weight   Source
-    Pass probability              25     app.monte_carlo.engine.MonteCarloResult.evaluation_pass_probability
-    First payout probability      20     ...first_payout_probability
+    Pass probability              25     app.monte_carlo.engine.MonteCarloResult.pass_probability_ci95
+                                          LOWER bound (Wilson 95%) -- gates on the pessimistic end of
+                                          MC noise, not the point estimate
+    First payout probability      20     ...payout_probability_ci95 lower bound (same reason)
     Risk of ruin                 -20     ...risk_of_ruin_pct (subtracted)
     Walk-forward stability        15     app.search.robustness.WalkForwardResult.walk_forward_efficiency
                                           (or CPCV, if that's the run's chosen primary generalization
@@ -511,9 +513,24 @@ def score_from_results(
     per-condition conformance is derived when `t58_conformance` isn't
     given. Omit both and the component is simply absent -- the pre-
     existing prop-survival-only score is unchanged."""
+    # v5 (2026-10-04): gate on the Wilson 95% LOWER bound, not the point
+    # estimate. A point estimate vs a hard acceptance bar flips inside MC
+    # noise (69.2% vs 70% is the same measurement), so the verdict only
+    # treats the bar as cleared when the PESSIMISTIC end of the sampling
+    # noise clears it too. Falls back to the point estimate for results
+    # built before the CI fields existed (e.g. deserialized old results)
+    # -- but a present (0.0, 0.0) CI means "unknown", so only a non-zero
+    # interval is trusted; a genuine all-fail run reports its lower bound
+    # as 0.0 anyway, which the point estimate would give too.
     pass_probability = getattr(mc_result, "evaluation_pass_probability", None)
     first_payout_probability = getattr(mc_result, "first_payout_probability", None)
     risk_of_ruin_pct = getattr(mc_result, "risk_of_ruin_pct", None)
+    _pass_ci = getattr(mc_result, "pass_probability_ci95", None)
+    if _pass_ci is not None and not (float(_pass_ci[0]) == 0.0 and float(_pass_ci[1]) == 0.0):
+        pass_probability = float(_pass_ci[0])
+    _payout_ci = getattr(mc_result, "payout_probability_ci95", None)
+    if _payout_ci is not None and not (float(_payout_ci[0]) == 0.0 and float(_payout_ci[1]) == 0.0):
+        first_payout_probability = float(_payout_ci[0])
 
     walk_forward_stability = None
     if walk_forward_result is not None:
