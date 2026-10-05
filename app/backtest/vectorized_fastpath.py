@@ -49,8 +49,19 @@ does NOT implement everything app.backtest.execution.run_execution does:
     take-profit orders are NOT lagged -- they trigger intrabar, same as
     the scalar engine.
   - No adaptive-risk overlay (Stage 1 never uses one today anyway).
-  - No daily-loss-limit forced-close, no account-blown circuit breaker,
-    no per-trade loss clamp. (max_trades_per_day IS enforced, matching
+  - Commission parity (C1): every exit charges flat per-trade PLUS
+    per-contract x whole contracts closed (commission_per_trade +
+    commission_per_contract x size/contract_size), exactly like the
+    scalar engine's _settle_exit -- the old flat-only charge
+    undercharged every multi-contract position.
+  - Daily-loss-limit forced close + day-entry block (C2): the
+    floating-adverse mark-to-market check (liquidated AT the floor,
+    mirroring the scalar engine post-C3), per-day realized P&L
+    bookkeeping keyed off the same days the scalar engine uses
+    (signal exits book on the fill bar's day), and the account-blown
+    circuit breaker (blown_floor threaded; reset-on-breach default
+    honored, halt_on_breach latches).
+  - No per-trade loss clamp. (max_trades_per_day IS enforced, matching
     the real engine exactly -- it defaults to 10 on RiskConfig, so
     skipping it would have materially overstated trade frequency for
     the common case, not just an edge case.)
@@ -340,6 +351,24 @@ def run_vectorized_batch(
     spread_price = risk.spread_pips * risk.pip_size
     slip_price = risk.slippage_pips * risk.pip_size
 
+    # C2: daily-loss-limit + account-blown handling, mirroring the scalar
+    # engine (app.backtest.execution). daily_limit_amount is None when no
+    # daily-loss limit is configured; blown_floor is None when no
+    # max-drawdown floor is configured (see RiskConfig.account_blown_floor).
+    daily_limit_amount = (
+        risk.initial_balance * (risk.daily_loss_limit_pct / 100.0)
+        if getattr(risk, "daily_loss_limit_pct", None) is not None
+        else None
+    )
+    blown_floor = risk.account_blown_floor()
+    halt_on_breach = bool(getattr(risk, "halt_on_breach", False))
+
+    # C2: per-day REALIZED P&L, mirroring the scalar engine's
+    # pnl_today_sum -- feeds both the floating-adverse daily-loss check
+    # and the day-entry block below. Original-column-indexed
+    # (n_days, k), never compacted, exactly like trades_today_count.
+    pnl_today_sum = np.zeros((len(_unique_days), k), dtype=np.float64)
+
     # Working state arrays below are indexed by WORKING column
     # (0..m-1); live_cols maps working -> original column.
     m = len(live_cols)
@@ -359,15 +388,21 @@ def run_vectorized_batch(
     initial_risk = np.zeros(m, dtype=np.float64)
     stop_price = np.full(m, np.nan)
     take_price = np.full(m, np.nan)
+    # C2: per-column account-blown latch (prop_daily_loss_is_breach, or
+    # halt_on_breach after a floor breach) -- blocks all further entries
+    # for that column, mirroring the scalar engine. Compacted with the
+    # other working-indexed state in _compact below.
+    account_blown = np.zeros(m, dtype=bool)
 
     def _compact(alive: np.ndarray) -> None:
         """Adaptive budget, mechanism 2: drop provably-dead columns from
         every working-indexed array. trade_events / scale_mismatch /
-        trades_today_count stay original-indexed and are untouched."""
+        trades_today_count / pnl_today_sum stay original-indexed and are
+        untouched."""
         nonlocal m, live_cols, last_sig_bar
         nonlocal sl_pips, tp_pips, equity, in_pos, direction, last_close_bar
         nonlocal entry_price, entry_ts, equity_at_entry, size_arr
-        nonlocal initial_risk, stop_price, take_price
+        nonlocal initial_risk, stop_price, take_price, account_blown
         keep = np.nonzero(alive)[0]
         live_cols = live_cols[keep]
         last_sig_bar = last_sig_bar[keep]
@@ -384,7 +419,60 @@ def run_vectorized_batch(
         initial_risk = initial_risk[keep]
         stop_price = stop_price[keep]
         take_price = take_price[keep]
+        account_blown = account_blown[keep]
         m = len(live_cols)
+
+    def _settle_exits(widx: np.ndarray, raw_prices: np.ndarray, reason_strs: np.ndarray,
+                      ts_vals: np.ndarray, day_idxs: np.ndarray, close_bar: int) -> None:
+        """Shared settlement for every exit path (stop/take, signal,
+        daily-loss forced close, account-blown forced close, end of
+        data): applies spread/slippage, charges commission, books equity
+        AND per-day realized P&L, appends the Trade dicts, and clears the
+        working position state. Single code path so a cost/bookkeeping
+        fix can never land on one exit type and miss another.
+
+        C1 commission parity with the scalar engine (B2-4): flat
+        per-trade charge PLUS per-contract x whole contracts actually
+        closed (size / contract_size) -- the old flat-only charge
+        undercharged every multi-contract position.
+
+        C2: pnl_today_sum[day, column] is booked on the SAME day the
+        scalar engine would book it (signal exits key off the FILL bar's
+        day; everything else keys off its own bar's day), so the
+        floating-adverse check and the day-entry block see the same
+        realized day P&L the scalar engine sees."""
+        oidx = live_cols[widx]
+        d = direction[widx].astype(np.float64)
+        filled = raw_prices - (spread_price + slip_price) * d
+        pnl = (filled - entry_price[widx]) * size_arr[widx] * d
+        _contracts = size_arr[widx] / risk.contract_size if risk.contract_size else np.zeros(len(widx))
+        _commission = risk.commission_per_trade + risk.commission_per_contract * _contracts
+        pnl = pnl - _commission
+        pnl = np.where(np.isfinite(pnl), pnl, 0.0)
+        new_equity = equity[widx] + pnl
+        for pos_j, (w, col) in enumerate(zip(widx, oidx)):
+            entry_eq = equity_at_entry[w]
+            trade_events[col].append(dict(
+                entry_time=pd.Timestamp(entry_ts[w]),
+                exit_time=pd.Timestamp(ts_vals[pos_j]),
+                direction=int(direction[w]),
+                entry_price=float(entry_price[w]),
+                exit_price=float(filled[pos_j]),
+                size=float(size_arr[w]),
+                pnl=float(pnl[pos_j]),
+                pnl_pct=(float(pnl[pos_j]) / entry_eq) * 100 if entry_eq else 0.0,
+                exit_reason=str(reason_strs[pos_j]),
+                commission=float(_commission[pos_j]),
+                equity_after=float(new_equity[pos_j]),
+                initial_risk=float(initial_risk[w]) if initial_risk[w] else None,
+            ))
+        equity[widx] = new_equity
+        pnl_today_sum[day_idxs, oidx] += pnl
+        in_pos[widx] = False
+        direction[widx] = 0
+        last_close_bar[widx] = close_bar  # P2-1: EXEC-002 cooldown parity (decision bar)
+        stop_price[widx] = np.nan
+        take_price[widx] = np.nan
 
     for i in range(n):
         if m == 0:
@@ -407,13 +495,57 @@ def run_vectorized_batch(
             exit_price = np.full(m, np.nan)
             exit_ts_i = np.full(m, ts[i], dtype=ts.dtype)
             reason = np.empty(m, dtype=object)
+            exit_day = np.full(m, day_idx[i], dtype=np.int64)
+
+            # C2: floating-adverse daily-loss check (mirrors the scalar
+            # engine's mark-to-market check): a prop firm's daily-loss
+            # floor is monitored on floating equity, so a trade that dips
+            # deep underwater intrabar and recovers by the close still
+            # gets liquidated. Runs BEFORE stop/take resolution -- the
+            # floor liquidation is the first thing that would have fired
+            # on this bar. Forced columns are masked out of the stop/take/
+            # signal logic below via the np.isnan(exit_price) guards.
+            if daily_limit_amount is not None:
+                _aw = np.nonzero(active)[0]
+                _adv = np.where(direction[_aw] == 1, l, h)
+                _float_pnl = (
+                    (_adv - entry_price[_aw]) * size_arr[_aw] * direction[_aw].astype(np.float64)
+                )
+                _day_real = pnl_today_sum[day_idx[i], live_cols[_aw]]
+                _dl_breach = (_day_real + _float_pnl) <= -daily_limit_amount
+                if _dl_breach.any():
+                    _bw = _aw[_dl_breach]
+                    _bd = direction[_bw].astype(np.float64)
+                    # C3 parity: liquidate AT the floor (the first moment
+                    # cumulative day P&L hits the limit), clamped to not
+                    # exceed the bar's adverse extreme. day_realized is a
+                    # SIGNED sum (negative on a losing day), so the
+                    # remaining room to the floor is daily_limit_amount +
+                    # day_realized -- see the scalar engine's C3 comment
+                    # for the derivation.
+                    _safe_size = np.where(size_arr[_bw] > 0, size_arr[_bw], np.nan)
+                    _liq_dist = (daily_limit_amount + _day_real[_dl_breach]) / _safe_size
+                    _liq_price = entry_price[_bw] - _bd * _liq_dist
+                    _liq_price = np.where(
+                        np.isnan(_liq_price),
+                        _adv[_dl_breach],
+                        np.where(
+                            _bd == 1,
+                            np.maximum(_liq_price, _adv[_dl_breach]),
+                            np.minimum(_liq_price, _adv[_dl_breach]),
+                        ),
+                    )
+                    exit_price[_bw] = _liq_price
+                    reason[_bw] = "daily_loss_limit_forced_close"
+                    if getattr(risk, "prop_daily_loss_is_breach", False):
+                        account_blown[_bw] = True
 
             # Honest gap-through fill: a resting stop the bar gapped
             # straight past fills at the open, not the stop level --
             # mirrors app.backtest.execution's own stop-fill logic.
             # Resting orders are NOT fill-lagged (they trigger intrabar).
-            stop_hit_long = long_m & ~np.isnan(stop_price) & (l <= stop_price)
-            stop_hit_short = short_m & ~np.isnan(stop_price) & (h >= stop_price)
+            stop_hit_long = long_m & np.isnan(exit_price) & ~np.isnan(stop_price) & (l <= stop_price)
+            stop_hit_short = short_m & np.isnan(exit_price) & ~np.isnan(stop_price) & (h >= stop_price)
             exit_price[stop_hit_long] = np.minimum(stop_price[stop_hit_long], o)
             exit_price[stop_hit_short] = np.maximum(stop_price[stop_hit_short], o)
             reason[stop_hit_long] = "stop_loss"
@@ -432,12 +564,15 @@ def run_vectorized_batch(
             # at this bar's close. Decided here, at the close that
             # produced the signal; the fill bar's open is already known
             # (full arrays are in memory), so it settles immediately.
+            # C2: its day-P&L books on the FILL bar's day, exactly like the
+            # scalar engine (which settles signal exits on the fill bar).
             remaining2 = active & np.isnan(exit_price)
             signal_exit = remaining2 & (sig_i != direction)
             exit_j = i + fill_lag
             if exit_j < n:
                 exit_price[signal_exit] = opens[exit_j]
                 exit_ts_i[signal_exit] = ts[exit_j]
+                exit_day[signal_exit] = day_idx[exit_j]
                 reason[signal_exit] = "signal"
             # else: tail bar -- no next open exists, so the signal exit
             # cannot fill; the position stays open and settles via the
@@ -445,35 +580,47 @@ def run_vectorized_batch(
 
             exit_mask = active & ~np.isnan(exit_price)
             if exit_mask.any():
-                widx = np.nonzero(exit_mask)[0]
-                oidx = live_cols[widx]
-                filled = exit_price[exit_mask] - (spread_price + slip_price) * direction[exit_mask]
-                pnl = (filled - entry_price[exit_mask]) * size_arr[exit_mask] * direction[exit_mask]
-                pnl = pnl - risk.commission_per_trade
-                pnl = np.where(np.isfinite(pnl), pnl, 0.0)
-                new_equity = equity[exit_mask] + pnl
-                for pos_j, (w, col) in enumerate(zip(widx, oidx)):
-                    entry_eq = equity_at_entry[w]
-                    trade_events[col].append(dict(
-                        entry_time=pd.Timestamp(entry_ts[w]),
-                        exit_time=pd.Timestamp(exit_ts_i[w]),
-                        direction=int(direction[w]),
-                        entry_price=float(entry_price[w]),
-                        exit_price=float(filled[pos_j]),
-                        size=float(size_arr[w]),
-                        pnl=float(pnl[pos_j]),
-                        pnl_pct=(float(pnl[pos_j]) / entry_eq) * 100 if entry_eq else 0.0,
-                        exit_reason=str(reason[w]),
-                        commission=risk.commission_per_trade,
-                        equity_after=float(new_equity[pos_j]),
-                        initial_risk=float(initial_risk[w]) if initial_risk[w] else None,
-                    ))
-                equity[exit_mask] = new_equity
-                in_pos[exit_mask] = False
-                direction[exit_mask] = 0
-                last_close_bar[widx] = i  # P2-1: EXEC-002 cooldown parity (decision bar)
-                stop_price[exit_mask] = np.nan
-                take_price[exit_mask] = np.nan
+                _settle_exits(
+                    np.nonzero(exit_mask)[0],
+                    exit_price[exit_mask],
+                    reason[exit_mask],
+                    exit_ts_i[exit_mask],
+                    exit_day[exit_mask],
+                    i,
+                )
+
+        # C2: account-blown circuit breaker (threaded blown_floor
+        # handling): once REALIZED equity crosses the loss floor (or
+        # hits zero), the account is terminated -- any still-open
+        # position is force-closed at this bar's close, exactly like
+        # the scalar engine. Unless halt_on_breach, the engine
+        # default (risk.reset_on_breach) starts a fresh account and
+        # keeps trading; halt_on_breach=True instead latches
+        # account_blown and blocks all further entries.
+        # (blown_floor may be None -- build the floor mask conditionally
+        # since numpy's & does not short-circuit.)
+        _floor_hit = (
+            (equity <= blown_floor)
+            if blown_floor is not None
+            else np.zeros(m, dtype=bool)
+        )
+        _breached = ~account_blown & ((equity <= 0) | _floor_hit)
+        if _breached.any():
+            _hw = np.nonzero(_breached)[0]
+            _open_hit = _hw[in_pos[_hw]]
+            if len(_open_hit):
+                _settle_exits(
+                    _open_hit,
+                    np.full(len(_open_hit), c),
+                    np.full(len(_open_hit), "account_blown_forced_close", dtype=object),
+                    np.full(len(_open_hit), ts[i], dtype=ts.dtype),
+                    np.full(len(_open_hit), day_idx[i], dtype=np.int64),
+                    i,
+                )
+            if halt_on_breach:
+                account_blown[_hw] = True
+            else:
+                equity[_hw] = risk.initial_balance
 
         flat = ~in_pos
         # v5 B2-3 parity: the cap is checked AND counted at the FILL bar's
@@ -488,7 +635,16 @@ def run_vectorized_batch(
         # with the default reentry_cooldown_bars=1, the close bar itself
         # is blocked and the next bar is the earliest reentry.
         cooldown_ok = (i - last_close_bar) >= risk.reentry_cooldown_bars
-        want_entry = flat & under_daily_cap & cooldown_ok & (sig_i != 0)
+        # C2: day-entry block -- no new entries once the day's REALIZED
+        # P&L has hit the daily-loss floor, mirroring the scalar engine's
+        # daily_limit_breached (keyed off the DECISION bar's session day),
+        # and none for a blown (terminated) account.
+        if daily_limit_amount is not None:
+            _day_realized_now = pnl_today_sum[day_idx[i]][live_cols]
+            daily_ok = _day_realized_now > -daily_limit_amount
+        else:
+            daily_ok = np.ones(m, dtype=bool)
+        want_entry = flat & under_daily_cap & cooldown_ok & daily_ok & ~account_blown & (sig_i != 0)
         # Fill-lag parity: an entry decided at bar i fills at the fill
         # bar's open. The last `fill_lag` bars have no next open, so
         # entries decided there are skipped -- they could never fill.
@@ -574,31 +730,14 @@ def run_vectorized_batch(
     # the real engine's end-of-data handling.
     if in_pos.any():
         widx = np.nonzero(in_pos)[0]
-        oidx = live_cols[widx]
-        c = closes[n - 1]
-        d = direction[widx].astype(np.float64)
-        filled = c - (spread_price + slip_price) * d
-        pnl = (filled - entry_price[widx]) * size_arr[widx] * d
-        pnl = pnl - risk.commission_per_trade
-        pnl = np.where(np.isfinite(pnl), pnl, 0.0)
-        new_equity = equity[widx] + pnl
-        for pos_j, (w, col) in enumerate(zip(widx, oidx)):
-            entry_eq = equity_at_entry[w]
-            trade_events[col].append(dict(
-                entry_time=pd.Timestamp(entry_ts[w]),
-                exit_time=pd.Timestamp(ts[n - 1]),
-                direction=int(direction[w]),
-                entry_price=float(entry_price[w]),
-                exit_price=float(filled[pos_j]),
-                size=float(size_arr[w]),
-                pnl=float(pnl[pos_j]),
-                pnl_pct=(float(pnl[pos_j]) / entry_eq) * 100 if entry_eq else 0.0,
-                exit_reason="end_of_data",
-                commission=risk.commission_per_trade,
-                equity_after=float(new_equity[pos_j]),
-                initial_risk=float(initial_risk[w]) if initial_risk[w] else None,
-            ))
-        equity[widx] = new_equity
+        _settle_exits(
+            widx,
+            np.full(len(widx), closes[n - 1]),
+            np.full(len(widx), "end_of_data", dtype=object),
+            np.full(len(widx), ts[n - 1], dtype=ts.dtype),
+            np.full(len(widx), day_idx[n - 1], dtype=np.int64),
+            n - 1,
+        )
 
     for col, cand in enumerate(candidates):
         if cand.candidate_id in outcomes:

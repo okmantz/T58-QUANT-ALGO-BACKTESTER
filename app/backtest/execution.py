@@ -121,6 +121,14 @@ class Trade:
 
 DEFAULT_STOP_PCT_OF_PRICE = 0.01  # 1% of entry price, used only when a strategy defines no stop at all
 
+# C6 (market-impact guardrail): entries above this many whole contracts
+# fill at the quoted price with zero market impact assumed -- the engine
+# warns (RuntimeWarning) instead of silently pretending a 30+ lot sweep
+# doesn't move the book. Deliberately a module constant, not a
+# RiskConfig field: the threshold is visible at the warning site and
+# there is no impact model to configure.
+MAX_CONTRACTS_BEFORE_IMPACT_WARN = 30
+
 
 def run_execution(
     df: pd.DataFrame,
@@ -340,7 +348,7 @@ def run_execution(
     # B2-3 (session day, 2026-10-04): supersedes the P2-3 wall-clock day.
     # Naive timestamps are assumed UTC (see app.data.trading_day),
     # converted to America/Chicago, and the day rolls at 17:00 CT --
-    # matching how prop firms (e.g. Alpha's 17:00 CT day roll) actually
+    # matching how prop firms (e.g. the standard 17:00 CT futures day roll) actually
     # attribute a trading day for the daily-loss limit, the 5x$200
     # winning-day count, and consistency numerators. Every per-day
     # structure below (trades_today_count, pnl_today_sum, the daily-loss
@@ -715,10 +723,39 @@ def run_execution(
                 daily_limit_amount is not None
                 and (day_realized_so_far + floating_adverse_pnl) <= -daily_limit_amount
             ):
-                # Force-close at the adverse extreme (the point the real
-                # account would have been liquidated at), paying the same
-                # round-turn cost as any other exit.
-                _settle_exit(open_trade, adverse_extreme, "daily_loss_limit_forced_close", direction, i)
+                # C3 (liquidate AT the floor): the old code settled the
+                # forced close at the bar's adverse extreme -- but the
+                # real account is liquidated the FIRST moment cumulative
+                # day P&L hits the daily floor, which is strictly before
+                # (or at) the adverse extreme on the bar that triggers
+                # this. Solve for the price where the floor is hit:
+                #   day_realized_so_far + (liq_price - entry)*size*direction
+                #       == -daily_limit_amount
+                # i.e. liq_price = entry - direction*(daily_limit_amount
+                # + day_realized_so_far)/size. (Note: day_realized_so_far
+                # is a SIGNED sum -- negative on a losing day -- so the
+                # remaining room to the floor is daily_limit_amount +
+                # day_realized_so_far, e.g. $1000 + (-$200) = $800 left.
+                # The minus-sign variant would liquidate $400 PAST the
+                # floor here, and -- via the clamp below -- degenerate to
+                # the old adverse-extreme behavior whenever the day was
+                # already red.) Clamped to not exceed the bar's adverse
+                # extreme (for a long the liquidation price can never be
+                # MORE adverse than the bar's own low -- the clamp only
+                # guards float noise at the boundary) and settled with
+                # the same round-turn cost as any other exit via
+                # _settle_exit.
+                _liq_size = open_trade["size"]
+                if _liq_size and _liq_size > 0:
+                    _liq_dist = (daily_limit_amount + day_realized_so_far) / _liq_size
+                    _liq_price = open_trade["entry_price"] - direction * _liq_dist
+                else:
+                    _liq_price = adverse_extreme
+                if direction == 1:
+                    _liq_price = max(_liq_price, adverse_extreme)
+                else:
+                    _liq_price = min(_liq_price, adverse_extreme)
+                _settle_exit(open_trade, _liq_price, "daily_loss_limit_forced_close", direction, i)
                 open_trade = None
                 force_closed_count += 1
                 if getattr(risk, "prop_daily_loss_is_breach", False):
@@ -736,6 +773,32 @@ def run_execution(
                 continue
 
             stop = open_trade["stop_price"]
+
+            # C4 (intrabar ordering: stop before tightening). The
+            # tightening blocks below (breakeven / trailing / partial
+            # scale-out) only ever move the resting stop CLOSER to price.
+            # On a bar that touches BOTH the profit trigger and the
+            # RESTING stop level, the live engine fills the resting stop
+            # first -- it was the order in the book while the bar traded
+            # there. Resolving the tightening first would let the same bar
+            # exit at breakeven (a scratch) instead of the full stop loss
+            # it actually hit. So the pre-tightening stop level is
+            # resolved BEFORE any tightening is applied; a hit here exits
+            # at the resting stop with the conservative gap-through fill,
+            # consistent with stop-beats-target ordering in
+            # _resolve_intrabar_exit (the take-profit is deliberately NOT
+            # pre-checked -- take handling is unchanged).
+            _pre_tighten_exit, _pre_tighten_reason = _resolve_intrabar_exit(
+                direction, stop, None, lows[i], highs[i], opens[i]
+            )
+            if _pre_tighten_exit is not None:
+                # open_trade["stop_price"] still holds the pre-tightening
+                # (resting) level here, so _exit_cause_for's
+                # breakeven/trailing taxonomy classifies correctly.
+                _settle_exit(open_trade, _pre_tighten_exit, _pre_tighten_reason, direction, i)
+                open_trade = None
+                equity_arr[i] = equity
+                continue
 
             # Break-even: once profit reaches the configured R multiple,
             # move the stop to entry (only ever tightens the stop).
@@ -1157,6 +1220,28 @@ def run_execution(
                         take_price = entry_price + direction * take_profit_pips * risk.pip_size
 
                     initial_risk = abs(entry_price - stop_price) if stop_price is not None else None
+
+                    # C6 (market-impact guardrail): a fill of this many
+                    # whole contracts is assumed to land at the quoted
+                    # price with zero market impact -- on real books a
+                    # 30+ lot sweep walks the order book. Docs-only +
+                    # warning: there is deliberately NO impact model here,
+                    # because any particular impact curve would be a
+                    # guess; the warning tells the user the fill assumed
+                    # infinite liquidity. MAX_CONTRACTS_BEFORE_IMPACT_WARN
+                    # is a module constant (not a RiskConfig field) so the
+                    # threshold is visible at the warning site.
+                    if risk.contract_size:
+                        _whole_contracts = size / risk.contract_size
+                        if _whole_contracts > MAX_CONTRACTS_BEFORE_IMPACT_WARN:
+                            import warnings
+                            warnings.warn(
+                                f"MARKET IMPACT: entry of {_whole_contracts:.0f} whole contracts "
+                                f"({_restore_tz(ts[fill_idx])}) filled at the quoted price with "
+                                f"zero market impact assumed (above the {MAX_CONTRACTS_BEFORE_IMPACT_WARN}-contract "
+                                f"guardrail). Real fills of this size move the book; this backtest does not model that.",
+                                RuntimeWarning,
+                            )
 
                     open_trade = {
                         "entry_time": _restore_tz(ts[fill_idx]),
