@@ -26,6 +26,7 @@ before trusting the parsed fields) rather than as confirmed-correct.
 """
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 import pandas as pd
@@ -163,11 +164,30 @@ class TradeLockerBrokerAdapter(BrokerAdapter):
             ))
         return out
 
+    def to_broker_qty(
+        self, units: float, contract_size: Optional[float], units_per_lot: Optional[float],
+    ) -> float:
+        # ASSUMPTION (documented, v7 P0-1): TradeLocker's order `qty` is
+        # interpreted as LOTS in the broker's native lot definition --
+        # TradeLocker is primarily a forex/CFD platform where 1 lot =
+        # 100,000 base units, so units_per_lot=100,000 is the FX-standard
+        # conversion; for futures-style symbols 1 lot = 1 contract, so
+        # callers pass units_per_lot = contract_size. Verify this
+        # assumption against your own account's first order (the order
+        # ticket echoes the accepted qty) before trusting it with size.
+        # Floored to 0.01 -- never rounded up. Refuses (0.0) when
+        # units_per_lot is missing.
+        if not units_per_lot or units_per_lot <= 0:
+            return 0.0
+        return math.floor(units / units_per_lot * 100 + 1e-9) / 100.0
+
     def place_market_order(
         self, symbol: str, direction: int, volume: float,
         sl_price: float | None = None, tp_price: float | None = None,
         comment: str = "T58 Live", deviation: int = 20,
     ) -> OrderResult:
+        # `volume` here is broker-native LOTS, converted via to_broker_qty
+        # by the caller -- never raw sizing units (v7 P0-1).
         try:
             body = {
                 "tradableInstrumentId": symbol, "qty": volume,

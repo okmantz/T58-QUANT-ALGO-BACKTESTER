@@ -113,6 +113,12 @@ class LiveExecutionStatus:
     halted_reason: Optional[str] = None
     baseline_win_rate: Optional[float] = None
     drift_flag: Optional[str] = None
+    # v7 P0-2/P0-5: loud session-state alert flag. Set (and never cleared
+    # except by starting a new session) when the session emergency-halts:
+    # max-drawdown breach or N consecutive poll failures. UIs should
+    # surface this prominently -- it means "a human must look at the
+    # broker account before restarting".
+    alert: Optional[str] = None
 
 
 @dataclass
@@ -122,6 +128,16 @@ class LiveExecutionConfig:
     risk: RiskConfig
     prop_rules: PropRules            # supplies max_drawdown/daily-loss context AND the new
                                       # news_blackout_windows / weekend_hold_allowed / hedging_allowed fields
+    # v7 P0-1: sizing-unit -> broker-quantity conversion inputs. REQUIRED
+    # keyword args -- every construction site must pass them explicitly.
+    # contract_size: sizing units per ONE whole contract (ES=50, MES=5;
+    # None when unknown/not applicable, e.g. spot FX). units_per_lot:
+    # sizing units per ONE broker lot (FX standard 100,000; futures
+    # normally = contract_size). The adapters REFUSE (size to zero,
+    # entry skipped) rather than guess when the factor they need is
+    # missing -- there are no silent defaults that could oversize.
+    contract_size: Optional[float] = field(kw_only=True)
+    units_per_lot: Optional[float] = field(kw_only=True)
     poll_seconds: int = 20
     history_bars: int = 1500
     min_drift_sample: int = 20
@@ -163,6 +179,14 @@ class LiveExecutionSession:
         self._daily_key: Optional[str] = None
         self._link_down = False
         self._weekend_flattened_this_week = False
+        # v7 P0-5: consecutive poll-failure counter -- on reaching
+        # _MAX_CONSECUTIVE_POLL_FAILURES the session best-effort flattens
+        # and halts instead of logging-and-skipping forever.
+        self._consecutive_poll_failures = 0
+        self._max_consecutive_poll_failures = 3
+        # v7 P0-2: trailing peak of mark-to-market equity for the live
+        # max-drawdown check. Initialized at start(); None = not started.
+        self._dd_peak: Optional[float] = None
 
     # -- public controls ------------------------------------------------
 
@@ -182,6 +206,8 @@ class LiveExecutionSession:
             self.cfg.timeframe_minutes, conn.account_login or "", conn.account_server or self.broker.platform_name,
         )
         self.status.baseline_win_rate = self.cfg.baseline_win_rate
+        # v7 P0-2: anchor the trailing max-drawdown peak at session start.
+        self._dd_peak = conn.equity or conn.balance or self.cfg.risk.initial_balance
         self._reconcile_existing_position()
 
         self._stop_flag.clear()
@@ -324,31 +350,124 @@ class LiveExecutionSession:
                 try:
                     self._poll_once()
                 except Exception as exc:  # noqa: BLE001
-                    self._log("error", f"Poll error: {exc}\n{traceback.format_exc(limit=3)}")
+                    # v7 P0-5: an exception escaping the poll is a poll
+                    # failure too -- it counts toward the N-strikes halt.
+                    self._note_poll_failure(f"Poll error: {exc}\n{traceback.format_exc(limit=3)}")
                 self._on_status(self.status)
                 self._stop_flag.wait(self.cfg.poll_seconds)
         finally:
             self.status.running = False
             self._on_status(self.status)
 
-    def _poll_once(self) -> None:
+    def _note_poll_success(self) -> None:
+        """A poll that reached live data resets the failure counter."""
         was_down = self._link_down
-        reconnect = self.broker.ensure_connected()
-        if not reconnect.ok:
-            self._link_down = True
-            self._log("error", f"{self.broker.platform_name} connection lost, reconnect failed: {reconnect.message}")
-            return
         self._link_down = False
+        self._consecutive_poll_failures = 0
         if was_down:
             self._log("info", f"{self.broker.platform_name} connection recovered -- resuming polling.")
+
+    def _note_poll_failure(self, message: str) -> None:
+        """Count a failed poll; on N consecutive failures best-effort
+        flatten everything and halt the session (v7 P0-5). Positions left
+        unmanaged during a network outage must never just be
+        "log and skip"-ed indefinitely."""
+        self._consecutive_poll_failures += 1
+        self._link_down = True
+        self._log(
+            "error",
+            f"{message} (consecutive poll failures: "
+            f"{self._consecutive_poll_failures}/{self._max_consecutive_poll_failures})",
+        )
+        if self._consecutive_poll_failures >= self._max_consecutive_poll_failures:
+            self._emergency_flatten_and_halt(
+                f"CONNECTION LOST: {self._max_consecutive_poll_failures} consecutive poll failures on "
+                f"{self.broker.platform_name}. Attempted to flatten all open positions; the session is HALTED. "
+                "Positions were unmanaged during the outage -- verify them on the broker before restarting."
+            )
+
+    def _emergency_flatten_and_halt(self, reason: str) -> None:
+        """Best-effort flatten of ALL account positions, then halt.
+
+        Called from inside the poll thread (max-drawdown breach,
+        connection-loss strikes), so it must NOT call self.stop() -- that
+        would join the current thread. Sets the stop flag directly and
+        raises the loud status.alert flag for the UIs.
+        """
+        self._log("error", reason)
+        try:
+            results = self.broker.close_all()  # account-wide: on a safety halt, flatten everything
+        except Exception as exc:  # noqa: BLE001
+            self._log("error", f"Emergency flatten failed: {exc}")
+            results = []
+        for r in results or []:
+            self._log("info" if r.ok else "error", f"Emergency flatten: {r.message}")
+        self.status.alert = reason
+        self.status.halted_reason = reason
+        self.status.open_position_ticket = None
+        self._stop_flag.set()
+        self.status.running = False
+
+    def _max_drawdown_floor(self) -> Optional[float]:
+        """The live max-drawdown floor in account currency, or None when
+        the rule is off (max_drawdown_pct <= 0). Trailing trails the
+        session's mark-to-market equity peak; static anchors to the
+        prop rule's account size. (v7 P0-2)"""
+        dd_pct = getattr(self.cfg.prop_rules, "max_drawdown_pct", 0) or 0
+        if dd_pct <= 0:
+            return None
+        base = getattr(self.cfg.prop_rules, "account_size", 0) or self.cfg.risk.initial_balance
+        dd_amount = base * (dd_pct / 100.0)
+        if getattr(self.cfg.prop_rules, "drawdown_type", "trailing") == "static":
+            return base - dd_amount
+        peak = self._dd_peak if self._dd_peak is not None else base
+        return peak - dd_amount
+
+    def _check_max_drawdown(self) -> bool:
+        """Check mark-to-market equity against the max-drawdown floor.
+        Returns True when a breach halted the session. (v7 P0-2)"""
+        floor = self._max_drawdown_floor()
+        if floor is None:
+            return False
+        equity = self.status.equity
+        if equity is None:
+            equity = self.status.balance
+        if equity is None:
+            return False  # no equity data this poll -- can't check, don't halt on missing data
+        if self._dd_peak is None or equity > self._dd_peak:
+            self._dd_peak = equity
+        if equity <= floor:
+            dd_pct = getattr(self.cfg.prop_rules, "max_drawdown_pct", 0)
+            dd_type = getattr(self.cfg.prop_rules, "drawdown_type", "trailing")
+            self._emergency_flatten_and_halt(
+                f"MAX DRAWDOWN BREACHED: mark-to-market equity ${equity:,.2f} is at/below the {dd_type} "
+                f"floor ${floor:,.2f} ({dd_pct}% rule). All positions flattened; the session is HALTED."
+            )
+            return True
+        return False
+
+    def _poll_once(self) -> None:
+        reconnect = self.broker.ensure_connected()
+        if not reconnect.ok:
+            self._note_poll_failure(
+                f"{self.broker.platform_name} connection lost, reconnect failed: {reconnect.message}"
+            )
+            return
         summary = self.broker.account_summary()
         if summary:
             self.status.balance = summary.get("balance")
             self.status.equity = summary.get("equity")
 
+        # v7 P0-2: the single most important prop rule -- checked on live
+        # mark-to-market equity every poll, BEFORE any new entry logic.
+        # A breach flattens everything and halts; nothing below runs.
+        if self._check_max_drawdown():
+            return
+
         df = self.broker.fetch_completed_bars(self.cfg.symbol, self.cfg.timeframe_minutes, self.cfg.history_bars)
         if df.empty:
             return
+        self._note_poll_success()
         latest_bar_time = df["timestamp"].iloc[-1]
         self._reset_daily_counter_if_needed(latest_bar_time)
 
@@ -416,31 +535,63 @@ class LiveExecutionSession:
         target_distance = self._resolve_target_distance(result, price)
         stop_pips = stop_distance / self.cfg.risk.pip_size if self.cfg.risk.pip_size else 0
         equity = self.status.equity or self.cfg.risk.initial_balance
-        volume = self.cfg.risk.position_size(equity, stop_pips)
+        volume = self.cfg.risk.position_size(equity, stop_pips)  # generic sizing units (NOT broker quantity)
 
+        # v7 P0-1: convert generic sizing units -> this broker's native
+        # quantity (whole contracts on Tradovate, lots on MT5/cTrader/
+        # TradeLocker/DXtrade). The adapter floors and refuses (0.0) when
+        # its conversion factor is missing -- never guessed, never rounded
+        # up. A sub-1-contract size skips the entry; it must never become
+        # a fractional contract or a 50x order.
+        broker_qty = self.broker.to_broker_qty(
+            volume,
+            contract_size=self.cfg.contract_size,
+            units_per_lot=self.cfg.units_per_lot,
+        )
+        if broker_qty <= 0:
+            self._log(
+                "warn",
+                f"Computed position size ({volume:.2f} sizing units) converts to zero "
+                f"{self.broker.platform_name} quantity -- below one whole contract/lot, or the "
+                "unit-conversion factor (contract_size/units_per_lot) is missing. Skipping entry.",
+            )
+            return
+
+        # v7 P0-2: max_lot_size is broker-native (contracts/lots per single
+        # order), applied AFTER conversion so "5" means 5 contracts/lots.
         max_lot = getattr(self.cfg.prop_rules, "max_lot_size", None)
         if max_lot:
-            volume = min(volume, max_lot)
-
-        if volume <= 0:
-            self._log("warn", "Computed position size was zero -- skipping entry.")
+            capped = min(broker_qty, max_lot)
+            if capped < broker_qty:
+                self._log(
+                    "warn",
+                    f"Order quantity capped by max_lot_size: {broker_qty:.2f} -> {capped:.2f} "
+                    f"{self.broker.platform_name} units.",
+                )
+            broker_qty = capped
+        if broker_qty <= 0:
+            self._log("warn", "Computed position size was zero after the max-lot cap -- skipping entry.")
             return
 
         sl_price = price - signal * stop_distance
         tp_price = price + signal * target_distance if target_distance else None
 
-        order = self.broker.place_market_order(self.cfg.symbol, signal, volume, sl_price=sl_price, tp_price=tp_price)
+        order = self.broker.place_market_order(self.cfg.symbol, signal, broker_qty, sl_price=sl_price, tp_price=tp_price)
         if not order.ok:
             self._log("error", f"Order failed: {order.message}")
             return
 
         self.status.open_position_ticket = order.ticket
+        # Journal the SIZING UNITS (not the broker quantity): the journal's
+        # close-out PnL math (exit-entry) x direction x volume is in the
+        # same unit domain as position_size, so it stays in dollars.
         self._open_trade_row_id = self.journal.record_open(
-            self._session_id, order.ticket, signal, order.volume or volume,
+            self._session_id, order.ticket, signal, volume,
             order.price or price, sl_price, tp_price,
         )
-        self._log("info", f"Opened {'LONG' if signal == 1 else 'SHORT'} {order.volume or volume:.2f} "
-                           f"{self.cfg.symbol} @ {order.price or price:.5f} (ticket {order.ticket}).")
+        self._log("info", f"Opened {'LONG' if signal == 1 else 'SHORT'} {broker_qty:.2f} "
+                           f"{self.broker.platform_name} units of {self.cfg.symbol} @ {order.price or price:.5f} "
+                           f"(ticket {order.ticket}).")
 
     def _close_current_trade(self, reason: str) -> None:
         ticket = self.status.open_position_ticket

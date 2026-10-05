@@ -36,7 +36,6 @@ from typing import Optional
 
 import pandas as pd
 
-
 @dataclass
 class ConnectionResult:
     ok: bool
@@ -131,10 +130,46 @@ class BrokerAdapter(ABC):
         self, symbol: str, direction: int, volume: float,
         sl_price: float | None = None, tp_price: float | None = None,
         comment: str = "T58 Live", deviation: int = 20,
-    ) -> OrderResult: ...
+    ) -> OrderResult:
+        """Place a market order. ``volume`` is the BROKER-NATIVE quantity
+        (whole contracts on Tradovate, lots on MT5/cTrader/TradeLocker/
+        DXtrade) -- callers MUST convert via ``to_broker_qty`` first;
+        never pass raw sizing units here (v7 P0-1)."""
 
     @abstractmethod
     def close_position(self, ticket: str, comment: str = "T58 Live close") -> OrderResult: ...
 
     def close_all(self, symbol: Optional[str] = None) -> list[OrderResult]:
         return [self.close_position(p.ticket) for p in self.get_open_positions(symbol)]
+
+    @abstractmethod
+    def to_broker_qty(
+        self, units: float, contract_size: Optional[float], units_per_lot: Optional[float],
+    ) -> float:
+        """Convert generic sizing units into this platform's native order quantity.
+
+        ``units`` come from ``RiskConfig.position_size`` and mean
+        ``PnL = units x price_move`` -- they are NOT contracts, lots, or
+        base-currency amounts, and passing them verbatim as an order
+        quantity is the 50x-oversize bug this method exists to kill
+        (v7 P0-1: $50k/1%/10-pt-stop ES sizes to 50.0 units, which is ONE
+        contract, not fifty).
+
+        ``contract_size`` is sizing units per ONE whole contract (e.g.
+        ES=50, MES=5 -- see app.data.instrument_specs); ``units_per_lot``
+        is sizing units per ONE broker lot (FX standard 100,000; futures
+        usually = contract_size). Each adapter uses whichever factor its
+        platform's quantity semantics need, documented on the override.
+
+        HARD RULES, no exceptions:
+        * FLOOR to the platform's minimum quantity increment -- never
+          round up. Rounding up risks more than the configured risk
+          amount at the stop.
+        * Return 0.0 when the size is below one whole minimum unit (the
+          engine skips the entry; a sub-1-contract size must NEVER
+          become a fractional contract or a rounded-up 1 lot).
+        * Return 0.0 when the conversion factor this platform needs is
+          missing or <= 0. Refusing is always safer than guessing on
+          real capital -- there are NO silent defaults here.
+        """
+        ...

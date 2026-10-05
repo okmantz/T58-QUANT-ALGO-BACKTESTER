@@ -31,6 +31,7 @@ single global reactor rather than each starting their own.
 """
 from __future__ import annotations
 
+import math
 import queue
 import threading
 import time
@@ -285,11 +286,28 @@ class CTraderBrokerAdapter(BrokerAdapter):
             ))
         return out
 
+    def to_broker_qty(
+        self, units: float, contract_size: Optional[float], units_per_lot: Optional[float],
+    ) -> float:
+        # cTrader Open API expresses order volume as an INTEGER number of
+        # 1/100ths of a lot (see place_market_order's int(volume * 100)
+        # and get_open_positions' volume / 100.0). This returns LOTS
+        # floored to 0.01 so that int(lots * 100) is exact -- never rounded
+        # up. Same conversion factors as MT5: FX 1 lot = 100,000 units via
+        # units_per_lot; futures 1 lot = 1 contract via
+        # units_per_lot = contract_size. Refuses (0.0) when units_per_lot
+        # is missing (v7 P0-1).
+        if not units_per_lot or units_per_lot <= 0:
+            return 0.0
+        return math.floor(units / units_per_lot * 100 + 1e-9) / 100.0
+
     def place_market_order(
         self, symbol: str, direction: int, volume: float,
         sl_price: float | None = None, tp_price: float | None = None,
         comment: str = "T58 Live", deviation: int = 20,
     ) -> OrderResult:
+        # `volume` here is broker-native LOTS (already floored to 0.01 by
+        # to_broker_qty) -- never raw sizing units (v7 P0-1).
         try:
             symbol_id = self._resolve_symbol_id(symbol)
             req = ProtoOANewOrderReq(

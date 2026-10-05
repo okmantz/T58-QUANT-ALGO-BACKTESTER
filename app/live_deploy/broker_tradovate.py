@@ -6,8 +6,9 @@ zero futures-platform connectivity).
 
 Tradovate's API is plain REST + JSON (no protobuf, no local terminal),
 which makes it the most straightforward of the four new adapters. Setup:
-  1. Register a free developer application at https://tradovate.com/api
-     (an "app id" and "app secret" -- the app registration itself is
+  1. Register a free developer application at https://api.tradovate.com
+     (v7 link fix 2026-10-05: the old https://tradovate.com/api returns 404;
+     an "app id" and "app secret" -- the app registration itself is
      free; verify current terms there, they do change access tiers over
      time). For development/testing, Tradovate's demo environment at
      demo.tradovateapi.com works against a free practice/sim account with
@@ -28,6 +29,7 @@ signal generation.
 """
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 import pandas as pd
@@ -169,11 +171,25 @@ class TradovateBrokerAdapter(BrokerAdapter):
             ))
         return out
 
+    def to_broker_qty(
+        self, units: float, contract_size: Optional[float], units_per_lot: Optional[float],
+    ) -> float:
+        # Tradovate's orderQty is a WHOLE NUMBER OF CONTRACTS. One contract
+        # = contract_size sizing units (ES: 50.0 units = 1 contract).
+        # Floor, never round up; refuse (0.0) when contract_size is
+        # missing -- without it we'd be guessing, and a guess here is a
+        # 50x order on real capital (v7 P0-1).
+        if not contract_size or contract_size <= 0:
+            return 0.0
+        return float(math.floor(units / contract_size + 1e-9))
+
     def place_market_order(
         self, symbol: str, direction: int, volume: float,
         sl_price: float | None = None, tp_price: float | None = None,
         comment: str = "T58 Live", deviation: int = 20,
     ) -> OrderResult:
+        # `volume` here is broker-native: WHOLE CONTRACTS, converted via
+        # to_broker_qty by the caller -- never raw sizing units (v7 P0-1).
         try:
             resp = self._session.post(f"{self.base_url}/order/placeorder", json={
                 "accountId": self.account_id, "symbol": symbol,
@@ -188,11 +204,23 @@ class TradovateBrokerAdapter(BrokerAdapter):
             return OrderResult(ok=False, message=str(exc))
 
     def close_position(self, ticket: str, comment: str = "T58 Live close") -> OrderResult:
+        # v7 P0-4: verify the API response before reporting success -- the
+        # old code returned ok=True even when Tradovate rejected the
+        # liquidation, leaving the session journal believing a position
+        # was flat while it was still open.
         try:
             resp = self._session.post(f"{self.base_url}/order/liquidateposition", json={
                 "accountId": self.account_id, "positionId": int(ticket),
             }, timeout=20)
             data = resp.json()
-            return OrderResult(ok=True, message="Close submitted.", ticket=ticket)
         except Exception as exc:
             return OrderResult(ok=False, message=str(exc))
+        if resp.status_code >= 400:
+            detail = data.get("failureText") or data.get("errorText") if isinstance(data, dict) else None
+            return OrderResult(ok=False, message=f"Tradovate rejected the close (HTTP {resp.status_code}): {detail or data}")
+        if isinstance(data, dict) and ("failureReason" in data or "failureText" in data):
+            return OrderResult(
+                ok=False,
+                message=f"Tradovate rejected the close: {data.get('failureText') or data.get('failureReason')}",
+            )
+        return OrderResult(ok=True, message="Close submitted.", ticket=ticket)

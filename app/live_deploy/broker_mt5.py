@@ -15,6 +15,7 @@ interoperability instead.
 """
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 import pandas as pd
@@ -61,11 +62,28 @@ class MT5BrokerAdapter(BrokerAdapter):
             for p in self._conn.get_open_positions(symbol)
         ]
 
+    def to_broker_qty(
+        self, units: float, contract_size: Optional[float], units_per_lot: Optional[float],
+    ) -> float:
+        # MT5 order volume is LOTS. For FX, 1 lot = 100,000 base-currency
+        # units and sizing "units" are exactly base-currency units
+        # (PnL = units x price_move), so units_per_lot=100,000 converts
+        # correctly. For futures on MT5, 1 lot is normally 1 contract, so
+        # callers pass units_per_lot = contract_size. Floored to 0.01
+        # (MT5's finest common volume step) -- never rounded up. Refuses
+        # (0.0) when units_per_lot is missing: passing raw units as lots
+        # would otherwise send e.g. 100,000-lot orders (v7 P0-1).
+        if not units_per_lot or units_per_lot <= 0:
+            return 0.0
+        return math.floor(units / units_per_lot * 100 + 1e-9) / 100.0
+
     def place_market_order(
         self, symbol: str, direction: int, volume: float,
         sl_price: float | None = None, tp_price: float | None = None,
         comment: str = "T58 Live", deviation: int = 20,
     ) -> OrderResult:
+        # `volume` here is broker-native LOTS, converted via to_broker_qty
+        # by the caller -- never raw sizing units (v7 P0-1).
         r = self._conn.place_market_order(
             symbol, direction, volume, sl_price=sl_price, tp_price=tp_price,
             comment=comment[:31], deviation=deviation,  # MT5 comment field is capped at 31 chars

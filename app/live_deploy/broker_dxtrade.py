@@ -21,6 +21,7 @@ with `/dxsca-web`) before trusting this against a funded account.
 """
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 import pandas as pd
@@ -144,11 +145,29 @@ class DXtradeBrokerAdapter(BrokerAdapter):
             ))
         return out
 
+    def to_broker_qty(
+        self, units: float, contract_size: Optional[float], units_per_lot: Optional[float],
+    ) -> float:
+        # ASSUMPTION (documented, v7 P0-1): DXtrade's order `quantity` is
+        # interpreted as LOTS in the broker/firm's native lot definition.
+        # DXtrade is white-labeled per firm, so the exact lot definition
+        # can vary by deployment -- the common pattern is 1 lot =
+        # 100,000 base units for FX/CFD (units_per_lot=100,000) and
+        # 1 lot = 1 contract for futures (units_per_lot = contract_size).
+        # Confirm against your firm's own order ticket on a first small
+        # order before trusting this with size. Floored to 0.01 -- never
+        # rounded up. Refuses (0.0) when units_per_lot is missing.
+        if not units_per_lot or units_per_lot <= 0:
+            return 0.0
+        return math.floor(units / units_per_lot * 100 + 1e-9) / 100.0
+
     def place_market_order(
         self, symbol: str, direction: int, volume: float,
         sl_price: float | None = None, tp_price: float | None = None,
         comment: str = "T58 Live", deviation: int = 20,
     ) -> OrderResult:
+        # `volume` here is broker-native LOTS, converted via to_broker_qty
+        # by the caller -- never raw sizing units (v7 P0-1).
         try:
             body = {
                 "accountId": self.account_id, "symbol": symbol,
