@@ -142,7 +142,19 @@ def test_grammar_extension_point_register_operand_kind():
 
 def test_building_block_pool_decomposes_templates():
     from app.search.strategy_space import FAMILIES
-    assert len(FAMILIES) == 84, "the 84 frozen templates must still exist, untouched"
+    # v7 (2026-10-05): 84 frozen templates + 10 new v7 families
+    # (app/search/families_v7.py). The original 84 must still exist,
+    # untouched -- the count check below enforces both.
+    try:
+        from app.search.families_v7 import V7_FAMILY_NAMES
+        v7_names = set(V7_FAMILY_NAMES)
+    except ImportError:
+        v7_names = set()
+    assert len(FAMILIES) == 84 + len(v7_names), (
+        f"expected 84 frozen templates + {len(v7_names)} v7 families"
+    )
+    original = set(FAMILIES) - v7_names
+    assert len(original) == 84, "the 84 frozen templates must still exist, untouched"
     pool = building_block_pool()
     assert pool["families_used"], "no families decomposed"
     assert pool["entry_blocks"], "no entry blocks extracted"
@@ -157,8 +169,9 @@ def test_building_block_pool_decomposes_templates():
                                     "short": []},
                "risk_management": grammar.random_block(pool, "risk_blocks", rng)}
         assert not validate(cfg), f"pool block invalid: {validate(cfg)[:2]}"
-    # Templates untouched: FAMILIES registry still has all 84 after pooling.
-    assert len(FAMILIES) == 84
+    # Templates untouched: FAMILIES registry still has all 84 originals
+    # after pooling (v7: plus the 10 new families).
+    assert len(FAMILIES) - len(v7_names) == 84
 
 
 # ---------------------------------------------------------------------------
