@@ -400,3 +400,74 @@ def compute_pbo(
         if tmp_dir is not None:
             import shutil
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# pbo_gate -- Probability of Backtest Overfitting as a REJECT gate
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PBOGateResult:
+    passed: bool
+    pbo: float            # the measured Probability of Backtest Overfitting, 0-1
+    max_pbo: float        # the bar it had to stay under
+    reason: str           # one human-readable line, pass or fail
+    pbo_result: PBOResult | None = None
+
+
+def pbo_gate(pbo_result: PBOResult | None, max_pbo: float = 0.5) -> PBOGateResult:
+    """The Probability of Backtest Overfitting as a REJECT gate, not a
+    diagnostic note.
+
+    compute_pbo() above measures whether a search's SELECTION process --
+    "take whichever candidate looked best in-sample" -- generalizes: the
+    fraction of CPCV paths where the in-sample winner finished in the
+    bottom half out-of-sample. Its own note documents the interpretation:
+    values above ~0.5 mean the search process is more likely to be
+    selecting noise than signal. A pool like that has no business
+    crowning a champion -- picking the winner was a coin flip with extra
+    steps -- so above ``max_pbo`` the candidate is REJECTED outright
+    rather than penalized in a score it can out-shout elsewhere.
+
+    max_pbo default 0.5: the coin-flip line. A stricter bar (e.g. 0.3) is
+    defensible for real-money deployment; 0.5 is the "not demonstrably
+    worse than random" floor no candidate should be allowed under.
+
+    pbo_result=None (PBO couldn't run -- e.g. fewer than 2 candidates in
+    the pool, making the measurement degenerate by construction) is a
+    PASS-with-note here, not a rejection: an unmeasurable gate must not
+    fail a candidate. Callers that require the measurement to exist (a
+    pipeline that explicitly selected PBO as its overfitting check) should
+    treat "couldn't run" as NOT TESTED themselves -- see
+    app.orchestration.full_pipeline's CPCV-primary handling for the
+    pattern.
+    """
+    if pbo_result is None:
+        return PBOGateResult(
+            passed=True,
+            pbo=float("nan"),
+            max_pbo=max_pbo,
+            reason=(
+                "PBO gate not run (no PBO result supplied -- e.g. fewer than 2 candidates, "
+                "where the measurement is degenerate by construction). Not treated as a failure."
+            ),
+            pbo_result=None,
+        )
+    passed = pbo_result.pbo <= max_pbo
+    if passed:
+        reason = (
+            f"PBO gate PASSED: probability of backtest overfitting {pbo_result.pbo:.3f} <= "
+            f"{max_pbo:.2f} ({pbo_result.n_paths} CPCV paths over {pbo_result.n_candidates} "
+            f"candidates) -- the selection process picks signal more often than noise."
+        )
+    else:
+        reason = (
+            f"REJECTED by the PBO gate: probability of backtest overfitting {pbo_result.pbo:.3f} > "
+            f"{max_pbo:.2f} ({pbo_result.n_paths} CPCV paths over {pbo_result.n_candidates} "
+            f"candidates) -- the in-sample winner lands in the bottom half out-of-sample more "
+            f"often than a coin flip, so crowning this candidate would be selecting noise."
+        )
+    return PBOGateResult(
+        passed=passed, pbo=pbo_result.pbo, max_pbo=max_pbo, reason=reason,
+        pbo_result=pbo_result,
+    )
