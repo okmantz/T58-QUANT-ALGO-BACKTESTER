@@ -306,6 +306,24 @@ def ensure_licensed(interactive: bool = True) -> bool:
     if ok:
         return True
 
+    # v7 -- FAIL LOUDLY when this build has no license server URL
+    # configured. A cached master-key activation already returned True
+    # above, so reaching here means: no usable cached license AND no
+    # server to ask. The activation form below could then only ever
+    # succeed via a master key (fully offline), so say that plainly
+    # instead of letting the person type a server key into a form that
+    # is guaranteed to fail -- the old code died confusingly against the
+    # dead placeholder domain.
+    url_ok, url_message = client.check_license_server_configured()
+    if not url_ok:
+        if not interactive:
+            print(f"T58 license configuration error: {url_message}")
+            return False
+        return show_activation_window(
+            initial_message=url_message,
+            initial_email=client.load_state().email,
+        )
+
     if not interactive:
         print(f"T58 license check failed: {message}")
         print("Run the app normally (without any CLI flags) once to activate, or check your license status.")

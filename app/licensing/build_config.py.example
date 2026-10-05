@@ -1,0 +1,33 @@
+"""
+Build-time license configuration for the T58 Quant Algo Backtester.
+
+THIS FILE IS A TEMPLATE -- copy it to build_config.py (same directory) and
+fill in your values, or let the GitHub Actions build workflows generate
+build_config.py from the T58_LICENSE_SERVER_URL / T58_MASTER_LICENSE_KEY_HASH
+secrets (see .github/workflows/build-exe.yml "Bake license build config").
+
+NEVER commit a build_config.py with real values -- it would ship your
+license server URL and master-key hash to everyone who can read the repo.
+build_config.py is in .gitignore for exactly this reason.
+
+Precedence in app/licensing/client.py (highest wins):
+  1. T58_LICENSE_SERVER_URL / T58_MASTER_LICENSE_KEY_HASH environment
+     variables (runtime -- staging/testing overrides, and the documented
+     way to configure a from-source dev run).
+  2. This module's LICENSE_SERVER_URL / MASTER_LICENSE_KEY_HASH (baked in
+     at build time -- what the shipped .exe actually uses).
+  3. Nothing -- the app then fails LOUDLY at startup with a clear "no
+     license server configured" message (never a silent placeholder), and
+     the master-key activation path is simply unavailable with a clear
+     hint (never silently insecure).
+"""
+
+# Public HTTPS URL of your deployed license_server/ (no trailing slash),
+# e.g. "https://t58-license-server.onrender.com".
+LICENSE_SERVER_URL = ""
+
+# SHA-256 hex digest of the master key (the key itself is NEVER stored
+# here), computed exactly as the app checks it: key uppercased and
+# stripped of surrounding whitespace, then sha256 hex:
+#   python -c "import hashlib; print(hashlib.sha256('T58-YOUR-KEY'.strip().upper().encode()).hexdigest())"
+MASTER_LICENSE_KEY_HASH = ""

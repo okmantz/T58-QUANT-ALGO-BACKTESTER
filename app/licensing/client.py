@@ -32,11 +32,67 @@ from app.data.storage import get_app_base_dir
 SERVICE_NAME = "T58PropAlgoBacktester"
 KEYRING_USERNAME = "license"
 
-# Point this at wherever you deploy license_server/ (see its README.md).
-# Overridable via the T58_LICENSE_SERVER_URL environment variable so the
-# same built .exe can point at a staging server during testing without a
-# rebuild -- set the env var, or just edit this default before building.
-DEFAULT_SERVER_URL = "https://license.yourdomain.example.com"
+# --- License server URL (v7) ---------------------------------------------------
+# Where license_server/ is deployed. There is deliberately NO placeholder
+# default anymore: the old "https://license.yourdomain.example.com" meant
+# every paying customer's activation died against a dead domain with a
+# confusing network error. Resolution order:
+#   1. T58_LICENSE_SERVER_URL environment variable (runtime -- the way a
+#      from-source dev run or a staging deploy points the app somewhere
+#      without a rebuild; also the local-testing path in
+#      license_server/README.md).
+#   2. app/licensing/build_config.py LICENSE_SERVER_URL (baked in at
+#      build time -- the GitHub release workflows generate build_config.py
+#      from the T58_LICENSE_SERVER_URL repo secret right before PyInstaller
+#      runs, so the shipped .exe carries the real URL; see
+#      license_server/DEPLOY.md step 7).
+#   3. None -- and then the app FAILS LOUDLY at startup (see
+#      check_license_server_configured() and its call in
+#      app/licensing/gate.py's ensure_licensed()) instead of silently
+#      falling back to a dead URL. The master-key activation path is fully
+#      offline and keeps working regardless (see the master-key section).
+def _baked_license_server_url() -> str:
+    """The build-time URL from app/licensing/build_config.py, or "".
+
+    build_config.py is GENERATED at release-build time (never committed
+    with real values -- see build_config.py.example); its absence on a
+    from-source dev checkout is normal, not an error."""
+    try:
+        from app.licensing import build_config
+    except ImportError:
+        return ""
+    return str(getattr(build_config, "LICENSE_SERVER_URL", "") or "").strip().rstrip("/")
+
+
+def resolve_license_server_url() -> str | None:
+    """The effective license-server URL, or None if none is configured."""
+    env_value = os.environ.get("T58_LICENSE_SERVER_URL", "").strip().rstrip("/")
+    if env_value:
+        return env_value
+    baked = _baked_license_server_url()
+    return baked or None
+
+
+_NO_LICENSE_SERVER_URL_MESSAGE = (
+    "This T58 build has no license server URL configured, so it cannot activate "
+    "or validate a server license. Set the T58_LICENSE_SERVER_URL environment "
+    "variable, or rebuild with the URL baked in (see license_server/DEPLOY.md "
+    "step 7). A master key still activates fully offline -- enter it in the "
+    "activation window if you have one."
+)
+
+
+def check_license_server_configured() -> tuple[bool, str]:
+    """(configured, message) -- the fail-LOUD check for a missing server URL.
+
+    Called from app/licensing/gate.py's ensure_licensed() BEFORE the
+    activation window is shown: a licensed build with no URL can never
+    activate anyone, so the startup must say so plainly instead of letting
+    the person type a key into a form that is guaranteed to fail."""
+    url = resolve_license_server_url()
+    if url:
+        return True, url
+    return False, _NO_LICENSE_SERVER_URL_MESSAGE
 
 # How long the app keeps working after the LAST successful ONLINE
 # validation if the license server can't be reached at all (as opposed
@@ -57,13 +113,10 @@ VALIDATE_TIMEOUT_S = 6.0
 
 # --- Master key ------------------------------------------------------------
 # A single, permanent, fully-offline override for the app's own owner --
-# added because there was no way to run the app at all before
-# license_server/ is actually deployed somewhere real (DEFAULT_SERVER_URL
-# above is a placeholder domain until then), and because the owner
-# shouldn't depend on a live server, a device binding, or an internet
-# connection just to open their own software.
+# the owner shouldn't depend on a live server, a device binding, or an
+# internet connection just to open their own software.
 #
-# Only the SHA-256 HASH of the real key lives in this file -- never the
+# Only the SHA-256 HASH of the real key is ever configured -- never the
 # key itself: matching it requires knowing the actual key, not just
 # reading this source, the same way a password hash doesn't reveal the
 # password. The key is handed to the owner once and never
@@ -72,27 +125,44 @@ VALIDATE_TIMEOUT_S = 6.0
 # compare (UPPERCASED with surrounding whitespace stripped -- see
 # _is_master_key).
 #
-# UN-REVOCABLE BY DESIGN (Owen's explicit call, Oct 2026): this hash
-# ships inside the built .exe (and lives in the repo), so anyone holding
-# the matching key gets permanent offline activation in every build that
-# contains this hash, forever. Rotation = replace _DEFAULT_MASTER_KEY_HASH
-# with the new key's SHA-256, rebuild, re-ship; old builds keep honoring
-# the old hash until they are replaced. The T58_MASTER_LICENSE_KEY_HASH
-# environment variable overrides the hardcoded value when set (e.g. a
-# per-build hash injected at release time) without editing this file.
-# Precedence: env var > _DEFAULT_MASTER_KEY_HASH below > error hint when
-# neither is configured.
-_DEFAULT_MASTER_KEY_HASH = "fcfe701fc0367a1328746e744805a96d76e8b2c1a06638908a0fa6c92a327ea0"
+# v7 (Oct 2026): the old hardcoded _DEFAULT_MASTER_KEY_HASH is GONE --
+# a hash baked into a public repo is un-revocable by design, so the
+# default is now EMPTY. The hash comes from build-time configuration:
+#   1. T58_MASTER_LICENSE_KEY_HASH environment variable (when set) --
+#      used directly at runtime AND read by the release workflows at
+#      build time to bake the hash into build_config.py for the .exe
+#      (see license_server/DEPLOY.md step 7 -- Owen sets this per
+#      release, never committed to the repo).
+#   2. app/licensing/build_config.py MASTER_LICENSE_KEY_HASH (the
+#      build-time-baked value).
+#   3. Nothing -- and then the master-key path is simply UNAVAILABLE in
+#      this build, with the clear hint below on every master-key-shaped
+#      attempt. Never silently insecure: an unset hash can never
+#      accidentally validate anything.
+#
+# Rotation = new hash -> rebuild -> re-ship; old builds keep honoring
+# their old hash until they are replaced.
+def _baked_master_key_hash() -> str:
+    """The build-time master-key hash from app/licensing/build_config.py,
+    or "". See _baked_license_server_url() above for why its absence is
+    normal on a from-source checkout."""
+    try:
+        from app.licensing import build_config
+    except ImportError:
+        return ""
+    return str(getattr(build_config, "MASTER_LICENSE_KEY_HASH", "") or "").strip()
 
 
 def _master_key_hash() -> str | None:
     """The effective master-key hash, or None if none is configured.
     Precedence: T58_MASTER_LICENSE_KEY_HASH env var (when set) >
-    _DEFAULT_MASTER_KEY_HASH above (when non-empty) > None."""
+    build_config.MASTER_LICENSE_KEY_HASH (baked at build time, when set) >
+    None (master-key path unavailable in this build)."""
     env_value = os.environ.get("T58_MASTER_LICENSE_KEY_HASH", "").strip()
     if env_value:
         return env_value
-    return _DEFAULT_MASTER_KEY_HASH or None
+    baked = _baked_master_key_hash()
+    return baked or None
 
 
 def _is_master_key(license_key: str) -> bool:
@@ -281,8 +351,11 @@ def clear_state() -> None:
             pass
 
 
-def _server_url() -> str:
-    return os.environ.get("T58_LICENSE_SERVER_URL", DEFAULT_SERVER_URL)
+def _server_url() -> str | None:
+    """The resolved license-server URL, or None when none is configured.
+    (v7: the old placeholder default is gone -- see
+    resolve_license_server_url() above.)"""
+    return resolve_license_server_url()
 
 
 def _post(path: str, payload: dict, timeout: float = 10.0) -> tuple[bool, dict, str | None]:
@@ -293,8 +366,17 @@ def _post(path: str, payload: dict, timeout: float = 10.0) -> tuple[bool, dict, 
     triggers the offline grace period in validate() below. network_ok=True
     with response["ok"]=False means the server WAS reached and gave a
     real, authoritative answer (e.g. "revoked") -- never subject to the
-    grace period, on purpose."""
-    url = _server_url().rstrip("/") + path
+    grace period, on purpose.
+
+    v7: a missing server URL is its own clear error (not a crash on
+    None.rstrip, and not a confusing DNS failure against a placeholder).
+    The offline grace period still applies to a genuinely unreachable
+    CONFIGURED server; a build with NO server configured fails loudly
+    earlier, at ensure_licensed()."""
+    base = _server_url()
+    if not base:
+        return False, {}, _NO_LICENSE_SERVER_URL_MESSAGE
+    url = base.rstrip("/") + path
     data = json.dumps(payload).encode("utf-8")
     req = urllib_request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
     try:
