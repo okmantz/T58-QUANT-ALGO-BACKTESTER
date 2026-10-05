@@ -734,10 +734,27 @@ def run_walkforward_aware_refinement(
             genome=best_ever.genome, fitness=best_ever.fitness, oos_trade_count=best_ever.trade_count,
             in_sample_fitness=in_sample_fitness, config=config_snapshot, code_text=code_text, code_extension=code_ext,
         )
-        leaderboard = [
-            WalkforwardGACandidate(genome=c.genome, fitness=c.fitness, oos_trade_count=c.trade_count)
-            for c in sorted(population, key=lambda c: c.fitness, reverse=True)
-        ]
+        # D3: snapshot the config/code for EVERY leaderboard candidate,
+        # not just the winner -- _leaderboard_candidate_spec (and through
+        # it the DSR/PBO gates) re-backtests each leaderboard genome, and
+        # a candidate carrying genome-but-no-config/code is
+        # un-re-backtestable (the old code left config/code None here, so
+        # the manual path raised and the code path rebuilt from nothing).
+        def _snapshot_candidate(genome: list) -> tuple:
+            if strategy.source_type == "manual":
+                from app.optimize.parameter_space import apply_genome
+                return apply_genome(strategy.config, genes, genome), None, None
+            from app.optimize.code_parameter_space import patched_source_for_strategy
+            _ct, _ce = patched_source_for_strategy(strategy, genes, genome)
+            return None, _ct, _ce
+
+        leaderboard = []
+        for c in sorted(population, key=lambda c: c.fitness, reverse=True):
+            _cc, _ct, _ce = _snapshot_candidate(c.genome)
+            leaderboard.append(WalkforwardGACandidate(
+                genome=c.genome, fitness=c.fitness, oos_trade_count=c.trade_count,
+                config=_cc, code_text=_ct, code_extension=_ce,
+            ))
 
         elapsed = time.time() - t0
         log(f"Walk-forward-aware GA complete in {elapsed:.1f}s.")

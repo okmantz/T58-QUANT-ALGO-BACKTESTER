@@ -287,6 +287,50 @@ class RefinementResult:
 # Fitness
 # ---------------------------------------------------------------------------
 
+# v6 (2026-10-04): headroom-ratio keys exported in the single-run sim
+# summary (see app.prop.simulator.summarize_single_run) -- each is the
+# fraction of the corresponding prop limit the run actually used, so 1.0
+# means "right at the limit" and lower means more margin of safety.
+_HEADROOM_RATIO_KEYS = (
+    "best_day_profit_pct_of_limit",
+    "worst_daily_loss_pct_of_limit",
+    "max_dd_pct_of_limit",
+)
+
+
+def _headroom_bonus(sim_summary: dict | None, weight: float = 0.1) -> float:
+    """v6 (2026-10-04): margin-of-safety gradient -- a small additive bonus
+    that rewards running FARTHER from the prop limits, not just clearing
+    them. Each ratio in _HEADROOM_RATIO_KEYS is 1.0 at the limit, so
+    (1.0 - min(util, 1.0)) is 1.0 at zero utilization and 0.0 at/over the
+    limit; the bonus is `weight * mean(...)` over whichever ratios are
+    present. Ratios that are None/absent (e.g. a sim summary built before
+    headroom tracking existed) contribute nothing -- the term is exactly
+    0.0, never fabricated.
+
+    Weighting: 0.1 by default, i.e. a perfect-headroom candidate earns at
+    most +0.1 additive points on the composite's ~0-100 scale -- a
+    tiebreaker nudge, not a dominant factor. The pass/payout probability
+    legs must decide the ranking; headroom only separates candidates the
+    probabilities already call equal. Raise the weight via the caller if
+    you want margin-of-safety to drive selection harder.
+    """
+    if not sim_summary:
+        return 0.0
+    utils = []
+    for key in _HEADROOM_RATIO_KEYS:
+        try:
+            v = float(sim_summary.get(key)) if sim_summary.get(key) is not None else None
+        except (TypeError, ValueError):
+            v = None
+        if v is None or not math.isfinite(v):
+            continue
+        utils.append(1.0 - min(v, 1.0))
+    if not utils:
+        return 0.0
+    return weight * (sum(utils) / len(utils))
+
+
 def _band(value: float, floor: float, ceiling: float) -> float:
     """0 at/below `floor`, ramps linearly to 1 at/above `ceiling`. Small
     helper for scoring a raw metric against one of the guide's target
@@ -300,7 +344,7 @@ def _band(value: float, floor: float, ceiling: float) -> float:
     return (value - floor) / (ceiling - floor)
 
 
-def _prop_guide_score(stats: dict, mc: MonteCarloResult) -> float:
+def _prop_guide_score(stats: dict, mc: MonteCarloResult, prop_rules: "PropRules | None" = None) -> float:
     """Scores a strategy against the PROP-ORIENTED STRATEGY GENERATION
     GUIDE's "ideal performance profile" (its section 4 target table)
     instead of collapsing everything to net profit, or even just eval-pass
@@ -318,11 +362,27 @@ def _prop_guide_score(stats: dict, mc: MonteCarloResult) -> float:
     so the GA can't win by exploiting the numbers this metric doesn't
     look at.
 
+    v6 (2026-10-04): the pass/payout legs read PER-ATTEMPT (single-account)
+    odds -- the chain-level numbers are inflated almost by construction
+    once reset_on_breach is on -- falling back to the chain-level fields
+    for MonteCarloResults built before per-attempt tracking existed
+    (identical when reset_on_breach is off).
+
+    prop_rules: when provided, the P95-drawdown band is measured relative
+    to the ACTIVE account's max_drawdown_pct instead of the hardcoded
+    6-10% band (the guide wants P95 drawdown under roughly half of the
+    firm's actual limit; the band is (0.6 * limit, 1.0 * limit)). None
+    (the default) keeps the old 6-10% stand-in band -- deliberately, so
+    every existing caller that doesn't thread PropRules through keeps
+    byte-identical scores.
+
     Deliberately NOT normalized to a clean 0-1 range -- what matters for
     the GA/refinement's tournament selection is relative ordering between
     candidates, not the absolute scale."""
-    eval_pass = mc.evaluation_pass_probability / 100.0
-    payout = mc.first_payout_probability / 100.0
+    _per_pass = getattr(mc, "per_attempt_pass_probability", None)
+    eval_pass = float(_per_pass if _per_pass is not None else mc.evaluation_pass_probability) / 100.0
+    _per_payout = getattr(mc, "per_attempt_payout_probability", None)
+    payout = float(_per_payout if _per_payout is not None else mc.first_payout_probability) / 100.0
     ruin_penalty = mc.risk_of_ruin_pct / 100.0
 
     pf = stats.get("profit_factor", 0.0)
@@ -338,14 +398,19 @@ def _prop_guide_score(stats: dict, mc: MonteCarloResult) -> float:
     else:
         win_rate_score = max(0.0, 1.0 - (win_rate - 65.0) / 25.0)
 
-    # P95 drawdown vs a typical ~10%-max-drawdown prop firm: the guide
-    # wants P95 drawdown under roughly 50-60% of the firm's actual limit.
-    # compute_fitness doesn't have the active PropRules in scope here, so
-    # this uses that typical 10% figure as a stand-in rather than the
-    # exact configured limit -- close enough to penalize a strategy that
-    # runs uncomfortably close to ANY reasonable drawdown limit, without
-    # needing to thread PropRules through every call site of this metric.
-    dd_score = 1.0 - _band(mc.p95_drawdown_pct, 6.0, 10.0)
+    # v6 (2026-10-04): P95 drawdown vs the ACTIVE account's limit when
+    # PropRules are in scope, falling back to the hardcoded 6-10% stand-in
+    # band (typical ~10%-max-drawdown prop firm) when they aren't. The
+    # guide wants P95 drawdown under roughly 50-60% of the firm's actual
+    # limit -- _band(p95, 0.6*limit, limit) scores that directly; the old
+    # comment about compute_fitness not having PropRules in scope is
+    # resolved by the new optional prop_rules parameter on both
+    # _prop_guide_score and compute_fitness.
+    if prop_rules is not None and prop_rules.max_drawdown_pct > 0:
+        _dd_limit = float(prop_rules.max_drawdown_pct)
+    else:
+        _dd_limit = 10.0
+    dd_score = 1.0 - _band(mc.p95_drawdown_pct, 0.6 * _dd_limit, _dd_limit)
 
     return (
         eval_pass * 0.40
@@ -485,6 +550,7 @@ def compute_fitness(
     stats: dict, prop_summary: dict | None, mc: MonteCarloResult, metric: str,
     risk_of_ruin_cap: float | None = None,
     trades: list | None = None,
+    prop_rules: PropRules | None = None,
 ) -> float:
     """risk_of_ruin_cap: when provided, erodes the raw metric score by
     app.optimize.refinement._apply_ruin_penalty's fractional ruin penalty
@@ -496,7 +562,15 @@ def compute_fitness(
     have them (see _evaluate). Only used by metrics that need per-trade
     evidence -- today that is avg_give_back_r (PART-A PORT #1). Callers
     that don't pass trades and select avg_give_back_r get -inf
-    ("cannot be scored on exit quality")."""
+    ("cannot be scored on exit quality").
+
+    prop_rules: v6 (2026-10-04) -- the ACTIVE PropRules, threaded through
+    by callers that have them (see _evaluate). Only used by
+    metric="prop_guide_score": _prop_guide_score's P95-drawdown band is
+    measured relative to prop_rules.max_drawdown_pct instead of the
+    hardcoded 6-10% stand-in. None (the default) keeps the old band --
+    byte-identical for every caller that doesn't thread PropRules
+    through."""
     if metric == "net_profit":
         fitness = float(stats.get("net_profit", 0.0))
     elif metric == "profit_factor":
@@ -531,8 +605,13 @@ def compute_fitness(
             + (_per_payout if _per_payout is not None else mc.first_payout_probability) * 0.3
             - mc.risk_of_ruin_pct * 0.2
         )
+        # v6 (2026-10-04): margin-of-safety gradient -- rewards candidates
+        # that clear the prop limits with headroom, not just clear them.
+        # prop_summary is the single-run sim summary that carries the
+        # headroom ratios; absent ratios (older summaries) contribute 0.0.
+        fitness += _headroom_bonus(prop_summary)
     elif metric == "prop_guide_score":
-        fitness = _prop_guide_score(stats, mc)
+        fitness = _prop_guide_score(stats, mc, prop_rules=prop_rules)
     elif metric == "avg_give_back_r":
         # PART-A PORT #1: rank on exit quality (negated average R
         # give-back). trades is None for callers that don't have per-trade
@@ -659,7 +738,7 @@ def _evaluate(
 
     fitness = compute_fitness(
         bt_result.statistics.to_dict(), prop_summary, mc_result, metric,
-        trades=bt_result.trades,
+        trades=bt_result.trades, prop_rules=prop_rules,
     )
     if not math.isfinite(fitness):
         fitness = float("-inf")
@@ -674,7 +753,7 @@ def _evaluate(
             stressed_mc = run_monte_carlo(stressed_bt.trades, prop_rules, mc_cfg)
             stressed_fitness = compute_fitness(
                 stressed_bt.statistics.to_dict(), summarize_single_run(stressed_single_run), stressed_mc, metric,
-                trades=stressed_bt.trades,
+                trades=stressed_bt.trades, prop_rules=prop_rules,
             )
         else:
             stressed_fitness = float("-inf")
@@ -761,15 +840,20 @@ def _select_plateau_robust(
     genes: list,
     cfg: RefinementConfig,
     evaluate_cheap,
-) -> tuple[Candidate, dict | None]:
+) -> tuple[Candidate, dict | None, int]:
     """Picks a plateau-robust champion from every finite candidate the
-    search evaluated. Returns (chosen_candidate, report_dict | None) --
-    report_dict is None only when there was nothing finite to choose from
-    (evaluate_cheap already handles that case by returning the raw best)."""
+    search evaluated. Returns (chosen_candidate, report_dict | None,
+    probe_count) -- report_dict is None only when there was nothing finite
+    to choose from (evaluate_cheap already handles that case by returning
+    the raw best). probe_count is the number of cheap neighborhood-probe
+    evaluations run inside this function; callers add it to their trial
+    counts (see run_iterative_refinement's total_evaluations) because a
+    probe can swap the crowned genome, so DSR/trial-count accounting must
+    count probes as real evaluations."""
     finite = [c for c in candidates if math.isfinite(c.fitness)]
     if not finite:
         raw_best = max(candidates, key=lambda c: c.fitness)
-        return raw_best, None
+        return raw_best, None, 0
 
     raw_best = max(finite, key=lambda c: c.fitness)
 
@@ -788,9 +872,13 @@ def _select_plateau_robust(
 
     best_candidate = raw_best
     best_score = float("-inf")
+    probe_count = 0
     for candidate in pool:
         neighbor_genomes = _neighbor_genomes(candidate.genome, genes, cfg.plateau_neighbor_step_frac)
-        neighbor_fitnesses = [evaluate_cheap(g).fitness for g in neighbor_genomes]
+        neighbor_fitnesses = []
+        for g in neighbor_genomes:
+            neighbor_fitnesses.append(evaluate_cheap(g).fitness)
+            probe_count += 1
         score = _plateau_robustness_score(candidate.fitness, neighbor_fitnesses)
         if score > best_score:
             best_score = score
@@ -802,8 +890,9 @@ def _select_plateau_robust(
         "swapped": tuple(round(v, 6) for v in best_candidate.genome) != tuple(round(v, 6) for v in raw_best.genome),
         "neighbor_step_frac": cfg.plateau_neighbor_step_frac,
         "finalist_pool_size": len(pool),
+        "probe_count": probe_count,
     }
-    return best_candidate, report
+    return best_candidate, report, probe_count
 
 
 def _tournament_select(population: list[Candidate], rng: random.Random, k: int = 3) -> Candidate:
@@ -1360,13 +1449,14 @@ def run_iterative_refinement(
             best_ever = max(all_evaluated, key=lambda c: c.fitness)
 
         plateau_report: dict | None = None
+        plateau_probes = 0
         if cfg.plateau_robust_selection:
             log(
                 f"Checking the top {min(cfg.plateau_finalist_pool, len(all_evaluated))} candidate(s) "
                 "for neighborhood-robust (plateau) selection..."
             )
             evaluate_cheap = lambda genome: evaluate(genome, generation=-1, keep_full=False, track=False)  # noqa: E731
-            best_ever, plateau_report = _select_plateau_robust(all_evaluated, genes, cfg, evaluate_cheap)
+            best_ever, plateau_report, plateau_probes = _select_plateau_robust(all_evaluated, genes, cfg, evaluate_cheap)
             if plateau_report is not None and plateau_report["swapped"]:
                 log(
                     f"Raw optimum (fitness={plateau_report['raw_best_fitness']:.3f}) looks like a thin spike; "
@@ -1413,7 +1503,7 @@ def run_iterative_refinement(
         leaderboard = sorted(population, key=lambda c: c.fitness, reverse=True)
         elapsed = time.time() - t0
         distribution_summary = _compute_distribution_summary(all_evaluated, cfg)
-        log(f"Iterative Refinement complete in {elapsed:.1f}s ({len(all_evaluated)} candidates evaluated).")
+        log(f"Iterative Refinement complete in {elapsed:.1f}s ({len(all_evaluated)} candidates evaluated + {plateau_probes} plateau probes).")
 
         return RefinementResult(
             refinement_config=cfg,
@@ -1428,7 +1518,11 @@ def run_iterative_refinement(
             elapsed_seconds=elapsed,
             warnings=warnings,
             plateau_robustness=plateau_report,
-            total_evaluations=len(all_evaluated),
+            # v6 (2026-10-04): D4(a) -- the plateau-robustness neighborhood
+            # probes above can swap the crowned genome, so they count as
+            # real evaluations in DSR/trial-count accounting, not free
+            # lookups. total_evaluations = search evaluations + probes.
+            total_evaluations=len(all_evaluated) + plateau_probes,
             distribution_summary=distribution_summary,
         )
     finally:
