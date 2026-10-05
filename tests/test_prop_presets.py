@@ -24,7 +24,7 @@ def test_get_preset_unknown_key_raises():
 
 
 def test_to_prop_rules_round_trips_fields():
-    p = get_preset("apex_50k")
+    p = get_preset("apex_50k_eod")
     rules = p.to_prop_rules()
     assert isinstance(rules, PropRules)
     assert rules.account_size == p.account_size
@@ -67,7 +67,7 @@ def test_lucid_payout_frequency_matches_current_lucidpro_terms():
 def test_apex_has_no_evaluation_stage_minimums_post_4_0():
     """Regression guard: Apex 4.0 (March 2026) removed both the minimum
     trading days and the evaluation-stage consistency rule."""
-    for key in ("apex_50k", "apex_100k"):
+    for key in ("apex_50k_eod", "apex_50k_intraday", "apex_100k_eod", "apex_100k_intraday"):
         p = get_preset(key)
         assert p.min_trading_days == 0
         assert p.consistency_rule_pct is None

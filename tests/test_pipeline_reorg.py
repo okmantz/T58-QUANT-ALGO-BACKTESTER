@@ -86,7 +86,12 @@ def test_scorecard_attached_and_verdict_matches_tier_mapping(tmp_path):
     )
     assert result.scorecard is not None
     tier = result.scorecard.tier
-    if result.risk_of_ruin_hard_fail:
+    # D3 (v6): the DSR/PBO gates now run on REAL leaderboard pools for
+    # manual candidates instead of degrading to a skip -- a hard
+    # validation gate legitimately overrides the tier mapping, exactly
+    # like the risk-of-ruin hard fail already did.
+    hard_gate_fired = any("HARD VALIDATION GATE FAILED" in r for r in result.verdict_reasons)
+    if result.risk_of_ruin_hard_fail or hard_gate_fired:
         assert result.verdict == "NOT READY"
     elif tier in ("Elite", "Strong"):
         assert result.verdict == "READY"

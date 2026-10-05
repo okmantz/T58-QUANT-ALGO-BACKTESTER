@@ -103,7 +103,7 @@ def test_select_plateau_robust_swaps_away_from_a_thin_spike():
             return _candidate(genome, fitness=1.9)
         return _candidate(genome, fitness=0.0)
 
-    chosen, report = _select_plateau_robust(candidates, genes, cfg, evaluate_cheap)
+    chosen, report, probe_count = _select_plateau_robust(candidates, genes, cfg, evaluate_cheap)
     assert chosen.genome == plateau_center.genome
     assert report is not None
     assert report["swapped"] is True
@@ -123,7 +123,7 @@ def test_select_plateau_robust_keeps_the_raw_best_when_it_is_already_flat():
         # "robust" than the genuinely-best point, so no swap should occur.
         return _candidate(genome, fitness=genome[0] / 25.0)
 
-    chosen, report = _select_plateau_robust(candidates, genes, cfg, evaluate_cheap)
+    chosen, report, probe_count = _select_plateau_robust(candidates, genes, cfg, evaluate_cheap)
     assert chosen.genome == flat_best.genome
     assert report["swapped"] is False
 
@@ -132,9 +132,10 @@ def test_select_plateau_robust_returns_raw_best_with_no_report_when_nothing_fini
     genes = [_gene(lo=0.0, hi=100.0)]
     candidates = [_candidate([1.0], fitness=float("-inf")), _candidate([2.0], fitness=float("nan"))]
     cfg = RefinementConfig()
-    chosen, report = _select_plateau_robust(candidates, genes, cfg, evaluate_cheap=lambda g: _candidate(g, 0.0))
+    chosen, report, probe_count = _select_plateau_robust(candidates, genes, cfg, evaluate_cheap=lambda g: _candidate(g, 0.0))
     assert report is None
     assert chosen in candidates
+    assert probe_count == 0
 
 
 def test_select_plateau_robust_deduplicates_identical_genomes_in_the_finalist_pool():
@@ -151,7 +152,11 @@ def test_select_plateau_robust_deduplicates_identical_genomes_in_the_finalist_po
         calls.append(tuple(genome))
         return _candidate(genome, fitness=1.5)
 
-    _select_plateau_robust([dup_a, dup_b, other], genes, cfg, evaluate_cheap)
+    _chosen, _report, probe_count = _select_plateau_robust([dup_a, dup_b, other], genes, cfg, evaluate_cheap)
     # Two finalists (the deduped 50.0 genome + the 10.0 genome) * 2
     # neighbor probes each (one gene, two directions) = 4 calls, not 6.
     assert len(calls) == 4
+    # v6 D4(a): the function reports the probe count itself so callers can
+    # add it to their evaluation/trial counts.
+    assert probe_count == 4
+    assert _report["probe_count"] == 4
