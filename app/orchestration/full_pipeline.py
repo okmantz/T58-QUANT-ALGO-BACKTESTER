@@ -290,6 +290,17 @@ class FullPipelineConfig:
     # promotes.
     dsr_gate_enabled: bool = True
     dsr_min_probabilistic_sharpe: float = 0.95
+    # D4(b): hand-tuned / externally-evaluated configurations that never
+    # went through this pipeline's own GA still count as trials the
+    # searcher "had a chance to get lucky on" -- without this, a
+    # hand-tuned strategy arrives at the DSR gate with n_trials=1 (just
+    # the baseline), which understates the multiple-testing burden and
+    # makes the deflated Sharpe optimistic. Set to the number of
+    # distinct configurations evaluated outside this pipeline (manual
+    # spot-checks, AI-suggested candidates, earlier runs); it is threaded
+    # into count_all_trials(..., extra_trial_counts=(...)) at the DSR
+    # step. 0 (default) = this pipeline saw every evaluation itself.
+    external_trial_count: int = 0
     # PBO gate: the genuine multi-candidate Probability of Backtest
     # Overfitting (Bailey et al. 2017) over the GA's final-generation
     # leaderboard -- "did the SELECTION process pick signal or noise?".
@@ -303,6 +314,23 @@ class FullPipelineConfig:
     pbo_max: float = 0.5
     pbo_max_candidates: int = 8
     pbo_max_paths: int = 10
+    # D1: the holdout gate rejects (NOT READY) when the holdout check RAN
+    # with at least this many trades AND lost money (net < 0 or profit
+    # factor < 1.0) while the in-sample run traded. Below this trade
+    # count the holdout is too thin to convict -- it stays UNPROVEN (the
+    # empty-holdout MARGINAL cap still applies), not FAILED.
+    min_holdout_trades_for_gate: int = 10
+    # B2(d): the acceptance verdict gates on the PER-ATTEMPT pass odds,
+    # not the inflated chain-level number. A strategy whose per-attempt
+    # pass CI lower bound (fallback: per-attempt point estimate) sits
+    # below this bar cannot be called READY -- it is a hard validation
+    # gate, so the verdict is NOT READY (advisory mode records without
+    # rejecting). 70.0 is the bar historically used for "high chance of
+    # passing an eval". The gate is skipped when the MC result carries
+    # no per-attempt information at all (legacy results predating the
+    # v6 MC fields) -- a gate that can't measure can't convict, the
+    # same couldn't-run/UNPROVEN distinction the ICIR gate makes.
+    min_per_attempt_pass_pct: float = 70.0
     # Regime performance stays purely informational (pipeline reorg plan
     # section 13/14) -- attached to the report/result for a human to
     # read, never scored or gated. Reuses the SAME trades final_bt
@@ -534,6 +562,12 @@ def _make_verdict(
     lookahead_bug_detected: bool = False,
     min_trades_for_ready: int = 100,
     holdout: dict | None = None,
+    # D1: minimum holdout trade count for the holdout gate to count as
+    # "ran" (see FullPipelineConfig.min_holdout_trades_for_gate).
+    min_holdout_trades_for_gate: int = 10,
+    # B2(d): minimum per-attempt pass odds for the acceptance verdict
+    # (see FullPipelineConfig.min_per_attempt_pass_pct).
+    min_per_attempt_pass_pct: float = 70.0,
     # -- v5 validation hard gates -----------------------------------------
     # dsr_gate_result / pbo_gate_result: pass the computed gate results
     # (see run_full_pipeline Steps 6c/6d) -- a FAILED gate rejects the
@@ -735,6 +769,34 @@ def _make_verdict(
     if pbo_gate_result is not None and not pbo_gate_result.passed:
         _record_gate_failure(pbo_gate_result.reason)
 
+    # -- B2(d): per-attempt pass-odds gate ----------------------------------
+    # The Monte Carlo chain-level pass probability is inflated (it
+    # counts "passed at least once over N attempts"), so the acceptance
+    # verdict gates on the PER-ATTEMPT pass odds: the Wilson-95% lower
+    # bound when present, else the per-attempt point estimate. Skipped
+    # when the MC result carries no per-attempt information at all
+    # (legacy results predating the v6 MC fields) -- a gate that can't
+    # measure can't convict.
+    from app.scoring.t58_scorecard import _preferred_pass_ci
+    _pass_ci = _preferred_pass_ci(final_mc)
+    _pass_lo = None
+    if _pass_ci is not None:
+        _pass_lo = _pass_ci[0]
+    elif getattr(final_mc, "per_attempt_pass_probability", None):
+        _pass_lo = final_mc.per_attempt_pass_probability
+    if _pass_lo is not None and _pass_lo < min_per_attempt_pass_pct:
+        _ci_txt = (
+            f" (Wilson-95% CI {_pass_ci[0]:.1f}%–{_pass_ci[1]:.1f}%)"
+            if _pass_ci is not None
+            else " (per-attempt point estimate; no CI recorded)"
+        )
+        _record_gate_failure(
+            f"per-attempt eval pass odds too low: the per-attempt pass lower bound is "
+            f"{_pass_lo:.1f}%{_ci_txt} -- below the {min_per_attempt_pass_pct:.0f}% bar "
+            f"(the chain-level number is inflated by counting multiple attempts per "
+            f"simulation). See FullPipelineConfig.min_per_attempt_pass_pct."
+        )
+
     if validation_gate_failures and not gates_advisory_only:
         reasons.append(f"For reference, {scorecard.render_line()} (not the reason for this verdict).")
         _hold_note = _holdout_untestable_note(holdout)
@@ -796,6 +858,64 @@ def _make_verdict(
             "floor this pipeline requires before trusting a result enough to call it READY -- a small "
             "sample can look strong by chance (or on the strength of one or two outsized trades) "
             "regardless of how good its score is. See FullPipelineConfig.min_trades_for_ready."
+        )
+
+    # -- D1: holdout gate ------------------------------------------------
+    # A holdout that RAN with enough trades to mean something (>=
+    # min_holdout_trades_for_gate) and LOST money (net < 0 or profit
+    # factor < 1.0) while the in-sample run traded is a hard rejection:
+    # the edge did not survive untouched data. An empty/thin holdout is
+    # UNPROVEN, not FAILED (the empty-holdout MARGINAL cap below still
+    # applies) -- a gate that can't measure can't convict, the same
+    # couldn't-run distinction the walk-forward gate makes.
+    _ho = holdout or {}
+    _ho_stats = _ho.get("holdout_statistics") or {}
+    _ho_in_stats = _ho.get("in_sample_statistics") or {}
+    _ho_trades = _ho_stats.get("total_trades") or 0
+    _ho_in_trades = _ho_in_stats.get("total_trades") or 0
+    # The gate "ran" only when the holdout produced enough trades to be
+    # a real check AND the in-sample run actually traded (otherwise there
+    # is no in-sample edge to falsify). D5 keys off this same flag.
+    holdout_gate_ran = bool(
+        _ho_trades >= min_holdout_trades_for_gate and _ho_in_trades > 0
+    )
+    if holdout_gate_ran:
+        _ho_net = _ho_stats.get("net_profit")
+        _ho_pf = _ho_stats.get("profit_factor")
+        if (_ho_net is not None and _ho_net < 0) or (_ho_pf is not None and _ho_pf < 1.0):
+            _net_txt = f"${_ho_net:,.2f}" if _ho_net is not None else "n/a"
+            _pf_txt = f"{_ho_pf:.2f}" if _ho_pf is not None else "n/a"
+            _record_gate_failure(
+                f"the holdout check LOST money on untouched data: holdout net {_net_txt} "
+                f"(profit factor {_pf_txt}) over {_ho_trades} trade(s) while the in-sample "
+                f"run took {_ho_in_trades} trade(s) -- the edge did not survive data the "
+                f"search never saw."
+            )
+    if validation_gate_failures and not gates_advisory_only:
+        reasons.append(f"For reference, {scorecard.render_line()} (not the reason for this verdict).")
+        _hold_note = _holdout_untestable_note(holdout)
+        if _hold_note:
+            reasons.append(_hold_note)
+        reasons.append(
+            "This verdict does NOT lock the strategy: it can still be sent through the Validate hub "
+            "(CPCV, Walk-Forward, Sensitivity, Regime Matrix) to see where it is weak."
+        )
+        return "NOT READY", reasons, scorecard, False, False
+
+    # -- D5: WF-starved cap -----------------------------------------------
+    # When BOTH the primary generalization test (walk-forward or CPCV)
+    # and the holdout gate failed to produce a real check, a READY
+    # verdict would rest on in-sample evidence alone -- cap at MARGINAL.
+    # (In addition to the existing empty-holdout cap below, which only
+    # fires when the holdout ran-but-empty.)
+    _wf_missing = oos_validation is None and cpcv_primary_result is None
+    if verdict == "READY" and _wf_missing and not holdout_gate_ran:
+        verdict = "MARGINAL"
+        reasons.append(
+            "CAPPED AT MARGINAL: neither the walk-forward check nor CPCV produced a result, "
+            "and the holdout gate did not run with enough trades to count as a check -- a READY "
+            "verdict on in-sample evidence alone is not trusted. See "
+            "FullPipelineConfig.min_holdout_trades_for_gate."
         )
 
     _hold_note = _holdout_untestable_note(holdout)
@@ -1526,6 +1646,10 @@ def run_full_pipeline(
                     baseline_count=1,
                     ga_total_evaluations=(ga_result.total_evaluations
                                           if (refinement_ran and ga_result is not None) else 0),
+                    # D4(b): hand-tuned / externally-evaluated configs
+                    # count too -- otherwise a hand-tuned strategy gets
+                    # n_trials=1 and an optimistic deflated Sharpe.
+                    extra_trial_counts=(cfg.external_trial_count,),
                 )
                 trial_sharpes: list[float] = []
                 if refinement_ran and ga_result is not None and ga_result.leaderboard:
@@ -1643,6 +1767,8 @@ def run_full_pipeline(
             lookahead_bug_detected=lookahead_bug_detected,
             min_trades_for_ready=cfg.min_trades_for_ready,
             holdout=final_holdout,
+            min_holdout_trades_for_gate=cfg.min_holdout_trades_for_gate,
+            min_per_attempt_pass_pct=cfg.min_per_attempt_pass_pct,
             dsr_gate_result=dsr_gate_result, pbo_gate_result=pbo_gate_result,
             primary_robustness_method=cfg.primary_robustness_method,
             gates_advisory_only=cfg.validation_gates_advisory_only,

@@ -43,17 +43,20 @@ class SearchLoopConfig:
     # Stop condition -- a leaderboard candidate's `target_metric` value
     # must reach this before the loop declares a winner and stops.
     target_eval_pass_pct: float = 60.0
-    # "evaluation_pass_probability" is Search Lab's own Stage 3 Monte
-    # Carlo pass estimate (see batch_runner's mc_summary) -- the same
-    # raw, in-sample-biased number Evolution Lab's target_metric warns
-    # about (see EvolutionCandidateRecord's own field comment); Search
-    # Lab's Stage 3 doesn't run CPCV the way Evolution Lab does, so
-    # there is no honest held-out equivalent to target here yet. Only
-    # candidates that already cleared every OTHER Stage 3 gate (walk-
-    # forward stability, lookahead, parameter-neighborhood robustness --
-    # see require_passed_gate below) are ever considered, which is the
-    # best honesty check currently available at this layer.
-    target_metric: str = "evaluation_pass_probability"
+    # v6 (2026-10-04): "per_attempt_pass_probability" -- the per-attempt
+    # (single-account) Monte Carlo pass estimate from batch_runner's
+    # mc_summary -- is now the loop's stop metric. The old default,
+    # "evaluation_pass_probability", is the CHAIN-level number ("did >=1
+    # mechanical rebuy attempt in the chain ever pass"), which under the
+    # default reset_on_breach posture is inflated almost by construction
+    # (a long enough chain eventually clears a low bar) -- a loop that
+    # stops on the chain-level number can declare victory on a strategy
+    # whose actual one-account pass odds are poor. When reset_on_breach
+    # is off the two numbers are identical, so non-reset loops are
+    # byte-identical to before. _best_value_in_leaderboard falls back to
+    # the chain-level field for leaderboard dicts built before
+    # per-attempt tracking existed.
+    target_metric: str = "per_attempt_pass_probability"
     # Only count a candidate that passed EVERY Stage 3 gate (walk-forward
     # stability, no lookahead bug, parameter-neighborhood robustness) --
     # not just one that happens to have a high raw Monte Carlo number
@@ -131,7 +134,16 @@ def _best_value_in_leaderboard(
         if metric == "composite_score":
             value = row.get("composite_score")
         else:
-            value = (row.get("mc_summary") or {}).get(metric)
+            # v6 (2026-10-04): the default target_metric is now the
+            # per-attempt number; fall back to the chain-level field for
+            # leaderboard dicts built before per-attempt tracking existed
+            # (identical when reset_on_breach is off). Explicit None-check
+            # rather than `or`: a genuine 0.0 per-attempt value must NOT
+            # be silently replaced by the inflated chain-level number.
+            mc_summary = row.get("mc_summary") or {}
+            value = mc_summary.get(metric)
+            if value is None:
+                value = mc_summary.get("evaluation_pass_probability")
         if value is None:
             continue
         if best_value is None or value > best_value:
