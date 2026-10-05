@@ -291,6 +291,23 @@ class ManualStrategy(Strategy):
                     "swing_bos", "swing_choch"}:
             return build_indicator_series(work, kind, period=period, column=field, lookback=lookback)
 
+        # --- w10-astra: regime-oscillator + VWAP-profile operand kinds ---
+        # (Oct-4 analysis, Part A ports #2/#3). Like the existing
+        # atr_regime/volatility_regime/time_of_day branches below, these are
+        # manual.py-local dispatches rather than app.strategy.indicators
+        # kinds, because they need operand-level parameters the
+        # build_indicator_series (frame, kind, period, column, lookback)
+        # signature cannot carry: zone_bounds / div_lookback / trend window
+        # for the RSI zones, and roll_hour / band sigmas / poc_buckets for
+        # the session VWAP profile. All series are per-bar and causal --
+        # see app.quant_lab.regime_oscillators / app.quant_lab.vwap_profile.
+        if kind in {"rsi_regime", "rsi_zone_buy", "rsi_zone_sell", "rsi_divergence"}:
+            return self._regime_oscillator_series(work, kind, operand, period=period, lookback=lookback)
+        if kind in {"session_vwap", "vwap_sigma", "vwap_vah", "vwap_val",
+                    "vwap_upper_2", "vwap_lower_2", "vwap_poc", "vwap_zscore",
+                    "vwap_above", "vwap_below", "vwap_outside_value_area"}:
+            return self._vwap_profile_series(work, kind, operand)
+
         if kind == "time_of_day":
             ts = pd.to_datetime(work["timestamp"])
             session_start = operand.get("session_start", "00:00")
@@ -514,6 +531,62 @@ class ManualStrategy(Strategy):
         out[vol < baseline * contraction_mult] = -1
         return out
 
+    # --- w10-astra: regime-oscillator + VWAP-profile operand dispatch ---
+    # (Oct-4 analysis, Part A ports #2/#3). The per-generate() cache
+    # (reset at the top of generate()) shares one computed profile across
+    # the several kinds a single strategy's conditions may reference, so a
+    # strategy using vwap_vah + vwap_val + vwap_poc pays the session-POC
+    # loop once, not three times.
+
+    def _quant_lab_cache(self) -> dict:
+        cache = self.__dict__.get("_w10_quant_lab_cache")
+        if cache is None:
+            cache = self.__dict__["_w10_quant_lab_cache"] = {}
+        return cache
+
+    def _regime_oscillator_series(self, work: pd.DataFrame, kind: str, operand: dict,
+                                  *, period: int, lookback: int) -> pd.Series:
+        from app.quant_lab import regime_oscillators as ro
+        rsi_period = max(int(operand.get("rsi_period", period) or period), 1)
+        div_lookback = max(int(operand.get("div_lookback", lookback) or lookback), 6)
+        zone_bounds = operand.get("zone_bounds") or None
+        trend_left = max(int(operand.get("trend_left", 5) or 5), 1)
+        trend_right = max(int(operand.get("trend_right", 5) or 5), 1)
+        cache = self._quant_lab_cache()
+        key = ("regime", rsi_period, div_lookback, trend_left, trend_right,
+               repr(sorted((zone_bounds or {}).items())))
+        bundle = cache.get(key)
+        if bundle is None:
+            trend_s = ro.trend_regime_series(work, left=trend_left, right=trend_right)
+            bundle = {"trend": trend_s}
+            cache[key] = bundle
+        if kind == "rsi_divergence":
+            return ro.rsi_divergence_series(work, rsi_period=rsi_period, lookback=div_lookback)
+        return ro.regime_flag_series(
+            work, kind, rsi_period=rsi_period, zone_bounds=zone_bounds,
+            trend_left=trend_left, trend_right=trend_right, trend=bundle["trend"],
+        )
+
+    def _vwap_profile_series(self, work: pd.DataFrame, kind: str, operand: dict) -> pd.Series:
+        from app.quant_lab import vwap_profile as vp
+        roll_hour = int(operand.get("roll_hour", vp.DEFAULT_ROLL_HOUR))
+        value_area_sigma = float(operand.get("value_area_sigma", 1.0) or 1.0)
+        extreme_sigma = float(operand.get("extreme_sigma", 2.0) or 2.0)
+        poc_buckets = max(int(operand.get("poc_buckets", 30) or 30), 1)
+        cache = self._quant_lab_cache()
+        key = ("vwap", roll_hour, value_area_sigma, extreme_sigma, poc_buckets)
+        profile = cache.get(key)
+        if profile is None:
+            profile = vp.session_vwap_profile(
+                work, roll_hour=roll_hour, value_area_sigma=value_area_sigma,
+                extreme_sigma=extreme_sigma, poc_buckets=poc_buckets,
+            )
+            cache[key] = profile
+        return vp.vwap_operand_series(
+            work, kind, roll_hour=roll_hour, value_area_sigma=value_area_sigma,
+            extreme_sigma=extreme_sigma, poc_buckets=poc_buckets, profile=profile,
+        )
+
     @staticmethod
     def _compare(left: pd.Series, operator: str, right: pd.Series) -> pd.Series:
         op = operator.strip().lower()
@@ -716,6 +789,9 @@ class ManualStrategy(Strategy):
     # ------------------------------------------------------------------
     def generate(self, df: pd.DataFrame) -> StrategyResult:
         cfg = self.config
+        # w10-astra: drop any cached quant-lab profiles from a previous
+        # generate() call -- they belong to that call's `work` frame.
+        self.__dict__.pop("_w10_quant_lab_cache", None)
         work = self._build_indicators(df)
 
         has_visual = bool(cfg.get("entry_conditions"))
