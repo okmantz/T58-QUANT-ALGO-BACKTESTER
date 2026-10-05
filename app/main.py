@@ -1137,6 +1137,18 @@ def run_full_pipeline_cli(
 
 
 def main():
+    # --- v7 (worker D): crash-reporting hook. Deliberately minimal -- one
+    # call, no behavior change unless the user has explicitly opted in
+    # (Settings checkbox / first-run prompt) AND a Sentry DSN was baked
+    # into the build (T58_SENTRY_DSN). See app.telemetry for the full
+    # opt-in semantics; Owen's setup steps are in
+    # docs/buyer/SENTRY_SETUP.md. ---
+    try:
+        from app.telemetry import init_crash_reporting_if_opted_in
+        init_crash_reporting_if_opted_in()
+    except Exception:
+        pass  # telemetry must never break startup
+
     parser = argparse.ArgumentParser(description="T58 Trading — Quant Algo Backtester")
     parser.add_argument("--cli", action="store_true", help="run headlessly instead of launching the GUI")
     parser.add_argument("--csv", default=None, help="path to a market data CSV (--cli mode); if omitted, uses the "
