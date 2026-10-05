@@ -823,12 +823,25 @@ def _coerce_timestamp_series(series: pd.Series) -> pd.Series:
 def import_csv(
     path_or_buffer,
     manual_mapping: Optional[dict[str, str]] = None,
+    *,
+    drop_trailing_partial_bar: bool = True,
+    historical_complete: bool = False,
 ) -> ImportResult:
     """
     Import a market-data file.
 
     Automatically handles common CSV formats and headerless
     OHLCV data.
+
+    Keyword arguments
+    -----------------
+    drop_trailing_partial_bar: when True (default), the last bar is
+        dropped if it looks like a still-forming partial bar (see the
+        trailing-bar block in "Final cleanup" below). Set False when
+        the caller needs the freshest bar anyway (e.g. live data feeds).
+    historical_complete: when True, the import is explicitly marked as
+        a finished historical export, so the trailing-partial-bar
+        heuristic is skipped entirely.
     """
 
     issues: list[ValidationIssue] = []
@@ -1192,6 +1205,86 @@ def import_csv(
     # Final cleanup
     # ---------------------------------------------------------
 
+    # B2-3 (Oct 2026) -- source_timezone stamp.
+    #
+    # Convention choice: this importer had no existing annotation
+    # convention (no attrs, no metadata column). The codebase-wide
+    # convention for per-DataFrame metadata is .attrs (cf.
+    # app/backtest/execution.py's equity_df.attrs[...]), so the source
+    # timezone is stamped there rather than as a junk column -- a column
+    # would leak into strategy code, CSV round-trips, and plotting.
+    # Downstream, app/data/trading_day.py treats naive timestamps as
+    # UTC, so naive data defaults to "UTC" here.
+    _ts_tz = df["timestamp"].dt.tz
+    df.attrs["source_timezone"] = "UTC" if _ts_tz is None else str(_ts_tz)
+
+    # B2-4 (Oct 2026) -- drop the trailing partial (still-forming) bar.
+    #
+    # Heuristic, documented in full because a wrong guess here silently
+    # deletes real data:
+    #   1. The dominant bar interval is the median of the timestamp
+    #      diffs. The trailing bar is "on a bar boundary" only when the
+    #      cadence held right up to the end -- i.e. the gap from the
+    #      previous bar equals the dominant interval (within a 1-second
+    #      slack for sub-second source rounding). A mid-session export
+    #      stops off-cadence (e.g. the bundled MGC CSV ends at
+    #      2026-04-15T12:26:00 with a 13-minute final gap on 1-minute
+    #      bars), which is exactly the signature of a bar whose interval
+    #      never closed in the export.
+    #   2. Data recency is the second trigger: if the last bar is newer
+    #      than one dominant interval relative to import time, its own
+    #      interval cannot have completed yet -- the bar is still
+    #      forming and feeding it to a backtest is lookahead-adjacent.
+    #      (A tz-aware last bar is compared in UTC; a future-dated last
+    #      bar counts as fresh.)
+    #   3. Neither trigger fires for ordinary finished history: a
+    #      complete export ends on-cadence with stale data.
+    # Guards: needs >= 3 bars to establish a cadence; skipped entirely
+    # when historical_complete=True or drop_trailing_partial_bar=False
+    # (callers with live feeds opt out and take the fresh bar).
+    if (
+        drop_trailing_partial_bar
+        and not historical_complete
+        and len(df) >= 3
+    ):
+        _gaps = df["timestamp"].diff().dropna()
+        _dominant = _gaps.median() if not _gaps.empty else pd.Timedelta(0)
+        if _dominant > pd.Timedelta(0):
+            _last_ts = df["timestamp"].iloc[-1]
+            _prev_ts = df["timestamp"].iloc[-2]
+            _final_gap = _last_ts - _prev_ts
+            _on_grid = abs(_final_gap - _dominant) <= pd.Timedelta(seconds=1)
+            _now_utc = pd.Timestamp.now(tz="UTC").tz_localize(None)
+            _last_naive = (
+                _last_ts.tz_convert("UTC").tz_localize(None)
+                if _last_ts.tzinfo is not None
+                else _last_ts
+            )
+            _fresh = (_now_utc - _last_naive) < _dominant
+            _reason = None
+            if not _on_grid:
+                _reason = (
+                    f"final bar at {_last_ts} is off the series' dominant "
+                    f"bar interval ({_dominant}; final gap {_final_gap})"
+                )
+            elif _fresh:
+                _reason = (
+                    f"final bar at {_last_ts} is newer than one dominant "
+                    f"bar interval ({_dominant}) relative to import time"
+                )
+            if _reason is not None:
+                issues.append(
+                    ValidationIssue(
+                        "warning",
+                        f"Dropped the trailing bar ({_reason}) as a "
+                        f"still-forming partial bar. If this bar is "
+                        f"actually complete, pass historical_complete=True "
+                        f"or drop_trailing_partial_bar=False.",
+                    )
+                )
+                dropped_rows.append((1, "trailing partial bar (still forming)"))
+                df = df.iloc[:-1]
+
     # P2-8 (Oct 2026) -- drop-rate guardrail: validation above silently
     # dropped rows (bad timestamps, non-numeric OHLC, dupes, integrity
     # failures) and returned whatever survived. A file that loses more
@@ -1229,6 +1322,9 @@ def import_csv_bytes(
     content: bytes,
     manual_mapping: Optional[dict[str, str]] = None,
     filename: Optional[str] = None,
+    *,
+    drop_trailing_partial_bar: bool = True,
+    historical_complete: bool = False,
 ) -> ImportResult:
     """
     Convenience wrapper for importing raw bytes.
@@ -1249,4 +1345,6 @@ def import_csv_bytes(
     return import_csv(
         buffer,
         manual_mapping=manual_mapping,
+        drop_trailing_partial_bar=drop_trailing_partial_bar,
+        historical_complete=historical_complete,
     )

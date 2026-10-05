@@ -109,15 +109,19 @@ def apply_instrument_spec(risk: RiskConfig, symbol: str) -> RiskConfig:
     KNOWN_INSTRUMENTS[symbol] -- the exact two fields a user would
     otherwise have to hand-derive (see this module's own docstring).
     Every other RiskConfig field (risk_value, max_position_size, ...) is
-    left completely untouched, WITH ONE EXCEPTION: commission_per_trade is
-    also filled in from the spec's default_commission_round_turn, but
-    ONLY when the caller's current commission_per_trade is still exactly
-    0.0 (RiskConfig's own generic default) -- an explicit nonzero value
-    the user already typed in (their own broker's real rate) is never
-    overwritten. This is deliberately narrow: it closes the "$0 commission
-    on a real futures instrument" gap for anyone who picks the instrument
-    from the dropdown and never touches the Commission field at all,
-    without silently changing a rate someone already configured.
+    left completely untouched, WITH ONE EXCEPTION: commission_per_contract
+    is also filled in from the spec's default_commission_round_turn ($ per
+    ONE contract round-turn, e.g. MGC = $1.60/contract), but ONLY when the
+    caller's current commission_per_contract is still exactly 0.0
+    (RiskConfig's own generic default) -- an explicit nonzero value the
+    user already typed in (their own broker's real rate) is never
+    overwritten. B2-4 (2026-10-04): the spec rate now lands on
+    commission_per_contract (charged per contract at settle:
+    commission_per_trade + commission_per_contract * contracts) instead of
+    the old flat commission_per_trade fill -- the flat fill undercharged
+    every multi-contract position (a 30-micro MGC position costs ~$48
+    round-turn live, $1.60 in the old sim). commission_per_trade is left
+    exactly as the caller set it.
 
     Raises KeyError (naming the known symbols) for a symbol not in the
     registry, rather than silently leaving `risk` unchanged -- a caller
@@ -132,8 +136,8 @@ def apply_instrument_spec(risk: RiskConfig, symbol: str) -> RiskConfig:
             "InstrumentSpec to app.data.instrument_specs.KNOWN_INSTRUMENTS."
         )
     updates = {"pip_size": spec.pip_size, "contract_size": spec.contract_size}
-    if risk.commission_per_trade == 0.0:
-        updates["commission_per_trade"] = spec.default_commission_round_turn
+    if risk.commission_per_contract == 0.0:
+        updates["commission_per_contract"] = spec.default_commission_round_turn
     return replace(risk, **updates)
 
 
