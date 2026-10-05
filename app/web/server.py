@@ -938,6 +938,50 @@ def _prop_presets_json() -> str:
     return json.dumps([p.to_dict() for p in list_prop_firm_presets()])
 
 
+def _prop_rules_from_search_evo_form(form) -> PropRules:
+    """v6 (2026-10-04, B1): full preset-field thread-through for Search Lab
+    and Evolution Lab (single- and multi-instrument). These pages' PropRules
+    constructions previously read only account_size / profit_target /
+    daily_loss / max_dd, silently dropping drawdown_type,
+    drawdown_check_mode, consistency_rule_pct, and min_trading_days -- the
+    same fields the prop-firm presets (see app.prop.presets) and the
+    Run / Full-Pipeline forms already carry. Picking a preset whose real
+    rules are static-drawdown with no consistency rule (e.g. Apex) still
+    searched under trailing-drawdown-with-30%-consistency: wrong pass
+    probabilities with no indication anything was off.
+
+    `consistency` explicitly blank -> None (no eval-stage consistency
+    gate); `consistency` field ABSENT entirely (a template not yet updated
+    with the new fields) -> PropRules' own 30.0 default, preserving the
+    pre-B1 behavior instead of silently turning the gate off. The other
+    three fields fall back to PropRules' own defaults, so a form that
+    doesn't send them behaves exactly as before. This is the "server
+    helper" the preset thread-through tests exercise.
+    """
+    _MISSING = object()
+    _consistency_raw = form.get("consistency", _MISSING)
+    if _consistency_raw is _MISSING:
+        # The page's form has no consistency field at all (e.g. a template
+        # not yet updated with the new fields) -- keep the pre-B1
+        # behavior (PropRules' own 30.0 default) rather than silently
+        # turning the consistency gate off.
+        consistency_rule_pct = PropRules.consistency_rule_pct
+    elif _consistency_raw:
+        consistency_rule_pct = float(_consistency_raw)
+    else:
+        consistency_rule_pct = None  # explicitly cleared -> no consistency gate
+    return PropRules(
+        account_size=float(form.get("account_size", 100000) or 100000),
+        evaluation_profit_target_pct=float(form.get("profit_target", 8) or 8),
+        daily_loss_limit_pct=float(form.get("daily_loss", 5) or 5),
+        max_drawdown_pct=float(form.get("max_dd", 10) or 10),
+        drawdown_type=form.get("dd_type", "trailing") or "trailing",
+        drawdown_check_mode=form.get("dd_check_mode", "intrabar") or "intrabar",
+        consistency_rule_pct=consistency_rule_pct,
+        min_trading_days=int(form.get("min_days", 5) or 5),
+    )
+
+
 def _saved_strategies_json() -> str:
     """{"python": [{"name", "description", "market", "tags", "status",
     "last_run", "lookahead", "last_search", "evolution"}, ...], "pinescript": [...],
@@ -3210,6 +3254,131 @@ def _run_search_job(
         JOB_MANAGER.finish(job_id, cancelled=True)
     except Exception as exc:  # noqa: BLE001 -- a search job must fail visibly on the status page, not crash a thread silently
         log_crash("Search Lab (web)", exc=exc)
+        JOB_MANAGER.fail(job_id, str(exc))
+    finally:
+        HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
+
+
+def _multi_preset_champion_row(summary) -> dict | None:
+    """One JSON-safe row for the per-firm champion board: the
+    champion_candidate_id's leaderboard row if present, else the
+    leaderboard's top row, else None (no candidates survived)."""
+    rows = summary.leaderboard or []
+    row = None
+    for r in rows:
+        if r.get("candidate_id") == summary.champion_candidate_id:
+            row = r
+            break
+    if row is None and rows:
+        row = rows[0]
+    if row is None:
+        return None
+    mc = row.get("mc_summary") or {}
+    stats = row.get("statistics") or {}
+    return {
+        "candidate_id": row.get("candidate_id"),
+        "family": row.get("family"),
+        "composite_score": row.get("composite_score"),
+        # per-attempt (single-account) odds are the honest comparison
+        # across firms; chain-level kept alongside for reporting.
+        "per_attempt_pass_probability": mc.get("per_attempt_pass_probability"),
+        "per_attempt_payout_probability": mc.get("per_attempt_payout_probability"),
+        "evaluation_pass_probability": mc.get("evaluation_pass_probability"),
+        "first_payout_probability": mc.get("first_payout_probability"),
+        "net_profit": stats.get("net_profit"),
+        "profit_factor": stats.get("profit_factor"),
+        "win_rate": stats.get("win_rate"),
+        "total_trades": stats.get("total_trades"),
+        "passed_stage3_gate": bool(row.get("passed_stage3_gate")),
+    }
+
+
+def _run_multi_preset_search_job(
+    job_id: str, df, risk: RiskConfig, presets: list, space, stage_cfg: SearchStageConfig,
+    instrument: str, library_ref: tuple[str, str] | None = None,
+    cancel_event: threading.Event | None = None,
+) -> None:
+    """v6 (2026-10-04, B11a): multi-firm champion comparison. Runs one full,
+    independent run_search() per selected prop-firm preset -- each under
+    that preset's own to_prop_rules() (full field set, not just the four
+    the old search form carried) -- then emits a per-firm champion board
+    into the job log and job["multi_preset_champions"] (also exposed via
+    /search/job/<id>/status.json for any UI to render).
+
+    Deliberately NOT joint optimization: every preset's search explores
+    the same space/stage_cfg/risk independently, and the board compares
+    the resulting champions side by side. Optimizing ONE strategy jointly
+    across several firms' rule sets at once (multi-objective over firms)
+    is roadmap, not implemented here -- see the log line this job emits
+    on completion.
+    """
+    champions: list[dict] = []
+    try:
+        for idx, preset in enumerate(presets):
+            if cancel_event is not None and cancel_event.is_set():
+                raise SearchCancelled("Search Lab run stopped by user.")
+            preset_rules = preset.to_prop_rules()
+            db_path = str(SEARCH_DIR / f"search_multipreset_{job_id}_{preset.key}.db")
+            label = f"{instrument} [{preset.label}]"
+            JOB_MANAGER.log(
+                job_id,
+                f"[{idx + 1}/{len(presets)}] Searching under {preset.label} "
+                f"({preset.drawdown_type} DD, {preset.max_drawdown_pct:g}% max DD, "
+                f"{'no' if preset.consistency_rule_pct is None else f'{preset.consistency_rule_pct:g}%'} "
+                f"consistency, {preset.min_trading_days}d min)...",
+            )
+            summary = run_search(
+                df, risk, preset_rules, space, stage_cfg, db_path=db_path,
+                instrument=label, timeframe=infer_timeframe_label(df),
+                progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
+                cancel_event=cancel_event,
+            )
+            report_paths = generate_search_report(
+                output_dir=str(SEARCH_DIR), summary=summary, space=space,
+                instrument=label, timeframe=infer_timeframe_label(df),
+            )
+            champions.append({
+                "preset_key": preset.key,
+                "preset_label": preset.label,
+                "firm": preset.firm,
+                "account_size": preset.account_size,
+                "champion_candidate_id": summary.champion_candidate_id,
+                "total_candidates": summary.total_candidates,
+                "stage3_survivors": summary.stage3_survivors,
+                "champion_row": _multi_preset_champion_row(summary),
+                "report_html": f"/search_reports/{report_paths['html'].name}",
+                "report_json": f"/search_reports/{report_paths['json'].name}",
+                "db_path": db_path,
+                "run_id": summary.run_id,
+            })
+        board = [
+            "",
+            "=== PER-FIRM CHAMPION BOARD (independent search per firm; joint multi-firm optimization is roadmap, not implemented) ===",
+        ]
+        for c in champions:
+            row = c["champion_row"] or {}
+            board.append(
+                f"{c['preset_label']}: champion={c['champion_candidate_id'] or 'none'} "
+                f"| per-attempt pass={row.get('per_attempt_pass_probability')} "
+                f"| per-attempt payout={row.get('per_attempt_payout_probability')} "
+                f"| composite={row.get('composite_score')} "
+                f"| stage3 survivors={c['stage3_survivors']}/{c['total_candidates']}"
+            )
+        for line in board:
+            JOB_MANAGER.log(job_id, line)
+        JOB_MANAGER.finish(
+            job_id, summary=None, multi_preset=True, multi_preset_champions=champions,
+            df=df, risk=risk,
+            # First preset's rules -- the single /promote path needs A
+            # rules object; per-preset promote is not wired (each preset's
+            # db_path/run_id is stored above for a future endpoint).
+            rules=presets[0].to_prop_rules(),
+        )
+    except SearchCancelled:
+        JOB_MANAGER.log(job_id, "Multi-firm comparison stopped by user.")
+        JOB_MANAGER.finish(job_id, cancelled=True, multi_preset=True, multi_preset_champions=champions)
+    except Exception as exc:  # noqa: BLE001 -- a search job must fail visibly on the status page, not crash a thread silently
+        log_crash("Search Lab multi-firm comparison (web)", exc=exc)
         JOB_MANAGER.fail(job_id, str(exc))
     finally:
         HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
@@ -6683,12 +6852,7 @@ def evolution_start():
             spread_pips=float(form.get("spread_pips", 1.0) or 1.0),
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
-        rules = PropRules(
-            account_size=float(form.get("account_size", 100000) or 100000),
-            evaluation_profit_target_pct=float(form.get("profit_target", 8) or 8),
-            daily_loss_limit_pct=float(form.get("daily_loss", 5) or 5),
-            max_drawdown_pct=float(form.get("max_dd", 10) or 10),
-        )
+        rules = _prop_rules_from_search_evo_form(form)
 
         # T58 BACKTEST INTEGRITY CHECK -- same pre-flight gate as Run &
         # Report / Quick Optimize / Full Pipeline / Search Lab. Evolution
@@ -7127,12 +7291,7 @@ def evolution_multi_instrument_start():
             spread_pips=float(form.get("spread_pips", 1.0) or 1.0),
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
-        rules = PropRules(
-            account_size=float(form.get("account_size", 100000) or 100000),
-            evaluation_profit_target_pct=float(form.get("profit_target", 8) or 8),
-            daily_loss_limit_pct=float(form.get("daily_loss", 5) or 5),
-            max_drawdown_pct=float(form.get("max_dd", 10) or 10),
-        )
+        rules = _prop_rules_from_search_evo_form(form)
         families_selected = form.getlist("families") or None
         base_cfg = EvolutionConfig(
             population_size=int(form.get("population_size", 60) or 60),
@@ -7876,19 +8035,38 @@ def search_start():
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
             commission_per_trade=float(form.get("commission", 0) or 0),
         )
-        rules = PropRules(
-            account_size=float(form.get("account_size", 100000) or 100000),
-            evaluation_profit_target_pct=float(form.get("profit_target", 8) or 8),
-            daily_loss_limit_pct=float(form.get("daily_loss", 5) or 5),
-            max_drawdown_pct=float(form.get("max_dd", 10) or 10),
-        )
+        rules = _prop_rules_from_search_evo_form(form)
+
+        # v6 (2026-10-04, B11a): multi-firm champion comparison -- 2+
+        # selected presets switches this route to one independent run_search
+        # per preset (see _run_multi_preset_search_job). Resolved here so
+        # the pre-flight integrity check below can run once, against the
+        # first selected preset's own full rule set. 0 or 1 selected falls
+        # through to the normal single-search path, byte-identical to before.
+        multi_preset_keys = [k for k in dict.fromkeys(form.getlist("multi_preset_keys") or []) if k]
+        multi_presets = None
+        if len(multi_preset_keys) > 1:
+            try:
+                multi_presets = [get_prop_firm_preset(k) for k in multi_preset_keys]
+            except KeyError as exc:
+                HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
+                return render_template(
+                    "search.html", error=f"Unknown prop-firm preset selected: {exc}",
+                    stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+                    families=[{"name": n, "description": family_description(n)} for n in list_families()],
+                    saved_strategies_json=_saved_strategies_json(),
+                    prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
+            rules = multi_presets[0].to_prop_rules()
 
         # T58 BACKTEST INTEGRITY CHECK -- same pre-flight gate as Run &
         # Report / Quick Optimize / Full Pipeline. `strategy` is None for
         # "family_named" mode (no single strategy to check yet), in which
         # case only the DATA/TIMEFRAME/ACCOUNT sections run -- still
         # enough to catch corrupt data or an unsupportable timeframe
-        # before spending compute across the whole family.
+        # before spending compute across the whole family. In multi-preset
+        # mode this runs once, against the first selected preset's rules
+        # (data/timeframe/account sanity is preset-independent; each
+        # run_search then applies its own preset's full rule set).
         integrity_report = run_integrity_check(
             df, strategy, risk, prop_rules=rules,
             requested_timeframe=form.get("timeframe") or None,
@@ -7903,6 +8081,36 @@ def search_start():
                 saved_strategies_json=_saved_strategies_json(),
                 prop_presets_json=_prop_presets_json(), **_alpaca_template_context(),
             ), 400
+
+        # v6 (2026-10-04, B11a): multi-firm champion comparison job --
+        # one independent run_search per selected preset, then a per-firm
+        # champion board. Loop Mode / timeframe sweep are not combined
+        # with multi-firm comparison.
+        if multi_presets is not None:
+            initial_log = [f"Loaded {len(df)} bars from {active_label}."]
+            if import_note:
+                initial_log.append(import_note)
+            initial_log.extend(_family_exclusion_log)
+            initial_log.append(
+                "Multi-firm comparison ON -- one independent Search Lab per preset: "
+                + ", ".join(p.label for p in multi_presets)
+                + ". (Loop Mode / timeframe sweep are not combined with multi-firm comparison; "
+                "joint multi-firm optimization is roadmap, not implemented.)"
+            )
+            cancel_event = threading.Event()
+            job_id = JOB_MANAGER.create(
+                log=initial_log, summary=None, cancelled=False, instrument=active_label, mode=mode_key,
+                cancel_event=cancel_event, loop_mode=False, tool="Search Lab", progress_kind="search",
+                multi_preset=True,
+            )
+            JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
+            thread = threading.Thread(
+                target=_run_multi_preset_search_job,
+                args=(job_id, df, risk, multi_presets, space, stage_cfg, active_label, library_ref, cancel_event),
+                daemon=True,
+            )
+            thread.start()
+            return redirect(url_for("search_job", job_id=job_id))
 
         db_path = str(SEARCH_DIR / f"search_{uuid.uuid4().hex[:12]}.db")
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
@@ -8116,6 +8324,10 @@ def search_job_status(job_id):
             ),
         },
         "leaderboard": leaderboard,
+        # v6 (2026-10-04, B11a): multi-firm comparison jobs have
+        # summary=None and carry the per-firm champion board here instead.
+        "multi_preset": job.get("multi_preset", False),
+        "multi_preset_champions": job.get("multi_preset_champions"),
         "loop_mode": job.get("loop_mode", False),
         "loop_rounds": job.get("loop_rounds", 0),
         "loop_last_round": job.get("loop_last_round"),
