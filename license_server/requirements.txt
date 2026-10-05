@@ -4,6 +4,7 @@
 # is pure stdlib.
 Flask>=3.0.0
 
-# Uncomment if deploying behind gunicorn (recommended for anything but
-# local testing -- see README.md's deployment section):
-# gunicorn>=21.2.0
+# Production server for the Render one-click deploy (render.yaml's
+# startCommand runs gunicorn; the built-in `python app.py` dev server is
+# for local testing only).
+gunicorn>=21.2.0

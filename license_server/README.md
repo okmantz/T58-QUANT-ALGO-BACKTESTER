@@ -56,11 +56,14 @@ Whichever you pick, you need:
 
 ## 2. Point the desktop app at your server
 
-In `app/licensing/client.py`, either:
-- edit `DEFAULT_SERVER_URL` to your deployed URL before you build the
-  .exe, or
-- set the `T58_LICENSE_SERVER_URL` environment variable on whatever
-  machine builds it.
+Set the `T58_LICENSE_SERVER_URL` repository secret (GitHub repo →
+Settings → Secrets and variables → Actions) to your deployed URL. The
+release workflows bake it into `app/licensing/build_config.py` at build
+time, so the shipped .exe knows your server -- see
+[DEPLOY.md](DEPLOY.md) step 7 for the full checklist, including the
+per-release master-key hash. For local/dev runs from source, the same
+value can be supplied as the `T58_LICENSE_SERVER_URL` environment
+variable instead (env vars take precedence over the baked-in value).
 
 Every activation/validation call from every customer's copy of the app
 goes to this one URL.
