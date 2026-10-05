@@ -78,7 +78,7 @@ from app.data.london_strategic_edge_source import (
 )
 from app.data.importer import import_csv, import_csv_bytes
 from app.data.folder_import import import_uploaded_files
-from app.data.instrument_specs import KNOWN_INSTRUMENTS
+from app.data.instrument_specs import KNOWN_INSTRUMENTS, get_instrument_spec, guess_instrument_symbol
 from app.data.timeframe_resample import infer_timeframe_label
 from app.web.alpaca_shared import alpaca_template_context
 from app.web.lse_shared import lse_template_context
@@ -161,6 +161,7 @@ from app.search.graveyard import (
     graveyard_path_for, list_graveyard_files, load_graveyard, render_graveyard_report, summarize_graveyard,
 )
 from app.search.search_report import generate_search_report
+from app.search.quickopt_gates import quickopt_gates_summary
 from app.search.strategy_space import (
     StrategySpaceError, family_description, generate_search_space, hypothesis_question, list_families,
     spec_from_strategy,
@@ -1228,10 +1229,39 @@ def data_detect_pip_size():
         if err:
             return jsonify({"error": err}), 400
         suggested = suggest_pip_size(df)
-        return jsonify({
+        # v7 (2026-10-05, worker B, fix #7): also return the guessed
+        # instrument symbol + its spec's contract/commission, so the
+        # lab pages can auto-fill pip_size/contract_size/commission with a
+        # visible confirmation. If the label and the DATA disagree on
+        # scale (e.g. "ES1!" but FX-scale decimals), refuse to
+        # auto-suggest -- the page shows a LOUD warning and leaves every
+        # field untouched rather than filling a silently-wrong value.
+        symbol = guess_instrument_symbol(label)
+        spec = get_instrument_spec(symbol)
+        warning = None
+        if symbol is not None and spec is not None:
+            spec_pip = spec.pip_size
+            if (spec_pip >= 1.0) != (suggested >= 1.0):
+                warning = (
+                    f"Dataset label says {symbol} (spec pip_size {spec_pip}) but the data "
+                    f"decimals suggest pip_size {suggested}. One of them is wrong -- "
+                    "check the dataset before running; nothing was auto-filled."
+                )
+                suggested = None
+        resp = {
             "pip_size": suggested,
-            "message": f"Suggested {suggested} from {label} -- confirm this matches the instrument before running a backtest.",
-        })
+            "message": (f"Suggested {suggested} from {label} -- confirm this matches "
+                        "the instrument before running a backtest.") if suggested is not None else warning,
+        }
+        if suggested is not None:
+            resp.update({
+                "symbol": symbol,
+                "contract_size": spec.contract_size if spec else None,
+                "commission": spec.default_commission_round_turn if spec else None,
+            })
+        else:
+            resp["warning"] = warning
+        return jsonify(resp)
     except Exception as exc:
         return jsonify({"error": f"Couldn't detect: {exc}"}), 400
 
@@ -6587,8 +6617,13 @@ def quickopt_start():
             ), 400
 
         cfg = QuickOptimizeConfig(
-            ga_population=int(form.get("ga_population", 16) or 16),
-            ga_generations=int(form.get("ga_generations", 8) or 8),
+            # v7 (2026-10-05, worker B, workstream D): 16x8 -> 32x12.
+            # 16x8 was a light polish pass, not an optimization budget --
+            # the GA couldn't reliably climb out of a mediocre basin. The
+            # QuickOptimizeConfig dataclass defaults still say 16/8 (file
+            # not owned); this route + the template form now override them.
+            ga_population=int(form.get("ga_population", 32) or 32),
+            ga_generations=int(form.get("ga_generations", 12) or 12),
             fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
             optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
             n_folds=int(form.get("n_folds", 4) or 4),
@@ -6610,6 +6645,13 @@ def quickopt_start():
             replace_existing=form.get("replace_existing") == "on",
         )
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
+        # v7 (2026-10-05, worker B, fix #7): pip_size backstop -- WARN loudly
+        # if the untouched FX default disagrees with the data. We do NOT
+        # silently fix it here; the fix belongs client-side (auto-fill with
+        # user confirmation).
+        from app.search.instrument_risk import resolve_leg_risk
+        _, _v7_qo_notes = resolve_leg_risk(risk, df, active_label)
+        initial_log.extend(_v7_qo_notes)
         if import_note:
             initial_log.append(import_note)
         cancel_event = threading.Event()
@@ -6700,6 +6742,11 @@ def quickopt_job_status(job_id):
             "holdout_eval_pass_probability": result.holdout_eval_pass_probability,
             "holdout_payout_probability": result.holdout_payout_probability,
             "holdout_note": result.holdout_note,
+            # v7 (2026-10-05, worker B, workstream D): the explicit
+            # ran/skipped gate ledger -- which robustness gates ran and
+            # which were skipped -- so the report is honest about what
+            # was and wasn't validated.
+            "gates": quickopt_gates_summary(result),
         }
     return jsonify({
         "found": True, "done": job["done"], "error": job["error"], "cancelled": job.get("cancelled", False),
@@ -6876,7 +6923,11 @@ def evolution_start():
 
         families_selected = form.getlist("families") or None
         cfg = EvolutionConfig(
-            population_size=int(form.get("population_size", 60) or 60),
+            # v7 (2026-10-05, worker B, fix #10): 60 -> 200. At 60 the
+            # immigrant floor filled the population before any elite
+            # child was bred (n_children = 0); see EvolutionConfig's
+            # docstring. The evolution.html form default moved with this.
+            population_size=int(form.get("population_size", 200) or 200),
             elite_keep=int(form.get("elite_keep", 10) or 10),
             instrument=active_label,
             families=families_selected,
@@ -7294,7 +7345,8 @@ def evolution_multi_instrument_start():
         rules = _prop_rules_from_search_evo_form(form)
         families_selected = form.getlist("families") or None
         base_cfg = EvolutionConfig(
-            population_size=int(form.get("population_size", 60) or 60),
+            # v7 (2026-10-05, worker B, fix #10): 60 -> 200 (see above).
+            population_size=int(form.get("population_size", 200) or 200),
             elite_keep=int(form.get("elite_keep", 10) or 10),
             families=families_selected,
             mc_sims=int(form.get("mc_sims", 1000) or 1000),
@@ -7797,8 +7849,37 @@ def forward_test_status():
         })
 
 
+# -- v7 P0-3: web live-deploy access control ---------------------------------
+# The /deploy-live/* routes connect to REAL funded accounts and place REAL
+# orders. They are DISABLED entirely unless the operator sets
+# T58_ENABLE_WEB_LIVE_DEPLOY=1, and even then they require the web app's
+# own authentication -- the account password lock (app.accounts.settings;
+# session["t58_unlocked"]) -- to be set AND the browser session unlocked.
+# Enabling the env flag without a lock password keeps the routes refused:
+# "putting the server behind auth" is a prerequisite, not a suggestion.
+# There is deliberately no weaker mode -- an unauthenticated remote
+# live-trading endpoint is not something this app will offer.
+def _web_live_deploy_guard():
+    """Returns a (response, status) refusal tuple, or None when the request may proceed."""
+    from app.live_deploy.web_deploy_config import check_web_live_deploy
+    try:
+        from app.accounts.settings import load_account_settings
+        has_password = bool(load_account_settings().has_password)
+    except Exception:  # noqa: BLE001 -- a settings-load failure must fail closed, never open
+        has_password = False
+    unlocked = bool(session.get("t58_unlocked"))
+    allowed, code, message = check_web_live_deploy(has_password, unlocked)
+    if allowed:
+        return None
+    return jsonify({"ok": False, "error": message}), code
+
+
 @app.route("/deploy-live")
 def deploy_live_info():
+    # v7 P0-3: disabled by default; requires the app password lock when enabled.
+    guard = _web_live_deploy_guard()
+    if guard:
+        return guard
     from app.live_deploy.live_settings import load_accounts
     with _LIVE_DEPLOY_LOCK:
         running = _LIVE_DEPLOY_SESSION["session"] is not None and _LIVE_DEPLOY_SESSION["session"].status.running
@@ -7816,7 +7897,21 @@ def deploy_live_start():
     live trading without it. This does NOT add authentication to the
     server itself -- see deploy_live.html for why that's a decision for
     the person running this server to make about their own network
-    exposure, not something to silently bolt on here."""
+    exposure, not something to silently bolt on here.
+
+    v7 P0-3 UPDATE: the paragraph above is superseded -- these routes are
+    now DISABLED by default (T58_ENABLE_WEB_LIVE_DEPLOY, see
+    app.live_deploy.web_deploy_config) and, when enabled, require the
+    app's own password lock to be set and the browser session unlocked.
+    v7 P0-2: prop guardrails are hard-wired to the futures-prop-safe
+    defaults below (news blackout ON, no weekend hold, no hedging,
+    per-order lot cap), and the daily-loss limit is now set on the
+    RiskConfig the engine actually reads -- the old code set it only on
+    PropRules, so web-launched sessions had NO daily-loss halt at all.
+    """
+    guard = _web_live_deploy_guard()
+    if guard:
+        return guard
     from app.live_deploy.execution_engine import LiveExecutionConfig, LiveExecutionSession
     from app.live_deploy.broker_registry import build_adapter
     from app.live_deploy.live_settings import load_accounts
@@ -7852,20 +7947,41 @@ def deploy_live_start():
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
             commission_per_trade=float(form.get("commission", 0) or 0),
+            # v7 P0-2: the live engine reads the daily-loss halt from
+            # `risk`, not from prop_rules -- the old code set it only on
+            # the rules object, so web-launched sessions had NO
+            # daily-loss halt at all. "0" disables (None).
+            daily_loss_limit_pct=(float(form.get("daily_loss", 5) or 5) or None),
         )
-        rules = PropRules(
+        # v7 P0-1/P0-2: sizing conversion factors + hard-wired
+        # futures-prop-safe guardrails (no per-widget overrides on the web
+        # route -- the enforced values are shown on deploy_live.html).
+        from app.live_deploy.guardrails import (
+            enforced_guardrails_summary, futures_prop_safe_rules, resolve_units_per_lot,
+        )
+        contract_size = risk.contract_size
+        # Futures: 1 broker lot/contract = contract_size sizing units;
+        # FX (no contract_size): the 100,000 FX standard.
+        units_per_lot = resolve_units_per_lot(contract_size)
+        rules = futures_prop_safe_rules(
             account_size=float(form.get("account_size", 100000) or 100000),
-            evaluation_profit_target_pct=float(form.get("profit_target", 8) or 8),
-            daily_loss_limit_pct=float(form.get("daily_loss", 5) or 5),
+            daily_loss_limit_pct=(float(form.get("daily_loss", 5) or 5) or None),
             max_drawdown_pct=float(form.get("max_dd", 10) or 10),
         )
+        # The eval profit target is informational for live (no eval to
+        # pass), but keep honoring the form field rather than dropping it.
+        rules.evaluation_profit_target_pct = float(form.get("profit_target", 8) or 8)
         cfg = LiveExecutionConfig(
             symbol=form.get("symbol", "").strip() or "EURUSD",
             timeframe_minutes=int(form.get("timeframe_minutes", 5) or 5),
             risk=risk, prop_rules=rules,
             poll_seconds=int(form.get("poll_seconds", 20) or 20),
+            contract_size=contract_size, units_per_lot=units_per_lot,
         )
         log = []
+        log.append(f"[warn] {enforced_guardrails_summary(rules)}")
+        log.append(f"[info] Sizing conversion for {broker.platform_name}: "
+                   f"contract_size={contract_size}, units_per_lot={units_per_lot}.")
         session = LiveExecutionSession(
             strategy=strategy, strategy_type=form.get("strategy_mode", "manual"),
             strategy_filename=form.get("strategy_mode", "manual"),
@@ -7897,6 +8013,9 @@ def deploy_live_start():
 
 @app.route("/deploy-live/stop", methods=["POST"])
 def deploy_live_stop():
+    guard = _web_live_deploy_guard()
+    if guard:
+        return guard
     with _LIVE_DEPLOY_LOCK:
         session = _LIVE_DEPLOY_SESSION["session"]
         if session is None:
@@ -7905,8 +8024,28 @@ def deploy_live_stop():
         return jsonify({"ok": True})
 
 
+@app.route("/deploy-live/kill", methods=["POST"])
+def deploy_live_kill():
+    """v7 P0-3: kill switch -- flatten ALL open positions on the broker,
+    then stop the session. /deploy-live/stop is graceful only (it leaves
+    working positions alone); this is the emergency path."""
+    guard = _web_live_deploy_guard()
+    if guard:
+        return guard
+    with _LIVE_DEPLOY_LOCK:
+        live_session = _LIVE_DEPLOY_SESSION["session"]
+        if live_session is None:
+            return jsonify({"ok": False, "error": "Nothing is running."})
+        live_session.flatten_all_and_stop()
+        _LIVE_DEPLOY_SESSION["session"] = None
+        return jsonify({"ok": True, "message": "Kill switch: all positions flattened, session stopped."})
+
+
 @app.route("/deploy-live/status.json")
 def deploy_live_status():
+    guard = _web_live_deploy_guard()
+    if guard:
+        return guard
     with _LIVE_DEPLOY_LOCK:
         session = _LIVE_DEPLOY_SESSION["session"]
         if session is None:
@@ -7916,7 +8055,7 @@ def deploy_live_status():
             "running": s.running, "connected": s.connected, "platform": s.platform,
             "balance": s.balance, "equity": s.equity, "n_trades_closed": s.n_trades_closed,
             "win_rate": s.win_rate, "net_pnl": s.net_pnl, "halted_reason": s.halted_reason,
-            "drift_flag": s.drift_flag, "log": _LIVE_DEPLOY_SESSION["log"][-100:],
+            "drift_flag": s.drift_flag, "alert": s.alert, "log": _LIVE_DEPLOY_SESSION["log"][-100:],
         })
 
 
@@ -7983,7 +8122,9 @@ def search_start():
 
         mode_key = form.get("search_mode", "family_named")
         seed = int(form.get("seed", 42) or 42)
-        max_candidates = int(form.get("max_candidates", 200) or 200)
+        # v7 (2026-10-05, worker B, fix #9): 200 -> 1000 default budget.
+        # The web Search Lab form default moved with this.
+        max_candidates = int(form.get("max_candidates", 1000) or 1000)
         library_ref = None
         strategy = None  # only "single"/"family_grid" build one concrete Strategy below;
         # "family_named" searches many candidates at once and has no single
@@ -8004,9 +8145,22 @@ def search_start():
         else:
             family_key = form.get("family", "all") or "all"
             exclude_families = _resolve_family_exclusions(_family_exclusion_log)
+            # v7 (2026-10-05, worker B, fix #8): the web Search Lab used to
+            # only ever search frozen templates (candidate_source="templates").
+            # The search.html Stage 2 card now carries a default-ON "Invent
+            # new structures (grammar)" checkbox; when it is on, grammar
+            # draws are ADDED to the template candidates -- grammar draws
+            # never replace them, and "templates" stays available by
+            # unchecking the box.
+            candidate_source = (
+                "templates+grammar"
+                if (form.get("invent_structures") or "on") == "on"
+                else "templates"
+            )
             space = generate_search_space(
                 mode="family", family=family_key, max_candidates=max_candidates, seed=seed,
                 exclude_families=exclude_families,
+                candidate_source=candidate_source,
             )
 
         workers_raw = (form.get("workers") or "").strip()
@@ -8014,8 +8168,10 @@ def search_start():
             min_trades=int(form.get("min_trades", 20) or 20),
             min_profit_factor=float(form.get("min_profit_factor", 1.05) or 1.05),
             stage1_top_n=int(form.get("stage1_top_n", 40) or 40),
-            ga_population=int(form.get("ga_population", 10) or 10),
-            ga_generations=int(form.get("ga_generations", 4) or 4),
+            # v7 (2026-10-05, worker B, fix #9): 10x4 -> 40x15 default budget.
+            # The web Search Lab form defaults moved with these.
+            ga_population=int(form.get("ga_population", 40) or 40),
+            ga_generations=int(form.get("ga_generations", 15) or 15),
             stage2_top_n=int(form.get("stage2_top_n", 10) or 10),
             full_mc_sims=int(form.get("full_mc_sims", 3000) or 3000),
             walk_forward_folds=int(form.get("walk_forward_folds", 4) or 4),
@@ -9154,8 +9310,9 @@ def search_multi_instrument_start():
             min_trades=int(form.get("min_trades", 20) or 20),
             min_profit_factor=float(form.get("min_profit_factor", 1.05) or 1.05),
             stage1_top_n=int(form.get("stage1_top_n", 40) or 40),
-            ga_population=int(form.get("ga_population", 10) or 10),
-            ga_generations=int(form.get("ga_generations", 4) or 4),
+            # v7 (2026-10-05, worker B, fix #9): 10x4 -> 40x15 default budget.
+            ga_population=int(form.get("ga_population", 40) or 40),
+            ga_generations=int(form.get("ga_generations", 15) or 15),
             stage2_top_n=int(form.get("stage2_top_n", 10) or 10),
             full_mc_sims=int(form.get("full_mc_sims", 3000) or 3000),
             walk_forward_folds=int(form.get("walk_forward_folds", 4) or 4),
