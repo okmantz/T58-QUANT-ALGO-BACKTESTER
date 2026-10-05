@@ -55,13 +55,26 @@ def test_apply_instrument_spec_unknown_symbol_raises_with_helpful_message():
 
 def test_apply_instrument_spec_fills_commission_when_still_at_zero_default():
     """The 2026-09-24 upgrade: picking a known futures instrument also
-    fills a realistic commission_per_trade, but ONLY when the caller left
-    it at RiskConfig's own 0.0 default -- this is the exact gap a $0-
-    commission Full Pipeline report (on ES) was found to have."""
-    risk = RiskConfig()  # commission_per_trade defaults to 0.0
+    fills a realistic commission, but ONLY when the caller left it at
+    RiskConfig's own 0.0 default -- this is the exact gap a $0-
+    commission Full Pipeline report (on ES) was found to have.
+
+    B2-4 (2026-10-04): the spec's round-turn rate now lands on
+    commission_per_contract (charged per contract at settle), NOT the old
+    flat commission_per_trade fill -- the flat fill undercharged every
+    multi-contract position. commission_per_trade is left exactly as the
+    caller set it."""
+    risk = RiskConfig()  # commission_per_trade AND commission_per_contract default to 0.0
     out = apply_instrument_spec(risk, "ES")
-    assert out.commission_per_trade == KNOWN_INSTRUMENTS["ES"].default_commission_round_turn
-    assert out.commission_per_trade > 0.0
+    assert out.commission_per_contract == KNOWN_INSTRUMENTS["ES"].default_commission_round_turn
+    assert out.commission_per_contract > 0.0
+    assert out.commission_per_trade == 0.0  # no longer auto-filled (would double-charge)
+
+
+def test_apply_instrument_spec_never_overwrites_an_explicit_per_contract_commission():
+    risk = RiskConfig(commission_per_contract=1.0)
+    out = apply_instrument_spec(risk, "ES")
+    assert out.commission_per_contract == 1.0
 
 
 def test_apply_instrument_spec_never_overwrites_an_explicit_commission():

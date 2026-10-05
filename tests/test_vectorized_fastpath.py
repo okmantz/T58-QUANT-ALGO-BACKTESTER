@@ -44,6 +44,58 @@ def _choppy_df(n=600, seed=7):
     return pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
 
 
+def _gapless_df(n=600, seed=7):
+    """Like _choppy_df, but with open[i+1] == close[i] exactly (no gaps).
+
+    Fill-lag parity note (v5): the fastpath fills market entries and
+    signal-exits at open[i+lag] while the scalar engine still fills at
+    close[i]. On gapless data those two prices coincide, so a
+    trade-by-trade comparison against the scalar engine isolates REAL
+    divergences from the intended one-bar fill shift. Tests that need
+    gaps use _choppy_df and assert the next-open fill directly."""
+    rng = np.random.default_rng(seed)
+    ts = pd.date_range("2024-01-01", periods=n, freq="15min")
+    rows = []
+    prev_close = 100.0
+    for i in range(n):
+        o = prev_close  # gapless by construction: this bar's open IS last bar's close
+        step = rng.normal(0, 0.6)
+        c = o + step
+        h = max(o, c) + abs(rng.normal(0, 0.4))
+        l = min(o, c) - abs(rng.normal(0, 0.4))
+        rows.append((ts[i], o, h, l, c, 1000.0))
+        prev_close = c
+    return pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
+
+
+def _assert_trades_match_lag_shift(scalar_trades, vec_trades, df):
+    """Assert trade-by-trade parity between the scalar engine and the v5
+    fastpath. BOTH engines fill market entries and signal-exits at the
+    fill bar's open -- ``open[i + entry_fill_lag_bars]`` (default lag 1,
+    read off the shared RiskConfig) -- so entry/exit timestamps must be
+    IDENTICAL, with identical prices/sizes/pnl/reasons.
+
+    Callers must zero out signals on the last `lag` bars first: entries
+    the engines would open at the final close are skipped by both (no
+    next open to fill at), and signal-exits decided there settle as
+    end_of_data instead of "signal" -- both intended fill-lag semantics,
+    not bugs."""
+    ts_index = {t: i for i, t in enumerate(df["timestamp"])}
+    assert len(vec_trades) == len(scalar_trades)
+    for s, v in zip(scalar_trades, vec_trades):
+        assert s.direction == v.direction
+        assert s.exit_reason == v.exit_reason
+        assert s.entry_price == pytest.approx(v.entry_price, abs=1e-9)
+        assert s.exit_price == pytest.approx(v.exit_price, abs=1e-9)
+        assert s.size == pytest.approx(v.size, rel=1e-9)
+        assert s.pnl == pytest.approx(v.pnl, abs=1e-6)
+        assert s.equity_after == pytest.approx(v.equity_after, abs=1e-6)
+        # Both engines fill at open[i + entry_fill_lag_bars]; resting
+        # stop/take fills and the end-of-data close do not move either.
+        assert v.entry_time == s.entry_time
+        assert v.exit_time == s.exit_time
+
+
 def _alternating_signals(n, seed=11, flat_prob=0.15):
     """A signal series with entries, flat stretches, and reversals --
     exercises same-bar reversal fills on both engines identically."""
@@ -64,8 +116,15 @@ def _alternating_signals(n, seed=11, flat_prob=0.15):
 
 @pytest.mark.parametrize("stop_pips,take_pips", [(20.0, 40.0), (15.0, None), (None, 30.0), (None, None)])
 def test_vectorized_matches_scalar_engine_trade_by_trade(stop_pips, take_pips):
-    df = _choppy_df()
+    # v5: gapless data so the fastpath's next-open fill coincides with
+    # the scalar engine's next-open fill (both read entry_fill_lag_bars=1
+    # off the shared RiskConfig); exact timestamp parity is asserted by
+    # _assert_trades_match_lag_shift. Signals on
+    # the last bars are zeroed: tail entries are an intended semantic
+    # difference (no next open to fill at), not a parity break.
+    df = _gapless_df()
     sig = _alternating_signals(len(df))
+    sig[-5:] = 0
     risk = RiskConfig(initial_balance=10_000.0, risk_value=1.0, pip_size=0.01, spread_pips=1.0,
                        slippage_pips=0.5, commission_per_trade=0.5, max_trades_per_day=999)
 
@@ -77,28 +136,20 @@ def test_vectorized_matches_scalar_engine_trade_by_trade(stop_pips, take_pips):
     outcomes = run_vectorized_batch(
         df, [VectorizedCandidate("c1", sig, stop_pips, take_pips)], risk,
     )
-    vec_trades = outcomes["c1"].trades
-
-    assert len(vec_trades) == len(scalar_trades)
-    for s, v in zip(scalar_trades, vec_trades):
-        assert s.entry_time == v.entry_time
-        assert s.exit_time == v.exit_time
-        assert s.direction == v.direction
-        assert s.exit_reason == v.exit_reason
-        assert s.entry_price == pytest.approx(v.entry_price, abs=1e-9)
-        assert s.exit_price == pytest.approx(v.exit_price, abs=1e-9)
-        assert s.size == pytest.approx(v.size, rel=1e-9)
-        assert s.pnl == pytest.approx(v.pnl, abs=1e-6)
-        assert s.equity_after == pytest.approx(v.equity_after, abs=1e-6)
+    _assert_trades_match_lag_shift(scalar_trades, outcomes["c1"].trades, df)
 
 
 def test_vectorized_batch_multiple_candidates_are_independent():
     """Two different parameter sets in the same batch call must not leak
     state into each other -- this is the whole premise of vectorizing
     across columns instead of running each in its own process."""
-    df = _choppy_df(seed=3)
+    # v5: gapless data + zeroed tail so both engines fill identically
+    # (see test_vectorized_matches_scalar_engine_trade_by_trade).
+    df = _gapless_df(seed=3)
     sig_a = _alternating_signals(len(df), seed=1)
     sig_b = _alternating_signals(len(df), seed=2)
+    sig_a[-5:] = 0
+    sig_b[-5:] = 0
     risk = RiskConfig(initial_balance=25_000.0, risk_value=0.5, pip_size=0.01, spread_pips=0.5)
 
     outcomes = run_vectorized_batch(
@@ -152,11 +203,21 @@ def test_risk_amount_and_position_size_vectorized_match_scalar():
             assert vs == pytest.approx(risk.position_size(eq, pip), abs=1e-9)
 
 
-def test_is_vectorizable_rejects_dynamic_stop_shapes():
+def test_is_vectorizable_allows_perbar_stops_rejects_unsupported():
+    """v5: per-bar stop_loss_distance / take_profit_distance arrays (ATR
+    stops) are now vectorizable; trailing stops, breakeven triggers and
+    partial exits still force the scalar path."""
     base = dict(name="x", source_type="python", signals=pd.Series([0]))
     assert is_vectorizable(StrategyResult(**base, stop_loss_pips=20.0, take_profit_pips=40.0))
-    assert not is_vectorizable(StrategyResult(**base, stop_loss_distance=pd.Series([0.5])))
-    assert not is_vectorizable(StrategyResult(**base, take_profit_distance=pd.Series([0.5])))
+    assert is_vectorizable(StrategyResult(**base, stop_loss_distance=pd.Series([0.5])))
+    assert is_vectorizable(StrategyResult(
+        **base, stop_loss_distance=pd.Series([0.5]), take_profit_distance=pd.Series([1.0])))
+    assert not is_vectorizable(StrategyResult(
+        **base, stop_loss_distance=pd.Series([0.5]), trailing_stop_distance=pd.Series([0.5])))
+    assert not is_vectorizable(StrategyResult(
+        **base, stop_loss_distance=pd.Series([0.5]), breakeven_trigger_r=1.5))
+    assert not is_vectorizable(StrategyResult(
+        **base, stop_loss_distance=pd.Series([0.5]), partial_exit={"r_multiple": 1.0, "fraction": 0.5}))
     assert not is_vectorizable(StrategyResult(**base, trailing_stop_distance=pd.Series([0.5])))
     assert not is_vectorizable(StrategyResult(**base, breakeven_trigger_r=1.5))
 

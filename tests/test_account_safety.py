@@ -32,13 +32,19 @@ def test_max_trade_loss_caps_a_catastrophic_gap_through_loss():
     ordinary-looking overnight gap becomes a massive dollar loss. The
     engine must cap that single trade's loss instead of reporting it in
     full."""
-    ts = pd.date_range("2024-01-01 09:00", periods=2, freq="1d")
+    ts = pd.date_range("2024-01-01 09:00", periods=3, freq="1d")
     rows = [
         (ts[0], 150.0, 150.2, 149.8, 150.0, 1000.0),
-        (ts[1], 130.0, 130.5, 125.0, 128.0, 1000.0),  # huge overnight gap down
+        # B2-2 (2026-10-04): entries fill at the NEXT bar's open, so the
+        # position opens here at 150.0 (tight bar -- the 15-pip FX stop
+        # survives it)...
+        (ts[1], 150.0, 150.05, 149.999, 150.02, 1000.0),
+        # ...and the catastrophic gap lands on the following bar, gapping
+        # straight through the resting stop.
+        (ts[2], 130.0, 130.5, 125.0, 128.0, 1000.0),  # huge overnight gap down
     ]
     df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
-    signals = pd.Series([1, 1])
+    signals = pd.Series([1, 1, 1])
 
     risk = RiskConfig(
         initial_balance=10_000.0, risk_mode="percent", risk_value=1.0,

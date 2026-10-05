@@ -182,6 +182,10 @@ class TestExec002ReentryCooldown:
             initial_balance=10_000.0, risk_value=1.0, pip_size=1.0,
             spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0,
             reentry_cooldown_bars=cooldown,
+            # B2-2 (2026-10-04): fill lag is orthogonal to the cooldown --
+            # lag=0 keeps this test about same-bar re-entry (now filled at
+            # the bar's open instead of the old same-bar close).
+            entry_fill_lag_bars=0,
         )
         trades, _ = run_execution(
             df=df, signals=sig, risk=risk,
@@ -195,8 +199,9 @@ class TestExec002ReentryCooldown:
     def test_explicit_zero_reproduces_original_no_cooldown_behavior(self):
         """Backward compatibility: reentry_cooldown_bars=0 explicitly set
         must reproduce the ORIGINAL (undocumented) same-bar reentry
-        behavior byte-for-byte -- a stop-out on bar 1 followed by a fresh
-        same-direction entry at that same bar's close."""
+        behavior -- a stop-out on bar 1 followed by a fresh same-direction
+        entry on that same bar (filled at the bar's open under the B2-2
+        fill-lag regime with entry_fill_lag_bars=0)."""
         trades = self._run(cooldown=0)
         assert len(trades) == 2
         assert trades[0].exit_reason == "stop_loss"

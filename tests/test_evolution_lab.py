@@ -304,6 +304,9 @@ def test_generate_population_stratifies_immigrants_across_all_families():
     population = runner._generate_population(0, [])
     families_seen = {meta.get("family") for _, _, meta in population}
     expected = set(list_families().keys()) - set(FAMILIES_REQUIRING_PAIR_DATA) - set(FAMILIES_REQUIRING_CALENDAR_DATA)
+    # v5 B1-1: the "grammar" pseudo-family joins the stratified draw when
+    # use_structural_operators is on (the default).
+    expected = expected | {"grammar"}
 
     assert families_seen == expected
 

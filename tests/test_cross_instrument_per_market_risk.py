@@ -43,7 +43,11 @@ def test_each_market_gets_its_own_risk():
     # unknown names: pip detected from price, the stray shared contract size is NOT carried over
     assert risks["EURUSD_5m"].pip_size == 0.0001 and risks["EURUSD_5m"].contract_size is None
     assert risks["XYZSTOCK"].pip_size == 0.01 and risks["XYZSTOCK"].contract_size is None
-    assert risks["MGC_1m_2023-2026"].commission_per_trade == 1.60   # filled from spec because shared commission was 0
+    # B2-4 (2026-10-04): the spec's round-turn rate now lands on
+    # commission_per_contract (per-contract at settle), not the old flat
+    # commission_per_trade fill.
+    assert risks["MGC_1m_2023-2026"].commission_per_contract == 1.60   # filled from spec because shared commission was 0
+    assert risks["MGC_1m_2023-2026"].commission_per_trade == 0.0       # no longer auto-filled (would double-charge)
     assert len(report) == 4 and all(r.describe() for r in report)
 
 

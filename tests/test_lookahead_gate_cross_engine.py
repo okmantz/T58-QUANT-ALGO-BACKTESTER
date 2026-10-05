@@ -146,39 +146,63 @@ def test_leaky_strategy_fails_full_pipeline_verdict_via_lookahead_gate(tmp_path)
 
 
 def test_leaky_strategy_fails_search_lab_stage3_gate(tmp_path):
-    """Same regression, for Search Lab -- this gate already existed before
-    the audit (batch_runner._stage1_score / Stage 3's passed_stage3_gate
-    already ANDs in `not lookahead.bug_detected`); kept here so a future
-    change to that gate is caught by the same test file as the Full
-    Pipeline / Evolution Lab versions above and below."""
-    from app.search.batch_runner import SearchStageConfig, run_search
-    from app.search.strategy_space import generate_search_space
+    """Same regression, for Search Lab -- Stage 3's passed_stage3_gate ANDs
+    in `not lookahead.bug_detected`; kept here so a future change to that
+    gate is caught by the same test file as the Full Pipeline / Evolution
+    Lab versions above and below.
+
+    v5 note: this exercises _stage3_task directly (not the full run_search)
+    because honest next-bar-open fills (B2-2) removed this leaky strategy's
+    illusory edge (PF 0.56, net negative) -- it can no longer survive
+    Stage 1's `net_profit > 0` filter, which is correct behavior, not a
+    gate failure. The regression under test is the Stage 3 lookahead gate
+    itself: a leaky candidate that REACHES Stage 3 must be rejected there.
+    The acceptance floors are zeroed so the lookahead check is the only
+    possible reason for rejection.
+    """
+    from app.search import batch_runner as br
+    from app.search.strategy_space import spec_from_strategy
 
     df = _sample_df()
     strategy = PythonStrategy(_write_leaky_strategy(tmp_path))
-    space = generate_search_space(mode="single", strategy=strategy)
-    cfg = SearchStageConfig(
-        min_trades=1, min_profit_factor=0.0, max_drawdown_buffer_mult=100.0,
-        stage1_top_n=1, ga_population=4, ga_generations=1, ga_search_sims=20,
-        stage2_top_n=1, full_mc_sims=50, walk_forward_folds=0, robustness_neighbors=0,
-        workers=1, random_seed=1,
-    )
-    summary = run_search(
-        df, RiskConfig(), PropRules(), space, cfg,
-        db_path=str(tmp_path / "search.db"), instrument="TEST", timeframe="5m",
-    )
-    # stage3_survivors counts candidates that REACHED Stage 3 evaluation,
-    # not ones that passed its gate -- the actual disqualification lives on
-    # each leaderboard record's passed_stage3_gate flag (and, in turn, on
-    # whether a champion could be named at all).
-    assert len(summary.leaderboard) == 1
-    record = summary.leaderboard[0]
+    spec = spec_from_strategy(strategy)
+
+    # _stage3_task runs in a worker process in production; here we populate
+    # the worker state it reads (_WORKER) in-process instead.
+    br._WORKER["df"] = df
+    br._WORKER["risk"] = RiskConfig()
+    br._WORKER["prop_rules"] = PropRules()
+    br._WORKER["tmp_dir"] = tmp_path
+    try:
+        stage3_cfg = {
+            "full_mc_sims": 50, "random_seed": 1,
+            "fitness_metric": "eval_pass_probability",
+            "stage3_min_trades": 1,
+            "stage3_min_profit_factor": 0.0,
+            "stage3_max_drawdown_buffer_mult": 100.0,
+            "stage3_require_positive_net": False,
+            # Zero the acceptance floors so the ONLY thing that can fail
+            # this candidate is the lookahead gate under test.
+            "min_eval_pass_probability": 0.0,
+            "min_first_payout_probability": 0.0,
+            "walk_forward_folds": 0,
+            "walk_forward_metric": "profit_factor",
+            "walk_forward_min_efficiency": 0.5,
+            "robustness_neighbors": 0,
+            "robustness_perturbation_frac": 0.1,
+            "robustness_min_stability": 0.5,
+            "reset_on_breach": False,
+        }
+        record = br._stage3_task("leaky", spec, stage3_cfg)
+    finally:
+        br._WORKER.clear()
+
     assert record["lookahead"]["bug_detected"] is True
     assert not record["passed_stage3_gate"], (
-        "the only candidate in this search has a confirmed lookahead leak -- "
-        "it must never pass Stage 3's gate, however good its raw numbers look"
+        "the candidate has a confirmed lookahead leak -- it must never pass "
+        "Stage 3's gate, however good its raw numbers look; "
+        f"gate notes: {record.get('gate_notes')}"
     )
-    assert summary.champion_candidate_id is None
 
 
 def test_leaky_python_candidate_excluded_from_evolution_lab_cpcv_pool(tmp_path):

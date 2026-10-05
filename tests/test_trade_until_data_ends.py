@@ -116,12 +116,24 @@ def test_no_target_configured_means_no_payouts_and_no_halt():
 
 # 3. whole-contract dead-lock -------------------------------------------------
 def test_one_contract_minimum_prevents_the_sizing_dead_lock():
-    ts = pd.date_range("2024-01-01 09:00", periods=8, freq="D")
-    px = [100, 75, 76, 77, 78, 79, 80, 81]
-    df = pd.DataFrame({"timestamp": ts, "open": px, "high": [p + 0.5 for p in px],
-                       "low": [100 - 40 if i == 1 else p - 0.5 for i, p in enumerate(px)],
-                       "close": px, "volume": 1000.0})
-    sig = pd.Series([1, 0, 1, 1, 1, 1, 1, 1])
+    # B2-2 (2026-10-04): entries fill at the NEXT bar's open, so the loss
+    # that knocks equity under the 1-contract threshold must come from a
+    # gap AFTER the fill bar -- the old 8-bar layout relied on the
+    # same-bar-close fill to be inside the position for the gap bar.
+    ts = pd.date_range("2024-01-01 09:00", periods=9, freq="D")
+    rows = [
+        (ts[0], 100.0, 100.5, 99.5, 100.0, 1000.0),   # signal -> fills at bar 1's open
+        (ts[1], 100.0, 100.5, 99.5, 100.0, 1000.0),   # entry @ 100.0, stop 80.0
+        (ts[2], 75.0, 75.5, 60.0, 75.0, 1000.0),      # gap down THROUGH the stop -> -$1,250
+        (ts[3], 76.0, 76.5, 75.5, 76.0, 1000.0),      # rescue: 1 contract (equity 48,750 < 50,000)
+        (ts[4], 77.0, 77.5, 76.5, 77.0, 1000.0),
+        (ts[5], 78.0, 78.5, 77.5, 78.0, 1000.0),
+        (ts[6], 79.0, 79.5, 78.5, 79.0, 1000.0),
+        (ts[7], 80.0, 80.5, 79.5, 80.0, 1000.0),
+        (ts[8], 81.0, 81.5, 80.5, 81.0, 1000.0),
+    ]
+    df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    sig = pd.Series([1] * 9)
     risk = RiskConfig(initial_balance=50_000.0, risk_mode="percent", risk_value=2.0, pip_size=1.0, contract_size=50.0)
     trades, eq, msgs = _run(df, sig=sig, risk=risk, sl=20, tp=None)
     assert trades[0].pnl < 0                      # equity is now just under the 1-contract threshold

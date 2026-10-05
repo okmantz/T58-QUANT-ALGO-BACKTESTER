@@ -50,7 +50,9 @@ def _runner(tmp_path, **cfg_overrides):
 # ---------------------------------------------------------------------------
 
 def test_no_target_configured_is_a_no_op(tmp_path):
-    runner = _runner(tmp_path)  # target_eval_pass_pct defaults to None
+    # v5: the default is now 70.0, so "no target configured" must opt out
+    # explicitly with None to get the legacy no-op.
+    runner = _runner(tmp_path, target_eval_pass_pct=None)  # target_eval_pass_pct defaults to None
     runner.leaderboard = [_record("a", cpcv=99.0)]
     assert runner._check_target_reached() is None
 
@@ -117,8 +119,10 @@ def test_run_loop_stops_before_max_generations_once_target_reached(tmp_path, mon
 def test_run_loop_without_a_target_runs_to_max_generations_as_before(tmp_path, monkeypatch):
     """Regression guard: a run that never sets target_eval_pass_pct must
     behave exactly as it always did -- run every generation regardless of
-    what's on the leaderboard."""
-    runner = _runner(tmp_path, max_generations=4, population_size=4, elite_keep=2)
+    what's on the leaderboard. (v5: the default is now 70.0, so opting
+    out requires an explicit None.)"""
+    runner = _runner(tmp_path, max_generations=4, population_size=4, elite_keep=2,
+                      target_eval_pass_pct=None)
 
     call_count = {"n": 0}
 
