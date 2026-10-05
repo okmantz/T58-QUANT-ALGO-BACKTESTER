@@ -11199,6 +11199,13 @@ class MainWindow:
             anchor="w", padx=18, pady=(2, 8),
         )
         self._button(app_section, "CHECK FOR UPDATES", self._account_check_for_updates).pack(anchor="w", padx=18)
+        # v7: actually download a found update (checksum-verified) instead of
+        # just telling the user to visit GitHub. Enabled by
+        # _account_check_for_updates only when an update is available.
+        self.acct_download_update_btn = self._button(app_section, "DOWNLOAD UPDATE", self._account_download_update)
+        self.acct_download_update_btn.pack(anchor="w", padx=18, pady=(6, 0))
+        self.acct_download_update_btn.configure(state="disabled")
+        self._acct_pending_update = None
         self.acct_update_status = Label(app_section, text="", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8), wraplength=760, justify="left")
         self.acct_update_status.pack(anchor="w", padx=18, pady=(8, 8))
 
@@ -11381,18 +11388,94 @@ class MainWindow:
         result = check_for_updates()
         if not result.configured:
             self.acct_update_status.config(text=result.error, fg=TEXT_MUTED)
+            self._acct_pending_update = None
+            self.acct_download_update_btn.configure(state="disabled")
         elif result.checked and result.update_available:
             self.acct_update_status.config(
                 text=f"A newer version is available: {result.latest_version}."
                      + (f"  {result.release_url}" if result.release_url else ""),
                 fg=AMBER,
             )
+            # v7: an update is available -- enable the DOWNLOAD UPDATE
+            # button so the user can fetch it checksum-verified.
+            self._acct_pending_update = result
+            self.acct_download_update_btn.configure(state="normal")
         elif result.checked:
             self.acct_update_status.config(
                 text=f"You're up to date (latest release: {result.latest_version}).", fg=GREEN,
             )
+            self._acct_pending_update = None
+            self.acct_download_update_btn.configure(state="disabled")
         else:
             self.acct_update_status.config(text=result.error, fg=RED)
+            self._acct_pending_update = None
+            self.acct_download_update_btn.configure(state="disabled")
+
+    def _account_download_update(self):
+        # v7: wire the DOWNLOAD UPDATE button to the real download path --
+        # download_update() enforces the SHA-256 checksum (and refuses the
+        # download if the release publishes no checksum), then this offers
+        # to open the download folder. The app NEVER auto-installs or
+        # auto-executes anything -- the user opens/installs it themselves.
+        from app.accounts.app_info import download_update
+
+        pending = self._acct_pending_update
+        if pending is None:
+            messagebox.showinfo(
+                "Download update",
+                "No update is pending -- click CHECK FOR UPDATES first.",
+                parent=self.root,
+            )
+            return
+        if not messagebox.askyesno(
+            "Download update",
+            f"Download version {pending.latest_version} from the GitHub release?\n\n"
+            "The download is verified against the release's published SHA-256 checksum; "
+            "the download is refused if the checksum is missing or does not match. "
+            "Nothing is installed automatically -- you will choose whether to open the file yourself.",
+            parent=self.root,
+        ):
+            return
+
+        self.acct_update_status.config(
+            text=f"Downloading {pending.latest_version}... (verifying checksum)", fg=AMBER,
+        )
+        self.acct_download_update_btn.configure(state="disabled")
+
+        def _work():
+            result = download_update(confirmed=True)
+            self.root.after(0, lambda: self._account_download_finished(result))
+
+        import threading
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _account_download_finished(self, result):
+        # Runs back on the UI thread after the download thread completes.
+        from pathlib import Path
+
+        if result.ok:
+            self.acct_update_status.config(
+                text=f"Update {result.version} downloaded and checksum-verified: {result.path}",
+                fg=GREEN,
+            )
+            if messagebox.askyesno(
+                "Download complete",
+                f"Version {result.version} is downloaded and its checksum matched the release.\n\n"
+                f"File: {result.path}\n\n"
+                "Open the download folder so you can run the installer/update yourself?",
+                parent=self.root,
+            ):
+                folder = str(Path(result.path).parent)
+                try:
+                    import os as _os
+                    _os.startfile(folder)  # Windows only -- the desktop app ships as a Windows .exe
+                except Exception:  # noqa: BLE001
+                    messagebox.showinfo("Download folder", f"Open this folder yourself:\n{folder}", parent=self.root)
+        else:
+            self.acct_update_status.config(text=f"Download failed: {result.error}", fg=RED)
+            messagebox.showerror("Download failed", result.error or "Unknown error.", parent=self.root)
+            # Let them retry without re-running the check.
+            self.acct_download_update_btn.configure(state="normal")
 
     def _save_account_settings(self):
         from app.web.notifications import NotificationSettings, load_notification_settings, save_notification_settings
@@ -20862,6 +20945,70 @@ class MainWindow:
             risk_section, "Backtest win rate %, for drift comparison (optional)", "",
         )
 
+        # ---- Prop guardrails (v7 P0-2: enforced on every live session) ------
+        # Before v7 these shipped DISABLED (bare PropRules defaults) with an
+        # inline comment admitting the widgets didn't exist yet. They are
+        # real widgets now, defaulting to futures-prop-safe values; the
+        # engine additionally halts the session (flattening everything) on
+        # a max-drawdown breach, which no widget can turn off.
+        guard_section = self._section(
+            f, "Prop guardrails (enforced)",
+            "A live session can blow an evaluation on a pure rule technicality (news trade, "
+            "weekend gap, hedge, oversize ticket) even with perfect strategy performance. "
+            "These ship ON with futures-prop-safe defaults -- the notice below states exactly "
+            "what the engine enforces.",
+        )
+        from app.live_deploy.guardrails import (
+            DEFAULT_MAX_LOT_SIZE, default_news_blackout_entry_text,
+        )
+        self.dl_contract_size = LabeledEntry(
+            guard_section,
+            "Contract size -- sizing units per whole contract (ES=50, MES=5, NQ=20; blank = auto from futures spec)",
+            "",
+        )
+        self.dl_units_per_lot = LabeledEntry(
+            guard_section,
+            "Units per broker lot (blank = auto: contract size for futures, 100,000 FX standard)",
+            "",
+        )
+        self.dl_news_blackout = LabeledEntry(
+            guard_section,
+            "News blackout windows -- HH:MM-HH:MM, comma-separated (server/broker time)",
+            default_news_blackout_entry_text(),
+        )
+        self.dl_weekend_hold_var = BooleanVar(value=False)
+        Checkbutton(
+            guard_section, variable=self.dl_weekend_hold_var, bg=PANEL, activebackground=PANEL,
+            selectcolor=PANEL_3, highlightthickness=0,
+            text="Allow holding positions over the weekend (leave OFF = flatten Friday, prop-safe)",
+            fg=TEXT_MUTED, font=_safe_font(9), anchor="w",
+        ).pack(anchor="w", padx=18, pady=(2, 2))
+        self.dl_hedging_var = BooleanVar(value=False)
+        Checkbutton(
+            guard_section, variable=self.dl_hedging_var, bg=PANEL, activebackground=PANEL,
+            selectcolor=PANEL_3, highlightthickness=0,
+            text="Allow hedging / opposite-direction positions (leave OFF = prop-safe)",
+            fg=TEXT_MUTED, font=_safe_font(9), anchor="w",
+        ).pack(anchor="w", padx=18, pady=(2, 2))
+        self.dl_max_lot = LabeledEntry(
+            guard_section,
+            "Max contracts/lots per single order (broker-native, enforced after sizing conversion)",
+            DEFAULT_MAX_LOT_SIZE,
+        )
+        # v7 P0-2: on-screen notice stating the enforced values.
+        Label(
+            guard_section,
+            text="ENFORCED ON EVERY SESSION -- news blackout ON "
+                 f"({default_news_blackout_entry_text()}; server/broker time, editable above); "
+                 "weekend holds BLOCKED (flattened Friday ~20:45 server time) unless checked above; "
+                 "hedging BLOCKED unless checked above; "
+                 f"max {DEFAULT_MAX_LOT_SIZE:g} contracts/lots per single order; "
+                 "max-drawdown halt ARMED from your firm's rule -- a breach flattens ALL positions "
+                 "and stops the session; 3 consecutive poll failures also flatten and halt.",
+            bg="#1a2b1a", fg="#9fe6a0", font=_safe_font(8, "bold"),
+            wraplength=900, justify="left",
+        ).pack(anchor="w", padx=18, pady=(8, 14))
+
         # ---- Connect + deploy -------------------------------------------------
         deploy_section = self._section(
             f, "Connect and deploy",
@@ -21282,26 +21429,81 @@ class MainWindow:
                     pip_size = 0.0001
             probe.disconnect()
 
+            # v7 P0-1: resolve the sizing-unit -> broker-quantity conversion
+            # factors. contract_size: explicit field first, else auto from
+            # the futures instrument spec (ESZ25 -> ES). units_per_lot:
+            # explicit field, else contract_size for futures, else the FX
+            # standard 100,000. Refuse to start when Tradovate (whole
+            # contracts) has no contract_size -- guessing here is how 50x
+            # orders happen; every other adapter refuses inside
+            # to_broker_qty instead of guessing.
+            from app.live_deploy.guardrails import (
+                DEFAULT_MAX_LOT_SIZE, contract_size_for_symbol,
+                enforced_guardrails_summary, futures_prop_safe_rules,
+                normalize_blackout_text, resolve_units_per_lot,
+            )
+            contract_size = None
+            cs_str = self.dl_contract_size.get_str().strip()
+            if cs_str:
+                try:
+                    contract_size = float(cs_str)
+                except ValueError:
+                    contract_size = None
+            if contract_size is None:
+                contract_size = contract_size_for_symbol(symbol)
+            if contract_size is not None and contract_size <= 0:
+                contract_size = None
+            if contract_size is None and acct.platform == "Tradovate":
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Missing contract size",
+                    f"Tradovate orders are whole contracts and '{symbol}' is not a known futures symbol -- "
+                    "enter the contract size explicitly (sizing units per whole contract, e.g. ES=50, MES=5)."))
+                self.root.after(0, lambda: self.dl_start_btn.config(state="normal"))
+                return
+            upl_str = self.dl_units_per_lot.get_str().strip()
+            units_per_lot = None
+            if upl_str:
+                try:
+                    units_per_lot = float(upl_str)
+                except ValueError:
+                    units_per_lot = None
+            units_per_lot = resolve_units_per_lot(contract_size, units_per_lot)
+
             risk = RiskConfig(
                 initial_balance=conn.balance or 10_000.0,
                 risk_mode="percent",
                 risk_value=self.dl_risk_pct.get_float(1.0),
                 max_trades_per_day=self.dl_max_trades_per_day.get_int(10),
                 pip_size=pip_size,
+                contract_size=contract_size,
                 daily_loss_limit_pct=self.dl_daily_loss_limit.get_float(5.0) or None,
             )
             baseline_str = self.dl_baseline_win_rate.get_str().strip()
             baseline_win_rate = float(baseline_str) if baseline_str else None
 
-            # Deploy Live's own prop-rule risk controls (news blackout / weekend hold /
-            # max lot / hedging) aren't exposed as dedicated widgets on this tab yet --
-            # see INTEGRATION.md's note on this. Defaults (no blackout windows, weekend
-            # holding and hedging both allowed, no lot cap) apply until that's added.
-            prop_rules = PropRules(account_size=conn.balance or 10_000.0)
+            # v7 P0-2: the tab's own guardrail widgets, defaulting to the
+            # futures-prop-safe values (blackout ON, no weekend hold, no
+            # hedging, per-order lot cap). The engine additionally enforces
+            # the max-drawdown halt on every poll -- no widget disables it.
+            try:
+                max_lot = float(self.dl_max_lot.get_str().strip())
+            except ValueError:
+                max_lot = DEFAULT_MAX_LOT_SIZE
+            if max_lot <= 0:
+                max_lot = None
+            prop_rules = futures_prop_safe_rules(
+                account_size=conn.balance or 10_000.0,
+                news_blackout_windows=normalize_blackout_text(self.dl_news_blackout.get_str()),
+                weekend_hold_allowed=bool(self.dl_weekend_hold_var.get()),
+                hedging_allowed=bool(self.dl_hedging_var.get()),
+                max_lot_size=max_lot,
+                daily_loss_limit_pct=self.dl_daily_loss_limit.get_float(5.0) or None,
+            )
 
             cfg = LiveExecutionConfig(
                 symbol=symbol, timeframe_minutes=self._dl_timeframe_minutes(),
                 risk=risk, prop_rules=prop_rules, baseline_win_rate=baseline_win_rate,
+                contract_size=contract_size, units_per_lot=units_per_lot,
             )
             self._dl_journal = ForwardTestJournal()
             session = LiveExecutionSession(
@@ -21316,6 +21518,7 @@ class MainWindow:
                 self.root.after(0, lambda: self.dl_start_btn.config(state="normal"))
                 return
             self._dl_session = session
+            self.root.after(0, lambda: self._dl_log_line("warn", enforced_guardrails_summary(prop_rules)))
             self.root.after(0, self._dl_on_started)
 
         threading.Thread(target=resolve_pip_and_start, daemon=True).start()
