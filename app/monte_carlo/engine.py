@@ -40,7 +40,10 @@ class MonteCarloConfig:
     # one trading day and preserves day-level clustering. An explicit int
     # overrides the heuristic. NOTE: session-conditioned block resampling
     # is NOT implemented -- _resample_pnls has no session labels, so
-    # blocks are contiguous circular slices of the trade sequence.
+    # blocks are contiguous NON-CIRCULAR slices of the trade sequence
+    # (v5: a block never wraps around the end of the series, which would
+    # splice the series' head onto its tail and fabricate a continuity
+    # that never existed).
     block_size: int | None = None
     slippage_stress_pct: float = 0.0  # extra % cost applied to every trade
     # Session/volatility-aware slippage (app.monte_carlo.slippage_model) -- applied ONCE to the
@@ -158,6 +161,20 @@ class MonteCarloResult:
     per_attempt_failure_before_payout_probability: float = 0.0
     total_independent_attempts: int = 0          # sum of total_attempts across every simulated path
 
+    # v5 (2026-10-04): Wilson 95% confidence intervals (0-100 scale) for
+    # the path-level pass and first-payout probabilities, computed over
+    # the n_simulations simulated paths via the Wilson score interval
+    # (see _wilson_score_interval). A point estimate vs a hard 70%/50%
+    # acceptance bar flips inside MC noise -- the acceptance verdict
+    # (app.scoring.t58_scorecard's score_from_results, which drives
+    # app.orchestration.full_pipeline._make_verdict) gates on the LOWER
+    # bound of these intervals, not the point estimate, so a strategy
+    # only reads as "passing the bar" when the bar clears the pessimistic
+    # end of the sampling noise. (0.0, 0.0) on a result built before this
+    # change (e.g. deserialized) means "unknown, not zero".
+    pass_probability_ci95: tuple = (0.0, 0.0)
+    payout_probability_ci95: tuple = (0.0, 0.0)
+
     # MC-004: what this run's resampling actually did, in plain language,
     # so `evaluation_pass_probability` isn't read as a stronger claim than
     # it is. Every consumer of this number (Search Lab, Quick Optimizer,
@@ -181,6 +198,36 @@ def _max_losing_streak(pnls: np.ndarray) -> int:
     return best
 
 
+# v5 (2026-10-04): minimum trades for any MC-derived verdict. A fold/path
+# with fewer trades than this contributes NO verdict (scores 0.0): the
+# resample has too few independent trades for the pass probability -- and
+# its Wilson CI -- to mean anything, and scoring such a slice at face
+# value lets thin-slice noise climb the search objective. ~15 = a handful
+# of trading days at the typical 2-5 trades/day, the smallest sample
+# whose block bootstrap isn't pure noise.
+MIN_TRADES_FOR_VERDICT = 15
+
+
+def _wilson_score_interval(successes: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """Wilson score 95% interval for a binomial proportion, returned on the
+    0-100 scale this module reports probabilities on. Unlike the Wald
+    (normal-approx) interval, Wilson stays inside [0, 1] and stays honest
+    at the boundaries (k=0, k=n) -- exactly where a 69.2%-vs-70%
+    acceptance-verdict flip lives inside MC noise. The acceptance
+    verdict (app.scoring.t58_scorecard via
+    app.orchestration.full_pipeline._make_verdict) gates on the LOWER
+    bound of this interval, not the point estimate."""
+    if n <= 0:
+        return (0.0, 0.0)
+    p = successes / n
+    denom = 1.0 + z * z / n
+    center = (p + z * z / (2.0 * n)) / denom
+    half = z * ((p * (1.0 - p) / n) + (z * z / (4.0 * n * n))) ** 0.5 / denom
+    lo = max(0.0, center - half) * 100.0
+    hi = min(1.0, center + half) * 100.0
+    return (lo, hi)
+
+
 def _effective_block_size(cfg: MonteCarloConfig, n_trades: int, n_trading_days: int | None) -> int:
     """P1-5: resolves the block size for block bootstrap. An explicit
     cfg.block_size always wins; otherwise scale to typical trades/day from
@@ -196,18 +243,26 @@ def _effective_block_size(cfg: MonteCarloConfig, n_trades: int, n_trading_days: 
 
 def _resample_indices(rng: np.random.Generator, n: int, method: str, block_size: int) -> np.ndarray:
     """Index array implementing each resampling method. Block bootstrap
-    uses contiguous circular blocks (wrapping at the end of the sequence);
-    session-conditioned block resampling is NOT implemented -- this
-    function never sees session labels, so blocks are plain contiguous
-    slices. Returning indices (rather than values) lets callers resample
-    parallel per-trade arrays (P&L + initial risk) with the same draw."""
+    uses contiguous NON-CIRCULAR blocks (v5: a block never wraps around
+    the end of the sequence -- start is drawn from 0..n-block_size so
+    every block is a real contiguous slice; wrapping would splice the
+    series' head onto its tail and fabricate continuity that never
+    existed). Session-conditioned block resampling is NOT implemented --
+    this function never sees session labels, so blocks are plain
+    contiguous slices. Returning indices (rather than values) lets
+    callers resample parallel per-trade arrays (P&L + initial risk) with
+    the same draw."""
     if method == "shuffle":
         return rng.permutation(n)
     if method == "block_bootstrap":
+        if block_size >= n:
+            # Degenerate: the whole series is one block -- return it in
+            # order rather than wrapping fragments.
+            return np.arange(n)
         idx: list[int] = []
         while len(idx) < n:
-            start = int(rng.integers(0, n))
-            idx.extend((start + j) % n for j in range(block_size))
+            start = int(rng.integers(0, n - block_size + 1))
+            idx.extend(start + j for j in range(block_size))
         return np.array(idx[:n])
     # default: iid bootstrap with replacement
     return rng.integers(0, n, size=n)
@@ -251,10 +306,33 @@ def eval_pass_probability_for_trades(
     """
     Convenience wrapper around run_monte_carlo() that returns just the
     single number nearly every fold-level / candidate-level scoring path
-    in the app actually wants: the probability of reaching the prop
-    firm's profit target BEFORE hitting the daily-loss limit, the
-    max-drawdown limit, or the consistency rule -- i.e.
-    MonteCarloResult.evaluation_pass_probability.
+    in the app actually wants: the PER-ATTEMPT probability of passing the
+    prop evaluation -- i.e. MonteCarloResult.per_attempt_pass_probability:
+    of every independent account attempt this Monte Carlo run
+    represents, what fraction passed.
+
+    BEHAVIOR CHANGE (v5, 2026-10-04): this used to return the
+    CHAIN-LEVEL MonteCarloResult.evaluation_pass_probability ("did >=1
+    attempt in the mechanically-rebought chain ever pass"). With
+    reset_on_breach on (the default), a long chain eventually clears a
+    low bar almost by construction, so the chain-level number looked
+    strong even for a strategy whose single account had only a modest
+    real chance -- every caller (WF, CPCV, regime selector, Forge) was
+    climbing an inflated objective. The per-attempt number is the actual
+    "will ONE account attempt succeed" question. When reset_on_breach
+    is off, every path has exactly one attempt and the two are
+    identical, so nothing changes for that case. The chain-level value
+    remains available for reporting on the full MonteCarloResult --
+    keep using run_monte_carlo()'s chain-level fields for display;
+    do NOT use them for scoring.
+
+    MIN-TRADES FLOOR (v5): a fold/path with fewer than
+    MIN_TRADES_FOR_VERDICT (15) trades scores 0.0 -- it contributes no
+    verdict, because the resample has too few independent trades for a
+    pass probability (or its Wilson CI) to mean anything. Returns 0.0
+    (not an exception) for an empty/too-small trade list, since "this
+    slice produced nothing worth passing" is itself a valid, low, fold
+    score rather than a hard failure.
 
     This is the shared primitive behind making "probability of passing"
     (rather than raw backtest profit, win rate, or R:R) the one thing
@@ -269,19 +347,16 @@ def eval_pass_probability_for_trades(
     Uses a smaller default simulation count than a final-report Monte
     Carlo run (this is called once per fold/path/generation, often many
     times per search) -- callers that care about that tradeoff should
-    pass their own mc_cfg. Returns 0.0 (not an exception) for an
-    empty/too-small trade list, since "this slice produced nothing worth
-    passing" is itself a valid, low, fold score rather than a hard
-    failure.
+    pass their own mc_cfg.
     """
-    if not trades:
+    if not trades or len(trades) < MIN_TRADES_FOR_VERDICT:
         return 0.0
     cfg = mc_cfg or MonteCarloConfig(n_simulations=500)
     try:
         result = run_monte_carlo(trades, rules, cfg)
     except ValueError:
         return 0.0
-    return result.evaluation_pass_probability
+    return result.per_attempt_pass_probability
 
 
 def _reset_on_breach_note(cfg: "MonteCarloConfig") -> str:
@@ -406,6 +481,19 @@ def _methodology_note(
         )
     if cfg.reset_on_breach:
         note += _reset_on_breach_note(cfg)
+    # v5: ruin now counts ANY simulated account death in a path
+    # (daily-loss-limit breach -- the dominant death mode -- max-drawdown
+    # breach, or inactivity closure), not just max-drawdown breaches; and
+    # the pass/payout probabilities above carry Wilson 95% confidence
+    # intervals (pass_probability_ci95 / payout_probability_ci95), whose
+    # LOWER bounds are what the acceptance verdict gates on.
+    note += (
+        " Risk of ruin counts any simulated account death (daily-loss-limit "
+        "breach, max-drawdown breach, or inactivity closure), not just "
+        "max-drawdown breaches. Wilson 95% CIs on the pass/payout "
+        "probabilities are reported alongside the point estimates; the "
+        "acceptance verdict gates on their lower bounds."
+    )
     return note
 
 
@@ -462,6 +550,14 @@ def run_monte_carlo(
     sum_attempts_passed = 0
     sum_attempts_reached_payout = 0
     sum_total_attempts = 0
+    # v5: per-path account-death flag -- True when ANY attempt in this
+    # path's reset chain died (breached a prop rule). The dominant death
+    # mode in practice is failure_reason="daily_loss_limit" (a single bad
+    # day kills the account long before the trailing max-drawdown floor is
+    # ever touched), so counting only max-DD breaches -- the old
+    # behavior -- made risk_of_ruin blind to how most simulated accounts
+    # actually die.
+    death_flags: list[bool] = []
 
     for _ in range(cfg.n_simulations):
         sim_idx = _resample_indices(rng, len(base_pnls), cfg.method, eff_block_size)
@@ -483,6 +579,12 @@ def run_monte_carlo(
         sum_attempts_passed += result.attempts_passed
         sum_attempts_reached_payout += result.attempts_reached_payout
         sum_total_attempts += result.total_attempts
+        # v5: count EVERY account death, whatever the failure_reason
+        # ("daily_loss_limit", "max_drawdown (...)", inactivity closure).
+        # result.attempts always holds at least the attempt-#1 record, and
+        # more than one record only when reset_on_breach rebuys into the
+        # remaining history after a bust.
+        death_flags.append(any(a.failed for a in result.attempts))
 
         if result.days_to_pass is not None:
             days_to_pass_list.append(result.days_to_pass)
@@ -504,11 +606,23 @@ def run_monte_carlo(
     dd_arr = np.array(drawdown_pcts)
     streak_arr = np.array(losing_streaks)
 
-    ruin_arr = dd_arr >= rules.max_drawdown_pct  # account hit its max-drawdown floor at least once
+    # v5 (2026-10-04): ruin = the account DIED in this path -- ANY attempt
+    # in the chain breached a prop rule -- not just "the max-drawdown
+    # floor was hit". The old definition (drawdown_pct >=
+    # max_drawdown_pct) ignored daily-loss-limit deaths, which are the
+    # dominant death mode: most busts never get near the trailing DD
+    # floor because a single bad day ends them first. Death counts are
+    # path-level (did >=1 attempt die), consistent with the other
+    # headline path-level probabilities on this result.
+    death_arr = np.array(death_flags)
+    ruin_arr = death_arr
     attempts_arr = np.array(attempts_per_path)
 
     def pct(arr, q):
         return float(np.percentile(arr, q)) if len(arr) else 0.0
+
+    pass_ci95 = _wilson_score_interval(int(passed_arr.sum()), len(passed_arr))
+    payout_ci95 = _wilson_score_interval(int(first_payout_arr.sum()), len(first_payout_arr))
 
     result = MonteCarloResult(
         n_simulations=cfg.n_simulations,
@@ -549,5 +663,7 @@ def run_monte_carlo(
             float((sum_total_attempts - sum_attempts_reached_payout) / sum_total_attempts * 100) if sum_total_attempts else 0.0
         ),
         total_independent_attempts=int(sum_total_attempts),
+        pass_probability_ci95=pass_ci95,
+        payout_probability_ci95=payout_ci95,
     )
     return result
