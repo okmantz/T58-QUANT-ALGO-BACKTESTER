@@ -8145,26 +8145,28 @@ def search_start():
         else:
             family_key = form.get("family", "all") or "all"
             exclude_families = _resolve_family_exclusions(_family_exclusion_log)
-            # v7 (2026-10-05, worker B, fix #8): the web Search Lab used to
-            # only ever search frozen templates (candidate_source="templates").
-            # The search.html Stage 2 card now carries a default-ON "Invent
-            # new structures (grammar)" checkbox; when it is on, grammar
-            # draws are ADDED to the template candidates -- grammar draws
-            # never replace them, and "templates" stays available by
-            # unchecking the box.
-            candidate_source = (
-                "templates+grammar"
-                if (form.get("invent_structures") or "on") == "on"
-                else "templates"
-            )
             space = generate_search_space(
                 mode="family", family=family_key, max_candidates=max_candidates, seed=seed,
                 exclude_families=exclude_families,
-                candidate_source=candidate_source,
             )
 
         workers_raw = (form.get("workers") or "").strip()
+        # v7 (2026-10-05, worker B, fix #8) -- corrected 2026-10-05: the
+        # "Invent new structures (grammar)" checkbox (default ON in
+        # search.html) sets candidate_source on SearchStageConfig, which is
+        # what batch_runner's Stage 2 actually reads to draw fresh grammar
+        # candidates alongside the template survivors. (An earlier cut
+        # passed it to generate_search_space(), which never accepted that
+        # kwarg -- every /search/start POST 500'd. Valid values are only
+        # "templates" | "grammar"; grammar draws ADD to the template pool,
+        # they never replace it.)
+        candidate_source = (
+            "grammar"
+            if (form.get("invent_structures") or "on") == "on"
+            else "templates"
+        )
         stage_cfg = SearchStageConfig(
+            candidate_source=candidate_source,
             min_trades=int(form.get("min_trades", 20) or 20),
             min_profit_factor=float(form.get("min_profit_factor", 1.05) or 1.05),
             stage1_top_n=int(form.get("stage1_top_n", 40) or 40),
