@@ -86,6 +86,16 @@ class PropFirmPreset:
     as_of: str = ""                 # date this preset was last checked against the firm's own rules page
     source_note: str = ""           # short pointer to what to re-check and where
 
+    # v7: does this firm EXPLICITLY allow algorithmic/automated trading on
+    # the account this preset models? Conservative by design -- True ONLY
+    # when the firm's own published rules say so unambiguously. False
+    # covers outright bans (Apex), approval-gated policies (The5ers), and
+    # account-size/platform-gated ones (FundedNext $50k+), with the reason
+    # spelled out in algo_policy_note. Defaults to False so an
+    # un-reviewed preset can never imply permission that isn't explicit.
+    algo_trading_allowed: bool = False
+    algo_policy_note: str = ""      # what the firm's own rules actually say; required whenever the flag was reviewed
+
     def to_prop_rules(self) -> PropRules:
         return PropRules(
             account_size=self.account_size,
@@ -144,6 +154,11 @@ _AS_OF_V6 = "2026-10-04"  # v6 pass (Oct 2026): Apex split into EOD/Intraday
 # corrected to intrabar, FundedNext re-mapped to the Stellar 2-Step
 # product, The5ers Bootcamp relabeled to High-Stakes, and funded-stage
 # consistency / payout-gate fields (B5/B10) wired through to_prop_rules.
+_AS_OF_V7 = "2026-10-05"  # v7 pass (Oct 2026): algo_trading_allowed field added,
+# all 15 legacy presets backfilled from firms' own rules pages, 4 new
+# algo-friendly presets (E8 One, FunderPro One Phase, Atlas 1-Step,
+# The Futures Desk) with as-of dates from their own help centers.
+# NEVER an Alpha Futures preset -- Alpha prohibits algorithmic trading.
 
 PROP_FIRM_PRESETS: list[PropFirmPreset] = [
     # --- FTMO ---------------------------------------------------------
@@ -175,6 +190,16 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
             "days 'Best Day Rule' instead of a minimum-trading-days rule) -- not modeled as a separate "
             "preset here; add one if the 1-Step route matters for your timeline."
         ),
+        algo_trading_allowed=True,
+        algo_policy_note=(
+            "FTMO explicitly allows algorithmic trading and EAs (official FAQ, checked 2026-10-05): "
+            "'no reasons for limiting or restricting your trading strategy, whether it's discretionary "
+            "trading, algorithmic trading, EAs, etc.' -- "
+            "https://ftmo.com/en/faq/which-instruments-can-i-trade-and-what-strategies-am-i-allowed-to-use/ "
+            "Conditions: strategy must be legitimate and replicable under real market conditions, no "
+            "forbidden practices; platform limits of 200 open orders / 2,000 positions per day; a "
+            "third-party EA used by many traders can hit the $400k capital-allocation cap."
+        ),
     ),
     PropFirmPreset(
         key="ftmo_100k", firm="FTMO", label="FTMO - $100k Challenge",
@@ -189,6 +214,12 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
             "Confirmed 2026-09-13 against ftmo.com/en/trading-objectives/ -- see the $10k preset's note "
             "for the 2-Step-vs-1-Step and phase-modeling caveats, which apply identically here."
         ),
+        algo_trading_allowed=True,
+        algo_policy_note=(
+            "FTMO explicitly allows algorithmic trading and EAs -- same official FAQ as the $10k preset "
+            "(checked 2026-10-05): "
+            "https://ftmo.com/en/faq/which-instruments-can-i-trade-and-what-strategies-am-i-allowed-to-use/"
+        ),
     ),
     PropFirmPreset(
         key="ftmo_200k", firm="FTMO", label="FTMO - $200k Challenge",
@@ -202,6 +233,12 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
         source_note=(
             "Confirmed 2026-09-13 against ftmo.com/en/trading-objectives/ -- see the $10k preset's note "
             "for the 2-Step-vs-1-Step and phase-modeling caveats, which apply identically here."
+        ),
+        algo_trading_allowed=True,
+        algo_policy_note=(
+            "FTMO explicitly allows algorithmic trading and EAs -- same official FAQ as the $10k preset "
+            "(checked 2026-10-05): "
+            "https://ftmo.com/en/faq/which-instruments-can-i-trade-and-what-strategies-am-i-allowed-to-use/"
         ),
     ),
     # --- Apex Trader Funding -------------------------------------------
@@ -243,6 +280,16 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
             "not modeled. Verify exact dollar amounts for your chosen platform/product at "
             "apextraderfunding.com before relying on them."
         ),
+        algo_trading_allowed=False,
+        algo_policy_note=(
+            "Apex BANS automated trading -- official prohibited-activities page (checked 2026-10-05): "
+            "'No Automation or Algorithm Usage allowed: Rewards are intended to recognize human traders "
+            "actively participating in the learning process, not to reward automated systems executing "
+            "preprogrammed logic.' -- "
+            "https://apextraderfunding.com/help-center/getting-started/prohibited-activities/ "
+            "Limited automation aids (ATM/bracket orders) are tolerated only with the trader in full "
+            "manual control of entries and exits."
+        ),
     ),
     PropFirmPreset(
         key="apex_50k_intraday", firm="Apex Trader Funding", label="Apex - $50k Evaluation (Intraday)",
@@ -262,6 +309,13 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
             "consistency rule -- all modeled. The 'Safety Net' profit buffer caveat from the EOD "
             "entry applies here too."
         ),
+        algo_trading_allowed=False,
+        algo_policy_note=(
+            "Apex BANS automated trading -- official prohibited-activities page (checked 2026-10-05): "
+            "'No Automation or Algorithm Usage allowed.' -- "
+            "https://apextraderfunding.com/help-center/getting-started/prohibited-activities/ "
+            "See the $50k EOD preset's note for the full quote."
+        ),
     ),
     PropFirmPreset(
         key="apex_100k_eod", firm="Apex Trader Funding", label="Apex - $100k Evaluation (EOD)",
@@ -279,6 +333,13 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
             "$1,500 daily loss limit = 1.5%; drawdown monitored at EOD. Payout gates and caveats as "
             "in the $50k EOD entry."
         ),
+        algo_trading_allowed=False,
+        algo_policy_note=(
+            "Apex BANS automated trading -- official prohibited-activities page (checked 2026-10-05): "
+            "'No Automation or Algorithm Usage allowed.' -- "
+            "https://apextraderfunding.com/help-center/getting-started/prohibited-activities/ "
+            "See the $50k EOD preset's note for the full quote."
+        ),
     ),
     PropFirmPreset(
         key="apex_100k_intraday", firm="Apex Trader Funding", label="Apex - $100k Evaluation (Intraday)",
@@ -295,6 +356,13 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
             "Updated 2026-10-04: Intraday account type. $3,000 trailing max drawdown = 3.0% of $100k; "
             "no daily loss limit; drawdown monitored intraday. Payout gates and caveats as in the "
             "$50k Intraday entry."
+        ),
+        algo_trading_allowed=False,
+        algo_policy_note=(
+            "Apex BANS automated trading -- official prohibited-activities page (checked 2026-10-05): "
+            "'No Automation or Algorithm Usage allowed.' -- "
+            "https://apextraderfunding.com/help-center/getting-started/prohibited-activities/ "
+            "See the $50k EOD preset's note for the full quote."
         ),
     ),
     # --- TopStep --------------------------------------------------------
@@ -323,6 +391,15 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
             "by default on TopstepX, but still enforced on NinjaTrader/Tradovate/Quantower/TradingView -- "
             "the non-binding 100% here matches TopstepX; tighten it if you trade one of the other platforms."
         ),
+        algo_trading_allowed=True,
+        algo_policy_note=(
+            "Topstep's official help center: 'Automated strategies are permitted' on the Trading Combine "
+            "and Express Funded Account (checked 2026-10-05; see TradersPost's Topstep review quoting the "
+            "official stance). Caveats straight from Topstep: the trader is fully responsible for the "
+            "bot's errors (Topstep won't help set up or troubleshoot automation), automated trading via "
+            "the ProjectX API is PROHIBITED on the Live Funded Account, and 'improper use of "
+            "automation' (manipulative/abusive algos) is a prohibited strategy."
+        ),
     ),
     PropFirmPreset(
         key="topstep_100k", firm="TopStep", label="TopStep - $100k Trading Combine",
@@ -336,6 +413,12 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
         funded_consistency_rule_pct=40.0,
         as_of=_AS_OF,
         source_note="Re-verified 2026-09-13 against help.topstep.com -- see the $50k preset's note for the full explanation.",
+        algo_trading_allowed=True,
+        algo_policy_note=(
+            "Topstep's official help center: 'Automated strategies are permitted' on the Trading Combine "
+            "and Express Funded Account (checked 2026-10-05) -- same as the $50k preset; trader bears "
+            "full responsibility for bot errors, ProjectX API automation banned on the Live Funded Account."
+        ),
     ),
     # --- The5%ers ---------------------------------------------------------
     # v6 (Oct 2026) RELABEL (B9): these entries were called "Bootcamp" but their
@@ -364,6 +447,14 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
             "these entries are labeled High-Stakes (their numbers match that program); The5%ers Bootcamp's "
             "real numbers are roughly 5% target / 4% daily / 3% max loss and are NOT modeled here."
         ),
+        algo_trading_allowed=False,
+        algo_policy_note=(
+            "The5ers' FAQ permits own-code EAs (trader must own the source code; no tick scalping, "
+            "latency/hedge/reverse arbitrage, HFT, emulators, or stealth stop-losses), BUT the firm's "
+            "Terms require prior WRITTEN APPROVAL before using any automated trading software -- "
+            "approval-gated, so this is False until that approval is obtained (checked 2026-10-05). "
+            "Do not assume an EA that works on a retail account complies with The5ers."
+        ),
     ),
     PropFirmPreset(
         key="the5ers_100k", firm="The5%ers", label="The5%ers - $100k High-Stakes",
@@ -374,6 +465,12 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
         payout_frequency_days=14,
         as_of=_AS_OF,
         source_note="Re-verified 2026-09-13 -- see the $20k preset's note for the full explanation and program-naming caveat.",
+        algo_trading_allowed=False,
+        algo_policy_note=(
+            "The5ers' FAQ permits own-code EAs, BUT the Terms require prior WRITTEN APPROVAL before using "
+            "any automated trading software -- approval-gated, False until that approval is obtained "
+            "(checked 2026-10-05). See the $20k preset's note."
+        ),
     ),
     # --- FundedNext ---------------------------------------------------------
     # v6 (Oct 2026) REMAP (B7): these entries now model FundedNext's
@@ -405,6 +502,14 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
             "sim's first payout roughly 7 trade-days earlier than reality. Payout gate: 5 winning days of "
             "$100+."
         ),
+        algo_trading_allowed=True,
+        algo_policy_note=(
+            "FundedNext's official help center (checked 2026-10-05): EAs are welcome on MT4/MT5 accounts "
+            "BELOW $50k ('Feel free to trade with Expert Advisors (EAs)' -- no restrictions; a paid "
+            "'add-on' buys permission to use ready-made/third-party EAs). $50k and above: traders must "
+            "trade fully manually. This $25k preset is under the threshold, so True. "
+            "https://help.fundednext.com/en/articles/8020763-is-ea-allowed-in-fundednext"
+        ),
     ),
     PropFirmPreset(
         key="fundednext_100k", firm="FundedNext", label="FundedNext - $100k Stellar 2-Step",
@@ -420,6 +525,13 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
             "Updated 2026-10-04 -- see the $25k Stellar 2-Step preset's note (8.0 Phase-1 target, 21-day "
             "first-payout caveat, 40% consistency at both stages). Payout gate here: 5 winning days of "
             "$200+."
+        ),
+        algo_trading_allowed=False,
+        algo_policy_note=(
+            "FundedNext's official help center (checked 2026-10-05): EAs are welcome on accounts below "
+            "$50k, but $50k and above must be traded fully manually -- no bots, EAs, or automation of "
+            "any kind. This $100k preset is over the threshold, so False. "
+            "https://help.fundednext.com/en/articles/8020763-is-ea-allowed-in-fundednext"
         ),
     ),
     # --- Lucid Trading ---------------------------------------------------
@@ -452,6 +564,15 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
             "LucidDirect (skips the evaluation entirely, 20% funded consistency) -- this preset models "
             "LucidPro specifically, the track shown in the screenshot this correction was verified against."
         ),
+        algo_trading_allowed=True,
+        algo_policy_note=(
+            "Lucid's official help center 'Permitted Activities' (checked 2026-10-05): automated systems "
+            "are permitted -- 'We allow traders to use automated trading systems as long as they do not "
+            "exploit the platform.' PROHIBITED even with automation: high-frequency trading (HFT) "
+            "strategies, latency arbitrage, and reverse/hedge arbitrage. "
+            "https://intercom.help/lucid-trading/en/articles/11321405-prohibited-trading-strategies "
+            "(also covered in TradersPost's Lucid review)."
+        ),
     ),
     PropFirmPreset(
         key="lucid_100k", firm="Lucid Trading", label="Lucid Trading - $100k Evaluation",
@@ -469,6 +590,133 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
             "and daily_loss_limit_pct are carried over from the $50k tier's percentage (Lucid markets these "
             "as 'the same profit targets' across sizes) but the exact $100k dollar figures weren't directly "
             "confirmed in this pass -- worth a direct check at lucidtrading.com before relying on them."
+        ),
+        algo_trading_allowed=True,
+        algo_policy_note=(
+            "Lucid's official help center 'Permitted Activities' (checked 2026-10-05): automated systems "
+            "are permitted as long as they do not exploit the platform; HFT, latency arbitrage, and "
+            "reverse/hedge arbitrage prohibited. Same as the $50k preset. "
+            "https://intercom.help/lucid-trading/en/articles/11321405-prohibited-trading-strategies"
+        ),
+    ),
+    # --- E8 Markets -----------------------------------------------------
+    # v7 (Oct 2026): E8 explicitly permits algo trading on the E8 One
+    # 1-Step program -- their official help center lists "Algo, EA, Bots
+    # and Indicators" among the tools traders can use (checked 2026-10-05:
+    # help.e8markets.com/en/articles/5515409). Numbers for the $100k E8
+    # One (1-Step) plan: 10% profit target (Phase 1 only), 4% daily loss,
+    # 6% STATIC max loss, 10 minimum trading days, no fixed calendar
+    # deadline (the 14-day payout field models the standard post-payout
+    # review cadence; confirm current terms at e8markets.com before
+    # relying on them -- prop firms adjust these plans).
+    PropFirmPreset(
+        key="e8_one_100k", firm="E8 Markets", label="E8 Markets - $100k E8 One (1-Step)",
+        account_size=100_000, evaluation_profit_target_pct=10.0,
+        daily_loss_limit_pct=4.0, max_drawdown_pct=6.0,
+        drawdown_type="static", drawdown_check_mode="eod",
+        consistency_rule_pct=None, min_trading_days=10,
+        payout_frequency_days=14,
+        as_of=_AS_OF_V7,
+        source_note=(
+            "Added 2026-10-05. Models the E8 One (1-Step) $100k plan: 10% target, 4% daily loss, 6% "
+            "static max loss, 10 minimum trading days. Verified against E8's official help center "
+            "(https://help.e8markets.com/en/articles/5515409). E8 also sells the E8 Account (2-Step) product; "
+            "these numbers are NOT the 2-Step -- confirm which plan your account uses at e8markets.com."
+        ),
+        algo_trading_allowed=True,
+        algo_policy_note=(
+            "E8 explicitly allows algo trading on E8 One: official help center (checked 2026-10-05) "
+            "lists 'Algo, EA, Bots and Indicators' among the tools traders may use. -- "
+            "https://help.e8markets.com/en/articles/5515409"
+        ),
+    ),
+    # --- FunderPro ------------------------------------------------------
+    # v7 (Oct 2026): FunderPro's One Phase program explicitly allows
+    # EAs -- their official help center says EAs are permitted provided
+    # the trader OWNS the EA (checked 2026-10-05). Numbers for the $100k
+    # One Phase plan: 10% profit target, 3% balance-based daily loss,
+    # 6% static max loss. Confirm current terms at funderpro.com.
+    PropFirmPreset(
+        key="funderpro_one_phase_100k", firm="FunderPro", label="FunderPro - $100k One Phase",
+        account_size=100_000, evaluation_profit_target_pct=10.0,
+        daily_loss_limit_pct=3.0, max_drawdown_pct=6.0,
+        drawdown_type="static", drawdown_check_mode="eod",
+        consistency_rule_pct=None, min_trading_days=5,
+        payout_frequency_days=14,
+        as_of=_AS_OF_V7,
+        source_note=(
+            "Added 2026-10-05. Models FunderPro's One Phase $100k plan: 10% target, 3% daily loss "
+            "(balance-based), 6% static max loss, 5 minimum trading days. Verified against FunderPro's "
+            "official help center (https://www.funderpro.com). FunderPro also sells a 2-Step product -- these "
+            "numbers are the One Phase plan; re-confirm terms at funderpro.com before relying on them."
+        ),
+        algo_trading_allowed=True,
+        algo_policy_note=(
+            "FunderPro explicitly allows EAs on One Phase -- official help center (checked 2026-10-05): "
+            "EAs are permitted provided the trader OWNS the EA they trade with. Shared/third-party EAs "
+            "not owned by the trader are not covered by that permission."
+        ),
+    ),
+    # --- Atlas Funded ---------------------------------------------------
+    # v7 (Oct 2026): Atlas Funded's 1-Step program explicitly allows EAs --
+    # their official help center permits EAs with the standard forbidden-
+    # practices carve-outs (checked 2026-10-05:
+    # atlasfunded-helpcenter.atlassian.net articles 9904215 and 9903316).
+    # Numbers for the $100k 1-Step plan: 10% profit target, 5% daily loss,
+    # 10% STATIC max drawdown, 5 minimum trading days. Confirm current
+    # terms at atlasfunded.com.
+    PropFirmPreset(
+        key="atlas_funded_1step_100k", firm="Atlas Funded", label="Atlas Funded - $100k 1-Step",
+        account_size=100_000, evaluation_profit_target_pct=10.0,
+        daily_loss_limit_pct=5.0, max_drawdown_pct=10.0,
+        drawdown_type="static", drawdown_check_mode="eod",
+        consistency_rule_pct=None, min_trading_days=5,
+        payout_frequency_days=14,
+        as_of=_AS_OF_V7,
+        source_note=(
+            "Added 2026-10-05. Models Atlas Funded's 1-Step $100k plan: 10% target, 5% daily loss, "
+            "10% static max drawdown, 5 minimum trading days. Verified against Atlas Funded's official "
+            "help center (checked 2026-10-05; https://atlasfunded-helpcenter.atlassian.net -- articles "
+            "9904215 and 9903316 cover EA permission). Atlas also sells a 2-Step product -- these are "
+            "the 1-Step numbers; confirm at atlasfunded.com."
+        ),
+        algo_trading_allowed=True,
+        algo_policy_note=(
+            "Atlas Funded explicitly allows EAs on the 1-Step program -- official help center "
+            "(checked 2026-10-05): EAs permitted subject to the standard forbidden-practices rules "
+            "(no HFT/latency/martingale exploits). -- "
+            "https://atlasfunded-helpcenter.atlassian.net (articles 9904215, 9903316)"
+        ),
+    ),
+    # --- The Futures Desk -----------------------------------------------
+    # v7 (Oct 2026): The Futures Desk is an algo-first futures prop shop --
+    # their own homepage leads with "Microscalping + Algos Allowed" and
+    # they publish free algorithmic trading tools (checked 2026-10-05:
+    # thefuturesdesk.com). Numbers model a $50k account on their standard
+    # track: $4,000 profit target (8%), $2,000 max drawdown (trailing),
+    # $800 intraday daily loss limit, 20% eval consistency, daily payouts.
+    # Confirm current terms at thefuturesdesk.com -- a young firm whose
+    # plans change.
+    PropFirmPreset(
+        key="futures_desk_50k", firm="The Futures Desk", label="The Futures Desk - $50k Standard",
+        account_size=50_000, evaluation_profit_target_pct=8.0,
+        daily_loss_limit_pct=1.6, max_drawdown_pct=4.0,
+        drawdown_type="trailing", drawdown_check_mode="intrabar",
+        consistency_rule_pct=20.0, min_trading_days=1,
+        payout_frequency_days=1,
+        as_of=_AS_OF_V7,
+        source_note=(
+            "Added 2026-10-05. Models The Futures Desk's $50k standard track: $4,000 target (8%), "
+            "$2,000 trailing max drawdown (4%), $800 intraday daily loss limit (1.6%), 20% eval "
+            "consistency, daily payouts. Verified against the firm's own homepage "
+            "(https://thefuturesdesk.com, 'Microscalping + Algos Allowed'). Young firm -- re-verify "
+            "terms before relying on them."
+        ),
+        algo_trading_allowed=True,
+        algo_policy_note=(
+            "The Futures Desk is algo-first by design -- the firm's own homepage (checked 2026-10-05) "
+            "leads with 'Microscalping + Algos Allowed' and they publish free algorithmic trading tools. "
+            "https://thefuturesdesk.com"
         ),
     ),
 ]
@@ -499,3 +747,16 @@ def get_preset(key: str) -> PropFirmPreset:
 
 def presets_for_firm(firm: str) -> list[PropFirmPreset]:
     return [p for p in PROP_FIRM_PRESETS if p.firm.lower() == firm.lower()]
+
+
+def algo_allowed_presets() -> list[PropFirmPreset]:
+    """Presets whose firm explicitly allows algorithmic/automated trading
+    (v7: algo_trading_allowed=True), in catalog order.
+
+    Minimal UI wiring hook: UIs that list presets (Prop-Firm Recommender,
+    Speed Run, Evolution Lab firm pickers) can call this to offer an
+    "algo-friendly only" filter or badge without touching the catalog.
+    See CHANGES.txt (v7 worker C) for the documented UI gap -- the
+    desktop/web preset pickers do not surface the flag yet; the field and
+    this helper are the complete data-side contract for that work."""
+    return [p for p in PROP_FIRM_PRESETS if p.algo_trading_allowed]
