@@ -335,7 +335,13 @@ def _evo_full_eval_task(
 
 @dataclass
 class EvolutionConfig:
-    population_size: int = 60
+    # v7 (2026-10-05, worker B, fix #10): 60 -> 200. At 60, the immigrant
+    # floor (~2 per each of 84+ families + grammar) filled the entire
+    # population before any elite child was bred (n_children = 0) -- the
+    # lab was ~95% random sampling with almost no elite compounding. 200
+    # restores a real exploitation budget. Guarded by
+    # tests/test_search_v7.py::test_evolution_n_children_positive_at_defaults.
+    population_size: int = 200
     elite_keep: int = 10
     # FIX (2026-09-22): this used to be accepted-but-ignored -- the web
     # form's "Optimizer mode (per-family child proposals)" dropdown (see
@@ -469,7 +475,12 @@ class EvolutionConfig:
     # family's descendants fill every breeding slot. Both floors below
     # exist specifically so "seed the GA with structurally different
     # edges" stays true for the whole run, not just generation 0.
-    min_immigrants_per_family: int = 2   # every family gets at least this many fresh candidates, every generation
+    # v7 (2026-10-05, worker B, fix #10): 2 -> 1. Combined with the
+    # population_size raise above, the immigrant floor drops from ~170 to
+    # ~95 while the population grows to 200, so n_children > 0 at defaults
+    # and elite compounding actually happens. Guarded by
+    # tests/test_search_v7.py::test_evolution_n_children_positive_at_defaults.
+    min_immigrants_per_family: int = 1   # every family gets at least this many fresh candidates, every generation
     max_elite_frac_per_family: float = 0.5   # no single family may hold more than this share of the elite/breeding pool
 
     # Adaptive family budget -- the graduated, intra-run counterpart to
@@ -811,6 +822,16 @@ class EvolutionRunner:
         # explicitly set on their own RiskConfig (except initial_balance,
         # which RISK-001 makes always match prop_rules.account_size).
         self.risk = with_prop_safety_defaults(risk, prop_rules)
+        # v7 (2026-10-05, worker B, fix #7): pip_size backstop -- WARN loudly
+        # if the untouched FX default disagrees with the data. We do NOT
+        # silently fix it here; the fix belongs client-side (auto-fill with
+        # user confirmation). This also covers MultiInstrumentEvolutionGroup:
+        # every runner in the group logs its own leg's warning.
+        from app.search.instrument_risk import resolve_leg_risk
+        _, _v7_risk_notes = resolve_leg_risk(
+            self.risk, df, (cfg.instrument if cfg else None))
+        for _v7_note in _v7_risk_notes:
+            self._log(f"  {_v7_note}")
         self.prop_rules = prop_rules
         self.cfg = cfg or EvolutionConfig()
         # P1-4: locked OOS holdout, reserved BEFORE generation 0 (Forge
