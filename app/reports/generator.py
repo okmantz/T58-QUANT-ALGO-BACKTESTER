@@ -10,6 +10,7 @@ rendering dependency for the MVP).
 from __future__ import annotations
 
 import csv
+import html
 import json
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -18,6 +19,7 @@ from typing import Any
 
 import pandas as pd
 
+from app.analysis.exit_quality import analyze_exit_quality
 from app.backtest.engine import BacktestResult
 from app.backtest.risk import RiskConfig
 from app.backtest.statistics import compute_concentration_stats, compute_cost_ladder
@@ -96,6 +98,64 @@ def _headline_warnings_banner(flags: list[str]) -> str:
         '<div class="risk-flags-banner">'
         '<div class="verdict-title">⚠ Headline risk flags</div>'
         f"<ul>{items}</ul>"
+        "</div>"
+    )
+
+
+def _read_sizing_halt(backtest_result) -> dict | None:
+    """PART-C (2026-10-04): read the machine-readable sizing-halt flag the
+    engine records on the equity curve's attrs
+    (``equity_df.attrs["sizing_halt"]`` -- ``{"halted": bool, "skipped":
+    int, "skip_ratio": float, "last_trade_exit": ..., "risk_value":
+    float, "contract_size": ...}``), set by a sibling worker in
+    app/backtest/execution.py when whole-contract flooring is skipping
+    signals.
+
+    Defensive by design: every .get() has a default, non-dict values are
+    rejected, and a missing or non-halted flag returns None -- so a report
+    built from ANY run (older backtests, hand-built results, JSON
+    re-renders) never crashes here.
+    """
+    equity_df = getattr(backtest_result, "equity_curve", None)
+    attrs = getattr(equity_df, "attrs", None)
+    if not isinstance(attrs, dict):
+        return None
+    halt = attrs.get("sizing_halt")
+    if not isinstance(halt, dict) or not halt.get("halted"):
+        return None
+    return halt
+
+
+def _sizing_halt_banner(halt: dict | None, instrument: str) -> str:
+    """PART-C (2026-10-04): the unmissable red banner for a sizing halt --
+    the engine skipped a majority of signals because the configured
+    risk_value cannot afford 1 contract with this strategy's stop width.
+    Rendered at the very top of the report (see _HTML_TEMPLATE), ABOVE
+    every section, so it cannot be missed by scrolling. Empty string when
+    the report carries no halt flag (the normal case) or when halted is
+    falsy -- the truthiness check lives here (not just in
+    _read_sizing_halt) so every caller path honors the same contract."""
+    if not isinstance(halt, dict) or not halt.get("halted"):
+        return ""
+    skipped = halt.get("skipped", 0) or 0
+    skip_ratio = halt.get("skip_ratio", 0.0) or 0.0
+    risk_value = halt.get("risk_value")
+    last = halt.get("last_trade_exit")
+    risk_txt = f"{risk_value:g}%" if isinstance(risk_value, (int, float)) else "?"
+    last_txt = html.escape(str(last)) if last else "never (no trades completed)"
+    inst_txt = html.escape(str(instrument or "?"))
+    # Exact copy specified in the 2026-10-04 analysis, Part C.
+    copy = (
+        f"TRADING STOPPED — {skipped:,} signals ({skip_ratio * 100.0:.0f}%) were skipped "
+        f"because risk_value ({risk_txt}) cannot afford 1 {inst_txt} contract with this "
+        f"strategy's stop width. Last trade: {last_txt}. This is a configuration problem, "
+        "not a strategy problem — raise risk_value, switch to the micro contract, "
+        "increase account size, or tighten stops."
+    )
+    return (
+        '<div class="sizing-halt-banner">'
+        '<div class="halt-title">⛔ Trading stopped</div>'
+        f"<p>{copy}</p>"
         "</div>"
     )
 
@@ -189,6 +249,18 @@ def build_report(
     # fragile" from the raw tables.
     report["headline_warnings"] = _headline_risk_flags(
         report["concentration_check"], verdict_reasons, getattr(backtest_result, "statistics", None),
+    )
+    # PART-C (2026-10-04): machine-readable sizing-halt flag the engine sets
+    # on the equity curve's attrs when whole-contract flooring is skipping
+    # signals (set in app/backtest/execution.py by a sibling worker). Read
+    # defensively -- the attrs are absent on every run that never hit the
+    # zero-floor path, and the report must render identically then.
+    report["sizing_halt"] = _read_sizing_halt(backtest_result)
+    # PART-A PORT #1 (2026-10-04): exit-quality analysis from per-trade MFE
+    # evidence (app/analysis/exit_quality.py). A dict with zero evidence
+    # rows renders as a short "not assessable" note in export_html.
+    report["exit_quality"] = analyze_exit_quality(
+        getattr(backtest_result, "trades", None) or []
     )
     return report
 
@@ -352,6 +424,16 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   }}
   .risk-flags-banner ul {{ margin: 0; padding-left: 18px; }}
   .risk-flags-banner li {{ font-size: 13px; margin-bottom: 4px; }}
+  .sizing-halt-banner {{
+    border-radius: 6px; padding: 16px 18px; margin: 16px 0 20px;
+    border: 2px solid #f04438; background: #fef3f2;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }}
+  .sizing-halt-banner .halt-title {{
+    font-weight: 800; font-size: 16px; text-transform: uppercase; letter-spacing: .04em;
+    color: #b42318; margin-bottom: 8px;
+  }}
+  .sizing-halt-banner p {{ font-size: 13px; color: #7a271a; margin: 0; }}
   .verdict-banner .verdict-title {{
     font-weight: 700; font-size: 14px; text-transform: uppercase; letter-spacing: .04em;
     margin-bottom: 8px;
@@ -370,6 +452,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   </div>
 </div>
 <div class="content">
+{sizing_halt_banner}
 <p class="meta">Generated {generated_at} &middot; Strategy: <b>{strategy_name}</b> ({source_type}) &middot;
 Instrument: {instrument} &middot; Timeframe: {timeframe} &middot; Period: {period_start} → {period_end}</p>
 
@@ -418,6 +501,8 @@ Instrument: {instrument} &middot; Timeframe: {timeframe} &middot; Period: {perio
 <h2>Cost Ladder</h2>
 <p class="muted">The same trade sequence above, re-costed at increasing added round-turn friction. A real edge should degrade gracefully as costs rise; an edge that only exists at 0% added cost i[...]
 {cost_ladder_table}
+
+{exit_quality_section}
 
 <h2>Equity Curve (Historical Backtest)</h2>
 <div class="chart">{equity_chart}</div>
@@ -613,6 +698,96 @@ def _concentration_table(c: dict) -> str:
         "<table><tr><th></th><th>P&amp;L</th><th>Share of gross profit</th>"
         f"<th>Result if removed</th></tr>{rows}</table>"
     )
+
+
+def _exit_quality_section(analysis: dict | None) -> str:
+    """PART-A PORT #1 (2026-10-04): renders the exit-quality analysis
+    computed by app/analysis/exit_quality.py -- avg give-back (R),
+    capture ratio, per-exit-mechanism table (machine-verified causes
+    only), per-instrument matrix, and the thin-sample `insufficient`
+    flags.
+
+    Empty string when no analysis rides along with the report (older JSON
+    re-renders, hand-built dicts) so those render byte-identically to
+    before. A short honest note when the run has no MFE/MAE evidence.
+    """
+    if analysis is None:
+        return ""
+    parts = [
+        "<h2>Exit Quality</h2>",
+        '<p class="muted">Did the exits leave the entries\u2019 money on the table? '
+        "Peak favorable excursion (MFE) vs what each trade actually captured. "
+        "Give-back is reported in R multiples only where a real stop distance was "
+        "tracked on the trade; the pct columns need no stop at all. "
+        "Lower give-back is better.</p>",
+    ]
+    if not analysis.get("evidence_rows"):
+        parts.append(
+            '<p class="muted">Not assessable: no closed trade in this run carries '
+            "MFE/MAE excursion evidence.</p>"
+        )
+        return "".join(parts)
+
+    def cell(v, fmt="{:.2f}", suffix=""):
+        return "--" if v is None else fmt.format(v) + suffix
+
+    diagnosis = analysis.get("diagnosis")
+    if diagnosis:
+        parts.append(f"<p><b>Diagnosis:</b> {html.escape(diagnosis)}</p>")
+
+    overall = analysis.get("overall") or {}
+    parts.append(
+        "<table><tr><th></th><th>Trades</th><th>Win rate</th><th>Avg peak (R)</th>"
+        "<th>Avg give-back (R)</th><th>Avg captured</th><th>Net P&amp;L</th></tr>"
+        f"<tr><td><b>All exits</b></td><td>{overall.get('n', 0)}</td>"
+        f"<td>{cell(overall.get('win_rate_pct'), '{:.1f}', '%')}</td>"
+        f"<td>{cell(overall.get('avg_mfe_r'))}R</td>"
+        f"<td>{cell(overall.get('avg_give_back_r'))}R</td>"
+        f"<td>{cell(overall.get('avg_efficiency_pct'), '{:.1f}', '%')}</td>"
+        f"<td>{cell(overall.get('net_pnl'), '${:,.2f}')}</td></tr></table>"
+    )
+
+    by_mech = analysis.get("by_mechanism") or []
+    if by_mech:
+        rows = "".join(
+            f"<tr><td>{html.escape(m.get('label') or m.get('exit_cause', ''))}</td>"
+            f"<td>{m.get('n', 0)}</td>"
+            f"<td>{cell(m.get('win_rate_pct'), '{:.1f}', '%')}</td>"
+            f"<td>{cell(m.get('avg_mfe_r'))}R</td>"
+            f"<td>{cell(m.get('avg_give_back_r'))}R</td>"
+            f"<td>{cell(m.get('avg_efficiency_pct'), '{:.1f}', '%')}</td>"
+            f"<td>{cell(m.get('net_pnl'), '${:,.2f}')}</td></tr>"
+            for m in by_mech
+        )
+        parts.append("<h3>By exit mechanism (machine-verified causes only)</h3>")
+        parts.append(
+            "<table><tr><th>Mechanism</th><th>Trades</th><th>Win rate</th>"
+            "<th>Avg peak (R)</th><th>Avg give-back (R)</th><th>Avg captured</th>"
+            "<th>Net P&amp;L</th></tr>" + rows + "</table>"
+        )
+
+    per_symbol = analysis.get("per_symbol") or []
+    if per_symbol:
+        rows = "".join(
+            f"<tr><td>{html.escape(m.get('inst', ''))}</td>"
+            f"<td>{m.get('n', 0)}</td>"
+            f"<td>{cell(m.get('avg_mfe_r'))}R</td>"
+            f"<td>{cell(m.get('avg_give_back_r'))}R</td>"
+            f"<td>{cell(m.get('net_pnl'), '${:,.2f}')}</td></tr>"
+            for m in per_symbol
+        )
+        parts.append("<h3>Per instrument</h3>")
+        parts.append(
+            "<table><tr><th>Instrument</th><th>Trades</th><th>Avg peak (R)</th>"
+            "<th>Avg give-back (R)</th><th>Net P&amp;L</th></tr>" + rows + "</table>"
+        )
+
+    insufficient = analysis.get("insufficient") or []
+    if insufficient:
+        items = "".join(f"<li>{html.escape(s)}</li>" for s in insufficient)
+        parts.append("<p><b>Cannot be asserted on this sample:</b></p>")
+        parts.append(f'<ul class="muted">{items}</ul>')
+    return "".join(parts)
 
 
 def _holdout_section(holdout: dict | None) -> str:
@@ -835,6 +1010,9 @@ def export_html(
         warnings_section=_warnings_section(report.get("execution_warnings")),
         verdict_section=_verdict_section(report.get("verdict"), report.get("verdict_reasons")),
         headline_warnings_section=_headline_warnings_banner(report.get("headline_warnings") or []),
+        sizing_halt_banner=_sizing_halt_banner(
+            report.get("sizing_halt"), report["strategy"]["instrument"]
+        ),
         final_parameters_section=_final_parameters_section(report.get("final_parameters"), report.get("baseline_parameters")),
         risk_config_table=_risk_config_table(report.get("risk_config")),
         risk_reconciliation_section=_risk_reconciliation_section(report["historical_backtest"]["statistics"]),
@@ -851,6 +1029,7 @@ def export_html(
         backtest_table=_dict_to_table(report["historical_backtest"]["statistics"]),
         concentration_table=_concentration_table(report.get("concentration_check", {})),
         cost_ladder_table=_cost_ladder_table(report.get("cost_ladder", [])),
+        exit_quality_section=_exit_quality_section(report.get("exit_quality")),
         equity_chart=equity_chart,
         holdout_section=_holdout_section(report.get("holdout_comparison")),
         rules_table=_dict_to_table(report["prop_firm_rules"]),
