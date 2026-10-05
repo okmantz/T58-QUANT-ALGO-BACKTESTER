@@ -317,6 +317,12 @@ A curated beginner's guide to trading fundamentals — market structure,
 liquidity, supply & demand, entry models — for anyone who wants a running
 start before backtesting their first strategy.
 
+**Just bought the app?** Start with [docs/buyer/INSTALL.md](docs/buyer/INSTALL.md)
+(Windows install + 15-minute first run) and
+[docs/buyer/QUICKSTART.md](docs/buyer/QUICKSTART.md) (your first backtest in
+10 minutes). The buyer pack also includes the EULA, refund policy, and
+privacy policy templates plus the crash-reporting (Sentry) setup guide.
+
 ## AI Assist (optional, local Ollama)
 
 Several tools above can optionally call a local [Ollama](https://ollama.com)

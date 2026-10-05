@@ -1,0 +1,62 @@
+# Render Blueprint for the T58 License Server.
+#
+# One-click deploy: Render Dashboard -> New -> Blueprint -> pick the
+# T58-QUANT-ALGO-BACKTESTER repo. Render reads this file and creates the
+# service below automatically. Full step-by-step: license_server/DEPLOY.md.
+#
+# What this spins up:
+#   - A Python web service running license_server/ (Flask) with gunicorn.
+#   - A 1 GB persistent disk mounted where the SQLite database lives, so
+#     the license list survives redeploys and restarts.
+#
+# IMPORTANT (read before deploying): Render only attaches persistent disks
+# to PAID instance types (Starter, $7/mo as of Oct 2026 -- verify current
+# pricing). On the free tier there is no persistent disk: the SQLite file
+# lives on ephemeral disk and is WIPED on every redeploy/restart, taking
+# your license list with it. Two honest options:
+#   a) Pay for Starter ($7/mo): the disk below just works. Recommended the
+#      moment you have even one paying customer.
+#   b) Stay on free ($0): remove the `disk:` block before applying, and
+#      export a license backup after every sale (see DEPLOY.md step 8).
+# Either way, set the env vars below in the Render dashboard after the
+# first deploy -- the blueprint marks secrets as "sync: false" on purpose
+# so they are never committed to this file.
+
+services:
+  - type: web
+    name: t58-license-server
+    runtime: python
+    plan: free
+    rootDir: license_server
+    buildCommand: pip install -r requirements.txt
+    # $PORT is injected by Render; app.py also falls back to 5055 locally.
+    startCommand: gunicorn -w 2 -b 0.0.0.0:$PORT app:app
+    autoDeploy: true
+    healthCheckPath: /health
+    disk:
+      name: t58-license-data
+      mountPath: /opt/render/project/src/license_server/data
+      sizeGB: 1
+    envVars:
+      # Long random string gating every /admin/* endpoint. Generate with:
+      #   python -c "import secrets; print(secrets.token_urlsafe(32))"
+      - key: T58_LICENSE_ADMIN_TOKEN
+        sync: false
+      # Whop webhook signing secret (whsec_...) -- paste after creating the
+      # webhook in the Whop dashboard (DEPLOY.md step 5).
+      - key: T58_WHOP_WEBHOOK_SECRET
+        sync: false
+      # SQLite lives on the persistent disk (see the IMPORTANT note above).
+      - key: T58_LICENSE_DB_PATH
+        value: /opt/render/project/src/license_server/data/licenses.db
+      # License-delivery email (stdlib SMTP -- no extra dependency).
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: 587
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false
