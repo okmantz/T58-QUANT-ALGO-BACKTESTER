@@ -767,6 +767,10 @@ def _stage2_task(
             **base, "statistics": stats,
             "prop_summary": prop_summary, "fitness": fitness,
             "passed_stage2": math.isfinite(fitness), "ga_skipped_reason": str(exc),
+            # D4(c): no GA inner loop ran on this path -- the single
+            # backtest+MC above is the baseline trial (counted by the
+            # caller), not a GA evaluation.
+            "ga_total_evaluations": 0,
         }
 
     best = result.best
@@ -785,6 +789,12 @@ def _stage2_task(
         "baseline_fitness": result.baseline.fitness,
         "genes_count": len(result.genes),
         "passed_stage2": math.isfinite(best.fitness),
+        # D4(c): the ACTUALLY-RAN inner-loop evaluation count (see
+        # RefinementResult.total_evaluations) -- the honest per-candidate
+        # trial count the pipeline DSR deflates against. A configured
+        # population*(generations+1) budget would under/over-count:
+        # auto-shrink-on-low-trades and AI-assist move the real number.
+        "ga_total_evaluations": int(getattr(result, "total_evaluations", 0) or 0),
     }
 
 
@@ -1126,6 +1136,37 @@ def _drain_futures(
 # unit-testable.
 def _search_prop_rules(prop_rules: PropRules, stage_cfg: "SearchStageConfig") -> PropRules:
     return replace(prop_rules, floating_drawdown_mode=stage_cfg.floating_drawdown_mode)
+
+
+def _stage_eval_counts(stage1_records: list, stage2_records: list, stage3_records: list) -> dict:
+    """D4(c): honest per-stage trial counts for the champion metadata.
+
+    Every backtested configuration counts as a trial, not just the
+    survivors that reached Stage 3 -- this is the multiple-testing
+    burden a downstream pipeline DSR (see count_all_trials in
+    app.search.robustness) must deflate against:
+      stage1_backtests: one cheap evaluation per Stage 1 candidate (a
+        pre-screen skip still counts -- the search examined that
+        configuration and made a selection decision on it);
+      stage2_ga_evaluations: the ACTUALLY-RAN GA inner-loop trials
+        summed across every refined candidate (see ga_total_evaluations
+        on the Stage 2 records), not the configured
+        population*(generations+1) budget;
+      stage3_backtests: one full validation backtest per Stage 3
+        candidate;
+      total_evaluations: the sum, for convenience.
+    Factored out (rather than inline in run_search) so the assembly is
+    directly unit-testable.
+    """
+    counts = {
+        "stage1_backtests": len(stage1_records),
+        "stage2_ga_evaluations": sum(int(r.get("ga_total_evaluations", 0) or 0) for r in stage2_records),
+        "stage3_backtests": len(stage3_records),
+    }
+    counts["total_evaluations"] = (
+        counts["stage1_backtests"] + counts["stage2_ga_evaluations"] + counts["stage3_backtests"]
+    )
+    return counts
 
 
 def run_search(
@@ -1526,13 +1567,22 @@ def run_search(
                 import random as _random
 
                 from app.search.grammar import generate_random as _grammar_generate_random
+                from app.search.grammar import building_block_pool as _grammar_building_block_pool
+
+                # A3 (v6 W1): seed the grammar draws from the template
+                # building-block pool (proven ingredients), not pure
+                # random terminals -- built once per run, not per draw.
+                try:
+                    _grammar_block_pool = _grammar_building_block_pool()
+                except Exception:  # noqa: BLE001 -- a pool that can't be built is a miss, not a run failure
+                    _grammar_block_pool = None
 
                 _grammar_rng = _random.Random(stage_cfg.random_seed + 0x6A4D4D41)
                 _n_grammar_each = max(0, int(stage_cfg.grammar_candidates_per_survivor))
                 for _s in survivors1:
                     for _k in range(_n_grammar_each):
                         try:
-                            _g_config = _grammar_generate_random(rng=_grammar_rng)
+                            _g_config = _grammar_generate_random(rng=_grammar_rng, block_pool=_grammar_block_pool)
                         except Exception:
                             continue  # a failed draw is a miss, not a run failure
                         _g_cid = f"grammar-s2-{_s['candidate_id']}-{_k}"
@@ -1643,7 +1693,17 @@ def run_search(
     trial_sharpes = [r.get("sharpe", 0.0) for r in stage1_records if isinstance(r.get("sharpe"), (int, float))]
     n_trials = len(stage1_records)
 
+    # D4(c): honest per-stage trial counts on every validated (Stage 3)
+    # record, so a downstream pipeline DSR can deflate against the
+    # search's REAL multiple-testing burden via
+    # app.search.robustness.count_all_trials -- every backtested
+    # configuration counts as a trial, not just the survivors that
+    # reached this stage. See _stage_eval_counts() for the field
+    # semantics.
+    _eval_counts = _stage_eval_counts(stage1_records, stage2_records, stage3_records)
+
     for rec in stage3_records:
+        rec["stage_eval_counts"] = dict(_eval_counts)
         sharpe = rec.get("sharpe", 0.0) or 0.0
         n_trade_returns = (rec.get("statistics") or {}).get("total_trades", 0)
         dsr = deflated_sharpe_ratio(sharpe, trial_sharpes, n_trials, n_trade_returns)

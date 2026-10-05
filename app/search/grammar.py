@@ -32,9 +32,7 @@ name -> builder callable (rng -> operand dict). The astra port list
 bands, time-invalidation stop) lands here as new terminals, NOT as new
 frozen templates -- call register_operand_kind(name, builder) and the
 grammar, the structural operators, and validate() all pick it up
-automatically (validate() also needs the kind added to the
-_NON_LOOKAHEAD categories in this module if the builder produces an
-operand the Manual engine can dispatch).
+automatically.
 """
 from __future__ import annotations
 
@@ -92,6 +90,22 @@ INDICATOR_KINDS = (
     "fisher_transform", "fisher_transform_signal",
     "connors_rsi", "adr",
     "swing_bos", "swing_choch",
+    # w10-astra terminals (Oct-4 analysis, Part A ports #2/#3) -- regime-
+    # adaptive RSI zones + session VWAP profile levels. NOT
+    # build_indicator_series kinds: they need operand-level parameters
+    # (zone_bounds/div_lookback/trend window; roll_hour/band sigmas/
+    # poc_buckets) that the (frame, kind, period, column, lookback)
+    # signature cannot carry, so ManualStrategy._series_from_operand
+    # dispatches them via _regime_oscillator_series/_vwap_profile_series
+    # (see app.strategy.manual and app.quant_lab.regime_oscillators /
+    # app.quant_lab.vwap_profile). They live in this tuple (and hence in
+    # NUMERIC_KINDS below) so random_operand() can draw them and
+    # swap_operand_kind() can swap to them like any numeric terminal.
+    # rsi_regime / rsi_divergence are TRISTATE (+1/-1/0) -- see
+    # THRESHOLD_BOUNDS below for how thresholds against them are drawn.
+    "rsi_regime", "rsi_divergence",
+    "session_vwap", "vwap_sigma", "vwap_vah", "vwap_val",
+    "vwap_upper_2", "vwap_lower_2", "vwap_poc", "vwap_zscore",
 )
 
 # Boolean terminals -- used with "is true"/"is false" (or == 0/1).
@@ -102,6 +116,18 @@ BOOLEAN_KINDS = (
     "change_of_character", "choch",
     "fair_value_gap", "fvg", "order_block",
     "atr_regime", "volatility_regime",
+    # w10-astra: regime-oscillator zone flags + VWAP position flags --
+    # 1.0/0.0 per-bar series, safe for "is true"/"is false".
+    "rsi_zone_buy", "rsi_zone_sell",
+    "vwap_above", "vwap_below", "vwap_outside_value_area",
+    # A6: atr_regime / volatility_regime are TRISTATE (+1 expansion /
+    # -1 contraction / 0 neutral). "is true" on the raw tristate treats
+    # -1 as true (bool(-1) is True), so a contraction gate written
+    # against atr_regime would also fire on expansions. Rather than
+    # change global "is true" semantics in manual.py, each leg gets its
+    # own dedicated 1/0 terminal (dispatched in manual.py via
+    # _regime_series; registered here like any boolean terminal).
+    "atr_expansion", "atr_contraction",
 )
 
 # Session-level numeric terminals (need a session window; numeric output).
@@ -115,6 +141,28 @@ SESSION_KINDS = (
 NUMERIC_KINDS = PRICE_KINDS + INDICATOR_KINDS + SESSION_KINDS
 CONSTANT_KINDS = ("value", "constant", "number")
 ALL_OPERAND_KINDS = set(NUMERIC_KINDS) | set(BOOLEAN_KINDS) | set(CONSTANT_KINDS)
+
+# ---------------------------------------------------------------------------
+# A6: grammar-local threshold bounds. BOUNDED_OSCILLATOR_RANGES
+# (app.strategy.indicators) is the app-wide map; this module extends it
+# for the kinds it draws random thresholds for: adx / aroon_up /
+# aroon_down are 0-100 oscillators, cmf is a -1..1 money-flow
+# oscillator, and the astra rsi_regime / rsi_divergence terminals are
+# tristate (-1/0/+1) flags. Deliberately LOCAL to this module (not a
+# change to app.strategy.indicators): the bounded-threshold rule is
+# enforced by THIS module's random_threshold() (draw) and validate()
+# (dead-code rejection); the app-wide gene-mutation bounds in
+# app.optimize.parameter_space keep their own map untouched.
+# ---------------------------------------------------------------------------
+THRESHOLD_BOUNDS: dict[str, tuple[float, float]] = {
+    **BOUNDED_OSCILLATOR_RANGES,
+    "adx": (0.0, 100.0),
+    "aroon_up": (0.0, 100.0),
+    "aroon_down": (0.0, 100.0),
+    "cmf": (-1.0, 1.0),
+    "rsi_regime": (-1.0, 1.0),
+    "rsi_divergence": (-1.0, 1.0),
+}
 
 OPERATORS = (">", ">=", "<", "<=", "cross above", "cross below", "is true", "is false")
 CONNECTORS = ("AND", "OR")
@@ -192,7 +240,8 @@ def _operand(kind: str, rng: random.Random, **overrides: Any) -> dict:
     if kind in ("time_of_day",) or kind in SESSION_KINDS:
         op["session_start"] = overrides.get("session_start", rng.choice(["08:30", "09:30", "02:00", "18:00"]))
         op["session_end"] = overrides.get("session_end", rng.choice(["11:00", "15:00", "10:00", "23:59"]))
-    if kind in ("atr_regime", "volatility_regime"):
+    if kind in ("atr_regime", "volatility_regime", "atr_expansion", "atr_contraction"):
+        op["period"] = int(overrides.get("period", rng.choice([10, 14, 20])))
         op["expansion_mult"] = overrides.get("expansion_mult", round(rng.uniform(1.1, 1.5), 2))
         op["contraction_mult"] = overrides.get("contraction_mult", round(rng.uniform(0.5, 0.9), 2))
     op.update(overrides)
@@ -207,6 +256,62 @@ def _register_builtin_terminals() -> None:
 
 
 _register_builtin_terminals()
+
+
+def _register_astra_terminals() -> None:
+    """Register the w10-astra terminals (Oct-4 analysis, Part A ports
+    #2/#3): regime-adaptive RSI zones + causal RSI divergence + session
+    VWAP profile levels/flags.
+
+    Called once at import, right after _register_builtin_terminals() --
+    the astra kinds are already in the NUMERIC_KINDS / BOOLEAN_KINDS
+    category tuples (so random_operand() can draw them), and this
+    replaces the generic _operand() builders the builtin loop assigned
+    with ones that sample the operand-level knobs manual.py's
+    _regime_oscillator_series / _vwap_profile_series actually read
+    (rsi_period / div_lookback / trend window; roll_hour / band sigmas /
+    poc_buckets). validate() round-trips every emitted operand through
+    the real Manual builder, so a bad knob choice here surfaces as an
+    import-time-visible test failure, not a silent runtime miss.
+
+    Boolean kinds (drawn with "is true"/"is false"): rsi_zone_buy,
+    rsi_zone_sell, vwap_above, vwap_below, vwap_outside_value_area.
+    Tristate/numeric kinds (+1/-1/0, compared numerically): rsi_regime,
+    rsi_divergence. Plain numeric (price-scale levels): session_vwap,
+    vwap_sigma, vwap_vah, vwap_val, vwap_upper_2, vwap_lower_2,
+    vwap_poc, vwap_zscore.
+    """
+    def _rsi_builder(kind: str) -> OperandBuilder:
+        def _build(rng: random.Random) -> dict:
+            return {
+                "type": kind,
+                "rsi_period": int(rng.choice([7, 14, 21])),
+                "div_lookback": int(rng.choice([10, 20, 30])),
+                "trend_left": 5,
+                "trend_right": 5,
+            }
+        return _build
+
+    def _vwap_builder(kind: str) -> OperandBuilder:
+        def _build(rng: random.Random) -> dict:
+            return {
+                "type": kind,
+                "roll_hour": 17,
+                "value_area_sigma": 1.0,
+                "extreme_sigma": 2.0,
+                "poc_buckets": 30,
+            }
+        return _build
+
+    for _kind in ("rsi_regime", "rsi_divergence", "rsi_zone_buy", "rsi_zone_sell"):
+        register_operand_kind(_kind, _rsi_builder(_kind))
+    for _kind in ("session_vwap", "vwap_sigma", "vwap_vah", "vwap_val",
+                  "vwap_upper_2", "vwap_lower_2", "vwap_poc", "vwap_zscore",
+                  "vwap_above", "vwap_below", "vwap_outside_value_area"):
+        register_operand_kind(_kind, _vwap_builder(_kind))
+
+
+_register_astra_terminals()
 
 
 def random_operand(rng: random.Random, category: str = "numeric") -> dict:
@@ -233,7 +338,7 @@ def random_threshold(rng: random.Random, left_kind: str) -> dict:
     app.strategy.manual.validate_bounded_conditions); everything else
     gets either another numeric operand or a plausible constant.
     """
-    bounds = BOUNDED_OSCILLATOR_RANGES.get(left_kind)
+    bounds = THRESHOLD_BOUNDS.get(left_kind)
     if bounds is not None:
         lo, hi = bounds
         return {"type": "value", "value": round(rng.uniform(lo, hi), 2)}
@@ -242,10 +347,39 @@ def random_threshold(rng: random.Random, left_kind: str) -> dict:
         # Indicator-vs-indicator (the transferable pattern -- no
         # instrument-specific price level baked in).
         return random_operand(rng, "numeric")
+    if left_kind in _PRICE_SCALE_KINDS:
+        # A6: price-level terminals (session VWAP profile levels) draw
+        # constant thresholds from the data's own price scale -- a fixed
+        # 0.1-3.0 constant against a ~2000 price level is dead code
+        # (always true / always false), and the numeric GA stage re-tunes
+        # the level per dataset afterwards anyway.
+        scale = _price_scale()
+        return {"type": "value", "value": round(rng.uniform(0.8, 1.2) * scale, 2)}
     # Plausible constants for ratio/count-style terminals; a plain price
     # comparison against a fixed level is allowed but rare (levels don't
     # transfer across instruments -- the numeric GA stage can tune them).
     return {"type": "value", "value": round(rng.uniform(0.1, 3.0), 2)}
+
+
+# Price-level terminals whose constant thresholds must be drawn from the
+# data's own price scale (see random_threshold above).
+_PRICE_SCALE_KINDS = frozenset({
+    "session_vwap", "vwap_sigma", "vwap_vah", "vwap_val",
+    "vwap_upper_2", "vwap_lower_2", "vwap_poc",
+})
+
+_price_scale_frame: pd.DataFrame | None = None
+
+
+def _price_scale() -> float:
+    """Median close of the canonical synthetic frame -- the price scale
+    _PRICE_SCALE_KINDS draw constant thresholds from. The synthetic
+    frame is the same one validate() round-trips through, so a
+    generated threshold is always meaningful on at least that frame."""
+    global _price_scale_frame
+    if _price_scale_frame is None:
+        _price_scale_frame = _synthetic_ohlcv()
+    return float(_price_scale_frame["close"].median())
 
 
 def random_condition(rng: random.Random) -> dict:
@@ -521,7 +655,7 @@ def _validate_condition(condition: Any, where: str, errors: list[str]) -> None:
         if not isinstance(osc_node, dict) or not isinstance(val_node, dict):
             continue
         osc_kind = str(osc_node.get("type", "")).lower().strip()
-        bounds = BOUNDED_OSCILLATOR_RANGES.get(osc_kind)
+        bounds = THRESHOLD_BOUNDS.get(osc_kind)
         if bounds is None:
             continue
         if str(val_node.get("type", "")).lower().strip() not in CONSTANT_KINDS:
@@ -705,8 +839,9 @@ def validate(config: dict) -> list[str]:
 
 def lint_warnings(config: dict) -> list[str]:
     """Soft warnings for a config that is valid but suspicious -- currently
-    the bounded-oscillator dead-code check plus the chikou lookahead flag.
-    Informational only; validate() does not call this."""
+    the bounded-oscillator dead-code check plus the chikou lookahead flag
+    plus the all-NaN/constant series check below. Informational only;
+    validate() does not call this."""
     from app.strategy.manual import validate_bounded_conditions
     warnings = list(validate_bounded_conditions(config or {}))
 
@@ -724,6 +859,61 @@ def lint_warnings(config: dict) -> list[str]:
             "ichimoku_chikou present: known lookahead leak (close.shift(-26)) -- "
             "the grammar never emits this kind; see the module docstring."
         )
+    warnings.extend(_constancy_warnings(config or {}))
+    return warnings
+
+
+def _iter_condition_operands(config: dict):
+    """Yield (where, operand_dict) for every left/right operand in every
+    entry/exit condition."""
+    for block_name in ("entry_conditions", "exit_conditions"):
+        block = config.get(block_name) or {}
+        if not isinstance(block, dict):
+            continue
+        for side in ("long", "short"):
+            conditions = block.get(side) or []
+            if not isinstance(conditions, list):
+                continue
+            for i, cond in enumerate(conditions):
+                if not isinstance(cond, dict):
+                    continue
+                for role in ("left", "right"):
+                    node = cond.get(role)
+                    if isinstance(node, dict):
+                        yield f"{block_name}.{side}[{i}].{role}", node
+
+
+def _constancy_warnings(config: dict) -> list[str]:
+    """A6: warn when a condition's computed series is all-NaN or constant
+    on the canonical synthetic frame -- a constant series makes its
+    condition dead code (always true / always false), and an all-NaN
+    series means the terminal produced nothing tradeable at all.
+    Informational only (lint, not validate): the check runs against the
+    synthetic frame, so a series that is constant THERE but varies on
+    real data would be a false positive as a hard error."""
+    warnings: list[str] = []
+    try:
+        df = _synthetic_ohlcv()
+        strat = ManualStrategy(config)
+    except Exception:  # noqa: BLE001 -- lint must never blow up the caller
+        return warnings
+    for where, node in _iter_condition_operands(config):
+        kind = str(node.get("type", "")).lower().strip()
+        if kind in CONSTANT_KINDS or kind not in ALL_OPERAND_KINDS:
+            continue
+        try:
+            series = strat._series_from_operand(df, node, where.rsplit(".", 1)[-1])
+            vals = pd.Series(series).dropna()
+        except Exception:  # noqa: BLE001 -- an undispatchable operand is validate()'s problem, not lint's
+            continue
+        if len(vals) == 0:
+            warnings.append(
+                f"{where}: '{kind}' series is all-NaN on the reference frame -- this condition never fires"
+            )
+        elif vals.nunique() <= 1:
+            warnings.append(
+                f"{where}: '{kind}' series is constant on the reference frame -- this condition is dead code"
+            )
     return warnings
 
 
