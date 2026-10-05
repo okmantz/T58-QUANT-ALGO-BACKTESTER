@@ -172,8 +172,35 @@ class MonteCarloResult:
     # only reads as "passing the bar" when the bar clears the pessimistic
     # end of the sampling noise. (0.0, 0.0) on a result built before this
     # change (e.g. deserialized) means "unknown, not zero".
+    # v6 (2026-10-04): SUPERSEDED for gating -- the acceptance verdict now
+    # gates on the PER-ATTEMPT intervals (per_attempt_pass_ci95 /
+    # per_attempt_payout_ci95) below, falling back to these only for
+    # results built before the per-attempt fields existed. Kept populated
+    # for reporting continuity.
     pass_probability_ci95: tuple = (0.0, 0.0)
     payout_probability_ci95: tuple = (0.0, 0.0)
+
+    # v6 (2026-10-04): Wilson 95% confidence intervals (0-100 scale) for
+    # the PER-ATTEMPT pass and first-payout probabilities -- the honest
+    # "will ONE account attempt succeed" numbers (see the per_attempt_*
+    # fields above). The chain-level pass_probability_ci95 /
+    # payout_probability_ci95 above are inflated almost by construction
+    # once reset_on_breach is on (a long enough rebuy chain eventually
+    # clears a low bar), so the acceptance verdict
+    # (app.scoring.t58_scorecard.score_from_results -> _make_verdict)
+    # gates on the LOWER bound of THESE per-attempt intervals, falling
+    # back to the chain-level interval only for results built before
+    # this change. The per-attempt pool treats every independent attempt
+    # across every simulated path as one Bernoulli trial; attempts
+    # within the same path share a resampled trade ordering, so this is
+    # an approximation, not a proof of independence -- it is still the
+    # right number to gate on, because the alternative (gating on the
+    # chain-level interval) answers "did a mechanical rebuyer who
+    # rebought hundreds of times eventually pass," which is not the
+    # question anyone is asking. (0.0, 0.0) on a result built before
+    # this change (e.g. deserialized) means "unknown, not zero".
+    per_attempt_pass_ci95: tuple = (0.0, 0.0)
+    per_attempt_payout_ci95: tuple = (0.0, 0.0)
 
     # MC-004: what this run's resampling actually did, in plain language,
     # so `evaluation_pass_probability` isn't read as a stronger claim than
@@ -214,9 +241,13 @@ def _wilson_score_interval(successes: int, n: int, z: float = 1.96) -> tuple[flo
     (normal-approx) interval, Wilson stays inside [0, 1] and stays honest
     at the boundaries (k=0, k=n) -- exactly where a 69.2%-vs-70%
     acceptance-verdict flip lives inside MC noise. The acceptance
-    verdict (app.scoring.t58_scorecard via
+    verdict (app.scoring.t58_scorecard.score_from_results via
     app.orchestration.full_pipeline._make_verdict) gates on the LOWER
-    bound of this interval, not the point estimate."""
+    bound of the PER-ATTEMPT interval (per_attempt_pass_ci95), not the
+    point estimate and not the chain-level pass_probability_ci95 -- the
+    chain-level number answers "did a mechanical rebuyer who rebought
+    hundreds of times eventually pass," which is not the question the
+    verdict is meant to ask."""
     if n <= 0:
         return (0.0, 0.0)
     p = successes / n
@@ -485,14 +516,17 @@ def _methodology_note(
     # (daily-loss-limit breach -- the dominant death mode -- max-drawdown
     # breach, or inactivity closure), not just max-drawdown breaches; and
     # the pass/payout probabilities above carry Wilson 95% confidence
-    # intervals (pass_probability_ci95 / payout_probability_ci95), whose
+    # intervals (per_attempt_pass_ci95 / per_attempt_payout_ci95 -- the
+    # PER-ATTEMPT, single-account intervals, which supersede the legacy
+    # chain-level pass_probability_ci95 / payout_probability_ci95), whose
     # LOWER bounds are what the acceptance verdict gates on.
     note += (
         " Risk of ruin counts any simulated account death (daily-loss-limit "
         "breach, max-drawdown breach, or inactivity closure), not just "
-        "max-drawdown breaches. Wilson 95% CIs on the pass/payout "
-        "probabilities are reported alongside the point estimates; the "
-        "acceptance verdict gates on their lower bounds."
+        "max-drawdown breaches. Wilson 95% CIs on the PER-ATTEMPT "
+        "pass/payout probabilities (not the chain-level intervals) are "
+        "reported alongside the point estimates; the acceptance verdict "
+        "gates on their lower bounds."
     )
     return note
 
@@ -623,6 +657,12 @@ def run_monte_carlo(
 
     pass_ci95 = _wilson_score_interval(int(passed_arr.sum()), len(passed_arr))
     payout_ci95 = _wilson_score_interval(int(first_payout_arr.sum()), len(first_payout_arr))
+    # v6 (2026-10-04): Wilson 95% CIs on the PER-ATTEMPT (single-account)
+    # numbers -- the honest gate. See the per_attempt_*_ci95 fields on
+    # MonteCarloResult for why these, not the chain-level intervals
+    # above, are what the acceptance verdict gates on.
+    per_attempt_pass_ci95 = _wilson_score_interval(int(sum_attempts_passed), int(sum_total_attempts))
+    per_attempt_payout_ci95 = _wilson_score_interval(int(sum_attempts_reached_payout), int(sum_total_attempts))
 
     result = MonteCarloResult(
         n_simulations=cfg.n_simulations,
@@ -665,5 +705,7 @@ def run_monte_carlo(
         total_independent_attempts=int(sum_total_attempts),
         pass_probability_ci95=pass_ci95,
         payout_probability_ci95=payout_ci95,
+        per_attempt_pass_ci95=per_attempt_pass_ci95,
+        per_attempt_payout_ci95=per_attempt_payout_ci95,
     )
     return result
