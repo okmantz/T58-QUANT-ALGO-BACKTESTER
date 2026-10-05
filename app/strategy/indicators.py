@@ -1309,6 +1309,15 @@ def _build_indicator_series_uncached(frame: pd.DataFrame, kind: str, period: int
         return _swing_structure_event(frame, "bos", window=(lookback or 5))
     if kind == "swing_choch":
         return _swing_structure_event(frame, "choch", window=(lookback or 5))
+    # --- v7 (worker D): new indicator modules live in
+    # app.strategy.indicators_v7 (StochRSI, +/-DI, linreg slope, Hurst,
+    # KST, Coppock). This fallback is additive only -- no existing kind
+    # above is affected. Import is lazy so the module graph is unchanged
+    # when the v7 kinds are never requested. ---
+    from app.strategy import indicators_v7 as _indicators_v7
+    _v7_builder = _indicators_v7.V7_INDICATOR_BUILDERS.get(kind)
+    if _v7_builder is not None:
+        return _v7_builder(frame, p, column, lookback)
     raise KeyError(kind)
 
 

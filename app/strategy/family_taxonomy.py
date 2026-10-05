@@ -178,6 +178,17 @@ _SKELETON_TO_GROUP: dict[str, str] = {
     # class as volatility_contraction_squeeze/keltner_squeeze_breakout/
     # ttm_squeeze_momentum_breakout above -- not a plain "breakout" family.
     "ib_contraction_breakout": "volatility_contraction",
+    # -- v7 (2026-10-05): ten new template families from app/search/families_v7.py --
+    "session_range_breakout": "breakout",
+    "vwap_band_breakout": "vwap",
+    "opening_momentum_burst": "momentum",
+    "keltner_band_breakout": "volatility_expansion",
+    "bollinger_squeeze_expansion": "volatility_expansion",
+    "rsi_divergence_reversal": "mean_reversion",
+    "choppiness_gated_momentum": "momentum",
+    "choppiness_gated_range_fade": "mean_reversion",
+    "heikin_ashi_reversal": "mean_reversion",
+    "vwap_value_area_breakout": "vwap",
 }
 
 # Path 2a: app.strategy.dna active_tags() -> canonical group. Checked in

@@ -283,6 +283,15 @@ class ManualStrategy(Strategy):
                     "fisher_transform", "fisher_transform_signal",
                     "connors_rsi", "adr",
                     "news_minutes_since_high_impact", "news_minutes_until_high_impact",
+                    # Expansion round 9 (v7 -- worker D): new indicator
+                    # kinds from app.strategy.indicators_v7 (dispatched via
+                    # the v7 fallback in build_indicator_series). Named here
+                    # so Manual/evolution/Search-Lab configs can reference
+                    # them exactly like the built-ins.
+                    "stochrsi_k", "stochrsi_d",
+                    "plus_di", "minus_di",
+                    "linreg_slope", "hurst_exponent",
+                    "kst", "coppock",
                     # Market-structure round: real fractal-swing BOS/ChoCH
                     # events via app.quant_lab.market_structure -- see
                     # app.strategy.indicators._swing_structure_event. The
