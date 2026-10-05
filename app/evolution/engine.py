@@ -203,6 +203,19 @@ def _evo_prefilter_task(
     See EvolutionConfig.prefilter_max_bars for why this exists.
     """
     df, risk = _EVO_WORKER["df"], _EVO_WORKER["risk"]
+    # A4 (v6 W1): unfundable pre-screen, ported from Search Lab's Stage 1
+    # (app.search.batch_runner._prescreen_funding). A candidate whose
+    # median stop can't afford 1 whole contract would floor every signal
+    # to 0 contracts -- skip it BEFORE spending a backtest, with the
+    # "unfundable" reason (counted separately in _prefilter's
+    # rejection_counts, not as a build/backtest error). Lazy import: the
+    # worker already paid for batch_runner's import cost in the pool
+    # initializer path, and the serial path below imports it on first
+    # use only.
+    from app.search.batch_runner import _prescreen_funding as _evo_prescreen
+    _ps = _evo_prescreen({"candidate_id": cid}, spec, risk, df)
+    if _ps is not None:
+        return (cid, spec, meta, None, ["unfundable"], _ps.get("error"), None)
     if prefilter_max_bars and len(df) > prefilter_max_bars:
         df = df.tail(prefilter_max_bars)
     try:
@@ -1387,7 +1400,12 @@ class EvolutionRunner:
             if self.cfg.target_metric == "cpcv_oos_eval_pass_probability":
                 value = record.cpcv_oos_eval_pass_probability
             else:
-                value = (record.mc_summary or {}).get("evaluation_pass_probability")
+                # v6: prefer per-attempt pass odds over the inflated chain-level
+                # number (explicit None-check so a genuine 0.0 is never masked).
+                mc_summary = record.mc_summary or {}
+                value = mc_summary.get("per_attempt_pass_probability")
+                if value is None:
+                    value = mc_summary.get("evaluation_pass_probability")
             if value is not None and value >= self.cfg.target_eval_pass_pct:
                 return record
         return None
@@ -1776,6 +1794,66 @@ class EvolutionRunner:
         )
 
         out: list[tuple[str, dict, dict]] = []
+        # ----- v6 W1-A3: grammar building-block pool, once per runner (BEGIN) -----
+        # Decomposed template blocks (see app.search.grammar.
+        # building_block_pool) that the grammar seeds its immigrant draws
+        # from -- built ONCE per runner and reused by every generation.
+        # Lazily built on first use inside this structural-only branch so
+        # numeric-only mode (use_structural_operators=False) never
+        # imports app.search.grammar or pays for the decomposition.
+        if self.cfg.use_structural_operators and getattr(self, "_grammar_block_pool", None) is None \
+                and not getattr(self, "_grammar_block_pool_failed", False):
+            try:
+                from app.search.grammar import building_block_pool as _building_block_pool
+                self._grammar_block_pool = _building_block_pool()
+            except Exception:  # noqa: BLE001 -- a pool that can't be built is a miss, not a generation failure
+                self._grammar_block_pool = None
+                self._grammar_block_pool_failed = True
+        # ----- v6 W1-A3: grammar building-block pool, once per runner (END) -----
+        # ----- v6 W1-A5: dedicated structural-breeding budget (BEGIN) -----
+        # TUNING NOTE: the per-family immigrant floor in the loop below
+        # (default min_immigrants_per_family=2 across 84+ template
+        # families plus the grammar pseudo-family) routinely fills the
+        # ENTIRE population before any child is bred -- n_children =
+        # max(0, population_size - len(out)) came out 0, so the
+        # structural operators (the only path that INVENTS structure
+        # rather than tuning numbers) never ran despite
+        # use_structural_operators=True. Structural children now get a
+        # DEDICATED budget -- max(2, 15% of population_size) children bred
+        # from elites via _breed_structural_child BEFORE the immigrant
+        # floor loop, IN ADDITION to (not instead of) the existing
+        # elite-children loop below. 15% keeps immigrants dominant for
+        # exploration while guaranteeing structural invention is never
+        # starved to zero; the floor of 2 keeps the budget alive on tiny
+        # test populations. structural_mutation_frac is untouched -- it
+        # still governs the structural-vs-numeric split inside the
+        # existing children loop. This block uses its own rng substream
+        # (seed + 0x57A1C1) so the existing loop's random.Random(seed)
+        # stream -- and every numeric-only code path -- is byte-identical
+        # to before this change.
+        if elites and self.cfg.use_structural_operators:
+            _n_structural = max(2, int(self.cfg.population_size * 0.15))
+            _s_rng = random.Random(seed + 0x57A1C1)
+            _made = 0
+            _attempts = 0
+            while _made < _n_structural and _attempts < _n_structural * 4 + len(elites):
+                _attempts += 1
+                _e_spec, _e_meta = _s_rng.choice(elites)
+                _e_config = _e_spec.get("config") if isinstance(_e_spec, dict) else None
+                if not _e_config:
+                    continue
+                _s_op, _s_child = self._breed_structural_child(_e_config, elites, _s_rng)
+                if _s_child is None:
+                    continue  # a failed structural breed is a miss, not a lost population slot
+                _s_fam = _e_meta.get("family", "mutant") if isinstance(_e_meta, dict) else "mutant"
+                _s_cid = f"structural-gen{gen}-{_s_rng.randrange(10**8):08x}"
+                out.append((_s_cid, {"source_type": "manual", "config": _s_child},
+                            {"family": _s_fam, "params": {},
+                             "mutated_from": _e_meta.get("family") if isinstance(_e_meta, dict) else None,
+                             "structural": True, "structural_op": _s_op,
+                             "structural_budget": True}))
+                _made += 1
+        # ----- v6 W1-A5: dedicated structural-breeding budget (END) -----
         for i, fam in enumerate(active_families):
             per_family = max(self.cfg.min_immigrants_per_family, round(base_per_family * budget_multipliers.get(fam, 1.0)))
             # ----- v5 B1-1 grammar-immigrant branch (BEGIN) -----
@@ -1788,7 +1866,12 @@ class EvolutionRunner:
                 _g_rng = random.Random(seed + i * 7919 + 0x6A4D4D41)
                 for _ in range(per_family):
                     try:
-                        _g_config = _grammar_generate_random(rng=_g_rng)
+                        # A3 (v6 W1): immigrants are seeded from the
+                        # building-block pool (proven template ingredients)
+                        # as well as pure random terminals -- see
+                        # generate_random's block_pool parameter.
+                        _g_config = _grammar_generate_random(
+                            rng=_g_rng, block_pool=getattr(self, "_grammar_block_pool", None))
                     except Exception:
                         continue  # a failed draw is just a miss, not a generation failure
                     _g_cid = f"grammar-gen{gen}-{_g_rng.randrange(10**8):08x}"
@@ -2002,16 +2085,27 @@ class EvolutionRunner:
         rejection_counts = {
             "build_or_backtest_error": 0, "no_trades": 0, "min_trades": 0,
             "profit_factor": 0, "max_drawdown": 0, "unprofitable": 0,
+            # A4 (v6 W1): candidates skipped by the unfundable pre-screen
+            # (see _evo_prefilter_task) -- deliberate skips, not crashes.
+            "unfundable": 0,
         }
         tested_rows = []
 
         def _consume(cid, spec, meta, bt, reasons, error, stats):
-            # Mirrors _evo_prefilter_task's four possible return shapes
-            # exactly (see its docstring/body): a build/backtest error, a
-            # zero-trade candidate, a candidate that ran but failed one or
-            # more cheap filters, or a genuine survivor.
+            # Mirrors _evo_prefilter_task's return shapes exactly (see
+            # its docstring/body): the unfundable pre-screen skip, a
+            # build/backtest error, a zero-trade candidate, a candidate
+            # that ran but failed one or more cheap filters, or a
+            # genuine survivor.
             if error is not None:
-                rejection_counts["build_or_backtest_error"] += 1
+                if (reasons or []) == ["unfundable"]:
+                    # Pre-screen skip, not a crash -- counted separately
+                    # so "why did nothing survive" triage can tell "no
+                    # candidate could afford 1 contract" apart from "the
+                    # builder/backtest kept failing".
+                    rejection_counts["unfundable"] += 1
+                else:
+                    rejection_counts["build_or_backtest_error"] += 1
                 tested_rows.append(self._tested_row(cid, meta, gen, passed=False, reasons=reasons, error=error))
                 return
             if stats is None:
@@ -2320,17 +2414,31 @@ class EvolutionRunner:
                 if self._stop_flag.is_set():
                     clean_pool.append(r)
                     continue
-                if r.spec.get("source_type") not in ("python", "pinescript", "mql5"):
-                    # Manual/indicator-builder specs are causal by construction
-                    # -- see app.strategy.lookahead_check's own scope note.
+                # A8 (v6 W1): manual finalists are checked too -- the old
+                # blanket exemption ("manual specs are causal by
+                # construction") no longer holds. The Oct-3 audit verified
+                # a REAL lookahead leak reachable from the Manual builder
+                # (ichimoku_chikou = close.shift(-26)), and the v5
+                # grammar + structural operators now emit novel operand
+                # combinations no template ever used -- so a manual
+                # champion's signals must be proven causal the same way
+                # code strategies' are. This pool is the champion pool
+                # (cpcv_top_n), so the cost is bounded: ~2 generate()
+                # calls per finalist. Search Lab's Stage 3 gate already
+                # checks every source type and is unchanged.
+                src = r.spec.get("source_type", "manual")
+                if src not in ("manual", "python", "pinescript", "mql5"):
+                    # Unknown source type -- nothing the checker
+                    # understands; keep the old fail-open behavior.
                     clean_pool.append(r)
                     continue
                 try:
                     # build_strategy_from_spec requires a writable tmp_dir for
                     # "python" specs (PythonStrategy only accepts a file path)
                     # -- created lazily, once, only if this pool actually has
-                    # a non-manual candidate to check.
-                    if _lookahead_tmp_dir is None:
+                    # a python candidate to check. Manual/Pine/MQL5 build
+                    # from the spec alone.
+                    if src == "python" and _lookahead_tmp_dir is None:
                         import tempfile as _tempfile
                         _lookahead_tmp_dir = _tempfile.mkdtemp(prefix="t58_evolution_lookahead_")
                     strategy = build_strategy_from_spec(r.spec, _lookahead_tmp_dir)

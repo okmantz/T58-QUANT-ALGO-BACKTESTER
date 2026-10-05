@@ -141,6 +141,54 @@ def remove_condition(config: dict, rng: random.Random | None = None) -> dict:
     return _try_mutations(config, rng, _mutate)
 
 
+def add_exit_condition(config: dict, rng: random.Random | None = None) -> dict:
+    """Append one random condition (grammar terminal) to a random side's
+    EXIT list -- the exit-logic invention the frozen templates can never
+    do (their exit blocks come pre-shaped from the SkeletonSpec). The
+    connector list grows by one random AND/OR. Mirrors add_condition
+    exactly, against the exit_conditions block instead of
+    entry_conditions."""
+    rng = _rng(rng)
+
+    def _mutate(cfg: dict, r: random.Random) -> None:
+        side = r.choice(_SIDES)
+        conds = _conditions(cfg, side, block="exit_conditions")
+        block = (cfg.get("exit_conditions") or {})
+        conns = list(block.get(f"{side}_connectors") or [])
+        conds.append(grammar.random_condition(r))
+        conns.append(r.choice(CONNECTORS))
+        _set_conditions(cfg, side, conds, conns, block="exit_conditions")
+
+    return _try_mutations(config, rng, _mutate)
+
+
+def remove_exit_condition(config: dict, rng: random.Random | None = None) -> dict:
+    """Remove one random condition from a random side's EXIT list.
+    Unlike remove_condition there is no keep-one-side-non-empty guard --
+    an empty exit block is valid (the builder treats it as "no
+    signal-based exit"; risk_management still exits the trade), so a
+    side may be emptied freely."""
+    rng = _rng(rng)
+
+    def _mutate(cfg: dict, r: random.Random) -> None:
+        sides = _sides_with_conditions(cfg, block="exit_conditions")
+        if not sides:
+            raise ValueError("no exit conditions to remove")
+        side = r.choice(sides)
+        conds = _conditions(cfg, side, block="exit_conditions")
+        block = (cfg.get("exit_conditions") or {})
+        conns = list(block.get(f"{side}_connectors") or [])
+        idx = r.randrange(len(conds))
+        del conds[idx]
+        # Drop the connector adjacent to the removed condition.
+        drop = min(idx, len(conns) - 1) if conns else None
+        if drop is not None:
+            del conns[drop]
+        _set_conditions(cfg, side, conds, conns, block="exit_conditions")
+
+    return _try_mutations(config, rng, _mutate)
+
+
 def swap_operand_kind(config: dict, rng: random.Random | None = None) -> dict:
     """Pick a random condition and swap one of its operands' KIND for
     another kind from the same category (numeric<->numeric,
@@ -385,6 +433,8 @@ def mutate_risk_block(config: dict, rng: random.Random | None = None) -> dict:
 STRUCTURAL_OPERATORS: dict[str, Callable[[dict, random.Random | None], dict]] = {
     "add_condition": add_condition,
     "remove_condition": remove_condition,
+    "add_exit_condition": add_exit_condition,
+    "remove_exit_condition": remove_exit_condition,
     "swap_operand_kind": swap_operand_kind,
     "flip_connector": flip_connector,
     "mutate_filter": mutate_filter,

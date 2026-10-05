@@ -5,6 +5,8 @@ selects and ranks candidates by, instead of raw profit.
     PROP FITNESS =
         pass_probability x payout_probability x robustness x oos_consistency
         / drawdown
+        + bonuses(net_profit [opt-in], headroom [v6: margin-of-safety gradient
+          rewarding limit headroom, weight 0.1 by default])
         - penalties(too_few_trades, high_param_sensitivity, high_pbo,
                      is_oos_degradation, concentration, losing_streaks)
 
@@ -26,7 +28,20 @@ final ranking after robustness/OOS/CPCV/stress have already run.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
+
+# v6 (2026-10-04): headroom-ratio keys exported in the single-run sim
+# summary (see app.prop.simulator.summarize_single_run) -- each is the
+# fraction of the corresponding prop limit the run actually used, so 1.0
+# means "right at the limit" and lower means more margin of safety. The
+# same key names app.optimize.refinement._HEADROOM_RATIO_KEYS uses, kept
+# in sync so both fitness paths consume identical fields.
+_HEADROOM_RATIO_KEYS = (
+    "best_day_profit_pct_of_limit",
+    "worst_daily_loss_pct_of_limit",
+    "max_dd_pct_of_limit",
+)
 
 # Default weights for every component of the multiplicative PROP FITNESS
 # score below -- this dict, unchanged, reproduces the exact original
@@ -50,6 +65,13 @@ DEFAULT_FITNESS_WEIGHTS: dict = {
     "oos_consistency": 1.0,
     "drawdown": 1.0,
     "net_profit": 0.0,
+    # v6 (2026-10-04): margin-of-safety gradient -- additive headroom
+    # bonus (see _headroom_bonus). 0.1 means a perfect-headroom candidate
+    # earns at most +0.1 points on the ~0-100 base scale: a tiebreaker
+    # nudge, not a dominant factor. Set to 0.0 to drop it entirely (the
+    # term is also exactly 0.0 whenever the headroom ratios are absent
+    # from the summaries, so old summaries rank byte-identically).
+    "headroom_bonus": 0.1,
 }
 
 # A few named presets for the common cases Owen asked for ("let me set
@@ -105,6 +127,9 @@ class PropFitnessBreakdown:
     penalty_is_oos_degradation: float = 0.0
     penalty_concentration: float = 0.0
     penalty_losing_streak: float = 0.0
+    # v6 (2026-10-04): margin-of-safety gradient -- additive bonus for
+    # running far from the prop limits (see _headroom_bonus).
+    headroom_bonus: float = 0.0
 
     final_score: float = 0.0
     notes: list = field(default_factory=list)
@@ -131,6 +156,45 @@ def _trade_concentration(trade_pnls: list[float]) -> float:
     return max(wins) / gross_profit
 
 
+def _headroom_bonus(mc_summary: dict, sim_summary: dict | None, weight: float) -> float:
+    """v6 (2026-10-04): margin-of-safety gradient -- a small additive bonus
+    that rewards candidates whose single-run utilization sits FAR below
+    the prop limits, not just under them. Each ratio is 1.0 at the limit,
+    so ``weight * mean(1.0 - min(util, 1.0))`` over the available ratios is
+    largest for a candidate that barely touches its limits and 0.0 for
+    one running at/over them. Ratios are read from `mc_summary` first,
+    then `sim_summary` (whichever of the two the caller populated --
+    see compute_prop_fitness); a key that is None/absent in both (e.g. a
+    summary built before headroom tracking existed) contributes nothing,
+    so old summaries rank exactly as before.
+
+    Weighting: the default 0.1 (see DEFAULT_FITNESS_WEIGHTS) makes this a
+    tiebreaker nudge on the ~0-100 base scale -- the pass/payout legs
+    decide the ranking, headroom only separates candidates the
+    probabilities already call equal. Raise the weight (or the goal
+    preset's override) if margin-of-safety should drive selection harder.
+    """
+    ratios = []
+    for key in _HEADROOM_RATIO_KEYS:
+        v = None
+        for src in (mc_summary, sim_summary):
+            if src and src.get(key) is not None:
+                v = src.get(key)
+                break
+        if v is None:
+            continue
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(f):
+            continue
+        ratios.append(1.0 - min(f, 1.0))
+    if not ratios:
+        return 0.0
+    return weight * (sum(ratios) / len(ratios))
+
+
 def compute_prop_fitness(
     stats: dict,
     mc_summary: dict,
@@ -141,6 +205,7 @@ def compute_prop_fitness(
     cpcv_degradation: float | None = None,  # in-sample minus out-of-sample metric, from app.validation.cpcv.run_cpcv
     min_trades_target: int = 30,
     weights: "dict | str | None" = None,    # None/"balanced" reproduces the original unweighted formula exactly
+    sim_summary: dict | None = None,        # v6: optional single-run sim summary; also checked for headroom ratios
 ) -> PropFitnessBreakdown:
     w = resolve_fitness_weights(weights)
     # P0-1: rank on PER-ATTEMPT (single-account) odds, not the chain-level
@@ -184,7 +249,16 @@ def compute_prop_fitness(
         net_profit_bonus = max(0.0, float(stats.get("net_profit", 0.0) or 0.0)) * w["net_profit"]
     base_score += net_profit_bonus
 
+    # v6 (2026-10-04): margin-of-safety gradient -- additive headroom
+    # bonus, weighted via DEFAULT_FITNESS_WEIGHTS["headroom_bonus"] (0.1
+    # default: tiebreaker-class). Exactly 0.0 when the headroom ratios
+    # are absent from both summaries, so old runs rank byte-identically.
+    headroom_bonus = _headroom_bonus(mc_summary, sim_summary, w["headroom_bonus"])
+    base_score += headroom_bonus
+
     notes: list[str] = []
+    if headroom_bonus > 0:
+        notes.append(f"Headroom bonus +{headroom_bonus:.3f}: runs with margin below the prop limits.")
     n_trades = int(stats.get("total_trades", 0) or 0)
 
     penalty_too_few_trades = 0.0
@@ -236,6 +310,7 @@ def compute_prop_fitness(
         penalty_is_oos_degradation=penalty_is_oos_degradation,
         penalty_concentration=penalty_concentration,
         penalty_losing_streak=penalty_losing_streak,
+        headroom_bonus=headroom_bonus,
         notes=notes,
     )
     breakdown.final_score = base_score - breakdown.total_penalty()
