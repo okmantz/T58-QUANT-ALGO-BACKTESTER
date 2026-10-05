@@ -1171,6 +1171,91 @@ def import_csv(
                 )
 
     # ---------------------------------------------------------
+    # Roll awareness (C7)
+    #
+    # A continuous front-month futures series switches contracts on
+    # roll week, and the raw (unadjusted) series shows an overnight
+    # price displacement equal to the calendar spread -- a move no real
+    # trade could have captured, exactly like the unadjusted-split
+    # artifact above. Flag session-break gaps whose cross-break price
+    # displacement is outsized relative to the series' own typical
+    # true range AND that land near a likely roll window, so the user
+    # eyeballs them before trusting a backtest that holds through one.
+    # Warning only, never a rejection: a big overnight gap can also be
+    # genuine news, and this heuristic cannot tell the difference --
+    # it just says "this looks like a roll, check it".
+    # ---------------------------------------------------------
+
+    _ROLL_GAP_TR_MULTIPLE = 3.0  # cross-break displacement this many x median true range
+    _ROLL_WINDOW_DAYS = range(6, 17)  # classic roll week: ~2nd week of the month
+
+    try:
+        _tr = pd.concat(
+            [
+                df["high"] - df["low"],
+                (df["high"] - df["close"].shift(1)).abs(),
+                (df["low"] - df["close"].shift(1)).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        _median_tr = _tr.median()
+    except Exception:  # noqa: BLE001 -- best-effort diagnostic; never blocks an import
+        _median_tr = float("nan")
+
+    _roll_hits: list[str] = []
+    if (
+        not diffs.empty
+        and median_gap > pd.Timedelta(0)
+        and pd.notna(_median_tr)
+        and _median_tr > 0
+    ):
+        # diffs carries df's own (possibly non-positional) index labels --
+        # convert each break label to a positional index before .iloc.
+        _break_labels = diffs[diffs > median_gap * 5].index
+        for _bl in _break_labels:
+            try:
+                _pos = int(df.index.get_loc(_bl))
+            except (TypeError, ValueError):  # non-unique index -> slice; skip
+                continue
+            if _pos <= 0 or _pos >= len(df):
+                continue
+            _t1 = df["timestamp"].iloc[_pos]
+            _displacement = abs(float(df["open"].iloc[_pos]) - float(df["close"].iloc[_pos - 1]))
+            if _displacement <= _ROLL_GAP_TR_MULTIPLE * _median_tr:
+                continue
+            # "Near a likely roll window": the post-break bar lands in
+            # the classic second-week-of-month roll window, or the break
+            # itself spans a multi-day (weekend+) halt -- rolls usually
+            # take effect across a session break, not mid-session.
+            try:
+                _t1_day = int(pd.Timestamp(_t1).day)
+            except Exception:  # noqa: BLE001
+                continue
+            _near_roll_window = (
+                _t1_day in _ROLL_WINDOW_DAYS
+                or diffs.loc[_bl] >= pd.Timedelta(days=2)
+            )
+            if _near_roll_window:
+                _roll_hits.append(
+                    f"{_t1} (overnight displacement {_displacement / _median_tr:.1f}x median true range)"
+                )
+
+    if _roll_hits:
+        _roll_msg = (
+            f"Detected {len(_roll_hits)} session-break gap(s) with an outsized price "
+            f"displacement (>{_ROLL_GAP_TR_MULTIPLE:g}x median true range) near a likely "
+            f"contract-roll window: {'; '.join(_roll_hits[:5])}"
+            f"{' ...' if len(_roll_hits) > 5 else ''}. This is the classic signature "
+            "of an UNADJUSTED contract roll (front-month switch), not real price action "
+            "-- a strategy holding through it 'profits' from the calendar spread. "
+            "Consider back-adjusted/continuous data, or split the series at the roll, "
+            "before trusting any backtest over this period."
+        )
+        issues.append(ValidationIssue("warning", _roll_msg))
+        import warnings
+        warnings.warn(_roll_msg, RuntimeWarning)
+
+    # ---------------------------------------------------------
     # Split / bad-tick artifact detection
     #
     # The single most common way a backtest lies to you: an unadjusted

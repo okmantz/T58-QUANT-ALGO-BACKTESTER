@@ -62,6 +62,23 @@ class InstrumentSpec:
     # use this field). Confirm against your own broker before trusting it
     # for anything beyond "is my backtest even in the right ballpark."
     default_commission_round_turn: float = 4.20
+    # SPREAD / SLIPPAGE DEFAULTS (2026-10-04): typical inside spread and
+    # market-order slippage for this contract, in TICKS (tick_size units,
+    # not pip_size units). Same honesty standard as
+    # default_commission_round_turn above: these are typical-condition
+    # estimates for liquid front-month contracts, NOT your broker's actual
+    # fills -- every contract in this registry trades with a typical
+    # inside spread of 1 tick, and a market order that doesn't sweep the
+    # book slips ~1 tick on average. apply_instrument_spec fills
+    # RiskConfig.spread_pips/slippage_pips from these (ticks == pips for
+    # every spec here since pip_size is 1.0), but ONLY when the caller's
+    # values are still exactly 0.0 (RiskConfig's own generic default) --
+    # an explicit nonzero value is never overwritten. The ZERO FRICTION
+    # warning in app.backtest.execution stays as the backstop: it still
+    # fires whenever all four friction fields end up 0.0 (e.g. a
+    # hand-built RiskConfig that never applied a spec).
+    default_spread_ticks: float = 1.0
+    default_slippage_ticks: float = 1.0
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -138,6 +155,16 @@ def apply_instrument_spec(risk: RiskConfig, symbol: str) -> RiskConfig:
     updates = {"pip_size": spec.pip_size, "contract_size": spec.contract_size}
     if risk.commission_per_contract == 0.0:
         updates["commission_per_contract"] = spec.default_commission_round_turn
+    # C5: spec-driven spread/slippage defaults. Every spec in this
+    # registry has pip_size == 1.0, so ticks == pips here -- the spec's
+    # tick-denominated defaults land directly on RiskConfig's
+    # pip-denominated fields. Same only-when-still-0.0 rule as the
+    # commission fill above: an explicit nonzero value the user already
+    # typed in is never overwritten.
+    if risk.spread_pips == 0.0:
+        updates["spread_pips"] = float(spec.default_spread_ticks)
+    if risk.slippage_pips == 0.0:
+        updates["slippage_pips"] = float(spec.default_slippage_ticks)
     return replace(risk, **updates)
 
 
