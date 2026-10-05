@@ -425,6 +425,27 @@ class EvolutionConfig:
     mutation_rate: float = 0.35
     mutation_strength: float = 0.25
     random_immigrant_frac: float = 0.3
+    # v5 B1-1 -- structural (compositional) evolution. When True (the
+    # default), the engine can INVENT structure instead of only tuning
+    # numbers: a "grammar" pseudo-family joins the stratified immigrant
+    # draw (fresh candidates from app.search.grammar.generate_random(),
+    # with the same per-family floor and reproducible seeding as every
+    # template family), and elite children are bred with the structural
+    # operators in app.evolution.structural (add/remove/swap conditions,
+    # flip AND<->OR, graft subtrees between parents, mutate filter/risk
+    # blocks). When False, _generate_population behaves EXACTLY as before
+    # (numeric-only: family immigrants + _mutate genome perturbation) --
+    # this is the reproducibility flag. The structural code path is
+    # lazily imported inside the True branch only, so with the flag off
+    # app.search.grammar / app.evolution.structural are never even
+    # imported and the random streams are untouched.
+    use_structural_operators: bool = True
+    # Fraction of elite child slots bred via a structural operator (the
+    # rest use the classic numeric _mutate path, unchanged).
+    structural_mutation_frac: float = 0.5
+    # ...of those structural slots, the fraction that graft a subtree
+    # from a SECOND elite (real crossover) instead of mutating one parent.
+    structural_graft_frac: float = 0.2
     # Family diversity: without these two, a GA that finds one working
     # family early (e.g. mtf_pullback) starves every other family of
     # both fresh candidates AND elite/breeding slots within a handful of
@@ -495,10 +516,17 @@ class EvolutionConfig:
     # STOP. Setting a target here makes a run stop on its own the first
     # generation a leaderboard candidate's target_metric clears
     # target_eval_pass_pct -- checked in _run_loop right after each
-    # generation's leaderboard update. None (the default) preserves the
-    # exact old behavior (run forever / to max_generations regardless of
-    # what's on the leaderboard).
-    target_eval_pass_pct: float | None = None
+    # generation's leaderboard update.
+    #
+    # v5 B1-3: the default is now 70.0 (the app's acceptance bar -- see the
+    # Oct 4 analysis), and the SAME bar is enforced as a REAL gate in
+    # champion selection: _update_leaderboard rejects any champion whose
+    # locked-holdout per-attempt pass probability is below it (see
+    # _apply_holdout_gate). Set to None to disable BOTH the loop-mode
+    # auto-stop and the holdout gate -- that restores the exact pre-v5
+    # behavior (run forever / to max_generations; champion crowned on
+    # in-sample fitness alone).
+    target_eval_pass_pct: float | None = 70.0
     # "cpcv_oos_eval_pass_probability" (the honest held-out estimate) is
     # the default and strongly recommended metric -- see
     # EvolutionCandidateRecord's own field comment for why the raw
@@ -659,6 +687,15 @@ class EvolutionCandidateRecord:
     lookahead_bug_detected: bool | None = None
     lookahead_summary: str | None = None
     stressed_ok: bool | None = None
+    # v5 B1-3 -- the locked-holdout gate verdict (see _apply_holdout_gate):
+    # {"passed": True/False/None, "per_attempt_pass_probability": ...,
+    #  "per_attempt_payout_probability": ..., "n_trades": ...,
+    #  "target_eval_pass_pct": ...} or {"passed": None, "error": ...} when
+    #  the holdout evaluation itself failed. None = never evaluated (e.g.
+    #  the run had no holdout slice, or the candidate never reached the
+    #  top of the leaderboard). Cached on the record so each candidate is
+    #  evaluated at most once per run.
+    holdout_check: dict | None = None
     fitness: object = None                     # PropFitnessBreakdown
     trade_pnls: list = field(default_factory=list)
     trades: list = field(default_factory=list)  # raw Trade objects, for date-aligned cluster correlation
@@ -685,6 +722,7 @@ class EvolutionCandidateRecord:
             "lookahead_bug_detected": self.lookahead_bug_detected,
             "lookahead_summary": self.lookahead_summary,
             "stressed_ok": self.stressed_ok,
+            "holdout_check": self.holdout_check,
             "fitness": self.fitness.to_dict() if self.fitness is not None else None,
             "trade_pnls": self.trade_pnls[:500],
         }
@@ -706,6 +744,7 @@ def _record_from_dict(d: dict) -> EvolutionCandidateRecord:
         lookahead_bug_detected=d.get("lookahead_bug_detected"),
         lookahead_summary=d.get("lookahead_summary"),
         stressed_ok=d.get("stressed_ok"),
+        holdout_check=d.get("holdout_check"),
         fitness=fitness,
         trade_pnls=d.get("trade_pnls") or [],
         trades=[],
@@ -1709,6 +1748,19 @@ class EvolutionRunner:
         n_immigrants = self.cfg.population_size if not elites else max(1, int(self.cfg.population_size * self.cfg.random_immigrant_frac))
 
         active_families = list(self.cfg.families) if self.cfg.families else list(list_families().keys())
+        # v5 B1-1: the grammar joins the stratified immigrant draw as a
+        # pseudo-family. It gets the same per-family floor
+        # (min_immigrants_per_family), the same reproducible per-family
+        # seed (seed + i*7919), and the same adaptive-budget multiplier
+        # treatment (unknown to the tracker -> 1.0, never punished for
+        # having no history) as every template family -- so structural
+        # invention can never starve. use_structural_operators=False
+        # skips this line AND the branch in the loop below, and the
+        # grammar module is lazily imported inside that branch only, so
+        # numeric-only mode never touches the new code or its rng stream.
+        _GRAMMAR_FAMILY_KEY = "__grammar__"
+        if self.cfg.use_structural_operators:
+            active_families = active_families + [_GRAMMAR_FAMILY_KEY]
         n_fam = max(1, len(active_families))
         base_per_family = max(self.cfg.min_immigrants_per_family, n_immigrants // n_fam)
 
@@ -1726,6 +1778,24 @@ class EvolutionRunner:
         out: list[tuple[str, dict, dict]] = []
         for i, fam in enumerate(active_families):
             per_family = max(self.cfg.min_immigrants_per_family, round(base_per_family * budget_multipliers.get(fam, 1.0)))
+            # ----- v5 B1-1 grammar-immigrant branch (BEGIN) -----
+            # Fresh structurally-novel candidates straight from the
+            # compositional grammar -- the search inventing structure,
+            # not just tuning frozen templates. Reproducible via the
+            # same per-family seed scheme (distinct substream offset).
+            if fam == _GRAMMAR_FAMILY_KEY:
+                from app.search.grammar import generate_random as _grammar_generate_random
+                _g_rng = random.Random(seed + i * 7919 + 0x6A4D4D41)
+                for _ in range(per_family):
+                    try:
+                        _g_config = _grammar_generate_random(rng=_g_rng)
+                    except Exception:
+                        continue  # a failed draw is just a miss, not a generation failure
+                    _g_cid = f"grammar-gen{gen}-{_g_rng.randrange(10**8):08x}"
+                    out.append((_g_cid, {"source_type": "manual", "config": _g_config},
+                                {"family": "grammar", "params": {}, "grammar_drawn": True}))
+                continue
+            # ----- v5 B1-1 grammar-immigrant branch (END) -----
             try:
                 fam_space = generate_search_space(
                     mode="family", family=fam,
@@ -1783,12 +1853,78 @@ class EvolutionRunner:
                         n_from_surrogate += 1
 
                 for _ in range(max(0, per_elite - n_from_surrogate)):
+                    # ----- v5 B1-1 structural-child branch (BEGIN) -----
+                    # With use_structural_operators on, a fraction of elite
+                    # children are bred by STRUCTURE (operators/graft) rather
+                    # than numeric genome perturbation. When the flag is off
+                    # this branch is never entered -- rng.random() is not
+                    # even called -- so the numeric-only path below consumes
+                    # the identical rng stream as before v5.
+                    _structural_op: str | None = None
+                    _structural_child: dict | None = None
+                    if self.cfg.use_structural_operators and rng.random() < self.cfg.structural_mutation_frac:
+                        _structural_op, _structural_child = self._breed_structural_child(config, elites, rng)
+                    if _structural_child is not None:
+                        child_spec = {"source_type": "manual", "config": _structural_child}
+                        cid = f"{fam}-gen{gen}-{rng.randrange(10**8):08x}"
+                        out.append((cid, child_spec, {"family": fam, "params": {},
+                                                     "mutated_from": meta.get("family"),
+                                                     "structural": True,
+                                                     "structural_op": _structural_op}))
+                        continue
+                    # ----- v5 B1-1 structural-child branch (END) -----
                     child_genome = _mutate(base_genome, genes, self.cfg.mutation_rate, self.cfg.mutation_strength, rng)
                     child_config = apply_genome(config, genes, child_genome)
                     child_spec = {"source_type": "manual", "config": child_config}
                     cid = f"{fam}-gen{gen}-{rng.randrange(10**8):08x}"
                     out.append((cid, child_spec, {"family": fam, "params": {}, "mutated_from": meta.get("family")}))
         return out[: max(self.cfg.population_size, len(out))]
+
+    def _breed_structural_child(
+        self, config: dict, elites: list[tuple[dict, dict]], rng: random.Random,
+    ) -> tuple[str | None, dict | None]:
+        """v5 B1-1: breed one child from an elite's Manual config via
+        structural operators (never numeric genome perturbation).
+
+        Returns (op_name, child_config), or (None, None) when no
+        structural child could be produced -- the caller then falls back
+        to the classic numeric _mutate for that child slot, so a cold or
+        degenerate elite never costs the generation a candidate.
+
+        The imports are deliberately lazy AND local: with
+        use_structural_operators=False this method is never called, so
+        numeric-only mode never imports app.search.grammar or
+        app.evolution.structural at all.
+        """
+        import copy as _copy
+
+        from app.evolution import structural as _structural
+        from app.search.grammar import validate as _validate_cfg
+
+        if not isinstance(config, dict) or _validate_cfg(config):
+            # structural.random_operator / graft_subtree guarantee validity
+            # of their OUTPUT, but only relative to a valid input -- an
+            # elite config the grammar's own validator rejects (e.g. a
+            # hand-built oddity) is left to the numeric path.
+            return None, None
+        elite_configs = [
+            spec.get("config") for spec, _meta in elites
+            if isinstance(spec, dict) and isinstance(spec.get("config"), dict)
+            and not _validate_cfg(spec["config"])
+        ]
+        if (
+            elite_configs
+            and rng.random() < self.cfg.structural_graft_frac
+        ):
+            others = [c for c in elite_configs if c is not config]
+            donor = rng.choice(others) if others else rng.choice(elite_configs)
+            child = _structural.graft_subtree(_copy.deepcopy(config), donor, rng)
+            if child is not config and not _validate_cfg(child):
+                return "graft_subtree", child
+        op_name, child = _structural.random_operator(_copy.deepcopy(config), rng)
+        if op_name != "identity_fallback" and not _validate_cfg(child):
+            return op_name, child
+        return None, None
 
     def _diversify_elites(self, clustered: list[EvolutionCandidateRecord]) -> list[EvolutionCandidateRecord]:
         """Picks the elite/breeding pool for the next generation off
@@ -2280,7 +2416,97 @@ class EvolutionRunner:
     def _update_leaderboard(self, new_elites: list[EvolutionCandidateRecord]) -> None:
         combined = {r.candidate_id: r for r in (self.leaderboard + new_elites)}
         ranked = sorted(combined.values(), key=lambda r: r.fitness.final_score, reverse=True)
+        # v5 B1-3: the locked-holdout gate -- evaluate_champion_on_locked_holdout()
+        # finally has a caller. The champion (ranked[0]) must clear
+        # target_eval_pass_pct on genuinely held-out data; a champion that
+        # fails is REJECTED (dropped from the leaderboard, logged with its
+        # numbers) and the next-ranked candidate is tried. Previously the
+        # champion was crowned on in-sample fitness alone.
+        ranked = self._apply_holdout_gate(ranked)
         self.leaderboard = ranked[: self.cfg.elite_keep]
+
+    def _apply_holdout_gate(
+        self, ranked: list[EvolutionCandidateRecord],
+    ) -> list[EvolutionCandidateRecord]:
+        """Enforce the locked-holdout gate on a fitness-ranked candidate
+        list (see _update_leaderboard).
+
+        Walks the list in rank order; the first candidate whose
+        locked-holdout per-attempt pass probability clears
+        target_eval_pass_pct becomes champion. A candidate that FAILS the
+        holdout is rejected -- removed from the returned list, with the
+        verdict cached on record.holdout_check (so each candidate is
+        evaluated at most once per run) and a log line carrying the actual
+        numbers. Evaluation stops at the first PASS, so the gate costs one
+        holdout backtest + Monte Carlo per generation in the common case,
+        not one per leaderboard row.
+
+        Inconclusive evaluations (the holdout backtest/MC itself raised)
+        fail OPEN -- the candidate is kept but flagged
+        holdout_check={"passed": None, ...} -- because a broken holdout
+        slice must not silently crown OR silently kill a candidate.
+        target_eval_pass_pct=None disables the gate entirely (pre-v5
+        behavior); a run with no holdout slice logs one skip line and is
+        likewise unaffected.
+        """
+        target = self.cfg.target_eval_pass_pct
+        if target is None:
+            return ranked
+        if self.locked_holdout_df is None or not len(self.locked_holdout_df):
+            if not getattr(self, "_holdout_gate_skip_logged", False):
+                self._log("  Holdout gate skipped: this run has no locked holdout slice.")
+                self._holdout_gate_skip_logged = True
+            return ranked
+        gated: list[EvolutionCandidateRecord] = []
+        champion_found = False
+        for record in ranked:
+            check = record.holdout_check
+            # Evaluate lazily, in rank order, only until the first PASS --
+            # the gate costs one holdout backtest + Monte Carlo per
+            # generation in the common case, not one per leaderboard row.
+            # Lower-ranked candidates keep holdout_check=None until they
+            # ever reach the top; each candidate is evaluated at most once
+            # per run (the verdict is cached on the record).
+            if check is None and not champion_found:
+                try:
+                    holdout = self.evaluate_champion_on_locked_holdout(record)
+                except Exception as exc:  # noqa: BLE001 -- inconclusive, not a failure
+                    self._log(
+                        f"  Holdout gate: {record.candidate_id} could not be evaluated on the "
+                        f"locked holdout ({type(exc).__name__}: {exc}) -- kept, flagged inconclusive."
+                    )
+                    record.holdout_check = {"passed": None, "error": f"{type(exc).__name__}: {exc}"}
+                    gated.append(record)
+                    continue
+                passed = bool(holdout["per_attempt_pass_probability"] >= target)
+                record.holdout_check = {
+                    "passed": passed,
+                    "per_attempt_pass_probability": holdout["per_attempt_pass_probability"],
+                    "per_attempt_payout_probability": holdout["per_attempt_payout_probability"],
+                    "n_trades": holdout["n_trades"],
+                    "n_bars": holdout["n_bars"],
+                    "target_eval_pass_pct": target,
+                }
+                check = record.holdout_check
+                if passed:
+                    self._log(
+                        f"  Holdout gate: {record.candidate_id} PASSED -- locked-holdout per-attempt "
+                        f"pass {check['per_attempt_pass_probability']:.1f}% >= target {target:.0f}% "
+                        f"({check['n_trades']} holdout trades)."
+                    )
+                else:
+                    self._log(
+                        f"  HOLDOUT GATE: REJECTED {record.candidate_id} as champion -- locked-holdout "
+                        f"per-attempt pass {check['per_attempt_pass_probability']:.1f}% < target "
+                        f"{target:.0f}% ({check['n_trades']} holdout trades). It stays out of the "
+                        f"leaderboard; trying the next-ranked candidate."
+                    )
+            if check is not None and check.get("passed") is False:
+                continue  # rejected -- never crowned, never kept
+            gated.append(record)
+            if check is not None and check.get("passed") is True:
+                champion_found = True
+        return gated
 
     def _maybe_save_to_library(self, new_elites: list[EvolutionCandidateRecord]) -> None:
         if not self.cfg.save_to_library:
