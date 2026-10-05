@@ -20,19 +20,24 @@ against the firm's current terms before relying on it, not a live feed.
 There is no automatic "check for updates" here -- see
 `PropFirmPreset.as_of` and `PropFirmPreset.source_note`.
 
-MODELING LIMITATION -- consistency_rule_pct is a single field checked
-ONLY at the evaluation-pass gate (see app.prop.simulator.simulate_account:
-"best_day_profit / total_profit_since_start <= consistency_rule_pct",
-checked once, at the moment balance first clears the profit target).
-Several firms below (Apex, Lucid) have NO consistency rule during
-evaluation at all -- their real consistency rule only gates PAYOUTS on
-the funded account, which this simulator does not separately model. For
-those firms, consistency_rule_pct is correctly set to None (no eval-stage
-gate) even though a real funded-stage consistency rule exists; don't
-read None as "this firm has no consistency rule anywhere," and don't
-"fix" it by putting the funded-stage number here -- that would incorrectly
-block the evaluation-pass check on a rule that, in reality, doesn't apply
-until afterward. Each such preset's source_note says where the real
+MODELING LIMITATION (updated v6, Oct 2026) -- consistency_rule_pct is a
+single field checked ONLY at the evaluation-pass gate (see
+app.prop.simulator.simulate_account: "best_day_profit /
+total_profit_since_start <= consistency_rule_pct", checked once, at the
+moment balance first clears the profit target). Several firms below
+(Apex, Lucid) have NO consistency rule during evaluation at all -- their
+real consistency rule only gates PAYOUTS on the funded account. That
+funded-stage rule is now modeled separately by the v6 field
+PropRules.funded_consistency_rule_pct (checked at every funded payout:
+best_day_since_baseline / profit_since_baseline <=
+funded_consistency_rule_pct), and the presets below set it (Apex 50.0,
+Lucid 40.0, TopStep 40.0, FundedNext 40.0). For those firms,
+consistency_rule_pct is correctly None (no eval-stage gate) even though
+a real funded-stage consistency rule exists; don't read None as "this
+firm has no consistency rule anywhere," and don't "fix" it by putting
+the funded-stage number here -- that would incorrectly block the
+evaluation-pass check on a rule that, in reality, doesn't apply until
+afterward. Each such preset's source_note says where the real
 funded-stage number lives instead.
 
 This module is independent of app.prop.simulator's PropRules dataclass
@@ -65,6 +70,19 @@ class PropFirmPreset:
     payout_cap_pct: float | None = None
     payout_frequency_days: int = 14
     required_buffer_pct: float = 0.0
+    # B10 (v6): funded-stage payout/inactivity fields, passed through to
+    # PropRules by to_prop_rules(). Zero = "rule off" for the count/dollar
+    # fields (max_inactive_days=0 maps to None, i.e. the inactivity rule
+    # disabled; winning_days_for_payout=0 disables the winning-day gate).
+    winning_days_for_payout: int = 0
+    min_winning_day_profit: float = 0.0
+    max_inactive_days: int = 0
+    floating_drawdown_mode: str = "realized"
+    # B5 (v6): funded-stage consistency rule -- gated at every funded
+    # payout (best single day <= this % of profit since the payout
+    # baseline), NOT at the evaluation-pass gate. See the module
+    # docstring's MODELING LIMITATION note, updated for v6.
+    funded_consistency_rule_pct: float | None = None
     as_of: str = ""                 # date this preset was last checked against the firm's own rules page
     source_note: str = ""           # short pointer to what to re-check and where
 
@@ -82,6 +100,12 @@ class PropFirmPreset:
             payout_cap_pct=self.payout_cap_pct,
             payout_frequency_days=self.payout_frequency_days,
             required_buffer_pct=self.required_buffer_pct,
+            winning_days_for_payout=self.winning_days_for_payout,
+            min_winning_day_profit=self.min_winning_day_profit,
+            # preset convention: 0 (or negative) = inactivity rule off
+            max_inactive_days=self.max_inactive_days if self.max_inactive_days > 0 else None,
+            floating_drawdown_mode=self.floating_drawdown_mode,
+            funded_consistency_rule_pct=self.funded_consistency_rule_pct,
         )
 
     def to_dict(self) -> dict:
@@ -115,6 +139,11 @@ class PropFirmPreset:
 # ---------------------------------------------------------------------------
 
 _AS_OF = "2026-09-13"  # last time this catalog's numbers were checked/updated
+_AS_OF_V6 = "2026-10-04"  # v6 pass (Oct 2026): Apex split into EOD/Intraday
+# account types with confirmed drawdown dollars, FTMO drawdown monitoring
+# corrected to intrabar, FundedNext re-mapped to the Stellar 2-Step
+# product, The5ers Bootcamp relabeled to High-Stakes, and funded-stage
+# consistency / payout-gate fields (B5/B10) wired through to_prop_rules.
 
 PROP_FIRM_PRESETS: list[PropFirmPreset] = [
     # --- FTMO ---------------------------------------------------------
@@ -125,16 +154,19 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
     # trailing on the 2-Step route), and a confirmed 4 minimum trading
     # days. Payout: FTMO's own payout-policy pages and most 2026 reviews
     # converge on a 14-day first-payout window from the funded account's
-    # first trade. No numeric changes needed here -- this preset was
-    # already accurate.
+    # first trade. v6 (Oct 2026): drawdown_check_mode corrected to
+    # "intrabar" -- FTMO monitors equity intraday (can breach mid-day),
+    # not just at EOD; and max_inactive_days=30 models FTMO's inactivity
+    # rule (fail after 30+ calendar days with no trading activity).
     PropFirmPreset(
         key="ftmo_10k", firm="FTMO", label="FTMO - $10k Challenge",
         account_size=10_000, evaluation_profit_target_pct=10.0,
         daily_loss_limit_pct=5.0, max_drawdown_pct=10.0,
-        drawdown_type="static", drawdown_check_mode="eod",
+        drawdown_type="static", drawdown_check_mode="intrabar",
         consistency_rule_pct=None, min_trading_days=4,
         payout_frequency_days=14,
-        as_of=_AS_OF,
+        max_inactive_days=30,
+        as_of=_AS_OF_V6,
         source_note=(
             "Confirmed 2026-09-13 against ftmo.com/en/trading-objectives/ -- models the FTMO Challenge: "
             "2-Step (Phase 1 numbers; Phase 2 relaxes the profit target to 5%, which this single-PropRules "
@@ -148,10 +180,11 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
         key="ftmo_100k", firm="FTMO", label="FTMO - $100k Challenge",
         account_size=100_000, evaluation_profit_target_pct=10.0,
         daily_loss_limit_pct=5.0, max_drawdown_pct=10.0,
-        drawdown_type="static", drawdown_check_mode="eod",
+        drawdown_type="static", drawdown_check_mode="intrabar",
         consistency_rule_pct=None, min_trading_days=4,
         payout_frequency_days=14,
-        as_of=_AS_OF,
+        max_inactive_days=30,
+        as_of=_AS_OF_V6,
         source_note=(
             "Confirmed 2026-09-13 against ftmo.com/en/trading-objectives/ -- see the $10k preset's note "
             "for the 2-Step-vs-1-Step and phase-modeling caveats, which apply identically here."
@@ -161,63 +194,107 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
         key="ftmo_200k", firm="FTMO", label="FTMO - $200k Challenge",
         account_size=200_000, evaluation_profit_target_pct=10.0,
         daily_loss_limit_pct=5.0, max_drawdown_pct=10.0,
-        drawdown_type="static", drawdown_check_mode="eod",
+        drawdown_type="static", drawdown_check_mode="intrabar",
         consistency_rule_pct=None, min_trading_days=4,
         payout_frequency_days=14,
-        as_of=_AS_OF,
+        max_inactive_days=30,
+        as_of=_AS_OF_V6,
         source_note=(
             "Confirmed 2026-09-13 against ftmo.com/en/trading-objectives/ -- see the $10k preset's note "
             "for the 2-Step-vs-1-Step and phase-modeling caveats, which apply identically here."
         ),
     ),
     # --- Apex Trader Funding -------------------------------------------
-    # MAJOR UPDATE: Apex overhauled its rules on March 1, 2026 ("Apex 4.0").
-    # Per Apex's own Help Center (apextraderfunding.com/help-center/...):
-    # the evaluation now has NO consistency rule at all (previously 30%,
-    # removed) and NO minimum-trading-days rule (previously ~1 day,
-    # removed -- "pass in one day if you hit the target cleanly" is now
-    # explicitly the documented behavior, not just a loophole). The 50%
-    # payout-stage consistency rule and the "at least 5 qualifying
-    # trading days" payout-eligibility rule are real, but apply to the
-    # FUNDED Performance Account, not the evaluation -- see this module's
-    # docstring's MODELING LIMITATION note for why consistency_rule_pct
-    # stays None here rather than being set to 50.
+    # v6 (Oct 2026) SPLIT: Apex sells EOD and Intraday account types with
+    # genuinely different drawdown rules, so the old single "Apex 50k/100k"
+    # entries (which hedged with a 6% midpoint) are replaced by four
+    # entries. Verified Oct 2026 against apextraderfunding.com's own
+    # EOD/Intraday Performance Account payout pages:
+    #   - 50K: $2,000 trailing max drawdown = 4.0%; 100K: $3,000 = 3.0%.
+    #   - EOD type: daily loss limit $1,000 (50K = 2.0%) / $1,500
+    #     (100K = 1.5%), drawdown monitored at EOD
+    #     (drawdown_check_mode="eod").
+    #   - Intraday type: NO daily loss limit during evaluation
+    #     (100.0 = the presets' "no DLL" convention), drawdown monitored
+    #     intraday (drawdown_check_mode="intrabar").
+    # Payout gates (both types): at least 5 qualifying trading days before
+    # the first payout request; min_winning_day_profit 250.0 (EOD) /
+    # 200.0 (Intraday). funded_consistency_rule_pct=50.0 models Apex's
+    # real 50% payout-stage consistency rule (see module docstring --
+    # there is NO evaluation-stage consistency rule post Apex 4.0, so
+    # consistency_rule_pct stays None). min_trading_days stays 0 (Apex
+    # 4.0, March 2026: no minimum -- a same-day pass is valid).
     PropFirmPreset(
-        key="apex_50k", firm="Apex Trader Funding", label="Apex - $50k Evaluation",
+        key="apex_50k_eod", firm="Apex Trader Funding", label="Apex - $50k Evaluation (EOD)",
         account_size=50_000, evaluation_profit_target_pct=6.0,
-        daily_loss_limit_pct=100.0,  # Apex has no daily loss limit during evaluation -- see source_note
-        max_drawdown_pct=6.0,
-        drawdown_type="trailing", drawdown_check_mode="intrabar",
+        daily_loss_limit_pct=2.0,  # $1,000 EOD daily loss limit
+        max_drawdown_pct=4.0,      # $2,000 trailing max drawdown
+        drawdown_type="trailing", drawdown_check_mode="eod",
         consistency_rule_pct=None, min_trading_days=0,
         payout_frequency_days=5,
-        as_of=_AS_OF,
+        winning_days_for_payout=5, min_winning_day_profit=250.0,
+        funded_consistency_rule_pct=50.0,
+        as_of=_AS_OF_V6,
         source_note=(
-            "Updated 2026-09-13 for the Apex 4.0 overhaul (March 1, 2026): min_trading_days is now 0 (no "
-            "minimum -- Apex's own Help Center confirms a same-day pass is valid) and consistency_rule_pct "
-            "is None (no evaluation-stage consistency rule; see module docstring). payout_frequency_days=5 "
-            "reflects Apex's own EOD/Intraday Performance Account payout pages: 'at least 5 qualifying "
-            "trading days' before the first payout request -- a real 50% consistency rule and a "
-            "size-specific 'Safety Net' profit buffer ALSO gate that first payout and are not modeled by "
-            "this simulator's fields. The exact trailing-drawdown DOLLAR amount is genuinely ambiguous "
-            "across sources as of this check ($2,000-$2,500 depending on EOD vs Intraday and Rithmic vs "
-            "Tradovate vs Wealthcharts) -- the 6% here is a reasonable midpoint, not a confirmed figure; "
-            "verify the exact number for your chosen platform/product at apextraderfunding.com before "
-            "relying on it."
+            "Updated 2026-10-04: EOD account type. $2,000 trailing max drawdown = 4.0% of $50k; "
+            "$1,000 daily loss limit = 2.0%; drawdown monitored at EOD. Payout gates: 5 qualifying "
+            "trading days, $250+/day winning-day gate, 50% funded consistency rule -- all modeled. "
+            "A size-specific 'Safety Net' profit buffer also gates the first payout in reality and is "
+            "not modeled. Verify exact dollar amounts for your chosen platform/product at "
+            "apextraderfunding.com before relying on them."
         ),
     ),
     PropFirmPreset(
-        key="apex_100k", firm="Apex Trader Funding", label="Apex - $100k Evaluation",
-        account_size=100_000, evaluation_profit_target_pct=6.0,
-        daily_loss_limit_pct=100.0,
-        max_drawdown_pct=6.0,
+        key="apex_50k_intraday", firm="Apex Trader Funding", label="Apex - $50k Evaluation (Intraday)",
+        account_size=50_000, evaluation_profit_target_pct=6.0,
+        daily_loss_limit_pct=100.0,  # no daily loss limit on the Intraday type -- see source_note
+        max_drawdown_pct=4.0,        # $2,000 trailing max drawdown
         drawdown_type="trailing", drawdown_check_mode="intrabar",
         consistency_rule_pct=None, min_trading_days=0,
         payout_frequency_days=5,
-        as_of=_AS_OF,
+        winning_days_for_payout=5, min_winning_day_profit=200.0,
+        funded_consistency_rule_pct=50.0,
+        as_of=_AS_OF_V6,
         source_note=(
-            "Updated 2026-09-13 for the Apex 4.0 overhaul -- see the $50k preset's note for the full "
-            "explanation (no eval consistency rule, no minimum trading days, 5-day payout eligibility, "
-            "and the same trailing-drawdown-dollar-amount ambiguity across EOD/Intraday/platform variants)."
+            "Updated 2026-10-04: Intraday account type. $2,000 trailing max drawdown = 4.0% of $50k; "
+            "no daily loss limit (100.0 = the presets' 'no DLL' convention); drawdown monitored "
+            "intraday. Payout gates: 5 qualifying trading days, $200+/day winning-day gate, 50% funded "
+            "consistency rule -- all modeled. The 'Safety Net' profit buffer caveat from the EOD "
+            "entry applies here too."
+        ),
+    ),
+    PropFirmPreset(
+        key="apex_100k_eod", firm="Apex Trader Funding", label="Apex - $100k Evaluation (EOD)",
+        account_size=100_000, evaluation_profit_target_pct=6.0,
+        daily_loss_limit_pct=1.5,  # $1,500 EOD daily loss limit
+        max_drawdown_pct=3.0,      # $3,000 trailing max drawdown
+        drawdown_type="trailing", drawdown_check_mode="eod",
+        consistency_rule_pct=None, min_trading_days=0,
+        payout_frequency_days=5,
+        winning_days_for_payout=5, min_winning_day_profit=250.0,
+        funded_consistency_rule_pct=50.0,
+        as_of=_AS_OF_V6,
+        source_note=(
+            "Updated 2026-10-04: EOD account type. $3,000 trailing max drawdown = 3.0% of $100k; "
+            "$1,500 daily loss limit = 1.5%; drawdown monitored at EOD. Payout gates and caveats as "
+            "in the $50k EOD entry."
+        ),
+    ),
+    PropFirmPreset(
+        key="apex_100k_intraday", firm="Apex Trader Funding", label="Apex - $100k Evaluation (Intraday)",
+        account_size=100_000, evaluation_profit_target_pct=6.0,
+        daily_loss_limit_pct=100.0,  # no daily loss limit on the Intraday type
+        max_drawdown_pct=3.0,        # $3,000 trailing max drawdown
+        drawdown_type="trailing", drawdown_check_mode="intrabar",
+        consistency_rule_pct=None, min_trading_days=0,
+        payout_frequency_days=5,
+        winning_days_for_payout=5, min_winning_day_profit=200.0,
+        funded_consistency_rule_pct=50.0,
+        as_of=_AS_OF_V6,
+        source_note=(
+            "Updated 2026-10-04: Intraday account type. $3,000 trailing max drawdown = 3.0% of $100k; "
+            "no daily loss limit; drawdown monitored intraday. Payout gates and caveats as in the "
+            "$50k Intraday entry."
         ),
     ),
     # --- TopStep --------------------------------------------------------
@@ -229,6 +306,8 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
         drawdown_type="trailing", drawdown_check_mode="eod",
         consistency_rule_pct=50.0, min_trading_days=2,
         payout_frequency_days=5,
+        winning_days_for_payout=5, min_winning_day_profit=150.0,
+        funded_consistency_rule_pct=40.0,
         as_of=_AS_OF,
         source_note=(
             "Re-verified 2026-09-13 against help.topstep.com. min_trading_days=2 and max_drawdown_pct=4.0 "
@@ -253,12 +332,20 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
         drawdown_type="trailing", drawdown_check_mode="eod",
         consistency_rule_pct=50.0, min_trading_days=2,
         payout_frequency_days=5,
+        winning_days_for_payout=5, min_winning_day_profit=150.0,
+        funded_consistency_rule_pct=40.0,
         as_of=_AS_OF,
         source_note="Re-verified 2026-09-13 against help.topstep.com -- see the $50k preset's note for the full explanation.",
     ),
     # --- The5%ers ---------------------------------------------------------
+    # v6 (Oct 2026) RELABEL (B9): these entries were called "Bootcamp" but their
+    # numbers (8% target / 5% daily / 10% static max loss / 30% consistency /
+    # 3 min days) match The5%ers' High-Stakes 2-phase program, not Bootcamp.
+    # Bootcamp's real numbers are roughly 5% target / 4% daily / 3% max loss
+    # and are NOT modeled here -- don't pick these presets for a Bootcamp
+    # account.
     PropFirmPreset(
-        key="the5ers_20k", firm="The5%ers", label="The5%ers - $20k Bootcamp",
+        key="the5ers_20k", firm="The5%ers", label="The5%ers - $20k High-Stakes",
         account_size=20_000, evaluation_profit_target_pct=8.0,
         daily_loss_limit_pct=5.0, max_drawdown_pct=10.0,
         drawdown_type="static", drawdown_check_mode="eod",
@@ -273,11 +360,13 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
             "than strictly per-day. The5%ers currently sells several concurrently-named programs (Bootcamp, "
             "Hyper Growth, High-Stakes, Pro Growth) with different profit-target/drawdown combinations -- "
             "the 8%/5%/10%/static numbers here match the High-Stakes-style 2-phase structure most closely; "
-            "confirm which program name your account actually uses at the5ers.com."
+            "confirm which program name your account actually uses at the5ers.com. NOTE (v6, Oct 2026): "
+            "these entries are labeled High-Stakes (their numbers match that program); The5%ers Bootcamp's "
+            "real numbers are roughly 5% target / 4% daily / 3% max loss and are NOT modeled here."
         ),
     ),
     PropFirmPreset(
-        key="the5ers_100k", firm="The5%ers", label="The5%ers - $100k Bootcamp",
+        key="the5ers_100k", firm="The5%ers", label="The5%ers - $100k High-Stakes",
         account_size=100_000, evaluation_profit_target_pct=8.0,
         daily_loss_limit_pct=5.0, max_drawdown_pct=10.0,
         drawdown_type="static", drawdown_check_mode="eod",
@@ -287,36 +376,51 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
         source_note="Re-verified 2026-09-13 -- see the $20k preset's note for the full explanation and program-naming caveat.",
     ),
     # --- FundedNext ---------------------------------------------------------
+    # v6 (Oct 2026) REMAP (B7): these entries now model FundedNext's
+    # Stellar 2-Step product specifically (the product these numbers
+    # correspond to), not the generic "Evaluation" product. Phase-1 profit
+    # target corrected 10.0 -> 8.0. payout_frequency_days=14 models the
+    # RECURRING cadence; FundedNext's actual Stellar terms are a 21-day
+    # wait for the FIRST payout and 14 days thereafter -- this simulator
+    # has no separate "first payout frequency" field, so the 21-day first-
+    # payout caveat is documented here instead of modeled (expect the
+    # sim's first payout ~7 trade-days earlier than reality).
     PropFirmPreset(
-        key="fundednext_25k", firm="FundedNext", label="FundedNext - $25k Evaluation",
-        account_size=25_000, evaluation_profit_target_pct=10.0,
+        key="fundednext_25k", firm="FundedNext", label="FundedNext - $25k Stellar 2-Step",
+        account_size=25_000, evaluation_profit_target_pct=8.0,
         daily_loss_limit_pct=5.0, max_drawdown_pct=10.0,
         drawdown_type="static", drawdown_check_mode="eod",
         consistency_rule_pct=40.0, min_trading_days=5,
-        payout_frequency_days=7,
-        as_of=_AS_OF,
+        payout_frequency_days=14,
+        winning_days_for_payout=5, min_winning_day_profit=100.0,
+        funded_consistency_rule_pct=40.0,
+        as_of=_AS_OF_V6,
         source_note=(
-            "Re-verified 2026-09-13. min_trading_days=5, and the 10%/5%/10% target/daily/max-drawdown "
-            "numbers were already accurate for FundedNext's 2-phase Evaluation product. consistency_rule_pct "
-            "is now set to 40.0 (was None) -- confirmed rule: 'no single day can account for more than 40% "
-            "of your total profit' (one source states 30% instead; 40% was the more directly-quoted figure "
-            "and is used here, but this is worth a direct check). payout_frequency_days lowered from 15 to "
-            "7 as a rough midpoint for the standard Evaluation product's 'weekly payouts' framing -- of "
-            "everything re-checked in this pass, THIS is the least confidently sourced number: FundedNext "
-            "now runs Evaluation/Express/Stellar 1-Step/Stellar 2-Step/Rapid Pro/Rapid Daily products with "
-            "payout cycles documented anywhere from 3 days to daily to bi-weekly depending on which one you "
-            "actually bought. Confirm the exact figure for your specific product at fundednext.com."
+            "Updated 2026-10-04: now models the Stellar 2-Step product (Phase-1 target 8.0, corrected "
+            "from 10.0). consistency_rule_pct=40.0 (eval) and funded_consistency_rule_pct=40.0 (funded "
+            "payouts) both set -- confirmed rule: 'no single day can account for more than 40% of your "
+            "total profit' (one source states 30% instead; worth a direct check). min_trading_days=5. "
+            "Payout cadence: payout_frequency_days=14 models the RECURRING 14-day cycle; Stellar's actual "
+            "terms require 21 days before the FIRST payout, which this field cannot express -- expect the "
+            "sim's first payout roughly 7 trade-days earlier than reality. Payout gate: 5 winning days of "
+            "$100+."
         ),
     ),
     PropFirmPreset(
-        key="fundednext_100k", firm="FundedNext", label="FundedNext - $100k Evaluation",
-        account_size=100_000, evaluation_profit_target_pct=10.0,
+        key="fundednext_100k", firm="FundedNext", label="FundedNext - $100k Stellar 2-Step",
+        account_size=100_000, evaluation_profit_target_pct=8.0,
         daily_loss_limit_pct=5.0, max_drawdown_pct=10.0,
         drawdown_type="static", drawdown_check_mode="eod",
         consistency_rule_pct=40.0, min_trading_days=5,
-        payout_frequency_days=7,
-        as_of=_AS_OF,
-        source_note="Re-verified 2026-09-13 -- see the $25k preset's note, including the payout-cadence caveat (least confident figure in this catalog).",
+        payout_frequency_days=14,
+        winning_days_for_payout=5, min_winning_day_profit=200.0,
+        funded_consistency_rule_pct=40.0,
+        as_of=_AS_OF_V6,
+        source_note=(
+            "Updated 2026-10-04 -- see the $25k Stellar 2-Step preset's note (8.0 Phase-1 target, 21-day "
+            "first-payout caveat, 40% consistency at both stages). Payout gate here: 5 winning days of "
+            "$200+."
+        ),
     ),
     # --- Lucid Trading ---------------------------------------------------
     # MAJOR CORRECTION: this preset was significantly stale. Verified
@@ -332,6 +436,7 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
         drawdown_type="trailing", drawdown_check_mode="eod",
         consistency_rule_pct=None, min_trading_days=1,
         payout_frequency_days=3,
+        funded_consistency_rule_pct=40.0,
         as_of=_AS_OF,
         source_note=(
             "CORRECTED 2026-09-13 against lucidtrading.com (LucidPro track) -- previous values were stale. "
@@ -341,7 +446,8 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
             "not 14 -- confirmed both by Lucid's own live pricing page ('Days to Payout: 3') and independent "
             "sources. consistency_rule_pct stays None: LucidPro has NO consistency rule during evaluation -- "
             "the real 40% consistency rule shown on Lucid's site applies only at the funded-payout stage "
-            "(see module docstring's MODELING LIMITATION note), same situation as Apex above. Lucid also "
+            "(now modeled by funded_consistency_rule_pct=40.0 as of v6; see module docstring's MODELING "
+            "LIMITATION note), same situation as Apex above. Lucid also "
             "sells LucidFlex (50% eval consistency, no funded consistency, no DLL), LucidDaily, and "
             "LucidDirect (skips the evaluation entirely, 20% funded consistency) -- this preset models "
             "LucidPro specifically, the track shown in the screenshot this correction was verified against."
@@ -354,6 +460,7 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
         drawdown_type="trailing", drawdown_check_mode="eod",
         consistency_rule_pct=None, min_trading_days=1,
         payout_frequency_days=3,
+        funded_consistency_rule_pct=40.0,
         as_of=_AS_OF,
         source_note=(
             "CORRECTED 2026-09-13 -- see the $50k preset's note for the full explanation. max_drawdown_pct "

@@ -57,6 +57,59 @@ class PropRules:
     # no trades pass between two trade days. None (default) = rule off,
     # byte-identical to before this field existed.
     max_inactive_days: int | None = None
+    # B5 (v6): funded-stage consistency rule -- checked at every funded
+    # payout, mirroring the eval-stage rule's shape: the payout is gated
+    # unless best_day_since_baseline / profit_since_baseline <= this
+    # percentage. Guarded against divide-by-zero (skipped when
+    # profit_since_baseline <= 0). None (default) = rule off,
+    # byte-identical to before this field existed. Firms gate payouts
+    # (not the eval pass) with this kind of rule -- Apex 50%, Lucid 40%,
+    # TopStep 40%, FundedNext 40% (see app.prop.presets).
+    funded_consistency_rule_pct: float | None = None
+    # B13 (v6): what happens when a session day breaches the daily loss
+    # limit. "fail" (default) = the account busts immediately, exactly as
+    # before. "lock_day" = the day's remaining trades are skipped and the
+    # sim resumes on the next session day (models firms/desks that lock
+    # you out for the day instead of closing the account). Validated in
+    # __post_init__ -- anything else raises ValueError.
+    daily_loss_action: str = "fail"              # "fail" | "lock_day"
+    # B15 (v6): WHAT balance the daily-loss-limit percentage is taken of.
+    #   "initial" (default): today's behavior, byte-identical -- the limit
+    #   is always account_size * daily_loss_limit_pct / 100.
+    #   "prior_day_high": the limit is taken of the prior session day's
+    #   realized-balance peak (the closest this realized-PnL-only sim can
+    #   get to "max(prior session close, equity high at prior midnight)"
+    #   -- peak >= close, so the max collapses to the peak).
+    #   "ratchet_up": the limit is taken of max(account_size, all prior
+    #   session-close balances) -- the base never decreases once it rises.
+    # Day 1 (no prior session) always falls back to account_size.
+    # Validated in __post_init__ -- anything else raises ValueError.
+    daily_loss_base: str = "initial"             # "initial" | "prior_day_high" | "ratchet_up"
+    # B14 (v6): evaluation time limit -- fail the account with reason
+    # "eval_time_limit" once more than this many CALENDAR days have
+    # elapsed since the eval started (attempt start day) without passing.
+    # None (default) = no time limit, byte-identical to before.
+    max_eval_calendar_days: int | None = None
+    # B14 (v6): absolute dollar cap applied to every payout request
+    # (on top of payout_cap_pct). None (default) = no dollar cap.
+    payout_cap_dollars: float | None = None
+    # B14 (v6): maximum number of payouts over the life of one attempt
+    # (each attempt is a fresh account, so the cap is per attempt).
+    # None (default) = unlimited.
+    max_payouts: int | None = None
+
+    def __post_init__(self):
+        # B13/B15 (v6): reject misspelled/unknown enum values at
+        # construction instead of silently misbehaving mid-simulation.
+        if self.daily_loss_action not in ("fail", "lock_day"):
+            raise ValueError(
+                f"daily_loss_action must be 'fail' or 'lock_day', got {self.daily_loss_action!r}"
+            )
+        if self.daily_loss_base not in ("initial", "prior_day_high", "ratchet_up"):
+            raise ValueError(
+                f"daily_loss_base must be 'initial', 'prior_day_high' or 'ratchet_up', "
+                f"got {self.daily_loss_base!r}"
+            )
     # P1-3: WHAT balance the drawdown failure checks trail on.
     #   "realized" (default): today's behavior, byte-identical -- checks
     #   run against realized trade-close balance only.
@@ -197,6 +250,14 @@ class AccountSimResult:
     total_attempts: int = 1
     attempts_passed: int = 0
     attempts_reached_payout: int = 0
+    # -- B12-sim (v6): constraint-utilization tracking -------------------------
+    # Overall (across all attempts in the chain) best single-day PnL and
+    # worst single-day PnL, consumed by summarize_single_run's
+    # best_day_profit_pct_of_limit / worst_daily_loss_pct_of_limit fields.
+    # 0.0 defaults = byte-neutral for any run with no positive/negative
+    # days respectively; nothing here changes any pre-existing field.
+    best_day_profit: float = 0.0
+    worst_day_pnl: float = 0.0
 
     @property
     def reached_first_payout(self) -> bool:
@@ -396,6 +457,8 @@ def simulate_account(
     overall_first_payout_amount = None
     overall_max_dd_pct_reached = 0.0
     last_day_idx_reached = -1
+    overall_best_day_profit = 0.0             # B12-sim (v6): run-wide best single-day PnL
+    overall_worst_day_pnl = 0.0               # B12-sim (v6): run-wide worst single-day PnL
 
     i = 0
     attempt_index = 0
@@ -434,6 +497,9 @@ def simulate_account(
         payout_baseline_balance = rules.account_size
         total_profit_since_start = 0.0
         best_day_profit = 0.0
+        best_day_since_baseline = 0.0          # B5 (v6): best single-day PnL since the current payout baseline
+        day_close: dict = {}                  # B15 (v6): session-day idx -> realized balance at that day's last trade
+        day_peak: dict = {}                   # B15 (v6): session-day idx -> highest realized balance seen that day
 
         j = i
         while j < n:
@@ -502,6 +568,14 @@ def simulate_account(
                 j += 1
                 continue
 
+            # B15 (v6): per-session-day balance envelope for the daily-loss
+            # base ("prior_day_high" / "ratchet_up"). day_peak tracks the
+            # highest realized balance seen during each session day;
+            # day_close records the realized balance at the day's end.
+            day_peak[cur_day_idx] = max(day_peak.get(cur_day_idx, float("-inf")), balance)
+            if is_last_of_day[j]:
+                day_close[cur_day_idx] = balance
+
             # P0-2: static-drawdown ruin must be measured against the STATIC
             # floor (account_size-relative), not the ratcheting trailing
             # peak. Only "trailing" firms anchor to trailing_peak.
@@ -515,7 +589,35 @@ def simulate_account(
             overall_max_dd_pct_reached = max(overall_max_dd_pct_reached, current_dd_pct)
 
             # --- Failure checks (apply in both evaluation and funded stages) ---
-            if daily_pnl[cur_day_idx] <= -rules.account_size * (rules.daily_loss_limit_pct / 100.0):
+            # B15 (v6): the daily-loss base is configurable -- "initial" is
+            # today's behavior (byte-identical: account_size * pct / 100),
+            # "prior_day_high" takes the limit off the prior session day's
+            # realized-balance peak (peak >= close, so the spec's
+            # "max(prior session close, equity high at prior midnight)"
+            # collapses to the peak in this realized-PnL-only sim), and
+            # "ratchet_up" takes it off max(account_size, every prior
+            # session-close balance) -- never decreases once it rises. The
+            # first session day always falls back to account_size (no prior
+            # session exists yet).
+            if rules.daily_loss_base == "initial":
+                _dll_base = rules.account_size
+            elif rules.daily_loss_base == "prior_day_high":
+                _dll_base = day_peak.get(cur_day_idx - 1, rules.account_size)
+            else:  # "ratchet_up"
+                _prior_closes = [c for d, c in day_close.items() if d < cur_day_idx]
+                _dll_base = max([rules.account_size] + _prior_closes)
+            _dll_limit = _dll_base * (rules.daily_loss_limit_pct / 100.0)
+            if daily_pnl[cur_day_idx] <= -_dll_limit:
+                if rules.daily_loss_action == "lock_day":
+                    # B13 (v6): skip the rest of this session day and resume
+                    # on the next one -- the account survives the breach.
+                    # Skipped trades are treated as never taken (no balance
+                    # move, no day attribution); the breached day's close
+                    # is recorded so DLL-base bookkeeping stays consistent.
+                    day_close[cur_day_idx] = balance
+                    while j < n and day_index_per_trade[j] == cur_day_idx:
+                        j += 1
+                    continue
                 failed = True
                 failure_reason = "daily_loss_limit"
                 failure_day_index = cur_day_idx
@@ -553,6 +655,16 @@ def simulate_account(
 
             # --- Evaluation pass check ---
             if stage == "evaluation":
+                # B14 (v6): eval time limit -- fail once more than
+                # max_eval_calendar_days CALENDAR days have elapsed since
+                # the eval started (attempt start day) without passing.
+                if rules.max_eval_calendar_days is not None:
+                    _eval_cal_days = (day_dates[cur_day_idx] - day_dates[attempt_start_day_idx]).days
+                    if _eval_cal_days > rules.max_eval_calendar_days:
+                        failed = True
+                        failure_reason = "eval_time_limit"
+                        failure_day_index = cur_day_idx
+                        break
                 target_balance = rules.account_size * (1 + rules.evaluation_profit_target_pct / 100.0)
                 trading_days_so_far = cur_day_idx - attempt_start_day_idx + 1
                 if balance >= target_balance and trading_days_so_far >= rules.min_trading_days:
@@ -566,6 +678,9 @@ def simulate_account(
                         passed_evaluation = True
                         days_to_pass = trading_days_so_far
                         payout_baseline_balance = balance
+                        # B5 (v6): the payout baseline starts a fresh
+                        # funded-consistency window.
+                        best_day_since_baseline = 0.0
                         funded_start_day_idx = cur_day_idx  # P2-6: winning-day gate counts funded-stage days from here
                         last_payout_day_index = cur_day_idx  # start payout clock from pass date
 
@@ -574,6 +689,19 @@ def simulate_account(
                 profit_since_baseline = balance - payout_baseline_balance
                 required_profit = rules.account_size * (rules.payout_threshold_pct / 100.0) \
                     + rules.account_size * (rules.required_buffer_pct / 100.0)
+                # B5 (v6): track the best single-day PnL since the current
+                # payout baseline; the payout is additionally gated unless
+                # best_day_since_baseline / profit_since_baseline <=
+                # funded_consistency_rule_pct. Guarded: the check is skipped
+                # when profit_since_baseline <= 0 (divide-by-zero).
+                best_day_since_baseline = max(
+                    best_day_since_baseline, day_profit_history.get(cur_day_idx, 0.0)
+                )
+                funded_consistency_ok = True
+                if rules.funded_consistency_rule_pct is not None and profit_since_baseline > 0:
+                    funded_consistency_ok = (
+                        best_day_since_baseline / profit_since_baseline * 100.0
+                    ) <= rules.funded_consistency_rule_pct
                 # P2-7: trade-days, not calendar days (cur_day_idx is an
                 # ordinal over days with >= 1 trade).
                 days_since_last_payout = cur_day_idx - last_payout_day_index
@@ -589,12 +717,21 @@ def simulate_account(
                 )
                 # P2-7: `>=` (was `>`) -- a balance landing exactly on the
                 # payout target is eligible, not one cent short of it.
+                # B14 (v6): max_payouts caps the number of payouts over the
+                # life of one attempt (each attempt is a fresh account).
                 if (profit_since_baseline >= required_profit
                         and days_since_last_payout >= rules.payout_frequency_days
-                        and winning_days >= rules.winning_days_for_payout):
+                        and winning_days >= rules.winning_days_for_payout
+                        and funded_consistency_ok
+                        and (rules.max_payouts is None
+                             or len(payouts_this_attempt) < rules.max_payouts)):
                     withdrawable = profit_since_baseline - rules.account_size * (rules.required_buffer_pct / 100.0)
                     if rules.payout_cap_pct is not None:
                         withdrawable = min(withdrawable, profit_since_baseline * (rules.payout_cap_pct / 100.0))
+                    # B14 (v6): absolute dollar cap per payout request,
+                    # applied on top of payout_cap_pct.
+                    if rules.payout_cap_dollars is not None:
+                        withdrawable = min(withdrawable, rules.payout_cap_dollars)
                     withdrawable = max(withdrawable, 0.0)
                     if withdrawable > 0:
                         balance -= withdrawable
@@ -610,6 +747,9 @@ def simulate_account(
                             first_payout_amount_attempt = withdrawable
                         payout_baseline_balance = balance
                         last_payout_day_index = cur_day_idx
+                        # B5 (v6): a new baseline starts a new
+                        # funded-consistency window.
+                        best_day_since_baseline = 0.0
                         # P0-3: a payout must never move the account closer
                         # to its own drawdown floor -- the withdrawal nets
                         # out of the trailing peak, so a just-paid account
@@ -623,6 +763,11 @@ def simulate_account(
 
         # --- attempt finished: either it busted (break above) or it rode
         # out every remaining trade without failing (j == n) ---
+        # B12-sim (v6): fold this attempt's day extremes into the
+        # run-wide constraint-utilization tracking.
+        if daily_pnl:
+            overall_best_day_profit = max(overall_best_day_profit, max(daily_pnl.values()))
+            overall_worst_day_pnl = min(overall_worst_day_pnl, min(daily_pnl.values()))
         attempts.append(AttemptRecord(
             attempt_index=attempt_index,
             start_day_index=attempt_start_day_idx,
@@ -672,17 +817,45 @@ def simulate_account(
         total_attempts=len(attempts),
         attempts_passed=sum(1 for a in attempts if a.passed_evaluation),
         attempts_reached_payout=sum(1 for a in attempts if a.reached_first_payout),
+        best_day_profit=overall_best_day_profit,
+        worst_day_pnl=overall_worst_day_pnl,
     )
 
 
-def summarize_single_run(result: AccountSimResult) -> dict:
+def summarize_single_run(result: AccountSimResult, rules: "PropRules | None" = None) -> dict:
     """
     Section-4-style summary for the single deterministic historical trade
     sequence. Pass/fail/payout rates here are necessarily 0% or 100% since
     there is only one run -- statistical distributions over many possible
     trade sequences are the job of the Monte Carlo engine (section 5/6).
+
+    rules: the PropRules the run was simulated under. Optional -- when
+    omitted, the three B12-sim constraint-utilization fields
+    (best_day_profit_pct_of_limit, worst_daily_loss_pct_of_limit,
+    max_dd_pct_of_limit) are None, since the limits they are ratios
+    against come from the rules. Every pre-existing caller passes just
+    `result` and keeps working unchanged.
+
+    B12-sim (v6): the three utilization fields are float ratios where
+    1.0 = exactly at the limit, None when the corresponding rule is
+    disabled (or the ratio is undefined):
+      - best_day_profit_pct_of_limit: best single-day profit / the
+        day-profit amount that would breach consistency, where the breach
+        amount = consistency% x the run's total net profit
+        ((final_balance - account_size) + total_payout_amount). The eval
+        rule (consistency_rule_pct) is preferred when set; otherwise the
+        funded rule (funded_consistency_rule_pct). None when neither rule
+        is set, or when total net profit <= 0 (the ratio is undefined).
+      - worst_daily_loss_pct_of_limit: |worst single-day PnL| / the
+        daily-loss-limit dollar amount, computed off the initial base
+        (an approximation when daily_loss_base is "prior_day_high" or
+        "ratchet_up", whose limit moves day to day). None when the DLL
+        is effectively disabled (daily_loss_limit_pct >= 100, the
+        presets' "no DLL" convention) or non-positive.
+      - max_dd_pct_of_limit: max_drawdown_pct_reached / max_drawdown_pct.
+        None when max_drawdown_pct <= 0.
     """
-    return {
+    summary = {
         "evaluation_pass_pct": 100.0 if result.passed_evaluation else 0.0,
         "evaluation_failure_pct": 100.0 if result.failed and not result.passed_evaluation else 0.0,
         "first_payout_pct": 100.0 if result.reached_first_payout else 0.0,
@@ -696,3 +869,30 @@ def summarize_single_run(result: AccountSimResult) -> dict:
         "failure_reason": result.failure_reason,
         "trading_days_count": result.trading_days_count,
     }
+
+    best_day_profit_pct_of_limit = None
+    worst_daily_loss_pct_of_limit = None
+    max_dd_pct_of_limit = None
+    if rules is not None:
+        _consistency_pct = (
+            rules.consistency_rule_pct
+            if rules.consistency_rule_pct is not None
+            else rules.funded_consistency_rule_pct
+        )
+        if _consistency_pct is not None:
+            _total_net_profit = (result.final_balance - rules.account_size) + result.total_payout_amount
+            if _total_net_profit > 0 and result.best_day_profit > 0:
+                _breach_amount = _consistency_pct / 100.0 * _total_net_profit
+                if _breach_amount > 0:
+                    best_day_profit_pct_of_limit = result.best_day_profit / _breach_amount
+        if 0.0 < rules.daily_loss_limit_pct < 100.0:
+            _dll_dollars = rules.account_size * rules.daily_loss_limit_pct / 100.0
+            if _dll_dollars > 0:
+                worst_daily_loss_pct_of_limit = abs(min(result.worst_day_pnl, 0.0)) / _dll_dollars
+        if rules.max_drawdown_pct > 0:
+            max_dd_pct_of_limit = result.max_drawdown_pct_reached / rules.max_drawdown_pct
+
+    summary["best_day_profit_pct_of_limit"] = best_day_profit_pct_of_limit
+    summary["worst_daily_loss_pct_of_limit"] = worst_daily_loss_pct_of_limit
+    summary["max_dd_pct_of_limit"] = max_dd_pct_of_limit
+    return summary
