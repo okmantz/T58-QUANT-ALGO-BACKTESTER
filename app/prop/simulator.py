@@ -20,6 +20,8 @@ from datetime import date as date_type
 
 import pandas as pd
 
+from app.data.trading_day import trading_day
+
 
 @dataclass
 class PropRules:
@@ -66,6 +68,36 @@ class PropRules:
     # that name is already taken by the intrabar/eod WHEN-to-check field
     # above, so this orthogonal WHAT-to-trail axis gets its own name.
     floating_drawdown_mode: str = "realized"        # "realized" | "adverse"
+    # -- session-day bucketing (v5) -------------------------------------------
+    # All day grouping in this module (daily-loss attribution, winning-day
+    # counts, trade-day ordinals, the inactivity gap) uses the shared
+    # app.data.trading_day.trading_day() helper, NOT naive UTC midnight:
+    # the trading day rolls at `session_roll_hour` (17:00 = 5 PM CT, the
+    # Globex roll used by Alpha Futures and most US futures firms).
+    # Behavior change vs older revisions: evening PnL between 17:00 and
+    # 23:59 CT now attributes to the NEXT session day instead of the
+    # calendar (UTC-midnight) day, which changes daily-loss-limit
+    # attribution, the 5x$200 winning-day gate, and per-day consistency
+    # numerators. Naive timestamps are assumed to be UTC (the state of
+    # imported price data); tz-aware timestamps are converted properly.
+    session_timezone: str = "America/Chicago"    # tz for session-day bucketing
+    session_roll_hour: int = 17                  # hour of day (in session_timezone) when the trading day rolls
+
+    # -- portfolio correlation caps (v5, astra port #5) ------------------------
+    # Optional overlay for JOINT N-strategy sims (one simulate_account call
+    # over the interleaved trades of several strategies): cap how many
+    # positions may be open at once and how many of them may point the same
+    # direction. Correlated same-direction exposure is the blow-up vector
+    # per-strategy drawdown limits miss -- e.g. five "different" strategies
+    # all long NQ into the same flush. Default None/None = overlay OFF:
+    # single-strategy sims (and any caller that doesn't pass entry times)
+    # are byte-identical to before these fields existed. When enabled, the
+    # caller must also pass trade_entry_times (and trade_sides for the
+    # direction cap) to simulate_account; a trade that would violate a cap
+    # is SKIPPED as if it never happened (blocked live by the desk's risk
+    # gate) and counted in AccountSimResult.blocked_trades.
+    max_concurrent_positions: int | None = None    # e.g. 6 (astra risk_constants.py:48-50)
+    max_same_direction_exposure: int | None = None # e.g. 4 (astra risk_constants.py:48-50)
     max_position_size: float | None = None          # informational cap on units (enforced in RiskConfig)
 
     # -- live-execution-only fields (added for Deploy Live / execution_engine.py) --------------
@@ -145,6 +177,13 @@ class AccountSimResult:
     final_balance: float = 0.0
     max_drawdown_pct_reached: float = 0.0
     trading_days_count: int = 0
+    # -- portfolio correlation-cap overlay (v5) --------------------------------
+    # Trades skipped because they would have violated
+    # max_concurrent_positions / max_same_direction_exposure. 0 unless the
+    # overlay is enabled (both the cap fields on PropRules AND entry times
+    # passed to simulate_account); with the overlay off this is always 0
+    # and every other field is byte-identical to before it existed.
+    blocked_trades: int = 0
     # -- reset-on-breach chain bookkeeping (see simulate_account's docstring) --
     # Populated for every call (attempts always has at least one record,
     # attempt #1); only ever has more than one entry when reset_on_breach
@@ -171,9 +210,11 @@ class AccountSimResult:
 @dataclass
 class DayStructure:
     """The part of simulate_account's bookkeeping that depends ONLY on
-    `trade_dates`, never on the P&L values themselves: which calendar day
+    `trade_dates`, never on the P&L values themselves: which trading day
     each trade in the sequence falls on, and which trades are the last of
-    their day. The Monte Carlo engine resamples/shuffles P&L VALUES across
+    their day. (v5: "day" = session day per app.data.trading_day with the
+    tz/roll_hour precompute_day_structure was called with -- see the
+    behavior-change note on PropRules.session_roll_hour.) The Monte Carlo engine resamples/shuffles P&L VALUES across
     thousands of simulations while reusing the exact same (fixed,
     historical) trade dates every time -- see app.monte_carlo.engine's
     run_monte_carlo -- so this structure is identical across every one of
@@ -191,12 +232,24 @@ class DayStructure:
     n_days: int
 
 
-def precompute_day_structure(trade_dates: list) -> DayStructure:
+def precompute_day_structure(
+    trade_dates: list,
+    *,
+    tz: str = "America/Chicago",
+    roll_hour: int = 17,
+) -> DayStructure:
     """Builds the (dates-only) bookkeeping simulate_account needs, once,
     so it can be reused across many calls that all share the same
     `trade_dates` but different `trade_pnls` (exactly the Monte Carlo
-    engine's resampling pattern). See DayStructure's docstring."""
-    dates_norm = [pd.Timestamp(d).normalize() for d in trade_dates]
+    engine's resampling pattern). See DayStructure's docstring.
+
+    v5: day grouping uses the shared session-day helper
+    app.data.trading_day.trading_day() -- the trading day rolls at
+    `roll_hour` o'clock in `tz` (defaults 17:00 America/Chicago, the
+    futures-session roll), NOT naive UTC midnight. Naive timestamps are
+    assumed to be UTC; tz-aware timestamps convert properly.
+    """
+    dates_norm = [pd.Timestamp(trading_day(d, tz=tz, roll_hour=roll_hour)) for d in trade_dates]
     day_index_map: dict = {}
     day_order: list = []
     day_index_per_trade: list = []
@@ -225,6 +278,9 @@ def simulate_account(
     _day_structure: "DayStructure | None" = None,
     reset_on_breach: bool = False,
     trade_initial_risks: "list[float] | None" = None,
+    trade_entry_times: "list | None" = None,
+    trade_sides: "list | None" = None,
+    trade_exit_times: "list | None" = None,
 ) -> AccountSimResult:
     """
     trade_pnls: P&L of each trade (account-currency $), in chronological order
@@ -267,6 +323,18 @@ def simulate_account(
     initial_risk * size). Only used when
     rules.floating_drawdown_mode == "adverse" (see P1-3 below); None
     (default) keeps the check a no-op, byte-identical to not passing it.
+
+    trade_entry_times: optional per-trade entry datetimes, same
+    order/length as trade_pnls. Only used by the portfolio correlation-cap
+    overlay (rules.max_concurrent_positions /
+    rules.max_same_direction_exposure); None (default) disables the
+    overlay entirely, byte-identical to not passing it.
+    trade_sides: optional per-trade side, same order/length as trade_pnls:
+    +1/-1 (or "long"/"short" strings). Only used by the
+    max_same_direction_exposure cap; None (default) disables that cap.
+    trade_exit_times: optional per-trade exit datetimes overriding
+    trade_dates for the concurrency-overlap computation. Defaults to
+    trade_dates (i.e. trade_dates are the position close times).
     """
     if len(trade_pnls) == 0:
         return AccountSimResult(
@@ -276,12 +344,49 @@ def simulate_account(
             reset_on_breach=reset_on_breach, attempts=[], total_attempts=0,
         )
 
-    day_structure = _day_structure if _day_structure is not None else precompute_day_structure(trade_dates)
+    day_structure = (
+        _day_structure
+        if _day_structure is not None
+        else precompute_day_structure(
+            trade_dates, tz=rules.session_timezone, roll_hour=rules.session_roll_hour
+        )
+    )
     day_index_per_trade = day_structure.day_index_per_trade
     is_last_of_day = day_structure.is_last_of_day
     day_dates = day_structure.day_dates
     n = len(trade_pnls)
     static_floor = rules.account_size * (1 - rules.max_drawdown_pct / 100.0)
+
+    # --- portfolio correlation-cap overlay (v5, astra port #5) --------------
+    # Off unless a cap is configured on `rules` AND entry times are given.
+    # `_correlation_caps_active` is False in every single-strategy / legacy
+    # call, so the inner trade loop below is byte-identical to before.
+    _caps_active = (
+        (rules.max_concurrent_positions is not None or rules.max_same_direction_exposure is not None)
+        and trade_entry_times is not None
+    )
+    _blocked_trades = 0
+
+    def _side_of(value) -> int | None:
+        """Normalize a trade side to +1 (long) / -1 (short) / None (unknown)."""
+        if isinstance(value, str):
+            v = value.strip().lower()
+            if v.startswith("long"):
+                return 1
+            if v.startswith("short"):
+                return -1
+            return None
+        if value is None:
+            return None
+        if value > 0:
+            return 1
+        if value < 0:
+            return -1
+        return None
+
+    # Positions already taken (and not skipped) in the current attempt:
+    # list of (entry_time, exit_time, side) used for the overlap test.
+    _open_pool: list = []
 
     attempts: list[AttemptRecord] = []
     overall_payouts: list[PayoutEvent] = []
@@ -323,12 +428,46 @@ def simulate_account(
         first_payout_day_index_attempt = None
         first_payout_amount_attempt = None
         last_payout_day_index = -10 ** 9
+        # correlation-cap overlay: each attempt is a fresh account, so the
+        # open-position pool resets at the attempt boundary.
+        _open_pool = []
         payout_baseline_balance = rules.account_size
         total_profit_since_start = 0.0
         best_day_profit = 0.0
 
         j = i
         while j < n:
+            # --- correlation-cap overlay: a blocked trade never happened ---
+            if _caps_active:
+                entry_j = pd.Timestamp(trade_entry_times[j])
+                exit_j = (
+                    pd.Timestamp(trade_exit_times[j])
+                    if trade_exit_times is not None
+                    else pd.Timestamp(trade_dates[j])
+                )
+                open_sides = []
+                for (e_k, x_k, s_k) in _open_pool:
+                    if e_k <= entry_j < x_k:
+                        open_sides.append(s_k)
+                blocked = (
+                    rules.max_concurrent_positions is not None
+                    and len(open_sides) >= rules.max_concurrent_positions
+                )
+                if not blocked and rules.max_same_direction_exposure is not None and trade_sides is not None:
+                    side_j = _side_of(trade_sides[j])
+                    same_dir = sum(1 for s in open_sides if s is not None and s == side_j)
+                    blocked = same_dir >= rules.max_same_direction_exposure
+                if blocked:
+                    # Live, the desk's risk gate would have rejected this
+                    # entry -- the sim skips it wholesale: no balance move,
+                    # no day attribution, no winning-day credit.
+                    _blocked_trades += 1
+                    j += 1
+                    continue
+                _open_pool.append(
+                    (entry_j, exit_j, _side_of(trade_sides[j]) if trade_sides is not None else None)
+                )
+
             pnl = trade_pnls[j]
             cur_day_idx = day_index_per_trade[j]
             attempt_last_day_idx = cur_day_idx
@@ -527,6 +666,7 @@ def simulate_account(
         final_balance=balance,
         max_drawdown_pct_reached=overall_max_dd_pct_reached,
         trading_days_count=last_day_idx_reached + 1,
+        blocked_trades=_blocked_trades,
         reset_on_breach=reset_on_breach,
         attempts=attempts,
         total_attempts=len(attempts),
