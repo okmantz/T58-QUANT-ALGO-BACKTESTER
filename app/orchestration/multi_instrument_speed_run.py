@@ -123,10 +123,17 @@ def run_multi_instrument_speed_run(
                 )
             df = import_result.dataframe
             job_output_dir = output_dir / f"{job.instrument}_{job.timeframe}"
+            # v7 (2026-10-05): per-leg pip_size resolution -- same rationale
+            # as run_multi_instrument_search. Only the untouched FX default
+            # is ever adjusted; explicit values are never overridden.
+            from app.search.instrument_risk import resolve_leg_risk
+            leg_risk, leg_notes = resolve_leg_risk(risk, df, job.instrument)
+            for leg_note in leg_notes:
+                log(job, leg_note)
             log(job, f"Starting Speed Run ({per_job_workers} discovery worker(s), "
                      f"{per_job_validations} concurrent validation(s))...")
             result = run_speed_run(
-                df, risk, prop_rules, job_output_dir, per_job_cfg,
+                df, leg_risk, prop_rules, job_output_dir, per_job_cfg,
                 progress_cb=lambda m: log(job, m), instrument=job.instrument,
             )
             verdict = "a winner" if result.winner is not None else "no winner"

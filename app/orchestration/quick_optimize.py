@@ -206,8 +206,11 @@ def _display_name(strategy: Strategy) -> str:
 
 @dataclass
 class QuickOptimizeConfig:
-    ga_population: int = 16
-    ga_generations: int = 8
+    # v7 (2026-10-05, workstream D): budget raised 16x8 -> 32x12 to match the
+    # web Quick Optimize route/template defaults. Non-trivial budget is part
+    # of the "actually optimizes" bar.
+    ga_population: int = 32
+    ga_generations: int = 12
     fitness_metric: str = "eval_pass_probability"
     # UPGRADE (optimizer core): explicit optimizer mode -- "genetic"
     # (default, byte-identical to every run before this field existed),

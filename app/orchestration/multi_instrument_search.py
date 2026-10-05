@@ -131,9 +131,19 @@ def run_multi_instrument_search(
                 )
             df = import_result.dataframe
             db_path = db_dir / f"{job.instrument}_{job.timeframe}.db"
+            # v7 (2026-10-05): per-leg pip_size resolution -- the same fix as
+            # app/search/cross_instrument.py. A single global RiskConfig must
+            # not leak an FX-scale pip_size into a futures leg (or vice
+            # versa). resolve_leg_risk only adjusts the untouched FX default
+            # when the data disagrees; explicit user values are never
+            # overridden, and every adjustment is logged.
+            from app.search.instrument_risk import resolve_leg_risk
+            leg_risk, leg_notes = resolve_leg_risk(risk, df, job.instrument)
+            for leg_note in leg_notes:
+                log(job, leg_note)
             log(job, f"Starting search ({per_job_workers} worker(s))...")
             summary = run_search(
-                df, risk, prop_rules, space, per_job_stage_cfg, str(db_path),
+                df, leg_risk, prop_rules, space, per_job_stage_cfg, str(db_path),
                 instrument=job.instrument, timeframe=job.timeframe,
                 progress_cb=lambda m: log(job, m),
                 cancel_event=cancel_event,
