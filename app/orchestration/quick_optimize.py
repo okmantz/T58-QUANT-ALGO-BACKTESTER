@@ -79,6 +79,7 @@ that gap several ways at once:
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -142,6 +143,53 @@ RESEARCH_RESULT_BANNER = "\u26a0\ufe0f RESEARCH RESULT \u2014 NOT OOS VALIDATED"
 RESEARCH_RESULT_BANNER_DETAIL = (
     "Run Full Pipeline to determine whether this result survives unseen-data validation."
 )
+
+
+def _evaluate_quick_optimize_ready_gate(
+    per_attempt_pass_probability: float,
+    lookahead_bug_detected: bool,
+    oos_trade_count: int,
+    min_per_attempt_pass_pct: float = 70.0,
+    min_trades: int = MIN_CREDIBLE_OOS_TRADES,
+) -> tuple[bool, list[str]]:
+    """v5 READY acceptance gate for Quick Optimize -- the three conditions
+    a winning configuration must ALL clear before it may be reported as an
+    improvement ("crowned"):
+
+      1. per-attempt (single-account) eval-pass probability >=
+         min_per_attempt_pass_pct -- the HONEST number: "will ONE account
+         attempt pass", not the chain-level "did >=1 rebuy attempt in a
+         long reset chain ever pass" (see MonteCarloResult's
+         per_attempt_* fields). 70.0 matches the Evolution Lab loop-mode
+         target_eval_pass_pct convention: one acceptance bar across tools.
+      2. no confirmed lookahead-bias leak -- a strategy whose signal
+         depends on future data isn't "somewhat ready": every number
+         reported for it is downstream of the same leak.
+      3. >= min_trades out-of-sample trades -- a percentage built on a
+         handful of trades is noise, not edge.
+
+    Returns (passed, reasons): reasons is empty on a pass, and lists every
+    failed condition on a fail. Kept as a pure module-level function (no
+    run state) so it is directly unit-testable.
+    """
+    reasons: list[str] = []
+    if not math.isfinite(per_attempt_pass_probability) or per_attempt_pass_probability < min_per_attempt_pass_pct:
+        shown = f"{per_attempt_pass_probability:.1f}%" if math.isfinite(per_attempt_pass_probability) else "n/a"
+        reasons.append(
+            f"per-attempt eval-pass probability {shown} is below the {min_per_attempt_pass_pct:.0f}% "
+            f"acceptance bar -- the single-account odds are not good enough to crown this candidate."
+        )
+    if lookahead_bug_detected:
+        reasons.append(
+            "a lookahead-bias leak was confirmed in the final configuration's signal -- every number "
+            "reported for it (backtest, Monte Carlo) is downstream of that leak and untrustworthy."
+        )
+    if oos_trade_count < min_trades:
+        reasons.append(
+            f"only {oos_trade_count} out-of-sample trade(s) behind this result (want {min_trades}+) -- "
+            f"too thin a sample to trust with an improvement verdict."
+        )
+    return (not reasons, reasons)
 
 
 def _display_name(strategy: Strategy) -> str:
@@ -223,6 +271,20 @@ class QuickOptimizeConfig:
     # Pipeline run -- not so this tool can claim to replace that run.
     reserve_holdout: bool = False
     holdout_frac: float = 0.2
+
+    # v5 READY acceptance gate: the winning configuration must clear ALL
+    # three of (a) per-attempt (single-account, NOT chain-level)
+    # eval-pass probability >= ready_gate_min_per_attempt_pass_pct, (b) no
+    # confirmed lookahead-bias leak, and (c) >= ready_gate_min_trades
+    # out-of-sample trades -- otherwise it is not reported as an
+    # improvement, no matter how much better than baseline it looks.
+    # 70.0 matches the Evolution Lab loop-mode target_eval_pass_pct
+    # convention (see the Oct 2026 analysis): one acceptance bar across
+    # tools, on the honest per-attempt number.
+    ready_gate_min_per_attempt_pass_pct: float = 70.0
+    # Same floor as MIN_CREDIBLE_OOS_TRADES above: a percentage built on
+    # fewer trades is noise, not edge, and noise doesn't get crowned.
+    ready_gate_min_trades: int = MIN_CREDIBLE_OOS_TRADES
 
     # VERSIONING (stop-making-copies fix): when the strategy being
     # optimized came from the Strategy Library, library_ref is its
@@ -339,6 +401,22 @@ class QuickOptimizeResult:
     significance_note: str | None = None
     parsimony_result: ParsimonyResult | None = None
     parsimony_note: str | None = None
+
+    # v5: lookahead check on the final configuration (best-effort, the same
+    # check_for_lookahead Full Pipeline runs). Quick Optimize previously
+    # never checked for lookahead bias at all -- a leaked signal could be
+    # crowned "IMPROVED" with every number downstream of the leak.
+    lookahead_bug_detected: bool = False
+    lookahead_note: str | None = None
+
+    # v5 READY acceptance gate (see _evaluate_quick_optimize_ready_gate):
+    # per-attempt eval-pass >= cfg.ready_gate_min_per_attempt_pass_pct, no
+    # confirmed lookahead leak, >= cfg.ready_gate_min_trades OOS trades.
+    # When this fails, `improved` is forced False below -- a candidate that
+    # cannot clear acceptance is not crowned as the winner, no matter how
+    # much better than baseline it looks numerically.
+    ready_gate_passed: bool = False
+    ready_gate_reasons: list = field(default_factory=list)
 
     # Point (5): populated only when cfg.reserve_holdout=True. The winning
     # configuration's own performance on the trailing holdout_frac slice
@@ -630,6 +708,30 @@ def run_quick_optimize(
     if parsimony_note:
         log(f"  Parsimony: {parsimony_note}")
 
+    # v5: lookahead check on the FINAL configuration -- Quick Optimize
+    # previously never checked for lookahead bias at all, so a leaked
+    # signal could be crowned "IMPROVED" with every downstream number
+    # untrustworthy. Best-effort (same treatment as Full Pipeline's own
+    # copy): a check that can't run never fails the run, it just can't
+    # satisfy the gate below.
+    log("Checking the final configuration for lookahead bias...")
+    lookahead_bug_detected = False
+    lookahead_note = None
+    try:
+        from app.strategy.lookahead_check import check_for_lookahead
+        _lh_result = check_for_lookahead(final_strategy, dev_df, max_signal_checkpoints=8)
+        lookahead_bug_detected = bool(_lh_result.bug_detected)
+        lookahead_note = _lh_result.summary()
+        log(f"  Lookahead check (final configuration): {lookahead_note}")
+    except Exception as exc:  # noqa: BLE001 -- best-effort validation step, same treatment as the ICIR block above
+        lookahead_note = f"Lookahead check failed to run (skipped, best-effort only): {exc}"
+        log(f"  {lookahead_note}")
+
+    # v5 READY acceptance gate -- evaluated below, right after the
+    # `improved` comparison is computed, so a candidate that cannot clear
+    # acceptance is NOT crowned as the winner no matter how much better
+    # than baseline it looks numerically.
+
     # Point (5): the winning configuration's performance on the untouched
     # holdout tail, when reserve_holdout=True. A single plain backtest +
     # Monte Carlo -- not re-run through the ICIR gate above, and not a
@@ -679,6 +781,41 @@ def run_quick_optimize(
             and final_bt.statistics.win_rate > baseline_bt.statistics.win_rate
         )
     )
+
+    # v5 READY acceptance gate: the winning configuration must clear
+    # per-attempt pass >= threshold, no lookahead leak, and the OOS trade
+    # floor before it may be reported as an improvement. When it fails,
+    # `improved` is forced False below -- a candidate that cannot clear
+    # acceptance is NOT crowned as the winner, no matter how much better
+    # than baseline it looks numerically (the before/after numbers stay on
+    # the result for inspection; only the verdict changes).
+    log("Evaluating the READY acceptance gate...")
+    ready_gate_passed, ready_gate_reasons = _evaluate_quick_optimize_ready_gate(
+        per_attempt_pass_probability=float(final_mc.per_attempt_pass_probability),
+        lookahead_bug_detected=lookahead_bug_detected,
+        oos_trade_count=oos_trade_count,
+        min_per_attempt_pass_pct=cfg.ready_gate_min_per_attempt_pass_pct,
+        min_trades=cfg.ready_gate_min_trades,
+    )
+    if ready_gate_passed:
+        log(
+            f"  READY acceptance gate: PASSED (per-attempt pass "
+            f"{final_mc.per_attempt_pass_probability:.1f}% >= "
+            f"{cfg.ready_gate_min_per_attempt_pass_pct:.0f}%, no lookahead leak, "
+            f"{oos_trade_count} OOS trades >= {cfg.ready_gate_min_trades})."
+        )
+    else:
+        for _r in ready_gate_reasons:
+            log(f"  READY acceptance gate FAILED: {_r}")
+            warnings.append(f"READY acceptance gate FAILED: {_r}")
+        if improved:
+            warnings.append(
+                "Not reporting this as an improvement: the GA did find a numerically better "
+                "configuration, but it failed the READY acceptance gate above -- a non-READY "
+                "candidate is never crowned the winner."
+            )
+            log("  Not reporting this as an improvement (acceptance gate failed).")
+        improved = False
 
     # Point (3) of the 2026-09-17 fix: a real GA winner's parameters no
     # longer match `display_name` (the ORIGINAL strategy's name) -- see
@@ -885,6 +1022,10 @@ def run_quick_optimize(
         significance_note=significance_note,
         parsimony_result=parsimony_result,
         parsimony_note=parsimony_note,
+        lookahead_bug_detected=lookahead_bug_detected,
+        lookahead_note=lookahead_note,
+        ready_gate_passed=ready_gate_passed,
+        ready_gate_reasons=ready_gate_reasons,
         holdout_enabled=cfg.reserve_holdout,
         holdout_trades=holdout_trades,
         holdout_net_profit=holdout_net_profit,

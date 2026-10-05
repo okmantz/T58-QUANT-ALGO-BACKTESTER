@@ -79,6 +79,7 @@ reason, never allowed to take down a run that otherwise succeeded.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import threading
@@ -113,13 +114,19 @@ from app.prop.simulator import AccountSimResult, PropRules, simulate_account
 from app.reports.crash_log import log_crash
 from app.scoring.parsimony import ParsimonyResult, compute_parsimony
 from app.scoring.t58_scorecard import T58ScorecardResult, score_from_results
-from app.search.robustness import WalkForwardResult, run_walk_forward
+from app.search.robustness import (
+    DeflatedSharpeGateResult,
+    WalkForwardResult,
+    count_all_trials,
+    deflated_sharpe_gate,
+    run_walk_forward,
+)
 from app.search.strategy_space import build_strategy_from_spec
 from app.strategy.base import Strategy
 from app.strategy.library import StrategyAlreadyExists, provenance_stamped_name, safe_filename_stem, \
     save_strategy_replacing_version, save_strategy_text, set_strategy_status, record_backtest_result, \
     record_optimize_result, record_validation_result, record_champion_check_result
-from app.validation.cpcv import CPCVError, CPCVResult, run_cpcv
+from app.validation.cpcv import CPCVError, CPCVResult, PBOGateResult, compute_pbo, pbo_gate, run_cpcv
 from app.validation.icir import ICIRGateResult, run_icir_gate_from_backtest
 from app.validation.regime_matrix import RegimeMatrixResult, build_regime_matrix
 
@@ -261,6 +268,41 @@ class FullPipelineConfig:
     cpcv_supporting_enabled: bool = False
     cpcv_n_groups: int = 6
     cpcv_n_test_groups: int = 2
+    # -- Validation hard gates (v5) --------------------------------------
+    # Walk-forward, CPCV, and the ICIR/significance gate used to be
+    # diagnostic-only in this pipeline (scored or noted, never rejecting)
+    # while the only hard gates were lookahead-bias and risk-of-ruin. They
+    # are now hard gates: a candidate that FAILS any enabled one is NOT
+    # READY, with the reason recorded in verdict_reasons -- a strong
+    # backtest that doesn't generalize is exactly what these tests exist
+    # to catch, and "strong but fragile" must not be crowned.
+    # validation_gates_advisory_only=True restores the old behavior for
+    # debugging: gate failures are still computed and recorded in
+    # verdict_reasons (prefixed ADVISORY) but no longer force NOT READY.
+    validation_gates_advisory_only: bool = False
+    # DSR gate: the champion's Sharpe, deflated for how many configurations
+    # the search actually evaluated -- count_all_trials() counts the baseline
+    # PLUS every GA genome the inner loop backtested (not just leaderboard
+    # survivors), fixing the old optimistic undercount. Rejects when the
+    # probabilistic Sharpe falls below dsr_min_probabilistic_sharpe. 0.95 is
+    # Bailey & de Prado's recommended bar and matches deflated_sharpe_ratio's
+    # own default -- a gate should be no looser than the diagnostic it
+    # promotes.
+    dsr_gate_enabled: bool = True
+    dsr_min_probabilistic_sharpe: float = 0.95
+    # PBO gate: the genuine multi-candidate Probability of Backtest
+    # Overfitting (Bailey et al. 2017) over the GA's final-generation
+    # leaderboard -- "did the SELECTION process pick signal or noise?".
+    # Rejects when PBO exceeds pbo_max (0.5 = the coin-flip line: above it
+    # the in-sample winner lands in the bottom half out-of-sample more
+    # often than random -- see app.validation.cpcv.pbo_gate).
+    # pbo_max_candidates caps the pool (leaderboard, best-first) and
+    # pbo_max_paths caps the CPCV paths, bounding the extra backtests this
+    # adds (candidates x paths x 2 backtests each).
+    pbo_gate_enabled: bool = True
+    pbo_max: float = 0.5
+    pbo_max_candidates: int = 8
+    pbo_max_paths: int = 10
     # Regime performance stays purely informational (pipeline reorg plan
     # section 13/14) -- attached to the report/result for a human to
     # read, never scored or gated. Reuses the SAME trades final_bt
@@ -354,6 +396,17 @@ class FullPipelineResult:
     # same dedicated prominence Quick Optimize gives its own copy of
     # this field.
     account_mismatch_warning: str | None = None
+    # -- v5 validation hard gates -----------------------------------------
+    dsr_gate_result: "DeflatedSharpeGateResult | None" = None
+    dsr_skip_reason: str | None = None
+    pbo_gate_result: "PBOGateResult | None" = None
+    pbo_skip_reason: str | None = None
+    # Names of the validation gates (walk_forward / cpcv / icir / dsr /
+    # pbo) whose failure forced this run's NOT READY verdict -- empty when
+    # the verdict came from the scorecard or another hard gate. Lets
+    # callers/UI say exactly which filter rejected the candidate without
+    # re-parsing verdict_reasons.
+    validation_gate_failures: list = field(default_factory=list)
 
 
 def _display_name(strategy: Strategy) -> str:
@@ -401,6 +454,73 @@ def _holdout_untestable_note(holdout: dict | None) -> str | None:
     return None
 
 
+def _leaderboard_candidate_spec(cand, final_source_type: str) -> dict:
+    """Builds a compute_pbo()/DSR-trial-ready candidate spec from one
+    WalkforwardGACandidate (the GA's final-generation leaderboard).
+
+    WalkforwardGACandidate doesn't carry source_type -- but a GA run never
+    mixes source types, so the run's own final_source_type applies to every
+    leaderboard genome. Manual genomes carry .config; code genomes carry
+    .code_text/.code_extension."""
+    if cand.config is not None:
+        return {"source_type": "manual", "config": cand.config}
+    if final_source_type == "manual":
+        raise ValueError("GA leaderboard candidate has no config for a manual-type run.")
+    return {
+        "source_type": final_source_type,
+        "code_text": cand.code_text,
+        "code_extension": cand.code_extension,
+    }
+
+
+def _pnl_skew_kurtosis(pnls: list[float]) -> tuple[float, float]:
+    """Trade-PnL skew/kurtosis for the DSR gate's PSR denominator -- Sharpe
+    ratios on fat-tailed, skewed trade distributions (typical for
+    short-RR, high win-rate prop strategies) are noisier than the same
+    Sharpe on a symmetric distribution, and the PSR formula accounts for
+    that directly. Falls back to the normal defaults (0.0 / 3.0) when
+    there isn't enough data to estimate."""
+    import numpy as np
+
+    arr = np.asarray([p for p in pnls if math.isfinite(p)], dtype=float)
+    if arr.size < 4:
+        return 0.0, 3.0
+    mean = arr.mean()
+    sd = arr.std(ddof=1)
+    if sd <= 0:
+        return 0.0, 3.0
+    z = (arr - mean) / sd
+    skew = float((z ** 3).mean())
+    kurt = float((z ** 4).mean())
+    if not (math.isfinite(skew) and math.isfinite(kurt)):
+        return 0.0, 3.0
+    return skew, kurt
+
+
+def _validation_gate_failure_names(verdict_reasons: list[str]) -> list[str]:
+    """Extracts which validation gates rejected the candidate from the
+    recorded HARD VALIDATION GATE FAILED reasons -- lets callers/UI name
+    the failing filter(s) without re-parsing prose."""
+    names = []
+    for r in verdict_reasons or []:
+        if "HARD VALIDATION GATE FAILED" not in r:
+            continue
+        low = r.lower()
+        if "walk-forward" in low:
+            names.append("walk_forward")
+        elif "cpcv" in low:
+            names.append("cpcv")
+        elif "icir" in low:
+            names.append("icir")
+        elif "deflated sharpe" in low:
+            names.append("dsr")
+        elif "pbo gate" in low:
+            names.append("pbo")
+    # de-dupe, preserving order
+    seen = set()
+    return [n for n in names if not (n in seen or seen.add(n))]
+
+
 def _make_verdict(
     final_mc: MonteCarloResult,
     oos_validation: WalkForwardResult | None,
@@ -414,6 +534,16 @@ def _make_verdict(
     lookahead_bug_detected: bool = False,
     min_trades_for_ready: int = 100,
     holdout: dict | None = None,
+    # -- v5 validation hard gates -----------------------------------------
+    # dsr_gate_result / pbo_gate_result: pass the computed gate results
+    # (see run_full_pipeline Steps 6c/6d) -- a FAILED gate rejects the
+    # candidate (NOT READY) with its reason recorded, unless
+    # gates_advisory_only=True, which records the failure as ADVISORY
+    # without changing the verdict (debugging mode).
+    dsr_gate_result: "DeflatedSharpeGateResult | None" = None,
+    pbo_gate_result: "PBOGateResult | None" = None,
+    primary_robustness_method: str = "walk_forward",
+    gates_advisory_only: bool = False,
 ) -> tuple[str, list[str], "T58ScorecardResult", bool, bool]:
     """Pipeline reorg item #1: the verdict is now a hard safety gate
     (risk of ruin, and -- FIX (audit) -- a confirmed lookahead-bias leak)
@@ -527,12 +657,101 @@ def _make_verdict(
             "Primary generalization test couldn't run (not enough data) -- scored as UNPROVEN "
             "(missing, not failing) rather than penalized as if it had failed."
         )
+
+    # -- v5 validation hard gates -----------------------------------------
+    # Walk-forward, CPCV, ICIR, DSR, and PBO graduate here from diagnostic
+    # to REJECTING gates. The rule for each: a gate that RAN and FAILED
+    # rejects the candidate; a gate that COULDN'T RUN stays UNPROVEN /
+    # advisory (missing evidence is not the same as bad evidence) --
+    # EXCEPT CPCV-as-primary, which this run explicitly selected as its
+    # generalization test: choosing it and then getting no result is NOT
+    # TESTED, and NOT TESTED is rejected (a run cannot pass on a
+    # generalization test that never ran).
+    validation_gate_failures: list[str] = []
+    icir_hard_failed = False
+
+    def _record_gate_failure(reason: str) -> None:
+        validation_gate_failures.append(reason)
+        tag = (
+            "ADVISORY ONLY (validation_gates_advisory_only=True -- not rejecting)"
+            if gates_advisory_only
+            else "HARD VALIDATION GATE FAILED"
+        )
+        reasons.append(
+            f"{tag}: {reason} This strategy is NOT READY -- a strong backtest that does not "
+            f"generalize is exactly what these gates exist to catch."
+            if not gates_advisory_only else
+            f"{tag}: {reason}"
+        )
+
+    if oos_validation is not None and not oos_validation.is_stable:
+        _record_gate_failure(
+            f"the walk-forward check is NOT stable: walk-forward efficiency "
+            f"{oos_validation.walk_forward_efficiency:.2f} is below the "
+            f"{oos_validation.stability_threshold:.2f} stability threshold "
+            f"across {oos_validation.n_folds} fold(s) -- this configuration does not retain "
+            f"its edge on unseen folds."
+        )
+    if primary_robustness_method == "cpcv":
+        if cpcv_primary_result is None:
+            _record_gate_failure(
+                "CPCV was selected as this run's primary robustness method "
+                "(primary_robustness_method='cpcv') but produced no result -- NOT TESTED."
+            )
+        elif not cpcv_primary_result.is_robust:
+            _record_gate_failure(
+                f"the CPCV check is NOT robust: mean out-of-sample metric "
+                f"{cpcv_primary_result.mean_oos_metric:.3f} vs in-sample "
+                f"{cpcv_primary_result.mean_is_metric:.3f} across "
+                f"{cpcv_primary_result.n_paths} path(s) -- the edge does not survive "
+                f"partition choice."
+            )
+    if icir_gate is not None and not icir_gate.ok:
+        # Genuine failure rejects: the ICIR was measurable in-sample AND
+        # out-of-sample, but retention/decay/significance didn't hold. When
+        # either ICIR is None the gate COULDN'T COMPUTE (too few distinct
+        # periods with trades) -- that is UNPROVEN, not FAILED: a gate that
+        # can't measure can't convict, the same couldn't-run/UNPROVEN
+        # distinction the walk-forward gate makes (thin-data situations are
+        # caught by min_trades_for_ready and the scorecard's
+        # available-checks count instead).
+        icir_measurable = (
+            icir_gate.in_sample_icir is not None
+            and icir_gate.out_sample_icir is not None
+        )
+        if icir_measurable:
+            # In advisory mode the failure is recorded above as ADVISORY but the
+            # old informational note still applies (the gate didn't reject) --
+            # only suppress the duplicate note when the gate actually rejected.
+            icir_hard_failed = not gates_advisory_only
+            _record_gate_failure(
+                "the ICIR / signal-decay / Bonferroni-corrected significance gate DID NOT PASS "
+                "(" + " ".join(icir_gate.reasons) + ")."
+            )
+        # not measurable -> UNPROVEN: no rejection; the supporting-diagnostic
+        # note below still records what the gate found.
+    if dsr_gate_result is not None and not dsr_gate_result.passed:
+        _record_gate_failure(dsr_gate_result.reason)
+    if pbo_gate_result is not None and not pbo_gate_result.passed:
+        _record_gate_failure(pbo_gate_result.reason)
+
+    if validation_gate_failures and not gates_advisory_only:
+        reasons.append(f"For reference, {scorecard.render_line()} (not the reason for this verdict).")
+        _hold_note = _holdout_untestable_note(holdout)
+        if _hold_note:
+            reasons.append(_hold_note)
+        reasons.append(
+            "This verdict does NOT lock the strategy: it can still be sent through the Validate hub "
+            "(CPCV, Walk-Forward, Sensitivity, Regime Matrix) to see where it is weak."
+        )
+        return "NOT READY", reasons, scorecard, False, False
+
     if icir_gate is None:
         reasons.append(
             "ICIR / signal-decay / Bonferroni-corrected significance gate couldn't run -- kept as "
             "a supporting diagnostic only, not part of the T58 Score."
         )
-    elif not icir_gate.ok:
+    elif not icir_gate.ok and not icir_hard_failed:
         reasons.append(
             "Supporting diagnostic: did NOT pass the ICIR / signal-decay / Bonferroni-corrected "
             "significance gate (" + " ".join(icir_gate.reasons) + "). Not scored into the T58 Score "
@@ -1284,6 +1503,110 @@ def run_full_pipeline(
         elif cfg.primary_robustness_method == "cpcv":
             cpcv_skip_reason = "CPCV was selected as the primary robustness method but did not run (see log above)."
 
+        # -- v5 Step 6c/7: Deflated Sharpe gate (multiple-testing) --------
+        # The champion's Sharpe, deflated for the search's FULL multiple-
+        # testing burden via count_all_trials() (baseline + every GA genome
+        # the inner loop actually backtested -- the old leaderboard-length
+        # undercount made this optimistic). The trial-Sharpe spread comes
+        # from re-backtesting the GA's final-generation leaderboard once
+        # each on dev_df -- the search's own candidates, not an assumed
+        # textbook spread. Known conservative limitation, documented in
+        # the log line: the final generation already converged, so its
+        # spread is a LOWER bound on the true cross-trial dispersion --
+        # the deflation is weaker than textbook, which makes a REJECT here
+        # unambiguous (it failed even the lenient version).
+        _check_cancel()
+        dsr_gate_result = None
+        dsr_skip_reason = None
+        if cfg.dsr_gate_enabled:
+            log("Step 6c/7: Deflated Sharpe gate (multiple-testing correction)...")
+            try:
+                from app.backtest.engine import run_backtest as _run_backtest_dsr
+                n_trials = count_all_trials(
+                    baseline_count=1,
+                    ga_total_evaluations=(ga_result.total_evaluations
+                                          if (refinement_ran and ga_result is not None) else 0),
+                )
+                trial_sharpes: list[float] = []
+                if refinement_ran and ga_result is not None and ga_result.leaderboard:
+                    for cand in ga_result.leaderboard:
+                        try:
+                            cand_spec = _leaderboard_candidate_spec(cand, final_source_type)
+                            cand_bt = _run_backtest_dsr(
+                                dev_df, build_strategy_from_spec(cand_spec, final_tmp_dir), risk)
+                            trial_sharpes.append(float(cand_bt.statistics.sharpe_ratio))
+                        except Exception:  # noqa: BLE001 -- one bad genome must not kill the gate
+                            continue
+                if not trial_sharpes:
+                    # No GA leaderboard to sample a spread from (refinement
+                    # didn't run or produced nothing re-backtestable): fall
+                    # back to the two Sharpe observations the pipeline
+                    # genuinely has. expected_max_sharpe() needs >= 2 finite
+                    # values for a spread; with fewer the benchmark is 0
+                    # and the gate degrades to a plain PSR-vs-zero check,
+                    # which the log says out loud rather than hiding.
+                    trial_sharpes = [float(final_bt.statistics.sharpe_ratio)]
+                    dsr_skip_reason = (
+                        "DSR gate ran on a degenerate trial pool (no GA leaderboard Sharpes available) -- "
+                        "treated as a plain significance check, not a full multiple-testing correction."
+                    )
+                    log(f"  {dsr_skip_reason}")
+                _pnls = [t.pnl for t in final_bt.trades]
+                _skew, _kurt = _pnl_skew_kurtosis(_pnls)
+                dsr_gate_result = deflated_sharpe_gate(
+                    float(final_bt.statistics.sharpe_ratio),
+                    trial_sharpes,
+                    n_trials,
+                    len(final_bt.trades),
+                    returns_skew=_skew,
+                    returns_kurtosis=_kurt,
+                    min_probabilistic_sharpe=cfg.dsr_min_probabilistic_sharpe,
+                )
+                log(f"  {dsr_gate_result.reason}")
+            except Exception as exc:  # noqa: BLE001 -- best-effort validation step
+                dsr_skip_reason = f"DSR gate failed to run: {exc}"
+                log(f"  {dsr_skip_reason}")
+
+        # -- v5 Step 6d/7: PBO gate (was the SELECTION process overfit?) ---
+        # Genuine Bailey et al. (2017) PBO over the GA's final-generation
+        # leaderboard: for every CPCV path, rank the pool in-sample, take
+        # the IS winner, check its OOS rank. Above pbo_max the search was
+        # selecting noise, so the champion is rejected no matter how good
+        # it looks. Needs >= 2 candidates -- with fewer the measurement is
+        # degenerate by construction and the gate stays out of the way.
+        _check_cancel()
+        pbo_gate_result = None
+        pbo_skip_reason = None
+        if cfg.pbo_gate_enabled:
+            log("Step 6d/7: PBO gate (probability of backtest overfitting)...")
+            try:
+                pbo_specs = []
+                if refinement_ran and ga_result is not None and ga_result.leaderboard:
+                    for cand in ga_result.leaderboard[: max(int(cfg.pbo_max_candidates), 2)]:
+                        try:
+                            pbo_specs.append(_leaderboard_candidate_spec(cand, final_source_type))
+                        except Exception:  # noqa: BLE001 -- one bad genome must not kill the gate
+                            continue
+                if len(pbo_specs) >= 2:
+                    pbo_res = compute_pbo(
+                        dev_df, pbo_specs, risk,
+                        n_groups=cfg.cpcv_n_groups, n_test_groups=cfg.cpcv_n_test_groups,
+                        max_paths=cfg.pbo_max_paths,
+                        metric=cfg.oos_check_metric, prop_rules=prop_rules,
+                        mc_cfg=MonteCarloConfig(n_simulations=cfg.ga_search_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
+                    )
+                    pbo_gate_result = pbo_gate(pbo_res, max_pbo=cfg.pbo_max)
+                    log(f"  {pbo_gate_result.reason}")
+                else:
+                    pbo_skip_reason = (
+                        f"PBO gate not run: only {len(pbo_specs)} candidate(s) available "
+                        "(need >= 2 for the measurement to be meaningful)."
+                    )
+                    log(f"  {pbo_skip_reason}")
+            except Exception as exc:  # noqa: BLE001 -- best-effort validation step
+                pbo_skip_reason = f"PBO gate failed to run: {exc}"
+                log(f"  {pbo_skip_reason}")
+
         # -- Pipeline reorg extra: parsimony (section 24) --------------------
         # Reward strategies with fewer unnecessary degrees of freedom --
         # a small, additive scorecard component, never a gate. Cheap
@@ -1320,6 +1643,9 @@ def run_full_pipeline(
             lookahead_bug_detected=lookahead_bug_detected,
             min_trades_for_ready=cfg.min_trades_for_ready,
             holdout=final_holdout,
+            dsr_gate_result=dsr_gate_result, pbo_gate_result=pbo_gate_result,
+            primary_robustness_method=cfg.primary_robustness_method,
+            gates_advisory_only=cfg.validation_gates_advisory_only,
         )
 
         elapsed = time.time() - t0
@@ -1334,6 +1660,8 @@ def run_full_pipeline(
             cpcv_primary_result or cpcv_supporting_result, cpcv_skip_reason, regime_result, regime_skip_reason,
             df, prop_rules, risk, cfg, elapsed, warnings, log, output_dir,
             instrument, report_basename, account_mismatch_warning,
+            dsr_gate_result=dsr_gate_result, dsr_skip_reason=dsr_skip_reason,
+            pbo_gate_result=pbo_gate_result, pbo_skip_reason=pbo_skip_reason,
         )
     finally:
         if final_tmp_dir is not None:
@@ -1351,6 +1679,10 @@ def _finish(
     regime_result, regime_skip_reason,
     df, prop_rules, risk, cfg, elapsed, warnings, log, output_dir,
     instrument="unknown", report_basename="full_pipeline_report", account_mismatch_warning=None,
+    dsr_gate_result: "DeflatedSharpeGateResult | None" = None,
+    dsr_skip_reason: str | None = None,
+    pbo_gate_result: "PBOGateResult | None" = None,
+    pbo_skip_reason: str | None = None,
 ) -> FullPipelineResult:
     """Writes the report + (for code strategies) saves the winner into the
     Strategy Library. Split out of run_full_pipeline only to keep that
@@ -1763,6 +2095,11 @@ def _finish(
         parsimony=parsimony_result,
         cpcv_result=cpcv_result,
         cpcv_skip_reason=cpcv_skip_reason,
+        dsr_gate_result=dsr_gate_result,
+        dsr_skip_reason=dsr_skip_reason,
+        pbo_gate_result=pbo_gate_result,
+        pbo_skip_reason=pbo_skip_reason,
+        validation_gate_failures=_validation_gate_failure_names(verdict_reasons),
         regime_result=regime_result,
         regime_skip_reason=regime_skip_reason,
         saved_library_path=saved_library_path,

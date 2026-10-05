@@ -218,6 +218,93 @@ def _dd_dollars(stats: dict | None, account_size: float) -> float:
     return round(pct / 100.0 * account_size, 2)
 
 
+def _cpcv_is_robust(cpcv_result) -> bool:
+    """B1-2 (w4-forge): CPCV robustness verdict for one candidate. A skipped
+    CPCV (no result -- not enough data to run it) means NOT robust:
+    unknown robustness is a rejection, not a pass."""
+    return cpcv_result.is_robust if cpcv_result else False
+
+
+def _final_mc_sort_key(rec: dict) -> float:
+    """B1-2 (w4-forge): Forge's final-MC ranking key -- the PER-ATTEMPT
+    (single-account) pass probability, not the chain-level "any attempt in
+    a reset chain ever passed" number. This reads the per-attempt field
+    straight out of the final-MC result dict (no extra MC run -- calling
+    eval_pass_probability_for_trades() here would re-run a full Monte
+    Carlo per candidate). Falls back to the legacy chain-level field for
+    dicts that predate the per-attempt field."""
+    mc = rec["final_mc"]
+    return float(mc.get("per_attempt_pass_probability", mc["evaluation_pass_probability"]))
+
+
+def _locked_oos_check(rec: dict, locked_df, risk: "RiskConfig", prop_rules: "PropRules",
+                      config: "ForgeConfig", family_scores: dict,
+                      diagnoses: list, graveyard_path) -> str:
+    """B1-2 (w4-forge): locked-OOS holdout verdict for one candidate.
+
+    Runs the holdout backtest + rolling evaluation, records
+    rec["locked_oos"], and appends diagnoses/graveyard entries as a side
+    effect. Returns "PASSED" | "FAILED" | "NOT TESTED" -- the caller only
+    keeps the candidate when the status is "PASSED".
+
+    B1-2 behavior change: "NOT TESTED" (no holdout backtest, or too few
+    holdout trades to judge) now REJECTS the candidate -- unproven on
+    unseen data is not a pass. (Previously it was kept, flagged.)
+    """
+    spec = _rebuild_spec(rec)
+    strategy = build_strategy_from_spec(spec)
+    holdout_bt = run_backtest(locked_df, strategy, risk) if len(locked_df) else None
+    if holdout_bt is None or not holdout_bt.trades or len(holdout_bt.trades) < 5:
+        rec["locked_oos"] = {"status": "NOT TESTED", "pass_rate_pct": None}
+        diag = diagnose_candidate(
+            candidate_id=rec.get("candidate_id", "?"), family=rec.get("family") or "unknown",
+            verdict="REJECTED: locked out-of-sample holdout not testable (too few holdout trades)",
+            statistics=holdout_bt.statistics.to_dict() if holdout_bt is not None else None,
+            rolling=rec.get("rolling"), family_performance=family_scores,
+        )
+        diagnoses.append(diag)
+        record_rejections([GraveyardEntry(
+            candidate_id=diag.candidate_id, family=diag.family, generation=None, stage_died="stress",
+            reason="Locked OOS holdout NOT TESTED (too few holdout trades) -- rejected, not kept.",
+            oos_result="not_tested", param_signature=param_signature(diag.family, rec.get("config")),
+            primary_failure=diag.primary_failure, secondary_failure=diag.secondary_failure,
+            strength=diag.strength, weakness=diag.weakness,
+            suggested_mutation=diag.suggested_mutation,
+            related_successful_family=diag.related_successful_family,
+        )], path=graveyard_path)
+        return "NOT TESTED"
+    try:
+        holdout_rolling = run_rolling_evaluation(
+            holdout_bt.trades, prop_rules,
+            window_trading_days=min(config.eval_window_days, max(len(holdout_bt.trades) // 2, 5)),
+            max_windows=200,
+        )
+        pass_rate = holdout_rolling.pass_rate_pct
+    except ValueError:
+        pass_rate = 100.0 if (holdout_bt.statistics.net_profit or 0) > 0 else 0.0
+    if pass_rate >= config.locked_oos_min_pass_rate:
+        rec["locked_oos"] = {"status": "PASSED", "pass_rate_pct": pass_rate}
+        return "PASSED"
+    rec["locked_oos"] = {"status": "FAILED", "pass_rate_pct": pass_rate}
+    diag = diagnose_candidate(
+        candidate_id=rec.get("candidate_id", "?"), family=rec.get("family") or "unknown",
+        verdict="FAILED locked out-of-sample holdout",
+        statistics=holdout_bt.statistics.to_dict(),
+        rolling=rec.get("rolling"), family_performance=family_scores,
+    )
+    diagnoses.append(diag)
+    record_rejections([GraveyardEntry(
+        candidate_id=diag.candidate_id, family=diag.family, generation=None, stage_died="stress",
+        reason=f"Locked OOS holdout pass rate only {pass_rate:.0f}%.",
+        oos_result="negative", param_signature=param_signature(diag.family, rec.get("config")),
+        primary_failure=diag.primary_failure, secondary_failure=diag.secondary_failure,
+        strength=diag.strength, weakness=diag.weakness,
+        suggested_mutation=diag.suggested_mutation,
+        related_successful_family=diag.related_successful_family,
+    )], path=graveyard_path)
+    return "FAILED"
+
+
 def run_forge(
     df: pd.DataFrame,
     risk: RiskConfig,
@@ -449,7 +536,10 @@ def run_forge(
 
         cpcv_dict = cpcv_result.to_dict() if cpcv_result else None
         regime_dict = regime_result.to_dict() if regime_result else None
-        is_robust = cpcv_result.is_robust if cpcv_result else True   # not enough data to test = not penalized
+        # B1-2 (w4-forge): a skipped CPCV (no result -- not enough data to
+        # run it) means the candidate is NOT robust. Unknown robustness is
+        # a rejection, not a pass (was: `else True`, "not penalized").
+        is_robust = _cpcv_is_robust(cpcv_result)
         is_regime_stable = regime_result.is_regime_stable if regime_result else True
 
         if is_robust and is_regime_stable:
@@ -508,7 +598,9 @@ def run_forge(
             MonteCarloConfig(n_simulations=config.final_mc_sims, reset_on_breach=config.reset_on_breach),
         )
         mc_pool.append({**rec, "trades": bt.trades, "statistics": bt.statistics.to_dict(), "final_mc": mc_result.to_dict()})
-    mc_pool.sort(key=lambda r: r["final_mc"]["evaluation_pass_probability"], reverse=True)
+    # B1-2 (w4-forge): rank on PER-ATTEMPT (single-account) pass
+    # probability, not the chain-level number -- see _final_mc_sort_key.
+    mc_pool.sort(key=_final_mc_sort_key, reverse=True)
     kept_mc = mc_pool[: config.mc_survivors]
     funnel.append(FunnelStage("Monte Carlo (final, deeper)", n_in=len(cpcv_shortlist), n_out=len(kept_mc)))
     log(f"Final Monte Carlo ({config.final_mc_sims:,} sims): kept the top {len(kept_mc)} of {len(mc_pool)}.")
@@ -565,43 +657,12 @@ def run_forge(
     # ------------------------------------------------------------------
     locked_survivors: dict[str, dict] = {}
     for rec in kept_rolling:
-        spec = _rebuild_spec(rec)
-        strategy = build_strategy_from_spec(spec)
-        holdout_bt = run_backtest(locked_df, strategy, risk) if len(locked_df) else None
-        if holdout_bt is None or not holdout_bt.trades or len(holdout_bt.trades) < 5:
-            rec["locked_oos"] = {"status": "NOT TESTED", "pass_rate_pct": None}
-            locked_survivors[rec["candidate_id"]] = rec  # too few holdout trades to judge -- keep, flagged
-            continue
-        try:
-            holdout_rolling = run_rolling_evaluation(
-                holdout_bt.trades, prop_rules,
-                window_trading_days=min(config.eval_window_days, max(len(holdout_bt.trades) // 2, 5)),
-                max_windows=200,
-            )
-            pass_rate = holdout_rolling.pass_rate_pct
-        except ValueError:
-            pass_rate = 100.0 if (holdout_bt.statistics.net_profit or 0) > 0 else 0.0
-        if pass_rate >= config.locked_oos_min_pass_rate:
-            rec["locked_oos"] = {"status": "PASSED", "pass_rate_pct": pass_rate}
+        # B1-2 (w4-forge): only a PASSED holdout keeps the candidate --
+        # NOT TESTED is now a rejection (see _locked_oos_check), not a
+        # keep-with-flag.
+        if _locked_oos_check(rec, locked_df, risk, prop_rules, config,
+                            family_scores, diagnoses, graveyard_path) == "PASSED":
             locked_survivors[rec["candidate_id"]] = rec
-        else:
-            rec["locked_oos"] = {"status": "FAILED", "pass_rate_pct": pass_rate}
-            diag = diagnose_candidate(
-                candidate_id=rec.get("candidate_id", "?"), family=rec.get("family") or "unknown",
-                verdict="FAILED locked out-of-sample holdout",
-                statistics=holdout_bt.statistics.to_dict(),
-                rolling=rec.get("rolling"), family_performance=family_scores,
-            )
-            diagnoses.append(diag)
-            record_rejections([GraveyardEntry(
-                candidate_id=diag.candidate_id, family=diag.family, generation=None, stage_died="stress",
-                reason=f"Locked OOS holdout pass rate only {pass_rate:.0f}%.",
-                oos_result="negative", param_signature=param_signature(diag.family, rec.get("config")),
-                primary_failure=diag.primary_failure, secondary_failure=diag.secondary_failure,
-                strength=diag.strength, weakness=diag.weakness,
-                suggested_mutation=diag.suggested_mutation,
-                related_successful_family=diag.related_successful_family,
-            )], path=graveyard_path)
 
     funnel.append(FunnelStage("Locked OOS holdout", n_in=len(kept_rolling), n_out=len(locked_survivors)))
     log(f"Locked OOS holdout: {len(locked_survivors)}/{len(kept_rolling)} held up on data never searched over.")
