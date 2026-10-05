@@ -62,6 +62,7 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
+import numpy as np
 import pandas as pd
 
 from app.backtest.engine import run_backtest, run_holdout_comparison
@@ -230,6 +231,19 @@ class SearchStageConfig:
     ga_search_sims: int = 300
     stage2_top_n: int = 10                    # survivors that advance to Stage 3
 
+    # ----- v5 B1-1 grammar candidate hook: config (BEGIN) -----
+    # Stage 2 candidate source. "templates" (default) keeps the exact old
+    # behavior: Stage 2 refines only the Stage 1 skeleton survivors.
+    # "grammar" ADDITIONALLY draws fresh structurally-novel candidates
+    # straight from app.search.grammar.generate_random() and runs them
+    # through the same Stage 2 GA refinement -- this is how Search Lab
+    # invents structure instead of only tuning frozen templates.
+    candidate_source: str = "templates"       # "templates" | "grammar"
+    # Extra grammar-drawn candidates refined per Stage-1 survivor when
+    # candidate_source == "grammar".
+    grammar_candidates_per_survivor: int = 2
+    # ----- v5 B1-1 grammar candidate hook: config (END) -----
+
     # Stage 2 cost-stress: see RefinementConfig.cost_stress_* -- exposed here
     # so a family-wide search can bias its whole GA toward candidates that
     # survive worse execution, not just candidates that look best under the
@@ -271,10 +285,14 @@ class SearchStageConfig:
     # P1-4 acceptance floor on the thing being optimized: Stage 3's gate
     # is stability, not level -- without these, a candidate with an
     # arbitrarily low pass probability can pass and become champion.
-    # Scales match MonteCarloResult's own 0-100 fields. NOTE the mixed
-    # magnitudes are per the fix spec: 70.0 means 70%, 0.5 means 0.5%.
+    # Scales are MonteCarloResult's own 0-100 fields: 70.0 means 70%,
+    # 50.0 means 50%.
     min_eval_pass_probability: float = 70.0
-    min_first_payout_probability: float = 0.5
+    # B1-2 (w4-forge): payout acceptance floor on the 0-100 Monte Carlo
+    # scale -- 50.0 means "at least a 50% per-attempt chance of reaching
+    # a first payout". (Was 0.5, a units bug: a 0.5% payout gate, i.e.
+    # effectively no gate at all.)
+    min_first_payout_probability: float = 50.0
 
     # P1-4 locked OOS holdout (Forge pattern -- see
     # app.orchestration.forge): the last locked_holdout_frac of `df` is
@@ -319,6 +337,17 @@ class SearchStageConfig:
     # built directly in code/tests without going through that form is
     # unaffected.
     reset_on_breach: bool = False
+
+    # B1-2 (w4-forge): which balance the prop simulator's drawdown checks
+    # trail on for every simulate_account / run_monte_carlo scoring path
+    # in this search. "realized" (default): today's behavior, byte-
+    # identical -- checks run against realized trade-close balance only.
+    # "adverse": degrade the max-drawdown check with each trade's initial
+    # risk as a floating-drawdown proxy (see
+    # app.prop.simulator.PropRules.floating_drawdown_mode). The "adverse"
+    # simulator path itself is implemented by a sibling worker; this field
+    # only plumbs the value through the search configs to the simulator.
+    floating_drawdown_mode: str = "realized"
 
     # Strategy Family Diversity -- caps how many Stage 1 survivors from
     # the SAME classified family (app.strategy.family_taxonomy) can
@@ -367,6 +396,13 @@ class SearchStageConfig:
         self.full_mc_sims = max(int(self.full_mc_sims), 100)
         self.walk_forward_folds = max(int(self.walk_forward_folds), 0)
         self.robustness_neighbors = max(int(self.robustness_neighbors), 0)
+        # B1-2 (w4-forge): fail fast on a typo'd drawdown mode rather than
+        # silently scoring as "realized".
+        if self.floating_drawdown_mode not in ("realized", "adverse"):
+            raise ValueError(
+                f"SearchStageConfig.floating_drawdown_mode must be 'realized' or 'adverse', "
+                f"got {self.floating_drawdown_mode!r}."
+            )
 
 
 @dataclass
@@ -482,6 +518,89 @@ def _stage1_score(
     }
 
 
+# ===========================================================================
+# w10-astra B3 EDIT -- SEARCH PRE-SCREEN: skip unfundable (strategy, risk%)
+# candidates. MERGE POINT: a sibling worker also edits this file; this
+# block (helper + two hook call-sites + one driver log line, all tagged
+# "w10-astra") is self-contained -- keep it together when merging.
+# ---------------------------------------------------------------------------
+# Part C root cause operating inside the search: nothing pre-filtered
+# (strategy, risk%) pairs that can't afford 1 whole contract, so the search
+# spent full Stage-1 backtests on candidates the engine then floors to
+# zero contracts on every signal (0 trades, wasted compute, and a
+# misleading "no winners" verdict). This pre-screen runs each candidate's
+# median stop distance through the SAME RiskConfig.position_size() the
+# engine uses; if that sizes to less than one whole contract, the candidate
+# is skipped with a counted reason instead of being backtested.
+# ===========================================================================
+def _candidate_median_stop_pips(spec: dict, risk: RiskConfig, df) -> float | None:
+    """Median stop distance in pips for a candidate spec, or None when the
+    spec's stop can't be determined without running the strategy (non-manual
+    sources, or no stop configured at all -- those pass through)."""
+    if spec.get("source_type", "manual") != "manual":
+        return None
+    cfg = spec.get("config", {}) or {}
+    rm = cfg.get("risk_management", {}) or {}
+    stop_type = str(rm.get("stop_type", "")).lower()
+    if stop_type == "fixed" and rm.get("stop_value") not in (None, ""):
+        try:
+            return float(rm["stop_value"])
+        except (TypeError, ValueError):
+            return None
+    if cfg.get("stop_loss_pips") not in (None, ""):
+        try:
+            return float(cfg["stop_loss_pips"])
+        except (TypeError, ValueError):
+            return None
+    if stop_type == "atr" and rm.get("stop_value") not in (None, ""):
+        # ATR stop: median stop ~= mult x median(ATR) over the search data,
+        # converted to pips. Uses the same ATR definition the engine sizes
+        # against (app.strategy.indicators.atr, via manual's _atr_series).
+        try:
+            mult = float(rm["stop_value"])
+            period = max(int(rm.get("stop_atr_period", 14) or 14), 1)
+            from app.strategy.indicators import atr as _atr
+            atr_med = float(_atr(df, period).median())
+            if atr_med > 0 and math.isfinite(atr_med) and risk.pip_size:
+                return (mult * atr_med) / risk.pip_size
+        except (TypeError, ValueError):
+            return None
+        return None
+    return None
+
+
+def _prescreen_funding(base: dict, spec: dict, risk: RiskConfig, df) -> dict | None:
+    """w10-astra B3: returns a skip-result dict when the candidate cannot
+    afford 1 whole contract at its median stop, else None (proceed to the
+    Stage 1 backtest). The skip mirrors the engine's own whole-contract
+    flooring exactly: RiskConfig.position_size() < contract_size."""
+    if not getattr(risk, "contract_size", None):
+        return None  # no whole-contract flooring in play -- nothing to pre-screen
+    stop_pips = _candidate_median_stop_pips(spec, risk, df)
+    if stop_pips is None or not math.isfinite(stop_pips) or stop_pips <= 0:
+        return None
+    units = risk.position_size(risk.initial_balance, stop_pips)
+    if units >= risk.contract_size - 1e-9:
+        return None
+    detail = (
+        f"risk_value={risk.risk_value}% of ${risk.initial_balance:,.0f} cannot afford "
+        f"1 contract (contract_size={risk.contract_size:g}) at this candidate's median "
+        f"stop of {stop_pips:.1f} pips -- every signal would floor to 0 contracts"
+    )
+    return {
+        **base,
+        "passed_stage1": False,
+        "prescreen_skipped": True,
+        "prescreen_skip_reason": "unfundable",
+        # "error" (not a crash -- a deliberate skip) feeds the existing
+        # failure-triage counting so the skip shows up in the Stage 1
+        # triage summary with its reason.
+        "error": f"pre-screen: unfundable ({detail})",
+        "prescreen_detail": detail,
+    }
+# ============================ end w10-astra B3 block ===========================
+
+
 def _stage1_task(candidate_id: str, spec: dict, filters: dict) -> dict:
     """Stage 1: one fast backtest, no Monte Carlo. Runs in a worker
     process. This is the scalar fallback path -- always correct for
@@ -491,6 +610,11 @@ def _stage1_task(candidate_id: str, spec: dict, filters: dict) -> dict:
     df, risk, prop_rules = _WORKER["df"], _WORKER["risk"], _WORKER["prop_rules"]
     tmp_dir = _WORKER.get("tmp_dir")
     base = {"candidate_id": candidate_id, **_record_fields_from_spec(spec)}
+    # w10-astra B3 hook: skip candidates that can't afford 1 contract at
+    # their median stop before spending a backtest on them.
+    prescreen = _prescreen_funding(base, spec, risk, df)
+    if prescreen is not None:
+        return prescreen
     try:
         strategy = build_strategy_from_spec(spec, tmp_dir)
         bt = run_backtest(df, strategy, risk)
@@ -539,6 +663,13 @@ def _stage1_task_batch(items: list[tuple[str, dict]], filters: dict) -> list[dic
     for candidate_id, spec in items:
         spec_by_id[candidate_id] = spec
         base = {"candidate_id": candidate_id, **_record_fields_from_spec(spec)}
+        # w10-astra B3 hook: same pre-screen as the scalar path, before the
+        # strategy is even built (vectorized or not, an unfundable candidate
+        # is an unfundable candidate).
+        prescreen = _prescreen_funding(base, spec, risk, df)
+        if prescreen is not None:
+            results.append(prescreen)
+            continue
         try:
             strategy = build_strategy_from_spec(spec, tmp_dir)
             strat_result = strategy.generate(df)
@@ -547,11 +678,20 @@ def _stage1_task_batch(items: list[tuple[str, dict]], filters: dict) -> list[dic
             continue
 
         if is_vectorizable(strat_result):
+            # v5: per-bar stop/target distance arrays (e.g. ATR stops)
+            # now vectorize too -- pass them through so the fast path
+            # prices and sizes off the same distances the scalar engine
+            # would use. Length is validated inside run_vectorized_batch
+            # (mismatch -> exception -> scalar fallback below).
+            sl_dist = strat_result.stop_loss_distance
+            tp_dist = strat_result.take_profit_distance
             vec_batch.append(VectorizedCandidate(
                 candidate_id=candidate_id,
                 signals=strat_result.signals.to_numpy(),
                 stop_loss_pips=strat_result.stop_loss_pips,
                 take_profit_pips=strat_result.take_profit_pips,
+                stop_distances=np.asarray(sl_dist, dtype=float) if sl_dist is not None else None,
+                take_distances=np.asarray(tp_dist, dtype=float) if tp_dist is not None else None,
             ))
             vec_bases[candidate_id] = base
         else:
@@ -791,7 +931,7 @@ def _stage3_task(candidate_id: str, spec: dict, cfg: dict) -> dict:
     per_attempt_payout = mc_summary.get(
         "per_attempt_payout_probability", mc_summary.get("first_payout_probability", 0.0))
     min_eval_floor = cfg.get("min_eval_pass_probability", 70.0)
-    min_payout_floor = cfg.get("min_first_payout_probability", 0.5)
+    min_payout_floor = cfg.get("min_first_payout_probability", 50.0)  # B1-2 (w4-forge): 0-100 MC scale
     if per_attempt_pass < min_eval_floor:
         notes.append(
             f"Per-attempt eval pass probability {per_attempt_pass:.1f}% below "
@@ -978,6 +1118,16 @@ def _drain_futures(
 # Orchestrator
 # ---------------------------------------------------------------------------
 
+# B1-2 (w4-forge): stamp the search's floating_drawdown_mode onto the
+# PropRules every simulator/MC scoring path in run_search uses. Default
+# "realized" is byte-identical to today's behavior (PropRules' own
+# default); "adverse" is implemented inside the simulator by a sibling
+# worker. Factored out (rather than inline) so the threading is directly
+# unit-testable.
+def _search_prop_rules(prop_rules: PropRules, stage_cfg: "SearchStageConfig") -> PropRules:
+    return replace(prop_rules, floating_drawdown_mode=stage_cfg.floating_drawdown_mode)
+
+
 def run_search(
     df: pd.DataFrame,
     risk: RiskConfig,
@@ -1029,6 +1179,13 @@ def run_search(
     # simulate_account/MonteCarloConfig scoring layer below but never into
     # the RiskConfig Stage 1/2/3 actually backtest every candidate against.
     risk = replace(risk, reset_on_breach=stage_cfg.reset_on_breach)
+
+    # B1-2 (w4-forge): thread floating_drawdown_mode through to every
+    # simulator call below -- simulate_account and run_monte_carlo both
+    # read it off PropRules. Stamping it here covers the in-process
+    # simulate_account calls AND the worker processes (prop_kwargs =
+    # asdict(prop_rules) is built from this object below).
+    prop_rules = _search_prop_rules(prop_rules, stage_cfg)
 
     # P1-4: locked OOS holdout, reserved BEFORE any stage runs (Forge
     # pattern -- see app.orchestration.forge). Stages 0-3 below only ever
@@ -1192,6 +1349,15 @@ def run_search(
             )
             for line in stage1_triage.format_log_lines():
                 log(line)
+            # w10-astra B3: counted pre-screen skips (kept next to the triage
+            # so "0 survivors" is never confused with "0 candidates scored").
+            prescreen_skipped = sum(1 for r in stage1_records if r.get("prescreen_skipped"))
+            if prescreen_skipped:
+                log(
+                    f"  Stage 1: {prescreen_skipped} candidate(s) skipped by the funding "
+                    f"pre-screen (risk_value too small to afford 1 contract at their "
+                    f"median stop) -- no backtest was run for them."
+                )
             mismatch_count = sum(1 for r in stage1_records if r.get("scale_mismatch_warning"))
             if stage1_records and mismatch_count / len(stage1_records) >= 0.25:
                 log(
@@ -1331,6 +1497,14 @@ def run_search(
                 "optimizer_mode": stage_cfg.optimizer_mode,
                 "plateau_robust_selection": stage_cfg.plateau_robust_selection,
                 "plateau_finalist_pool": stage_cfg.plateau_finalist_pool,
+                # ----- v5 B1-1 grammar candidate hook: passthrough (BEGIN) -----
+                # Carried so _stage2_task's worker-side code (and any future
+                # grammar-aware refinement) can see which source mode this
+                # run uses. The actual grammar draw happens in run_search's
+                # Stage 2 section below, not in the worker.
+                "candidate_source": stage_cfg.candidate_source,
+                "grammar_candidates_per_survivor": stage_cfg.grammar_candidates_per_survivor,
+                # ----- v5 B1-1 grammar candidate hook: passthrough (END) -----
             }
             futures = {
                 pool_box[0].submit(
@@ -1339,6 +1513,38 @@ def run_search(
                 ): r["candidate_id"]
                 for r in survivors1
             }
+            # ----- v5 B1-1 grammar candidate hook: draw (BEGIN) -----
+            # When candidate_source == "grammar", draw fresh candidates from
+            # the compositional grammar and refine each through the SAME
+            # Stage 2 GA task as the template survivors. Additive only:
+            # every template survivor above is still refined exactly as
+            # before; candidate_source == "templates" (the default) skips
+            # this block entirely. Drawn in the parent process (grammar
+            # generation is cheap); the expensive GA refinement still runs
+            # in the worker pool via _stage2_task.
+            if stage_cfg.candidate_source == "grammar":
+                import random as _random
+
+                from app.search.grammar import generate_random as _grammar_generate_random
+
+                _grammar_rng = _random.Random(stage_cfg.random_seed + 0x6A4D4D41)
+                _n_grammar_each = max(0, int(stage_cfg.grammar_candidates_per_survivor))
+                for _s in survivors1:
+                    for _k in range(_n_grammar_each):
+                        try:
+                            _g_config = _grammar_generate_random(rng=_grammar_rng)
+                        except Exception:
+                            continue  # a failed draw is a miss, not a run failure
+                        _g_cid = f"grammar-s2-{_s['candidate_id']}-{_k}"
+                        _g_spec = {"source_type": "manual", "config": _g_config}
+                        futures[pool_box[0].submit(
+                            _stage2_task, _g_cid, _g_spec, refine_kwargs,
+                            stage_cfg.ga_search_sims, stage_cfg.fitness_metric, stage_cfg.random_seed,
+                        )] = _g_cid
+                if _n_grammar_each:
+                    log(f"  Stage 2: +{len(survivors1) * _n_grammar_each} grammar-drawn candidate(s) "
+                        f"queued for GA refinement (candidate_source='grammar').")
+            # ----- v5 B1-1 grammar candidate hook: draw (END) -----
             done = 0
 
             def _on_stage2_done(_label, fut):

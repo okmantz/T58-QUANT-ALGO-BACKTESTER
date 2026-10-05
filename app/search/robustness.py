@@ -475,3 +475,121 @@ def parameter_neighborhood_robustness(
         is_stable=stability_ratio >= stability_threshold,
         stability_threshold=stability_threshold,
     )
+
+
+# ---------------------------------------------------------------------------
+# Gate primitives: honest trial counting + the DSR as a REJECT gate
+# ---------------------------------------------------------------------------
+
+def count_all_trials(
+    baseline_count: int = 1,
+    ga_total_evaluations: int = 0,
+    extra_trial_counts: tuple[int, ...] = (),
+) -> int:
+    """The n_trials fix for deflated_sharpe_ratio: EVERY parameter
+    configuration a pipeline actually evaluated counts as a trial -- not
+    just the screening-stage candidates that survived onto a leaderboard.
+
+    The classic undercount (this repo's own Search Lab Stage 4 did exactly
+    this): ``n_trials = len(stage1_records)``, silently ignoring every
+    genome the Stage-2 GA backtested in its inner loop while refining the
+    survivors. Those inner-loop trials are still chances the search had to
+    get lucky, so omitting them understates the expected best-of-N chance
+    Sharpe -- and an understated chance benchmark makes the deflated Sharpe
+    ratio OPTIMISTIC: the champion looks more significant than the search's
+    actual multiple-testing burden justifies. Count everything.
+
+    baseline_count: configurations evaluated outside any optimizer loop
+        (usually 1: the supplied / baseline strategy itself).
+    ga_total_evaluations: every genome the optimizer actually backtested --
+        e.g. WalkforwardGAResult.total_evaluations /
+        RefinementResult.total_evaluations. Pass the ACTUALLY-RAN count,
+        not the configured population*(generations+1) budget: auto-shrink-
+        on-low-trades and AI-assist can push the real number either side
+        of the budget (see the Bonferroni-vs-actual-evaluations fix in
+        app.orchestration.full_pipeline).
+    extra_trial_counts: any other evaluated-configuration counts (AI-
+        suggested candidates, manual spot-checks, ...) as ints.
+
+    Returns at least 1 -- a Sharpe that was computed at all was selected
+    from at least one trial.
+    """
+    total = max(int(baseline_count), 0) + max(int(ga_total_evaluations), 0)
+    for c in extra_trial_counts:
+        total += max(int(c), 0)
+    return max(total, 1)
+
+
+@dataclass
+class DeflatedSharpeGateResult:
+    passed: bool
+    probabilistic_sharpe: float      # the champion's PSR vs the deflated benchmark, 0-1
+    min_probabilistic_sharpe: float  # the bar it had to clear
+    n_trials: int                    # the (honestly counted) trial count behind the deflation
+    benchmark_sharpe: float          # E[best Sharpe by chance] across n_trials
+    reason: str                      # one human-readable line, pass or fail
+    dsr_result: "DeflatedSharpeResult | None" = None
+
+
+def deflated_sharpe_gate(
+    observed_sharpe: float,
+    trial_sharpes: list[float],
+    n_trials: int,
+    n_trade_returns: int,
+    returns_skew: float = 0.0,
+    returns_kurtosis: float = 3.0,
+    min_probabilistic_sharpe: float = 0.95,
+) -> DeflatedSharpeGateResult:
+    """The Deflated Sharpe Ratio as a REJECT gate, not a score penalty.
+
+    deflated_sharpe_ratio() above only ever produced ``is_significant`` as
+    a diagnostic flag -- callers folded it into a weighted score (Search
+    Lab Stage 4: 25% of the composite), so a spectacularly overfit
+    champion could still be crowned as long as its other numbers were
+    loud enough. This wrapper turns the same Bailey & Lopez de Prado
+    (2014) computation into a pass/fail verdict: below
+    ``min_probabilistic_sharpe`` the candidate is REJECTED outright,
+    because "indistinguishable from the best of N random tries" is not a
+    weak signal to weigh -- it is the absence of evidence.
+
+    ``n_trials`` should come from count_all_trials() above, not from a
+    leaderboard length: the whole point of the deflation is the search's
+    full multiple-testing burden, GA inner-loop trials included.
+
+    min_probabilistic_sharpe default 0.95: Bailey & de Prado's recommended
+    significance bar, and the same default deflated_sharpe_ratio() itself
+    uses -- a gate should not be looser than the diagnostic it promotes.
+    """
+    dsr = deflated_sharpe_ratio(
+        observed_sharpe,
+        trial_sharpes,
+        n_trials,
+        n_trade_returns,
+        returns_skew=returns_skew,
+        returns_kurtosis=returns_kurtosis,
+        significance_threshold=min_probabilistic_sharpe,
+    )
+    passed = dsr.deflated_sharpe >= min_probabilistic_sharpe
+    if passed:
+        reason = (
+            f"Deflated Sharpe gate PASSED: probabilistic Sharpe {dsr.deflated_sharpe:.3f} >= "
+            f"{min_probabilistic_sharpe:.2f} (deflated against an expected best-of-{dsr.n_trials} "
+            f"chance Sharpe of {dsr.benchmark_sharpe:.3f})."
+        )
+    else:
+        reason = (
+            f"REJECTED by the Deflated Sharpe gate: probabilistic Sharpe {dsr.deflated_sharpe:.3f} < "
+            f"{min_probabilistic_sharpe:.2f} -- after deflating for {dsr.n_trials} evaluated "
+            f"configuration(s) (expected best-by-chance Sharpe {dsr.benchmark_sharpe:.3f}), this "
+            f"champion's Sharpe of {dsr.observed_sharpe:.3f} is indistinguishable from what the "
+            f"search would produce by luck alone."
+        )
+    return DeflatedSharpeGateResult(
+        passed=passed,
+        probabilistic_sharpe=dsr.deflated_sharpe,
+        min_probabilistic_sharpe=min_probabilistic_sharpe,
+        n_trials=dsr.n_trials,
+        benchmark_sharpe=dsr.benchmark_sharpe,
+        reason=reason,
+        dsr_result=dsr,
+    )
