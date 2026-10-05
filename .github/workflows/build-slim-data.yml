@@ -1,0 +1,85 @@
+# build-slim-data -- v7 (worker D, 2026-10-05).
+#
+# Produces the buyer-friendly EXAMPLES-ONLY data zip: data/examples/ plus a
+# short readme pointing at the in-app downloader (app/data/downloader.py).
+# This is the slim counterpart to the full-data bundle -- the release zips
+# no longer need to carry the entire ~1 GB data/raw tree; buyers get a
+# small first download and fetch full data packs from inside the app (with
+# SHA-256 verification and resume support).
+#
+# The workflow also writes SHA256SUMS for the zip, so any consumer that
+# enforces checksums (e.g. the app's own update path) has a file to check
+# against.
+#
+# Trigger/concurrency conventions mirror build-exe.yml (which this file
+# does not modify -- worker C owns that file).
+
+name: build-slim-data
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ "v*" ]
+  workflow_dispatch: {}
+
+concurrency:
+  group: build-slim-data-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  slim-data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Assemble slim data directory
+        run: |
+          set -euo pipefail
+          rm -rf slim-data
+          mkdir -p slim-data/data
+          cp -r data/examples slim-data/data/examples
+          cat > slim-data/DATA_README.txt <<'EOF'
+          T58 Quant Algo Backtester -- sample data
+          ========================================
+          This zip contains ONLY the small bundled example datasets
+          (data/examples/). It is intentionally slim so the first download
+          stays fast.
+
+          Full historical data packs (per instrument/timeframe) are fetched
+          from inside the app: open the Data Center / data tab and use the
+          data-pack downloader. Every pack is SHA-256 checksum-verified on
+          arrival and downloads resume after interruptions.
+
+          See docs/buyer/INSTALL.md for the 15-minute first-run path.
+          EOF
+          ls -la slim-data/data/examples
+
+      - name: Create zip + checksums
+        run: |
+          set -euo pipefail
+          cd slim-data
+          zip -r -9 ../T58-Data-Examples-Slim.zip data DATA_README.txt
+          cd ..
+          sha256sum T58-Data-Examples-Slim.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          du -h T58-Data-Examples-Slim.zip
+
+      - name: Upload slim data zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: T58-Data-Examples-Slim
+          path: |
+            T58-Data-Examples-Slim.zip
+            SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Attach slim data zip to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            T58-Data-Examples-Slim.zip
+            SHA256SUMS.txt

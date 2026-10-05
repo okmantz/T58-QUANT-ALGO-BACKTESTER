@@ -155,6 +155,40 @@ jobs:
           Get-ChildItem "app\ui" -Recurse |
             Select-Object FullName, Length
 
+      - name: Bake license build config
+        shell: pwsh
+        run: |
+          # v7: generates app/licensing/build_config.py from the release
+          # secrets (T58_LICENSE_SERVER_URL, T58_MASTER_LICENSE_KEY_HASH),
+          # so the shipped .exe has a real license URL and a per-release
+          # master-key hash instead of a placeholder / repo-baked hash.
+          # Both secrets are OPTIONAL: absent values are left empty and
+          # the app degrades loudly at startup (see app/licensing/client.py
+          # and app/licensing/gate.py), never silently insecure.
+          # Owen sets both once per repo: GitHub Settings -> Secrets and
+          # variables -> Actions. Full checklist: license_server/DEPLOY.md.
+          python -c "
+          import json, os
+          config = {
+              'LICENSE_SERVER_URL': os.environ.get('T58_LICENSE_SERVER_URL', ''),
+              'MASTER_LICENSE_KEY_HASH': os.environ.get('T58_MASTER_LICENSE_KEY_HASH', ''),
+          }
+          header = ('# AUTO-GENERATED at build time by the release workflow from the '
+                    'T58_LICENSE_SERVER_URL / T58_MASTER_LICENSE_KEY_HASH repo secrets. '
+                    'Never edit by hand; never commit (see .gitignore).\n')
+          lines = [header] + [f'{k} = {json.dumps(v)}' for k, v in config.items()]
+          os.makedirs('app/licensing', exist_ok=True)
+          open('app/licensing/build_config.py', 'w', encoding='ascii').write('\n'.join(lines) + '\n')
+          print('Wrote app/licensing/build_config.py -- URL set: %s, master-key hash set: %s'
+                % (bool(config['LICENSE_SERVER_URL']), bool(config['MASTER_LICENSE_KEY_HASH'])))
+          if not config['LICENSE_SERVER_URL']:
+              print('WARNING: T58_LICENSE_SERVER_URL secret is not set -- this build will fail '
+                    'loudly at startup (no license server URL configured). See license_server/DEPLOY.md.')
+          "
+        env:
+          T58_LICENSE_SERVER_URL: ${{ secrets.T58_LICENSE_SERVER_URL }}
+          T58_MASTER_LICENSE_KEY_HASH: ${{ secrets.T58_MASTER_LICENSE_KEY_HASH }}
+
       - name: Build Windows executable
         shell: pwsh
         run: |
@@ -369,15 +403,33 @@ jobs:
           Write-Host "Path: $($zip.FullName)"
           Write-Host "Size: $($zip.Length) bytes"
 
+      - name: Publish SHA-256 checksum
+        # v7: the desktop updater (app/accounts/app_info.py) refuses any
+        # download whose release has no checksum asset -- these zips used
+        # to ship with no checksum at all, so in-app updates never
+        # worked. Writes '<hex>  <filename>' lines (parsed by
+        # _published_sha256_for()); the '.sha256' name is what
+        # _find_checksum_asset() matches on the release assets.
+        shell: pwsh
+        run: |
+          $zip = "T58-Quant-Algo-Backtester-Windows.zip"
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  $zip" | Out-File -Encoding ascii "$zip.sha256"
+          Write-Host "Checksum written to $zip.sha256 : $hash"
+
       - name: Upload Windows application
         uses: actions/upload-artifact@v4
         with:
           name: T58-Quant-Algo-Backtester-Windows
-          path: T58-Quant-Algo-Backtester-Windows.zip
+          path: |
+            T58-Quant-Algo-Backtester-Windows.zip
+            T58-Quant-Algo-Backtester-Windows.zip.sha256
           if-no-files-found: error
 
       - name: Attach Windows application to release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: T58-Quant-Algo-Backtester-Windows.zip
+          files: |
+            T58-Quant-Algo-Backtester-Windows.zip
+            T58-Quant-Algo-Backtester-Windows.zip.sha256
