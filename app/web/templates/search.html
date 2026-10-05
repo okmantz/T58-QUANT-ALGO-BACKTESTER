@@ -454,6 +454,9 @@
         <option value="profit_factor">Profit factor</option>
       </select>
       <p style="font-size:12px;color:#888;margin-top:4px;">Not trading a prop-firm evaluation? Pick "Long-term net profit" -- it scores candidates purely on total P&amp;L and ignores prop-firm drawdown/payout rules entirely.</p>
+      <label>Stage 3 acceptance floor — first-payout probability (%)</label>
+      <input type="number" name="min_first_payout_probability" value="50.0" min="0" max="100" step="0.5">
+      <p style="font-size:12px;color:#888;margin-top:4px;">Candidates below this per-attempt first-payout probability fail the Stage 3 gate no matter how stable they look. 0–100 scale (50 = 50%).</p>
     </details>
   </div>
 
