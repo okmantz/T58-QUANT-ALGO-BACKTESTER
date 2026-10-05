@@ -5071,3 +5071,22 @@ def generate_search_space(
         candidates=candidates, meta=meta,
         total_generated=total_generated, sampled=sampled,
     )
+
+
+# ---------------------------------------------------------------------------
+# v7 (2026-10-05, worker B, workstream B): register the ten new template
+# families + hypothesis questions from app.search.families_v7. Imported
+# LAST so families_v7's own `from app.search.strategy_space import ...`
+# sees a fully-initialized module (no circular import: families_v7 only
+# needs the helpers and SkeletonSpec defined above). Search Lab
+# (generate_search_space) and Evolution Lab (list_families) both read
+# FAMILIES, so both labs pick these up with no further wiring.
+# ---------------------------------------------------------------------------
+try:
+    from app.search.families_v7 import V7_FAMILIES, V7_HYPOTHESIS_QUESTIONS
+    FAMILIES.update(V7_FAMILIES)
+    HYPOTHESIS_QUESTIONS.update(V7_HYPOTHESIS_QUESTIONS)
+except ImportError:
+    # families_v7 is additive; a checkout without it keeps the 84-family
+    # registry exactly as before.
+    pass

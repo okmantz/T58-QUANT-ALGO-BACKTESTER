@@ -90,6 +90,20 @@ INDICATOR_KINDS = (
     "fisher_transform", "fisher_transform_signal",
     "connors_rsi", "adr",
     "swing_bos", "swing_choch",
+    # v7 (worker D, 2026-10-05): new indicator kinds from
+    # app.strategy.indicators_v7 (StochRSI, Wilder +/-DI, linear-regression
+    # slope, Hurst exponent, KST, Coppock). Dispatched via the v7 fallback
+    # in build_indicator_series and routed by ManualStrategy's
+    # _series_from_operand -- the round-trip test below proves each is
+    # dispatchable. The Workstream-C list members that already had
+    # builders (Supertrend, TTM Squeeze, Connors RSI, Williams %R, CCI,
+    # ADX, Aroon, Keltner, Donchian, Parabolic SAR, Heikin-Ashi,
+    # linreg channels, Choppiness Index, Elder Ray, TRIX, DPO, VWAP bands)
+    # were already registered above and are unchanged.
+    "stochrsi_k", "stochrsi_d",
+    "plus_di", "minus_di",
+    "linreg_slope", "hurst_exponent",
+    "kst", "coppock",
     # w10-astra terminals (Oct-4 analysis, Part A ports #2/#3) -- regime-
     # adaptive RSI zones + session VWAP profile levels. NOT
     # build_indicator_series kinds: they need operand-level parameters
@@ -162,6 +176,13 @@ THRESHOLD_BOUNDS: dict[str, tuple[float, float]] = {
     "cmf": (-1.0, 1.0),
     "rsi_regime": (-1.0, 1.0),
     "rsi_divergence": (-1.0, 1.0),
+    # v7 (worker D): bounded 0-100 oscillators among the new
+    # indicators_v7 kinds -- see V7_BOUNDED_RANGES there. Kept local to
+    # this module for the same reason as the entries above.
+    "stochrsi_k": (0.0, 100.0),
+    "stochrsi_d": (0.0, 100.0),
+    "plus_di": (0.0, 100.0),
+    "minus_di": (0.0, 100.0),
 }
 
 OPERATORS = (">", ">=", "<", "<=", "cross above", "cross below", "is true", "is false")
@@ -196,6 +217,52 @@ _LOOKBACK_KINDS = {
     "change_of_character", "choch", "fair_value_gap", "fvg", "order_block",
     "swing_bos", "swing_choch", "ib_contraction_ratio",
 }
+
+# ---------------------------------------------------------------------------
+# v7 (worker D): multi-timeframe grammar support.
+#
+# Feasibility verdict (2026-10-05): feasible WITHOUT new machinery. The
+# app already has a lookahead-safe MTF pipeline -- operand-level
+# "timeframe" keys are honored by ManualStrategy._series_from_operand
+# (MTF-STRATEGY-001), and app.data.timeframe_resample.
+# prepare_timeframe_aligned_data computes the HTF indicator on genuine
+# native-frequency bars (never the base timeframe's upsampled values)
+# and merges it on as a tfNN_ column before generate() ever runs. The
+# grammar just needs to (a) occasionally EMIT the timeframe key and
+# (b) run the same data-prep in validate()'s round-trip. Both are done
+# here, guarded by _MTF_PROBABILITY so the emission rate is tunable and
+# generate_random(allow_mtf=False) turns it off entirely.
+# ---------------------------------------------------------------------------
+MTF_CONTEXT_TIMEFRAMES: tuple[str, ...] = ("1h", "4h", "1d")
+
+_MTF_PROBABILITY: float = 0.08
+
+
+def set_mtf_probability(p: float) -> float:
+    """Set the per-indicator-operand probability of emitting a coarser
+    context timeframe (0.0 = never, 1.0 = always). Returns the previous
+    value. generate_random(allow_mtf=False) is the scoped alternative."""
+    global _MTF_PROBABILITY
+    prev = _MTF_PROBABILITY
+    _MTF_PROBABILITY = float(min(max(p, 0.0), 1.0))
+    return prev
+
+
+def enable_mtf_grammar(p: float = 0.08) -> None:
+    """Opt in to MTF operand emission at probability `p` (the default)."""
+    set_mtf_probability(p)
+
+
+def disable_mtf_grammar() -> None:
+    """Turn MTF operand emission off entirely."""
+    set_mtf_probability(0.0)
+
+
+# Indicator kinds MTF emission skips: raw price columns (a bare HTF price
+# is rarely the useful bias primitive -- the HTF *indicator* is), session
+# levels (their session_start/session_end semantics are base-timeframe),
+# and the lookback-window structure detectors.
+_MTF_EXCLUDED_KINDS = frozenset(PRICE_KINDS) | frozenset(SESSION_KINDS) | _LOOKBACK_KINDS
 
 # ---------------------------------------------------------------------------
 # Extension point: operand terminal registry.
@@ -244,6 +311,16 @@ def _operand(kind: str, rng: random.Random, **overrides: Any) -> dict:
         op["period"] = int(overrides.get("period", rng.choice([10, 14, 20])))
         op["expansion_mult"] = overrides.get("expansion_mult", round(rng.uniform(1.1, 1.5), 2))
         op["contraction_mult"] = overrides.get("contraction_mult", round(rng.uniform(0.5, 0.9), 2))
+    # v7: occasionally tag an indicator operand with a coarser context
+    # timeframe -- the classic "HTF bias indicator" primitive. The MTF
+    # pipeline (MTF-STRATEGY-001 + app.data.timeframe_resample) computes
+    # it on genuine native-frequency bars, lookahead-safe; validate()'s
+    # round-trip runs the same prep. Skipped for price/session/lookback
+    # kinds (see _MTF_EXCLUDED_KINDS).
+    if ("timeframe" not in overrides and kind in NUMERIC_KINDS
+            and kind not in _MTF_EXCLUDED_KINDS
+            and rng.random() < _MTF_PROBABILITY):
+        op["timeframe"] = rng.choice(MTF_CONTEXT_TIMEFRAMES)
     op.update(overrides)
     return op
 
@@ -495,6 +572,7 @@ def generate_random(
     max_conditions_per_side: int = 3,
     block_pool: dict | None = None,
     seed: int | None = None,
+    allow_mtf: bool = True,
 ) -> dict:
     """Generate one random, valid Manual strategy config dict.
 
@@ -504,7 +582,28 @@ def generate_random(
     probability per side, entry conditions are drawn from decomposed
     template blocks instead of pure random terminals, so the grammar
     invents around proven ingredients rather than pure noise.
+    allow_mtf: when False, no operand gets a "timeframe" key (the MTF
+    emission probability is forced to 0.0 for the duration of this call
+    only; the module-level setting is restored afterwards).
     """
+    prev_prob = None
+    if not allow_mtf:
+        prev_prob = set_mtf_probability(0.0)
+    try:
+        return _generate_random_inner(rng, max_conditions_per_side, block_pool, seed)
+    finally:
+        if prev_prob is not None:
+            set_mtf_probability(prev_prob)
+
+
+def _generate_random_inner(
+    rng: random.Random | None,
+    max_conditions_per_side: int,
+    block_pool: dict | None,
+    seed: int | None,
+) -> dict:
+    """Body of generate_random (see that docstring). Split out so the
+    allow_mtf flag can scope the MTF probability knob around it."""
     if rng is None:
         rng = random.Random(seed)
     long_conds, long_conns = _random_condition_list(rng, max_conditions_per_side, block_pool, "long")
@@ -795,6 +894,15 @@ def _validate_filters(filters: Any, errors: list[str]) -> None:
                 )
 
 
+def _config_declares_timeframe(config: dict) -> bool:
+    """True if any entry/exit condition operand carries a "timeframe" key
+    (the v7 MTF primitive)."""
+    for _where, node in _iter_condition_operands(config):
+        if node.get("timeframe"):
+            return True
+    return False
+
+
 def validate(config: dict) -> list[str]:
     """Validate a Manual strategy config dict. Returns a list of error
     strings -- empty means valid.
@@ -828,7 +936,19 @@ def validate(config: dict) -> list[str]:
         # operand kind/operator in this config. Synthetic data is enough --
         # this checks dispatch validity, not edge quality.
         try:
-            result = ManualStrategy(config).generate(_synthetic_ohlcv())
+            strat = ManualStrategy(config)
+            df = _synthetic_ohlcv()
+            if _config_declares_timeframe(config):
+                # v7 MTF: run the same upstream data prep the production
+                # backtest path runs (app.backtest.engine.run_backtest) --
+                # it computes each HTF-tagged indicator on genuine
+                # native-frequency bars and merges it on as a lookahead-safe
+                # tfNN_ column. Without this the builder would raise on the
+                # missing merged column. Lazy import: keeps this module's
+                # import graph unchanged for non-MTF configs.
+                from app.data.timeframe_resample import prepare_timeframe_aligned_data
+                df, _mtf_warnings = prepare_timeframe_aligned_data(df, strat)
+            result = strat.generate(df)
             signals = result.signals
             if not set(pd.unique(signals.astype(int))).issubset({-1, 0, 1}):
                 errors.append("builder round-trip: signals contain values outside {-1, 0, 1}")

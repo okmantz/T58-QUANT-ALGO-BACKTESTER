@@ -248,6 +248,20 @@ def run_cross_instrument_search(
     backtests = [0]
     errors: list[str] = []
 
+    # v7 (2026-10-05, worker B, fix #11): one shared RiskConfig stamped on
+    # N instruments is the classic per-leg scale bug -- resolve each leg's
+    # own pip/contract/commission from its own data + label unless the
+    # caller already supplied per-market risk explicitly. Explicit user
+    # values are never overridden (see app.search.instrument_risk).
+    if risk_by_market is None:
+        from app.search.instrument_risk import resolve_leg_risk
+        risk_by_market = {}
+        for _leg_label, _leg_df in dfs.items():
+            _leg_risk, _leg_notes = resolve_leg_risk(risk, _leg_df, _leg_label)
+            risk_by_market[_leg_label] = _leg_risk
+            for _leg_note in _leg_notes:
+                log(_leg_note)
+
     selected = [f for f in (families or []) if f]
     unknown = [f for f in selected if f not in FAMILIES]
     if unknown:

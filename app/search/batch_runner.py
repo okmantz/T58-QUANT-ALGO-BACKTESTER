@@ -78,6 +78,7 @@ from app.reports.generator import generate_full_report
 from app.search.failure_triage import aggregate_failure_reasons
 from app.search.family_diversity import enforce_family_diversity
 from app.search.graveyard import GraveyardEntry, graveyard_path_for, param_signature, record_rejections
+from app.search.instrument_risk import resolve_leg_risk
 from app.search.results_db import ResultsDB
 from app.search.robustness import (
     deflated_sharpe_ratio, parameter_neighborhood_robustness, run_walk_forward,
@@ -226,8 +227,12 @@ class SearchStageConfig:
     stage1_top_n: int = 40                    # survivors that advance to Stage 2
 
     # Stage 2 -- GA refinement (delegates to the existing RefinementConfig)
-    ga_population: int = 10
-    ga_generations: int = 4
+    # v7 (2026-10-05, worker B, fix #9): raised defaults 10x4 -> 40x15.
+    # The old budget was a weekend of random sampling for the space being
+    # searched, not a serious search. Callers passing explicit values are
+    # unaffected; the web Search Lab form defaults moved with these.
+    ga_population: int = 40
+    ga_generations: int = 15
     ga_search_sims: int = 300
     stage2_top_n: int = 10                    # survivors that advance to Stage 3
 
@@ -1220,6 +1225,17 @@ def run_search(
     # simulate_account/MonteCarloConfig scoring layer below but never into
     # the RiskConfig Stage 1/2/3 actually backtest every candidate against.
     risk = replace(risk, reset_on_breach=stage_cfg.reset_on_breach)
+
+    # v7 (2026-10-05, worker B, fix #7): pip_size backstop -- WARN loudly
+    # if the untouched FX default disagrees with the data. We do NOT
+    # silently fix it here; the fix belongs client-side (auto-fill with
+    # user confirmation), and Stage 1's "** LIKELY ROOT CAUSE **" line
+    # must still fire. (Multi-instrument legs ARE fixed per-leg in
+    # cross_instrument.py, where there is no per-leg UI.)
+    from app.search.instrument_risk import resolve_leg_risk
+    _, _v7_risk_notes = resolve_leg_risk(risk, df, instrument)
+    for _v7_note in _v7_risk_notes:
+        log(_v7_note)
 
     # B1-2 (w4-forge): thread floating_drawdown_mode through to every
     # simulator call below -- simulate_account and run_monte_carlo both
