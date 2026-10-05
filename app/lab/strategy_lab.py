@@ -149,6 +149,16 @@ class StrategyLabSpec:
     random_seed: int = 42
     workers: int | None = None
 
+    # A2 (v6 W1): Stage 2 candidate source, threaded straight into
+    # SearchStageConfig. "grammar" (default) ADDITIONALLY draws fresh
+    # structurally-novel candidates from app.search.grammar.
+    # generate_random() and refines each through the same Stage 2 GA as
+    # the template survivors -- this is how Strategy Lab invents
+    # structure instead of only tuning frozen templates. "templates"
+    # keeps the exact old behavior (Stage 2 refines only the Stage 1
+    # skeleton survivors).
+    candidate_source: str = "grammar"
+
     # UPGRADE (prop-firm reset-on-breach as the search basis): threaded
     # into the Generate->Filter->Optimize->Validate funnel's own Monte
     # Carlo scoring (Stage 2/3, via SearchStageConfig) and the parameter-
@@ -164,6 +174,10 @@ class StrategyLabSpec:
         if self.goal_metric not in KNOWN_GOAL_METRICS:
             raise ValueError(
                 f"Unknown goal_metric '{self.goal_metric}'. Must be one of: {sorted(KNOWN_GOAL_METRICS)}."
+            )
+        if self.candidate_source not in ("templates", "grammar"):
+            raise ValueError(
+                f"Unknown candidate_source '{self.candidate_source}'. Must be 'templates' or 'grammar'."
             )
         self.untouched_holdout_frac = min(max(float(self.untouched_holdout_frac), 0.0), 0.5)
 
@@ -398,6 +412,10 @@ def run_strategy_lab(
         fitness_metric=spec.goal_metric,
         workers=spec.workers, random_seed=spec.random_seed,
         reset_on_breach=spec.reset_on_breach,
+        # A2 (v6 W1): thread the spec's candidate source into the Search
+        # Lab funnel so the Stage 2 "grammar" draw branch in
+        # app.search.batch_runner is reachable from Strategy Lab.
+        candidate_source=spec.candidate_source,
     )
 
     out_dir = Path(output_dir) if output_dir else Path(tempfile.mkdtemp(prefix="t58_strategy_lab_"))
