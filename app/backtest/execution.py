@@ -3,9 +3,12 @@ Bar-by-bar trade execution simulator.
 
 Consumes OHLCV data + a standardized signal series (-1/0/1) + risk config
 and produces a discrete trade list. Entries occur on the bar the signal
-changes (filled at that bar's close, adjusted for spread/slippage); each
-open trade is then walked forward bar-by-bar checking for stop-loss /
-take-profit intrabar hits (using high/low) or a signal-driven exit.
+changes, filled at open[i + risk.entry_fill_lag_bars] (default: the NEXT
+bar's open -- no live trader can fill at the close that produced the
+signal), adjusted for spread/slippage; each open trade is then walked
+forward bar-by-bar checking for stop-loss / take-profit intrabar hits
+(using high/low), a time-invalidation stop, or a signal-driven exit
+(which also fills at open[i + entry_fill_lag_bars]).
 
 This is intentionally a straightforward, transparent simulation appropriate
 for an MVP -- no partial fills, no multi-leg positions, one open trade at a
@@ -40,6 +43,15 @@ import pandas as pd
 
 from app.backtest.adaptive_risk import AdaptiveRiskConfig, AdaptiveRiskState, volatility_percentile_series
 from app.backtest.risk import RiskConfig
+
+try:
+    # B2-3 (session day): shared trading-day helper (created by a sibling
+    # v5 worker). Guarded so this module still imports/runs if that module
+    # hasn't been merged yet -- in that case run_execution falls back to
+    # the previous wall-clock calendar-day grouping.
+    from app.data.trading_day import trading_day
+except ImportError:  # pragma: no cover - only until the sibling module lands
+    trading_day = None
 
 
 @dataclass
@@ -79,6 +91,26 @@ class Trade:
     # app.backtest.statistics.compute_statistics. None for trades built
     # by paths that don't track it (e.g. the vectorized Stage-1 fast
     # path, which settles without intrabar extremes).
+    mfe_price: float | None = None
+    # Part A port #1: the most FAVORABLE price the trade's bar extremes ever
+    # reached while the position was open (high for a long, low for a
+    # short) -- mirrors best_price (engine-internal favorable extreme) the
+    # way worst_price above mirrors the adverse one. Feeds per-trade MFE
+    # (max favorable excursion) in app.analysis.exit_quality. None for
+    # trades built by paths that don't track it.
+    exit_cause: str | None = None
+    # Part A port #1: machine-verified exit taxonomy, refined from the raw
+    # exit_reason at settle time -- one of "stop_loss" | "take_profit" |
+    # "trailing_stop" | "breakeven" | "time_stop" | "signal_exit" |
+    # "session_close" | "daily_loss_close" | "end_of_data". Lets
+    # exit-quality analysis attribute results per exit mechanism instead of
+    # lumping every stop fill together. None only for trades built by paths
+    # that don't tag it.
+    sized_above_risk_target: bool = False
+    # Part C fix 2: True when this trade was opened by the dead-lock rescue
+    # under RiskConfig.allow_single_contract_minimum at/above
+    # initial_balance -- i.e. its 1-contract size may exceed the configured
+    # risk_value % for that entry. False for every normally-sized trade.
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -305,10 +337,29 @@ def run_execution(
     # first so "a day" is the wall-clock calendar day the data was
     # recorded in -- the same day app.backtest.statistics'
     # _periodic_max_drawdown attributes P&L to.
-    _ts_for_days = df["timestamp"]
-    if _ts_tz is not None:
-        _ts_for_days = pd.DatetimeIndex(ts).tz_localize("UTC").tz_convert(_ts_tz)
-    bar_dates = pd.DatetimeIndex(_ts_for_days).normalize().to_numpy()
+    # B2-3 (session day, 2026-10-04): supersedes the P2-3 wall-clock day.
+    # Naive timestamps are assumed UTC (see app.data.trading_day),
+    # converted to America/Chicago, and the day rolls at 17:00 CT --
+    # matching how prop firms (e.g. Alpha's 17:00 CT day roll) actually
+    # attribute a trading day for the daily-loss limit, the 5x$200
+    # winning-day count, and consistency numerators. Every per-day
+    # structure below (trades_today_count, pnl_today_sum, the daily-loss
+    # circuit breaker, news blackout, weekend hold) keys off this SESSION
+    # day. Falls back to the P2-3 wall-clock calendar day if the
+    # trading_day module isn't importable yet (guarded import at top).
+    if trading_day is not None:
+        _ts_for_days = pd.DatetimeIndex(ts)
+        if _ts_tz is not None:
+            _ts_for_days = _ts_for_days.tz_localize("UTC").tz_convert(_ts_tz)
+        bar_dates = np.array(
+            [trading_day(t, tz="America/Chicago", roll_hour=17) for t in _ts_for_days],
+            dtype=object,
+        )
+    else:
+        _ts_for_days = df["timestamp"]
+        if _ts_tz is not None:
+            _ts_for_days = pd.DatetimeIndex(ts).tz_localize("UTC").tz_convert(_ts_tz)
+        bar_dates = pd.DatetimeIndex(_ts_for_days).normalize().to_numpy()
 
     # UPGRADE (speed): trades_today / pnl_today used to be plain dicts keyed
     # by the numpy.datetime64 in bar_dates, with a hash + dict lookup (get(),
@@ -381,6 +432,13 @@ def run_execution(
     spread_price = risk.spread_pips * risk.pip_size
     slip_price = risk.slippage_pips * risk.pip_size
 
+    # B2-2 (fill honesty): market entries and signal-driven exits fill at
+    # open[i + fill_lag_bars], never at the signal bar's own close -- no
+    # live trader can fill at the close that produced the signal. Default
+    # 1 (next bar's open); 0 = the signal bar's own open. THIS CHANGES ALL
+    # BACKTEST NUMBERS vs the old default.
+    fill_lag_bars = max(int(risk.entry_fill_lag_bars or 0), 0)
+
     force_closed_count = 0
 
     # ------------------------------------------------------------------
@@ -402,12 +460,61 @@ def run_execution(
     # used to be silently zeroed without the "_invalid_pnl_skipped"
     # suffix the normal exit path already applied -- now every path
     # gets the same treatment.
+    def _exit_cause_for(reason: str, open_pos: dict) -> str:
+        """Maps the engine-internal exit `reason` to the machine-verified
+        exit_cause taxonomy stored on Trade.exit_cause (Part A port #1).
+        The interesting refinement is "stop_loss": a stop resting AT the
+        entry price (moved there by breakeven_trigger_r or a partial
+        exit's move_stop_to_breakeven) is an exit-quality "breakeven", not
+        a loss, and a stop the trailing ratchet moved away from its
+        original level is a "trailing_stop" -- lumping those in with plain
+        stop losses is exactly the "entries fine, exits broken" blindness
+        this taxonomy closes. account_blown_forced_close has no closer
+        taxonomy value than "session_close" (that account's trading
+        session ended via termination); partial_take_profit is a
+        take-profit mechanism, so it maps to "take_profit"."""
+        reason = reason.removesuffix("_invalid_pnl_skipped")
+        if reason == "stop_loss":
+            stop_now = open_pos.get("stop_price")
+            entry = open_pos.get("entry_price")
+            direction_ = open_pos.get("direction")
+            init_risk = open_pos.get("initial_risk")
+            if (
+                stop_now is not None and entry is not None
+                and math.isclose(stop_now, entry, rel_tol=1e-9, abs_tol=1e-12)
+            ):
+                return "breakeven"
+            if init_risk and direction_ and stop_now is not None and entry is not None:
+                orig_stop = entry - direction_ * init_risk
+                if (
+                    open_pos.get("trailing_distance")
+                    and not math.isclose(stop_now, orig_stop, rel_tol=1e-9, abs_tol=1e-12)
+                ):
+                    return "trailing_stop"
+            return "stop_loss"
+        return {
+            "take_profit": "take_profit",
+            "signal": "signal_exit",
+            "time_stop": "time_stop",
+            "daily_loss_limit_forced_close": "daily_loss_close",
+            "weekend_hold_forced_close": "session_close",
+            "account_blown_forced_close": "session_close",
+            "partial_take_profit": "take_profit",
+            "end_of_data": "end_of_data",
+        }.get(reason, reason)
+
     def _settle_exit(open_pos: dict, raw_exit_price: float, reason: str, direction_: int, i: int) -> float:
         nonlocal equity, gap_loss_count, last_close_bar_idx
         last_close_bar_idx = i  # EXEC-002: this is a FULL close -- see reentry_cooldown_bars above
         filled_exit_price = raw_exit_price - (spread_price + slip_price) * direction_
         pnl = (filled_exit_price - open_pos["entry_price"]) * open_pos["size"] * direction_
-        pnl -= risk.commission_per_trade
+        # B2-4: commission = flat per-trade + per-contract x contracts
+        # actually closed (open_pos["size"] is post-partial, in sizing
+        # units; contract_size converts to whole contracts). 0.0 defaults
+        # keep this byte-identical to the old flat-only charge.
+        _contracts_closed = open_pos["size"] / risk.contract_size if risk.contract_size else 0.0
+        _commission_charged = risk.commission_per_trade + risk.commission_per_contract * _contracts_closed
+        pnl -= _commission_charged
         if not math.isfinite(pnl):
             # Guard against a runaway/degenerate trade (e.g. an entry
             # sized off a near-zero ATR-based stop distance) ever
@@ -438,13 +545,16 @@ def run_execution(
             pnl=pnl,
             pnl_pct=(pnl / open_pos["equity_at_entry"]) * 100 if open_pos["equity_at_entry"] else 0.0,
             exit_reason=reason,
-            commission=risk.commission_per_trade,
+            commission=_commission_charged,
             equity_after=equity,
             initial_risk=open_pos["initial_risk"],
             adaptive_risk_multiplier=open_pos["adaptive_multiplier"],
             adaptive_risk_rules_active=tuple(open_pos["adaptive_rules_active"]),
             intended_risk_dollars=open_pos.get("intended_risk_dollars"),
             worst_price=open_pos.get("worst_price"),
+            mfe_price=open_pos.get("mfe_price"),
+            exit_cause=_exit_cause_for(reason, open_pos),
+            sized_above_risk_target=bool(open_pos.get("sized_above_risk_target", False)),
         ))
         bar_date_ = day_idx[i]
         adaptive_state.record_trade_close(pnl, is_new_day=not day_has_pnl[bar_date_])
@@ -471,7 +581,14 @@ def run_execution(
         partial_size = open_pos["initial_size"] * partial_fraction
         filled_exit_price = fill_price - (spread_price + slip_price) * direction_
         pnl = (filled_exit_price - open_pos["entry_price"]) * partial_size * direction_
-        pnl -= risk.commission_per_trade * partial_fraction
+        # B2-4: same per-trade + per-contract charge as a full settle, scaled
+        # pro-rata to the fraction actually closed (contracts of the
+        # ORIGINAL size x the fraction closed).
+        _contracts_total = open_pos["initial_size"] / risk.contract_size if risk.contract_size else 0.0
+        _commission_charged = (
+            risk.commission_per_trade + risk.commission_per_contract * _contracts_total
+        ) * partial_fraction
+        pnl -= _commission_charged
         if not math.isfinite(pnl):
             pnl = 0.0
         pnl = _clamp_loss(pnl, open_pos["equity_at_entry"])
@@ -486,13 +603,16 @@ def run_execution(
             pnl=pnl,
             pnl_pct=(pnl / open_pos["equity_at_entry"]) * 100 if open_pos["equity_at_entry"] else 0.0,
             exit_reason="partial_take_profit",
-            commission=risk.commission_per_trade * partial_fraction,
+            commission=_commission_charged,
             equity_after=equity,
             initial_risk=open_pos["initial_risk"],
             adaptive_risk_multiplier=open_pos["adaptive_multiplier"],
             adaptive_risk_rules_active=tuple(open_pos["adaptive_rules_active"]),
             intended_risk_dollars=open_pos.get("intended_risk_dollars"),
             worst_price=open_pos.get("worst_price"),
+            mfe_price=open_pos.get("mfe_price"),
+            exit_cause="take_profit",  # partial scale-out is a take-profit mechanism
+            sized_above_risk_target=bool(open_pos.get("sized_above_risk_target", False)),
         ))
         open_pos["size"] -= partial_size
         bar_date_ = day_idx[i]
@@ -557,6 +677,15 @@ def run_execution(
                 open_trade["best_price"] = max(open_trade["best_price"], favorable_extreme)
             else:
                 open_trade["best_price"] = min(open_trade["best_price"], favorable_extreme)
+
+            # Part A port #1: track the most FAVORABLE price reached (MFE)
+            # exactly like best_price above -- best_price doubles as the
+            # trailing-stop ratchet input, while mfe_price is the clean
+            # per-trade favorable extreme for exit-quality analysis.
+            if direction == 1:
+                open_trade["mfe_price"] = max(open_trade["mfe_price"], favorable_extreme)
+            else:
+                open_trade["mfe_price"] = min(open_trade["mfe_price"], favorable_extreme)
 
             # P2-5: mirror best_price (favorable extreme) with worst_price
             # (adverse extreme) so max adverse excursion (MAE) is
@@ -669,11 +798,52 @@ def run_execution(
             take = open_trade["take_price"]
             exit_price, reason = _resolve_intrabar_exit(direction, stop, take, lows[i], highs[i], opens[i])
 
-            # signal-driven exit (flat or reversal) takes effect at close if no SL/TP hit
+            # signal-driven exit (flat or reversal): a market order filled at
+            # the next bar's open (see B2-2) if no SL/TP hit intrabar
             if exit_price is None and sig[i] != direction:
-                exit_price, reason = closes[i], "signal"
+                _sig_fill_idx = i + fill_lag_bars
+                if _sig_fill_idx < n:
+                    # B2-2: a signal exit is a market order -- it fills at
+                    # the next bar's open, not at the close that produced
+                    # the signal. The trade settles on the FILL bar (exit
+                    # time, cooldown, and day-PnL all key off it).
+                    exit_price, reason = opens[_sig_fill_idx], "signal"
+                    _settle_exit(open_trade, exit_price, reason, direction, _sig_fill_idx)
+                    # Cooldown keys off the TRIGGER bar (i), not the fill
+                    # bar: reentry_cooldown_bars is documented as "measured
+                    # from the bar the previous position closed on", and its
+                    # contract is about the information bar -- a signal on
+                    # the very next bar is new information and must stay
+                    # tradable (cooldown=1 blocks the same bar's decision
+                    # only). Keying it off the fill bar would silently
+                    # extend every cooldown by the fill lag.
+                    last_close_bar_idx = i
+                    open_trade = None
+                # else: no future bar to fill on -- leave the position open;
+                # the end-of-data close below settles it honestly.
 
-            if exit_price is not None:
+            # Part A port #4 (time-invalidation stop): at the bar's close,
+            # if the position is older than time_stop_hours AND price has
+            # barely moved from the entry (|close - entry| still inside
+            # time_stop_atr_band * ATR), the capital is dead -- close it as
+            # stagnant. Absolute (either-direction) excursion: a flat trade
+            # is stagnant whether it flatlined a touch above or below the
+            # entry; a trade that actually went somewhere (winner OR slow
+            # loser past the band) is left to its stop/target/signal logic.
+            # Checked after the signal exit so a strategy-driven exit keeps
+            # its own cause; fills at the close like any bar-close decision.
+            if exit_price is None and open_trade is not None and risk.time_stop_hours:
+                _age_hours = (ts[i] - ts[open_trade["entry_bar_idx"]]) / np.timedelta64(1, "h")
+                _atr_now = float(_atr_for_mismatch_check[i])
+                _stagnation = abs(closes[i] - open_trade["entry_price"])
+                if (
+                    _age_hours > risk.time_stop_hours
+                    and _atr_now > 0
+                    and _stagnation <= risk.time_stop_atr_band * _atr_now
+                ):
+                    exit_price, reason = closes[i], "time_stop"
+
+            if exit_price is not None and open_trade is not None:
                 # Every exit is a real transaction and pays the same
                 # round-turn cost the entry did — crediting a stop/take/
                 # signal exit at its exact quoted level (with no spread or
@@ -831,12 +1001,22 @@ def run_execution(
         news_blackout_today = bool(_news_blackout_bar[i])
         weekend_blocked_today = _weekend_hold and (_dow[i] >= 5 or weekend_entry_block)
         if open_trade is None and sig[i] != 0 and not daily_limit_breached and not account_blown and not cooldown_active and not news_blackout_today and not weekend_blocked_today:
-            n_today = trades_today_count[bar_date]
+            # B2-2: a market entry fills at open[i + fill_lag_bars], not at
+            # the signal bar's close. No future bar to fill on (signal on
+            # the last bar(s)) means no entry -- an honest engine cannot
+            # fill an order after the data ends.
+            fill_idx = i + fill_lag_bars
+            if fill_idx >= n:
+                continue
+            # The trade opens on the FILL bar: max-trades/day counting and
+            # the stall diagnostic's last-entry marker key off it.
+            fill_bar_date = day_idx[fill_idx]
+            n_today = trades_today_count[fill_bar_date]
             if n_today >= risk.max_trades_per_day:
                 blocked_max_trades_count += 1
             if n_today < risk.max_trades_per_day:
                 direction = int(sig[i])
-                raw_price = closes[i]
+                raw_price = opens[fill_idx]
                 entry_price = raw_price + (spread_price + slip_price) * direction
 
                 # UPGRADE (speed): pd.isna() on a single numpy float64 scalar
@@ -876,10 +1056,35 @@ def run_execution(
                 # account WOULD afford one contract with this exact config,
                 # trade the 1-contract minimum -- never more risk than the
                 # configured % of the starting balance.
-                if size <= 0 and risk.contract_size and 0 < equity < risk.initial_balance:
-                    if risk.position_size(risk.initial_balance, sizing_pips) >= risk.contract_size:
-                        size = float(risk.contract_size)
-                        min_contract_rescue_count += 1
+                # Part C fix 2 (2026-10-04): with
+                # risk.allow_single_contract_minimum=True the rescue ALSO
+                # fires at/above initial_balance -- a profitable account
+                # whose stops widened past what risk_value affords (Part C's
+                # silent halt) gets the 1-contract minimum too instead of
+                # stopping forever. NOTE: the override bypasses the
+                # fresh-account affordability check as well -- in
+                # percent/fixed mode "a fresh account affords 1 contract but
+                # the larger current account doesn't" is mathematically
+                # impossible, so keeping that check would make this flag
+                # dead code that can never fire. Override-path trades are
+                # tagged sized_above_risk_target=True since 1 contract may
+                # exceed the configured risk % there. Default OFF: honest
+                # skipping stays the default.
+                rescue_above_risk_target = False
+                allow_single_min = bool(risk.allow_single_contract_minimum)
+                legacy_eligible = (
+                    size <= 0
+                    and risk.contract_size
+                    and 0 < equity < risk.initial_balance
+                    and risk.position_size(risk.initial_balance, sizing_pips) >= risk.contract_size
+                )
+                override_eligible = (
+                    allow_single_min and size <= 0 and risk.contract_size and equity > 0
+                )
+                if legacy_eligible or override_eligible:
+                    size = float(risk.contract_size)
+                    min_contract_rescue_count += 1
+                    rescue_above_risk_target = bool(override_eligible) and not legacy_eligible
 
                 adaptive_multiplier = 1.0
                 adaptive_rules_active: list[str] = []
@@ -954,7 +1159,8 @@ def run_execution(
                     initial_risk = abs(entry_price - stop_price) if stop_price is not None else None
 
                     open_trade = {
-                        "entry_time": _restore_tz(ts[i]),
+                        "entry_time": _restore_tz(ts[fill_idx]),
+                        "entry_bar_idx": fill_idx,
                         "direction": direction,
                         "entry_price": entry_price,
                         "size": size,
@@ -964,6 +1170,7 @@ def run_execution(
                         "equity_at_entry": equity,
                         "best_price": entry_price,
                         "worst_price": entry_price,
+                        "mfe_price": entry_price,
                         "initial_risk": initial_risk,
                         "intended_risk_dollars": intended_risk_dollars,
                         "breakeven_done": False,
@@ -971,9 +1178,10 @@ def run_execution(
                         "trailing_distance": bar_trail_distance,
                         "adaptive_multiplier": adaptive_multiplier,
                         "adaptive_rules_active": adaptive_rules_active,
+                        "sized_above_risk_target": rescue_above_risk_target,
                     }
-                    trades_today_count[bar_date] = n_today + 1
-                    last_entry_bar_idx = i
+                    trades_today_count[fill_bar_date] = n_today + 1
+                    last_entry_bar_idx = fill_idx
 
         elif open_trade is None and sig[i] != 0:
             if account_blown:
@@ -1172,7 +1380,25 @@ def run_execution(
             RuntimeWarning,
         )
 
-    if risk.commission_per_trade == 0.0 and risk.slippage_pips == 0.0 and risk.spread_pips == 0.0:
+    # Part C (2026-10-04, silent sizing halt): the engine is CORRECT to skip
+    # entries it can't afford at whole-contract size -- the bug was that a
+    # run could go permanently quiet (96% of signals skipped, equity flat
+    # for months on a profitable account) with the cause buried in one
+    # warning line. Flag it machine-readably so the report generator can
+    # banner it unmissably. Always present (not just when skips happened)
+    # so downstream code never has to guard on the key.
+    total_signals = len(trades) + zero_size_contract_floor_count
+    halt_ratio = (zero_size_contract_floor_count / total_signals) if total_signals else 0.0
+    equity_df.attrs["sizing_halt"] = {
+        "halted": halt_ratio > 0.5,
+        "skipped": zero_size_contract_floor_count,
+        "skip_ratio": halt_ratio,
+        "last_trade_exit": trades[-1].exit_time if trades else None,
+        "risk_value": risk.risk_value,
+        "contract_size": risk.contract_size,
+    }
+
+    if risk.commission_per_trade == 0.0 and risk.commission_per_contract == 0.0 and risk.slippage_pips == 0.0 and risk.spread_pips == 0.0:
         import warnings
         warnings.warn(
             "ZERO FRICTION: commission, slippage, AND spread are all 0.0 -- every trade is filled "

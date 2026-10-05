@@ -19,6 +19,21 @@ class RiskConfig:
     risk_value: float = 1.0             # % of equity, or fixed $ amount, per trade
     max_trades_per_day: int = 10
     commission_per_trade: float = 0.0   # flat $ per round-turn trade
+    # B2-2 (fill honesty): market entries AND signal-driven exits fill at
+    # open[i + entry_fill_lag_bars], not the signal bar's close -- 1 = next bar's open (0 = the
+    # signal bar's own open; the old same-bar-close fill is gone by design).
+    entry_fill_lag_bars: int = 1
+    # B2-4: $ commission per CONTRACT per round-turn, charged at settle on top of
+    # commission_per_trade (total = commission_per_trade + commission_per_contract * contracts).
+    commission_per_contract: float = 0.0
+    # Part A port #4 (time-invalidation stop): None (default) = off; when set, a position older
+    # than this many hours is closed if |close - entry| is still within time_stop_atr_band * ATR.
+    time_stop_hours: float | None = None
+    # Stagnation band for the time stop, in multiples of the 14-bar ATR (astra-quant-agent used 0.15).
+    time_stop_atr_band: float = 0.15
+    # Part C fix 2 (opt-in): when True, the dead-lock rescue fires at ANY equity level, not just
+    # equity < initial_balance; rescued trades are tagged sized_above_risk_target=True.
+    allow_single_contract_minimum: bool = False
     slippage_pips: float = 0.0
     spread_pips: float = 0.0
     pip_size: float = 0.0001            # price move that equals "1 pip" (e.g. 0.0001 for EURUSD)
