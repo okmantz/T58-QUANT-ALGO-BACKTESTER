@@ -1,420 +1,419 @@
-# Strategy File Format — what the backtester actually reads
+# Strategy Format — how the backtester reads your strategy
 
-This explains exactly what a `.py` / `.pine` / `.mq5` file needs to contain
+This is the contract between your strategy and the backtester. Write to it
+and your strategy loads, backtests, optimizes, and deploys. Break it and
+you get a clear error naming the problem — never a silently wrong backtest.
 
-for this app to load it, and how it knows when to enter a trade, exit,
+Four ways to make a strategy, one shared contract:
 
-place a stop-loss, or take profit. Each language has its own parser
+1. **Manual** — the visual Manual Strategy Builder (no code; produces a config).
+2. **Python** (`.py`) — a `generate_signals(df)` function.
+3. **Pine Script** (`.pine`, v5 subset) — `strategy.entry()` / `strategy.close()` calls.
+4. **MQL5** (`.mq5`, EA subset) — `trade.Buy()` / `trade.Sell()` / `trade.PositionClose()` calls.
 
-(`app/strategy/python.py`, `app/strategy/pinescript.py`,
+## The universal contract (all four sources)
 
-`app/strategy/mql5.py`) and each parser only understands a **subset** of
+**Signals are `-1` (short), `0` (flat), `1` (long)** — one value per bar.
+A change `0 → 1` opens a long, `0 → -1` opens a short, a change back to
+`0` closes the position, and an opposite-direction signal while a position
+is open reverses it immediately. (The Manual Builder has an "Opposite
+Signal Exit" toggle; when off, opposite signals are ignored while a
+position is open.)
 
-that language — this doc describes that subset directly, so you don't have
+**One position at a time.** No pyramiding, no hedging, no partial fills in
+the backtest. Size is set separately in the lab (risk % per trade), not in
+your strategy code.
 
-to read the parser source to write a working strategy by hand (the
+**Fills are next-bar-open by default.** Your signal is computed on bar N;
+the trade fills at bar N+1's open. There is no same-bar fill fantasy. If a
+single bar touches both your stop and your target, the stop wins.
 
-Generate Strategies (AI) tab also builds against these exact same rules).
+**Costs are lab settings, not strategy code.** Spread, slippage, and
+commission are configured where you run the backtest (sensible per-
+instrument defaults are applied automatically). Your strategy never
+prices its own costs.
 
-If you use the built-in **Manual Strategy Builder** (Step 02, "Manual"
+**pip_size comes from the instrument, not your file.** When you pick a
+dataset in any lab, the app auto-detects the instrument spec (pip_size,
+contract_size, commission) and fills it in — an explicit value you typed
+is never overridden, but if you hand-set one, double-check it matches the
+instrument. Getting pip_size wrong is the #1 silent killer: an FX-scale
+`0.0001` on ES data turns every fixed-pip stop into 0.002 points and
+every candidate dies on the first tick.
 
-mode) instead of uploading a file, none of this applies — the visual
+**A stop-loss is not optional in practice.** If your strategy defines no
+stop at all, the engine applies a 1%-of-entry-price protective stop and
+warns you (counted in the report as fallback stops). Always define a real
+stop — see "Stops and targets" below.
 
-builder always produces something the engine can read.
-
----
-
-## What's new in v7 (2026-10-05) — strategy authoring
-
-### 1. New indicator kinds (AI Generate tab, Manual Builder, Search/Evolution Lab configs)
-
-Eight new lookahead-safe indicator kinds, computed in
-`app/strategy/indicators_v7.py` and dispatched through the existing
-`build_indicator_series` fallback — no existing indicator is affected:
-
-- `stochrsi_k`, `stochrsi_d` — Stochastic RSI %K / %D (0–100 oscillators)
-- `plus_di`, `minus_di` — Wilder's +DI / −DI (0–100)
-- `linreg_slope` — linear-regression slope of price (trend direction/strength)
-- `hurst_exponent` — Hurst exponent (trending vs mean-reverting regime)
-- `kst` — Know Sure Thing momentum oscillator
-- `coppock` — Coppock Curve
-
-Every one is verified causal (no negative shifts — the lookahead check
-passes on each) and covered by unit tests (`tests/test_indicators_v7.py`).
-The Manual Strategy Builder, Evolution Lab, and Search Lab configs can
-reference them exactly like built-in kinds.
-
-**Hand-written `.py` strategies are unaffected** — you still compute your
-own indicators with pandas/numpy; nothing new is required or read from
-your file. **The `.pine` and `.mq5` parser subsets are unchanged**
-(still `ta.sma`/`ta.ema`/`ta.wma`/`ta.rsi` and `iMA`/`iRSI` only — see
-below).
-
-### 2. Multi-timeframe operands in the AI Generate tab
-
-The discovery grammar can now emit 1h / 4h / 1d context-timeframe operands
-(default ~8% of indicator operands; tunable via
-`app.search.grammar.set_mtf_probability()`, fully off with
-`generate_random(allow_mtf=False)`). HTF values are computed on genuine
-native-frequency bars and merged as `tfNN_` columns before `generate()`
-ever runs — lookahead-safe by construction.
-
-For **hand-written Python** multi-timeframe filters the rule is unchanged:
-use `app.strategy.mtf.completed_bars()` / `last_completed_bar()`, never a
-raw `htf.index < timestamp` comparison (see "The #1 bug" below).
-
-### 3. Ten new template families (94 total, was 84)
-
-`app/search/families_v7.py`, registered so both Search Lab
-(`generate_search_space`) and Evolution Lab (immigrant families) draw from
-them with no extra wiring:
-
-1. Session Range Breakout — Asia/London/New York range, trade the break
-2. VWAP Band Breakout — ±sigma VWAP band expansion
-3. Opening Momentum Burst — time-of-day momentum window (open burst)
-4. Keltner Band Breakout — ATR/Keltner channel expansion
-5. Bollinger Squeeze Expansion — squeeze-gated volatility expansion
-6. RSI Divergence Reversal — RSI divergence washout reversal
-7. Choppiness-Gated Momentum — momentum only when choppiness says expansion
-8. Choppiness-Gated Range Fade — range fade only when choppiness says contraction
-9. Heikin-Ashi Reversal — RSI washout + Heikin-Ashi flip
-10. VWAP Value-Area Breakout — leaving the value area
-
-All ten are **scale-agnostic by construction**: stops/targets are ATR
-multiples resolved against the instrument's own volatility at backtest
-time — no family hardcodes a pip_size or any FX-scale assumption, so the
-same grid runs on ES, NQ, GC, or EURUSD without a silent pip trap. Every
-family passes `app.strategy.lookahead_check` on ES-scale data
-(`tests/test_families_v7.py`).
-
-### 4. pip_size auto-apply — what the engine now assumes
-
-The #1 mechanical footgun (search form sitting at the FX default
-`pip_size=0.0001` while the data is ES-scale, turning every fixed-pip stop
-into 0.002 points) is now handled two ways:
-
-- **In the UI:** 12 lab templates (Search, Evolution, Quick Optimize,
-  multi-instrument variants, etc.) auto-detect on dataset select. Choosing
-  a dataset POSTs to `/data/detect-pip-size`, fills
-  pip_size/contract_size/commission, and shows a green confirmation
-  ("Detected ES — pip_size=1.0, ..."). If detection fails or the dataset
-  label and the price data disagree on scale, you get a LOUD red warning
-  and nothing is auto-applied. Until a dataset is chosen, the status line
-  warns that pip_size is still the untouched FX default — never silent.
-- **On the server:** a warn-only backstop. An explicit value you typed is
-  never overridden. If the submitted value is still the untouched default
-  and the data disagrees, the run log keeps the
-  `** LIKELY ROOT CAUSE **` line so a dead search tells you why.
-
-What this means for you: `RiskConfig.pip_size` now comes from the
-detected instrument spec unless you explicitly set it. If you hand-set a
-pip_size, it is respected exactly — but double-check it's right for the
-instrument, because the engine will not second-guess an explicit value.
-
-### 5. Quick Optimize is honest now
-
-Quick Optimize runs Full Pipeline's Step 2 (the walk-forward-aware GA) in
-isolation — budget 32 populations × 12 generations, walk-forward-scored
-fitness (the GA never scores on in-sample data), prop-rule-aware scoring,
-plus a significance gate and a lookahead recheck. It does **not** run the
-independent out-of-sample holdout re-verification, DSR/PBO, or CPCV. The
-report and the web job status page now carry an explicit ran/skipped
-ledger (`app/search/quickopt_gates.py`), so "what was and wasn't
-validated" is never left to inference. A Quick Optimize result is a
-tuned candidate, not a validated one — run 15 Full Pipeline before
-trusting it.
-
-### 6. `algo_trading_allowed` preset flag
-
-This is preset-level, not strategy-file metadata: every prop-firm preset
-in `app/prop/presets.py` now carries `algo_trading_allowed: true/false`,
-verified against each firm's official rules as of 2026-10-05 (ambiguous
-or "with approval" policies are marked `false` with a note — permission is
-never implied). When you pick which firm to validate against or deploy
-toward, prefer an algo-allowed preset: most eval firms restrict or ban
-unattended algos. (Alpha Futures is never listed — they prohibit algo
-trading.)
+**Your strategy cannot see its own trade outcomes.** Signal generation runs
+once, statelessly, over the whole dataset before any trade exists. A "stop
+trading after N losses today" counter inside strategy code is silently a
+no-op — use the lab's risk settings (daily loss limit) for that instead.
 
 ---
 
-## Python (`.py`)
+## 1. Manual (visual builder, no code)
 
-**Required:** a single top-level function —
+The Manual Strategy Builder produces a **data config** (JSON-like dict),
+not source code — so there is nothing to hand-format. What it stores:
+
+- **Entry / exit conditions** — operands (indicators, price fields like
+  `close`/`high`/`low`, session highs/lows, previous-day levels, opening
+  range, time-of-day, day-of-week, liquidity sweeps, ATR expansion/
+  contraction legs, RSI divergence, …) combined with comparisons and
+  `and`/`or`/`not` into long-entry, short-entry, long-exit, short-exit
+  rule sets.
+- **Risk management** — stop-loss / take-profit (fixed pips or ATR
+  multiples), trailing stop, breakeven trigger, time-based exits,
+  max-bars-in-trade.
+- **Filters** (optional) — exclude weekdays (`filters.days_of_week`,
+  0=Monday…6=Sunday) or exclude market regimes the strategy already loses
+  in (`filters.regime_exclude`, fed straight from the Regime Survival
+  Matrix). Filtered bars force the signal flat regardless of the rules.
+
+Two builder behaviors worth knowing:
+
+- **Impossible-condition check.** Comparing a bounded oscillator against a
+  threshold outside its range (e.g. `RSI > 102`) can never be true — the
+  builder warns you, because that branch of your logic would be dead code
+  with nothing in the numbers telling you so.
+- **Opposite Signal Exit toggle.** On (default): an opposite entry signal
+  reverses the open position. Off: the position can only close via its
+  own exits, stop, target, or time exit.
+
+If you can click it in the builder, the engine can read it — the builder
+only offers constructs the backtester supports.
+
+---
+
+## 2. Python (`.py`)
+
+**Required:** one top-level function.
 
 ```python
-
 import pandas as pd
 
 def generate_signals(df: pd.DataFrame) -> pd.Series:
-
- ...
-
- return signals # -1 (short), 0 (flat), or 1 (long), one value per row of df
-
+    close = df["close"]
+    fast = close.rolling(10).mean()
+    slow = close.rolling(30).mean()
+    long_cond = (fast > slow) & (fast.shift(1) <= slow.shift(1))
+    short_cond = (fast < slow) & (fast.shift(1) >= slow.shift(1))
+    signals = pd.Series(0, index=df.index)
+    signals[long_cond] = 1
+    signals[short_cond] = -1
+    return signals  # -1 / 0 / 1, one value per row of df
 ```
 
-- `df` has columns `timestamp, open, high, low, close, volume` (lowercase)
+Rules:
 
- and nothing else — that's the entire market data your strategy sees.
+- `df` columns are `timestamp, open, high, low, close, volume`
+  (lowercase). If you declare `HTF_TIMEFRAMES` (below), you also get
+  `tfNN_open/high/low/close/volume` columns for each context timeframe.
+- Return a Series the **same length as `df`**, containing `-1`, `0`, `1`.
+  Anything else is coerced (`fillna(0)`, clipped to [-1, 1], rounded) —
+  don't rely on that; return clean values.
+- `generate_signals(df)` is called **once, statelessly**, on a copy of the
+  data, before any trade exists. No trade counters, no P&L-aware logic.
+- The module is imported in isolation; any exception while loading or
+  running your function becomes a clear `StrategyError`, not a silent
+  mis-backtest.
 
-- The returned Series must be the same length as `df`, containing only
-
- `-1`, `0`, or `1`. This is how the engine knows when to enter/exit: a
-
- change from `0`→`1` opens a long, `0`→`-1` opens a short, and a change
-
- back to `0` (or a flip to the opposite side) closes the open position.
-
-- `generate_signals(df)` is called **once, statelessly**, over the whole
-
- dataset before any trade has opened or closed. It cannot see its own
-
- past trade outcomes — a "stop trading after N losses today" counter
-
- inside this function is silently a no-op. Use the engine's own
-
- `RiskConfig.daily_loss_limit_pct` (Step 04, Risk) for that instead.
-
-- Only `pandas` and `numpy` may be imported. No file I/O, no network
-
- calls, no other third-party packages.
-
-### Stop-loss / take-profit — two ways
-
-**Fixed, whole-backtest (simplest):** define module-level constants —
+**Optional module-level constants** (all read without calling your
+function):
 
 ```python
-
-STOP_LOSS_PIPS = 20
-
-TAKE_PROFIT_PIPS = 40
-
-STRATEGY_NAME = "My Strategy" # optional, shown in reports
-
+STRATEGY_NAME = "My Strategy"   # shown in reports; defaults to filename
+STOP_LOSS_PIPS = 20             # fixed stop, whole backtest
+TAKE_PROFIT_PIPS = 40           # fixed target, whole backtest
+TIMEFRAME = "15m"               # resample data to 15m bars BEFORE your
+                                # function runs; trades fill on these bars
+HTF_TIMEFRAMES = ["1h"]         # coarser context bars merged on as
+                                # tf60_open/high/low/close/volume —
+                                # lookahead-safe: only fully closed HTF
+                                # bars are ever visible per row
+WARMUP_BARS = 200               # force first N signals flat; set to at
+                                # least your longest indicator lookback
+EXCLUDE_DAYS_OF_WEEK = [6]      # 0=Monday..6=Sunday; signal forced flat
+                                # on these weekdays
 ```
 
-**Per-trade / dynamic (an ATR multiple, a swing level, etc.):** attach
-
-arrays to the returned Series' `.attrs`, one raw-price value per bar (only
-
-the value on the entry bar itself is read):
+**Dynamic (per-trade) stops and targets** — attach to the returned
+Series' `.attrs`, in raw price units, one value per bar (only the entry
+bar's value is read):
 
 ```python
-
-signals.attrs["stop_loss_distance"] # |entry - stop|, e.g. 1.5 * atr
-
-signals.attrs["take_profit_distance"] # |entry - target|
-
+signals.attrs["stop_loss_distance"]     # |entry - stop|, e.g. 1.5 * atr
+signals.attrs["take_profit_distance"]   # |entry - target|
 signals.attrs["trailing_stop_distance"] # raw-price trailing distance
-
-signals.attrs["breakeven_trigger_r"] # scalar float, e.g. 1.0 == "+1R"
-
+signals.attrs["breakeven_trigger_r"]    # scalar float, e.g. 1.0 == "+1R"
 ```
 
-If you compute a stop/target inside your function and **never** attach it
+This is the **only** path a computed stop/target reaches the engine. If
+you compute one and don't attach it here, the engine never sees it and
+falls back to its generic stop — your risk management is silently
+discarded.
 
-to `.attrs`, the engine has no way to know about it — it will fall back to
+**The #1 Python bug: lookahead in multi-timeframe filters.** If you
+resample to a higher timeframe yourself and filter with
+`htf[htf.index < timestamp]`, you leak the still-forming current HTF bar
+(a resampled bar is labeled by its start time). This exact bug has
+manufactured entire fake "edges" in real uploaded strategies. Prefer
+`HTF_TIMEFRAMES` (safe by construction), or use
+`app.strategy.mtf.completed_bars()` / `last_completed_bar()` if you
+hand-roll the resample.
 
-its own generic protective stop and your intended risk management is
-
-silently discarded. `.attrs` is the *only* path a computed stop/target
-
-reaches execution.
-
-### The #1 bug: lookahead in multi-timeframe filters
-
-If your strategy resamples to a higher timeframe (e.g. a 1H bias filter
-
-for a 15m entry) and filters it with something like
-
-`htf[htf.index < timestamp]`, **this leaks the still-forming current HTF
-
-bar** — a resampled bar is labeled by its start time, so that filter
-
-includes a bar built from data later than `timestamp` that hasn't
-
-happened yet. This exact bug has been found (and quietly manufactured the
-
-entire apparent "edge") in real uploaded strategies more than once. Use
-
-`app.strategy.mtf.completed_bars()` / `last_completed_bar()` instead,
-
-which correctly require a bar to have fully closed before using it.
+**ML-style strategies:** set `RETRAIN_PER_FOLD = True` and read
+`df.attrs.get("wf_train_end_index")` — during walk-forward validation the
+engine calls your function once on train+test concatenated with the real
+split index marked, so you retrain on the true training window instead of
+guessing one. Absent (`None`) on every other call path; fall back to your
+own logic then.
 
 ---
 
-## PineScript (`.pine`, PineScript v5)
+## 3. Pine Script (`.pine`, v5 subset)
 
-The parser understands a **restricted subset** — anything outside it fails
+A line-based parser, not a full Pine runtime. Anything outside the subset
+below raises a clear error naming the unsupported construct. Cosmetic
+lines (the `strategy()` header, `plot()`, alerts) are silently ignored.
 
-to load with a clear error naming the unsupported construct. You may
+**You may use:**
 
-ONLY use:
+- Price: `open, high, low, close, hl2, hlc3, ohlc4`
+- `x = input.int(20, ...)` / `input.float(1.5, ...)` → constant from the
+  default value (no other `input.*` types)
+- `ta.sma(src, len)`, `ta.ema(src, len)`, `ta.wma(src, len)`,
+  `ta.rsi(src, len)`
+- `ta.crossover(a, b)`, `ta.crossunder(a, b)`
+- `ta.atr(len)`, `ta.vwap()` (session VWAP), `ta.highest(src, len)`,
+  `ta.lowest(src, len)`, `ta.stdev(src, len)` — standalone **or embedded**
+  inside larger expressions, e.g. `stopDist = ta.atr(14) * 1.5`
+- `[m, s, h] = ta.macd(src, fast, slow, signal)` — 3-way destructuring
+  (the only destructuring supported)
+- Plain arithmetic over defined series/constants:
+  `spreadPct = (fastMA - slowMA) / slowMA`
+- Boolean rule variables from comparisons / `and` / `or` / `not`:
+  `longCondition = ta.crossover(fast, slow) and rsiVal < 70`
 
-- Price references: `open, high, low, close, hl2, hlc3, ohlc4`
+**Entries** (inline `when=` or inside an `if` block) — direction comes
+from `strategy.long` / `strategy.short`:
 
-- `x = input.int(20, ...)` / `input.float(1.5, ...)` — becomes a constant
+```pine
+strategy.entry("Long", strategy.long, when=longCondition)
+strategy.entry("Short", strategy.short, when=shortCondition)
 
- using the given default value; no other `input.*` types
+if longCondition
+    strategy.entry("Long", strategy.long)
+```
 
-- `x = ta.sma(src, len)`, `ta.ema(src, len)`, `ta.wma(src, len)`,
+**Exits:** `strategy.close("Long", when=exitLong)` — the trade id decides
+the side: contains "short" → closes shorts, "long" → closes longs,
+anything else → closes both.
 
- `ta.rsi(src, len)` — no other `ta.*` functions
+**Stops and targets** — special directive comments (Pine's
+`strategy.exit()` price offsets aren't portable across instruments, so
+they're not read):
 
-- `x = ta.crossover(a, b)`, `ta.crossunder(a, b)`
+```pine
+// T58_SL_PIPS=20
+// T58_TP_PIPS=40
+```
 
-- Boolean rule variables built from comparisons/`and`/`or`/`not` over the
+or, **preferred for anything that isn't FX** (gold, indices, crypto —
+a fixed pip count is only correct at the one pip_size it was tuned for):
 
- above, e.g. `longCondition = ta.crossover(fast, slow) and rsiVal < 70`
+```pine
+// T58_SL_ATR_MULT=1.5
+// T58_TP_ATR_MULT=3.0
+// T58_ATR_PERIOD=14     (optional, defaults to 14)
+```
 
-- **Entries** (inline or inside an `if` block) — this is how the engine
+ATR-mult wins if both styles are present. It computes a per-bar
+stop/target in raw price units — scale-independent, no pip trap.
 
- knows when to place a trade:
+**Timeframes** (this parser can't use `security()` — multi-timeframe
+requests are rejected):
 
- ```
+```pine
+// T58_TIMEFRAME=15m     (resample to 15m execution bars first)
+// T58_HTF=1h,4h         (merge raw coarser bars; indicators can't be
+                          computed at HTF in Pine — raw bars only)
+```
 
- strategy.entry("Long", strategy.long, when=longCondition)
+**Weekday filter:** `// T58_EXCLUDE_DAYS=6` (0=Monday…6=Sunday,
+comma-separated; signal forced flat those days).
 
- if longCondition
-
- strategy.entry("Long", strategy.long)
-
- ```
-
-- **Exits**: `strategy.close("Long", when=exitLongCondition)`
-
-- **Stop-loss / take-profit** as special directive comments (not
-
- `strategy.exit()` price offsets, which aren't portable across
-
- instruments):
-
- ```
-
- // T58_SL_PIPS=20
-
- // T58_TP_PIPS=40
-
- ```
-
-**Not supported** (raises an error): custom functions, arrays/matrices,
-
-`security()` / multi-timeframe requests, repainting constructs, plotting,
-
-alerts, or any `ta.*` function not listed above.
+**Not supported:** custom functions, arrays/matrices, `security()`,
+repainting constructs, and any `ta.*` beyond the list above.
 
 ---
 
-## MQL5 (`.mq5`, Expert Advisor source)
+## 4. MQL5 (`.mq5`, EA subset)
 
-Also a restricted subset. You may ONLY use:
+Also a line-based parser. Anything outside the subset raises a clear
+error naming the construct.
 
-- Direct-value indicator calls (the simplified/legacy calling style):
+**You may use:**
 
- ```
+- Direct-value indicator calls (simplified/legacy style):
 
- double fastMA = iMA(_Symbol, PERIOD_CURRENT, 10, 0, MODE_SMA, PRICE_CLOSE);
+```mql5
+double fastMA = iMA(_Symbol, PERIOD_CURRENT, 10, 0, MODE_SMA, PRICE_CLOSE);
+double slowMA = iMA(_Symbol, PERIOD_CURRENT, 30, 0, MODE_EMA, PRICE_CLOSE);
+double rsiVal = iRSI(_Symbol, PERIOD_CURRENT, 14, PRICE_CLOSE);
+double atrVal = iATR(_Symbol, PERIOD_CURRENT, 14);
+double bandTop = iBands(_Symbol, PERIOD_CURRENT, 20, 2, 0, PRICE_CLOSE, MODE_UPPER);
+double hh     = iHighest(_Symbol, PERIOD_CURRENT, MODE_HIGH, 20, 0);
+double ll     = iLowest(_Symbol, PERIOD_CURRENT, MODE_LOW, 20, 0);
+```
 
- double slowMA = iMA(_Symbol, PERIOD_CURRENT, 30, 0, MODE_EMA, PRICE_CLOSE);
+`iMA` modes: `MODE_SMA` / `MODE_EMA` / `MODE_LWMA`. `iBands` selectors:
+`MODE_UPPER` / `MODE_LOWER` / `MODE_MAIN`. The symbol / timeframe /
+shift / applied-price arguments are accepted but not used — the engine
+always runs on the single imported dataset bar-by-bar.
 
- double rsiVal = iRSI(_Symbol, PERIOD_CURRENT, 14, PRICE_CLOSE);
-
- ```
-
- (only `MODE_SMA`/`MODE_EMA`/`MODE_LWMA`; only `iMA` and `iRSI` as
-
- indicators — the symbol/timeframe/shift/applied-price arguments are
-
- accepted but not otherwise used, since the engine always runs on the
-
- single imported dataset bar-by-bar)
-
+- Plain arithmetic over defined variables:
+  `double stopDist = atrVal * 1.5;`
 - Boolean conditions with C-style operators: `> < >= <= == != && || !`
+- `if (condition) { ... }` or single-statement `if (condition) statement;`
+  (nesting handled)
 
-- `if (condition) { ... }` or a single-statement
+**Entries** inside a condition's guard:
 
-`if (condition) statement;`
+```mql5
+if (longCondition) { trade.Buy(0.1); }
+// or: OrderSend(_Symbol, ORDER_TYPE_BUY, 0.1, ...);   (OP_BUY also accepted)
+if (shortCondition) { trade.Sell(0.1); }
+```
 
-- **Entries** inside a condition's guard — how the engine knows when to
+(Lot-size arguments are accepted but ignored — sizing comes from the
+lab's risk settings, exactly like every other source.)
 
- place a trade:
+**Exits** inside a condition's guard:
+`trade.PositionClose(ticket);` / `OrderClose(...);`
 
- ```
+**Stops, targets, timeframes, weekday filter** — identical directive
+comments to Pine Script:
 
- trade.Buy(...) / trade.Sell(...)
+```mql5
+// T58_SL_PIPS=20            (or the ATR-mult trio below — preferred off-FX)
+// T58_TP_PIPS=40
+// T58_SL_ATR_MULT=1.5
+// T58_TP_ATR_MULT=3.0
+// T58_ATR_PERIOD=14
+// T58_TIMEFRAME=15m
+// T58_HTF=1h,4h
+// T58_EXCLUDE_DAYS=6
+```
 
- OrderSend(..., ORDER_TYPE_BUY, ...) / OrderSend(..., ORDER_TYPE_SELL, ...)
-
- ```
-
- (legacy MQL4-style `OP_BUY` / `OP_SELL` constants are also accepted)
-
-- **Exits** inside a condition's guard: `trade.PositionClose(...)` /
-
-`OrderClose(...)`
-
-- **Stop-loss / take-profit** as special directive comments (point-based
-
- SL/TP in MQL5 aren't portable pip distances across instruments):
-
- ```
-
- // T58_SL_PIPS=20
-
- // T58_TP_PIPS=40
-
- ```
-
-**Not supported** (raises an error): `CopyBuffer()`-based indicator
-
-handles, custom indicators, arrays/structs, multi-symbol/multi-timeframe
-
-logic, trailing stops, or any indicator beyond `iMA`/`iRSI`.
+**Not supported:** `CopyBuffer()` indicator handles, custom indicators,
+arrays/structs, multi-symbol or multi-timeframe logic, trailing stops,
+and any indicator beyond `iMA` / `iRSI` / `iATR` / `iBands` /
+`iHighest` / `iLowest`.
 
 ---
 
-## Quick checklist before uploading a strategy
+## Stops and targets — precedence, in one place
 
-1. Does it define the one required entry point for its language
+When several are defined, the engine uses the first available:
 
- (`generate_signals(df)` for Python; `strategy.entry(...)` calls for
+1. **Per-trade dynamic** — Python `.attrs` distances, or Pine/MQL5
+   `T58_*_ATR_MULT` directives (raw price units, computed per bar).
+2. **Fixed pips** — `STOP_LOSS_PIPS` / `TAKE_PROFIT_PIPS`, or
+   `T58_SL_PIPS` / `T58_TP_PIPS` directives (interpreted with the
+   instrument's pip_size — see the pip_size note up top).
+3. **Protective fallback** — 1% of entry price, with a loud warning
+   counted in the report. A backtest full of fallback stops is telling
+   you the strategy has no real risk management.
 
- Pine; `trade.Buy/Sell(...)` or `OrderSend(...)` for MQL5)?
+Trailing stops and breakeven triggers are supported for Python
+(`.attrs`) and the Manual Builder; Pine/MQL5 express them via the
+builder, not directives.
 
-2. Does it use ONLY the indicators/functions listed above for that
+---
 
- language? Anything else fails to load, on purpose, rather than
+## Quick checklist before you upload or generate
 
- silently mis-backtesting.
+1. **One required entry point per language** — `generate_signals(df)`
+   (Python); at least one `strategy.entry(...)` (Pine);
+   `trade.Buy/Sell(...)` or `OrderSend(...)` inside an `if` (MQL5).
+   Missing it = immediate, named error.
+2. **Only the listed indicators/functions.** Anything else fails to load
+   on purpose — a rejected strategy beats a silently mis-backtested one.
+3. **A real stop is defined** — not the 1% fallback. Prefer ATR-based
+   stops for anything that isn't FX.
+4. **pip_size matches the instrument** — or leave it to auto-detect and
+   confirm the green confirmation line names your instrument.
+5. **No lookahead** — no negative shifts, no hand-rolled HTF filter with
+   `htf.index < timestamp`; every backtest runs the behavioral
+   lookahead check and fails loudly on a leak.
+6. **Run 05 Run & Report first, then 15 Full Pipeline** before trusting
+   any numbers — whether you wrote the strategy, downloaded it, or the
+   AI Generate tab built it.
 
-3. Is a stop-loss defined one of the supported ways (fixed
+## Minimal complete examples
 
- `STOP_LOSS_PIPS` / `// T58_SL_PIPS=`, or Python's dynamic
+**Python** — EMA cross with ATR stop:
 
- `.attrs["stop_loss_distance"]`)? A strategy with no stop at all still
+```python
+import pandas as pd
 
- runs (the engine applies a 1%-of-price protective stop as a fallback,
+STRATEGY_NAME = "EMA Cross 10/30"
+WARMUP_BARS = 30
 
- with a warning), but an explicit stop is almost always what you want.
+def generate_signals(df: pd.DataFrame) -> pd.Series:
+    close = df["close"]
+    fast = close.ewm(span=10).mean()
+    slow = close.ewm(span=30).mean()
+    tr = (df["high"] - df["low"]).abs()
+    atr = tr.rolling(14).mean()
 
-4. For Python only: any higher-timeframe filter uses
+    long_cond = (fast > slow) & (fast.shift(1) <= slow.shift(1))
+    short_cond = (fast < slow) & (fast.shift(1) >= slow.shift(1))
 
- `app.strategy.mtf.completed_bars()`/`last_completed_bar()`, not a raw
+    signals = pd.Series(0, index=df.index)
+    signals[long_cond] = 1
+    signals[short_cond] = -1
+    signals.attrs["stop_loss_distance"] = 1.5 * atr      # per-trade ATR stop
+    signals.attrs["take_profit_distance"] = 3.0 * atr    # per-trade ATR target
+    return signals
+```
 
- `htf.index < timestamp` comparison (see "The #1 bug" above).
+**Pine** — RSI washout reversal:
 
-5. **v7 pip_size check:** if you hand-set a pip_size anywhere (strategy
+```pine
+rsiLen = input.int(14, "RSI length")
+rsiVal = ta.rsi(close, rsiLen)
+longCondition = ta.crossunder(rsiVal, 30)
+shortCondition = ta.crossover(rsiVal, 70)
 
- constants, lab forms), confirm it matches the instrument — the UI now
+strategy.entry("Long", strategy.long, when=longCondition)
+strategy.entry("Short", strategy.short, when=shortCondition)
+strategy.close("Long", when=ta.crossover(rsiVal, 55))
+strategy.close("Short", when=ta.crossunder(rsiVal, 45))
 
- auto-detects it from the dataset, and the engine trusts an explicit
+// T58_SL_ATR_MULT=1.5
+// T58_TP_ATR_MULT=3.0
+```
 
- value exactly as given.
+**MQL5** — Donchian-style breakout:
 
-6. Once it loads, run it through **05 Run & Report** first, then **15
+```mql5
+double hh = iHighest(_Symbol, PERIOD_CURRENT, MODE_HIGH, 20, 0);
+double ll = iLowest(_Symbol, PERIOD_CURRENT, MODE_LOW, 20, 0);
+double atrVal = iATR(_Symbol, PERIOD_CURRENT, 14);
 
- Full Pipeline** before trusting any of its numbers — this is true
+if (close > hh)
+   trade.Buy(0.1);
+if (close < ll)
+   trade.Sell(0.1);
 
- whether you wrote it, downloaded it, or generated it with the AI
+// T58_SL_ATR_MULT=2.0
+// T58_TP_ATR_MULT=4.0
+```
 
-Assist tab.
+(Conditions are evaluated bar-by-bar over the full history, producing a
+boolean series — an entry fires on each bar where its guard is true and no
+position is already open, exactly like the Pine subset.)
