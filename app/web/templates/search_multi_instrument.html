@@ -119,8 +119,8 @@
       <div><label>Stage 2 -&gt; Stage 3 survivors</label><input type="number" name="stage2_top_n" value="10"></div>
     </div>
     <div class="row">
-      <div><label>GA population (Stage 2)</label><input type="number" name="ga_population" value="10"></div>
-      <div><label>GA generations (Stage 2)</label><input type="number" name="ga_generations" value="4"></div>
+      <div><label>GA population (Stage 2)</label><input type="number" name="ga_population" value="40"></div>
+      <div><label>GA generations (Stage 2)</label><input type="number" name="ga_generations" value="15"></div>
     </div>
     <div class="row">
       <div><label>Monte Carlo sims (Stage 3)</label><input type="number" name="full_mc_sims" value="3000"></div>
@@ -217,5 +217,16 @@
 <script>
   initPropFirmPresetDropdown('smi_prop_preset_select', { account_size: 'initial_balance' });
 </script>
+
+<script>
+// v7 (2026-10-05, worker B, fix #7): auto-run pip-size detection when the
+// checked dataset set changes -- never wait for the manual button.
+document.addEventListener('DOMContentLoaded', function () {
+  document.querySelectorAll('input[name="datasets"]').forEach(function (cb) {
+    cb.addEventListener('change', function () { smiDetectPipSize(); });
+  });
+});
+</script>
+
 </body>
 </html>

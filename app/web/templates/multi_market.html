@@ -129,6 +129,9 @@
     <div class="row" style="margin-top:8px;">
       <div><label>Commission per trade ($)</label><input type="number" step="0.01" name="commission" id="mm_commission_field" value="0"></div>
     </div>
+    {# v7 (2026-10-05, worker B, fix #7): auto pip-size detection on dataset
+       selection. multi_market uses dataset CHECKBOXES, so mode="multi". #}
+    {% with pip_prefix="mm", pip_dataset_mode="multi" %}{% include "_pip_size_autodetect.html" %}{% endwith %}
     <script>document.addEventListener('DOMContentLoaded', function () { t58PopulateInstrumentPicker('mm_instrument_select'); });</script>
   </div>
 

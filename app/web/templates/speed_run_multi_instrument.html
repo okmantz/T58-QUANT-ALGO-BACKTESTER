@@ -204,5 +204,16 @@
 <script>
   initPropFirmPresetDropdown('srmi_prop_preset_select', { account_size: 'account_size', profit_target: 'profit_target', daily_loss: 'daily_loss', max_dd: 'max_dd' });
 </script>
+
+<script>
+// v7 (2026-10-05, worker B, fix #7): auto-run pip-size detection when the
+// checked dataset set changes -- never wait for the manual button.
+document.addEventListener('DOMContentLoaded', function () {
+  document.querySelectorAll('input[name="datasets"]').forEach(function (cb) {
+    cb.addEventListener('change', function () { srmDetectPipSize(); });
+  });
+});
+</script>
+
 </body>
 </html>

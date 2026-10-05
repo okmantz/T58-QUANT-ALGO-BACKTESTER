@@ -222,7 +222,7 @@
   <div class="card">
     <h2>3. Evolution settings</h2>
     <div class="row">
-      <div><label>Population size</label><input type="number" name="population_size" value="60"></div>
+      <div><label>Population size</label><input type="number" name="population_size" value="200"></div>
       <div><label>Elites kept per generation</label><input type="number" name="elite_keep" value="10"></div>
     </div>
     <div class="row">
@@ -395,9 +395,26 @@
           statusEl.textContent = data.error || "Couldn't detect pip size.";
           return;
         }
-        document.getElementById('evo_pip_size_field').value = data.pip_size;
+        // v7 (2026-10-05, worker B, fix #7): the endpoint now also returns
+        // the guessed symbol + spec contract/commission, and -- when the
+        // label and the DATA disagree on scale -- pip_size=null with a LOUD
+        // warning instead of a silently-wrong value. Never fill fields on
+        // disagreement; never overwrite a pip the user typed by hand.
+        if (data.warning) {
+          statusEl.style.color = '#ff9d9d';
+          statusEl.style.fontWeight = 'bold';
+          statusEl.textContent = '!!! ' + data.warning;
+          return;
+        }
+        const pipEl = document.getElementById('evo_pip_size_field');
+        if (pipEl && data.pip_size != null) pipEl.value = data.pip_size;
+        const cEl = document.getElementById('evo_contract_size_field');
+        if (cEl && data.contract_size != null && !cEl.value) cEl.value = data.contract_size;
+        const comEl = document.getElementById('evo_commission_field');
+        if (comEl && data.commission != null && (comEl.value === '' || comEl.value === '0' || comEl.value === '0.0')) comEl.value = data.commission;
         statusEl.style.color = '#b4ffcb';
-        statusEl.textContent = data.message;
+        statusEl.style.fontWeight = 'normal';
+        statusEl.textContent = (data.symbol ? 'Detected ' + data.symbol + ' -- ' : '') + data.message;
       })
       .catch(err => {
         statusEl.style.color = '#ff9d9d';
@@ -641,5 +658,24 @@
   })();
 </script>
 <script src="/static/t58-multiselect.js"></script>
+
+<script>
+// v7 (2026-10-05, worker B, fix #7): run pip-size detection AUTOMATICALLY
+// when a dataset is selected or a file is chosen -- the #1 mechanical
+// footgun is a silently-wrong pip_size, so this never waits for the manual
+// button. The manual "Detect pip size from data" button still works as a
+// re-run.
+document.addEventListener('DOMContentLoaded', function () {
+  const ds = document.querySelector('select[name="existing_dataset"]');
+  if (ds) ds.addEventListener('change', function () { if (this.value) evoDetectPipSize(); });
+  const fi = document.querySelector('input[name="csv_file"]');
+  if (fi) fi.addEventListener('change', function () { if (this.files && this.files.length) evoDetectPipSize(); });
+  // Multi-dataset checkbox pages (multi_market): re-run when the checked set changes.
+  document.querySelectorAll('input[name="datasets"]').forEach(function (cb) {
+    cb.addEventListener('change', function () { evoDetectPipSize(); });
+  });
+});
+</script>
+
 </body>
 </html>

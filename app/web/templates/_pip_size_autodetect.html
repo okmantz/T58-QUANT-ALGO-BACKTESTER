@@ -1,0 +1,154 @@
+{# v7 (2026-10-05, worker B, fix #7): auto-detect pip size when a dataset is
+   selected -- the #1 mechanical footgun in this app is the pip_size form
+   field silently sitting at its FX default (0.0001) while the data is
+   ES-scale, which turns every fixed-pip stop into 0.002 points and kills
+   every candidate (see the "** LIKELY ROOT CAUSE **" line in
+   app.search.batch_runner).
+
+   Include from any lab template that has the standard pip_size form
+   pattern, e.g.:
+
+     {% with pip_prefix="search", pip_dataset_mode="single" %}
+     {% include "_pip_size_autodetect.html" %}
+     {% endwith %}
+
+   pip_prefix: id prefix shared by the page's fields --
+     {prefix}_pip_size_field, {prefix}_pip_detect_status,
+     {prefix}_instrument_select, {prefix}_contract_size_field,
+     {prefix}_commission_field.
+   pip_dataset_mode: "single" for a select[name=existing_dataset] (+ an
+     optional csv_file upload input), "multi" for an
+     input[name=datasets] checkbox checklist (multi-instrument pages --
+     detection runs against the FIRST checked dataset and says so).
+
+   Behavior:
+   * On dataset select (or file pick): POSTs to /data/detect-pip-size,
+     fills pip/contract/commission, and shows a green confirmation
+     ("Detected ES -- pip_size=1.0, ...").
+   * If detection fails OR the dataset label and the price data disagree
+     on scale (e.g. label says ES, data looks FX-scale): a LOUD red
+     warning, and NOTHING is auto-applied.
+   * Until a dataset is chosen, the status line carries a loud amber hint
+     that pip_size is still the untouched FX default -- never a silent
+     default.
+   * Never depends on t58-chrome.js (fields are filled directly from the
+     server response); the instrument dropdown is synced best-effort for
+     visual consistency.
+#}
+<script>
+(function () {
+  var PREFIX = "{{ pip_prefix }}";
+  var MODE = "{{ pip_dataset_mode }}";  // "single" | "multi"
+
+  function el(suffix) { return document.getElementById(PREFIX + suffix); }
+
+  function detectSource() {
+    // -> {kind:'dataset', value} | {kind:'file'} | null
+    if (MODE === "multi") {
+      var checked = document.querySelector('input[name="datasets"]:checked');
+      return checked ? { kind: "dataset", value: checked.value } : null;
+    }
+    var sel = document.querySelector('select[name="existing_dataset"]');
+    if (sel && sel.value) return { kind: "dataset", value: sel.value };
+    var fi = document.querySelector('input[name="csv_file"]');
+    if (fi && fi.files && fi.files.length) return { kind: "file" };
+    return null;
+  }
+
+  function loudHint() {
+    var statusEl = el("_pip_detect_status");
+    if (!statusEl) return;
+    statusEl.style.color = "#ffcf7a";
+    statusEl.textContent = "\u26a0 Pip size is still the untouched FX default (0.0001). "
+      + "Select a dataset above and it will be auto-detected -- or set it manually. "
+      + "Running non-FX data at 0.0001 silently kills every candidate.";
+  }
+
+  function syncInstrumentDropdown(symbol) {
+    var sel = el("_instrument_select");
+    if (!sel || !symbol) return;
+    var tries = 0;
+    (function attempt() {
+      for (var i = 0; i < sel.options.length; i++) {
+        if (sel.options[i].value === symbol) { sel.selectedIndex = i; return; }
+      }
+      if (++tries < 24) setTimeout(attempt, 250);  // picker populates async
+    })();
+  }
+
+  function runAutoDetect() {
+    var statusEl = el("_pip_detect_status");
+    var pipField = el("_pip_size_field");
+    if (!statusEl || !pipField) return;
+    var src = detectSource();
+    if (!src) { loudHint(); return; }
+
+    var fd = new FormData();
+    if (src.kind === "dataset") {
+      fd.append("existing_dataset", src.value);
+    } else {
+      var fi = document.querySelector('input[name="csv_file"]');
+      for (var i = 0; i < fi.files.length; i++) fd.append("csv_file", fi.files[i]);
+    }
+
+    statusEl.style.color = "#888";
+    statusEl.textContent = "Detecting pip size from data\u2026";
+    fetch("/data/detect-pip-size", { method: "POST", body: fd })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+      .then(function (res) {
+        var d = res.data || {};
+        if (!res.ok || d.error) {
+          statusEl.style.color = "#ff9d9d";
+          statusEl.textContent = "\u26a0 Could not detect pip size: "
+            + (d.error || "unknown error")
+            + " -- CHECK pip size manually before running. Nothing was changed.";
+          return;
+        }
+        if (d.warning) {
+          // LOUD warning: label and data disagree on scale -- do NOT auto-apply.
+          statusEl.style.color = "#ff9d9d";
+          statusEl.textContent = "\u26a0 " + d.warning + " Nothing was auto-applied.";
+          return;
+        }
+        pipField.value = d.pip_size;
+        var contractField = el("_contract_size_field");
+        if (contractField && d.contract_size != null && !contractField.value) {
+          contractField.value = d.contract_size;
+        }
+        var commField = el("_commission_field");
+        if (commField && d.commission != null && parseFloat(commField.value || "0") === 0) {
+          commField.value = d.commission;
+        }
+        syncInstrumentDropdown(d.symbol);
+        statusEl.style.color = "#b4ffcb";
+        var srcNote = (MODE === "multi") ? " (from the first selected dataset)" : "";
+        statusEl.textContent = "\u2713 " + (d.message || ("Detected pip_size=" + d.pip_size)) + srcNote;
+      })
+      .catch(function (err) {
+        statusEl.style.color = "#ff9d9d";
+        statusEl.textContent = "\u26a0 Could not detect pip size: " + err
+          + " -- CHECK pip size manually before running. Nothing was changed.";
+      });
+  }
+
+  function bind() {
+    if (MODE === "multi") {
+      var boxes = document.querySelectorAll('input[name="datasets"]');
+      for (var i = 0; i < boxes.length; i++) boxes[i].addEventListener("change", runAutoDetect);
+    } else {
+      var sel = document.querySelector('select[name="existing_dataset"]');
+      if (sel) sel.addEventListener("change", runAutoDetect);
+      var fi = document.querySelector('input[name="csv_file"]');
+      if (fi) fi.addEventListener("change", runAutoDetect);
+    }
+    // Initial state: loud hint until a dataset is chosen (never a silent default).
+    if (!detectSource()) loudHint();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bind);
+  } else {
+    bind();
+  }
+})();
+</script>

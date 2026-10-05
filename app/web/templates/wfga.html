@@ -366,5 +366,21 @@
 <script>
   initPropFirmPresetDropdown('wfga_prop_preset_select', { account_size: 'account_size', profit_target: 'profit_target', daily_loss: 'daily_loss', max_dd: 'max_dd' });
 </script>
+
+<script>
+// v7 (2026-10-05, worker B, fix #7): auto-run pip-size detection when a
+// dataset is selected or a file is chosen.
+document.addEventListener('DOMContentLoaded', function () {
+  var ds = document.querySelector('select[name="existing_dataset"]');
+  if (ds) ds.addEventListener('change', function () {
+    if (this.value) t58DetectPipSize({statusId:'wfga_pip_detect_status', pipFieldId:'wfga_pip_size_field', fileSelector:'input[name=csv_file]', datasetSelector:'select[name=existing_dataset]'});
+  });
+  var fi = document.querySelector('input[name="csv_file"]');
+  if (fi) fi.addEventListener('change', function () {
+    if (this.files && this.files.length) t58DetectPipSize({statusId:'wfga_pip_detect_status', pipFieldId:'wfga_pip_size_field', fileSelector:'input[name=csv_file]', datasetSelector:'select[name=existing_dataset]'});
+  });
+});
+</script>
+
 </body>
 </html>

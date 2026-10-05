@@ -253,9 +253,20 @@
           statusEl.textContent = data.error || "Couldn't detect pip size.";
           return;
         }
-        document.getElementById('refine_pip_size_field').value = data.pip_size;
+        // v7 (2026-10-05, worker B, fix #7): handle the extended response --
+        // label/data scale disagreement arrives as a LOUD warning with
+        // pip_size=null; never fill fields on disagreement.
+        if (data.warning) {
+          statusEl.style.color = '#ff9d9d';
+          statusEl.style.fontWeight = 'bold';
+          statusEl.textContent = '!!! ' + data.warning;
+          return;
+        }
+        const pipEl = document.getElementById('refine_pip_size_field');
+        if (pipEl && data.pip_size != null) pipEl.value = data.pip_size;
         statusEl.style.color = '#b4ffcb';
-        statusEl.textContent = data.message;
+        statusEl.style.fontWeight = 'normal';
+        statusEl.textContent = (data.symbol ? 'Detected ' + data.symbol + ' -- ' : '') + data.message;
       })
       .catch(err => {
         statusEl.style.color = '#ff9d9d';
@@ -406,5 +417,17 @@
 <script>
   initPropFirmPresetDropdown('refine_prop_preset_select', { account_size: 'account_size', profit_target: 'profit_target', daily_loss: 'daily_loss', max_dd: 'max_dd' });
 </script>
+
+<script>
+// v7 (2026-10-05, worker B, fix #7): auto-run pip-size detection when a
+// dataset is selected or a file is chosen.
+document.addEventListener('DOMContentLoaded', function () {
+  const ds = document.querySelector('select[name="existing_dataset"]');
+  if (ds) ds.addEventListener('change', function () { if (this.value) detectPipSizeRefine(); });
+  const fi = document.querySelector('input[name="csv_file"]');
+  if (fi) fi.addEventListener('change', function () { if (this.files && this.files.length) detectPipSizeRefine(); });
+});
+</script>
+
 </body>
 </html>

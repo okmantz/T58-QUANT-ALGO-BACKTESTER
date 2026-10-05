@@ -30,6 +30,10 @@
     padding: 13px 20px; border-radius: 10px; border: 1px solid #6b2323; background: transparent;
     color: #ff8a8a; font-weight: 700; font-size: 14px; margin-top: 6px; cursor: pointer;
   }
+  .kill-btn {
+    padding: 13px 20px; border-radius: 10px; border: 1px solid #ff4444; background: #ff4444;
+    color: #200; font-weight: 700; font-size: 14px; margin-top: 6px; margin-left: 8px; cursor: pointer;
+  }
   .status-grid { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; }
   .status-stat { flex: 1; min-width: 100px; }
   .status-stat .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; }
@@ -50,14 +54,24 @@
 </div>
 
 <div class="warn">
-  <strong>&#9888; Read before using this page.</strong> This trades real money on a real account. Two things are true
-  at once here: (1) it works the same way the desktop app's Deploy Live tab does -- same broker connections, same
-  execution engine -- whenever this web server runs on the same machine as your MT5 terminal (for MT5 accounts) or
-  has network access to your broker's API (for the others); and (2) <strong>this web server, as configured, has no
-  login of its own and listens on every network interface</strong> -- anyone who can reach this server on your
-  network can open this page. If that matters to you (this server is reachable beyond just your own device), set a
-  local app-lock password under <a href="/settings/account">Account Settings</a> first, or don't expose this
-  server's port beyond localhost.
+  <strong>&#9888; Read before using this page.</strong> This trades real money on a real account. Access control
+  (v7): these routes are <strong>disabled entirely</strong> unless the server was started with
+  <code>T58_ENABLE_WEB_LIVE_DEPLOY=1</code> <em>and</em> an app-lock password is set under
+  <a href="/settings/account">Account Settings</a> with this browser session unlocked. Enabling the flag without
+  the password lock keeps every route refused. If this page shows a "disabled" error, that is the guard working --
+  do not expose this server's port beyond localhost unless you understand exactly who can reach it.
+</div>
+
+<div class="card" style="border-color:#2c5a2c;">
+  <h2 style="color:#9fe6a0;">Enforced prop guardrails (every web-launched session)</h2>
+  <p class="help" style="color:#b9d9b9;">
+    News blackout <strong>ON</strong> (07:25&ndash;07:40, 12:55&ndash;13:10 server/broker time -- US releases/FOMC)
+    &middot; weekend holds <strong>BLOCKED</strong> (flattened Friday) &middot; hedging <strong>BLOCKED</strong>
+    &middot; max <strong>5</strong> contracts/lots per single order &middot; daily-loss limit halts new entries
+    &middot; <strong>max-drawdown halt armed</strong> -- a breach flattens ALL positions and stops the session
+    &middot; 3 consecutive poll failures also flatten and halt. Sizing units are converted to broker-native
+    quantity (whole contracts on Tradovate, lots elsewhere) -- never passed through raw.
+  </p>
 </div>
 
 {% if not broker_accounts %}
@@ -130,6 +144,7 @@
 
   <button class="submit-btn" type="submit" id="start-btn">Deploy Live</button>
   <button class="stop-btn" type="button" id="stop-btn" style="display:none;" onclick="stopSession()">Stop</button>
+  <button class="kill-btn" type="button" id="kill-btn" style="display:none;" onclick="killSession()">KILL — FLATTEN &amp; STOP</button>
 </form>
 
 <div class="card" id="status-card" style="display:none;margin-top:16px;">
@@ -170,6 +185,7 @@
         }
         document.getElementById('start-btn').style.display = 'none';
         document.getElementById('stop-btn').style.display = 'inline-block';
+        document.getElementById('kill-btn').style.display = 'inline-block';
         document.getElementById('status-card').style.display = 'block';
         startPolling();
       });
@@ -179,8 +195,24 @@
     fetch('/deploy-live/stop', {method: 'POST'}).then(() => {
       document.getElementById('start-btn').style.display = 'inline-block';
       document.getElementById('stop-btn').style.display = 'none';
+      document.getElementById('kill-btn').style.display = 'none';
       if (polling) clearInterval(polling);
     });
+  }
+
+  function killSession() {
+    if (!confirm('KILL SWITCH: flatten ALL open positions on the broker and stop the session?')) return;
+    fetch('/deploy-live/kill', {method: 'POST'})
+      .then(r => r.json())
+      .then(data => {
+        document.getElementById('start-btn').style.display = 'inline-block';
+        document.getElementById('stop-btn').style.display = 'none';
+        document.getElementById('kill-btn').style.display = 'none';
+        if (polling) clearInterval(polling);
+        if (!data.ok) {
+          document.getElementById('error-box').innerHTML = `<div class="error">${data.error}</div>`;
+        }
+      });
   }
 
   function startPolling() {
@@ -190,6 +222,7 @@
         if (!data.running) {
           document.getElementById('start-btn').style.display = 'inline-block';
           document.getElementById('stop-btn').style.display = 'none';
+          document.getElementById('kill-btn').style.display = 'none';
           clearInterval(polling);
           return;
         }
@@ -198,7 +231,7 @@
         document.getElementById('s-equity').textContent = fmt(data.equity);
         document.getElementById('s-trades').textContent = data.n_trades_closed;
         document.getElementById('s-pnl').textContent = fmt(data.net_pnl);
-        document.getElementById('s-halted').textContent = data.halted_reason || '';
+        document.getElementById('s-halted').textContent = data.alert || data.halted_reason || '';
         document.getElementById('log').textContent = (data.log || []).join('\n');
       });
     }, 3000);
@@ -207,6 +240,7 @@
   {% if running %}
   document.getElementById('start-btn').style.display = 'none';
   document.getElementById('stop-btn').style.display = 'inline-block';
+  document.getElementById('kill-btn').style.display = 'inline-block';
   document.getElementById('status-card').style.display = 'block';
   startPolling();
   {% endif %}

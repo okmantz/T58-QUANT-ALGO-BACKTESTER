@@ -286,7 +286,7 @@
   <div class="card">
     <h2>3. Search space size</h2>
     <div class="row">
-      <div><label>Max candidates (Family modes)</label><input type="number" name="max_candidates" value="200"></div>
+      <div><label>Max candidates (Family modes)</label><input type="number" name="max_candidates" value="1000"></div>
       <div><label>Random seed</label><input type="number" name="seed" value="42"></div>
     </div>
     <label>Parallel workers (blank = all CPU cores)</label>
@@ -449,9 +449,14 @@
     <details>
       <summary>5. Stage 2 — GA refinement</summary>
       <div class="row">
-        <div><label>GA population size</label><input type="number" name="ga_population" value="10"></div>
-        <div><label>GA generations</label><input type="number" name="ga_generations" value="4"></div>
+        <div><label>GA population size</label><input type="number" name="ga_population" value="40"></div>
+        <div><label>GA generations</label><input type="number" name="ga_generations" value="15"></div>
       </div>
+      {# v7 (2026-10-05, worker B, fix #8): the grammar path invents genuinely
+         new structures instead of re-gridding the frozen templates. ON by
+         default; grammar draws are ADDED to the template candidates, never
+         replace them. Uncheck to search templates only. #}
+      <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;background:rgba(120,200,255,0.08);border:1px solid rgba(120,200,255,0.35);border-radius:8px;padding:8px 10px;margin-top:10px;"><input type="checkbox" name="invent_structures" checked style="width:auto;">Invent new structures (grammar) — add grammar-drawn candidates to the template pool (default ON; uncheck for templates only)</label>
       <label>Survivors that advance to Stage 3 (validation)</label>
       <input type="number" name="stage2_top_n" value="10">
     </details>
@@ -777,9 +782,26 @@
           statusEl.textContent = data.error || "Couldn't detect pip size.";
           return;
         }
-        document.getElementById('search_pip_size_field').value = data.pip_size;
+        // v7 (2026-10-05, worker B, fix #7): the endpoint now also returns
+        // the guessed symbol + spec contract/commission, and -- when the
+        // label and the DATA disagree on scale -- pip_size=null with a LOUD
+        // warning instead of a silently-wrong value. Never fill fields on
+        // disagreement; never overwrite a pip the user typed by hand.
+        if (data.warning) {
+          statusEl.style.color = '#ff9d9d';
+          statusEl.style.fontWeight = 'bold';
+          statusEl.textContent = '!!! ' + data.warning;
+          return;
+        }
+        const pipEl = document.getElementById('search_pip_size_field');
+        if (pipEl && data.pip_size != null) pipEl.value = data.pip_size;
+        const cEl = document.getElementById('search_contract_size_field');
+        if (cEl && data.contract_size != null && !cEl.value) cEl.value = data.contract_size;
+        const comEl = document.getElementById('search_commission_field');
+        if (comEl && data.commission != null && (comEl.value === '' || comEl.value === '0' || comEl.value === '0.0')) comEl.value = data.commission;
         statusEl.style.color = '#b4ffcb';
-        statusEl.textContent = data.message;
+        statusEl.style.fontWeight = 'normal';
+        statusEl.textContent = (data.symbol ? 'Detected ' + data.symbol + ' -- ' : '') + data.message;
       })
       .catch(err => {
         statusEl.style.color = '#ff9d9d';
@@ -802,5 +824,24 @@
     b.addEventListener('input', () => { a.value = b.value; });
   })();
 </script>
+
+<script>
+// v7 (2026-10-05, worker B, fix #7): run pip-size detection AUTOMATICALLY
+// when a dataset is selected or a file is chosen -- the #1 mechanical
+// footgun is a silently-wrong pip_size, so this never waits for the manual
+// button. The manual "Detect pip size from data" button still works as a
+// re-run.
+document.addEventListener('DOMContentLoaded', function () {
+  const ds = document.querySelector('select[name="existing_dataset"]');
+  if (ds) ds.addEventListener('change', function () { if (this.value) searchDetectPipSize(); });
+  const fi = document.querySelector('input[name="csv_file"]');
+  if (fi) fi.addEventListener('change', function () { if (this.files && this.files.length) searchDetectPipSize(); });
+  // Multi-dataset checkbox pages (multi_market): re-run when the checked set changes.
+  document.querySelectorAll('input[name="datasets"]').forEach(function (cb) {
+    cb.addEventListener('change', function () { searchDetectPipSize(); });
+  });
+});
+</script>
+
 </body>
 </html>
