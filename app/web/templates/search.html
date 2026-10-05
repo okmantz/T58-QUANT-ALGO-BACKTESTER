@@ -395,6 +395,28 @@
       <div><label>Max drawdown %</label><input type="number" step="0.1" name="max_dd" value="10"></div>
       <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" id="search_pip_size_field" value="0.0001"></div>
     </div>
+    <div class="row" style="margin-top:8px;">
+      <div><label>Drawdown type</label>
+        <select name="dd_type"><option value="trailing">Trailing</option><option value="static">Static</option></select>
+      </div>
+      <div><label>Drawdown check mode</label>
+        <select name="dd_check_mode"><option value="intrabar">Intrabar</option><option value="eod">End of day</option></select>
+      </div>
+    </div>
+    <div class="row" style="margin-top:8px;">
+      <div><label>Consistency rule % (blank = none)</label><input type="number" step="0.1" name="consistency" value="30"></div>
+      <div><label>Min trading days</label><input type="number" name="min_days" value="5"></div>
+    </div>
+    <div class="row" style="margin-top:8px;">
+      <div>
+        <label>Compare champions across prop firms (optional, multi-select)</label>
+        <select name="multi_preset_keys" id="search_multi_preset_select" multiple size="6" style="min-height:110px;"></select>
+        <p class="help">Select TWO or more presets to run one independent Search Lab per firm and emit a per-firm
+        champion board (Ctrl/Cmd-click to pick several). Selecting 0 or 1 keeps the normal single search using
+        the rule fields above. Joint multi-firm optimization is not implemented -- this is independent per-firm
+        search, for comparison only.</p>
+      </div>
+    </div>
     <button type="button" onclick="searchDetectPipSize()" style="margin-top:6px;background:none;border:1px solid var(--border-light);color:var(--teal);padding:9px 12px;border-radius:8px;font-size:13px;width:100%;">Detect pip size from data</button>
     <p id="search_pip_detect_status" style="font-size:12px;margin-top:6px;"></p>
     <div class="row" style="margin-top:8px;">
@@ -692,6 +714,20 @@
       select.appendChild(opt);
     });
   })();
+  // v6 (2026-10-04, B11a): multi-select preset picker for the per-firm
+  // champion comparison -- posts `multi_preset_keys` (one value per
+  // selected preset); 2+ selected switches /search/start to one
+  // independent run_search per preset.
+  (function populateSearchMultiPresetSelect() {
+    const select = document.getElementById('search_multi_preset_select');
+    if (!select) return;
+    SEARCH_PROP_PRESETS.forEach((p) => {
+      const opt = document.createElement('option');
+      opt.value = p.key;
+      opt.textContent = p.label;
+      select.appendChild(opt);
+    });
+  })();
 
   function searchApplyPropPreset(value) {
     if (!value) return;
@@ -703,6 +739,13 @@
     set('profit_target', p.evaluation_profit_target_pct);
     set('daily_loss', p.daily_loss_limit_pct);
     set('max_dd', p.max_drawdown_pct);
+    // v6 (2026-10-04, B1): full preset field thread-through -- drawdown
+    // type, check mode, consistency rule, and min trading days used to be
+    // silently dropped (searched under PropRules defaults instead).
+    set('dd_type', p.drawdown_type);
+    set('dd_check_mode', p.drawdown_check_mode);
+    set('consistency', p.consistency_rule_pct != null ? p.consistency_rule_pct : '');
+    set('min_days', p.min_trading_days);
   }
 
   function searchDetectPipSize() {

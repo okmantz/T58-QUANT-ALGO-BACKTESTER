@@ -180,6 +180,18 @@
       <div><label>Max drawdown (%)</label><input type="number" step="0.1" name="max_dd" value="10"></div>
       <div><label>Max trades/day</label><input type="number" name="max_trades_day" value="10"></div>
     </div>
+    <div class="row" style="margin-top:8px;">
+      <div><label>Drawdown type</label>
+        <select name="dd_type"><option value="trailing">Trailing</option><option value="static">Static</option></select>
+      </div>
+      <div><label>Drawdown check mode</label>
+        <select name="dd_check_mode"><option value="intrabar">Intrabar</option><option value="eod">End of day</option></select>
+      </div>
+    </div>
+    <div class="row" style="margin-top:8px;">
+      <div><label>Consistency rule % (blank = none)</label><input type="number" step="0.1" name="consistency" value="30"></div>
+      <div><label>Min trading days</label><input type="number" name="min_days" value="5"></div>
+    </div>
     <div class="row">
       <div><label>Risk mode</label>
         <select name="risk_mode"><option value="percent">% of balance</option><option value="fixed">Fixed $</option></select>
@@ -345,6 +357,13 @@
     set('profit_target', p.evaluation_profit_target_pct);
     set('daily_loss', p.daily_loss_limit_pct);
     set('max_dd', p.max_drawdown_pct);
+    // v6 (2026-10-04, B1): full preset field thread-through -- drawdown
+    // type, check mode, consistency rule, and min trading days used to be
+    // silently dropped (evolved under PropRules defaults instead).
+    set('dd_type', p.drawdown_type);
+    set('dd_check_mode', p.drawdown_check_mode);
+    set('consistency', p.consistency_rule_pct != null ? p.consistency_rule_pct : '');
+    set('min_days', p.min_trading_days);
   }
 
   function evoDetectPipSize() {
