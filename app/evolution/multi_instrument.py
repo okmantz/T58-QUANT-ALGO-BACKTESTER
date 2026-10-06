@@ -34,6 +34,7 @@ from app.data.importer import import_csv
 from app.data.storage import get_app_base_dir
 from app.evolution.engine import EvolutionConfig, EvolutionRunner
 from app.optimize.distribution_summary import compute_distribution_summary
+from app.orchestration.run_progress import ProgressTracker
 from app.prop.simulator import PropRules
 from app.search.budget_allocator import (
     allocate_search_budget,
@@ -111,10 +112,21 @@ class MultiInstrumentEvolutionGroup:
         self.group_id = group_id
         self.jobs = jobs
         self.total_evaluation_budget = total_evaluation_budget
+        # v8 audit: lets the web layer evict long-finished groups --
+        # without this, _MULTI_EVOLUTION_GROUPS in app.web.server grew
+        # without bound, pinning every finished run's EvolutionRunners
+        # (and their dataframes) in the server process forever.
+        self.created_at = time.time()
         self._lock = threading.Lock()
         self.runners: dict[str, EvolutionRunner] = {}
         self.logs: dict[str, list[str]] = {}
         self.errors: dict[str, str] = {}
+        # v8 (2026-10-05): one live phase/candidate tracker per instrument,
+        # fed from _log() alongside the text log, so the job page can show
+        # a live "Phase 2 · Breeding · 1,240 candidates · 38/s" banner per
+        # instrument card instead of only the raw log tail. Telemetry must
+        # never break a run -- _log() swallows tracker errors.
+        self._trackers: dict[str, ProgressTracker] = {}
 
         budget_by_label = {}
         if total_evaluation_budget is not None:
@@ -167,6 +179,12 @@ class MultiInstrumentEvolutionGroup:
                     f"evaluations of this group's {total_evaluation_budget:,}-total budget)."
                 )
             self.logs[job.label] = [log_line]
+            try:
+                tracker = ProgressTracker("evolution")
+                tracker.feed(log_line)
+                self._trackers[job.label] = tracker
+            except Exception:  # noqa: BLE001 -- telemetry must never break group setup
+                pass
             self.runners[job.label] = EvolutionRunner(
                 df, risk, prop_rules, cfg,
                 progress_cb=lambda msg, label=job.label: self._log(label, msg),
@@ -177,6 +195,12 @@ class MultiInstrumentEvolutionGroup:
             log = self.logs.setdefault(label, [])
             log.append(msg)
             del log[:-500]
+            tracker = self._trackers.get(label)
+        if tracker is not None:
+            try:
+                tracker.feed(msg)
+            except Exception:  # noqa: BLE001 -- telemetry must never break a run
+                pass
 
     def start_all(self) -> None:
         for runner in self.runners.values():
@@ -230,15 +254,24 @@ class MultiInstrumentEvolutionGroup:
     def status(self) -> dict:
         with self._lock:
             logs_copy = {label: list(v) for label, v in self.logs.items()}
+            trackers_copy = dict(self._trackers)
         instruments = {}
         for label, runner in self.runners.items():
             runner_status = runner.status()
+            tracker = trackers_copy.get(label)
+            try:
+                progress = tracker.snapshot().to_dict() if tracker is not None else None
+            except Exception:  # noqa: BLE001 -- telemetry must never break the status page
+                progress = None
             instruments[label] = {
                 "running": runner.is_running,
                 "generation": runner.generation,
                 "leaderboard_size": len(runner.leaderboard),
                 "leaderboard": [r.to_checkpoint_dict() for r in runner.leaderboard[:10]],
                 "log": logs_copy.get(label, [])[-100:],
+                # v8 (2026-10-05): live phase/candidate banner per instrument
+                # card (see _log's tracker feeding above).
+                "progress": progress,
                 # Loop mode -- see EvolutionConfig.target_eval_pass_pct. Every
                 # runner in the group shares base_cfg's target settings (they
                 # only differ in checkpoint/tested-log/knowledge-graph paths),
