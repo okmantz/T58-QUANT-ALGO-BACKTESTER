@@ -12,7 +12,7 @@ from __future__ import annotations
 import csv
 import html
 import json
-from dataclasses import asdict
+from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -160,6 +160,71 @@ def _sizing_halt_banner(halt: dict | None, instrument: str) -> str:
     )
 
 
+def sanitize_for_json(obj: Any) -> Any:
+    """Recursively converts an arbitrary report payload into JSON-safe values.
+
+    2026-10-06: a pandas Timestamp buried in a statistics/holdout payload
+    crashed export_html's bare json.dumps() with "Object of type Timestamp
+    is not JSON serializable", which the Full Pipeline's timeframe sweep
+    then surfaced as the misleading "produced no usable timeframe".
+    build_report() sanitizes once before returning, so every consumer of
+    the report dict (JSON file, HTML, run history, web routes) gets a
+    clean dict -- no single exotic value can fail a whole run's report
+    again. Unknown objects stringify rather than raise: a report must
+    never die on one weird value.
+    """
+    if obj is None or isinstance(obj, (bool, int, str)):
+        return obj
+    if isinstance(obj, float):
+        return obj if obj == obj and abs(obj) != float("inf") else None
+    # pd.NaT subclasses datetime, so it must be caught BEFORE the
+    # datetime branch below (its .isoformat() is the useless "NaT").
+    if obj is pd.NaT or obj is getattr(pd, "NA", object()):
+        return None
+    if isinstance(obj, (datetime, pd.Timestamp)):
+        return obj.isoformat()
+    if isinstance(obj, pd.Timedelta):
+        return obj.total_seconds()
+    try:
+        import numpy as np  # local import: numpy always ships with pandas, but this keeps the module's top-level imports unchanged
+
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            v = float(obj)
+            return v if v == v and abs(v) != float("inf") else None
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        if isinstance(obj, np.ndarray):
+            return [sanitize_for_json(v) for v in obj.tolist()]
+    except ImportError:
+        pass
+    if isinstance(obj, pd.Series):
+        return [sanitize_for_json(v) for v in obj.tolist()]
+    if isinstance(obj, pd.DataFrame):
+        return [
+            {str(k): sanitize_for_json(v) for k, v in row.items()}
+            for row in obj.to_dict(orient="records")
+        ]
+    if is_dataclass(obj) and not isinstance(obj, type):
+        return {str(k): sanitize_for_json(v) for k, v in asdict(obj).items()}
+    if isinstance(obj, dict):
+        return {
+            (k if isinstance(k, (str, int, float, bool)) or k is None else str(k)): sanitize_for_json(v)
+            for k, v in obj.items()
+        }
+    if isinstance(obj, (list, tuple)):
+        return [sanitize_for_json(v) for v in obj]
+    if isinstance(obj, (set, frozenset)):
+        return [sanitize_for_json(v) for v in sorted(obj, key=repr)]
+    try:
+        if pd.isna(obj):  # pd.NaT / pd.NA and other missing sentinels
+            return None
+    except (TypeError, ValueError):
+        pass
+    return str(obj)
+
+
 def build_report(
     strategy_name: str,
     strategy_source_type: str,
@@ -262,7 +327,10 @@ def build_report(
     report["exit_quality"] = analyze_exit_quality(
         getattr(backtest_result, "trades", None) or []
     )
-    return report
+    # 2026-10-06: sanitize once here so every consumer of this dict (JSON
+    # export, HTML, run history, web routes) gets JSON-safe values -- see
+    # sanitize_for_json's docstring for the crash this closes.
+    return sanitize_for_json(report)
 
 
 def export_json(report: dict, path: str | Path) -> Path:
@@ -1057,7 +1125,7 @@ def export_html(
     pdf_button_html = f"""
 <div style="position:fixed;bottom:18px;right:18px;z-index:999;">
   <form method="post" action="/export/pdf" style="margin:0;">
-    <input type="hidden" name="report_json" value='{json.dumps(report).replace("'", "&#39;")}'>
+    <input type="hidden" name="report_json" value='{json.dumps(report, default=str).replace("'", "&#39;")}'>
     <button type="submit" style="padding:10px 16px;border-radius:8px;border:1px solid #2f6fed;
       background:#2f6fed;color:#fff;font-size:13px;font-weight:600;cursor:pointer;
       box-shadow:0 2px 10px rgba(0,0,0,.25);">&#11015; Export PDF</button>
