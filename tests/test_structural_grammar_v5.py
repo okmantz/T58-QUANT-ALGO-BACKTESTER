@@ -143,17 +143,23 @@ def test_grammar_extension_point_register_operand_kind():
 def test_building_block_pool_decomposes_templates():
     from app.search.strategy_space import FAMILIES
     # v7 (2026-10-05): 84 frozen templates + 10 new v7 families
-    # (app/search/families_v7.py). The original 84 must still exist,
-    # untouched -- the count check below enforces both.
+    # (app/search/families_v7.py). v8 (2026-10-05): + 8 new v8 families
+    # (app/search/families_v8.py). The original 84 must still exist,
+    # untouched -- the count check below enforces all three.
     try:
         from app.search.families_v7 import V7_FAMILY_NAMES
         v7_names = set(V7_FAMILY_NAMES)
     except ImportError:
         v7_names = set()
-    assert len(FAMILIES) == 84 + len(v7_names), (
-        f"expected 84 frozen templates + {len(v7_names)} v7 families"
+    try:
+        from app.search.families_v8 import V8_FAMILY_NAMES
+        v8_names = set(V8_FAMILY_NAMES)
+    except ImportError:
+        v8_names = set()
+    assert len(FAMILIES) == 84 + len(v7_names) + len(v8_names), (
+        f"expected 84 frozen templates + {len(v7_names)} v7 families + {len(v8_names)} v8 families"
     )
-    original = set(FAMILIES) - v7_names
+    original = set(FAMILIES) - v7_names - v8_names
     assert len(original) == 84, "the 84 frozen templates must still exist, untouched"
     pool = building_block_pool()
     assert pool["families_used"], "no families decomposed"
@@ -170,8 +176,8 @@ def test_building_block_pool_decomposes_templates():
                "risk_management": grammar.random_block(pool, "risk_blocks", rng)}
         assert not validate(cfg), f"pool block invalid: {validate(cfg)[:2]}"
     # Templates untouched: FAMILIES registry still has all 84 originals
-    # after pooling (v7: plus the 10 new families).
-    assert len(FAMILIES) - len(v7_names) == 84
+    # after pooling (v7: plus the 10 new families; v8: plus 8 more).
+    assert len(FAMILIES) - len(v7_names) - len(v8_names) == 84
 
 
 # ---------------------------------------------------------------------------
