@@ -104,6 +104,17 @@ INDICATOR_KINDS = (
     "plus_di", "minus_di",
     "linreg_slope", "hurst_exponent",
     "kst", "coppock",
+    # v8 (2026-10-05): gap/efficiency/channel/bandwidth/volume/R2
+    # indicators from app.strategy.indicators_v8 (ATR percentile rank,
+    # Kaufman efficiency ratio, Donchian channel position, Bollinger
+    # bandwidth, volume z-score, overnight gap in ATR units, fractal
+    # swing strength, linear-regression R-squared). Same dispatch path
+    # as the v7 kinds (v8 fallback in build_indicator_series +
+    # ManualStrategy._series_from_operand routing).
+    "atr_percentile", "efficiency_ratio",
+    "donchian_mid_distance", "bollinger_bandwidth",
+    "volume_zscore", "overnight_gap_atr",
+    "fractal_strength", "linreg_r2",
     # w10-astra terminals (Oct-4 analysis, Part A ports #2/#3) -- regime-
     # adaptive RSI zones + session VWAP profile levels. NOT
     # build_indicator_series kinds: they need operand-level parameters
@@ -183,6 +194,12 @@ THRESHOLD_BOUNDS: dict[str, tuple[float, float]] = {
     "stochrsi_d": (0.0, 100.0),
     "plus_di": (0.0, 100.0),
     "minus_di": (0.0, 100.0),
+    # v8: bounded oscillators among the new indicators_v8 kinds -- see
+    # V8_BOUNDED_RANGES there. Kept local to this module for the same
+    # reason as the entries above.
+    "atr_percentile": (0.0, 100.0),
+    "efficiency_ratio": (0.0, 1.0),
+    "linreg_r2": (0.0, 1.0),
 }
 
 OPERATORS = (">", ">=", "<", "<=", "cross above", "cross below", "is true", "is false")

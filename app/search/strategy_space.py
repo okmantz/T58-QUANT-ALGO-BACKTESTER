@@ -4846,6 +4846,53 @@ def _grid_space_around_strategy(
 # Public entry point
 # ---------------------------------------------------------------------------
 
+def _apply_v8_search_overrides(
+    config: dict,
+    *,
+    max_hold_bars: int | None,
+    stop_mult_scale: float,
+    session_filter: "tuple[str, str] | None",
+) -> None:
+    """Apply the v8 generate_search_space() tunables to one built Manual
+    config (mutates in place). All three are default-neutral -- with the
+    defaults (None / 1.0 / None) the config is byte-identical to what the
+    family's build() produced, so existing callers and tests see no
+    change. Each override is structural, not cosmetic:
+
+    * max_hold_bars: forces risk_management["max_bars_in_trade"], but
+      ONLY for families whose grid already exposes a time exit (the key
+      is present) -- a family designed without one keeps its behavior.
+    * stop_mult_scale: multiplies the ATR stop_value (the "ATR-stop
+      multiplier range extension" as a live search knob rather than a
+      frozen grid edit).
+    * session_filter: ANDs a time_of_day gate onto every non-empty entry
+      side, so a whole search can be restricted to one clock window.
+    """
+    rm = config.get("risk_management") or {}
+    if max_hold_bars is not None and "max_bars_in_trade" in rm:
+        rm["max_bars_in_trade"] = int(max_hold_bars)
+    _scale = 1.0 if stop_mult_scale is None else float(stop_mult_scale)
+    if _scale != 1.0 and rm.get("stop_type") == "atr":
+        rm["stop_value"] = float(rm.get("stop_value", 1.0)) * _scale
+    if session_filter is not None:
+        start, end = session_filter
+
+        def _gate() -> dict:
+            return {"left": {"type": "time_of_day", "session_start": start, "session_end": end},
+                    "operator": "is true", "right": {"type": "value", "value": 1}}
+
+        entries = config.get("entry_conditions") or {}
+        for side in ("long", "short"):
+            conds = entries.get(side) or []
+            if not conds:
+                continue
+            entries[side] = conds + [_gate()]
+            conns = list(entries.get(f"{side}_connectors") or [])
+            while len(conns) < len(conds) - 1:
+                conns.append("AND")
+            entries[f"{side}_connectors"] = conns + ["AND"]
+
+
 def generate_search_space(
     mode: str,
     family: str | None = None,
@@ -4857,6 +4904,15 @@ def generate_search_space(
     has_pair_data: bool = False,
     has_calendar_data: bool = False,
     exclude_families: "set[str] | None" = None,
+    # v8 (2026-10-05): live search-space tunables. All four are
+    # default-neutral (None / 1.0 / None / None) -- existing callers see
+    # byte-identical spaces. Each one genuinely changes candidate
+    # generation or evaluation; see _apply_v8_search_overrides and the
+    # budget-allocation wiring below.
+    max_hold_bars: int | None = None,
+    stop_mult_scale: float = 1.0,
+    session_filter: "tuple[str, str] | None" = None,
+    family_budget_caps: "dict[str, int] | None" = None,
 ) -> SearchSpace:
     """
     mode="single":
@@ -4889,6 +4945,18 @@ def generate_search_space(
         from app.search.family_health.apply_family_exclusions(). Falls
         back to searching everything if excluding these would leave zero
         families, same safety rule apply_family_exclusions itself uses.
+
+    v8 tunables (all default-neutral):
+        max_hold_bars: override risk_management["max_bars_in_trade"] on
+            every family candidate that already supports time exits.
+        stop_mult_scale: multiply every candidate's ATR stop_value by
+            this factor (> 0 required).
+        session_filter: (start, end) "HH:MM" window ANDed onto every
+            non-empty entry side as a time_of_day gate.
+        family_budget_caps: {family_name: max_candidates} clamps the
+            water-filling budget allocator below; a cap of 0 drops the
+            family (with the same never-empty-the-space safety rule as
+            exclude_families).
     """
     if mode == "single":
         if strategy is not None:
@@ -4916,6 +4984,22 @@ def generate_search_space(
     if mode != "family":
         raise StrategySpaceError(f"Unknown search mode '{mode}' (expected 'single' or 'family').")
 
+    # v8: validate the live tunables up front so a typo fails fast
+    # instead of silently generating a mis-shaped space.
+    if stop_mult_scale is not None and float(stop_mult_scale) <= 0:
+        raise StrategySpaceError(f"stop_mult_scale must be > 0 (got {stop_mult_scale!r}).")
+    if max_hold_bars is not None and int(max_hold_bars) <= 0:
+        raise StrategySpaceError(f"max_hold_bars must be a positive int (got {max_hold_bars!r}).")
+    if session_filter is not None:
+        _sf_start, _sf_end = session_filter
+        if not (_sf_start < _sf_end):
+            raise StrategySpaceError(
+                f"session_filter window must satisfy start < end (got {session_filter!r}).")
+    _budget_caps: dict[str, int] = {}
+    if family_budget_caps:
+        for _fam, _cap in family_budget_caps.items():
+            _budget_caps[_fam] = max(int(_cap), 0)
+
     if strategy is not None:
         return _grid_space_around_strategy(strategy, grid_points_per_gene, max_candidates, seed)
 
@@ -4935,6 +5019,16 @@ def generate_search_space(
         survivors = [f for f in families_to_run if f not in exclude_families]
         if survivors:
             families_to_run = survivors
+
+    # v8: a budget cap of 0 drops the family outright (same never-empty
+    # safety rule as exclude_families); positive caps clamp the
+    # water-filling allocator below.
+    if _budget_caps and family in (None, "all"):
+        zeroed = [f for f in families_to_run if _budget_caps.get(f, 1) <= 0]
+        if zeroed:
+            survivors = [f for f in families_to_run if f not in zeroed]
+            if survivors:
+                families_to_run = survivors
 
     if not has_pair_data:
         requested_pair_families = [f for f in families_to_run if f in FAMILIES_REQUIRING_PAIR_DATA]
@@ -5021,6 +5115,10 @@ def generate_search_space(
             for fam in fams_sorted:
                 share = max(1, remaining_quota // remaining_fam_count)
                 take = min(len(combos_by_family[fam]), share)
+                # v8: per-family budget cap clamps the water-filling share.
+                _cap = _budget_caps.get(fam)
+                if _cap is not None:
+                    take = min(take, _cap)
                 allocation[fam] = take
                 remaining_quota -= take
                 remaining_fam_count -= 1
@@ -5037,6 +5135,10 @@ def generate_search_space(
                 if remaining_quota <= 0:
                     break
                 extra = min(room, remaining_quota)
+                # v8: the headroom redistribution respects the same caps.
+                _cap = _budget_caps.get(fam)
+                if _cap is not None:
+                    extra = min(extra, max(_cap - allocation[fam], 0))
                 allocation[fam] += extra
                 remaining_quota -= extra
 
@@ -5062,7 +5164,16 @@ def generate_search_space(
         # (see app/search/results_db.py's module docstring).
         digest = hashlib.sha1(json.dumps(params, sort_keys=True, default=str).encode()).hexdigest()[:10]
         cid = f"{fam}-{digest}"
-        candidates[cid] = {"source_type": "manual", "config": FAMILIES[fam].build(params)}
+        config = FAMILIES[fam].build(params)
+        # v8: live search-space tunables (default-neutral; see
+        # _apply_v8_search_overrides).
+        _apply_v8_search_overrides(
+            config,
+            max_hold_bars=max_hold_bars,
+            stop_mult_scale=stop_mult_scale,
+            session_filter=session_filter,
+        )
+        candidates[cid] = {"source_type": "manual", "config": config}
         meta[cid] = {"family": fam, "params": params}
 
     return SearchSpace(
@@ -5089,4 +5200,26 @@ try:
 except ImportError:
     # families_v7 is additive; a checkout without it keeps the 84-family
     # registry exactly as before.
+    pass
+
+# ---------------------------------------------------------------------------
+# v8 (2026-10-05): register the eight new template families + hypothesis
+# questions from app.search.families_v8 (gap-fade ATR gate, NY-lunch VWAP
+# band fade, LinReg-confirmed trend, RSI-2 volume-confirmed reversion,
+# turtle-soup displacement fade, ER-gated pullback, Donchian position
+# reversion, fractal-strength exhaustion fade). Same additive pattern as
+# v7 above: imported LAST so families_v8's own
+# `from app.search.strategy_space import ...` sees a fully-initialized
+# module (families_v8 only needs the helpers and SkeletonSpec defined
+# above -- no circular import). Search Lab (generate_search_space) and
+# Evolution Lab (list_families) both read FAMILIES, so both labs pick
+# these up with no further wiring.
+# ---------------------------------------------------------------------------
+try:
+    from app.search.families_v8 import V8_FAMILIES, V8_HYPOTHESIS_QUESTIONS
+    FAMILIES.update(V8_FAMILIES)
+    HYPOTHESIS_QUESTIONS.update(V8_HYPOTHESIS_QUESTIONS)
+except ImportError:
+    # families_v8 is additive; a checkout without it keeps the registry
+    # exactly as before (84 frozen templates + v7 families if present).
     pass
