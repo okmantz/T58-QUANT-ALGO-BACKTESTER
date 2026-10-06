@@ -424,6 +424,11 @@ class SearchSummary:
     db_path: str
     leaderboard: list = field(default_factory=list)
     graveyard_path: str | None = None
+    # v9: batches killed by the stall watchdog (240s with no completion) in
+    # Stage 2 / Stage 3. The recovery engine uses these to distinguish
+    # "too slow for this box" from "genuinely weak candidates".
+    stage2_stalled_skipped: int = 0
+    stage3_stalled_skipped: int = 0
     # P1-4: how the input df was split for this run -- Stages 0-3 ran on
     # the first (1 - locked_holdout_frac) of bars; the last
     # locked_holdout_frac was locked for promote_champion. Recorded so a
@@ -1612,12 +1617,14 @@ def run_search(
                         f"queued for GA refinement (candidate_source='grammar').")
             # ----- v5 B1-1 grammar candidate hook: draw (END) -----
             done = 0
+            stage2_stalled = 0
 
             def _on_stage2_done(_label, fut):
-                nonlocal done
+                nonlocal done, stage2_stalled
                 if fut is None:
                     log(f"  Stage 2: candidate {_label} skipped (stall recovery -- see log above).")
                     done += 1
+                    stage2_stalled += 1
                     return
                 rec = fut.result()
                 rec["family"] = space.meta.get(rec["candidate_id"], {}).get("family", space.family or "single")
@@ -1673,11 +1680,14 @@ def run_search(
             }
             done = 0
 
+            stage3_stalled = 0
+
             def _on_stage3_done(_label, fut):
-                nonlocal done
+                nonlocal done, stage3_stalled
                 if fut is None:
                     log(f"  Stage 3: candidate {_label} skipped (stall recovery -- see log above).")
                     done += 1
+                    stage3_stalled += 1
                     return
                 rec = fut.result()
                 rec["family"] = space.meta.get(rec["candidate_id"], {}).get("family", space.family or "single")
@@ -1778,6 +1788,7 @@ def run_search(
         graveyard_path=str(graveyard_path) if graveyard_path else None,
         locked_holdout_frac=stage_cfg.locked_holdout_frac,
         dev_bars=len(dev_df), locked_bars=len(locked_df),
+        stage2_stalled_skipped=stage2_stalled, stage3_stalled_skipped=stage3_stalled,
     )
 
 
