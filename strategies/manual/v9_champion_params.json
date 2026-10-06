@@ -1,0 +1,16 @@
+{
+ "entry_conditions.long[0].left.period": "10",
+ "entry_conditions.long[0].right.value": "73.3073",
+ "entry_conditions.long[1].right.value": "-0.4886",
+ "entry_conditions.short[0].left.period": "7",
+ "entry_conditions.short[0].right.value": "32.7735",
+ "entry_conditions.short[1].right.value": "-0.0333",
+ "exit_conditions.long[0].left.period": "5",
+ "exit_conditions.long[0].right.value": "59.4001",
+ "exit_conditions.short[0].left.period": "9",
+ "exit_conditions.short[0].right.value": "33.805",
+ "risk_management.stop_value": "1.5",
+ "risk_management.stop_atr_period": "26",
+ "risk_management.target_value": "1.4616",
+ "risk_management.target_atr_period": "14"
+}

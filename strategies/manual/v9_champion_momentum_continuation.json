@@ -1,0 +1,98 @@
+{
+  "name": "Momentum Continuation (rsi7>65, macd hist confirm) [quick_optimize, seed=42, 2026-10-06]",
+  "entry_conditions": {
+    "long": [
+      {
+        "left": {
+          "type": "rsi",
+          "period": 10,
+          "field": "close"
+        },
+        "operator": ">",
+        "right": {
+          "type": "value",
+          "value": 73.307301096929
+        }
+      },
+      {
+        "left": {
+          "type": "macd_histogram"
+        },
+        "operator": ">",
+        "right": {
+          "type": "value",
+          "value": -0.48855999820025764
+        }
+      }
+    ],
+    "long_connectors": [
+      "AND"
+    ],
+    "short": [
+      {
+        "left": {
+          "type": "rsi",
+          "period": 7,
+          "field": "close"
+        },
+        "operator": "<",
+        "right": {
+          "type": "value",
+          "value": 32.77347873060207
+        }
+      },
+      {
+        "left": {
+          "type": "macd_histogram"
+        },
+        "operator": "<",
+        "right": {
+          "type": "value",
+          "value": -0.033345785939427275
+        }
+      }
+    ],
+    "short_connectors": [
+      "AND"
+    ]
+  },
+  "exit_conditions": {
+    "long": [
+      {
+        "left": {
+          "type": "rsi",
+          "period": 5,
+          "field": "close"
+        },
+        "operator": "<",
+        "right": {
+          "type": "value",
+          "value": 59.400085394721245
+        }
+      }
+    ],
+    "short": [
+      {
+        "left": {
+          "type": "rsi",
+          "period": 9,
+          "field": "close"
+        },
+        "operator": ">",
+        "right": {
+          "type": "value",
+          "value": 33.805018524075905
+        }
+      }
+    ]
+  },
+  "risk_management": {
+    "stop_type": "atr",
+    "stop_value": 1.5,
+    "stop_atr_period": 26,
+    "target_type": "atr",
+    "target_value": 1.4616249491173725,
+    "target_atr_period": 14,
+    "opposite_signal_exit": true
+  }
+}
