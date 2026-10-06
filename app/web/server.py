@@ -88,6 +88,7 @@ from app.ensemble.ensemble import EnsembleError, EnsembleVoteConfig, run_ensembl
 from app.evolution import checkpoint as evo_checkpoint
 from app.evolution.engine import EvolutionConfig, EvolutionRunner, evolution_stats_metadata
 from app.orchestration import pipeline_guide
+from app.funnel import recovery as funnel_recovery
 from app.monte_carlo.engine import MonteCarloConfig, run_monte_carlo
 from app.monte_carlo.bankroll import BankrollConfig, simulate_bankroll_survival
 from app.optimize.risk_sweep import DEFAULT_RISK_VALUES, run_risk_sweep
@@ -108,7 +109,7 @@ from app.orchestration.quick_optimize import QuickOptimizeConfig, run_quick_opti
 from app.orchestration.resource_guard import (
     HEAVY_JOB_GUARD, JOB_EVOLUTION_LAB, JOB_FORGE, JOB_FULL_PIPELINE, JOB_SEARCH_LAB, JOB_SPEED_RUN,
     JOB_WFO, JOB_WFGA, JOB_CPCV, JOB_SENSITIVITY, JOB_MULTI_OBJECTIVE, JOB_REGIME_MATRIX, JOB_PBO,
-    JOB_PARAMETER_ROBUSTNESS, JOB_MULTI_MARKET,
+    JOB_PARAMETER_ROBUSTNESS, JOB_MULTI_MARKET, JOB_QUICK_OPTIMIZE,
     JOB_MULTI_INSTRUMENT_SEARCH, JOB_MULTI_INSTRUMENT_SPEED_RUN, JOB_MULTI_INSTRUMENT_EVOLUTION,
 )
 from app.orchestration.forge import ForgeConfig, run_forge
@@ -4692,6 +4693,12 @@ def full_pipeline_job_status(job_id):
             pipeline_guide.after_full_pipeline(result.verdict, bool(result.saved_library_note), result=result)
             if result is not None else None
         ),
+        # v9: structured recovery plan (gate, margin, ordered concrete actions).
+        "recovery": (
+            _safe_recovery(funnel_recovery.diagnose_pipeline,
+                           result, dataset_label=job.get("instrument", "") or "")
+            if result is not None else None
+        ),
     })
 
 
@@ -6762,7 +6769,119 @@ def quickopt_job_status(job_id):
         "found": True, "done": job["done"], "error": job["error"], "cancelled": job.get("cancelled", False),
         "log": job["log"], "instrument": job.get("instrument"), "summary": summary,
         "best_timeframe": job.get("best_timeframe"), "sweep_timeframes": job.get("sweep_timeframes"),
+        # v9: structured recovery plan for the Quick Optimize result.
+        "recovery": (
+            _safe_recovery(funnel_recovery.diagnose_quickopt,
+                           result, dataset_label=job.get("instrument", "") or "")
+            if (job["done"] and result is not None) else None
+        ),
     })
+
+
+# ---------------------------------------------------------------------------
+# v9: one-click recovery actions -- POST endpoints that turn a RecoveryAction
+# into a running job with zero form-filling. Every endpoint validates its
+# inputs and never lowers the 70% validation gate.
+# ---------------------------------------------------------------------------
+
+def _dataclass_from_dict(cls, data: dict):
+    """Build a dataclass from a JSON dict, ignoring unknown keys."""
+    import dataclasses
+    if not isinstance(data, dict):
+        return cls()
+    known = {f.name for f in dataclasses.fields(cls)}
+    return cls(**{k: v for k, v in data.items() if k in known})
+
+
+@app.route("/recovery/quick-optimize", methods=["POST"])
+def recovery_quick_optimize():
+    """One-click 'Send to Quick Optimize' from a recovery plan.
+
+    JSON body: {strategy_ref, dataset_label, risk, rules, qo_cfg}.
+    strategy_ref is either a search-candidate ref {candidate_id, db_path,
+    run_id} or a pipeline ref {source: "pipeline", final_source_type,
+    final_config, final_code_text, final_code_extension}.
+    Starts the Quick Optimize job and redirects to its live job page.
+    """
+    if not HEAVY_JOB_GUARD.try_acquire(JOB_QUICK_OPTIMIZE):
+        return jsonify({
+            "ok": False,
+            "error": f"{HEAVY_JOB_GUARD.active_name} is already running. "
+                     "Wait for it to finish before starting Quick Optimize.",
+        }), 409
+    try:
+        import tempfile
+        from app.search.strategy_space import build_strategy_from_spec
+        from app.strategy.manual import ManualStrategy
+        from app.orchestration.quick_optimize import QuickOptimizeConfig
+
+        body = request.get_json(force=True, silent=True) or {}
+        strat_ref = body.get("strategy_ref") or {}
+        dataset_label = (body.get("dataset_label") or "").strip()
+        qo_cfg_d = body.get("qo_cfg") or {}
+
+        # --- build the strategy --------------------------------------
+        strategy = None
+        if strat_ref.get("candidate_id") and strat_ref.get("db_path"):
+            spec = funnel_recovery.load_candidate_spec(
+                strat_ref.get("db_path"), strat_ref.get("run_id"),
+                strat_ref.get("candidate_id"))
+            if spec is None:
+                HEAVY_JOB_GUARD.release(JOB_QUICK_OPTIMIZE)
+                return jsonify({"ok": False, "error":
+                                "Candidate not found in the search results DB."}), 404
+            tmp = tempfile.mkdtemp(prefix="t58_recovery_qo_")
+            strategy = build_strategy_from_spec(spec, tmp)
+        elif strat_ref.get("source") == "evolution" and strat_ref.get("spec"):
+            # Evolution Lab top candidate: the spec rides along in the
+            # action params (no DB lookup needed).
+            tmp = tempfile.mkdtemp(prefix="t58_recovery_qo_")
+            try:
+                strategy = build_strategy_from_spec(strat_ref["spec"], tmp)
+            except Exception:
+                strategy = None
+        elif strat_ref.get("source") == "pipeline":
+            st = (strat_ref.get("final_source_type") or "manual")
+            if st == "manual" and strat_ref.get("final_config"):
+                strategy = ManualStrategy(strat_ref["final_config"])
+            elif strat_ref.get("final_code_text"):
+                spec = {"source_type": st,
+                        "code_text": strat_ref["final_code_text"],
+                        "code_extension": strat_ref.get("final_code_extension") or ".py"}
+                tmp = tempfile.mkdtemp(prefix="t58_recovery_qo_")
+                strategy = build_strategy_from_spec(spec, tmp)
+        if strategy is None:
+            HEAVY_JOB_GUARD.release(JOB_QUICK_OPTIMIZE)
+            return jsonify({"ok": False, "error":
+                            "Could not rebuild the strategy from the recovery reference."}), 400
+
+        # --- resolve the dataset --------------------------------------
+        df, active_label, _import_note, dataset_error = _resolve_dataset(
+            {"existing_dataset": dataset_label}, request.files)
+        if dataset_error or df is None:
+            HEAVY_JOB_GUARD.release(JOB_QUICK_OPTIMIZE)
+            return jsonify({"ok": False, "error":
+                            f"Dataset '{dataset_label}' is no longer available. "
+                            "Re-select it on the Quick Optimize page."}), 400
+
+        risk = _dataclass_from_dict(RiskConfig, body.get("risk") or {})
+        rules = _dataclass_from_dict(PropRules, body.get("rules") or {})
+        cfg = _dataclass_from_dict(QuickOptimizeConfig, qo_cfg_d)
+
+        job_id = JOB_MANAGER.create(
+            log=[f"Recovery Quick Optimize started from a 'What to do next' action on {active_label}."],
+            instrument=active_label, cancel_event=threading.Event(), cancelled=False)
+        cancel_event = JOB_MANAGER.get(job_id)["cancel_event"]
+        thread = threading.Thread(
+            target=_run_quickopt_job,
+            args=(job_id, df, strategy, risk, rules, cfg, cancel_event),
+            daemon=True)
+        thread.start()
+        return jsonify({"ok": True, "job_id": job_id,
+                        "job_url": url_for("quickopt_job", job_id=job_id)})
+    except Exception as exc:  # noqa: BLE001
+        HEAVY_JOB_GUARD.release(JOB_QUICK_OPTIMIZE)
+        return jsonify({"ok": False, "error": f"Unexpected error: {exc}"}), 500
 
 
 # ---------------------------------------------------------------------------
@@ -7228,6 +7347,14 @@ def evolution_status():
         ),
         "next_step": None if status["running"] else pipeline_guide.after_evolution_stop(
             status["leaderboard_size"], total_evaluated=status["generation"] * runner.cfg.population_size,
+        ),
+        # v9: structured recovery plan when the run has stopped.
+        "recovery": None if status["running"] else _safe_recovery(
+            funnel_recovery.diagnose_evolution,
+            [r.to_checkpoint_dict() for r in runner.leaderboard],
+            total_evaluated=status["generation"] * runner.cfg.population_size,
+            best_fitness=(runner.leaderboard[0].fitness.final_score
+                          if runner.leaderboard and runner.leaderboard[0].fitness else None),
         ),
     })
 
@@ -8106,6 +8233,17 @@ def api_suggest_loop_config():
 
 @app.route("/search")
 def search_form():
+    # v9: recovery-panel deep links pass ?from_recovery=1 plus any of the
+    # prescribed settings as query args (see _recovery_panel.html's
+    # searchPrefillUrl). Forward them to the template as JSON so its own
+    # JS can pre-fill the form fields.
+    _prefill_keys = (
+        "family", "max_candidates", "seed", "candidate_source",
+        "grammar_candidates_per_survivor", "ga_population", "ga_generations",
+        "stage1_top_n", "cost_stress_multiplier", "stop_mult_scale",
+        "max_hold_bars", "session_filter", "dataset",
+    )
+    _prefill = {k: request.args.get(k) for k in _prefill_keys if request.args.get(k) not in (None, "")}
     return render_template(
         "search.html",
         stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
@@ -8116,7 +8254,8 @@ def search_form():
         alpaca_notice=request.args.get("alpaca_notice"),
         alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"),
         optimizer_modes=OPTIMIZER_MODES,
-        prop_presets_json=_prop_presets_json(), **_alpaca_template_context())
+        prop_presets_json=_prop_presets_json(), **_alpaca_template_context(),
+        recovery_prefill_json=json.dumps(_prefill) if _prefill else None)
 
 
 @app.route("/search/start", methods=["POST"])
@@ -8450,6 +8589,79 @@ def search_job_stop(job_id):
     return jsonify({"ok": True})
 
 
+def _safe_recovery(fn, *args, **kwargs) -> dict | None:
+    """v9: never let recovery-plan computation break a status endpoint."""
+    try:
+        return fn(*args, **kwargs).to_dict()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _multi_search_recovery(job) -> "funnel_recovery.RecoveryPlan | None":
+    """v9: aggregate recovery for a finished multi-instrument search job.
+
+    Diagnoses each instrument's own summary with the single-lab engine and
+    returns the plan for the instrument that progressed furthest (most
+    Stage-1 survivors, then most Stage-2). Returns None when the job isn't
+    done or has no per-instrument results.
+    """
+    if not job.get("done"):
+        return None
+    results = job.get("results") or {}
+    best = None
+    best_key = (-1, -1)
+    for label, res in results.items():
+        if not isinstance(res, dict) or res.get("error"):
+            continue
+        summary = {
+            "total_candidates": res.get("total_candidates", 0),
+            "stage1_survivors": res.get("stage1_survivors", 0),
+            "stage2_survivors": res.get("stage2_survivors", 0),
+            "stage3_survivors": res.get("stage3_survivors", 0),
+            "champion_candidate_id": res.get("champion_candidate_id"),
+            "leaderboard": res.get("leaderboard") or [],
+            "db_path": res.get("db_path"),
+            "run_id": res.get("run_id"),
+        }
+        key = (summary["stage1_survivors"], summary["stage2_survivors"])
+        if key > best_key:
+            best_key = key
+            best = (label, summary, res)
+    if best is None:
+        return None
+    label, summary, res = best
+    diag = funnel_recovery.db_stage1_diagnostics(summary.get("db_path"), summary.get("run_id"))
+    plan = funnel_recovery.diagnose_search(
+        summary, dataset_label=label,
+        risk=job.get("risk"), rules=job.get("rules"), db_diagnostics=diag)
+    plan.headline = f"[{label}] " + plan.headline
+    return plan
+
+
+def _recovery_dict_for_search_job(job, summary) -> dict | None:
+    """v9: prescriptive 'what to do next' for a finished Search Lab run.
+
+    Returns the RecoveryPlan as a plain dict, or None when the job isn't
+    done / has no summary. Never raises: a diagnostics failure must not
+    break the status endpoint."""
+    try:
+        import dataclasses
+        risk = job.get("risk")
+        rules = job.get("rules")
+        risk_d = dataclasses.asdict(risk) if dataclasses.is_dataclass(risk) else (risk or {})
+        rules_d = dataclasses.asdict(rules) if dataclasses.is_dataclass(rules) else (rules or {})
+        db_path = job.get("db_path")
+        run_id = getattr(summary, "run_id", None)
+        diag = funnel_recovery.db_stage1_diagnostics(db_path, run_id)
+        plan = funnel_recovery.diagnose_search(
+            summary, stage_cfg=None,
+            dataset_label=job.get("instrument", "") or "",
+            risk=risk_d, rules=rules_d, db_diagnostics=diag)
+        return plan.to_dict()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @app.route("/search/job/<job_id>/status.json")
 def search_job_status(job_id):
     job = JOB_MANAGER.get(job_id)
@@ -8527,6 +8739,13 @@ def search_job_status(job_id):
                 summary.champion_candidate_id, len(summary.leaderboard or []),
                 total_candidates=summary.total_candidates,
             )
+            if (job["done"] and summary is not None) else None
+        ),
+        # v9: structured, data-driven recovery plan (gates, margins,
+        # ordered concrete actions). Rendered by search_job.html's
+        # "What to do next" panel.
+        "recovery": (
+            _recovery_dict_for_search_job(job, summary)
             if (job["done"] and summary is not None) else None
         ),
     })
@@ -9541,6 +9760,12 @@ def search_multi_instrument_job_status(job_id):
         # (see _MultiInstrumentProgress) so the job page can render a live
         # panel per instrument instead of only the aggregate log.
         "progress": job.get("progress"),
+        # v9: aggregate recovery plan across instruments when done. Each
+        # instrument's own summary is diagnosed with the single-lab engine;
+        # the plan shown is the one for the instrument that got furthest
+        # (most Stage-1 survivors), since that's the closest to a pass and
+        # its prescription generalizes best.
+        "recovery": _safe_recovery(_multi_search_recovery, job),
     })
 
 
