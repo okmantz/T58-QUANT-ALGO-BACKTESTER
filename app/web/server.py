@@ -127,6 +127,7 @@ from app.orchestration.multi_instrument_search import (
 from app.orchestration.multi_instrument_speed_run import (
     best_speed_run_across_instruments, run_multi_instrument_speed_run,
 )
+from app.orchestration.run_progress import ProgressTracker
 from app.orchestration.speed_run import SpeedRunConfig, SpeedRunResult, run_speed_run
 from app.orchestration.speed_run import _rank_key as _speedrun_rank_key
 from app.orchestration.overnight_autopilot import AutopilotConfig, run_overnight_autopilot
@@ -4873,6 +4874,15 @@ def _run_mo_job(job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, m
         JOB_MANAGER.fail(job_id, str(exc))
     except Exception as exc:  # noqa: BLE001
         JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
+    finally:
+        # v8 audit fix: this job's slot was never released -- the route
+        # acquires JOB_MULTI_OBJECTIVE before starting this thread (see
+        # mo_start above), and the sibling _run_mo_sweep_job releases it
+        # in a finally, but this non-sweep path didn't. Every heavy job
+        # after a non-sweep multi-objective run was refused with 409
+        # until the server restarted (no health check is registered for
+        # JOB_MULTI_OBJECTIVE, so the stale slot never self-healed).
+        HEAVY_JOB_GUARD.release(JOB_MULTI_OBJECTIVE)
 
 
 def _run_mo_sweep_job(
@@ -7245,7 +7255,21 @@ HEAVY_JOB_GUARD.register_health_check(
 
 @app.route("/evolution/multi-instrument")
 def evolution_multi_instrument_form():
+    # v8 audit: evict long-finished groups -- _MULTI_EVOLUTION_GROUPS
+    # otherwise grew without bound, pinning every finished run's
+    # EvolutionRunners (and their market-data dataframes) in the server
+    # process forever. A still-running group is never evicted, however
+    # old; a finished one stays linkable for 6h (same horizon as
+    # JOB_MANAGER.prune) so its job page / promote links keep working
+    # for a while after the run ends.
     with _MULTI_EVOLUTION_LOCK:
+        now = time.time()
+        stale = [
+            gid for gid, g in _MULTI_EVOLUTION_GROUPS.items()
+            if not g.is_running and (now - g.created_at) > 6 * 3600
+        ]
+        for gid in stale:
+            del _MULTI_EVOLUTION_GROUPS[gid]
         groups = list(_MULTI_EVOLUTION_GROUPS.items())
     return render_template(
         "evolution_multi_instrument.html",
@@ -9068,17 +9092,84 @@ def graveyard_view():
 # multi-select instead of one dataset picker.
 # ---------------------------------------------------------------------------
 
+class _MultiInstrumentProgress:
+    """Per-instrument live telemetry for the multi-instrument job pages.
+
+    v8 (2026-10-05): the multi-instrument Search / Speed Run job pages
+    showed only one aggregate log because per-instrument structured
+    progress never left the orchestration layer -- each instrument's
+    run_search/run_speed_run already emits (label, msg) progress lines
+    through the progress_cb this is wired into, so this fans every line
+    into that label's own app.orchestration.run_progress.ProgressTracker
+    and mirrors the snapshots into the JOB_MANAGER entry (throttled to
+    one push per ~2s so a chatty engine doesn't churn the job lock) for
+    the status.json routes to serve. Telemetry must never break a run:
+    every method swallows its own exceptions.
+    """
+
+    def __init__(self, job_id: str, labels: list[str], kind: str, min_interval_s: float = 2.0):
+        self._job_id = job_id
+        self._trackers: dict[str, ProgressTracker] = {}
+        for label in labels:
+            try:
+                self._trackers[label] = ProgressTracker(kind)
+            except Exception:  # noqa: BLE001 -- a typo'd kind must never stop a real job
+                continue
+        self._min_interval = min_interval_s
+        self._last_push = 0.0
+
+    def feed(self, label: str, msg: str) -> None:
+        try:
+            tracker = self._trackers.get(label)
+            if tracker is None:
+                return
+            tracker.feed(msg or "")
+            now = time.time()
+            if now - self._last_push >= self._min_interval:
+                self._last_push = now
+                self.push()
+        except Exception:  # noqa: BLE001 -- telemetry must never break a run
+            pass
+
+    def push(self) -> None:
+        try:
+            JOB_MANAGER.update(
+                self._job_id,
+                progress={label: t.snapshot().to_dict() for label, t in self._trackers.items()},
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    def finish(self) -> None:
+        try:
+            for t in self._trackers.values():
+                t.finish()
+            self.push()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _run_multi_search_job(
     job_id: str, jobs: list[InstrumentJob], space, risk: RiskConfig, rules: PropRules,
     stage_cfg: SearchStageConfig, max_concurrent: int,
 ) -> None:
     try:
         db_dir = SEARCH_DIR / "multi_instrument" / job_id
+        # v8 (2026-10-05): per-instrument live telemetry for the job page
+        # -- see _MultiInstrumentProgress above.
+        live = _MultiInstrumentProgress(
+            job_id, [f"{j.instrument}/{j.timeframe}" for j in jobs], "search")
+
+        def _progress_cb(label: str, msg: str) -> None:
+            JOB_MANAGER.log(job_id, f"[{label}] {msg}")
+            live.feed(label, msg)
+
         results = run_multi_instrument_search(
             jobs, space, risk, rules, stage_cfg, db_dir,
             max_concurrent_instruments=max_concurrent,
-            progress_cb=lambda label, msg: JOB_MANAGER.log(job_id, f"[{label}] {msg}"),
+            progress_cb=_progress_cb,
         )
+        live.finish()
         per_instrument = {}
         for label, res in results.items():
             if res.error:
@@ -9147,12 +9238,22 @@ def _run_multi_search_loop_job(
     that ranking helper for this round."""
     try:
         db_dir = SEARCH_DIR / "multi_instrument_loop" / job_id
+        # v8 (2026-10-05): per-instrument live telemetry, same as
+        # _run_multi_search_job above.
+        live = _MultiInstrumentProgress(
+            job_id, [f"{j.instrument}/{j.timeframe}" for j in jobs], "search")
+
+        def _progress_cb(label: str, msg: str) -> None:
+            JOB_MANAGER.log(job_id, f"[{label}] {msg}")
+            live.feed(label, msg)
+
         results = run_multi_instrument_search_loop(
             jobs, risk, rules, stage_cfg, loop_cfg, db_dir,
             max_concurrent_instruments=max_concurrent,
-            progress_cb=lambda label, msg: JOB_MANAGER.log(job_id, f"[{label}] {msg}"),
+            progress_cb=_progress_cb,
             cancel_event=cancel_event,
         )
+        live.finish()
         per_instrument = {}
         for label, res in results.items():
             if res.error:
@@ -9436,6 +9537,10 @@ def search_multi_instrument_job_status(job_id):
         "cancelled": job.get("cancelled", False),
         "best_label": job.get("best_label"),
         "champion_report": job.get("champion_report"),
+        # v8 (2026-10-05): per-instrument live phase/candidate telemetry
+        # (see _MultiInstrumentProgress) so the job page can render a live
+        # panel per instrument instead of only the aggregate log.
+        "progress": job.get("progress"),
     })
 
 
@@ -9965,10 +10070,21 @@ def _run_multi_speedrun_job(
 ) -> None:
     try:
         job_dir = MULTI_SPEEDRUN_DIR / job_id
+        # v8 (2026-10-05): per-instrument live telemetry, same pattern as
+        # _run_multi_search_job above ("speed_run" kind matches the
+        # Speed Run phase wording).
+        live = _MultiInstrumentProgress(
+            job_id, [f"{j.instrument}/{j.timeframe}" for j in jobs], "speed_run")
+
+        def _progress_cb(label: str, msg: str) -> None:
+            JOB_MANAGER.log(job_id, f"[{label}] {msg}")
+            live.feed(label, msg)
+
         results = run_multi_instrument_speed_run(
             jobs, risk, rules, cfg, job_dir, max_concurrent_instruments=max_concurrent,
-            progress_cb=lambda label, msg: JOB_MANAGER.log(job_id, f"[{label}] {msg}"),
+            progress_cb=_progress_cb,
         )
+        live.finish()
         per_instrument = {}
         for label, res in results.items():
             if res.error:
@@ -10120,6 +10236,9 @@ def speed_run_multi_instrument_job_status(job_id):
     return jsonify({
         "found": True, "done": job["done"], "error": job["error"], "log": job["log"][-200:],
         "labels": job.get("labels", []), "results": job.get("results"), "best_label": job.get("best_label"),
+        # v8 (2026-10-05): per-instrument live phase/candidate telemetry
+        # (see _MultiInstrumentProgress).
+        "progress": job.get("progress"),
     })
 
 
