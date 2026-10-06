@@ -1318,6 +1318,13 @@ def _build_indicator_series_uncached(frame: pd.DataFrame, kind: str, period: int
     _v7_builder = _indicators_v7.V7_INDICATOR_BUILDERS.get(kind)
     if _v7_builder is not None:
         return _v7_builder(frame, p, column, lookback)
+    # --- v8 (2026-10-05): gap/efficiency/channel/bandwidth/volume/R2
+    # indicators in app.strategy.indicators_v8. Same additive fallback
+    # treatment as v7 above. ---
+    from app.strategy import indicators_v8 as _indicators_v8
+    _v8_builder = _indicators_v8.V8_INDICATOR_BUILDERS.get(kind)
+    if _v8_builder is not None:
+        return _v8_builder(frame, p, column, lookback)
     raise KeyError(kind)
 
 

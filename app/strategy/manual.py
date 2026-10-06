@@ -297,7 +297,15 @@ class ManualStrategy(Strategy):
                     # app.strategy.indicators._swing_structure_event. The
                     # `lookback` operand doubles as the fractal swing
                     # window (defaults to the detectors' own 5 below).
-                    "swing_bos", "swing_choch"}:
+                    "swing_bos", "swing_choch",
+                    # Expansion round 10 (v8): gap/efficiency/channel/
+                    # bandwidth/volume/R2 indicators -- see
+                    # app.strategy.indicators_v8 (dispatched via the v8
+                    # fallback in build_indicator_series).
+                    "atr_percentile", "efficiency_ratio",
+                    "donchian_mid_distance", "bollinger_bandwidth",
+                    "volume_zscore", "overnight_gap_atr",
+                    "fractal_strength", "linreg_r2"}:
             return build_indicator_series(work, kind, period=period, column=field, lookback=lookback)
 
         # --- w10-astra: regime-oscillator + VWAP-profile operand kinds ---

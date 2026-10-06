@@ -189,6 +189,15 @@ _SKELETON_TO_GROUP: dict[str, str] = {
     "choppiness_gated_range_fade": "mean_reversion",
     "heikin_ashi_reversal": "mean_reversion",
     "vwap_value_area_breakout": "vwap",
+    # -- v8 (2026-10-05): eight new template families from app/search/families_v8.py --
+    "overnight_gap_fade_atr_gated": "mean_reversion",
+    "ny_lunch_vwap_band_fade": "vwap",
+    "linreg_confirmed_trend_continuation": "trend_following",
+    "rsi2_volume_confirmed_reversion": "mean_reversion",
+    "turtle_soup_displacement_fade": "liquidity_sweep",
+    "efficiency_ratio_trend_pullback": "pullback",
+    "donchian_channel_position_reversion": "mean_reversion",
+    "fractal_strength_exhaustion_fade": "mean_reversion",
 }
 
 # Path 2a: app.strategy.dna active_tags() -> canonical group. Checked in
