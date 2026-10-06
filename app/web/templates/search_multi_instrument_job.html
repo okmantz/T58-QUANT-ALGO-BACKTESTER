@@ -29,6 +29,14 @@
   tr.best-row { background: rgba(53,224,176,0.08); }
   tr.failed-row td { color: #ff8f8f; }
   .badge-best { display: inline-block; font-size: 10px; text-transform: uppercase; background: var(--teal); color: #04120e; border-radius: 4px; padding: 2px 6px; margin-left: 6px; font-weight: 700; }
+  .heartbeat { font-size: 11px; color: #777; margin-top: 6px; }
+  .heartbeat.stale { color: #ff9f43; }
+  .inst-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .inst-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .inst-card h3 { font-size: 13px; margin: 0 0 6px; color: var(--text); }
+  .inst-card .banner { font-size: 11.5px; color: #7ee08a; font-family: ui-monospace, Menlo, monospace; margin-bottom: 6px; }
+  .inst-card .banner.idle { color: #777; }
+  .inst-log { background: #0d0d0d; border: 1px solid var(--border-light); border-radius: 6px; padding: 8px; font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: #bbb; max-height: 150px; overflow-y: auto; white-space: pre-wrap; }
 </style>
 </head>
 <body>
@@ -47,6 +55,18 @@
 
 <div class="card">
   <h2 id="status-title"><span class="spinner" id="spinner"></span>Searching every instrument&hellip;</h2>
+  <div class="heartbeat" id="heartbeat">waiting for first update&hellip;</div>
+</div>
+
+<div class="error" id="gone-card" style="display:none;"></div>
+
+<!-- v8 (2026-10-05): per-instrument live panels -- phase banner plus each
+     instrument's own streaming log tail, so you can watch every leg work
+     instead of only the one aggregate log below. -->
+<div class="inst-grid" id="inst-grid"></div>
+
+<div class="card">
+  <h2>Combined log</h2>
   <div id="log">Starting&hellip;</div>
 </div>
 
@@ -69,6 +89,18 @@
 {% if not not_found %}
 <script>
   const jobId = {{ job_id | tojson }};
+  // v8: heartbeat -- proves the poll loop is alive; a stalled job turns
+  // the line amber instead of freezing silently.
+  let lastUpdateAt = 0;
+  function tickHeartbeat() {
+    const el = document.getElementById('heartbeat');
+    if (!el) return;
+    if (!lastUpdateAt) { el.textContent = 'waiting for first update…'; el.className = 'heartbeat'; return; }
+    const ageS = Math.round((Date.now() - lastUpdateAt) / 1000);
+    el.textContent = ageS < 2 ? 'live — updated just now' : `live — last update ${ageS}s ago`;
+    el.className = 'heartbeat' + (ageS > 20 ? ' stale' : '');
+  }
+  setInterval(tickHeartbeat, 1000);
 
   function saveToLibrary(label, btn) {
     btn.disabled = true;
@@ -89,6 +121,53 @@
       .catch(err => { btn.disabled = false; btn.textContent = 'Save Champion to Library'; alert('Save failed: ' + err); });
   }
 
+  // v8: render one live card per instrument. Labels are inserted as TEXT
+  // only (never into selectors or inline handlers) so instrument names
+  // with special characters (e.g. "ES1!/15") cannot break rendering.
+  function renderInstrumentCards(data) {
+    const grid = document.getElementById('inst-grid');
+    const labels = data.labels || [];
+    const logLines = (data.log || []).filter(Boolean);
+    const progress = data.progress || {};
+    const existing = new Map();
+    grid.querySelectorAll('.inst-card').forEach(c => existing.set(c.dataset.label, c));
+    labels.forEach(label => {
+      let card = existing.get(label);
+      if (!card) {
+        card = document.createElement('div');
+        card.className = 'inst-card';
+        card.dataset.label = label;
+        const h = document.createElement('h3');
+        h.textContent = label;
+        const banner = document.createElement('div');
+        banner.className = 'banner idle';
+        banner.textContent = 'starting…';
+        const logBox = document.createElement('div');
+        logBox.className = 'inst-log';
+        logBox.textContent = 'waiting for output…';
+        card.append(h, banner, logBox);
+        grid.append(card);
+        existing.set(label, card);
+      }
+      const banner = card.querySelector('.banner');
+      const p = progress[label];
+      if (p && p.banner) {
+        banner.className = 'banner';
+        banner.textContent = p.banner;
+      } else {
+        banner.className = 'banner idle';
+        banner.textContent = data.done ? 'finished' : 'starting…';
+      }
+      // This instrument's own log tail: the backend prefixes every line
+      // with "[label] ", so filter the aggregate log on that prefix.
+      const prefix = `[${label}] `;
+      const mine = logLines.filter(l => l.startsWith(prefix)).map(l => l.slice(prefix.length));
+      const logBox = card.querySelector('.inst-log');
+      logBox.textContent = mine.slice(-25).join('\n') || 'waiting for output…';
+      logBox.scrollTop = logBox.scrollHeight;
+    });
+  }
+
   function renderResults(data) {
     const tbody = document.getElementById('results-body');
     tbody.innerHTML = '';
@@ -98,20 +177,52 @@
       const r = results[label];
       const tr = document.createElement('tr');
       if (label === data.best_label) tr.className = 'best-row';
+      const tdLabel = document.createElement('td');
+      tdLabel.textContent = label;
+      tr.append(tdLabel);
       if (!r) {
-        tr.innerHTML = `<td>${label}</td><td colspan="6">pending&hellip;</td>`;
+        const td = document.createElement('td');
+        td.colSpan = 6;
+        td.innerHTML = 'pending&hellip;';
+        tr.append(td);
       } else if (r.error) {
         tr.className = 'failed-row';
-        tr.innerHTML = `<td>${label}</td><td colspan="5">FAILED: ${r.error}</td><td></td>`;
+        const td = document.createElement('td');
+        td.colSpan = 5;
+        td.textContent = 'FAILED: ' + r.error;
+        tr.append(td);
+        tr.append(document.createElement('td'));
       } else {
-        const bestTag = label === data.best_label ? '<span class="badge-best">BEST</span>' : '';
-        const champLink = r.report_html ? `<a href="${r.report_html}" target="_blank">Leaderboard &rarr;</a>` : '';
-        const saveBtn = r.champion_candidate_id
-          ? `<button class="promote-btn" onclick="saveToLibrary('${label}', this)">Save Champion to Library</button>`
-          : '';
-        tr.innerHTML = `<td>${label}${bestTag}</td><td>${r.total_candidates}</td><td>${r.stage1_survivors}</td>` +
-          `<td>${r.stage2_survivors}</td><td>${r.stage3_survivors}</td>` +
-          `<td>${r.champion_candidate_id || '(none)'}</td><td>${champLink} ${saveBtn}</td>`;
+        if (label === data.best_label) {
+          const tag = document.createElement('span');
+          tag.className = 'badge-best';
+          tag.textContent = 'BEST';
+          tdLabel.append(' ');
+          tdLabel.append(tag);
+        }
+        [r.total_candidates, r.stage1_survivors, r.stage2_survivors, r.stage3_survivors,
+         r.champion_candidate_id || '(none)'].forEach(v => {
+          const td = document.createElement('td');
+          td.textContent = v;
+          tr.append(td);
+        });
+        const actTd = document.createElement('td');
+        if (r.report_html) {
+          const a = document.createElement('a');
+          a.href = r.report_html;
+          a.target = '_blank';
+          a.textContent = 'Leaderboard →';
+          actTd.append(a);
+          actTd.append(' ');
+        }
+        if (r.champion_candidate_id) {
+          const btn = document.createElement('button');
+          btn.className = 'promote-btn';
+          btn.textContent = 'Save Champion to Library';
+          btn.addEventListener('click', () => saveToLibrary(label, btn));
+          actTd.append(btn);
+        }
+        tr.append(actTd);
       }
       tbody.appendChild(tr);
     });
@@ -119,11 +230,24 @@
 
     const bestContainer = document.getElementById('best-container');
     if (data.best_label) {
-      bestContainer.innerHTML = `<div class="best-banner">Best result: <strong>${data.best_label}</strong>` +
-        (data.champion_report ? ` — <a href="${data.champion_report}" target="_blank">open its full champion report &rarr;</a>` : '') +
-        `</div>`;
+      bestContainer.innerHTML = '';
+      const banner = document.createElement('div');
+      banner.className = 'best-banner';
+      banner.append(document.createTextNode('Best result: '));
+      const strong = document.createElement('strong');
+      strong.textContent = data.best_label;
+      banner.append(strong);
+      if (data.champion_report) {
+        banner.append(document.createTextNode(' — '));
+        const a = document.createElement('a');
+        a.href = data.champion_report;
+        a.target = '_blank';
+        a.textContent = 'open its full champion report →';
+        banner.append(a);
+      }
+      bestContainer.append(banner);
     } else if (data.done) {
-      bestContainer.innerHTML = `<div class="error">No instrument/timeframe produced a Stage 3 champion this run.</div>`;
+      bestContainer.innerHTML = '<div class="error">No instrument/timeframe produced a Stage 3 champion this run.</div>';
     }
   }
 
@@ -131,27 +255,42 @@
     fetch(`/search/multi-instrument/job/${jobId}/status.json`)
       .then(r => r.json())
       .then(data => {
-        if (!data.found) return;
-        document.getElementById('log').textContent = (data.log || []).filter(Boolean).join('\n');
-        document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
+        // v8: reschedule lives in a finally -- a rendering error can
+        // never silently freeze this page again.
+        let again = 2000;
+        try {
+          if (!data.found) {
+            const gc = document.getElementById('gone-card');
+            gc.style.display = 'block';
+            gc.textContent = 'This job is no longer on the server (it may have restarted). ' +
+              'Retrying every 15s in case it comes back.';
+            again = 15000;
+          } else {
+            document.getElementById('gone-card').style.display = 'none';
+            lastUpdateAt = Date.now();
+            document.getElementById('log').textContent = (data.log || []).filter(Boolean).join('\n');
+            document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
 
-        if (data.error) {
-          document.getElementById('spinner').style.display = 'none';
-          document.getElementById('status-title').textContent = 'Multi-instrument search failed';
-          const ec = document.getElementById('error-card');
-          ec.style.display = 'block';
-          ec.textContent = data.error;
-          return;
+            if (data.error) {
+              document.getElementById('spinner').style.display = 'none';
+              document.getElementById('status-title').textContent = 'Multi-instrument search failed';
+              const ec = document.getElementById('error-card');
+              ec.style.display = 'block';
+              ec.textContent = data.error;
+              again = null;
+            } else {
+              renderInstrumentCards(data);
+              renderResults(data);
+              if (data.done) {
+                document.getElementById('spinner').style.display = 'none';
+                document.getElementById('status-title').textContent = 'Multi-instrument search complete';
+                again = null;
+              }
+            }
+          }
+        } finally {
+          if (again !== null) setTimeout(poll, again);
         }
-
-        renderResults(data);
-
-        if (data.done) {
-          document.getElementById('spinner').style.display = 'none';
-          document.getElementById('status-title').textContent = 'Multi-instrument search complete';
-          return;
-        }
-        setTimeout(poll, 2000);
       })
       .catch(() => setTimeout(poll, 3000));
   }

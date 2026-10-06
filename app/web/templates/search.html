@@ -493,6 +493,7 @@
 </div>
 </div>
 
+<script src="/static/prop-presets.js"></script>
 <script>
   const modeSelect = document.getElementById('search_mode');
   const namedFamilyFields = document.getElementById('named-family-fields');
@@ -709,29 +710,37 @@
   }
 
   const SEARCH_PROP_PRESETS = {{ (prop_presets_json | default('[]')) | safe }};
-  (function populateSearchPropPresetDropdown() {
-    const select = document.getElementById('search_prop_preset_select');
+  // v8: badges + the "only show firms that allow algo trading" toggle
+  // (default ON) via the shared helper in /static/prop-presets.js; plain
+  // populate if that file failed to load. The multi-select posts preset
+  // keys (not the JSON blob), so it passes its own valueFn.
+  function _populateSearchPresetFallback(selectId, valueFn) {
+    const select = document.getElementById(selectId);
     if (!select) return;
-    SEARCH_PROP_PRESETS.forEach((p) => {
+    SEARCH_PROP_PRESETS.forEach((p, i) => {
       const opt = document.createElement('option');
-      opt.value = JSON.stringify(p);
+      opt.value = valueFn ? valueFn(p, i) : JSON.stringify(p);
       opt.textContent = p.label;
       select.appendChild(opt);
     });
+  }
+  (function populateSearchPropPresetDropdown() {
+    if (typeof addAlgoTradingFilter === 'function') {
+      addAlgoTradingFilter('search_prop_preset_select', SEARCH_PROP_PRESETS);
+    } else {
+      _populateSearchPresetFallback('search_prop_preset_select');
+    }
   })();
   // v6 (2026-10-04, B11a): multi-select preset picker for the per-firm
   // champion comparison -- posts `multi_preset_keys` (one value per
   // selected preset); 2+ selected switches /search/start to one
   // independent run_search per preset.
   (function populateSearchMultiPresetSelect() {
-    const select = document.getElementById('search_multi_preset_select');
-    if (!select) return;
-    SEARCH_PROP_PRESETS.forEach((p) => {
-      const opt = document.createElement('option');
-      opt.value = p.key;
-      opt.textContent = p.label;
-      select.appendChild(opt);
-    });
+    if (typeof addAlgoTradingFilter === 'function') {
+      addAlgoTradingFilter('search_multi_preset_select', SEARCH_PROP_PRESETS, (p) => p.key);
+    } else {
+      _populateSearchPresetFallback('search_multi_preset_select', (p) => p.key);
+    }
   })();
 
   function searchApplyPropPreset(value) {

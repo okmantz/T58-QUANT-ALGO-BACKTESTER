@@ -23,6 +23,8 @@
   #log { background: #0d0d0d; border: 1px solid var(--border-light); border-radius: 8px; padding: 10px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: #ccc; max-height: 260px; overflow-y: auto; white-space: pre-wrap; }
   .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border-light); border-top-color: var(--violet); border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .heartbeat { font-size: 11px; color: #777; margin-top: 6px; }
+  .heartbeat.stale { color: #ff9f43; }
   .instrument-card { border-left: 3px solid var(--border-light); padding-left: 12px; margin-bottom: 14px; }
   .instrument-card.best { border-left-color: var(--violet); }
   .instrument-card h3 { margin: 0 0 6px; font-size: 14px; }
@@ -32,6 +34,9 @@
   .verdict.READY { color: var(--teal); }
   .verdict.MARGINAL { color: var(--amber); }
   ul.guidance { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: #999; }
+  .inst-banner { font-size: 11.5px; color: #b79aff; font-family: ui-monospace, Menlo, monospace; margin: 4px 0 6px; }
+  .inst-banner.idle { color: #777; }
+  .inst-log { background: #0d0d0d; border: 1px solid var(--border-light); border-radius: 6px; padding: 8px; font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: #bbb; max-height: 140px; overflow-y: auto; white-space: pre-wrap; margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -50,11 +55,18 @@
 
 <div class="card">
   <h2 id="status-title"><span class="spinner" id="spinner"></span>Running Speed Run on every instrument&hellip;</h2>
-  <div id="log">Starting&hellip;</div>
+  <div class="heartbeat" id="heartbeat">waiting for first update&hellip;</div>
 </div>
+
+<div class="error" id="gone-card" style="display:none;"></div>
 
 <div id="best-container"></div>
 <div id="results-container"></div>
+
+<div class="card">
+  <h2>Combined log</h2>
+  <div id="log">Starting&hellip;</div>
+</div>
 
 <div class="error" id="error-card" style="display:none;"></div>
 
@@ -66,40 +78,115 @@
 <script>
   const jobId = {{ job_id | tojson }};
   const fmt = (v, d) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d === undefined ? 1 : d);
+  // v8: heartbeat -- proves the poll loop is alive; a stalled job turns
+  // the line amber instead of freezing silently.
+  let lastUpdateAt = 0;
+  function tickHeartbeat() {
+    const el = document.getElementById('heartbeat');
+    if (!el) return;
+    if (!lastUpdateAt) { el.textContent = 'waiting for first update…'; el.className = 'heartbeat'; return; }
+    const ageS = Math.round((Date.now() - lastUpdateAt) / 1000);
+    el.textContent = ageS < 2 ? 'live — updated just now' : `live — last update ${ageS}s ago`;
+    el.className = 'heartbeat' + (ageS > 20 ? ' stale' : '');
+  }
+  setInterval(tickHeartbeat, 1000);
+
+  // v8: labels are inserted as TEXT nodes only -- never into innerHTML --
+  // so instrument names with HTML/special characters cannot break cards.
+  function h3WithLabel(label, bestTag) {
+    const h = document.createElement('h3');
+    h.textContent = label;
+    if (bestTag) {
+      h.append(' ');
+      const tag = document.createElement('span');
+      tag.className = 'badge-best';
+      tag.textContent = 'BEST';
+      h.append(tag);
+    }
+    return h;
+  }
 
   function renderResults(data) {
     const container = document.getElementById('results-container');
     container.innerHTML = '';
     const labels = data.labels || [];
     const results = data.results || {};
+    const logLines = (data.log || []).filter(Boolean);
+    const progress = data.progress || {};
     labels.forEach(label => {
       const r = results[label];
       const div = document.createElement('div');
       div.className = 'card instrument-card' + (label === data.best_label ? ' best' : '');
+      div.append(h3WithLabel(label, label === data.best_label));
+      // v8: live per-instrument banner + log tail while the leg runs.
       if (!r) {
-        div.innerHTML = `<h3>${label}</h3><p>pending&hellip;</p>`;
+        const p = progress[label];
+        const banner = document.createElement('div');
+        banner.className = 'inst-banner' + (p && p.banner ? '' : ' idle');
+        banner.textContent = (p && p.banner) || (data.done ? 'finished' : 'starting…');
+        div.append(banner);
+        const prefix = `[${label}] `;
+        const mine = logLines.filter(l => l.startsWith(prefix)).map(l => l.slice(prefix.length));
+        const logBox = document.createElement('div');
+        logBox.className = 'inst-log';
+        logBox.textContent = mine.slice(-15).join('\n') || 'waiting for output…';
+        logBox.scrollTop = logBox.scrollHeight;
+        div.append(logBox);
       } else if (r.error) {
-        div.innerHTML = `<h3>${label}</h3><p style="color:#ff8f8f;">FAILED: ${r.error}</p>`;
+        const p = document.createElement('p');
+        p.style.color = '#ff8f8f';
+        p.textContent = 'FAILED: ' + r.error;
+        div.append(p);
       } else if (!r.has_winner) {
-        const guidance = (r.guidance || []).map(g => `<li>${g}</li>`).join('');
-        div.innerHTML = `<h3>${label}</h3><p>No winner found (${fmt(r.elapsed_seconds)}s). ${r.winner_reason || ''}</p>` +
-          (guidance ? `<ul class="guidance">${guidance}</ul>` : '');
+        const p = document.createElement('p');
+        p.textContent = `No winner found (${fmt(r.elapsed_seconds)}s). ${r.winner_reason || ''}`;
+        div.append(p);
+        if ((r.guidance || []).length) {
+          const ul = document.createElement('ul');
+          ul.className = 'guidance';
+          r.guidance.forEach(g => { const li = document.createElement('li'); li.textContent = g; ul.append(li); });
+          div.append(ul);
+        }
       } else {
         const w = r.winner;
-        const bestTag = label === data.best_label ? '<span class="badge-best">BEST</span>' : '';
-        const link = w.report_html ? ` — <a href="${w.report_html}" target="_blank">open report &rarr;</a>` : '';
-        div.innerHTML = `<h3>${label}${bestTag}</h3>` +
-          `<p><span class="verdict ${w.verdict}">${w.verdict}</span> — candidate ${w.candidate_id} (${w.family || 'unknown family'})</p>` +
-          `<p>Eval pass probability: ${fmt(w.eval_pass_probability)}% — First payout probability: ${fmt(w.first_payout_probability)}%${link}</p>`;
+        const p1 = document.createElement('p');
+        const v = document.createElement('span');
+        v.className = 'verdict ' + (w.verdict || '');
+        v.textContent = w.verdict || '';
+        p1.append(v);
+        p1.append(document.createTextNode(` — candidate ${w.candidate_id} (${w.family || 'unknown family'})`));
+        if (w.report_html) {
+          p1.append(document.createTextNode(' — '));
+          const a = document.createElement('a');
+          a.href = w.report_html;
+          a.target = '_blank';
+          a.textContent = 'open report →';
+          p1.append(a);
+        }
+        p1.append(document.createTextNode(')'));
+        const p2 = document.createElement('p');
+        p2.textContent = `Eval pass probability: ${fmt(w.eval_pass_probability)}% — First payout probability: ${fmt(w.first_payout_probability)}%`;
+        div.append(p1, p2);
       }
       container.appendChild(div);
     });
 
     const bestContainer = document.getElementById('best-container');
+    bestContainer.innerHTML = '';
     if (data.best_label) {
-      bestContainer.innerHTML = `<div class="best-banner">Best result: <strong>${data.best_label}</strong> — see its card below.</div>`;
+      const banner = document.createElement('div');
+      banner.className = 'best-banner';
+      banner.append(document.createTextNode('Best result: '));
+      const strong = document.createElement('strong');
+      strong.textContent = data.best_label;
+      banner.append(strong);
+      banner.append(document.createTextNode(' — see its card below.'));
+      bestContainer.append(banner);
     } else if (data.done) {
-      bestContainer.innerHTML = `<div class="error">No instrument produced a Speed Run winner this run — see each instrument's card below for what to try next.</div>`;
+      const err = document.createElement('div');
+      err.className = 'error';
+      err.textContent = 'No instrument produced a Speed Run winner this run — see each instrument\'s card below for what to try next.';
+      bestContainer.append(err);
     }
   }
 
@@ -107,27 +194,41 @@
     fetch(`/speed-run/multi-instrument/job/${jobId}/status.json`)
       .then(r => r.json())
       .then(data => {
-        if (!data.found) return;
-        document.getElementById('log').textContent = (data.log || []).filter(Boolean).join('\n');
-        document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
+        // v8: reschedule lives in a finally -- a rendering error can
+        // never silently freeze this page again.
+        let again = 2500;
+        try {
+          if (!data.found) {
+            const gc = document.getElementById('gone-card');
+            gc.style.display = 'block';
+            gc.textContent = 'This job is no longer on the server (it may have restarted). ' +
+              'Retrying every 15s in case it comes back.';
+            again = 15000;
+          } else {
+            document.getElementById('gone-card').style.display = 'none';
+            lastUpdateAt = Date.now();
+            document.getElementById('log').textContent = (data.log || []).filter(Boolean).join('\n');
+            document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
 
-        if (data.error) {
-          document.getElementById('spinner').style.display = 'none';
-          document.getElementById('status-title').textContent = 'Multi-instrument speed run failed';
-          const ec = document.getElementById('error-card');
-          ec.style.display = 'block';
-          ec.textContent = data.error;
-          return;
+            if (data.error) {
+              document.getElementById('spinner').style.display = 'none';
+              document.getElementById('status-title').textContent = 'Multi-instrument speed run failed';
+              const ec = document.getElementById('error-card');
+              ec.style.display = 'block';
+              ec.textContent = data.error;
+              again = null;
+            } else {
+              renderResults(data);
+              if (data.done) {
+                document.getElementById('spinner').style.display = 'none';
+                document.getElementById('status-title').textContent = 'Multi-instrument speed run complete';
+                again = null;
+              }
+            }
+          }
+        } finally {
+          if (again !== null) setTimeout(poll, again);
         }
-
-        renderResults(data);
-
-        if (data.done) {
-          document.getElementById('spinner').style.display = 'none';
-          document.getElementById('status-title').textContent = 'Multi-instrument speed run complete';
-          return;
-        }
-        setTimeout(poll, 2500);
       })
       .catch(() => setTimeout(poll, 4000));
   }

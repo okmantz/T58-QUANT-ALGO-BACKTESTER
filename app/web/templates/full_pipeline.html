@@ -313,6 +313,7 @@
 </div>
 </div>
 
+<script src="/static/prop-presets.js"></script>
 <script>
   const tabs = document.querySelectorAll('#strategy-tabs button');
   const modeInput = document.getElementById('strategy_mode');
@@ -382,7 +383,14 @@
   // above) remains the primary, always-visible path; this is purely an
   // optional shortcut.
   const PROP_PRESETS = {{ (prop_presets_json | default('[]')) | safe }};
+  // v8: badges + the "only show firms that allow algo trading" toggle
+  // (default ON) via the shared helper; plain populate if that file
+  // failed to load.
   (function populatePropPresetDropdown() {
+    if (typeof addAlgoTradingFilter === 'function') {
+      addAlgoTradingFilter('fp_prop_preset_select', PROP_PRESETS);
+      return;
+    }
     const select = document.getElementById('fp_prop_preset_select');
     if (!select) return;
     PROP_PRESETS.forEach((p) => {

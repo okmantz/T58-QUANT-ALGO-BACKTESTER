@@ -50,6 +50,7 @@
     </select>
   </div>
 </div>
+<script src="/static/prop-presets.js"></script>
 <script>
   // Populates the preset dropdown from app.prop.presets (already exposed
   // to every page that renders the main prop-rules form as
@@ -57,16 +58,24 @@
   // Falls back to a plain-text notice if this page doesn't pass that
   // context variable in (e.g. a page that only includes this fragment
   // without also wiring the preset list).
+  // v8: badges + the "only show firms that allow algo trading" toggle
+  // (default ON) come from the shared helper in prop-presets.js; if that
+  // file somehow failed to load, fall back to the old plain populate so
+  // the dropdown still works, just without badges/filter.
   (function () {
     const raw = {{ (prop_presets_json | default('null')) | safe }};
     const select = document.getElementById('prop_preset_select');
     if (!raw || !select) return;
-    raw.forEach((p) => {
-      const opt = document.createElement('option');
-      opt.value = JSON.stringify(p);
-      opt.textContent = p.label;
-      select.appendChild(opt);
-    });
+    if (typeof addAlgoTradingFilter === 'function') {
+      addAlgoTradingFilter('prop_preset_select', raw);
+    } else {
+      raw.forEach((p) => {
+        const opt = document.createElement('option');
+        opt.value = JSON.stringify(p);
+        opt.textContent = p.label;
+        select.appendChild(opt);
+      });
+    }
   })();
 
   window.T58ApplyPropPreset = function (value) {

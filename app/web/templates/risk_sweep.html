@@ -199,17 +199,25 @@
 
 </div>
 </div>
+<script src="/static/prop-presets.js"></script>
 <script>
+  // v8: badges + the "only show firms that allow algo trading" toggle
+  // (default ON) via the shared helper; plain populate if that file
+  // failed to load.
   (function () {
     const raw = {{ (prop_presets_json | default('null')) | safe }};
     const select = document.getElementById('prop_preset_select');
     if (!raw || !select) return;
-    raw.forEach((p) => {
-      const opt = document.createElement('option');
-      opt.value = JSON.stringify(p);
-      opt.textContent = p.label;
-      select.appendChild(opt);
-    });
+    if (typeof addAlgoTradingFilter === 'function') {
+      addAlgoTradingFilter('prop_preset_select', raw);
+    } else {
+      raw.forEach((p) => {
+        const opt = document.createElement('option');
+        opt.value = JSON.stringify(p);
+        opt.textContent = p.label;
+        select.appendChild(opt);
+      });
+    }
   })();
 
   window.T58ApplyPropPreset = function (value) {

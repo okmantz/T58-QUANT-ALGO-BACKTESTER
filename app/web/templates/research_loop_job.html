@@ -32,6 +32,10 @@
   .verdict-DISCARD { color: #999; }
   .verdict-NO_TRADES, .verdict-GENERATION_FAILED { color: #ff8f8f; }
   .verdict-SKIPPED_DUPLICATE { color: var(--amber, #f0b429); }
+  /* v8 (2026-10-05): poll-loop heartbeat -- proves the page is still
+     receiving updates; turns amber when a job stalls. */
+  .heartbeat { font-size: 11px; color: #777; margin: 6px 0; }
+  .heartbeat.stale { color: #ff9f43; }
 </style>
 </head>
 <body>
@@ -50,11 +54,14 @@
 
 <div class="card">
   <h2>Status <span class="badge" id="status-badge">...</span></h2>
+  <div class="heartbeat" id="heartbeat">waiting for first update&hellip;</div>
   <div id="log">Starting&hellip;</div>
   <form method="post" action="/research-loop/job/{{ job_id }}/stop" style="margin-top:10px;">
     <button class="stop-btn" type="submit">Stop</button>
   </form>
 </div>
+
+<div class="error" id="gone-card" style="display:none;"></div>
 
 <div id="best-container"></div>
 
@@ -101,21 +108,52 @@
       `Idea: ${best.idea}</div>`;
   }
 
+  // v8 (2026-10-05): heartbeat -- proves the poll loop is alive and
+  // makes a stalled job obvious instead of silently frozen.
+  let lastUpdateAt = 0;
+  function tickHeartbeat() {
+    const el = document.getElementById('heartbeat');
+    if (!el) return;
+    if (!lastUpdateAt) { el.textContent = 'waiting for first update…'; el.className = 'heartbeat'; return; }
+    const ageS = Math.round((Date.now() - lastUpdateAt) / 1000);
+    el.textContent = ageS < 2 ? 'live — updated just now' : `live — last update ${ageS}s ago`;
+    el.className = 'heartbeat' + (ageS > 20 ? ' stale' : '');
+  }
+  setInterval(tickHeartbeat, 1000);
+
   function poll() {
     fetch(`/research-loop/job/${jobId}/status.json`)
       .then(r => r.json())
       .then(data => {
-        if (!data.found) return;
-        const badge = document.getElementById('status-badge');
-        badge.textContent = data.running ? 'RUNNING' : ('STOPPED' + (data.stopped_reason ? ' (' + data.stopped_reason + ')' : ''));
-        badge.className = 'badge ' + (data.running ? 'running' : 'stopped');
-        document.getElementById('log').textContent = (data.log || []).filter(Boolean).join('\n');
-        document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
+        // v8: the reschedule lives in a finally, so a rendering error
+        // can never silently freeze this page again.
+        let again = 3000;
+        try {
+          if (!data.found) {
+            // The job is gone (server restarted or pruned) -- say so
+            // plainly and keep a slow retry instead of freezing silently.
+            const gc = document.getElementById('gone-card');
+            gc.style.display = 'block';
+            gc.textContent = 'This job is no longer on the server (it may have restarted). ' +
+              'Retrying every 15s in case it comes back.';
+            again = 15000;
+          } else {
+            document.getElementById('gone-card').style.display = 'none';
+            lastUpdateAt = Date.now();
+            const badge = document.getElementById('status-badge');
+            badge.textContent = data.running ? 'RUNNING' : ('STOPPED' + (data.stopped_reason ? ' (' + data.stopped_reason + ')' : ''));
+            badge.className = 'badge ' + (data.running ? 'running' : 'stopped');
+            document.getElementById('log').textContent = (data.log || []).filter(Boolean).join('\n');
+            document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
 
-        renderBest(data.best_iteration);
-        renderIterations(data.iterations || []);
+            renderBest(data.best_iteration);
+            renderIterations(data.iterations || []);
 
-        if (data.running) setTimeout(poll, 3000);
+            if (!data.running) again = null;
+          }
+        } finally {
+          if (again !== null) setTimeout(poll, again);
+        }
       })
       .catch(() => setTimeout(poll, 5000));
   }

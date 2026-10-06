@@ -9,6 +9,12 @@
 <meta name="theme-color" content="#05070a">
 <link rel="stylesheet" href="/static/theme.css">
 <link rel="stylesheet" href="/static/job-theme.css">
+<style>
+  /* v8 (2026-10-05): poll-loop heartbeat -- proves the page is still
+     receiving updates; turns amber when a job stalls. */
+  .heartbeat { font-size: 11px; color: #777; margin: 6px 0; }
+  .heartbeat.stale { color: #ff9f43; }
+</style>
 </head>
 <body>
 <header><h1>T58 Quant Algo Backtester — Multi-Objective Optimization</h1></header>
@@ -24,8 +30,11 @@
 
 <div class="card">
   <h2 id="status-title"><span class="spinner" id="spinner"></span>Multi-objective search running&hellip;</h2>
+  <div class="heartbeat" id="heartbeat">waiting for first update&hellip;</div>
   <div id="log">Starting&hellip;</div>
 </div>
+
+<div class="error" id="gone-card" style="display:none;"></div>
 
 <div class="card" id="sweep-card" style="display:none;">
   <h2>Timeframe sweep -- every timeframe's own Pareto front</h2>
@@ -59,24 +68,47 @@
   const jobId = {{ job_id | tojson }};
   const fmt = (v, d) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d === undefined ? 3 : d);
 
+  // v8 (2026-10-05): heartbeat -- proves the poll loop is alive and
+  // makes a stalled job obvious instead of silently frozen.
+  let lastUpdateAt = 0;
+  function tickHeartbeat() {
+    const el = document.getElementById('heartbeat');
+    if (!el) return;
+    if (!lastUpdateAt) { el.textContent = 'waiting for first update…'; el.className = 'heartbeat'; return; }
+    const ageS = Math.round((Date.now() - lastUpdateAt) / 1000);
+    el.textContent = ageS < 2 ? 'live — updated just now' : `live — last update ${ageS}s ago`;
+    el.className = 'heartbeat' + (ageS > 20 ? ' stale' : '');
+  }
+  setInterval(tickHeartbeat, 1000);
+
   function poll() {
     fetch(`/multi-objective/job/${jobId}/status.json`)
       .then(r => r.json())
       .then(data => {
-        if (!data.found) return;
-        document.getElementById('log').textContent = data.log.filter(Boolean).join('\n');
-        document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
+        // v8: the reschedule lives in a finally, so a rendering error
+        // can never silently freeze this page again.
+        let again = 2000;
+        try {
+          if (!data.found) {
+            const gc = document.getElementById('gone-card');
+            gc.style.display = 'block';
+            gc.textContent = 'This job is no longer on the server (it may have restarted). ' +
+              'Retrying every 15s in case it comes back.';
+            again = 15000;
+          } else {
+            document.getElementById('gone-card').style.display = 'none';
+            lastUpdateAt = Date.now();
+            document.getElementById('log').textContent = data.log.filter(Boolean).join('\n');
+            document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
 
-        if (data.error) {
-          document.getElementById('spinner').style.display = 'none';
-          document.getElementById('status-title').textContent = 'Multi-objective search failed';
-          const ec = document.getElementById('error-card');
-          ec.style.display = 'block';
-          ec.textContent = data.error;
-          return;
-        }
-
-        if (data.done) {
+            if (data.error) {
+              document.getElementById('spinner').style.display = 'none';
+              document.getElementById('status-title').textContent = 'Multi-objective search failed';
+              const ec = document.getElementById('error-card');
+              ec.style.display = 'block';
+              ec.textContent = data.error;
+              again = null;
+            } else if (data.done) {
           document.getElementById('spinner').style.display = 'none';
           document.getElementById('status-title').textContent = 'Multi-objective search complete';
 
@@ -117,10 +149,13 @@
             const links = document.getElementById('s-report-links');
             links.innerHTML = '';
             if (s.report_html) links.innerHTML += `<a href="${s.report_html}" target="_blank">Open full report &rarr;</a>`;
+            }
+            again = null;
           }
-          return;
         }
-        setTimeout(poll, 2000);
+        } finally {
+          if (again !== null) setTimeout(poll, again);
+        }
       })
       .catch(() => setTimeout(poll, 3000));
   }

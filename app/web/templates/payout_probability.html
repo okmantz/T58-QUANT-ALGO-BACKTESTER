@@ -278,6 +278,7 @@
 </div>
 </div>
 
+<script src="/static/prop-presets.js"></script>
 <script>
   const tabs = document.querySelectorAll('#strategy-tabs button');
   const modeInput = document.getElementById('strategy_mode');
@@ -286,7 +287,16 @@
   const SAVED_STRATEGIES = {{ saved_strategies_json | safe }};
   const PROP_PRESETS = {{ prop_presets_json | safe }};
 
+  // v8: badges + the "only show firms that allow algo trading" toggle
+  // (default ON) via the shared helper; plain populate if that file
+  // failed to load. Options keep their ORIGINAL indices as values even
+  // when the toggle hides some firms, so applyPropPreset()'s
+  // PROP_PRESETS[parseInt(value)] lookup stays correct.
   (function populatePropPresets() {
+    if (typeof addAlgoTradingFilter === 'function') {
+      addAlgoTradingFilter('prop_preset_select', PROP_PRESETS, (p, i) => String(i));
+      return;
+    }
     const select = document.getElementById('prop_preset_select');
     PROP_PRESETS.forEach((p, i) => {
       const opt = document.createElement('option');
@@ -307,6 +317,10 @@
     document.getElementById('pp_daily_loss').value = p.daily_loss_limit_pct;
     document.getElementById('pp_max_dd').value = p.max_drawdown_pct;
     note.textContent = 'As of ' + p.as_of + ': ' + p.source_note;
+    // v8: surface the firm's algo-trading policy right next to the
+    // preset note, so a pick from the unfiltered list still shows the
+    // flag before the person runs anything under these rules.
+    if (p.algo_policy_note) note.textContent += ' Algo policy: ' + p.algo_policy_note;
   }
 
 

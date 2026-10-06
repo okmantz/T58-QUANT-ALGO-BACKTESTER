@@ -22,7 +22,10 @@
   .badge.running { background: #123b1c; color: #7ee08a; }
   .badge.stopped { background: #262626; color: #999; }
   .stop-btn { padding: 10px 18px; border-radius: 10px; border: 1px solid #6b2323; background: #3a1616; color: #ffb4b4; font-size: 14px; font-weight: 700; }
-  #log { background: #0d0d0d; border: 1px solid var(--border-light); border-radius: 8px; padding: 10px; font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: #ccc; max-height: 180px; overflow-y: auto; white-space: pre-wrap; }
+  .log-box { background: #0d0d0d; border: 1px solid var(--border-light); border-radius: 8px; padding: 10px; font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: #ccc; max-height: 180px; overflow-y: auto; white-space: pre-wrap; }
+  .progress-banner { font-size: 12px; color: #7ee08a; background: #0f1f14; border: 1px solid #1d4028; border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; font-family: ui-monospace, Menlo, monospace; }
+  .heartbeat { font-size: 11px; color: #777; margin-top: 6px; }
+  .heartbeat.stale { color: #ff9f43; }
   table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
   th, td { padding: 6px 4px; border-bottom: 1px solid var(--border-light); text-align: left; }
   th { color: #888; font-weight: 600; text-transform: uppercase; font-size: 10px; }
@@ -50,7 +53,10 @@
   <form method="post" action="/evolution/multi-instrument/job/{{ group_id }}/stop">
     <button class="stop-btn" type="submit">Stop all instruments</button>
   </form>
+  <div class="heartbeat" id="heartbeat">waiting for first update&hellip;</div>
 </div>
+
+<div class="error" id="gone-card" style="display:none;"></div>
 
 <div id="instrument-cards"></div>
 
@@ -63,6 +69,18 @@
   const groupId = {{ group_id | tojson }};
   const fmt = (v, d) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d === undefined ? 2 : d);
   const money = (v) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : '$' + Number(v).toLocaleString(undefined, {maximumFractionDigits: 0});
+  // v8 (2026-10-05): heartbeat -- proves the poll loop is alive and makes
+  // a stalled job obvious instead of silently frozen.
+  let lastUpdateAt = 0;
+  function tickHeartbeat() {
+    const el = document.getElementById('heartbeat');
+    if (!el) return;
+    if (!lastUpdateAt) { el.textContent = 'waiting for first update…'; el.className = 'heartbeat'; return; }
+    const ageS = Math.round((Date.now() - lastUpdateAt) / 1000);
+    el.textContent = ageS < 2 ? 'live — updated just now' : `live — last update ${ageS}s ago`;
+    el.className = 'heartbeat' + (ageS > 20 ? ' stale' : '');
+  }
+  setInterval(tickHeartbeat, 1000);
 
   function promote(label, candidateId, btn) {
     btn.disabled = true;
@@ -83,41 +101,96 @@
     const div = document.createElement('div');
     div.className = 'card';
     if (inst.error) {
-      div.innerHTML = `<h2>${label}</h2><p style="color:#ff8f8f;font-size:13px;">${inst.error}</p>`;
+      const h = document.createElement('h2');
+      h.textContent = label;
+      const p = document.createElement('p');
+      p.style.cssText = 'color:#ff8f8f;font-size:13px;';
+      p.textContent = inst.error;
+      div.append(h, p);
       return div;
     }
-    const badge = inst.running
+    // NOTE: the label is only ever inserted as TEXT content below, never
+    // into a selector or an inline handler string -- v8 fix for the bug
+    // where querySelector('#log-' + label) threw a SyntaxError on every
+    // poll for labels with CSS-special characters (e.g. "ES1!/15"),
+    // leaving this page showing nothing but the stop button.
+    const h = document.createElement('h2');
+    h.append(document.createTextNode(label + ' '));
+    const b = document.createElement('span');
+    b.innerHTML = inst.running
       ? '<span class="badge running">RUNNING</span>' : '<span class="badge stopped">STOPPED</span>';
-    let html = `<h2>${label} ${badge}</h2>`;
-    html += `<p style="font-size:12px;color:#999;">Generation ${inst.generation} — leaderboard: ${inst.leaderboard_size}</p>`;
+    h.append(b);
+    div.append(h);
+
+    // v8: live per-instrument progress banner (phase, candidates, rate).
+    const prog = inst.progress;
+    if (prog && prog.banner) {
+      const pb = document.createElement('div');
+      pb.className = 'progress-banner';
+      let txt = prog.banner;
+      if (prog.best_fitness !== null && prog.best_fitness !== undefined) {
+        txt += ` · best fitness ${Number(prog.best_fitness).toFixed(2)}`;
+      }
+      pb.textContent = txt;
+      div.append(pb);
+    }
+
+    const meta = document.createElement('p');
+    meta.style.cssText = 'font-size:12px;color:#999;';
+    let metaTxt = `Generation ${inst.generation} — leaderboard: ${inst.leaderboard_size}`;
+    const lb0 = (inst.leaderboard || [])[0];
+    if (lb0 && lb0.fitness && lb0.fitness.final_score !== undefined && lb0.fitness.final_score !== null) {
+      metaTxt += ` — best fitness ${Number(lb0.fitness.final_score).toFixed(2)}`;
+    }
+    meta.textContent = metaTxt;
+    div.append(meta);
+
     const d = inst.distribution_summary;
     if (d) {
       const pct = (v) => (v === null || v === undefined || isNaN(v)) ? '—' : `${v.toFixed(1)}%`;
-      html += `<div style="font-size:12px;color:#999;background:#161b22;border:1px solid #2a323d;border-radius:6px;padding:8px 10px;margin-bottom:8px;">` +
-        `~${d.candidates_tested} tested, ${d.candidates_with_trades} with trades &mdash; ` +
+      const ds = document.createElement('div');
+      ds.style.cssText = 'font-size:12px;color:#999;background:#161b22;border:1px solid #2a323d;border-radius:6px;padding:8px 10px;margin-bottom:8px;';
+      ds.textContent =
+        `~${d.candidates_tested} tested, ${d.candidates_with_trades} with trades — ` +
         `Eval pass median/best: ${pct(d.eval_pass_probability.median)} / ${pct(d.eval_pass_probability.best)}, ` +
         `Payout median/best: ${pct(d.first_payout_probability.median)} / ${pct(d.first_payout_probability.best)}, ` +
-        `${d.robust_candidates} robust candidate(s)</div>`;
+        `${d.robust_candidates} robust candidate(s)`;
+      div.append(ds);
     }
-    html += `<div id="log-${label.replace('/', '-')}"></div>`;
+    // v8: the log box is built with a direct DOM reference -- no
+    // label-derived selector, so no label can ever break this lookup.
+    const logBox = document.createElement('div');
+    logBox.className = 'log-box';
+    logBox.textContent = (inst.log || []).slice(-40).join('\n') || 'No activity yet.';
+    logBox.scrollTop = logBox.scrollHeight;
+    div.append(logBox);
     if ((inst.leaderboard || []).length) {
-      html += `<div class="table-scroll"><table><thead><tr><th>#</th><th>Candidate</th><th>Net profit</th><th>PF</th><th>Eval pass %</th><th></th></tr></thead><tbody>`;
+      const wrap = document.createElement('div');
+      wrap.className = 'table-scroll';
+      const table = document.createElement('table');
+      const thead = document.createElement('thead');
+      thead.innerHTML = '<tr><th>#</th><th>Candidate</th><th>Net profit</th><th>PF</th><th>Eval pass %</th><th></th></tr>';
+      table.append(thead);
+      const tbody = document.createElement('tbody');
       inst.leaderboard.forEach((c, i) => {
         const stats = c.stats || {};
         const mc = c.mc_summary || {};
-        html += `<tr><td>${i + 1}</td><td>${c.candidate_id}</td><td>${money(stats.net_profit)}</td>` +
-          `<td>${fmt(stats.profit_factor)}</td><td>${fmt(mc.evaluation_pass_probability, 1)}%</td>` +
-          `<td><button class="lb-promote-btn" onclick="promote('${label}', '${c.candidate_id}', this)">Promote</button></td></tr>`;
+        const tr = document.createElement('tr');
+        [`${i + 1}`, c.candidate_id, money(stats.net_profit),
+         fmt(stats.profit_factor), fmt(mc.evaluation_pass_probability, 1) + '%'
+        ].forEach(t => { const td = document.createElement('td'); td.textContent = t; tr.append(td); });
+        const actTd = document.createElement('td');
+        const btn = document.createElement('button');
+        btn.className = 'lb-promote-btn';
+        btn.textContent = 'Promote';
+        btn.addEventListener('click', () => promote(label, c.candidate_id, btn));
+        actTd.append(btn);
+        tr.append(actTd);
+        tbody.append(tr);
       });
-      html += `</tbody></table></div>`;
-    }
-    div.innerHTML = html;
-    const logDiv = div.querySelector(`#log-${label.replace('/', '-')}`);
-    if (logDiv) {
-      const pre = document.createElement('div');
-      pre.id = 'log';
-      pre.textContent = (inst.log || []).slice(-40).join('\n') || 'No activity yet.';
-      logDiv.appendChild(pre);
+      table.append(tbody);
+      wrap.append(table);
+      div.append(wrap);
     }
     return div;
   }
@@ -126,19 +199,36 @@
     fetch(`/evolution/multi-instrument/job/${groupId}/status.json`)
       .then(r => r.json())
       .then(data => {
-        if (!data.found) return;
-        const badge = document.getElementById('status-badge');
-        badge.textContent = data.running ? 'RUNNING' : 'STOPPED';
-        badge.className = 'badge ' + (data.running ? 'running' : 'stopped');
+        // v8: the reschedule below lives in a finally, so a rendering
+        // error can never silently freeze this page again.
+        let again = 3000;
+        try {
+          if (!data.found) {
+            // The group is gone (server restarted or pruned) -- say so
+            // plainly and keep a slow retry instead of freezing silently.
+            const gc = document.getElementById('gone-card');
+            gc.style.display = 'block';
+            gc.textContent = 'This group is no longer on the server (it may have restarted). ' +
+              'Retrying every 15s in case it comes back; start a new group if it does not.';
+            again = 15000;
+          } else {
+            document.getElementById('gone-card').style.display = 'none';
+            lastUpdateAt = Date.now();
+            const badge = document.getElementById('status-badge');
+            badge.textContent = data.running ? 'RUNNING' : 'STOPPED';
+            badge.className = 'badge ' + (data.running ? 'running' : 'stopped');
 
-        const container = document.getElementById('instrument-cards');
-        container.innerHTML = '';
-        (data.labels || []).forEach(label => {
-          const inst = (data.instruments || {})[label];
-          if (inst) container.appendChild(renderInstrument(label, inst));
-        });
-
-        setTimeout(poll, 3000);
+            const container = document.getElementById('instrument-cards');
+            container.innerHTML = '';
+            (data.labels || []).forEach(label => {
+              const inst = (data.instruments || {})[label];
+              if (inst) container.appendChild(renderInstrument(label, inst));
+            });
+            if (!data.running) again = null;
+          }
+        } finally {
+          if (again !== null) setTimeout(poll, again);
+        }
       })
       .catch(() => setTimeout(poll, 5000));
   }

@@ -334,9 +334,17 @@
 </div>
 </div>
 
+<script src="/static/prop-presets.js"></script>
 <script>
   const EVO_PROP_PRESETS = {{ (prop_presets_json | default('[]')) | safe }};
+  // v8: badges + the "only show firms that allow algo trading" toggle
+  // (default ON) via the shared helper; plain populate if that file
+  // failed to load.
   (function populateEvoPropPresetDropdown() {
+    if (typeof addAlgoTradingFilter === 'function') {
+      addAlgoTradingFilter('evo_prop_preset_select', EVO_PROP_PRESETS);
+      return;
+    }
     const select = document.getElementById('evo_prop_preset_select');
     if (!select) return;
     EVO_PROP_PRESETS.forEach((p) => {
