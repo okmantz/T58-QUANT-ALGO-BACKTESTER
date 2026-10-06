@@ -125,22 +125,30 @@ VALIDATE_TIMEOUT_S = 6.0
 # compare (UPPERCASED with surrounding whitespace stripped -- see
 # _is_master_key).
 #
-# v7 (Oct 2026): the old hardcoded _DEFAULT_MASTER_KEY_HASH is GONE --
-# a hash baked into a public repo is un-revocable by design, so the
-# default is now EMPTY. The hash comes from build-time configuration:
+# Resolution order (highest wins):
 #   1. T58_MASTER_LICENSE_KEY_HASH environment variable (when set) --
-#      used directly at runtime AND read by the release workflows at
-#      build time to bake the hash into build_config.py for the .exe
-#      (see license_server/DEPLOY.md step 7 -- Owen sets this per
-#      release, never committed to the repo).
-#   2. app/licensing/build_config.py MASTER_LICENSE_KEY_HASH (the
-#      build-time-baked value).
-#   3. Nothing -- and then the master-key path is simply UNAVAILABLE in
-#      this build, with the clear hint below on every master-key-shaped
-#      attempt. Never silently insecure: an unset hash can never
-#      accidentally validate anything.
+#      runtime override AND the rotation path: point it at a new hash and
+#      every build honors the new key immediately, no rebuild needed.
+#   2. app/licensing/build_config.py MASTER_LICENSE_KEY_HASH (baked at
+#      build time from the T58_MASTER_LICENSE_KEY_HASH repo secret -- see
+#      license_server/DEPLOY.md step 7; never committed to the repo).
+#   3. _DEFAULT_MASTER_KEY_HASH below -- compiled into every build, so the
+#      owner's key works with zero configuration: from-source dev runs,
+#      CI-built .exes, any machine, no env vars, no server.
 #
-# Rotation = new hash -> rebuild -> re-ship; old builds keep honoring
+# On the compiled-in default living in a public repo (Oct 2026 -- Owen's
+# explicit direction, reversing the v7 "no baked default" call): a
+# SHA-256 hash is not the key. Recovering the key from the hash means a
+# preimage attack against a 192-bit-entropy key -- computationally
+# infeasible. What IS true, and worth knowing: anyone reading the repo
+# can see which hash the builds accept, and already-shipped builds keep
+# honoring their baked hash until replaced -- but that was already true
+# of the build_config.py path, so this default is no worse on that axis.
+# The plaintext key itself never appears in the repo, in any
+# build_config, or in any log.
+#
+# Rotation = new key -> new hash -> set the env var (instant, no rebuild)
+# or set the repo secret and rebuild -> re-ship; old builds keep honoring
 # their old hash until they are replaced.
 def _baked_master_key_hash() -> str:
     """The build-time master-key hash from app/licensing/build_config.py,
@@ -153,16 +161,26 @@ def _baked_master_key_hash() -> str:
     return str(getattr(build_config, "MASTER_LICENSE_KEY_HASH", "") or "").strip()
 
 
+# SHA-256 hex digest of the owner's master key -- the key itself, uppercased
+# and stripped of surrounding whitespace, then hashed, exactly as
+# _is_master_key() checks it. This is the zero-configuration fallback so
+# the master key activates offline in every build with nothing to set up.
+_DEFAULT_MASTER_KEY_HASH = "fcfe701fc0367a1328746e744805a96d76e8b2c1a06638908a0fa6c92a327ea0"
+
+
 def _master_key_hash() -> str | None:
     """The effective master-key hash, or None if none is configured.
     Precedence: T58_MASTER_LICENSE_KEY_HASH env var (when set) >
     build_config.MASTER_LICENSE_KEY_HASH (baked at build time, when set) >
-    None (master-key path unavailable in this build)."""
+    _DEFAULT_MASTER_KEY_HASH (compiled in -- the owner's key works with
+    zero configuration in every build)."""
     env_value = os.environ.get("T58_MASTER_LICENSE_KEY_HASH", "").strip()
     if env_value:
         return env_value
     baked = _baked_master_key_hash()
-    return baked or None
+    if baked:
+        return baked
+    return _DEFAULT_MASTER_KEY_HASH or None
 
 
 def _is_master_key(license_key: str) -> bool:
@@ -428,9 +446,10 @@ def activate(email: str, license_key: str, remember: bool = True) -> tuple[bool,
 
     if _is_master_key(license_key):
         # Permanent, offline activation -- no server contacted, no device
-        # binding, no expiry. The hash lives ONLY in the
-        # T58_MASTER_LICENSE_KEY_HASH environment variable (see the
-        # comment on _master_key_hash above).
+        # binding, no expiry. The hash comes from the T58_MASTER_LICENSE_KEY_HASH
+        # env var, build_config.py, or the compiled-in default (see the
+        # comment on _master_key_hash above) -- the plaintext key is never
+        # stored anywhere by this module.
         persist(LicenseState(
             email=email, license_key=license_key, device_id=device_id(), status="active",
             expires_at=None, last_validated_at=datetime.now(timezone.utc).isoformat(),
