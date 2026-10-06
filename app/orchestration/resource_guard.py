@@ -229,6 +229,12 @@ JOB_FULL_PIPELINE = "Full Pipeline"
 JOB_SPEED_RUN = "Speed Run"
 JOB_MULTI_INSTRUMENT_SPEED_RUN = "Multi-Instrument Speed Run"
 JOB_FORGE = "Forge Strategy"
+# v9 (2026-10-06): this slot was missing entirely -- app/web/server.py's
+# /quick-optimize/start route (and the v9 /recovery/quick-optimize route)
+# referenced JOB_QUICK_OPTIMIZE, which was never defined, so EVERY Quick
+# Optimize start raised NameError. The web test suite never caught it
+# because no test POSTs to /quick-optimize/start.
+JOB_QUICK_OPTIMIZE = "Quick Optimize"
 
 # UPGRADE (Sep 2026 UI pass, round 2): these five don't spin up their own
 # ProcessPoolExecutor the way the four above do, but Walk-Forward Opt/GA in
