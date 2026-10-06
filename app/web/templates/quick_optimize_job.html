@@ -221,6 +221,7 @@
               document.getElementById('s-holdout-note').textContent = s.holdout_note || '';
             }
           }
+          if (window.renderRecoveryPanel) window.renderRecoveryPanel(data);
           return;
         }
         setTimeout(poll, 2000);
@@ -234,6 +235,7 @@
   }
 </script>
 {% endif %}
+{% include '_recovery_panel.html' %}
 {% include '_project_chat_embed.html' %}
 </body>
 </html>

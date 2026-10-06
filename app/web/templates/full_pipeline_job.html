@@ -181,6 +181,7 @@
               }, 0);
             }
           }
+          if (window.renderRecoveryPanel) window.renderRecoveryPanel(data);
           return;  // stop polling
         }
         setTimeout(poll, 2000);
@@ -194,6 +195,7 @@
   }
 </script>
 {% endif %}
+{% include '_recovery_panel.html' %}
 {% include '_project_chat_embed.html' %}
 </body>
 </html>

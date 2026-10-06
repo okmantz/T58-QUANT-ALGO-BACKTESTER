@@ -578,6 +578,7 @@
       .then(data => {
         const badge = document.getElementById('status-badge');
         badge.textContent = data.running ? 'RUNNING' : 'STOPPED';
+        if (data.started && !data.running && window.renderRecoveryPanel) window.renderRecoveryPanel(data);
         badge.className = 'badge ' + (data.running ? 'running' : 'stopped');
         document.getElementById('log').textContent = (data.log || []).slice(-100).join('\n') || 'No activity yet.';
         document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
@@ -685,5 +686,6 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 </script>
 
+{% include '_recovery_panel.html' %}
 </body>
 </html>

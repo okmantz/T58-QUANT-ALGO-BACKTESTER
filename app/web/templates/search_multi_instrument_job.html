@@ -284,6 +284,7 @@
               if (data.done) {
                 document.getElementById('spinner').style.display = 'none';
                 document.getElementById('status-title').textContent = 'Multi-instrument search complete';
+                if (window.renderRecoveryPanel) window.renderRecoveryPanel(data);
                 again = null;
               }
             }
@@ -301,5 +302,6 @@
   }
 </script>
 {% endif %}
+{% include '_recovery_panel.html' %}
 </body>
 </html>

@@ -852,5 +852,41 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 </script>
 
+{# v9: recovery-panel deep links (?from_recovery=1 + settings) pre-fill this form. #}
+{% if recovery_prefill_json %}
+<script>
+(function () {
+  try {
+    const prefill = JSON.parse({{ recovery_prefill_json | tojson }});
+    const fields = {
+      family: 'select[name="family"]', max_candidates: 'input[name="max_candidates"]',
+      seed: 'input[name="seed"]', candidate_source: 'select[name="candidate_source"]',
+      grammar_candidates_per_survivor: 'input[name="grammar_candidates_per_survivor"]',
+      ga_population: 'input[name="ga_population"]', ga_generations: 'input[name="ga_generations"]',
+      stage1_top_n: 'input[name="stage1_top_n"]', cost_stress_multiplier: 'input[name="cost_stress_multiplier"]',
+      stop_mult_scale: 'input[name="stop_mult_scale"]', max_hold_bars: 'input[name="max_hold_bars"]',
+      session_filter: 'input[name="session_filter"]'
+    };
+    Object.keys(fields).forEach(k => {
+      if (prefill[k] === undefined) return;
+      const el = document.querySelector(fields[k]);
+      if (el) { el.value = prefill[k]; el.dispatchEvent(new Event('change')); }
+    });
+    if (prefill.dataset) {
+      const ds = document.querySelector('select[name="dataset"]');
+      if (ds) {
+        const opt = Array.from(ds.options).find(o => o.value === prefill.dataset || o.text === prefill.dataset);
+        if (opt) { ds.value = opt.value; ds.dispatchEvent(new Event('change')); }
+      }
+    }
+    const banner = document.createElement('div');
+    banner.style.cssText = 'margin:10px 0;padding:10px 12px;border-radius:8px;background:#1a2530;color:#a8c8e8;font-size:13px;';
+    banner.textContent = 'Settings pre-filled from the "What to do next" recovery panel. Review and press Start Search.';
+    document.querySelector('form').prepend(banner);
+  } catch (e) { console.warn('recovery prefill failed:', e); }
+})();
+</script>
+{% endif %}
+
 </body>
 </html>

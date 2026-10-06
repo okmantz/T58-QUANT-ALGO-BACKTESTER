@@ -1,0 +1,176 @@
+{# v9: "What to do next" recovery panel -- shared partial.
+   Include once per job page, then call renderRecoveryPanel(data) from the
+   page's poll() when data.recovery is present. Expects data.recovery to be
+   the RecoveryPlan dict from app/funnel/recovery.py (see the status.json
+   routes). All rendering is defensive: a malformed plan never breaks the
+   page's poll loop. #}
+<div id="recovery-panel" style="display:none; margin-top:14px; border:1px solid var(--border-light); border-radius:10px; padding:14px; background:#101418;">
+  <div style="font-weight:700; font-size:15px; margin-bottom:6px;">&#129514; What to do next</div>
+  <div id="recovery-headline" style="font-size:13px; color:#ddd; margin-bottom:8px;"></div>
+  <div id="recovery-gate" style="font-size:12px; color:#9ab; margin-bottom:10px;"></div>
+  <div id="recovery-actions"></div>
+</div>
+<script>
+(function () {
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function searchPrefillUrl(searchCfg) {
+    // Deep-link to Search Lab with the prescribed settings pre-filled.
+    // The /search route reads these query args (v9).
+    const q = new URLSearchParams();
+    const map = {
+      family: 'family', max_candidates: 'max_candidates', seed: 'seed',
+      candidate_source: 'candidate_source',
+      grammar_candidates_per_survivor: 'grammar_candidates_per_survivor',
+      ga_population: 'ga_population', ga_generations: 'ga_generations',
+      stage1_top_n: 'stage1_top_n', cost_stress_multiplier: 'cost_stress_multiplier',
+      stop_mult_scale: 'stop_mult_scale', max_hold_bars: 'max_hold_bars',
+      session_filter: 'session_filter'
+    };
+    for (const [k, arg] of Object.entries(map)) {
+      if (searchCfg[k] !== undefined && searchCfg[k] !== null && searchCfg[k] !== '') {
+        q.set(arg, searchCfg[k]);
+      }
+    }
+    if (searchCfg.dataset_label) q.set('dataset', searchCfg.dataset_label);
+    q.set('from_recovery', '1');
+    return '/search?' + q.toString();
+  }
+
+  function evoPrefillUrl(evoCfg) {
+    const q = new URLSearchParams();
+    if (evoCfg.dataset_label) q.set('dataset', evoCfg.dataset_label);
+    if (evoCfg.population_size) q.set('population_size', evoCfg.population_size);
+    if (evoCfg.max_generations) q.set('max_generations', evoCfg.max_generations);
+    if (evoCfg.seed) q.set('seed', evoCfg.seed);
+    q.set('from_recovery', '1');
+    return '/evolution?' + q.toString();
+  }
+
+  function startRecoveryQuickOptimize(btn, action) {
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = 'Starting...';
+    fetch('/recovery/quick-optimize', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        strategy_ref: action.params.strategy_ref || {},
+        dataset_label: action.params.dataset_label || '',
+        risk: action.params.risk || {},
+        rules: action.params.rules || {},
+        qo_cfg: action.params.qo_cfg || {}
+      })
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.ok && data.job_url) {
+          window.location.href = data.job_url;
+        } else {
+          btn.disabled = false;
+          btn.textContent = orig;
+          alert('Could not start Quick Optimize: ' + (data.error || 'unknown error'));
+        }
+      })
+      .catch(err => {
+        btn.disabled = false;
+        btn.textContent = orig;
+        alert('Could not start Quick Optimize: ' + err);
+      });
+  }
+
+  window.renderRecoveryPanel = function (data) {
+    try {
+      const panel = document.getElementById('recovery-panel');
+      if (!panel) return;
+      const rec = data && data.recovery;
+      if (!rec || !rec.actions || !rec.actions.length) {
+        panel.style.display = 'none';
+        return;
+      }
+      document.getElementById('recovery-headline').textContent = rec.headline || '';
+      const gateEl = document.getElementById('recovery-gate');
+      if (rec.gate_name && rec.gate_required != null && rec.gate_actual != null) {
+        const short = rec.margin != null ? ` \u2014 short by ${Number(rec.margin).toFixed(1)}` : '';
+        gateEl.textContent = `Gate: ${rec.gate_name} \u2014 required ${rec.gate_required}, got ${Number(rec.gate_actual).toFixed(1)}${short}.`;
+        gateEl.style.display = 'block';
+      } else {
+        gateEl.style.display = 'none';
+      }
+      const box = document.getElementById('recovery-actions');
+      box.innerHTML = '';
+      rec.actions.forEach((action, i) => {
+        const card = document.createElement('div');
+        card.style.cssText = 'border:1px solid var(--border-light); border-radius:8px; padding:10px 12px; margin-bottom:8px; background:#0d1117;';
+        const head = document.createElement('div');
+        head.style.cssText = 'font-weight:600; font-size:13px; margin-bottom:4px;';
+        head.textContent = `${i + 1}. ${action.title || 'Next step'}`;
+        const why = document.createElement('div');
+        why.style.cssText = 'font-size:12px; color:#aab; margin-bottom:8px;';
+        why.textContent = action.rationale || '';
+        card.appendChild(head);
+        card.appendChild(why);
+        const params = action.params || {};
+        if (action.kind === 'quick_optimize') {
+          const btn = document.createElement('button');
+          btn.className = 'promote-btn';
+          btn.textContent = '\u26a1 Send to Quick Optimize with these settings';
+          btn.onclick = () => startRecoveryQuickOptimize(btn, action);
+          card.appendChild(btn);
+        } else if (action.kind === 'new_search' && params.search_cfg) {
+          const a = document.createElement('a');
+          a.href = searchPrefillUrl(params.search_cfg);
+          a.className = 'promote-btn';
+          a.style.cssText = 'display:inline-block; text-decoration:none; padding:6px 12px;';
+          a.textContent = '\u2192 Open Search Lab with these settings pre-filled';
+          card.appendChild(a);
+        } else if (action.kind === 'new_evolution' && params.evo_cfg) {
+          const a = document.createElement('a');
+          a.href = evoPrefillUrl(params.evo_cfg);
+          a.className = 'promote-btn';
+          a.style.cssText = 'display:inline-block; text-decoration:none; padding:6px 12px;';
+          a.textContent = '\u2192 Open Evolution Lab with these settings pre-filled';
+          card.appendChild(a);
+        } else if (action.kind === 'rerun_pipeline') {
+          const a = document.createElement('a');
+          a.href = '/full-pipeline' + (params.dataset_label ? `?dataset=${encodeURIComponent(params.dataset_label)}` : '');
+          a.className = 'promote-btn';
+          a.style.cssText = 'display:inline-block; text-decoration:none; padding:6px 12px;';
+          a.textContent = '\u2192 Open Full Pipeline';
+          card.appendChild(a);
+        } else if (action.kind === 'download_data') {
+          const a = document.createElement('a');
+          a.href = '/data';
+          a.className = 'promote-btn';
+          a.style.cssText = 'display:inline-block; text-decoration:none; padding:6px 12px;';
+          a.textContent = '\u2192 Open Market Data downloader';
+          card.appendChild(a);
+        } else if (action.kind === 'validate') {
+          const a = document.createElement('a');
+          a.href = '/validate';
+          a.className = 'promote-btn';
+          a.style.cssText = 'display:inline-block; text-decoration:none; padding:6px 12px;';
+          a.textContent = '\u2192 Open Validate hub';
+          card.appendChild(a);
+        } else if (action.kind === 'deploy_checklist') {
+          const a = document.createElement('a');
+          a.href = '/deploy';
+          a.className = 'promote-btn';
+          a.style.cssText = 'display:inline-block; text-decoration:none; padding:6px 12px;';
+          a.textContent = '\u2192 Open deployment checklist';
+          card.appendChild(a);
+        }
+        // manual_fix / promote kinds render as text-only guidance.
+        box.appendChild(card);
+      });
+      panel.style.display = 'block';
+    } catch (e) {
+      // A broken recovery panel must never break the page's poll loop.
+      console.warn('recovery panel render failed:', e);
+    }
+  };
+})();
+</script>

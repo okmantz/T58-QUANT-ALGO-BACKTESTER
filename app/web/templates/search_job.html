@@ -317,6 +317,7 @@
             }
           }
           renderLeaderboard(data.leaderboard || []);
+          if (window.renderRecoveryPanel) window.renderRecoveryPanel(data);
           return;  // stop polling
         }
         setTimeout(poll, 1500);
@@ -330,6 +331,7 @@
   }
 </script>
 {% endif %}
+{% include '_recovery_panel.html' %}
 {% include '_project_chat_embed.html' %}
 </body>
 </html>
