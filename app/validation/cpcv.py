@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import itertools
 import math
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -252,6 +253,43 @@ class PBOResult:
         return dict(self.__dict__)
 
 
+def _evaluate_pbo_path(task: dict):
+    """One CSCV path of compute_pbo: rank every candidate in-sample and
+    out-of-sample. Top-level so ProcessPoolExecutor can pickle it.
+    Returns (path_idx, is_vals, oos_vals), or None when the path's
+    slices have too few bars."""
+    df = task["df"]
+    bounds = task["bounds"]
+    embargo = task["embargo"]
+    n = len(df)
+    test_group_set = set(task["test_groups"])
+    test_frames, train_frames = [], []
+    for g, (lo, hi) in enumerate(bounds):
+        if g in test_group_set:
+            test_frames.append(_slice_with_embargo(df, lo, hi, embargo, n))
+        else:
+            train_frames.append(_slice_with_embargo(df, lo, hi, embargo, n))
+    test_df = pd.concat(test_frames, ignore_index=True) if test_frames else df.iloc[0:0]
+    train_df = pd.concat(train_frames, ignore_index=True) if train_frames else df.iloc[0:0]
+    if len(test_df) < 5 or len(train_df) < 10:
+        return None
+
+    is_vals, oos_vals = [], []
+    for spec in task["candidate_specs"]:
+        try:
+            train_strategy = build_strategy_from_spec(spec, task["tmp_dir"])
+            test_strategy = build_strategy_from_spec(spec, task["tmp_dir"])
+        except StrategySpaceError:
+            is_vals.append(0.0)
+            oos_vals.append(0.0)
+            continue
+        train_bt = run_backtest(train_df, train_strategy, task["risk"])
+        test_bt = run_backtest(test_df, test_strategy, task["risk"])
+        is_vals.append(_metric_value(train_bt.statistics.to_dict(), task["metric"], train_bt.trades, task["prop_rules"], task["mc_cfg"]))
+        oos_vals.append(_metric_value(test_bt.statistics.to_dict(), task["metric"], test_bt.trades, task["prop_rules"], task["mc_cfg"]))
+    return task["path_idx"], is_vals, oos_vals
+
+
 def compute_pbo(
     df: pd.DataFrame,
     candidate_specs: list[dict],
@@ -317,32 +355,43 @@ def compute_pbo(
         oos_matrix = np.zeros((len(all_combos), n_candidates))
         valid_path_count = 0
 
-        for path_idx, test_groups in enumerate(all_combos):
-            test_group_set = set(test_groups)
-            test_frames, train_frames = [], []
-            for g, (lo, hi) in enumerate(bounds):
-                if g in test_group_set:
-                    test_frames.append(_slice_with_embargo(df, lo, hi, embargo, n))
-                else:
-                    train_frames.append(_slice_with_embargo(df, lo, hi, embargo, n))
-            test_df = pd.concat(test_frames, ignore_index=True) if test_frames else df.iloc[0:0]
-            train_df = pd.concat(train_frames, ignore_index=True) if train_frames else df.iloc[0:0]
-            if len(test_df) < 5 or len(train_df) < 10:
-                continue
+        # SPEED (v9.4): every path is independent (fresh strategy
+        # builds, read-only slices, fixed-seed Monte Carlo), so paths
+        # evaluate across a process pool. Results are re-keyed by
+        # path_idx, making the aggregate bit-identical to the serial
+        # loop; any pool failure falls back to serial for ALL paths.
+        tasks = [
+            {
+                "path_idx": _pi, "df": df, "bounds": bounds,
+                "embargo": embargo, "test_groups": _tg,
+                "candidate_specs": candidate_specs, "risk": risk,
+                "prop_rules": prop_rules, "mc_cfg": mc_cfg,
+                "metric": metric, "tmp_dir": tmp_dir,
+            }
+            for _pi, _tg in enumerate(all_combos)
+        ]
+        path_results: list = [None] * len(tasks)
+        if len(tasks) > 1:
+            try:
+                from concurrent.futures import ProcessPoolExecutor
 
-            is_vals, oos_vals = [], []
-            for c_idx, spec in enumerate(candidate_specs):
-                try:
-                    train_strategy = build_strategy_from_spec(spec, tmp_dir)
-                    test_strategy = build_strategy_from_spec(spec, tmp_dir)
-                except StrategySpaceError:
-                    is_vals.append(0.0)
-                    oos_vals.append(0.0)
-                    continue
-                train_bt = run_backtest(train_df, train_strategy, risk)
-                test_bt = run_backtest(test_df, test_strategy, risk)
-                is_vals.append(_metric_value(train_bt.statistics.to_dict(), metric, train_bt.trades, prop_rules, mc_cfg))
-                oos_vals.append(_metric_value(test_bt.statistics.to_dict(), metric, test_bt.trades, prop_rules, mc_cfg))
+                workers = min(len(tasks), os.cpu_count() or 1)
+                if workers > 1:
+                    with ProcessPoolExecutor(max_workers=workers) as pool:
+                        for _pi, _isv, _oosv in pool.map(_evaluate_pbo_path, tasks):
+                            path_results[_pi] = (_isv, _oosv)
+            except Exception:  # noqa: BLE001 -- serial below is the same math
+                path_results = [None] * len(tasks)
+        for _i, _task in enumerate(tasks):
+            if path_results[_i] is None:
+                _ev = _evaluate_pbo_path(_task)
+                if _ev is not None:
+                    path_results[_i] = (_ev[1], _ev[2])
+
+        for path_idx, _evaluated in enumerate(path_results):
+            if _evaluated is None:
+                continue
+            is_vals, oos_vals = _evaluated
 
             is_matrix[path_idx, :] = is_vals
             oos_matrix[path_idx, :] = oos_vals
