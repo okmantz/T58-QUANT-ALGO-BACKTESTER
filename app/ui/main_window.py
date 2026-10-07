@@ -7456,7 +7456,7 @@ class MainWindow:
                     log(f"  Skipped -- could not load: {exc}\n")
                     continue
                 try:
-                    res = run_quick_optimize(df, strategy, risk, rules, cfg, progress_cb=lambda m: log(f"  {m}"))
+                    res = run_quick_optimize(df, strategy, risk, rules, cfg, progress_cb=lambda m: log(f"  {m}"), instrument_label=os.path.basename(context.csv_paths[0]) if getattr(context, "csv_paths", None) else "")
                     results.append((item.name, res))
                     if res.instrument_mismatch_warning:
                         log(f"  !!! WARNING for {item.name}: {res.instrument_mismatch_warning}")
@@ -17749,7 +17749,7 @@ class MainWindow:
                 reserve_holdout=self.qopt_reserve_holdout.get(),
                 save_to_library=self.qopt_save_to_library.get(),
             )
-            res = run_quick_optimize(df, strategy, risk, rules, cfg, progress_cb=self._log_qopt)
+            res = run_quick_optimize(df, strategy, risk, rules, cfg, progress_cb=self._log_qopt, instrument_label=os.path.basename(self.qopt_context.csv_paths[0]) if getattr(self.qopt_context, "csv_paths", None) else "")
             if res.instrument_mismatch_warning:
                 self._log_qopt(f"\n!!! {res.instrument_mismatch_warning}")
             marker = "IMPROVED" if res.improved else "no improvement"
