@@ -352,6 +352,33 @@ def cmd_factor_model(args):
     _emit(result, args.out, result.render_summary())
 
 
+
+# ---------------------------------------------------------------------------
+# Discovery: idea -> hypothesis -> experiments -> break-it battery -> record
+# ---------------------------------------------------------------------------
+
+def cmd_discover(args):
+    from dataclasses import replace
+    from app.backtest.risk import RiskConfig
+    from app.data.instrument_specs import apply_instrument_spec
+    from app.discovery.experiment_runner import run_hypothesis
+    from app.discovery.hypothesis import HypothesisStore
+    from app.discovery.idea_compiler import compile_idea
+
+    llm = None
+    if args.use_ollama:
+        from app.ai.llm_client import OllamaTextClient
+        llm = OllamaTextClient()
+    hyp = compile_idea(args.idea, llm=llm, markets=[Path(d).stem for d in args.data],
+                       timeframes=args.timeframes or [])
+    datasets = {Path(d).stem: _load_ohlcv_csv(d) for d in args.data}
+    risk = RiskConfig(initial_balance=args.balance, risk_mode="fixed", risk_value=args.risk_dollars,
+                      sizing_mode=args.sizing_mode)
+    risk = apply_instrument_spec(risk, args.symbol) if args.symbol else risk
+    store = HypothesisStore(args.store) if args.store else HypothesisStore()
+    run = run_hypothesis(hyp, datasets, risk, store=store, n_null=args.null_draws)
+    _emit(run.hypothesis.to_dict(), args.out, summary=run.render())
+
 # ---------------------------------------------------------------------------
 # Argument parser assembly
 # ---------------------------------------------------------------------------
@@ -364,6 +391,20 @@ def _add_alpaca_args(p):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cli.py", description=__doc__.strip().splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("discover", help="Turn an idea into a tested, deflated, break-it-checked hypothesis and record it")
+    p.add_argument("--idea", required=True, help="Free-text idea, e.g. 'breakout of the 40-bar high keeps going'")
+    p.add_argument("--data", nargs="+", required=True, help="One or more OHLCV CSV files (one market each)")
+    p.add_argument("--timeframes", nargs="*", default=None, help="Pandas resample rules, e.g. 15min 1h 4h")
+    p.add_argument("--symbol", default=None, help="Instrument symbol for contract specs/costs (e.g. ES)")
+    p.add_argument("--balance", type=float, default=50000.0)
+    p.add_argument("--risk-dollars", type=float, default=500.0)
+    p.add_argument("--sizing-mode", choices=["skip", "fit_stop", "fixed_contracts", "micro_fallback"], default="fit_stop")
+    p.add_argument("--null-draws", type=int, default=100)
+    p.add_argument("--use-ollama", action="store_true", help="Compile the idea with the configured local Ollama model")
+    p.add_argument("--store", default=None, help="Hypothesis JSON store path (default: data/discovery/hypotheses.json)")
+    p.add_argument("--out", default=None)
+    p.set_defaults(func=cmd_discover)
 
     p = sub.add_parser("translate-strategy", help="Convert a Manual Strategy Builder config to PineScript or MQL5")
     p.add_argument("--config", required=True, help="Path to a Manual Strategy Builder JSON config")
