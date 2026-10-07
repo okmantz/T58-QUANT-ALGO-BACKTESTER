@@ -614,7 +614,6 @@ def run_quick_optimize(
             for gene, value in zip(ga_result.genes, ga_result.best.genome)
         } if ga_result.genes else None
 
-    log("Re-running the full backtest + Monte Carlo on the winning configuration...")
     if final_source_type == "manual":
         final_spec = {"source_type": "manual", "config": final_config}
     else:
@@ -625,8 +624,23 @@ def run_quick_optimize(
     # as Full Pipeline's final_tmp_dir; tmp_dir is unused for manual/pinescript/mql5.
     final_tmp_dir = Path(mkdtemp(prefix="t58_quick_optimize_")) if final_source_type != "manual" else None
     final_strategy = build_strategy_from_spec(final_spec, final_tmp_dir)
-    final_bt = run_backtest(dev_df, final_strategy, risk, adaptive_risk=adaptive_risk)
-    warnings.extend(final_bt.warnings)
+    # SPEED (2026-10-06): when the GA returned the original configuration
+    # unchanged (mutated_by_ga False -- its best candidate never traded
+    # out-of-sample), re-running the identical full backtest AND the
+    # identical final_mc_sims Monte Carlo reproduces the baseline's
+    # numbers bit for bit. Reuse them. (Baseline's MC already ran at
+    # cfg.final_mc_sims with the same seed and no selection-bias caveat,
+    # which is also what the re-run below would have used, since the
+    # caveat only switches on when oos_trade_count > 0.)
+    _reused_baseline = not mutated_by_ga
+    if _reused_baseline:
+        log("The GA returned the original configuration unchanged -- reusing the baseline "
+            "backtest and Monte Carlo instead of re-running them.")
+        final_bt = baseline_bt
+    else:
+        log("Re-running the full backtest + Monte Carlo on the winning configuration...")
+        final_bt = run_backtest(dev_df, final_strategy, risk, adaptive_risk=adaptive_risk)
+        warnings.extend(final_bt.warnings)
     if instrument_mismatch_warning is None and has_instrument_scale_mismatch(final_bt.warnings):
         # Same mismatch, just not visible until the optimized parameters
         # were actually run -- risk.pip_size is unchanged from the
@@ -637,13 +651,16 @@ def run_quick_optimize(
     if invalid_condition_warning is None and has_impossible_condition(final_bt.warnings):
         invalid_condition_warning = next(w for w in final_bt.warnings if "can never be true" in w)
         log(f"  !!! {invalid_condition_warning}")
-    final_mc = run_monte_carlo(
-        final_bt.trades, prop_rules,
-        MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
-        # MC-004: these trades came straight out of this run's own GA
-        # search over this same data -- see run_monte_carlo's docstring.
-        selection_bias_caveat=(ga_result.best.oos_trade_count > 0),
-    )
+    if _reused_baseline:
+        final_mc = baseline_mc
+    else:
+        final_mc = run_monte_carlo(
+            final_bt.trades, prop_rules,
+            MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
+            # MC-004: these trades came straight out of this run's own GA
+            # search over this same data -- see run_monte_carlo's docstring.
+            selection_bias_caveat=(ga_result.best.oos_trade_count > 0),
+        )
     log(
         f"Optimized: {len(final_bt.trades)} trades, net ${final_bt.statistics.net_profit:,.2f}, "
         f"win rate {final_bt.statistics.win_rate:.1f}%, eval pass {final_mc.evaluation_pass_probability:.1f}%, "

@@ -1368,6 +1368,23 @@ def run_full_pipeline(
     else:
         final_spec = _spec_for_code(final_source_type, final_code_text, final_code_ext)
 
+    # SPEED (2026-10-06): when Step 2's search returns a configuration
+    # identical to the one handed in (the GA's best genome IS the baseline
+    # genome -- Owen's 2020-2026 ES run printed byte-identical Baseline
+    # and Final parameter tables), Step 3 used to re-run the entire
+    # full-length backtest to produce a bit-identical trade list, then
+    # Step 3's Monte Carlo re-scored it. Spec equality is exact (same
+    # JSON-able dict), so reuse Step 1's backtest wholesale -- same
+    # trades, same statistics, zero statistical change; the 10,000-sim
+    # final Monte Carlo below still runs on those trades (Step 1's own
+    # MC was only baseline_mc_sims and is NOT reused).
+    if strategy.source_type == "manual":
+        _baseline_spec = _spec_for_manual(strategy.config)
+    else:
+        _base_text, _base_ext = patched_source_for_strategy(strategy, [], [])
+        _baseline_spec = _spec_for_code(strategy.source_type, _base_text, _base_ext)
+    _final_is_baseline = final_spec == _baseline_spec
+
     from tempfile import mkdtemp
     from shutil import rmtree
     final_tmp_dir = Path(mkdtemp(prefix="t58_fullpipeline_")) if final_source_type != "manual" else None
@@ -1376,11 +1393,16 @@ def run_full_pipeline(
 
         # -- Step 3: final validation ------------------------------------
         _check_cancel()
-        log("Step 3/7: Final validation (full backtest, prop simulation, Monte Carlo)...")
-        final_bt = run_backtest(dev_df, final_strategy, risk, adaptive_risk=adaptive_risk)
-        for w in final_bt.warnings:
-            log(f"  WARNING: {w}")
-            warnings.append(w)
+        if _final_is_baseline:
+            log("Step 3/7: Final validation -- the winning configuration is identical to the "
+                "baseline, reusing the Step 1 backtest instead of re-running it...")
+            final_bt = baseline_bt
+        else:
+            log("Step 3/7: Final validation (full backtest, prop simulation, Monte Carlo)...")
+            final_bt = run_backtest(dev_df, final_strategy, risk, adaptive_risk=adaptive_risk)
+            for w in final_bt.warnings:
+                log(f"  WARNING: {w}")
+                warnings.append(w)
         if not final_bt.trades:
             # Should not happen (the GA never returns a worse-than-baseline
             # candidate, and baseline already passed preflight), but never

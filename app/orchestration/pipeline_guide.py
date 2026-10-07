@@ -238,6 +238,22 @@ def _weakest_scorecard_components(scorecard, n: int = 2) -> list[tuple[str, floa
     return scored[:n]
 
 
+def _join_verdict_parts(parts: dict) -> str:
+    """Inverse of after_full_pipeline_parts(): flattens the structured
+    pieces back into the historical single-paragraph string, byte for
+    byte, so string consumers (desktop UI, existing tests) see no
+    change at all."""
+    chunks = [parts.get("headline", ""), *(parts.get("points") or [])]
+    if parts.get("steps"):
+        intro = parts.get("steps_intro") or "Next steps, in order:"
+        chunks.append(
+            intro + " " + " ".join(f"{i + 1}) {s}." for i, s in enumerate(parts["steps"]))
+        )
+    if parts.get("closing"):
+        chunks.append(parts["closing"])
+    return " ".join(c for c in chunks if c)
+
+
 def after_full_pipeline(verdict: str | None, saved_to_library: bool, result=None) -> str:
     """result: optional FullPipelineResult from this exact run. When
     provided, a NOT READY or MARGINAL verdict gets a specific, numbers-
@@ -246,25 +262,46 @@ def after_full_pipeline(verdict: str | None, saved_to_library: bool, result=None
     never just a bare verdict with nowhere to go. Every existing caller
     that doesn't pass `result` keeps the exact prior (shorter, generic)
     text -- fully backward compatible."""
+    return _join_verdict_parts(after_full_pipeline_parts(verdict, saved_to_library, result=result))
+
+
+def after_full_pipeline_parts(verdict: str | None, saved_to_library: bool, result=None) -> dict:
+    """Structured form of after_full_pipeline(): the same guidance split
+    into {"headline", "points", "steps"} (+ optional "steps_intro" /
+    "closing") so the web UI can render a readable verdict card -- bold
+    headline, short points, numbered steps -- instead of one wall of
+    text (Owen, 2026-10-06: "make the green text verdict section easier
+    to read instead of just 1 paragraph"). Step strings carry no
+    trailing period; renderers number them, and _join_verdict_parts
+    re-adds the periods for the string form."""
     verdict = (verdict or "").upper()
-    library_note = " It was saved to the Strategy Library." if saved_to_library else ""
+    library_point = "It was saved to the Strategy Library." if saved_to_library else ""
 
     if verdict == "READY":
-        return (
-            f"Verdict: READY.{library_note} Next step: this is your strongest evidence yet, but it's still "
-            "a backtest -- consider a short forward-test (MT5 Forward Test tab, or paper trading) before "
-            "risking real capital on a prop-firm evaluation."
-        )
+        return {
+            "headline": "Verdict: READY.",
+            "points": [p for p in (
+                library_point,
+                "Next step: this is your strongest evidence yet, but it's still "
+                "a backtest -- consider a short forward-test (MT5 Forward Test tab, or paper trading) before "
+                "risking real capital on a prop-firm evaluation.",
+            ) if p],
+            "steps": [],
+        }
 
     if result is not None and getattr(result, "lookahead_hard_fail", False):
-        return (
-            "Verdict: NOT READY -- confirmed lookahead-bias leak. Next step: this strategy's signal "
-            "depends on data that hadn't happened yet as of its own bar, so every number in this report "
-            "is unreliable. Open the lookahead check log above for the exact bar/condition responsible, "
-            "fix that condition (a common cause is referencing the current, still-forming bar's close/"
-            "high/low instead of a prior one), then re-run Full Pipeline from scratch -- optimizing "
-            "or re-scoring this exact configuration won't help until the leak itself is fixed."
-        )
+        return {
+            "headline": "Verdict: NOT READY -- confirmed lookahead-bias leak.",
+            "points": [
+                "Next step: this strategy's signal "
+                "depends on data that hadn't happened yet as of its own bar, so every number in this report "
+                "is unreliable. Open the lookahead check log above for the exact bar/condition responsible, "
+                "fix that condition (a common cause is referencing the current, still-forming bar's close/"
+                "high/low instead of a prior one), then re-run Full Pipeline from scratch -- optimizing "
+                "or re-scoring this exact configuration won't help until the leak itself is fixed."
+            ],
+            "steps": [],
+        }
 
     if result is not None and getattr(result, "risk_of_ruin_hard_fail", False):
         final_mc = getattr(result, "final_mc", None)
@@ -303,14 +340,18 @@ def after_full_pipeline(verdict: str | None, saved_to_library: bool, result=None
         if not (sizing_floor or holdout_empty):
             steps.append("Lower risk-per-trade in the Risk step (ruin scales roughly with the square of position size)")
         steps.append("Quick Optimize can search for a lower-drawdown parameter set, or treat this as a candidate for a looser prop firm's rules")
-        steps_text = " ".join(f"{i + 1}) {t}." for i, t in enumerate(steps))
-        return (
-            f"Verdict: NOT READY -- risk of ruin ({ruin_text}) is above the {cap:.0f}% cap{score_note}. "
-            "This is the one hard safety gate in the pipeline. NOT READY does not lock anything: you can still "
-            "open the Validate hub and run CPCV, Walk-Forward, Sensitivity and the Regime Matrix on this strategy "
-            "to see exactly where it is weak. Next steps, in order: " + steps_text
-            + " After any change, re-run Full Pipeline on the same strategy."
-        )
+        return {
+            "headline": f"Verdict: NOT READY -- risk of ruin ({ruin_text}) is above the {cap:.0f}% cap{score_note}.",
+            "points": [
+                "This is the one hard safety gate in the pipeline.",
+                "NOT READY does not lock anything: you can still "
+                "open the Validate hub and run CPCV, Walk-Forward, Sensitivity and the Regime Matrix on this strategy "
+                "to see exactly where it is weak.",
+            ],
+            "steps": steps,
+            "steps_intro": "Next steps, in order:",
+            "closing": "After any change, re-run Full Pipeline on the same strategy.",
+        }
 
     if result is not None and getattr(result, "scorecard", None) is not None:
         scorecard = result.scorecard
@@ -320,29 +361,46 @@ def after_full_pipeline(verdict: str | None, saved_to_library: bool, result=None
             label = _COMPONENT_LABELS.get(name, name)
             fix = _COMPONENT_FIXES.get(name, "review this component's underlying numbers in the report above")
             weak_lines.append(f"{label} ({value:.0f}/100) -- {fix}")
-        weak_text = " ".join(f"{i + 1}) {line}." for i, line in enumerate(weak_lines))
         tier_word = "MARGINAL" if verdict == "MARGINAL" else "NOT READY"
         action_word = "Try the strongest lever first" if verdict == "MARGINAL" else "Start with the weakest one"
-        return (
-            f"Verdict: {tier_word} -- T58 Score {scorecard.score:.1f}/100 ({scorecard.tier}).{library_note} "
-            f"Weakest area(s) driving this score: {weak_text} {action_word}, make one change, and re-run "
-            "Full Pipeline -- keep iterating through this same loop (change -> re-run -> check the new "
-            "weakest component) until the verdict reads READY. Don't change multiple things at once: it "
-            "makes it impossible to tell which change actually helped."
-        )
+        return {
+            "headline": f"Verdict: {tier_word} -- T58 Score {scorecard.score:.1f}/100 ({scorecard.tier}).",
+            "points": [p for p in (library_point,) if p],
+            "steps": weak_lines,
+            "steps_intro": "Weakest area(s) driving this score:",
+            "closing": (
+                f"{action_word}, make one change, and re-run "
+                "Full Pipeline -- keep iterating through this same loop (change -> re-run -> check the new "
+                "weakest component) until the verdict reads READY. Don't change multiple things at once: it "
+                "makes it impossible to tell which change actually helped."
+            ),
+        }
 
     if verdict == "MARGINAL":
-        return (
-            f"Verdict: MARGINAL.{library_note} Next step: it's not clearly ready or clearly dead. Try "
-            "Quick Optimize on it, or adjust risk settings (position size, daily-loss limit) and re-run "
-            "Full Pipeline -- don't take it live as-is."
-        )
+        return {
+            "headline": "Verdict: MARGINAL.",
+            "points": [p for p in (
+                library_point,
+                "Next step: it's not clearly ready or clearly dead. Try "
+                "Quick Optimize on it, or adjust risk settings (position size, daily-loss limit) and re-run "
+                "Full Pipeline -- don't take it live as-is.",
+            ) if p],
+            "steps": [],
+        }
     if verdict == "NOT READY":
-        return (
-            "Verdict: NOT READY. Next step: this strategy doesn't hold up under re-validation. Go back to "
-            "Evolution Lab or Search Lab for a different candidate rather than trying to rescue this one."
-        )
-    return "Next step: open the full report above for the detailed verdict and what drove it."
+        return {
+            "headline": "Verdict: NOT READY.",
+            "points": [
+                "Next step: this strategy doesn't hold up under re-validation. Go back to "
+                "Evolution Lab or Search Lab for a different candidate rather than trying to rescue this one."
+            ],
+            "steps": [],
+        }
+    return {
+        "headline": "Next step: open the full report above for the detailed verdict and what drove it.",
+        "points": [],
+        "steps": [],
+    }
 
 
 def after_full_pipeline_batch(outcomes: list[dict]) -> str:
