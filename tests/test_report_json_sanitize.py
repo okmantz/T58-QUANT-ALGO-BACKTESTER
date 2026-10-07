@@ -152,3 +152,20 @@ def test_every_standard_timeframe_resamples_from_1m():
     five = plan.targets[0].dataframe
     assert five["open"].iloc[0] == df["open"].iloc[0]
     assert five["close"].iloc[-1] == df["close"].iloc[-1]
+
+
+def test_export_html_survives_infinite_profit_factor_in_cost_ladder(tmp_path):
+    """All-winning trades give a cost-ladder rung with zero losses, i.e.
+    profit_factor = inf; build_report's sanitizer maps inf to None, and
+    the ladder's HTML formatter used to do f"{None:,.2f}" -> TypeError.
+    The report crashed precisely for winning strategies."""
+    report = _minimal_report()
+    report["cost_ladder"] = [
+        {"extra_cost_pct_per_trade": 0.0, "net_profit": 100.0, "profit_factor": float("inf"), "win_rate": 100.0},
+        {"extra_cost_pct_per_trade": 0.05, "net_profit": 90.0, "profit_factor": None, "win_rate": 100.0},
+        {"extra_cost_pct_per_trade": 0.1, "net_profit": 80.0, "profit_factor": 2.5, "win_rate": 90.0},
+    ]
+    out = export_html(report, tmp_path / "r2.html")
+    assert out.exists()
+    text = out.read_text(encoding="utf-8")
+    assert "∞" in text  # both the inf and the sanitized-None rung render as infinity

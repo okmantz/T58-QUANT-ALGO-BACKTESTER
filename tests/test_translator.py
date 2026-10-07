@@ -143,17 +143,21 @@ def test_trailing_emits_real_ratcheting_code_breakeven_still_todo():
 
 
 @pytest.mark.parametrize("kind", ["liquidity_sweep", "break_of_structure", "fair_value_gap", "session_high", "atr_regime"])
-def test_unsupported_smc_operand_kinds_raise(kind):
+def test_formerly_unsupported_smc_operand_kinds_now_translate(kind):
+    # These kinds used to be refused ("port this by hand"); they are
+    # closed-form causal formulas in app.strategy.manual, so all three
+    # targets now render them. The refusal contract survives only for
+    # genuinely unportable kinds (see the ib_contraction_ratio test in
+    # tests/test_translator_targets.py).
     config = {
-        "name": "Bad",
+        "name": "Now Supported",
         "entry_conditions": {"long": [{"left": {"type": kind}, "operator": ">", "right": 0}]},
         "exit_conditions": {},
         "risk_management": {},
     }
-    with pytest.raises(TranslationError):
-        to_pinescript(config)
-    with pytest.raises(TranslationError):
-        to_mql5(config)
+    assert "strategy(" in to_pinescript(config) or "indicator(" in to_pinescript(config)
+    assert "void OnTick" in to_mql5(config)
+    compile(to_python(config), "<generated>", "exec")
 
 
 def test_expression_string_config_rejected():

@@ -95,7 +95,9 @@ def test_translate_strategy_cli(tmp_path, capsys):
 
 
 def test_translate_strategy_cli_reports_unsupported_construct(tmp_path, capsys):
-    config = {"entry_conditions": {"long": [{"left": {"type": "liquidity_sweep"}, "operator": ">", "right": 0}]}}
+    # ib_contraction_ratio is the remaining deliberately-unportable kind
+    # (liquidity_sweep & friends translate since the translator overhaul).
+    config = {"entry_conditions": {"long": [{"left": {"type": "ib_contraction_ratio"}, "operator": ">", "right": 0}]}}
     config_path = tmp_path / "bad.json"
     config_path.write_text(json.dumps(config))
     rc, out, err = _run(
@@ -103,7 +105,7 @@ def test_translate_strategy_cli_reports_unsupported_construct(tmp_path, capsys):
          "--out", str(tmp_path / "out.pine")], capsys,
     )
     assert rc == 1
-    assert "liquidity_sweep" in err
+    assert "ib_contraction_ratio" in err
 
 
 def test_order_book_replay_cli(tmp_path, capsys):
