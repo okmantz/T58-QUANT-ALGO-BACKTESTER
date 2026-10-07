@@ -654,7 +654,12 @@ def _cost_ladder_table(ladder: list[dict]) -> str:
     rows = []
     for rung in ladder:
         pf = rung["profit_factor"]
-        pf_str = "∞" if pf == float("inf") else f"{pf:,.2f}"
+        # profit_factor is inf when a rung has profits and zero losses;
+        # build_report's JSON sanitizer (sanitize_for_json) maps inf to
+        # None, so both spell "no losses at this rung". Before this guard,
+        # an all-winning trade list crashed export_html here -- i.e. the
+        # report died precisely for the strategies worth reporting.
+        pf_str = "∞" if pf is None or pf == float("inf") else f"{pf:,.2f}"
         rows.append(
             f"<tr><td>+{rung['extra_cost_pct_per_trade']:.2f}%</td>"
             f"<td>${rung['net_profit']:,.2f}</td>"
