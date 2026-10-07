@@ -171,7 +171,30 @@ class AdaptiveRiskState:
         self.cumulative_realized_pnl = 0.0
         self.peak_realized_balance = self.initial_balance
 
+    def begin_new_day(self) -> None:
+        """Roll the daily accumulators over to a new trading day.
+
+        "Today" is a property of the CLOCK, not of the trade ledger: the
+        execution loop calls this on the first bar of each new day, so
+        daily_loss_pct / daily_profit_pct are always evaluated against
+        the current day's realized P&L. This must not wait for the next
+        trade close (record_trade_close's own new-day reset only fires
+        when a trade closes): on any stretch where no trade closes --
+        exactly what happens while entries are throttled to zero -- the
+        daily accumulators previously kept their last active day's final
+        values forever, so a daily_profit_pct lock (multiplier 0.0)
+        tripped on the last profitable day silenced every later entry
+        for the REST of the dataset. That was the multi-year flat line
+        in Owen's 2020-2026 ES Full Pipeline run: 55,795 of 55,798
+        signals after the last real entry blocked by a lock that should
+        have released the next morning (2026-10-06 stall fix)."""
+        self.day_realized_pnl = 0.0
+
     def record_trade_close(self, pnl: float, is_new_day: bool) -> None:
+        # is_new_day kept as a belt-and-braces reset for any caller that
+        # tracks days itself; the execution loop's begin_new_day() call
+        # is the authoritative rollover (see its docstring), and zeroing
+        # twice is idempotent.
         if is_new_day:
             self.day_realized_pnl = 0.0
         self.day_realized_pnl += pnl

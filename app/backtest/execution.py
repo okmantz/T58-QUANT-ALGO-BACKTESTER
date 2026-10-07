@@ -255,6 +255,8 @@ def run_execution(
     # a breach starts a fresh account and the run keeps trading to the last bar.
     halt_on_breach = bool(getattr(risk, "halt_on_breach", False))
     min_contract_rescue_count = 0
+    adaptive_probe_count = 0  # entries kept at the 1-contract minimum instead of being throttled below one lot (2026-10-06 stall fix)
+    _adaptive_state_day = -1  # day_idx the adaptive state's daily accumulators were last rolled to (2026-10-06 stall fix)
     blocked_daily_limit_count = 0
     blocked_cooldown_count = 0
     blocked_max_trades_count = 0
@@ -668,6 +670,20 @@ def run_execution(
 
     for i in range(n):
         bar_date = day_idx[i]
+
+        # STALL FIX (2026-10-06): roll the adaptive-risk daily
+        # accumulators over WITH THE CLOCK. This used to happen only
+        # inside record_trade_close (a new day was noticed when the next
+        # trade CLOSED), so on any stretch where entries were throttled
+        # to zero and no trade ever closed, "today" stayed frozen on the
+        # last active day -- and a daily profit lock (multiplier 0.0)
+        # tripped that day blocked every entry for the rest of the
+        # dataset (Owen's 2020-2026 ES run: last entry 2021-09-20, then
+        # 55,795 later signals blocked by "adaptive risk zero size").
+        # Daily triggers now always see the CURRENT day's realized P&L.
+        if adaptive_risk is not None and adaptive_risk.enabled and bar_date != _adaptive_state_day:
+            adaptive_state.begin_new_day()
+            _adaptive_state_day = bar_date
 
         # P2-6 (weekend hold): a new week clears the weekend entry block
         # (latched when a position was force-closed on the week's last
@@ -1158,7 +1174,31 @@ def run_execution(
                         current_vol_pct = float(_v) if not math.isnan(_v) else None
                     adaptive_multiplier = adaptive_state.active_multiplier(adaptive_risk, current_vol_pct)
                     adaptive_rules_active = adaptive_state.active_rule_labels(adaptive_risk, current_vol_pct)
+                    _size_before_adaptive = size
                     size *= adaptive_multiplier
+                    # STALL FIX (2026-10-06): position_size() floored to whole
+                    # contracts BEFORE this multiplier, so multiplying after
+                    # the fact produced fractional contracts (e.g. 0.39 of an
+                    # ES contract -- not a real, placeable size) and, whenever
+                    # the stacked limit-aware multipliers got small enough
+                    # (0.25 daily-loss x 0.25 drawdown x 0.125 volatility =
+                    # 0.008x), shrunk size to effectively nothing for as long
+                    # as conditions stayed rough -- months or years of a
+                    # flat trade chart. Adaptive throttling may shrink size
+                    # TOWARD the 1-contract minimum, never past it: re-floor
+                    # to whole contracts, and if flooring would erase a trade
+                    # the UNTHROTTLED sizing could afford (>= 1 contract),
+                    # open at the 1-contract minimum instead. A multiplier of
+                    # exactly 0.0 (a deliberate hard lock, e.g. the daily
+                    # profit lock) still blocks outright -- that is the rule
+                    # doing its job for the rest of THAT day, and the new
+                    # clock-driven day rollover above releases it tomorrow.
+                    if risk.contract_size and size > 0 and adaptive_multiplier > 0:
+                        _lots = math.floor(size / risk.contract_size + 1e-9)
+                        if _lots <= 0 and _size_before_adaptive >= risk.contract_size:
+                            _lots = 1
+                            adaptive_probe_count += 1
+                        size = _lots * risk.contract_size
 
                 if not math.isfinite(size) or size <= 0:
                     # Degenerate sizing (e.g. an ATR-based stop distance
@@ -1310,6 +1350,7 @@ def run_execution(
     equity_df.attrs["breach_events"] = [ev for ev in reset_events if ev.get("kind", "breach") == "breach"]
     equity_df.attrs["zero_size_contract_floor_count"] = zero_size_contract_floor_count
     equity_df.attrs["min_contract_rescue_count"] = min_contract_rescue_count
+    equity_df.attrs["adaptive_probe_count"] = adaptive_probe_count
     equity_df.attrs["entry_block_counts"] = {
         "engine_halted": blocked_halted_count,
         "daily_loss_limit": blocked_daily_limit_count,
@@ -1441,6 +1482,21 @@ def run_execution(
             "for the rest of the dataset (equity can never recover without trades). Risk per trade on these "
             "entries is capped at your configured % of the STARTING balance. Raise risk_value, use the micro "
             "contract, or enlarge the account if you want exact %-of-equity sizing.",
+            RuntimeWarning,
+        )
+
+    if adaptive_probe_count:
+        import warnings
+        warnings.warn(
+            f"{adaptive_probe_count:,} entr{'y' if adaptive_probe_count == 1 else 'ies'} traded at the "
+            f"1-contract minimum (contract_size={risk.contract_size:g}) because adaptive-risk "
+            "throttling would otherwise have shrunk them below one whole contract. Adaptive risk "
+            "scales size DOWN toward the minimum real position; it no longer reduces a trade to a "
+            "fractional contract or to zero (a multiplier of exactly 0.0 -- e.g. the daily profit "
+            "lock -- still blocks entries outright for the rest of that day). These trades carry "
+            "more per-trade risk than the throttled target but never more than your unthrottled "
+            "configured risk; raise risk_value or reduce the stop distance if you want the "
+            "throttled sizes to stay above one contract on their own.",
             RuntimeWarning,
         )
 
