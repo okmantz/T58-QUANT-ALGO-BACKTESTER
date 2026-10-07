@@ -537,14 +537,32 @@ def run_walkforward_aware_refinement(
                     futures = {pool.submit(_ga_eval_task, g): i for i, g in enumerate(genome_list)}
                     results: list = [None] * len(genome_list)
                     for fut in as_completed(futures):
+                        # Cancellation must not wait for EVERY in-flight
+                        # candidate's backtest + Monte Carlo (that made
+                        # Stop look broken): check as each one finishes,
+                        # cancel whatever is still queued, and bail.
+                        if cancel_event is not None and cancel_event.is_set():
+                            for pending in futures:
+                                pending.cancel()
+                            raise WalkforwardGACancelled(
+                                "Walk-forward-aware GA search stopped by user."
+                            )
                         i = futures[fut]
                         fitness, tc = fut.result()
                         results[i] = _Cand(genome_list[i], fitness, tc)
                     total_evaluations[0] += len(results)
                     return results
+                except WalkforwardGACancelled:
+                    raise
                 except Exception as exc:  # noqa: BLE001 -- fall back to serial for this batch
                     log(f"  Parallel evaluation failed ({exc}) -- falling back to a single process.")
-            results = [make(g) for g in genome_list]
+            results = []
+            for g in genome_list:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise WalkforwardGACancelled(
+                        "Walk-forward-aware GA search stopped by user."
+                    )
+                results.append(make(g))
             total_evaluations[0] += len(results)
             return results
 
