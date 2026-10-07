@@ -59,7 +59,12 @@ def _sma_config(fast=5, slow=15):
     }
 
 
-def test_mutated_manual_config_saved_under_stamped_name(tmp_path):
+def test_mutated_manual_config_saved_under_simple_formula_name(tmp_path):
+    """v9.4 (Owen's directive, supersedes the 2026-09-17 provenance
+    stamp): a GA-mutated winner saves under the simple formula name
+    'instrument timeframe INDICATOR (FULL PIPELINE)' -- and still never
+    under the stale original display name, which is the drift the old
+    stamp existed to prevent."""
     df = _trending_df()
     strategy = ManualStrategy(_sma_config())
     cfg = FullPipelineConfig(
@@ -69,14 +74,12 @@ def test_mutated_manual_config_saved_under_stamped_name(tmp_path):
     result = run_full_pipeline(df, strategy, RiskConfig(), PropRules(), tmp_path / "fp_out", cfg,
                                 report_basename="naming_fix_test")
     if result.refinement_ran and result.saved_library_path is not None:
-        assert "full_pipeline" in result.saved_library_path.name
-        assert "seed_11" in result.saved_library_path.name
+        assert "(FULL PIPELINE)" in result.saved_library_path.name
+        assert "SMA" in result.saved_library_path.name
+        assert "seed" not in result.saved_library_path.name
         saved = json.loads(result.saved_library_path.read_text())
-        # Original display name ("sma cross") should still be the PREFIX --
-        # provenance_stamped_name appends, never replaces.
-        assert saved["name"].startswith("sma cross [")
-        assert "full_pipeline" in saved["name"]
-        assert "seed=11" in saved["name"]
+        assert saved["name"].endswith("(FULL PIPELINE)")
+        assert saved["name"] != "sma cross"
 
 
 def test_report_flags_ga_modified_parameters_and_shows_baseline(tmp_path):

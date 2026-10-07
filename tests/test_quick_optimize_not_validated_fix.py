@@ -149,7 +149,10 @@ def test_provenance_stamped_name_format():
     assert "seed=42" in stamped
 
 
-def test_mutated_config_saved_under_stamped_name_not_stale_original():
+def test_mutated_config_saved_under_simple_formula_name_not_stale_original():
+    """v9.4 (Owen's directive, supersedes the 2026-09-17 provenance
+    stamp): the winner saves as 'instrument timeframe INDICATOR
+    (OPTIMIZED)' -- never under the stale original name."""
     df = _trending_df()
     strategy = ManualStrategy(_sma_config())
     result = run_quick_optimize(
@@ -158,12 +161,13 @@ def test_mutated_config_saved_under_stamped_name_not_stale_original():
     )
     if result.final_parameters:  # only meaningful when the GA actually produced a mutated winner
         assert result.saved_library_path is not None
-        assert "quick_optimize" in result.saved_library_path.name
-        assert "seed_7" in result.saved_library_path.name
+        assert "(OPTIMIZED)" in result.saved_library_path.name
+        assert "SMA" in result.saved_library_path.name
+        assert "seed" not in result.saved_library_path.name
         import json
         saved = json.loads(result.saved_library_path.read_text())
-        assert "[quick_optimize" in saved["name"]
-        assert "seed=7" in saved["name"]
+        assert saved["name"].endswith("(OPTIMIZED)")
+        assert saved["name"] != "sma cross"
 
 
 # ---------------------------------------------------------------------
