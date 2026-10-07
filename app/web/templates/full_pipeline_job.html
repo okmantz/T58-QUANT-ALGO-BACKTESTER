@@ -25,11 +25,17 @@
 <div class="card">
   <h2 id="status-title"><span class="spinner" id="spinner"></span>Full Pipeline running&hellip;</h2>
   <div id="log">Starting&hellip;</div>
-  <p id="next-step" style="display:none; margin-top:10px; padding:10px 12px; border-radius:8px; background:#152615; color:#b7e8b7; font-size:13px;"></p>
+  <div id="next-step" style="display:none; margin-top:10px; padding:12px 14px; border-radius:8px; background:#152615; color:#b7e8b7; font-size:13px; line-height:1.5;"></div>
   <button class="stop-btn" type="button" id="stop-btn" onclick="stopFullPipeline()" style="margin-top:12px; padding:10px 22px; border-radius:10px; border:1px solid #6b2323; background:#3a1616; color:#ffb4b4; font-size:14px; font-weight:700; cursor:pointer;">Stop</button>
 </div>
 
 <div id="verdict-banner-wrap" style="display:none;"><div class="verdict-banner" id="verdict-banner"></div></div>
+
+{# "What to do next" sits directly under the verdict banner so it can't
+   be missed (it used to render below the summary card, off-screen --
+   Owen only found it by accident, 2026-10-06). The partial is
+   display:none until the finished job's recovery plan arrives. #}
+{% include '_recovery_panel.html' %}
 
 <div class="card" id="sweep-card" style="display:none;">
   <h2>Timeframe sweep</h2>
@@ -107,9 +113,49 @@
           document.getElementById('status-title').textContent = 'Full Pipeline complete';
           const btn = document.getElementById('stop-btn');
           if (btn) btn.style.display = 'none';
-          if (data.next_step) {
+          if (data.next_step_parts || data.next_step) {
+            // Structured verdict card: bold headline, short points, then
+            // the numbered steps as a real list -- the guidance used to
+            // arrive as one wall-of-text paragraph that was easy to
+            // skim past (Owen, 2026-10-06). Falls back to the plain
+            // string when no structured parts are present.
             const nextStepEl = document.getElementById('next-step');
-            nextStepEl.textContent = data.next_step;
+            const parts = data.next_step_parts;
+            nextStepEl.textContent = '';
+            if (parts && (parts.headline || (parts.steps || []).length)) {
+              const head = document.createElement('div');
+              head.style.cssText = 'font-weight:700; font-size:14.5px; margin-bottom:6px;';
+              head.textContent = parts.headline || '';
+              nextStepEl.appendChild(head);
+              (parts.points || []).forEach(p => {
+                const d = document.createElement('div');
+                d.style.cssText = 'margin-bottom:6px;';
+                d.textContent = p;
+                nextStepEl.appendChild(d);
+              });
+              if ((parts.steps || []).length) {
+                const intro = document.createElement('div');
+                intro.style.cssText = 'font-weight:600; margin:8px 0 4px;';
+                intro.textContent = parts.steps_intro || 'Next steps, in order:';
+                nextStepEl.appendChild(intro);
+                const ol = document.createElement('ol');
+                ol.style.cssText = 'margin:0 0 6px 18px; padding:0;';
+                parts.steps.forEach(s => {
+                  const li = document.createElement('li');
+                  li.style.cssText = 'margin-bottom:5px;';
+                  li.textContent = s;
+                  ol.appendChild(li);
+                });
+                nextStepEl.appendChild(ol);
+              }
+              if (parts.closing) {
+                const d = document.createElement('div');
+                d.textContent = parts.closing;
+                nextStepEl.appendChild(d);
+              }
+            } else {
+              nextStepEl.textContent = data.next_step || '';
+            }
             nextStepEl.style.display = 'block';
           }
           if (data.sweep_timeframes) {
@@ -195,7 +241,6 @@
   }
 </script>
 {% endif %}
-{% include '_recovery_panel.html' %}
 {% include '_project_chat_embed.html' %}
 </body>
 </html>

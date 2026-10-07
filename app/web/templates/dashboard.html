@@ -284,6 +284,37 @@
 <script src="/static/graph.js"></script>
 <script src="/static/t58-tour.js" defer></script>
 <script>
+  // Count-up animation for the performance metric boxes. Purely cosmetic:
+  // the final rendered value is the server's number, reformatted identically.
+  (function () {
+    var reduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduced) return;
+    document.querySelectorAll(".t58-metric-box .val").forEach(function (el) {
+      var raw = el.textContent.trim();
+      var m = raw.match(/^([^\d\-]*)(-?[\d,]*\.?\d+)(.*)$/);
+      if (!m) return;
+      var prefix = m[1], suffix = m[3];
+      var target = parseFloat(m[2].replace(/,/g, ""));
+      if (!isFinite(target)) return;
+      var decimals = (m[2].split(".")[1] || "").length;
+      var commas = m[2].indexOf(",") >= 0;
+      function fmt(v) {
+        var s = v.toFixed(decimals);
+        if (commas) s = Number(s).toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+        return prefix + s + suffix;
+      }
+      var t0 = null;
+      function step(ts) {
+        if (!t0) t0 = ts;
+        var p = Math.min((ts - t0) / 700, 1);
+        el.textContent = fmt(target * (1 - Math.pow(1 - p, 3)));
+        if (p < 1) requestAnimationFrame(step);
+      }
+      requestAnimationFrame(step);
+    });
+  })();
+</script>
+<script>
   const DATA = {{ data | tojson | safe }};
 
   function paint(data) {
