@@ -162,13 +162,15 @@ def test_per_contract_commission_charged_at_settle():
     risk = RiskConfig(initial_balance=50_000.0, risk_value=2.0, pip_size=1.0,
                       contract_size=10.0,
                       commission_per_trade=2.0, commission_per_contract=1.60)
-    # $1000 budget / $200 one-contract stop = 5 contracts.
+    # $1000 budget; costs sit inside it: one contract's worst case is
+    # $200 stop + $1.60 commission, plus the $2 flat charge -> 4 contracts
+    # (5 would risk $1010).
     trades, _ = run_execution(df, signals, risk,
                               stop_loss_pips=20, take_profit_pips=None)
     assert len(trades) == 1
     t = trades[0]
-    assert t.size == pytest.approx(50.0)  # 5 contracts x 10 units
-    assert t.commission == pytest.approx(2.0 + 1.60 * 5)
+    assert t.size == pytest.approx(40.0)  # 4 contracts x 10 units
+    assert t.commission == pytest.approx(2.0 + 1.60 * 4)
     # And the P&L actually paid it.
     gross = (t.exit_price - t.entry_price) * t.size
     assert t.pnl == pytest.approx(gross - t.commission)

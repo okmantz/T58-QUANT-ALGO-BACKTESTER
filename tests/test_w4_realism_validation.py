@@ -117,8 +117,9 @@ def test_fastpath_commission_parity_multicontract():
     sig[120] = -1
     sig[200] = 0
     sig[-5:] = 0
-    # fixed $1000 risk, 20-point stop -> 50 units -> 10 whole contracts
-    # (contract_size=5): commission = 1.0 + 1.42 * 10 = 15.20 per trade.
+    # fixed $1000 risk, 20-point stop. Costs now sit INSIDE the risk budget
+    # (worst case per contract = 5*(20+1.5)+1.42 = $108.92) -> 9 whole
+    # contracts (10 would risk $1089): commission = 1.0 + 1.42 * 9 = 13.78.
     risk = RiskConfig(
         initial_balance=100_000.0, risk_mode="fixed", risk_value=1000.0,
         pip_size=1.0, contract_size=5.0,
@@ -136,7 +137,7 @@ def test_fastpath_commission_parity_multicontract():
     for s, v in zip(scalar_trades, vec_trades):
         assert v.exit_reason == s.exit_reason
         assert v.commission == pytest.approx(s.commission, abs=1e-9)
-        assert v.commission == pytest.approx(1.0 + 1.42 * 10, abs=1e-9)
+        assert v.commission == pytest.approx(1.0 + 1.42 * 9, abs=1e-9)
         assert v.pnl == pytest.approx(s.pnl, abs=1e-6)
 
 
@@ -158,8 +159,9 @@ def test_fastpath_daily_loss_parity_deep_dip():
     sig[5] = 1  # long, filled at bar 6 open = 100
     sig[6:21] = 1  # hold the long signal through the dip bar (a 0 would
     # mean "flat" and trigger a signal exit before the dip)
-    # fixed $500 risk, 20-point stop -> 25 units (5 contracts);
-    # daily floor $1000 -> liquidation 40 points adverse -> $60.
+    # fixed $500 risk, 20-point stop; costs ($1 flat) sit inside the
+    # budget -> 4 whole contracts (5 would risk $501) = 20 units;
+    # daily floor $1000 -> liquidation 50 points adverse -> $50.
     risk = RiskConfig(
         initial_balance=50_000.0, risk_mode="fixed", risk_value=500.0,
         pip_size=1.0, contract_size=5.0,
@@ -180,8 +182,8 @@ def test_fastpath_daily_loss_parity_deep_dip():
     s, v = scalar_trades[0], vec_trades[0]
     for t in (s, v):
         assert t.exit_reason == "daily_loss_limit_forced_close"
-        assert t.exit_price == pytest.approx(60.0, abs=1e-9)
-        assert t.pnl == pytest.approx((60.0 - 100.0) * 25 - 1.0, abs=1e-6)
+        assert t.exit_price == pytest.approx(50.0, abs=1e-9)
+        assert t.pnl == pytest.approx((50.0 - 100.0) * 20 - 1.0, abs=1e-6)
     assert v.exit_price == pytest.approx(s.exit_price, abs=1e-9)
     assert v.pnl == pytest.approx(s.pnl, abs=1e-6)
 
@@ -286,9 +288,10 @@ def test_intrabar_stop_before_tightening():
     assert len(trades) == 1
     t = trades[0]
     assert t.exit_reason == "stop_loss"
-    # full stop loss: (90 - 100) * 100 units - $1 commission
+    # full stop loss: 19 contracts (20 would risk $1001 incl. the $1
+    # flat commission) = 95 units: (90 - 100) * 95 - $1 commission
     assert t.exit_price == pytest.approx(90.0, abs=1e-9)
-    assert t.pnl == pytest.approx(-1001.0, abs=1e-6)
+    assert t.pnl == pytest.approx(-951.0, abs=1e-6)
 
 
 def test_intrabar_tightening_still_applies_when_stop_not_touched():
@@ -335,8 +338,10 @@ def test_spec_spread_slippage_defaults_applied():
     risk = RiskConfig()
     assert risk.spread_pips == 0.0 and risk.slippage_pips == 0.0
     applied = apply_instrument_spec(risk, "MGC")
-    assert applied.spread_pips == pytest.approx(1.0)
-    assert applied.slippage_pips == pytest.approx(1.0)
+    # 2026-10-07 cost-unit fix: the spec's defaults are TICKS; MGC's tick is
+    # 0.10 points, so 1 tick == 0.10 pip (pip_size 1.0), not 1.0.
+    assert applied.spread_pips == pytest.approx(1.0 * spec.tick_size / spec.pip_size)
+    assert applied.slippage_pips == pytest.approx(1.0 * spec.tick_size / spec.pip_size)
     # pip_size/contract_size/commission behavior unchanged
     assert applied.pip_size == 1.0 and applied.contract_size == 10.0
 
@@ -354,8 +359,11 @@ def test_spec_spread_defaults_all_specs():
         assert spec.default_spread_ticks > 0, symbol
         assert spec.default_slippage_ticks >= 0, symbol
         applied = apply_instrument_spec(RiskConfig(), symbol)
-        assert applied.spread_pips == pytest.approx(float(spec.default_spread_ticks)), symbol
-        assert applied.slippage_pips == pytest.approx(float(spec.default_slippage_ticks)), symbol
+        # ticks -> price via tick_size -> pips via pip_size (cost-unit fix)
+        assert applied.spread_pips == pytest.approx(
+            float(spec.default_spread_ticks) * spec.tick_size / spec.pip_size), symbol
+        assert applied.slippage_pips == pytest.approx(
+            float(spec.default_slippage_ticks) * spec.tick_size / spec.pip_size), symbol
 
 
 # ---------------------------------------------------------------------------
