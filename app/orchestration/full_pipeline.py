@@ -125,7 +125,8 @@ from app.search.strategy_space import build_strategy_from_spec
 from app.strategy.base import Strategy
 from app.strategy.library import StrategyAlreadyExists, provenance_stamped_name, safe_filename_stem, \
     save_strategy_replacing_version, save_strategy_text, set_strategy_status, record_backtest_result, \
-    record_optimize_result, record_validation_result, record_champion_check_result
+    record_optimize_result, record_validation_result, record_champion_check_result, \
+    instrument_from_dataset_label, simple_run_filename, simple_run_name
 from app.validation.cpcv import CPCVError, CPCVResult, PBOGateResult, compute_pbo, pbo_gate, run_cpcv
 from app.validation.icir import ICIRGateResult, run_icir_gate_from_backtest
 from app.validation.regime_matrix import RegimeMatrixResult, build_regime_matrix
@@ -314,6 +315,13 @@ class FullPipelineConfig:
     pbo_max: float = 0.5
     pbo_max_candidates: int = 8
     pbo_max_paths: int = 10
+    # SPEED (v9.4): PBO only ever consumes the RANKING of the candidates
+    # within each path, so its inner Monte Carlo runs at this reduced
+    # simulation count instead of the full ga_search_mc_sims -- same
+    # estimand (eval-pass probability per candidate), coarser sampling
+    # noise. Combined with compute_pbo's parallel path evaluation this
+    # is what keeps Step 6d from dwarfing the rest of the pipeline.
+    pbo_mc_sims: int = 50
     # D1: the holdout gate rejects (NOT READY) when the holdout check RAN
     # with at least this many trades AND lost money (net < 0 or profit
     # factor < 1.0) while the in-sample run traded. Below this trade
@@ -1739,7 +1747,7 @@ def run_full_pipeline(
                         n_groups=cfg.cpcv_n_groups, n_test_groups=cfg.cpcv_n_test_groups,
                         max_paths=cfg.pbo_max_paths,
                         metric=cfg.oos_check_metric, prop_rules=prop_rules,
-                        mc_cfg=MonteCarloConfig(n_simulations=cfg.ga_search_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
+                        mc_cfg=MonteCarloConfig(n_simulations=cfg.pbo_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
                     )
                     pbo_gate_result = pbo_gate(pbo_res, max_pbo=cfg.pbo_max)
                     log(f"  {pbo_gate_result.reason}")
@@ -1854,10 +1862,28 @@ def _finish(
     # exact bug this closes (the same fix as app.orchestration.
     # quick_optimize.run_quick_optimize's save_name).
     mutated_by_ga = refinement_ran and ga_result is not None and ga_result.best.oos_trade_count > 0
-    save_name = (
-        provenance_stamped_name(display_name, origin="full_pipeline", seed=cfg.random_seed)
-        if mutated_by_ga else display_name
-    )
+    # v9.4 naming (Owen's formula: instrument + timeframe + leading
+    # indicator + (test)): "ES1! 15m RSI (FULL PIPELINE).json". Exactly
+    # one canonical Full Pipeline output file per instrument/timeframe;
+    # repeat runs update it in place (previous version archived). This
+    # replaces the 2026-09-17 provenance-stamped names at Owen's direct
+    # request -- uniqueness now comes from the single-file rule instead
+    # of a new stamped filename per run.
+    _fp_instrument = instrument_from_dataset_label(instrument)
+    try:
+        from app.data.timeframe_resample import infer_timeframe_label
+
+        _fp_timeframe = infer_timeframe_label(df)
+    except Exception:  # noqa: BLE001 -- a name slot must never break a run
+        _fp_timeframe = ""
+    _fp_config = final_config if isinstance(final_config, dict) else getattr(strategy, "config", None)
+    _fp_indicator = ""
+    if isinstance(_fp_config, dict):
+        _fp_inds = _fp_config.get("indicators") or []
+        if _fp_inds and isinstance(_fp_inds[0], dict):
+            _fp_indicator = str(_fp_inds[0].get("type") or "").upper()
+    _fp_formula = simple_run_name(_fp_instrument, _fp_timeframe, _fp_indicator, "full pipeline")
+    save_name = _fp_formula if (mutated_by_ga and _fp_formula != "(FULL PIPELINE)") else display_name
     # PARAMETER-FIDELITY FIX (2026-09-24): make the report's own title say
     # when the backtested parameters are NOT the ones display_name/save_
     # name describe -- see the baseline_parameters comment further below
@@ -1966,8 +1992,8 @@ def _finish(
                     "net_profit": round(final_bt.statistics.net_profit, 2),
                     "win_rate": round(final_bt.statistics.win_rate, 1),
                     "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
-                    "eval_pass_probability": round(final_mc.evaluation_pass_probability, 1),
-                    "first_payout_probability": round(final_mc.first_payout_probability, 1),
+                    "eval_pass_probability": round(final_mc.headline_evaluation_pass_probability, 1),
+                    "first_payout_probability": round(final_mc.headline_first_payout_probability, 1),
                     "verdict": verdict,
                     "report_html": str(report_paths["html"]),
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
@@ -2000,22 +2026,24 @@ def _finish(
                 saved_library_note = f"Could not replace the Strategy Library entry: {exc}"
                 log(f"  {saved_library_note}")
         else:
-            base_name = safe_filename_stem(save_name, "full_pipeline_strategy")
-            filename = f"{base_name}_pipeline{ext}"
+            filename = simple_run_filename(_fp_instrument, _fp_timeframe, _fp_indicator, "full pipeline", ext)
+            if filename in (ext, f"(FULL PIPELINE){ext}"):  # no naming context at all
+                filename = f"{safe_filename_stem(save_name, 'full_pipeline_strategy')}_pipeline{ext}"
+            _fp_updated_existing = False
             try:
                 try:
                     saved_library_path = save_strategy_text(final_code_text, filename, final_source_type, overwrite=False)
                 except StrategyAlreadyExists:
-                    filename = f"{base_name}_pipeline_{int(time.time())}{ext}"
-                    saved_library_path = save_strategy_text(final_code_text, filename, final_source_type, overwrite=False)
+                    saved_library_path = save_strategy_replacing_version(final_code_text, final_source_type, filename)
+                    _fp_updated_existing = True
                 set_strategy_status(final_source_type, filename, status_to_set)
                 record_backtest_result(final_source_type, filename, {
                     "trades": len(final_bt.trades),
                     "net_profit": round(final_bt.statistics.net_profit, 2),
                     "win_rate": round(final_bt.statistics.win_rate, 1),
                     "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
-                    "eval_pass_probability": round(final_mc.evaluation_pass_probability, 1),
-                    "first_payout_probability": round(final_mc.first_payout_probability, 1),
+                    "eval_pass_probability": round(final_mc.headline_evaluation_pass_probability, 1),
+                    "first_payout_probability": round(final_mc.headline_first_payout_probability, 1),
                     "verdict": verdict,
                     "report_html": str(report_paths["html"]),
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
@@ -2053,7 +2081,7 @@ def _finish(
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
                     "t58_tier": t58_tier,
                 })
-                saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {status_to_set})." + _library_save_note_suffix(verdict, verdict_reasons)
+                saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {status_to_set})." + (" Updated the existing Full Pipeline output for this instrument/timeframe -- previous version archived." if _fp_updated_existing else "") + _library_save_note_suffix(verdict, verdict_reasons)
                 log(f"  {saved_library_note}")
             except Exception as exc:  # noqa: BLE001 -- saving to the library is a convenience, not core output
                 saved_library_note = f"Could not save to the Strategy Library: {exc}"
@@ -2086,8 +2114,8 @@ def _finish(
                     "net_profit": round(final_bt.statistics.net_profit, 2),
                     "win_rate": round(final_bt.statistics.win_rate, 1),
                     "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
-                    "eval_pass_probability": round(final_mc.evaluation_pass_probability, 1),
-                    "first_payout_probability": round(final_mc.first_payout_probability, 1),
+                    "eval_pass_probability": round(final_mc.headline_evaluation_pass_probability, 1),
+                    "first_payout_probability": round(final_mc.headline_first_payout_probability, 1),
                     "verdict": verdict,
                     "report_html": str(report_paths["html"]),
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
@@ -2122,8 +2150,9 @@ def _finish(
                 saved_library_note = f"Could not replace the Strategy Library entry: {exc}"
                 log(f"  {saved_library_note}")
         else:
-            base_name = safe_filename_stem(save_name, "full_pipeline_strategy")
-            filename = f"{base_name}_pipeline.json"
+            filename = simple_run_filename(_fp_instrument, _fp_timeframe, _fp_indicator, "full pipeline", ".json")
+            if filename == "(FULL PIPELINE).json":  # no naming context at all
+                filename = f"{safe_filename_stem(save_name, 'full_pipeline_strategy')}_pipeline.json"
             # 2026-09-17 naming-drift fix, continued: overwrite the saved
             # JSON's own "name" field with save_name too when mutated --
             # otherwise the file on disk would still claim the ORIGINAL
@@ -2132,20 +2161,21 @@ def _finish(
             if mutated_by_ga:
                 config_to_save["name"] = save_name
             config_text = json.dumps(config_to_save, indent=2)
+            _fp_updated_existing = False
             try:
                 try:
                     saved_library_path = save_strategy_text(config_text, filename, "manual", overwrite=False)
                 except StrategyAlreadyExists:
-                    filename = f"{base_name}_pipeline_{int(time.time())}.json"
-                    saved_library_path = save_strategy_text(config_text, filename, "manual", overwrite=False)
+                    saved_library_path = save_strategy_replacing_version(config_text, "manual", filename)
+                    _fp_updated_existing = True
                 set_strategy_status("manual", filename, status_to_set)
                 record_backtest_result("manual", filename, {
                     "trades": len(final_bt.trades),
                     "net_profit": round(final_bt.statistics.net_profit, 2),
                     "win_rate": round(final_bt.statistics.win_rate, 1),
                     "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
-                    "eval_pass_probability": round(final_mc.evaluation_pass_probability, 1),
-                    "first_payout_probability": round(final_mc.first_payout_probability, 1),
+                    "eval_pass_probability": round(final_mc.headline_evaluation_pass_probability, 1),
+                    "first_payout_probability": round(final_mc.headline_first_payout_probability, 1),
                     "verdict": verdict,
                     "report_html": str(report_paths["html"]),
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
@@ -2172,7 +2202,7 @@ def _finish(
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
                     "t58_tier": t58_tier,
                 })
-                saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {status_to_set})." + _library_save_note_suffix(verdict, verdict_reasons)
+                saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {status_to_set})." + (" Updated the existing Full Pipeline output for this instrument/timeframe -- previous version archived." if _fp_updated_existing else "") + _library_save_note_suffix(verdict, verdict_reasons)
                 log(f"  {saved_library_note}")
                 final_code_text = config_text
                 final_code_ext = ".json"
@@ -2203,8 +2233,8 @@ def _finish(
             win_rate=final_bt.statistics.win_rate,
             profit_factor=final_bt.statistics.profit_factor,
             max_drawdown_pct=final_bt.statistics.max_drawdown_pct,
-            eval_pass_probability=final_mc.evaluation_pass_probability,
-            first_payout_probability=final_mc.first_payout_probability,
+            eval_pass_probability=final_mc.headline_evaluation_pass_probability,
+            first_payout_probability=final_mc.headline_first_payout_probability,
             risk_of_ruin_pct=final_mc.risk_of_ruin_pct,
             lesson="; ".join(verdict_reasons) if verdict_reasons else "",
         )
@@ -2595,8 +2625,8 @@ def run_full_pipeline_batch(
                     "net_profit": round(result.final_bt.statistics.net_profit, 2),
                     "win_rate": round(result.final_bt.statistics.win_rate, 1),
                     "max_dd": round(result.final_bt.statistics.max_drawdown_pct, 2),
-                    "eval_pass_probability": round(result.final_mc.evaluation_pass_probability, 1),
-                    "first_payout_probability": round(result.final_mc.first_payout_probability, 1),
+                    "eval_pass_probability": round(result.final_mc.headline_evaluation_pass_probability, 1),
+                    "first_payout_probability": round(result.final_mc.headline_first_payout_probability, 1),
                     "verdict": result.verdict,
                     "report_html": str(result.report_paths["html"]),
                     "first_payout_amount": result.full_history_single_run.first_payout_amount,
@@ -2627,14 +2657,14 @@ def run_full_pipeline_batch(
         log(
             f"  Verdict: {result.verdict}  |  Trades: {len(result.final_bt.trades)}  |  "
             f"Net profit: ${result.final_bt.statistics.net_profit:,.2f}  |  "
-            f"Eval pass probability: {result.final_mc.evaluation_pass_probability:.1f}%  |  "
+            f"Eval pass probability: {result.final_mc.headline_evaluation_pass_probability:.1f}%  |  "
             f"Report: {result.report_paths['html'].name}"
         )
         outcomes_by_index[i] = FullPipelineBatchOutcome(
             label, ok=True, verdict=result.verdict,
             trades=len(result.final_bt.trades),
             net_profit=result.final_bt.statistics.net_profit,
-            eval_pass_probability=result.final_mc.evaluation_pass_probability,
+            eval_pass_probability=result.final_mc.headline_evaluation_pass_probability,
             report_html=result.report_paths["html"], result=result,
         )
         _write_progress(len(outcomes_by_index))

@@ -110,12 +110,16 @@ from app.search.strategy_space import build_strategy_from_spec
 from app.strategy.base import Strategy
 from app.strategy.library import (
     StrategyAlreadyExists,
+    instrument_from_dataset_label,
+    leading_indicator_name,
     provenance_stamped_name,
     record_optimize_result,
     safe_filename_stem,
     save_strategy_replacing_version,
     save_strategy_text,
     set_strategy_status,
+    simple_run_filename,
+    simple_run_name,
 )
 from app.validation.icir import ICIRGateResult, run_icir_gate_from_backtest
 
@@ -436,6 +440,118 @@ class QuickOptimizeResult:
     holdout_note: str | None = None
 
 
+def _save_optimized_to_library(
+    *, final_source_type, final_code_text, final_config, final_bt, final_mc,
+    baseline_mc, improved, cfg, display_name, mutated_by_ga,
+    run_instrument, run_timeframe, run_indicator, log, final_code_ext=None,
+):
+    """Saves ONE optimized strategy to the Strategy Library and returns
+    (saved_path, note, code_text, code_ext).
+
+    Naming (v9.4, Owen's formula): 'ES1! 15m RSI (OPTIMIZED).json' --
+    instrument + timeframe + leading indicator + (test). Exactly one
+    live output file per tool/instrument/timeframe: if that file already
+    exists (a previous run of the same tool), it is updated in place via
+    save_strategy_replacing_version (old version archived) instead of
+    minting another timestamped copy. With cfg.replace_existing, the
+    INPUT strategy's own file is replaced, per the form's checkbox.
+    """
+    formula_display = simple_run_name(run_instrument, run_timeframe, run_indicator, "optimized")
+    save_name = formula_display if (mutated_by_ga and formula_display != "(OPTIMIZED)") else display_name
+
+    def _output_filename(ext: str) -> str:
+        name = simple_run_filename(run_instrument, run_timeframe, run_indicator, "optimized", ext)
+        if name in (ext, f"(OPTIMIZED){ext}"):  # no naming context at all
+            return f"{safe_filename_stem(display_name, 'optimized_strategy')}_optimized{ext}"
+        return name
+
+    def _stats() -> dict:
+        return {
+            "improved": improved,
+            "trades": len(final_bt.trades),
+            "net_profit": round(final_bt.statistics.net_profit, 2),
+            "win_rate": round(final_bt.statistics.win_rate, 1),
+            "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
+            "eval_pass_probability": round(final_mc.headline_evaluation_pass_probability, 1),
+            "first_payout_probability": round(final_mc.headline_first_payout_probability, 1),
+            "baseline_eval_pass_probability": round(baseline_mc.evaluation_pass_probability, 1),
+        }
+
+    saved_library_path = None
+    saved_library_note = None
+    if final_source_type in ("python", "pinescript", "mql5") and final_code_text:
+        ext = _EXT_FOR_SOURCE[final_source_type]
+        if cfg.replace_existing and cfg.library_ref:
+            ref_type, ref_filename = cfg.library_ref
+            try:
+                saved_library_path = save_strategy_replacing_version(final_code_text, ref_type, ref_filename)
+                set_strategy_status(ref_type, ref_filename, cfg.library_status)
+                record_optimize_result(ref_type, ref_filename, _stats())
+                saved_library_note = f"Replaced '{ref_filename}' in the Strategy Library (previous version archived, status: {cfg.library_status})."
+                log(saved_library_note)
+            except Exception as exc:  # noqa: BLE001 -- saving is a convenience, not the core result
+                saved_library_note = f"Could not replace the Strategy Library entry: {exc}"
+                log(saved_library_note)
+        else:
+            filename = _output_filename(ext)
+            updated_existing = False
+            try:
+                try:
+                    saved_library_path = save_strategy_text(final_code_text, filename, final_source_type, overwrite=False)
+                except StrategyAlreadyExists:
+                    saved_library_path = save_strategy_replacing_version(final_code_text, final_source_type, filename)
+                    updated_existing = True
+                set_strategy_status(final_source_type, filename, cfg.library_status)
+                record_optimize_result(final_source_type, filename, _stats())
+                saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {cfg.library_status})."
+                if updated_existing:
+                    saved_library_note += " Updated the existing Quick Optimize output for this instrument/timeframe -- previous version archived, so the library keeps exactly one optimized copy."
+                log(saved_library_note)
+            except Exception as exc:  # noqa: BLE001
+                saved_library_note = f"Could not save to the Strategy Library: {exc}"
+                log(saved_library_note)
+    elif final_source_type == "manual" and final_config:
+        config_to_save = dict(final_config)
+        if cfg.replace_existing and cfg.library_ref:
+            ref_type, ref_filename = cfg.library_ref
+            config_text = json.dumps(config_to_save, indent=2)
+            try:
+                saved_library_path = save_strategy_replacing_version(config_text, ref_type, ref_filename)
+                set_strategy_status(ref_type, ref_filename, cfg.library_status)
+                record_optimize_result(ref_type, ref_filename, _stats())
+                saved_library_note = f"Replaced '{ref_filename}' in the Strategy Library (previous version archived, status: {cfg.library_status})."
+                log(saved_library_note)
+                final_code_text = config_text
+                final_code_ext = ".json"
+            except Exception as exc:  # noqa: BLE001
+                saved_library_note = f"Could not replace the Strategy Library entry: {exc}"
+                log(saved_library_note)
+        else:
+            filename = _output_filename(".json")
+            if mutated_by_ga:
+                config_to_save["name"] = save_name
+            config_text = json.dumps(config_to_save, indent=2)
+            updated_existing = False
+            try:
+                try:
+                    saved_library_path = save_strategy_text(config_text, filename, "manual", overwrite=False)
+                except StrategyAlreadyExists:
+                    saved_library_path = save_strategy_replacing_version(config_text, "manual", filename)
+                    updated_existing = True
+                set_strategy_status("manual", filename, cfg.library_status)
+                record_optimize_result("manual", filename, _stats())
+                saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {cfg.library_status})."
+                if updated_existing:
+                    saved_library_note += " Updated the existing Quick Optimize output for this instrument/timeframe -- previous version archived, so the library keeps exactly one optimized copy."
+                log(saved_library_note)
+                final_code_text = config_text
+                final_code_ext = ".json"
+            except Exception as exc:  # noqa: BLE001
+                saved_library_note = f"Could not save to the Strategy Library: {exc}"
+                log(saved_library_note)
+    return saved_library_path, saved_library_note, final_code_text, final_code_ext
+
+
 def run_quick_optimize(
     df: pd.DataFrame,
     strategy: Strategy,
@@ -444,6 +560,9 @@ def run_quick_optimize(
     cfg: QuickOptimizeConfig | None = None,
     progress_cb=None,
     cancel_event=None,
+    instrument_label: str = "",
+    timeframe_label: str = "",
+    defer_library_save: bool = False,
 ) -> QuickOptimizeResult:
     """Runs the walk-forward-aware GA against `strategy` and returns a
     before/after comparison. Raises RefinementError (same exception Full
@@ -459,6 +578,19 @@ def run_quick_optimize(
     t0 = time.time()
     warnings: list[str] = []
     display_name = _display_name(strategy)
+
+    # v9.4 simple-name inputs (Owen's formula: instrument + timeframe +
+    # leading indicator + (TEST)); see _save_optimized_to_library.
+    run_instrument = instrument_from_dataset_label(instrument_label)
+    run_timeframe = (timeframe_label or "").strip()
+    if not run_timeframe:
+        try:
+            from app.data.timeframe_resample import infer_timeframe_label
+
+            run_timeframe = infer_timeframe_label(df)
+        except Exception:  # noqa: BLE001 -- a name slot must never break a run
+            run_timeframe = ""
+    run_indicator = leading_indicator_name(strategy)
 
     log(f"  {RESEARCH_RESULT_BANNER}")
     log(f"  {RESEARCH_RESULT_BANNER_DETAIL}")
@@ -837,139 +969,38 @@ def run_quick_optimize(
             log("  Not reporting this as an improvement (acceptance gate failed).")
         improved = False
 
-    # Point (3) of the 2026-09-17 fix: a real GA winner's parameters no
-    # longer match `display_name` (the ORIGINAL strategy's name) -- see
-    # app.strategy.library.provenance_stamped_name's own docstring for the
-    # exact bug this closes. save_name is what both the filename AND (for
-    # manual configs, below) the saved JSON's own "name" field are derived
-    # from; the unmutated branch keeps display_name exactly as before.
-    save_name = (
-        provenance_stamped_name(display_name, origin="quick_optimize", seed=cfg.random_seed)
-        if mutated_by_ga else display_name
-    )
-
+    # v9.4: saved-name/identity handling moved into
+    # _save_optimized_to_library (Owen's simple-name formula + one
+    # canonical output file). save_name survives only as the display
+    # name stamped into a mutated manual config's JSON "name" field.
     saved_library_path = None
     saved_library_note = None
-    if cfg.save_to_library and final_source_type in ("python", "pinescript", "mql5") and final_code_text:
-        ext = _EXT_FOR_SOURCE[final_source_type]
-        if cfg.replace_existing and cfg.library_ref:
-            # VERSIONING: overwrite the SAME file the input strategy came
-            # from, in place -- archiving the version being replaced
-            # (see save_strategy_replacing_version) and keeping every
-            # pipeline-progress field that file already had, instead of
-            # writing yet another provenance-stamped copy that starts
-            # tracking from zero.
-            ref_type, ref_filename = cfg.library_ref
-            try:
-                saved_library_path = save_strategy_replacing_version(final_code_text, ref_type, ref_filename)
-                filename = ref_filename
-                set_strategy_status(ref_type, filename, cfg.library_status)
-                record_optimize_result(ref_type, filename, {
-                    "improved": improved,
-                    "trades": len(final_bt.trades),
-                    "net_profit": round(final_bt.statistics.net_profit, 2),
-                    "win_rate": round(final_bt.statistics.win_rate, 1),
-                    "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
-                    "eval_pass_probability": round(final_mc.evaluation_pass_probability, 1),
-                    "first_payout_probability": round(final_mc.first_payout_probability, 1),
-                    "baseline_eval_pass_probability": round(baseline_mc.evaluation_pass_probability, 1),
-                })
-                saved_library_note = f"Replaced '{filename}' in the Strategy Library (previous version archived, status: {cfg.library_status})."
-                log(saved_library_note)
-            except Exception as exc:  # noqa: BLE001 -- saving is a convenience, not the core result
-                saved_library_note = f"Could not replace the Strategy Library entry: {exc}"
-                log(saved_library_note)
-        else:
-            base_name = safe_filename_stem(save_name, "optimized_strategy")
-            filename = f"{base_name}_optimized{ext}"
-            try:
-                try:
-                    saved_library_path = save_strategy_text(final_code_text, filename, final_source_type, overwrite=False)
-                except StrategyAlreadyExists:
-                    filename = f"{base_name}_optimized_{int(time.time())}{ext}"
-                    saved_library_path = save_strategy_text(final_code_text, filename, final_source_type, overwrite=False)
-                set_strategy_status(final_source_type, filename, cfg.library_status)
-                record_optimize_result(final_source_type, filename, {
-                    "improved": improved,
-                    "trades": len(final_bt.trades),
-                    "net_profit": round(final_bt.statistics.net_profit, 2),
-                    "win_rate": round(final_bt.statistics.win_rate, 1),
-                    "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
-                    "eval_pass_probability": round(final_mc.evaluation_pass_probability, 1),
-                    "first_payout_probability": round(final_mc.first_payout_probability, 1),
-                    "baseline_eval_pass_probability": round(baseline_mc.evaluation_pass_probability, 1),
-                })
-                saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {cfg.library_status})."
-                log(saved_library_note)
-            except Exception as exc:  # noqa: BLE001 -- saving is a convenience, not the core result
-                saved_library_note = f"Could not save to the Strategy Library: {exc}"
-                log(saved_library_note)
-    elif cfg.save_to_library and final_source_type == "manual" and final_config:
-        # Same fix as app.orchestration.full_pipeline._finish -- manual/
-        # Search-Lab configs are dicts, not files, but app.strategy.library
-        # already has a first-class "manual" type that stores exactly this
-        # shape as JSON, so there's no real reason this used to give up.
-        config_to_save = dict(final_config)
-        if cfg.replace_existing and cfg.library_ref:
-            ref_type, ref_filename = cfg.library_ref
-            config_text = json.dumps(config_to_save, indent=2)
-            try:
-                saved_library_path = save_strategy_replacing_version(config_text, ref_type, ref_filename)
-                filename = ref_filename
-                set_strategy_status(ref_type, filename, cfg.library_status)
-                record_optimize_result(ref_type, filename, {
-                    "improved": improved,
-                    "trades": len(final_bt.trades),
-                    "net_profit": round(final_bt.statistics.net_profit, 2),
-                    "win_rate": round(final_bt.statistics.win_rate, 1),
-                    "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
-                    "eval_pass_probability": round(final_mc.evaluation_pass_probability, 1),
-                    "first_payout_probability": round(final_mc.first_payout_probability, 1),
-                    "baseline_eval_pass_probability": round(baseline_mc.evaluation_pass_probability, 1),
-                })
-                saved_library_note = f"Replaced '{filename}' in the Strategy Library (previous version archived, status: {cfg.library_status})."
-                log(saved_library_note)
-                final_code_text = config_text
+    pending_library_save = None
+    if cfg.save_to_library and (
+        (final_source_type in ("python", "pinescript", "mql5") and final_code_text)
+        or (final_source_type == "manual" and final_config)
+    ):
+        _save_call = dict(
+            final_source_type=final_source_type, final_code_text=final_code_text,
+            final_config=final_config, final_bt=final_bt, final_mc=final_mc,
+            baseline_mc=baseline_mc, improved=improved, cfg=cfg,
+            display_name=display_name, mutated_by_ga=mutated_by_ga,
+            run_instrument=run_instrument, run_timeframe=run_timeframe,
+            run_indicator=run_indicator, final_code_ext=final_code_ext,
+        )
+        if defer_library_save:
+            # Timeframe sweep: only the WINNING timeframe's result is
+            # saved (once, by run_quick_optimize_sweep) -- every other
+            # leg's save stays pending and is simply dropped.
+            pending_library_save = _save_call
+            if final_source_type == "manual" and final_config:
+                final_code_text = json.dumps(final_config, indent=2)
                 final_code_ext = ".json"
-            except Exception as exc:  # noqa: BLE001 -- saving is a convenience, not the core result
-                saved_library_note = f"Could not replace the Strategy Library entry: {exc}"
-                log(saved_library_note)
         else:
-            base_name = safe_filename_stem(save_name, "optimized_strategy")
-            filename = f"{base_name}_optimized.json"
-            # Point (3), continued: overwrite the saved JSON's own "name" field
-            # with save_name too when mutated -- otherwise the file on disk
-            # would still claim the ORIGINAL (now-inaccurate) name internally
-            # even though its filename was fixed, which is exactly the
-            # "stale name, mutated body" state that caused the original bug.
-            if mutated_by_ga:
-                config_to_save["name"] = save_name
-            config_text = json.dumps(config_to_save, indent=2)
-            try:
-                try:
-                    saved_library_path = save_strategy_text(config_text, filename, "manual", overwrite=False)
-                except StrategyAlreadyExists:
-                    filename = f"{base_name}_optimized_{int(time.time())}.json"
-                    saved_library_path = save_strategy_text(config_text, filename, "manual", overwrite=False)
-                set_strategy_status("manual", filename, cfg.library_status)
-                record_optimize_result("manual", filename, {
-                    "improved": improved,
-                    "trades": len(final_bt.trades),
-                    "net_profit": round(final_bt.statistics.net_profit, 2),
-                    "win_rate": round(final_bt.statistics.win_rate, 1),
-                    "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
-                    "eval_pass_probability": round(final_mc.evaluation_pass_probability, 1),
-                    "first_payout_probability": round(final_mc.first_payout_probability, 1),
-                    "baseline_eval_pass_probability": round(baseline_mc.evaluation_pass_probability, 1),
-                })
-                saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {cfg.library_status})."
-                log(saved_library_note)
-                final_code_text = config_text
-                final_code_ext = ".json"
-            except Exception as exc:  # noqa: BLE001 -- saving is a convenience, not the core result
-                saved_library_note = f"Could not save to the Strategy Library: {exc}"
-                log(saved_library_note)
-    elif final_source_type == "manual":
+            saved_library_path, saved_library_note, final_code_text, final_code_ext = (
+                _save_optimized_to_library(**_save_call, log=log)
+            )
+    elif final_source_type == "manual" and not cfg.save_to_library:
         saved_library_note = (
             "Manual Strategy Builder configuration produced, but nothing was saved (saving to the "
             "Strategy Library is turned off) -- copy the winning parameters from this result into "
@@ -1006,7 +1037,7 @@ def run_quick_optimize(
     if final_tmp_dir is not None:
         rmtree(final_tmp_dir, ignore_errors=True)
 
-    return QuickOptimizeResult(
+    result = QuickOptimizeResult(
         strategy_display_name=display_name,
         source_type=strategy.source_type,
         baseline_trades=len(baseline_bt.trades),
@@ -1054,6 +1085,13 @@ def run_quick_optimize(
         holdout_payout_probability=holdout_payout_probability,
         holdout_note=holdout_note,
     )
+    # v9.4 sweep support: a deferred save (see defer_library_save) rides
+    # on the result so run_quick_optimize_sweep can commit exactly one
+    # save -- the winning timeframe's. Plain attribute, not a dataclass
+    # field: it carries live objects (cfg, backtest/MC results) that
+    # must never be serialized with the result.
+    result.pending_library_save = pending_library_save
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1086,6 +1124,7 @@ def run_quick_optimize_sweep(
     cfg: QuickOptimizeConfig | None = None,
     progress_cb=None,
     cancel_event=None,
+    instrument_label: str = "",
 ) -> QuickOptimizeSweepResult:
     """Runs run_quick_optimize once per timeframe in `timeframes`, on `df`
     resampled to each one, and returns every timeframe's result alongside
@@ -1149,6 +1188,7 @@ def run_quick_optimize_sweep(
             result = run_quick_optimize(
                 target_df, run_strategy, risk, prop_rules, cfg=cfg,
                 progress_cb=_scoped_log if progress_cb else None, cancel_event=cancel_event,
+                instrument_label=instrument_label, defer_library_save=True,
             )
             per_timeframe[label] = result
         except RefinementError as exc:
@@ -1163,8 +1203,20 @@ def run_quick_optimize_sweep(
         per_timeframe,
         key=lambda k: (per_timeframe[k].optimized_eval_pass_probability, per_timeframe[k].optimized_win_rate),
     )
+    best_result = per_timeframe[best_label]
+
+    # v9.4: exactly ONE library save per sweep -- the winning
+    # timeframe's. Every leg deferred its save; only the winner commits.
+    _effective_cfg = cfg or QuickOptimizeConfig()
+    _pending = getattr(best_result, "pending_library_save", None)
+    if _effective_cfg.save_to_library and _pending is not None:
+        _saved_path, _saved_note, _ct, _ce = _save_optimized_to_library(
+            **_pending, log=(lambda m: progress_cb(m) if progress_cb else None),
+        )
+        best_result.saved_library_path = _saved_path
+        best_result.saved_library_note = _saved_note
 
     return QuickOptimizeSweepResult(
-        per_timeframe=per_timeframe, best_timeframe=best_label, best_result=per_timeframe[best_label],
+        per_timeframe=per_timeframe, best_timeframe=best_label, best_result=best_result,
         skipped=plan.skipped, errors=errors,
     )
