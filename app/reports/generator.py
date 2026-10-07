@@ -303,6 +303,12 @@ def build_report(
         "holdout_comparison": holdout_comparison,
         "prop_firm_rules": asdict(prop_rules),
         "prop_firm_single_run": summarize_single_run(prop_single_run),
+        # Account-by-account ledger of the deterministic single run
+        # (Owen's accounting): each attempt's eval outcome, funded
+        # outcome, and ending balance, in order. Rendered as its own
+        # section so a reader can follow "account 1 passed, blew the
+        # funded account, account 2 passed and paid out" directly.
+        "account_attempts": [asdict(a) for a in (prop_single_run.attempts or [])],
         "monte_carlo": monte_carlo_result.to_dict(),
     }
     # HEADLINE-RISK-FLAGS (2026-09-24): see _headline_risk_flags's own
@@ -583,6 +589,7 @@ Instrument: {instrument} &middot; Timeframe: {timeframe} &middot; Period: {perio
 <h2>Prop-Firm Single-Run Result (Historical Sequence)</h2>
 <p class="muted">Same trades as above, but the account stops the instant a prop-firm rule is breached (this run may therefore reflect fewer effective trading days than the historical stats above)[...]
 {single_run_table}
+{account_attempts_section}
 
 <h2>Monte Carlo Simulation ({n_sims:,} simulated accounts)</h2>
 <p class="muted">{mc_methodology_note}</p>
@@ -986,37 +993,76 @@ account's result. The account still standing at the end of this run made
 
 
 def _reset_chain_headline_section(mc: dict, is_reset_chain: bool) -> str:
-    """A second row of headline cards, shown ONLY when this run's Monte
-    Carlo used reset_on_breach, giving the true per-account-attempt
-    pass/payout rate (MonteCarloResult.per_attempt_pass_probability et
-    al.) right next to the chain-level "Evaluation Pass Probability" card
-    above -- which, under reset_on_breach, answers a different question
-    ("did at least one attempt anywhere in the chain pass") that can look
-    far stronger than any single attempt's real odds once a chain runs
-    many attempts (see mean_attempts_per_path). Returns "" for the
-    default, non-reset case -- the existing headline already answers the
-    single-attempt question correctly there."""
+    """Companion banner shown ONLY when this run's Monte Carlo used
+    reset_on_breach. The headline cards above already show the
+    per-ATTEMPT rates there (passed evals / attempted evals, and funded
+    accounts reaching payout / funded accounts -- the one-account
+    question). This banner explains that choice and demotes the
+    chain-level "did at least one attempt anywhere in the rebuy chain
+    ever pass / get paid" numbers to a footnote, since with hundreds of
+    attempts per chain they read far stronger than any single account's
+    real odds. Returns "" for the default, non-reset case -- the
+    headline already answers the single-attempt question there."""
     if not is_reset_chain or not mc.get("reset_on_breach"):
         return ""
-    per_attempt_pass = mc.get("per_attempt_pass_probability", 0.0)
-    per_attempt_payout = mc.get("per_attempt_payout_probability", 0.0)
+    chain_pass = mc.get("evaluation_pass_probability", 0.0)
+    chain_payout = mc.get("first_payout_probability", 0.0)
     mean_attempts = mc.get("mean_attempts_per_path", 0.0)
     total_attempts = mc.get("total_independent_attempts", 0)
     return f"""<div class="info-banner">
-<div class="info-title">Reset-on-breach Monte Carlo -- the cards above answer a different question</div>
+<div class="info-title">Reset-on-breach Monte Carlo -- the cards above are per account attempt</div>
 <p>With reset_on_breach on, each simulated path mechanically "rebought" an average of
 {mean_attempts:,.1f} times (see "Attempts per path" in the Monte Carlo table below) before the
-simulated history ran out. "Evaluation Pass Probability" / "First Payout Probability" above mean
-<b>"did at least one attempt anywhere in that chain eventually pass / get paid"</b> -- with hundreds
-of attempts per chain, that can look strong even when any ONE account's real odds are modest.</p>
-<div class="headline">
-  <div class="card"><div class="label">Per-Attempt Pass Probability</div><div class="value">{per_attempt_pass:.1f}%</div></div>
-  <div class="card"><div class="label">Per-Attempt Payout Probability</div><div class="value">{per_attempt_payout:.1f}%</div></div>
-</div>
-<p>These two are pooled across all {total_attempts:,} independent account attempts this Monte Carlo
-run represents, and directly answer <b>"if I buy ONE account, what's the probability it passes /
-gets paid"</b> -- the number to trust for a single real-money account decision.</p>
+simulated history ran out. The headline "Evaluation Pass Probability" / "First Payout Probability"
+cards therefore pool all {total_attempts:,} independent account attempts: <b>pass = evals passed /
+evals attempted; payout = funded accounts reaching a first payout / funded accounts</b> -- the
+"if I buy ONE account, what happens" numbers. For comparison, the chain-level view ("did at least
+one attempt anywhere in a whole rebuy chain eventually pass / get paid") reads
+{chain_pass:.1f}% / {chain_payout:.1f}% -- stronger by construction, and not the number to size a
+real purchase on.</p>
 </div>"""
+
+
+def _account_attempts_section(attempts) -> str:
+    """Account-by-account ledger of the deterministic single run, in
+    order, with the running percentages exactly as they'd be read live:
+    after each attempt, eval pass = passed / attempted so far, first
+    payout = funded accounts paid / funded accounts so far. This is the
+    sequential story the Monte Carlo percentages summarize."""
+    if not attempts:
+        return ""
+    rows = []
+    passed = funded_paid = 0
+    for a in attempts:
+        if a.get("passed_evaluation"):
+            passed += 1
+        if a.get("reached_first_payout"):
+            funded_paid += 1
+        n = a.get("attempt_index", 0) + 1
+        eval_pct = 100.0 * passed / n
+        payout_pct = (100.0 * funded_paid / passed) if passed else 0.0
+        if a.get("passed_evaluation"):
+            outcome = "Passed eval" + (" · reached first payout" if a.get("reached_first_payout") else " · no payout yet")
+        elif a.get("failed"):
+            outcome = "Failed (" + str(a.get("failure_reason") or "rule breached") + ")"
+        else:
+            outcome = "Still running when the trade history ended"
+        rows.append(
+            "<tr>"
+            f"<td>Account {n}</td><td>{outcome}</td>"
+            f"<td>{a.get('days_used', 0)}</td>"
+            f"<td>${a.get('ending_balance', 0.0):,.2f}</td>"
+            f"<td>${a.get('payout_amount', 0.0):,.2f}</td>"
+            f"<td>{eval_pct:.0f}%</td><td>{payout_pct:.0f}%</td>"
+            "</tr>"
+        )
+    return f"""<h3>Account by account (your actual trade order)</h3>
+<table>
+<thead><tr><th>Attempt</th><th>Outcome</th><th>Trading days</th><th>Ending balance</th><th>Paid out</th><th>Eval pass so far</th><th>First payout so far</th></tr></thead>
+<tbody>{''.join(rows)}</tbody>
+</table>
+<p class="muted">"First payout so far" counts only funded accounts -- an account that fails its eval
+never had a payout chance, so it stays out of that denominator.</p>"""
 
 
 def export_html(
@@ -1089,9 +1135,9 @@ def export_html(
         final_parameters_section=_final_parameters_section(report.get("final_parameters"), report.get("baseline_parameters")),
         risk_config_table=_risk_config_table(report.get("risk_config")),
         risk_reconciliation_section=_risk_reconciliation_section(report["historical_backtest"]["statistics"]),
-        eval_pass=mc["evaluation_pass_probability"],
-        first_payout=mc["first_payout_probability"],
-        failure_before_payout=mc["failure_before_payout_probability"],
+        eval_pass=(mc["per_attempt_pass_probability"] if mc.get("reset_on_breach") else mc["evaluation_pass_probability"]),
+        first_payout=(mc["per_attempt_payout_probability"] if mc.get("reset_on_breach") else mc["first_payout_probability"]),
+        failure_before_payout=(mc.get("per_attempt_failure_before_payout_probability", mc["failure_before_payout_probability"]) if mc.get("reset_on_breach") else mc["failure_before_payout_probability"]),
         median_days_payout=mc["median_days_to_first_payout"] if mc["median_days_to_first_payout"] is not None else "N/A",
         expected_payout=mc["expected_payout"],
         risk_of_ruin=mc["risk_of_ruin_pct"],
@@ -1107,6 +1153,7 @@ def export_html(
         holdout_section=_holdout_section(report.get("holdout_comparison")),
         rules_table=_dict_to_table(report["prop_firm_rules"]),
         single_run_table=_dict_to_table(single),
+        account_attempts_section=_account_attempts_section(report.get("account_attempts")),
         monte_carlo_table=_dict_to_table({
             k: v for k, v in mc.items()
             if not isinstance(v, (dict, list)) and k != "methodology_note"
