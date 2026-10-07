@@ -672,6 +672,25 @@ def run_walkforward_aware_refinement(
                     gen_summaries.append(_summary(gen, population))
                     log(f"Generation {gen}/{cfg.generations}: best OOS fitness={gen_summaries[-1].best_fitness:.3f} "
                         f"mean={gen_summaries[-1].mean_fitness:.3f}")
+                    # SPEED (2026-10-06): flatline early stop -- see
+                    # _flatlined's docstring and RefinementConfig.
+                    # flatline_patience. The generations already spent
+                    # (including the mutation-bred ones) stay in
+                    # generation_history/total_evaluations, so the
+                    # Bonferroni n_tests downstream still reflects how
+                    # many candidates were ACTUALLY tried.
+                    if _flatlined(gen_summaries, cfg.flatline_patience):
+                        _flat_msg = (
+                            f"Stopping the search early at generation {gen}: every candidate scored "
+                            f"exactly 0.0 fitness for {cfg.flatline_patience} straight generations -- "
+                            "there is no selection gradient left to breed from, so the remaining "
+                            "generations would only re-score mutations of a dead population. If you "
+                            "expected this strategy to trade here, check the baseline's own trade "
+                            "count first (a strategy that never trades scores 0 everywhere)."
+                        )
+                        log(f"  {_flat_msg}")
+                        warnings.append(_flat_msg)
+                        break
             else:
                 # TPE / CMA-ES -- see app.optimize.refinement.OPTIMIZER_MODES
                 # for what each mode is. Both propose a whole BATCH of
@@ -783,6 +802,25 @@ def _summary(gen: int, population: list) -> WalkforwardGAGenerationSummary:
     best = max((c.fitness for c in population), default=float("-inf"))
     mean = (sum(finite) / len(finite)) if finite else float("-inf")
     return WalkforwardGAGenerationSummary(generation=gen, best_fitness=best, mean_fitness=mean)
+
+
+def _flatlined(summaries: list, patience: int) -> bool:
+    """SPEED (2026-10-06): True when the last `patience` generation
+    summaries are ALL exactly zero -- best fitness 0.0 AND mean fitness
+    0.0, which (0.0 being the floor of every fitness metric this GA
+    scores: a per-attempt pass probability or a ruin-eroded variant of
+    one) means every single candidate in the population scored nothing.
+    With no non-zero candidate anywhere there is no selection gradient
+    to breed from; further generations only re-score fresh mutations of
+    a dead population. `patience` generations of mutated zeros still run
+    before this fires, so a population that merely STARTS dead gets its
+    fair chance to mutate into a trading one."""
+    if not patience or len(summaries) < patience:
+        return False
+    return all(
+        s.best_fitness == 0.0 and s.mean_fitness == 0.0
+        for s in summaries[-patience:]
+    )
 
 
 # ---------------------------------------------------------------------------

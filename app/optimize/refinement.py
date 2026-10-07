@@ -197,7 +197,20 @@ class RefinementConfig:
     auto_shrink_on_low_trades: bool = True
     min_oos_trades_per_candidate: int = 30
 
+    # SPEED (2026-10-06): flatline early stop. When every candidate in the
+    # population scores EXACTLY 0.0 fitness (best AND mean) for this many
+    # consecutive generations, there is no selection gradient left to
+    # breed from -- the remaining generations can only re-score mutations
+    # of a dead population. Owen's 2020-2026 ES Full Pipeline run spent
+    # 760s confirming best=0.000/mean=0.000 for 7 straight generations;
+    # the same story repeats in Quick Optimize whenever a strategy family
+    # simply has no tradeable edge on the data. 3 generations of mutated
+    # zeros still get their chance before the stop fires. 0 disables the
+    # early stop entirely (previous behavior, byte-identical search).
+    flatline_patience: int = 3
+
     def __post_init__(self):
+        self.flatline_patience = max(int(self.flatline_patience), 0)
         self.population_size = max(int(self.population_size), 4)
         self.generations = max(int(self.generations), 1)
         self.elite_count = max(1, min(int(self.elite_count), self.population_size - 1))
