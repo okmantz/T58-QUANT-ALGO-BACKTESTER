@@ -148,14 +148,17 @@ class MonteCarloResult:
     # low bar almost by construction. These three fields instead pool every
     # independent attempt across every simulated path (using each path's own
     # AccountSimResult.attempts_passed/attempts_reached_payout/total_attempts
-    # -- see app.prop.simulator) into one ratio: "of every independent $-size
-    # account attempt this Monte Carlo run represents, what fraction passed /
-    # reached payout" -- the actual "will ONE account attempt succeed"
-    # question. When reset_on_breach is False, every path has exactly one
-    # attempt, so these are IDENTICAL to evaluation_pass_probability/
-    # first_payout_probability -- byte-for-byte no change for the default,
-    # far more common case. Only diverges from the chain-level fields once
-    # reset_on_breach is on and a path's chain runs more than one attempt.
+    # -- see app.prop.simulator): per_attempt_pass_probability is passed
+    # evals / attempted evals, and per_attempt_payout_probability is funded
+    # attempts reaching a first payout / FUNDED (passed) attempts -- an
+    # attempt that blew its eval never had a payout chance, so it does not
+    # dilute the payout rate (Owen's accounting: pass two evals, one of
+    # the two funded accounts pays out -> 50%). When reset_on_breach is
+    # False, every path has exactly one attempt, so these are IDENTICAL to
+    # evaluation_pass_probability/first_payout_probability -- byte-for-byte
+    # no change for the default, far more common case. Only diverges from
+    # the chain-level fields once reset_on_breach is on and a path's chain
+    # runs more than one attempt.
     per_attempt_pass_probability: float = 0.0
     per_attempt_payout_probability: float = 0.0
     per_attempt_failure_before_payout_probability: float = 0.0
@@ -208,6 +211,26 @@ class MonteCarloResult:
     # Evolution Lab, Full Pipeline's verdict, CPCV) inherits this same
     # caveat -- see run_monte_carlo's docstring for the full reasoning.
     methodology_note: str = ""
+
+    # -- headline numbers (Owen's accounting) --------------------------------
+    # What reports/dashboards should show as "the" eval-pass / payout
+    # rates: per-attempt (passed/attempted evals, funded reaching
+    # payout/funded) when reset_on_breach chained attempts, because the
+    # chain-level fields above then answer "did >=1 attempt in a long
+    # mechanical rebuy chain ever pass" -- true but misleading as a
+    # headline. When reset_on_breach is off the two are identical, so
+    # these properties are always safe to display.
+    @property
+    def headline_evaluation_pass_probability(self) -> float:
+        if self.reset_on_breach and self.total_independent_attempts:
+            return self.per_attempt_pass_probability
+        return self.evaluation_pass_probability
+
+    @property
+    def headline_first_payout_probability(self) -> float:
+        if self.reset_on_breach and self.total_independent_attempts:
+            return self.per_attempt_payout_probability
+        return self.first_payout_probability
 
     def to_dict(self) -> dict:
         d = dict(self.__dict__)
@@ -662,7 +685,12 @@ def run_monte_carlo(
     # MonteCarloResult for why these, not the chain-level intervals
     # above, are what the acceptance verdict gates on.
     per_attempt_pass_ci95 = _wilson_score_interval(int(sum_attempts_passed), int(sum_total_attempts))
-    per_attempt_payout_ci95 = _wilson_score_interval(int(sum_attempts_reached_payout), int(sum_total_attempts))
+    # Payout is gated on having PASSED the eval first, so its honest
+    # denominator is funded (passed) attempts, not every eval attempt --
+    # Owen's accounting: "of the accounts that got funded, how many
+    # reached a first payout" (1 of 2 funded = 50%, even when other
+    # eval attempts around them failed).
+    per_attempt_payout_ci95 = _wilson_score_interval(int(sum_attempts_reached_payout), int(sum_attempts_passed))
 
     result = MonteCarloResult(
         n_simulations=cfg.n_simulations,
@@ -698,9 +726,13 @@ def run_monte_carlo(
         any_attempt_payout_probability=float(first_payout_arr.mean() * 100),
         attempts_distribution=attempts_arr.tolist(),
         per_attempt_pass_probability=float(sum_attempts_passed / sum_total_attempts * 100) if sum_total_attempts else 0.0,
-        per_attempt_payout_probability=float(sum_attempts_reached_payout / sum_total_attempts * 100) if sum_total_attempts else 0.0,
+        # Funded-only denominator (see the CI note above): of attempts
+        # that PASSED their eval, the fraction that reached a first
+        # payout. Attempts that blew the eval never had a payout chance
+        # and must not dilute this number.
+        per_attempt_payout_probability=float(sum_attempts_reached_payout / sum_attempts_passed * 100) if sum_attempts_passed else 0.0,
         per_attempt_failure_before_payout_probability=(
-            float((sum_total_attempts - sum_attempts_reached_payout) / sum_total_attempts * 100) if sum_total_attempts else 0.0
+            float((sum_attempts_passed - sum_attempts_reached_payout) / sum_attempts_passed * 100) if sum_attempts_passed else 0.0
         ),
         total_independent_attempts=int(sum_total_attempts),
         pass_probability_ci95=pass_ci95,
