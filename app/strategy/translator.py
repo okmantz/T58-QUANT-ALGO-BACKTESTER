@@ -140,31 +140,45 @@ class TranslationError(Exception):
 
 
 _PRICE_FIELDS = {"open", "high", "low", "close", "volume"}
-_SIMPLE_INDICATOR_KINDS = {"sma", "ema", "wma", "rsi", "atr", "highest_high", "lowest_low", "vwap"}
+_SIMPLE_INDICATOR_KINDS = {
+    "sma", "ema", "wma", "rsi", "atr", "highest_high", "lowest_low", "vwap",
+    "vwma", "average_volume", "candle_range", "percentage_change", "adx",
+}
 _MULTI_OUTPUT_KINDS = {"macd", "macd_signal", "macd_histogram", "bollinger_mid", "bollinger_upper", "bollinger_lower"}
-_SUPPORTED_INDICATOR_KINDS = _SIMPLE_INDICATOR_KINDS | _MULTI_OUTPUT_KINDS | {"candle_direction"}
+_DONCHIAN_KINDS = {"donchian_mid", "donchian_upper", "donchian_lower"}
+# Boolean event series from app.strategy.manual's advanced operand kinds.
+# Every one is a closed-form causal formula in the engine (range breaks vs
+# prior-bar extremes, confirmed-swing flags, displacement proxies -- see
+# manual.py's _advanced_boolean and swing branches, plus the fractal
+# _swing_structure_event in app.strategy.indicators), so each has a
+# faithful rendering in all three targets; none needs a "port by hand"
+# refusal. bos/choch here are manual.py's range-break semantics (close vs
+# the prior `lookback` bars' extreme, direction-filtered); swing_bos /
+# swing_choch are the separate fractal HH/HL/LH/LL detector.
+_ADVANCED_BOOL_KINDS = {
+    "bos", "choch", "liquidity_sweep", "fvg", "order_block",
+    "swing_high", "swing_low", "swing_bos", "swing_choch",
+}
+_REGIME_KINDS = {"atr_regime", "volatility_regime", "atr_expansion", "atr_contraction"}
+_SESSION_KINDS = {
+    "session_high", "session_low", "previous_day_high", "previous_day_low",
+    "previous_day_close", "opening_range_high", "opening_range_low",
+    "time_of_day", "day_of_week",
+}
+_SUPPORTED_INDICATOR_KINDS = (
+    _SIMPLE_INDICATOR_KINDS | _MULTI_OUTPUT_KINDS | _DONCHIAN_KINDS
+    | _ADVANCED_BOOL_KINDS | _REGIME_KINDS | _SESSION_KINDS | {"candle_direction"}
+)
+
+# Aliases the engine accepts for the same series (manual.py dispatches
+# both spellings to identical math); canonicalize at parse time.
+_KIND_ALIASES = {
+    "break_of_structure": "bos",
+    "change_of_character": "choch",
+    "fair_value_gap": "fvg",
+}
 
 _UNSUPPORTED_KIND_HINT = {
-    "liquidity_sweep": "structural liquidity-sweep detection",
-    "break_of_structure": "market-structure break detection",
-    "bos": "market-structure break detection",
-    "change_of_character": "structural character-shift detection",
-    "choch": "structural character-shift detection",
-    "fair_value_gap": "fair-value-gap detection",
-    "fvg": "fair-value-gap detection",
-    "order_block": "order-block detection",
-    "session_high": "session-relative level tracking",
-    "session_low": "session-relative level tracking",
-    "previous_day_high": "prior-day level tracking",
-    "previous_day_low": "prior-day level tracking",
-    "previous_day_close": "prior-day level tracking",
-    "opening_range_high": "opening-range level tracking",
-    "opening_range_low": "opening-range level tracking",
-    "time_of_day": "session time-window filtering",
-    "atr_regime": "ATR-regime classification",
-    "volatility_regime": "volatility-regime classification",
-    "swing_high": "confirmed swing-point detection",
-    "swing_low": "confirmed swing-point detection",
     "ib_contraction_ratio": "initial-balance contraction-vs-trailing-average filtering",
 }
 
@@ -175,9 +189,26 @@ class _Operand:
     value: float | None = None
     field: str = "close"
     period: int = 14
+    lookback: int = 0        # explicit `lookback` from the operand (0 = fall back to period)
+    direction: str = "both"  # "bullish" | "bearish" | "both" (directional kinds)
+    session_start: str = "08:30"
+    session_end: str = "15:00"
+    expansion_mult: float = 1.25
+    contraction_mult: float = 0.75
+    days: tuple = ()         # day_of_week: pandas day numbers (Mon=0 .. Sun=6)
 
     def key(self) -> tuple:
-        return (self.kind, self.field, self.period)
+        return (self.kind, self.field, self.period, self.lookback, self.direction,
+                self.session_start, self.session_end,
+                self.expansion_mult, self.contraction_mult, self.days)
+
+    @property
+    def window(self) -> int:
+        """Effective lookback for window-shaped kinds: an explicit
+        `lookback` on the operand wins, else `period` -- the engine's own
+        fallback (app.strategy.manual: lookback = operand.get('lookback',
+        period))."""
+        return self.lookback or self.period
 
 
 def _parse_operand(raw: Any, side: str) -> _Operand:
@@ -197,24 +228,70 @@ def _parse_operand(raw: Any, side: str) -> _Operand:
         raise TranslationError(f"Invalid {side}-side operand: {raw!r}")
 
     kind = str(raw.get("type", raw.get("source", "close"))).lower().strip()
+    kind = _KIND_ALIASES.get(kind, kind)
     field_name = str(raw.get("field", "close")).lower().strip()
     try:
         period = max(int(raw.get("period", 14) or 14), 1)
     except (TypeError, ValueError):
         period = 14
+    try:
+        lookback = max(int(raw.get("lookback", 0) or 0), 0)
+    except (TypeError, ValueError):
+        lookback = 0
+    if kind in {"swing_bos", "swing_choch"} and not lookback:
+        # The fractal swing window defaults to the detectors' own 5, not
+        # the generic indicator period (app.strategy.manual does the same).
+        lookback = 5
+    direction = str(raw.get("direction", "both")).lower().strip()
+    if direction not in {"bullish", "bearish", "both"}:
+        direction = "both"
+    if kind == "time_of_day":
+        session_start = str(raw.get("session_start", "00:00"))
+        session_end = str(raw.get("session_end", "23:59"))
+    else:
+        session_start = str(raw.get("session_start", "08:30"))
+        session_end = str(raw.get("session_end", "15:00"))
+    try:
+        expansion_mult = float(raw.get("expansion_mult", 1.25) or 1.25)
+    except (TypeError, ValueError):
+        expansion_mult = 1.25
+    try:
+        contraction_mult = float(raw.get("contraction_mult", 0.75) or 0.75)
+    except (TypeError, ValueError):
+        contraction_mult = 0.75
+    days_raw = raw.get("days")
+    if days_raw is None and raw.get("day") is not None:
+        days_raw = [raw.get("day")]
+    days: tuple = ()
+    if isinstance(days_raw, (list, tuple)):
+        try:
+            days = tuple(int(d) for d in days_raw)
+        except (TypeError, ValueError):
+            days = ()
 
     if kind in {"value", "constant", "number"}:
         try:
             return _Operand(kind="constant", value=float(raw.get("value", 0)))
         except (TypeError, ValueError) as exc:
             raise TranslationError("A numeric condition value is required.") from exc
+    if raw.get("timeframe"):
+        raise TranslationError(
+            f"Operand '{kind}' is pinned to its own timeframe ('{raw.get('timeframe')}') -- "
+            "the translator renders single-timeframe code, so a multi-timeframe condition "
+            "can't be carried over silently. Remove the timeframe pin or port this one "
+            "condition by hand."
+        )
     if kind in {"price", "open", "high", "low", "close", "volume"}:
         col = field_name if kind == "price" else kind
         if col not in _PRICE_FIELDS:
             raise TranslationError(f"Unknown price field '{col}'.")
         return _Operand(kind="price", field=col)
     if kind in _SUPPORTED_INDICATOR_KINDS:
-        return _Operand(kind=kind, field=field_name, period=period)
+        return _Operand(
+            kind=kind, field=field_name, period=period, lookback=lookback,
+            direction=direction, session_start=session_start, session_end=session_end,
+            expansion_mult=expansion_mult, contraction_mult=contraction_mult, days=days,
+        )
 
     hint = _UNSUPPORTED_KIND_HINT.get(kind)
     if hint:
@@ -244,6 +321,10 @@ def _normalize_operator(op: str) -> str:
         return "crosses_above"
     if op in {"cross below", "crosses below"}:
         return "crosses_below"
+    if op in {"is true", "true"}:
+        return "is_true"
+    if op in {"is false", "false"}:
+        return "is_false"
     raise TranslationError(f"Unsupported condition operator '{op}' for translation.")
 
 
@@ -403,31 +484,298 @@ def _pine_source(field_name: str) -> str:
     return field_name if field_name in _PRICE_FIELDS else "close"
 
 
+def _pine_name_num(value: float) -> str:
+    return _fmt_num(value).replace(".", "_").replace("-", "neg")
+
+
+def _pine_session_minutes(hhmm: str) -> int:
+    try:
+        hh, mm = (int(x) for x in str(hhmm).split(":")[:2])
+    except (TypeError, ValueError):
+        return 0
+    return hh * 60 + mm
+
+
+def _pine_bool_expr(op: _Operand) -> str:
+    """Single-line Pine expression (1.0/0.0 series) for the advanced
+    boolean kinds, mirroring app.strategy.manual._advanced_boolean and
+    its swing branches (same windows, same direction filter, same
+    confirmation shift -- no lookahead introduced)."""
+    w = op.window
+    d = op.direction
+    if op.kind == "bos":
+        bull = f"(close > prior_high_{w})"
+        bear = f"(close < prior_low_{w})"
+    elif op.kind == "liquidity_sweep":
+        bull = f"((low < prior_low_{w}) and (close > prior_low_{w}))"
+        bear = f"((high > prior_high_{w}) and (close < prior_high_{w}))"
+    elif op.kind == "choch":
+        bull = f"((close > high[{w}]) and (low[1] < low[{w + 1}]))"
+        bear = f"((close < low[{w}]) and (high[1] > high[{w + 1}]))"
+    elif op.kind == "fvg":
+        bull = "(low > high[2])"
+        bear = "(high < low[2])"
+    elif op.kind == "order_block":
+        bull = f"((close[1] < open[1]) and (close > high[1] + range_mean_{w}))"
+        bear = f"((close[1] > open[1]) and (close < low[1] - range_mean_{w}))"
+    elif op.kind == "swing_high":
+        return f"(high[{w}] == ta.highest(high, {2 * w + 1}) ? 1.0 : 0.0)"
+    elif op.kind == "swing_low":
+        return f"(low[{w}] == ta.lowest(low, {2 * w + 1}) ? 1.0 : 0.0)"
+    else:  # pragma: no cover -- guarded by caller
+        raise TranslationError(f"Unhandled boolean kind '{op.kind}' during PineScript generation.")
+    if d == "bullish":
+        return f"({bull} ? 1.0 : 0.0)"
+    if d == "bearish":
+        return f"({bear} ? 1.0 : 0.0)"
+    return f"(({bull} or {bear}) ? 1.0 : 0.0)"
+
+
+def _pine_swing_state_lines(w: int) -> list[str]:
+    """Streaming port of app.quant_lab.market_structure's fractal-swing
+    BOS/ChoCH detector (calculate_hh_ll_structure): a swing is a UNIQUE
+    fractal extreme over [i-w, i+w], labeled HH/HL/LH/LL against the
+    previous same-kind swing; HH in an uptrend (LL in a downtrend) is
+    BOS, the same break against the trend is ChoCH. State updates when
+    the swing CONFIRMS (w bars after it prints -- the engine emits at
+    swing index + w), so this stays lookahead-free. Lows are processed
+    before highs on a shared confirmation bar, matching the engine's
+    deterministic tie-break."""
+    span = 2 * w + 1
+    return [
+        f"// Fractal-swing BOS/ChoCH state (window {w}): events fire on the confirmation bar only.",
+        f"var float _last_sh_{w} = na",
+        f"var float _last_sl_{w} = na",
+        f"var int _trend_{w} = 0",
+        f"float bos_{w} = 0.0",
+        f"float choch_{w} = 0.0",
+        f"int _cnt_sl_{w} = 0",
+        f"for _j = 0 to {2 * w}",
+        f"    if low[_j] == low[{w}]",
+        f"        _cnt_sl_{w} += 1",
+        f"bool _is_sl_{w} = _cnt_sl_{w} == 1 and low[{w}] == ta.lowest(low, {span})",
+        f"if _is_sl_{w}",
+        f"    if na(_last_sl_{w})",
+        f"        _last_sl_{w} := low[{w}]",
+        f"    else if low[{w}] > _last_sl_{w}",
+        f"        if _trend_{w} != -1",
+        f"            _trend_{w} := 1",
+        f"        _last_sl_{w} := low[{w}]",
+        "    else",
+        f"        if _trend_{w} == 1",
+        f"            choch_{w} := 1.0",
+        f"        else if _trend_{w} == -1",
+        f"            bos_{w} := 1.0",
+        f"        _trend_{w} := -1",
+        f"        _last_sl_{w} := low[{w}]",
+        f"int _cnt_sh_{w} = 0",
+        f"for _j = 0 to {2 * w}",
+        f"    if high[_j] == high[{w}]",
+        f"        _cnt_sh_{w} += 1",
+        f"bool _is_sh_{w} = _cnt_sh_{w} == 1 and high[{w}] == ta.highest(high, {span})",
+        f"if _is_sh_{w}",
+        f"    if na(_last_sh_{w})",
+        f"        _last_sh_{w} := high[{w}]",
+        f"    else if high[{w}] > _last_sh_{w}",
+        f"        if _trend_{w} == -1",
+        f"            choch_{w} := 1.0",
+        f"        else if _trend_{w} == 1",
+        f"            bos_{w} := 1.0",
+        f"        _trend_{w} := 1",
+        f"        _last_sh_{w} := high[{w}]",
+        "    else",
+        f"        if _trend_{w} != 1",
+        f"            _trend_{w} := -1",
+        f"        _last_sh_{w} := high[{w}]",
+    ]
+
+
 def _pine_declare_indicators(indicators: dict[tuple, _Operand]) -> tuple[list[str], dict[tuple, str]]:
     lines: list[str] = []
     var_map: dict[tuple, str] = {}
+    ops = list(indicators.values())
 
-    macd_fields = sorted({op.field for op in indicators.values() if op.kind in ("macd", "macd_signal", "macd_histogram")})
-    for fld in macd_fields:
+    def reg(op: _Operand, var: str) -> None:
+        var_map[op.key()] = var
+
+    # MACD -- fixed 12/26/9 (the engine ignores any operand period for
+    # this family). Registration goes through op.key(): the old fixed
+    # ("macd", field, 0) registrations crashed with a KeyError on any
+    # MACD operand whose config carried a period (e.g. the v9 champion's
+    # macd_histogram, which spells no period and defaulted to 14).
+    for fld in sorted({op.field for op in ops if op.kind in ("macd", "macd_signal", "macd_histogram")}):
         src = _pine_source(fld)
-        base = f"macd_{fld}"
-        lines.append(f"[{base}_line, {base}_signal, {base}_hist] = ta.macd({src}, 12, 26, 9)")
-        var_map[("macd", fld, 0)] = f"{base}_line"
-        var_map[("macd_signal", fld, 0)] = f"{base}_signal"
-        var_map[("macd_histogram", fld, 0)] = f"{base}_hist"
+        lines.append(f"[macd_{fld}_line, macd_{fld}_signal, macd_{fld}_hist] = ta.macd({src}, 12, 26, 9)")
+    for op in ops:
+        if op.kind == "macd":
+            reg(op, f"macd_{op.field}_line")
+        elif op.kind == "macd_signal":
+            reg(op, f"macd_{op.field}_signal")
+        elif op.kind == "macd_histogram":
+            reg(op, f"macd_{op.field}_hist")
 
-    bb_groups = sorted({(op.field, op.period) for op in indicators.values()
-                         if op.kind in ("bollinger_mid", "bollinger_upper", "bollinger_lower")})
-    for fld, period in bb_groups:
+    # Bollinger Bands (2.0 mult, the engine's default).
+    for fld, period in sorted({(op.field, op.period) for op in ops
+                               if op.kind in ("bollinger_mid", "bollinger_upper", "bollinger_lower")}):
         src = _pine_source(fld)
-        base = f"bb_{fld}_{period}"
-        lines.append(f"[{base}_mid, {base}_upper, {base}_lower] = ta.bb({src}, {period}, 2.0)")
-        var_map[("bollinger_mid", fld, period)] = f"{base}_mid"
-        var_map[("bollinger_upper", fld, period)] = f"{base}_upper"
-        var_map[("bollinger_lower", fld, period)] = f"{base}_lower"
+        lines.append(f"[bb_{fld}_{period}_mid, bb_{fld}_{period}_upper, bb_{fld}_{period}_lower] = ta.bb({src}, {period}, 2.0)")
+    for op in ops:
+        if op.kind in ("bollinger_mid", "bollinger_upper", "bollinger_lower"):
+            reg(op, f"bb_{op.field}_{op.period}_{op.kind[len('bollinger_'):]}")
 
+    # Donchian channels -- PRIOR-period extremes (the engine shifts the
+    # window by one bar: a band including the current bar would make
+    # "close > upper" structurally always-false).
+    for period in sorted({op.period for op in ops if op.kind in _DONCHIAN_KINDS}):
+        lines.append(f"dc_{period}_upper = ta.highest(high, {period})[1]")
+        lines.append(f"dc_{period}_lower = ta.lowest(low, {period})[1]")
+        lines.append(f"dc_{period}_mid = (dc_{period}_upper + dc_{period}_lower) / 2")
+    for op in ops:
+        if op.kind in _DONCHIAN_KINDS:
+            reg(op, f"dc_{op.period}_{op.kind[len('donchian_'):]}")
+
+    # ADX (Wilder smoothing, same period for DI and ADX as the engine).
+    for fld, period in sorted({(op.field, op.period) for op in ops if op.kind == "adx"}):
+        lines.append(f"[_di_plus_{fld}_{period}, _di_minus_{fld}_{period}, adx_{period}_{fld}] = ta.dmi({period}, {period})")
+    for op in ops:
+        if op.kind == "adx":
+            reg(op, f"adx_{op.period}_{op.field}")
+
+    # Shared prior-extreme / range helpers for the advanced boolean kinds.
+    for w in sorted({op.window for op in ops if op.kind in ("bos", "liquidity_sweep", "order_block")}):
+        if any(op.kind in ("bos", "liquidity_sweep") and op.window == w for op in ops):
+            lines.append(f"prior_high_{w} = ta.highest(high[1], {w})")
+            lines.append(f"prior_low_{w} = ta.lowest(low[1], {w})")
+        if any(op.kind == "order_block" and op.window == w for op in ops):
+            lines.append(f"range_mean_{w} = ta.sma(high - low, {w})")
+    for op in ops:
+        if op.kind in ("bos", "choch", "liquidity_sweep", "fvg", "order_block", "swing_high", "swing_low"):
+            name = f"{op.kind}_{op.window}_{op.direction}"
+            lines.append(f"{name} = {_pine_bool_expr(op)}")
+            reg(op, name)
+
+    # Fractal-swing BOS/ChoCH state machines, one per window.
+    for w in sorted({op.window for op in ops if op.kind in ("swing_bos", "swing_choch")}):
+        lines.extend(_pine_swing_state_lines(w))
+    for op in ops:
+        if op.kind == "swing_bos":
+            reg(op, f"bos_{op.window}")
+        elif op.kind == "swing_choch":
+            reg(op, f"choch_{op.window}")
+
+    # Regime tristates: the indicator vs its own trailing baseline
+    # (engine: rolling mean over max(3*period, period+1) bars).
+    for period, exp_m, cont_m in sorted({(op.period, op.expansion_mult, op.contraction_mult) for op in ops
+                                         if op.kind in ("atr_regime", "atr_expansion", "atr_contraction")}):
+        g = f"{period}_{_pine_name_num(exp_m)}_{_pine_name_num(cont_m)}"
+        lines.append(f"_atr_{g} = ta.atr({period})")
+        lines.append(f"_atr_base_{g} = ta.sma(_atr_{g}, {max(3 * period, period + 1)})")
+        lines.append(f"atr_regime_{g} = _atr_{g} > _atr_base_{g} * {_fmt_num(exp_m)} ? 1.0 : _atr_{g} < _atr_base_{g} * {_fmt_num(cont_m)} ? -1.0 : 0.0")
+        lines.append(f"atr_expansion_{g} = atr_regime_{g} == 1.0 ? 1.0 : 0.0")
+        lines.append(f"atr_contraction_{g} = atr_regime_{g} == -1.0 ? 1.0 : 0.0")
+    for op in ops:
+        if op.kind in ("atr_regime", "atr_expansion", "atr_contraction"):
+            reg(op, f"{op.kind}_{op.period}_{_pine_name_num(op.expansion_mult)}_{_pine_name_num(op.contraction_mult)}")
+    for period, exp_m, cont_m in sorted({(op.period, op.expansion_mult, op.contraction_mult) for op in ops
+                                         if op.kind == "volatility_regime"}):
+        g = f"{period}_{_pine_name_num(exp_m)}_{_pine_name_num(cont_m)}"
+        lines.append(f"_ret_{g} = ta.change(close) / close[1]")
+        lines.append(f"_vol_{g} = ta.stdev(_ret_{g}, {period}, false)")
+        lines.append(f"_vol_base_{g} = ta.sma(_vol_{g}, {max(3 * period, period + 1)})")
+        lines.append(f"volatility_regime_{g} = _vol_{g} > _vol_base_{g} * {_fmt_num(exp_m)} ? 1.0 : _vol_{g} < _vol_base_{g} * {_fmt_num(cont_m)} ? -1.0 : 0.0")
+    for op in ops:
+        if op.kind == "volatility_regime":
+            reg(op, f"volatility_regime_{op.period}_{_pine_name_num(op.expansion_mult)}_{_pine_name_num(op.contraction_mult)}")
+
+    # Session / calendar series. Day boundaries follow the chart's
+    # exchange timezone, same convention as the engine's timestamp days.
+    session_ops = [op for op in ops if op.kind in _SESSION_KINDS]
+    if session_ops:
+        lines.append("_mins = hour * 60 + minute")
+        lines.append("_new_day = ta.change(dayofmonth) != 0")
+        if any(op.kind in ("previous_day_high", "previous_day_low", "previous_day_close") for op in session_ops):
+            lines.append("var float _day_high = na")
+            lines.append("var float _day_low = na")
+            lines.append("var float _pd_high = na")
+            lines.append("var float _pd_low = na")
+            lines.append("var float _pd_close = na")
+            lines.append("if _new_day")
+            lines.append("    _pd_high := _day_high")
+            lines.append("    _pd_low := _day_low")
+            lines.append("    _pd_close := close[1]")
+            lines.append("    _day_high := high")
+            lines.append("    _day_low := low")
+            lines.append("else")
+            lines.append("    _day_high := math.max(nz(_day_high, high), high)")
+            lines.append("    _day_low := math.min(nz(_day_low, low), low)")
+        for op in session_ops:
+            if op.kind == "previous_day_high":
+                reg(op, "_pd_high")
+            elif op.kind == "previous_day_low":
+                reg(op, "_pd_low")
+            elif op.kind == "previous_day_close":
+                reg(op, "_pd_close")
+        window_pairs = sorted({(_pine_session_minutes(op.session_start), _pine_session_minutes(op.session_end))
+                               for op in session_ops
+                               if op.kind in ("session_high", "session_low", "opening_range_high", "opening_range_low", "time_of_day")})
+        for s_min, e_min in window_pairs:
+            pair_ops = [op for op in session_ops
+                        if _pine_session_minutes(op.session_start) == s_min and _pine_session_minutes(op.session_end) == e_min]
+            if any(op.kind == "time_of_day" for op in pair_ops):
+                lines.append(f"tod_{s_min}_{e_min} = (_mins >= {s_min} and _mins <= {e_min}) ? 1.0 : 0.0")
+            if any(op.kind in ("session_high", "session_low") for op in pair_ops):
+                for kind, abbr, fn, px in (("session_high", "_sh", "math.max", "high"), ("session_low", "_sl", "math.min", "low")):
+                    if not any(op.kind == kind for op in pair_ops):
+                        continue
+                    v, prev = f"{abbr}_{s_min}_{e_min}", f"{abbr}_prev_{s_min}_{e_min}"
+                    lines.append(f"var float {v} = na")
+                    lines.append(f"var float {prev} = na")
+                    lines.append("if _new_day")
+                    lines.append(f"    if not na({v})")
+                    lines.append(f"        {prev} := {v}")
+                    lines.append(f"    {v} := na")
+                    lines.append(f"if _mins >= {s_min} and _mins <= {e_min}")
+                    lines.append(f"    {v} := {fn}(nz({v}, {px}), {px})")
+                    lines.append(f"{kind}_{s_min}_{e_min} = nz({v}, {prev})")
+            if any(op.kind in ("opening_range_high", "opening_range_low") for op in pair_ops):
+                lines.append(f"var float _orh_{s_min}_{e_min} = na")
+                lines.append(f"var float _orl_{s_min}_{e_min} = na")
+                lines.append(f"var float _orh_done_{s_min}_{e_min} = na")
+                lines.append(f"var float _orl_done_{s_min}_{e_min} = na")
+                lines.append("if _new_day")
+                lines.append(f"    _orh_{s_min}_{e_min} := na")
+                lines.append(f"    _orl_{s_min}_{e_min} := na")
+                lines.append(f"if _mins >= {s_min} and _mins <= {e_min}")
+                lines.append(f"    _orh_{s_min}_{e_min} := math.max(nz(_orh_{s_min}_{e_min}, high), high)")
+                lines.append(f"    _orl_{s_min}_{e_min} := math.min(nz(_orl_{s_min}_{e_min}, low), low)")
+                lines.append(f"if _mins > {e_min} and not na(_orh_{s_min}_{e_min})")
+                lines.append(f"    _orh_done_{s_min}_{e_min} := _orh_{s_min}_{e_min}")
+                lines.append(f"    _orl_done_{s_min}_{e_min} := _orl_{s_min}_{e_min}")
+                lines.append(f"opening_range_high_{s_min}_{e_min} = _orh_done_{s_min}_{e_min}")
+                lines.append(f"opening_range_low_{s_min}_{e_min} = _orl_done_{s_min}_{e_min}")
+        for op in session_ops:
+            s_min, e_min = _pine_session_minutes(op.session_start), _pine_session_minutes(op.session_end)
+            if op.kind == "time_of_day":
+                reg(op, f"tod_{s_min}_{e_min}")
+            elif op.kind in ("session_high", "session_low", "opening_range_high", "opening_range_low"):
+                reg(op, f"{op.kind}_{s_min}_{e_min}")
+        if any(op.kind == "day_of_week" for op in session_ops):
+            lines.append("_dow_num = (dayofweek + 5) % 7")
+        for op in session_ops:
+            if op.kind != "day_of_week":
+                continue
+            if op.days:
+                name = "dow_" + "_".join(str(d) for d in op.days)
+                cond = " or ".join(f"_dow_num == {d}" for d in op.days)
+                lines.append(f"{name} = ({cond}) ? 1.0 : 0.0")
+                reg(op, name)
+            else:
+                reg(op, "_dow_num")
+
+    # Classic single-series indicators.
     for key, op in indicators.items():
-        if op.kind in ("macd", "macd_signal", "macd_histogram", "bollinger_mid", "bollinger_upper", "bollinger_lower"):
+        if op.kind not in ("sma", "ema", "wma", "rsi", "atr", "highest_high", "lowest_low", "vwap",
+                           "vwma", "average_volume", "candle_range", "percentage_change", "candle_direction"):
             continue
         src = _pine_source(op.field)
         name = f"vwap_{op.field}" if op.kind == "vwap" else f"{op.kind}_{op.period}_{op.field}"
@@ -437,6 +785,8 @@ def _pine_declare_indicators(indicators: dict[tuple, _Operand]) -> tuple[list[st
             lines.append(f"{name} = ta.ema({src}, {op.period})")
         elif op.kind == "wma":
             lines.append(f"{name} = ta.wma({src}, {op.period})")
+        elif op.kind == "vwma":
+            lines.append(f"{name} = ta.vwma({src}, {op.period})")
         elif op.kind == "rsi":
             lines.append(f"{name} = ta.rsi({src}, {op.period})")
         elif op.kind == "atr":
@@ -445,6 +795,12 @@ def _pine_declare_indicators(indicators: dict[tuple, _Operand]) -> tuple[list[st
             lines.append(f"{name} = ta.highest(high, {op.period})")
         elif op.kind == "lowest_low":
             lines.append(f"{name} = ta.lowest(low, {op.period})")
+        elif op.kind == "average_volume":
+            lines.append(f"{name} = ta.sma(volume, {op.period})")
+        elif op.kind == "candle_range":
+            lines.append(f"{name} = high - low")
+        elif op.kind == "percentage_change":
+            lines.append(f"{name} = ({src} / {src}[{op.period}] - 1) * 100")
         elif op.kind == "vwap":
             # Session VWAP, matching app.strategy.indicators.vwap()'s own
             # formula exactly: cumulative (H+L+C)/3 * volume, divided by
@@ -455,11 +811,17 @@ def _pine_declare_indicators(indicators: dict[tuple, _Operand]) -> tuple[list[st
             # is always (H+L+C)/3, same as the app's own indicator.
             lines.append(f"{name} = ta.vwap(hlc3)")
         elif op.kind == "candle_direction":
-            lines.append(f"{name} = close > open ? 1 : close < open ? -1 : 0")
-        else:  # pragma: no cover -- guarded by _SUPPORTED_INDICATOR_KINDS
-            raise TranslationError(f"Unhandled indicator kind '{op.kind}' during PineScript generation.")
+            if op.direction == "bullish":
+                lines.append(f"{name} = close > open ? 1 : 0")
+            elif op.direction == "bearish":
+                lines.append(f"{name} = close < open ? 1 : 0")
+            else:
+                lines.append(f"{name} = close > open ? 1 : close < open ? -1 : 0")
         var_map[key] = name
 
+    missing = [op.kind for op in ops if op.key() not in var_map]
+    if missing:  # pragma: no cover -- every supported kind registers above
+        raise TranslationError(f"Unhandled indicator kind(s) during PineScript generation: {sorted(set(missing))}.")
     return lines, var_map
 
 
@@ -478,6 +840,10 @@ def _pine_render_condition(cond: _Condition, var_map: dict[tuple, str]) -> str:
         return f"ta.crossover({left}, {right})"
     if cond.operator == "crosses_below":
         return f"ta.crossunder({left}, {right})"
+    if cond.operator == "is_true":
+        return f"({left} != 0)"
+    if cond.operator == "is_false":
+        return f"({left} == 0)"
     return f"{left} {cond.operator} {right}"
 
 
@@ -632,13 +998,20 @@ def to_pinescript(config: dict) -> str:
 
 _MQL5_KIND_INFO = {
     "sma": ("iMA", "MODE_SMA"), "ema": ("iMA", "MODE_EMA"), "wma": ("iMA", "MODE_LWMA"),
-    "rsi": ("iRSI", None), "atr": ("iATR", None),
+    "rsi": ("iRSI", None), "atr": ("iATR", None), "adx": ("iADX", None),
 }
 
 
 def _mql5_price_call(field_name: str, shift: str) -> str:
     fn = {"open": "iOpen", "high": "iHigh", "low": "iLow", "close": "iClose"}.get(field_name, "iClose")
     return f"{fn}(_Symbol, PERIOD_CURRENT, {shift})"
+
+
+def _mql5_price_const(field_name: str) -> str:
+    """ENUM_APPLIED_PRICE token for a config field; anything that isn't a
+    price (e.g. a MACD sourced on volume) falls back to PRICE_CLOSE --
+    MQL5 has no volume applied price."""
+    return f"PRICE_{field_name.upper()}" if field_name in ("open", "high", "low", "close") else "PRICE_CLOSE"
 
 
 def _mql5_declare_indicators(indicators: dict[tuple, _Operand]) -> tuple[list[str], list[str], list[str], dict[tuple, str]]:
@@ -649,56 +1022,165 @@ def _mql5_declare_indicators(indicators: dict[tuple, _Operand]) -> tuple[list[st
     tick_lines: list[str] = []
     var_map: dict[tuple, str] = {}
 
+    # MACD (fixed 12/26/9): one iMACD handle per source field, one buffer
+    # per output line. Registration goes through op.key() -- keying by the
+    # old fixed ("macd", field, 0) tuples crashed with a KeyError on any
+    # MACD operand whose config carried a period.
     macd_fields = sorted({op.field for op in indicators.values() if op.kind in ("macd", "macd_signal", "macd_histogram")})
     for fld in macd_fields:
         handle = f"h_macd_{fld}"
         globals_.append(f"int {handle};")
-        init_lines.append(f'{handle} = iMACD(_Symbol, PERIOD_CURRENT, 12, 26, 9, PRICE_{fld.upper()});')
+        init_lines.append(f'{handle} = iMACD(_Symbol, PERIOD_CURRENT, 12, 26, 9, {_mql5_price_const(fld)});')
         for buf_idx, kind in ((0, "macd"), (1, "macd_signal"), (2, "macd_histogram")):
             arr = f"{handle}_buf{buf_idx}"
             globals_.append(f"double {arr}[];")
             tick_lines.append(f"ArraySetAsSeries({arr}, true);")
             tick_lines.append(f"CopyBuffer({handle}, {buf_idx}, 0, 3, {arr});")
-            var_map[(kind, fld, 0)] = arr
+            for op in indicators.values():
+                if op.kind == kind and op.field == fld:
+                    var_map[op.key()] = arr
 
     bb_groups = sorted({(op.field, op.period) for op in indicators.values()
                          if op.kind in ("bollinger_mid", "bollinger_upper", "bollinger_lower")})
     for fld, period in bb_groups:
         handle = f"h_bb_{fld}_{period}"
         globals_.append(f"int {handle};")
-        init_lines.append(f'{handle} = iBands(_Symbol, PERIOD_CURRENT, {period}, 0, 2.0, PRICE_{fld.upper()});')
+        init_lines.append(f'{handle} = iBands(_Symbol, PERIOD_CURRENT, {period}, 0, 2.0, {_mql5_price_const(fld)});')
         for buf_idx, kind in ((0, "bollinger_mid"), (1, "bollinger_upper"), (2, "bollinger_lower")):
             arr = f"{handle}_buf{buf_idx}"
             globals_.append(f"double {arr}[];")
             tick_lines.append(f"ArraySetAsSeries({arr}, true);")
             tick_lines.append(f"CopyBuffer({handle}, {buf_idx}, 0, 3, {arr});")
-            var_map[(kind, fld, period)] = arr
+            for op in indicators.values():
+                if op.kind == kind and op.field == fld and op.period == period:
+                    var_map[op.key()] = arr
 
+    # Kinds rendered inline in _mql5_render_scalar (price formulas or the
+    # T58* helpers emitted by to_mql5) need no indicator handle at all.
+    _inline_kinds = (
+        {"candle_direction", "highest_high", "lowest_low", "vwap",
+         "vwma", "average_volume", "candle_range", "percentage_change"}
+        | _DONCHIAN_KINDS | _ADVANCED_BOOL_KINDS | _REGIME_KINDS | _SESSION_KINDS
+    )
     for key, op in indicators.items():
         if op.kind in ("macd", "macd_signal", "macd_histogram", "bollinger_mid", "bollinger_upper", "bollinger_lower"):
             continue
-        if op.kind == "candle_direction":
-            continue  # rendered inline from price calls, no handle needed
-        if op.kind in ("highest_high", "lowest_low"):
-            continue  # rendered inline via ArrayMaximum/ArrayMinimum over price calls
-        if op.kind == "vwap":
-            continue  # rendered inline via the ComputeVWAP() helper (see to_mql5)
+        if op.kind in _inline_kinds:
+            continue
         fn, mode = _MQL5_KIND_INFO[op.kind]
         handle = f"h_{op.kind}_{op.period}_{op.field}"
         arr = f"{handle}_buf"
         globals_.append(f"int {handle};")
         globals_.append(f"double {arr}[];")
         if fn == "iMA":
-            init_lines.append(f'{handle} = iMA(_Symbol, PERIOD_CURRENT, {op.period}, 0, {mode}, PRICE_{op.field.upper()});')
+            init_lines.append(f'{handle} = iMA(_Symbol, PERIOD_CURRENT, {op.period}, 0, {mode}, {_mql5_price_const(op.field)});')
         elif fn == "iRSI":
-            init_lines.append(f'{handle} = iRSI(_Symbol, PERIOD_CURRENT, {op.period}, PRICE_{op.field.upper()});')
+            init_lines.append(f'{handle} = iRSI(_Symbol, PERIOD_CURRENT, {op.period}, {_mql5_price_const(op.field)});')
+        elif fn == "iADX":
+            init_lines.append(f'{handle} = iADX(_Symbol, PERIOD_CURRENT, {op.period});')
         elif fn == "iATR":
             init_lines.append(f'{handle} = iATR(_Symbol, PERIOD_CURRENT, {op.period});')
         tick_lines.append(f"ArraySetAsSeries({arr}, true);")
         tick_lines.append(f"CopyBuffer({handle}, 0, 0, 3, {arr});")
         var_map[key] = arr
 
+    missing = [op.kind for op in indicators.values()
+               if op.kind not in _inline_kinds and op.key() not in var_map]
+    if missing:  # pragma: no cover -- every supported kind resolves above
+        raise TranslationError(f"Unhandled indicator kind(s) during MQL5 generation: {sorted(set(missing))}.")
     return globals_, init_lines, tick_lines, var_map
+
+
+def _mql5_prior_extremes(window: int, shift: str) -> tuple[str, str]:
+    """(prior highest high, prior lowest low) over the `window` bars
+    BEFORE the bar at `shift` -- the engine's shift(1)-then-roll window."""
+    hi = f"iHigh(_Symbol, PERIOD_CURRENT, iHighest(_Symbol, PERIOD_CURRENT, MODE_HIGH, {window}, ({shift}) + 1))"
+    lo = f"iLow(_Symbol, PERIOD_CURRENT, iLowest(_Symbol, PERIOD_CURRENT, MODE_LOW, {window}, ({shift}) + 1))"
+    return hi, lo
+
+
+def _mql5_bool_expr(op: _Operand, shift: str) -> str:
+    """Inline 1.0/0.0 expression for the advanced boolean kinds,
+    mirroring app.strategy.manual._advanced_boolean (same windows,
+    direction filter, confirmation shift)."""
+    s = int(shift)
+    w = op.window
+    d = op.direction
+    close = _mql5_price_call("close", shift)
+    open_ = _mql5_price_call("open", shift)
+    if op.kind == "swing_high":
+        return f"(T58IsSwing({w}, {s}, true) ? 1.0 : 0.0)"
+    if op.kind == "swing_low":
+        return f"(T58IsSwing({w}, {s}, false) ? 1.0 : 0.0)"
+    prior_hi, prior_lo = _mql5_prior_extremes(w, shift)
+    if op.kind == "bos":
+        bull = f"({close} > {prior_hi})"
+        bear = f"({close} < {prior_lo})"
+    elif op.kind == "liquidity_sweep":
+        low, high = _mql5_price_call("low", shift), _mql5_price_call("high", shift)
+        bull = f"(({low} < {prior_lo}) && ({close} > {prior_lo}))"
+        bear = f"(({high} > {prior_hi}) && ({close} < {prior_hi}))"
+    elif op.kind == "choch":
+        high_w, low_w = _mql5_price_call("high", str(s + w)), _mql5_price_call("low", str(s + w))
+        low_1, high_1 = _mql5_price_call("low", str(s + 1)), _mql5_price_call("high", str(s + 1))
+        low_w1, high_w1 = _mql5_price_call("low", str(s + w + 1)), _mql5_price_call("high", str(s + w + 1))
+        bull = f"(({close} > {high_w}) && ({low_1} < {low_w1}))"
+        bear = f"(({close} < {low_w}) && ({high_1} > {high_w1}))"
+    elif op.kind == "fvg":
+        low, high = _mql5_price_call("low", shift), _mql5_price_call("high", shift)
+        bull = f"({low} > {_mql5_price_call('high', str(s + 2))})"
+        bear = f"({high} < {_mql5_price_call('low', str(s + 2))})"
+    elif op.kind == "order_block":
+        close_1, open_1 = _mql5_price_call("close", str(s + 1)), _mql5_price_call("open", str(s + 1))
+        high_1, low_1 = _mql5_price_call("high", str(s + 1)), _mql5_price_call("low", str(s + 1))
+        bull = f"(({close_1} < {open_1}) && ({close} > {high_1} + T58RangeMean({w}, {s})))"
+        bear = f"(({close_1} > {open_1}) && ({close} < {low_1} - T58RangeMean({w}, {s})))"
+    else:  # pragma: no cover -- guarded by caller
+        raise TranslationError(f"Unhandled boolean kind '{op.kind}' during MQL5 generation.")
+    if d == "bullish":
+        return f"({bull} ? 1.0 : 0.0)"
+    if d == "bearish":
+        return f"({bear} ? 1.0 : 0.0)"
+    return f"(({bull} || {bear}) ? 1.0 : 0.0)"
+
+
+def _mql5_regime_expr(op: _Operand, shift: str) -> str:
+    p, exp_m, cont_m = op.period, _fmt_num(op.expansion_mult), _fmt_num(op.contraction_mult)
+    if op.kind in ("atr_regime", "atr_expansion", "atr_contraction"):
+        base = f"T58AtrRegime({p}, {exp_m}, {cont_m}, {shift})"
+    else:
+        base = f"T58VolRegime({p}, {exp_m}, {cont_m}, {shift})"
+    if op.kind == "atr_expansion":
+        return f"({base} == 1 ? 1.0 : 0.0)"
+    if op.kind == "atr_contraction":
+        return f"({base} == -1 ? 1.0 : 0.0)"
+    return base
+
+
+def _mql5_session_expr(op: _Operand, shift: str) -> str:
+    s_min, e_min = _pine_session_minutes(op.session_start), _pine_session_minutes(op.session_end)
+    if op.kind == "previous_day_high":
+        return "iHigh(_Symbol, PERIOD_D1, 1)"
+    if op.kind == "previous_day_low":
+        return "iLow(_Symbol, PERIOD_D1, 1)"
+    if op.kind == "previous_day_close":
+        return "iClose(_Symbol, PERIOD_D1, 1)"
+    if op.kind == "session_high":
+        return f"T58SessionExtreme({shift}, {s_min}, {e_min}, true)"
+    if op.kind == "session_low":
+        return f"T58SessionExtreme({shift}, {s_min}, {e_min}, false)"
+    if op.kind == "opening_range_high":
+        return f"T58OpeningRange({shift}, {s_min}, {e_min}, true)"
+    if op.kind == "opening_range_low":
+        return f"T58OpeningRange({shift}, {s_min}, {e_min}, false)"
+    if op.kind == "time_of_day":
+        return f"((T58MinutesOfDay({shift}) >= {s_min} && T58MinutesOfDay({shift}) <= {e_min}) ? 1.0 : 0.0)"
+    if op.kind == "day_of_week":
+        if op.days:
+            cond = " || ".join(f"T58DayOfWeek({shift}) == {d}" for d in op.days)
+            return f"(({cond}) ? 1.0 : 0.0)"
+        return f"T58DayOfWeek({shift})"
+    raise TranslationError(f"Unhandled session kind '{op.kind}' during MQL5 generation.")  # pragma: no cover
 
 
 def _mql5_render_scalar(op: _Operand, var_map: dict[tuple, str], shift: str = "0") -> str:
@@ -709,6 +1191,10 @@ def _mql5_render_scalar(op: _Operand, var_map: dict[tuple, str], shift: str = "0
         return _mql5_price_call(op.field, shift)
     if op.kind == "candle_direction":
         c, o = _mql5_price_call("close", shift), _mql5_price_call("open", shift)
+        if op.direction == "bullish":
+            return f"({c} > {o} ? 1 : 0)"
+        if op.direction == "bearish":
+            return f"({c} < {o} ? 1 : 0)"
         return f"({c} > {o} ? 1 : ({c} < {o} ? -1 : 0))"
     if op.kind == "highest_high":
         return f"iHigh(_Symbol, PERIOD_CURRENT, iHighest(_Symbol, PERIOD_CURRENT, MODE_HIGH, {op.period}, {shift}))"
@@ -716,7 +1202,343 @@ def _mql5_render_scalar(op: _Operand, var_map: dict[tuple, str], shift: str = "0
         return f"iLow(_Symbol, PERIOD_CURRENT, iLowest(_Symbol, PERIOD_CURRENT, MODE_LOW, {op.period}, {shift}))"
     if op.kind == "vwap":
         return f"ComputeVWAP({shift})"
+    if op.kind == "vwma":
+        field_code = {"open": 0, "high": 1, "low": 2, "close": 3}.get(op.field, 3)
+        return f"T58VWMA({op.period}, {shift}, {field_code})"
+    if op.kind == "average_volume":
+        return f"T58AvgVolume({op.period}, {shift})"
+    if op.kind == "candle_range":
+        return f"({_mql5_price_call('high', shift)} - {_mql5_price_call('low', shift)})"
+    if op.kind == "percentage_change":
+        cur, prev = _mql5_price_call(op.field, shift), _mql5_price_call(op.field, str(int(shift) + op.period))
+        return f"(({cur} / {prev} - 1.0) * 100.0)"
+    if op.kind in _DONCHIAN_KINDS:
+        up, lo = _mql5_prior_extremes(op.period, shift)
+        if op.kind == "donchian_upper":
+            return up
+        if op.kind == "donchian_lower":
+            return lo
+        return f"(({up} + {lo}) / 2.0)"
+    if op.kind in ("bos", "choch", "liquidity_sweep", "fvg", "order_block", "swing_high", "swing_low"):
+        return _mql5_bool_expr(op, shift)
+    if op.kind in ("swing_bos", "swing_choch"):
+        return f"T58SwingEvent({op.window}, {shift}, {1 if op.kind == 'swing_choch' else 0})"
+    if op.kind in _REGIME_KINDS:
+        return _mql5_regime_expr(op, shift)
+    if op.kind in _SESSION_KINDS:
+        return _mql5_session_expr(op, shift)
     return f"{var_map[op.key()]}[{shift}]"
+
+
+def _mql5_helper_lines(indicators: dict[tuple, _Operand]) -> list[str]:
+    """T58* helper function bodies, emitted only for the kinds a given
+    strategy actually uses. Each is a closed-form port of the engine's
+    own series math (see app.strategy.manual / app.strategy.indicators)
+    so the generated EA computes the same numbers the backtester did."""
+    kinds = {op.kind for op in indicators.values()}
+    lines: list[str] = []
+    if not (kinds & ({"vwma", "average_volume", "order_block", "swing_high", "swing_low",
+                      "swing_bos", "swing_choch"} | _REGIME_KINDS | _SESSION_KINDS)):
+        return lines
+    lines += [
+        "",
+        "// --- T58 translator helpers (ports of the engine's series math) ---",
+    ]
+    if "vwma" in kinds:
+        lines += [
+            "double T58PriceAt(int fieldCode, int shift)",
+            "{",
+            "   if(fieldCode == 0) return iOpen(_Symbol, PERIOD_CURRENT, shift);",
+            "   if(fieldCode == 1) return iHigh(_Symbol, PERIOD_CURRENT, shift);",
+            "   if(fieldCode == 2) return iLow(_Symbol, PERIOD_CURRENT, shift);",
+            "   return iClose(_Symbol, PERIOD_CURRENT, shift);",
+            "}",
+            "",
+            "double T58VWMA(int period, int shift, int priceField)",
+            "{",
+            "   double sumPV = 0.0, sumV = 0.0;",
+            "   int total = Bars(_Symbol, PERIOD_CURRENT);",
+            "   for(int i = shift; i < shift + period && i < total; i++)",
+            "   {",
+            "      double vol = (double)iVolume(_Symbol, PERIOD_CURRENT, i);",
+            "      sumPV += T58PriceAt(priceField, i) * vol;",
+            "      sumV += vol;",
+            "   }",
+            "   return sumV > 0.0 ? sumPV / sumV : T58PriceAt(priceField, shift);",
+            "}",
+            "",
+        ]
+    if "average_volume" in kinds:
+        lines += [
+            "double T58AvgVolume(int period, int shift)",
+            "{",
+            "   double sum = 0.0;",
+            "   int n = 0, total = Bars(_Symbol, PERIOD_CURRENT);",
+            "   for(int i = shift; i < shift + period && i < total; i++) { sum += (double)iVolume(_Symbol, PERIOD_CURRENT, i); n++; }",
+            "   return n > 0 ? sum / n : 0.0;",
+            "}",
+            "",
+        ]
+    if "order_block" in kinds:
+        lines += [
+            "double T58RangeMean(int len, int shift)",
+            "{",
+            "   double sum = 0.0;",
+            "   int n = 0, total = Bars(_Symbol, PERIOD_CURRENT);",
+            "   for(int i = shift; i < shift + len && i < total; i++) { sum += iHigh(_Symbol, PERIOD_CURRENT, i) - iLow(_Symbol, PERIOD_CURRENT, i); n++; }",
+            "   return n > 0 ? sum / n : 0.0;",
+            "}",
+            "",
+        ]
+    if kinds & {"swing_high", "swing_low"}:
+        lines += [
+            "bool T58IsSwing(int w, int shift, bool wantHigh)",
+            "{",
+            "   // Confirmed-swing flag: the bar `w` bars before `shift` was the extreme of",
+            "   // its centered window (ties allowed, matching manual.py's swing operands).",
+            "   int c = shift + w;",
+            "   int total = Bars(_Symbol, PERIOD_CURRENT);",
+            "   if(c + w >= total) return false;",
+            "   double v = wantHigh ? iHigh(_Symbol, PERIOD_CURRENT, c) : iLow(_Symbol, PERIOD_CURRENT, c);",
+            "   for(int i = shift; i <= shift + 2 * w; i++)",
+            "   {",
+            "      double x = wantHigh ? iHigh(_Symbol, PERIOD_CURRENT, i) : iLow(_Symbol, PERIOD_CURRENT, i);",
+            "      if(wantHigh ? (x > v) : (x < v)) return false;",
+            "   }",
+            "   return true;",
+            "}",
+            "",
+        ]
+    if kinds & {"swing_bos", "swing_choch"}:
+        lines += [
+            "double T58SwingEvent(int w, int shift, int wantChoch)",
+            "{",
+            "   // Replays the fractal BOS/ChoCH detector (market_structure.",
+            "   // calculate_hh_ll_structure: UNIQUE window extremes, HH/HL/LH/LL",
+            "   // labels, event on the confirmation bar) over the most recent",
+            "   // 800 bars ending at `shift`; lows processed before highs.",
+            "   int total = Bars(_Symbol, PERIOD_CURRENT);",
+            "   double lastHigh = 0.0, lastLow = 0.0;",
+            "   bool hasHigh = false, hasLow = false;",
+            "   int trend = 0;",
+            "   double ev = 0.0;",
+            "   for(int p = shift + 800; p >= shift + w; p--)",
+            "   {",
+            "      if(p + w >= total) continue;",
+            "      double lv = iLow(_Symbol, PERIOD_CURRENT, p);",
+            "      int cntL = 0; bool beatL = false;",
+            "      for(int j = p - w; j <= p + w; j++)",
+            "      {",
+            "         double x = iLow(_Symbol, PERIOD_CURRENT, j);",
+            "         if(x < lv) beatL = true;",
+            "         if(x == lv) cntL++;",
+            "      }",
+            "      if(!beatL && cntL == 1)",
+            "      {",
+            "         if(!hasLow) { lastLow = lv; hasLow = true; }",
+            "         else if(lv > lastLow) { if(trend != -1) trend = 1; lastLow = lv; }",
+            "         else",
+            "         {",
+            "            if(p - w == shift) ev = (trend == 1) ? (wantChoch ? 1.0 : 0.0) : ((trend == -1) ? (wantChoch ? 0.0 : 1.0) : 0.0);",
+            "            trend = -1;",
+            "            lastLow = lv;",
+            "         }",
+            "      }",
+            "      double hv = iHigh(_Symbol, PERIOD_CURRENT, p);",
+            "      int cntH = 0; bool beatH = false;",
+            "      for(int j = p - w; j <= p + w; j++)",
+            "      {",
+            "         double x = iHigh(_Symbol, PERIOD_CURRENT, j);",
+            "         if(x > hv) beatH = true;",
+            "         if(x == hv) cntH++;",
+            "      }",
+            "      if(!beatH && cntH == 1)",
+            "      {",
+            "         if(!hasHigh) { lastHigh = hv; hasHigh = true; }",
+            "         else if(hv > lastHigh)",
+            "         {",
+            "            if(p - w == shift) ev = (trend == -1) ? (wantChoch ? 1.0 : 0.0) : ((trend == 1) ? (wantChoch ? 0.0 : 1.0) : 0.0);",
+            "            trend = 1;",
+            "            lastHigh = hv;",
+            "         }",
+            "         else { if(trend != 1) trend = -1; lastHigh = hv; }",
+            "      }",
+            "   }",
+            "   return ev;",
+            "}",
+            "",
+        ]
+    if kinds & {"atr_regime", "atr_expansion", "atr_contraction"}:
+        lines += [
+            "double T58AtrRegime(int period, double expMult, double contMult, int shift)",
+            "{",
+            "   // Wilder ATR vs its trailing mean over max(3*period, period+1) bars:",
+            "   // 1 = expansion, -1 = contraction, 0 = neutral (manual.py atr_regime).",
+            "   int total = Bars(_Symbol, PERIOD_CURRENT);",
+            "   int start = shift + period * 8 + 60;",
+            "   if(start >= total - 1) start = total - 2;",
+            "   if(start <= shift) return 0.0;",
+            "   double atrs[];",
+            "   ArrayResize(atrs, start - shift + 1);",
+            "   int count = 0, seen = 0;",
+            "   double atr = 0.0, seedSum = 0.0;",
+            "   bool seeded = false;",
+            "   for(int i = start; i >= shift; i--)",
+            "   {",
+            "      double h = iHigh(_Symbol, PERIOD_CURRENT, i);",
+            "      double l = iLow(_Symbol, PERIOD_CURRENT, i);",
+            "      double pc = iClose(_Symbol, PERIOD_CURRENT, i + 1);",
+            "      double tr = MathMax(h - l, MathMax(MathAbs(h - pc), MathAbs(l - pc)));",
+            "      seen++;",
+            "      if(!seeded) { seedSum += tr; atr = seedSum / seen; if(seen >= period) seeded = true; }",
+            "      else atr = (atr * (period - 1) + tr) / period;",
+            "      atrs[count++] = atr;",
+            "   }",
+            "   int baseLen = MathMax(3 * period, period + 1);",
+            "   int from = MathMax(0, count - baseLen);",
+            "   double bSum = 0.0; int bN = 0;",
+            "   for(int k = from; k < count; k++) { bSum += atrs[k]; bN++; }",
+            "   double base = bN > 0 ? bSum / bN : 0.0;",
+            "   if(base <= 0.0) return 0.0;",
+            "   double cur = atrs[count - 1];",
+            "   if(cur > base * expMult) return 1.0;",
+            "   if(cur < base * contMult) return -1.0;",
+            "   return 0.0;",
+            "}",
+            "",
+        ]
+    if "volatility_regime" in kinds:
+        lines += [
+            "double T58VolRegime(int period, double expMult, double contMult, int shift)",
+            "{",
+            "   // Rolling stdev of close returns vs its own trailing baseline,",
+            "   // same 1 / -1 / 0 tristate as T58AtrRegime (manual.py volatility_regime).",
+            "   int total = Bars(_Symbol, PERIOD_CURRENT);",
+            "   int baseLen = MathMax(3 * period, period + 1);",
+            "   int start = shift + baseLen + period + 5;",
+            "   if(start >= total - 2) start = total - 3;",
+            "   if(start <= shift) return 0.0;",
+            "   double vols[];",
+            "   ArrayResize(vols, start - shift + 1);",
+            "   int count = 0;",
+            "   for(int i = start; i >= shift; i--)",
+            "   {",
+            "      double rets[];",
+            "      ArrayResize(rets, period);",
+            "      double m = 0.0;",
+            "      for(int k = 0; k < period; k++)",
+            "      {",
+            "         double c0 = iClose(_Symbol, PERIOD_CURRENT, i + k);",
+            "         double c1 = iClose(_Symbol, PERIOD_CURRENT, i + k + 1);",
+            "         rets[k] = (c1 != 0.0) ? (c0 / c1 - 1.0) : 0.0;",
+            "         m += rets[k];",
+            "      }",
+            "      m /= period;",
+            "      double v = 0.0;",
+            "      for(int k = 0; k < period; k++) v += (rets[k] - m) * (rets[k] - m);",
+            "      vols[count++] = (period > 1) ? MathSqrt(v / (period - 1)) : 0.0;",
+            "   }",
+            "   int from = MathMax(0, count - baseLen);",
+            "   double bSum = 0.0; int bN = 0;",
+            "   for(int k = from; k < count; k++) { bSum += vols[k]; bN++; }",
+            "   double base = bN > 0 ? bSum / bN : 0.0;",
+            "   if(base <= 0.0) return 0.0;",
+            "   double cur = vols[count - 1];",
+            "   if(cur > base * expMult) return 1.0;",
+            "   if(cur < base * contMult) return -1.0;",
+            "   return 0.0;",
+            "}",
+            "",
+        ]
+    if kinds & {"session_high", "session_low", "opening_range_high", "opening_range_low", "time_of_day", "day_of_week"}:
+        lines += [
+            "int T58MinutesOfDay(int shift)",
+            "{",
+            "   MqlDateTime dt;",
+            "   TimeToStruct(iTime(_Symbol, PERIOD_CURRENT, shift), dt);",
+            "   return dt.hour * 60 + dt.min;",
+            "}",
+            "",
+        ]
+    if kinds & {"session_high", "session_low", "opening_range_high", "opening_range_low"}:
+        lines += [
+            "int T58DayKey(int shift)",
+            "{",
+            "   MqlDateTime dt;",
+            "   TimeToStruct(iTime(_Symbol, PERIOD_CURRENT, shift), dt);",
+            "   return dt.year * 10000 + dt.mon * 100 + dt.day;",
+            "}",
+            "",
+            "double T58SessionExtreme(int shift, int startMin, int endMin, bool wantHigh)",
+            "{",
+            "   // Session extreme so far today; before today's window opens, the",
+            "   // previous day's final session value carries over (the engine's",
+            "   // cummax-then-forward-fill). 0.0 when no session bars exist yet.",
+            "   int total = Bars(_Symbol, PERIOD_CURRENT);",
+            "   int evalDay = T58DayKey(shift);",
+            "   double today = 0.0, prev = 0.0;",
+            "   bool haveToday = false, havePrev = false;",
+            "   int phase = 0, prevDayKey = 0;",
+            "   for(int i = shift; i < total; i++)",
+            "   {",
+            "      int dk = T58DayKey(i);",
+            "      if(dk != evalDay)",
+            "      {",
+            "         if(haveToday) break;",
+            "         if(phase == 0) { phase = 1; prevDayKey = dk; }",
+            "         else if(dk != prevDayKey) break;",
+            "      }",
+            "      int mins = T58MinutesOfDay(i);",
+            "      if(mins < startMin || mins > endMin) continue;",
+            "      double px = wantHigh ? iHigh(_Symbol, PERIOD_CURRENT, i) : iLow(_Symbol, PERIOD_CURRENT, i);",
+            "      if(phase == 0) { today = haveToday ? (wantHigh ? MathMax(today, px) : MathMin(today, px)) : px; haveToday = true; }",
+            "      else { prev = havePrev ? (wantHigh ? MathMax(prev, px) : MathMin(prev, px)) : px; havePrev = true; }",
+            "   }",
+            "   if(haveToday) return today;",
+            "   return havePrev ? prev : 0.0;",
+            "}",
+            "",
+            "double T58OpeningRange(int shift, int startMin, int endMin, bool wantHigh)",
+            "{",
+            "   // Full window extreme, visible only after the window closes (the",
+            "   // engine fills forward from there); before that, yesterday's range.",
+            "   int total = Bars(_Symbol, PERIOD_CURRENT);",
+            "   int evalDay = T58DayKey(shift);",
+            "   bool afterWindow = T58MinutesOfDay(shift) > endMin;",
+            "   double today = 0.0, prev = 0.0;",
+            "   bool haveToday = false, havePrev = false;",
+            "   int phase = 0, prevDayKey = 0;",
+            "   for(int i = shift; i < total; i++)",
+            "   {",
+            "      int dk = T58DayKey(i);",
+            "      if(dk != evalDay)",
+            "      {",
+            "         if(phase == 0) { phase = 1; prevDayKey = dk; if(afterWindow && haveToday) break; }",
+            "         else if(dk != prevDayKey) break;",
+            "      }",
+            "      int mins = T58MinutesOfDay(i);",
+            "      if(mins < startMin || mins > endMin) continue;",
+            "      double px = wantHigh ? iHigh(_Symbol, PERIOD_CURRENT, i) : iLow(_Symbol, PERIOD_CURRENT, i);",
+            "      if(phase == 0) { today = haveToday ? (wantHigh ? MathMax(today, px) : MathMin(today, px)) : px; haveToday = true; }",
+            "      else { prev = havePrev ? (wantHigh ? MathMax(prev, px) : MathMin(prev, px)) : px; havePrev = true; }",
+            "   }",
+            "   if(afterWindow && haveToday) return today;",
+            "   return havePrev ? prev : 0.0;",
+            "}",
+            "",
+        ]
+    if "day_of_week" in kinds:
+        lines += [
+            "double T58DayOfWeek(int shift)",
+            "{",
+            "   // pandas convention: Monday = 0 .. Sunday = 6.",
+            "   MqlDateTime dt;",
+            "   TimeToStruct(iTime(_Symbol, PERIOD_CURRENT, shift), dt);",
+            "   return (double)((dt.day_of_week + 6) % 7);",
+            "}",
+            "",
+        ]
+    return lines
 
 
 def _mql5_render_condition(cond: _Condition, var_map: dict[tuple, str]) -> str:
@@ -726,6 +1548,10 @@ def _mql5_render_condition(cond: _Condition, var_map: dict[tuple, str]) -> str:
         if cond.operator == "crosses_above":
             return f"(({left0} > {right0}) && ({left1} <= {right1}))"
         return f"(({left0} < {right0}) && ({left1} >= {right1}))"
+    if cond.operator == "is_true":
+        return f"({_mql5_render_scalar(cond.left, var_map, '0')} != 0)"
+    if cond.operator == "is_false":
+        return f"({_mql5_render_scalar(cond.left, var_map, '0')} == 0)"
     left = _mql5_render_scalar(cond.left, var_map, "0")
     right = _mql5_render_scalar(cond.right, var_map, "0")
     return f"({left} {cond.operator} {right})"
@@ -944,6 +1770,7 @@ def to_mql5(config: dict) -> str:
         lines.append("   return sumV > 0.0 ? sumPV / sumV : 0.0;")
         lines.append("}")
         lines.append("")
+    lines.extend(_mql5_helper_lines(indicators))
     lines.extend(_risk_todo_lines(parsed, "//"))
     lines.extend(_config_directive_lines(config, "//"))
     return "\n".join(lines).rstrip() + "\n"
@@ -1230,7 +2057,7 @@ def _config_from_groups(
 # ---------------------------------------------------------------------------
 
 _PINE_ASSIGN_RE = re.compile(r"^\s*(?:var\s+)?([A-Za-z_]\w*)\s*=\s*(.+?)\s*$")
-_PINE_TA_CALL_RE = re.compile(r"ta\.(sma|ema|wma|rsi)\s*\(\s*([^,()]+)\s*,\s*([^()]+)\s*\)")
+_PINE_TA_CALL_RE = re.compile(r"ta\.(sma|ema|wma|rsi|vwma)\s*\(\s*([^,()]+)\s*,\s*([^()]+)\s*\)")
 _PINE_VWAP_CALL_RE = re.compile(r"ta\.vwap\s*\(\s*[^()]*\s*\)")
 _PINE_CROSS_CALL_RE = re.compile(r"ta\.(crossover|crossunder)\s*\(\s*([^,()]+)\s*,\s*([^()]+)\s*\)")
 _PINE_INPUT_RE = re.compile(r"input\.(?:int|float)\s*\(\s*([-\d.]+)")
@@ -1701,36 +2528,208 @@ def parse_mql5(source: str) -> dict:
 _PYTHON_IMPORTS = (
     "from app.strategy.indicators import (\n"
     "    atr, bollinger, crossover, crossunder, ema, highest_high, lowest_low, macd, rsi, sma, vwap, wma,\n"
+    "    adx, average_volume, candle_range, donchian, percentage_change, vwma,\n"
     ")"
 )
+
+# Emitted (once) when a strategy uses swing_bos/swing_choch: delegates to
+# the engine's own fractal detector so the generated strategy computes
+# byte-identical events instead of a reimplementation.
+_PYTHON_SWING_HELPER = (
+    "def _t58_swing_event(frame, event, window):\n"
+    "    # Fractal-swing BOS/ChoCH via the engine's own detector\n"
+    "    # (app.quant_lab.market_structure.calculate_hh_ll_structure);\n"
+    "    # events land on the confirmation bar (swing index + window).\n"
+    "    from app.quant_lab.market_structure import calculate_hh_ll_structure\n"
+    "    out = pd.Series(0.0, index=frame.index)\n"
+    "    if len(frame) < 2 * window + 1:\n"
+    "        return out\n"
+    "    structure = calculate_hh_ll_structure(frame, left=window, right=window)\n"
+    "    if structure.empty:\n"
+    "        return out\n"
+    "    for pos in structure.loc[structure['event'] == event, 'index'].to_numpy():\n"
+    "        confirm = int(pos) + window\n"
+    "        if 0 <= confirm < len(out):\n"
+    "            out.iloc[confirm] = 1.0\n"
+    "    return out"
+)
+
+
+def _python_bool_expr(op: _Operand) -> str:
+    """Pandas expression (0/1 ints) for the advanced boolean kinds --
+    a line-for-line port of app.strategy.manual._advanced_boolean and
+    its swing branches (same windows, direction filter, confirmation
+    shift: no lookahead)."""
+    w = op.window
+    d = op.direction
+    if op.kind == "bos":
+        bull = f"(work['close'] > _prior_high_{w})"
+        bear = f"(work['close'] < _prior_low_{w})"
+    elif op.kind == "liquidity_sweep":
+        bull = f"((work['low'] < _prior_low_{w}) & (work['close'] > _prior_low_{w}))"
+        bear = f"((work['high'] > _prior_high_{w}) & (work['close'] < _prior_high_{w}))"
+    elif op.kind == "choch":
+        bull = f"((work['close'] > work['high'].shift({w})) & (work['low'].diff({w}) < 0).shift(1))"
+        bear = f"((work['close'] < work['low'].shift({w})) & (work['high'].diff({w}) > 0).shift(1))"
+    elif op.kind == "fvg":
+        bull = "(work['low'] > work['high'].shift(2))"
+        bear = "(work['high'] < work['low'].shift(2))"
+    elif op.kind == "order_block":
+        bull = f"((work['close'].shift(1) < work['open'].shift(1)) & (work['close'] > work['high'].shift(1) + _range_mean_{w}))"
+        bear = f"((work['close'].shift(1) > work['open'].shift(1)) & (work['close'] < work['low'].shift(1) - _range_mean_{w}))"
+    elif op.kind == "swing_high":
+        return f"((work['high'] == work['high'].rolling({2 * w + 1}, center=True, min_periods={w + 1}).max()).shift({w}).fillna(False).astype(int))"
+    elif op.kind == "swing_low":
+        return f"((work['low'] == work['low'].rolling({2 * w + 1}, center=True, min_periods={w + 1}).min()).shift({w}).fillna(False).astype(int))"
+    else:  # pragma: no cover -- guarded by caller
+        raise TranslationError(f"Unhandled boolean kind '{op.kind}' during Python generation.")
+    if d == "bullish":
+        return f"({bull}.fillna(False).astype(int))"
+    if d == "bearish":
+        return f"({bear}.fillna(False).astype(int))"
+    return f"(({bull} | {bear}).fillna(False).astype(int))"
 
 
 def _python_declare_indicators(indicators: dict[tuple, _Operand]) -> tuple[list[str], dict[tuple, str]]:
     lines: list[str] = []
     var_map: dict[tuple, str] = {}
+    ops = list(indicators.values())
 
     def src(field_name: str) -> str:
         return f"work['{field_name}']" if field_name in _PRICE_FIELDS else "work['close']"
 
-    macd_fields = sorted({op.field for op in indicators.values() if op.kind in ("macd", "macd_signal", "macd_histogram")})
-    for fld in macd_fields:
+    def reg(op: _Operand, var: str) -> None:
+        var_map[op.key()] = var
+
+    # MACD (fixed 12/26/9) and Bollinger (2.0 mult) -- registered through
+    # op.key() (fixed-tuple registration crashed operands carrying a
+    # period with a KeyError; see _pine_declare_indicators).
+    for fld in sorted({op.field for op in ops if op.kind in ("macd", "macd_signal", "macd_histogram")}):
         base = f"macd_{fld}"
         lines.append(f"{base}_line, {base}_signal, {base}_hist = macd({src(fld)}, 12, 26, 9)")
-        var_map[("macd", fld, 0)] = f"{base}_line"
-        var_map[("macd_signal", fld, 0)] = f"{base}_signal"
-        var_map[("macd_histogram", fld, 0)] = f"{base}_hist"
+    for op in ops:
+        if op.kind == "macd":
+            reg(op, f"macd_{op.field}_line")
+        elif op.kind == "macd_signal":
+            reg(op, f"macd_{op.field}_signal")
+        elif op.kind == "macd_histogram":
+            reg(op, f"macd_{op.field}_hist")
 
-    bb_groups = sorted({(op.field, op.period) for op in indicators.values()
-                         if op.kind in ("bollinger_mid", "bollinger_upper", "bollinger_lower")})
-    for fld, period in bb_groups:
+    for fld, period in sorted({(op.field, op.period) for op in ops
+                               if op.kind in ("bollinger_mid", "bollinger_upper", "bollinger_lower")}):
         base = f"bb_{fld}_{period}"
         lines.append(f"{base}_mid, {base}_upper, {base}_lower = bollinger({src(fld)}, {period}, 2.0)")
-        var_map[("bollinger_mid", fld, period)] = f"{base}_mid"
-        var_map[("bollinger_upper", fld, period)] = f"{base}_upper"
-        var_map[("bollinger_lower", fld, period)] = f"{base}_lower"
+    for op in ops:
+        if op.kind in ("bollinger_mid", "bollinger_upper", "bollinger_lower"):
+            reg(op, f"bb_{op.field}_{op.period}_{op.kind[len('bollinger_'):]}")
 
+    # Donchian channels off the engine's own donchian() (prior-bar window).
+    for period in sorted({op.period for op in ops if op.kind in _DONCHIAN_KINDS}):
+        lines.append(f"dc_{period}_mid, dc_{period}_upper, dc_{period}_lower = donchian(work, {period})")
+    for op in ops:
+        if op.kind in _DONCHIAN_KINDS:
+            reg(op, f"dc_{op.period}_{op.kind[len('donchian_'):]}")
+
+    # Shared prior-extreme / range helpers + advanced boolean kinds.
+    for w in sorted({op.window for op in ops if op.kind in ("bos", "liquidity_sweep", "order_block")}):
+        if any(op.kind in ("bos", "liquidity_sweep") and op.window == w for op in ops):
+            lines.append(f"_prior_high_{w} = work['high'].shift(1).rolling({w}, min_periods={w}).max()")
+            lines.append(f"_prior_low_{w} = work['low'].shift(1).rolling({w}, min_periods={w}).min()")
+        if any(op.kind == "order_block" and op.window == w for op in ops):
+            lines.append(f"_range_mean_{w} = (work['high'] - work['low']).rolling({w}, min_periods=1).mean()")
+    for op in ops:
+        if op.kind in ("bos", "choch", "liquidity_sweep", "fvg", "order_block", "swing_high", "swing_low"):
+            name = f"{op.kind}_{op.window}_{op.direction}"
+            lines.append(f"{name} = {_python_bool_expr(op)}")
+            reg(op, name)
+    if any(op.kind in ("swing_bos", "swing_choch") for op in ops):
+        lines.extend(_PYTHON_SWING_HELPER.split("\n"))
+    for op in ops:
+        if op.kind in ("swing_bos", "swing_choch"):
+            name = f"{op.kind}_{op.window}"
+            lines.append(f"{name} = _t58_swing_event(work, '{'choch' if op.kind == 'swing_choch' else 'bos'}', {op.window})")
+            reg(op, name)
+
+    # Regime tristates (indicator vs its own trailing baseline).
+    for period, exp_m, cont_m in sorted({(op.period, op.expansion_mult, op.contraction_mult) for op in ops
+                                         if op.kind in ("atr_regime", "atr_expansion", "atr_contraction")}):
+        g = f"{period}_{_pine_name_num(exp_m)}_{_pine_name_num(cont_m)}"
+        base_len = max(3 * period, period + 1)
+        lines.append(f"_atr_{g} = atr(work, {period})")
+        lines.append(f"_atr_base_{g} = _atr_{g}.rolling({base_len}, min_periods={period}).mean()")
+        lines.append(f"atr_regime_{g} = pd.Series(0, index=work.index, dtype=int)")
+        lines.append(f"atr_regime_{g}[_atr_{g} > _atr_base_{g} * {_fmt_num(exp_m)}] = 1")
+        lines.append(f"atr_regime_{g}[_atr_{g} < _atr_base_{g} * {_fmt_num(cont_m)}] = -1")
+        lines.append(f"atr_expansion_{g} = (atr_regime_{g} == 1).astype(int)")
+        lines.append(f"atr_contraction_{g} = (atr_regime_{g} == -1).astype(int)")
+    for op in ops:
+        if op.kind in ("atr_regime", "atr_expansion", "atr_contraction"):
+            reg(op, f"{op.kind}_{op.period}_{_pine_name_num(op.expansion_mult)}_{_pine_name_num(op.contraction_mult)}")
+    for period, exp_m, cont_m in sorted({(op.period, op.expansion_mult, op.contraction_mult) for op in ops
+                                         if op.kind == "volatility_regime"}):
+        g = f"{period}_{_pine_name_num(exp_m)}_{_pine_name_num(cont_m)}"
+        base_len = max(3 * period, period + 1)
+        lines.append(f"_vol_{g} = work['close'].pct_change().rolling({period}, min_periods={period}).std()")
+        lines.append(f"_vol_base_{g} = _vol_{g}.rolling({base_len}, min_periods={period}).mean()")
+        lines.append(f"volatility_regime_{g} = pd.Series(0, index=work.index, dtype=int)")
+        lines.append(f"volatility_regime_{g}[_vol_{g} > _vol_base_{g} * {_fmt_num(exp_m)}] = 1")
+        lines.append(f"volatility_regime_{g}[_vol_{g} < _vol_base_{g} * {_fmt_num(cont_m)}] = -1")
+    for op in ops:
+        if op.kind == "volatility_regime":
+            reg(op, f"volatility_regime_{op.period}_{_pine_name_num(op.expansion_mult)}_{_pine_name_num(op.contraction_mult)}")
+
+    # Session / calendar series -- pandas ports of manual.py's
+    # _session_series (same day grouping, same carry semantics).
+    session_ops = [op for op in ops if op.kind in _SESSION_KINDS]
+    if session_ops:
+        lines.append("_ts = pd.to_datetime(work['timestamp'])")
+        lines.append("_day = _ts.dt.normalize()")
+        lines.append("_mins_of_day = _ts.dt.hour * 60 + _ts.dt.minute")
+        window_pairs = sorted({(_pine_session_minutes(op.session_start), _pine_session_minutes(op.session_end))
+                               for op in session_ops
+                               if op.kind in ("session_high", "session_low", "opening_range_high", "opening_range_low", "time_of_day")})
+        for s_min, e_min in window_pairs:
+            pair_ops = [op for op in session_ops
+                        if _pine_session_minutes(op.session_start) == s_min and _pine_session_minutes(op.session_end) == e_min]
+            lines.append(f"_mask_{s_min}_{e_min} = (_mins_of_day >= {s_min}) & (_mins_of_day <= {e_min})")
+            if any(op.kind == "time_of_day" for op in pair_ops):
+                lines.append(f"time_of_day_{s_min}_{e_min} = _mask_{s_min}_{e_min}.astype(int)")
+            if any(op.kind == "session_high" for op in pair_ops):
+                lines.append(f"session_high_{s_min}_{e_min} = work['high'].where(_mask_{s_min}_{e_min}).groupby(_day).cummax().ffill()")
+            if any(op.kind == "session_low" for op in pair_ops):
+                lines.append(f"session_low_{s_min}_{e_min} = work['low'].where(_mask_{s_min}_{e_min}).groupby(_day).cummin().ffill()")
+            if any(op.kind == "opening_range_high" for op in pair_ops):
+                lines.append(f"_orh_full_{s_min}_{e_min} = work['high'].where(_mask_{s_min}_{e_min}).groupby(_day).transform('max')")
+                lines.append(f"opening_range_high_{s_min}_{e_min} = _orh_full_{s_min}_{e_min}.where(_mins_of_day > {e_min}).ffill()")
+            if any(op.kind == "opening_range_low" for op in pair_ops):
+                lines.append(f"_orl_full_{s_min}_{e_min} = work['low'].where(_mask_{s_min}_{e_min}).groupby(_day).transform('min')")
+                lines.append(f"opening_range_low_{s_min}_{e_min} = _orl_full_{s_min}_{e_min}.where(_mins_of_day > {e_min}).ffill()")
+        for op in session_ops:
+            s_min, e_min = _pine_session_minutes(op.session_start), _pine_session_minutes(op.session_end)
+            if op.kind == "previous_day_high":
+                lines.append("previous_day_high = _day.map(work.groupby(_day)['high'].max().shift(1))")
+                reg(op, "previous_day_high")
+            elif op.kind == "previous_day_low":
+                lines.append("previous_day_low = _day.map(work.groupby(_day)['low'].min().shift(1))")
+                reg(op, "previous_day_low")
+            elif op.kind == "previous_day_close":
+                lines.append("previous_day_close = _day.map(work.groupby(_day)['close'].last().shift(1))")
+                reg(op, "previous_day_close")
+            elif op.kind in ("time_of_day", "session_high", "session_low", "opening_range_high", "opening_range_low"):
+                reg(op, f"{op.kind}_{s_min}_{e_min}")
+            elif op.kind == "day_of_week":
+                if op.days:
+                    name = "day_of_week_" + "_".join(str(d) for d in op.days)
+                    lines.append(f"{name} = _ts.dt.dayofweek.isin([{', '.join(str(d) for d in op.days)}]).astype(int)")
+                    reg(op, name)
+                else:
+                    lines.append("day_of_week_all = _ts.dt.dayofweek")
+                    reg(op, "day_of_week_all")
+
+    # Classic single-series indicators.
     for key, op in indicators.items():
-        if op.kind in ("macd", "macd_signal", "macd_histogram", "bollinger_mid", "bollinger_upper", "bollinger_lower"):
+        if op.kind not in ("sma", "ema", "wma", "rsi", "atr", "highest_high", "lowest_low", "vwap",
+                           "vwma", "adx", "average_volume", "candle_range", "percentage_change", "candle_direction"):
             continue
         name = f"vwap_{op.field}" if op.kind == "vwap" else f"{op.kind}_{op.period}_{op.field}"
         if op.kind == "sma":
@@ -1739,6 +2738,10 @@ def _python_declare_indicators(indicators: dict[tuple, _Operand]) -> tuple[list[
             lines.append(f"{name} = ema({src(op.field)}, {op.period})")
         elif op.kind == "wma":
             lines.append(f"{name} = wma({src(op.field)}, {op.period})")
+        elif op.kind == "vwma":
+            lines.append(f"{name} = vwma(work, {op.period}, '{op.field}')")
+        elif op.kind == "adx":
+            lines.append(f"{name} = adx(work, {op.period})")
         elif op.kind == "rsi":
             lines.append(f"{name} = rsi({src(op.field)}, {op.period})")
         elif op.kind == "atr":
@@ -1747,17 +2750,29 @@ def _python_declare_indicators(indicators: dict[tuple, _Operand]) -> tuple[list[
             lines.append(f"{name} = highest_high(work['high'], {op.period})")
         elif op.kind == "lowest_low":
             lines.append(f"{name} = lowest_low(work['low'], {op.period})")
+        elif op.kind == "average_volume":
+            lines.append(f"{name} = average_volume(work['volume'], {op.period})")
+        elif op.kind == "candle_range":
+            lines.append(f"{name} = candle_range(work)")
+        elif op.kind == "percentage_change":
+            lines.append(f"{name} = percentage_change({src(op.field)}, {op.period})")
         elif op.kind == "vwap":
             # Ignores op.field -- app.strategy.indicators.vwap() always
             # derives typical price from H/L/C and needs the whole frame
             # (for its timestamp-based daily reset), not a single column.
             lines.append(f"{name} = vwap(work)")
         elif op.kind == "candle_direction":
-            lines.append(f"{name} = (work['close'] - work['open']).apply(lambda d: 1 if d > 0 else (-1 if d < 0 else 0))")
-        else:  # pragma: no cover -- guarded by _SUPPORTED_INDICATOR_KINDS
-            raise TranslationError(f"Unhandled indicator kind '{op.kind}' during Python generation.")
+            if op.direction == "bullish":
+                lines.append(f"{name} = (work['close'] > work['open']).astype(int)")
+            elif op.direction == "bearish":
+                lines.append(f"{name} = (work['close'] < work['open']).astype(int)")
+            else:
+                lines.append(f"{name} = (work['close'] - work['open']).apply(lambda d: 1 if d > 0 else (-1 if d < 0 else 0))")
         var_map[key] = name
 
+    missing = [op.kind for op in ops if op.key() not in var_map]
+    if missing:  # pragma: no cover -- every supported kind registers above
+        raise TranslationError(f"Unhandled indicator kind(s) during Python generation: {sorted(set(missing))}.")
     return lines, var_map
 
 
@@ -1772,11 +2787,28 @@ def _python_render_operand(op: _Operand, var_map: dict[tuple, str]) -> str:
 def _python_render_condition(cond: _Condition, var_map: dict[tuple, str]) -> str:
     left = _python_render_operand(cond.left, var_map)
     right = _python_render_operand(cond.right, var_map)
-    if cond.operator == "crosses_above":
-        return f"crossover({left}, {right})"
-    if cond.operator == "crosses_below":
-        return f"crossunder({left}, {right})"
-    return f"({left} {cond.operator} {right})"
+    both_constant = cond.left.kind == "constant" and cond.right.kind == "constant"
+    if cond.operator in ("crosses_above", "crosses_below"):
+        if both_constant:
+            # Two constants can never cross; render the always-false
+            # placeholder as a Series so group math still works.
+            return "pd.Series(False, index=work.index)"
+        fn = "crossover" if cond.operator == "crosses_above" else "crossunder"
+        return f"{fn}({left}, {right})"
+    if cond.operator == "is_true":
+        # The engine's "is true" is left.astype(bool): any nonzero value
+        # (including a tristate -1) counts as true, NaN as false.
+        expr = f"({left} != 0)" if cond.left.kind == "constant" else f"(({left}).fillna(0) != 0)"
+    elif cond.operator == "is_false":
+        expr = f"({left} == 0)" if cond.left.kind == "constant" else f"(({left}).fillna(0) == 0)"
+    else:
+        expr = f"({left} {cond.operator} {right})"
+    if both_constant:
+        # e.g. a deliberately disabled side ("0 > 1" placeholder): a bare
+        # Python bool breaks the generated signal combiner, so broadcast
+        # it to a full-length constant Series.
+        return f"pd.Series({expr}, index=work.index)"
+    return expr
 
 
 def _python_render_group(group: _ConditionGroup, var_map: dict[tuple, str]) -> str:
