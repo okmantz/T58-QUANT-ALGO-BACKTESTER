@@ -154,8 +154,17 @@ def fetch_headlines(query: str, max_results: int = 50, timeout: float = 10.0) ->
     try:
         resp = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
         resp.raise_for_status()
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else "unknown"
+        raise SentimentPriceError(
+            f"Google News returned an error (HTTP {status}) for '{query}'. Wait a moment and "
+            "try again -- if it keeps happening, try a different search query."
+        ) from exc
     except requests.RequestException as exc:
-        raise SentimentPriceError(f"Failed to fetch headlines for '{query}': {exc}") from exc
+        raise SentimentPriceError(
+            f"Could not reach Google News to fetch headlines for '{query}'. Check your internet "
+            f"connection and try again. (Details: {exc})"
+        ) from exc
 
     try:
         root = ET.fromstring(resp.content)
@@ -254,10 +263,13 @@ class SentimentPriceCorrelation:
     warnings: list = field(default_factory=list)
 
     def render_summary(self) -> str:
+        def _fmt(value: float) -> str:
+            return f"{value:+.3f}" if np.isfinite(value) else "n/a"
+
         return (
             f"{self.n_days} overlapping trading days.\n"
-            f"Same-day correlation (sentiment vs. that day's return): {self.correlation:+.3f}\n"
-            f"Next-day correlation (sentiment vs. the FOLLOWING day's return): {self.lagged_correlation:+.3f}"
+            f"Same-day correlation (sentiment vs. that day's return): {_fmt(self.correlation)}\n"
+            f"Next-day correlation (sentiment vs. the FOLLOWING day's return): {_fmt(self.lagged_correlation)}"
         )
 
 
@@ -278,8 +290,19 @@ def correlate_sentiment_with_price(sentiment_df: pd.DataFrame, price_df: pd.Data
     s["date"] = pd.to_datetime(s["timestamp"], utc=True).dt.tz_localize(None).dt.normalize()
     daily_sentiment = s.groupby("date").agg(avg_sentiment=("sentiment", "mean"), headline_count=("sentiment", "size"))
 
+    missing = [c for c in ("timestamp", "close") if c not in price_df.columns]
+    if missing:
+        raise SentimentPriceError(
+            f"Price data is missing required column(s): {', '.join(missing)} "
+            f"(found: {', '.join(map(str, price_df.columns))})."
+        )
+    if price_df.empty:
+        raise SentimentPriceError("Price data has no rows to correlate against.")
     p = price_df[["timestamp", "close"]].copy()
-    p["timestamp"] = pd.to_datetime(p["timestamp"])
+    try:
+        p["timestamp"] = pd.to_datetime(p["timestamp"])
+    except (ValueError, TypeError) as exc:
+        raise SentimentPriceError(f"Price timestamps could not be parsed as dates: {exc}") from exc
     if p["timestamp"].dt.tz is not None:
         p["timestamp"] = p["timestamp"].dt.tz_localize(None)
     p["date"] = p["timestamp"].dt.normalize()
@@ -289,16 +312,27 @@ def correlate_sentiment_with_price(sentiment_df: pd.DataFrame, price_df: pd.Data
     merged = daily_sentiment.join(daily_price, how="inner").dropna(subset=["daily_return"])
     if len(merged) < 5:
         raise SentimentPriceError(
-            f"Only {len(merged)} overlapping days between headlines and price data -- need at least 5 "
-            "to compute a meaningful correlation. Try a wider headline search window or date range."
+            f"Only {len(merged)} overlapping days between headlines "
+            f"({daily_sentiment.index.min().date()} to {daily_sentiment.index.max().date()}) and "
+            f"price data ({daily_price.index.min().date()} to {daily_price.index.max().date()}) -- "
+            "need at least 5 to compute a meaningful correlation. Headlines only cover roughly "
+            "the last 30 days, so the price data must extend into that same recent window; older "
+            "price history cannot be correlated with today's news."
         )
 
     merged = merged.reset_index().rename(columns={"index": "date"})
-    correlation = float(merged["avg_sentiment"].corr(merged["daily_return"]))
+    with np.errstate(invalid="ignore", divide="ignore"):
+        correlation = float(merged["avg_sentiment"].corr(merged["daily_return"]))
+    if not np.isfinite(correlation):
+        warnings.append(
+            "Same-day correlation is undefined (shown as n/a) -- daily sentiment or daily returns "
+            "had no day-to-day variation across the overlapping days."
+        )
 
     merged["next_day_return"] = merged["daily_return"].shift(-1)
     lagged = merged.dropna(subset=["next_day_return"])
-    lagged_correlation = float(lagged["avg_sentiment"].corr(lagged["next_day_return"])) if len(lagged) >= 5 else float("nan")
+    with np.errstate(invalid="ignore", divide="ignore"):
+        lagged_correlation = float(lagged["avg_sentiment"].corr(lagged["next_day_return"])) if len(lagged) >= 5 else float("nan")
     if len(lagged) < 5:
         warnings.append("Not enough days to compute a reliable next-day-lagged correlation.")
 
