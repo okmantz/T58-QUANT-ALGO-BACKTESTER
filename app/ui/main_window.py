@@ -94,7 +94,7 @@ from app.orchestration.loop_runner import (
 from app.orchestration.resource_guard import (
     HEAVY_JOB_GUARD, JOB_EVOLUTION_LAB, JOB_FORGE, JOB_FULL_PIPELINE, JOB_SEARCH_LAB, JOB_SPEED_RUN,
     JOB_WFO, JOB_WFGA, JOB_CPCV, JOB_SENSITIVITY, JOB_MULTI_OBJECTIVE, JOB_REGIME_MATRIX,
-    JOB_PARAMETER_ROBUSTNESS,
+    JOB_PARAMETER_ROBUSTNESS, JOB_MULTI_INSTRUMENT_EVOLUTION, JOB_MULTI_INSTRUMENT_SEARCH,
 )
 from app.orchestration.speed_run import SpeedRunConfig, SpeedRunResult, run_speed_run
 from app.orchestration.speed_run import _rank_key as _speedrun_rank_key
@@ -18156,6 +18156,8 @@ class MainWindow:
                 "1 selected, use the regular Search Lab tab instead.",
             )
             return
+        if not self._try_start_heavy_job(JOB_MULTI_INSTRUMENT_SEARCH):
+            return
         self.searchmulti_output.delete("1.0", END)
         self.searchmulti_results_listbox.delete(0, END)
         self.searchmulti_best_label.config(text="Running...", fg=TEXT_DIM)
@@ -18220,6 +18222,7 @@ class MainWindow:
             log_crash("Multi-Instrument Search Lab", exc=exc)
         finally:
             self.searchmulti_progress.stop()
+            self._release_heavy_job(JOB_MULTI_INSTRUMENT_SEARCH)
 
     # -----------------------------------------------------------------------
     # Multi-Instrument Evolution Lab -- desktop parity with the web app's
@@ -18332,17 +18335,25 @@ class MainWindow:
             optimizer_mode=self._optimizer_mode_label_to_key.get(self.evomulti_optimizer_mode.get_str(), "genetic"),
         )
 
+        if not self._try_start_heavy_job(JOB_MULTI_INSTRUMENT_EVOLUTION):
+            return
         group_id = uuid.uuid4().hex[:10]
         self.evomulti_output.delete("1.0", END)
         self._evo_multi_seen_log_counts = {}
         try:
             self._evo_multi_group = MultiInstrumentEvolutionGroup(group_id, jobs, risk, rules, base_cfg)
         except Exception as exc:
+            self._release_heavy_job(JOB_MULTI_INSTRUMENT_EVOLUTION)
             messagebox.showerror("Could not start group", str(exc))
             return
         for label, err in self._evo_multi_group.errors.items():
             self.evomulti_output.insert(END, f"[{label}] SKIPPED: {err}\n")
-        self._evo_multi_group.start_all()
+        try:
+            self._evo_multi_group.start_all()
+        except Exception as exc:
+            self._release_heavy_job(JOB_MULTI_INSTRUMENT_EVOLUTION)
+            messagebox.showerror("Could not start group", str(exc))
+            return
         self.evomulti_output.insert(
             END, f"Started group {group_id} on {len(self._evo_multi_group.runners)} instrument(s).\n",
         )
@@ -18385,6 +18396,10 @@ class MainWindow:
                 self.root.after(2000, self._poll_evo_multi_status)
             except Exception:
                 pass
+        else:
+            # Group finished or was stopped -- free the heavy-job slot,
+            # same as the single-instrument Evolution Lab poll above.
+            self._release_heavy_job(JOB_MULTI_INSTRUMENT_EVOLUTION)
 
     # -----------------------------------------------------------------------
     # Optimize Overview / Picker + Validate Overview / Checklist -- desktop
@@ -19630,9 +19645,19 @@ class MainWindow:
                 log_lines = []
                 df = self.qlab_context.load_dataframe(log_lines.append)
                 if df is not None:
-                    corr = correlate_sentiment_with_price(sentiment_df, df)
-                    lines.append("")
-                    lines.append(corr.render_summary())
+                    # Correlation is an optional add-on -- if it can't run
+                    # (e.g. the price data doesn't overlap the recent
+                    # headline window), keep the sentiment result and say
+                    # why, instead of failing the whole job. Mirrors the
+                    # web route's handling in app/web/quant_lab_routes.py.
+                    try:
+                        corr = correlate_sentiment_with_price(sentiment_df, df)
+                        lines.append("")
+                        lines.append(corr.render_summary())
+                        lines += [f"Note: {w}" for w in corr.warnings]
+                    except Exception as exc:  # noqa: BLE001 -- degrade, don't discard
+                        lines.append("")
+                        lines.append(f"Price correlation unavailable: {exc}")
                 else:
                     lines.append("")
                     lines.append("(Could not correlate: " + "; ".join(log_lines) + ")")
