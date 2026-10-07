@@ -100,7 +100,7 @@ as before this module existed. Nothing here is ever the final answer.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 import pandas as pd
@@ -386,6 +386,9 @@ def run_vectorized_batch(
     equity_at_entry = np.zeros(m, dtype=np.float64)
     size_arr = np.zeros(m, dtype=np.float64)
     initial_risk = np.zeros(m, dtype=np.float64)
+    # per-position contract size / commission (micro_fallback swaps them)
+    cs_arr = np.full(m, float(risk.contract_size or 0.0), dtype=np.float64)
+    cpc_arr = np.full(m, float(risk.commission_per_contract or 0.0), dtype=np.float64)
     stop_price = np.full(m, np.nan)
     take_price = np.full(m, np.nan)
     # C2: per-column account-blown latch (prop_daily_loss_is_breach, or
@@ -403,6 +406,7 @@ def run_vectorized_batch(
         nonlocal sl_pips, tp_pips, equity, in_pos, direction, last_close_bar
         nonlocal entry_price, entry_ts, equity_at_entry, size_arr
         nonlocal initial_risk, stop_price, take_price, account_blown
+        nonlocal cs_arr, cpc_arr
         keep = np.nonzero(alive)[0]
         live_cols = live_cols[keep]
         last_sig_bar = last_sig_bar[keep]
@@ -417,6 +421,8 @@ def run_vectorized_batch(
         equity_at_entry = equity_at_entry[keep]
         size_arr = size_arr[keep]
         initial_risk = initial_risk[keep]
+        cs_arr = cs_arr[keep]
+        cpc_arr = cpc_arr[keep]
         stop_price = stop_price[keep]
         take_price = take_price[keep]
         account_blown = account_blown[keep]
@@ -445,8 +451,9 @@ def run_vectorized_batch(
         d = direction[widx].astype(np.float64)
         filled = raw_prices - (spread_price + slip_price) * d
         pnl = (filled - entry_price[widx]) * size_arr[widx] * d
-        _contracts = size_arr[widx] / risk.contract_size if risk.contract_size else np.zeros(len(widx))
-        _commission = risk.commission_per_trade + risk.commission_per_contract * _contracts
+        _cs = cs_arr[widx]
+        _contracts = np.divide(size_arr[widx], _cs, out=np.zeros(len(widx)), where=_cs > 0)
+        _commission = risk.commission_per_trade + cpc_arr[widx] * _contracts
         pnl = pnl - _commission
         pnl = np.where(np.isfinite(pnl), pnl, 0.0)
         new_equity = equity[widx] + pnl
@@ -705,11 +712,48 @@ def run_vectorized_batch(
                 if len(mismatched):
                     scale_mismatch[live_cols[mismatched]] = True
 
-            sized = _position_size_vec(equity[widx], sizing_pips, risk)
+            # Sizing goes through the ONE shared routine (RiskConfig.size_for_stop)
+            # so costs-in-budget, sizing modes, micro fallback and fit_stop
+            # behave exactly like the scalar engine.
+            sized = np.zeros(len(widx), dtype=np.float64)
+            dec_cs = np.zeros(len(widx), dtype=np.float64)
+            dec_cpc = np.zeros(len(widx), dtype=np.float64)
+            dec_stop = sl_dist.astype(np.float64).copy()
+            dec_scale = np.ones(len(widx), dtype=np.float64)
+            dec_capped = np.zeros(len(widx), dtype=bool)
+            for _k, _w in enumerate(widx):
+                _dec = risk.size_for_stop(float(equity[_w]), float(sl_dist[_k]))
+                if (_dec.skip_reason is not None and risk.contract_size and equity[_w] > 0
+                        and getattr(risk, "sizing_mode", "skip") == "skip"):
+                    # same bounded dead-lock guard as the scalar engine
+                    _fresh = risk.size_for_stop(risk.initial_balance, float(sl_dist[_k]))
+                    if _fresh.units > 0 and _fresh.contracts >= 1:
+                        _one = risk.worst_case_loss(float(risk.contract_size), float(sl_dist[_k]),
+                                                    risk.contract_size, risk.commission_per_contract)
+                        if _one <= 1.5 * max(risk.risk_amount(float(equity[_w])), 1e-9):
+                            _dec = replace(_dec, units=float(risk.contract_size), contracts=1.0,
+                                           skip_reason=None, contract_size=risk.contract_size,
+                                           commission_per_contract=risk.commission_per_contract)
+                if _dec.skip_reason is None and _dec.units and _dec.units > 0:
+                    sized[_k] = _dec.units
+                    dec_cs[_k] = _dec.contract_size or 0.0
+                    dec_cpc[_k] = _dec.commission_per_contract or 0.0
+                    dec_stop[_k] = _dec.stop_distance
+                    dec_scale[_k] = _dec.stop_scale
+                    dec_capped[_k] = bool(_dec.stop_capped)
             valid = np.isfinite(sized) & (sized > 0)
+            if dec_capped.any():
+                sl_dist = np.where(dec_capped, dec_stop, sl_dist)
+                if risk.fit_stop_target == "fixed_r":
+                    tp_dist = np.where(dec_capped, risk.fit_stop_target_r * dec_stop, tp_dist)
+                    has_any_tp = has_any_tp | dec_capped
+                elif risk.fit_stop_target == "scale":
+                    tp_dist = np.where(dec_capped, tp_dist * dec_scale, tp_dist)
             fw = widx[valid]
             if len(fw):
                 fd = d[valid]
+                cs_arr[fw] = dec_cs[valid]
+                cpc_arr[fw] = dec_cpc[valid]
                 in_pos[fw] = True
                 direction[fw] = fd.astype(np.int8)
                 entry_price[fw] = entry_fill[valid]

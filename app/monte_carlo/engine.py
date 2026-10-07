@@ -33,7 +33,7 @@ class MonteCarloConfig:
     # evaluate -- the pass probability being optimized was computed on
     # paths a real strategy would never produce. Explicit opt-out:
     # method="bootstrap" reproduces the pre-fix i.i.d. behavior exactly.
-    method: str = "block_bootstrap"  # "shuffle" | "bootstrap" | "block_bootstrap"
+    method: str = "day_block_bootstrap"  # "shuffle" | "bootstrap" | "block_bootstrap" | "day_block_bootstrap"
     # Block size used when method == "block_bootstrap". None (default) =
     # auto: scaled to typical trades/day from the trade timestamps --
     # max(2, round(n_trades / n_trading_days)) -- so a block approximates
@@ -45,6 +45,13 @@ class MonteCarloConfig:
     # splice the series' head onto its tail and fabricate a continuity
     # that never existed).
     block_size: int | None = None
+    # ACCURACY OVERHAUL (2026-10-07): "day_block_bootstrap" (the new default)
+    # resamples whole SESSION DAYS -- every trade of a day stays together and
+    # keeps its day -- in blocks of `day_block_days` consecutive days. The
+    # daily-loss limit, the consistency rule and the 5x$200 winning-day count
+    # are all per-day rules; resampling single trades (or arbitrary trade
+    # blocks) cuts days in half and changes how often those rules bind.
+    day_block_days: int = 3
     slippage_stress_pct: float = 0.0  # extra % cost applied to every trade
     # Session/volatility-aware slippage (app.monte_carlo.slippage_model) -- applied ONCE to the
     # historical trade pool before resampling, independent of and in addition to
@@ -212,6 +219,22 @@ class MonteCarloResult:
     # caveat -- see run_monte_carlo's docstring for the full reasoning.
     methodology_note: str = ""
 
+    # ACCURACY OVERHAUL (2026-10-07) -- honest attempt-level accounting.
+    # bust_before_pass_probability: % of paths whose FIRST purchased account
+    #   breached a rule before it passed the evaluation.
+    # per_attempt_bust_probability: failed attempts / all attempts (the
+    #   definition risk_of_ruin_pct now uses; see risk_of_ruin_definition).
+    # expected_attempts_to_pass: purchased accounts per pass (total attempts /
+    #   passed attempts across the simulated chains), None when none passed.
+    bust_before_pass_probability: float = 0.0
+    per_attempt_bust_probability: float = 0.0
+    expected_attempts_to_pass: float | None = None
+    risk_of_ruin_definition: str = "share of purchased accounts (attempts) that breached a firm rule"
+    sample_ok: bool = True
+    sample_notes: list = field(default_factory=list)
+    n_source_trades: int = 0
+    n_source_days: int = 0
+
     # -- headline numbers (Owen's accounting) --------------------------------
     # What reports/dashboards should show as "the" eval-pass / payout
     # rates: per-attempt (passed/attempted evals, funded reaching
@@ -256,6 +279,7 @@ def _max_losing_streak(pnls: np.ndarray) -> int:
 # of trading days at the typical 2-5 trades/day, the smallest sample
 # whose block bootstrap isn't pure noise.
 MIN_TRADES_FOR_VERDICT = 15
+MIN_DAYS_FOR_VERDICT = 20
 
 
 def _wilson_score_interval(successes: int, n: int, z: float = 1.96) -> tuple[float, float]:
@@ -320,6 +344,47 @@ def _resample_indices(rng: np.random.Generator, n: int, method: str, block_size:
         return np.array(idx[:n])
     # default: iid bootstrap with replacement
     return rng.integers(0, n, size=n)
+
+
+def _day_groups(trades) -> tuple[list, list]:
+    """Indices of trades per session day (chronological) and the day dates."""
+    from app.data.trading_day import trading_day
+    order = sorted(range(len(trades)), key=lambda i: pd.Timestamp(trades[i].entry_time))
+    groups: list[list[int]] = []
+    dates: list = []
+    last = None
+    for i in order:
+        d = pd.Timestamp(trading_day(pd.Timestamp(trades[i].entry_time), tz="America/Chicago", roll_hour=17))
+        if d != last:
+            groups.append([])
+            dates.append(d)
+            last = d
+        groups[-1].append(i)
+    return [np.asarray(g, dtype=np.int64) for g in groups], dates
+
+
+def _resample_day_blocks(rng, groups, dates, block_days: int):
+    """Draws consecutive-day blocks (non-circular) until the path has as many
+    day slots as the source. Returns (trade_index_array, DayStructure) -- the
+    structure is built with numpy straight from the drawn slots, so no
+    per-trade timestamp parsing happens inside the simulation loop."""
+    from app.prop.simulator import DayStructure
+    nd = len(groups)
+    k = max(1, min(int(block_days), nd))
+    chosen: list[int] = []
+    while len(chosen) < nd:
+        start = int(rng.integers(0, nd - k + 1))
+        chosen.extend(range(start, start + k))
+    chosen = chosen[:nd]
+    arrs = [groups[g] for g in chosen]
+    idx = np.concatenate(arrs).astype(np.int64)
+    counts = np.fromiter((len(a) for a in arrs), dtype=np.int64, count=nd)
+    day_index = np.repeat(np.arange(nd), counts)
+    is_last = np.zeros(len(idx), dtype=bool)
+    is_last[np.cumsum(counts) - 1] = True
+    ds = DayStructure(day_index_per_trade=day_index.tolist(), is_last_of_day=is_last.tolist(),
+                      day_dates=list(dates), n_days=nd)
+    return idx, ds
 
 
 def _resample_pnls(
@@ -598,6 +663,12 @@ def run_monte_carlo(
     # reasoning; this is a pure performance change with no effect on any
     # output value.
     day_structure = precompute_day_structure(base_dates)
+    use_day_blocks = cfg.method == "day_block_bootstrap"
+    if use_day_blocks:
+        _groups, _gdates = _day_groups(trades)
+        n_source_days = len(_groups)
+    else:
+        n_source_days = n_trading_days
 
     passed_flags, first_payout_flags, failed_before_payout_flags, multiple_payout_flags = [], [], [], []
     days_to_pass_list, days_to_first_payout_list = [], []
@@ -615,15 +686,22 @@ def run_monte_carlo(
     # behavior -- made risk_of_ruin blind to how most simulated accounts
     # actually die.
     death_flags: list[bool] = []
+    first_bust_flags: list[bool] = []
+    sum_attempts_failed = 0
 
     for _ in range(cfg.n_simulations):
-        sim_idx = _resample_indices(rng, len(base_pnls), cfg.method, eff_block_size)
+        if use_day_blocks:
+            sim_idx, sim_ds = _resample_day_blocks(rng, _groups, _gdates, cfg.day_block_days)
+        else:
+            sim_idx = _resample_indices(rng, len(base_pnls), cfg.method, eff_block_size)
+            sim_ds = None
         sim_pnls = base_pnls[sim_idx]
         sim_pnls = _apply_slippage_stress(sim_pnls, cfg.slippage_stress_pct)
         sim_risks = base_risks[sim_idx] if has_risks else None
 
         result = simulate_account(
-            sim_pnls, base_dates, rules, _day_structure=day_structure,
+            sim_pnls, base_dates, rules,
+            _day_structure=sim_ds if sim_ds is not None else day_structure,
             reset_on_breach=cfg.reset_on_breach,
             trade_initial_risks=sim_risks,
         )
@@ -642,6 +720,9 @@ def run_monte_carlo(
         # more than one record only when reset_on_breach rebuys into the
         # remaining history after a bust.
         death_flags.append(any(a.failed for a in result.attempts))
+        first_attempt = result.attempts[0] if result.attempts else None
+        first_bust_flags.append(bool(first_attempt and first_attempt.failed and not first_attempt.passed_evaluation))
+        sum_attempts_failed += sum(1 for a in result.attempts if a.failed)
 
         if result.days_to_pass is not None:
             days_to_pass_list.append(result.days_to_pass)
@@ -672,7 +753,12 @@ def run_monte_carlo(
     # path-level (did >=1 attempt die), consistent with the other
     # headline path-level probabilities on this result.
     death_arr = np.array(death_flags)
-    ruin_arr = death_arr
+    # ACCURACY OVERHAUL: ruin is now per purchased account (failed attempts
+    # / attempts), not "any attempt in a rebuy chain died" -- the chain
+    # definition approaches 100% for any strategy that can bust once and
+    # says nothing about one account's odds.
+    per_attempt_bust = (sum_attempts_failed / sum_total_attempts) if sum_total_attempts else 0.0
+    ruin_arr = np.array([per_attempt_bust])
     attempts_arr = np.array(attempts_per_path)
 
     def pct(arr, q):
@@ -692,6 +778,11 @@ def run_monte_carlo(
     # eval attempts around them failed).
     per_attempt_payout_ci95 = _wilson_score_interval(int(sum_attempts_reached_payout), int(sum_attempts_passed))
 
+    _notes: list[str] = []
+    if len(trades) < MIN_TRADES_FOR_VERDICT:
+        _notes.append(f"only {len(trades)} source trades (< {MIN_TRADES_FOR_VERDICT}): resampled probabilities are not meaningful.")
+    if n_source_days < MIN_DAYS_FOR_VERDICT:
+        _notes.append(f"only {n_source_days} source trading days (< {MIN_DAYS_FOR_VERDICT}): day-level rules (daily loss, consistency) are barely exercised.")
     result = MonteCarloResult(
         n_simulations=cfg.n_simulations,
         evaluation_pass_probability=float(passed_arr.mean() * 100),
@@ -739,5 +830,12 @@ def run_monte_carlo(
         payout_probability_ci95=payout_ci95,
         per_attempt_pass_ci95=per_attempt_pass_ci95,
         per_attempt_payout_ci95=per_attempt_payout_ci95,
+        bust_before_pass_probability=float(np.mean(first_bust_flags) * 100) if first_bust_flags else 0.0,
+        per_attempt_bust_probability=float(per_attempt_bust * 100),
+        expected_attempts_to_pass=(float(sum_total_attempts / sum_attempts_passed) if sum_attempts_passed else None),
+        sample_ok=not _notes,
+        sample_notes=_notes,
+        n_source_trades=len(trades),
+        n_source_days=int(n_source_days),
     )
     return result

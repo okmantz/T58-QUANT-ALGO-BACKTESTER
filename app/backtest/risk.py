@@ -12,6 +12,66 @@ import math
 from dataclasses import dataclass
 
 
+# ---------------------------------------------------------------------------
+# Position-sizing modes (ACCURACY OVERHAUL 2026-10-07, plan section "Stop and
+# size"). A real prop trader chooses DOLLARS first, then places a stop that
+# fits them. The engine used to do the opposite only: the strategy's stop was
+# fixed, size was floored from it, and a stop wider than the budget produced
+# 0 contracts and a silently skipped signal (99% of signals in the audited
+# ES 1h run). These modes make the choice explicit:
+#
+#   "skip"            Honest default. Size = whole contracts whose WORST-CASE
+#                     loss at the strategy's own stop (stop + exit spread/
+#                     slippage + commission) fits the budget. Zero contracts
+#                     means the signal is skipped and counted -- there is NO
+#                     1-contract rescue that exceeds the budget.
+#   "fit_stop"        Reproduces "pick the dollars, then place the stop":
+#                     when the strategy's stop does not fit the budget with
+#                     one contract, take 1 contract and CAP the stop to the
+#                     distance that does fit (target optionally scaled with
+#                     it). max_stop_dollars adds an explicit per-contract
+#                     ceiling even when the strategy's stop would fit.
+#   "fixed_contracts" Always trade `fixed_contracts` contracts at the
+#                     strategy's stop. Risk may exceed the budget -- tagged
+#                     on the trade, never hidden.
+#   "micro_fallback"  Full-size contract when it fits; otherwise the micro
+#                     equivalent (ES->MES etc.) when THAT fits; otherwise
+#                     skip. Never oversizes.
+# ---------------------------------------------------------------------------
+SIZING_MODES = ("skip", "fit_stop", "fixed_contracts", "micro_fallback")
+FIT_STOP_TARGET_MODES = ("scale", "keep", "fixed_r")
+
+# Reasons a SizingDecision can have units == 0 (the entry is skipped).
+SKIP_NO_BUDGET = "no_budget"
+SKIP_NO_STOP = "no_stop_distance"
+SKIP_STOP_TOO_WIDE = "stop_too_wide_for_budget"
+SKIP_COSTS_EXCEED_BUDGET = "costs_exceed_budget"
+SKIP_STOP_CAP_TOO_TIGHT = "stop_cap_too_tight"
+SKIP_NO_MICRO = "no_micro_defined"
+SKIP_TOO_WIDE_FOR_MICRO = "stop_too_wide_even_for_micro"
+SKIP_POSITION_CAP = "position_cap_below_one_contract"
+
+
+@dataclass(frozen=True)
+class SizingDecision:
+    """Everything the engine needs to open (or skip) one position, computed
+    in ONE place (RiskConfig.size_for_stop) so the bar engine, the vectorized
+    fast path and the preflight all size identically."""
+    units: float = 0.0                      # sizing units (0 = skip the entry)
+    contracts: float = 0.0                  # whole contracts (0 when the instrument has no contract_size)
+    stop_distance: float = 0.0              # price distance the position is protected with (possibly capped)
+    original_stop_distance: float = 0.0     # the strategy's own stop distance
+    stop_capped: bool = False
+    stop_scale: float = 1.0                 # stop_distance / original_stop_distance
+    budget: float = 0.0                     # dollar risk budget this trade was sized against
+    risk_at_stop: float = 0.0               # worst-case $ loss at the stop (no gap): stop + exit costs + commission
+    skip_reason: str | None = None
+    contract_size: float | None = None      # units per contract actually used (micro-aware)
+    commission_per_contract: float = 0.0    # per-contract commission actually used (micro-aware)
+    used_micro: bool = False
+    above_budget: bool = False              # True only for fixed_contracts when the stop risk exceeds the budget
+
+
 @dataclass
 class RiskConfig:
     initial_balance: float = 10_000.0
@@ -224,6 +284,86 @@ class RiskConfig:
     # purely additive and changes nothing for any existing caller/saved
     # config that doesn't explicitly set it.
 
+    # ------------------------------------------------------------------
+    # ACCURACY OVERHAUL (2026-10-07): sizing modes -- see SIZING_MODES.
+    # ------------------------------------------------------------------
+    sizing_mode: str = "skip"
+    # "skip" | "fit_stop" | "fixed_contracts" | "micro_fallback". The old
+    # dead-lock "1-contract rescue" is gone: it opened one contract ABOVE
+    # the risk budget on every trade it fired for. The only remaining way to
+    # exceed the budget is an explicit opt-in (allow_single_contract_minimum,
+    # or sizing_mode="fixed_contracts"), and such trades are tagged.
+    max_stop_dollars: float | None = None
+    # fit_stop only: hard ceiling on the per-contract dollar risk of the
+    # stop (e.g. 450 = never a stop worth more than $450 per contract),
+    # applied even when the strategy's own stop would have fit the budget.
+    fixed_contracts: int = 1
+    # fixed_contracts mode: contracts per trade.
+    fit_stop_min_fraction: float = 0.2
+    # fit_stop only: refuse to shrink the strategy's stop below this
+    # fraction of its own width -- a stop squeezed to a sliver is a
+    # different strategy, so the entry is skipped (stop_cap_too_tight)
+    # instead of silently trading something the strategy never defined.
+    fit_stop_target: str = "scale"
+    # What happens to the take-profit distance when fit_stop capped the
+    # stop: "scale" (shrink it by the same ratio, keeping the strategy's
+    # reward:risk), "keep" (leave the strategy's own target), "fixed_r"
+    # (target = fit_stop_target_r x the capped stop, e.g. 1.0 = 1:1).
+    fit_stop_target_r: float = 1.0
+    micro_contract_size: float | None = None
+    # micro_fallback only: sizing units per ONE micro contract (MES = 5).
+    # Filled by app.data.instrument_specs.apply_instrument_spec from the
+    # instrument's micro equivalent. None = no micro available.
+    micro_commission_per_contract: float | None = None
+    # micro_fallback only: $ round-turn commission per micro contract.
+    intrabar_replay: bool = False
+    # When True AND the caller supplies a finer-timeframe frame (see
+    # run_execution's intrabar_df), every open trade is walked bar-by-bar
+    # through the finer data to resolve which of stop/target traded first
+    # inside a strategy bar. Off by default: byte-identical to before.
+    account_model: str = "legacy"
+    # "legacy" keeps the old realized-equity static-floor breach check and
+    # the equity teleport-on-reset. "prop" routes every breach / daily-loss
+    # decision through app.prop.account.PropAccount (trailing high-water
+    # mark, floating-equity breach, firm session day, lock) and ENDS each
+    # attempt instead of teleporting equity.
+    prop_account_rules: object | None = None
+    # PropRules instance consumed by account_model="prop". Typed `object`
+    # to keep this module free of an app.prop import cycle.
+
+    # ------------------------------------------------------------------
+    # Cost helpers (costs belong INSIDE the sizing budget).
+    # ------------------------------------------------------------------
+    def side_cost_price(self) -> float:
+        """Price-unit cost of ONE fill side: spread + slippage. The engine
+        charges this on the entry fill AND on the exit fill."""
+        return (self.spread_pips + self.slippage_pips) * self.pip_size
+
+    def commission_for(self, contracts: float, commission_per_contract: float | None = None) -> float:
+        per = self.commission_per_contract if commission_per_contract is None else commission_per_contract
+        return self.commission_per_trade + per * contracts
+
+    def worst_case_loss(
+        self, units: float, stop_distance: float, contract_size: float | None = None,
+        commission_per_contract: float | None = None,
+    ) -> float:
+        """Worst-case $ loss of `units` stopped out at exactly `stop_distance`
+        (price units) with no gap: the stop distance itself, the EXIT side's
+        spread+slippage (the entry side's cost is already inside the filled
+        entry price the stop is anchored to), plus commission. This is the
+        number the budget must cover -- the audit's "100% of trades
+        overshoot" was this cost being ignored by the sizing budget."""
+        cs = self.contract_size if contract_size is None else contract_size
+        contracts = (units / cs) if cs else 0.0
+        return units * (stop_distance + self.side_cost_price()) + self.commission_for(contracts, commission_per_contract)
+
+    def round_trip_cost_dollars(self, units: float, contract_size: float | None = None) -> float:
+        """Round-trip $ cost (entry + exit spread/slippage + commission) of
+        `units`, independent of any stop. For preflight/diagnostics."""
+        cs = self.contract_size if contract_size is None else contract_size
+        contracts = (units / cs) if cs else 0.0
+        return 2.0 * self.side_cost_price() * units + self.commission_for(contracts)
+
     def risk_amount(self, current_equity: float) -> float:
         # Floor equity at 0 for sizing purposes: a negative-equity account
         # is already blown (see max_account_drawdown_pct / account_blown
@@ -236,60 +376,162 @@ class RiskConfig:
             return max(self.risk_value, 0.0)
         return max(equity_for_sizing * (self.risk_value / 100.0), 0.0)
 
+    def size_for_stop(self, current_equity: float, stop_distance: float) -> "SizingDecision":
+        """The ONE sizing routine (see SIZING_MODES). `stop_distance` is the
+        strategy's own stop in PRICE units. Returns a SizingDecision whose
+        `units` is 0 when the entry must be skipped, with `skip_reason`
+        saying why -- never a silent zero.
+
+        Budget accounting: the worst-case loss at the stop INCLUDES the
+        exit-side spread/slippage and commission (see worst_case_loss), so a
+        trade that stops out for exactly its sized risk never reads as an
+        "overshoot"."""
+        mode = self.sizing_mode if self.sizing_mode in SIZING_MODES else "skip"
+        budget = self.risk_amount(current_equity)
+        D = float(stop_distance) if stop_distance is not None and math.isfinite(stop_distance) else 0.0
+        if budget <= 0:
+            return SizingDecision(budget=budget, original_stop_distance=D, skip_reason=SKIP_NO_BUDGET)
+        if D <= 0:
+            return SizingDecision(budget=budget, original_stop_distance=D, skip_reason=SKIP_NO_STOP)
+
+        c = self.side_cost_price()
+        fixed = self.commission_per_trade
+        avail = budget - fixed
+
+        # -- fractional-unit instruments (FX/CFD/crypto): no whole-contract
+        # constraint, so every mode reduces to "size so the worst case fits".
+        if not self.contract_size:
+            if avail <= 0:
+                return SizingDecision(budget=budget, original_stop_distance=D, stop_distance=D,
+                                      skip_reason=SKIP_COSTS_EXCEED_BUDGET)
+            units = avail / (D + c)
+            if self.max_position_size is not None:
+                units = min(units, self.max_position_size)
+            if self.max_contracts is not None:
+                units = min(units, float(self.max_contracts))
+            units = max(units, 0.0)
+            return SizingDecision(
+                units=units, contracts=0.0, stop_distance=D, original_stop_distance=D, budget=budget,
+                risk_at_stop=self.worst_case_loss(units, D), contract_size=None,
+                commission_per_contract=self.commission_per_contract,
+                skip_reason=None if units > 0 else SKIP_NO_BUDGET,
+            )
+
+        cs = float(self.contract_size)
+        cpc = float(self.commission_per_contract)
+
+        def _cap_contracts(n: int, contract_units: float) -> int:
+            if self.max_position_size is not None:
+                n = min(n, int(math.floor(self.max_position_size / contract_units + 1e-9)))
+            if self.max_contracts is not None:
+                n = min(n, int(self.max_contracts))
+            return max(n, 0)
+
+        def _fit(dist: float, contract_units: float, per_contract_commission: float) -> int:
+            denom = contract_units * (dist + c) + per_contract_commission
+            if avail <= 0 or denom <= 0:
+                return 0
+            return int(math.floor(avail / denom + 1e-9))
+
+        def _decision(n: int, dist: float, contract_units: float, per_contract_commission: float,
+                      capped: bool = False, micro: bool = False, above: bool = False) -> "SizingDecision":
+            units = n * contract_units
+            return SizingDecision(
+                units=units, contracts=float(n), stop_distance=dist, original_stop_distance=D,
+                stop_capped=capped, stop_scale=(dist / D) if D else 1.0, budget=budget,
+                risk_at_stop=self.worst_case_loss(units, dist, contract_units, per_contract_commission),
+                contract_size=contract_units, commission_per_contract=per_contract_commission,
+                used_micro=micro, above_budget=above,
+            )
+
+        def _skip(reason: str, dist: float = D) -> "SizingDecision":
+            return SizingDecision(budget=budget, original_stop_distance=D, stop_distance=dist,
+                                  skip_reason=reason, contract_size=cs, commission_per_contract=cpc)
+
+        if mode == "fixed_contracts":
+            n = _cap_contracts(max(int(self.fixed_contracts), 1), cs)
+            if n <= 0:
+                return _skip(SKIP_POSITION_CAP)
+            d = _decision(n, D, cs, cpc)
+            if d.risk_at_stop > budget * 1.001:
+                d = _decision(n, D, cs, cpc, above=True)
+            return d
+
+        if mode == "fit_stop":
+            D_eff = D
+            if self.max_stop_dollars is not None and self.max_stop_dollars > 0:
+                D_eff = min(D_eff, self.max_stop_dollars / cs)
+            n = _cap_contracts(_fit(D_eff, cs, cpc), cs)
+            if n >= 1:
+                return _decision(n, D_eff, cs, cpc, capped=D_eff < D * (1 - 1e-12))
+            if _cap_contracts(1, cs) < 1:
+                return _skip(SKIP_POSITION_CAP)
+            # One contract at the (possibly ceilinged) stop still busts the
+            # budget: keep 1 contract and shrink the STOP to the distance
+            # whose worst case lands exactly on the budget.
+            d_fit = (avail - cpc) / cs - c
+            if d_fit <= 0:
+                return _skip(SKIP_COSTS_EXCEED_BUDGET)
+            D_cap = min(D_eff, d_fit)
+            if D_cap < self.fit_stop_min_fraction * D:
+                return _skip(SKIP_STOP_CAP_TOO_TIGHT, dist=D_cap)
+            return _decision(1, D_cap, cs, cpc, capped=True)
+
+        if mode == "micro_fallback":
+            n = _cap_contracts(_fit(D, cs, cpc), cs)
+            if n >= 1:
+                return _decision(n, D, cs, cpc)
+            if not self.micro_contract_size:
+                return _skip(SKIP_NO_MICRO)
+            m_cs = float(self.micro_contract_size)
+            m_cpc = float(self.micro_commission_per_contract if self.micro_commission_per_contract is not None else cpc)
+            # a micro's contract cap is expressed in micro contracts
+            n_m = _fit(D, m_cs, m_cpc)
+            if self.max_position_size is not None:
+                n_m = min(n_m, int(math.floor(self.max_position_size / m_cs + 1e-9)))
+            if self.max_contracts is not None:
+                n_m = min(n_m, int(self.max_contracts) * max(int(round(cs / m_cs)), 1))
+            if n_m >= 1:
+                return _decision(n_m, D, m_cs, m_cpc, micro=True)
+            return _skip(SKIP_TOO_WIDE_FOR_MICRO)
+
+        # mode == "skip"
+        n = _cap_contracts(_fit(D, cs, cpc), cs)
+        if n >= 1:
+            return _decision(n, D, cs, cpc)
+        if avail <= 0 or (cs * c + cpc) >= avail:
+            return _skip(SKIP_COSTS_EXCEED_BUDGET)
+        return _skip(SKIP_STOP_TOO_WIDE)
+
     def position_size(self, current_equity: float, stop_loss_pips: float) -> float:
         """Units such that a full stop-out loses (at most, after whole-
-        contract rounding -- see contract_size's own docstring)
-        `risk_amount`."""
+        contract rounding -- see contract_size's own docstring) the risk
+        budget, COSTS INCLUDED. Thin wrapper over size_for_stop kept for the
+        callers (fast path, UI, sweeps) that only want a size; callers that
+        need the capped stop / skip reason / micro swap should call
+        size_for_stop directly."""
         if not stop_loss_pips or stop_loss_pips <= 0:
             stop_loss_pips = 10.0  # sane fallback so sizing never divides by zero
-        stop_distance = stop_loss_pips * self.pip_size
-        risk_amt = self.risk_amount(current_equity)
-        units = risk_amt / stop_distance if stop_distance > 0 else 0.0
-        if self.max_position_size is not None:
-            units = min(units, self.max_position_size)
-        if self.contract_size:
-            # Floor, never round/ceil: rounding up could risk MORE than
-            # risk_amount at the stop, which defeats the point of sizing
-            # off a risk amount in the first place. A trade whose intended
-            # risk doesn't even reach one whole contract sizes to exactly
-            # 0 (skipped) rather than a fractional contract no real
-            # account could place -- e.g. a $50k account risking 0.25%
-            # ($125) with a 10-point ES stop wants 12.5 "units" here, but
-            # ES's contract_size=50 means that trade correctly can't be
-            # taken at all without either more risk per trade or a micro
-            # contract (MES, contract_size=5) instead.
-            lots = math.floor(units / self.contract_size + 1e-9)
-            units = max(lots, 0) * self.contract_size
-        if self.max_contracts is not None:
-            # P2-6: cap on whole contracts (with no contract_size set,
-            # one "contract" is one sizing unit). None = off.
-            units = min(units, self.max_contracts * (self.contract_size or 1.0))
-        return max(units, 0.0)
+        return self.size_for_stop(current_equity, stop_loss_pips * self.pip_size).units
 
     def sizing_floored_to_zero_contracts(self, current_equity: float, stop_loss_pips: float) -> bool:
         """True when this trade's intended risk was real and positive
         (there WAS money to risk and a real stop distance to size against)
-        but contract_size whole-lot rounding brought it down to exactly 0
-        -- i.e. THIS specific reason for a skipped entry, as opposed to a
-        genuinely degenerate stop distance (NaN/zero/negative) or no
-        money at all. See run_execution's own zero-size-floor warning:
-        without distinguishing this case, a run where every single entry
-        gets silently floored to 0 whole contracts (risk_value too small
-        for this instrument's contract_size given the strategy's stop
-        width) reports "0 trades" with no indication of why, which is
+        but whole-contract rounding (or the stop being wider than the
+        budget allows) brought it down to exactly 0 -- i.e. THIS specific
+        reason for a skipped entry, as opposed to a genuinely degenerate
+        stop distance (NaN/zero/negative) or no money at all. See
+        run_execution's zero-size-floor warning: without distinguishing
+        this case, a run where every single entry gets silently skipped
+        reports "0 trades" with no indication of why, which is
         indistinguishable from a strategy that simply never signals."""
         if not self.contract_size or not stop_loss_pips or stop_loss_pips <= 0:
             return False
-        stop_distance = stop_loss_pips * self.pip_size
-        if stop_distance <= 0:
-            return False
-        risk_amt = self.risk_amount(current_equity)
-        if risk_amt <= 0:
-            return False
-        units = risk_amt / stop_distance
-        if self.max_position_size is not None:
-            units = min(units, self.max_position_size)
-        return units > 0 and math.floor(units / self.contract_size + 1e-9) <= 0
+        d = self.size_for_stop(current_equity, stop_loss_pips * self.pip_size)
+        return d.units <= 0 and d.skip_reason in (
+            SKIP_STOP_TOO_WIDE, SKIP_COSTS_EXCEED_BUDGET, SKIP_STOP_CAP_TOO_TIGHT,
+            SKIP_TOO_WIDE_FOR_MICRO, SKIP_NO_MICRO,
+        )
 
     def max_trade_loss(self, equity_at_entry: float) -> float:
         """Hard dollar ceiling on how much a single trade may realistically

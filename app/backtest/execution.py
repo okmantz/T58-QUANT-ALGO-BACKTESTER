@@ -42,7 +42,7 @@ import numpy as np
 import pandas as pd
 
 from app.backtest.adaptive_risk import AdaptiveRiskConfig, AdaptiveRiskState, volatility_percentile_series
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, SizingDecision
 
 try:
     # B2-3 (session day): shared trading-day helper (created by a sibling
@@ -111,6 +111,19 @@ class Trade:
     # under RiskConfig.allow_single_contract_minimum at/above
     # initial_balance -- i.e. its 1-contract size may exceed the configured
     # risk_value % for that entry. False for every normally-sized trade.
+    risk_at_stop_dollars: float | None = None
+    # ACCURACY OVERHAUL (2026-10-07): the worst-case $ loss at THIS trade's
+    # stop, exit-side spread/slippage and commission included -- exactly
+    # what the sizing budget covered (RiskConfig.size_for_stop). A stopped
+    # trade that loses about this much is on budget; compute_risk_
+    # reconciliation measures overshoot against it instead of against the
+    # bare stop distance (which made 100% of trades "overshoot").
+    stop_capped: bool = False          # fit_stop shrank this trade's stop to fit the budget
+    sizing_mode: str | None = None     # RiskConfig.sizing_mode in force when sized
+    used_micro: bool = False           # micro_fallback swapped in the micro contract
+    contracts: float | None = None     # whole contracts of the contract actually traded
+    attempt_id: int = 0                # which purchased evaluation/funded account this trade belongs to
+    fill_resolution: str = "bar"       # "bar" (stop/target from the bar's high/low) or "intrabar" (finer-bar replay)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -118,6 +131,19 @@ class Trade:
         d["exit_time"] = str(self.exit_time)
         return d
 
+
+from app.backtest.risk import (  # noqa: E402  (grouped with the sizing constants on purpose)
+    SKIP_COSTS_EXCEED_BUDGET, SKIP_NO_MICRO, SKIP_STOP_CAP_TOO_TIGHT,
+    SKIP_STOP_TOO_WIDE, SKIP_TOO_WIDE_FOR_MICRO,
+)
+
+# Sizing skip reasons that mean "the budget cannot afford this signal" (as
+# opposed to a degenerate stop / no money) -- they feed the sizing-halt
+# diagnostic and the preflight's skip-rate gate.
+_SIZING_SKIP_REASONS = frozenset({
+    SKIP_STOP_TOO_WIDE, SKIP_COSTS_EXCEED_BUDGET, SKIP_STOP_CAP_TOO_TIGHT,
+    SKIP_TOO_WIDE_FOR_MICRO, SKIP_NO_MICRO,
+})
 
 DEFAULT_STOP_PCT_OF_PRICE = 0.01  # 1% of entry price, used only when a strategy defines no stop at all
 
@@ -128,6 +154,12 @@ DEFAULT_STOP_PCT_OF_PRICE = 0.01  # 1% of entry price, used only when a strategy
 # RiskConfig field: the threshold is visible at the warning site and
 # there is no impact model to configure.
 MAX_CONTRACTS_BEFORE_IMPACT_WARN = 30
+
+
+def sizing_mode_is_contract_skip(risk) -> bool:
+    """The bounded dead-lock guard applies only to the plain 'skip' mode;
+    fit_stop / micro_fallback already keep a small account trading."""
+    return getattr(risk, "sizing_mode", "skip") == "skip"
 
 
 def run_execution(
@@ -142,6 +174,9 @@ def run_execution(
     breakeven_trigger_r: float | None = None,
     partial_exit_config: dict | None = None,
     adaptive_risk: AdaptiveRiskConfig | None = None,
+    intrabar_df: pd.DataFrame | None = None,
+    attempt_mode: str = "chain",
+    stop_on_pass: bool = False,
 ) -> tuple[list[Trade], pd.DataFrame]:
     """
     Returns (trades, equity_curve_df) where equity_curve_df has columns
@@ -174,6 +209,22 @@ def run_execution(
     docstring). None/omitted -- the default -- reproduces every backtest
     run before this parameter existed, byte for byte; this is purely
     additive and never changes behavior for a strategy that doesn't set it.
+
+    intrabar_df: optional FINER-timeframe OHLC frame (e.g. 1-minute bars
+    under a 1-hour strategy frame) with a `timestamp` column. Only used when
+    risk.intrabar_replay is True: while a trade is open, each strategy bar's
+    stop / target / break-even / trailing / floating-floor decisions are
+    resolved by walking the finer bars inside that bar IN TIME ORDER, so a
+    bar that touched both the stop and the target books whichever really
+    traded first instead of always booking the loss.
+
+    attempt_mode / stop_on_pass (only with risk.account_model == "prop"):
+    "chain" (default) starts a fresh purchased account on the bar after one
+    ends and keeps going to the last bar, labelling every trade and equity
+    row with its attempt_id; "single" ends the run when the first attempt
+    ends (pass, bust or time limit) -- what the rolling attempt replay
+    uses. stop_on_pass ends an attempt the moment the evaluation target is
+    met instead of running on into the funded stage.
     """
     n = len(df)
     equity = risk.initial_balance
@@ -250,11 +301,55 @@ def run_execution(
         else None
     )
     blown_floor = risk.account_blown_floor()  # None if no floor configured
+    if getattr(risk, "account_model", "legacy") == "prop":
+        daily_limit_amount = None   # the PropAccount owns the daily-loss rule
+        blown_floor = None          # ... and the drawdown rule
     # UPGRADE (2026-09-29, "trade until the data ends"): unless a caller
     # explicitly opts into the legacy permanent halt (RiskConfig.halt_on_breach),
     # a breach starts a fresh account and the run keeps trading to the last bar.
     halt_on_breach = bool(getattr(risk, "halt_on_breach", False))
     min_contract_rescue_count = 0
+    attempt_id = 0                      # which purchased account the loop is currently trading
+    # ---- PROP ACCOUNT MODE (risk.account_model == "prop") ----------------
+    # The bar engine feeds ONE PropAccount per attempt (the same rule engine
+    # simulate_account / the rolling replay / Monte Carlo use), so trailing /
+    # static drawdown, the daily loss limit, the profit target, min days,
+    # consistency, eval time limit, inactivity and payouts mean the same
+    # thing everywhere. Every attempt is a fresh purchased account.
+    prop_mode = getattr(risk, "account_model", "legacy") == "prop"
+    acct = None
+    prop_rules = None
+    prop_day_map: dict = {}             # session-day idx -> active-day idx
+    prop_day_dates: list = []           # active-day idx -> date (for calendar rules)
+    prop_pending: str | None = None     # "failed" / "day_locked" raised inside _settle_exit
+    prop_locked_bar_date = -1
+    prop_attempts: list[dict] = []
+    prop_payouts_seen = 0
+    prop_done = False
+    prop_attempt_start_time = None
+    if prop_mode:
+        from app.prop.account import PropAccount, coerce_rules, DAY_LOCKED as _DAY_LOCKED, FAILED as _FAILED
+        prop_rules = coerce_rules(getattr(risk, "prop_account_rules", None))
+        if prop_rules is None:
+            raise ValueError("risk.account_model='prop' requires risk.prop_account_rules")
+        if abs(float(prop_rules.account_size) - float(risk.initial_balance)) > 1e-6:
+            import warnings
+            warnings.warn(
+                f"prop rules account_size ({prop_rules.account_size:,.2f}) != risk.initial_balance "
+                f"({risk.initial_balance:,.2f}); the firm's account size is used for the run.",
+                RuntimeWarning,
+            )
+            equity = float(prop_rules.account_size)
+        if getattr(prop_rules, "max_contracts", None):
+            from dataclasses import replace as _dc_replace
+            _mc = int(prop_rules.max_contracts)
+            if risk.max_contracts is not None:
+                _mc = min(_mc, int(risk.max_contracts))
+            risk = _dc_replace(risk, max_contracts=_mc)
+    sizing_considered_count = 0         # entries that reached the sizing step
+    sizing_skip_reasons: dict = {}      # skip_reason -> count (see risk.SKIP_*)
+    stop_capped_count = 0               # fit_stop shrank the stop to fit the budget
+    micro_fallback_count = 0            # micro_fallback traded the micro contract
     adaptive_probe_count = 0  # entries kept at the 1-contract minimum instead of being throttled below one lot (2026-10-06 stall fix)
     _adaptive_state_day = -1  # day_idx the adaptive state's daily accumulators were last rolled to (2026-10-06 stall fix)
     blocked_daily_limit_count = 0
@@ -513,6 +608,41 @@ def run_execution(
             "end_of_data": "end_of_data",
         }.get(reason, reason)
 
+    def _prop_day(bar_date_: int) -> int:
+        """Active-day index (days the account actually traded or held a
+        position) for a session-day index; creates it on first use."""
+        d = prop_day_map.get(bar_date_)
+        if d is None:
+            d = len(prop_day_dates)
+            prop_day_map[bar_date_] = d
+            prop_day_dates.append(_unique_days[bar_date_])
+        return d
+
+    def _prop_feed_close(pnl_: float, bar_date_: int, risk_dollars, i_: int) -> None:
+        """Feed one realized close to the attempt's PropAccount and sync
+        the engine's equity with the account balance (payouts withdraw)."""
+        nonlocal equity, prop_pending, prop_locked_bar_date, prop_payouts_seen
+        pday = _prop_day(bar_date_)
+        res = acct.on_trade_close(
+            pnl_, pday, is_last_of_day=True, trade_initial_risk=risk_dollars,
+            floating_handled=True,
+        )
+        if res == _FAILED:
+            prop_pending = "failed"
+        elif res == _DAY_LOCKED:
+            prop_locked_bar_date = bar_date_
+        if len(acct.payouts) > prop_payouts_seen:
+            for rec in acct.payouts[prop_payouts_seen:]:
+                reset_events.append({
+                    "kind": "payout", "reset_at": _restore_tz(ts[i_]),
+                    "attempt_id": attempt_id, "payout_amount": rec.amount,
+                    "equity_before_payout": rec.balance_after + rec.amount,
+                    "equity_after_payout": rec.balance_after,
+                    "message": f"attempt {attempt_id}: payout ${rec.amount:,.2f}",
+                })
+            prop_payouts_seen = len(acct.payouts)
+        equity = acct.balance
+
     def _settle_exit(open_pos: dict, raw_exit_price: float, reason: str, direction_: int, i: int) -> float:
         nonlocal equity, gap_loss_count, last_close_bar_idx
         last_close_bar_idx = i  # EXEC-002: this is a FULL close -- see reentry_cooldown_bars above
@@ -522,8 +652,10 @@ def run_execution(
         # actually closed (open_pos["size"] is post-partial, in sizing
         # units; contract_size converts to whole contracts). 0.0 defaults
         # keep this byte-identical to the old flat-only charge.
-        _contracts_closed = open_pos["size"] / risk.contract_size if risk.contract_size else 0.0
-        _commission_charged = risk.commission_per_trade + risk.commission_per_contract * _contracts_closed
+        _pos_cs = open_pos.get("contract_size", risk.contract_size)
+        _pos_cpc = open_pos.get("commission_per_contract", risk.commission_per_contract)
+        _contracts_closed = open_pos["size"] / _pos_cs if _pos_cs else 0.0
+        _commission_charged = risk.commission_per_trade + _pos_cpc * _contracts_closed
         pnl -= _commission_charged
         if not math.isfinite(pnl):
             # Guard against a runaway/degenerate trade (e.g. an entry
@@ -565,11 +697,20 @@ def run_execution(
             mfe_price=open_pos.get("mfe_price"),
             exit_cause=_exit_cause_for(reason, open_pos),
             sized_above_risk_target=bool(open_pos.get("sized_above_risk_target", False)),
+            risk_at_stop_dollars=open_pos.get("risk_at_stop_dollars"),
+            stop_capped=bool(open_pos.get("stop_capped", False)),
+            sizing_mode=open_pos.get("sizing_mode"),
+            used_micro=bool(open_pos.get("used_micro", False)),
+            contracts=open_pos.get("contracts"),
+            attempt_id=attempt_id,
+            fill_resolution=open_pos.get("fill_resolution", "bar"),
         ))
         bar_date_ = day_idx[i]
         adaptive_state.record_trade_close(pnl, is_new_day=not day_has_pnl[bar_date_])
         pnl_today_sum[bar_date_] += pnl
         day_has_pnl[bar_date_] = True
+        if prop_mode:
+            _prop_feed_close(pnl, bar_date_, open_pos.get("risk_at_stop_dollars"), i)
         return pnl
 
     partial_r_multiple = float(partial_exit_config["r_multiple"]) if partial_exit_config else None
@@ -594,9 +735,11 @@ def run_execution(
         # B2-4: same per-trade + per-contract charge as a full settle, scaled
         # pro-rata to the fraction actually closed (contracts of the
         # ORIGINAL size x the fraction closed).
-        _contracts_total = open_pos["initial_size"] / risk.contract_size if risk.contract_size else 0.0
+        _pos_cs = open_pos.get("contract_size", risk.contract_size)
+        _pos_cpc = open_pos.get("commission_per_contract", risk.commission_per_contract)
+        _contracts_total = open_pos["initial_size"] / _pos_cs if _pos_cs else 0.0
         _commission_charged = (
-            risk.commission_per_trade + risk.commission_per_contract * _contracts_total
+            risk.commission_per_trade + _pos_cpc * _contracts_total
         ) * partial_fraction
         pnl -= _commission_charged
         if not math.isfinite(pnl):
@@ -623,11 +766,20 @@ def run_execution(
             mfe_price=open_pos.get("mfe_price"),
             exit_cause="take_profit",  # partial scale-out is a take-profit mechanism
             sized_above_risk_target=bool(open_pos.get("sized_above_risk_target", False)),
+            risk_at_stop_dollars=open_pos.get("risk_at_stop_dollars"),
+            stop_capped=bool(open_pos.get("stop_capped", False)),
+            sizing_mode=open_pos.get("sizing_mode"),
+            used_micro=bool(open_pos.get("used_micro", False)),
+            contracts=open_pos.get("contracts"),
+            attempt_id=attempt_id,
+            fill_resolution=open_pos.get("fill_resolution", "bar"),
         ))
         open_pos["size"] -= partial_size
         bar_date_ = day_idx[i]
         pnl_today_sum[bar_date_] += pnl
         day_has_pnl[bar_date_] = True
+        if prop_mode:
+            _prop_feed_close(pnl, bar_date_, None, i)
         # Deliberately NOT calling adaptive_state.record_trade_close here --
         # the position this partial belongs to is still open, so this isn't
         # a trade CLOSE for adaptive-risk purposes (consecutive-loss/streak
@@ -667,9 +819,77 @@ def run_execution(
     # directly and handing pandas already-columnar data. Preallocating (vs.
     # letting the list grow) also avoids 2M+ individual tuple allocations.
     equity_arr = np.empty(n, dtype=np.float64)
+    attempt_arr = np.zeros(n, dtype=np.int32)
+    prop_last_bar_date = None
+
+    def _prop_new_account(i_: int) -> None:
+        nonlocal acct, prop_payouts_seen, prop_pending, prop_attempt_start_time
+        acct = PropAccount(prop_rules, start_day_index=len(prop_day_dates), day_dates=prop_day_dates)
+        acct.start_date = _unique_days[day_idx[min(i_, n - 1)]]
+        prop_payouts_seen = 0
+        prop_pending = None
+        prop_attempt_start_time = _restore_tz(ts[min(i_, n - 1)])
+
+    def _prop_end_attempt(i_: int, fill_price=None) -> None:
+        """Closes the current attempt (bust or pass): flat the book, record
+        it, and -- in chain mode -- buy a fresh account."""
+        nonlocal open_trade, equity, attempt_id, prop_pending, prop_done, payout_target_baseline
+        if open_trade is not None:
+            px = closes[i_] if fill_price is None else fill_price
+            _settle_exit(
+                open_trade, px,
+                "account_blown_forced_close" if acct.failed else "attempt_end_forced_close",
+                open_trade["direction"], i_,
+            )
+            open_trade = None
+        failed = acct.failed
+        end_t = _restore_tz(ts[i_])
+        prop_attempts.append({
+            "attempt_id": attempt_id, "start_time": prop_attempt_start_time, "end_time": end_t,
+            "outcome": "failed" if failed else "passed",
+            "failure_reason": acct.failure_reason, "passed_evaluation": acct.passed_evaluation,
+            "days_to_pass": acct.days_to_pass, "end_balance": acct.balance,
+            "n_trades": acct.n_trades, "total_payout": acct.total_payout_amount,
+            "max_dd_pct": acct.max_dd_pct_reached,
+        })
+        reset_events.append({
+            "kind": "breach" if failed else "attempt_pass",
+            "reset_at": end_t, "attempt_id": attempt_id,
+            "equity_before_reset": acct.balance, "equity_after_forced_close": acct.balance,
+            "drawdown_pct": ((prop_rules.account_size - acct.balance) / prop_rules.account_size * 100.0) if failed else None,
+            "message": (
+                f"{end_t}: attempt {attempt_id} " + (
+                    f"FAILED ({acct.failure_reason}) at balance ${acct.balance:,.2f}"
+                    if failed else f"PASSED the evaluation at balance ${acct.balance:,.2f}")
+                + ("; fresh account started." if attempt_mode != "single" else ".")
+            ),
+        })
+        if attempt_mode == "single":
+            prop_done = True
+            return
+        attempt_id += 1
+        equity = float(prop_rules.account_size)
+        payout_target_baseline = equity
+        adaptive_state.reset()
+        _prop_new_account(i_)
+
+    if prop_mode:
+        _prop_new_account(0)
 
     for i in range(n):
         bar_date = day_idx[i]
+
+        if prop_mode:
+            if bar_date != prop_last_bar_date:
+                if prop_last_bar_date is not None and prop_last_bar_date in prop_day_map and i > 0:
+                    acct.end_day(prop_day_map[prop_last_bar_date], float(equity_arr[i - 1]))
+                prop_last_bar_date = bar_date
+                if acct.check_new_day(_unique_days[bar_date]) == _FAILED:
+                    _prop_end_attempt(i, opens[i])
+                    if prop_done:
+                        equity_arr[i:] = equity
+                        attempt_arr[i:] = attempt_id
+                        break
 
         # STALL FIX (2026-10-06): roll the adaptive-risk daily
         # accumulators over WITH THE CLOCK. This used to happen only
@@ -720,6 +940,58 @@ def run_execution(
                 open_trade["worst_price"] = min(open_trade["worst_price"], adverse_extreme)
             else:
                 open_trade["worst_price"] = max(open_trade["worst_price"], adverse_extreme)
+
+            # PROP MODE: floating drawdown / floating daily-loss. The firm
+            # liquidates the position the instant FLOATING equity touches the
+            # applicable floor. Order matters: a resting stop that is closer
+            # to entry than the liquidation level fills first (the account
+            # survives with the stop loss); only if the floor is reached
+            # BEFORE the stop does the firm close the trade. Gaps fill at
+            # the open, never better.
+            if prop_mode and (acct.dd_basis in ("floating", "eod") or acct.daily_loss_basis == "floating"):
+                _ent = open_trade["entry_price"]
+                _sz = open_trade["size"]
+                _stop_now = open_trade["stop_price"]
+                _adv_eff = adverse_extreme
+                if _stop_now is not None:
+                    if direction == 1 and lows[i] <= _stop_now:
+                        _adv_eff = max(adverse_extreme, min(_stop_now, opens[i]))
+                    elif direction == -1 and highs[i] >= _stop_now:
+                        _adv_eff = min(adverse_extreme, max(_stop_now, opens[i]))
+                _eq_hi = equity + (favorable_extreme - _ent) * _sz * direction
+                _eq_lo = equity + (_adv_eff - _ent) * _sz * direction
+                _dd_fl, _dl_fl = acct.projected_floors(_eq_hi)
+                _lvl = None
+                _kind = None
+                if _dd_fl is not None and _eq_lo <= _dd_fl:
+                    _lvl, _kind = _dd_fl, "prop_floor_liquidation"
+                if _dl_fl is not None and _eq_lo <= _dl_fl and (_lvl is None or _dl_fl > _lvl):
+                    _lvl, _kind = _dl_fl, "daily_loss_limit_forced_close"
+                _pd = _prop_day(bar_date)
+                if _lvl is None:
+                    acct.on_equity_extremes(_pd, _eq_hi, _eq_lo)
+                else:
+                    _res = acct.on_equity_extremes(_pd, _eq_hi, _eq_lo)
+                    _liq = _ent + direction * (_lvl - equity) / _sz if _sz else adverse_extreme
+                    if direction == 1:
+                        _liq = min(max(_liq, adverse_extreme), opens[i])
+                    else:
+                        _liq = max(min(_liq, adverse_extreme), opens[i])
+                    _settle_exit(open_trade, _liq, _kind, direction, i)
+                    open_trade = None
+                    force_closed_count += 1
+                    if _res == _DAY_LOCKED:
+                        prop_locked_bar_date = bar_date
+                    equity_arr[i] = equity
+                    if prop_pending == "failed" or acct.failed:
+                        _prop_end_attempt(i)
+                        attempt_arr[i] = attempt_id
+                        equity_arr[i] = equity
+                        if prop_done:
+                            equity_arr[i:] = equity
+                            attempt_arr[i:] = attempt_id
+                            break
+                    continue
 
             # Mark-to-market daily-loss check, using the ADVERSE intrabar
             # extreme (low for a long, high for a short) rather than the
@@ -959,6 +1231,20 @@ def run_execution(
         else:
             mtm_equity = equity
         equity_arr[i] = mtm_equity
+        attempt_arr[i] = attempt_id
+
+        if prop_mode:
+            if prop_pending == "failed" or acct.failed:
+                _prop_end_attempt(i)
+                equity_arr[i] = equity
+                attempt_arr[i] = attempt_id if not prop_done else attempt_arr[i]
+            elif stop_on_pass and acct.passed_evaluation:
+                _prop_end_attempt(i)
+                equity_arr[i] = equity
+            if prop_done:
+                equity_arr[i:] = equity
+                attempt_arr[i:] = attempt_id
+                break
 
         # --- account-blown circuit breaker ---
         # A real prop/broker account is terminated the instant it breaches
@@ -972,7 +1258,7 @@ def run_execution(
         # -$50,000-on-a-$50,000-account or -$2.5M results this was built
         # to prevent. Any already-open trade still manages normally
         # (stop/target/signal exits) -- only NEW entries are blocked.
-        if not account_blown and (equity <= 0 or (blown_floor is not None and equity <= blown_floor)):
+        if not prop_mode and not account_blown and (equity <= 0 or (blown_floor is not None and equity <= blown_floor)):
             if not halt_on_breach:
                 # RESET-ON-BREACH (now the engine default, see RiskConfig.reset_on_breach): a
                 # prop-firm evaluator who "doesn't care about blowing
@@ -1034,7 +1320,7 @@ def run_execution(
         # under it -- only money that has actually settled through
         # _settle_exit.
         if (
-            risk.reset_on_target and risk.profit_target_pct and risk.profit_target_pct > 0 and not account_blown
+            not prop_mode and risk.reset_on_target and risk.profit_target_pct and risk.profit_target_pct > 0 and not account_blown
             and equity >= payout_target_baseline * (1 + risk.profit_target_pct / 100.0)
         ):
             payout_amount = equity - payout_target_baseline
@@ -1059,7 +1345,7 @@ def run_execution(
         day_realized_pnl = pnl_today_sum[bar_date]
         daily_limit_breached = (
             daily_limit_amount is not None and day_realized_pnl <= -daily_limit_amount
-        )
+        ) or (prop_mode and prop_locked_bar_date == bar_date)
         # EXEC-002: without this, a position stopped out (or hit its
         # target) intrabar on bar `i` could immediately reopen a fresh
         # position in the SAME direction at that SAME bar's close, as
@@ -1121,49 +1407,52 @@ def run_execution(
                     used_fallback_stop = True
 
                 if bar_sl_distance:
-                    sizing_pips = bar_sl_distance / risk.pip_size if risk.pip_size else 0
+                    sl_price_dist = bar_sl_distance
                 else:
-                    sizing_pips = stop_loss_pips or 0
+                    sl_price_dist = (stop_loss_pips or 0) * risk.pip_size
+                sizing_pips = (sl_price_dist / risk.pip_size) if risk.pip_size else 0
                 intended_risk_dollars = risk.risk_amount(equity)
-                size = risk.position_size(equity, sizing_pips)
-                # DEAD-LOCK RESCUE (2026-09-29): with whole-contract sizing, a
-                # small drawdown can drop equity just under the level that
-                # affords ONE contract at the configured risk %. With no
-                # trades, equity can never climb back, so the run silently
-                # stops for the rest of the dataset (e.g. 2% of $49,762 is
-                # $995 < the $1,000 one ES contract needs). If a fresh
-                # account WOULD afford one contract with this exact config,
-                # trade the 1-contract minimum -- never more risk than the
-                # configured % of the starting balance.
-                # Part C fix 2 (2026-10-04): with
-                # risk.allow_single_contract_minimum=True the rescue ALSO
-                # fires at/above initial_balance -- a profitable account
-                # whose stops widened past what risk_value affords (Part C's
-                # silent halt) gets the 1-contract minimum too instead of
-                # stopping forever. NOTE: the override bypasses the
-                # fresh-account affordability check as well -- in
-                # percent/fixed mode "a fresh account affords 1 contract but
-                # the larger current account doesn't" is mathematically
-                # impossible, so keeping that check would make this flag
-                # dead code that can never fire. Override-path trades are
-                # tagged sized_above_risk_target=True since 1 contract may
-                # exceed the configured risk % there. Default OFF: honest
-                # skipping stays the default.
-                rescue_above_risk_target = False
-                allow_single_min = bool(risk.allow_single_contract_minimum)
-                legacy_eligible = (
-                    size <= 0
-                    and risk.contract_size
-                    and 0 < equity < risk.initial_balance
-                    and risk.position_size(risk.initial_balance, sizing_pips) >= risk.contract_size
-                )
-                override_eligible = (
-                    allow_single_min and size <= 0 and risk.contract_size and equity > 0
-                )
-                if legacy_eligible or override_eligible:
+                # ACCURACY OVERHAUL (2026-10-07): ONE sizing routine for every
+                # mode (see risk.SIZING_MODES / RiskConfig.size_for_stop). The
+                # decision carries the contracts, the (possibly fit-to-budget)
+                # stop, whether the micro contract was swapped in, and -- when
+                # the entry is skipped -- WHY. Costs are inside the budget.
+                # The old dead-lock "1-contract rescue" that opened one
+                # contract ABOVE the risk budget is gone: the only way to
+                # exceed the budget now is the explicit, tagged
+                # allow_single_contract_minimum opt-in below.
+                decision = risk.size_for_stop(equity, sl_price_dist)
+                size = decision.units
+                pos_contract_size = decision.contract_size if decision.contract_size else risk.contract_size
+                pos_commission_pc = decision.commission_per_contract
+                sizing_considered_count += 1
+                rescue_above_risk_target = bool(decision.above_budget)
+                # Dead-lock guard (bounded): a config that a FRESH account can
+                # afford (>= 1 whole contract at initial_balance) must not stall
+                # forever just because a small loss pulled equity a hair under
+                # the one-contract threshold -- with no trades there is no way
+                # to climb back. One contract is allowed only while its
+                # worst-case loss stays within 1.5x the current budget; the
+                # trade is tagged sized_above_risk_target and counted as a
+                # rescue. allow_single_contract_minimum keeps its older,
+                # unbounded meaning.
+                _deadlock_guard = False
+                if size <= 0 and risk.contract_size and equity > 0 and decision.skip_reason is not None \
+                        and sizing_mode_is_contract_skip(risk):
+                    _fresh = risk.size_for_stop(risk.initial_balance, sl_price_dist)
+                    if _fresh.units > 0 and _fresh.contracts >= 1:
+                        _one = risk.worst_case_loss(
+                            float(risk.contract_size), sl_price_dist, risk.contract_size, risk.commission_per_contract,
+                        )
+                        _deadlock_guard = _one <= 1.5 * max(intended_risk_dollars, 1e-9)
+                if (
+                    size <= 0 and (risk.allow_single_contract_minimum or _deadlock_guard) and risk.contract_size and equity > 0
+                ):
                     size = float(risk.contract_size)
+                    pos_contract_size = risk.contract_size
+                    pos_commission_pc = risk.commission_per_contract
                     min_contract_rescue_count += 1
-                    rescue_above_risk_target = bool(override_eligible) and not legacy_eligible
+                    rescue_above_risk_target = True
 
                 adaptive_multiplier = 1.0
                 adaptive_rules_active: list[str] = []
@@ -1193,12 +1482,12 @@ def run_execution(
                     # profit lock) still blocks outright -- that is the rule
                     # doing its job for the rest of THAT day, and the new
                     # clock-driven day rollover above releases it tomorrow.
-                    if risk.contract_size and size > 0 and adaptive_multiplier > 0:
-                        _lots = math.floor(size / risk.contract_size + 1e-9)
-                        if _lots <= 0 and _size_before_adaptive >= risk.contract_size:
+                    if pos_contract_size and size > 0 and adaptive_multiplier > 0:
+                        _lots = math.floor(size / pos_contract_size + 1e-9)
+                        if _lots <= 0 and _size_before_adaptive >= pos_contract_size:
                             _lots = 1
                             adaptive_probe_count += 1
-                        size = _lots * risk.contract_size
+                        size = _lots * pos_contract_size
 
                 if not math.isfinite(size) or size <= 0:
                     # Degenerate sizing (e.g. an ATR-based stop distance
@@ -1206,8 +1495,11 @@ def run_execution(
                     # rather than opening a trade with an invalid size.
                     if adaptive_multiplier <= 0:
                         blocked_adaptive_zero_count += 1
-                    if risk.sizing_floored_to_zero_contracts(equity, sizing_pips):
+                    if risk.contract_size and decision.skip_reason in _SIZING_SKIP_REASONS:
                         zero_size_contract_floor_count += 1
+                        sizing_skip_reasons[decision.skip_reason] = sizing_skip_reasons.get(decision.skip_reason, 0) + 1
+                    elif decision.skip_reason is not None:
+                        sizing_skip_reasons[decision.skip_reason] = sizing_skip_reasons.get(decision.skip_reason, 0) + 1
                     pass  # n_today unchanged; no-op, kept for readability
                 else:
                     if used_fallback_stop:
@@ -1254,6 +1546,27 @@ def run_execution(
                                 atr_scale_mismatch_count += 1
                                 if atr_scale_mismatch_worst_ratio is None or atr_ratio < atr_scale_mismatch_worst_ratio:
                                     atr_scale_mismatch_worst_ratio = atr_ratio
+                    if decision.stop_capped:
+                        # fit_stop: 1 contract, stop shrunk to the distance
+                        # whose worst case equals the budget. The target
+                        # follows per risk.fit_stop_target (scale / keep /
+                        # fixed_r); a trailing distance shrinks with the
+                        # stop so the strategy's shape is preserved.
+                        stop_price = entry_price - direction * decision.stop_distance
+                        stop_capped_count += 1
+                        _base_tp = bar_tp_distance if bar_tp_distance else (
+                            take_profit_pips * risk.pip_size if take_profit_pips else None
+                        )
+                        if risk.fit_stop_target == "fixed_r":
+                            bar_tp_distance = risk.fit_stop_target_r * decision.stop_distance
+                        elif _base_tp and risk.fit_stop_target == "scale":
+                            bar_tp_distance = _base_tp * decision.stop_scale
+                        elif _base_tp:
+                            bar_tp_distance = _base_tp
+                        if bar_trail_distance:
+                            bar_trail_distance = bar_trail_distance * decision.stop_scale
+                    if decision.used_micro:
+                        micro_fallback_count += 1
                     if bar_tp_distance:
                         take_price = entry_price + direction * bar_tp_distance
                     elif take_profit_pips:
@@ -1271,8 +1584,8 @@ def run_execution(
                     # infinite liquidity. MAX_CONTRACTS_BEFORE_IMPACT_WARN
                     # is a module constant (not a RiskConfig field) so the
                     # threshold is visible at the warning site.
-                    if risk.contract_size:
-                        _whole_contracts = size / risk.contract_size
+                    if pos_contract_size:
+                        _whole_contracts = size / pos_contract_size
                         if _whole_contracts > MAX_CONTRACTS_BEFORE_IMPACT_WARN:
                             import warnings
                             warnings.warn(
@@ -1304,6 +1617,17 @@ def run_execution(
                         "adaptive_multiplier": adaptive_multiplier,
                         "adaptive_rules_active": adaptive_rules_active,
                         "sized_above_risk_target": rescue_above_risk_target,
+                        "contract_size": pos_contract_size,
+                        "commission_per_contract": pos_commission_pc,
+                        "risk_at_stop_dollars": risk.worst_case_loss(
+                            size, abs(entry_price - stop_price) if stop_price is not None else sl_price_dist,
+                            pos_contract_size, pos_commission_pc,
+                        ),
+                        "stop_capped": bool(decision.stop_capped),
+                        "sizing_mode": risk.sizing_mode,
+                        "used_micro": bool(decision.used_micro),
+                        "contracts": (size / pos_contract_size) if pos_contract_size else None,
+                        "fill_resolution": "bar",
                     }
                     trades_today_count[fill_bar_date] = n_today + 1
                     last_entry_bar_idx = fill_idx
@@ -1326,6 +1650,17 @@ def run_execution(
         direction = open_trade["direction"]
         _settle_exit(open_trade, closes[i], "end_of_data", direction, i)
 
+    if prop_mode and not prop_done:
+        prop_attempts.append({
+            "attempt_id": attempt_id, "start_time": prop_attempt_start_time,
+            "end_time": _restore_tz(ts[n - 1]) if n else None,
+            "outcome": "passed_funded" if acct.passed_evaluation else "open",
+            "failure_reason": None, "passed_evaluation": acct.passed_evaluation,
+            "days_to_pass": acct.days_to_pass, "end_balance": acct.balance,
+            "n_trades": acct.n_trades, "total_payout": acct.total_payout_amount,
+            "max_dd_pct": acct.max_dd_pct_reached,
+        })
+
     # UPGRADE (speed): building the DataFrame straight from the two
     # already-columnar numpy arrays (the original `ts` array + the
     # preallocated equity_arr) instead of a list of per-bar tuples avoids
@@ -1345,11 +1680,25 @@ def run_execution(
     # that wants them (e.g. the report generator). Always present (empty
     # list when reset_on_breach is False or no reset ever fired) so callers
     # don't need to guard against a missing key.
+    if prop_mode:
+        equity_df["attempt_id"] = attempt_arr
+        equity_df.attrs["prop_attempts"] = prop_attempts
+        equity_df.attrs["prop_rules"] = prop_rules
     equity_df.attrs["account_reset_events"] = reset_events
     equity_df.attrs["payout_events"] = [ev for ev in reset_events if ev.get("kind") == "payout"]
     equity_df.attrs["breach_events"] = [ev for ev in reset_events if ev.get("kind", "breach") == "breach"]
     equity_df.attrs["zero_size_contract_floor_count"] = zero_size_contract_floor_count
     equity_df.attrs["min_contract_rescue_count"] = min_contract_rescue_count
+    equity_df.attrs["sizing_summary"] = {
+        "mode": risk.sizing_mode,
+        "entries_considered": sizing_considered_count,
+        "entries_taken": len([t for t in trades if t.exit_reason != "partial_take_profit"]),
+        "skipped_for_sizing": zero_size_contract_floor_count,
+        "skip_rate": (zero_size_contract_floor_count / sizing_considered_count) if sizing_considered_count else 0.0,
+        "skip_reasons": dict(sizing_skip_reasons),
+        "stop_capped": stop_capped_count,
+        "micro_fallback": micro_fallback_count,
+    }
     equity_df.attrs["adaptive_probe_count"] = adaptive_probe_count
     equity_df.attrs["entry_block_counts"] = {
         "engine_halted": blocked_halted_count,
@@ -1476,12 +1825,12 @@ def run_execution(
     if min_contract_rescue_count:
         import warnings
         warnings.warn(
-            f"{min_contract_rescue_count:,} entr{'y' if min_contract_rescue_count == 1 else 'ies'} used the "
-            f"1-contract minimum (contract_size={risk.contract_size:g}) because equity had dipped just below "
-            "what your risk % affords for one whole contract. Without this the run would have stopped trading "
-            "for the rest of the dataset (equity can never recover without trades). Risk per trade on these "
-            "entries is capped at your configured % of the STARTING balance. Raise risk_value, use the micro "
-            "contract, or enlarge the account if you want exact %-of-equity sizing.",
+            f"{min_contract_rescue_count:,} entr{'y' if min_contract_rescue_count == 1 else 'ies'} were opened at the "
+            f"1-contract minimum (contract_size={risk.contract_size:g}) under allow_single_contract_minimum=True even "
+            "though ONE contract at the strategy's stop exceeds your risk budget. Those trades carry MORE than the "
+            "configured risk per trade (tagged sized_above_risk_target). This is an explicit opt-in -- the default "
+            "sizing modes never exceed the budget. Use sizing_mode='fit_stop' (shrink the stop to the budget) or "
+            "'micro_fallback' (trade the micro contract) to stay on budget instead.",
             RuntimeWarning,
         )
 
@@ -1537,6 +1886,8 @@ def run_execution(
         "last_trade_exit": trades[-1].exit_time if trades else None,
         "risk_value": risk.risk_value,
         "contract_size": risk.contract_size,
+        "sizing_mode": risk.sizing_mode,
+        "skip_reasons": dict(sizing_skip_reasons),
     }
 
     if risk.commission_per_trade == 0.0 and risk.commission_per_contract == 0.0 and risk.slippage_pips == 0.0 and risk.spread_pips == 0.0:

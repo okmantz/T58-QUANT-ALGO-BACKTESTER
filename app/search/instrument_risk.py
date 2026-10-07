@@ -114,10 +114,10 @@ def resolve_leg_risk(
             updates["commission_per_contract"] = spec.default_commission_round_turn
             filled.append(f"commission ${spec.default_commission_round_turn:g}/contract")
         if base_risk.spread_pips == 0.0:
-            updates["spread_pips"] = float(spec.default_spread_ticks)
+            updates["spread_pips"] = spec.default_spread_pips  # ticks -> pips via tick_size (2026-10-07 cost-unit fix)
             filled.append(f"spread {spec.default_spread_ticks} tick(s)")
         if base_risk.slippage_pips == 0.0:
-            updates["slippage_pips"] = float(spec.default_slippage_ticks)
+            updates["slippage_pips"] = spec.default_slippage_pips  # ticks -> pips via tick_size (2026-10-07 cost-unit fix)
             filled.append(f"slippage {spec.default_slippage_ticks} tick(s)")
         resolved = replace(base_risk, **updates) if updates else base_risk
         notes.append(

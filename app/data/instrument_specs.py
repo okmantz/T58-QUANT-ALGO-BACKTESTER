@@ -83,6 +83,48 @@ class InstrumentSpec:
     def to_dict(self) -> dict:
         return dict(self.__dict__)
 
+    def ticks_to_pips(self, ticks: float) -> float:
+        """Converts a tick count into RiskConfig pip units.
+
+        ACCURACY FIX (2026-10-07, Full Pipeline Audit "cost units"):
+        spread/slippage defaults are denominated in TICKS (tick_size price
+        units), but RiskConfig.spread_pips/slippage_pips are denominated in
+        PIPS (pip_size price units). The old code copied the tick count
+        straight into the pip field, which is only correct when
+        tick_size == pip_size. Every spec in this registry has
+        pip_size == 1.0 while tick_size is 0.25 (ES/NQ), 0.10 (RTY/GC) or
+        1.0 (YM), so ES was charged 1.0 point per tick instead of 0.25 --
+        4x too high per component, ~3x too high on the combined
+        spread+slippage the audit measured against the intended cost.
+        price = ticks x tick_size, pips = price / pip_size."""
+        return float(ticks) * float(self.tick_size) / float(self.pip_size)
+
+    @property
+    def default_spread_pips(self) -> float:
+        return self.ticks_to_pips(self.default_spread_ticks)
+
+    @property
+    def default_slippage_pips(self) -> float:
+        return self.ticks_to_pips(self.default_slippage_ticks)
+
+    def round_trip_cost_dollars(
+        self, contracts: float = 1.0, spread_ticks: float | None = None,
+        slippage_ticks: float | None = None, commission_round_turn: float | None = None,
+    ) -> float:
+        """Round-trip dollar cost of `contracts` whole contracts under the
+        engine's cost model (spread + slippage are charged on BOTH the
+        entry and the exit fill, plus commission once per round turn):
+
+            2 x (spread_ticks + slippage_ticks) x tick_value x contracts
+              + commission_round_turn x contracts
+
+        e.g. ES with the registry defaults (1 tick + 1 tick, $4.20):
+        2 x 2 x $12.50 + $4.20 = $54.20 per contract."""
+        s = self.default_spread_ticks if spread_ticks is None else spread_ticks
+        sl = self.default_slippage_ticks if slippage_ticks is None else slippage_ticks
+        c = self.default_commission_round_turn if commission_round_turn is None else commission_round_turn
+        return (2.0 * (float(s) + float(sl)) * self.tick_value + float(c)) * float(contracts)
+
 
 # Point value ($ per 1-point move) and tick size for the CME futures
 # contracts this app's users most commonly backtest -- see this module's
@@ -102,6 +144,23 @@ _SPECS: tuple[InstrumentSpec, ...] = (
 )
 
 KNOWN_INSTRUMENTS: dict[str, InstrumentSpec] = {spec.symbol: spec for spec in _SPECS}
+
+# Full-size contract -> its micro equivalent. Used by RiskConfig's
+# "micro_fallback" sizing mode: when a full-size contract cannot be sized
+# inside the risk budget, trade the micro (1/10th the point value) instead
+# of either skipping the signal or oversizing the risk.
+MICRO_EQUIVALENT: dict[str, str] = {
+    "ES": "MES", "NQ": "MNQ", "YM": "MYM", "RTY": "M2K", "GC": "MGC",
+}
+
+
+def micro_equivalent(symbol: str | None) -> "InstrumentSpec | None":
+    """The micro contract spec for a full-size symbol, or None when the
+    symbol has no micro in this registry (or is already a micro)."""
+    if not symbol:
+        return None
+    micro = MICRO_EQUIVALENT.get(str(symbol).strip().upper())
+    return KNOWN_INSTRUMENTS.get(micro) if micro else None
 
 
 def known_instrument_symbols() -> list[str]:
@@ -155,16 +214,17 @@ def apply_instrument_spec(risk: RiskConfig, symbol: str) -> RiskConfig:
     updates = {"pip_size": spec.pip_size, "contract_size": spec.contract_size}
     if risk.commission_per_contract == 0.0:
         updates["commission_per_contract"] = spec.default_commission_round_turn
-    # C5: spec-driven spread/slippage defaults. Every spec in this
-    # registry has pip_size == 1.0, so ticks == pips here -- the spec's
-    # tick-denominated defaults land directly on RiskConfig's
-    # pip-denominated fields. Same only-when-still-0.0 rule as the
-    # commission fill above: an explicit nonzero value the user already
-    # typed in is never overwritten.
+    # C5 + ACCURACY FIX (2026-10-07): the spec's spread/slippage defaults
+    # are TICKS; RiskConfig's fields are PIPS. Convert through the tick
+    # size (see InstrumentSpec.ticks_to_pips) instead of copying the tick
+    # count across -- ES was being charged 4x its real per-tick cost.
+    # Same only-when-still-0.0 rule as the commission fill above: an
+    # explicit nonzero value the user already typed in is never
+    # overwritten.
     if risk.spread_pips == 0.0:
-        updates["spread_pips"] = float(spec.default_spread_ticks)
+        updates["spread_pips"] = spec.default_spread_pips
     if risk.slippage_pips == 0.0:
-        updates["slippage_pips"] = float(spec.default_slippage_ticks)
+        updates["slippage_pips"] = spec.default_slippage_pips
     return replace(risk, **updates)
 
 

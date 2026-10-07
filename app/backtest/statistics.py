@@ -267,8 +267,16 @@ def _trade_reset_segment_ids(trades: list[Trade], equity_df: pd.DataFrame) -> np
     Segmenting trade attribution at a payout would wrongly report only
     the trades since the last payout as "the current account's" trades.
     """
+    # Prop-mode runs label every trade with the purchased account (attempt)
+    # that took it -- authoritative, no timestamp inference needed.
+    if trades and all(getattr(t, "attempt_id", None) is not None for t in trades) and any(
+        t.attempt_id for t in trades
+    ):
+        return np.array([int(t.attempt_id) for t in trades], dtype=np.int64)
     all_events = equity_df.attrs.get("account_reset_events") if equity_df is not None else None
-    events = [ev for ev in all_events if ev.get("kind", "breach") == "breach"] if all_events else None
+    events = [
+        ev for ev in all_events if ev.get("kind", "breach") in ("breach", "attempt_pass")
+    ] if all_events else None
     if not events or not trades:
         return None
     reset_ats = [ev["reset_at"] for ev in events]
@@ -298,8 +306,13 @@ def compute_risk_reconciliation(trades: list[Trade]) -> dict:
     direction (risking more than intended), tracked separately.
     """
     intended = [t.intended_risk_dollars for t in trades if t.intended_risk_dollars]
+    # Costs now sit inside the sizing budget (RiskConfig.size_for_stop), so the
+    # honest "what the stop would have cost" is the cost-inclusive worst case
+    # the sizer recorded; the bare stop distance x size is only the fallback
+    # for trades that predate it.
     pairs = [
-        (t.intended_risk_dollars, t.initial_risk * t.size)
+        (t.intended_risk_dollars,
+         (getattr(t, "risk_at_stop_dollars", None) or t.initial_risk * t.size))
         for t in trades
         if t.intended_risk_dollars and t.initial_risk and t.size
     ]
@@ -314,10 +327,20 @@ def compute_risk_reconciliation(trades: list[Trade]) -> dict:
     capped = [p for p in pairs if p[1] < p[0] * 0.99]
     pct_capped = float(len(capped) / len(pairs) * 100) if pairs else 0.0
 
+    # Overshoot is judged against the cost-inclusive worst case the sizer
+    # actually budgeted (Trade.risk_at_stop_dollars = units*(stop+exit costs)
+    # + commission) when the trade carries it; older trades fall back to the
+    # raw stop distance x size. Comparing against the raw stop alone made
+    # every ordinary stop-out look like an "overshoot" by its own costs.
+    def _budgeted(t):
+        rs = getattr(t, "risk_at_stop_dollars", None)
+        if rs:
+            return rs
+        return t.initial_risk * t.size if (t.initial_risk and t.size) else None
     overshoot_flags = [
-        abs(t.pnl) > (t.initial_risk * t.size) * 1.01
+        abs(t.pnl) > _budgeted(t) * 1.01
         for t in trades
-        if t.pnl < 0 and t.initial_risk and t.size
+        if t.pnl < 0 and _budgeted(t)
     ]
     pct_overshoot = float(sum(overshoot_flags) / len(overshoot_flags) * 100) if overshoot_flags else 0.0
 

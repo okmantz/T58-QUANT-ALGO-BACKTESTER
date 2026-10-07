@@ -557,7 +557,7 @@ def _validation_gate_failure_names(verdict_reasons: list[str]) -> list[str]:
     return [n for n in names if not (n in seen or seen.add(n))]
 
 
-def _make_verdict(
+def _make_verdict_core(
     final_mc: MonteCarloResult,
     oos_validation: WalkForwardResult | None,
     icir_gate: "ICIRGateResult | None" = None,
@@ -947,6 +947,48 @@ _VERDICT_TO_LIBRARY_STATUS = {
     "MARGINAL": "tested_passed",
     "NOT READY": "tested_failed",
 }
+
+def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 25.0, **kwargs):
+    """Accuracy-overhaul wrapper around the original verdict logic.
+
+    Adds two honesty gates that can only DEMOTE a READY verdict to MARGINAL
+    (never promote, never touch NOT READY):
+      * sample floor -- a Monte Carlo built from too few trades/trading days
+        (MonteCarloResult.sample_ok is False) cannot support "READY";
+      * replay agreement -- when a real-engine attempt replay
+        (app.prop.attempt_replay) is supplied and has enough attempts, its
+        pass rate must be within `replay_disagreement_pts` points of the
+        resampled Monte Carlo per-attempt pass probability; a large gap
+        means the trade-list resampling is not describing what a fresh
+        account would actually experience.
+    Same return shape as the original.
+    """
+    out = _make_verdict_core(*args, **kwargs)
+    verdict, reasons, scorecard, ruin_fail, look_fail = out
+    final_mc = args[0] if args else kwargs.get("final_mc")
+    if verdict != "READY":
+        return out
+    reasons = list(reasons)
+    if final_mc is not None and getattr(final_mc, "sample_ok", True) is False:
+        notes = " ".join(getattr(final_mc, "sample_notes", []) or [])
+        reasons.append(
+            "SAMPLE FLOOR: the evidence is too thin for a READY verdict (" + notes + ") "
+            "-- capped at MARGINAL until more trades/days are available."
+        )
+        return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
+    if attempt_replay is not None and getattr(attempt_replay, "sample_ok", False) and final_mc is not None:
+        mc_pct = float(getattr(final_mc, "per_attempt_pass_probability", 0.0))
+        rp_pct = float(attempt_replay.pass_rate) * 100.0
+        if abs(mc_pct - rp_pct) > replay_disagreement_pts:
+            reasons.append(
+                f"REPLAY DISAGREES: resampled Monte Carlo says {mc_pct:.0f}% per-attempt pass odds but "
+                f"re-running the engine from {attempt_replay.n_attempts} real start dates passes "
+                f"{rp_pct:.0f}% -- the resampled number is not describing what a fresh account "
+                "experiences; capped at MARGINAL."
+            )
+            return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
+    return verdict, reasons, scorecard, ruin_fail, look_fail
+
 
 
 def _library_save_note_suffix(verdict: str, verdict_reasons: list[str]) -> str:

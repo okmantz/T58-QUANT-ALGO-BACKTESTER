@@ -632,6 +632,18 @@ def compute_fitness(
         fitness = _give_back_fitness(trades)
     else:
         raise RefinementError(f"Unknown fitness metric '{metric}'.")
+    # ACCURACY OVERHAUL: a Monte Carlo built from a handful of trades is
+    # mostly noise, and a search that ranks on it climbs the noise. Shrink
+    # probability-style fitness in proportion to how far below the sample
+    # floor the source trade count is (14 trades -> 93%, 5 trades -> 33%).
+    _n_src = getattr(mc, "n_source_trades", 0)
+    if (
+        isinstance(_n_src, (int, float)) and 0 < _n_src < 15
+        and metric in ("eval_pass_probability", "first_payout_probability", "composite_prop_score",
+                       "fastest_payout", "expected_payout", "prop_guide_score")
+        and math.isfinite(fitness) and fitness > 0
+    ):
+        fitness *= float(_n_src) / 15.0
     if risk_of_ruin_cap is not None:
         fitness = _apply_ruin_penalty(fitness, mc, risk_of_ruin_cap, metric)
     return fitness
@@ -647,6 +659,7 @@ def _stressed_risk_config(risk: RiskConfig, multiplier: float) -> RiskConfig:
         spread_pips=risk.spread_pips * multiplier,
         slippage_pips=risk.slippage_pips * multiplier,
         commission_per_trade=risk.commission_per_trade * multiplier,
+        commission_per_contract=risk.commission_per_contract * multiplier,
     )
 
 
