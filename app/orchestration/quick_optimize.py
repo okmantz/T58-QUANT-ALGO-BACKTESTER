@@ -783,6 +783,13 @@ def run_quick_optimize(
     if invalid_condition_warning is None and has_impossible_condition(final_bt.warnings):
         invalid_condition_warning = next(w for w in final_bt.warnings if "can never be true" in w)
         log(f"  !!! {invalid_condition_warning}")
+    # v9.4.1: honor a late Stop before the (potentially long) final
+    # Monte Carlo, not just inside the GA -- otherwise a stop clicked
+    # during the final scoring phase silently ends as a normal result.
+    if cancel_event is not None and cancel_event.is_set():
+        from app.optimize.walkforward_ga import WalkforwardGACancelled
+
+        raise WalkforwardGACancelled("Quick Optimize stopped during final scoring.")
     if _reused_baseline:
         final_mc = baseline_mc
     else:
