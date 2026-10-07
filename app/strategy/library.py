@@ -232,6 +232,73 @@ def safe_filename_stem(display_name: str, fallback: str = "strategy") -> str:
     return name or fallback
 
 
+# ---------------------------------------------------------------------------
+# Simple run names (v9.4, Owen's formula)
+# ---------------------------------------------------------------------------
+# Owen: "The name is super long every time I run any test... Make sure it
+# saves it with a simple name (formula: instrument+timeframe+leading
+# indicator +(test). for example: 'ES1! 15m RSI (OPTIMIZED).json')."
+# One canonical output file per (instrument, timeframe, indicator, tool):
+# re-running the same tool updates that one file (previous version
+# archived via save_strategy_replacing_version) instead of minting a
+# fresh provenance-stamped copy every run.
+
+_UNSAFE_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|]')
+_TIMEFRAME_SUFFIX_RE = re.compile(
+    r"(?i)[_\-\s]*(\d+\s*(?:min|m|h|d|w)|d1|h1|h4|m1|m5|m15|m30)$"
+)
+
+
+def simple_run_name(instrument: str = "", timeframe: str = "",
+                    indicator: str = "", tag: str = "") -> str:
+    """'ES1! 15m RSI (OPTIMIZED)' -- the display form of the formula."""
+    parts = [p.strip() for p in (instrument, timeframe, indicator.upper()) if p and p.strip()]
+    name = " ".join(parts)
+    if tag and tag.strip():
+        name = f"{name} ({tag.strip().upper()})" if name else f"({tag.strip().upper()})"
+    return name
+
+
+def simple_run_filename(instrument: str = "", timeframe: str = "",
+                        indicator: str = "", tag: str = "", extension: str = "") -> str:
+    """simple_run_name as a filename: only the characters Windows
+    forbids are neutralized; spaces, '!' and parentheses survive, per
+    Owen's example."""
+    name = _UNSAFE_FILENAME_CHARS.sub("-", simple_run_name(instrument, timeframe, indicator, tag))
+    return f"{name}{extension}"
+
+
+def instrument_from_dataset_label(label: str) -> str:
+    """Best-effort instrument symbol from a dataset label/filename:
+    'EURUSD/EURUSD5.csv' -> 'EURUSD', 'ES1!.csv' -> 'ES1!',
+    'ES_15m.csv' -> 'ES'. Strips one trailing timeframe suffix; anything
+    unparseable passes through cleaned."""
+    if not label:
+        return ""
+    stem = str(label).replace("\\", "/").rsplit("/", 1)[-1]
+    if "." in stem:
+        stem = stem.rsplit(".", 1)[0]
+    stem = _TIMEFRAME_SUFFIX_RE.sub("", stem).strip(" _-")
+    # Glued-digit timeframe suffix ('EURUSD5' -> 'EURUSD'): only the
+    # common bar sizes, and only when a real symbol survives the strip.
+    m = re.search(r"(5|15|30|60|240)$", stem)
+    if m and len(stem) - len(m.group(1)) >= 3:
+        stem = stem[: -len(m.group(1))].strip(" _-")
+    return _UNSAFE_FILENAME_CHARS.sub("-", stem)
+
+
+def leading_indicator_name(strategy) -> str:
+    """The first declared indicator's type, upper-cased ('RSI'), for a
+    Manual Strategy Builder config. '' for code strategies and configs
+    without indicators -- the formula just omits the slot."""
+    config = getattr(strategy, "config", None)
+    if isinstance(config, dict):
+        indicators = config.get("indicators") or []
+        if indicators and isinstance(indicators[0], dict):
+            return str(indicators[0].get("type") or "").upper()
+    return ""
+
+
 def provenance_stamped_name(base_display_name: str, *, origin: str, seed: int | None) -> str:
     """Appends a short, honest provenance stamp to a strategy's display
     name -- "<base name> [origin, seed=N, YYYY-MM-DD]" -- for a config
