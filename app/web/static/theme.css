@@ -618,3 +618,15 @@ a { color: var(--teal); }
   .t58-champion .metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .t58-five-q { grid-template-columns: repeat(2, minmax(0,1fr)); }
 }
+
+/* ---- v9.3 dashboard polish: card entrance + tabular metric numerals ---- */
+@keyframes t58-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.t58-main .t58-card, .t58-main .t58-champion { animation: t58-rise .45s ease both; }
+.t58-metric-box .val { font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) {
+  .t58-main .t58-card, .t58-main .t58-champion { animation: none; }
+}
+

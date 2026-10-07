@@ -9,8 +9,10 @@
    - Self-contained: injects its own CSS, reads the app's theme variables
      (--panel-2, --teal, ...) so it follows the light/dark toggle.
    - Shows once per browser (localStorage key below). Finishing, skipping,
-     or closing it all count as "seen". If localStorage is blocked it never
-     auto-starts, so nobody gets nagged on every page load.
+     or closing it all count as "seen". If localStorage is blocked (some
+     desktop WebView shells), a sessionStorage fallback still shows it at
+     most once per app session, so nobody gets nagged on every page load
+     but a genuine first run is never silently skipped.
    - Replay anytime: any element with [data-t58-tour-start], the URL
      /dashboard?tour=1, or window.T58Tour.start() in the console.
    - No innerHTML anywhere: all text is set via textContent, so step copy
@@ -20,7 +22,13 @@
 (function () {
   "use strict";
 
-  var STORE_KEY = "t58-tour-v1";
+  // Key version bumps when the tour's steps materially change, so an
+  // updated app shows the (updated) tour once more instead of staying
+  // silent forever on a "seen" flag set by an older build. v2
+  // (2026-10-06): Owen reinstalled and never saw the tour -- his browser
+  // profile still carried the v1 "seen" flag from his first run weeks
+  // earlier, and a truly fresh install is exactly when it should pop.
+  var STORE_KEY = "t58-tour-v2";
   var Z = 10050;
   var MOBILE_QUERY = "(max-width: 760px)";
 
@@ -112,10 +120,17 @@
   var state = null; // { i, opened:[details], cleanup:[fn], els:{}, prevFocus, openedDrawer }
 
   function seen() {
-    try { return !!localStorage.getItem(STORE_KEY); } catch (e) { return true; }
+    // Desktop WebView shells can block localStorage entirely (it throws
+    // on access). The old code read that as "already seen", so the tour
+    // NEVER auto-started there -- not even on a genuine first run.
+    // Fall back to sessionStorage: still never nagging (at most once
+    // per app session), but a fresh install actually gets its tour.
+    try { if (localStorage.getItem(STORE_KEY)) return true; } catch (e) {}
+    try { return !!sessionStorage.getItem(STORE_KEY); } catch (e) { return false; }
   }
   function markSeen(how) {
     try { localStorage.setItem(STORE_KEY, how || "done"); } catch (e) {}
+    try { sessionStorage.setItem(STORE_KEY, how || "done"); } catch (e) {}
   }
   function isMobile() {
     return !!(window.matchMedia && window.matchMedia(MOBILE_QUERY).matches);
@@ -486,7 +501,10 @@
   window.T58Tour = {
     start: start,
     stop: function () { finish("skipped"); },
-    reset: function () { try { localStorage.removeItem(STORE_KEY); } catch (e) {} },
+    reset: function () {
+      try { localStorage.removeItem(STORE_KEY); } catch (e) {}
+      try { sessionStorage.removeItem(STORE_KEY); } catch (e) {}
+    },
     _steps: STEPS // exposed for tests
   };
 
