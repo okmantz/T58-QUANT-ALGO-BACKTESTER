@@ -128,6 +128,13 @@ class JobManager:
         those via ``initial`` (e.g. passing a non-empty starting
         ``log``, or an explicit ``project_id``).
 
+        page_template: pass a job-page path containing ``{job_id}``
+        (e.g. ``"/quick-optimize/job/{job_id}"``) and create() resolves
+        it into ``page_url`` once the id exists -- the sidebar's
+        "Running now" list links straight back into a live run, so a
+        user who navigated away mid-run can re-enter it. ``tool`` is
+        the plain-language label shown there.
+
         project_id auto-tagging: if the caller didn't pass project_id
         explicitly AND set_active_project_getter() has registered a
         getter, that getter is called (with no args) and its result
@@ -138,6 +145,7 @@ class JobManager:
         something truthy for the current call."""
         job_id = uuid.uuid4().hex[:12]
         progress_kind = initial.pop("progress_kind", None)
+        page_template = initial.pop("page_template", None)
         job = {
             "log": [],
             "done": False,
@@ -147,6 +155,8 @@ class JobManager:
             "project_id": None,
         }
         job.update(initial)
+        if page_template:
+            job["page_url"] = page_template.replace("{job_id}", job_id)
         if progress_kind:
             # Live phase/counter telemetry -- see app.orchestration.run_progress.
             # Opt-in per job type via create(progress_kind="search"|"speed_run"|

@@ -1467,6 +1467,32 @@ def champion_promote():
     return redirect(url_for("dashboard"))
 
 
+@app.route("/api/running-jobs.json")
+def api_running_jobs():
+    """Jobs still running, for the sidebar's "Running now" list -- so a
+    user who clicked Back (or switched pages) mid-run can get straight
+    back into a live job page instead of wondering whether it's gone.
+    Only jobs that recorded a page_url at create() time are listed."""
+    import time as _time
+
+    running = []
+    for job in JOB_MANAGER.list_jobs(limit=50):
+        if job.get("done"):
+            continue
+        page_url = job.get("page_url")
+        if not page_url:
+            continue
+        started = job.get("started_at")
+        running.append({
+            "job_id": job["job_id"],
+            "tool": job.get("tool") or "Job",
+            "instrument": job.get("instrument") or "",
+            "page_url": page_url,
+            "elapsed_seconds": round(_time.time() - started, 1) if isinstance(started, (int, float)) else None,
+        })
+    return jsonify({"running": running})
+
+
 @app.route("/api/dashboard-data")
 def api_dashboard_data():
     """JSON feed the dashboard page polls to refresh live, without a full
@@ -3603,7 +3629,7 @@ def refine_start():
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
-        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label)
+        job_id = JOB_MANAGER.create(tool="Strategy Refinement", page_template="/refine/job/{job_id}", log=initial_log, instrument=active_label)
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         thread = threading.Thread(
             target=_run_refinement_job,
@@ -3825,7 +3851,7 @@ def multi_market_start():
         initial_log = [f"Loaded {len(dfs)} market(s): {', '.join(dfs.keys())}."]
         if load_warnings:
             initial_log.extend(load_warnings)
-        job_id = JOB_MANAGER.create(log=initial_log, markets=list(dfs.keys()), aggregation=aggregation)
+        job_id = JOB_MANAGER.create(tool="Multi-Market Test", page_template="/multi-market/job/{job_id}", log=initial_log, markets=list(dfs.keys()), aggregation=aggregation)
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         thread = threading.Thread(
             target=_run_multi_market_job,
@@ -3981,7 +4007,7 @@ def _run_fullpipeline_sweep_job(
             table[label] = {
                 "verdict": r.verdict,
                 "t58_score": getattr(getattr(r, "scorecard", None), "score", None),
-                "eval_pass_probability": r.final_mc.evaluation_pass_probability,
+                "eval_pass_probability": r.final_mc.headline_evaluation_pass_probability,
                 "risk_of_ruin_pct": r.final_mc.risk_of_ruin_pct,
                 "trades": len(r.final_bt.trades),
                 "net_profit": r.final_bt.statistics.net_profit,
@@ -4171,7 +4197,7 @@ def full_pipeline_start_batch():
         if load_errors:
             initial_log.append(f"{len(load_errors)} selected strateg{'y' if len(load_errors) == 1 else 'ies'} failed to load and were skipped: " + "; ".join(load_errors))
         cancel_event = threading.Event()
-        job_id = JOB_MANAGER.create(
+        job_id = JOB_MANAGER.create(tool="Full Pipeline (batch)", page_template="/full-pipeline/batch-job/{job_id}", 
             log=initial_log, outcomes=None, instrument=active_label, total=len(batch_items),
             cancel_event=cancel_event, cancelled=False,
         )
@@ -4265,7 +4291,7 @@ def _run_scheduled_fullpipeline_batch(schedule_id: str, delay_seconds: float, la
 
     cancel_event = threading.Event()
     try:
-        job_id = JOB_MANAGER.create(
+        job_id = JOB_MANAGER.create(tool="Full Pipeline (batch)", page_template="/full-pipeline/batch-job/{job_id}", 
             log=launch_kwargs["initial_log"], outcomes=None, instrument=launch_kwargs["active_label"],
             total=len(launch_kwargs["batch_items"]), cancel_event=cancel_event, cancelled=False,
         )
@@ -4597,7 +4623,7 @@ def full_pipeline_start():
         if import_note:
             initial_log.append(import_note)
         cancel_event = threading.Event()
-        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label, cancel_event=cancel_event, cancelled=False)
+        job_id = JOB_MANAGER.create(tool="Full Pipeline", page_template="/full-pipeline/job/{job_id}", log=initial_log, instrument=active_label, cancel_event=cancel_event, cancelled=False)
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         expand_labels = parse_sweep_timeframes(form.get("expand_timeframes", ""))
         if expand_labels:
@@ -4823,7 +4849,7 @@ def wfo_start():
         # see app.web.job_manager's module docstring for why, and this
         # route (plus CPCV's below) as the reference other job types can
         # follow the same way.
-        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label)
+        job_id = JOB_MANAGER.create(tool="Walk-Forward Optimizer", page_template="/walk-forward-opt/job/{job_id}", log=initial_log, instrument=active_label)
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
         thread = threading.Thread(
             target=_run_wfo_job,
@@ -5013,7 +5039,7 @@ def mo_start():
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
-        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label)
+        job_id = JOB_MANAGER.create(tool="Multi-Objective Optimizer", page_template="/multi-objective/job/{job_id}", log=initial_log, instrument=active_label)
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         # FIX (multi-timeframe sweep): "Timeframes to test" runs the SAME
         # NSGA-II search once per requested timeframe (df resampled per
@@ -5190,7 +5216,7 @@ def wfga_start():
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
-        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label)
+        job_id = JOB_MANAGER.create(tool="Walk-Forward GA", page_template="/walk-forward-ga/job/{job_id}", log=initial_log, instrument=active_label)
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         thread = threading.Thread(
             target=_run_wfga_job,
@@ -5968,7 +5994,7 @@ def cpcv_start():
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
-        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label)
+        job_id = JOB_MANAGER.create(tool="CPCV Validation", page_template="/cpcv/job/{job_id}", log=initial_log, instrument=active_label)
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         thread = threading.Thread(
             target=_run_cpcv_job,
@@ -6171,7 +6197,7 @@ def pbo_start():
         if import_note:
             initial_log.append(import_note)
         initial_log.extend(pool_warnings)
-        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label)
+        job_id = JOB_MANAGER.create(tool="PBO Check", page_template="/pbo/job/{job_id}", log=initial_log, instrument=active_label)
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         thread = threading.Thread(
             target=_run_pbo_job,
@@ -6325,7 +6351,7 @@ def sensitivity_start():
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
-        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label, results=None, heatmap_done=False, heatmap_error=None, heatmap=None, _ctx=None)
+        job_id = JOB_MANAGER.create(tool="Sensitivity Analysis", page_template="/sensitivity/job/{job_id}", log=initial_log, instrument=active_label, results=None, heatmap_done=False, heatmap_error=None, heatmap=None, _ctx=None)
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         thread = threading.Thread(
             target=_run_sensitivity_job,
@@ -6503,7 +6529,7 @@ def parameter_robustness_start():
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
-        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label)
+        job_id = JOB_MANAGER.create(tool="Parameter Robustness", page_template="/parameter-robustness/job/{job_id}", log=initial_log, instrument=active_label)
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         thread = threading.Thread(
             target=_run_param_robustness_job,
@@ -6602,14 +6628,14 @@ HEAVY_JOB_GUARD.register_health_check(JOB_QUICK_OPTIMIZE, _quickopt_still_runnin
 
 def _run_quickopt_job(
     job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, cfg: QuickOptimizeConfig,
-    cancel_event: threading.Event | None = None,
+    cancel_event: threading.Event | None = None, instrument_label: str = "",
 ) -> None:
     with _QUICKOPT_ACTIVE_LOCK:
         _QUICKOPT_ACTIVE_JOB_IDS.add(job_id)
     try:
         result = run_quick_optimize(
             df, strategy, risk, rules, cfg, progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
-            cancel_event=cancel_event,
+            cancel_event=cancel_event, instrument_label=instrument_label,
         )
         JOB_MANAGER.finish(job_id, result=result)
     except WalkforwardGACancelled:
@@ -6624,7 +6650,7 @@ def _run_quickopt_job(
 
 def _run_quickopt_sweep_job(
     job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, cfg: QuickOptimizeConfig,
-    timeframes: list[str], cancel_event: threading.Event | None = None,
+    timeframes: list[str], cancel_event: threading.Event | None = None, instrument_label: str = "",
 ) -> None:
     """Same shape as _run_quickopt_job, but drives
     app.orchestration.quick_optimize.run_quick_optimize_sweep instead of a
@@ -6640,6 +6666,7 @@ def _run_quickopt_sweep_job(
         sweep = run_quick_optimize_sweep(
             df, strategy, risk, rules, timeframes, cfg,
             progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg), cancel_event=cancel_event,
+            instrument_label=instrument_label,
         )
         sweep_timeframes = {
             label: {
@@ -6745,7 +6772,7 @@ def quickopt_start():
         if import_note:
             initial_log.append(import_note)
         cancel_event = threading.Event()
-        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label, cancel_event=cancel_event, cancelled=False)
+        job_id = JOB_MANAGER.create(tool="Quick Optimize", page_template="/quick-optimize/job/{job_id}", log=initial_log, instrument=active_label, cancel_event=cancel_event, cancelled=False)
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
         # FIX (multi-timeframe sweep): "Timeframes to test" runs the SAME
         # GA once per requested timeframe (df resampled per timeframe --
@@ -6755,11 +6782,11 @@ def quickopt_start():
         expand_labels = parse_sweep_timeframes(form.get("expand_timeframes", ""))
         if expand_labels:
             thread = threading.Thread(
-                target=_run_quickopt_sweep_job, args=(job_id, df, strategy, risk, rules, cfg, expand_labels, cancel_event),
+                target=_run_quickopt_sweep_job, args=(job_id, df, strategy, risk, rules, cfg, expand_labels, cancel_event, active_label),
                 daemon=True,
             )
         else:
-            thread = threading.Thread(target=_run_quickopt_job, args=(job_id, df, strategy, risk, rules, cfg, cancel_event), daemon=True)
+            thread = threading.Thread(target=_run_quickopt_job, args=(job_id, df, strategy, risk, rules, cfg, cancel_event, active_label), daemon=True)
         thread.start()
         return redirect(url_for("quickopt_job", job_id=job_id))
     except (StrategyError, RefinementError) as exc:
@@ -6838,8 +6865,13 @@ def quickopt_job_status(job_id):
             # was and wasn't validated.
             "gates": quickopt_gates_summary(result),
         }
+    _cancel_event = job.get("cancel_event")
     return jsonify({
         "found": True, "done": job["done"], "error": job["error"], "cancelled": job.get("cancelled", False),
+        # True once Stop has been pressed but the runner hasn't drained
+        # yet -- lets the page say "Stopping..." honestly instead of
+        # spinning like the click did nothing.
+        "stopping": bool(_cancel_event is not None and _cancel_event.is_set() and not job["done"]),
         "log": job["log"], "instrument": job.get("instrument"), "summary": summary,
         "best_timeframe": job.get("best_timeframe"), "sweep_timeframes": job.get("sweep_timeframes"),
         # v9: structured recovery plan for the Quick Optimize result.
@@ -6941,13 +6973,13 @@ def recovery_quick_optimize():
         rules = _dataclass_from_dict(PropRules, body.get("rules") or {})
         cfg = _dataclass_from_dict(QuickOptimizeConfig, qo_cfg_d)
 
-        job_id = JOB_MANAGER.create(
+        job_id = JOB_MANAGER.create(tool="Quick Optimize", page_template="/quick-optimize/job/{job_id}", 
             log=[f"Recovery Quick Optimize started from a 'What to do next' action on {active_label}."],
             instrument=active_label, cancel_event=threading.Event(), cancelled=False)
         cancel_event = JOB_MANAGER.get(job_id)["cancel_event"]
         thread = threading.Thread(
             target=_run_quickopt_job,
-            args=(job_id, df, strategy, risk, rules, cfg, cancel_event),
+            args=(job_id, df, strategy, risk, rules, cfg, cancel_event, dataset_label),
             daemon=True)
         thread.start()
         return jsonify({"ok": True, "job_id": job_id,
@@ -7195,7 +7227,7 @@ def evolution_start():
         with _EVOLUTION_LOCK:
             _finish_evolution_job()  # close out any previous run's entry first
             _EVOLUTION_STARTED = False
-            _EVOLUTION_JOB_ID = JOB_MANAGER.create(
+            _EVOLUTION_JOB_ID = JOB_MANAGER.create(page_template="/evolution", 
                 instrument=active_label, tool="Evolution Lab", progress_kind="evolution",
             )
             JOB_MANAGER.prune(max_age_seconds=6 * 3600)
@@ -7787,7 +7819,7 @@ def research_agent_start():
         job_log = [f"Loaded {len(df)} bars from {active_label}.", f"Question: {question}"]
         if uploaded_reports:
             job_log.append(f"Uploaded {len(uploaded_reports)} report/screenshot file(s): " + ", ".join(p.name for p in uploaded_reports))
-        job_id = JOB_MANAGER.create(log=job_log)
+        job_id = JOB_MANAGER.create(tool="Research Agent", page_template="/research-agent/job/{job_id}", log=job_log)
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         thread = threading.Thread(target=_run_agent_job, args=(job_id, question, ctx, settings), daemon=True)
         thread.start()
@@ -8493,7 +8525,7 @@ def search_start():
                 "joint multi-firm optimization is roadmap, not implemented.)"
             )
             cancel_event = threading.Event()
-            job_id = JOB_MANAGER.create(
+            job_id = JOB_MANAGER.create(page_template="/search/job/{job_id}", 
                 log=initial_log, summary=None, cancelled=False, instrument=active_label, mode=mode_key,
                 cancel_event=cancel_event, loop_mode=False, tool="Search Lab", progress_kind="search",
                 multi_preset=True,
@@ -8554,7 +8586,7 @@ def search_start():
                 f"Timeframe sweep of {active_label}: searching {len(sweep_jobs)} timeframe target(s): "
                 + ", ".join(f"{j.instrument}/{j.timeframe}" for j in sweep_jobs),
             ]
-            sweep_job_id = JOB_MANAGER.create(
+            sweep_job_id = JOB_MANAGER.create(tool="Search Lab (multi-instrument)", page_template="/search/multi-instrument/job/{job_id}", 
                 log=sweep_log, results=None, best_label=None, champion_report=None,
                 labels=[f"{j.instrument}/{j.timeframe}" for j in sweep_jobs], loop_mode=False,
             )
@@ -8584,7 +8616,7 @@ def search_start():
                 f"clears {loop_cfg.target_eval_pass_pct:.0f}%, {loop_cfg.max_rounds} rounds run, or the "
                 f"time budget is used up."
             )
-            job_id = JOB_MANAGER.create(
+            job_id = JOB_MANAGER.create(page_template="/search/job/{job_id}", 
                 log=initial_log, summary=None, cancelled=False, instrument=active_label, mode=mode_key,
                 cancel_event=cancel_event, loop_mode=True, loop_rounds=0,
                 loop_last_round=None, loop_result=None, tool="Search Lab", progress_kind="search",
@@ -8600,7 +8632,7 @@ def search_start():
             thread.start()
             return redirect(url_for("search_job", job_id=job_id))
 
-        job_id = JOB_MANAGER.create(
+        job_id = JOB_MANAGER.create(page_template="/search/job/{job_id}", 
             log=initial_log, summary=None, cancelled=False, instrument=active_label, mode=mode_key,
             cancel_event=cancel_event, loop_mode=False, tool="Search Lab", progress_kind="search",
         )
@@ -9247,7 +9279,7 @@ def forge_start():
                 seed=seed,
                 base_config=config,
             )
-            job_id = JOB_MANAGER.create(
+            job_id = JOB_MANAGER.create(tool="Signal Forge", page_template="/forge/job/{job_id}", 
                 log=initial_log, instrument=active_label, cancelled=False,
                 cancel_event=cancel_event, graveyard_path=graveyard_path,
                 loop_mode=True, loop_rounds=0, loop_last_round=None, loop_result=None,
@@ -9268,7 +9300,7 @@ def forge_start():
             thread.start()
             return redirect(url_for("forge_job", job_id=job_id))
 
-        job_id = JOB_MANAGER.create(
+        job_id = JOB_MANAGER.create(tool="Signal Forge", page_template="/forge/job/{job_id}", 
             log=initial_log, instrument=active_label, cancelled=False,
             cancel_event=cancel_event, graveyard_path=graveyard_path, loop_mode=False,
         )
@@ -9743,7 +9775,7 @@ def search_multi_instrument_start():
                 seed=int(form.get("seed", 42) or 42),
             )
             cancel_event = threading.Event()
-            job_id = JOB_MANAGER.create(
+            job_id = JOB_MANAGER.create(tool="Search Lab (multi-instrument)", page_template="/search/multi-instrument/job/{job_id}", 
                 log=[f"Loop mode ON -- searching {len(jobs)} instrument/timeframe target(s) "
                      f"independently until each clears {loop_cfg.target_eval_pass_pct:.0f}%: " +
                      ", ".join(f"{j.instrument}/{j.timeframe}" for j in jobs)]
@@ -9761,7 +9793,7 @@ def search_multi_instrument_start():
             thread.start()
             return redirect(url_for("search_multi_instrument_job", job_id=job_id))
 
-        job_id = JOB_MANAGER.create(
+        job_id = JOB_MANAGER.create(tool="Search Lab (multi-instrument)", page_template="/search/multi-instrument/job/{job_id}", 
             log=[f"Searching {len(jobs)} instrument/timeframe target(s): " +
                  ", ".join(f"{j.instrument}/{j.timeframe}" for j in jobs)]
                 + sweep_warnings + _family_exclusion_log,
@@ -10030,7 +10062,7 @@ def speed_run_start():
                 base_config=cfg,
             )
             cancel_event = threading.Event()
-            job_id = JOB_MANAGER.create(
+            job_id = JOB_MANAGER.create(page_template="/speed-run/job/{job_id}", 
                 log=initial_log, instrument=active_label, cancel_event=cancel_event,
                 loop_mode=True, loop_rounds=0, loop_result=None, cancelled=False,
                 tool="Speed Run", progress_kind="speed_run",
@@ -10051,7 +10083,7 @@ def speed_run_start():
             thread.start()
             return redirect(url_for("speed_run_job", job_id=job_id))
 
-        job_id = JOB_MANAGER.create(
+        job_id = JOB_MANAGER.create(page_template="/speed-run/job/{job_id}", 
             log=initial_log, instrument=active_label, loop_mode=False,
             tool="Speed Run", progress_kind="speed_run",
         )
@@ -10288,7 +10320,7 @@ def overnight_autopilot_start():
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
-        job_id = JOB_MANAGER.create(log=initial_log, instrument=active_label)
+        job_id = JOB_MANAGER.create(tool="Overnight Autopilot", page_template="/overnight-autopilot/job/{job_id}", log=initial_log, instrument=active_label)
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
         thread = threading.Thread(
             target=_run_autopilot_job, args=(job_id, df, risk, rules, active_label, autopilot_cfg), daemon=True,
@@ -10499,7 +10531,7 @@ def speed_run_multi_instrument_start():
         )
         max_concurrent = int(form.get("max_concurrent_instruments", 2) or 2)
 
-        job_id = JOB_MANAGER.create(
+        job_id = JOB_MANAGER.create(tool="Speed Run (multi-instrument)", page_template="/speed-run/multi-instrument/job/{job_id}", 
             log=[f"Running Speed Run on {len(jobs)} instrument/timeframe target(s): " +
                  ", ".join(f"{j.instrument}/{j.timeframe}" for j in jobs)],
             results=None, best_label=None,
@@ -10625,7 +10657,7 @@ def generate_strategies_start():
     stall_timeout = int(form.get("stall_timeout", DEFAULT_TIMEOUT_SECONDS) or DEFAULT_TIMEOUT_SECONDS)
     max_total = int(form.get("max_total", DEFAULT_MAX_TOTAL_SECONDS) or DEFAULT_MAX_TOTAL_SECONDS)
 
-    job_id = JOB_MANAGER.create(code=None, filename_hint=None, language=language, idea=idea, tokens=0, elapsed=0.0)
+    job_id = JOB_MANAGER.create(tool="Strategy Generator", page_template="/generate-strategies/job/{job_id}", code=None, filename_hint=None, language=language, idea=idea, tokens=0, elapsed=0.0)
     JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
     thread = threading.Thread(
         target=_run_genstrat_job,

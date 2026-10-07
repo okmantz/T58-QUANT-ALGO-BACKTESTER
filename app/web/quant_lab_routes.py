@@ -102,6 +102,49 @@ def _load_ohlcv_upload(form_file_key: str):
     return result.dataframe
 
 
+def _dataset_select_html(field: str = "dataset_label") -> str:
+    """Dropdown of market data already in the app (everything under
+    data/raw/), so a Quant Lab tool can run on an existing dataset
+    instead of forcing a fresh upload. The first, empty option keeps
+    the upload path available."""
+    import html
+
+    from app.data.storage import list_stored_datasets
+
+    options = ['<option value="">-- upload a file instead --</option>']
+    for ds in list_stored_datasets():
+        name = html.escape(ds.name, quote=True)
+        options.append(f'<option value="{name}">{name}</option>')
+    return (
+        f'<label for="{field}">Market data already in the app</label>'
+        f'<select id="{field}" name="{field}">' + "".join(options) + "</select>"
+    )
+
+
+def _load_ohlcv_from_form(file_key: str, dataset_field: str = "dataset_label"):
+    """An uploaded file wins; otherwise load the stored dataset picked
+    in the form's dataset dropdown (see _dataset_select_html). Raises a
+    plain-language ValueError when neither was provided."""
+    upload = request.files.get(file_key)
+    if upload is not None and upload.filename:
+        return _load_ohlcv_upload(file_key)
+    label = (request.form.get(dataset_field) or "").strip()
+    if label:
+        from app.data.importer import import_csv
+        from app.data.storage import get_raw_data_dir
+
+        raw_dir = get_raw_data_dir().resolve()
+        path = (raw_dir / label).resolve()
+        if raw_dir not in path.parents and path != raw_dir:
+            raise ValueError(f"Dataset '{label}' is not in the app's data folder.")
+        result = import_csv(str(path))
+        if result.dataframe is None:
+            errors = "; ".join(i.message for i in result.issues if i.level == "error")
+            raise ValueError(f"Could not load '{label}' as OHLCV data: {errors}")
+        return result.dataframe
+    raise ValueError("Choose a dataset from the dropdown, or upload a CSV file.")
+
+
 def _pre(text: str) -> str:
     import html
     return f'<pre class="result-summary">{html.escape(text)}</pre>'
@@ -769,7 +812,8 @@ def factor_model():
 @quant_lab_bp.route("/market-structure", methods=["GET", "POST"])
 def market_structure():
     form_html = (
-        '<label for="ohlcv_csv">Market data (CSV)</label><input type="file" id="ohlcv_csv" name="ohlcv_csv" accept=".csv">'
+        _dataset_select_html()
+        + '<label for="ohlcv_csv">...or upload market data (CSV)</label><input type="file" id="ohlcv_csv" name="ohlcv_csv" accept=".csv">'
         + _field("swing_left", "Fractal swing bars, left", "number", "5")
         + _field("swing_right", "Fractal swing bars, right", "number", "5")
         + _field("wyckoff_window", "Wyckoff consolidation window (bars)", "number", "40")
@@ -784,7 +828,7 @@ def market_structure():
                 calculate_hh_ll_structure, calculate_wyckoff_events, summarize_market_structure,
             )
 
-            df = _load_ohlcv_upload("ohlcv_csv")
+            df = _load_ohlcv_from_form("ohlcv_csv")
             swing_left = int(request.form.get("swing_left", 5) or 5)
             swing_right = int(request.form.get("swing_right", 5) or 5)
             wyckoff_window = int(request.form.get("wyckoff_window", 40) or 40)
@@ -884,7 +928,8 @@ def _build_signal_from_form(prefix: str, form) -> "object":
 @quant_lab_bp.route("/composite-signal", methods=["GET", "POST"])
 def composite_signal():
     form_html = (
-        '<label for="ohlcv_csv">Market data (CSV)</label><input type="file" id="ohlcv_csv" name="ohlcv_csv" accept=".csv">'
+        _dataset_select_html()
+        + '<label for="ohlcv_csv">...or upload market data (CSV)</label><input type="file" id="ohlcv_csv" name="ohlcv_csv" accept=".csv">'
         + _signal_fields("a", "Signal A")
         + _signal_fields("b", "Signal B")
         + '<label for="mode">Combine mode</label><select id="mode" name="mode"><option value="and">AND (both must fire)</option><option value="or">OR (either fires)</option></select>'
@@ -894,7 +939,7 @@ def composite_signal():
         try:
             from app.strategy.composite_thresholds import mix_thresholds, preview_signal
 
-            df = _load_ohlcv_upload("ohlcv_csv")
+            df = _load_ohlcv_from_form("ohlcv_csv")
             form = request.form.to_dict()
             form["_df"] = df  # threaded through to _build_signal_from_form without changing its signature
             signal_a = _build_signal_from_form("a", form)
