@@ -4264,10 +4264,14 @@ def _run_scheduled_fullpipeline_batch(schedule_id: str, delay_seconds: float, la
         guard_waited += 10.0
 
     cancel_event = threading.Event()
-    job_id = JOB_MANAGER.create(
-        log=launch_kwargs["initial_log"], outcomes=None, instrument=launch_kwargs["active_label"],
-        total=len(launch_kwargs["batch_items"]), cancel_event=cancel_event, cancelled=False,
-    )
+    try:
+        job_id = JOB_MANAGER.create(
+            log=launch_kwargs["initial_log"], outcomes=None, instrument=launch_kwargs["active_label"],
+            total=len(launch_kwargs["batch_items"]), cancel_event=cancel_event, cancelled=False,
+        )
+    except Exception:
+        HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)  # never strand the slot on a failed scheduled launch
+        raise
     with _SCHEDULED_JOBS_LOCK:
         entry = _SCHEDULED_JOBS.get(schedule_id)
         if entry is not None:
@@ -4691,6 +4695,13 @@ def full_pipeline_job_status(job_id):
         "sweep_skipped": job.get("sweep_skipped"),
         "next_step": (
             pipeline_guide.after_full_pipeline(result.verdict, bool(result.saved_library_note), result=result)
+            if result is not None else None
+        ),
+        # Structured verdict guidance (headline / points / numbered steps)
+        # so the job page can render a readable verdict card instead of
+        # one wall-of-text paragraph. Same text as next_step, split.
+        "next_step_parts": (
+            pipeline_guide.after_full_pipeline_parts(result.verdict, bool(result.saved_library_note), result=result)
             if result is not None else None
         ),
         # v9: structured recovery plan (gate, margin, ordered concrete actions).
@@ -6264,6 +6275,7 @@ def _run_sensitivity_heatmap_job(job_id: str, param_a: str, param_b: str, pct_ra
     job = JOB_MANAGER.get(job_id)
     ctx = job.get("_ctx") if job else None
     if job is None or ctx is None:
+        HEAVY_JOB_GUARD.release(JOB_SENSITIVITY)  # route acquired it for us; nothing to run
         return
     try:
         JOB_MANAGER.log(job_id, f"Running 2D heatmap for {param_a} x {param_b}...")
@@ -6283,6 +6295,8 @@ def _run_sensitivity_heatmap_job(job_id: str, param_a: str, param_b: str, pct_ra
         JOB_MANAGER.update(job_id, heatmap_done=True, heatmap_running=False, heatmap_error=str(exc))
     except Exception as exc:  # noqa: BLE001
         JOB_MANAGER.update(job_id, heatmap_done=True, heatmap_running=False, heatmap_error=f"Unexpected error: {exc}")
+    finally:
+        HEAVY_JOB_GUARD.release(JOB_SENSITIVITY)
 
 
 @app.route("/sensitivity")
@@ -6381,13 +6395,19 @@ def sensitivity_job_heatmap(job_id):
         return jsonify({"ok": False, "error": "Pick two different parameters."}), 400
     if param_a not in available or param_b not in available:
         return jsonify({"ok": False, "error": "Unknown parameter label -- pick from the discovered list."}), 400
+    if not HEAVY_JOB_GUARD.try_acquire(JOB_SENSITIVITY):
+        return jsonify({"ok": False, "error": f"{HEAVY_JOB_GUARD.active_name} is already running on this server. Wait for it to finish before running a 2D heatmap."}), 409
     JOB_MANAGER.update(job_id, heatmap_done=False, heatmap_error=None, heatmap=None, heatmap_running=True)
     thread = threading.Thread(
         target=_run_sensitivity_heatmap_job,
         args=(job_id, param_a, param_b, float(form.get("pct_range", 0.5) or 0.5), int(form.get("n_steps", 7) or 7)),
         daemon=True,
     )
-    thread.start()
+    try:
+        thread.start()
+    except Exception as exc:  # noqa: BLE001
+        HEAVY_JOB_GUARD.release(JOB_SENSITIVITY)
+        return jsonify({"ok": False, "error": f"Unexpected error: {exc}"}), 500
     return jsonify({"ok": True})
 
 
@@ -6535,10 +6555,57 @@ def parameter_robustness_job_status(job_id):
 # job/poll pattern as the other GA-driven tabs.
 # ---------------------------------------------------------------------------
 
+# v9.3 (2026-10-06): Quick Optimize guard-slot bookkeeping. The
+# /recovery/quick-optimize route acquires JOB_QUICK_OPTIMIZE from
+# HEAVY_JOB_GUARD before starting one of the runners below, but the
+# runners never released it -- the only release() calls were in the
+# recovery route's synchronous setup error paths -- so once any Quick
+# Optimize finished, the slot stayed held forever and every other
+# heavy job (Full Pipeline included) was refused with "Quick Optimize
+# is already running" until the server restarted. The runners now
+# register their job id here on entry and release the slot when the
+# LAST active Quick Optimize job ends (counted, not blind: the plain
+# form route can start a job without holding the slot, and release()
+# only ever clears a slot actually held under this name). The
+# registered health check is the guard's own self-heal backstop (see
+# HeavyJobGuard.register_health_check) in case a future path ever
+# acquires the slot without going through these runners.
+_QUICKOPT_ACTIVE_JOB_IDS: set[str] = set()
+_QUICKOPT_ACTIVE_LOCK = threading.Lock()
+
+
+def _quickopt_still_running() -> bool:
+    """HEAVY_JOB_GUARD health check for JOB_QUICK_OPTIMIZE: True only
+    while a Quick Optimize job registered by the runners below exists
+    and has not finished yet."""
+    with _QUICKOPT_ACTIVE_LOCK:
+        job_ids = list(_QUICKOPT_ACTIVE_JOB_IDS)
+    for job_id in job_ids:
+        job = JOB_MANAGER.get(job_id)
+        if job is not None and not job.get("done"):
+            return True
+    return False
+
+
+def _release_quickopt_guard_if_idle(job_id: str) -> None:
+    """Unregisters a finished Quick Optimize job and frees the shared
+    heavy-job slot once no Quick Optimize job is still active."""
+    with _QUICKOPT_ACTIVE_LOCK:
+        _QUICKOPT_ACTIVE_JOB_IDS.discard(job_id)
+        idle = not _QUICKOPT_ACTIVE_JOB_IDS
+    if idle:
+        HEAVY_JOB_GUARD.release(JOB_QUICK_OPTIMIZE)
+
+
+HEAVY_JOB_GUARD.register_health_check(JOB_QUICK_OPTIMIZE, _quickopt_still_running)
+
+
 def _run_quickopt_job(
     job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, cfg: QuickOptimizeConfig,
     cancel_event: threading.Event | None = None,
 ) -> None:
+    with _QUICKOPT_ACTIVE_LOCK:
+        _QUICKOPT_ACTIVE_JOB_IDS.add(job_id)
     try:
         result = run_quick_optimize(
             df, strategy, risk, rules, cfg, progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
@@ -6551,6 +6618,8 @@ def _run_quickopt_job(
         JOB_MANAGER.fail(job_id, str(exc))
     except Exception as exc:  # noqa: BLE001
         JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
+    finally:
+        _release_quickopt_guard_if_idle(job_id)
 
 
 def _run_quickopt_sweep_job(
@@ -6565,6 +6634,8 @@ def _run_quickopt_sweep_job(
     adds `job["sweep_timeframes"]`, a plain label -> headline-numbers dict
     for the extra per-timeframe comparison table on the job page.
     """
+    with _QUICKOPT_ACTIVE_LOCK:
+        _QUICKOPT_ACTIVE_JOB_IDS.add(job_id)
     try:
         sweep = run_quick_optimize_sweep(
             df, strategy, risk, rules, timeframes, cfg,
@@ -6598,6 +6669,8 @@ def _run_quickopt_sweep_job(
         JOB_MANAGER.fail(job_id, str(exc))
     except Exception as exc:  # noqa: BLE001
         JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
+    finally:
+        _release_quickopt_guard_if_idle(job_id)
 
 
 @app.route("/quick-optimize")
@@ -7132,6 +7205,7 @@ def evolution_start():
         return redirect(url_for("evolution_form"))
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_EVOLUTION_LAB)
+        HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_EVOLUTION)  # sweep hand-off above may hold this name instead; release() no-ops on a name not held
         _finish_evolution_job()  # don't leave a phantom "running" entry in the Activity feed
         log_crash("Evolution Lab (web)", exc=exc)
         return render_template("evolution.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), families=[{"name": n, "description": family_description(n)} for n in list_families()], running=False, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 500
@@ -8541,6 +8615,7 @@ def search_start():
 
     except StrategySpaceError as exc:
         HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
+        HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_SEARCH)  # sweep hand-off above may hold this name instead; release() no-ops on a name not held
         return render_template(
             "search.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             families=[{"name": n, "description": family_description(n)} for n in list_families()],
@@ -8548,6 +8623,7 @@ def search_start():
             prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
     except StrategyError as exc:
         HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
+        HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_SEARCH)  # sweep hand-off above may hold this name instead; release() no-ops on a name not held
         return render_template(
             "search.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
             families=[{"name": n, "description": family_description(n)} for n in list_families()],
@@ -8555,6 +8631,7 @@ def search_start():
             prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
+        HEAVY_JOB_GUARD.release(JOB_MULTI_INSTRUMENT_SEARCH)  # sweep hand-off above may hold this name instead; release() no-ops on a name not held
         log_crash("Search Lab (web, start)", exc=exc)
         return render_template(
             "search.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),

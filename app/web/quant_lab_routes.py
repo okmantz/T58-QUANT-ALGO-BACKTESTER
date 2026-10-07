@@ -628,20 +628,38 @@ def sentiment_price():
     if request.method == "POST":
         try:
             from app.quant_lab.sentiment_price import (
-                aggregate_sentiment, correlate_sentiment_with_price, fetch_headlines, score_headlines,
+                SentimentPriceError, aggregate_sentiment, correlate_sentiment_with_price,
+                fetch_headlines, score_headlines,
             )
 
-            headlines = fetch_headlines(request.form["query"], max_results=int(request.form["max_results"]))
+            query = (request.form.get("query") or "").strip()
+            if not query:
+                raise ValueError("Enter a headline search query first (for example 'AAPL Apple stock').")
+            try:
+                max_results = int(request.form.get("max_results") or 50)
+            except ValueError:
+                max_results = 50
+            headlines = fetch_headlines(query, max_results=max_results)
             sentiment_df = score_headlines(headlines)
             overall = aggregate_sentiment(sentiment_df)
             lines = [overall.render_summary(), ""]
             lines += [f"{row.label:<9} {row.sentiment:+.2f}  {row.title}" for row in sentiment_df.itertuples()]
             price_upload = request.files.get("price_csv")
             if price_upload and price_upload.filename:
-                price_df = _load_ohlcv_upload("price_csv")
-                corr = correlate_sentiment_with_price(sentiment_df, price_df)
-                lines.append("")
-                lines.append(corr.render_summary())
+                # Correlation is an optional add-on to the sentiment result
+                # above -- if it can't run (e.g. the price file doesn't
+                # overlap the recent headline window), say so on the result
+                # instead of failing the whole request and discarding a
+                # perfectly good sentiment summary.
+                try:
+                    price_df = _load_ohlcv_upload("price_csv")
+                    corr = correlate_sentiment_with_price(sentiment_df, price_df)
+                    lines.append("")
+                    lines.append(corr.render_summary())
+                    lines += [f"Note: {w}" for w in corr.warnings]
+                except (SentimentPriceError, ValueError) as exc:
+                    lines.append("")
+                    lines.append(f"Price correlation unavailable: {exc}")
             result_html = _pre("\n".join(lines))
         except Exception as exc:  # noqa: BLE001
             error = str(exc)
