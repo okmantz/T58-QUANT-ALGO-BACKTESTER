@@ -44,6 +44,49 @@
     <span class="t58-nav-icon">&#8962;</span><span class="label">Dashboard</span>
   </a>
 
+  <!-- Running-now: live jobs you can jump back into. Populated by polling
+       /api/running-jobs.json; hidden entirely when nothing is running. -->
+  <div id="t58-running-now" style="display:none;margin:2px 10px 8px;">
+    <div class="t58-nav-section-label" style="padding-left:2px;">Running now</div>
+    <div id="t58-running-now-list"></div>
+  </div>
+  <script>
+  (function () {
+    var box = document.getElementById('t58-running-now');
+    var list = document.getElementById('t58-running-now-list');
+    if (!box || !list) return;
+    function fmtElapsed(sec) {
+      if (sec == null) return '';
+      sec = Math.floor(sec);
+      if (sec < 60) return sec + 's';
+      return Math.floor(sec / 60) + 'm ' + (sec % 60) + 's';
+    }
+    function poll() {
+      fetch('/api/running-jobs.json').then(function (r) { return r.json(); }).then(function (data) {
+        var jobs = (data && data.running) || [];
+        if (!jobs.length) { box.style.display = 'none'; return; }
+        list.innerHTML = '';
+        jobs.forEach(function (j) {
+          var a = document.createElement('a');
+          a.href = j.page_url;
+          a.className = 't58-nav-item';
+          a.style.cssText = 'display:flex;justify-content:space-between;gap:6px;';
+          var name = document.createElement('span');
+          name.textContent = j.tool + (j.instrument ? ' · ' + j.instrument : '');
+          var el = document.createElement('span');
+          el.style.cssText = 'color:var(--teal);font-size:11px;white-space:nowrap;';
+          el.textContent = '● ' + fmtElapsed(j.elapsed_seconds);
+          a.appendChild(name); a.appendChild(el);
+          list.appendChild(a);
+        });
+        box.style.display = 'block';
+      }).catch(function () {});
+    }
+    poll();
+    setInterval(poll, 5000);
+  })();
+  </script>
+
   <a href="/assistant" class="t58-nav-item top-level {{ 'active' if active_page == 'ai_assistant' else '' }}">
     <span class="t58-nav-icon">&#9737;</span><span class="label">AI Assistant</span>
   </a>

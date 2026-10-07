@@ -26,6 +26,26 @@
   <button type="button" class="t58-btn ghost sm" data-t58-tour-start style="margin-top:10px;">&#127891; Take the 60-second tour</button>
 </div>
 
+<!-- ---- Workflow shortcuts ---- -->
+<div class="t58-card">
+  <h2>Your workflow</h2>
+  <div class="t58-pipeline">
+    <a class="step" href="/generate-strategies"><span class="n">01</span><span class="t">Generate</span></a>
+    <span class="arrow">&rarr;</span>
+    <a class="step" href="/"><span class="n">02</span><span class="t">Backtest</span></a>
+    <span class="arrow">&rarr;</span>
+    <a class="step" href="/search"><span class="n">03</span><span class="t">Optimize</span></a>
+    <span class="arrow">&rarr;</span>
+    <a class="step" href="/cpcv"><span class="n">04</span><span class="t">Validate</span></a>
+    <span class="arrow">&rarr;</span>
+    <a class="step" href="/portfolio"><span class="n">05</span><span class="t">Portfolio</span></a>
+    <span class="arrow">&rarr;</span>
+    <a class="step" href="/forward-test"><span class="n">06</span><span class="t">Forward test</span></a>
+    <span class="arrow">&rarr;</span>
+    <a class="step" href="/deploy-live"><span class="n">07</span><span class="t">Deploy live</span></a>
+  </div>
+</div>
+
 {% if show_welcome %}
 <div class="t58-card" style="border-color:var(--cyan, #2dd4ee);">
   <h2 style="margin-top:0;">👋 New here? Start here so you never have to guess.</h2>
@@ -151,76 +171,6 @@
 </div>
 {% endif %}
 
-<!-- ---- Workflow shortcuts ---- -->
-<div class="t58-card">
-  <h2>Your workflow</h2>
-  <div class="t58-pipeline">
-    <a class="step" href="/generate-strategies"><span class="n">01</span><span class="t">Generate</span></a>
-    <span class="arrow">&rarr;</span>
-    <a class="step" href="/"><span class="n">02</span><span class="t">Backtest</span></a>
-    <span class="arrow">&rarr;</span>
-    <a class="step" href="/search"><span class="n">03</span><span class="t">Optimize</span></a>
-    <span class="arrow">&rarr;</span>
-    <a class="step" href="/cpcv"><span class="n">04</span><span class="t">Validate</span></a>
-    <span class="arrow">&rarr;</span>
-    <a class="step" href="/portfolio"><span class="n">05</span><span class="t">Portfolio</span></a>
-    <span class="arrow">&rarr;</span>
-    <a class="step" href="/forward-test"><span class="n">06</span><span class="t">Forward test</span></a>
-    <span class="arrow">&rarr;</span>
-    <a class="step" href="/deploy-live"><span class="n">07</span><span class="t">Deploy live</span></a>
-  </div>
-</div>
-
-<!-- ---- Champion Board -- candidate board with dimensions, not a single ranking ---- -->
-<div class="t58-card">
-  <h2>Champion Board</h2>
-  <p style="color:var(--text-muted);font-size:12px;margin-top:-6px;">Every saved strategy's actual standing: Eval / Payout / OOS, and how far it's been explicitly promoted through Candidate &rarr; Validated &rarr; Champion Candidate &rarr; Forward Testing &rarr; Production Ready. Promotion is manual -- a high raw metric alone never advances a strategy.</p>
-  {% if board_rows %}
-  <table class="t58-table">
-    <thead>
-      <tr>
-        <th>Strategy</th><th>Status</th><th>Eval</th><th>Payout</th><th>OOS</th><th>Stage</th><th></th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for r in board_rows[:25] %}
-      <tr>
-        <td>{{ r.display_name }}</td>
-        <td><span class="t58-pill {{ 'pass' if r.status == 'READY' else ('fail' if r.status == 'NOT READY' else '') }}">{{ r.status }}</span></td>
-        <td>{{ "%.0f%%"|format(r.eval_pct) if r.eval_pct is not none else "--" }}</td>
-        <td>{{ "%.0f%%"|format(r.payout_pct) if r.payout_pct is not none else "--" }}</td>
-        <td>{{ "%.0f%%"|format(r.oos_pct) if r.oos_pct is not none else "--" }}</td>
-        <td>{{ r.promotion.stage_title }}</td>
-        <td>
-          {% if r.promotion.can_promote %}
-          <form method="post" action="/champion/promote" style="margin:0;">
-            <input type="hidden" name="strategy_type" value="{{ r.strategy_type }}">
-            <input type="hidden" name="filename" value="{{ r.filename }}">
-            <button type="submit" class="t58-btn ghost sm">Promote &rarr; {{ r.promotion.next_stage_title }}</button>
-          </form>
-          {% elif r.promotion.next_stage_title %}
-          <span style="font-size:11px;color:var(--text-dim);" title="{{ r.promotion.requirements | selectattr('met', 'equalto', false) | map(attribute='label') | join('; ') }}">Not yet eligible for {{ r.promotion.next_stage_title }}{% set unmet = r.promotion.requirements | rejectattr('met') | list %}{% if unmet %} -- {{ unmet | length }} check{{ '' if unmet | length == 1 else 's' }} still to run</span> <a href="/validate" style="font-size:11px;">Open Validate hub &rarr;</a>{% else %}</span>{% endif %}
-          {% else %}
-          <span style="font-size:11px;color:var(--teal);">&#9733; Final stage</span>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <div class="t58-empty">No saved strategies yet. Backtest and save a strategy to the Strategy Library to see it here.</div>
-  {% endif %}
-</div>
-
-<div class="t58-card">
-  <h2>Strategy universe</h2>
-  <div id="universe-graph"></div>
-</div>
-
-{% include '_survivors_strip.html' %}
-<p style="margin:-6px 0 14px;font-size:13px;"><a href="/universe" style="color:var(--teal);">Open the full Universe Map &rarr;</a></p>
-
 <div class="t58-grid cols-2">
   <div class="t58-card">
     <h2>Equity curves -- top strategies by net profit</h2>
@@ -277,6 +227,57 @@
     {% endif %}
   </div>
 </div>
+<div class="t58-card">
+  <h2>Strategy universe</h2>
+  <div id="universe-graph"></div>
+</div>
+
+{% include '_survivors_strip.html' %}
+<p style="margin:-6px 0 14px;font-size:13px;"><a href="/universe" style="color:var(--teal);">Open the full Universe Map &rarr;</a></p>
+
+<!-- ---- Champion Board -- candidate board with dimensions, not a single ranking ---- -->
+<div class="t58-card">
+  <h2>Champion Board</h2>
+  <p style="color:var(--text-muted);font-size:12px;margin-top:-6px;">Every saved strategy's actual standing: Eval / Payout / OOS, and how far it's been explicitly promoted through Candidate &rarr; Validated &rarr; Champion Candidate &rarr; Forward Testing &rarr; Production Ready. Promotion is manual -- a high raw metric alone never advances a strategy.</p>
+  {% if board_rows %}
+  <table class="t58-table">
+    <thead>
+      <tr>
+        <th>Strategy</th><th>Status</th><th>Eval</th><th>Payout</th><th>OOS</th><th>Stage</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in board_rows[:25] %}
+      <tr>
+        <td>{{ r.display_name }}</td>
+        <td><span class="t58-pill {{ 'pass' if r.status == 'READY' else ('fail' if r.status == 'NOT READY' else '') }}">{{ r.status }}</span></td>
+        <td>{{ "%.0f%%"|format(r.eval_pct) if r.eval_pct is not none else "--" }}</td>
+        <td>{{ "%.0f%%"|format(r.payout_pct) if r.payout_pct is not none else "--" }}</td>
+        <td>{{ "%.0f%%"|format(r.oos_pct) if r.oos_pct is not none else "--" }}</td>
+        <td>{{ r.promotion.stage_title }}</td>
+        <td>
+          {% if r.promotion.can_promote %}
+          <form method="post" action="/champion/promote" style="margin:0;">
+            <input type="hidden" name="strategy_type" value="{{ r.strategy_type }}">
+            <input type="hidden" name="filename" value="{{ r.filename }}">
+            <button type="submit" class="t58-btn ghost sm">Promote &rarr; {{ r.promotion.next_stage_title }}</button>
+          </form>
+          {% elif r.promotion.next_stage_title %}
+          <span style="font-size:11px;color:var(--text-dim);" title="{{ r.promotion.requirements | selectattr('met', 'equalto', false) | map(attribute='label') | join('; ') }}">Not yet eligible for {{ r.promotion.next_stage_title }}{% set unmet = r.promotion.requirements | rejectattr('met') | list %}{% if unmet %} -- {{ unmet | length }} check{{ '' if unmet | length == 1 else 's' }} still to run</span> <a href="/validate" style="font-size:11px;">Open Validate hub &rarr;</a>{% else %}</span>{% endif %}
+          {% else %}
+          <span style="font-size:11px;color:var(--teal);">&#9733; Final stage</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="t58-empty">No saved strategies yet. Backtest and save a strategy to the Strategy Library to see it here.</div>
+  {% endif %}
+</div>
+
+
 
 </div>
 </div>

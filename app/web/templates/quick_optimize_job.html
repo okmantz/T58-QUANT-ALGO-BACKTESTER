@@ -100,7 +100,18 @@
   function stopQuickOptimize() {
     const btn = document.getElementById('stop-btn');
     if (btn) { btn.disabled = true; btn.textContent = 'Stopping…'; }
-    fetch(`/quick-optimize/job/${jobId}/stop`, {method: 'POST'}).catch(() => {});
+    fetch(`/quick-optimize/job/${jobId}/stop`, {method: 'POST'})
+      .then(r => r.json())
+      .then(data => {
+        if (data && data.found) {
+          // Confirmed: the cancellation flag is set. The poll loop turns
+          // this into "Quick Optimize stopped" within a candidate
+          // evaluation or two -- say so, instead of buffering silently.
+          const title = document.getElementById('status-title');
+          if (title) title.innerHTML = '<span class="spinner"></span>Stopping&hellip; finishing the current candidate, then halting';
+        }
+      })
+      .catch(() => {});
   }
 
   function poll() {
@@ -110,6 +121,15 @@
         if (!data.found) return;
         document.getElementById('log').textContent = data.log.filter(Boolean).join('\n');
         document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
+
+        if (data.stopping && !data.done) {
+          document.getElementById('status-title').innerHTML =
+            '<span class="spinner"></span>Stopping&hellip; finishing the current candidate, then halting';
+          const sbtn = document.getElementById('stop-btn');
+          if (sbtn) { sbtn.disabled = true; sbtn.textContent = 'Stopping…'; }
+          setTimeout(poll, 2000);
+          return;
+        }
 
         if (data.cancelled) {
           document.getElementById('spinner').style.display = 'none';
