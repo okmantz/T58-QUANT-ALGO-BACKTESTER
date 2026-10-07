@@ -414,9 +414,10 @@ def reset_chain_note(
     if per_attempt_eval_pass_pct is not None and per_attempt_payout_pct is not None:
         attempts_note = f" across {total_attempts:,} independent attempts" if total_attempts else ""
         note += (
-            f"the per-ATTEMPT rate{attempts_note} (the \"will ONE account attempt pass\" "
-            f"question) is eval pass {per_attempt_eval_pass_pct:.1f}%, "
-            f"payout {per_attempt_payout_pct:.1f}%.]"
+            f"the per-ATTEMPT rates{attempts_note} (the \"will ONE account attempt pass\" "
+            f"question) are eval pass {per_attempt_eval_pass_pct:.1f}% of attempts, and "
+            f"payout {per_attempt_payout_pct:.1f}% of accounts that passed their eval "
+            f"reached a first payout.]"
         )
     else:
         note += "see the Monte Carlo section for the per-attempt rate.]"
