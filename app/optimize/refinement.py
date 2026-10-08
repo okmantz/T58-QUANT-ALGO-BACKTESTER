@@ -54,7 +54,7 @@ import numpy as np
 
 from app.backtest.adaptive_risk import AdaptiveRiskConfig
 from app.backtest.engine import BacktestResult, run_backtest, run_holdout_comparison
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, build_run_context
 from app.analysis.exit_quality import analyze_exit_quality
 from app.monte_carlo.engine import MonteCarloConfig, MonteCarloResult, run_monte_carlo
 from app.optimize.code_parameter_space import discover_code_genes, materialize_code_strategy, patched_source_for_strategy
@@ -1396,6 +1396,7 @@ def run_iterative_refinement(
     those other two tools' "Enable adaptive, limit-aware position
     sizing" checkboxes.
     """
+    risk = build_run_context(risk, prop_rules)
     def log(msg: str) -> None:
         if progress_cb:
             progress_cb(msg)

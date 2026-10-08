@@ -55,7 +55,7 @@ from typing import Callable
 import pandas as pd
 import numpy as np
 
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, build_run_context
 from app.monte_carlo.engine import MonteCarloConfig
 from app.optimize.parameter_space import RefinementError
 from app.optimize.refinement import (
@@ -206,8 +206,9 @@ def evaluate_multi_market(
     per_market: list[PerMarketScore] = []
     for market_label, df in dfs.items():
         strategy = build(genome)
+        market_risk = build_run_context(risk, prop_rules, instrument=market_label)
         fitness, stats, _prop_summary, _mc_summary, bt_result, _mc_result, _single_run = _evaluate(
-            df, strategy, risk, prop_rules, mc_cfg, fitness_metric, keep_full=False,
+            df, strategy, market_risk, prop_rules, mc_cfg, fitness_metric, keep_full=False,
             cost_stress_multiplier=cost_stress_multiplier,
             cost_stress_penalty_weight=cost_stress_penalty_weight,
             adaptive_risk=adaptive_risk,
@@ -273,6 +274,7 @@ def run_multi_market_search(
     switching modes never changes what a candidate is scored on, only how
     the next genome to try is chosen (same principle as
     app.optimize.refinement and app.optimize.walkforward_ga)."""
+    risk = build_run_context(risk, prop_rules)
     def log(msg: str) -> None:
         if progress_cb:
             progress_cb(msg)

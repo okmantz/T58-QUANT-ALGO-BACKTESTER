@@ -51,7 +51,7 @@ import numpy as np
 
 from app.backtest.engine import run_backtest
 from app.backtest.execution import Trade
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, build_run_context
 from app.backtest.statistics import compute_statistics
 from app.monte_carlo.engine import MonteCarloConfig, run_monte_carlo
 from app.monte_carlo.slippage_model import SessionVolatilitySlippageConfig
@@ -357,6 +357,7 @@ def run_walkforward_aware_refinement(
         except Exception:
             return []
 
+    risk = build_run_context(risk, prop_rules)
     cfg = refinement_config or RefinementConfig(population_size=12, generations=6, search_monte_carlo_sims=200)
     t0 = time.time()
     warnings: list[str] = []

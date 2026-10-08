@@ -21,7 +21,7 @@ import dataclasses
 from dataclasses import dataclass, field
 
 from app.backtest.engine import run_backtest
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, build_run_context
 from app.prop.simulator import PropRules
 from app.prop.survival_engine import PropSurvivalConfig, run_prop_survival_analysis
 
@@ -104,6 +104,7 @@ def run_risk_sweep(
         base_risk.risk_value. Defaults to the exact list the Masterclass
         material itself suggests (0.10% through 1.00%).
     """
+    base_risk = build_run_context(base_risk, prop_rules)
     risk_values = DEFAULT_RISK_VALUES if risk_values is None else risk_values
     if not risk_values:
         raise ValueError("risk_values must contain at least one candidate risk level.")

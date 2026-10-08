@@ -41,7 +41,7 @@ from typing import Callable
 import pandas as pd
 
 from app.backtest.engine import run_backtest
-from app.backtest.risk import RiskConfig, with_prop_safety_defaults
+from app.backtest.risk import RiskConfig, build_run_context, with_prop_safety_defaults
 from app.monte_carlo.engine import MonteCarloConfig, MonteCarloResult, run_monte_carlo
 from app.optimize.parameter_space import RefinementError
 from app.optimize.refinement import (
@@ -264,7 +264,7 @@ def run_multi_objective_refinement(
     # app.backtest.risk.with_prop_safety_defaults' own docstring. Without
     # this, every genome's backtest below could keep opening new trades
     # straight through a blown account or a breached daily-loss limit.
-    risk = with_prop_safety_defaults(risk, prop_rules)
+    risk = build_run_context(risk, prop_rules)
     # FIX (2026-09-18): see RiskConfig.reset_on_breach's docstring --
     # cfg.reset_on_breach was already threaded into search_mc_cfg below but
     # never into the RiskConfig every genome's own backtest() call runs
