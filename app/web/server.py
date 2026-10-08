@@ -65,7 +65,14 @@ from app.ai.ollama_settings import save_settings as save_ollama_settings
 from app.ai.research_agent import ResearchAgentContext, ResearchAgent
 from app.ai.research_loop import ResearchLoopConfig, ResearchLoopRunner
 from app.backtest.engine import run_backtest, run_holdout_comparison
-from app.backtest.risk import RiskConfig, suggest_pip_size, with_prop_safety_defaults
+from app.backtest.risk import RiskConfig as _BaseRiskConfig, suggest_pip_size, with_prop_safety_defaults
+from app.web.discover_routes import discover_bp
+from app.web.accuracy_form import accuracy_bp, risk_config_from_request as _risk_from_request
+
+
+def RiskConfig(*args, **kwargs):  # noqa: N802 -- request-aware drop-in: picks up sizing_mode etc. from the submitted form
+    return _risk_from_request(_BaseRiskConfig, *args, **kwargs)
+
 from app.data import alpaca_credentials
 from app.data.alpaca_source import (
     ASSET_CLASSES, ADJUSTMENT_CHOICES, FEED_CHOICES, TIMEFRAME_LABELS,
@@ -645,6 +652,8 @@ app.register_blueprint(hedge_fund_bp)
 # see app/web/extra_routes.py's module docstring (Deploy Live's live-money
 # routes are deliberately NOT here; see that file for why).
 app.register_blueprint(extra_bp)
+app.register_blueprint(accuracy_bp)
+app.register_blueprint(discover_bp)
 # Risk Sweep -- run_risk_sweep (app/optimize/risk_sweep.py) was already
 # fully implemented and tested but had no route calling it; see
 # app/web/risk_sweep_routes.py's module docstring.
