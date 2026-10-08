@@ -1,0 +1,42 @@
+{# Instrument-first accuracy fields. Include inside any lab form:
+   {% include "_accuracy_fields.html" %}
+   Picking an instrument fills pip size, $/point and tick costs from the instrument spec;
+   the server rejects a run whose typed pip size disagrees with the instrument. #}
+<fieldset style="border:1px solid var(--border,#ccc);padding:8px;margin:8px 0">
+  <legend>Accuracy settings</legend>
+  <div class="row">
+    <div><label>Instrument (pick first)</label>
+      <input type="text" name="acc_instrument" id="acc_instrument" placeholder="ES, MES, NQ, GC ..." list="acc_instr_list" autocomplete="off">
+      <datalist id="acc_instr_list"><option>ES</option><option>MES</option><option>NQ</option><option>MNQ</option><option>GC</option><option>MGC</option><option>CL</option></datalist>
+      <span id="acc_instr_status" style="font-size:11px;color:var(--text-muted)"></span></div>
+    <div><label>Sizing mode</label>
+      <select name="sizing_mode">
+        <option value="skip">skip - no trade if the stop is too wide for the budget</option>
+        <option value="fit_stop" selected>fit_stop - shrink the stop to fit the dollar budget</option>
+        <option value="micro_fallback">micro_fallback - use the micro contract</option>
+        <option value="fixed_contracts">fixed_contracts</option>
+      </select></div>
+    <div><label>Max stop ($)</label><input type="number" step="any" name="max_stop_dollars" placeholder="optional"></div>
+    <div><label>Fixed contracts</label><input type="number" step="1" min="1" name="fixed_contracts" placeholder="only for fixed_contracts"></div>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" name="intrabar_replay"> Replay stop/target order on 1-minute bars (needs 1-minute data)</label>
+    <label><input type="checkbox" name="account_model" value="prop"> Fresh purchased account per attempt (prop account model)</label>
+  </div>
+</fieldset>
+<script>
+(function(){
+  var i=document.getElementById('acc_instrument'), st=document.getElementById('acc_instr_status');
+  if(!i) return;
+  i.addEventListener('change', function(){
+    if(!i.value) return;
+    fetch('/api/accuracy/instrument/'+encodeURIComponent(i.value)).then(function(r){return r.json();}).then(function(d){
+      if(!d.ok){ st.textContent=d.error; return; }
+      var f=i.form; function set(n,v){ var e=f&&f.elements[n]; if(e) e.value=v; }
+      set('pip_size', d.pip_size); set('contract_size', d.contract_size);
+      set('spread_pips', d.spread_pips); set('slippage_pips', d.slippage_pips); set('commission_per_contract', d.commission_per_contract);
+      st.textContent=d.symbol+': $'+d.contract_size+'/pt, tick '+d.tick_size+', round turn ~$'+d.round_trip_cost_dollars.toFixed(2);
+    });
+  });
+})();
+</script>
