@@ -55,7 +55,7 @@ import pandas as pd
 from app.ai import ollama_settings
 from app.ai.ollama_settings import OllamaSettings
 from app.backtest.engine import BacktestResult, run_backtest
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, build_run_context
 from app.backtest.statistics import compute_cost_ladder
 from app.monte_carlo.engine import MonteCarloConfig, MonteCarloResult, run_monte_carlo
 from app.prop.simulator import PropRules, simulate_account, summarize_single_run
@@ -114,6 +114,7 @@ def _get_baseline_backtest(ctx: ResearchAgentContext) -> BacktestResult:
     cached = ctx.cache_get("__baseline_bt__")
     if cached is not None:
         return cached
+    ctx.risk = build_run_context(ctx.risk, ctx.prop_rules, instrument=getattr(ctx, "instrument", None) or None)
     bt = run_backtest(ctx.df, ctx.strategy_builder(), ctx.risk)
     ctx.cache_set("__baseline_bt__", bt)
     return bt
@@ -306,6 +307,7 @@ def _tool_compare_strategies(ctx: ResearchAgentContext, args: dict) -> dict:
     if not isinstance(names, list) or not names:
         return {"error": "compare_strategies requires a 'strategy_files' list, e.g. "
                           "[{'strategy_type': 'python', 'filename': 'ema_pullback.py'}]."}
+    ctx.risk = build_run_context(ctx.risk, ctx.prop_rules, instrument=getattr(ctx, "instrument", None) or None)
     rows = [{
         "strategy": ctx.strategy_name,
         **_stats_summary(_get_baseline_backtest(ctx).statistics.to_dict()),
@@ -665,6 +667,10 @@ class ResearchAgent:
                 result.error = "AI Assist is not enabled and no Claude/OpenAI key is saved -- turn AI Assist on (TEST CONNECTION) or save an API key."
                 return result
 
+        try:
+            ctx.risk = build_run_context(ctx.risk, ctx.prop_rules, instrument=getattr(ctx, "instrument", None) or None)
+        except Exception:  # noqa: BLE001 -- hardening must never block the agent's own error handling
+            pass
         tools = build_tool_registry(ctx, self.settings)
         system_prompt = build_system_prompt(ctx.strategy_name, ctx.source_type, ctx.instrument, tools, question)
         transcript_so_far = ""

@@ -62,7 +62,7 @@ from app.ai.experiment_memory import is_dna_tagset_previously_discarded, record_
 from app.ai.ollama_settings import OllamaSettings
 from app.ai.strategy_generator import generate_strategy
 from app.backtest.engine import run_backtest
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, build_run_context
 from app.monte_carlo.engine import MonteCarloConfig, run_monte_carlo
 from app.prop.simulator import PropRules
 from app.prop.survival_engine import PropSurvivalConfig, run_prop_survival_analysis
@@ -372,7 +372,7 @@ class ResearchLoopRunner:
         progress_cb: ProgressCallback | None = None,
     ):
         self.df = df
-        self.risk = risk
+        self.risk = build_run_context(risk, prop_rules)
         self.prop_rules = prop_rules
         self.settings = settings
         self.cfg = cfg or ResearchLoopConfig()
@@ -476,6 +476,7 @@ def run_research_loop(
     ResearchLoopRunner show live progress while an unbounded loop is
     still running, instead of an empty iteration list until it stops."""
     cfg = cfg or ResearchLoopConfig()
+    risk = build_run_context(risk, prop_rules)
 
     def log(msg: str):
         if progress_cb:
