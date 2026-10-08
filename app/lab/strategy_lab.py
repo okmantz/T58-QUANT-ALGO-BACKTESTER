@@ -61,7 +61,7 @@ from typing import Callable
 import pandas as pd
 
 from app.backtest.engine import run_backtest
-from app.backtest.risk import RiskConfig, with_prop_safety_defaults
+from app.backtest.risk import RiskConfig, build_run_context, with_prop_safety_defaults
 from app.backtest.statistics import compute_cost_ladder
 from app.monte_carlo.engine import MonteCarloConfig
 from app.optimize.parameter_space import RefinementError
@@ -366,7 +366,7 @@ def run_strategy_lab(
     # Untouched Test stage's own run_backtest call (which uses the
     # `risk` this function received) would keep using an un-hardened
     # account with no account-blown/daily-loss floor.
-    risk = with_prop_safety_defaults(risk, prop_rules)
+    risk = build_run_context(risk, prop_rules, instrument=instrument if instrument and instrument != "unknown" else None)
     # FIX (2026-09-18): see RiskConfig.reset_on_breach's docstring --
     # spec.reset_on_breach was already threaded into stage_cfg below (and
     # into run_backtest calls further down) but never onto `risk` itself,
