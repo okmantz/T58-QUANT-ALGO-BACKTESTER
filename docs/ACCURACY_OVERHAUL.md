@@ -37,11 +37,40 @@ equity.attrs["prop_attempts"]    # one record per purchased account
 ```
 `account_model="legacy"` (default) keeps every previous behaviour; `PropRules.dd_basis="legacy"` reproduces the old simulator exactly.
 
+## Second pass (2026-10-07, later)
+
+| Item | What exists now | Where |
+|---|---|---|
+| 1-minute intrabar fills | When one bar could touch both stop and target, the 1-minute path decides which came first (stop first if the same minute touches both); trades carry `fill_resolution="intrabar"` | `execution.py`, `engine.run_backtest(intrabar_df=)`, `data/timeframe_resample.resample_with_intrabar` |
+| GA reliability | <15 trades = -inf, <100 scaled down, skip-rate penalty; used by walk-forward GA with lookahead check skipped for speed | `optimize/refinement.py`, `optimize/walkforward_ga.py` |
+| Preflight gate | Quick Optimize and Full Pipeline stop when the baseline has <100 trades or >20% of signals skipped for sizing (`preflight_enforce`) | `validation/preflight.py`, `orchestration/*` |
+| Holdout | `run_holdout_comparison(continuous_account=True)`: holdout continues the account instead of starting empty; reports `min_holdout_trades` | `backtest/engine.py` |
+| Presets | `dd_basis`, `trailing_lock`, lock offset, contract caps; Lucid 50k updated; `compare_rules_to_preset` | `prop/presets.py` |
+| Reports | per-attempt sawtooth equity curve, reworded overshoot note, reliability header, battery section | `reports/*` |
+| Continuous contracts | difference (Panama) back-adjustment of roll gaps | `data/continuous_contract.py` |
+| Web / desktop forms | instrument-first fields, sizing mode, mismatch blocking | `web/accuracy_form.py`, `_accuracy_fields.html`, `ui/main_window.py` |
+| Zones in the engine | `StrategyResult.entry_orders`, manual `zone_entry`, strict causality check, fast path refuses them | `strategy/zones.py`, `strategy/base.py`, `strategy/manual.py`, `backtest/engine.py` |
+| Null gate | random-entry distribution + p-value; can only demote READY -> MARGINAL | `research/director.py`, `full_pipeline.py` |
+| Hypotheses | linked to experiment memory; already-tested warning | `ai/experiment_memory.py`, `discovery/experiment_runner.py` |
+| Papers -> hypotheses | claim extraction | `discovery/paper_hypotheses.py` |
+| Hosted LLM | Claude/OpenAI keys used by generator, research loop and agent | `ai/llm_client.py` |
+| Speed | lookahead check cached by strategy structure | `backtest/engine.py` |
+| "Your idea" screen | `/discover`, job-based, shows rule, grid, battery | `web/discover_routes.py` |
+| Translator | zone entries rendered to Pine and MQL5 | `strategy/translator.py` |
+| Real-account check | compares your real sessions to a replay | `validation/real_account_check.py` |
+| Data coverage | `python scripts/data_coverage_audit.py` -> `docs/DATA_COVERAGE.md` | `scripts/` |
+
 ## Honest limits
 
-* **Firm rules are not verified.** Presets still carry the repo's existing numbers. Check each firm's current rulebook (drawdown basis, daily-loss reset time, consistency, scaling plan) before trusting a pass probability; `PropRules` now has the fields to express them.
-* Intrabar (1-minute) fill-order replay, back-adjusted continuous contracts and the discovery UI screen are **not** implemented; the `intrabar_replay` / `intrabar_df` parameters are accepted but ignored. Bar-level ordering is conservative (stop before target).
-* Monte Carlo still resamples a trade list; it cannot resize trades to the account state the way the engine does. Use the attempt replay as the cross-check (the verdict now does).
+* **Only Lucid 50k was updated, and only against a secondary source (checked 2026-10-07).** Other presets are unverified. Check each firm's current rulebook before trusting a pass probability.
+* **The real-account check has not been run.** It needs your ~20 real sessions (entries, exits, sizes, fees). It is the only test that proves the model matches a funded account.
+* The execution loop is **not compiled** (no numba); the speed gain is the lookahead cache only.
+* Pine/MQL5 zone output is generated text; it has **not been compiled or run** in TradingView/MetaEditor. No cTrader zone output.
+* Back-adjustment exists as a module but is **not wired into the importer**; run it explicitly on roll-contract data.
+* Hosted LLM calls were written against the documented APIs and **not exercised live**.
+* The keyword idea compiler is crude: it can ignore numbers in the idea (e.g. "stop 1 ATR") and fall back to defaults. Read the rule shown on the "Your idea" screen before trusting the result.
+* The stop-in-dollars limit in the GA is enforced by the skip-rate penalty, not by a bound on the stop gene.
+* Monte Carlo still resamples a trade list; use the attempt replay as the cross-check.
 * The break-it "out-of-sample" segment is only out-of-sample if the rule was not tuned on it.
-* `sizing_mode="skip"` keeps a bounded dead-lock guard: if a *fresh* account can afford one contract, a single contract is still traded after a small loss while its worst case is within 1.5x the current budget (tagged `sized_above_risk_target`); `fit_stop` / `micro_fallback` avoid the issue entirely.
-* Default `MonteCarloConfig.method` changed to `day_block_bootstrap`; `risk_of_ruin_pct` now means per-attempt bust rate.
+* `sizing_mode="skip"` keeps a bounded dead-lock guard (single contract when worst case <=1.5x budget, tagged `sized_above_risk_target`).
+* Defaults changed: Monte Carlo method is `day_block_bootstrap`; `risk_of_ruin_pct` is the per-attempt bust rate; the web form defaults sizing to `fit_stop`; the preflight gate blocks runs under 100 trades.
