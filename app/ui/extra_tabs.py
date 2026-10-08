@@ -526,11 +526,11 @@ def build_replay_tab(win) -> None:
     _entry(grid, fields["pip"]).grid(row=2, column=1, sticky="w", pady=4)
     _lbl(2, 2, "Commission per trade ($)")
     _entry(grid, fields["commission"]).grid(row=2, column=3, sticky="w", pady=4)
-    _lbl(3, 0, "Profit target (%)")
+    _lbl(3, 0, "Profit target (%) — simulated")
     _entry(grid, fields["target"]).grid(row=3, column=1, sticky="w", pady=4)
-    _lbl(3, 2, "Daily loss limit (%)")
+    _lbl(3, 2, "Daily loss limit (%) — simulated")
     _entry(grid, fields["daily"]).grid(row=3, column=3, sticky="w", pady=4)
-    _lbl(4, 0, "Max drawdown (%)")
+    _lbl(4, 0, "Max drawdown (%) — simulated")
     _entry(grid, fields["dd"]).grid(row=4, column=1, sticky="w", pady=4)
     _lbl(4, 2, "Bars to replay (latest N)")
     _entry(grid, fields["max_bars"]).grid(row=4, column=3, sticky="w", pady=4)
@@ -619,7 +619,8 @@ def _rp_prepare(win) -> None:
     def work():
         try:
             from app.backtest.engine import run_backtest
-            from app.backtest.risk import RiskConfig, suggest_pip_size
+            from app.backtest.risk import RiskConfig, build_run_context, suggest_pip_size
+            from app.prop.simulator import PropRules
             from app.data.importer import import_csv
             from app.data.timeframe_resample import prepare_timeframe_aligned_data
             from app.strategy.library_loader import load_strategy_object
@@ -632,10 +633,23 @@ def _rp_prepare(win) -> None:
             df, _warn = prepare_timeframe_aligned_data(df, strategy)
             if len(df) > max_bars:
                 df = df.tail(max_bars).reset_index(drop=True)
-            risk = RiskConfig(
+            base_risk = RiskConfig(
                 initial_balance=account, risk_mode=risk_mode, risk_value=risk_value,
                 pip_size=pip if pip else suggest_pip_size(df), commission_per_trade=commission,
             )
+            # Profit target / daily loss / max drawdown are SIMULATED, not
+            # display-only: build a PropRules from the three fields and
+            # route the risk through build_run_context so the raw engine
+            # itself enforces them (prop account model, balance synced).
+            _prop_kwargs = {"account_size": account}
+            if target is not None:
+                _prop_kwargs["evaluation_profit_target_pct"] = target
+            if daily is not None:
+                _prop_kwargs["daily_loss_limit_pct"] = daily
+            if dd is not None:
+                _prop_kwargs["max_drawdown_pct"] = dd
+            prop_rules = PropRules(**_prop_kwargs)
+            risk = build_run_context(base_risk, prop_rules)
             result = run_backtest(df, strategy, risk)
             data = _rp_pack(df, result, account, target, daily, dd, f"{ds_label}  \u00b7  {item.name}")
             tk_safety.call_soon(lambda: _rp_ready(win, data))

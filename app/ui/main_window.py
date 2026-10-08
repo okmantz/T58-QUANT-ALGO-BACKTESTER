@@ -42,7 +42,7 @@ except ImportError:  # pragma: no cover - optional dependency
 import app.evolution.checkpoint as evo_checkpoint
 from app.backtest.adaptive_risk import AdaptiveRiskConfig, AdaptiveRiskError, AdaptiveRiskRule
 from app.backtest.engine import run_backtest, run_holdout_comparison
-from app.backtest.risk import RiskConfig, suggest_pip_size, with_prop_safety_defaults
+from app.backtest.risk import RiskConfig, build_run_context, suggest_pip_size, with_prop_safety_defaults
 from app.data.instrument_specs import known_instrument_symbols, get_instrument_spec
 from app.backtest.statistics import net_profit_reset_note
 import app.ai.ollama_settings as ollama_settings_module
@@ -58,7 +58,7 @@ from app.data.alpaca_source import (
     AlpacaFetchError, AlpacaImportError, fetch_bars, save_bars_as_csv, test_connection,
 )
 from app.data.london_strategic_edge_source import (
-    ASSET_CLASSES as LSE_ASSET_CLASSES, TIMEFRAME_CHOICES as LSE_TIMEFRAME_CHOICES,
+    TIMEFRAME_CHOICES as LSE_TIMEFRAME_CHOICES,
     LSEFetchError, LSEImportError,
     fetch_candles as lse_fetch_candles, save_bars_as_csv as lse_save_bars_as_csv,
     test_connection as lse_test_connection,
@@ -1675,7 +1675,7 @@ class RunContextPanel:
 
     def build_risk_config(self) -> RiskConfig:
         contract_size_str = self.r_contract_size.get_str().strip()
-        return RiskConfig(
+        risk = RiskConfig(
             initial_balance=self.r_initial_balance.get_float(self._default_account_size),
             risk_mode=self.r_risk_mode.get_str().strip() or "percent",
             risk_value=self.r_risk_value.get_float(1.0),
@@ -1686,6 +1686,14 @@ class RunContextPanel:
             pip_size=self.r_pip_size.get_float(0.0001),
             contract_size=float(contract_size_str) if contract_size_str else None,
         )
+        # HARDENING (v9.6, audit finding A2): every RunContextPanel tab used
+        # to start from RiskConfig's raw defaults (sizing_mode="skip",
+        # account_model="legacy", no intrabar replay), so results from
+        # WFO/CPCV/Sensitivity/etc. weren't comparable to Full Pipeline's.
+        # build_run_context is the single backend chokepoint that applies
+        # the prop safety defaults against THIS panel's own prop rules --
+        # route every panel-built risk through it before returning.
+        return build_run_context(risk, self.build_prop_rules())
 
     def _apply_instrument_spec(self):
         symbol = self.r_instrument.var.get()
@@ -2193,6 +2201,9 @@ class MainWindow:
         self.tab_evolution_multi = Frame(self.content, bg=BG)
         self.tab_risksweep = Frame(self.content, bg=BG)
         self.tab_compare = Frame(self.content, bg=BG)
+        self.tab_optimize_simple = Frame(self.content, bg=BG)
+        self.tab_validate_simple = Frame(self.content, bg=BG)
+        self.tab_champion_simple = Frame(self.content, bg=BG)
         self.tab_optimize_hub = Frame(self.content, bg=BG)
         self.tab_validate_hub = Frame(self.content, bg=BG)
         self.tab_forge = Frame(self.content, bg=BG)
@@ -2232,7 +2243,8 @@ class MainWindow:
             self.tab_wfo, self.tab_cpcv, self.tab_pbo, self.tab_sensitivity, self.tab_param_robustness, self.tab_portfolio,
             self.tab_multiobj, self.tab_wfga, self.tab_ensemble, self.tab_fullpipeline,
             self.tab_quickoptimize, self.tab_search_multi, self.tab_evolution_multi, self.tab_risksweep,
-            self.tab_compare, self.tab_optimize_hub, self.tab_validate_hub,
+            self.tab_compare, self.tab_optimize_simple, self.tab_validate_simple, self.tab_champion_simple,
+            self.tab_optimize_hub, self.tab_validate_hub,
             self.tab_forge, self.tab_research_director,
             self.tab_speedrun, self.tab_speedrun_multi, self.tab_research_loop,
             self.tab_forwardtest, self.tab_deploylive, self.tab_livemarket, self.tab_genstrat,
@@ -2272,7 +2284,7 @@ class MainWindow:
             ("aiassistant", "", "AI Assistant", self.tab_ai_assistant, GREEN),
             ("manual", "", "User Manual", self.tab_manual, GREEN),
 
-            (None, "SUPERHEADER", "Strategy Lab", None, None),
+            (None, "SUPERHEADER", "Lifecycle", None, None),
             (None, None, "\u2460 CREATE", None, NEON_VIOLET),
             ("starthere_create", "", "Start Here", self._starthere_frames["create"], NEON_VIOLET),
             ("genstrat", "", "Generate Strategies (AI)", self.tab_genstrat, NEON_VIOLET),
@@ -2280,6 +2292,11 @@ class MainWindow:
             ("researchdirector", "", "\U0001F50D Research Director", self.tab_research_director, NEON_VIOLET),
             ("researchloop", "", "\u21bb Research Loop (Background)", self.tab_research_loop, NEON_VIOLET),
             ("youridea", "", "\U0001F4A1 Your Idea", self.tab_youridea, NEON_VIOLET),
+            # Moved here from DEPLOYMENT (v9.6 lifecycle pass): Overnight
+            # Autopilot *creates* a strategy run overnight, so it belongs
+            # with the other create/discovery tools. Still just a pointer
+            # at Speed Run's own tab/frame, exactly as before.
+            ("autopilot_pointer", "", "\u26a1 Overnight Autopilot", self.tab_speedrun, NEON_VIOLET),
             ("speedrun", "", "\u26a1 Speed Run", self.tab_speedrun, NEON_VIOLET),
             ("speedrunmulti", "", "\u26a1 Multi-Instrument Speed Run", self.tab_speedrun_multi, NEON_VIOLET),
             ("forge", "", "\u26a1 Forge Strategy", self.tab_forge, NEON_LIME),
@@ -2293,11 +2310,13 @@ class MainWindow:
             ("prop", "", "3  Prop-Firm Rules", self.tab_prop, NEON_CYAN),
             ("risk", "", "4  Risk & Execution", self.tab_risk, NEON_CYAN),
             ("run", "", "5  Run & Report", self.tab_run, NEON_CYAN),
+            ("fullpipeline_test_pointer", "", "Full Pipeline (all-in-one)", self.tab_fullpipeline, NEON_CYAN),
             ("payout", "", "6  Payout Probability", self.tab_payout, NEON_CYAN),
             ("propfirmrec", "", "7  Prop-Firm Recommender", self.tab_prop_recommender, NEON_CYAN),
 
             (None, None, "\u2462 OPTIMIZE", None, BLUE),
             ("optimizehub", "", "Start Here", self.tab_optimize_hub, BLUE),
+            ("optimize_simple", "", "\u2726 Optimize (pick your engines)", self.tab_optimize_simple, BLUE),
             ("fullpipeline", "", "Full Pipeline (all-in-one)", self.tab_fullpipeline, BLUE),
             ("quickoptimize", "", "\u26a1 Quick Optimize", self.tab_quickoptimize, BLUE),
             ("search", "", "Search Lab", self.tab_search, BLUE),
@@ -2310,6 +2329,8 @@ class MainWindow:
 
             (None, None, "\u2463 VALIDATE", None, NEON_AMBER),
             ("validatehub", "", "Start Here", self.tab_validate_hub, NEON_AMBER),
+            ("validate_simple", "", "\u2726 Validate (pick your checks)", self.tab_validate_simple, NEON_AMBER),
+            ("youridea_validate_pointer", "", "\U0001F4A1 Your Idea", self.tab_youridea, NEON_AMBER),
             ("wfo", "", "Walk-Forward Optimization", self.tab_wfo, NEON_AMBER),
             ("wfga", "", "Walk-Forward GA", self.tab_wfga, NEON_AMBER),
             ("cpcv", "", "CPCV", self.tab_cpcv, NEON_AMBER),
@@ -2324,24 +2345,20 @@ class MainWindow:
 
             (None, None, "\u2464 CHAMPION", None, NEON_MAGENTA),
             ("starthere_champion", "", "Start Here", self._starthere_frames["champion"], NEON_MAGENTA),
+            ("champion_simple", "", "\u2726 Champion Board (promote)", self.tab_champion_simple, NEON_MAGENTA),
             ("familydiversity", "", "Family Diversity", self.tab_family_diversity, NEON_MAGENTA),
             ("portfolio", "", "Multi-Asset Portfolio", self.tab_portfolio, NEON_MAGENTA),
             ("ensemble", "", "Multi-Strategy Ensemble", self.tab_ensemble, NEON_MAGENTA),
+            # Moved here from DEPLOYMENT (v9.6 lifecycle pass): Compare and
+            # Strategy Health are champion-selection chores, not deployment.
+            # Same keys/frames as before -- only their section changed.
+            # "Strategy Health" still points at the Quant Lab screen those
+            # controls already live on.
+            ("compare", "", "\u2696 Compare Strategies", self.tab_compare, NEON_MAGENTA),
+            ("strathealth_pointer", "", "\U0001F4C8 Strategy Health / Auto Re-tune", self.tab_quantlab, NEON_MAGENTA),
 
-            # "SUBHEADER" (icon field) marks a subtle, non-collapsible label
-            # inside a group -- unlike a key=None/icon=None main header, it
-            # does NOT start a new collapsible section (see
-            # _build_sidebar_nav). "Overnight Autopilot" and "Strategy
-            # Health" below point at the existing screens those controls
-            # already live on (Speed Run's own "Overnight Autopilot"
-            # section; Quant Lab's Strategy Health tool) pending a fully
-            # separate screen for each.
             (None, None, "\u2465 DEPLOYMENT", None, NEON_LIME),
             ("starthere_deployment", "", "Start Here", self._starthere_frames["deployment"], NEON_LIME),
-            (None, "SUBHEADER", "Champion Checks", None, None),
-            ("autopilot_pointer", "", "\u26a1 Overnight Autopilot", self.tab_speedrun, NEON_LIME),
-            ("compare", "", "\u2696 Compare Strategies", self.tab_compare, NEON_LIME),
-            ("strathealth_pointer", "", "\U0001F4C8 Strategy Health / Auto Re-tune", self.tab_quantlab, NEON_LIME),
             (None, "SUBHEADER", "Live Markets", None, None),
             ("forwardtest", "", "Forward Test (MT5)", self.tab_forwardtest, NEON_LIME),
             ("deploylive", "", "Deploy Live", self.tab_deploylive, RED),
@@ -2372,9 +2389,13 @@ class MainWindow:
             (None, "SUPERHEADER", "Account", None, None),
             (None, None, "\u2460 ACCOUNT", None, METAL_BRIGHT),
             ("starthere_account", "", "Start Here", self._starthere_frames["account"], METAL_BRIGHT),
-            ("datacenter", "", "\U0001F4CA Data Center", self.tab_datacenter, METAL_BRIGHT),
-            ("account", "", "\u2699 Account", self.tab_account, METAL_BRIGHT),
+            ("account", "", "Account Settings", self.tab_account, METAL_BRIGHT),
+            # Notification Settings live inside the Account tab (no separate
+            # frame exists) -- this entry is a second pointer at that frame,
+            # same pattern as montecarlo -> tab_payout.
+            ("notifications", "", "Notification Settings", self.tab_account, METAL_BRIGHT),
             ("apikeys", "", "\U0001F511 API Keys", self.tab_api_keys, METAL_BRIGHT),
+            ("datacenter", "", "\U0001F4CA Data Center", self.tab_datacenter, METAL_BRIGHT),
             ("support", "", "\U0001F6DF Support", self.tab_support, METAL_BRIGHT),
 
             (None, None, "\u2461 EDUCATION", None, METAL_BRIGHT),
@@ -2425,6 +2446,9 @@ class MainWindow:
             ("Multi-Instrument Evolution Lab", self._build_evolution_multi_tab),
             ("Full Pipeline", self._build_full_pipeline_tab),
             ("Quick Optimize", self._build_quick_optimize_tab),
+            ("Optimize (pick your engines)", self._build_optimize_simple_tab),
+            ("Validate (pick your checks)", self._build_validate_simple_tab),
+            ("Champion Board (promote)", self._build_champion_simple_tab),
             ("Risk Sweep", self._build_risk_sweep_tab),
             ("Compare Strategies", self._build_compare_tab),
             ("Optimize Overview", self._build_optimize_hub_tab),
@@ -2513,6 +2537,9 @@ class MainWindow:
         "leaderboard": "\U0001F3C6",
         "familydiversity": "\u2726", "portfolio": "\u25eb", "ensemble": "\u25eb",
         "autopilot_pointer": "\u26a1", "compare": "\u2696", "strathealth_pointer": "\U0001F4C8",
+        "optimize_simple": "\u2726", "validate_simple": "\u2726", "champion_simple": "\u2726",
+        "fullpipeline_test_pointer": "\u26a1", "youridea_validate_pointer": "\U0001F4A1",
+        "notifications": "\u2699",
         "forwardtest": "\u25ef", "deploylive": "\u26a0", "livemarket": "\u25cf",
         "graveyard": "\U0001F480",
         "quantlab": "\u2696", "optionsoutlook": "\u25eb", "hedgefund": "\u2696",
@@ -2996,14 +3023,17 @@ class MainWindow:
     # stage the currently active page belongs to. A wayfinding aid only --
     # like the web version, it doesn't claim per-strategy completion.
     _STAGE_DEFS = [
-        ("Create", "speedrun", {"genstrat", "researchagent", "researchdirector", "researchloop",
+        ("Create", "speedrun", {"genstrat", "researchagent", "researchdirector", "researchloop", "youridea",
+                                 "autopilot_pointer",
                                  "speedrun", "speedrunmulti", "forge", "strategy", "stratlibrary", "starthere_create"}),
-        ("Test", "run", {"starthere_test", "strategyconfig", "data", "prop", "risk", "run", "payout", "propfirmrec"}),
+        ("Test", "run", {"starthere_test", "strategyconfig", "data", "prop", "risk", "run", "payout", "propfirmrec",
+                          "fullpipeline_test_pointer"}),
         ("Optimize", "fullpipeline", {"optimizehub", "fullpipeline", "quickoptimize", "search", "searchmulti", "evolution",
-                                     "evolutionmulti", "multiobj", "refine", "risksweep"}),
+                                     "evolutionmulti", "multiobj", "refine", "risksweep", "optimize_simple"}),
         ("Validate", "wfo", {"validatehub", "wfo", "wfga", "cpcv", "pbo", "sensitivity", "paramrobustness",
-                              "regimematrix", "montecarlo"}),
-        ("Champion", "familydiversity", {"starthere_champion", "familydiversity", "portfolio", "ensemble", "leaderboard"}),
+                              "regimematrix", "montecarlo", "validate_simple", "youridea_validate_pointer"}),
+        ("Champion", "familydiversity", {"starthere_champion", "familydiversity", "portfolio", "ensemble", "leaderboard",
+                                          "champion_simple", "compare", "strathealth_pointer"}),
         ("Forward Test", "forwardtest", {"starthere_deployment", "forwardtest"}),
         ("Deploy", "deploylive", {"deploylive"}),
         ("Monitor", "livemarket", {"livemarket", "replay"}),
@@ -3942,13 +3972,27 @@ class MainWindow:
         btn_row = Frame(parent, bg=PANEL_2)
         btn_row.pack(anchor="w", padx=16, pady=(0, 14))
         row = snapshot["row"]
-        if row["promotion"]["can_promote"]:
+        # Lifecycle-aware primary action (v9.6): this used to always say
+        # "OPEN VALIDATE" whenever promotion wasn't available -- including
+        # for a strategy that has never been tested at all, where the
+        # honest next step is a first real run, not a validation check.
+        # Order matters: a live/forward-testing stage wins over any
+        # stale verdict, then READY, then the failure/empty cases.
+        stage = (row.get("promotion") or {}).get("stage", "")
+        verdict = (row.get("verdict") or "").upper()
+        if stage in ("forward_testing", "production_ready"):
+            self._button(btn_row, "MONITOR", lambda: self._show_page("livemarket")).pack(side="left")
+        elif verdict == "READY":
+            self._button(btn_row, "CHAMPION", lambda: self._show_page("champion_simple"), primary=True).pack(side="left")
+        elif verdict == "NOT READY":
+            self._button(btn_row, "OPTIMIZE", lambda: self._show_page("optimize_simple"), primary=True).pack(side="left")
+        elif row["promotion"]["can_promote"]:
             self._button(
                 btn_row, f"PROMOTE TO {row['promotion']['next_stage_title'].upper()}",
                 lambda: self._promote_board_row(row["strategy_type"], row["filename"]), primary=True,
             ).pack(side="left")
         else:
-            self._button(btn_row, "OPEN VALIDATE", lambda: self._show_page("cpcv")).pack(side="left")
+            self._button(btn_row, "\u25b6 RUN FULL PIPELINE", lambda: self._show_page("fullpipeline"), primary=True).pack(side="left")
 
     def _promote_board_row(self, strategy_type: str, filename: str):
         try:
@@ -5546,7 +5590,6 @@ class MainWindow:
             section, "Save this key on this computer for next time", default=True
         )
 
-        self.lse_asset_class = LabeledCombo(section, "Asset class (informational)", LSE_ASSET_CLASSES, default=LSE_ASSET_CLASSES[0])
         self.lse_symbols = LabeledEntry(
             section, "Symbol(s), comma-separated (e.g. AAPL, EUR/USD, GC)", "AAPL", width=32
         )
@@ -18039,6 +18082,744 @@ class MainWindow:
             self.qopt_progress.stop()
 
     # -----------------------------------------------------------------------
+    # v9.6 "pick your ..." pages -- Optimize / Validate / Champion, one
+    # clear thing to do each. All three reuse the app's existing patterns
+    # wholesale: a RunContextPanel for this-run data/prop/risk, the shared
+    # Step 01 strategy builder (_build_strategy), risk hardened through
+    # build_run_context, the app's own module-level runners, and a plain
+    # text progress log. Anything sophisticated lives under ONE collapsed
+    # "Advanced options" expander per page -- nothing here invents a new
+    # engine, store, or verdict.
+    # -----------------------------------------------------------------------
+
+    def _advanced_expander(self, parent, title="Advanced options"):
+        """A collapsed-by-default frame: a toggle button plus a body frame
+        that starts hidden and is packed/forgotten on toggle. Returns the
+        body frame to build the advanced fields into."""
+        wrap = Frame(parent, bg=BG)
+        wrap.pack(fill="x", padx=16, pady=7)
+        body = Frame(wrap, bg=BG)
+        state = {"open": False}
+
+        def _toggle():
+            state["open"] = not state["open"]
+            if state["open"]:
+                body.pack(fill="x")
+                btn.config(text=f"\u25be {title}")
+            else:
+                body.pack_forget()
+                btn.config(text=f"\u25b8 {title}")
+
+        btn = self._button(wrap, f"\u25b8 {title}", _toggle)
+        btn.pack(anchor="w")
+        return body
+
+    def _log_box(self, parent, height=16):
+        """The standard output-log widget (Text + scrollbar in a panel
+        frame), factored out of the copy every tab used to repeat."""
+        frame = Frame(parent, bg=PANEL)
+        text = Text(
+            frame, height=height, wrap="word", bg=LOG_BG, fg=TEXT, insertbackground=TEXT,
+            relief="flat", bd=0, highlightthickness=1, highlightbackground=BORDER, font=(MONO, 9),
+        )
+        scroll = ttk.Scrollbar(frame, orient="vertical", command=text.yview, style="T58.Vertical.TScrollbar")
+        text.configure(yscrollcommand=scroll.set)
+        text.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        frame.pack(fill="both", expand=True, padx=18, pady=(3, 16))
+        self._bind_isolated_wheel(text)
+        return text
+
+    # -----------------------------------------------------------------------
+    # Optimize -- pick your engines
+    # -----------------------------------------------------------------------
+
+    def _build_optimize_simple_tab(self):
+        f = self._scrollable(self.tab_optimize_simple)
+
+        self._page_header(
+            f,
+            "OPTIMIZE / Optimize (pick your engines)",
+            "\u2726 Optimize \u2014 pick your engines",
+            "One clear thing to do: the strategy comes from CREATE \u2192 Strategy Builder "
+            "(Step 01, same as every other Optimize tab), the dataset / prop firm / risk "
+            "below are this tab's own copy, then tick the engines you want and hit RUN. "
+            "Ticked engines run one after another on the same hardened settings, so their "
+            "results are comparable. Search Lab and Evolution Lab keep their full settings "
+            "on their own tabs -- ticking them here runs the wired engines first, then "
+            "takes you there.",
+        )
+
+        self.opt_simple_context = RunContextPanel(self, "Optimize (pick your engines)")
+        self.opt_simple_context.build(f)
+
+        picker_section = self._section(
+            f, "What will run",
+            "Strategy: Step 01 builder. Dataset / preset / risk: the panel above. "
+            "Risk is hardened through the prop safety defaults before any engine sees it.",
+        )
+        self.opt_simple_summary = Label(
+            picker_section, text="Pick a dataset above, tick engines below, then RUN.",
+            bg=PANEL, fg=TEXT_DIM, font=_safe_font(9), wraplength=900, justify="left", anchor="w",
+        )
+        self.opt_simple_summary.pack(anchor="w", fill="x", padx=18, pady=(2, 12))
+
+        engines = self._section(
+            f, "Engines", "Ticked engines run sequentially, in this order. Everything runs -- nothing is implied.",
+            emphasize=True,
+        )
+        self.opt_eng_quick = LabeledCheckbox(engines, "Quick Optimize \u2014 walk-forward-aware GA, before/after comparison (\u26a0 not OOS validated)", True)
+        self.opt_eng_refine = LabeledCheckbox(engines, "Iterative Refinement \u2014 plain GA parameter refinement", False)
+        self.opt_eng_risksweep = LabeledCheckbox(engines, "Risk Sweep \u2014 which risk-per-trade level survives best", False)
+        self.opt_eng_multiobj = LabeledCheckbox(engines, "Multi-Objective \u2014 NSGA-II Pareto front", False)
+        self.opt_eng_search = LabeledCheckbox(engines, "Search Lab \u2014 full settings live on its own tab (link-out below)", False)
+        self.opt_eng_evolution = LabeledCheckbox(engines, "Evolution Lab (GA) \u2014 checkpointed runner lives on its own tab (link-out below)", False)
+
+        advanced = self._advanced_expander(f)
+        adv_section = self._section(
+            advanced, "Advanced options",
+            "Defaults are sensible \u2014 skip this unless you know why you're changing it. "
+            "Mirrors Quick Optimize's own fitness / GA fields.",
+        )
+        self.opt_simple_fitness = LabeledCombo(adv_section, "Fitness metric (what 'best' means)", list(FITNESS_METRICS), default="eval_pass_probability")
+        self.opt_simple_ga_population = LabeledEntry(adv_section, "GA population", 16)
+        self.opt_simple_ga_generations = LabeledEntry(adv_section, "GA generations", 8)
+
+        button_row = Frame(f, bg=BG)
+        button_row.pack(fill="x", padx=24, pady=10)
+        self._button(button_row, "RUN TICKED ENGINES", self._optimize_simple_run_clicked, primary=True).pack(side="left")
+
+        self.opt_simple_progress = NeuralProgress(f)
+        self.opt_simple_progress.pack(fill="x", padx=24, pady=(2, 10))
+
+        output_section = self._section(f, "Optimize output", "Every engine that ran is logged here, in order \u2014 including the ones that only link out.")
+        self.opt_simple_output = self._log_box(output_section, height=18)
+
+    def _log_opt_simple(self, msg: str):
+        self.opt_simple_output.insert(END, msg + "\n")
+        self.opt_simple_output.see(END)
+        self.root.update_idletasks()
+
+    def _optimize_simple_run_clicked(self):
+        if not self.opt_simple_context.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV above (this tab's own Market Data section).")
+            return
+        engines = []
+        if self.opt_eng_quick.get():
+            engines.append("quick")
+        if self.opt_eng_refine.get():
+            engines.append("refine")
+        if self.opt_eng_risksweep.get():
+            engines.append("risksweep")
+        if self.opt_eng_multiobj.get():
+            engines.append("multiobj")
+        link_outs = []
+        if self.opt_eng_search.get():
+            link_outs.append("search")
+        if self.opt_eng_evolution.get():
+            link_outs.append("evolution")
+        if not engines and not link_outs:
+            messagebox.showwarning("Nothing ticked", "Tick at least one engine first.")
+            return
+        self.opt_simple_summary.config(
+            text=f"Dataset: {self.opt_simple_context.instrument_label()}  \u00b7  "
+                 f"Preset: {self.opt_simple_context.p_preset_combo.get_str()}  \u00b7  "
+                 f"Engines: {', '.join(engines + link_outs)}",
+            fg=TEXT,
+        )
+        self.opt_simple_output.delete("1.0", END)
+        self.opt_simple_progress.start(10)
+        threading.Thread(
+            target=self._optimize_simple_run_pipeline, args=(engines, link_outs), daemon=True,
+        ).start()
+
+    def _optimize_simple_run_pipeline(self, engines: list, link_outs: list):
+        log = self._log_opt_simple
+        try:
+            df = self.opt_simple_context.load_dataframe(log)
+            if df is None:
+                return
+            rules = self.opt_simple_context.build_prop_rules()
+            # build_risk_config() already routes through build_run_context;
+            # pass explicitly again so this page's contract is visible at
+            # the call site (the second pass is a no-op by construction).
+            risk = build_run_context(self.opt_simple_context.build_risk_config(), rules)
+            mc_config = self._validation_mc_config()
+            fitness = self.opt_simple_fitness.get_str().strip() or "eval_pass_probability"
+            population = self.opt_simple_ga_population.get_int(16)
+            generations = self.opt_simple_ga_generations.get_int(8)
+
+            if "quick" in engines:
+                log("\n=== Quick Optimize ===")
+                try:
+                    from app.orchestration.quick_optimize import QuickOptimizeConfig, run_quick_optimize
+
+                    strategy = self._build_strategy()
+                    cfg = QuickOptimizeConfig(
+                        ga_population=population, ga_generations=generations, fitness_metric=fitness,
+                    )
+                    res = run_quick_optimize(df, strategy, risk, rules, cfg, progress_cb=log)
+                    if res.instrument_mismatch_warning:
+                        log(f"!!! {res.instrument_mismatch_warning}")
+                    marker = "IMPROVED" if res.improved else "no improvement"
+                    log(f"Quick Optimize done in {res.elapsed_seconds:.1f}s: eval pass "
+                        f"{res.baseline_eval_pass_probability:.1f}% -> {res.optimized_eval_pass_probability:.1f}% ({marker}). "
+                        "\u26a0 NOT OOS VALIDATED.")
+                except Exception:
+                    log("Quick Optimize failed:\n" + traceback.format_exc())
+
+            if "refine" in engines:
+                log("\n=== Iterative Refinement ===")
+                try:
+                    strategy = self._build_strategy()
+                    refine_cfg = RefinementConfig(
+                        fitness_metric=fitness, population_size=population, generations=generations,
+                    )
+                    res = run_iterative_refinement(df, strategy, risk, rules, mc_config, refine_cfg, progress_cb=log)
+                    log(f"Iterative Refinement done in {res.elapsed_seconds:.1f}s: best {res.fitness_metric} "
+                        f"fitness {res.best.fitness:.4g} (baseline {res.baseline.fitness:.4g}).")
+                except Exception:
+                    log("Iterative Refinement failed:\n" + traceback.format_exc())
+
+            if "risksweep" in engines:
+                log("\n=== Risk Sweep ===")
+                try:
+                    from app.optimize.risk_sweep import run_risk_sweep
+
+                    res = run_risk_sweep(df, self._build_strategy, risk, rules)
+                    log(res.render_table())
+                except Exception:
+                    log("Risk Sweep failed:\n" + traceback.format_exc())
+
+            if "multiobj" in engines:
+                log("\n=== Multi-Objective ===")
+                try:
+                    strategy = self._build_strategy()
+                    mo_cfg = MultiObjectiveConfig(population_size=population, generations=generations)
+                    res = run_multi_objective_refinement(df, strategy, risk, rules, mc_config, mo_cfg, progress_cb=log)
+                    log(f"Multi-Objective done in {res.elapsed_seconds:.1f}s: "
+                        f"{len(res.pareto_front)} Pareto-optimal candidate(s) on the final front.")
+                    for w in res.warnings:
+                        log(f"  warning: {w}")
+                except Exception:
+                    log("Multi-Objective failed:\n" + traceback.format_exc())
+
+            log("\nAll wired engines finished.")
+        except StrategyError as exc:
+            log(f"\nStrategy error: {exc}")
+        except Exception as exc:
+            log("\nUnexpected error:\n" + traceback.format_exc())
+            log_crash("Optimize (pick your engines)", exc=exc)
+        finally:
+            self.opt_simple_progress.stop()
+
+        # Link-outs run last, only after the wired engines above -- the
+        # status line is logged BEFORE navigating so the log (this page's
+        # honest record) says exactly what did and didn't run here.
+        if "search" in link_outs:
+            log("\u2192 open the Search Lab tab to run (settings carried) \u2014 Search Lab's hypothesis/family "
+                "settings live there, so it isn't run from here.")
+            self.root.after(0, lambda: self._show_page("search"))
+        if "evolution" in link_outs:
+            log("\u2192 open the Evolution Lab tab to run (settings carried) \u2014 Evolution Lab's checkpointed "
+                "runner lives there, so it isn't run from here.")
+            self.root.after(0, lambda: self._show_page("evolution"))
+
+    # -----------------------------------------------------------------------
+    # -----------------------------------------------------------------------
+    # Validate -- pick your checks (shared dispatch)
+    # -----------------------------------------------------------------------
+
+    def _run_validation_checks(self, checks, strategy_factory, df, risk, rules, mc_config, log, *,
+                               cpcv_n_groups=6, cpcv_n_test_groups=2, sens_pct_range=0.5, sens_steps=9):
+        """The one dispatch behind "Validate (pick your checks)" AND the
+        Champion Board's re-run button, so both surfaces run identical
+        checks. Runs ONE baseline backtest first (risk already hardened by
+        the caller), then feeds that run's trades / fresh strategy
+        instances to each ticked check's own module-level runner.
+        `checks` is a set drawn from {"montecarlo", "cpcv", "pbo",
+        "walkforward", "sensitivity", "robustness", "regime"}. Every
+        check is attempted independently -- one failing never blocks the
+        rest. Returns {check_name: result_object} for the checks that
+        produced one; all human reporting goes through `log`, using only
+        fields the returned objects actually carry (no invented
+        thresholds -- PASS/FAIL wording only where the module itself
+        computes a verdict: CPCV's is_robust)."""
+        results: dict = {}
+        log("Running baseline backtest (hardened risk)...")
+        bt = run_backtest(df, strategy_factory(), risk)
+        stats = bt.statistics
+        log(f"Baseline: {len(bt.trades)} trade(s), net ${stats.net_profit:,.2f}, "
+            f"win rate {stats.win_rate:.1f}%, profit factor {stats.profit_factor:.2f}, "
+            f"max drawdown {stats.max_drawdown_pct:.1f}%.")
+
+        if "montecarlo" in checks:
+            log("\n--- Monte Carlo ---")
+            try:
+                if not bt.trades:
+                    log("Monte Carlo: skipped -- the baseline produced zero trades.")
+                else:
+                    mc = run_monte_carlo(bt.trades, rules, mc_config)
+                    results["montecarlo"] = mc
+                    log(f"Monte Carlo ({mc_config.n_simulations:,} sims): eval pass "
+                        f"{mc.evaluation_pass_probability:.1f}%, first payout "
+                        f"{mc.first_payout_probability:.1f}%, risk of ruin {mc.risk_of_ruin_pct:.1f}%.")
+            except Exception:
+                log("Monte Carlo failed:\n" + traceback.format_exc())
+
+        if "cpcv" in checks:
+            log("\n--- CPCV ---")
+            try:
+                res = run_cpcv(
+                    df, strategy_factory, risk,
+                    n_groups=cpcv_n_groups, n_test_groups=cpcv_n_test_groups,
+                    prop_rules=rules, mc_cfg=mc_config,
+                )
+                results["cpcv"] = res
+                log(f"CPCV: {res.n_paths} path(s), mean OOS {res.metric} {res.mean_oos_metric:.3f} "
+                    f"vs in-sample {res.mean_is_metric:.3f} -- CPCV verdict: "
+                    f"{'ROBUST' if res.is_robust else 'NOT ROBUST'} "
+                    f"(OOS below in-sample on {res.pct_paths_oos_below_is:.0f}% of paths).")
+            except Exception:
+                log("CPCV failed:\n" + traceback.format_exc())
+
+        if "pbo" in checks:
+            log("\n--- PBO ---")
+            try:
+                strategy = strategy_factory()
+                if strategy.source_type == "manual":
+                    specs = [{"source_type": "manual", "config": dict(strategy.config)}]
+                    genes = extract_genome(strategy.config)
+                    rng = random.Random(42)
+                    for _ in range(4):
+                        if not genes:
+                            break
+                        genome = [max(min(g.base_value + rng.uniform(-0.3, 0.3) * (g.hi - g.lo), g.hi), g.lo) for g in genes]
+                        specs.append({"source_type": "manual", "config": apply_genome(strategy.config, genes, genome)})
+                    if not genes:
+                        log("No tunable parameters -- PBO runs with a single candidate (degenerate case).")
+                else:
+                    specs = [{
+                        "source_type": strategy.source_type,
+                        "code_text": Path(strategy.file_path).read_text(encoding="utf-8"),
+                        "code_extension": Path(strategy.file_path).suffix,
+                    }]
+                    log(f"'{strategy.source_type}' candidate perturbation isn't built here -- "
+                        "PBO runs with this one strategy as the pool (degenerate case).")
+                res = compute_pbo(
+                    df, specs, risk,
+                    n_groups=cpcv_n_groups, n_test_groups=cpcv_n_test_groups,
+                    prop_rules=rules,
+                )
+                results["pbo"] = res
+                log(f"PBO: {res.pbo:.2f} across {res.n_candidates} candidate(s) on {res.n_paths} path(s) "
+                    f"-- the probability the in-sample winner is a backtest-overfitting artifact (lower is better).")
+            except Exception:
+                log("PBO failed:\n" + traceback.format_exc())
+
+        if "walkforward" in checks:
+            log("\n--- Walk-Forward ---")
+            try:
+                res = run_walk_forward_optimization(
+                    df, strategy_factory(), risk, rules, mc_config, progress_cb=log,
+                )
+                results["walkforward"] = res
+                eff = res.out_of_sample_efficiency
+                eff_text = f"{eff:.2f}" if eff is not None else "n/a"
+                log(f"Walk-Forward: {len(res.folds)} fold(s) completed, OOS efficiency {eff_text}, "
+                    f"{len(res.combined_trades)} combined out-of-sample trade(s).")
+            except Exception:
+                log("Walk-Forward failed:\n" + traceback.format_exc())
+
+        if "sensitivity" in checks:
+            log("\n--- Sensitivity ---")
+            try:
+                sweeps = compute_1d_sensitivity(
+                    df, strategy_factory(), risk, rules, mc_config, metric="profit_factor",
+                    pct_range=sens_pct_range, n_steps=sens_steps, progress_cb=log,
+                )
+                results["sensitivity"] = sweeps
+                for r in sweeps:
+                    flag = "  <-- CLIFF" if r.cliff_detected else ""
+                    log(f"  {r.gene_label}: max adjacent-step drop "
+                        f"{r.max_pct_drop_between_adjacent_steps:.0f}%{flag}")
+            except Exception:
+                log("Sensitivity failed:\n" + traceback.format_exc())
+
+        if "robustness" in checks:
+            log("\n--- Robustness ---")
+            try:
+                res = compute_parameter_robustness(
+                    df, strategy_factory(), risk, rules, mc_config,
+                    pct_range=sens_pct_range, n_steps_1d=sens_steps, progress_cb=log,
+                )
+                results["robustness"] = res
+                log(f"Robustness: score {res.parameter_robustness_score:.0f}/100 across "
+                    f"{res.n_parameters_checked} parameter(s); {res.n_cliffs_detected} cliff(s) detected.")
+            except Exception:
+                log("Robustness failed:\n" + traceback.format_exc())
+
+        if "regime" in checks:
+            log("\n--- Regime ---")
+            try:
+                res = run_regime_matrix(df, strategy_factory(), risk)
+                if res is None:
+                    log("Regime: not enough bars in this dataset to classify regimes reliably.")
+                else:
+                    results["regime"] = res
+                    disabled = res.disable_regimes()
+                    log(f"Regime: {len(res.cells)} cell(s) analysed across "
+                        f"{' x '.join(res.primary_dimensions)}; {len(disabled)} regime cell(s) "
+                        "flagged as gate-OFF candidates (enough trades, losing profit factor).")
+                    for n in res.notes:
+                        log(f"  Note: {n}")
+            except Exception:
+                log("Regime failed:\n" + traceback.format_exc())
+
+        return results
+
+    def _build_validate_simple_tab(self):
+        f = self._scrollable(self.tab_validate_simple)
+
+        self._page_header(
+            f,
+            "VALIDATE / Validate (pick your checks)",
+            "\u2726 Validate \u2014 pick your checks",
+            "One clear thing to do: the strategy comes from CREATE \u2192 Strategy Builder "
+            "(Step 01, same as every other Validate tab), the dataset / prop firm / risk "
+            "below are this tab's own copy, then tick the checks you want and hit RUN. "
+            "One baseline backtest runs first on hardened settings; every ticked check "
+            "feeds off that same run, so the numbers describe the same strategy on the "
+            "same data. Each dedicated Validate tab still exists for its full settings "
+            "and official reports.",
+        )
+
+        self.val_simple_context = RunContextPanel(self, "Validate (pick your checks)")
+        self.val_simple_context.build(f)
+
+        checks_section = self._section(
+            f, "Checks", "Ticked checks run in this order against the one baseline backtest.", emphasize=True,
+        )
+        self.val_chk_montecarlo = LabeledCheckbox(checks_section, "Monte Carlo \u2014 resampled pass / payout / ruin probabilities", True)
+        self.val_chk_cpcv = LabeledCheckbox(checks_section, "CPCV \u2014 combinatorial purged cross-validation (ROBUST / NOT ROBUST)", False)
+        self.val_chk_pbo = LabeledCheckbox(checks_section, "PBO \u2014 probability the winner is a backtest-overfitting artifact", False)
+        self.val_chk_walkforward = LabeledCheckbox(checks_section, "Walk-Forward \u2014 re-optimise per fold, test out-of-sample", False)
+        self.val_chk_sensitivity = LabeledCheckbox(checks_section, "Sensitivity \u2014 1D parameter sweeps with cliff detection", False)
+        self.val_chk_robustness = LabeledCheckbox(checks_section, "Robustness \u2014 parameter stability score (0\u2013100)", False)
+        self.val_chk_regime = LabeledCheckbox(checks_section, "Regime \u2014 which market regimes to gate the strategy off in", False)
+
+        advanced = self._advanced_expander(f)
+        adv_section = self._section(
+            advanced, "Advanced options",
+            "Defaults are sensible \u2014 skip this unless you know why you're changing it.",
+        )
+        self.val_simple_mc_sims = LabeledEntry(adv_section, "Monte Carlo sims", 2000)
+        self.val_simple_cpcv_groups = LabeledEntry(adv_section, "CPCV groups (N)", 6)
+        self.val_simple_cpcv_test_groups = LabeledEntry(adv_section, "CPCV test groups (k)", 2)
+        self.val_simple_sens_pct = LabeledEntry(adv_section, "Sensitivity range (\u00b1 fraction, e.g. 0.5 = \u00b150%)", 0.5)
+        self.val_simple_sens_steps = LabeledEntry(adv_section, "Sensitivity steps", 9)
+
+        button_row = Frame(f, bg=BG)
+        button_row.pack(fill="x", padx=24, pady=10)
+        self._button(button_row, "RUN TICKED CHECKS", self._validate_simple_run_clicked, primary=True).pack(side="left")
+
+        self.val_simple_progress = NeuralProgress(f)
+        self.val_simple_progress.pack(fill="x", padx=24, pady=(2, 10))
+
+        output_section = self._section(f, "Validate output", "Baseline first, then each ticked check's own numbers \u2014 PASS/FAIL wording only where the check itself computes a verdict.")
+        self.val_simple_output = self._log_box(output_section, height=20)
+
+    def _log_val_simple(self, msg: str):
+        self.val_simple_output.insert(END, msg + "\n")
+        self.val_simple_output.see(END)
+        self.root.update_idletasks()
+
+    def _ticked_validation_checks(self, prefix: str) -> set:
+        """Reads one page's seven validation checkboxes by attribute
+        prefix ("val_chk_" / "champ_chk_") into the dispatch's check-key
+        set -- shared so Validate-simple and Champion-simple can never
+        drift apart in what a tick means."""
+        checks = set()
+        if getattr(self, f"{prefix}montecarlo").get():
+            checks.add("montecarlo")
+        if getattr(self, f"{prefix}cpcv").get():
+            checks.add("cpcv")
+        if getattr(self, f"{prefix}pbo").get():
+            checks.add("pbo")
+        if getattr(self, f"{prefix}walkforward").get():
+            checks.add("walkforward")
+        if getattr(self, f"{prefix}sensitivity").get():
+            checks.add("sensitivity")
+        if getattr(self, f"{prefix}robustness").get():
+            checks.add("robustness")
+        if getattr(self, f"{prefix}regime").get():
+            checks.add("regime")
+        return checks
+
+    def _validate_simple_run_clicked(self):
+        if not self.val_simple_context.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV above (this tab's own Market Data section).")
+            return
+        checks = self._ticked_validation_checks("val_chk_")
+        if not checks:
+            messagebox.showwarning("Nothing ticked", "Tick at least one check first.")
+            return
+        self.val_simple_output.delete("1.0", END)
+        self.val_simple_progress.start(10)
+        threading.Thread(target=self._validate_simple_run_pipeline, args=(checks,), daemon=True).start()
+
+    def _validate_simple_run_pipeline(self, checks: set):
+        log = self._log_val_simple
+        try:
+            df = self.val_simple_context.load_dataframe(log)
+            if df is None:
+                return
+            rules = self.val_simple_context.build_prop_rules()
+            risk = build_run_context(self.val_simple_context.build_risk_config(), rules)
+            mc_config = self._validation_mc_config(n_simulations=self.val_simple_mc_sims.get_int(2000))
+            self._run_validation_checks(
+                checks, self._build_strategy, df, risk, rules, mc_config, log,
+                cpcv_n_groups=self.val_simple_cpcv_groups.get_int(6),
+                cpcv_n_test_groups=self.val_simple_cpcv_test_groups.get_int(2),
+                sens_pct_range=self.val_simple_sens_pct.get_float(0.5),
+                sens_steps=self.val_simple_sens_steps.get_int(9),
+            )
+            log("\nDone. For a check's official recorded result and HTML report, use its dedicated Validate tab.")
+        except StrategyError as exc:
+            log(f"\nStrategy error: {exc}")
+        except Exception as exc:
+            log("\nUnexpected error:\n" + traceback.format_exc())
+            log_crash("Validate (pick your checks)", exc=exc)
+        finally:
+            self.val_simple_progress.stop()
+
+    # -----------------------------------------------------------------------
+    # Champion Board -- promote
+    # -----------------------------------------------------------------------
+
+    def _build_champion_simple_tab(self):
+        f = self._scrollable(self.tab_champion_simple)
+
+        self._page_header(
+            f,
+            "CHAMPION / Champion Board (promote)",
+            "\u2726 Champion Board \u2014 promote",
+            "One clear thing to do: pick a saved strategy below, optionally re-run the "
+            "validation checks you care about against it, then promote it. The table is "
+            "the same Champion Board the Dashboard shows (app.scoring.champion_board). "
+            "PROMOTE uses that board's own gated mechanism \u2014 it advances exactly one "
+            "stage, and only when every requirement for that stage is already met; "
+            "otherwise it names what's missing. Nothing is promoted automatically.",
+        )
+
+        board_section = self._section(
+            f, "Champion Board",
+            "Every saved strategy's verdict and promotion stage. Re-running checks below "
+            "uses this tab's own dataset / prop / risk panel, further down.",
+            emphasize=True,
+        )
+        board_frame = Frame(board_section, bg=PANEL)
+        board_frame.pack(fill="both", expand=True, padx=14, pady=(0, 8))
+        self.champ_simple_tree = ttk.Treeview(
+            board_frame, columns=("strategy", "verdict", "notes"), show="headings",
+            style="T58Board.Treeview", height=10,
+        )
+        self.champ_simple_tree.heading("strategy", text="Strategy", anchor="w")
+        self.champ_simple_tree.heading("verdict", text="Verdict", anchor="w")
+        self.champ_simple_tree.heading("notes", text="Notes", anchor="w")
+        self.champ_simple_tree.column("strategy", width=240, anchor="w")
+        self.champ_simple_tree.column("verdict", width=120, anchor="w")
+        self.champ_simple_tree.column("notes", width=520, anchor="w")
+        self.champ_simple_tree.pack(side="left", fill="both", expand=True)
+        board_scroll = ttk.Scrollbar(
+            board_frame, orient="vertical", command=self.champ_simple_tree.yview, style="T58.Vertical.TScrollbar",
+        )
+        board_scroll.pack(side="right", fill="y")
+        self.champ_simple_tree.configure(yscrollcommand=board_scroll.set)
+        self._bind_isolated_wheel(self.champ_simple_tree)
+        self._champ_rows_by_iid: dict = {}
+
+        board_btn_row = Frame(board_section, bg=PANEL)
+        board_btn_row.pack(anchor="w", padx=14, pady=(0, 12))
+        self._button(board_btn_row, "REFRESH", self._champion_simple_refresh).pack(side="left")
+        self._button(board_btn_row, "PROMOTE TO CHAMPION", self._champion_simple_promote_clicked, primary=True).pack(side="left", padx=8)
+        self.champ_simple_status = Label(
+            board_btn_row, text="", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8), wraplength=640, justify="left",
+        )
+        self.champ_simple_status.pack(side="left", padx=10)
+
+        self.champ_simple_context = RunContextPanel(self, "Champion Board (promote)")
+        self.champ_simple_context.build(f)
+
+        checks_section = self._section(
+            f, "Re-run checks on the selected strategy",
+            "Same checks, same dispatch as VALIDATE \u2192 Validate (pick your checks) \u2014 "
+            "run against the board row selected above, on the dataset picked in this tab's panel.",
+            emphasize=True,
+        )
+        checks_row = Frame(checks_section, bg=PANEL)
+        checks_row.pack(fill="x", padx=14, pady=(2, 6))
+        # Compact row: plain Checkbuttons (not LabeledCheckbox, which is a
+        # full-width row widget) so all seven fit on one line.
+        self.champ_chk_vars: dict = {}
+        for key, label in (
+            ("montecarlo", "Monte Carlo"), ("cpcv", "CPCV"), ("pbo", "PBO"),
+            ("walkforward", "Walk-Forward"), ("sensitivity", "Sensitivity"),
+            ("robustness", "Robustness"), ("regime", "Regime"),
+        ):
+            var = BooleanVar(value=(key == "cpcv"))
+            Checkbutton(
+                checks_row, text=label, variable=var, bg=PANEL, fg=TEXT,
+                selectcolor=PANEL_3, activebackground=PANEL, highlightthickness=0,
+                font=_safe_font(9),
+            ).pack(side="left", padx=(0, 10))
+            self.champ_chk_vars[key] = var
+
+        advanced = self._advanced_expander(f)
+        adv_section = self._section(
+            advanced, "Advanced options",
+            "Defaults are sensible \u2014 skip this unless you know why you're changing it.",
+        )
+        self.champ_simple_mc_sims = LabeledEntry(adv_section, "Monte Carlo sims", 2000)
+        self.champ_simple_cpcv_groups = LabeledEntry(adv_section, "CPCV groups (N)", 6)
+        self.champ_simple_cpcv_test_groups = LabeledEntry(adv_section, "CPCV test groups (k)", 2)
+        self.champ_simple_sens_pct = LabeledEntry(adv_section, "Sensitivity range (\u00b1 fraction, e.g. 0.5 = \u00b150%)", 0.5)
+        self.champ_simple_sens_steps = LabeledEntry(adv_section, "Sensitivity steps", 9)
+
+        button_row = Frame(f, bg=BG)
+        button_row.pack(fill="x", padx=24, pady=10)
+        self._button(button_row, "RE-RUN TICKED CHECKS", self._champion_simple_rerun_clicked, primary=True).pack(side="left")
+
+        self.champ_simple_progress = NeuralProgress(f)
+        self.champ_simple_progress.pack(fill="x", padx=24, pady=(2, 10))
+
+        output_section = self._section(f, "Champion output", "Re-run results for the selected strategy, in the same format as the Validate page.")
+        self.champ_simple_output = self._log_box(output_section, height=18)
+
+        self._champion_simple_refresh()
+
+    def _log_champ_simple(self, msg: str):
+        self.champ_simple_output.insert(END, msg + "\n")
+        self.champ_simple_output.see(END)
+        self.root.update_idletasks()
+
+    def _champion_simple_refresh(self):
+        try:
+            rows = champion_board.list_board()
+        except Exception:
+            rows = []
+        self._champ_rows_by_iid = {}
+        for iid in self.champ_simple_tree.get_children():
+            self.champ_simple_tree.delete(iid)
+        for r in rows:
+            iid = f"{r['strategy_type']}::{r['filename']}"
+            self._champ_rows_by_iid[iid] = r
+            notes = r["promotion"]["stage_title"]
+            if r["promotion"]["can_promote"] and r["promotion"]["next_stage_title"]:
+                notes += f" \u00b7 ready to promote to {r['promotion']['next_stage_title']}"
+            elif r["promotion"]["next_stage_title"]:
+                notes += f" \u00b7 next stage: {r['promotion']['next_stage_title']}"
+            if r["eval_pct"] is not None:
+                notes += f" \u00b7 Eval {r['eval_pct']:.0f}%"
+            if r["oos_pct"] is not None:
+                notes += f" \u00b7 OOS {r['oos_pct']:.0f}%"
+            self.champ_simple_tree.insert(
+                "", "end", iid=iid,
+                values=(r["display_name"], r["verdict"] or "no verdict yet", notes),
+            )
+
+    def _champion_simple_selected_row(self):
+        selection = self.champ_simple_tree.selection()
+        if not selection:
+            messagebox.showinfo("Champion Board", "Select a strategy in the board above first.")
+            return None
+        return self._champ_rows_by_iid.get(selection[0])
+
+    def _champion_simple_promote_clicked(self):
+        row = self._champion_simple_selected_row()
+        if row is None:
+            return
+        # The board's own real promotion mechanism -- the same one the
+        # Dashboard's PROMOTE button calls. It advances one gated stage
+        # and refuses (naming the unmet requirements) when the strategy
+        # hasn't earned it; there is no separate "champion" marker to fake.
+        try:
+            ok, message, _new_stage = champion_board.promote_strategy(row["strategy_type"], row["filename"])
+        except Exception as exc:  # pragma: no cover - defensive
+            ok, message = False, f"Unexpected error: {exc}"
+        self.champ_simple_status.config(text=message, fg=(GREEN if ok else AMBER))
+        self._champion_simple_refresh()
+
+    def _champion_simple_rerun_clicked(self):
+        row = self._champion_simple_selected_row()
+        if row is None:
+            return
+        if not self.champ_simple_context.csv_paths:
+            messagebox.showwarning("Missing data", "Please select a market data CSV in this tab's Market Data section first.")
+            return
+        checks = {k for k, v in self.champ_chk_vars.items() if v.get()}
+        if not checks:
+            messagebox.showwarning("Nothing ticked", "Tick at least one check first.")
+            return
+        self.champ_simple_output.delete("1.0", END)
+        self.champ_simple_progress.start(10)
+        threading.Thread(
+            target=self._champion_simple_rerun_pipeline, args=(row, checks), daemon=True,
+        ).start()
+
+    def _champion_simple_rerun_pipeline(self, row: dict, checks: set):
+        log = self._log_champ_simple
+        try:
+            stored = next(
+                (s for s in list_saved_strategies(row["strategy_type"]) if s.name == row["filename"]), None,
+            )
+            if stored is None:
+                log(f"'{row['filename']}' is no longer in the Strategy Library -- refresh the board.")
+                return
+
+            def strategy_factory():
+                return load_strategy_object(stored)
+
+            df = self.champ_simple_context.load_dataframe(log)
+            if df is None:
+                return
+            rules = self.champ_simple_context.build_prop_rules()
+            risk = build_run_context(self.champ_simple_context.build_risk_config(), rules)
+            mc_config = self._validation_mc_config(n_simulations=self.champ_simple_mc_sims.get_int(2000))
+            log(f"Re-running {', '.join(sorted(checks))} for {row['display_name']} "
+                f"on {self.champ_simple_context.instrument_label()}...")
+            results = self._run_validation_checks(
+                checks, strategy_factory, df, risk, rules, mc_config, log,
+                cpcv_n_groups=self.champ_simple_cpcv_groups.get_int(6),
+                cpcv_n_test_groups=self.champ_simple_cpcv_test_groups.get_int(2),
+                sens_pct_range=self.champ_simple_sens_pct.get_float(0.5),
+                sens_steps=self.champ_simple_sens_steps.get_int(9),
+            )
+            # Mirror the dedicated CPCV tab's library record so a re-run
+            # here moves the board's OOS column exactly like a CPCV tab
+            # run does. (The other checks' official records live on their
+            # own tabs; this quick re-run reports them in place.)
+            cpcv_res = results.get("cpcv")
+            if cpcv_res is not None:
+                try:
+                    record_validation_result(row["strategy_type"], row["filename"], {
+                        "method": "cpcv", "n_paths": cpcv_res.n_paths,
+                        "is_robust": bool(cpcv_res.is_robust),
+                        "efficiency": getattr(cpcv_res, "mean_oos_metric", None),
+                    })
+                    log("\nRecorded the CPCV result on the library entry (board refreshed).")
+                except (FileNotFoundError, ValueError):
+                    pass
+            self.root.after(0, self._champion_simple_refresh)
+            log("Done.")
+        except StrategyError as exc:
+            log(f"\nStrategy error: {exc}")
+        except Exception as exc:
+            log("\nUnexpected error:\n" + traceback.format_exc())
+            log_crash("Champion Board (promote)", exc=exc)
+        finally:
+            self.champ_simple_progress.stop()
+
     # Risk Sweep -- "Risk Is a Strategy Variable" (T58 Quant Trading
     # Masterclass, Lesson 7): re-runs the strategy at several candidate
     # risk-per-trade levels and scores each with the same full-lifecycle
