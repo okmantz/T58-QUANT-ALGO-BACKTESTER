@@ -136,6 +136,12 @@ ProgressCallback = Callable[[str], None]
 
 @dataclass
 class FullPipelineConfig:
+    preflight_enforce: bool = field(default_factory=lambda: __import__('os').environ.get('T58_PREFLIGHT_ENFORCE', '1') != '0')          # stop at step 0 on a structurally bad configuration
+    preflight_min_trades: int = 100
+    extra_gates_enabled: bool = field(default_factory=lambda: __import__('os').environ.get('T58_SKIP_EXTRA_GATES', '0') != '1')
+    attempt_replay_starts: int = 24       # fresh-account attempts re-run through the real engine
+    null_n_seeds: int = 100               # random-entry null runs
+    null_p_max: float = 0.10              # READY needs the real result to beat >=90% of random-timing runs
     n_folds: int = 4
     window_mode: str = "rolling"           # for the GA's internal fold split
     ga_population: int = 12
@@ -948,7 +954,7 @@ _VERDICT_TO_LIBRARY_STATUS = {
     "NOT READY": "tested_failed",
 }
 
-def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 25.0, **kwargs):
+def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 25.0, null_result=None, null_p_max: float = 0.10, **kwargs):
     """Accuracy-overhaul wrapper around the original verdict logic.
 
     Adds two honesty gates that can only DEMOTE a READY verdict to MARGINAL
@@ -987,8 +993,66 @@ def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 2
                 "experiences; capped at MARGINAL."
             )
             return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
+    if null_result and null_result.get("p_value") is not None and null_result["p_value"] > null_p_max:
+        reasons.append(
+            f"RANDOM-ENTRY NULL NOT BEATEN: {null_result['p_value'] * 100:.0f}% of {null_result['n_seeds']} random-timing runs "
+            f"(same exits, sizing and trade count) did as well as this strategy on {null_result['metric']} "
+            f"(limit {null_p_max * 100:.0f}%); the entry logic is not distinguishable from chance -- capped at MARGINAL."
+        )
+        return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
     return verdict, reasons, scorecard, ruin_fail, look_fail
 
+
+def _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt, cfg, log):
+    """Evidence the verdict wrapper gates on, computed once on the final
+    strategy: (a) the real engine re-run from many start dates on fresh
+    accounts, (b) a random-entry null DISTRIBUTION with the strategy's own
+    exits and trade count. Never raises -- a failure here just means the gate
+    has no evidence (logged), it must not sink the run."""
+    replay = None
+    null = None
+    if not getattr(cfg, "extra_gates_enabled", True):
+        return replay, null
+    try:
+        from app.data.timeframe_resample import prepare_timeframe_aligned_data
+        d2, _ = prepare_timeframe_aligned_data(dev_df, final_strategy)
+        sr = final_strategy.generate(d2)
+        if getattr(sr, "entry_orders", None) is not None:
+            return replay, null
+        try:
+            from app.prop.attempt_replay import run_attempt_replay
+            replay = run_attempt_replay(
+                d2, sr.signals, risk, prop_rules, sr.stop_loss_pips, sr.take_profit_pips,
+                n_starts=cfg.attempt_replay_starts,
+                stop_loss_distance=sr.stop_loss_distance, take_profit_distance=sr.take_profit_distance,
+                trailing_stop_distance=sr.trailing_stop_distance, breakeven_trigger_r=sr.breakeven_trigger_r,
+                partial_exit_config=sr.partial_exit,
+            )
+            log("  " + replay.render().replace("\n", "\n  ") if hasattr(replay, "render") else "  attempt replay done")
+        except Exception as exc:  # noqa: BLE001
+            log(f"  Attempt replay skipped: {exc}")
+        try:
+            from app.research.director import random_entry_distribution
+            trades = final_bt.trades
+            if len(trades) >= 20:
+                longs = sum(1 for t in trades if t.direction == 1)
+                holds = sorted((t.exit_time - t.entry_time).total_seconds() for t in trades)
+                bar_s = max(1.0, float(pd.Series(pd.to_datetime(d2["timestamp"])).diff().dt.total_seconds().median()))
+                hold_bars = max(1, int(round(holds[len(holds) // 2] / bar_s)))
+                null = random_entry_distribution(
+                    d2, risk, float(final_bt.statistics.net_profit), len(trades), longs / len(trades), hold_bars,
+                    stop_loss_pips=sr.stop_loss_pips, take_profit_pips=sr.take_profit_pips,
+                    stop_loss_distance=sr.stop_loss_distance, take_profit_distance=sr.take_profit_distance,
+                    n_seeds=cfg.null_n_seeds,
+                )
+                if null.get("p_value") is not None:
+                    log(f"  Random-entry null: p = {null['p_value']:.3f} over {null['n_seeds']} runs "
+                        f"(null mean ${null['null_mean']:,.0f}, p95 ${null['null_p95']:,.0f}, observed ${null['observed']:,.0f}).")
+        except Exception as exc:  # noqa: BLE001
+            log(f"  Random-entry null skipped: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        log(f"  Replay/null evidence skipped: {exc}")
+    return replay, null
 
 
 def _library_save_note_suffix(verdict: str, verdict_reasons: list[str]) -> str:
@@ -1170,6 +1234,14 @@ def run_full_pipeline(
     for w in baseline_bt.warnings:
         log(f"  WARNING: {w}")
         warnings.append(w)
+    if getattr(cfg, "preflight_enforce", True):
+        from app.validation.preflight import baseline_preflight, enforce_preflight
+        _pf = baseline_preflight(baseline_bt, dev_df, risk, prop_rules, symbol=instrument,
+                                 min_trades=getattr(cfg, "preflight_min_trades", 100))
+        log("  " + _pf.render().replace("\n", "\n  "))
+        for _i in _pf.by_severity("warn"):
+            warnings.append(_i.message)
+        enforce_preflight(_pf, "Full Pipeline")
 
     lookahead_summary = None
     lookahead_bug_detected = False
@@ -1831,8 +1903,10 @@ def run_full_pipeline(
         # -- Step 7: report + save -----------------------------------------
         _check_cancel()
         log("Step 7/7: Generating final report...")
+        _replay_ev, _null_ev = _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt, cfg, log)
         verdict, verdict_reasons, scorecard, risk_of_ruin_hard_fail, lookahead_hard_fail = _make_verdict(
             final_mc, oos_validation, icir_gate,
+            attempt_replay=_replay_ev, null_result=_null_ev, null_p_max=cfg.null_p_max,
             statistics=final_bt.statistics, prop_rules=prop_rules,
             risk_of_ruin_cap=cfg.risk_of_ruin_cap, parsimony=parsimony_result,
             cpcv_primary_result=cpcv_primary_result, cpcv_supporting_result=cpcv_supporting_result,
@@ -1846,6 +1920,16 @@ def run_full_pipeline(
             gates_advisory_only=cfg.validation_gates_advisory_only,
         )
 
+        verdict_reasons = list(verdict_reasons)
+        if _replay_ev is not None:
+            verdict_reasons.append(
+                f"Evidence (attempt replay): {_replay_ev.n_attempts} fresh accounts started on real dates through the actual engine -> "
+                f"{_replay_ev.pass_rate * 100:.0f}% passed, {_replay_ev.bust_rate * 100:.0f}% busted, {_replay_ev.open_rate * 100:.0f}% unresolved; "
+                f"bust-before-pass {_replay_ev.bust_before_pass_rate * 100:.0f}%.")
+        if _null_ev and _null_ev.get("p_value") is not None:
+            verdict_reasons.append(
+                f"Evidence (random-entry null): {_null_ev['n_seeds']} random-timing runs with this strategy's exits and trade count; "
+                f"p = {_null_ev['p_value']:.3f} (null mean ${_null_ev['null_mean']:,.0f}, observed ${_null_ev['observed']:,.0f}).")
         elapsed = time.time() - t0
         return _finish(
             strategy, display_name, baseline_bt, baseline_single_run, baseline_mc, lookahead_summary,

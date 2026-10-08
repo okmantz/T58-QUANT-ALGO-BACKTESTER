@@ -210,6 +210,8 @@ def _display_name(strategy: Strategy) -> str:
 
 @dataclass
 class QuickOptimizeConfig:
+    preflight_enforce: bool = field(default_factory=lambda: __import__('os').environ.get('T58_PREFLIGHT_ENFORCE', '1') != '0')
+    preflight_min_trades: int = 100
     # v7 (2026-10-05, workstream D): budget raised 16x8 -> 32x12 to match the
     # web Quick Optimize route/template defaults. Non-trivial budget is part
     # of the "actually optimizes" bar.
@@ -646,6 +648,15 @@ def run_quick_optimize(
     log("Running baseline backtest...")
     baseline_bt = run_backtest(dev_df, strategy, risk, adaptive_risk=adaptive_risk)
     warnings.extend(baseline_bt.warnings)
+    if getattr(cfg, "preflight_enforce", True):
+        from app.validation.preflight import baseline_preflight, enforce_preflight
+        _pf = baseline_preflight(baseline_bt, dev_df, risk, prop_rules,
+                                 symbol=instrument_label or None,
+                                 min_trades=getattr(cfg, "preflight_min_trades", 100))
+        log("  " + _pf.render().replace("\n", "\n  "))
+        for _i in _pf.by_severity("warn"):
+            warnings.append(_i.message)
+        enforce_preflight(_pf, "Quick Optimize")
 
     # Escalate a pip_size/instrument-scale mismatch to the SAME prominence
     # Full Pipeline gives it, rather than letting it sit quietly inside
