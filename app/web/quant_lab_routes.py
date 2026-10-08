@@ -29,6 +29,7 @@ from pathlib import Path
 from flask import Blueprint, render_template, request
 
 from app.data import alpaca_credentials
+from app.web.accuracy_form import harden_risk_config
 
 quant_lab_bp = Blueprint("quant_lab", __name__, url_prefix="/quant-lab")
 
