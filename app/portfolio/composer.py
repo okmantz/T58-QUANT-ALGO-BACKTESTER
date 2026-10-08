@@ -40,7 +40,9 @@ from __future__ import annotations
 
 import itertools
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as _dataclass_replace
+
+from app.backtest.risk import build_run_context
 
 from app.monte_carlo.engine import MonteCarloConfig
 from app.portfolio.portfolio import (
@@ -165,6 +167,13 @@ def compose_portfolio(
     min_legs = max(int(min_legs), 2)
     max_legs = max(int(max_legs), min_legs)
     cfg = portfolio_config or PortfolioConfig()
+    # Harden each candidate leg through the shared run context; the
+    # underlying run_portfolio_backtest hardens again (idempotently), so
+    # legs are never run on a silent 'skip' sizing mode.
+    candidates = [
+        _dataclass_replace(leg, risk=build_run_context(leg.risk, cfg.prop_rules, instrument=leg.name))
+        for leg in candidates
+    ]
     if len(candidates) < min_legs:
         raise PortfolioComposerError(
             f"Need at least {min_legs} candidate legs to search combinations of that size; got {len(candidates)}."

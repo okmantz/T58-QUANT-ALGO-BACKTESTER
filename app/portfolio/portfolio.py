@@ -40,14 +40,14 @@ multi-asset event-driven engine):
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as _dataclass_replace
 
 import numpy as np
 import pandas as pd
 
 from app.backtest.engine import run_backtest
 from app.backtest.execution import Trade
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, build_run_context
 from app.backtest.statistics import BacktestStatistics, compute_statistics
 from app.monte_carlo.engine import MonteCarloConfig, MonteCarloResult, run_monte_carlo
 from app.prop.simulator import PropRules, simulate_account, summarize_single_run
@@ -162,6 +162,14 @@ def run_portfolio_backtest(
 
     cfg = config or PortfolioConfig()
     warnings: list[str] = []
+    # Harden every leg through the shared run context (prop rules from
+    # the portfolio config when present; per-leg instrument from its name
+    # when that names a known contract). Local copies only -- callers'
+    # leg objects are not mutated.
+    legs = [
+        _dataclass_replace(leg, risk=build_run_context(leg.risk, cfg.prop_rules, instrument=leg.name))
+        for leg in legs
+    ]
 
     # --- Pass 1: measure each leg independently at its nominal risk ---
     baseline_results = {}
@@ -218,18 +226,9 @@ def run_portfolio_backtest(
         weight = final_weights[leg.name]
         nominal_weight = leg.weight
         scale_factor = weight / nominal_weight if nominal_weight else weight
-        adjusted_risk = RiskConfig(
-            initial_balance=leg.risk.initial_balance,
-            risk_mode=leg.risk.risk_mode,
-            risk_value=leg.risk.risk_value * scale_factor,
-            max_trades_per_day=leg.risk.max_trades_per_day,
-            commission_per_trade=leg.risk.commission_per_trade,
-            slippage_pips=leg.risk.slippage_pips,
-            spread_pips=leg.risk.spread_pips,
-            pip_size=leg.risk.pip_size,
-            max_position_size=leg.risk.max_position_size,
-            daily_loss_limit_pct=leg.risk.daily_loss_limit_pct,
-        )
+        # Preserve the hardened leg risk wholesale (sizing mode, account
+        # model, contract/costs, intrabar) -- only its risk_value scales.
+        adjusted_risk = _dataclass_replace(leg.risk, risk_value=leg.risk.risk_value * scale_factor)
         bt = run_backtest(leg.df, leg.strategy, adjusted_risk)
         all_final_trades.extend(bt.trades)
         leg_results.append(LegResult(
