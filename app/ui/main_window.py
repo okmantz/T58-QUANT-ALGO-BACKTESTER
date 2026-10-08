@@ -8061,6 +8061,14 @@ class MainWindow:
         self.r_contract_size = LabeledEntry(
             section, "Contract $/point (blank = not lot-rounded; auto-filled by instrument pick above)", "",
         )
+        # Accuracy overhaul: how a stop that is too wide for the dollar risk
+        # budget is handled, and the optional 1-minute fill-order replay.
+        self.r_sizing_mode = LabeledCombo(
+            section, "Sizing mode (stop too wide for the budget)",
+            ["fit_stop", "skip", "micro_fallback", "fixed_contracts"], default="fit_stop",
+        )
+        self.r_max_stop_dollars = LabeledEntry(section, "Max stop in $ (blank = none)", "")
+        self.r_fixed_contracts = LabeledEntry(section, "Fixed contracts (fixed_contracts mode only)", "")
         pip_detect_row = Frame(section, bg=PANEL)
         pip_detect_row.pack(anchor="w", padx=18, pady=(0, 8))
         self._button(
@@ -8181,7 +8189,25 @@ class MainWindow:
             spread_pips=self.r_spread.get_float(1.0),
             pip_size=self.r_pip_size.get_float(0.0001),
             contract_size=float(contract_size_str) if contract_size_str else None,
+            **self._accuracy_risk_kwargs(),
         )
+
+    def _accuracy_risk_kwargs(self) -> dict:
+        """Sizing-mode fields (absent on tabs built without them -> defaults)."""
+        out: dict = {}
+        try:
+            mode = self.r_sizing_mode.get_str().strip()
+            if mode:
+                out["sizing_mode"] = mode
+            msd = self.r_max_stop_dollars.get_str().strip()
+            if msd:
+                out["max_stop_dollars"] = float(msd)
+            fc = self.r_fixed_contracts.get_str().strip()
+            if fc and mode == "fixed_contracts":
+                out["fixed_contracts"] = int(float(fc))
+        except (AttributeError, ValueError):
+            return {k: v for k, v in out.items() if k == "sizing_mode"}
+        return out
 
     def _detect_pip_size_from_data(self, status_label=None):
         """Suggests a pip_size from whatever's currently selected in Step 2
