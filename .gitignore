@@ -68,3 +68,8 @@ dist/
 Thumbs.db
 .vscode/
 .idea/
+
+# --- Discovery / AI runtime state (v9.5) -------------------------------------
+data/ai_memory/
+data/discovery/
+data/evolution/
