@@ -425,6 +425,7 @@ def strategy_health():
                     daily_loss_limit_pct=float(request.form.get("daily_loss", 5) or 5),
                     max_drawdown_pct=float(request.form.get("max_dd", 10) or 10),
                 )
+                risk = harden_risk_config(risk, prop_rules=rules, form=request.form)
                 threshold = request.form.get("retune_threshold", "warning") or "warning"
                 outcome = maybe_trigger_retune(
                     journal, session_id, strategy_label, predicted, account_balance=account_balance,
@@ -500,7 +501,9 @@ def portfolio_composer():
                 raise ValueError("Choose at least 2 strategies.")
             df = _load_ohlcv_upload("data_csv")
             by_name = {s.name: s for s in candidates_list}
-            leg_risk = RiskConfig(commission_per_trade=float(request.form.get("commission", 0) or 0))
+            leg_risk = harden_risk_config(
+                RiskConfig(commission_per_trade=float(request.form.get("commission", 0) or 0)))
+
             legs = [InstrumentLeg(name=n, df=df, strategy=load_strategy_object(by_name[n]), risk=leg_risk) for n in names]
             result = compose_portfolio(
                 legs, min_legs=int(request.form["min_legs"]), max_legs=int(request.form["max_legs"]),

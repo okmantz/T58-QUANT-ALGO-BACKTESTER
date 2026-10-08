@@ -25,6 +25,7 @@ from pathlib import Path
 from flask import Blueprint, jsonify, redirect, render_template, request, send_file, url_for
 
 from app.backtest.risk import RiskConfig, with_prop_safety_defaults
+from app.web.accuracy_form import harden_risk_config
 from app.data.importer import import_csv
 from app.data.instrument_specs import resolve_risk_per_market
 from app.data.storage import get_raw_data_dir, list_datasets_by_instrument, list_stored_datasets
@@ -140,6 +141,7 @@ def compare_run():
         commission_per_trade=float(form.get("commission", 0) or 0),
     )
     prop_rules = _prop_rules_from_form(form)
+    risk = harden_risk_config(risk, prop_rules=prop_rules, form=form)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         try:

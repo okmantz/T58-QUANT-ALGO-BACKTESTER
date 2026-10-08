@@ -80,6 +80,7 @@ def _result_html(run) -> str:
 
 def _worker(job_id: str, idea: str, names: list, tfs: list, max_bars: int, n_null: int):
     from app.backtest.risk import RiskConfig
+    from app.web.accuracy_form import harden_risk_config
     from app.data.instrument_specs import apply_any_instrument_spec as apply_instrument_spec, guess_any_instrument_symbol as guess_instrument_symbol
     from app.discovery.experiment_runner import run_hypothesis
     from app.discovery.hypothesis import HypothesisStore
@@ -97,7 +98,10 @@ def _worker(job_id: str, idea: str, names: list, tfs: list, max_bars: int, n_nul
             log(f"Loading {n}...")
             datasets[n] = _load_dataset(n, max_bars)
         sym = guess_instrument_symbol(names[0]) if names else None
-        base = RiskConfig(initial_balance=50_000.0, risk_mode="fixed", risk_value=500.0, sizing_mode="fit_stop", max_trades_per_day=20)
+        base = harden_risk_config(
+            RiskConfig(initial_balance=50_000.0, risk_mode="fixed", risk_value=500.0, sizing_mode="fit_stop", max_trades_per_day=20),
+            instrument=sym,
+        )
         risk = apply_instrument_spec(base, sym) if sym else base
         log("Running the grid and the break-it battery (this can take several minutes)...")
         run = run_hypothesis(hyp, datasets, risk, store=HypothesisStore(), n_null=n_null)

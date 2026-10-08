@@ -34,6 +34,7 @@ import tempfile
 from flask import Blueprint, render_template, request
 
 from app.backtest.risk import RiskConfig
+from app.web.accuracy_form import accuracy_kwargs, harden_risk_config
 from app.data.importer import import_csv
 from app.data.storage import get_raw_data_dir, list_stored_datasets
 from app.optimize.risk_sweep import DEFAULT_RISK_VALUES, run_risk_sweep
@@ -156,7 +157,10 @@ def risk_sweep_run():
             slippage_pips=float(form.get("slippage_pips", 0.5) or 0.5),
             spread_pips=float(form.get("spread_pips", 1.0) or 1.0),
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+            contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
+            **accuracy_kwargs(form),  # v9.6 A3a: the form renders these -- read them
         )
+        base_risk = harden_risk_config(base_risk, prop_rules=rules, form=form)
         prop_rules = _prop_rules_from_form(form)
     except ValueError as exc:
         return _render_form(error=f"Invalid input: {exc}", form_values=form_values)

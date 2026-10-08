@@ -67,7 +67,10 @@ from app.ai.research_loop import ResearchLoopConfig, ResearchLoopRunner
 from app.backtest.engine import run_backtest, run_holdout_comparison
 from app.backtest.risk import RiskConfig as _BaseRiskConfig, suggest_pip_size, with_prop_safety_defaults
 from app.web.discover_routes import discover_bp
-from app.web.accuracy_form import accuracy_bp, risk_config_from_request as _risk_from_request
+from app.web.accuracy_form import (
+    accuracy_bp, describe_simulation_text, full_risk_kwargs, harden_risk_config,
+    prop_rules_from_form, risk_config_from_request as _risk_from_request,
+)
 
 
 def RiskConfig(*args, **kwargs):  # noqa: N802 -- request-aware drop-in: picks up sizing_mode etc. from the submitted form
@@ -1569,6 +1572,393 @@ def optimize_hub():
     return render_template("optimize_hub.html", active_page="optimize_hub", current_strategy=current)
 
 
+
+
+# ---------------------------------------------------------------------------
+# v9.6 simplified lifecycle pages: Optimize (pick engines) / Validate (pick
+# checks) / Champion (promote). These are thin front doors over the EXISTING
+# runners -- same strategy/dataset/prop field names as the tool pages, risk
+# always hardened through build_run_context (via accuracy_form wrapper).
+# Old tool URLs are untouched; nothing here replaces a handler.
+# ---------------------------------------------------------------------------
+
+_OPT_LINK_ENGINES = {
+    "search": ("/search", "Search Lab"),
+    "evolution": ("/evolution", "Evolution Lab (GA)"),
+    "multi_objective": ("/multi-objective", "Multi-Objective Optimization"),
+}
+_VALIDATE_CHECKS = ("monte_carlo", "cpcv", "pbo", "walk_forward", "sensitivity", "robustness", "regime")
+
+
+def _simple_strategy_options() -> list[dict]:
+    return [{"type": s.strategy_type, "name": s.name} for s in list_saved_strategies()]
+
+
+def _simple_pickers(form=None) -> dict:
+    form = form or {}
+    return {
+        "strategies": _simple_strategy_options(),
+        "stored_datasets": list_stored_datasets(),
+        "dataset_groups": list_datasets_by_instrument(),
+        "prop_presets": list_prop_firm_presets(),
+        "prop_presets_json": _prop_presets_json(),
+        "saved_strategies_json": _saved_strategies_json(),
+    }
+
+
+def _simple_load_strategy(form):
+    """Saved-library pick (strategy_pick = 'type::filename') first; fall
+    back to the shared builder fields (strategy_mode/strategy_code)."""
+    pick = (form.get("strategy_pick") or "").strip()
+    if pick and "::" in pick:
+        stype, fname = pick.split("::", 1)
+        code = load_strategy_text(stype, fname)
+        return build_strategy_from_code(stype, code), (stype, fname)
+    return _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
+
+
+def _simple_prop_rules(form):
+    preset_key = (form.get("prop_preset") or "").strip()
+    if preset_key:
+        try:
+            return get_prop_firm_preset(preset_key).to_prop_rules()
+        except Exception:  # noqa: BLE001 -- fall through to typed fields
+            pass
+    rules = prop_rules_from_form(form)
+    if rules is not None:
+        return rules
+    return PropRules(account_size=float(form.get("account_size", form.get("initial_balance", 100000)) or 100000))
+
+
+def _simple_base_risk(form, rules):
+    risk = RiskConfig(
+        initial_balance=float(form.get("initial_balance", 100000) or 100000),
+        risk_mode=form.get("risk_mode", "percent") or "percent",
+        risk_value=float(form.get("risk_value", 1.0) or 1.0),
+        max_trades_per_day=int(form.get("max_trades_day", 10) or 10),
+        commission_per_trade=float(form.get("commission", 0) or 0),
+        slippage_pips=float(form.get("slippage_pips", 0.5) or 0.5),
+        spread_pips=float(form.get("spread_pips", 1.0) or 1.0),
+        pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
+        contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
+    )
+    return harden_risk_config(risk, prop_rules=rules, form=form)
+
+
+def _num_or_none(v):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f == f else None
+
+
+def _dispatch_validation_checks(df, strategy, risk, rules, checks, form, baseline_trades=None):
+    """Run the ticked checks against ONE hardened baseline. Every check is
+    isolated: a failure is reported per-check, never fatal to the others.
+    Returns a list of {check, ok, summary, error} with honest numbers."""
+    out: list[dict] = []
+    mc_sims = min(int(form.get("mc_sims", 1000) or 1000), 10_000)
+    metric = form.get("validation_metric", "profit_factor") or "profit_factor"
+    for check in checks:
+        try:
+            if check == "monte_carlo":
+                if not baseline_trades:
+                    raise ValueError("Baseline backtest produced no trades to resample.")
+                mc = run_monte_carlo(baseline_trades, rules, MonteCarloConfig(n_simulations=mc_sims))
+                summary = {
+                    "evaluation_pass_probability": mc.evaluation_pass_probability,
+                    "first_payout_probability": mc.first_payout_probability,
+                    "risk_of_ruin_pct": mc.risk_of_ruin_pct,
+                    "expected_payout": mc.expected_payout,
+                    "n_simulations": mc.n_simulations,
+                }
+            elif check == "cpcv":
+                res = run_cpcv(
+                    df, lambda s=strategy: s, risk,
+                    n_groups=int(form.get("cpcv_groups", 4) or 4),
+                    n_test_groups=int(form.get("cpcv_test_groups", 2) or 2),
+                    metric=metric, prop_rules=rules,
+                    mc_cfg=MonteCarloConfig(n_simulations=min(mc_sims, 500)),
+                    max_paths=int(form.get("cpcv_max_paths", 15) or 15),
+                )
+                summary = {
+                    "n_paths": res.n_paths, "metric": res.metric,
+                    "mean_oos_metric": res.mean_oos_metric, "median_oos_metric": res.median_oos_metric,
+                    "mean_is_metric": res.mean_is_metric, "is_robust": bool(res.is_robust),
+                }
+            elif check == "pbo":
+                specs = [spec_from_strategy(strategy)] + _perturbed_variant_specs(
+                    strategy, int(form.get("pbo_variants", 4) or 4), 42)
+                if len(specs) < 2:
+                    raise ValueError("PBO needs at least 2 candidates; this strategy has no tunable parameters to perturb.")
+                res = compute_pbo(
+                    df, specs, risk,
+                    n_groups=int(form.get("cpcv_groups", 4) or 4),
+                    n_test_groups=int(form.get("cpcv_test_groups", 2) or 2),
+                    metric=metric, prop_rules=rules, max_paths=int(form.get("cpcv_max_paths", 15) or 15),
+                )
+                summary = {"pbo": res.pbo, "n_candidates": res.n_candidates, "n_paths": res.n_paths, "note": res.note}
+            elif check == "walk_forward":
+                res = run_walk_forward_optimization(
+                    df, strategy, risk, rules,
+                    MonteCarloConfig(n_simulations=min(mc_sims, 500)),
+                    n_folds=int(form.get("wf_folds", 3) or 3),
+                    window_mode=form.get("wf_window_mode", "rolling") or "rolling",
+                )
+                summary = res.to_summary_dict() if hasattr(res, "to_summary_dict") else {
+                    "n_folds_completed": len(getattr(res, "folds", []) or []),
+                    "out_of_sample_efficiency": getattr(res, "out_of_sample_efficiency", None),
+                }
+            elif check == "sensitivity":
+                res_list = compute_1d_sensitivity(
+                    df, strategy, risk, rules, MonteCarloConfig(n_simulations=min(mc_sims, 500)),
+                    metric=metric, pct_range=float(form.get("pct_range", 0.5) or 0.5),
+                    n_steps=int(form.get("n_steps", 5) or 5), max_params=int(form.get("max_params", 4) or 4),
+                )
+                summary = {
+                    "n_parameters": len(res_list),
+                    "n_cliffs": sum(1 for r in res_list if r.cliff_detected),
+                    "parameters": [
+                        {"label": r.gene_label, "base_value": r.base_value, "base_metric": r.base_metric,
+                         "cliff_detected": bool(r.cliff_detected), "max_pct_drop": r.max_pct_drop_between_adjacent_steps}
+                        for r in res_list
+                    ],
+                }
+            elif check == "robustness":
+                res = compute_parameter_robustness(
+                    df, strategy, risk, rules, MonteCarloConfig(n_simulations=min(mc_sims, 500)),
+                    metric=form.get("robustness_metric", "eval_pass_probability") or "eval_pass_probability",
+                    pct_range=float(form.get("pct_range", 0.5) or 0.5),
+                    n_steps_1d=int(form.get("n_steps", 5) or 5), max_params=int(form.get("max_params", 4) or 4),
+                    n_heatmap_pairs=1,
+                )
+                summary = {
+                    "parameter_robustness_score": res.parameter_robustness_score,
+                    "n_parameters_checked": res.n_parameters_checked,
+                    "n_cliffs_detected": res.n_cliffs_detected,
+                }
+            elif check == "regime":
+                res = run_regime_matrix(
+                    df, strategy, risk,
+                    dimensions=((form.get("regime_dim_a", "volatility") or "volatility"),
+                                (form.get("regime_dim_b", "environment") or "environment")),
+                )
+                if res is None:
+                    raise ValueError("Not enough bars to classify regimes reliably.")
+                summary = {
+                    "n_cells": len(res.cells),
+                    "n_disable_recommended": len(res.disable_regimes()),
+                    "notes": list(res.notes or []),
+                }
+            else:
+                continue
+            out.append({"check": check, "ok": True, "summary": summary, "error": None})
+        except Exception as exc:  # noqa: BLE001 -- per-check isolation
+            out.append({"check": check, "ok": False, "summary": None, "error": str(exc)})
+    return out
+
+
+def _run_optimize_simple_job(job_id: str, df, strategy, risk, rules, engines, form) -> None:
+    summary: dict = {}
+    try:
+        for eng in engines:
+            JOB_MANAGER.log(job_id, f"Optimize (pick engines): running {eng}...")
+            try:
+                if eng == "quick_optimize":
+                    res = run_quick_optimize(
+                        df, strategy, risk, rules,
+                        QuickOptimizeConfig(
+                            ga_population=int(form.get("ga_population", 16) or 16),
+                            ga_generations=int(form.get("ga_generations", 6) or 6),
+                            fitness_metric=form.get("fitness_metric", "eval_pass_probability") or "eval_pass_probability",
+                            save_to_library=False,
+                        ),
+                        progress_cb=lambda m: JOB_MANAGER.log(job_id, m),
+                    )
+                    summary[eng] = {"ran": True,
+                                    "baseline_net_profit": getattr(res, "baseline_net_profit", None),
+                                    "optimized_net_profit": getattr(res, "optimized_net_profit", None),
+                                    "baseline_eval_pass_probability": getattr(res, "baseline_eval_pass_probability", None),
+                                    "optimized_eval_pass_probability": getattr(res, "optimized_eval_pass_probability", None),
+                                    "improved": getattr(res, "improved", None)}
+                elif eng == "refine":
+                    res = run_iterative_refinement(
+                        df, strategy, risk, rules,
+                        MonteCarloConfig(n_simulations=int(form.get("mc_sims", 500) or 500)),
+                        RefinementConfig(enabled=True,
+                                         population_size=int(form.get("population_size", 10) or 10),
+                                         generations=int(form.get("generations", 5) or 5),
+                                         fitness_metric=form.get("fitness_metric", "eval_pass_probability") or "eval_pass_probability"),
+                        progress_cb=lambda m: JOB_MANAGER.log(job_id, m),
+                    )
+                    summary[eng] = {"ran": True, "result": str(res)[:500]}
+                    for attr in ("best_fitness", "baseline_fitness", "generations_run"):
+                        if hasattr(res, attr):
+                            summary[eng][attr] = getattr(res, attr)
+                elif eng == "risk_sweep":
+                    sweep = run_risk_sweep(df, lambda s=strategy: s, risk, rules)
+                    summary[eng] = {"ran": True,
+                                    "best_risk_value": (sweep.best_point.risk_value if sweep.best_point else None),
+                                    "n_points": len(sweep.points)}
+                elif eng in _OPT_LINK_ENGINES:
+                    url, label = _OPT_LINK_ENGINES[eng]
+                    summary[eng] = {"ran": False, "linked": True, "url": url, "label": label,
+                                    "note": "This engine keeps its own page and settings; settings are not auto-carried on web. Open it and re-pick the strategy/dataset there."}
+            except Exception as exc:  # noqa: BLE001 -- one engine must not sink the rest
+                summary[eng] = {"ran": False, "error": str(exc)}
+        JOB_MANAGER.finish(job_id, summary=summary)
+    except Exception as exc:  # noqa: BLE001
+        JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
+
+
+@app.route("/optimize-simple")
+def optimize_simple_form():
+    return render_template("optimize_simple.html", active_page="optimize_simple",
+                           error=request.args.get("error"), **_simple_pickers())
+
+
+@app.route("/optimize-simple/start", methods=["POST"])
+def optimize_simple_start():
+    form = request.form
+    engines = [e for e in ("quick_optimize", "refine", "risk_sweep", "search", "evolution", "multi_objective")
+               if form.get(f"engine_{e}") == "on"]
+    ctx = lambda **kw: dict(active_page="optimize_simple", **_simple_pickers(), **kw)
+    if not engines:
+        return render_template("optimize_simple.html", **ctx(error="Tick at least one engine.")), 400
+    try:
+        df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
+        if dataset_error:
+            return render_template("optimize_simple.html", **ctx(error=dataset_error)), 400
+        strategy, _library_ref = _simple_load_strategy(form)
+        rules = _simple_prop_rules(form)
+        risk = _simple_base_risk(form, rules)
+        job_id = JOB_MANAGER.create(tool="Optimize (pick engines)", page_template="/optimize-simple/job/{job_id}",
+                                    log=[f"Loaded {len(df)} bars from {active_label}.", f"Engines: {', '.join(engines)}."],
+                                    instrument=active_label)
+        JOB_MANAGER.prune(max_age_seconds=6 * 3600)
+        threading.Thread(target=_run_optimize_simple_job,
+                         args=(job_id, df, strategy, risk, rules, engines, form), daemon=True).start()
+        return redirect(url_for("optimize_simple_job", job_id=job_id))
+    except (StrategyError, RefinementError, ValueError) as exc:
+        return render_template("optimize_simple.html", **ctx(error=str(exc))), 400
+    except Exception as exc:  # noqa: BLE001
+        return render_template("optimize_simple.html", **ctx(error=f"Unexpected error: {exc}")), 500
+
+
+@app.route("/optimize-simple/job/<job_id>")
+def optimize_simple_job(job_id):
+    job = JOB_MANAGER.get(job_id)
+    if job is None:
+        return render_template("optimize_simple_job.html", job_id=job_id, not_found=True), 404
+    return render_template("optimize_simple_job.html", job_id=job_id, not_found=False)
+
+
+@app.route("/optimize-simple/job/<job_id>/status.json")
+def optimize_simple_job_status(job_id):
+    job = JOB_MANAGER.get(job_id)
+    if job is None:
+        return jsonify({"found": False}), 404
+    return jsonify({"found": True, "done": job["done"], "error": job["error"], "log": job["log"],
+                    "instrument": job.get("instrument"), "summary": job.get("summary")})
+
+
+@app.route("/validate-simple")
+def validate_simple_form():
+    return render_template("validate_simple.html", active_page="validate_simple",
+                           error=request.args.get("error"), checks=None, baseline=None,
+                           simulation_text=None, **_simple_pickers())
+
+
+@app.route("/validate-simple/start", methods=["POST"])
+def validate_simple_start():
+    form = request.form
+    checks = [c for c in _VALIDATE_CHECKS if form.get(f"check_{c}") == "on"]
+    ctx = lambda **kw: dict(active_page="validate_simple", **_simple_pickers(), **kw)
+    if not checks:
+        return render_template("validate_simple.html", **ctx(error="Tick at least one check.", checks=None, baseline=None, simulation_text=None)), 400
+    try:
+        df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
+        if dataset_error:
+            return render_template("validate_simple.html", **ctx(error=dataset_error, checks=None, baseline=None, simulation_text=None)), 400
+        strategy, library_ref = _simple_load_strategy(form)
+        rules = _simple_prop_rules(form)
+        risk = _simple_base_risk(form, rules)
+        baseline = run_backtest(df, strategy, risk)
+        baseline_summary = {
+            "trades": len(baseline.trades), "net_profit": baseline.statistics.net_profit,
+            "win_rate": baseline.statistics.win_rate, "max_drawdown_pct": baseline.statistics.max_drawdown_pct,
+            "dataset": active_label,
+        }
+        results = _dispatch_validation_checks(df, strategy, risk, rules, checks, form,
+                                                baseline_trades=baseline.trades)
+        return render_template("validate_simple.html", **ctx(
+            checks=results, baseline=baseline_summary,
+            simulation_text=describe_simulation_text(risk, rules),
+            strategy_name=getattr(strategy, "name", "Strategy"),
+        ))
+    except (StrategyError, RefinementError, ValueError) as exc:
+        return render_template("validate_simple.html", **ctx(error=str(exc), checks=None, baseline=None, simulation_text=None)), 400
+    except Exception as exc:  # noqa: BLE001
+        return render_template("validate_simple.html", **ctx(error=f"Unexpected error: {exc}", checks=None, baseline=None, simulation_text=None)), 500
+
+
+@app.route("/champion-simple")
+def champion_simple_form():
+    rows = champion_board.list_board()
+    champion = champion_board.strongest_validated_candidate(rows)
+    return render_template("champion_simple.html", active_page="champion_simple",
+                           board_rows=rows, champion=champion,
+                           notice=request.args.get("notice"), notice_ok=request.args.get("ok"),
+                           checks_result=None, **_simple_pickers())
+
+
+@app.route("/champion-simple/promote", methods=["POST"])
+def champion_simple_promote():
+    candidate = (request.form.get("candidate") or "").strip()
+    strategy_type, _, filename = candidate.partition("::")
+    if candidate and strategy_type and filename:
+        ok, message, _stage = champion_board.promote_strategy(strategy_type, filename)
+        return redirect(url_for("champion_simple_form", notice=message, ok="1" if ok else "0"))
+    return redirect(url_for("champion_simple_form", notice="Pick a candidate to promote.", ok="0"))
+
+
+@app.route("/champion-simple/rerun", methods=["POST"])
+def champion_simple_rerun():
+    """Re-run ticked checks for one board candidate (validate-simple logic)."""
+    form = request.form
+    checks = [c for c in _VALIDATE_CHECKS if form.get(f"check_{c}") == "on"]
+    rows = champion_board.list_board()
+    candidate = (request.form.get("candidate") or "").strip()
+    strategy_type, _, filename = candidate.partition("::")
+    base_ctx = dict(active_page="champion_simple", board_rows=rows,
+                    champion=champion_board.strongest_validated_candidate(rows), **_simple_pickers())
+    if not checks:
+        return render_template("champion_simple.html", **base_ctx, checks_result=None,
+                               notice="Tick at least one check to re-run.", notice_ok="0"), 400
+    if not (strategy_type and filename):
+        return render_template("champion_simple.html", **base_ctx, checks_result=None,
+                               notice="Pick a candidate first.", notice_ok="0"), 400
+    try:
+        df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
+        if dataset_error:
+            return render_template("champion_simple.html", **base_ctx, checks_result=None, notice=dataset_error, notice_ok="0"), 400
+        code = load_strategy_text(strategy_type, filename)
+        strategy = build_strategy_from_code(strategy_type, code)
+        rules = _simple_prop_rules(form)
+        risk = _simple_base_risk(form, rules)
+        baseline = run_backtest(df, strategy, risk)
+        results = _dispatch_validation_checks(df, strategy, risk, rules, checks, form,
+                                              baseline_trades=baseline.trades)
+        return render_template("champion_simple.html", **base_ctx, checks_result={
+            "candidate": f"{strategy_type}::{filename}", "dataset": active_label,
+            "baseline_trades": len(baseline.trades), "checks": results,
+        })
+    except Exception as exc:  # noqa: BLE001
+        return render_template("champion_simple.html", **base_ctx, checks_result=None,
+                               notice=f"Re-run failed: {exc}", notice_ok="0"), 500
+
+
 @app.route("/validate")
 def validate_hub():
     """Guided checklist for the VALIDATE stage, built entirely from data
@@ -1846,6 +2236,7 @@ def replay_prepare():
         # sequence and equity curve (see this route's own top comment),
         # not a prop-firm evaluation/payout simulation -- account_size
         # only sets what "the account" starts at for the balance panel.
+        risk = harden_risk_config(risk, prop_rules=prop_rules_from_form(form), form=form)
         prop_account_size = float(form.get("account_size", risk.initial_balance) or risk.initial_balance)
         prop_rules_form = _parse_replay_prop_rules(form)
     except (StrategyError, RefinementError) as exc:
@@ -1911,6 +2302,7 @@ def replay_rerun(replay_id):
         contract_size=(float(form.get("contract_size")) if form.get("contract_size") else old_risk.contract_size),
         commission_per_trade=(float(form.get("commission")) if form.get("commission") not in (None, "") else old_risk.commission_per_trade),
     )
+    new_risk = harden_risk_config(new_risk, prop_rules=prop_rules_from_form(form), form=form)
     prop_account_size = float(form.get("account_size") or new_risk.initial_balance)
     prop_rules_form = _parse_replay_prop_rules(form)
 
@@ -2105,6 +2497,7 @@ def batch_test_saved_strategies_route():
         payout_frequency_days=int(form.get("payout_freq", 14)),
         required_buffer_pct=float(form.get("buffer", 0)),
     )
+    risk = harden_risk_config(risk, prop_rules=rules, form=form)
     n_sims = int(form.get("n_sims", 5000))
     mc_method = form.get("mc_method", "bootstrap")
 
@@ -2462,6 +2855,7 @@ def run_pipeline():
                 "report_html": f"/reports/{paths['html'].name}",
                 "report_json": f"/reports/{paths['json'].name}",
                 "report_csv": f"/reports/{paths['summary_csv'].name}",
+                "simulation_text": describe_simulation_text(risk, rules),
                 "next_step": pipeline_guide.after_first_backtest(
                     bt_result.statistics.to_dict(), passed_evaluation=single_run.passed_evaluation,
                 ),
@@ -3602,6 +3996,7 @@ def refine_start():
             daily_loss_limit_pct=float(form.get("daily_loss", 5)),
             max_drawdown_pct=float(form.get("max_dd", 10)),
         )
+        risk = harden_risk_config(risk, prop_rules=rules, form=form)
         mc_cfg = MonteCarloConfig(n_simulations=int(form.get("n_sims", 2000) or 2000))
 
         # Same "Enable adaptive, limit-aware position sizing" overlay Quick
@@ -3820,6 +4215,7 @@ def multi_market_start():
             daily_loss_limit_pct=float(form.get("daily_loss", 5) or 5),
             max_drawdown_pct=float(form.get("max_dd", 10) or 10),
         )
+        risk = harden_risk_config(risk, prop_rules=rules, form=form)
         mc_cfg = MonteCarloConfig(n_simulations=int(form.get("n_sims", 2000) or 2000))
         cfg = RefinementConfig(
             enabled=True,
@@ -4842,6 +5238,7 @@ def wfo_start():
             daily_loss_limit_pct=float(form.get("daily_loss", 5)),
             max_drawdown_pct=float(form.get("max_dd", 10)),
         )
+        risk = harden_risk_config(risk, prop_rules=rules, form=form)
         mc_cfg = MonteCarloConfig(n_simulations=int(form.get("n_sims", 1000) or 1000))
         refine_cfg = RefinementConfig(
             population_size=int(form.get("population_size", 8) or 8),
@@ -5355,6 +5752,7 @@ def portfolio_run():
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
             commission_per_trade=float(form.get("commission", 0) or 0),
         )
+        risk = harden_risk_config(risk, prop_rules=prop_rules_from_form(form), form=form)
 
         legs: list[InstrumentLeg] = []
         leg_labels = []
@@ -5503,6 +5901,7 @@ def regime_matrix_run():
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
             commission_per_trade=float(form.get("commission", 0) or 0),
         )
+        risk = harden_risk_config(risk, prop_rules=prop_rules_from_form(form), form=form)
 
         dim_a = form.get("dimension_a", "volatility")
         dim_b = form.get("dimension_b", "environment")
@@ -5669,6 +6068,7 @@ def payout_probability_run():
             max_drawdown_pct=float(form.get("max_dd", 10)),
         )
 
+        risk = harden_risk_config(risk, prop_rules=rules, form=form)
         bt_result = run_backtest(df, strategy, risk)
         if not bt_result.trades:
             return render_template("payout_probability.html", **ctx(
@@ -5798,6 +6198,7 @@ def prop_firm_recommender_run():
             commission_per_trade=float(form.get("commission", 0) or 0),
         )
 
+        risk = harden_risk_config(risk, prop_rules=prop_rules_from_form(form), form=form)
         bt_result = run_backtest(df, strategy, risk)
         if not bt_result.trades:
             return render_template("prop_firm_recommender.html", **ctx(
@@ -5870,7 +6271,12 @@ def ensemble_run():
             return render_template("ensemble.html", **ctx(error="An ensemble needs at least 2 strategy legs -- upload at least 2 strategy files below (Python/PineScript/MQL5, mixing types is fine)."), **_alpaca_template_context()), 400
 
         balance = float(form.get("initial_balance", 100000) or 100000)
-        risk = RiskConfig(initial_balance=balance, commission_per_trade=float(form.get("commission", 0) or 0))
+        _ens_kw = {"initial_balance": balance}
+        _ens_kw.update(full_risk_kwargs(form))
+        _ens_kw["initial_balance"] = balance
+        risk = RiskConfig(**_ens_kw)
+        _ens_rules = prop_rules_from_form(form) or PropRules(account_size=balance)
+        risk = harden_risk_config(risk, prop_rules=_ens_rules, form=form)
         mode = form.get("ensemble_mode", "blend")
 
         if mode == "vote":
@@ -5878,7 +6284,7 @@ def ensemble_run():
             bt_result = run_ensemble_vote(df, strategies, risk, names=names, vote_config=EnsembleVoteConfig(min_agreement=min_agreement))
             if not bt_result.trades:
                 return render_template("ensemble.html", **ctx(error="This vote ensemble produced zero trades on the given data -- nothing to report."), **_alpaca_template_context()), 400
-            rules = PropRules(account_size=balance)
+            rules = _ens_rules
             period = (str(df["timestamp"].iloc[0]), str(df["timestamp"].iloc[-1]))
             pnls = [t.pnl for t in bt_result.trades]
             dates = [t.entry_time for t in bt_result.trades]
@@ -5999,7 +6405,8 @@ def cpcv_start():
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
             commission_per_trade=float(form.get("commission", 0) or 0),
         )
-        prop_rules = PropRules(account_size=float(form.get("initial_balance", 100000)))
+        prop_rules = prop_rules_from_form(form) or PropRules(account_size=float(form.get("account_size", form.get("initial_balance", 100000)) or 100000))
+        risk = harden_risk_config(risk, prop_rules=prop_rules, form=form)
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         if import_note:
             initial_log.append(import_note)
@@ -6201,7 +6608,8 @@ def pbo_start():
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
             commission_per_trade=float(form.get("commission", 0) or 0),
         )
-        prop_rules = PropRules(account_size=float(form.get("initial_balance", 100000)))
+        prop_rules = prop_rules_from_form(form) or PropRules(account_size=float(form.get("account_size", form.get("initial_balance", 100000)) or 100000))
+        risk = harden_risk_config(risk, prop_rules=prop_rules, form=form)
         initial_log = [f"Loaded {len(df)} bars from {active_label}.", f"Candidate pool: {len(specs)} ({1} form strategy + {len(pool_specs)} library + {len(variant_specs)} perturbed)."]
         if import_note:
             initial_log.append(import_note)
@@ -6353,8 +6761,11 @@ def sensitivity_start():
             HEAVY_JOB_GUARD.release(JOB_SENSITIVITY)
             return render_template("sensitivity.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
         strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
-        risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000)), pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None), commission_per_trade=float(form.get("commission", 0) or 0))
-        rules = PropRules(account_size=float(form.get("account_size", 100000)))
+        _sens_kw = {"initial_balance": 100000.0, "pip_size": 0.0001}
+        _sens_kw.update(full_risk_kwargs(form))
+        risk = RiskConfig(**_sens_kw)
+        rules = prop_rules_from_form(form) or PropRules(account_size=float(form.get("account_size", 100000)))
+        risk = harden_risk_config(risk, prop_rules=rules, form=form)
         mc_cfg = MonteCarloConfig(n_simulations=int(form.get("mc_sims", 500) or 500))
 
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
@@ -6531,8 +6942,11 @@ def parameter_robustness_start():
                 "parameter_robustness.html", error=dataset_error, stored_datasets=list_stored_datasets(),
                 dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), **_alpaca_template_context()), 400
         strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
-        risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000)), pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None), commission_per_trade=float(form.get("commission", 0) or 0))
-        rules = PropRules(account_size=float(form.get("account_size", 100000)))
+        _pr_kw = {"initial_balance": 100000.0, "pip_size": 0.0001}
+        _pr_kw.update(full_risk_kwargs(form))
+        risk = RiskConfig(**_pr_kw)
+        rules = prop_rules_from_form(form) or PropRules(account_size=float(form.get("account_size", 100000)))
+        risk = harden_risk_config(risk, prop_rules=rules, form=form)
         mc_cfg = MonteCarloConfig(n_simulations=int(form.get("mc_sims", 500) or 500))
 
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
@@ -7788,6 +8202,7 @@ def research_agent_start():
         strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000) or 100000), pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None), commission_per_trade=float(form.get("commission", 0) or 0))
         rules = PropRules(account_size=float(form.get("account_size", 100000) or 100000))
+        risk = harden_risk_config(risk, prop_rules=rules, form=form)
         question = (form.get("question") or "").strip()
         if not question:
             return render_template("research_agent.html", error="Enter a question for the agent to investigate.", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), ai_enabled=False, ai_host="", ai_model="", **_alpaca_template_context()), 400
@@ -7923,6 +8338,7 @@ def research_loop_start():
             commission_per_trade=float(form.get("commission", 0) or 0),
         )
         rules = PropRules(account_size=float(form.get("account_size", 100000) or 100000))
+        risk = harden_risk_config(risk, prop_rules=rules, form=form)
         settings = OllamaSettings(
             enabled=True,
             host=form.get("ai_host", "http://localhost:11434") or "http://localhost:11434",
@@ -9133,6 +9549,7 @@ def research_run():
             daily_loss_limit_pct=float(form.get("daily_loss", 5) or 5),
             max_drawdown_pct=float(form.get("max_dd", 10) or 10),
         )
+        risk = harden_risk_config(risk, prop_rules=rules, form=form)
         window_trading_days = int(form.get("window_trading_days", 30) or 30)
 
         full_bt = research_director._run_spec(spec, df, risk)
