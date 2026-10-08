@@ -83,6 +83,16 @@ class PropFirmPreset:
     # baseline), NOT at the evaluation-pass gate. See the module
     # docstring's MODELING LIMITATION note, updated for v6.
     funded_consistency_rule_pct: float | None = None
+    # Accuracy overhaul: how the bar engine / PropAccount enforce the rules.
+    # "legacy" keeps the pre-overhaul behaviour for presets nobody has
+    # re-verified; a verified preset sets them explicitly.
+    dd_basis: str = "legacy"        # legacy | realized | eod | floating
+    daily_loss_basis: str = "realized"   # realized | floating
+    daily_loss_action: str = "fail"      # fail | lock_day
+    trailing_lock: bool = False
+    trailing_lock_offset_pct: float = 0.0
+    max_contracts: int | None = None     # per-firm cap on mini-equivalent contracts
+    rules_checked_on: str = ""      # date the dd/lock/contract fields above were checked against the firm
     as_of: str = ""                 # date this preset was last checked against the firm's own rules page
     source_note: str = ""           # short pointer to what to re-check and where
 
@@ -116,6 +126,13 @@ class PropFirmPreset:
             max_inactive_days=self.max_inactive_days if self.max_inactive_days > 0 else None,
             floating_drawdown_mode=self.floating_drawdown_mode,
             funded_consistency_rule_pct=self.funded_consistency_rule_pct,
+            dd_basis=self.dd_basis,
+            daily_loss_basis=self.daily_loss_basis,
+            daily_loss_action=self.daily_loss_action,
+            trailing_lock=self.trailing_lock,
+            trailing_lock_offset_pct=self.trailing_lock_offset_pct,
+            max_contracts=self.max_contracts,
+            rules_checked_on=self.rules_checked_on,
         )
 
     def to_dict(self) -> dict:
@@ -546,6 +563,11 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
         account_size=50_000, evaluation_profit_target_pct=6.0,
         daily_loss_limit_pct=2.4, max_drawdown_pct=4.0,
         drawdown_type="trailing", drawdown_check_mode="eod",
+        # Checked 2026-10-07 against tradetanto.com's LucidPro 50K table (secondary source; confirm on
+        # lucidtrading.com): EOD trailing MLL $2,000 that LOCKS at $50,100 once balance exceeds
+        # $52,100; $1,200 daily loss is a soft breach (day locked, account kept); 4 mini / 40 micro.
+        dd_basis="eod", daily_loss_basis="floating", daily_loss_action="lock_day",
+        trailing_lock=True, trailing_lock_offset_pct=0.2, max_contracts=4, rules_checked_on="2026-10-07",
         consistency_rule_pct=None, min_trading_days=1,
         payout_frequency_days=3,
         funded_consistency_rule_pct=40.0,
