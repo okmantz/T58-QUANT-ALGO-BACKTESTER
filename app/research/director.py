@@ -40,7 +40,7 @@ import pandas as pd
 
 from app.backtest.engine import run_backtest, BacktestResult
 from app.backtest.execution import Trade, run_execution
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, build_run_context
 from app.prop.simulator import PropRules
 from app.prop.rolling_evaluation import run_rolling_evaluation
 from app.search.strategy_space import build_strategy_from_spec
@@ -96,7 +96,7 @@ def _row(label: str, bt: BacktestResult | None, prop_rules: PropRules, window_tr
 def _run_spec(spec: dict, df: pd.DataFrame, risk: RiskConfig) -> BacktestResult | None:
     try:
         strategy = build_strategy_from_spec(spec)
-        return run_backtest(df, strategy, risk)
+        return run_backtest(df, strategy, build_run_context(risk))
     except Exception as exc:  # a candidate variant is allowed to be broken/untradeable
         return None
 
@@ -195,6 +195,7 @@ def edge_decomposition(
     and this function will backtest each one and produce the same table
     (skips the manual-only decomposition logic entirely).
     """
+    risk = build_run_context(risk, prop_rules)
     if variants is not None:
         steps = []
         for label, variant_spec in variants:
@@ -310,6 +311,7 @@ def ablation_test(
     yourself as [(rule_name, spec_with_that_rule_removed), ...] -- the
     full/baseline row is always run separately as `spec` itself.
     """
+    risk = build_run_context(risk, prop_rules)
     full_bt = _run_spec(spec, df, risk)
     full_row = _row("Full strategy", full_bt, prop_rules, window_trading_days)
 
@@ -478,6 +480,7 @@ def null_baselines(
     (e.g. ATR-based), pass explicit stop_loss_pips/take_profit_pips to give
     every baseline a comparable, fixed exit structure instead.
     """
+    risk = build_run_context(risk, prop_rules)
     sl = stop_loss_pips if stop_loss_pips is not None else 20.0
     tp = take_profit_pips if take_profit_pips is not None else 30.0
     builders = {k: v for k, v in _NULL_BUILDERS.items() if (only is None or k in only)}
@@ -543,6 +546,7 @@ def random_entry_distribution(
     (1 + #null >= observed) / (1 + N): the share of random-timing runs that did
     at least as well as the real strategy. Old single-seed null_baselines is
     unchanged."""
+    risk = build_run_context(risk)
     from app.backtest.statistics import compute_statistics
     rng = np.random.default_rng(seed)
     n = len(df)
@@ -612,6 +616,7 @@ def signal_degradation(
     if not _is_manual(spec):
         raise ValueError("Signal Degradation Tests currently support Manual Strategy Builder configs only.")
 
+    risk = build_run_context(risk, prop_rules)
     strategy = ManualStrategy(spec["config"])
     strat_result = strategy.generate(df)
     base_signals = strat_result.signals
@@ -836,6 +841,7 @@ def regime_discovery(
     whether the pass rate genuinely improves out of sample."""
     if not trades:
         return {"note": "No trades to analyze."}
+    risk = build_run_context(risk, prop_rules)
 
     features = []
     for t in trades:
