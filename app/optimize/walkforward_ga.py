@@ -67,6 +67,7 @@ from app.optimize.refinement import (
     _stressed_risk_config,
     _tournament_select,
     apply_cost_stress_penalty,
+    apply_ga_reliability_adjustments,
     compute_fitness,
     preflight_signal_check,
 )
@@ -115,9 +116,14 @@ def _chained_fitness(
     app.optimize.refinement._apply_ruin_penalty. None (default) means no
     penalty, byte-identical to before this parameter existed."""
     all_trades: list[Trade] = []
+    _skipped = 0
     for test_df in slices:
-        bt = run_backtest(test_df, strategy_to_run, risk_to_use, adaptive_risk=adaptive_risk)
+        bt = run_backtest(test_df, strategy_to_run, risk_to_use, adaptive_risk=adaptive_risk, lookahead_check="skip")
         all_trades.extend(bt.trades)
+        try:
+            _skipped += int(bt.equity_curve.attrs.get("sizing_halt", {}).get("skipped", 0))
+        except Exception:  # noqa: BLE001
+            pass
     if not all_trades:
         return float("-inf"), 0
     equity = risk_to_use.initial_balance
@@ -134,6 +140,7 @@ def _chained_fitness(
     mc = run_monte_carlo(all_trades, prop_rules, mc_cfg)
     prop_summary = summarize_single_run(single_run)
     fitness = compute_fitness(stats.to_dict(), prop_summary, mc, fitness_metric, risk_of_ruin_cap=risk_of_ruin_cap)
+    fitness = apply_ga_reliability_adjustments(fitness, len(all_trades), _skipped)
     return (fitness if math.isfinite(fitness) else float("-inf")), len(all_trades)
 
 

@@ -1554,3 +1554,37 @@ def run_iterative_refinement(
     finally:
         if tmp_dir is not None:
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# GA reliability adjustments (accuracy overhaul, step 6)
+# ---------------------------------------------------------------------------
+GA_TRADE_FLOOR = 100          # below this many chained OOS trades fitness is scaled down
+GA_HARD_FLOOR = 15            # below this the candidate cannot be ranked at all (-inf)
+GA_MAX_SKIP_RATIO = 0.20      # share of signals skipped for sizing tolerated before penalty
+
+
+def apply_ga_reliability_adjustments(fitness: float, n_trades: int, skipped_for_sizing: int = 0) -> float:
+    """Makes the GA objective unable to prefer a candidate for being quiet.
+
+    * fewer than GA_HARD_FLOOR trades -> -inf (not rankable);
+    * fewer than GA_TRADE_FLOOR trades -> positive fitness scaled by n/floor
+      (a 14-trade lucky seed can no longer beat a 300-trade candidate);
+    * more than GA_MAX_SKIP_RATIO of signals skipped for sizing (a genome
+      that widened its own stop out of the dollar risk budget) -> positive
+      fitness scaled by the share of signals that were actually tradable.
+    Negative fitness is left alone so a bad candidate never improves by
+    trading less. Deterministic: same inputs, same output."""
+    import math as _m
+    if not _m.isfinite(fitness):
+        return fitness
+    if n_trades < GA_HARD_FLOOR:
+        return float("-inf")
+    out = fitness
+    if out > 0:
+        out *= min(1.0, n_trades / float(GA_TRADE_FLOOR))
+        total = n_trades + max(0, int(skipped_for_sizing))
+        skip_ratio = (skipped_for_sizing / total) if total else 0.0
+        if skip_ratio > GA_MAX_SKIP_RATIO:
+            out *= max(0.0, 1.0 - skip_ratio)
+    return out
