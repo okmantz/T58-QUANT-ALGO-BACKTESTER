@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 import pandas as pd
 
 from app.backtest.engine import run_backtest
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, build_run_context
 from app.evolution.prop_fitness import compute_prop_fitness
 from app.monte_carlo.engine import MonteCarloConfig, run_monte_carlo
 from app.prop.simulator import PropRules
@@ -82,6 +82,7 @@ def compare_strategies(
     if not (2 <= len(candidates) <= 4):
         raise CompareError(f"Compare 2-4 strategies at a time, got {len(candidates)}.")
 
+    risk = build_run_context(risk, prop_rules)
     mc_cfg = MonteCarloConfig(n_simulations=mc_n_simulations)
     results: list[CompareCandidateResult] = []
 

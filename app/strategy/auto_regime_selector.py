@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 import pandas as pd
 
 from app.backtest.engine import run_backtest
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, build_run_context
 from app.monte_carlo.engine import MonteCarloConfig, eval_pass_probability_for_trades
 from app.prop.simulator import PropRules
 from app.strategy.base import Strategy
@@ -172,7 +172,7 @@ def select_regime_strategies(
     if not candidates:
         raise RegimeSelectorError("select_regime_strategies needs at least one named candidate strategy.")
 
-    risk_cfg = risk or RiskConfig()
+    risk_cfg = build_run_context(risk or RiskConfig(), prop_rules)
     rules = prop_rules or PropRules()
     mc_cfg = mc_config or MonteCarloConfig(n_simulations=1000)
     resolved_pip_size = pip_size if pip_size is not None else risk_cfg.pip_size
