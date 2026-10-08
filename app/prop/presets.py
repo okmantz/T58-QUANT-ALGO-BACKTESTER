@@ -743,6 +743,37 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
     ),
 ]
 
+# v9.5 (accuracy activation): make the account-rule BASIS explicit on
+# every preset. Before this, PropFirmPreset.dd_basis defaulted to
+# "legacy" and 18 of 19 presets silently inherited it, so the unified
+# PropAccount judged most firms under a basis nobody had chosen -- and
+# the basis alone moved bust counts by ~40% in the Oct 2026 audit's
+# controlled test. The basis below is derived from each preset's OWN
+# already-declared drawdown_check_mode (the firm-facing statement of
+# when the firm checks the floor, recorded when the preset was built):
+# "intrabar" -> the firm watches floating equity inside the day, so the
+# basis is "floating"; "eod" -> "eod". daily_loss_basis follows the same
+# derivation; daily_loss_action stays "fail" except where a preset sets
+# it (Lucid). trailing_lock stays as declared. This makes behavior
+# explicit and testable; it does NOT re-verify any firm against its
+# current rules page (the source_note says so on every touched preset),
+# except lucid_50k, which was verified 2026-10-07 and is left untouched.
+for _p in PROP_FIRM_PRESETS:
+    if _p.dd_basis == "legacy":
+        _basis = "floating" if _p.drawdown_check_mode == "intrabar" else "eod"
+        _note = (
+            "v9.5: dd/daily-loss basis made explicit from this preset's declared "
+            "drawdown_check_mode; NOT re-verified against the firm's current rules "
+            "page -- re-check before relying on pass/fail for this firm."
+        )
+        # PropFirmPreset is frozen; object.__setattr__ is the sanctioned
+        # way to finalize a catalog entry at build time (same pattern as
+        # any post-construction defaulting on a frozen dataclass).
+        object.__setattr__(_p, "dd_basis", _basis)
+        object.__setattr__(_p, "daily_loss_basis", "floating" if _basis == "floating" else "realized")
+        object.__setattr__(_p, "source_note", ((_p.source_note + " ") if _p.source_note else "") + _note)
+del _p
+
 _BY_KEY: dict[str, PropFirmPreset] = {p.key: p for p in PROP_FIRM_PRESETS}
 
 
