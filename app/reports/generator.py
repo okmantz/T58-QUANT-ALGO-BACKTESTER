@@ -21,7 +21,7 @@ import pandas as pd
 
 from app.analysis.exit_quality import analyze_exit_quality
 from app.backtest.engine import BacktestResult
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, describe_simulation
 from app.backtest.statistics import compute_concentration_stats, compute_cost_ladder
 from app.reports._assets import T58_LOGO_BASE64
 from app.monte_carlo.engine import MonteCarloResult
@@ -327,6 +327,10 @@ def build_report(
     # defensively -- the attrs are absent on every run that never hit the
     # zero-floor path, and the report must render identically then.
     report["sizing_halt"] = _read_sizing_halt(backtest_result)
+    try:
+        report["simulation_description"] = describe_simulation(risk_config, prop_rules) if risk_config is not None else None
+    except Exception:  # noqa: BLE001
+        report["simulation_description"] = None
     # PART-A PORT #1 (2026-10-04): exit-quality analysis from per-trade MFE
     # evidence (app/analysis/exit_quality.py). A dict with zero evidence
     # rows renders as a short "not assessable" note in export_html.
@@ -545,6 +549,8 @@ Instrument: {instrument} &middot; Timeframe: {timeframe} &middot; Period: {perio
 <h2>Backtest Configuration</h2>
 <p class="muted">The exact execution/risk assumptions used to produce every dollar figure below. Recorded here so this report can be reproduced or audited later.</p>
 {risk_config_table}
+
+{simulation_section}
 
 {risk_reconciliation_section}
 
@@ -912,6 +918,45 @@ def _downsample(values: list[float], max_points: int = 400) -> list[float]:
     return [values[i] for i in idx]
 
 
+def _simulation_section(report: dict) -> str:
+    """'How this was simulated' -- plain-English describe_simulation lines
+    plus the verdict-threshold text, HTML-escaped. Shared renderer only:
+    every Run & Report / Full Pipeline HTML report goes through
+    export_html here, so adding it once here covers both."""
+    lines: list[str] = []
+    text = report.get("simulation_description") if isinstance(report, dict) else None
+    if text:
+        lines = [ln for ln in str(text).splitlines() if ln.strip()]
+    else:
+        # Re-render path (e.g. export_html on a report dict loaded from
+        # JSON): rebuild the objects from the recorded dicts, filtered to
+        # real dataclass fields, and describe those.
+        try:
+            import dataclasses as _dc
+
+            rc = report.get("risk_config") if isinstance(report, dict) else None
+            if isinstance(rc, dict):
+                rc_fields = {f.name for f in _dc.fields(RiskConfig)}
+                rc_kwargs = {k: v for k, v in rc.items() if k in rc_fields and k != "prop_account_rules"}
+                risk_obj = RiskConfig(**rc_kwargs)
+                rules_obj = None
+                pr = report.get("prop_firm_rules")
+                if isinstance(pr, dict):
+                    pr_fields = {f.name for f in _dc.fields(PropRules)}
+                    rules_obj = PropRules(**{k: v for k, v in pr.items() if k in pr_fields})
+                lines = [ln for ln in describe_simulation(risk_obj, rules_obj).splitlines() if ln.strip()]
+        except Exception:  # noqa: BLE001 -- a report must never die over this section
+            lines = []
+    if not lines:
+        return (
+            "<h2>How this was simulated</h2>"
+            "<p class=\"muted\">No risk configuration was recorded for this run, so the simulation "
+            "assumptions cannot be reconstructed from this report.</p>"
+        )
+    items = "".join(f"<li>{html.escape(str(ln))}</li>" for ln in lines)
+    return f"<h2>How this was simulated</h2><ul>{items}</ul>"
+
+
 def _risk_config_table(risk_config: dict | None) -> str:
     if not risk_config:
         return "<p>No risk configuration was recorded for this run.</p>"
@@ -1170,6 +1215,7 @@ def export_html(
         ),
         final_parameters_section=_final_parameters_section(report.get("final_parameters"), report.get("baseline_parameters")),
         risk_config_table=_risk_config_table(report.get("risk_config")),
+        simulation_section=_simulation_section(report),
         risk_reconciliation_section=_risk_reconciliation_section(report["historical_backtest"]["statistics"]),
         eval_pass=(mc["per_attempt_pass_probability"] if mc.get("reset_on_breach") else mc["evaluation_pass_probability"]),
         first_payout=(mc["per_attempt_payout_probability"] if mc.get("reset_on_breach") else mc["first_payout_probability"]),
