@@ -344,3 +344,10 @@ def find_relevant_excerpts(
         text = chunk.text if len(chunk.text) <= max_chars_per_excerpt else chunk.text[:max_chars_per_excerpt] + "..."
         results.append({"source": chunk.source, "text": text, "score": round(score, 3)})
     return results
+
+
+def extract_hypotheses(chunk, llm=None, store=None, **kw):
+    """Turn a research excerpt into stored, citable, testable hypotheses
+    (see app.discovery.paper_hypotheses)."""
+    from app.discovery.paper_hypotheses import extract_hypotheses as _x
+    return _x(chunk, llm=llm, store=store, **kw)

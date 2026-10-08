@@ -244,8 +244,16 @@ def _ask_ollama_next_hypothesis(
     suggestion = diagnosis.get("suggestion")
     fallback = f"{prior_idea.strip()} {suggestion}".strip() if suggestion else prior_idea
 
-    if not settings.is_usable or not suggestion:
+    if not suggestion:
         return fallback, False
+    if not settings.is_usable:
+        from app.ai.llm_client import complete_text, remote_available
+        if not remote_available():
+            return fallback, False
+        _p = ("A trading strategy failed. Original hypothesis: " + prior_idea + "\nComputed diagnostic: " + str(suggestion) +
+              "\nIn 2-3 sentences propose ONE specific structural change to test next. No code. Reply with only the revised hypothesis.")
+        _t, _e = complete_text(_p)
+        return ((_t or "").strip() or fallback), bool(_t and _t.strip())
 
     prompt = (
         "You are a quantitative trading research assistant. A trading strategy was tested and "

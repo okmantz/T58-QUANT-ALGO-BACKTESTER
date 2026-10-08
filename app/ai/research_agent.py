@@ -623,6 +623,9 @@ class ResearchAgent:
 
     def _call_ollama(self, prompt: str) -> tuple[str | None, str | None]:
         import requests
+        if not self.settings.is_usable:
+            from app.ai.llm_client import complete_text
+            return complete_text(prompt)
 
         host = (self.settings.host or "").rstrip("/")
         if not host:
@@ -657,8 +660,10 @@ class ResearchAgent:
     ) -> AgentRunResult:
         result = AgentRunResult()
         if not self.settings.is_usable:
-            result.error = "AI Assist is not enabled -- turn it on and confirm TEST CONNECTION works first."
-            return result
+            from app.ai.llm_client import remote_available
+            if not remote_available():
+                result.error = "AI Assist is not enabled and no Claude/OpenAI key is saved -- turn AI Assist on (TEST CONNECTION) or save an API key."
+                return result
 
         tools = build_tool_registry(ctx, self.settings)
         system_prompt = build_system_prompt(ctx.strategy_name, ctx.source_type, ctx.instrument, tools, question)

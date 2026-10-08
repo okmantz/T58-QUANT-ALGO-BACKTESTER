@@ -75,6 +75,16 @@ def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(str(_db_path()))
     conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA)
+    # additive migration (hypothesis linkage); old rows stay readable
+    for col in ("hypothesis_id TEXT", "cell TEXT"):
+        try:
+            conn.execute(f"ALTER TABLE experiments ADD COLUMN {col}")
+        except sqlite3.OperationalError:
+            pass
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_experiments_hypothesis ON experiments(hypothesis_id)")
+    except sqlite3.OperationalError:
+        pass
     return conn
 
 
@@ -162,8 +172,12 @@ def record_experiment(
     lesson: str = "",
     config: dict | None = None,
     settings: OllamaSettings | None = None,
+    hypothesis_id: str | None = None,
+    cell: str | None = None,
 ) -> str | None:
-    """Records one completed experiment. Returns the new experiment's id,
+    """Records one completed experiment. hypothesis_id / cell (e.g. 'NQ/15min')
+    link the row to a discovery hypothesis so "what happened when we tested this
+    idea" is one query (see experiments_for_hypothesis / already_tested). Returns the new experiment's id,
     or None if recording failed for any reason (never raises -- this is
     called from the tail end of Full Pipeline / Quick Optimize / Batch
     Test runs and must never be able to turn a successful backtest run
@@ -201,6 +215,8 @@ def record_experiment(
                     summary, lesson, json.dumps(config or {}),
                 ),
             )
+            if hypothesis_id or cell:
+                conn.execute("UPDATE experiments SET hypothesis_id = ?, cell = ? WHERE id = ?", (hypothesis_id, cell, exp_id))
         conn.close()
     except Exception:
         return None
@@ -495,3 +511,23 @@ def is_dna_tagset_previously_discarded(
         jaccard = len(tag_set & past_set) / len(union)
         best = max(best, jaccard)
     return best >= min_jaccard, best
+
+
+def experiments_for_hypothesis(hypothesis_id: str) -> list[dict]:
+    """Every recorded experiment row for a hypothesis (any origin), oldest first."""
+    try:
+        conn = _connect()
+        rows = conn.execute(
+            "SELECT id, created_at, origin, strategy_name, instrument, verdict, trades, net_profit, profit_factor, "
+            "summary, lesson, cell FROM experiments WHERE hypothesis_id = ? ORDER BY created_at", (hypothesis_id,)
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def already_tested(hypothesis_id: str, cell: str | None = None) -> list[dict]:
+    """Prior rows for this hypothesis (optionally one market/timeframe cell)."""
+    rows = experiments_for_hypothesis(hypothesis_id)
+    return [r for r in rows if cell is None or r.get("cell") == cell]

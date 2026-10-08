@@ -306,7 +306,22 @@ def generate_strategy(
     if not idea or not idea.strip():
         return GenerationResult(error="Describe the strategy idea first -- entry/exit logic, indicators, market, etc.")
     if not settings.is_usable:
-        return GenerationResult(error="Ollama isn't enabled/configured -- set it up first (see AI Assist settings).")
+        from app.ai.llm_client import complete_text, remote_available
+        if not remote_available():
+            return GenerationResult(error="Ollama isn't enabled/configured and no Claude/OpenAI key is saved -- set one up first (see AI Assist / API keys settings).")
+        try:
+            from app.ai.research_library import find_relevant_excerpts
+            _ex = find_relevant_excerpts(idea, max_excerpts=n_research_excerpts)
+        except Exception:
+            _ex = []
+        _prompt = _build_prompt(language, idea, research_excerpts=_ex, prior_examples=gather_prior_examples(language, max_examples=n_prior_examples))
+        _text, _err = complete_text(_prompt)
+        if _text is None:
+            return GenerationResult(error=f"Hosted model request failed: {_err}")
+        _code = _extract_code(_text)
+        if not _code:
+            return GenerationResult(error="The hosted model responded, but nothing that looked like code could be extracted.", rationale=_text[:1000])
+        return GenerationResult(code=_code, filename_hint=_slugify(idea), rationale=_text[:2000])
 
     try:
         from app.ai.research_library import find_relevant_excerpts
