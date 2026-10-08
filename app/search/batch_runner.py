@@ -581,22 +581,39 @@ def _candidate_median_stop_pips(spec: dict, risk: RiskConfig, df) -> float | Non
 
 def _prescreen_funding(base: dict, spec: dict, risk: RiskConfig, df) -> dict | None:
     """w10-astra B3: returns a skip-result dict when the candidate cannot
-    afford 1 whole contract at its median stop, else None (proceed to the
-    Stage 1 backtest). The skip mirrors the engine's own whole-contract
-    flooring exactly: RiskConfig.position_size() < contract_size."""
+    afford 1 whole contract at its median stop AS DESIGNED, else None
+    (proceed to the Stage 1 backtest). Affordability is judged at the
+    candidate's own stop via RiskConfig.size_for_stop(): a decision that
+    only fits by capping the stop (stop_capped, e.g. fit_stop) does not
+    count as fundable -- that would silently trade a different strategy
+    than the one the candidate specifies."""
     if not getattr(risk, "contract_size", None):
         return None  # no whole-contract flooring in play -- nothing to pre-screen
     stop_pips = _candidate_median_stop_pips(spec, risk, df)
     if stop_pips is None or not math.isfinite(stop_pips) or stop_pips <= 0:
         return None
-    units = risk.position_size(risk.initial_balance, stop_pips)
-    if units >= risk.contract_size - 1e-9:
+    # Screen at the candidate's OWN designed stop: a sizing mode like
+    # fit_stop that only makes the trade affordable by shrinking the stop
+    # (stop_capped) is trading a different strategy than the one designed,
+    # so for screening purposes it counts as unfundable -- the prefilter's
+    # contract is "can't trade as designed -> skip cheaply".
+    decision = risk.size_for_stop(risk.initial_balance, stop_pips * risk.pip_size)
+    units = decision.units
+    if units >= risk.contract_size - 1e-9 and not decision.stop_capped:
         return None
-    detail = (
-        f"risk_value={risk.risk_value}% of ${risk.initial_balance:,.0f} cannot afford "
-        f"1 contract (contract_size={risk.contract_size:g}) at this candidate's median "
-        f"stop of {stop_pips:.1f} pips -- every signal would floor to 0 contracts"
-    )
+    if decision.stop_capped and units >= risk.contract_size - 1e-9:
+        detail = (
+            f"risk_value={risk.risk_value}% of ${risk.initial_balance:,.0f} can only afford "
+            f"1 contract (contract_size={risk.contract_size:g}) at this candidate's median "
+            f"stop of {stop_pips:.1f} pips by capping the stop to "
+            f"{decision.stop_distance / risk.pip_size:.1f} pips -- not tradeable as designed"
+        )
+    else:
+        detail = (
+            f"risk_value={risk.risk_value}% of ${risk.initial_balance:,.0f} cannot afford "
+            f"1 contract (contract_size={risk.contract_size:g}) at this candidate's median "
+            f"stop of {stop_pips:.1f} pips -- every signal would floor to 0 contracts"
+        )
     return {
         **base,
         "passed_stage1": False,
