@@ -462,6 +462,19 @@ def strategy_exists(strategy_type: str, filename: str) -> bool:
     return (get_strategy_library_dir(t) / name).exists()
 
 
+def _looks_like_manual_config(path: Path) -> bool:
+    """True when an extensionless file is actually a manual-builder
+    strategy config (JSON object with entry_conditions). Used so a
+    strategy uploaded without its .json extension still appears in the
+    library instead of silently vanishing."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        return False
+    return isinstance(data, dict) and "entry_conditions" in data
+
+
 def list_saved_strategies(
     strategy_type: str | None = None,
     query: str = "",
@@ -488,7 +501,23 @@ def list_saved_strategies(
     out: list[StoredStrategy] = []
     for t in types:
         d = get_strategy_library_dir(t)
-        for f in sorted(d.glob(f"*{_EXTENSIONS[t]}")):
+        _files = list(sorted(d.glob(f"*{_EXTENSIONS[t]}")))
+        if t == "manual":
+            # v9.5: a manual strategy saved/uploaded WITHOUT the .json
+            # extension (e.g. "ES1! Momentum Continuation 5m" from a
+            # GitHub upload) was invisible to the extension glob above --
+            # the file sat in strategies/manual/ and never appeared in
+            # the app. Extensionless files that parse as a manual config
+            # (JSON object carrying entry_conditions) are strategies too.
+            for _cand in sorted(d.iterdir()):
+                if (
+                    _cand.is_file()
+                    and _cand.suffix == ""
+                    and not _cand.name.endswith(_META_SUFFIX)
+                    and _looks_like_manual_config(_cand)
+                ):
+                    _files.append(_cand)
+        for f in _files:
             if not f.is_file():
                 continue
             # "manual"'s own extension (.json) is a suffix of every
