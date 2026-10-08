@@ -635,6 +635,36 @@ def with_prop_safety_defaults(risk: "RiskConfig", prop_rules) -> "RiskConfig":
     account_size = getattr(prop_rules, "account_size", None)
     if account_size is not None and risk.initial_balance != account_size:
         updates["initial_balance"] = account_size
+    # v9.5 (accuracy activation): a run that carries prop rules IS a prop
+    # evaluation, so the corrected account semantics must be the ones the
+    # raw backtest itself uses -- not an opt-in the caller has to remember.
+    # Before this, account_model stayed "legacy" (static realized floor +
+    # equity teleport on reset) for every pipeline that did not explicitly
+    # ask for "prop", while the post-hoc simulator judged the same trades
+    # under trailing/floating rules: two rule books, one report. Now the
+    # engine, the trade-list simulator, attempt replay and Monte Carlo all
+    # read the same PropRules through app.prop.account.PropAccount.
+    if prop_rules is not None:
+        updates["account_model"] = "prop"
+        updates["prop_account_rules"] = prop_rules
+        # Sizing: "risk UP TO the budget" is how a trader actually trades
+        # (pick the dollars, then place the stop). The legacy default
+        # "skip" derives contracts from the strategy's own stop and sizes
+        # to ZERO whenever one contract at that stop exceeds the budget --
+        # the 99%-of-signals-skipped failure from the Oct 2026 audit.
+        # fit_stop caps the stop at the budget (costs included) so one
+        # contract at a $450 stop on a $50k account trades exactly like
+        # the manual trade it models. Callers that explicitly chose
+        # fixed_contracts / micro_fallback keep their mode.
+        if risk.sizing_mode == "skip":
+            updates["sizing_mode"] = "fit_stop"
+        # Intrabar replay only engages when a finer frame is available
+        # (engine.run_backtest derives one automatically when the raw
+        # data is finer than the strategy timeframe); enabling it here
+        # makes stop/target order inside a bar resolve on real 1-minute
+        # paths instead of the bar's high/low, stop-first.
+        if not risk.intrabar_replay:
+            updates["intrabar_replay"] = True
     if not updates:
         return risk
     return replace(risk, **updates)

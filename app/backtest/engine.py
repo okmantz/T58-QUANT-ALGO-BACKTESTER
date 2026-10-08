@@ -238,7 +238,22 @@ def run_backtest(
     # everywhere with no other caller needing to change. A strategy that
     # declares nothing gets `df` back completely unchanged -- byte-
     # identical to every run before this existed.
+    _raw_native_df = df
     df, timeframe_warnings = prepare_timeframe_aligned_data(df, strategy)
+
+    # v9.5: intrabar replay auto-derivation. When the strategy runs on a
+    # resampled (coarser) frame but the caller handed us finer native bars
+    # and risk.intrabar_replay is on, the native frame IS the intrabar
+    # frame: stop/target order inside each strategy bar resolves on the
+    # real finer path instead of the coarse bar's high/low (stop-first).
+    # No finer data -> nothing changes (execution ignores intrabar_df
+    # unless it is strictly finer than the strategy bars).
+    if (
+        intrabar_df is None
+        and getattr(risk, "intrabar_replay", False)
+        and len(df) < len(_raw_native_df)
+    ):
+        intrabar_df = _raw_native_df
 
     strat_result: StrategyResult = strategy.generate(df)
 
