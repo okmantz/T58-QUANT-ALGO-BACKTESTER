@@ -409,6 +409,54 @@ def run_execution(
     # round-trip.
     _ts_tz = getattr(df["timestamp"].dtype, "tz", None)
 
+    # ---- 1-minute (finer-bar) fill-order replay -------------------------
+    # A strategy bar that touched BOTH the resting stop and the target does
+    # not tell us which traded first. With risk.intrabar_replay and a finer
+    # frame we walk the finer bars inside [ts[i], ts[i+1]) in time order.
+    _ib_on = False
+    _ib_ts = _ib_hi = _ib_lo = None
+    if getattr(risk, "intrabar_replay", False) and intrabar_df is not None and len(intrabar_df) > 0:
+        _ibd = intrabar_df.sort_values("timestamp")
+        _ibt = pd.to_datetime(_ibd["timestamp"])
+        if getattr(_ibt.dt, "tz", None) is not None:
+            _ibt = _ibt.dt.tz_convert("UTC").dt.tz_localize(None)
+        _ib_ts = _ibt.values.astype("datetime64[ns]")
+        _ib_hi = _ibd["high"].to_numpy(dtype=np.float64)
+        _ib_lo = _ibd["low"].to_numpy(dtype=np.float64)
+        _ib_on = True
+    _bar_span = None
+    if _ib_on and n > 1:
+        _d = np.diff(ts.astype("datetime64[ns]"))
+        _bar_span = np.median(_d) if len(_d) else None
+
+    def _intrabar_first_hit(direction_: int, stop_, take_, i_: int):
+        """'stop' / 'take' / None: which resting level traded first inside
+        bar i_ according to the finer frame. Same finer bar touching both
+        resolves to the stop (conservative). None = finer data does not
+        cover the bar (caller falls back to the bar-level rule)."""
+        if not _ib_on or stop_ is None or take_ is None:
+            return None
+        t0 = ts[i_].astype("datetime64[ns]")
+        t1 = ts[i_ + 1].astype("datetime64[ns]") if i_ + 1 < n else (t0 + _bar_span if _bar_span is not None else None)
+        if t1 is None:
+            return None
+        a = int(np.searchsorted(_ib_ts, t0, side="left"))
+        b = int(np.searchsorted(_ib_ts, t1, side="left"))
+        if b <= a:
+            return None
+        hi = _ib_hi[a:b]
+        lo = _ib_lo[a:b]
+        if direction_ == 1:
+            hs, ht = lo <= stop_, hi >= take_
+        else:
+            hs, ht = hi >= stop_, lo <= take_
+        any_s, any_t = hs.any(), ht.any()
+        if not any_s and not any_t:
+            return None
+        fs = int(np.argmax(hs)) if any_s else len(hs) + 1
+        ft = int(np.argmax(ht)) if any_t else len(ht) + 1
+        return "take" if ft < fs else "stop"
+
     def _restore_tz(ts_value) -> pd.Timestamp:
         """Rebuilds a `pd.Timestamp` from a raw `ts[i]` numpy datetime64
         value with the original column's tz reattached. A tz-aware pandas
@@ -1076,6 +1124,19 @@ def run_execution(
             # consistent with stop-beats-target ordering in
             # _resolve_intrabar_exit (the take-profit is deliberately NOT
             # pre-checked -- take handling is unchanged).
+            if _ib_on and open_trade["take_price"] is not None and stop is not None:
+                _both_s, _ = _resolve_intrabar_exit(direction, stop, None, lows[i], highs[i], opens[i])
+                _both_t, _ = _resolve_intrabar_exit(direction, None, open_trade["take_price"], lows[i], highs[i], opens[i])
+                if _both_s is not None and _both_t is not None:
+                    _first = _intrabar_first_hit(direction, stop, open_trade["take_price"], i)
+                    open_trade["fill_resolution"] = "intrabar"
+                    if _first == "take" and not (
+                        (direction == 1 and opens[i] <= stop) or (direction == -1 and opens[i] >= stop)
+                    ):
+                        _settle_exit(open_trade, open_trade["take_price"], "take_profit", direction, i)
+                        open_trade = None
+                        equity_arr[i] = equity
+                        continue
             _pre_tighten_exit, _pre_tighten_reason = _resolve_intrabar_exit(
                 direction, stop, None, lows[i], highs[i], opens[i]
             )

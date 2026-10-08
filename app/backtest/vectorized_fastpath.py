@@ -165,6 +165,8 @@ def is_vectorizable(strat_result) -> bool:
     fixed-pips-only gate excluded). Anything with a trailing stop, a
     breakeven trigger, or a partial-exit/scale-out config must go through
     the real engine instead -- see module docstring."""
+    if getattr(strat_result, "entry_orders", None) is not None:
+        return False  # resting-order / zone strategies: slow path only, never silently mis-scored
     sl = strat_result.stop_loss_distance
     tp = strat_result.take_profit_distance
     dynamic_ok = (sl is None or _is_perbar_distance(sl)) and (tp is None or _is_perbar_distance(tp))
