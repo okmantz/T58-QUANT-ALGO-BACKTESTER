@@ -54,6 +54,12 @@ class StrategyResult:
     # per trade. None/omitted = no partial exit, identical to every
     # backtest run before this field existed.
     partial_exit: dict | None = None
+    # Resting-order strategies (zone retests, limit entries): a list of
+    # app.backtest.resting_orders.LimitOrder carrying ABSOLUTE stop/target
+    # prices. When set, run_backtest simulates these orders (trade-through
+    # fills, stop before target on ambiguous bars) instead of the per-bar
+    # signal series. None keeps every existing strategy unchanged.
+    entry_orders: list | None = None
 
 
 class Strategy:

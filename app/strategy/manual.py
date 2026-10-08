@@ -817,6 +817,15 @@ class ManualStrategy(Strategy):
     # ------------------------------------------------------------------
     def generate(self, df: pd.DataFrame) -> StrategyResult:
         cfg = self.config
+        if cfg.get("zone_entry"):
+            # Resting-order strategy: "buy the first retrace into the zone, stop beyond the far edge,
+            # target N x risk". See app.strategy.zones for the lifecycle and causality rules.
+            from app.strategy.zones import zone_orders_from_config
+            orders = zone_orders_from_config(df, cfg["zone_entry"])
+            return StrategyResult(
+                name=cfg.get("name", "Zone strategy"), source_type=self.source_type,
+                signals=pd.Series(0, index=df.index, dtype=int), entry_orders=orders,
+            )
         # w10-astra: drop any cached quant-lab profiles from a previous
         # generate() call -- they belong to that call's `work` frame.
         self.__dict__.pop("_w10_quant_lab_cache", None)
