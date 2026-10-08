@@ -1,0 +1,99 @@
+{
+  "entry_conditions": {
+    "long": [
+      {
+        "left": {
+          "field": "close",
+          "period": 3,
+          "type": "rsi"
+        },
+        "operator": ">",
+        "right": {
+          "type": "value",
+          "value": 98.88692530991534
+        }
+      },
+      {
+        "left": {
+          "type": "macd_histogram"
+        },
+        "operator": ">",
+        "right": {
+          "type": "value",
+          "value": 0.48724664255854844
+        }
+      }
+    ],
+    "long_connectors": [
+      "AND"
+    ],
+    "short": [
+      {
+        "left": {
+          "field": "close",
+          "period": 20,
+          "type": "rsi"
+        },
+        "operator": "<",
+        "right": {
+          "type": "value",
+          "value": 25.094868438091694
+        }
+      },
+      {
+        "left": {
+          "type": "macd_histogram"
+        },
+        "operator": "<",
+        "right": {
+          "type": "value",
+          "value": -0.19170053059625192
+        }
+      }
+    ],
+    "short_connectors": [
+      "AND"
+    ]
+  },
+  "exit_conditions": {
+    "long": [
+      {
+        "left": {
+          "field": "close",
+          "period": 15,
+          "type": "rsi"
+        },
+        "operator": "<",
+        "right": {
+          "type": "value",
+          "value": 67.70614852464581
+        }
+      }
+    ],
+    "short": [
+      {
+        "left": {
+          "field": "close",
+          "period": 23,
+          "type": "rsi"
+        },
+        "operator": ">",
+        "right": {
+          "type": "value",
+          "value": 33.33142587698031
+        }
+      }
+    ]
+  },
+  "name": "Momentum Continuation (rsi7>65, macd hist confirm) [quick_optimize, seed=42, 2026-10-06] [quick_optimize, seed=42, 2026-10-06]",
+  "risk_management": {
+    "opposite_signal_exit": true,
+    "stop_atr_period": 8,
+    "stop_type": "atr",
+    "stop_value": 4.5,
+    "target_atr_period": 18,
+    "target_type": "atr",
+    "target_value": 4.2721038410292
+  },
+  "timeframe": "5m"
+}
