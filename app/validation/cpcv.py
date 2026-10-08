@@ -55,7 +55,7 @@ import numpy as np
 import pandas as pd
 
 from app.backtest.engine import run_backtest
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, build_run_context
 from app.search.strategy_space import StrategySpaceError, build_strategy_from_spec
 
 
@@ -154,6 +154,7 @@ def run_cpcv(
     run_walk_forward) -- required because some strategy sources cache
     state keyed to the data they last saw.
     """
+    risk = build_run_context(risk, prop_rules)
     if metric == "eval_pass_probability" and prop_rules is None:
         metric = "profit_factor"  # can't run per-path Monte Carlo without prop rules
 
@@ -317,6 +318,7 @@ def compute_pbo(
     the result is degenerate by construction (pbo will be 0 or 1 and the
     note says so).
     """
+    risk = build_run_context(risk, prop_rules)
     if metric == "eval_pass_probability" and prop_rules is None:
         metric = "sharpe_ratio"  # can't run per-candidate Monte Carlo without prop rules
 

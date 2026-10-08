@@ -36,7 +36,7 @@ import numpy as np
 import pandas as pd
 
 from app.backtest.engine import run_backtest
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, build_run_context
 from app.monte_carlo.engine import MonteCarloConfig, run_monte_carlo
 from app.optimize.parameter_space import RefinementError
 from app.optimize.refinement import _build_adapter, compute_fitness
@@ -161,6 +161,7 @@ def compute_base_metric(
     downstream call via their own base_metric= parameter, instead of
     quietly recomputing an identical result over and over.
     """
+    risk = build_run_context(risk, prop_rules)
     genes, build = _build_adapter(strategy, tmp_dir)
     if not genes:
         raise RefinementError(
@@ -208,6 +209,7 @@ def compute_1d_sensitivity(
     robustness, which also needs the same baseline for its 2D heatmaps)
     has already computed it, to skip the computation here entirely.
     """
+    risk = build_run_context(risk, prop_rules)
     genes, build = _build_adapter(strategy, tmp_dir)
     if not genes:
         raise RefinementError(
@@ -296,6 +298,7 @@ def compute_2d_heatmap(
     identical backtest+Monte-Carlo run when the caller (e.g.
     compute_parameter_robustness) already has one on hand.
     """
+    risk = build_run_context(risk, prop_rules)
     genes, build = _build_adapter(strategy, tmp_dir)
     if not genes:
         raise RefinementError("This strategy has no tunable numeric parameters.")

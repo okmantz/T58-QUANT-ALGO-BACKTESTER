@@ -65,7 +65,7 @@ import numpy as np
 import pandas as pd
 
 from app.backtest.engine import run_backtest
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, build_run_context
 from app.strategy.base import Strategy
 from app.strategy.indicators import atr as _atr_ind
 from app.strategy.indicators import bollinger, ema
@@ -558,6 +558,7 @@ def run_regime_matrix(
     from the same run driving your leaderboard/report), call
     build_regime_matrix(df, bt_result.trades, risk.initial_balance, ...)
     directly instead of paying for a second backtest."""
+    risk = build_run_context(risk)
     bt_result = run_backtest(df, strategy, risk)
     return build_regime_matrix(
         df, bt_result.trades, risk.initial_balance, dimensions=dimensions,

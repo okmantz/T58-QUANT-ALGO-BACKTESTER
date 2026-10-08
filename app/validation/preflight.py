@@ -193,11 +193,95 @@ def baseline_preflight(
         ratio = float(halt.get("skip_ratio", 0.0))
         rep.facts["sizing_skip_ratio"] = ratio
         if ratio > max_skip_ratio:
-            add("block", "sizing_skips",
+            # Dollar terms (A1): say which lever fixes this, in dollars,
+            # using only facts actually available -- never invented numbers.
+            try:
+                budget = float(risk.risk_amount(float(risk.initial_balance)))
+            except Exception:  # noqa: BLE001
+                budget = None
+            if risk.risk_mode == "fixed":
+                budget_txt = f"risk budget is ${budget:,.0f} per trade (fixed ${float(risk.risk_value):,.0f})" if budget is not None else "risk budget is a fixed dollar amount"
+            else:
+                budget_txt = (
+                    f"risk budget is ${budget:,.0f} per trade ({float(risk.risk_value):g}% of ${float(risk.initial_balance):,.0f})"
+                    if budget is not None else f"risk budget is {float(risk.risk_value):g}% per trade"
+                )
+            # One-contract risk at the strategy's stop, if computable.
+            needed = None
+            stop_dist = None
+            for _key in ("stop_distance_price", "stop_distance", "one_contract_risk_at_stop", "risk_at_stop_dollars", "stop_dollars"):
+                if halt.get(_key):
+                    try:
+                        _val = float(halt[_key])
+                    except Exception:  # noqa: BLE001
+                        continue
+                    if _key in ("one_contract_risk_at_stop", "risk_at_stop_dollars", "stop_dollars"):
+                        needed = _val
+                    else:
+                        stop_dist = _val
+                    break
+            if stop_dist is None and stop_loss_pips:
+                try:
+                    stop_dist = float(stop_loss_pips) * float(risk.pip_size)
+                except Exception:  # noqa: BLE001
+                    stop_dist = None
+            if needed is None and stop_dist:
+                try:
+                    units = float(risk.contract_size) if risk.contract_size else 1.0
+                    needed = float(risk.worst_case_loss(units, float(stop_dist)))
+                except Exception:  # noqa: BLE001
+                    needed = None
+            if needed is None:
+                for _trade in (getattr(baseline_bt, "trades", None) or []):
+                    _rat = getattr(_trade, "risk_at_stop_dollars", None)
+                    if _rat:
+                        try:
+                            needed = float(_rat)
+                        except Exception:  # noqa: BLE001
+                            needed = None
+                        break
+            if needed is not None:
+                rep.facts["one_contract_risk_at_stop"] = needed
+            # Micro-contract alternative, named when a mapping exists.
+            micro_txt = "a micro contract"
+            try:
+                from app.data.instrument_specs import (
+                    KNOWN_INSTRUMENTS,
+                    guess_any_instrument_symbol,
+                    micro_equivalent,
+                )
+
+                _sym = halt.get("symbol") or halt.get("instrument") or symbol
+                _root = guess_any_instrument_symbol(str(_sym)) if _sym else None
+                if _root is None and risk.contract_size:
+                    for _spec in KNOWN_INSTRUMENTS.values():
+                        if abs(float(_spec.contract_size) - float(risk.contract_size)) < 1e-9 and abs(float(_spec.pip_size) - float(risk.pip_size)) < 1e-12:
+                            _root = _spec.symbol
+                            break
+                _micro = micro_equivalent(_root) if _root else None
+                if _micro is not None:
+                    _vs = f" vs ${float(risk.contract_size):g}/point here" if risk.contract_size else ""
+                    micro_txt = (
+                        f"the micro contract {_micro.symbol} (micro equivalent of {_root}, "
+                        f"${_micro.contract_size:g}/point{_vs})"
+                    )
+                elif _root:
+                    micro_txt = f"a micro contract, if one exists for {_root}"
+            except Exception:  # noqa: BLE001
+                micro_txt = "a micro contract (for example MES for ES, MNQ for NQ, or MGC for GC)"
+            one_contract_txt = f" One contract at the strategy's stop risks about ${needed:,.0f}." if needed is not None else ""
+            msg = (
                 f"{ratio:.0%} of signals ({halt.get('skipped', 0)}) were skipped because the risk budget "
-                f"cannot buy one contract at the strategy's stop (limit {max_skip_ratio:.0%}). Use "
-                "sizing_mode='fit_stop' or 'micro_fallback', a micro contract, or a tighter stop. "
-                f"Reasons: {halt.get('skip_reasons', {})}")
+                f"cannot buy one contract at the strategy's stop (limit {max_skip_ratio:.0%}). The {budget_txt}.{one_contract_txt} "
+                f"Fixes, in dollars: raise the risk budget per trade; switch to {micro_txt} with sizing_mode='micro_fallback'; "
+                f"use sizing_mode='fit_stop' and consider lowering the don't-shrink-below lever "
+                f"(fit_stop_min_fraction is currently {float(getattr(risk, 'fit_stop_min_fraction', 0.2)):g} -- a capped stop below that "
+                "fraction of the strategy's stop is skipped instead of shrunk); tighten the strategy stop; or raise the risk budget. "
+                f"Reasons: {halt.get('skip_reasons', {})}"
+            )
+            if needed is not None and budget is not None:
+                msg += f" This would need ≈ ${needed:,.0f} per trade at the current stop, vs ${budget:,.0f} configured."
+            add("block", "sizing_skips", msg)
     except Exception:  # noqa: BLE001
         pass
     longs = sum(1 for t in baseline_bt.trades if t.direction == 1)

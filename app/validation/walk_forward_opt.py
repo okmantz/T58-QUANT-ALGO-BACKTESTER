@@ -57,7 +57,7 @@ import pandas as pd
 
 from app.backtest.engine import BacktestResult, run_backtest
 from app.backtest.execution import Trade
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, build_run_context
 from app.backtest.statistics import BacktestStatistics, compute_statistics
 from app.monte_carlo.engine import MonteCarloConfig
 from app.optimize.parameter_space import RefinementError
@@ -485,6 +485,7 @@ def run_walk_forward_optimization(
     t0 = time.time()
     warnings: list[str] = []
     refine_cfg = refine_cfg or RefinementConfig(population_size=8, generations=3, search_monte_carlo_sims=200)
+    risk = build_run_context(risk, prop_rules)
     rng = random.Random(random_seed)
 
     raw_folds = build_folds(df, n_folds=n_folds, window_mode=window_mode, train_frac=train_frac, embargo_bars=embargo_bars)

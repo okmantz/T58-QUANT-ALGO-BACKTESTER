@@ -43,7 +43,7 @@ from typing import Callable, Optional
 import numpy as np
 import pandas as pd
 
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, build_run_context
 from app.monte_carlo.engine import MonteCarloConfig
 from app.optimize.parameter_space import RefinementError
 from app.prop.simulator import PropRules
@@ -225,6 +225,7 @@ def compute_parameter_robustness(
     finishes, so a job page has something to show throughout instead of
     going silent for the whole run.
     """
+    risk = build_run_context(risk, prop_rules)
     genes_available = list_tunable_parameters(strategy, tmp_dir)
     if not genes_available:
         raise RefinementError(
