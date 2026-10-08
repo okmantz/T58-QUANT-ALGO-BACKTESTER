@@ -518,6 +518,67 @@ def null_baselines(
     return {"target": target_row, "baselines": rows, "best_baseline": best_null, "edge_contribution": edge_contribution, "verdict": verdict}
 
 
+def random_entry_distribution(
+    df: pd.DataFrame,
+    risk: RiskConfig,
+    observed_value: float,
+    n_entries: int,
+    long_fraction: float = 0.5,
+    hold_bars: int = 12,
+    *,
+    stop_loss_pips: float | None = None,
+    take_profit_pips: float | None = None,
+    stop_loss_distance=None,
+    take_profit_distance=None,
+    metric: str = "net_profit",
+    n_seeds: int = 200,
+    seed: int = 0,
+) -> dict:
+    """Random-entry null as a DISTRIBUTION (not one seed).
+
+    Each seed draws `n_entries` random entry bars (same count and long/short mix
+    as the strategy), keeps the strategy's OWN exits and sizing, runs the real
+    engine and records `metric` ('net_profit' | 'profit_factor' |
+    'expectancy'). Returns the null values and the one-sided p-value
+    (1 + #null >= observed) / (1 + N): the share of random-timing runs that did
+    at least as well as the real strategy. Old single-seed null_baselines is
+    unchanged."""
+    from app.backtest.statistics import compute_statistics
+    rng = np.random.default_rng(seed)
+    n = len(df)
+    hold = max(1, int(hold_bars))
+    vals: list[float] = []
+    import warnings
+    for _ in range(int(n_seeds)):
+        k = max(1, min(int(n_entries), n // (hold + 1)))
+        slots = rng.choice(np.arange(0, n - hold - 1, hold + 1), size=min(k, max(1, (n - hold - 1) // (hold + 1))), replace=False)
+        sig = np.zeros(n, dtype=int)
+        for st in slots:
+            sig[st:st + hold] = 1 if rng.random() < long_fraction else -1
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                trades, eq = run_execution(df=df, signals=pd.Series(sig, index=df.index), risk=risk,
+                                           stop_loss_pips=stop_loss_pips, take_profit_pips=take_profit_pips,
+                                           stop_loss_distance=stop_loss_distance, take_profit_distance=take_profit_distance)
+            st_ = compute_statistics(trades, eq, initial_balance=risk.initial_balance)
+            if metric == "profit_factor":
+                v = float(st_.profit_factor) if np.isfinite(st_.profit_factor) else 10.0
+            elif metric == "expectancy":
+                v = float(np.mean([t.pnl for t in trades])) if trades else 0.0
+            else:
+                v = float(st_.net_profit)
+        except Exception:  # noqa: BLE001
+            v = float("nan")
+        vals.append(v)
+    arr = np.array([v for v in vals if np.isfinite(v)])
+    if len(arr) == 0:
+        return {"metric": metric, "n_seeds": 0, "p_value": None, "observed": observed_value, "null": []}
+    p = float((1 + np.sum(arr >= observed_value)) / (1 + len(arr)))
+    return {"metric": metric, "n_seeds": int(len(arr)), "observed": float(observed_value), "p_value": p,
+            "null_mean": float(arr.mean()), "null_p95": float(np.percentile(arr, 95)), "null": arr.tolist()}
+
+
 # ---------------------------------------------------------------------------
 # 4. Signal Degradation Tests (Execution Fragility Score)
 # ---------------------------------------------------------------------------
