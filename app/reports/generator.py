@@ -952,14 +952,36 @@ def _risk_reconciliation_section(stats: dict) -> str:
     if pct_overshoot >= 5.0:
         overshoot_note = (
             f"<p class='muted'>{pct_overshoot:.0f}% of LOSING trades realized MORE loss than "
-            "their own stop was sized for -- almost always a gap-through fill (price crossed the "
-            "resting stop within one bar), not a bug. See the execution warnings above if this "
+            "their own stop-plus-costs risk budget (spread, slippage and commission are counted INSIDE "
+            "the budget, so a normal stop-out no longer trips this) -- that means a genuine gap-through "
+            "fill or a forced close, not routine costs. See the execution warnings above if this "
             "share is large.</p>"
         )
     return f"""<h2>Risk Reconciliation</h2>
 <p class="muted">Reconciles the risk % you configured against what actually happened to it on a trade-by-trade basis -- two different, independent gaps to watch for: sizing that comes in UNDER yo[...]
 {table}
 {cap_note}{overshoot_note}"""
+
+
+def _reliability_header(report: dict) -> str:
+    """Trade count, attempt count and sizing-skip rate at the very top of
+    every report, so a number is never read without its sample size."""
+    try:
+        st = report["historical_backtest"]["statistics"]
+        n_tr = int(st.get("total_trades", 0))
+        halt = report.get("sizing_halt") or {}
+        skip = float(halt.get("skip_ratio", 0.0)) * 100.0
+        att = len(report.get("prop_firm_single_run", {}).get("attempts") or []) or int(st.get("n_account_resets", 0) or 0) + 1
+        cls = "warning" if (n_tr < 100 or skip > 20) else "muted"
+        flag = ""
+        if n_tr < 100:
+            flag += f" Only {n_tr} trades (< 100): treat every percentage below as indicative, not reliable."
+        if skip > 20:
+            flag += f" {skip:.0f}% of signals were skipped for sizing."
+        return (f'<div class="{cls}" style="padding:8px 12px;border:1px solid #ccc;margin:8px 0">'
+                f'<b>Sample:</b> {n_tr} trades &middot; {att} account attempt(s) &middot; {skip:.0f}% of signals skipped for sizing.{flag}</div>')
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _reset_chain_banner(stats: dict) -> str:
@@ -1088,8 +1110,22 @@ def export_html(
         trade_chart_html = '<p class="muted">No backtest result was available to plot.</p>'
 
     if backtest_result is not None and len(backtest_result.equity_curve):
-        equity_values = _downsample(backtest_result.equity_curve["equity"].tolist())
-        equity_chart = svg_line_chart(
+        _eq = backtest_result.equity_curve
+        _attempt_chart = None
+        try:
+            if "attempt_id" in _eq.columns and _eq["attempt_id"].nunique() > 1:
+                from app.reports.charts import svg_attempt_chart
+                _outcomes = {a.get("attempt_id"): a.get("outcome") for a in (_eq.attrs.get("prop_attempts") or [])}
+                _segs = []
+                for _aid, _g in _eq.reset_index(drop=True).groupby("attempt_id", sort=True):
+                    _vals = _downsample(_g["equity"].tolist())
+                    _segs.append(dict(attempt_id=int(_aid), values=_vals, start_index=int(_g.index[0]),
+                                      outcome=_outcomes.get(int(_aid), "open"), start_balance=float(_g["equity"].iloc[0])))
+                _attempt_chart = svg_attempt_chart(_segs)
+        except Exception:  # noqa: BLE001 - never lose the report over a chart
+            _attempt_chart = None
+        equity_values = _downsample(_eq["equity"].tolist())
+        equity_chart = _attempt_chart or svg_line_chart(
             equity_values, title="Account Equity Over the Historical Backtest", y_label="Equity ($)",
         )
     else:
@@ -1128,7 +1164,7 @@ def export_html(
         generated_at=report["generated_at"],
         warnings_section=_warnings_section(report.get("execution_warnings")),
         verdict_section=_verdict_section(report.get("verdict"), report.get("verdict_reasons")),
-        headline_warnings_section=_headline_warnings_banner(report.get("headline_warnings") or []),
+        headline_warnings_section=_reliability_header(report) + _headline_warnings_banner(report.get("headline_warnings") or []),
         sizing_halt_banner=_sizing_halt_banner(
             report.get("sizing_halt"), report["strategy"]["instrument"]
         ),
@@ -1244,3 +1280,24 @@ def generate_full_report(
     # to turn a successful report into a failed run.
     run_history.record_run(report, paths, backtest_result=backtest_result)
     return paths
+
+
+def battery_section_html(battery: dict | None, null: dict | None = None) -> str:
+    """Break-it battery block for a report / the discovery page: per-attack status table plus, when a
+    random-entry null distribution is supplied, where the real result sits inside it."""
+    import html as _h
+    rows = ""
+    for t in (battery or {}).get("tests", []):
+        colour = {"pass": "#1e9e5a", "fail": "#F05B63"}.get(t.get("status"), "#999")
+        rows += (f"<tr><td>{_h.escape(str(t.get('name')))}</td><td style='color:{colour};font-weight:600'>{_h.escape(str(t.get('status')).upper())}</td>"
+                 f"<td>{'hard' if t.get('hard') else ''}</td><td>{_h.escape(str(t.get('detail')))}</td></tr>")
+    verdict = (battery or {}).get("verdict", "n/a")
+    out = f"<h2>Break-it battery: {_h.escape(str(verdict)).upper()}</h2>"
+    if rows:
+        out += f"<table><tr><th>Attack</th><th>Result</th><th></th><th>Detail</th></tr>{rows}</table>"
+    if null and null.get("null"):
+        vals = null["null"]
+        out += svg_histogram(vals, title="Random-entry null (same exits, sizing and trade count)", x_label=null.get("metric", "net_profit"),
+                             color="#8888aa", markers={"Real": null.get("observed"), "P95": null.get("null_p95")})
+        out += f"<p class='muted'>{null['p_value'] * 100:.1f}% of {null['n_seeds']} random-timing runs did at least as well as the real strategy.</p>"
+    return out

@@ -379,3 +379,52 @@ def svg_multi_line_chart(
   {''.join(legend)}
 </svg>
 """.strip()
+
+
+def svg_attempt_chart(
+    segments: list[dict],
+    width: int = 760,
+    height: int = 300,
+    title: str = "Equity per purchased account (attempt)",
+    y_label: str = "Equity ($)",
+) -> str:
+    """One polyline per attempt on a shared bar axis (no teleport back to the
+    starting balance between attempts), coloured by outcome, plus a dashed
+    cumulative-P&L line. segments: [{attempt_id, values:[equity...], start_index,
+    outcome ('passed'|'failed'|'open'), start_balance}]."""
+    pad_left, pad_right, pad_top, pad_bottom = 56, 16, 28, 28
+    plot_w, plot_h = width - pad_left - pad_right, height - pad_top - pad_bottom
+    segs = [s for s in segments if s.get("values")]
+    if not segs:
+        return f'<svg width="{width}" height="{height}"><text x="20" y="20">No attempts to plot.</text></svg>'
+    n_total = max(s["start_index"] + len(s["values"]) for s in segs)
+    cum, running = [], 0.0
+    for s in segs:
+        running += float(s["values"][-1]) - float(s.get("start_balance", s["values"][0]))
+        cum.append((s["start_index"] + len(s["values"]) - 1, running))
+    base = float(segs[0].get("start_balance", segs[0]["values"][0]))
+    all_v = [v for s in segs for v in s["values"] if math.isfinite(v)] + [base + c for _, c in cum]
+    lo, hi = min(all_v), max(all_v)
+    if lo == hi:
+        lo, hi = lo - 1, hi + 1
+    span = hi - lo
+    px = lambda i: pad_left + (i / max(n_total - 1, 1)) * plot_w  # noqa: E731
+    py = lambda v: pad_top + plot_h - ((v - lo) / span) * plot_h  # noqa: E731
+    colour = {"passed": "#1e9e5a", "failed": "#F05B63", "open": "#2f6fed"}
+    out = [f'<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">',
+           f'<text x="{pad_left}" y="16" font-weight="bold">{title}</text>',
+           f'<text x="4" y="{pad_top + 10}" fill="#666">{y_label}</text>']
+    for k in range(5):
+        v = lo + span * k / 4
+        y = py(v)
+        out.append(f'<line x1="{pad_left}" x2="{width - pad_right}" y1="{y:.1f}" y2="{y:.1f}" stroke="#e5e7eb"/>')
+        out.append(f'<text x="{pad_left - 4}" y="{y + 4:.1f}" text-anchor="end" fill="#666">{v:,.0f}</text>')
+    for s in segs:
+        pts = " ".join(f"{px(s['start_index'] + j):.1f},{py(v):.1f}" for j, v in enumerate(s["values"]) if math.isfinite(v))
+        c = colour.get(s.get("outcome", "open"), "#2f6fed")
+        out.append(f'<polyline fill="none" stroke="{c}" stroke-width="1.4" points="{pts}"><title>attempt {s.get("attempt_id")} - {s.get("outcome")}</title></polyline>')
+    cpts = " ".join(f"{px(i):.1f},{py(base + c):.1f}" for i, c in cum)
+    out.append(f'<polyline fill="none" stroke="#111" stroke-width="1.6" stroke-dasharray="5,3" points="{cpts}"><title>cumulative P&L across attempts, before fees</title></polyline>')
+    out.append(f'<text x="{width - pad_right}" y="16" text-anchor="end" fill="#444">green pass / red bust / blue open / dashed = cumulative P&amp;L (before fees)</text>')
+    out.append("</svg>")
+    return "".join(out)
