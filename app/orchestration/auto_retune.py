@@ -26,7 +26,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, build_run_context
 from app.forward_test.journal import ForwardTestJournal
 from app.monitoring.strategy_health import StrategyHealthResult, check_strategy_health
 from app.monte_carlo.engine import MonteCarloResult
@@ -92,6 +92,7 @@ def maybe_trigger_retune(
     if severity_threshold not in VALID_THRESHOLDS:
         raise ValueError(f"severity_threshold must be one of {VALID_THRESHOLDS}, got {severity_threshold!r}")
 
+    risk = build_run_context(risk, prop_rules)
     health = check_strategy_health(journal, session_id, strategy_label, predicted, account_balance)
 
     threshold_rank = _SEVERITY_ORDER[severity_threshold]
