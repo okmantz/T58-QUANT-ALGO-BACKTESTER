@@ -686,7 +686,11 @@ def run_execution(
                     "attempt_id": attempt_id, "payout_amount": rec.amount,
                     "equity_before_payout": rec.balance_after + rec.amount,
                     "equity_after_payout": rec.balance_after,
-                    "message": f"attempt {attempt_id}: payout ${rec.amount:,.2f}",
+                    "message": (
+                        f"{_restore_tz(ts[i_])}: PROFIT TARGET REACHED - "
+                        f"attempt {attempt_id}: payout ${rec.amount:,.2f} banked; "
+                        f"account balance ${rec.balance_after:,.2f}; trading continues."
+                    ),
                 })
             prop_payouts_seen = len(acct.payouts)
         equity = acct.balance
