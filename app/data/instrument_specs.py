@@ -143,7 +143,32 @@ _SPECS: tuple[InstrumentSpec, ...] = (
     InstrumentSpec("MGC", "Micro Gold futures", "COMEX", pip_size=1.0, contract_size=10.0, tick_size=0.10, tick_value=1.00, default_commission_round_turn=1.60),
 )
 
+# dataset-folder / vendor labels that do not contain the root symbol itself
+_ALIASES: dict[str, str] = {"NASDAQ 100": "NAS100", "USATECHIDXUSD": "NAS100", "NAS100_USD": "NAS100",
+                            "BITCOIN": "BTCUSD", "XAUUSD (GOLD)": "XAUUSD", "GOLD SPOT": "XAUUSD"}
+
 KNOWN_INSTRUMENTS: dict[str, InstrumentSpec] = {spec.symbol: spec for spec in _SPECS}
+
+# RETAIL SPOT/CFD instruments for cross-market tests (added 2026-10-07). Kept OUT of KNOWN_INSTRUMENTS on
+# purpose: that registry means "known FUTURES contract" to the integrity check ($0-commission block,
+# whole-contract warning) and to guess_instrument_symbol callers. Use the *_any_* helpers below to include these.
+_CROSS_MARKET_SPECS: tuple[InstrumentSpec, ...] = (
+    # One "contract" here is a small, divisible unit so whole-contract sizing is not absurdly coarse:
+    # FX = 0.1 lot (10,000 units), gold = 0.1 lot (10 oz), NAS100 = 1 index unit, BTC = 0.1 coin.
+    # Costs are TYPICAL retail ECN-style figures (spread/slippage in ticks, commission per round turn per
+    # contract), not any broker's actual quotes -- replace with your broker's before trusting small edges.
+    InstrumentSpec("EURUSD", "Euro / US dollar spot", "FX", pip_size=0.0001, contract_size=10_000.0, tick_size=0.00001, tick_value=0.10,
+                   default_commission_round_turn=0.70, default_spread_ticks=6.0, default_slippage_ticks=2.0),
+    InstrumentSpec("GBPUSD", "British pound / US dollar spot", "FX", pip_size=0.0001, contract_size=10_000.0, tick_size=0.00001, tick_value=0.10,
+                   default_commission_round_turn=0.70, default_spread_ticks=10.0, default_slippage_ticks=3.0),
+    InstrumentSpec("XAUUSD", "Gold spot (10 oz contract)", "OTC", pip_size=0.10, contract_size=10.0, tick_size=0.01, tick_value=0.10,
+                   default_commission_round_turn=0.70, default_spread_ticks=25.0, default_slippage_ticks=10.0),
+    InstrumentSpec("NAS100", "Nasdaq-100 cash index CFD (1 unit)", "OTC", pip_size=1.0, contract_size=1.0, tick_size=0.10, tick_value=0.10,
+                   default_commission_round_turn=0.0, default_spread_ticks=10.0, default_slippage_ticks=5.0),
+    InstrumentSpec("BTCUSD", "Bitcoin / US dollar spot (0.1 coin contract)", "CRYPTO", pip_size=1.0, contract_size=0.1, tick_size=1.0, tick_value=0.10,
+                   default_commission_round_turn=0.0, default_spread_ticks=15.0, default_slippage_ticks=10.0),
+)
+CROSS_MARKET_INSTRUMENTS: dict[str, InstrumentSpec] = {spec.symbol: spec for spec in _CROSS_MARKET_SPECS}
 
 # Full-size contract -> its micro equivalent. Used by RiskConfig's
 # "micro_fallback" sizing mode: when a full-size contract cannot be sized
@@ -326,3 +351,42 @@ def resolve_risk_per_market(
                 note="no known contract in the name, so positions are not lot-rounded"))
         risks[label] = risk
     return risks, report
+
+
+# ---- helpers that ALSO see the retail spot/CFD instruments (cross-market tests, accuracy form, preflight) ----
+
+def get_any_instrument_spec(symbol: str) -> InstrumentSpec | None:
+    return get_instrument_spec(symbol) or CROSS_MARKET_INSTRUMENTS.get(str(symbol or "").strip().upper())
+
+
+def guess_any_instrument_symbol(label: str | None) -> str | None:
+    """guess_instrument_symbol, then aliases and the retail spot/CFD symbols."""
+    sym = guess_instrument_symbol(label)
+    if sym:
+        return sym
+    if not label:
+        return None
+    import re
+    text = str(label).upper()
+    for alias, symbol in _ALIASES.items():
+        if alias in text:
+            return symbol
+    for symbol in sorted(CROSS_MARKET_INSTRUMENTS, key=len, reverse=True):
+        if re.search(rf"(?<![A-Z]){re.escape(symbol)}(?![A-Z])", text):
+            return symbol
+    return None
+
+
+def apply_any_instrument_spec(risk: RiskConfig, symbol: str) -> RiskConfig:
+    """apply_instrument_spec that also accepts the retail spot/CFD symbols."""
+    if symbol and str(symbol).strip().upper() in CROSS_MARKET_INSTRUMENTS:
+        spec = CROSS_MARKET_INSTRUMENTS[str(symbol).strip().upper()]
+        updates = {"pip_size": spec.pip_size, "contract_size": spec.contract_size}
+        if risk.commission_per_contract == 0.0:
+            updates["commission_per_contract"] = spec.default_commission_round_turn
+        if risk.spread_pips == 0.0:
+            updates["spread_pips"] = spec.default_spread_pips
+        if risk.slippage_pips == 0.0:
+            updates["slippage_pips"] = spec.default_slippage_pips
+        return replace(risk, **updates)
+    return apply_instrument_spec(risk, symbol)

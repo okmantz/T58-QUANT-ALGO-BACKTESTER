@@ -489,3 +489,23 @@ def prepare_timeframe_aligned_data(raw_df: pd.DataFrame, strategy) -> tuple[pd.D
         f"~{native_minutes:.0f}-minute bars -- {detail}."
     )
     return merged, warnings
+
+
+def resample_with_intrabar(df_fine, rule: str, *, timestamp_col: str = "timestamp"):
+    """(resampled_df, intrabar_df): the strategy frame plus the untouched
+    finer frame, ready for run_backtest(..., intrabar_df=...) with
+    RiskConfig.intrabar_replay=True. Fails loudly if the fine frame is not
+    finer than the requested bar."""
+    import pandas as pd
+    f = df_fine.sort_values(timestamp_col).reset_index(drop=True)
+    ts = pd.to_datetime(f[timestamp_col])
+    fine_step = ts.diff().median()
+    coarse_step = pd.Timedelta(pd.tseries.frequencies.to_offset(rule))
+    if pd.isna(fine_step) or fine_step >= coarse_step:
+        raise ValueError(f"intrabar frame (step {fine_step}) must be finer than the strategy bars ({coarse_step}).")
+    g = f.set_index(ts)
+    agg = {"open": "first", "high": "max", "low": "min", "close": "last"}
+    if "volume" in g.columns:
+        agg["volume"] = "sum"
+    coarse = g.resample(rule, label="left", closed="left").agg(agg).dropna(subset=["open"]).reset_index(names=timestamp_col)
+    return coarse, f
