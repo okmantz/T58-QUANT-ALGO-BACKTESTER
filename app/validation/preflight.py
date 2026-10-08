@@ -74,7 +74,7 @@ def run_preflight(
 
     spec = None
     try:
-        from app.data.instrument_specs import get_instrument_spec, guess_instrument_symbol
+        from app.data.instrument_specs import get_any_instrument_spec as get_instrument_spec, guess_any_instrument_symbol as guess_instrument_symbol
         sym = guess_instrument_symbol(symbol) or symbol
         spec = get_instrument_spec(sym) if sym else None
     except Exception:  # noqa: BLE001
@@ -162,3 +162,89 @@ def run_preflight(
         if len(trades) < MIN_TRADES:
             add("warn", "few_trades", f"Only {len(trades)} trades (< {MIN_TRADES}); statistics and Monte Carlo are not reliable.")
     return rep
+
+
+def baseline_preflight(
+    baseline_bt,
+    df,
+    risk,
+    rules=None,
+    symbol: str | None = None,
+    stop_loss_pips: float | None = None,
+    min_trades: int = 100,
+    max_skip_ratio: float = 0.20,
+    min_per_direction: int = 30,
+) -> PreflightReport:
+    """Preflight that also looks at the strategy's own baseline run: the
+    plan's step-0 gate. Blocks (does not merely warn) on fewer than
+    `min_trades` trades, more than `max_skip_ratio` of signals skipped for
+    sizing, and a direction that never fires when the other one does."""
+    rep = run_preflight(df, risk, rules, stop_loss_pips=stop_loss_pips, trades=baseline_bt.trades, symbol=symbol)
+    add = lambda sev, code, msg: rep.issues.append(PreflightIssue(sev, code, msg))  # noqa: E731
+    rep.issues = [i for i in rep.issues if i.code != "few_trades"]
+    n = len(baseline_bt.trades)
+    rep.facts["baseline_trades"] = n
+    if n < min_trades:
+        add("block", "trade_floor",
+            f"This configuration produces {n} trades on the development data (minimum {min_trades}). "
+            "Statistics, the Monte Carlo and any optimizer score on fewer trades are noise.")
+    try:
+        halt = baseline_bt.equity_curve.attrs.get("sizing_halt", {}) or {}
+        ratio = float(halt.get("skip_ratio", 0.0))
+        rep.facts["sizing_skip_ratio"] = ratio
+        if ratio > max_skip_ratio:
+            add("block", "sizing_skips",
+                f"{ratio:.0%} of signals ({halt.get('skipped', 0)}) were skipped because the risk budget "
+                f"cannot buy one contract at the strategy's stop (limit {max_skip_ratio:.0%}). Use "
+                "sizing_mode='fit_stop' or 'micro_fallback', a micro contract, or a tighter stop. "
+                f"Reasons: {halt.get('skip_reasons', {})}")
+    except Exception:  # noqa: BLE001
+        pass
+    longs = sum(1 for t in baseline_bt.trades if t.direction == 1)
+    shorts = sum(1 for t in baseline_bt.trades if t.direction == -1)
+    rep.facts.update({"long_trades": longs, "short_trades": shorts})
+    if n >= min_trades and (longs == 0 or shorts == 0):
+        side = "short" if shorts == 0 else "long"
+        add("warn", "one_sided",
+            f"No {side} trade fired in the whole sample ({longs} long / {shorts} short): that entry rule is never true "
+            "on this data, so the strategy is effectively one-directional.")
+    elif n >= min_trades and min(longs, shorts) < min_per_direction:
+        add("warn", "thin_side", f"Only {min(longs, shorts)} trades on one side ({longs} long / {shorts} short).")
+    return rep
+
+
+def enforce_preflight(rep: PreflightReport, feature_name: str) -> None:
+    """Raises RefinementError (the exception both pipelines already turn
+    into a clean 'stopped' result) when the report has a blocking issue."""
+    if not rep.blocked:
+        return
+    from app.optimize.parameter_space import RefinementError
+    raise RefinementError(f"{feature_name} stopped at preflight, before any search:\n" + rep.render())
+
+
+_PRESET_COMPARE_FIELDS = (
+    "account_size", "evaluation_profit_target_pct", "daily_loss_limit_pct", "max_drawdown_pct",
+    "drawdown_type", "consistency_rule_pct", "min_trading_days", "dd_basis", "daily_loss_action",
+    "trailing_lock", "max_contracts",
+)
+
+
+def compare_rules_to_preset(rules, preset_key: str) -> list[PreflightIssue]:
+    """Differences between the PropRules a run is configured with and the
+    named firm preset (e.g. 'lucid_50k'). One 'warn' issue per differing
+    field: a config that silently disagrees with the firm is the commonest
+    way a pass probability stops describing a real account."""
+    from app.prop.presets import get_preset
+    preset = get_preset(preset_key)
+    if preset is None:
+        return [PreflightIssue("warn", "unknown_preset", f"No preset named {preset_key!r}.")]
+    want = preset.to_prop_rules()
+    out = []
+    for f in _PRESET_COMPARE_FIELDS:
+        a, b = getattr(rules, f, None), getattr(want, f, None)
+        if a != b:
+            out.append(PreflightIssue(
+                "warn", "preset_mismatch",
+                f"{f}: config has {a!r} but {preset.label} uses {b!r}"
+                + (f" (checked {preset.rules_checked_on})" if preset.rules_checked_on else " (not re-verified)") + "."))
+    return out
