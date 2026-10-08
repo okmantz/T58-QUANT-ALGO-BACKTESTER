@@ -44,7 +44,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from app.backtest.engine import BacktestResult, run_backtest
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, build_run_context
 from app.portfolio.portfolio import InstrumentLeg, PortfolioConfig, PortfolioResult, run_portfolio_backtest
 from app.strategy.base import Strategy, StrategyResult
 
@@ -91,6 +91,7 @@ def build_ensemble_legs(
     expects -- the only difference from a real multi-asset Portfolio call
     is that every leg's `df` is identical."""
     resolved_names, resolved_weights = _validate_legs(strategies, names, weights)
+    risk = build_run_context(risk)
     return [
         InstrumentLeg(name=name, df=df, strategy=strat, risk=risk, weight=weight)
         for name, strat, weight in zip(resolved_names, strategies, resolved_weights)
@@ -111,8 +112,10 @@ def run_ensemble_blend(
     reused as-is so the existing Portfolio report template can render an
     ensemble result unmodified, just relabeled "strategies" instead of
     "instruments" in the UI layer."""
+    cfg = config or PortfolioConfig()
+    risk = build_run_context(risk, cfg.prop_rules)
     legs = build_ensemble_legs(df, strategies, risk, names, weights)
-    return run_portfolio_backtest(legs, config)
+    return run_portfolio_backtest(legs, cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -188,5 +191,6 @@ def run_ensemble_vote(
             f"min_agreement ({cfg.min_agreement}) cannot exceed the number of strategy legs "
             f"({len(strategies)})."
         )
+    risk = build_run_context(risk)
     vote_strategy = _VoteEnsembleStrategy(strategies, cfg.min_agreement, resolved_names)
     return run_backtest(df, vote_strategy, risk)

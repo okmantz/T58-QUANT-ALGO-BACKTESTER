@@ -55,7 +55,7 @@ from dataclasses import dataclass, field
 import pandas as pd
 
 from app.backtest.engine import run_backtest
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, build_run_context
 from app.ensemble.ensemble import EnsembleError, run_ensemble_blend
 from app.monte_carlo.engine import MonteCarloConfig
 from app.portfolio.portfolio import PortfolioConfig, PortfolioResult, _daily_returns, _rebuild_equity_curve
@@ -214,6 +214,7 @@ def build_diversified_ensemble(
     if max_legs < min_legs:
         raise AutoEnsembleError("max_legs must be >= min_legs.")
 
+    risk = build_run_context(risk, prop_rules)
     rejected: list[RejectedCandidate] = []
     notes: list[str] = []
     tmp_paths: list[str] = []
