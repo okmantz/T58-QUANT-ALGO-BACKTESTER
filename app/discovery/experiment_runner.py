@@ -71,8 +71,16 @@ def run_hypothesis(
     store: HypothesisStore | None = None,
     n_null: int = 100,
     min_trades: int = 20,
+    link_memory: bool = True,
 ) -> HypothesisRun:
     from app.search.robustness import deflated_sharpe_ratio
+    try:
+        from app.ai.experiment_memory import already_tested
+        prior_rows = already_tested(hyp.id)
+        if prior_rows:
+            hyp.warnings.append(f"already tested {len(prior_rows)} time(s) before (see experiment memory); trials are deflated accordingly.")
+    except Exception:  # noqa: BLE001
+        pass
     hyp.status = "testing"
     tfs = list(hyp.timeframes) or [None]
     frames = {}
@@ -118,6 +126,37 @@ def run_hypothesis(
         hyp.add_experiment(Experiment("break_battery", time.time(), rep.to_dict(), n_variants=1,
                                       passed=(rep.verdict == "survived"),
                                       notes=f"best cell {best.market}/{best.timeframe}; deflated for {n_trials} trials"))
+    if link_memory:
+        _link_to_memory(hyp, run)
     if store is not None:
         store.save(hyp)
     return run
+
+
+def _link_to_memory(hyp: Hypothesis, run: "HypothesisRun") -> None:
+    """Best-effort: one experiment-memory row per cell (linked by hypothesis id) and, when the
+    hypothesis is broken, a graveyard entry so the dead idea is not re-discovered. Never raises."""
+    verdict = {"survived": "SURVIVED", "broken": "BROKEN"}.get(hyp.status, "INCONCLUSIVE")
+    try:
+        from app.ai.experiment_memory import record_experiment
+        for c in run.cells:
+            record_experiment(
+                origin="discovery", strategy_name=f"{hyp.idea[:70]} [{c.market}/{c.timeframe}]", source_type="rule_spec",
+                instrument=str(c.market), verdict=verdict, trades=int(c.n), net_profit=float(c.net),
+                lesson=f"mean {c.mean_r:+.3f}R; deflated PSR {c.psr_deflated}; trials counted {run.n_trials}",
+                config=hyp.spec, hypothesis_id=hyp.id, cell=f"{c.market}/{c.timeframe}",
+            )
+    except Exception:  # noqa: BLE001
+        pass
+    if hyp.status == "broken":
+        try:
+            from app.search.graveyard import GraveyardEntry, graveyard_path_for, param_signature, record_rejection
+            reasons = [t.name + ": " + t.detail for t in (run.battery.tests if run.battery else []) if getattr(t, "status", "") == "fail"][:3]
+            record_rejection(GraveyardEntry(
+                candidate_id=f"hypothesis:{hyp.id}", family=str(hyp.spec.get("kind", "rule_spec")), generation=None,
+                stage_died="break_battery", reason="; ".join(reasons) or "broken by the break-it battery",
+                param_signature=param_signature(str(hyp.spec.get("kind", "rule_spec")), hyp.spec.get("params")),
+                notes=[hyp.idea],
+            ), path=(graveyard_path_for(str(run.best_cell.market), str(run.best_cell.timeframe)) if run.best_cell else None))
+        except Exception:  # noqa: BLE001
+            pass
