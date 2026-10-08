@@ -785,6 +785,25 @@ def _evaluate(
             stressed_fitness = float("-inf")
         fitness = apply_cost_stress_penalty(fitness, stressed_fitness, cost_stress_penalty_weight)
 
+    # v9.5: the plain Iterative Refinement path now gets the same GA
+    # reliability adjustments the walk-forward GA already had. Before
+    # this, _evaluate returned raw compute_fitness output, so a
+    # 14-trade candidate could outrank a 300-trade one on a lucky Monte
+    # Carlo seed, and a genome that widened its stop until 99% of its
+    # signals sized to zero paid no penalty. Adjustments: <15 trades is
+    # unrankable (-inf), positive fitness is scaled by n/100 below 100
+    # trades, and a >20% sizing-skip rate scales fitness by the tradable
+    # share. Deterministic; negative fitness untouched.
+    if math.isfinite(fitness):
+        _halt = {}
+        try:
+            _halt = bt_result.equity_curve.attrs.get("sizing_halt", {}) or {}
+        except Exception:
+            _halt = {}
+        fitness = apply_ga_reliability_adjustments(
+            fitness, len(bt_result.trades), int(_halt.get("skipped", 0) or 0)
+        )
+
     return (
         fitness,
         bt_result.statistics.to_dict(),
