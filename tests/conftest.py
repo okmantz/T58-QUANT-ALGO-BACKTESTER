@@ -97,3 +97,12 @@ def _reset_heavy_job_guard():
     stuck = HEAVY_JOB_GUARD.active_name
     if stuck is not None:
         HEAVY_JOB_GUARD.release(stuck)
+
+
+import os as _os
+
+# The legacy pipeline tests run tiny synthetic samples (a few dozen trades).
+# The real preflight gate (>=100 trades) correctly refuses those, so the
+# suite opts out by default; the preflight tests call the gate directly.
+_os.environ.setdefault("T58_PREFLIGHT_ENFORCE", "0")
+_os.environ.setdefault("T58_SKIP_EXTRA_GATES", "1")

@@ -90,7 +90,7 @@ def test_holdout_comparison_matches_direct_run_backtest_per_half():
     direct_in_sample = run_backtest(in_sample_df, strategy, risk, adaptive_risk=adaptive_risk)
     direct_holdout = run_backtest(holdout_df, strategy, risk, adaptive_risk=adaptive_risk)
 
-    result = run_holdout_comparison(df, strategy, risk, holdout_frac=holdout_frac, adaptive_risk=adaptive_risk)
+    result = run_holdout_comparison(df, strategy, risk, holdout_frac=holdout_frac, adaptive_risk=adaptive_risk, continuous_account=False)
 
     assert result["in_sample_statistics"]["total_trades"] == direct_in_sample.statistics.total_trades
     assert result["in_sample_statistics"]["net_profit"] == direct_in_sample.statistics.net_profit

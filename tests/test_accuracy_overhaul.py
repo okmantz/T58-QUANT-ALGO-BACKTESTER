@@ -278,7 +278,11 @@ def test_idea_compiler_falls_back_when_model_unavailable_or_wrong():
     assert good.source == "llm" and good.spec["params"]["lookback"] == 80
 
 
-def test_break_battery_kills_noise_and_records(tmp_path):
+def test_break_battery_kills_noise_and_records(tmp_path, monkeypatch):
+    import app.ai.experiment_memory as em
+    import app.search.graveyard as gy
+    monkeypatch.setattr(em, "_db_path", lambda: tmp_path / "mem.db")
+    monkeypatch.setattr(gy, "get_app_base_dir", lambda: tmp_path)
     from app.discovery.experiment_runner import run_hypothesis
     from app.discovery.hypothesis import HypothesisStore
     from app.discovery.idea_compiler import compile_idea
@@ -290,6 +294,11 @@ def test_break_battery_kills_noise_and_records(tmp_path):
     saved = store.get(h.id)
     assert saved is not None and saved.experiments and saved.status == h.status
     assert run.n_trials >= 2 and run.render()
+    # linked into experiment memory by hypothesis id, one row per market/timeframe cell
+    rows = em.experiments_for_hypothesis(h.id)
+    assert len(rows) == len(run.cells) and all(r["cell"] for r in rows)
+    if h.status == "broken":
+        assert list((tmp_path / "data" / "evolution").glob("strategy_graveyard__*.jsonl"))
 
 
 def test_hypothesis_variants_accumulate_for_deflation(tmp_path):
