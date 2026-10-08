@@ -26,8 +26,16 @@ then the strongest cell is attacked: random-entry null, held-out data, 1.5x cost
 <select name="datasets" multiple size="10">{% for d in datasets %}<option value="{{ d }}">{{ d }}</option>{% endfor %}</select>
 <label>Timeframes (comma separated; empty = the data's own)</label><input name="timeframes" placeholder="15min, 1h">
 <label>Max bars per dataset (most recent)</label><input name="max_bars" type="number" value="60000">
-<label>Random-entry null draws</label><input name="n_null" type="number" value="100">
-<p><button type="submit">Run the idea</button></p></form></div></body></html>"""
+<label>Random-entry null draws</label><input name="n_null" type="number" value="200">
+<p><button type="submit">Run the idea</button></p></form></div>
+<div class="card"><h2>Hypotheses on file</h2>
+{% if mined %}<p>Mined {{ mined }} new hypothesis(es) from the research library.</p>{% endif %}
+<p>Every idea tested here is stored as a hypothesis with its experiments attached, so "have we tested this, on which markets, and what happened?" has an answer. Papers become hypotheses too: mine the research library and the claims land here as <i>proposed</i>, ready to run.</p>
+<form method="post" action="/discover/mine"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><p><button type="submit">Mine research library for hypotheses</button></p></form>
+{% if hypotheses %}<table><tr><th>Status</th><th>Idea</th><th>Markets</th><th>Timeframes</th><th>Experiments</th><th>Source</th></tr>
+{% for h in hypotheses %}<tr><td>{{ h.status }}</td><td>{{ h.idea }}</td><td>{{ h.markets }}</td><td>{{ h.timeframes }}</td><td>{{ h.n_experiments }}</td><td>{{ h.source }}</td></tr>{% endfor %}</table>
+{% else %}<p>No hypotheses stored yet.</p>{% endif %}
+</div></body></html>"""
 
 _JOB = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Your idea - result</title><link rel="stylesheet" href="/static/theme.css">
@@ -101,8 +109,46 @@ def _worker(job_id: str, idea: str, names: list, tfs: list, max_bars: int, n_nul
 @discover_bp.route("/discover")
 def discover_form():
     from app.data.storage import list_stored_datasets
+    hypotheses = []
+    try:
+        from app.discovery.hypothesis import HypothesisStore
+
+        for h in HypothesisStore().all()[-25:][::-1]:
+            hypotheses.append({
+                "status": h.status, "idea": h.idea[:140],
+                "markets": ", ".join(map(str, h.markets)), "timeframes": ", ".join(map(str, h.timeframes)),
+                "n_experiments": len(h.experiments), "source": h.source,
+            })
+    except Exception:  # noqa: BLE001 -- the form must render even if the store is unreadable
+        hypotheses = []
     return render_template_string(_PAGE, datasets=[d.name for d in list_stored_datasets()], error=request.args.get("error"),
+                                  hypotheses=hypotheses, mined=request.args.get("mined"),
                                   csrf_token=lambda: __import__("flask").session.get("csrf_token", ""))
+
+
+@discover_bp.route("/discover/mine", methods=["POST"])
+def discover_mine():
+    """Papers -> stored, citable hypotheses (app.discovery.paper_hypotheses).
+
+    Before v9.5 this pipeline existed as a library with no user-reachable
+    caller; the only way research became a testable claim was a human
+    reading the PDF. Mining stores each claim as a 'proposed' hypothesis
+    (testable ones carry a compiled rule spec; untestable ones say why),
+    so the next step -- pick it in the idea box and run it -- is one
+    click of work, not a research project."""
+    try:
+        from app.ai.llm_client import preferred_client
+        from app.discovery.hypothesis import HypothesisStore
+        from app.discovery.paper_hypotheses import extract_from_library
+
+        client = preferred_client()
+        found = extract_from_library(
+            llm=None if client.__class__.__name__ == "NullClient" else client,
+            store=HypothesisStore(),
+        )
+        return redirect(f"/discover?mined={len(found)}")
+    except Exception as exc:  # noqa: BLE001
+        return redirect(f"/discover?error=Mining+failed:+{exc.__class__.__name__}")
 
 
 @discover_bp.route("/discover/run", methods=["POST"])
@@ -115,7 +161,7 @@ def discover_run():
     tfs = [t.strip() for t in (request.form.get("timeframes") or "").split(",") if t.strip()]
     job_id = JOB_MANAGER.create(tool="Your idea", page_template="/discover/job/{job_id}")
     threading.Thread(target=_worker, daemon=True, args=(
-        job_id, idea, names, tfs, int(request.form.get("max_bars") or 60000), int(request.form.get("n_null") or 100))).start()
+        job_id, idea, names, tfs, int(request.form.get("max_bars") or 60000), int(request.form.get("n_null") or 200))).start()
     return redirect(f"/discover/job/{job_id}")
 
 
