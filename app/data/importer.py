@@ -820,6 +820,47 @@ def _coerce_timestamp_series(series: pd.Series) -> pd.Series:
     return pd.to_datetime(series, errors="coerce", utc=False)
 
 
+def _looks_like_continuous_future(source_name: str) -> bool:
+    """Continuous-contract futures series (TradingView 'ES1!' style or
+    'futures_ES.F' vendor style) are the ones carrying roll gaps. Spot,
+    crypto and single-contract names return False."""
+    base = str(source_name or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if "1!" in base or "2!" in base:
+        return True
+    if base.startswith("futures_") or ".f_" in base or base.endswith(".f"):
+        return True
+    return False
+
+
+def _maybe_back_adjust_continuous(df: pd.DataFrame, source_name: str, issues: list) -> pd.DataFrame:
+    """Difference-back-adjust a continuous futures frame at load (v9.5).
+
+    Adds `roll_bar` / `adj_offset` columns and a `roll_adjustment` entry in
+    df.attrs, and appends a warning issue describing what was removed.
+    Frames with no detected roll gaps are returned with zero offsets (the
+    adjustment is then a no-op), so downstream code can rely on the
+    columns existing for continuous series."""
+    if df is None or len(df) < 50 or not _looks_like_continuous_future(source_name):
+        return df
+    if not {"timestamp", "open", "high", "low", "close"}.issubset(df.columns):
+        return df
+    from app.data.continuous_contract import back_adjust, describe
+
+    adjusted, rolls = back_adjust(df)
+    adjusted.attrs["roll_adjustment"] = describe(rolls)
+    adjusted.attrs["roll_adjusted"] = bool(rolls)
+    if rolls:
+        issues.append(
+            ValidationIssue(
+                "warning",
+                "Continuous-contract data back-adjusted at import: "
+                + describe(rolls)
+                + " Backtests now run on the adjusted series (roll_bar/adj_offset columns kept for audit).",
+            )
+        )
+    return adjusted
+
+
 def import_csv(
     path_or_buffer,
     manual_mapping: Optional[dict[str, str]] = None,
@@ -1395,6 +1436,30 @@ def import_csv(
     df = df.reset_index(
         drop=True
     )
+
+    # v9.5: continuous-contract roll adjustment, wired into the one load
+    # path every stored/uploaded dataset funnels through. An unadjusted
+    # "ES1!"-style series jumps by the roll spread at every contract roll;
+    # those jumps are not tradable, yet the pre-v9.5 app backtested across
+    # them because app.data.continuous_contract.back_adjust existed but
+    # had no production caller. Now: continuous futures (names like
+    # "ES1!", "futures_ES.F_1m") are difference-back-adjusted at load, the
+    # frame carries `roll_bar`/`adj_offset` columns plus an attrs note,
+    # and a warning issue records what was removed. Non-continuous data
+    # (spot FX, crypto, single contracts) is returned untouched.
+    try:
+        _src_name = getattr(path_or_buffer, "name", None) or (
+            str(path_or_buffer) if isinstance(path_or_buffer, (str, Path)) else ""
+        )
+        df = _maybe_back_adjust_continuous(df, _src_name, issues)
+    except Exception as _adj_exc:  # never let adjustment break an import
+        issues.append(
+            ValidationIssue(
+                "warning",
+                f"Continuous-contract roll adjustment skipped ({_adj_exc}); "
+                "results may include unadjusted roll gaps.",
+            )
+        )
 
     return ImportResult(
         dataframe=df,
