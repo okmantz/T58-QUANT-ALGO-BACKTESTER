@@ -670,6 +670,163 @@ def with_prop_safety_defaults(risk: "RiskConfig", prop_rules) -> "RiskConfig":
     return replace(risk, **updates)
 
 
+def build_run_context(risk: "RiskConfig | None", prop_rules=None, instrument=None) -> "RiskConfig":
+    """Return a NEW, hardened RiskConfig for one run (v9.6, A2).
+
+    This is the single entry point every run type should pass its risk
+    through so results are comparable across tabs/tools:
+
+    * ``instrument`` (a symbol, a label naming one, or an object/dict with
+      a ``symbol``): when a known instrument-spec helper exists, apply it
+      so ``pip_size``/``contract_size`` (and default costs, only where the
+      caller left them at zero) are correct for that instrument. Unknown
+      instruments leave the caller's scale untouched rather than raising.
+    * ``prop_rules is not None``: delegate to
+      :func:`with_prop_safety_defaults` -- prop account model, balance
+      synced to the firm's account size, drawdown/daily-loss fills, and
+      ``skip`` sizing upgraded to ``fit_stop``.
+    * ``prop_rules is None``: this is a plain backtest, so
+      ``account_model`` is left exactly as configured -- but a silent
+      ``skip`` sizing mode is still never allowed through: ``skip`` is
+      upgraded to ``fit_stop`` so a run cannot quietly take zero trades
+      for sizing reasons. Explicit ``fixed_contracts`` /
+      ``micro_fallback`` (and an already-set ``fit_stop``) are preserved.
+
+    The caller's object is never mutated; a new RiskConfig is always
+    returned (via ``dataclasses.replace``), even when nothing changed.
+    """
+    from dataclasses import replace as _replace
+
+    hardened: RiskConfig = risk if risk is not None else RiskConfig()
+
+    if instrument is not None:
+        symbol = None
+        if isinstance(instrument, str):
+            symbol = instrument.strip() or None
+        elif isinstance(instrument, dict):
+            symbol = instrument.get("symbol") or instrument.get("instrument")
+        else:
+            symbol = getattr(instrument, "symbol", None) or getattr(instrument, "instrument", None)
+        if symbol:
+            try:
+                from app.data.instrument_specs import (
+                    apply_any_instrument_spec,
+                    guess_any_instrument_symbol,
+                )
+
+                resolved = guess_any_instrument_symbol(str(symbol)) or str(symbol)
+                hardened = apply_any_instrument_spec(hardened, resolved)
+            except Exception:  # noqa: BLE001 -- unknown instrument: keep caller's scale
+                pass
+
+    if prop_rules is not None:
+        hardened = with_prop_safety_defaults(hardened, prop_rules)
+    elif hardened.sizing_mode == "skip":
+        hardened = _replace(hardened, sizing_mode="fit_stop")
+
+    if hardened is risk:
+        hardened = _replace(hardened)
+    return hardened
+
+
+def _costs_source(risk: "RiskConfig") -> str:
+    """Best-effort detection for describe_simulation: 'instrument defaults'
+    only when pip/contract/cost fields all match a known spec's defaults."""
+    try:
+        from app.data.instrument_specs import CROSS_MARKET_INSTRUMENTS, KNOWN_INSTRUMENTS
+
+        for spec in list(KNOWN_INSTRUMENTS.values()) + list(CROSS_MARKET_INSTRUMENTS.values()):
+            if (
+                abs(float(risk.pip_size) - float(spec.pip_size)) < 1e-12
+                and risk.contract_size is not None
+                and abs(float(risk.contract_size) - float(spec.contract_size)) < 1e-9
+                and abs(float(risk.commission_per_contract) - float(spec.default_commission_round_turn)) < 1e-9
+                and abs(float(risk.spread_pips) - float(spec.default_spread_pips)) < 1e-12
+                and abs(float(risk.slippage_pips) - float(spec.default_slippage_pips)) < 1e-12
+            ):
+                return "instrument defaults"
+    except Exception:  # noqa: BLE001
+        pass
+    return "as configured"
+
+
+def describe_simulation(risk: "RiskConfig", prop_rules=None) -> str:
+    """Plain-English lines describing how a run was simulated (v9.6).
+
+    Returned as one multi-line string. The verdict-threshold lines are
+    descriptive text only -- stating them here does not change any gate.
+    """
+    sizing_notes = {
+        "fit_stop": "shrink the stop to fit the risk budget, taking one contract where possible",
+        "skip": "skip a trade whose stop does not fit the risk budget",
+        "fixed_contracts": "always trade the configured fixed number of contracts",
+        "micro_fallback": "fall back to the micro contract when the full contract does not fit",
+    }
+    sizing_note = sizing_notes.get(risk.sizing_mode, "as configured")
+    account_note = (
+        "prop-firm account semantics (trailing/floating drawdown, daily-loss and breach rules)"
+        if risk.account_model == "prop"
+        else "plain backtest account semantics (no prop-firm account model in the raw engine)"
+    )
+    if prop_rules is not None:
+        account_size = getattr(prop_rules, "account_size", None)
+        if account_size is not None and float(risk.initial_balance) == float(account_size):
+            balance_line = (
+                f"Initial balance: ${float(risk.initial_balance):,.2f} "
+                f"(account size source: prop rules, account_size=${float(account_size):,.2f}; balance synced to it)"
+            )
+        elif account_size is not None:
+            balance_line = (
+                f"Initial balance: ${float(risk.initial_balance):,.2f} "
+                f"(account size source: prop rules, account_size=${float(account_size):,.2f}; "
+                "note: the risk balance differs from the prop account size)"
+            )
+        else:
+            balance_line = f"Initial balance: ${float(risk.initial_balance):,.2f} (account size source: prop rules)"
+    else:
+        balance_line = (
+            f"Initial balance: ${float(risk.initial_balance):,.2f} "
+            "(account size source: RiskConfig initial_balance; plain backtest -- no prop firm supplied)"
+        )
+    try:
+        budget = float(risk.risk_amount(float(risk.initial_balance)))
+        if risk.risk_mode == "fixed":
+            budget_line = f"Risk budget per trade: ${budget:,.2f} (fixed ${float(risk.risk_value):,.2f} per trade)"
+        else:
+            budget_line = (
+                f"Risk budget per trade: ${budget:,.2f} "
+                f"({float(risk.risk_value):g}% of the initial balance per trade)"
+            )
+    except Exception:  # noqa: BLE001
+        budget_line = f"Risk budget per trade: risk_value={risk.risk_value!r} (mode {risk.risk_mode!r})"
+    contract_line = (
+        f"Contract size: ${float(risk.contract_size):,.2f} per point (pip_size={float(risk.pip_size):g})"
+        if risk.contract_size
+        else f"Contract size: not set / fractional sizing (pip_size={float(risk.pip_size):g})"
+    )
+    lines = [
+        f"Sizing mode: {risk.sizing_mode} -- {sizing_note}.",
+        f"Account model: {risk.account_model} -- {account_note}.",
+        balance_line,
+        budget_line,
+        contract_line,
+        (
+            f"Costs (source: {_costs_source(risk)}): commission ${float(risk.commission_per_trade):,.2f} per trade "
+            f"plus ${float(risk.commission_per_contract):,.2f} per contract, "
+            f"spread {float(risk.spread_pips):g} pips, slippage {float(risk.slippage_pips):g} pips."
+        ),
+        f"Intrabar replay: {'on' if risk.intrabar_replay else 'off'}"
+        + (" -- stop/target order inside a bar is resolved on finer-timeframe bars where available."
+           if risk.intrabar_replay else " -- stop/target order inside a bar uses the bar's high/low, stop-first."),
+    ]
+    if prop_rules is not None:
+        lines.append(
+            "Verdict thresholds (unchanged, for context only): per-attempt pass ≥70% lower bound, "
+            "≥100 trades -- a run must clear both before it can be called ready."
+        )
+    return "\n".join(lines)
+
+
 def account_size_mismatch_message(initial_balance: float, account_size: float) -> str | None:
     """RISK-001: None if `initial_balance` (RiskConfig, drives position
     sizing and the raw backtest's own intrabar circuit breakers) and
