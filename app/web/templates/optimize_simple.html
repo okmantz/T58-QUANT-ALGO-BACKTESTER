@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Optimize (pick engines) — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  .card p.help { font-size: 12px; color: #888; margin: 0 0 10px; line-height: 1.5; }
+  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  input[type=text], input[type=number], select, textarea {
+    width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font-size: 15px;
+  }
+  .row { display: flex; gap: 10px; }
+  .row > div { flex: 1; }
+  input[type=file] { width: 100%; color: #ccc; }
+  .submit-btn {
+    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: #04120e;
+    font-size: 16px; font-weight: 700; margin-top: 6px;
+    box-shadow: 0 0 22px rgba(53,224,176,0.35);
+  }
+  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  details summary { font-size: 13px; color: #999; cursor: pointer; }
+  .engine-row { display: flex; gap: 8px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .engine-row input { margin-top: 3px; }
+  .engine-row .desc { font-size: 12px; color: #888; }
+</style>
+</head>
+<body>
+{% set active_page = active_page|default('optimize_simple') %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Optimize (pick engines)</h1>
+  <p>One front door for optimization: pick a saved strategy and a dataset, tick the engines you want, and they run against one hardened risk setup. Quick Optimize, Refine and Risk Sweep run here; Search, Evolution and Multi-Objective keep their own pages (your tick is recorded with a link -- settings are not auto-carried on web).</p>
+</div>
+
+{% if error %}
+<div class="error">{{ error }}</div>
+{% endif %}
+
+<form method="post" action="/optimize-simple/start" enctype="multipart/form-data">
+
+<div class="card">
+  <h2>Strategy &amp; data</h2>
+  <label>Saved strategy</label>
+  <select name="strategy_pick">
+    {% for s in strategies %}
+    <option value="{{ s.type }}::{{ s.name }}">{{ s.name }} ({{ s.type }})</option>
+    {% endfor %}
+  </select>
+  <label>Dataset (stored) — or upload below</label>
+  <select name="existing_dataset">
+    <option value="">— upload a CSV instead —</option>
+    {% for g in dataset_groups %}
+    <optgroup label="{{ g.instrument }}">
+      {% for d in g.datasets %}
+      <option value="{{ d.name }}">{{ d.name }}</option>
+      {% endfor %}
+    </optgroup>
+    {% endfor %}
+    {% for d in stored_datasets %}
+    <option value="{{ d.name }}">{{ d.name }}</option>
+    {% endfor %}
+  </select>
+  <label>…or upload market data (CSV)</label>
+  <input type="file" name="csv_file" accept=".csv">
+</div>
+
+<div class="card">
+  <h2>Engines</h2>
+  <div class="engine-row"><input type="checkbox" name="engine_quick_optimize" id="e_qo"><div><label for="e_qo" style="margin:0;">Quick Optimize</label><div class="desc">GA over the strategy's tunable parameters, scored on eval pass probability.</div></div></div>
+  <div class="engine-row"><input type="checkbox" name="engine_refine" id="e_rf"><div><label for="e_rf" style="margin:0;">Refine (iterative)</label><div class="desc">Multi-round refinement with Monte-Carlo fitness.</div></div></div>
+  <div class="engine-row"><input type="checkbox" name="engine_risk_sweep" id="e_rs"><div><label for="e_rs" style="margin:0;">Risk Sweep</label><div class="desc">Sweeps risk-per-trade levels against the prop rules.</div></div></div>
+  <div class="engine-row"><input type="checkbox" name="engine_search" id="e_se"><div><label for="e_se" style="margin:0;">Search Lab</label><div class="desc">Runs on its own page -- ticked engines get a link in the job result.</div></div></div>
+  <div class="engine-row"><input type="checkbox" name="engine_evolution" id="e_ev"><div><label for="e_ev" style="margin:0;">Evolution Lab (GA)</label><div class="desc">Runs on its own page -- ticked engines get a link in the job result.</div></div></div>
+  <div class="engine-row"><input type="checkbox" name="engine_multi_objective" id="e_mo"><div><label for="e_mo" style="margin:0;">Multi-Objective</label><div class="desc">Runs on its own page -- ticked engines get a link in the job result.</div></div></div>
+</div>
+
+<div class="card">
+  <h2>Account &amp; risk</h2>
+  <div class="row">
+    <div><label>Prop-firm preset</label>
+      <select name="prop_preset">
+        <option value="">— type the rules below —</option>
+        {% for p in prop_presets %}
+        <option value="{{ p.key }}">{{ p.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div><label>Initial balance ($)</label><input type="number" step="any" name="initial_balance" value="100000"></div>
+  </div>
+  <div class="row">
+    <div><label>Account size ($)</label><input type="number" step="any" name="account_size" value="100000"></div>
+    <div><label>Profit target (%)</label><input type="number" step="any" name="profit_target" value="8"></div>
+    <div><label>Daily loss (%)</label><input type="number" step="any" name="daily_loss" value="5"></div>
+    <div><label>Max drawdown (%)</label><input type="number" step="any" name="max_dd" value="10"></div>
+  </div>
+  <div class="row">
+    <div><label>Risk mode</label>
+      <select name="risk_mode"><option value="percent">% of balance</option><option value="fixed">Fixed $</option></select>
+    </div>
+    <div><label>Risk value</label><input type="number" step="any" name="risk_value" value="1.0"></div>
+    <div><label>Max trades / day</label><input type="number" name="max_trades_day" value="10"></div>
+  </div>
+  <div class="row">
+    <div><label>Pip size</label><input type="number" step="any" name="pip_size" value="0.0001"></div>
+    <div><label>Contract size</label><input type="number" step="any" name="contract_size" placeholder="auto"></div>
+    <div><label>Spread (pips)</label><input type="number" step="any" name="spread_pips" value="1.0"></div>
+    <div><label>Slippage (pips)</label><input type="number" step="any" name="slippage_pips" value="0.5"></div>
+    <div><label>Commission / trade</label><input type="number" step="any" name="commission" value="0"></div>
+  </div>
+</div>
+
+<details class="card">
+  <summary>Advanced — accuracy &amp; engine knobs</summary>
+  {% include '_accuracy_fields.html' %}
+  <div class="row">
+    <div><label>GA population (Quick Optimize)</label><input type="number" name="ga_population" value="16"></div>
+    <div><label>GA generations (Quick Optimize)</label><input type="number" name="ga_generations" value="6"></div>
+    <div><label>Population (Refine)</label><input type="number" name="population_size" value="10"></div>
+    <div><label>Generations (Refine)</label><input type="number" name="generations" value="5"></div>
+    <div><label>Monte-Carlo sims</label><input type="number" name="mc_sims" value="500"></div>
+    <div><label>Fitness metric</label><input type="text" name="fitness_metric" value="eval_pass_probability"></div>
+  </div>
+</details>
+
+<button class="submit-btn" type="submit">Run ticked engines</button>
+</form>
+
+</div>
+</div>
+</body>
+</html>

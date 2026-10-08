@@ -102,11 +102,11 @@
   <div class="t58-nav-divider"></div>
   <div class="t58-nav-section-label">Strategy Lab</div>
 
-  {% set create_pages   = ['forge', 'strategy_library', 'speed_run', 'speed_run_multi_instrument', 'generate_strategies', 'research_agent', 'research', 'research_loop'] %}
-  {% set test_pages     = ['run', 'payout_probability'] %}
-  {% set optimize_pages = ['optimize_hub', 'search', 'search_multi_instrument', 'refine', 'full_pipeline', 'quick_optimize', 'multi_objective', 'evolution', 'evolution_multi_instrument', 'risk_sweep'] %}
-  {% set validate_pages = ['validate_hub', 'wfo', 'wfga', 'cpcv', 'pbo', 'sensitivity', 'parameter_robustness', 'regime_matrix'] %}
-  {% set champion_pages = ['family_diversity', 'ensemble', 'portfolio'] %}
+  {% set create_pages   = ['forge', 'strategy_library', 'speed_run', 'speed_run_multi_instrument', 'generate_strategies', 'research_agent', 'research', 'research_loop', 'discover', 'overnight_autopilot'] %}
+  {% set test_pages     = ['run', 'payout_probability', 'full_pipeline'] %}
+  {% set optimize_pages = ['optimize_hub', 'optimize_simple', 'search', 'search_multi_instrument', 'multi_market', 'refine', 'full_pipeline', 'quick_optimize', 'multi_objective', 'evolution', 'evolution_multi_instrument', 'risk_sweep', 'cross_instrument'] %}
+  {% set validate_pages = ['validate_hub', 'validate_simple', 'wfo', 'wfga', 'cpcv', 'pbo', 'sensitivity', 'parameter_robustness', 'regime_matrix'] %}
+  {% set champion_pages = ['champion_simple', 'family_diversity', 'ensemble', 'portfolio', 'universe', 'compare'] %}
 
   <!-- All groups launch condensed/closed by default, regardless of which
        page is active -- t58-chrome.js only re-opens a group if the person
@@ -137,6 +137,12 @@
       <a href="/research-loop" data-accent="violet" class="t58-nav-item {{ 'active' if active_page == 'research_loop' else '' }}">
         <span class="t58-nav-icon">&#8635;</span><span class="label">Research Loop (Background)</span>
       </a>
+      <a href="/discover" data-accent="violet" class="t58-nav-item {{ 'active' if active_page == 'discover' else '' }}">
+        <span class="t58-nav-icon">&#10024;</span><span class="label">Your Idea</span>
+      </a>
+      <a href="/overnight-autopilot" data-accent="violet" class="t58-nav-item {{ 'active' if active_page == 'overnight_autopilot' else '' }}">
+        <span class="t58-nav-icon">&#9889;</span><span class="label">Overnight Autopilot</span>
+      </a>
       <a href="/speed-run" data-accent="violet" class="t58-nav-item {{ 'active' if active_page == 'speed_run' else '' }}">
         <span class="t58-nav-icon">&#9889;</span><span class="label">Speed Run</span>
       </a>
@@ -162,6 +168,12 @@
       <a href="/" data-accent="cyan" class="t58-nav-item {{ 'active' if active_page == 'run' else '' }}">
         <span class="t58-nav-icon">&#9654;</span><span class="label">Run &amp; Report</span>
       </a>
+      <a href="/full-pipeline" data-accent="cyan" class="t58-nav-item {{ 'active' if active_page == 'full_pipeline' else '' }}">
+        <span class="t58-nav-icon">&#9889;</span><span class="label">Full Pipeline</span>
+      </a>
+      <a href="/" data-accent="cyan" class="t58-nav-item">
+        <span class="t58-nav-icon">&#8635;</span><span class="label">Timeframe Sweep (in Run &amp; Report)</span>
+      </a>
       <a href="/payout-probability" data-accent="cyan" class="t58-nav-item {{ 'active' if active_page == 'payout_probability' else '' }}">
         <span class="t58-nav-icon">&#9878;</span><span class="label">Payout Probability</span>
       </a>
@@ -177,6 +189,9 @@
     <div class="t58-nav-group-items">
       <a href="/optimize" data-accent="blue" class="t58-nav-item {{ 'active' if active_page == 'optimize_hub' else '' }}" style="font-weight:600;">
         <span class="t58-nav-icon">&#128161;</span><span class="label">Start Here</span>
+      </a>
+      <a href="/optimize-simple" data-accent="blue" class="t58-nav-item {{ 'active' if active_page == 'optimize_simple' else '' }}" style="font-weight:700;">
+        <span class="t58-nav-icon">&#9889;</span><span class="label">Optimize (pick engines)</span>
       </a>
       <a href="/full-pipeline" data-accent="blue" class="t58-nav-item {{ 'active' if active_page == 'full_pipeline' else '' }}">
         <span class="t58-nav-icon">&#9889;</span><span class="label">Full Pipeline</span>
@@ -208,6 +223,9 @@
       <a href="/risk-sweep" data-accent="blue" class="t58-nav-item {{ 'active' if active_page == 'risk_sweep' else '' }}">
         <span class="t58-nav-icon">&#9878;</span><span class="label">Risk Sweep</span>
       </a>
+      <a href="/multi-market" data-accent="blue" class="t58-nav-item {{ 'active' if active_page == 'multi_market' else '' }}">
+        <span class="t58-nav-icon">&#9878;</span><span class="label">Multi-Market Search</span>
+      </a>
     </div>
   </details>
 
@@ -217,6 +235,9 @@
     <div class="t58-nav-group-items">
       <a href="/validate" data-accent="amber" class="t58-nav-item {{ 'active' if active_page == 'validate_hub' else '' }}" style="font-weight:600;">
         <span class="t58-nav-icon">&#128161;</span><span class="label">Start Here</span>
+      </a>
+      <a href="/validate-simple" data-accent="amber" class="t58-nav-item {{ 'active' if active_page == 'validate_simple' else '' }}" style="font-weight:700;">
+        <span class="t58-nav-icon">&#8862;</span><span class="label">Validate (pick checks)</span>
       </a>
       <a href="/walk-forward-opt" data-accent="amber" class="t58-nav-item {{ 'active' if active_page == 'wfo' else '' }}">
         <span class="t58-nav-icon">&#8635;</span><span class="label">Walk-Forward Optimization</span>
@@ -255,6 +276,12 @@
       <a href="/start-here/champion" data-accent="magenta" class="t58-nav-item {{ 'active' if active_page == 'start_here_champion' else '' }}" style="font-weight:600;">
         <span class="t58-nav-icon">&#128161;</span><span class="label">Start Here</span>
       </a>
+      <a href="/champion-simple" data-accent="magenta" class="t58-nav-item {{ 'active' if active_page == 'champion_simple' else '' }}" style="font-weight:700;">
+        <span class="t58-nav-icon">&#127942;</span><span class="label">Champion (promote)</span>
+      </a>
+      <a href="/dashboard" data-accent="magenta" class="t58-nav-item">
+        <span class="t58-nav-icon">&#127942;</span><span class="label">Champion Board / Leaderboard</span>
+      </a>
       <a href="/family-diversity" data-accent="magenta" class="t58-nav-item {{ 'active' if active_page == 'family_diversity' else '' }}">
         <span class="t58-nav-icon">&#10038;</span><span class="label">Family Diversity</span>
       </a>
@@ -267,6 +294,12 @@
       <a href="/ensemble" data-accent="magenta" class="t58-nav-item {{ 'active' if active_page == 'ensemble' else '' }}">
         <span class="t58-nav-icon">&#9707;</span><span class="label">Multi-Strategy Ensemble</span>
       </a>
+      <a href="/compare" data-accent="magenta" class="t58-nav-item {{ 'active' if active_page == 'compare' else '' }}">
+        <span class="t58-nav-icon">&#9878;</span><span class="label">Compare Strategies</span>
+      </a>
+      <a href="/quant-lab/strategy-health" data-accent="magenta" class="t58-nav-item">
+        <span class="t58-nav-icon">&#128200;</span><span class="label">Strategy Health / Auto Re-Tune</span>
+      </a>
     </div>
   </details>
 
@@ -276,22 +309,12 @@
        labels inside this one still-collapsible group -- same idea as the
        desktop SUBHEADER sentinel, just markup instead of a tuple field. -->
   <details class="t58-nav-group">
-    <summary><span class="t58-num">&#9317;</span> Deployment <span class="chev">&#9656;</span></summary>
+    <summary><span class="t58-num">&#9317;</span> Deploy <span class="chev">&#9656;</span></summary>
     <div class="t58-nav-group-items">
       <a href="/start-here/deployment" data-accent="lime" class="t58-nav-item {{ 'active' if active_page == 'start_here_deployment' else '' }}" style="font-weight:600;">
         <span class="t58-nav-icon">&#128161;</span><span class="label">Start Here</span>
       </a>
-      <div class="t58-nav-subheader">Champion Checks</div>
-      <a href="/overnight-autopilot" data-accent="lime" class="t58-nav-item {{ 'active' if active_page == 'overnight_autopilot' else '' }}">
-        <span class="t58-nav-icon">&#9889;</span><span class="label">Overnight Autopilot</span>
-      </a>
-      <a href="/compare" data-accent="lime" class="t58-nav-item {{ 'active' if active_page == 'compare' else '' }}">
-        <span class="t58-nav-icon">&#9878;</span><span class="label">Compare Strategies</span>
-      </a>
-      <a href="/quant-lab/strategy-health" data-accent="lime" class="t58-nav-item">
-        <span class="t58-nav-icon">&#128200;</span><span class="label">Strategy Health / Auto Re-Tune</span>
-      </a>
-      <div class="t58-nav-subheader">Live Markets</div>
+
       <a href="/forward-test" data-accent="lime" class="t58-nav-item {{ 'active' if active_page == 'forward_test' else '' }}">
         <span class="t58-nav-icon">&#9711;</span><span class="label">Forward Test (MT5)</span>
       </a>
@@ -372,11 +395,11 @@
       <a href="/settings/account" class="t58-nav-item {{ 'active' if active_page == 'account_settings' else '' }}">
         <span class="t58-nav-icon">&#9881;</span><span class="label">Account Settings</span>
       </a>
-      <a href="/settings/api-keys" class="t58-nav-item {{ 'active' if active_page == 'api_keys_settings' else '' }}">
-        <span class="t58-nav-icon">&#128273;</span><span class="label">API Keys</span>
-      </a>
       <a href="/settings/notifications" class="t58-nav-item {{ 'active' if active_page == 'notification_settings' else '' }}">
         <span class="t58-nav-icon">&#128276;</span><span class="label">Notification Settings</span>
+      </a>
+      <a href="/settings/api-keys" class="t58-nav-item {{ 'active' if active_page == 'api_keys_settings' else '' }}">
+        <span class="t58-nav-icon">&#128273;</span><span class="label">API Keys</span>
       </a>
       <a href="/data-center" class="t58-nav-item {{ 'active' if active_page == 'data_center' else '' }}">
         <span class="t58-nav-icon">&#128202;</span><span class="label">Data Center</span>

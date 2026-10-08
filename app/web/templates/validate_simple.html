@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Validate (pick checks) — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  .card p.help { font-size: 12px; color: #888; margin: 0 0 10px; line-height: 1.5; }
+  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  input[type=text], input[type=number], select, textarea {
+    width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font-size: 15px;
+  }
+  .row { display: flex; gap: 10px; }
+  .row > div { flex: 1; }
+  input[type=file] { width: 100%; color: #ccc; }
+  .submit-btn {
+    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: #04120e;
+    font-size: 16px; font-weight: 700; margin-top: 6px;
+    box-shadow: 0 0 22px rgba(53,224,176,0.35);
+  }
+  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  details summary { font-size: 13px; color: #999; cursor: pointer; }
+  .check-row { display: flex; gap: 8px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .check-row input { margin-top: 3px; }
+  .check-row .desc { font-size: 12px; color: #888; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td, th { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+  pre { white-space: pre-wrap; font-size: 12px; color: #bbb; }
+  .ok { color: #7ee2a8; } .bad { color: #ff9c9c; }
+</style>
+</head>
+<body>
+{% set active_page = active_page|default('validate_simple') %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Validate (pick checks)</h1>
+  <p>One hardened baseline backtest, then exactly the checks you tick — Monte Carlo, CPCV, PBO, Walk-Forward, Sensitivity, Parameter Robustness and Regime — all against the same risk setup, so the numbers are comparable. Each check reports honestly or fails on its own; one failure never sinks the rest.</p>
+</div>
+
+{% if error %}
+<div class="error">{{ error }}</div>
+{% endif %}
+
+{% if baseline %}
+<div class="card">
+  <h2>Baseline backtest{% if strategy_name %} — {{ strategy_name }}{% endif %}</h2>
+  <table>
+    <tr><td>Dataset</td><td>{{ baseline.dataset }}</td></tr>
+    <tr><td>Trades</td><td>{{ baseline.trades }}</td></tr>
+    <tr><td>Net profit</td><td>{{ '%.2f'|format(baseline.net_profit) }}</td></tr>
+    <tr><td>Win rate</td><td>{{ '%.1f'|format(baseline.win_rate) }}%</td></tr>
+    <tr><td>Max drawdown</td><td>{{ '%.2f'|format(baseline.max_drawdown_pct) }}%</td></tr>
+  </table>
+</div>
+{% endif %}
+
+{% if simulation_text %}
+<div class="card">
+  <h2>How this was simulated</h2>
+  <details>
+    <summary>Simulation assumptions for this run</summary>
+    <pre>{{ simulation_text }}</pre>
+  </details>
+</div>
+{% endif %}
+
+{% if checks %}
+<div class="card">
+  <h2>Check results</h2>
+  {% for r in checks %}
+  <h3 class="{{ 'ok' if r.ok else 'bad' }}">{{ r.check }}{% if not r.ok %} — failed{% endif %}</h3>
+  {% if r.ok %}
+  <table>
+    {% for k, v in r.summary.items() %}
+    <tr><td>{{ k }}</td><td>{% if v is mapping or v is sequence and v is not string %}<pre>{{ v | tojson(indent=2) }}</pre>{% else %}{{ v }}{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="bad">{{ r.error }}</p>
+  {% endif %}
+  {% endfor %}
+</div>
+{% endif %}
+
+<form method="post" action="/validate-simple/start" enctype="multipart/form-data">
+
+<div class="card">
+  <h2>Strategy &amp; data</h2>
+  <label>Saved strategy</label>
+  <select name="strategy_pick">
+    {% for s in strategies %}
+    <option value="{{ s.type }}::{{ s.name }}">{{ s.name }} ({{ s.type }})</option>
+    {% endfor %}
+  </select>
+  <label>Dataset (stored) — or upload below</label>
+  <select name="existing_dataset">
+    <option value="">— upload a CSV instead —</option>
+    {% for g in dataset_groups %}
+    <optgroup label="{{ g.instrument }}">
+      {% for d in g.datasets %}
+      <option value="{{ d.name }}">{{ d.name }}</option>
+      {% endfor %}
+    </optgroup>
+    {% endfor %}
+    {% for d in stored_datasets %}
+    <option value="{{ d.name }}">{{ d.name }}</option>
+    {% endfor %}
+  </select>
+  <label>…or upload market data (CSV)</label>
+  <input type="file" name="csv_file" accept=".csv">
+</div>
+
+<div class="card">
+  <h2>Checks</h2>
+  <div class="check-row"><input type="checkbox" name="check_monte_carlo" id="c_mc"><div><label for="c_mc" style="margin:0;">Monte Carlo</label><div class="desc">Resamples the baseline trades against the prop rules: eval-pass / first-payout probability, ruin.</div></div></div>
+  <div class="check-row"><input type="checkbox" name="check_cpcv" id="c_cpcv"><div><label for="c_cpcv" style="margin:0;">CPCV</label><div class="desc">Combinatorial purged cross-validation across every train/test partition.</div></div></div>
+  <div class="check-row"><input type="checkbox" name="check_pbo" id="c_pbo"><div><label for="c_pbo" style="margin:0;">PBO (overfitting)</label><div class="desc">Probability of backtest overfitting vs perturbed parameter variants.</div></div></div>
+  <div class="check-row"><input type="checkbox" name="check_walk_forward" id="c_wf"><div><label for="c_wf" style="margin:0;">Walk-Forward</label><div class="desc">Rolling/anchored out-of-sample optimization folds.</div></div></div>
+  <div class="check-row"><input type="checkbox" name="check_sensitivity" id="c_se"><div><label for="c_se" style="margin:0;">Sensitivity (1-D)</label><div class="desc">One-parameter-at-a-time sweeps; flags cliff edges.</div></div></div>
+  <div class="check-row"><input type="checkbox" name="check_robustness" id="c_rb"><div><label for="c_rb" style="margin:0;">Parameter Robustness</label><div class="desc">Plateau-vs-cliff scoring across the parameter surface.</div></div></div>
+  <div class="check-row"><input type="checkbox" name="check_regime" id="c_rg"><div><label for="c_rg" style="margin:0;">Regime Matrix</label><div class="desc">Performance split by market regime; flags regimes to disable.</div></div></div>
+</div>
+
+<div class="card">
+  <h2>Account &amp; risk</h2>
+  <div class="row">
+    <div><label>Prop-firm preset</label>
+      <select name="prop_preset">
+        <option value="">— type the rules below —</option>
+        {% for p in prop_presets %}
+        <option value="{{ p.key }}">{{ p.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div><label>Initial balance ($)</label><input type="number" step="any" name="initial_balance" value="100000"></div>
+  </div>
+  <div class="row">
+    <div><label>Account size ($)</label><input type="number" step="any" name="account_size" value="100000"></div>
+    <div><label>Profit target (%)</label><input type="number" step="any" name="profit_target" value="8"></div>
+    <div><label>Daily loss (%)</label><input type="number" step="any" name="daily_loss" value="5"></div>
+    <div><label>Max drawdown (%)</label><input type="number" step="any" name="max_dd" value="10"></div>
+  </div>
+  <div class="row">
+    <div><label>Risk mode</label>
+      <select name="risk_mode"><option value="percent">% of balance</option><option value="fixed">Fixed $</option></select>
+    </div>
+    <div><label>Risk value</label><input type="number" step="any" name="risk_value" value="1.0"></div>
+    <div><label>Max trades / day</label><input type="number" name="max_trades_day" value="10"></div>
+  </div>
+  <div class="row">
+    <div><label>Pip size</label><input type="number" step="any" name="pip_size" value="0.0001"></div>
+    <div><label>Contract size</label><input type="number" step="any" name="contract_size" placeholder="auto"></div>
+    <div><label>Spread (pips)</label><input type="number" step="any" name="spread_pips" value="1.0"></div>
+    <div><label>Slippage (pips)</label><input type="number" step="any" name="slippage_pips" value="0.5"></div>
+    <div><label>Commission / trade</label><input type="number" step="any" name="commission" value="0"></div>
+  </div>
+</div>
+
+<details class="card">
+  <summary>Advanced — accuracy &amp; check knobs</summary>
+  {% include '_accuracy_fields.html' %}
+  <div class="row">
+    <div><label>Monte-Carlo sims</label><input type="number" name="mc_sims" value="1000"></div>
+    <div><label>CPCV/PBO groups</label><input type="number" name="cpcv_groups" value="4"></div>
+    <div><label>CPCV/PBO test groups</label><input type="number" name="cpcv_test_groups" value="2"></div>
+    <div><label>Max paths</label><input type="number" name="cpcv_max_paths" value="15"></div>
+  </div>
+  <div class="row">
+    <div><label>PBO variants</label><input type="number" name="pbo_variants" value="4"></div>
+    <div><label>Walk-forward folds</label><input type="number" name="wf_folds" value="3"></div>
+    <div><label>WF window</label>
+      <select name="wf_window_mode"><option value="rolling">rolling</option><option value="anchored">anchored</option></select>
+    </div>
+    <div><label>Validation metric</label><input type="text" name="validation_metric" value="profit_factor"></div>
+  </div>
+  <div class="row">
+    <div><label>Sensitivity range (± fraction)</label><input type="number" step="any" name="pct_range" value="0.5"></div>
+    <div><label>Steps</label><input type="number" name="n_steps" value="5"></div>
+    <div><label>Max parameters</label><input type="number" name="max_params" value="4"></div>
+    <div><label>Robustness metric</label><input type="text" name="robustness_metric" value="eval_pass_probability"></div>
+  </div>
+  <div class="row">
+    <div><label>Regime dimension A</label><input type="text" name="regime_dim_a" value="volatility"></div>
+    <div><label>Regime dimension B</label><input type="text" name="regime_dim_b" value="environment"></div>
+  </div>
+</details>
+
+<button class="submit-btn" type="submit">Run baseline + ticked checks</button>
+</form>
+
+</div>
+</div>
+</body>
+</html>

@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Champion (promote) — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  .card p.help { font-size: 12px; color: #888; margin: 0 0 10px; line-height: 1.5; }
+  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  input[type=text], input[type=number], select, textarea {
+    width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font-size: 15px;
+  }
+  .row { display: flex; gap: 10px; }
+  .row > div { flex: 1; }
+  input[type=file] { width: 100%; color: #ccc; }
+  .submit-btn {
+    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: #04120e;
+    font-size: 16px; font-weight: 700; margin-top: 6px;
+    box-shadow: 0 0 22px rgba(53,224,176,0.35);
+  }
+  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .notice { background: #142a1a; border: 1px solid #235a32; color: #b4ffcb; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .notice.bad { background: #2a1414; border-color: #6b2323; color: #ffb4b4; }
+  details summary { font-size: 13px; color: #999; cursor: pointer; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td, th { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+  pre { white-space: pre-wrap; font-size: 12px; color: #bbb; }
+</style>
+</head>
+<body>
+{% set active_page = active_page|default('champion_simple') %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Champion (promote)</h1>
+  <p>The promotion board, simplified: see every candidate and the current champion, re-run the validation checks for one candidate against a dataset, then promote it. Promotion uses the existing champion persistence — the same board the Dashboard leaderboard reads. The 70% promotion gate is unchanged.</p>
+</div>
+
+{% if notice %}
+<div class="notice{{ '' if notice_ok == '1' else ' bad' }}">{{ notice }}</div>
+{% endif %}
+
+{% if champion %}
+<div class="card">
+  <h2>Current champion (strongest validated candidate)</h2>
+  <table>
+    <tr><td>Strategy</td><td>{{ champion.filename }} ({{ champion.strategy_type }})</td></tr>
+    <tr><td>Verdict</td><td>{{ champion.verdict }}</td></tr>
+    <tr><td>Checks passed</td><td>{{ champion.checks_passed }} / {{ champion.checks_total }}</td></tr>
+  </table>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Promotion board</h2>
+  {% if board_rows %}
+  <table>
+    <thead><tr><th></th><th>Candidate</th><th>Verdict</th><th>Checks</th><th>Last checked</th></tr></thead>
+    <tbody>
+    {% for r in board_rows %}
+      <tr>
+        <td><input type="radio" name="candidate" value="{{ r.strategy_type }}::{{ r.filename }}" form="champion-actions"></td>
+        <td>{{ r.filename }} ({{ r.strategy_type }})</td>
+        <td>{{ r.verdict }}</td>
+        <td>{{ r.checks_passed }} / {{ r.checks_total }}</td>
+        <td>{{ r.last_checked or '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="help">No candidates yet — run a strategy through Full Pipeline or Validate so it lands on the board.</p>
+  {% endif %}
+</div>
+
+{% if checks_result %}
+<div class="card">
+  <h2>Re-run results — {{ checks_result.candidate }}</h2>
+  <p class="help">Dataset: {{ checks_result.dataset }} · baseline trades: {{ checks_result.baseline_trades }}</p>
+  {% for r in checks_result.checks %}
+  <h3>{{ r.check }}{% if not r.ok %} — failed{% endif %}</h3>
+  {% if r.ok %}
+  <table>
+    {% for k, v in r.summary.items() %}
+    <tr><td>{{ k }}</td><td>{% if v is mapping or v is sequence and v is not string %}<pre>{{ v | tojson(indent=2) }}</pre>{% else %}{{ v }}{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p>{{ r.error }}</p>
+  {% endif %}
+  {% endfor %}
+</div>
+{% endif %}
+
+<form id="champion-actions" method="post" enctype="multipart/form-data">
+<div class="card">
+  <h2>Re-run checks for the selected candidate</h2>
+  <p class="help">Pick a candidate in the board above (radio button), choose a dataset, tick checks, then re-run. Promote is separate and uses the board's stored verdicts.</p>
+  <label>Dataset (stored) — or upload below</label>
+  <select name="existing_dataset">
+    <option value="">— upload a CSV instead —</option>
+    {% for g in dataset_groups %}
+    <optgroup label="{{ g.instrument }}">
+      {% for d in g.datasets %}
+      <option value="{{ d.name }}">{{ d.name }}</option>
+      {% endfor %}
+    </optgroup>
+    {% endfor %}
+    {% for d in stored_datasets %}
+    <option value="{{ d.name }}">{{ d.name }}</option>
+    {% endfor %}
+  </select>
+  <label>…or upload market data (CSV)</label>
+  <input type="file" name="csv_file" accept=".csv">
+  <label><input type="checkbox" name="check_monte_carlo"> Monte Carlo</label>
+  <label><input type="checkbox" name="check_cpcv"> CPCV</label>
+  <label><input type="checkbox" name="check_pbo"> PBO (overfitting)</label>
+  <label><input type="checkbox" name="check_walk_forward"> Walk-Forward</label>
+  <label><input type="checkbox" name="check_sensitivity"> Sensitivity (1-D)</label>
+  <label><input type="checkbox" name="check_robustness"> Parameter Robustness</label>
+  <label><input type="checkbox" name="check_regime"> Regime Matrix</label>
+  <div class="row">
+    <div><label>Prop-firm preset</label>
+      <select name="prop_preset">
+        <option value="">— typed rules / account size only —</option>
+        {% for p in prop_presets %}
+        <option value="{{ p.key }}">{{ p.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div><label>Account size ($)</label><input type="number" step="any" name="account_size" value="100000"></div>
+    <div><label>Initial balance ($)</label><input type="number" step="any" name="initial_balance" value="100000"></div>
+  </div>
+</div>
+
+<details class="card">
+  <summary>Advanced — accuracy &amp; check knobs</summary>
+  {% include '_accuracy_fields.html' %}
+  <div class="row">
+    <div><label>Monte-Carlo sims</label><input type="number" name="mc_sims" value="1000"></div>
+    <div><label>CPCV/PBO groups</label><input type="number" name="cpcv_groups" value="4"></div>
+    <div><label>CPCV/PBO test groups</label><input type="number" name="cpcv_test_groups" value="2"></div>
+    <div><label>Max paths</label><input type="number" name="cpcv_max_paths" value="15"></div>
+    <div><label>Walk-forward folds</label><input type="number" name="wf_folds" value="3"></div>
+  </div>
+</details>
+
+<button class="submit-btn" type="submit" formaction="/champion-simple/rerun">Re-run checks</button>
+<button class="submit-btn" type="submit" formaction="/champion-simple/promote" style="margin-top:10px;">Promote selected candidate</button>
+</form>
+
+</div>
+</div>
+</body>
+</html>
