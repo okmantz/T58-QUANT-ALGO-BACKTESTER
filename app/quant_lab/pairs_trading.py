@@ -54,7 +54,7 @@ import numpy as np
 import pandas as pd
 
 from app.backtest.engine import BacktestResult, run_backtest
-from app.backtest.risk import RiskConfig
+from app.backtest.risk import RiskConfig, build_run_context
 from app.data.alpaca_source import AlpacaFetchError, fetch_stock_bars
 from app.data.pairs import DEFAULT_PAIR_COLUMN, merge_pair_series
 from app.strategy.manual import ManualStrategy
@@ -281,6 +281,6 @@ def run_pairs_backtest(
 
     config = build_pairs_strategy_config(symbol_a, symbol_b, zscore_period, entry_z, exit_z)
     strategy = ManualStrategy(config)
-    risk_cfg = risk or RiskConfig()
+    risk_cfg = build_run_context(risk or RiskConfig())
     bt = run_backtest(merged_df, strategy, risk_cfg)
     return PairsBacktestResult(pair=pair_info, strategy_config=config, backtest=bt)
