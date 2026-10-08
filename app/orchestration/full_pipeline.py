@@ -140,7 +140,10 @@ class FullPipelineConfig:
     preflight_min_trades: int = 100
     extra_gates_enabled: bool = field(default_factory=lambda: __import__('os').environ.get('T58_SKIP_EXTRA_GATES', '0') != '1')
     attempt_replay_starts: int = 24       # fresh-account attempts re-run through the real engine
-    null_n_seeds: int = 100               # random-entry null runs
+    null_n_seeds: int = 200               # random-entry null runs (v9.5: raised from 100 per accuracy plan)
+    break_cost_mult: float = 2.0          # v9.5 break-it gate: verdict must survive costs at this multiple
+    seed_rescore_seeds: int = 3           # v9.5: extra Monte Carlo seeds for winner seed-stability check
+    seed_rescore_sims: int = 2000         # sims per seed-rescore run (dispersion check, not the headline MC)
     null_p_max: float = 0.10              # READY needs the real result to beat >=90% of random-timing runs
     n_folds: int = 4
     window_mode: str = "rolling"           # for the GA's internal fold split
@@ -954,7 +957,7 @@ _VERDICT_TO_LIBRARY_STATUS = {
     "NOT READY": "tested_failed",
 }
 
-def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 25.0, null_result=None, null_p_max: float = 0.10, **kwargs):
+def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 25.0, null_result=None, null_p_max: float = 0.10, cost_stress=None, mc_dispersion_pts=None, **kwargs):
     """Accuracy-overhaul wrapper around the original verdict logic.
 
     Adds two honesty gates that can only DEMOTE a READY verdict to MARGINAL
@@ -1000,6 +1003,23 @@ def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 2
             f"(limit {null_p_max * 100:.0f}%); the entry logic is not distinguishable from chance -- capped at MARGINAL."
         )
         return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
+    # v9.5 break-it gates (same demote-only posture): an edge that dies at
+    # 2x costs, or whose pass rate swings wildly with the Monte Carlo
+    # seed, is not an edge a funded account can rely on.
+    if cost_stress is not None and float(cost_stress.get("base_net_profit", 0.0)) > 0 and float(cost_stress.get("net_profit", 0.0)) <= 0:
+        reasons.append(
+            f"COST STRESS: at {float(cost_stress.get('multiplier', 2.0)):g}x spread/slippage/commission the same "
+            f"trades net ${float(cost_stress.get('net_profit', 0.0)):,.0f} (vs ${float(cost_stress.get('base_net_profit', 0.0)):,.0f} at 1x) "
+            "-- the edge does not survive realistic cost slippage; capped at MARGINAL."
+        )
+        return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
+    if mc_dispersion_pts is not None and float(mc_dispersion_pts) > 10.0:
+        reasons.append(
+            f"SEED INSTABILITY: per-attempt pass probability swings with a standard deviation of "
+            f"{float(mc_dispersion_pts):.1f} points across Monte Carlo seeds -- the headline number is partly "
+            "luck of the draw; capped at MARGINAL until the sample is bigger."
+        )
+        return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
     return verdict, reasons, scorecard, ruin_fail, look_fail
 
 
@@ -1011,14 +1031,15 @@ def _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt
     has no evidence (logged), it must not sink the run."""
     replay = None
     null = None
+    cost_stress = None
     if not getattr(cfg, "extra_gates_enabled", True):
-        return replay, null
+        return replay, null, cost_stress
     try:
         from app.data.timeframe_resample import prepare_timeframe_aligned_data
         d2, _ = prepare_timeframe_aligned_data(dev_df, final_strategy)
         sr = final_strategy.generate(d2)
         if getattr(sr, "entry_orders", None) is not None:
-            return replay, null
+            return replay, null, cost_stress
         try:
             from app.prop.attempt_replay import run_attempt_replay
             replay = run_attempt_replay(
@@ -1052,7 +1073,34 @@ def _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt
             log(f"  Random-entry null skipped: {exc}")
     except Exception as exc:  # noqa: BLE001
         log(f"  Replay/null evidence skipped: {exc}")
-    return replay, null
+    # v9.5 break-it evidence: the same final strategy re-run at elevated
+    # costs. An edge that only exists at exactly today's spread/slippage
+    # is not tradeable on a funded account.
+    try:
+        from dataclasses import replace as _replace_risk
+
+        _mult = float(getattr(cfg, "break_cost_mult", 2.0))
+        _srisk = _replace_risk(
+            risk,
+            spread_pips=risk.spread_pips * _mult,
+            slippage_pips=risk.slippage_pips * _mult,
+            commission_per_contract=risk.commission_per_contract * _mult,
+            commission_per_trade=risk.commission_per_trade * _mult,
+        )
+        _sbt = run_backtest(dev_df, final_strategy, _srisk)
+        cost_stress = {
+            "multiplier": _mult,
+            "net_profit": float(_sbt.statistics.net_profit),
+            "trades": len(_sbt.trades),
+            "base_net_profit": float(final_bt.statistics.net_profit),
+        }
+        log(
+            f"  Cost stress ({_mult:g}x): net ${cost_stress['net_profit']:,.0f} "
+            f"vs ${cost_stress['base_net_profit']:,.0f} at 1x ({cost_stress['trades']} trades)."
+        )
+    except Exception as exc:  # noqa: BLE001
+        log(f"  Cost-stress evidence skipped: {exc}")
+    return replay, null, cost_stress
 
 
 def _library_save_note_suffix(verdict: str, verdict_reasons: list[str]) -> str:
@@ -1903,10 +1951,32 @@ def run_full_pipeline(
         # -- Step 7: report + save -----------------------------------------
         _check_cancel()
         log("Step 7/7: Generating final report...")
-        _replay_ev, _null_ev = _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt, cfg, log)
+        _replay_ev, _null_ev, _cost_ev = _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt, cfg, log)
+        # v9.5 seed stability: re-score the winner's trade list under a
+        # few different Monte Carlo seeds. The Oct 2026 audit measured
+        # the same genome at 0.00-1.07 pass probability across seeds on a
+        # thin sample; a winner whose number swings >10 points with the
+        # seed is partly luck, and the verdict now says so.
+        _mc_disp = None
+        try:
+            import statistics as _stats_mod
+
+            _rates = []
+            for _seed in (11, 101, 1009)[: max(1, int(getattr(cfg, "seed_rescore_seeds", 3)))]:
+                _m = run_monte_carlo(
+                    final_bt.trades, prop_rules,
+                    MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=int(getattr(cfg, "seed_rescore_sims", 2000)), random_seed=_seed, reset_on_breach=cfg.reset_on_breach),
+                )
+                _rates.append(float(_m.per_attempt_pass_probability))
+            if len(_rates) >= 2:
+                _mc_disp = float(_stats_mod.pstdev(_rates))
+                log(f"  Seed stability: per-attempt pass {['%.0f%%' % r for r in _rates]} (sd {_mc_disp:.1f} pts).")
+        except Exception as exc:  # noqa: BLE001
+            log(f"  Seed-stability check skipped: {exc}")
         verdict, verdict_reasons, scorecard, risk_of_ruin_hard_fail, lookahead_hard_fail = _make_verdict(
             final_mc, oos_validation, icir_gate,
             attempt_replay=_replay_ev, null_result=_null_ev, null_p_max=cfg.null_p_max,
+            cost_stress=_cost_ev, mc_dispersion_pts=_mc_disp,
             statistics=final_bt.statistics, prop_rules=prop_rules,
             risk_of_ruin_cap=cfg.risk_of_ruin_cap, parsimony=parsimony_result,
             cpcv_primary_result=cpcv_primary_result, cpcv_supporting_result=cpcv_supporting_result,
