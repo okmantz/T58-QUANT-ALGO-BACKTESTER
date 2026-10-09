@@ -250,6 +250,18 @@ def apply_instrument_spec(risk: RiskConfig, symbol: str) -> RiskConfig:
         updates["spread_pips"] = spec.default_spread_pips
     if risk.slippage_pips == 0.0:
         updates["slippage_pips"] = spec.default_slippage_pips
+    # micro_fallback sizing reads micro_contract_size /
+    # micro_commission_per_contract off the config, but nothing ever
+    # populated them -- the mode could only ever answer "no micro
+    # available" (SKIP_NO_MICRO) no matter the instrument. Fill them
+    # from the registry's micro equivalent, only where the caller left
+    # them unset. Inert unless sizing_mode == "micro_fallback".
+    micro = micro_equivalent(symbol)
+    if micro is not None:
+        if not risk.micro_contract_size:
+            updates["micro_contract_size"] = micro.contract_size
+        if risk.micro_commission_per_contract is None:
+            updates["micro_commission_per_contract"] = micro.default_commission_round_turn
     return replace(risk, **updates)
 
 
