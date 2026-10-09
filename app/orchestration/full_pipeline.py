@@ -1032,12 +1032,21 @@ def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 2
     return verdict, reasons, scorecard, ruin_fail, look_fail
 
 
-def _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt, cfg, log):
+def _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt, cfg, log,
+                              workers: int = 1, progress_hook=None):
     """Evidence the verdict wrapper gates on, computed once on the final
     strategy: (a) the real engine re-run from many start dates on fresh
     accounts, (b) a random-entry null DISTRIBUTION with the strategy's own
     exits and trade count. Never raises -- a failure here just means the gate
-    has no evidence (logged), it must not sink the run."""
+    has no evidence (logged), it must not sink the run.
+
+    workers / progress_hook (v9.13): the replay's start dates and the
+    null's seeds are independent engine runs, so they fan out across
+    `workers` processes with indexed collection -- identical outcomes,
+    identical null values, identical p-value (see
+    app.prop.attempt_replay / app.research.director). progress_hook, when
+    given, receives (7, fraction, label) updates for the run page's
+    progress bar."""
     replay = None
     null = None
     cost_stress = None
@@ -1058,6 +1067,9 @@ def _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt
                 stop_loss_distance=sr.stop_loss_distance, take_profit_distance=sr.take_profit_distance,
                 trailing_stop_distance=sr.trailing_stop_distance, breakeven_trigger_r=sr.breakeven_trigger_r,
                 partial_exit_config=sr.partial_exit,
+                max_workers=workers,
+                progress_cb=(lambda d, t: progress_hook(
+                    7, 0.02 + 0.12 * (d / max(t, 1)), "Attempt replay")) if progress_hook else None,
             )
             log("  " + replay.render().replace("\n", "\n  ") if hasattr(replay, "render") else "  attempt replay done")
         except Exception as exc:  # noqa: BLE001
@@ -1072,12 +1084,18 @@ def _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt
                 hold_bars = max(1, int(round(holds[len(holds) // 2] / bar_s)))
                 log(f"  Random-entry null: {cfg.null_n_seeds} full engine runs over {len(d2):,} bars "
                     f"(the quietest stretch of this step -- progress prints every 25 runs)...")
+                def _null_progress(done, total):
+                    log(f"    Random-entry null: {done}/{total} runs done...")
+                    if progress_hook is not None:
+                        progress_hook(7, 0.16 + 0.38 * (done / max(total, 1)), "Random-entry null")
+
                 null = random_entry_distribution(
                     d2, risk, float(final_bt.statistics.net_profit), len(trades), longs / len(trades), hold_bars,
                     stop_loss_pips=sr.stop_loss_pips, take_profit_pips=sr.take_profit_pips,
                     stop_loss_distance=sr.stop_loss_distance, take_profit_distance=sr.take_profit_distance,
                     n_seeds=cfg.null_n_seeds,
-                    progress_cb=lambda done, total: log(f"    Random-entry null: {done}/{total} runs done..."),
+                    progress_cb=_null_progress,
+                    max_workers=workers,
                 )
                 if null.get("p_value") is not None:
                     log(f"  Random-entry null: p = {null['p_value']:.3f} over {null['n_seeds']} runs "
@@ -1164,6 +1182,8 @@ def run_full_pipeline(
     ollama_settings: "OllamaSettings | None" = None,
     report_basename: str = "full_pipeline_report",
     cancel_event: threading.Event | None = None,
+    progress_hook=None,
+    baseline_ready_cb=None,
 ) -> FullPipelineResult:
     """
     report_basename: filename stem (no extension) for the written report,
@@ -1197,10 +1217,34 @@ def run_full_pipeline(
     default) runs exactly as before this parameter existed; any failure
     to reach Ollama degrades to the same "AI assist is off" behavior
     without interrupting the pipeline.
+
+    progress_hook (v9.13): optional callable(step, step_total,
+    fraction_within_step, label) invoked at step boundaries and from
+    inside the long legs (GA generations, Monte Carlo paths, null runs,
+    replay attempts) so a caller can render a real completion
+    percentage. Purely observational -- it is never read back, and any
+    exception it raises is swallowed. See
+    app.orchestration.run_progress.PipelineProgress for the weighting
+    that turns this into an overall percent.
+
+    baseline_ready_cb (v9.13): optional callable(baseline_bt) invoked
+    ONCE, the moment Step 1's baseline backtest is final (after any
+    automatic sizing remedy has been adopted), with the baseline
+    BacktestResult. The web job uses it to publish the baseline trades
+    for the run page's trade explorer while the remaining steps grind.
+    Purely observational; exceptions are swallowed.
     """
     def log(msg: str) -> None:
         if progress_cb:
             progress_cb(msg)
+
+    def _progress(step: int, fraction: float, label: str = "") -> None:
+        if progress_hook is None:
+            return
+        try:
+            progress_hook(step, 7, max(0.0, min(1.0, float(fraction))), label)
+        except Exception:  # noqa: BLE001 -- progress must never sink the run
+            pass
 
     def _check_cancel() -> None:
         if cancel_event is not None and cancel_event.is_set():
@@ -1252,6 +1296,13 @@ def run_full_pipeline(
             f"(one per worker) would risk exhausting available memory."
         )
     cfg = replace(cfg, parallel_search_max_workers=_safe_fp_workers)
+    # v9.13: the same memory-safe worker budget also drives the newly
+    # parallel Monte Carlo calls (Steps 1/3/7) and Step 7's null/replay
+    # engine pools. All of those are pure speed paths (identical draws,
+    # indexed collection -- see app.monte_carlo.engine,
+    # app.research.director, app.prop.attempt_replay), so sharing the
+    # GA's worker budget changes no number this run produces.
+    _mc_workers = max(1, int(_safe_fp_workers or 1))
 
     # RISK-001: detect (and log) a RiskConfig.initial_balance / PropRules.
     # account_size mismatch BEFORE with_prop_safety_defaults silently
@@ -1366,6 +1417,7 @@ def run_full_pipeline(
         )
 
     log(f"Step 1/7: Baseline run for '{display_name}'...")
+    _progress(1, 0.0, "Baseline backtest")
     baseline_bt = run_backtest(dev_df, strategy, risk, adaptive_risk=adaptive_risk)
     for w in baseline_bt.warnings:
         log(f"  WARNING: {w}")
@@ -1512,6 +1564,16 @@ def run_full_pipeline(
             f"{_micro_n} micro, {int(_ss.get('skipped_for_sizing', 0) or 0)} skipped "
             f"(reasons: {_ss.get('skip_reasons', {})})."
         )
+    # v9.13: the baseline is final now (any sizing remedy above has
+    # been adopted or rejected) -- hand it to the caller's explorer
+    # hook before the expensive steps start, so the run page can show
+    # the baseline's trades while the search grinds.
+    if baseline_ready_cb is not None:
+        try:
+            baseline_ready_cb(baseline_bt)
+        except Exception:  # noqa: BLE001 -- the explorer must never sink the run
+            pass
+    _progress(1, 0.3, "Baseline backtest done")
     if not baseline_bt.trades:
         # Genuine never-fires (or a sizing case the remedies above could
         # not rescue with enforcement off): keep the fast, specific
@@ -1543,7 +1605,10 @@ def run_full_pipeline(
     baseline_mc = run_monte_carlo(
         baseline_bt.trades, prop_rules,
         MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=cfg.baseline_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
+        max_workers=_mc_workers,
+        progress_cb=lambda d, t: _progress(1, 0.35 + 0.6 * (d / max(t, 1)), "Baseline Monte Carlo"),
     )
+    _progress(1, 1.0, "Baseline done")
     log(
         format_run_summary_line(
             "  Baseline", len(baseline_bt.trades), baseline_bt.statistics,
@@ -1556,6 +1621,7 @@ def run_full_pipeline(
     # -- Step 2: robust (walk-forward-aware) optimization ----------------
     _check_cancel()
     log("Step 2/7: Searching for a more robust configuration (walk-forward-aware GA)...")
+    _progress(2, 0.0, "Walk-forward-aware GA search")
     refinement_ran = False
     refinement_skip_reason = None
     ga_result: WalkforwardGAResult | None = None
@@ -1707,6 +1773,22 @@ def run_full_pipeline(
         log(f"  Optimization skipped: {refinement_skip_reason}")
         ga_result = None
     else:
+        # v9.13: the GA narrates each completed generation ("Generation
+        # g/N: ..."); translate that into Step 2's within-step fraction
+        # for the run page's progress bar. Generation 0's line carries
+        # no "/N", so the configured generation count stands in -- the
+        # bar may sit a touch conservative if the search auto-shrinks,
+        # never ahead of the work actually done.
+        import re as _re
+
+        def _ga_progress(msg: str) -> None:
+            log(f"  {msg}")
+            m = _re.search(r"Generation (\d+)(?:/(\d+))?", msg)
+            if m:
+                gen = int(m.group(1))
+                total = int(m.group(2)) if m.group(2) else int(cfg.ga_generations)
+                _progress(2, (gen + 1) / max(total + 1, 1), "Walk-forward-aware GA search")
+
         try:
             refine_cfg = RefinementConfig(
                 population_size=cfg.ga_population,
@@ -1727,7 +1809,7 @@ def run_full_pipeline(
                 MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=cfg.ga_search_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
                 refinement_config=refine_cfg,
                 n_folds=cfg.n_folds, window_mode=cfg.window_mode,
-                progress_cb=lambda m: log(f"  {m}"),
+                progress_cb=_ga_progress,
                 ai_suggest_cb=ai_suggest_cb,
                 parallel=cfg.parallel_search,
                 max_workers=cfg.parallel_search_max_workers,
@@ -1800,6 +1882,7 @@ def run_full_pipeline(
 
         # -- Step 3: final validation ------------------------------------
         _check_cancel()
+        _progress(3, 0.0, "Final validation")
         if _final_is_baseline:
             log("Step 3/7: Final validation -- the winning configuration is identical to the "
                 "baseline, reusing the Step 1 backtest instead of re-running it...")
@@ -1892,6 +1975,7 @@ def run_full_pipeline(
             full_history_bt = final_bt
             full_history_single_run = final_single_run
 
+        _progress(3, 0.25, "Final Monte Carlo")
         final_mc = run_monte_carlo(
             final_bt.trades, prop_rules,
             MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
@@ -1900,7 +1984,10 @@ def run_full_pipeline(
             # run_monte_carlo's docstring. Steps 4-6 below provide the
             # genuinely independent evidence this number alone doesn't.
             selection_bias_caveat=refinement_ran,
+            max_workers=_mc_workers,
+            progress_cb=lambda d, t: _progress(3, 0.25 + 0.72 * (d / max(t, 1)), "Final Monte Carlo"),
         )
+        _progress(3, 1.0, "Final validation done")
         log(
             format_run_summary_line(
                 "  Final", len(final_bt.trades), final_bt.statistics,
@@ -1913,6 +2000,7 @@ def run_full_pipeline(
         # -- Step 4: out-of-sample fold check (no re-tuning) --------------
         _check_cancel()
         log("Step 4/7: Out-of-sample fold check (same configuration, no further tuning)...")
+        _progress(4, 0.0, "Out-of-sample fold check")
         oos_validation = None
         oos_skip_reason = None
         # VAL-005 fix: Step 2's GA already selected the winning genome
@@ -1960,8 +2048,10 @@ def run_full_pipeline(
         # cutoff exactly, so the tail half this compares against is the
         # same bars Steps 1-4 above never got to see (see
         # FullPipelineConfig.reserve_true_holdout).
+        _progress(4, 1.0, "Out-of-sample fold check done")
         _check_cancel()
         log("Step 5/7: Out-of-sample holdout check...")
+        _progress(5, 0.0, "Holdout check")
         try:
             final_holdout = run_holdout_comparison(df, final_strategy, risk, holdout_frac=cfg.holdout_frac, adaptive_risk=adaptive_risk)
         except Exception:
@@ -1981,8 +2071,10 @@ def run_full_pipeline(
         # Step 5, not dev_df) -- it doesn't select or score parameters,
         # so it isn't part of the circularity Step 2's search creates;
         # it's simply re-deriving its own in-sample/holdout split.
+        _progress(5, 1.0, "Holdout check done")
         _check_cancel()
         log("Step 6/7: ICIR / signal-decay / Bonferroni-corrected significance gate...")
+        _progress(6, 0.0, "Significance gates")
         icir_gate = None
         icir_gate_skip_reason = None
         try:
@@ -2011,6 +2103,7 @@ def run_full_pipeline(
             icir_gate_skip_reason = f"ICIR gate failed to run: {exc}"
             log(f"  {icir_gate_skip_reason}")
 
+        _progress(6, 0.15, "CPCV / PBO")
         # -- Pipeline reorg extra: CPCV/PBO (Option A -- one canonical
         # generalization test, section 11) ----------------------------------
         # cfg.primary_robustness_method selects whether CPCV or the
@@ -2052,6 +2145,7 @@ def run_full_pipeline(
         elif cfg.primary_robustness_method == "cpcv":
             cpcv_skip_reason = "CPCV was selected as the primary robustness method but did not run (see log above)."
 
+        _progress(6, 0.4, "Deflated Sharpe gate")
         # -- v5 Step 6c/7: Deflated Sharpe gate (multiple-testing) --------
         # The champion's Sharpe, deflated for the search's FULL multiple-
         # testing burden via count_all_trials() (baseline + every GA genome
@@ -2120,6 +2214,7 @@ def run_full_pipeline(
                 dsr_skip_reason = f"DSR gate failed to run: {exc}"
                 log(f"  {dsr_skip_reason}")
 
+        _progress(6, 0.65, "PBO gate")
         # -- v5 Step 6d/7: PBO gate (was the SELECTION process overfit?) ---
         # Genuine Bailey et al. (2017) PBO over the GA's final-generation
         # leaderboard: for every CPCV path, rank the pool in-sample, take
@@ -2160,6 +2255,7 @@ def run_full_pipeline(
                 pbo_skip_reason = f"PBO gate failed to run: {exc}"
                 log(f"  {pbo_skip_reason}")
 
+        _progress(6, 0.9, "Significance gates done")
         # -- Pipeline reorg extra: parsimony (section 24) --------------------
         # Reward strategies with fewer unnecessary degrees of freedom --
         # a small, additive scorecard component, never a gate. Cheap
@@ -2188,7 +2284,12 @@ def run_full_pipeline(
         # -- Step 7: report + save -----------------------------------------
         _check_cancel()
         log("Step 7/7: Generating final report...")
-        _replay_ev, _null_ev, _cost_ev = _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt, cfg, log)
+        _progress(7, 0.0, "Attempt replay + random-entry null")
+        _replay_ev, _null_ev, _cost_ev = _replay_and_null_evidence(
+            final_strategy, dev_df, risk, prop_rules, final_bt, cfg, log,
+            workers=_mc_workers, progress_hook=_progress,
+        )
+        _progress(7, 0.6, "Seed-stability Monte Carlo")
         # v9.5 seed stability: re-score the winner's trade list under a
         # few different Monte Carlo seeds. The Oct 2026 audit measured
         # the same genome at 0.00-1.07 pass probability across seeds on a
@@ -2199,10 +2300,15 @@ def run_full_pipeline(
             import statistics as _stats_mod
 
             _rates = []
-            for _seed in (11, 101, 1009)[: max(1, int(getattr(cfg, "seed_rescore_seeds", 3)))]:
+            _rescore_seeds = (11, 101, 1009)[: max(1, int(getattr(cfg, "seed_rescore_seeds", 3)))]
+            for _si, _seed in enumerate(_rescore_seeds):
                 _m = run_monte_carlo(
                     final_bt.trades, prop_rules,
                     MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=int(getattr(cfg, "seed_rescore_sims", 2000)), random_seed=_seed, reset_on_breach=cfg.reset_on_breach),
+                    max_workers=_mc_workers,
+                    progress_cb=lambda d, t, _i=_si: _progress(
+                        7, 0.6 + 0.28 * ((_i + d / max(t, 1)) / max(len(_rescore_seeds), 1)),
+                        "Seed-stability Monte Carlo"),
                 )
                 _rates.append(float(_m.per_attempt_pass_probability))
             if len(_rates) >= 2:
@@ -2210,6 +2316,7 @@ def run_full_pipeline(
                 log(f"  Seed stability: per-attempt pass {['%.0f%%' % r for r in _rates]} (sd {_mc_disp:.1f} pts).")
         except Exception as exc:  # noqa: BLE001
             log(f"  Seed-stability check skipped: {exc}")
+        _progress(7, 0.92, "Verdict + report")
         verdict, verdict_reasons, scorecard, risk_of_ruin_hard_fail, lookahead_hard_fail = _make_verdict(
             final_mc, oos_validation, icir_gate,
             attempt_replay=_replay_ev, null_result=_null_ev, null_p_max=cfg.null_p_max,
@@ -2888,6 +2995,8 @@ def run_full_pipeline_sweep(
     ollama_settings: "OllamaSettings | None" = None,
     report_basename: str = "full_pipeline_report",
     cancel_event: threading.Event | None = None,
+    progress_hook=None,
+    baseline_ready_cb=None,
 ) -> FullPipelineSweepResult:
     """Runs the ENTIRE Full Pipeline once per requested timeframe, each on
     `df` resampled to that bar size (so one 1-minute file can be judged on
@@ -2927,6 +3036,12 @@ def run_full_pipeline_sweep(
                 instrument=instrument, ollama_settings=ollama_settings,
                 report_basename=f"{report_basename}__{label}" if sweeping else report_basename,
                 cancel_event=cancel_event,
+                # v9.13: progress + baseline explorer hooks forward per
+                # timeframe (each run reports its own Step 1..7; the
+                # newest timeframe's baseline replaces the previous one
+                # in the explorer, matching "current run" semantics).
+                progress_hook=progress_hook,
+                baseline_ready_cb=baseline_ready_cb,
             )
         except FullPipelineCancelled:
             raise

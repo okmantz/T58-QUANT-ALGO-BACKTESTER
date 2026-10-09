@@ -141,7 +141,7 @@ from app.orchestration.multi_instrument_search import (
 from app.orchestration.multi_instrument_speed_run import (
     best_speed_run_across_instruments, run_multi_instrument_speed_run,
 )
-from app.orchestration.run_progress import ProgressTracker
+from app.orchestration.run_progress import PipelineProgress, ProgressTracker
 from app.orchestration.speed_run import SpeedRunConfig, SpeedRunResult, run_speed_run
 from app.orchestration.speed_run import _rank_key as _speedrun_rank_key
 from app.orchestration.overnight_autopilot import AutopilotConfig, run_overnight_autopilot
@@ -4737,11 +4737,34 @@ def multi_market_job_status(job_id):
 # this is the single slowest thing the app can run.
 # ---------------------------------------------------------------------------
 
+def _fp_job_hooks(job_id: str, run_count: int = 1):
+    """v9.13: the two observational hooks every Full Pipeline job wires
+    into run_full_pipeline -- weighted progress for the right-rail bar,
+    and the Step 1 baseline payload for the trade explorer. Both are
+    fire-and-forget: neither can affect the run."""
+    tracker = PipelineProgress(run_count=run_count)
+
+    def _progress_hook(step, step_total, fraction, label=""):
+        JOB_MANAGER.update(job_id, progress=tracker.update(step, step_total, fraction, label))
+
+    def _baseline_ready_cb(baseline_bt):
+        from app.orchestration.baseline_explorer import trades_to_payload
+
+        JOB_MANAGER.update(
+            job_id,
+            baseline_trades=trades_to_payload(baseline_bt.trades),
+            baseline_ready=True,
+        )
+
+    return tracker, _progress_hook, _baseline_ready_cb
+
+
 def _run_fullpipeline_job(
     job_id: str, df, strategy, risk: RiskConfig, rules: PropRules,
     cfg: FullPipelineConfig, active_label: str, ollama_settings: OllamaSettings | None,
     cancel_event: threading.Event | None = None, notify_webhook_url: str | None = None,
 ) -> None:
+    tracker, _progress_hook, _baseline_ready_cb = _fp_job_hooks(job_id)
     try:
         result = run_full_pipeline(
             df, strategy, risk, rules, FULL_PIPELINE_DIR, cfg,
@@ -4749,9 +4772,11 @@ def _run_fullpipeline_job(
             instrument=active_label, ollama_settings=ollama_settings,
             report_basename=f"full_pipeline_{job_id}",
             cancel_event=cancel_event,
+            progress_hook=_progress_hook,
+            baseline_ready_cb=_baseline_ready_cb,
         )
         JOB_MANAGER.finish(
-            job_id, result=result,
+            job_id, result=result, progress=tracker.finish(),
             report_html=f"/full_pipeline_reports/{Path(result.report_paths['html']).name}",
             report_json=f"/full_pipeline_reports/{Path(result.report_paths['json']).name}",
         )
@@ -4761,11 +4786,12 @@ def _run_fullpipeline_job(
             job_url=f"/full-pipeline/job/{job_id}",
         )
     except FullPipelineCancelled:
-        JOB_MANAGER.finish(job_id, cancelled=True)
+        JOB_MANAGER.finish(job_id, cancelled=True, progress=tracker.payload())
         notify_job_finished(notify_webhook_url, "Full Pipeline", "Stopped by request", job_url=f"/full-pipeline/job/{job_id}")
     except Exception as exc:  # noqa: BLE001 -- must surface on the status page, not crash the thread silently
         log_crash("Full Pipeline (web)", exc=exc)
         JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
+        JOB_MANAGER.update(job_id, progress=tracker.payload())
         notify_job_finished(notify_webhook_url, "Full Pipeline", f"FAILED -- {exc}", job_url=f"/full-pipeline/job/{job_id}")
     finally:
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
@@ -4781,12 +4807,15 @@ def _run_fullpipeline_sweep_job(
     timeframe's FullPipelineResult, so the existing status page/summary work
     unchanged; `sweep_timeframes` adds the side-by-side table."""
     from app.orchestration.full_pipeline import run_full_pipeline_sweep
+    tracker, _progress_hook, _baseline_ready_cb = _fp_job_hooks(job_id, run_count=max(1, len(expand_labels)))
     try:
         sweep = run_full_pipeline_sweep(
             df, strategy, risk, rules, FULL_PIPELINE_DIR, expand_labels, cfg,
             progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
             instrument=active_label, ollama_settings=ollama_settings,
             report_basename=f"full_pipeline_{job_id}", cancel_event=cancel_event,
+            progress_hook=_progress_hook,
+            baseline_ready_cb=_baseline_ready_cb,
         )
         best = sweep.best_result
         table = {}
@@ -4804,7 +4833,7 @@ def _run_fullpipeline_sweep_job(
         for label, why in sweep.errors.items():
             table[label] = {"verdict": "ERROR", "error": why, "is_best": False}
         JOB_MANAGER.finish(
-            job_id, result=best,
+            job_id, result=best, progress=tracker.finish(),
             report_html=f"/full_pipeline_reports/{Path(best.report_paths['html']).name}",
             report_json=f"/full_pipeline_reports/{Path(best.report_paths['json']).name}",
             sweep_timeframes=table, best_timeframe=sweep.best_timeframe,
@@ -4816,10 +4845,11 @@ def _run_fullpipeline_sweep_job(
             job_url=f"/full-pipeline/job/{job_id}",
         )
     except FullPipelineCancelled:
-        JOB_MANAGER.finish(job_id, cancelled=True)
+        JOB_MANAGER.finish(job_id, cancelled=True, progress=tracker.payload())
     except Exception as exc:  # noqa: BLE001
         log_crash("Full Pipeline sweep (web)", exc=exc)
         JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
+        JOB_MANAGER.update(job_id, progress=tracker.payload())
     finally:
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
 
@@ -5452,7 +5482,8 @@ def full_pipeline_start():
         if import_note:
             initial_log.append(import_note)
         cancel_event = threading.Event()
-        job_id = JOB_MANAGER.create(tool="Full Pipeline", page_template="/full-pipeline/job/{job_id}", log=initial_log, instrument=active_label, cancel_event=cancel_event, cancelled=False)
+        job_id = JOB_MANAGER.create(tool="Full Pipeline", page_template="/full-pipeline/job/{job_id}", log=initial_log, instrument=active_label, cancel_event=cancel_event, cancelled=False,
+                                    progress={"percent": 0.0, "step": None, "step_total": 7, "step_label": "", "label": "", "elapsed_seconds": 0.0, "done": False})
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         expand_labels = parse_sweep_timeframes(form.get("expand_timeframes", ""))
         if expand_labels:
@@ -5545,6 +5576,14 @@ def full_pipeline_job_status(job_id):
         "cancelled": job.get("cancelled", False),
         "log": job["log"],
         "instrument": job.get("instrument"),
+        # v9.13: weighted completion percent (step + within-step
+        # fraction, weighted by typical step cost -- see
+        # app.orchestration.run_progress.PipelineProgress). Updated on
+        # every progress hook from the running pipeline; read fresh
+        # from the job store on every poll (never cached). None for
+        # jobs started before this field existed.
+        "progress": job.get("progress"),
+        "baseline_ready": bool(job.get("baseline_ready")),
         "summary": summary,
         "sweep_timeframes": job.get("sweep_timeframes"),
         "best_timeframe": job.get("best_timeframe"),
@@ -5566,6 +5605,32 @@ def full_pipeline_job_status(job_id):
                            result, dataset_label=job.get("instrument", "") or "")
             if result is not None else None
         ),
+    })
+
+
+@app.route("/full-pipeline/job/<job_id>/baseline.json")
+def full_pipeline_job_baseline(job_id):
+    """v9.13: the baseline trade explorer's data. Serves Step 1's
+    completed baseline trades (plus server-computed aggregates) as soon
+    as the baseline finishes, while the job keeps running -- the
+    baseline lands within seconds and Steps 2-7 grind for minutes, so
+    the run page can show where the baseline's losses cluster DURING
+    the run instead of only after the verdict. Read fresh from the job
+    store on every request (never cached)."""
+    job = JOB_MANAGER.get(job_id)
+    if job is None:
+        return jsonify({"found": False}), 404
+    trades = job.get("baseline_trades")
+    if trades is None:
+        return jsonify({"found": True, "ready": False, "done": job["done"]})
+    from app.orchestration.baseline_explorer import summarize_baseline_trades
+
+    return jsonify({
+        "found": True,
+        "ready": True,
+        "done": job["done"],
+        "trades": trades,
+        "summary": summarize_baseline_trades(trades),
     })
 
 

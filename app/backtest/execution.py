@@ -49,9 +49,10 @@ try:
     # v5 worker). Guarded so this module still imports/runs if that module
     # hasn't been merged yet -- in that case run_execution falls back to
     # the previous wall-clock calendar-day grouping.
-    from app.data.trading_day import trading_day
+    from app.data.trading_day import trading_day, trading_days
 except ImportError:  # pragma: no cover - only until the sibling module lands
     trading_day = None
+    trading_days = None
 
 
 @dataclass
@@ -504,10 +505,13 @@ def run_execution(
         _ts_for_days = pd.DatetimeIndex(ts)
         if _ts_tz is not None:
             _ts_for_days = _ts_for_days.tz_localize("UTC").tz_convert(_ts_tz)
-        bar_dates = np.array(
-            [trading_day(t, tz="America/Chicago", roll_hour=17) for t in _ts_for_days],
-            dtype=object,
-        )
+        # v9.13 speed: trading_days() is the vectorized twin of the
+        # per-bar trading_day() list comprehension this used to be --
+        # elementwise identical dates (pinned by test), computed
+        # column-wise instead of one pd.Timestamp + pytz lookup per bar
+        # (that loop alone was ~half of a single engine pass's wall
+        # clock on a 75k-bar frame, paid by every backtest in the app).
+        bar_dates = trading_days(_ts_for_days, tz="America/Chicago", roll_hour=17)
     else:
         _ts_for_days = df["timestamp"]
         if _ts_tz is not None:

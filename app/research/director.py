@@ -521,6 +521,74 @@ def null_baselines(
     return {"target": target_row, "baselines": rows, "best_baseline": best_null, "edge_contribution": edge_contribution, "verdict": verdict}
 
 
+def _null_draw_signal(rng, n: int, hold: int, n_entries: int, long_fraction: float):
+    """Draws ONE seed's random-entry signal array, consuming `rng` in
+    exactly the order (choice, then one random() per slot) the serial
+    loop always has -- extracted verbatim (v9.13) so the draws can be
+    generated in the parent process while worker processes run the
+    engine, without changing a single drawn value."""
+    k = max(1, min(int(n_entries), n // (hold + 1)))
+    slots = rng.choice(np.arange(0, n - hold - 1, hold + 1), size=min(k, max(1, (n - hold - 1) // (hold + 1))), replace=False)
+    sig = np.zeros(n, dtype=int)
+    for st in slots:
+        sig[st:st + hold] = 1 if rng.random() < long_fraction else -1
+    return sig
+
+
+def _null_eval_signal(df, sig, risk, stop_loss_pips, take_profit_pips,
+                      stop_loss_distance, take_profit_distance, metric) -> float:
+    """Runs the real engine on ONE drawn signal and reduces it to the
+    null metric -- the serial loop's per-seed body, verbatim (v9.13),
+    including its swallow-everything-to-NaN failure semantics."""
+    import warnings
+
+    from app.backtest.statistics import compute_statistics
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            trades, eq = run_execution(df=df, signals=pd.Series(sig, index=df.index), risk=risk,
+                                       stop_loss_pips=stop_loss_pips, take_profit_pips=take_profit_pips,
+                                       stop_loss_distance=stop_loss_distance, take_profit_distance=take_profit_distance)
+        st_ = compute_statistics(trades, eq, initial_balance=risk.initial_balance)
+        if metric == "profit_factor":
+            return float(st_.profit_factor) if np.isfinite(st_.profit_factor) else 10.0
+        if metric == "expectancy":
+            return float(np.mean([t.pnl for t in trades])) if trades else 0.0
+        return float(st_.net_profit)
+    except Exception:  # noqa: BLE001
+        return float("nan")
+
+
+# -- v9.13: cross-process null evaluation --------------------------------
+# The 200 null runs are independent full engine passes; only the rng
+# DRAWS must stay sequential. The parent draws every seed's signal in
+# the original order and workers only run the engine; values are
+# collected by seed index, so the null list (and therefore the p-value)
+# is bit-identical to the serial run -- pinned by
+# tests/test_v913_progress_explorer_speed.py. Spawn matches every other
+# pool in this app; any pool failure finishes the remaining seeds
+# serially in-process from the already-drawn signals.
+_NULL_WORKER: dict = {}
+
+
+def _null_worker_init(df, risk, stop_loss_pips, take_profit_pips,
+                      stop_loss_distance, take_profit_distance, metric) -> None:
+    global _NULL_WORKER
+    _NULL_WORKER = {
+        "df": df, "risk": risk, "stop_loss_pips": stop_loss_pips,
+        "take_profit_pips": take_profit_pips, "stop_loss_distance": stop_loss_distance,
+        "take_profit_distance": take_profit_distance, "metric": metric,
+    }
+
+
+def _null_worker_task(sig) -> float:
+    w = _NULL_WORKER
+    return _null_eval_signal(
+        w["df"], sig, w["risk"], w["stop_loss_pips"], w["take_profit_pips"],
+        w["stop_loss_distance"], w["take_profit_distance"], w["metric"],
+    )
+
+
 def random_entry_distribution(
     df: pd.DataFrame,
     risk: RiskConfig,
@@ -537,6 +605,7 @@ def random_entry_distribution(
     n_seeds: int = 200,
     seed: int = 0,
     progress_cb=None,
+    max_workers: int | None = None,
 ) -> dict:
     """Random-entry null as a DISTRIBUTION (not one seed).
 
@@ -552,41 +621,83 @@ def random_entry_distribution(
     (and never otherwise) purely so a caller can show this loop is alive --
     on a large dataset these are 200 FULL engine runs and used to take
     many minutes with no output at all, which read as a hung page. The
-    callback cannot affect the draws, the values, or the p-value."""
+    callback cannot affect the draws, the values, or the p-value.
+
+    max_workers (v9.13): when > 1, the per-seed engine runs execute
+    across worker processes. The signal draws stay in this process, in
+    seed order, and values are collected by seed index, so the returned
+    distribution is bit-identical to the serial run -- only faster.
+    None (the default) keeps every existing caller on the exact serial
+    path it has always used."""
     risk = build_run_context(risk)
-    from app.backtest.statistics import compute_statistics
     rng = np.random.default_rng(seed)
     n = len(df)
     hold = max(1, int(hold_bars))
-    vals: list[float] = []
-    import warnings
-    for _seed_idx in range(int(n_seeds)):
-        if progress_cb is not None and (_seed_idx + 1) % 25 == 0:
+    n_seeds = int(n_seeds)
+    vals: list[float] = [float("nan")] * n_seeds
+
+    _next_milestone = [25]
+
+    def _fire(done_count: int) -> None:
+        # Fires once per 25-seed milestone reached, exactly the values
+        # the serial loop has always reported (25, 50, ...), whether the
+        # seeds were evaluated serially or by the pool.
+        if progress_cb is None:
+            return
+        while _next_milestone[0] <= done_count:
             try:
-                progress_cb(_seed_idx + 1, int(n_seeds))
+                progress_cb(_next_milestone[0], n_seeds)
             except Exception:  # noqa: BLE001 -- progress must never sink the run
                 pass
-        k = max(1, min(int(n_entries), n // (hold + 1)))
-        slots = rng.choice(np.arange(0, n - hold - 1, hold + 1), size=min(k, max(1, (n - hold - 1) // (hold + 1))), replace=False)
-        sig = np.zeros(n, dtype=int)
-        for st in slots:
-            sig[st:st + hold] = 1 if rng.random() < long_fraction else -1
+            _next_milestone[0] += 25
+
+    use_parallel = max_workers is not None and int(max_workers) > 1 and n_seeds >= 8
+    done_up_to = 0  # seeds [0, done_up_to) have final values in vals
+    if use_parallel:
+        import multiprocessing
+        from concurrent.futures import ProcessPoolExecutor
+
+        chunk = max(4, int(max_workers) * 2)
+        pool = None
         try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                trades, eq = run_execution(df=df, signals=pd.Series(sig, index=df.index), risk=risk,
-                                           stop_loss_pips=stop_loss_pips, take_profit_pips=take_profit_pips,
-                                           stop_loss_distance=stop_loss_distance, take_profit_distance=take_profit_distance)
-            st_ = compute_statistics(trades, eq, initial_balance=risk.initial_balance)
-            if metric == "profit_factor":
-                v = float(st_.profit_factor) if np.isfinite(st_.profit_factor) else 10.0
-            elif metric == "expectancy":
-                v = float(np.mean([t.pnl for t in trades])) if trades else 0.0
-            else:
-                v = float(st_.net_profit)
-        except Exception:  # noqa: BLE001
-            v = float("nan")
-        vals.append(v)
+            pool = ProcessPoolExecutor(
+                max_workers=int(max_workers),
+                mp_context=multiprocessing.get_context("spawn"),
+                initializer=_null_worker_init,
+                initargs=(df, risk, stop_loss_pips, take_profit_pips,
+                          stop_loss_distance, take_profit_distance, metric),
+            )
+            while done_up_to < n_seeds:
+                end = min(done_up_to + chunk, n_seeds)
+                sigs = [
+                    _null_draw_signal(rng, n, hold, n_entries, long_fraction)
+                    for _ in range(done_up_to, end)
+                ]
+                futures = [pool.submit(_null_worker_task, s) for s in sigs]
+                for off, fut in enumerate(futures):
+                    vals[done_up_to + off] = fut.result()
+                done_up_to = end
+                _fire(done_up_to)
+        except Exception:  # noqa: BLE001 -- fall back to serial for the rest
+            use_parallel = False
+        finally:
+            if pool is not None:
+                try:
+                    pool.shutdown(wait=False, cancel_futures=True)
+                except Exception:  # noqa: BLE001
+                    pass
+    if not use_parallel:
+        # Serial: either the only path ever used before v9.13, or the
+        # fallback for seeds a failed pool never reached. Draws continue
+        # from the same rng in seed order, so the values are the ones
+        # the purely serial run would have produced.
+        for seed_idx in range(done_up_to, n_seeds):
+            _fire(seed_idx + 1)
+            sig = _null_draw_signal(rng, n, hold, n_entries, long_fraction)
+            vals[seed_idx] = _null_eval_signal(
+                df, sig, risk, stop_loss_pips, take_profit_pips,
+                stop_loss_distance, take_profit_distance, metric,
+            )
     arr = np.array([v for v in vals if np.isfinite(v)])
     if len(arr) == 0:
         return {"metric": metric, "n_seeds": 0, "p_value": None, "observed": observed_value, "null": []}

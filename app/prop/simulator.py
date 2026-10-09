@@ -20,7 +20,7 @@ from datetime import date as date_type
 
 import pandas as pd
 
-from app.data.trading_day import trading_day
+from app.data.trading_day import trading_day, trading_days
 from app.prop.account import DAY_LOCKED, FAILED, PropAccount
 
 
@@ -360,7 +360,9 @@ def precompute_day_structure(
     futures-session roll), NOT naive UTC midnight. Naive timestamps are
     assumed to be UTC; tz-aware timestamps convert properly.
     """
-    dates_norm = [pd.Timestamp(trading_day(d, tz=tz, roll_hour=roll_hour)) for d in trade_dates]
+    # v9.13 speed: vectorized twin of the per-date trading_day() loop
+    # (elementwise identical -- see app.data.trading_day.trading_days).
+    dates_norm = list(pd.DatetimeIndex(trading_days(trade_dates, tz=tz, roll_hour=roll_hour)))
     day_index_map: dict = {}
     day_order: list = []
     day_index_per_trade: list = []

@@ -40,6 +40,41 @@
   <button class="stop-btn" type="button" id="stop-btn" onclick="stopFullPipeline()" style="margin-top:12px; padding:10px 22px; border-radius:10px; border:1px solid #6b2323; background:#3a1616; color:#ffb4b4; font-size:14px; font-weight:700; cursor:pointer;">Stop</button>
 </div>
 
+{# v9.13: baseline trade explorer. Step 1's baseline finishes in
+   seconds while the search grinds for minutes -- as soon as its
+   trades are published (baseline.json) this panel shows where the
+   baseline's losses cluster: hour x weekday P&L heatmap (2D), hour
+   and weekday profiles, worst buckets, losing streaks, and honest
+   numbered suggestions for the NEXT run. Nothing here touches the
+   run; it reads a separate endpoint on its own slow poll. #}
+<div class="lc-card" id="explorer-card" style="display:none;">
+  <h2 style="margin:0 0 6px; font-size:16px;">Baseline trade explorer <span class="lc-hint" style="font-weight:400;">— from Step 1, live while the run continues</span></h2>
+  <p class="note" id="explorer-note" style="margin:0 0 10px;">Waiting for the baseline backtest (Step 1)…</p>
+  <div id="explorer-body" style="display:none;">
+    <h3 style="margin:10px 0 6px; font-size:13px;">Net P&amp;L by entry hour × weekday</h3>
+    <div style="overflow-x:auto;"><table id="explorer-heatmap" style="border-collapse:collapse; font-size:10px;"></table></div>
+    <div style="display:flex; gap:18px; flex-wrap:wrap; margin-top:12px;">
+      <div style="flex:1 1 300px; min-width:260px;">
+        <h3 style="margin:0 0 6px; font-size:13px;">P&amp;L by entry hour</h3>
+        <div id="explorer-hours"></div>
+      </div>
+      <div style="flex:1 1 220px; min-width:200px;">
+        <h3 style="margin:0 0 6px; font-size:13px;">P&amp;L by weekday</h3>
+        <div id="explorer-weekdays"></div>
+      </div>
+    </div>
+    <h3 style="margin:14px 0 6px; font-size:13px;">Where the losses cluster</h3>
+    <div id="explorer-clusters" style="font-size:13px; line-height:1.55;"></div>
+    <h3 style="margin:14px 0 6px; font-size:13px;">For the next run</h3>
+    <ul id="explorer-suggestions" style="font-size:13px; line-height:1.55; margin:0 0 4px 18px; padding:0;"></ul>
+    <div id="explorer-3d-wrap" style="display:none; margin-top:10px;">
+      <button type="button" id="explorer-3d-btn" style="padding:6px 14px; border-radius:8px; border:1px solid var(--border-light); background:var(--panel-3); color:var(--text); font-size:12.5px; cursor:pointer;">Show 3D surface of the same grid</button>
+      <div id="explorer-3d" style="width:100%; height:340px; display:none;"></div>
+      <p class="note" style="margin:4px 0 0;">Optional view of the identical hour × weekday numbers (needs the Plotly CDN, so it simply never appears offline). The heatmap above stays 2D either way.</p>
+    </div>
+  </div>
+</div>
+
 <div id="verdict-banner-wrap" style="display:none;"><div class="verdict-banner" id="verdict-banner"></div></div>
 
 {# "What to do next" sits directly under the verdict banner so it can't
@@ -83,6 +118,7 @@
     <h4>&#9654; Run progress</h4>
     <div style="display:flex; align-items:baseline; gap:10px;"><span class="lc-pct-big" id="lc-job-pct">…</span><span class="lc-hint" id="lc-job-state">running</span></div>
     <div class="lc-progress indet" id="lc-job-bar" style="margin:8px 0;"><div></div></div>
+    <div class="lc-kv"><span class="k">Step</span><span class="v" id="lc-job-step">—</span></div>
     <div class="lc-kv"><span class="k">Polling</span><span class="v lc-ok">live · every 2s</span></div>
   </div>
 
@@ -146,6 +182,10 @@
       .then(r => r.json())
       .then(data => {
         if (!data.found) return;
+        // v9.13: hand the weighted progress payload to the right-rail
+        // renderer (separate script below) without touching this
+        // poller's cadence or payload handling.
+        window.__lcJobProgress = data.progress || null;
         document.getElementById('log').textContent = data.log.filter(Boolean).join('\n');
         document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
 
@@ -308,20 +348,26 @@
   }
 </script>
 <script>
-  // v9.7: right-rail run progress mirrors the job state without touching
-  // the poller above. The job API publishes no numeric %; the bar stays
-  // indeterminate while running and lands at 100% when the job finishes.
+  // v9.7/v9.13: right-rail run progress. The status payload now carries
+  // a real weighted completion percent (pipeline step + within-step
+  // fraction, weighted by typical step cost), so the bar shows "NN%"
+  // and fills for real during the run; jobs without a progress payload
+  // keep the old indeterminate behavior, and the bar lands at 100%
+  // when the job finishes either way.
   (function () {
     var pct = document.getElementById('lc-job-pct');
     var state = document.getElementById('lc-job-state');
     var bar = document.getElementById('lc-job-bar');
+    var stepEl = document.getElementById('lc-job-step');
     if (!pct) return;
     function tick() {
       var title = (document.getElementById('status-title') || {}).textContent || '';
       var errShown = document.getElementById('error-card') && document.getElementById('error-card').style.display === 'block';
+      var prog = window.__lcJobProgress;
       if (/complete/i.test(title)) {
         pct.textContent = '100%'; state.textContent = 'complete';
         bar.classList.remove('indet'); bar.firstElementChild.style.width = '100%';
+        if (stepEl) stepEl.textContent = 'done';
         return;
       }
       if (/stopped|failed/i.test(title) || errShown) {
@@ -329,10 +375,163 @@
         bar.classList.remove('indet'); bar.firstElementChild.style.width = '0%';
         return;
       }
-      pct.textContent = '…'; state.textContent = 'running';
-      setTimeout(tick, 2000);
+      if (prog && typeof prog.percent === 'number') {
+        var p = Math.max(0, Math.min(100, prog.percent));
+        pct.textContent = p.toFixed(0) + '%';
+        state.textContent = 'running';
+        bar.classList.remove('indet'); bar.firstElementChild.style.width = p + '%';
+        if (stepEl) {
+          stepEl.textContent = prog.step
+            ? ('Step ' + prog.step + ' of ' + (prog.step_total || 7) + (prog.step_label ? ' — ' + prog.step_label : ''))
+            : (prog.label || 'starting');
+        }
+      } else {
+        pct.textContent = '…'; state.textContent = 'running';
+      }
+      setTimeout(tick, 1000);
     }
     tick();
+  })();
+</script>
+<script>
+  // v9.13: baseline trade explorer. Polls baseline.json on its own
+  // slow cadence (never touching the 2s status poll); the baseline is
+  // immutable once Step 1 finishes, so after the first successful
+  // render this stops polling entirely.
+  (function () {
+    var card = document.getElementById('explorer-card');
+    if (!card) return;
+    var rendered = false;
+    var moneyFmt = function (v) {
+      if (v === null || v === undefined || Number.isNaN(v)) return '—';
+      var s = Math.abs(v).toLocaleString(undefined, {maximumFractionDigits: 0});
+      return (v < 0 ? '-$' : '$') + s;
+    };
+    function barRow(label, v, maxAbs, count) {
+      var pctW = maxAbs > 0 ? Math.max(2, Math.round(Math.abs(v) / maxAbs * 100)) : 0;
+      var color = v < 0 ? '#cf2233' : '#2ea043';
+      return '<div style="display:flex; align-items:center; gap:8px; margin:2px 0; font-size:11.5px;">' +
+        '<span style="width:34px; color:var(--text-muted);">' + label + '</span>' +
+        '<span style="flex:1; background:var(--panel-3); border-radius:4px; height:12px; position:relative;">' +
+        '<span style="position:absolute; left:0; top:0; bottom:0; width:' + pctW + '%; background:' + color + '; border-radius:4px;"></span></span>' +
+        '<span style="width:110px; text-align:right;">' + moneyFmt(v) + (count !== undefined ? ' <span style="color:var(--text-muted);">(' + count + ')</span>' : '') + '</span></div>';
+    }
+    function render(data) {
+      var s = data.summary;
+      card.style.display = 'block';
+      var note = document.getElementById('explorer-note');
+      var body = document.getElementById('explorer-body');
+      if (!s || !s.has_trades) {
+        note.textContent = 'The baseline produced no trades — nothing to explore. (If every signal was skipped for sizing, the preflight notes in the log say why.)';
+        body.style.display = 'none';
+        return;
+      }
+      note.textContent = s.n_trades + ' baseline trades · net ' + moneyFmt(s.net_pnl) +
+        ' · gross losses ' + moneyFmt(s.gross_loss) + '. Buckets use each trade\u2019s entry time, in the clock the data carries.';
+      body.style.display = 'block';
+      // Heatmap (2D).
+      var maxAbs = 0;
+      s.matrix.forEach(function (row) { row.forEach(function (v) { if (Math.abs(v) > maxAbs) maxAbs = Math.abs(v); }); });
+      var html = '<tr><th></th>' + Array.from({length: 24}, function (_, h) { return '<th style="padding:1px 2px; color:var(--text-muted);">' + h + '</th>'; }).join('') + '</tr>';
+      s.weekday_labels.forEach(function (label, d) {
+        html += '<tr><th style="padding:1px 4px; text-align:right; color:var(--text-muted);">' + label + '</th>';
+        s.matrix[d].forEach(function (v, h) {
+          var a = maxAbs > 0 ? Math.min(0.92, Math.abs(v) / maxAbs) : 0;
+          var bg = v === 0 ? 'transparent' : (v < 0 ? 'rgba(207,34,51,' + a + ')' : 'rgba(46,160,67,' + a + ')');
+          var cnt = s.matrix_counts[d][h];
+          html += '<td title="' + label + ' ' + String(h).padStart(2, '0') + ':00 — ' + moneyFmt(v) + ' over ' + cnt + ' trade' + (cnt === 1 ? '' : 's') +
+            '" style="width:22px; height:16px; background:' + bg + '; border:1px solid rgba(255,255,255,0.05);"></td>';
+        });
+        html += '</tr>';
+      });
+      document.getElementById('explorer-heatmap').innerHTML = html;
+      // Profiles.
+      var hMax = Math.max.apply(null, s.hour_profile.map(function (v) { return Math.abs(v); }).concat([0]));
+      document.getElementById('explorer-hours').innerHTML = s.hour_profile.map(function (v, h) {
+        return barRow(String(h).padStart(2, '0') + ':00', v, hMax, s.hour_counts[h]);
+      }).join('');
+      var wMax = Math.max.apply(null, s.weekday_profile.map(function (v) { return Math.abs(v); }).concat([0]));
+      document.getElementById('explorer-weekdays').innerHTML = s.weekday_profile.map(function (v, d) {
+        return barRow(s.weekday_labels[d], v, wMax, s.weekday_counts[d]);
+      }).join('');
+      // Loss clusters.
+      var lines = [];
+      if (s.worst_hours.length) {
+        lines.push('<div><b>Worst entry hours:</b> ' + s.worst_hours.map(function (w) {
+          return String(w.hour).padStart(2, '0') + ':00 ' + moneyFmt(w.pnl) + ' (' + w.share_of_gross_losses_pct + '% of losses, ' + w.trades + ' trades)';
+        }).join(' · ') + '</div>');
+      }
+      if (s.worst_weekdays.length) {
+        lines.push('<div><b>Worst weekdays:</b> ' + s.worst_weekdays.map(function (w) {
+          return w.label + ' ' + moneyFmt(w.pnl) + ' (' + w.share_of_gross_losses_pct + '% of losses, ' + w.trades + ' trades)';
+        }).join(' · ') + '</div>');
+      }
+      if (s.longest_losing_streaks.length) {
+        lines.push('<div><b>Longest losing streaks:</b> ' + s.longest_losing_streaks.map(function (w) {
+          return w.trades + ' trades, ' + moneyFmt(w.total_pnl) + ' (' + String(w.start).slice(0, 16) + ' → ' + String(w.end).slice(0, 16) + ')';
+        }).join(' · ') + '</div>');
+      }
+      if (s.biggest_loss_clusters.length) {
+        lines.push('<div><b>Biggest loss clusters:</b> ' + s.biggest_loss_clusters.map(function (w) {
+          return w.trades + ' straight losers, ' + moneyFmt(w.total_pnl) + ' (' + String(w.start).slice(0, 16) + ' → ' + String(w.end).slice(0, 16) + ')';
+        }).join(' · ') + '</div>');
+      }
+      document.getElementById('explorer-clusters').innerHTML = lines.join('') || '<div>No losing buckets — the baseline lost money nowhere by these groupings.</div>';
+      // Suggestions.
+      var ul = document.getElementById('explorer-suggestions');
+      ul.innerHTML = '';
+      (s.suggestions || []).forEach(function (txt) {
+        var li = document.createElement('li');
+        li.textContent = txt;
+        ul.appendChild(li);
+      });
+      if (!(s.suggestions || []).length) {
+        var li2 = document.createElement('li');
+        li2.textContent = 'No strong cluster pattern in this baseline — the losses are spread out rather than concentrated in a time bucket.';
+        ul.appendChild(li2);
+      }
+      // Optional 3D surface of the SAME matrix (progressive enhancement:
+      // only when the Plotly CDN the reports already use is reachable).
+      var wrap3d = document.getElementById('explorer-3d-wrap');
+      var plotDiv = document.getElementById('explorer-3d');
+      var btn3d = document.getElementById('explorer-3d-btn');
+      function tryPlotly() {
+        if (window.Plotly) {
+          wrap3d.style.display = 'block';
+          btn3d.onclick = function () {
+            plotDiv.style.display = 'block';
+            window.Plotly.newPlot(plotDiv, [{
+              type: 'surface', z: s.matrix,
+              x: Array.from({length: 24}, function (_, h) { return h; }),
+              y: s.weekday_labels, colorscale: 'RdYlGn', reversescale: true,
+            }], {margin: {l: 40, r: 10, t: 10, b: 40}, paper_bgcolor: 'rgba(0,0,0,0)',
+              scene: {xaxis: {title: 'entry hour'}, yaxis: {title: 'weekday'}, zaxis: {title: 'net $'}}}, {displayModeBar: false});
+          };
+        }
+      }
+      if (window.Plotly) { tryPlotly(); }
+      else {
+        var sc = document.createElement('script');
+        sc.src = 'https://cdn.plot.ly/plotly-2.32.0.min.js';
+        sc.onload = tryPlotly;
+        sc.onerror = function () { /* offline: heatmap stays 2D, nothing breaks */ };
+        document.head.appendChild(sc);
+      }
+    }
+    function pollBaseline() {
+      if (rendered) return;
+      fetch(`/full-pipeline/job/${jobId}/baseline.json`)
+        .then(r => r.json())
+        .then(data => {
+          if (!data.found) return;
+          if (data.ready) { rendered = true; render(data); return; }
+          if (data.done) { return; }  // run ended before a baseline existed
+          card.style.display = 'block';
+          setTimeout(pollBaseline, 5000);
+        })
+        .catch(() => setTimeout(pollBaseline, 7000));
+    }
+    pollBaseline();
   })();
 </script>
 {% endif %}

@@ -15,6 +15,7 @@ so results are directly comparable.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any, NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -264,11 +265,20 @@ def _max_losing_streak(pnls: np.ndarray) -> int:
     # P2-7: breakeven (pnl <= 0) counts as non-winning here -- consistent
     # with app.backtest.statistics' win-rate/max-consecutive-losers, which
     # likewise treat breakeven as a loss for streak purposes.
-    best = cur = 0
-    for p in pnls:
-        cur = cur + 1 if p <= 0 else 0
-        best = max(best, cur)
-    return best
+    # v9.13: vectorized run-length computation, integer-identical to the
+    # per-element loop it replaces (a "loss" is pnl <= 0; NaN compares
+    # False in both versions, so a NaN breaks a streak either way). This
+    # runs once per simulated path -- at 10,000 paths x ~3,800 trades the
+    # Python loop was seconds of pure overhead per Monte Carlo call.
+    arr = np.asarray(pnls, dtype=float)
+    if arr.size == 0:
+        return 0
+    is_loss = arr <= 0
+    if not bool(is_loss.any()):
+        return 0
+    win_idx = np.flatnonzero(~is_loss)
+    bounds = np.concatenate(([-1], win_idx, [arr.size]))
+    return int(np.diff(bounds).max() - 1)
 
 
 # v5 (2026-10-04): minimum trades for any MC-derived verdict. A fold/path
@@ -619,11 +629,153 @@ def _methodology_note(
     return note
 
 
+class _SimRow(NamedTuple):
+    """Everything run_monte_carlo's aggregation consumes from ONE
+    simulated path, in the aggregation's own terms. Computed by
+    _mc_simulate_path either in-process (serial path) or in a worker
+    process (parallel path) -- a pure function of the drawn path, so the
+    two paths produce interchangeable rows."""
+    passed: bool
+    reached_first_payout: bool
+    failed_before_payout: bool
+    multiple_payouts: bool
+    total_attempts: int
+    attempts_passed: int
+    attempts_reached_payout: int
+    any_attempt_failed: bool
+    first_attempt_bust: bool
+    attempts_failed: int
+    days_to_pass: Any
+    first_payout_day_index: Any
+    return_pct: float
+    total_payout_amount: float
+    max_drawdown_pct: float
+    max_losing_streak: int
+
+
+def _mc_simulate_path(sim_pnls, base_dates, rules, day_structure, reset_on_breach, sim_risks) -> _SimRow:
+    """Runs ONE resampled path through simulate_account and reduces it to
+    a _SimRow. Extracted verbatim from run_monte_carlo's old serial loop
+    (v9.13) so the serial and parallel paths share one implementation."""
+    result = simulate_account(
+        sim_pnls, base_dates, rules,
+        _day_structure=day_structure,
+        reset_on_breach=reset_on_breach,
+        trade_initial_risks=sim_risks,
+    )
+    first_attempt = result.attempts[0] if result.attempts else None
+    return _SimRow(
+        passed=result.passed_evaluation,
+        reached_first_payout=result.reached_first_payout,
+        failed_before_payout=result.failed and not result.reached_first_payout,
+        multiple_payouts=len(result.payouts) > 1,
+        total_attempts=result.total_attempts,
+        attempts_passed=result.attempts_passed,
+        attempts_reached_payout=result.attempts_reached_payout,
+        any_attempt_failed=any(a.failed for a in result.attempts),
+        first_attempt_bust=bool(first_attempt and first_attempt.failed and not first_attempt.passed_evaluation),
+        attempts_failed=sum(1 for a in result.attempts if a.failed),
+        days_to_pass=result.days_to_pass,
+        first_payout_day_index=result.first_payout_day_index,
+        return_pct=(result.final_balance - rules.account_size) / rules.account_size * 100.0,
+        total_payout_amount=result.total_payout_amount,
+        max_drawdown_pct=result.max_drawdown_pct_reached,
+        max_losing_streak=_max_losing_streak(sim_pnls),
+    )
+
+
+# -- v9.13: cross-process path evaluation --------------------------------
+# The resample DRAWS are the only part of a Monte Carlo run that must
+# stay sequential (they consume one rng stream); given a drawn path,
+# simulate_account is a pure function. So the parallel path draws every
+# path in THIS process, in the original order, and farms only the
+# simulation work out -- results are collected by sim index and fed to
+# the exact same aggregation, in the exact same order, as the serial
+# loop. Identical draws + identical per-path math + identical
+# aggregation order = a bit-identical MonteCarloResult; this is pinned
+# by tests/test_v913_progress_explorer_speed.py. Spawn (not fork) to
+# match every other pool in this app, and any pool failure falls back
+# to the serial loop with a freshly seeded rng (see run_monte_carlo).
+_MC_PARALLEL_MIN_SIMS = 200
+
+_MC_WORKER: dict = {}
+
+
+def _mc_worker_init(base_dates, rules, day_structure, reset_on_breach) -> None:
+    global _MC_WORKER
+    _MC_WORKER = {
+        "base_dates": base_dates, "rules": rules,
+        "day_structure": day_structure, "reset_on_breach": reset_on_breach,
+    }
+
+
+def _mc_worker_task(payload: list) -> list:
+    w = _MC_WORKER
+    out = []
+    for sim_pnls, sim_ds, sim_risks in payload:
+        out.append(_mc_simulate_path(
+            sim_pnls, w["base_dates"], w["rules"],
+            sim_ds if sim_ds is not None else w["day_structure"],
+            w["reset_on_breach"], sim_risks,
+        ))
+    return out
+
+
+def _mc_rows_parallel(n_sims, draw_one, *, base_dates, rules, day_structure,
+                      reset_on_breach, workers, progress_cb, chunk_cap=256):
+    """Draws paths via draw_one() (in sim order, this process) and
+    evaluates them across `workers` processes, returning _SimRows in sim
+    order. Raises on any pool failure -- the caller falls back to the
+    serial loop with a re-seeded rng, so a broken pool can never change
+    the numbers, only the speed."""
+    import multiprocessing
+    from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor
+    from concurrent.futures import wait as _futures_wait
+
+    rows: list = [None] * n_sims
+    chunk = max(16, min(chunk_cap, n_sims // max(1, workers * 16)))
+    done = 0
+    next_i = 0
+    ctx = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(
+        max_workers=workers, mp_context=ctx,
+        initializer=_mc_worker_init,
+        initargs=(base_dates, rules, day_structure, reset_on_breach),
+    ) as pool:
+        pending: dict = {}
+
+        def _submit_more() -> None:
+            nonlocal next_i
+            while next_i < n_sims and len(pending) < workers * 2:
+                start = next_i
+                payload = [draw_one() for _ in range(start, min(start + chunk, n_sims))]
+                next_i = start + len(payload)
+                pending[pool.submit(_mc_worker_task, payload)] = start
+
+        _submit_more()
+        while pending:
+            finished, _ = _futures_wait(list(pending), return_when=FIRST_COMPLETED)
+            for fut in finished:
+                start = pending.pop(fut)
+                for off, row in enumerate(fut.result()):
+                    rows[start + off] = row
+                    done += 1
+                if progress_cb is not None:
+                    try:
+                        progress_cb(done, n_sims)
+                    except Exception:  # noqa: BLE001 -- progress must never sink the run
+                        pass
+            _submit_more()
+    return rows
+
+
 def run_monte_carlo(
     trades: list[Trade],
     rules: PropRules,
     cfg: MonteCarloConfig | None = None,
     selection_bias_caveat: bool = False,
+    max_workers: int | None = None,
+    progress_cb=None,
 ) -> MonteCarloResult:
     """
     selection_bias_caveat: MC-004. Pass True when `trades` are known (or
@@ -632,6 +784,18 @@ def run_monte_carlo(
     genome the walk-forward-aware GA just picked. Only changes the
     wording of the returned result's `methodology_note`; never changes
     any numeric output.
+
+    max_workers (v9.13): when > 1 and n_simulations is large enough,
+    the per-path simulations run across that many worker processes.
+    Purely a speed change -- the resample draws stay in this process in
+    the original order and results are aggregated in sim order, so the
+    returned MonteCarloResult is bit-identical to the serial run (see
+    _mc_rows_parallel). None (the default) keeps every existing caller
+    on the exact serial path it has always used.
+
+    progress_cb: optional callable(done, total), invoked as paths
+    complete (at most ~20 times). Purely observational; exceptions in
+    it are swallowed.
     """
     cfg = cfg or MonteCarloConfig()
     if not trades:
@@ -689,7 +853,12 @@ def run_monte_carlo(
     first_bust_flags: list[bool] = []
     sum_attempts_failed = 0
 
-    for _ in range(cfg.n_simulations):
+    # v9.13: the draw for each path happens HERE, in sim order, whether
+    # the path itself is then simulated in this process or a worker --
+    # that is what keeps the parallel path bit-identical (see
+    # _mc_rows_parallel). _draw_one() is exactly the draw sequence the
+    # old serial loop performed per iteration.
+    def _draw_one():
         if use_day_blocks:
             sim_idx, sim_ds = _resample_day_blocks(rng, _groups, _gdates, cfg.day_block_days)
         else:
@@ -698,42 +867,72 @@ def run_monte_carlo(
         sim_pnls = base_pnls[sim_idx]
         sim_pnls = _apply_slippage_stress(sim_pnls, cfg.slippage_stress_pct)
         sim_risks = base_risks[sim_idx] if has_risks else None
+        return sim_pnls, sim_ds, sim_risks
 
-        result = simulate_account(
-            sim_pnls, base_dates, rules,
-            _day_structure=sim_ds if sim_ds is not None else day_structure,
-            reset_on_breach=cfg.reset_on_breach,
-            trade_initial_risks=sim_risks,
-        )
+    n_sims = int(cfg.n_simulations)
+    rows: list | None = None
+    _want_parallel = (
+        max_workers is not None and int(max_workers) > 1 and n_sims >= _MC_PARALLEL_MIN_SIMS
+    )
+    if _want_parallel:
+        try:
+            rows = _mc_rows_parallel(
+                n_sims, _draw_one, base_dates=base_dates, rules=rules,
+                day_structure=day_structure, reset_on_breach=cfg.reset_on_breach,
+                workers=int(max_workers), progress_cb=progress_cb,
+                chunk_cap=32 if use_day_blocks else 256,
+            )
+        except Exception:  # noqa: BLE001 -- a broken pool must never change the numbers
+            rows = None
+    if rows is None:
+        if _want_parallel:
+            # The failed parallel attempt already consumed draws from
+            # rng; re-seed so the serial loop below draws the identical
+            # sequence a purely serial run would have drawn.
+            rng = np.random.default_rng(cfg.random_seed)
+        rows = []
+        _report_every = max(1, n_sims // 20) if progress_cb is not None else 0
+        for i in range(n_sims):
+            sim_pnls, sim_ds, sim_risks = _draw_one()
+            rows.append(_mc_simulate_path(
+                sim_pnls, base_dates, rules,
+                sim_ds if sim_ds is not None else day_structure,
+                cfg.reset_on_breach, sim_risks,
+            ))
+            if progress_cb is not None and ((i + 1) % _report_every == 0 or i + 1 == n_sims):
+                try:
+                    progress_cb(i + 1, n_sims)
+                except Exception:  # noqa: BLE001 -- progress must never sink the run
+                    pass
 
-        passed_flags.append(result.passed_evaluation)
-        first_payout_flags.append(result.reached_first_payout)
-        failed_before_payout_flags.append(result.failed and not result.reached_first_payout)
-        multiple_payout_flags.append(len(result.payouts) > 1)
-        attempts_per_path.append(result.total_attempts)
-        sum_attempts_passed += result.attempts_passed
-        sum_attempts_reached_payout += result.attempts_reached_payout
-        sum_total_attempts += result.total_attempts
+    for row in rows:
+        passed_flags.append(row.passed)
+        first_payout_flags.append(row.reached_first_payout)
+        failed_before_payout_flags.append(row.failed_before_payout)
+        multiple_payout_flags.append(row.multiple_payouts)
+        attempts_per_path.append(row.total_attempts)
+        sum_attempts_passed += row.attempts_passed
+        sum_attempts_reached_payout += row.attempts_reached_payout
+        sum_total_attempts += row.total_attempts
         # v5: count EVERY account death, whatever the failure_reason
         # ("daily_loss_limit", "max_drawdown (...)", inactivity closure).
         # result.attempts always holds at least the attempt-#1 record, and
         # more than one record only when reset_on_breach rebuys into the
         # remaining history after a bust.
-        death_flags.append(any(a.failed for a in result.attempts))
-        first_attempt = result.attempts[0] if result.attempts else None
-        first_bust_flags.append(bool(first_attempt and first_attempt.failed and not first_attempt.passed_evaluation))
-        sum_attempts_failed += sum(1 for a in result.attempts if a.failed)
+        death_flags.append(row.any_attempt_failed)
+        first_bust_flags.append(row.first_attempt_bust)
+        sum_attempts_failed += row.attempts_failed
 
-        if result.days_to_pass is not None:
-            days_to_pass_list.append(result.days_to_pass)
-        if result.first_payout_day_index is not None:
-            days_to_first_payout_list.append(result.first_payout_day_index)
+        if row.days_to_pass is not None:
+            days_to_pass_list.append(row.days_to_pass)
+        if row.first_payout_day_index is not None:
+            days_to_first_payout_list.append(row.first_payout_day_index)
 
-        return_pcts.append((result.final_balance - rules.account_size) / rules.account_size * 100.0)
-        payout_amounts.append(result.total_payout_amount)
-        total_withdrawals += result.total_payout_amount
-        drawdown_pcts.append(result.max_drawdown_pct_reached)
-        losing_streaks.append(_max_losing_streak(sim_pnls))
+        return_pcts.append(row.return_pct)
+        payout_amounts.append(row.total_payout_amount)
+        total_withdrawals += row.total_payout_amount
+        drawdown_pcts.append(row.max_drawdown_pct)
+        losing_streaks.append(row.max_losing_streak)
 
     passed_arr = np.array(passed_flags)
     first_payout_arr = np.array(first_payout_flags)

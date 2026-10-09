@@ -116,6 +116,26 @@ class PropAccount:
         # -- per-day bookkeeping ----------------------------------------
         self.daily_pnl: dict = {}
         self.day_profit_history: dict = {}
+        # v9.13 speed: _maybe_payout used to recount "winning days" by
+        # scanning this account's ENTIRE day_profit_history dict on every
+        # funded-stage trade close -- O(days) per trade, O(days x trades)
+        # per simulated path, and the single hottest spot in every Monte
+        # Carlo / prop simulation in the app (~55% of a 2,378-trade path's
+        # wall clock at 1,400 trading days). These two counters track the
+        # exact same count incrementally instead: _winning_days_total is
+        # the number of days in day_profit_history currently at/above the
+        # rules' min_winning_day_profit (maintained at the one mutation
+        # site in on_trade_close), and _winning_days_before_funded is
+        # that count restricted to days BEFORE the funded stage began,
+        # frozen at the funding transition (later trades never touch an
+        # earlier day again -- callers feed trades chronologically, so
+        # pre-funded days' profits are final by then). _maybe_payout's
+        # count is total - before_funded, an identical integer; the
+        # payout decisions, and therefore every number downstream, are
+        # unchanged. Pinned by tests/test_account_parity.py and
+        # tests/test_v913_progress_explorer_speed.py.
+        self._winning_days_total = 0
+        self._winning_days_before_funded = 0
         self.day_peak: dict = {}
         self.day_close: dict = {}
         self.day_start_balance: dict = {}
@@ -368,7 +388,18 @@ class PropAccount:
 
         self.balance += pnl
         self.daily_pnl[cur] = self.daily_pnl.get(cur, 0.0) + pnl
-        self.day_profit_history[cur] = self.day_profit_history.get(cur, 0.0) + pnl
+        # v9.13: same day-profit accumulation as before, plus the O(1)
+        # winning-day bookkeeping described at the counters in __init__.
+        _prev_day_profit = self.day_profit_history.get(cur)
+        _new_day_profit = (_prev_day_profit if _prev_day_profit is not None else 0.0) + pnl
+        self.day_profit_history[cur] = _new_day_profit
+        _win_threshold = getattr(r, "min_winning_day_profit", 0.0)
+        _was_winning = _prev_day_profit is not None and _prev_day_profit >= _win_threshold
+        _is_winning = _new_day_profit >= _win_threshold
+        if _is_winning and not _was_winning:
+            self._winning_days_total += 1
+        elif _was_winning and not _is_winning:
+            self._winning_days_total -= 1
         self.total_profit_since_start += pnl
         self.best_day_profit = max(self.best_day_profit, self.day_profit_history[cur])
 
@@ -441,6 +472,14 @@ class PropAccount:
                     self.best_day_since_baseline = 0.0
                     self.funded_start_day_index = cur
                     self.last_payout_day_index = cur
+                    # v9.13: freeze the pre-funded winning-day count once
+                    # (the only O(days) scan left, once per account) so
+                    # _maybe_payout can stay O(1) -- see __init__.
+                    _win_threshold = getattr(r, "min_winning_day_profit", 0.0)
+                    self._winning_days_before_funded = sum(
+                        1 for d, p in self.day_profit_history.items()
+                        if d < cur and p >= _win_threshold
+                    )
         elif self.stage == "funded":
             self._maybe_payout(cur)
         return OK
@@ -461,10 +500,13 @@ class PropAccount:
             ) <= r.funded_consistency_rule_pct
         days_since_last_payout = cur - self.last_payout_day_index
         funded_from = self.funded_start_day_index if self.funded_start_day_index is not None else cur
-        winning_days = sum(
-            1 for d, p in self.day_profit_history.items()
-            if d >= funded_from and p >= r.min_winning_day_profit
-        )
+        # v9.13: identical count to the full-history scan this replaces
+        # (days >= funded_from at/above the winning-day threshold) --
+        # see the incremental counters maintained in __init__ /
+        # on_trade_close. funded_from always equals the frozen
+        # _winning_days_before_funded boundary because _maybe_payout
+        # only runs in the funded stage, whose start set it.
+        winning_days = self._winning_days_total - self._winning_days_before_funded
         if (profit_since_baseline >= required_profit
                 and days_since_last_payout >= r.payout_frequency_days
                 and winning_days >= r.winning_days_for_payout

@@ -274,6 +274,7 @@ class ProgressTracker:
         with self._lock:
             end = self._finished_at if self._finished_at is not None else self._clock()
             elapsed = max(0.0, end - self._started_at)
+
             done = self._finished_at is not None
             done_count = self._banked + self._done_count
             # Under a second of data gives absurd rates (thousands/s from one
@@ -294,3 +295,116 @@ class ProgressTracker:
                 elapsed_seconds=round(elapsed, 1), done=done,
                 banner=format_banner(self._phase, label, done_count, rate, self._generation, done),
             )
+
+
+# ---------------------------------------------------------------------------
+# Full Pipeline weighted completion (v9.13)
+#
+# Owen: "Make the progress bar on the right show completion percentage
+# for all the runs during the run." The pipeline's seven steps have
+# wildly unequal costs, so a plain step counter would sit at "Step 2/7"
+# for half the run; instead each step carries a weight approximating
+# its typical share of a full run's wall clock. Calibrated on the two
+# measured 471k-bar configurations in the v9.13 proof set (ES 5m
+# momentum / Lucid 50k and GC 1h trend / Apex 100k -- their post-fix
+# step shares averaged roughly 4/37/17/1/0/18/24 percent, with the
+# fold/holdout steps kept slightly above their measured share because
+# configurations whose winner differs from the baseline pay real
+# backtests there). The weights are documented here and in
+# CHANGES_SUMMARY.md; the bar is an honest estimate, not a promise --
+# the within-step fractions (GA generation, Monte Carlo paths, null
+# runs) are exact counts of work done.
+PIPELINE_STEP_LABELS: tuple[str, ...] = (
+    "Baseline",
+    "Search (walk-forward GA)",
+    "Final validation",
+    "Out-of-sample folds",
+    "Holdout",
+    "Significance gates",
+    "Evidence + report",
+)
+PIPELINE_STEP_WEIGHTS: tuple[float, ...] = (0.05, 0.38, 0.17, 0.03, 0.02, 0.15, 0.20)
+
+
+def pipeline_percent(step: int, fraction: float) -> float:
+    """Overall weighted completion (0-100) for a 1-based pipeline step
+    at `fraction` (0-1) within that step. Pure function of the weights
+    above so it is unit-testable without any job plumbing."""
+    step = max(1, min(int(step), len(PIPELINE_STEP_WEIGHTS)))
+    fraction = max(0.0, min(1.0, float(fraction)))
+    base = sum(PIPELINE_STEP_WEIGHTS[: step - 1])
+    return round(100.0 * (base + PIPELINE_STEP_WEIGHTS[step - 1] * fraction), 1)
+
+
+class PipelineProgress:
+    """Stateful tracker behind the Full Pipeline job page's right-rail
+    percentage. The pipeline reports (step, fraction) via its
+    progress_hook; this turns it into a monotonic overall percent.
+
+    Multi-run jobs (the timeframe sweep runs the whole pipeline once
+    per timeframe) pass run_count > 1: when a fresh run's Step 1
+    arrives after a previous run already reported progress, the tracker
+    rolls into the next run's slice of the bar instead of restarting
+    at 0. Thread-safe; finish() pins the percent at 100."""
+
+    def __init__(self, run_count: int = 1, clock: Callable[[], float] = time.time) -> None:
+        self._lock = threading.Lock()
+        self._clock = clock
+        self._started_at = clock()
+        self._finished_at: Optional[float] = None
+        self._run_count = max(1, int(run_count))
+        self._run_index = 0
+        self._run_pct = 0.0          # weighted percent within the current run
+        self._percent = 0.0          # overall percent (monotonic)
+        self._step: Optional[int] = None
+        self._step_label = ""
+        self._label = ""
+
+    def set_run_count(self, run_count: int) -> None:
+        with self._lock:
+            self._run_count = max(1, int(run_count))
+
+    def update(self, step: int, step_total: int, fraction: float, label: str = "") -> dict:
+        with self._lock:
+            step = int(step)
+            if step == 1 and float(fraction) <= 0.0 and self._step is not None and self._finished_at is None:
+                # A new run of a multi-run job is starting (timeframe
+                # sweep): roll into the next run's slice of the bar.
+                self._run_index = min(self._run_index + 1, self._run_count - 1)
+                self._run_pct = 0.0
+            run_pct = pipeline_percent(step, fraction)
+            if run_pct > self._run_pct:
+                self._run_pct = run_pct
+            self._step = step
+            if 1 <= step <= len(PIPELINE_STEP_LABELS):
+                self._step_label = PIPELINE_STEP_LABELS[step - 1]
+            if label:
+                self._label = label
+            overall = (self._run_index + self._run_pct / 100.0) / self._run_count * 100.0
+            if overall > self._percent:
+                self._percent = round(overall, 1)
+            return self._payload_locked()
+
+    def finish(self) -> dict:
+        with self._lock:
+            if self._finished_at is None:
+                self._finished_at = self._clock()
+            self._percent = 100.0
+            self._run_pct = 100.0
+            return self._payload_locked()
+
+    def payload(self) -> dict:
+        with self._lock:
+            return self._payload_locked()
+
+    def _payload_locked(self) -> dict:
+        end = self._finished_at if self._finished_at is not None else self._clock()
+        return {
+            "percent": self._percent,
+            "step": self._step,
+            "step_total": len(PIPELINE_STEP_WEIGHTS),
+            "step_label": self._step_label,
+            "label": self._label,
+            "elapsed_seconds": round(max(0.0, end - self._started_at), 1),
+            "done": self._finished_at is not None,
+        }

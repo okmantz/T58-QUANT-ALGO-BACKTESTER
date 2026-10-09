@@ -55,3 +55,32 @@ def trading_day(ts: pd.Timestamp, *, tz: str = "America/Chicago", roll_hour: int
     # to 00:00 of the following calendar day, so .date() lands on the
     # trading day. E.g. roll_hour=17, 18:00 CT -> +7h -> 01:00 next day.
     return (local + pd.Timedelta(hours=(24 - roll_hour) % 24)).date()
+
+
+def trading_days(index, *, tz: str = "America/Chicago", roll_hour: int = 17):
+    """Vectorized twin of :func:`trading_day` over a whole timestamp
+    sequence (v9.13 speed): returns an object ndarray of ``datetime.date``
+    elementwise IDENTICAL to ``[trading_day(t, tz=tz, roll_hour=roll_hour)
+    for t in index]`` -- same naive-means-UTC assumption, same tz
+    conversion, same roll shift, applied column-wise instead of one
+    ``pd.Timestamp`` construction (plus a pytz zone lookup) per bar.
+
+    Exists because the bar engine and the Monte Carlo day-structure
+    precompute used to call the scalar helper once per bar/trade: on a
+    75k-bar frame that loop alone was roughly half the wall-clock of a
+    single backtest, and every Full Pipeline step pays it again. The two
+    implementations are pinned elementwise-equal by
+    tests/test_v913_progress_explorer_speed.py over naive, tz-aware, and
+    DST-boundary inputs, so this can never quietly drift from the scalar
+    semantics the rest of the app (and its older tests) rely on."""
+    if not 0 <= roll_hour < 24:
+        raise ValueError(f"roll_hour must be in [0, 24), got {roll_hour}")
+    import numpy as np
+
+    idx = index if isinstance(index, pd.DatetimeIndex) else pd.DatetimeIndex(index)
+    if idx.tz is None:
+        # Naive input is assumed UTC -- same convention as trading_day().
+        local = idx.tz_localize("UTC").tz_convert(tz)
+    else:
+        local = idx.tz_convert(tz)
+    return np.asarray((local + pd.Timedelta(hours=(24 - roll_hour) % 24)).date, dtype=object)
