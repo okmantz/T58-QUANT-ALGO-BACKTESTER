@@ -12,158 +12,265 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
-<style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
-  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
-  .card p.help { font-size: 12px; color: #888; margin: 0 0 10px; line-height: 1.5; }
-  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
-  input[type=text], input[type=number], select, textarea {
-    width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light);
-    background: var(--panel-3); color: var(--text); font-size: 15px;
-  }
-  .row { display: flex; gap: 10px; }
-  .row > div { flex: 1; }
-  input[type=file] { width: 100%; color: #ccc; }
-  .submit-btn {
-    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: #04120e;
-    font-size: 16px; font-weight: 700; margin-top: 6px;
-    box-shadow: 0 0 22px rgba(53,224,176,0.35);
-  }
-  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
-  .notice { background: #142a1a; border: 1px solid #235a32; color: #b4ffcb; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
-  .notice.bad { background: #2a1414; border-color: #6b2323; color: #ffb4b4; }
-  details summary { font-size: 13px; color: #999; cursor: pointer; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  td, th { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
-  pre { white-space: pre-wrap; font-size: 12px; color: #bbb; }
-</style>
+{% include '_lifecycle_css.html' %}
 </head>
 <body>
 {% set active_page = active_page|default('champion_simple') %}
 <div class="t58-shell">
 {% include '_sidebar.html' %}
 <div class="t58-main">
-<div class="t58-page-header">
-  <h1>Champion (promote)</h1>
-  <p>The promotion board, simplified: see every candidate and the current champion, re-run the validation checks for one candidate against a dataset, then promote it. Promotion uses the existing champion persistence — the same board the Dashboard leaderboard reads. The 70% promotion gate is unchanged.</p>
-</div>
+<div class="lc-scope"><div class="lc-wrap">
+
+{% set lc_step = 'champion' %}
+{% include '_lifecycle_stepper.html' %}
+<div class="lc-crumb">Lifecycle · 5 · <b>Champion</b></div>
+<h1 class="lc-title">Champion board</h1>
+<p class="lc-sub">The shortlist. Every saved strategy's actual standing — Eval / Payout / OOS and how far it's been explicitly promoted through Candidate &rarr; Validated &rarr; Champion Candidate &rarr; Forward Testing &rarr; Production Ready. Promotion is manual and advances one earned stage at a time; a high raw metric alone never advances a strategy. The 70% promotion gate is unchanged.</p>
 
 {% if notice %}
-<div class="notice{{ '' if notice_ok == '1' else ' bad' }}">{{ notice }}</div>
+<div class="lc-notice{{ '' if notice_ok == '1' else ' bad' }}">{{ notice }}</div>
 {% endif %}
+
+<div class="lc-run-grid">
+<div class="lc-run-main">
 
 {% if champion %}
-<div class="card">
-  <h2>Current champion (strongest validated candidate)</h2>
-  <table>
-    <tr><td>Strategy</td><td>{{ champion.filename }} ({{ champion.strategy_type }})</td></tr>
-    <tr><td>Verdict</td><td>{{ champion.verdict }}</td></tr>
-    <tr><td>Checks passed</td><td>{{ champion.checks_passed }} / {{ champion.checks_total }}</td></tr>
-  </table>
-</div>
+  <div class="lc-card">
+    <h3>Current champion (strongest validated candidate)</h3>
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+      <div><b>{{ champion.display_name or champion.filename }}</b>
+        <div class="lc-hint">{{ champion.strategy_type }} · stage: {{ champion.promotion.stage_title }}</div></div>
+      <span class="lc-pill {{ 'green' if champion.verdict == 'READY' else ('red' if champion.verdict == 'NOT READY' else 'amber') }}">{{ champion.verdict or champion.status }}</span>
+    </div>
+    <div style="margin-top:10px;">
+      <div class="lc-kv"><span class="k">Eval pass</span><span class="v">{{ '%.0f%%'|format(champion.eval_pct) if champion.eval_pct is not none else '—' }}</span></div>
+      <div class="lc-kv"><span class="k">First payout</span><span class="v">{{ '%.0f%%'|format(champion.payout_pct) if champion.payout_pct is not none else '—' }}</span></div>
+      <div class="lc-kv"><span class="k">OOS quality</span><span class="v">{{ '%.0f%%'|format(champion.oos_pct) if champion.oos_pct is not none else '—' }}</span></div>
+    </div>
+  </div>
 {% endif %}
 
-<div class="card">
-  <h2>Promotion board</h2>
-  {% if board_rows %}
-  <table>
-    <thead><tr><th></th><th>Candidate</th><th>Verdict</th><th>Checks</th><th>Last checked</th></tr></thead>
-    <tbody>
-    {% for r in board_rows %}
-      <tr>
-        <td><input type="radio" name="candidate" value="{{ r.strategy_type }}::{{ r.filename }}" form="champion-actions"></td>
-        <td>{{ r.filename }} ({{ r.strategy_type }})</td>
-        <td>{{ r.verdict }}</td>
-        <td>{{ r.checks_passed }} / {{ r.checks_total }}</td>
-        <td>{{ r.last_checked or '—' }}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <p class="help">No candidates yet — run a strategy through Full Pipeline or Validate so it lands on the board.</p>
-  {% endif %}
-</div>
+  <div class="lc-card">
+    <h3>Promotion board</h3>
+    {% if board_rows %}
+    <div style="overflow-x:auto;">
+    <table class="lc-tbl">
+      <thead><tr><th></th><th>Strategy</th><th>Verdict</th><th>Eval</th><th>Payout</th><th>OOS</th><th>Stage</th><th>Next step</th></tr></thead>
+      <tbody>
+      {% for r in board_rows %}
+        <tr>
+          <td><input type="radio" name="candidate" value="{{ r.strategy_type }}::{{ r.filename }}" form="champion-actions"></td>
+          <td><b>{{ r.display_name }}</b><div class="lc-hint">{{ r.strategy_type }}</div></td>
+          <td><span class="lc-pill {{ 'green' if r.verdict == 'READY' else ('red' if r.verdict == 'NOT READY' else ('amber' if r.verdict == 'MARGINAL' else 'grey')) }}">{{ r.verdict or 'UNTESTED' }}</span></td>
+          <td>{{ '%.0f%%'|format(r.eval_pct) if r.eval_pct is not none else '—' }}</td>
+          <td>{{ '%.0f%%'|format(r.payout_pct) if r.payout_pct is not none else '—' }}</td>
+          <td>{{ '%.0f%%'|format(r.oos_pct) if r.oos_pct is not none else '—' }}</td>
+          <td>{{ r.promotion.stage_title }}</td>
+          <td>
+            {% if r.promotion.can_promote %}
+            <span class="lc-pill green">Ready — select it and Promote below</span>
+            {% elif r.promotion.next_stage_title %}
+            {% set bt_req = r.promotion.requirements | selectattr('key', 'equalto', 'backtested') | list %}
+            {% if bt_req and not bt_req[0].met %}
+            {# v9.7: no completed test run yet -> Full Pipeline, never Validate. #}
+            <a class="lc-btn small" href="/full-pipeline?load_strategy_type={{ r.strategy_type }}&load_strategy_name={{ r.filename | urlencode }}">&#9654; Run Full Pipeline</a>
+            {% else %}
+            {% set unmet = r.promotion.requirements | rejectattr('met') | list %}
+            <span class="lc-hint">{{ unmet | length }} check{{ '' if unmet | length == 1 else 's' }} still to run</span><br>
+            <a href="/validate-simple" style="color:var(--lc-acc); font-size:12px;">Open Validate (pick checks) &rarr;</a>
+            {% endif %}
+            {% else %}
+            <span style="color:var(--lc-acc); font-size:12px;">&#9733; Final stage</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p class="lc-hint">No candidates yet — run a strategy through the Full Pipeline or Validate so it lands on the board.</p>
+    {% endif %}
+  </div>
 
 {% if checks_result %}
-<div class="card">
-  <h2>Re-run results — {{ checks_result.candidate }}</h2>
-  <p class="help">Dataset: {{ checks_result.dataset }} · baseline trades: {{ checks_result.baseline_trades }}</p>
-  {% for r in checks_result.checks %}
-  <h3>{{ r.check }}{% if not r.ok %} — failed{% endif %}</h3>
-  {% if r.ok %}
-  <table>
-    {% for k, v in r.summary.items() %}
-    <tr><td>{{ k }}</td><td>{% if v is mapping or v is sequence and v is not string %}<pre>{{ v | tojson(indent=2) }}</pre>{% else %}{{ v }}{% endif %}</td></tr>
+  <div class="lc-card">
+    <h3>Re-run results — {{ checks_result.candidate }}</h3>
+    <p class="lc-hint">Dataset: {{ checks_result.dataset }} · baseline trades: {{ checks_result.baseline_trades }}</p>
+    {% for r in checks_result.checks %}
+    <div class="lc-verdict {{ 'pass' if r.ok else '' }}">
+      <span class="lc-pill {{ 'green' if r.ok else 'red' }}">{{ 'RAN' if r.ok else 'FAILED' }}</span>
+      <h3 style="margin-top:8px;">{{ {'monte_carlo': 'Monte Carlo', 'cpcv': 'CPCV', 'pbo': 'PBO (overfitting)', 'walk_forward': 'Walk-Forward', 'sensitivity': 'Sensitivity (1-D)', 'robustness': 'Parameter Robustness', 'regime': 'Regime Matrix'}.get(r.check, r.check) }}</h3>
+      {% if r.ok %}
+      {% for k, v in r.summary.items() %}
+      <div class="lc-kv"><span class="k">{{ k }}</span><span class="v">{% if v is mapping or v is sequence and v is not string %}<pre style="white-space:pre-wrap;font-size:11px;text-align:left;">{{ v | tojson(indent=2) }}</pre>{% else %}{{ v }}{% endif %}</span></div>
+      {% endfor %}
+      {% else %}
+      <p class="lc-hint" style="color:#ffb4b4;">{{ r.error }}</p>
+      {% endif %}
+    </div>
     {% endfor %}
-  </table>
-  {% else %}
-  <p>{{ r.error }}</p>
-  {% endif %}
-  {% endfor %}
-</div>
+  </div>
 {% endif %}
 
 <form id="champion-actions" method="post" enctype="multipart/form-data">
-<div class="card">
-  <h2>Re-run checks for the selected candidate</h2>
-  <p class="help">Pick a candidate in the board above (radio button), choose a dataset, tick checks, then re-run. Promote is separate and uses the board's stored verdicts.</p>
-  <label>Dataset (stored) — or upload below</label>
-  <select name="existing_dataset">
-    <option value="">— upload a CSV instead —</option>
-    {% for g in dataset_groups %}
-    <optgroup label="{{ g.instrument }}">
-      {% for d in g.datasets %}
-      <option value="{{ d.name }}">{{ d.name }}</option>
-      {% endfor %}
-    </optgroup>
-    {% endfor %}
-    {% for d in stored_datasets %}
-    <option value="{{ d.name }}">{{ d.name }}</option>
-    {% endfor %}
-  </select>
-  <label>…or upload market data (CSV)</label>
-  <input type="file" name="csv_file" accept=".csv">
-  <label><input type="checkbox" name="check_monte_carlo"> Monte Carlo</label>
-  <label><input type="checkbox" name="check_cpcv"> CPCV</label>
-  <label><input type="checkbox" name="check_pbo"> PBO (overfitting)</label>
-  <label><input type="checkbox" name="check_walk_forward"> Walk-Forward</label>
-  <label><input type="checkbox" name="check_sensitivity"> Sensitivity (1-D)</label>
-  <label><input type="checkbox" name="check_robustness"> Parameter Robustness</label>
-  <label><input type="checkbox" name="check_regime"> Regime Matrix</label>
-  <div class="row">
-    <div><label>Prop-firm preset</label>
-      <select name="prop_preset">
-        <option value="">— typed rules / account size only —</option>
-        {% for p in prop_presets %}
-        <option value="{{ p.key }}">{{ p.label }}</option>
-        {% endfor %}
-      </select>
+  <div class="lc-card">
+    <h3>Re-run checks for the selected candidate</h3>
+    <p class="lc-hint" style="margin-bottom:12px;">Pick a candidate in the board above (radio button), choose a dataset and a prop firm, tick checks, then re-run. Promote is separate and uses the board's stored verdicts — it advances one earned stage and names anything unmet.</p>
+    <div class="lc-row">
+      <div class="lc-col">
+        <label class="flabel" for="lc-dataset-pick">Market data</label>
+        <select class="inp" name="existing_dataset" id="lc-dataset-pick">
+          <option value="">— upload a CSV instead —</option>
+          {% for g in dataset_groups %}
+          <optgroup label="{{ g.instrument }}">
+            {% for d in g.datasets %}
+            <option value="{{ d.name }}">{{ d.name }}</option>
+            {% endfor %}
+          </optgroup>
+          {% endfor %}
+          {% for d in stored_datasets %}
+          <option value="{{ d.name }}">{{ d.name }}</option>
+          {% endfor %}
+        </select>
+        <label class="flabel" style="margin-top:10px;" for="lc-csv-file">…or upload market data (CSV)</label>
+        <input type="file" name="csv_file" id="lc-csv-file" accept=".csv">
+      </div>
+      <div class="lc-col">
+        <label class="flabel" for="lc-prop-preset">Prop firm</label>
+        <select class="inp" name="prop_preset" id="lc-prop-preset">
+          <option value="">— typed rules / account size only —</option>
+          {% for p in prop_presets %}
+          <option value="{{ p.key }}">{{ p.label }}</option>
+          {% endfor %}
+        </select>
+        <div class="lc-hint" style="margin-top:5px;">Its rules show in the rail &rarr;</div>
+        <div class="lc-rules-line" id="lc-rules-line"></div>
+      </div>
     </div>
-    <div><label>Account size ($)</label><input type="number" step="any" name="account_size" value="100000"></div>
-    <div><label>Initial balance ($)</label><input type="number" step="any" name="initial_balance" value="100000"></div>
+    <div class="lc-row" style="margin-top:6px;">
+      <div class="lc-col"><label class="flabel">Account size ($)</label><input type="number" step="any" name="account_size" value="100000"></div>
+      <div class="lc-col"><label class="flabel">Initial balance ($)</label><input type="number" step="any" name="initial_balance" value="100000"></div>
+    </div>
   </div>
-</div>
 
-<details class="card">
-  <summary>Advanced — accuracy &amp; check knobs</summary>
-  {% include '_accuracy_fields.html' %}
-  <div class="row">
-    <div><label>Monte-Carlo sims</label><input type="number" name="mc_sims" value="1000"></div>
-    <div><label>CPCV/PBO groups</label><input type="number" name="cpcv_groups" value="4"></div>
-    <div><label>CPCV/PBO test groups</label><input type="number" name="cpcv_test_groups" value="2"></div>
-    <div><label>Max paths</label><input type="number" name="cpcv_max_paths" value="15"></div>
-    <div><label>Walk-forward folds</label><input type="number" name="wf_folds" value="3"></div>
+  <div class="lc-card">
+    <h3>Which checks to re-run?</h3>
+    <div class="lc-checkcards">
+      <label class="lc-checkcard">
+        <input class="lc-check-input" type="checkbox" name="check_monte_carlo">
+        <div class="cname"><span class="cbox"></span>Monte Carlo</div>
+        <div class="cdesc">Eval-pass / first-payout probability and ruin, resampled from the baseline trades.</div>
+      </label>
+      <label class="lc-checkcard">
+        <input class="lc-check-input" type="checkbox" name="check_cpcv">
+        <div class="cname"><span class="cbox"></span>CPCV</div>
+        <div class="cdesc">Combinatorial purged cross-validation across every train/test partition.</div>
+      </label>
+      <label class="lc-checkcard">
+        <input class="lc-check-input" type="checkbox" name="check_pbo">
+        <div class="cname"><span class="cbox"></span>PBO (overfitting)</div>
+        <div class="cdesc">Probability the "best" settings won by chance.</div>
+      </label>
+      <label class="lc-checkcard">
+        <input class="lc-check-input" type="checkbox" name="check_walk_forward">
+        <div class="cname"><span class="cbox"></span>Walk-Forward</div>
+        <div class="cdesc">Rolling/anchored out-of-sample optimization folds.</div>
+      </label>
+      <label class="lc-checkcard">
+        <input class="lc-check-input" type="checkbox" name="check_sensitivity">
+        <div class="cname"><span class="cbox"></span>Sensitivity (1-D)</div>
+        <div class="cdesc">One-parameter-at-a-time sweeps; flags cliff edges.</div>
+      </label>
+      <label class="lc-checkcard">
+        <input class="lc-check-input" type="checkbox" name="check_robustness">
+        <div class="cname"><span class="cbox"></span>Parameter Robustness</div>
+        <div class="cdesc">Plateau-vs-cliff scoring across the parameter surface.</div>
+      </label>
+      <label class="lc-checkcard">
+        <input class="lc-check-input" type="checkbox" name="check_regime">
+        <div class="cname"><span class="cbox"></span>Regime Matrix</div>
+        <div class="cdesc">Performance split by market regime; flags regimes to disable.</div>
+      </label>
+    </div>
   </div>
-</details>
 
-<button class="submit-btn" type="submit" formaction="/champion-simple/rerun">Re-run checks</button>
-<button class="submit-btn" type="submit" formaction="/champion-simple/promote" style="margin-top:10px;">Promote selected candidate</button>
+  <details class="lc-adv">
+    <summary>Advanced — accuracy &amp; check knobs</summary>
+    <div class="adv-body">
+      {% include '_accuracy_fields.html' %}
+      <div class="lc-adv-grid">
+        <div class="lc-adv-field"><label class="flabel">Monte-Carlo sims</label><input type="number" name="mc_sims" value="1000"></div>
+        <div class="lc-adv-field"><label class="flabel">CPCV/PBO groups</label><input type="number" name="cpcv_groups" value="4"></div>
+        <div class="lc-adv-field"><label class="flabel">CPCV/PBO test groups</label><input type="number" name="cpcv_test_groups" value="2"></div>
+        <div class="lc-adv-field"><label class="flabel">Max paths</label><input type="number" name="cpcv_max_paths" value="15"></div>
+        <div class="lc-adv-field"><label class="flabel">Walk-forward folds</label><input type="number" name="wf_folds" value="3"></div>
+      </div>
+    </div>
+  </details>
+
+  <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">
+    <button class="lc-btn big" type="submit" formaction="/champion-simple/rerun">Re-run checks</button>
+    <button class="lc-btn big" type="submit" formaction="/champion-simple/promote">&#127942; Promote selected candidate</button>
+  </div>
 </form>
 
+  <div class="lc-card">
+    <h3>How a strategy gets here</h3>
+    <p class="lc-hint" style="font-size:13px;">READY from the Full Pipeline (&ge;70% per-attempt pass, &ge;100 trades, seed-stable) &rarr; stress-checked in Validate &rarr; listed here. Nothing reaches this board by being profitable on one lucky backtest.</p>
+  </div>
+
+</div>
+<div class="lc-run-side">
+  <div class="lc-side-card">
+    <h4>&#127942; Board status</h4>
+    {% if champion %}
+    <div class="lc-kv"><span class="k">Champion</span><span class="v">{{ champion.display_name or champion.filename }}</span></div>
+    <div class="lc-kv"><span class="k">Stage</span><span class="v">{{ champion.promotion.stage_title }}</span></div>
+    {% else %}
+    <div class="lc-kv"><span class="k">Champion</span><span class="v">none yet — nothing has earned Validated</span></div>
+    {% endif %}
+    <div class="lc-kv"><span class="k">Candidates</span><span class="v">{{ board_rows | length }}</span></div>
+    <div class="lc-kv"><span class="k">Final stage</span><span class="v">Production Ready</span></div>
+  </div>
+
+  <div class="lc-side-card">
+    <h4>&#127963; Prop firm rules</h4>
+    <div id="lc-rules-body"></div>
+  </div>
+
+  <div class="lc-side-card">
+    <h4>&#128203; Promotion gates (read-only)</h4>
+    <div class="lc-kv"><span class="k">Candidate &rarr; Validated</span><span class="v">backtest + all 5 validation steps + no lookahead leak</span></div>
+    <div class="lc-kv"><span class="k">&rarr; Champion Candidate</span><span class="v">eval &ge;60% · payout &ge;55% · OOS &ge;50%</span></div>
+    <div class="lc-kv"><span class="k">&rarr; Forward Testing</span><span class="v">Champion Check READY · eval &ge;70%</span></div>
+    <div class="lc-kv"><span class="k">&rarr; Production Ready</span><span class="v">&ge;14 days in Forward Testing</span></div>
+  </div>
+
+  {% include '_lifecycle_how.html' %}
+
+  <div class="lc-side-card">
+    <h4>&#129517; What happens next</h4>
+    <p class="lc-hint" style="font-size:12.5px; color:var(--lc-text);">Promoted &rarr; <b>Deploy</b>: forward test it on live prices first.<br>Not ready &rarr; the row names the missing checks; run them in <b>Validate</b>.<br>Untested &rarr; its button goes straight to the <b>Full Pipeline</b>.</p>
+  </div>
+
+  <div class="lc-side-card">
+    <h4>&#9888; Watch-outs</h4>
+    <p class="lc-hint" style="font-size:12.5px;">Promotion advances exactly one stage and only when every requirement for the next stage is already met — the refusal message names what's missing. Lucid is the only preset re-verified against the firm's own page (Oct 7).</p>
+  </div>
 </div>
 </div>
+
+</div></div>
+</div>
+</div>
+<script>window.LC_PROP_PRESETS = {{ prop_presets_json | safe }};</script>
+{% include '_lifecycle_rules_js.html' %}
+<script>
+  (function () {
+    if (window.lcBindPropPreset) window.lcBindPropPreset(document.getElementById('lc-prop-preset'));
+    if (window.lcSyncCheckCards) window.lcSyncCheckCards(document);
+  })();
+</script>
 </body>
 </html>

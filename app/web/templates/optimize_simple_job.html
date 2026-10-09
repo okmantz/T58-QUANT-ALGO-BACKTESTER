@@ -9,54 +9,104 @@
 <meta name="theme-color" content="#05070a">
 <link rel="stylesheet" href="/static/theme.css">
 <link rel="stylesheet" href="/static/job-theme.css">
+{% include '_lifecycle_css.html' %}
 </head>
 <body>
-<header><h1>T58 Quant Algo Backtester — Optimize (pick engines)</h1></header>
+<header><h1><span class="mark"></span>T58 Quant Algo Backtester — Optimize (pick engines)</h1></header>
 <nav>
   <a href="/dashboard" class="back-btn">&larr; Back</a>
   <a href="/optimize-simple">New Run</a>
 </nav>
-<main>
+<main style="max-width:1180px;">
+<div class="lc-scope"><div class="lc-wrap">
+
+{% set lc_step = 'optimize' %}
+{% include '_lifecycle_stepper.html' %}
+<div class="lc-crumb">Lifecycle · 3 · <b>Optimize</b></div>
+<h1 class="lc-title">Tune the numbers for me</h1>
 
 {% if not_found %}
-<div class="error">Job "{{ job_id }}" was not found (the server may have restarted since it ran).</div>
+<div class="lc-error">Job "{{ job_id }}" was not found (the server may have restarted since it ran).</div>
 {% else %}
 
-<div class="card">
-  <h2 id="status-title"><span class="spinner" id="spinner"></span>Optimize running&hellip;</h2>
-  <div id="log">Starting&hellip;</div>
-  <button type="button" id="stop-btn" style="margin-top:12px; padding:10px 22px; border-radius:10px; border:1px solid #6b2323; background:#3a1616; color:#ffb4b4; font-size:14px; font-weight:700; cursor:pointer;" onclick="stopPolling()">Stop watching</button>
+<div class="lc-run-grid">
+<div class="lc-run-main">
+  <div class="lc-card">
+    <h3 id="status-title"><span class="spinner" id="spinner"></span>Optimize running&hellip;</h3>
+    <div id="log" class="lc-logbox tall">Starting&hellip;</div>
+    <button type="button" id="stop-btn" class="lc-btn danger small" style="margin-top:12px;" onclick="stopPolling()">Stop watching</button>
+  </div>
+
+  <div class="lc-card" id="summary-card" style="display:none;">
+    <h3>Engine results</h3>
+    <div id="summary-body"></div>
+  </div>
 </div>
 
-<div class="card" id="summary-card" style="display:none;">
-  <h2>Engine results</h2>
-  <div id="summary-body"></div>
-</div>
+<div class="lc-run-side">
+  <div class="lc-side-card">
+    <h4>&#9654; Run progress</h4>
+    <div style="display:flex; align-items:baseline; gap:10px;"><span class="lc-pct-big" id="lc-pct">···</span><span class="lc-hint" id="lc-stage">running</span></div>
+    <div class="lc-progress indet" id="lc-progress" style="margin:8px 0;"><div></div></div>
+    <div class="lc-kv"><span class="k" id="lc-stage-line">Engines running…</span><span class="v lc-ok">live</span></div>
+  </div>
 
+  <div class="lc-side-card">
+    <h4>&#128203; Run checklist</h4>
+    <div id="lc-checklist"><div class="lc-kv"><span class="k">Engines</span><span class="v">running — results land below</span></div></div>
+  </div>
+
+  {% include '_lifecycle_how.html' %}
+
+  <div class="lc-side-card">
+    <h4>&#129517; What happens next</h4>
+    <p class="lc-hint" style="font-size:12.5px; color:var(--lc-text);">Best variation is still only a candidate &rarr; run it through <b>Test it properly</b> (Full Pipeline) before believing it.</p>
+  </div>
+
+  <div class="lc-side-card">
+    <h4>&#9888; Watch-outs</h4>
+    <p class="lc-hint" style="font-size:12.5px;">Optimizing never grants READY — the 70% bar is judged by the Full Pipeline on data the tuning never saw.</p>
+  </div>
+</div>
+</div>
+{% endif %}
+
+</div></div>
+</main>
+
+{% if not not_found %}
 <script>
 const JOB_ID = {{ job_id | tojson }};
 let stopped = false;
 function stopPolling(){ stopped = true; document.getElementById('stop-btn').disabled = true; }
 function esc(s){ const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+function engineRow(name, r){
+  if (r && r.error) return '<div class="lc-kv"><span class="k">' + esc(name) + '</span><span class="v lc-bad">failed</span></div>';
+  if (r && r.linked) return '<div class="lc-kv"><span class="k">' + esc(name) + '</span><span class="v">own page — linked below</span></div>';
+  return '<div class="lc-kv"><span class="k">' + esc(name) + '</span><span class="v lc-ok">ran ✓</span></div>';
+}
 function renderSummary(summary){
   const body = document.getElementById('summary-body');
-  if (!summary) { body.innerHTML = '<p class="note">No summary recorded.</p>'; return; }
+  const checklist = document.getElementById('lc-checklist');
+  if (!summary) { body.innerHTML = '<p class="lc-hint">No summary recorded.</p>'; return; }
   let html = '';
+  let rows = '';
   for (const [engine, r] of Object.entries(summary)) {
-    html += '<h3>' + esc(engine) + '</h3>';
-    if (r.error) { html += '<p class="note">Failed: ' + esc(r.error) + '</p>'; continue; }
+    rows += engineRow(engine, r);
+    html += '<div class="lc-verdict ' + ((r && !r.error) ? 'pass' : '') + '"><h3>' + esc(engine) + '</h3>';
+    if (r.error) { html += '<p class="lc-hint" style="color:#ffb4b4;">Failed: ' + esc(r.error) + '</p></div>'; continue; }
     if (r.linked) {
-      html += '<p>This engine keeps its own page: <a href="' + esc(r.url) + '">' + esc(r.label) + '</a></p><p class="note">' + esc(r.note || '') + '</p>';
+      html += '<p style="font-size:13px;">This engine keeps its own page: <a href="' + esc(r.url) + '" style="color:var(--lc-acc);">' + esc(r.label) + '</a></p><p class="lc-hint">' + esc(r.note || '') + '</p></div>';
       continue;
     }
-    html += '<table>';
     for (const [k, v] of Object.entries(r)) {
-      if (k === 'result') html += '<tr><td>' + esc(k) + '</td><td><pre>' + esc(v) + '</pre></td></tr>';
-      else html += '<tr><td>' + esc(k) + '</td><td>' + esc(v) + '</td></tr>';
+      if (k === 'result') html += '<div class="lc-kv"><span class="k">' + esc(k) + '</span><span class="v"><pre style="white-space:pre-wrap;font-size:11px;text-align:left;">' + esc(v) + '</pre></span></div>';
+      else html += '<div class="lc-kv"><span class="k">' + esc(k) + '</span><span class="v">' + esc(v) + '</span></div>';
     }
-    html += '</table>';
+    html += '</div>';
   }
   body.innerHTML = html;
+  if (checklist) checklist.innerHTML = rows;
 }
 async function poll(){
   if (stopped) return;
@@ -71,6 +121,12 @@ async function poll(){
       document.getElementById('stop-btn').style.display = 'none';
       document.getElementById('status-title').textContent = data.error ? 'Optimize finished with errors' : 'Optimize finished';
       document.getElementById('summary-card').style.display = 'block';
+      const pct = document.getElementById('lc-pct'), stage = document.getElementById('lc-stage'),
+            line = document.getElementById('lc-stage-line'), prog = document.getElementById('lc-progress');
+      if (pct) pct.textContent = '100%';
+      if (stage) stage.textContent = 'done';
+      if (line) line.textContent = data.error ? 'Finished with errors' : 'All ticked engines finished';
+      if (prog) { prog.classList.remove('indet'); prog.querySelector('div').style.width = '100%'; }
       renderSummary(data.summary);
       return;
     }
@@ -80,8 +136,6 @@ async function poll(){
 poll();
 </script>
 {% endif %}
-
-</main>
 {% include '_project_chat_embed.html' %}
 </body>
 </html>

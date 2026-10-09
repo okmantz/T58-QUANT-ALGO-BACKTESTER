@@ -2553,6 +2553,21 @@ class MainWindow:
     # Plain top-level rows (Dashboard / AI Assistant / User Manual): bold, teal,
     # and -- like the web's un-accented .t58-nav-item -- no resting left bar.
     _NAV_TOP_LEVEL = {"dashboard", "aiassistant", "manual"}
+    # v9.7 (Owen): clicking a lifecycle section header's numeral/name jumps
+    # straight to that step's main page (the group's "home"), mirroring the
+    # web sidebar's linked summaries; the chevron keeps expand/collapse.
+    # Keyed by the header's display name (numerals repeat across super-
+    # headers -- (1) exists under Lifecycle, Quant Lab AND Account).
+    _SECTION_HOME_KEYS = {
+        "CREATE": "starthere_create",
+        "TEST": "fullpipeline_test_pointer",
+        "OPTIMIZE": "optimize_simple",
+        "VALIDATE": "validate_simple",
+        "FINAL SELECTION": "leaderboard",
+        "CHAMPION": "champion_simple",
+        "DEPLOYMENT": "forwardtest",
+        "STRATEGY GRAVEYARD": "graveyard",
+    }
     # Leading glyph or "1  " step-number that older labels carried inline; the
     # icon column now shows the glyph, and the web sidebar doesn't number rows.
     _NAV_LABEL_PREFIX_RE = re.compile(r"^(?:[\u2190-\u2bff\u2600-\u27bf\U0001F000-\U0001FAFF]+\s*|\d+\s{2,})")
@@ -2640,16 +2655,32 @@ class MainWindow:
                         self._collapsed_groups.add(name)
                     self._build_sidebar_nav()
 
+                # v9.7: numeral + name jump straight to the step's
+                # main page (auto-expanding its group via _show_page);
+                # the chevron alone keeps expand/collapse. Sections
+                # without a home key keep the old toggle-everywhere
+                # behavior.
+                home_key = self._SECTION_HOME_KEYS.get(name_text)
+
+                def _go_home(_e=None, key=home_key):
+                    if key:
+                        self._show_page(key)
+
                 def _hdr_hover(entering, widgets=(header_row, left, mid, right)):
                     for w in widgets:
                         w.configure(bg=(self._nav_hover_bg() if entering else SIDEBAR))
 
-                for w in (header_row, left, mid, right):
-                    w.bind("<Button-1>", _toggle)
+                for w in (header_row, left, mid):
+                    w.bind("<Button-1>", _go_home if home_key else _toggle)
                     w.bind("<Enter>", lambda _e, f=_hdr_hover: f(True))
                     w.bind("<Leave>", lambda _e, f=_hdr_hover: f(False))
                     for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
                         w.bind(seq, _wheel)
+                right.bind("<Button-1>", _toggle)
+                right.bind("<Enter>", lambda _e, f=_hdr_hover: f(True))
+                right.bind("<Leave>", lambda _e, f=_hdr_hover: f(False))
+                for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                    right.bind(seq, _wheel)
                 continue
             if section_collapsed:
                 continue
@@ -3992,7 +4023,18 @@ class MainWindow:
                 lambda: self._promote_board_row(row["strategy_type"], row["filename"]), primary=True,
             ).pack(side="left")
         else:
-            self._button(btn_row, "\u25b6 RUN FULL PIPELINE", lambda: self._show_page("fullpipeline"), primary=True).pack(side="left")
+            # v9.7: same logic order as the web dashboard -- an untested
+            # strategy goes to the Full Pipeline, never Validate; a
+            # tested strategy with checks still missing goes to the
+            # pick-your-checks Validate page.
+            reqs = row["promotion"].get("requirements") or []
+            bt_req = next((r for r in reqs if r.get("key") == "backtested"), None)
+            if bt_req is not None and not bt_req.get("met"):
+                self._button(btn_row, "\u25b6 RUN FULL PIPELINE", lambda: self._show_page("fullpipeline"), primary=True).pack(side="left")
+            elif any(not r.get("met") for r in reqs):
+                self._button(btn_row, "OPEN VALIDATE (PICK CHECKS)", lambda: self._show_page("validate_simple"), primary=True).pack(side="left")
+            else:
+                self._button(btn_row, "\u25b6 RUN FULL PIPELINE", lambda: self._show_page("fullpipeline"), primary=True).pack(side="left")
 
     def _promote_board_row(self, strategy_type: str, filename: str):
         try:
@@ -18718,7 +18760,14 @@ class MainWindow:
             if r["promotion"]["can_promote"] and r["promotion"]["next_stage_title"]:
                 notes += f" \u00b7 ready to promote to {r['promotion']['next_stage_title']}"
             elif r["promotion"]["next_stage_title"]:
-                notes += f" \u00b7 next stage: {r['promotion']['next_stage_title']}"
+                # v9.7: name the honest next ACTION -- an untested row's
+                # next step is the Full Pipeline, never Validate.
+                reqs = r["promotion"].get("requirements") or []
+                bt_req = next((x for x in reqs if x.get("key") == "backtested"), None)
+                if bt_req is not None and not bt_req.get("met"):
+                    notes += " \u00b7 next step: \u25b6 run the Full Pipeline first (not tested yet)"
+                else:
+                    notes += f" \u00b7 next stage: {r['promotion']['next_stage_title']} \u2014 run the missing checks in Validate (pick checks)"
             if r["eval_pct"] is not None:
                 notes += f" \u00b7 Eval {r['eval_pct']:.0f}%"
             if r["oos_pct"] is not None:

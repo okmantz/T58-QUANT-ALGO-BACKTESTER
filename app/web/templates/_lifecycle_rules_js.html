@@ -1,0 +1,112 @@
+{# v9.7 prop-firm rules panel: renders the SELECTED preset's actual rules
+   (app/prop/presets.py, served to the page as prop_presets_json) into
+   #lc-rules-body in the right rail, and refreshes the one-line summary
+   (#lc-rules-line) under the pickers. One shared implementation for the
+   Test / Optimize / Validate / Champion pages. window.LC_PROP_PRESETS
+   (or the older PROP_PRESETS global on full_pipeline.html) must hold the
+   preset array. Verified = the preset carries rules_checked_on (only
+   Lucid 50k today); everything else is flagged not re-verified. #}
+<script>
+(function () {
+  var PRESETS = window.LC_PROP_PRESETS || window.PROP_PRESETS || [];
+  function esc(s) {
+    var d = document.createElement('div');
+    d.textContent = (s === null || s === undefined) ? '' : String(s);
+    return d.innerHTML;
+  }
+  function byKey(k) {
+    for (var i = 0; i < PRESETS.length; i++) if (PRESETS[i].key === k) return PRESETS[i];
+    return null;
+  }
+  function fmtPct(v) { return (v === null || v === undefined || v === '') ? '—' : (Math.round(Number(v) * 100) / 100) + '%'; }
+  function fmtMoney(v) { return (v === null || v === undefined || v === '') ? '—' : '$' + Number(v).toLocaleString(); }
+  function kv(k, v) { return '<div class="lc-kv"><span class="k">' + k + '</span><span class="v">' + v + '</span></div>'; }
+
+  window.lcRenderPropRules = function (p) {
+    var body = document.getElementById('lc-rules-body');
+    var line = document.getElementById('lc-rules-line');
+    if (line) {
+      line.textContent = p
+        ? ('Passing needs +' + fmtPct(p.evaluation_profit_target_pct) + ' before −' + fmtPct(p.max_drawdown_pct)
+           + ' · daily loss ' + fmtPct(p.daily_loss_limit_pct) + ' · ' + (p.drawdown_type || '') + ' drawdown'
+           + (p.max_contracts ? ' · max ' + p.max_contracts + ' mini-equiv' : ''))
+        : '';
+    }
+    if (!body) return;
+    if (!p) {
+      body.innerHTML = '<p class="lc-hint">Pick a prop firm and its actual rules land here — the same preset that hardens this run (prop account model, stop-to-budget sizing, intrabar replay).</p>';
+      return;
+    }
+    var acct = Number(p.account_size) || 0;
+    function pctDollars(v) {
+      if (v === null || v === undefined || v === '') return '—';
+      return fmtPct(v) + (acct ? ' (' + fmtMoney(acct * Number(v) / 100) + ')' : '');
+    }
+    var h = '<div style="font-weight:700; margin-bottom:6px; color:var(--lc-text);">' + esc(p.label || p.firm || p.key) + '</div>';
+    h += kv('Account size', fmtMoney(p.account_size));
+    h += kv('Profit target', pctDollars(p.evaluation_profit_target_pct));
+    h += kv('Daily loss limit', pctDollars(p.daily_loss_limit_pct));
+    h += kv('Max drawdown', pctDollars(p.max_drawdown_pct));
+    h += kv('Drawdown basis', esc(p.drawdown_type || '—') + ' · ' + esc(p.dd_basis || 'legacy') + ' basis · ' + esc(p.drawdown_check_mode || '—') + ' check');
+    h += kv('Payout threshold', pctDollars(p.payout_threshold_pct));
+    h += kv('Payout cap', (p.payout_cap_pct === null || p.payout_cap_pct === undefined) ? '—' : pctDollars(p.payout_cap_pct));
+    h += kv('Payout cycle', p.payout_frequency_days ? (p.payout_frequency_days + ' trading days') : '—');
+    h += kv('Consistency (eval)', (p.consistency_rule_pct === null || p.consistency_rule_pct === undefined) ? 'none' : fmtPct(p.consistency_rule_pct));
+    if (p.funded_consistency_rule_pct !== null && p.funded_consistency_rule_pct !== undefined) {
+      h += kv('Consistency (funded)', fmtPct(p.funded_consistency_rule_pct));
+    }
+    h += kv('Winning days to payout', p.winning_days_for_payout
+      ? (p.winning_days_for_payout + (p.min_winning_day_profit ? ' × ≥ ' + fmtMoney(p.min_winning_day_profit) + '/day' : ''))
+      : '—');
+    h += kv('Min trading days', (p.min_trading_days !== null && p.min_trading_days !== undefined) ? p.min_trading_days : '—');
+    if (p.max_contracts) h += kv('Max contracts', p.max_contracts + ' mini-equiv');
+    if (p.rules_checked_on) {
+      h += '<p style="margin-top:8px; font-size:12px;"><span class="lc-ok">✓ Rule fields page-checked ' + esc(p.rules_checked_on) + '</span></p>';
+    } else {
+      h += '<p style="margin-top:8px; font-size:12px;"><span class="lc-warn">⚠ Not re-verified</span> <span class="lc-hint">against the firm&rsquo;s current rules page — treat these numbers as approximate.</span></p>';
+    }
+    if (p.source_note) {
+      var note = String(p.source_note);
+      if (note.length > 260) note = note.slice(0, 260) + '…';
+      h += '<p class="lc-hint" style="margin-top:6px; line-height:1.5;">' + esc(note) + '</p>';
+    }
+    body.innerHTML = h;
+  };
+
+  window.lcPresetFromSelect = function (select) {
+    if (!select) return null;
+    var v = select.value || '';
+    if (!v) return null;
+    try { var parsed = JSON.parse(v); if (parsed && parsed.key) return parsed; } catch (e) {}
+    return byKey(v);
+  };
+
+  window.lcBindPropPreset = function (select) {
+    if (!select) return;
+    function update() {
+      window.lcRenderPropRules(window.lcPresetFromSelect(select));
+      var ev = document.createEvent('Event');
+      ev.initEvent('lc:preset', true, false);
+      select.dispatchEvent(ev);
+    }
+    select.addEventListener('change', update);
+    update();
+  };
+
+  // Checkbox cards: clicking the card toggles the real checkbox inside
+  // it; the green "selected" state always mirrors the checkbox itself.
+  window.lcSyncCheckCards = function (root) {
+    (root || document).querySelectorAll('.lc-checkcard').forEach(function (card) {
+      var input = card.querySelector('input.lc-check-input');
+      if (!input) return;
+      function sync() {
+        card.classList.toggle('selected', !!input.checked);
+        var box = card.querySelector('.cbox');
+        if (box) box.textContent = input.checked ? '✓' : '';
+      }
+      input.addEventListener('change', sync);
+      sync();
+    });
+  };
+})();
+</script>

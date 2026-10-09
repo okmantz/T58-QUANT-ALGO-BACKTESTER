@@ -150,10 +150,10 @@
           card.appendChild(a);
         } else if (action.kind === 'validate') {
           const a = document.createElement('a');
-          a.href = '/validate';
+          a.href = '/validate-simple';
           a.className = 'promote-btn';
           a.style.cssText = 'display:inline-block; text-decoration:none; padding:6px 12px;';
-          a.textContent = '\u2192 Open Validate hub';
+          a.textContent = '\u2192 Open Validate (pick checks)';
           card.appendChild(a);
         } else if (action.kind === 'deploy_checklist') {
           const a = document.createElement('a');

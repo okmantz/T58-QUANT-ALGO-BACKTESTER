@@ -12,57 +12,15 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
+{% include '_lifecycle_css.html' %}
 <style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
-  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
-  .card p.help { font-size: 12px; color: #888; margin: 0 0 10px; line-height: 1.5; }
-  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
-  input[type=text], input[type=number], select, textarea, input[type=password] {
-    width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light);
-    background: var(--panel-3); color: var(--text); font-size: 15px;
-  }
-  input:focus, select:focus, textarea:focus {
-    outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(53,224,176,0.15);
-  }
-  textarea { min-height: 140px; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
-  .row { display: flex; gap: 10px; }
-  .row > div { flex: 1; }
-  input[type=file] { width: 100%; color: #ccc; }
-  .tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
-  .tabs button {
-    flex: 1; min-width: 70px; padding: 10px 6px; border-radius: 8px; border: 1px solid var(--border-light);
-    background: var(--panel-3); color: #ccc; font-size: 13px;
-  }
-  .tabs button.active { background: var(--teal); color: #04120e; font-weight: 600; border-color: var(--teal); }
-  .submit-btn {
-    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: #04120e;
-    font-size: 16px; font-weight: 700; margin-top: 6px;
-    box-shadow: 0 0 22px rgba(53,224,176,0.35);
-  }
-  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
-  details summary { font-size: 13px; color: #999; cursor: pointer; }
-  .ai-note { font-size: 12px; color: #888; margin: 0 0 10px; line-height: 1.5; }
-  .checkbox-row { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; }
-  .checkbox-row input { width: auto; }
-  .checkbox-row label { margin: 0; }
-  .batch-strategy-list { max-height: 260px; overflow-y: auto; border: 1px solid #2a2f3a; border-radius: 8px; padding: 8px 12px; }
-  .batch-item { font-size: 13px; }
-  /* Batch/schedule run buttons previously used near-black inline colors
-     (#1b2a1b / #1b1b2a) that were nearly invisible against the dark
-     theme -- easy to miss entirely and click the wrong button. Now
-     bright and clearly distinct from the primary teal Single Run button
-     and from each other, with the same glow treatment so all three read
-     as equally "real" buttons. */
-  .submit-btn.batch-run {
-    border-color: var(--lime, #7ee787); background: var(--lime, #7ee787); color: #04120e;
-    box-shadow: 0 0 22px rgba(126,231,135,0.35);
-  }
-  .submit-btn.schedule-run {
-    border-color: var(--amber, #f5c451); background: var(--amber, #f5c451); color: #241a00;
-    box-shadow: 0 0 22px rgba(245,196,81,0.35);
-  }
+  .lc-scope .checkbox-row { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; font-size: 13px; }
+  .lc-scope .checkbox-row input { width: auto; accent-color: var(--lc-acc); }
+  .lc-scope .batch-strategy-list { max-height: 260px; overflow-y: auto; border: 1px solid var(--lc-border2); border-radius: 8px; padding: 8px 12px; }
+  .lc-scope .batch-item { font-size: 13px; }
+  .lc-btn.batch { border-color: #7ee787; color: #7ee787; }
+  .lc-btn.schedule { border-color: #f5c451; color: #f5c451; }
+  .lc-subhead { font-size: 12px; letter-spacing: .8px; text-transform: uppercase; color: var(--lc-muted); margin: 16px 0 6px; font-weight: 700; }
 </style>
 </head>
 <body>
@@ -70,13 +28,16 @@
 <div class="t58-shell">
 {% include '_sidebar.html' %}
 <div class="t58-main">
-<div class="t58-page-header">
-  <h1>Full pipeline</h1>
-  <p>The "run everything" button: baseline &rarr; walk-forward-aware GA search &rarr; re-validated final Monte Carlo &rarr; out-of-sample fold check &rarr; holdout check &rarr; a READY / MARGINAL / NOT READY verdict. Slowest thing this app runs -- expect it to take a while on a full dataset.</p>
-</div>
+<div class="lc-scope"><div class="lc-wrap">
+
+{% set lc_step = 'test' %}
+{% include '_lifecycle_stepper.html' %}
+<div class="lc-crumb">Test &rsaquo; <b>Full Pipeline</b></div>
+<h1 class="lc-title">Test it properly</h1>
+<p class="lc-sub">The full check: baseline &rarr; preflight &rarr; walk-forward-aware search &rarr; re-validated Monte Carlo &rarr; out-of-sample &rarr; holdout &rarr; a READY / MARGINAL / NOT READY verdict. This is the only run allowed to call a strategy READY. Slowest thing this app runs — expect it to take a while on a full dataset.</p>
 
 {% if error %}
-<div class="error">{{ error }}</div>
+<div class="lc-error">{{ error }}</div>
 {% endif %}
 
 {% if alpaca_notice %}
@@ -87,230 +48,265 @@
 {% include "_alpaca_fetch_section.html" %}
 
 <form method="post" action="/full-pipeline/start" enctype="multipart/form-data">
-{% include "_accuracy_fields.html" %}
+<div class="lc-run-grid">
+<div class="lc-run-main">
 
-  <div class="card">
-    <h2>1. Market Data</h2>
-    {% if stored_datasets %}
-    <label>Use a previously stored dataset</label>
-    <select name="existing_dataset">
-      <option value="">— none, I'm uploading new file(s) below —</option>
-      {% for g in dataset_groups %}
-      <optgroup label="{{ g.instrument }}">
-        {% for file in g.files %}
-        <option value="{{ file.full_name }}">{{ file.name }} ({{ (file.size_bytes / 1024) | round(1) }} KB){{ ' — empty' if file.empty else '' }}</option>
-        {% endfor %}
-      </optgroup>
-      {% endfor %}
-    </select>
-    {% endif %}
-    <label>Or upload new CSV file(s) (timestamp, open, high, low, close, volume)</label>
-    <input type="file" name="csv_file" accept=".csv,.tsv,.txt,.parquet,.zip,.7z" multiple>
-  </div>
-
-  <div class="card">
-    <h2>2. Strategy</h2>
-    <div class="tabs" id="strategy-tabs">
-      <button type="button" data-mode="manual" class="active">Manual</button>
-      <button type="button" data-mode="python">Python</button>
-      <button type="button" data-mode="pinescript">PineScript</button>
-      <button type="button" data-mode="mql5">MQL5</button>
-    </div>
-    <input type="hidden" name="strategy_mode" id="strategy_mode" value="manual">
-
-    <div id="manual-fields">
-      <div class="row">
-        <div><label>SMA fast</label><input type="number" name="sma_fast" value="20"></div>
-        <div><label>SMA slow</label><input type="number" name="sma_slow" value="50"></div>
+  <div class="lc-card">
+    <div style="margin-bottom:14px;">
+      <div class="lc-tabs" id="strategy-tabs">
+        <button type="button" data-mode="manual" class="lc-tab-btn active">Manual</button>
+        <button type="button" data-mode="python" class="lc-tab-btn">Python</button>
+        <button type="button" data-mode="pinescript" class="lc-tab-btn">PineScript</button>
+        <button type="button" data-mode="mql5" class="lc-tab-btn">MQL5</button>
       </div>
-      <div class="row">
-        <div><label>Stop loss (pips)</label><input type="number" name="sl_pips" value="20"></div>
-        <div><label>Take profit (pips)</label><input type="number" name="tp_pips" value="40"></div>
-      </div>
+      <input type="hidden" name="strategy_mode" id="strategy_mode" value="manual">
     </div>
-
-    <div id="code-fields" style="display:none;">
-      <label>Search the library (name / description / market)</label>
-      <input type="text" id="strategy_search_input" placeholder="e.g. fvg, XAUUSD..." oninput="onLibraryFiltersChanged()">
-      <div class="row">
-        <div>
-          <label>Browse market</label>
-          <select id="strategy_filter_market" onchange="onLibraryFiltersChanged()"><option value="">All markets</option></select>
+    <div class="lc-row">
+      <div class="lc-col" style="min-width:260px;">
+        <label class="flabel">Strategy</label>
+        <div id="manual-fields">
+          <div class="lc-row">
+            <div class="lc-col" style="min-width:90px;"><label class="flabel">SMA fast</label><input type="number" name="sma_fast" value="20"></div>
+            <div class="lc-col" style="min-width:90px;"><label class="flabel">SMA slow</label><input type="number" name="sma_slow" value="50"></div>
+          </div>
+          <div class="lc-row">
+            <div class="lc-col" style="min-width:90px;"><label class="flabel">Stop loss (pips)</label><input type="number" name="sl_pips" value="20"></div>
+            <div class="lc-col" style="min-width:90px;"><label class="flabel">Take profit (pips)</label><input type="number" name="tp_pips" value="40"></div>
+          </div>
         </div>
-        <div>
-          <label>Browse tag</label>
-          <select id="strategy_filter_tag" onchange="onLibraryFiltersChanged()"><option value="">All tags</option></select>
-        </div>
-        <div>
-          <label>Browse status</label>
-          <select id="strategy_filter_status" onchange="onLibraryFiltersChanged()">
-            <option value="">All statuses</option>
-            {% for s in strategy_statuses|default([]) %}
-            <option value="{{ s }}">{{ s }}</option>
-            {% endfor %}
+        <div id="code-fields" style="display:none;">
+          <label class="flabel">Search the library (name / description / market)</label>
+          <input type="text" id="strategy_search_input" placeholder="e.g. fvg, XAUUSD..." oninput="onLibraryFiltersChanged()">
+          <div class="lc-row">
+            <div class="lc-col" style="min-width:100px;">
+              <label class="flabel">Browse market</label>
+              <select id="strategy_filter_market" onchange="onLibraryFiltersChanged()"><option value="">All markets</option></select>
+            </div>
+            <div class="lc-col" style="min-width:100px;">
+              <label class="flabel">Browse tag</label>
+              <select id="strategy_filter_tag" onchange="onLibraryFiltersChanged()"><option value="">All tags</option></select>
+            </div>
+            <div class="lc-col" style="min-width:100px;">
+              <label class="flabel">Browse status</label>
+              <select id="strategy_filter_status" onchange="onLibraryFiltersChanged()">
+                <option value="">All statuses</option>
+                {% for s in strategy_statuses|default([]) %}
+                <option value="{{ s }}">{{ s }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+          <label class="flabel">Load a saved strategy from the library</label>
+          <select id="existing_strategy_select" onchange="loadFromLibrary()">
+            <option value="">— none, paste or upload below —</option>
           </select>
+          <a href="#" onclick="fpViewStrategyCode(); return false;" style="font-size:12px;color:var(--lc-acc);display:inline-block;margin-top:6px;">View code of selected strategy</a>
+          <p class="lc-hint" style="margin-top:6px;" id="library-count-note"></p>
+
+          <label class="flabel" style="margin-top:14px;">Or upload a strategy file (from this computer or your phone)</label>
+          <input type="file" id="strategy_file_input" name="strategy_file" accept=".py,.pine,.mq5">
+
+          <label class="flabel" style="margin-top:10px;">Or paste strategy source</label>
+          <textarea class="code" name="strategy_code" id="strategy_code" placeholder="Paste your Python / PineScript / MQL5 strategy here"></textarea>
         </div>
       </div>
-      <label>Load a saved strategy from the library</label>
-      <select id="existing_strategy_select" onchange="loadFromLibrary()">
-        <option value="">— none, paste or upload below —</option>
-      </select>
-      <a href="#" onclick="fpViewStrategyCode(); return false;" style="font-size:12px;color:var(--teal);display:inline-block;margin-top:6px;">View code of selected strategy</a>
-      <p style="font-size:12px;color:#888;margin-top:6px;" id="library-count-note"></p>
-
-      <label style="margin-top:14px;">Or upload a strategy file (from this computer or your phone)</label>
-      <input type="file" id="strategy_file_input" name="strategy_file" accept=".py,.pine,.mq5">
-
-      <label>Or paste strategy source</label>
-      <textarea name="strategy_code" id="strategy_code" placeholder="Paste your Python / PineScript / MQL5 strategy here"></textarea>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>3. Risk &amp; prop rules</h2>
-    <div class="row">
-      <div>
-        <label>Prop firm preset (optional shortcut)</label>
-        <select id="fp_prop_preset_select" onchange="fpApplyPropPreset(this.value)">
-          <option value="">-- or enter rules manually below --</option>
+      <div class="lc-col" style="min-width:220px;">
+        <label class="flabel">Market data</label>
+        {% if stored_datasets %}
+        <select name="existing_dataset" id="lc-dataset-pick">
+          <option value="">— none, I'm uploading new file(s) below —</option>
+          {% for g in dataset_groups %}
+          <optgroup label="{{ g.instrument }}">
+            {% for file in g.files %}
+            <option value="{{ file.full_name }}">{{ file.name }} ({{ (file.size_bytes / 1024) | round(1) }} KB){{ ' — empty' if file.empty else '' }}</option>
+            {% endfor %}
+          </optgroup>
+          {% endfor %}
         </select>
+        {% endif %}
+        <label class="flabel" style="margin-top:10px;">Or upload new CSV file(s)</label>
+        <input type="file" name="csv_file" accept=".csv,.tsv,.txt,.parquet,.zip,.7z" multiple>
+        <div class="lc-hint" style="margin-top:5px;">timestamp, open, high, low, close, volume</div>
       </div>
-    </div>
-    <div class="row">
-      <div><label>Initial balance</label><input type="number" name="initial_balance" id="fp_initial_balance" value="100000"></div>
-      <div><label>Account size (prop rules)</label><input type="number" name="account_size" id="fp_account_size" value="100000"></div>
-    </div>
-    <div class="row">
-      <div><label>Risk mode</label>
-        <select name="risk_mode"><option value="percent">% of balance</option><option value="fixed">Fixed lot</option></select>
-      </div>
-      <div><label>Risk value</label><input type="number" step="0.1" name="risk_value" value="1.0"></div>
-    </div>
-    <div class="row">
-      <div><label>Profit target %</label><input type="number" step="0.1" name="profit_target" value="8"></div>
-      <div><label>Daily loss limit %</label><input type="number" step="0.1" name="daily_loss" value="5"></div>
-    </div>
-    <div class="row">
-      <div><label>Max drawdown %</label><input type="number" step="0.1" name="max_dd" value="10"></div>
-      <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" id="fp_pip_size_field" value="0.0001"></div>
-    </div>
-    <button type="button" onclick="fpDetectPipSize()" style="margin-top:6px;background:none;border:1px solid var(--border-light);color:var(--teal);padding:9px 12px;border-radius:8px;font-size:13px;width:100%;">Detect pip size from data</button>
-    <p id="fp_pip_detect_status" style="font-size:12px;margin-top:6px;"></p>
-    <div class="row" style="margin-top:8px;">
-      <div><label>Or pick a known instrument (auto-fills pip size + $/point)</label>
+      <div class="lc-col" style="min-width:220px;">
+        <label class="flabel">Prop firm</label>
+        <select id="fp_prop_preset_select" onchange="fpApplyPropPreset(this.value)">
+          <option value="">-- or enter rules manually in Advanced --</option>
+        </select>
+        <div class="lc-hint" style="margin-top:5px;">Picking one fills the rule fields in Advanced and shows the firm's actual rules in the rail &rarr;</div>
+        <label class="flabel" style="margin-top:12px;">Or pick a known instrument (auto-fills pip size + $/point)</label>
         <select id="fp_instrument_select" onchange="t58ApplyInstrumentSpec({selectEl:this, pipFieldId:'fp_pip_size_field', contractFieldId:'fp_contract_size_field', commissionFieldId:'fp_commission_field', statusId:'fp_pip_detect_status'})">
           <option value="">(none -- set manually)</option>
         </select>
+        <script>document.addEventListener('DOMContentLoaded', function () { t58PopulateInstrumentPicker('fp_instrument_select'); });</script>
       </div>
-      <div><label>Contract $/point (blank = not lot-rounded)</label><input type="number" step="0.01" name="contract_size" id="fp_contract_size_field" value=""></div>
     </div>
-    <div class="row" style="margin-top:8px;">
-      <div><label>Commission per trade ($)</label><input type="number" step="0.01" name="commission" id="fp_commission_field" value="0"></div>
-    </div>
-    <script>document.addEventListener('DOMContentLoaded', function () { t58PopulateInstrumentPicker('fp_instrument_select'); });</script>
+    <div class="lc-rules-line" id="lc-rules-line"></div>
   </div>
 
-  <div class="card">
-    <h2>4. Pipeline settings</h2>
-    <div class="row">
-      <div><label>Walk-forward folds</label><input type="number" name="n_folds" value="4"></div>
-      <div><label>Window mode</label>
-        <select name="window_mode"><option value="rolling">Rolling</option><option value="anchored">Anchored</option></select>
+  <div class="lc-summary-band">
+    <div id="lc-will-run">Will run <b>1 strategy</b> on your picked data against the <b>picked prop-firm rules</b> — baseline &rarr; search &rarr; Monte Carlo &rarr; holdout &rarr; verdict.</div>
+    <div class="est">Slowest run in the app · results land on the job page and in Reports</div>
+  </div>
+
+  <div style="display:flex; gap:10px; margin-bottom:14px; flex-wrap:wrap;">
+    <button class="lc-btn big" type="submit">&#9654; RUN FULL PIPELINE</button>
+    <button class="lc-btn big ghost batch" type="submit" formaction="/full-pipeline/start-batch">Run Batch (strategies ticked in Advanced)</button>
+    <button class="lc-btn big ghost schedule" type="submit" formaction="/full-pipeline/schedule-batch">Schedule Batch</button>
+  </div>
+
+  <details class="lc-adv">
+    <summary>Advanced options <span class="lc-hint">defaults are sensible — skip this unless you know why</span></summary>
+    <div class="adv-body">
+      {% include "_accuracy_fields.html" %}
+
+      <div class="lc-subhead">Risk &amp; prop rules</div>
+      <div class="lc-adv-grid">
+        <div class="lc-adv-field"><label class="flabel">Initial balance</label><input type="number" name="initial_balance" id="fp_initial_balance" value="100000"></div>
+        <div class="lc-adv-field"><label class="flabel">Account size (prop rules)</label><input type="number" name="account_size" id="fp_account_size" value="100000"></div>
+        <div class="lc-adv-field"><label class="flabel">Risk mode</label>
+          <select name="risk_mode"><option value="percent">% of balance</option><option value="fixed">Fixed lot</option></select></div>
+        <div class="lc-adv-field"><label class="flabel">Risk value</label><input type="number" step="0.1" name="risk_value" value="1.0"></div>
+        <div class="lc-adv-field"><label class="flabel">Profit target %</label><input type="number" step="0.1" name="profit_target" value="8"></div>
+        <div class="lc-adv-field"><label class="flabel">Daily loss limit %</label><input type="number" step="0.1" name="daily_loss" value="5"></div>
+        <div class="lc-adv-field"><label class="flabel">Max drawdown %</label><input type="number" step="0.1" name="max_dd" value="10"></div>
+        <div class="lc-adv-field"><label class="flabel">Pip size</label><input type="number" step="0.0001" name="pip_size" id="fp_pip_size_field" value="0.0001"></div>
+        <div class="lc-adv-field"><label class="flabel">Contract $/point (blank = not lot-rounded)</label><input type="number" step="0.01" name="contract_size" id="fp_contract_size_field" value=""></div>
+        <div class="lc-adv-field"><label class="flabel">Commission per trade ($)</label><input type="number" step="0.01" name="commission" id="fp_commission_field" value="0"></div>
       </div>
-    </div>
-    <label>Fitness metric</label>
-    <select name="fitness_metric">
-      {% for key, label in fitness_metrics.items() %}
-      <option value="{{ key }}" {{ 'selected' if key == 'eval_pass_probability' else '' }}>{{ label }}</option>
-      {% endfor %}
-    </select>
-    <p style="font-size:12px;color:#888;margin-top:4px;">Not trading a prop-firm evaluation? Pick "Long-Term Net Profit" -- it scores candidates purely on total P&amp;L and ignores prop-firm drawdown/payout rules entirely.</p>
-    <label>Optimizer mode</label>
-    <select name="optimizer_mode">
-      {% for key, label in optimizer_modes.items() %}
-      <option value="{{ key }}" {{ 'selected' if key == 'genetic' else '' }}>{{ label }}</option>
-      {% endfor %}
-    </select>
-    <p style="font-size:12px;color:#888;margin-top:4px;">All three run the exact same chained out-of-sample scoring per candidate -- only how the next configuration to try is chosen differs. TPE/CMA-ES need the optuna / cma packages on the server; you'll get a clear error here if one isn't installed.</p>
-    <details style="margin-top:10px;" open>
-      <summary>GA search settings</summary>
-      <div class="row">
-        <div><label>GA population</label><input type="number" name="ga_population" value="12"></div>
-        <div><label>GA generations</label><input type="number" name="ga_generations" value="6"></div>
+      <button type="button" class="lc-btn ghost small" onclick="fpDetectPipSize()" style="margin-top:8px;">Detect pip size from data</button>
+      <p class="lc-hint" id="fp_pip_detect_status" style="margin-top:6px;"></p>
+
+      <div class="lc-subhead">Pipeline settings</div>
+      <div class="lc-adv-grid">
+        <div class="lc-adv-field"><label class="flabel">Walk-forward folds</label><input type="number" name="n_folds" value="4"></div>
+        <div class="lc-adv-field"><label class="flabel">Window mode</label>
+          <select name="window_mode"><option value="rolling">Rolling</option><option value="anchored">Anchored</option></select></div>
+        <div class="lc-adv-field"><label class="flabel">Fitness metric</label>
+          <select name="fitness_metric">
+            {% for key, label in fitness_metrics.items() %}
+            <option value="{{ key }}" {{ 'selected' if key == 'eval_pass_probability' else '' }}>{{ label }}</option>
+            {% endfor %}
+          </select>
+          <div class="why">Not trading a prop-firm evaluation? Pick "Long-Term Net Profit" — it scores candidates purely on total P&amp;L and ignores prop-firm drawdown/payout rules entirely.</div></div>
+        <div class="lc-adv-field"><label class="flabel">Optimizer mode</label>
+          <select name="optimizer_mode">
+            {% for key, label in optimizer_modes.items() %}
+            <option value="{{ key }}" {{ 'selected' if key == 'genetic' else '' }}>{{ label }}</option>
+            {% endfor %}
+          </select>
+          <div class="why">All three run the exact same chained out-of-sample scoring per candidate — only how the next configuration to try is chosen differs. TPE/CMA-ES need the optuna / cma packages on the server.</div></div>
+        <div class="lc-adv-field"><label class="flabel">GA population</label><input type="number" name="ga_population" value="12"></div>
+        <div class="lc-adv-field"><label class="flabel">GA generations</label><input type="number" name="ga_generations" value="6"></div>
+        <div class="lc-adv-field"><label class="flabel">Search-phase MC sims</label><input type="number" name="ga_search_mc_sims" value="200"></div>
+        <div class="lc-adv-field"><label class="flabel">Final MC sims</label><input type="number" name="final_mc_sims" value="10000"></div>
+        <div class="lc-adv-field"><label class="flabel">Baseline MC sims (diagnostic only)</label><input type="number" name="baseline_mc_sims" value="2000"></div>
+        <div class="lc-adv-field"><label class="flabel">Holdout fraction</label><input type="number" step="0.05" name="holdout_frac" value="0.2" id="lc-holdout-frac"></div>
+        <div class="lc-adv-field"><label class="flabel">OOS check folds</label><input type="number" name="oos_check_folds" value="4"></div>
+        <div class="lc-adv-field"><label class="flabel">Random seed</label><input type="number" name="random_seed" value="42"></div>
+        <div class="lc-adv-field"><label class="flabel">Library status override (blank = auto-pick from verdict)</label>
+          <select name="library_status">
+            <option value="">— auto (from verdict) —</option>
+            {% for s in strategy_statuses|default([]) %}
+            <option value="{{ s }}">{{ s }}</option>
+            {% endfor %}
+          </select></div>
+        <div class="lc-adv-field"><label class="flabel">Notify me when done (optional)</label>
+          <input type="url" name="notify_webhook_url" placeholder="Discord/Slack/Zapier webhook URL — leave blank for none">
+          <div class="why">Posts one message here the moment this run (single or batch) finishes — useful for an overnight Full Pipeline batch you don't want to babysit.</div></div>
+        <div class="lc-adv-field"><label class="flabel">Timeframes to test (optional)</label>
+          <input type="text" name="expand_timeframes" placeholder="e.g. 5m, 15m, 30m, 1h, 4h">
+          <div class="why">Leave blank to run once on the loaded data's own bar size. Each listed timeframe runs the ENTIRE pipeline, resampled from the loaded file. Not used by the batch buttons.</div></div>
+        <div class="lc-adv-field"><label class="flabel">Schedule batch start (24h HH:MM, local)</label>
+          <input type="text" name="schedule_start_at" placeholder="e.g. 23:30" pattern="[0-2][0-9]:[0-5][0-9]">
+          <div class="why">Only for the Schedule Batch button: validates now, starts at this clock time (today, or tomorrow if it's already passed).</div></div>
       </div>
-      <div class="row">
-        <div><label>Search-phase MC sims</label><input type="number" name="ga_search_mc_sims" value="200"></div>
-        <div><label>Final MC sims</label><input type="number" name="final_mc_sims" value="10000"></div>
-      </div>
-      <label class="checkbox-row" style="background:rgba(80,160,255,0.08);border:1px solid rgba(80,160,255,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="skip_optimization">Lock parameters -- skip the GA search entirely and backtest exactly what's supplied (use this to compare against another tool/platform on the identical rule, with no re-optimization)</label>
+      <label class="checkbox-row"><input type="checkbox" name="skip_optimization">Lock parameters -- skip the GA search entirely and backtest exactly what's supplied (use this to compare against another tool/platform on the identical rule, with no re-optimization)</label>
       <label class="checkbox-row"><input type="checkbox" name="parallel_search" checked>Parallelize GA search across CPU cores</label>
-      <label class="checkbox-row" style="background:rgba(255,200,80,0.08);border:1px solid rgba(255,200,80,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="adaptive_risk_enabled">Enable adaptive, limit-aware position sizing (throttles risk as the account nears its daily-loss/max-drawdown limits)</label>
-      <label class="checkbox-row" style="background:rgba(120,200,120,0.08);border:1px solid rgba(120,200,120,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="reset_on_breach" checked>Reset-on-breach: score on the basis that a blown account gets a fresh eval and keeps going, not a dead end (recommended)</label>
-      <p style="font-size:12px;color:#888;margin-top:4px;">Off by default. If you ran Quick Optimize on this strategy with this ON, leave it ON here too -- comparing a Quick Optimize result with this enabled against a Full Pipeline run with it OFF (or vice versa) is not an apples-to-apples comparison and can show wildly different pass/fail outcomes for the identical strategy and data.</p>
-    </details>
-    <details style="margin-top:10px;">
-      <summary>Validation &amp; library settings</summary>
-      <div class="row">
-        <div><label>Baseline MC sims (diagnostic only)</label><input type="number" name="baseline_mc_sims" value="2000"></div>
-        <div><label>Holdout fraction</label><input type="number" step="0.05" name="holdout_frac" value="0.2"></div>
-      </div>
-      <div class="row">
-        <div><label>OOS check folds</label><input type="number" name="oos_check_folds" value="4"></div>
-        <div><label>Random seed</label><input type="number" name="random_seed" value="42"></div>
-      </div>
+      <label class="checkbox-row"><input type="checkbox" name="adaptive_risk_enabled">Enable adaptive, limit-aware position sizing (throttles risk as the account nears its daily-loss/max-drawdown limits)</label>
+      <label class="checkbox-row"><input type="checkbox" name="reset_on_breach" checked>Reset-on-breach: score on the basis that a blown account gets a fresh eval and keeps going, not a dead end (recommended)</label>
+      <p class="lc-field-note">If you ran Quick Optimize on this strategy with adaptive sizing ON, leave it ON here too — comparing a Quick Optimize result with this enabled against a Full Pipeline run with it OFF (or vice versa) is not an apples-to-apples comparison.</p>
       <label class="checkbox-row"><input type="checkbox" name="save_to_library" checked>Save the winning strategy to the Strategy Library</label>
-      <label class="checkbox-row" style="background:rgba(90,220,180,0.08);border:1px solid rgba(90,220,180,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="replace_existing">Replace the original strategy in place instead of saving a new copy (only applies when you started from an existing Strategy Library entry above -- its previous version is archived, never deleted, and its Test/Optimize/Validate/Champion progress carries forward onto the same file instead of resetting)</label>
-      <label>Library status override (blank = auto-pick from verdict)</label>
-      <select name="library_status">
-        <option value="">— auto (from verdict) —</option>
-        {% for s in strategy_statuses|default([]) %}
-        <option value="{{ s }}">{{ s }}</option>
-        {% endfor %}
-      </select>
-      <label>Notify me when done (optional)</label>
-      <input type="url" name="notify_webhook_url" placeholder="Discord/Slack/Zapier webhook URL — leave blank for none">
-      <p class="help" style="margin-top:4px;">Posts one message here the moment this run (single or batch) finishes — useful for an overnight Full Pipeline batch you don't want to babysit. Works with any Discord/Slack "Incoming Webhook" URL, or your own endpoint.</p>
-    </details>
-  </div>
+      <label class="checkbox-row"><input type="checkbox" name="replace_existing">Replace the original strategy in place instead of saving a new copy (only applies when you started from an existing Strategy Library entry above — its previous version is archived, never deleted, and its Test/Optimize/Validate/Champion progress carries forward onto the same file instead of resetting)</label>
 
-  <div class="card">
-    <h2>5. AI Assist (optional, off by default)</h2>
-    <p class="ai-note">
-      When enabled, the GA search asks a local Ollama model for candidate parameter values once per generation and seeds them into the population alongside the normal random/bred candidates. Every suggestion still goes through the exact same backtest/prop-sim/Monte Carlo evaluation as any other candidate -- it proposes numbers for parameters that already exist, never code. Needs Ollama reachable at the host below from wherever this server is running (works over your home/office LAN -- point it at the IP of whatever machine is running Ollama).
-    </p>
-    <label class="checkbox-row"><input type="checkbox" name="ai_enabled" id="ai_enabled" {{ 'checked' if ai_enabled else '' }}>Enable AI Assist for this run</label>
-    <div class="row">
-      <div><label>Ollama host</label><input type="text" name="ai_host" value="{{ ai_host }}"></div>
-      <div><label>Model</label><input type="text" name="ai_model" value="{{ ai_model }}"></div>
+      <div class="lc-subhead">Or run on multiple saved strategies (batch)</div>
+      <p class="lc-field-note">Runs the SAME full pipeline against every strategy checked below, one after another — the web equivalent of the desktop app's "RUN FULL PIPELINE (BATCH)" button. Uses the dataset and settings configured here; the single strategy picked above is ignored when you click the batch button.</p>
+      <div id="batch-strategy-list" class="batch-strategy-list"></div>
+
+      <div class="lc-subhead">AI Assist (optional, off by default)</div>
+      <p class="lc-field-note">When enabled, the GA search asks a local Ollama model for candidate parameter values once per generation and seeds them into the population alongside the normal random/bred candidates. Every suggestion still goes through the exact same backtest/prop-sim/Monte Carlo evaluation as any other candidate — it proposes numbers for parameters that already exist, never code. Needs Ollama reachable at the host below from wherever this server is running.</p>
+      <label class="checkbox-row"><input type="checkbox" name="ai_enabled" id="ai_enabled" {{ 'checked' if ai_enabled else '' }}>Enable AI Assist for this run</label>
+      <div class="lc-adv-grid">
+        <div class="lc-adv-field"><label class="flabel">Ollama host</label><input type="text" name="ai_host" value="{{ ai_host }}"></div>
+        <div class="lc-adv-field"><label class="flabel">Model</label><input type="text" name="ai_model" value="{{ ai_model }}"></div>
+      </div>
     </div>
+  </details>
+
+  <details class="lc-adv">
+    <summary>Previous runs <span class="lc-hint">most recent first, from every tool in this app</span></summary>
+    <div class="adv-body">
+      {% if recent_runs %}
+      {% for run in recent_runs %}
+      <div class="lc-prev-row">
+        <span>{{ run.timestamp[:10] }} · {{ run.strategy_name }} <span class="lc-hint">{{ run.instrument }} · {{ run.timeframe }}</span></span>
+        <span style="display:flex; gap:8px; align-items:center;">
+          <span class="lc-pill {{ 'green' if run.net_profit >= 0 else 'red' }}">{{ run.trades }} trades · ${{ '{:,.0f}'.format(run.net_profit) }}</span>
+          {% if run.report_url %}<a class="lc-btn ghost small" href="{{ run.report_url }}" target="_blank">Open</a>{% endif %}
+        </span>
+      </div>
+      {% endfor %}
+      {% else %}
+      <p class="lc-hint" style="padding-top:8px;">No runs recorded yet — your first Full Pipeline will start this list.</p>
+      {% endif %}
+    </div>
+  </details>
+
+  <div class="lc-card">
+    <h3>Run log — live</h3>
+    <div class="lc-logbox"><div><span class="lt">--:--:--</span>  Press RUN FULL PIPELINE and the log streams live on the job page. No silent screens.</div></div>
   </div>
 
-  <div class="card">
-    <h2>6. Or run on multiple saved strategies (batch)</h2>
-    <p class="ai-note">
-      Runs the SAME full 7-step pipeline (baseline, walk-forward-aware GA search, re-validated Monte
-      Carlo, out-of-sample check, holdout check, ICIR gate, report) against every strategy checked
-      below, one after another -- the web equivalent of the desktop app's "RUN FULL PIPELINE (BATCH)"
-      button. Uses the dataset and settings configured above; the single strategy picked in section 1
-      above is ignored when you click the batch button below.
-    </p>
-    <div id="batch-strategy-list" class="batch-strategy-list"></div>
-    <label style="margin-top:14px;">Or schedule this batch to start later (24h HH:MM, local time)</label>
-    <input type="text" name="schedule_start_at" placeholder="e.g. 23:30" pattern="[0-2][0-9]:[0-5][0-9]" style="max-width:140px;">
-    <p class="help" style="margin-top:4px;">Validates the dataset and selected strategies right now, then waits until this clock time (today, or tomorrow if it's already passed) before actually starting -- so you can queue an overnight batch without staying up for it. Runs today if the time hasn't passed yet, otherwise tomorrow.</p>
+</div>
+<div class="lc-run-side">
+  <div class="lc-side-card">
+    <h4>&#9654; Run progress</h4>
+    <div style="display:flex; align-items:baseline; gap:10px;"><span class="lc-pct-big">0%</span><span class="lc-hint">not started</span></div>
+    <div class="lc-progress" style="margin:8px 0;"><div></div></div>
+    <div class="lc-kv"><span class="k">Waiting for RUN</span><span class="v lc-ok">live</span></div>
   </div>
 
-  <div class="card">
-    <h2>Timeframes to test (optional)</h2>
-    <p style="font-size:12px;color:#888;">Leave blank to run once on the loaded data's own bar size. Enter e.g. <b>5m, 15m, 30m, 1h, 4h</b> and the ENTIRE pipeline (baseline, GA, holdout, verdict) runs once per timeframe, resampled from the loaded file even if it is 1-minute data. The best verdict (then T58 score, then eval-pass %) becomes the headline result; every timeframe keeps its own report. Not used by the batch buttons. Runtime scales with the number of timeframes.</p>
-    <input type="text" name="expand_timeframes" placeholder="e.g. 5m, 15m, 30m, 1h, 4h">
+  <div class="lc-side-card">
+    <h4>&#127963; Prop firm rules</h4>
+    <div id="lc-rules-body"></div>
   </div>
 
-  <button class="submit-btn" type="submit">Run Full Pipeline</button>
-  <button class="submit-btn batch-run" type="submit" formaction="/full-pipeline/start-batch" style="margin-top:10px;">Run Full Pipeline (Batch — Selected Above)</button>
-  <button class="submit-btn schedule-run" type="submit" formaction="/full-pipeline/schedule-batch" style="margin-top:10px;">Schedule Batch Run (at time above)</button>
+  <div class="lc-side-card">
+    <h4>&#128203; Run checklist</h4>
+    <div class="lc-kv"><span class="k">Strategy</span><span class="v" id="lc-ck-strategy">pick above</span></div>
+    <div class="lc-kv"><span class="k">Market data</span><span class="v" id="lc-ck-dataset">pick above</span></div>
+    <div class="lc-kv"><span class="k">Prop firm</span><span class="v" id="lc-ck-firm">pick above</span></div>
+    <div class="lc-kv"><span class="k">Sizing fits budget</span><span class="v">fit-stop cap · floor in Advanced</span></div>
+    <div class="lc-kv"><span class="k">Holdout</span><span class="v">last 20% locked (Advanced)</span></div>
+    <div class="lc-kv"><span class="k">READY bar</span><span class="v">&ge;70% attempts, &ge;100 trades</span></div>
+  </div>
+
+  {% include '_lifecycle_how.html' %}
+
+  <div class="lc-side-card">
+    <h4>&#129517; What happens next</h4>
+    <p class="lc-hint" style="font-size:12.5px; color:var(--lc-text);">READY &rarr; moves to <b>Champion</b>.<br>NOT READY &rarr; one button on the job page carries these exact settings into <b>Optimize</b>.<br>Blocked preflight &rarr; it says why in dollars, with one-click fixes, right there.</p>
+  </div>
+
+  <div class="lc-side-card">
+    <h4>&#9888; Watch-outs</h4>
+    <p class="lc-hint" style="font-size:12.5px;">Lucid is the only preset re-verified against the firm&rsquo;s own page (Oct 7). Other presets carry a “not re-verified” flag in the rules panel above. Continuous-futures data is roll-adjusted at import; single contracts are untouched.</p>
+  </div>
+</div>
+</div>
 </form>
 
+</div></div>
 </div>
 </div>
 
@@ -351,11 +347,6 @@
           statusEl.textContent = data.error || "Couldn't detect pip size.";
           return;
         }
-        // v7 (2026-10-05, worker B, fix #7): the endpoint now also returns
-        // the guessed symbol + spec contract/commission, and -- when the
-        // label and the DATA disagree on scale -- pip_size=null with a LOUD
-        // warning instead of a silently-wrong value. Never fill fields on
-        // disagreement; never overwrite a pip the user typed by hand.
         if (data.warning) {
           statusEl.style.color = '#ff9d9d';
           statusEl.style.fontWeight = 'bold';
@@ -378,15 +369,7 @@
       });
   }
 
-  // Prop-firm preset dropdown (see app.prop.presets) -- fills account
-  // size / profit target / daily loss / max drawdown from a one-click
-  // pick instead of typing them by hand. Manual entry (the fields
-  // above) remains the primary, always-visible path; this is purely an
-  // optional shortcut.
   const PROP_PRESETS = {{ (prop_presets_json | default('[]')) | safe }};
-  // v8: badges + the "only show firms that allow algo trading" toggle
-  // (default ON) via the shared helper; plain populate if that file
-  // failed to load.
   (function populatePropPresetDropdown() {
     if (typeof addAlgoTradingFilter === 'function') {
       addAlgoTradingFilter('fp_prop_preset_select', PROP_PRESETS);
@@ -446,14 +429,6 @@
   function populateLibrarySelect(mode) {
     populateFilterOptions(mode);
     const select = document.getElementById('existing_strategy_select');
-    // Named per-mode (existing_strategy_manual / _python / _pinescript /
-    // _mql5) so the backend's per-mode precedence check
-    // (form.get(f"existing_strategy_{mode}") -- see
-    // app.web.server.resolve_strategy_source / _build_strategy) has a
-    // real form field to read even if a library pick's fetched text
-    // somehow never made it into the strategy_code textarea (e.g. JS
-    // fetch failure) -- previously this select had no name attribute
-    // at all, so that fallback path was silently dead for every mode.
     select.name = 'existing_strategy_' + mode;
     const note = document.getElementById('library-count-note');
     const all = SAVED_STRATEGIES[mode] || [];
@@ -509,12 +484,6 @@
     tabs.forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     modeInput.value = btn.dataset.mode;
-    // Manual strategies (including every one the Evolution Lab auto-saves
-    // or promotes -- see app.evolution.engine._maybe_save_to_library) are
-    // saved-library entries too, same as Python/PineScript/MQL5 -- so the
-    // "load from library" dropdown/search/filter panel now shows for
-    // Manual as well, instead of only exposing the quick SMA-crossover
-    // builder fields with no way to load anything previously saved.
     manualFields.style.display = 'block';
     codeFields.style.display = 'block';
     const fileInput = document.getElementById('strategy_file_input');
@@ -529,11 +498,6 @@
     populateLibrarySelect(btn.dataset.mode);
   }));
 
-  // UPGRADE (Strategy Library): arriving here with ?load_strategy_type=X
-  // &load_strategy_name=Y (from the Strategy Library's Backtest button)
-  // pre-selects that mode's tab and loads that exact saved strategy into
-  // the code/config field, the same as clicking the tab and picking it
-  // from the dropdown by hand would.
   (function () {
     const params = new URLSearchParams(window.location.search);
     const loadType = params.get('load_strategy_type');
@@ -549,16 +513,8 @@
     }
   })();
 
-  // Run once on page load for whichever tab starts active (Manual), so
-  // the library dropdown/search/filter panel is populated and visible
-  // immediately instead of only appearing after the user clicks a tab.
   document.querySelector('#strategy-tabs button.active')?.click();
 
-  // Section 6 -- batch checkbox list, built from every saved strategy
-  // across all 4 types (unlike the single-strategy picker above, this
-  // isn't filtered to one mode at a time, since a batch run is exactly
-  // for testing several different strategies -- possibly different
-  // source types -- together).
   (function populateBatchList() {
     const container = document.getElementById('batch-strategy-list');
     const types = Object.keys(SAVED_STRATEGIES);
@@ -578,7 +534,7 @@
       });
     });
     if (!any) {
-      container.innerHTML = '<p style="font-size:13px;color:#999;">No saved strategies yet -- save one from section 1 above (or run Evolution Lab / Search Lab) before using the batch button.</p>';
+      container.innerHTML = '<p style="font-size:13px;color:#999;">No saved strategies yet -- save one from the Strategy picker above (or run Evolution Lab / Search Lab) before using the batch button.</p>';
     }
   })();
 
@@ -613,11 +569,59 @@ document.addEventListener('DOMContentLoaded', function () {
   if (ds) ds.addEventListener('change', function () { if (this.value) fpDetectPipSize(); });
   const fi = document.querySelector('input[name="csv_file"]');
   if (fi) fi.addEventListener('change', function () { if (this.files && this.files.length) fpDetectPipSize(); });
-  // Multi-dataset checkbox pages (multi_market): re-run when the checked set changes.
   document.querySelectorAll('input[name="datasets"]').forEach(function (cb) {
     cb.addEventListener('change', function () { fpDetectPipSize(); });
   });
 });
+</script>
+
+<script>window.LC_PROP_PRESETS = {{ (prop_presets_json | default('[]')) | safe }};</script>
+{% include '_lifecycle_rules_js.html' %}
+<script>
+  // v9.7: prop-firm rules panel + checklist/will-run summary wiring. The
+  // preset select keeps its existing onchange (fpApplyPropPreset fills
+  // the Advanced rule fields); this only mirrors the selection into the
+  // right rail and the checklist.
+  (function () {
+    var preset = document.getElementById('fp_prop_preset_select');
+    if (window.lcBindPropPreset) window.lcBindPropPreset(preset);
+    function selText(sel) {
+      if (!sel || !sel.value) return '';
+      var o = sel.options[sel.selectedIndex];
+      return o ? o.textContent.trim() : '';
+    }
+    function updateSummary() {
+      var stratSel = document.getElementById('existing_strategy_select');
+      var strat = selText(stratSel);
+      var mode = (document.getElementById('strategy_mode') || {}).value || 'manual';
+      var stratLabel = strat || (mode === 'manual' ? 'the SMA builder strategy' : 'a pasted/uploaded ' + mode + ' strategy');
+      var dsSel = document.querySelector('select[name="existing_dataset"]');
+      var ds = selText(dsSel) || 'uploaded data';
+      var firm = selText(preset) || 'the typed rules';
+      var wr = document.getElementById('lc-will-run');
+      if (wr) wr.innerHTML = 'Will run <b>' + stratLabel.replace(/</g, '&lt;') + '</b> on <b>' + ds.replace(/</g, '&lt;') + '</b> against the <b>' + firm.replace(/</g, '&lt;') + '</b> rules — baseline &rarr; search &rarr; Monte Carlo &rarr; holdout &rarr; verdict.';
+      var ckS = document.getElementById('lc-ck-strategy');
+      if (ckS) ckS.textContent = strat || mode;
+      var ckD = document.getElementById('lc-ck-dataset');
+      if (ckD) ckD.textContent = ds;
+      var ckF = document.getElementById('lc-ck-firm');
+      if (ckF) ckF.textContent = firm;
+    }
+    ['existing_strategy_select', 'lc-dataset-pick', 'strategy_mode'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.addEventListener('change', updateSummary);
+    });
+    if (preset) preset.addEventListener('change', updateSummary);
+    if (preset) preset.addEventListener('lc:preset', updateSummary);
+    tabs.forEach(function (b) { b.addEventListener('click', function () { setTimeout(updateSummary, 0); }); });
+    window.addEventListener('load', function () {
+      if (window.lcRenderPropRules && window.lcPresetFromSelect) {
+        window.lcRenderPropRules(window.lcPresetFromSelect(preset));
+      }
+      updateSummary();
+    });
+    updateSummary();
+  })();
 </script>
 
 </body>

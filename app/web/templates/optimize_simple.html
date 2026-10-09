@@ -12,136 +12,198 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
-<style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
-  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
-  .card p.help { font-size: 12px; color: #888; margin: 0 0 10px; line-height: 1.5; }
-  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
-  input[type=text], input[type=number], select, textarea {
-    width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light);
-    background: var(--panel-3); color: var(--text); font-size: 15px;
-  }
-  .row { display: flex; gap: 10px; }
-  .row > div { flex: 1; }
-  input[type=file] { width: 100%; color: #ccc; }
-  .submit-btn {
-    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: #04120e;
-    font-size: 16px; font-weight: 700; margin-top: 6px;
-    box-shadow: 0 0 22px rgba(53,224,176,0.35);
-  }
-  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
-  details summary { font-size: 13px; color: #999; cursor: pointer; }
-  .engine-row { display: flex; gap: 8px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid var(--border); }
-  .engine-row input { margin-top: 3px; }
-  .engine-row .desc { font-size: 12px; color: #888; }
-</style>
+{% include '_lifecycle_css.html' %}
 </head>
 <body>
 {% set active_page = active_page|default('optimize_simple') %}
 <div class="t58-shell">
 {% include '_sidebar.html' %}
 <div class="t58-main">
-<div class="t58-page-header">
-  <h1>Optimize (pick engines)</h1>
-  <p>One front door for optimization: pick a saved strategy and a dataset, tick the engines you want, and they run against one hardened risk setup. Quick Optimize, Refine and Risk Sweep run here; Search, Evolution and Multi-Objective keep their own pages (your tick is recorded with a link -- settings are not auto-carried on web).</p>
-</div>
+<div class="lc-scope"><div class="lc-wrap">
+
+{% set lc_step = 'optimize' %}
+{% include '_lifecycle_stepper.html' %}
+<div class="lc-crumb">Lifecycle · 3 · <b>Optimize</b></div>
+<h1 class="lc-title">Tune the numbers for me</h1>
+<p class="lc-sub">Pick the strategy, the data, and the firm — then tick the engines you want. Quick Optimize, Refine and Risk Sweep run right here against one hardened risk setup; Search, Evolution and Multi-Objective keep their own pages (your tick is recorded with a link — settings are not auto-carried on web). It tries variations, keeps the best, and tells you plainly what changed.</p>
 
 {% if error %}
-<div class="error">{{ error }}</div>
+<div class="lc-error">{{ error }}</div>
 {% endif %}
 
 <form method="post" action="/optimize-simple/start" enctype="multipart/form-data">
+<div class="lc-run-grid">
+<div class="lc-run-main">
 
-<div class="card">
-  <h2>Strategy &amp; data</h2>
-  <label>Saved strategy</label>
-  <select name="strategy_pick">
-    {% for s in strategies %}
-    <option value="{{ s.type }}::{{ s.name }}">{{ s.name }} ({{ s.type }})</option>
-    {% endfor %}
-  </select>
-  <label>Dataset (stored) — or upload below</label>
-  <select name="existing_dataset">
-    <option value="">— upload a CSV instead —</option>
-    {% for g in dataset_groups %}
-    <optgroup label="{{ g.instrument }}">
-      {% for d in g.datasets %}
-      <option value="{{ d.name }}">{{ d.name }}</option>
-      {% endfor %}
-    </optgroup>
-    {% endfor %}
-    {% for d in stored_datasets %}
-    <option value="{{ d.name }}">{{ d.name }}</option>
-    {% endfor %}
-  </select>
-  <label>…or upload market data (CSV)</label>
-  <input type="file" name="csv_file" accept=".csv">
-</div>
-
-<div class="card">
-  <h2>Engines</h2>
-  <div class="engine-row"><input type="checkbox" name="engine_quick_optimize" id="e_qo"><div><label for="e_qo" style="margin:0;">Quick Optimize</label><div class="desc">GA over the strategy's tunable parameters, scored on eval pass probability.</div></div></div>
-  <div class="engine-row"><input type="checkbox" name="engine_refine" id="e_rf"><div><label for="e_rf" style="margin:0;">Refine (iterative)</label><div class="desc">Multi-round refinement with Monte-Carlo fitness.</div></div></div>
-  <div class="engine-row"><input type="checkbox" name="engine_risk_sweep" id="e_rs"><div><label for="e_rs" style="margin:0;">Risk Sweep</label><div class="desc">Sweeps risk-per-trade levels against the prop rules.</div></div></div>
-  <div class="engine-row"><input type="checkbox" name="engine_search" id="e_se"><div><label for="e_se" style="margin:0;">Search Lab</label><div class="desc">Runs on its own page -- ticked engines get a link in the job result.</div></div></div>
-  <div class="engine-row"><input type="checkbox" name="engine_evolution" id="e_ev"><div><label for="e_ev" style="margin:0;">Evolution Lab (GA)</label><div class="desc">Runs on its own page -- ticked engines get a link in the job result.</div></div></div>
-  <div class="engine-row"><input type="checkbox" name="engine_multi_objective" id="e_mo"><div><label for="e_mo" style="margin:0;">Multi-Objective</label><div class="desc">Runs on its own page -- ticked engines get a link in the job result.</div></div></div>
-</div>
-
-<div class="card">
-  <h2>Account &amp; risk</h2>
-  <div class="row">
-    <div><label>Prop-firm preset</label>
-      <select name="prop_preset">
-        <option value="">— type the rules below —</option>
-        {% for p in prop_presets %}
-        <option value="{{ p.key }}">{{ p.label }}</option>
-        {% endfor %}
-      </select>
+  <div class="lc-card">
+    <div class="lc-row">
+      <div class="lc-col">
+        <label class="flabel" for="lc-strategy-pick">Strategy</label>
+        <select class="inp" name="strategy_pick" id="lc-strategy-pick">
+          {% for s in strategies %}
+          <option value="{{ s.type }}::{{ s.name }}">{{ s.name }} ({{ s.type }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="lc-col">
+        <label class="flabel" for="lc-dataset-pick">Market data</label>
+        <select class="inp" name="existing_dataset" id="lc-dataset-pick">
+          <option value="">— upload a CSV instead —</option>
+          {% for g in dataset_groups %}
+          <optgroup label="{{ g.instrument }}">
+            {% for d in g.datasets %}
+            <option value="{{ d.name }}">{{ d.name }}</option>
+            {% endfor %}
+          </optgroup>
+          {% endfor %}
+          {% for d in stored_datasets %}
+          <option value="{{ d.name }}">{{ d.name }}</option>
+          {% endfor %}
+        </select>
+        <label class="flabel" style="margin-top:10px;" for="lc-csv-file">…or upload market data (CSV)</label>
+        <input type="file" name="csv_file" id="lc-csv-file" accept=".csv">
+      </div>
+      <div class="lc-col">
+        <label class="flabel" for="lc-prop-preset">Prop firm</label>
+        <select class="inp" name="prop_preset" id="lc-prop-preset">
+          <option value="">— type the rules in Advanced —</option>
+          {% for p in prop_presets %}
+          <option value="{{ p.key }}">{{ p.label }}</option>
+          {% endfor %}
+        </select>
+        <div class="lc-hint" style="margin-top:5px;">Its rules show in the rail &rarr; and harden this run.</div>
+      </div>
     </div>
-    <div><label>Initial balance ($)</label><input type="number" step="any" name="initial_balance" value="100000"></div>
+    <div class="lc-rules-line" id="lc-rules-line"></div>
   </div>
-  <div class="row">
-    <div><label>Account size ($)</label><input type="number" step="any" name="account_size" value="100000"></div>
-    <div><label>Profit target (%)</label><input type="number" step="any" name="profit_target" value="8"></div>
-    <div><label>Daily loss (%)</label><input type="number" step="any" name="daily_loss" value="5"></div>
-    <div><label>Max drawdown (%)</label><input type="number" step="any" name="max_dd" value="10"></div>
-  </div>
-  <div class="row">
-    <div><label>Risk mode</label>
-      <select name="risk_mode"><option value="percent">% of balance</option><option value="fixed">Fixed $</option></select>
+
+  <div class="lc-card">
+    <h3>Which engines?</h3>
+    <div class="lc-checkcards">
+      <label class="lc-checkcard">
+        <input class="lc-check-input" type="checkbox" name="engine_quick_optimize" id="e_qo">
+        <div class="cname"><span class="cbox"></span>Quick Optimize</div>
+        <div class="cdesc">GA over the strategy's tunable parameters, scored on eval pass probability. Runs here.</div>
+      </label>
+      <label class="lc-checkcard">
+        <input class="lc-check-input" type="checkbox" name="engine_refine" id="e_rf">
+        <div class="cname"><span class="cbox"></span>Refine (iterative)</div>
+        <div class="cdesc">Multi-round refinement with Monte-Carlo fitness. Runs here.</div>
+      </label>
+      <label class="lc-checkcard">
+        <input class="lc-check-input" type="checkbox" name="engine_risk_sweep" id="e_rs">
+        <div class="cname"><span class="cbox"></span>Risk Sweep</div>
+        <div class="cdesc">Sweeps risk-per-trade levels against the prop rules. Runs here.</div>
+      </label>
+      <label class="lc-checkcard">
+        <input class="lc-check-input" type="checkbox" name="engine_search" id="e_se">
+        <div class="cname"><span class="cbox"></span>Search Lab</div>
+        <div class="cdesc">Runs on its own page — ticked engines get a link in the job result.</div>
+      </label>
+      <label class="lc-checkcard">
+        <input class="lc-check-input" type="checkbox" name="engine_evolution" id="e_ev">
+        <div class="cname"><span class="cbox"></span>Evolution Lab (GA)</div>
+        <div class="cdesc">Runs on its own page — ticked engines get a link in the job result.</div>
+      </label>
+      <label class="lc-checkcard">
+        <input class="lc-check-input" type="checkbox" name="engine_multi_objective" id="e_mo">
+        <div class="cname"><span class="cbox"></span>Multi-Objective</div>
+        <div class="cdesc">Runs on its own page — ticked engines get a link in the job result.</div>
+      </label>
     </div>
-    <div><label>Risk value</label><input type="number" step="any" name="risk_value" value="1.0"></div>
-    <div><label>Max trades / day</label><input type="number" name="max_trades_day" value="10"></div>
+    <div class="lc-hint" style="margin-top:10px;" id="lc-engine-count"></div>
   </div>
-  <div class="row">
-    <div><label>Pip size</label><input type="number" step="any" name="pip_size" value="0.0001"></div>
-    <div><label>Contract size</label><input type="number" step="any" name="contract_size" placeholder="auto"></div>
-    <div><label>Spread (pips)</label><input type="number" step="any" name="spread_pips" value="1.0"></div>
-    <div><label>Slippage (pips)</label><input type="number" step="any" name="slippage_pips" value="0.5"></div>
-    <div><label>Commission / trade</label><input type="number" step="any" name="commission" value="0"></div>
+
+  <details class="lc-adv">
+    <summary>Advanced options <span class="lc-hint">account, risk, and engine knobs</span></summary>
+    <div class="adv-body">
+      <div class="lc-adv-grid">
+        <div class="lc-adv-field"><label class="flabel">Initial balance ($)</label><input type="number" step="any" name="initial_balance" value="100000"></div>
+        <div class="lc-adv-field"><label class="flabel">Account size ($)</label><input type="number" step="any" name="account_size" value="100000"></div>
+        <div class="lc-adv-field"><label class="flabel">Profit target (%)</label><input type="number" step="any" name="profit_target" value="8"></div>
+        <div class="lc-adv-field"><label class="flabel">Daily loss (%)</label><input type="number" step="any" name="daily_loss" value="5"></div>
+        <div class="lc-adv-field"><label class="flabel">Max drawdown (%)</label><input type="number" step="any" name="max_dd" value="10"></div>
+        <div class="lc-adv-field"><label class="flabel">Risk mode</label>
+          <select name="risk_mode"><option value="percent">% of balance</option><option value="fixed">Fixed $</option></select></div>
+        <div class="lc-adv-field"><label class="flabel">Risk value</label><input type="number" step="any" name="risk_value" value="1.0"></div>
+        <div class="lc-adv-field"><label class="flabel">Max trades / day</label><input type="number" name="max_trades_day" value="10"></div>
+        <div class="lc-adv-field"><label class="flabel">Pip size</label><input type="number" step="any" name="pip_size" value="0.0001"></div>
+        <div class="lc-adv-field"><label class="flabel">Contract size</label><input type="number" step="any" name="contract_size" placeholder="auto"></div>
+        <div class="lc-adv-field"><label class="flabel">Spread (pips)</label><input type="number" step="any" name="spread_pips" value="1.0"></div>
+        <div class="lc-adv-field"><label class="flabel">Slippage (pips)</label><input type="number" step="any" name="slippage_pips" value="0.5"></div>
+        <div class="lc-adv-field"><label class="flabel">Commission / trade</label><input type="number" step="any" name="commission" value="0"></div>
+        <div class="lc-adv-field"><label class="flabel">GA population (Quick Optimize)</label><input type="number" name="ga_population" value="16"></div>
+        <div class="lc-adv-field"><label class="flabel">GA generations (Quick Optimize)</label><input type="number" name="ga_generations" value="6"></div>
+        <div class="lc-adv-field"><label class="flabel">Population (Refine)</label><input type="number" name="population_size" value="10"></div>
+        <div class="lc-adv-field"><label class="flabel">Generations (Refine)</label><input type="number" name="generations" value="5"></div>
+        <div class="lc-adv-field"><label class="flabel">Monte-Carlo sims</label><input type="number" name="mc_sims" value="500"></div>
+        <div class="lc-adv-field"><label class="flabel">Fitness metric</label><input type="text" name="fitness_metric" value="eval_pass_probability"></div>
+      </div>
+      {% include '_accuracy_fields.html' %}
+    </div>
+  </details>
+
+  <div style="margin-bottom:14px;"><button class="lc-btn big" type="submit">&#9654; OPTIMIZE</button></div>
+
+  <div class="lc-card">
+    <h3>Run log — live</h3>
+    <div class="lc-logbox"><div><span class="lt">--:--:--</span>  Press OPTIMIZE and the run streams live on the job page — every engine ticked, in order. No silent screens.</div></div>
+  </div>
+
+</div>
+<div class="lc-run-side">
+  <div class="lc-side-card">
+    <h4>&#9654; Run progress</h4>
+    <div style="display:flex; align-items:baseline; gap:10px;"><span class="lc-pct-big">0%</span><span class="lc-hint">not started</span></div>
+    <div class="lc-progress" style="margin:8px 0;"><div></div></div>
+    <div class="lc-kv"><span class="k">Waiting for OPTIMIZE</span><span class="v lc-ok">live</span></div>
+  </div>
+
+  <div class="lc-side-card">
+    <h4>&#127963; Prop firm rules</h4>
+    <div id="lc-rules-body"></div>
+  </div>
+
+  <div class="lc-side-card">
+    <h4>&#128203; Run checklist</h4>
+    <div class="lc-kv"><span class="k">Risk setup</span><span class="v">one hardened setup for every engine</span></div>
+    <div class="lc-kv"><span class="k">Runs here</span><span class="v">Quick Optimize · Refine · Risk Sweep</span></div>
+    <div class="lc-kv"><span class="k">Links out</span><span class="v">Search · Evolution · Multi-Objective</span></div>
+    <div class="lc-kv"><span class="k">READY bar</span><span class="v">untouched — optimizing never grants READY</span></div>
+  </div>
+
+  {% include '_lifecycle_how.html' %}
+
+  <div class="lc-side-card">
+    <h4>&#129517; What happens next</h4>
+    <p class="lc-hint" style="font-size:12.5px; color:var(--lc-text);">Best variation is still only a candidate &rarr; run it through <b>Test it properly</b> (Full Pipeline) before believing it — optimizing and validating on the same data is how curve-fits happen.</p>
+  </div>
+
+  <div class="lc-side-card">
+    <h4>&#9888; Watch-outs</h4>
+    <p class="lc-hint" style="font-size:12.5px;">Lucid is the only preset re-verified against the firm&rsquo;s own page (Oct 7). Variations with too few trades are discounted, not crowned.</p>
   </div>
 </div>
-
-<details class="card">
-  <summary>Advanced — accuracy &amp; engine knobs</summary>
-  {% include '_accuracy_fields.html' %}
-  <div class="row">
-    <div><label>GA population (Quick Optimize)</label><input type="number" name="ga_population" value="16"></div>
-    <div><label>GA generations (Quick Optimize)</label><input type="number" name="ga_generations" value="6"></div>
-    <div><label>Population (Refine)</label><input type="number" name="population_size" value="10"></div>
-    <div><label>Generations (Refine)</label><input type="number" name="generations" value="5"></div>
-    <div><label>Monte-Carlo sims</label><input type="number" name="mc_sims" value="500"></div>
-    <div><label>Fitness metric</label><input type="text" name="fitness_metric" value="eval_pass_probability"></div>
-  </div>
-</details>
-
-<button class="submit-btn" type="submit">Run ticked engines</button>
+</div>
 </form>
 
+</div></div>
 </div>
 </div>
+<script>window.LC_PROP_PRESETS = {{ prop_presets_json | safe }};</script>
+{% include '_lifecycle_rules_js.html' %}
+<script>
+  (function () {
+    if (window.lcBindPropPreset) window.lcBindPropPreset(document.getElementById('lc-prop-preset'));
+    if (window.lcSyncCheckCards) window.lcSyncCheckCards(document);
+    var count = document.getElementById('lc-engine-count');
+    function updateCount() {
+      var n = document.querySelectorAll('.lc-checkcard input.lc-check-input:checked').length;
+      if (count) count.textContent = n + (n === 1 ? ' engine' : ' engines') + ' selected' + (n === 0 ? ' — tick at least one to run.' : '.');
+    }
+    document.querySelectorAll('.lc-checkcard input.lc-check-input').forEach(function (i) { i.addEventListener('change', updateCount); });
+    updateCount();
+  })();
+</script>
 </body>
 </html>

@@ -515,14 +515,18 @@ def _diagnose_why(row: dict[str, Any]) -> str:
 # unmet requirements; can_promote's own "Promote" button (which posts to
 # /champion/promote) still handles the fully-met case.
 _REQUIREMENT_HREF: dict[str, str] = {
-    "backtested": "/",                 # Run & Report
+    # v9.7: an untested strategy's next step is the Full Pipeline (the only
+    # run that produces a verdict) -- never the Validate hub. Owen: the
+    # dashboard must not say "Open Validate" before anything was tested.
+    "backtested": "/full-pipeline",    # Run the Full Pipeline first
     # FIX (2026-09): every "validated_<method>" requirement (one per
     # VALIDATION_STEP_METHODS -- see _requirements_for_next_stage's
-    # "candidate" branch above) points at "/validate", the actual Validate
-    # hub that lists and links all 5 tools with a live pass/pending
-    # checklist -- not straight at one specific tool (the old single
-    # "validated_run": "/cpcv" silently hid the other 4 from the person).
-    **{f"validated_{m}": "/validate" for m in VALIDATION_STEP_METHODS},
+    # "candidate" branch above) points at the Validate page -- not straight
+    # at one specific tool (the old single "validated_run": "/cpcv"
+    # silently hid the other 4 from the person).
+    # v9.7: the pick-your-checks page is /validate-simple; the old
+    # /validate hub stays linked from the sidebar.
+    **{f"validated_{m}": "/validate-simple" for m in VALIDATION_STEP_METHODS},
     "lookahead_clean": "/library",      # fix/replace the flagged code, not a tool run
     "eval_threshold": "/quick-optimize",
     "payout_threshold": "/quick-optimize",
@@ -563,7 +567,7 @@ def _next_action_href(row: dict[str, Any]) -> str:
         return ""  # template shows the Promote button instead, not a link
     unmet = [r for r in promo["requirements"] if not r["met"]]
     if unmet:
-        return _REQUIREMENT_HREF.get(unmet[0]["key"], "/validate")
+        return _REQUIREMENT_HREF.get(unmet[0]["key"], "/validate-simple")
     if row.get("verdict") == "NOT READY":
         return "/search"
     return "/"

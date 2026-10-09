@@ -82,7 +82,7 @@
       <button type="submit" class="t58-btn primary">Promote to {{ snapshot.row.promotion.next_stage_title }} &rarr;</button>
     </form>
     {% else %}
-    <a class="t58-btn primary" href="{{ snapshot.next_action_href or '/validate' }}">Continue &rarr;</a>
+    <a class="t58-btn primary" href="{{ snapshot.next_action_href or '/validate-simple' }}">Continue &rarr;</a>
     {% endif %}
     <a class="t58-btn ghost" href="/forward-test">Forward test</a>
   </div>
@@ -98,8 +98,13 @@
   <div class="title-row"><h3 style="color:var(--text-dim);font-weight:500;">{{ current_strategy.strategy_name }}</h3></div>
   <div class="t58-champion-empty">Tracked as your current strategy, but not on the Champion Board yet -- save it to the Strategy Library (Run &amp; Report's "Save to library" option, or Full Pipeline's) to get a stage, verdict, and next-action here.</div>
   <div class="actions">
-    <a class="t58-btn secondary" href="/library">Open Strategy Library &rarr;</a>
-    <a class="t58-btn ghost" href="/validate">Open Validate &rarr;</a>
+    {% if current_metrics %}
+    <a class="t58-btn secondary" href="/validate-simple">Open Validate (pick checks) &rarr;</a>
+    {% else %}
+    {# v9.7: never tested -> the next step is a test, not validation. #}
+    <a class="t58-btn primary" href="/full-pipeline">&#9654; Run Full Pipeline</a>
+    {% endif %}
+    <a class="t58-btn ghost" href="/library">Open Strategy Library &rarr;</a>
   </div>
   {% else %}
   <div class="title-row"><h3 style="color:var(--text-dim);font-weight:500;">No strategy tested yet</h3></div>
@@ -136,7 +141,12 @@
     {% endfor %}
   </div>
   <div class="actions" style="margin-top:12px;">
-    <a class="t58-btn secondary" href="/validate">Open Validate &rarr;</a>
+    {% if current_metrics or (robustness and robustness.ran_count) %}
+    <a class="t58-btn secondary" href="/validate-simple">Open Validate (pick checks) &rarr;</a>
+    {% else %}
+    {# v9.7: no recorded run and no checks yet -> test first, never validate. #}
+    <a class="t58-btn primary" href="/full-pipeline">&#9654; Run Full Pipeline</a>
+    {% endif %}
     <a class="t58-btn ghost" href="/reports/by-strategy">All reports for this strategy &rarr;</a>
     <form method="post" action="/current-strategy/clear" style="display:inline;">
       <button type="submit" class="t58-btn ghost sm">Stop tracking</button>
@@ -263,7 +273,18 @@
             <button type="submit" class="t58-btn ghost sm">Promote &rarr; {{ r.promotion.next_stage_title }}</button>
           </form>
           {% elif r.promotion.next_stage_title %}
-          <span style="font-size:11px;color:var(--text-dim);" title="{{ r.promotion.requirements | selectattr('met', 'equalto', false) | map(attribute='label') | join('; ') }}">Not yet eligible for {{ r.promotion.next_stage_title }}{% set unmet = r.promotion.requirements | rejectattr('met') | list %}{% if unmet %} -- {{ unmet | length }} check{{ '' if unmet | length == 1 else 's' }} still to run</span> <a href="/validate" style="font-size:11px;">Open Validate hub &rarr;</a>{% else %}</span>{% endif %}
+          {% set bt_req = r.promotion.requirements | selectattr('key', 'equalto', 'backtested') | list %}
+          {% set untested = bt_req and not bt_req[0].met %}
+          {% if untested %}
+          {# v9.7: no completed test run on record -> the next step is the
+             Full Pipeline, never Validate. #}
+          <span style="font-size:11px;color:var(--text-dim);">Not yet eligible for {{ r.promotion.next_stage_title }} -- no test run yet</span>
+          <a class="t58-btn primary sm" href="/full-pipeline?load_strategy_type={{ r.strategy_type }}&load_strategy_name={{ r.filename | urlencode }}" style="font-size:11px;">&#9654; Run Full Pipeline</a>
+          {% else %}
+          {% set unmet = r.promotion.requirements | rejectattr('met') | list %}
+          <span style="font-size:11px;color:var(--text-dim);" title="{{ unmet | map(attribute='label') | join('; ') }}">Not yet eligible for {{ r.promotion.next_stage_title }}{% if unmet %} -- {{ unmet | length }} check{{ '' if unmet | length == 1 else 's' }} still to run{% endif %}</span>
+          <a href="/validate-simple" style="font-size:11px;">Open Validate (pick checks) &rarr;</a>
+          {% endif %}
           {% else %}
           <span style="font-size:11px;color:var(--teal);">&#9733; Final stage</span>
           {% endif %}

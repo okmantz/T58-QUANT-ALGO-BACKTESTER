@@ -9,6 +9,7 @@
 <link rel="apple-touch-icon" href="/static/icon-192.png">
 <meta name="theme-color" content="#05070a">
 <link rel="stylesheet" href="/static/theme.css">
+{% include '_lifecycle_css.html' %}
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -43,6 +44,124 @@
   <h1>{{ section_title }} — Start Here</h1>
   <p>{{ tagline }}</p>
 </div>
+
+{% if section == 'create' %}
+<div class="lc-scope" style="margin-bottom:16px;">
+<div class="lc-wrap" style="max-width:none;">
+{% set lc_step = 'create' %}
+{% include '_lifecycle_stepper.html' %}
+<div class="lc-crumb">Lifecycle · 1 · <b>Create</b></div>
+<h1 class="lc-title">Describe it, or paste the code</h1>
+<p class="lc-sub">Where strategies enter. Write the idea in plain English and let the pipeline turn it into testable candidates — or paste/build code directly and save it to the library. Either way, the next stop is <b>Test</b>.</p>
+
+<div class="lc-card">
+  <div class="lc-tabs" style="margin-bottom:14px;">
+    <button type="button" class="lc-tab-btn active" onclick="lcCreateTab(this,'manual')">Manual (plain English)</button>
+    <button type="button" class="lc-tab-btn" onclick="lcCreateTab(this,'python')">Python</button>
+    <button type="button" class="lc-tab-btn" onclick="lcCreateTab(this,'pinescript')">PineScript</button>
+    <button type="button" class="lc-tab-btn" onclick="lcCreateTab(this,'mql5')">MQL5</button>
+  </div>
+
+  <form method="post" action="/discover/run" data-panel="manual">
+    <input type="hidden" name="_csrf_token" value="{{ create_csrf or '' }}">
+    <label class="flabel">Describe the strategy in plain English</label>
+    <textarea name="idea" placeholder="Strategies that go long after price sweeps below the Asian low and reclaims it on ES 15m…"></textarea>
+    <label class="flabel" style="margin-top:10px;">Market data to test it on</label>
+    {% if create_datasets %}
+    <div class="lc-checkcards" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr));">
+      {% for d in create_datasets %}
+      <label class="lc-checkline" style="border:1px solid var(--lc-border2); border-radius:8px; padding:8px 10px;">
+        <input type="checkbox" name="datasets" value="{{ d }}"> {{ d }}
+      </label>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="lc-hint">No stored datasets yet — import one from the Data section first, then come back here.</p>
+    {% endif %}
+    <div class="lc-row" style="margin-top:10px;">
+      <div class="lc-col"><label class="flabel">Timeframes (comma-separated, optional)</label><input type="text" name="timeframes" placeholder="e.g. 15m, 30m, 1h"></div>
+      <div class="lc-col"><label class="flabel">Max bars</label><input type="number" name="max_bars" value="60000"></div>
+      <div class="lc-col"><label class="flabel">Null comparisons</label><input type="number" name="n_null" value="200"></div>
+    </div>
+    <button class="lc-btn big" type="submit" style="margin-top:14px;">See if it survives &rarr;</button>
+    <p class="lc-hint" style="margin-top:8px;">Runs the real discovery pipeline — data checked, idea compiled against shuffled nulls, results deflated for the number of things you tried.</p>
+  </form>
+
+  {% for t, label, ph in [('python','Python','Paste your Python strategy here'), ('pinescript','PineScript','Paste your PineScript strategy here'), ('mql5','MQL5','Paste your MQL5 strategy here')] %}
+  <div data-panel="{{ t }}" style="display:none;">
+    <div class="lc-row">
+      <div class="lc-col"><label class="flabel">Filename</label><input type="text" class="lc-code-name" placeholder="my_strategy.{{ 'py' if t == 'python' else ('pine' if t == 'pinescript' else 'mq5') }}"></div>
+      <div class="lc-col"><label class="flabel">…or load from a file</label><input type="file" class="lc-code-file"></div>
+    </div>
+    <label class="flabel" style="margin-top:10px;">{{ ph }}</label>
+    <textarea class="code lc-code-text" placeholder="{{ ph }}"></textarea>
+    <div style="display:flex; gap:10px; align-items:center; margin-top:12px; flex-wrap:wrap;">
+      <button class="lc-btn big" type="button" onclick="lcSaveCode(this,'{{ t }}')">Save &amp; continue</button>
+      <a class="lc-btn ghost lc-test-link" style="display:none;" href="#">Test it &rarr;</a>
+    </div>
+    <p class="lc-hint lc-save-status" style="margin-top:8px;"></p>
+  </div>
+  {% endfor %}
+</div>
+
+{% if recent_strategies %}
+<div class="lc-card">
+  <h3>Recently created</h3>
+  {% for s in recent_strategies %}
+  <div class="lc-prev-row">
+    <span>{{ s.name }} <span class="lc-hint">{{ s.strategy_type }}</span></span>
+    <span style="display:flex; gap:8px; align-items:center;"><span class="lc-pill grey">{{ s.status }}</span><a class="lc-btn ghost small" href="/full-pipeline?load_strategy_type={{ s.strategy_type }}&load_strategy_name={{ s.name | urlencode }}">Test it</a></span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+</div>
+</div>
+<script>
+  function lcCreateTab(btn, panel) {
+    document.querySelectorAll('.lc-tab-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('[data-panel]').forEach(p => {
+      p.style.display = (p.getAttribute('data-panel') === panel) ? '' : 'none';
+    });
+  }
+  document.querySelectorAll('.lc-code-file').forEach(function (fi) {
+    fi.addEventListener('change', function () {
+      var file = fi.files && fi.files[0];
+      if (!file) return;
+      var panel = fi.closest('[data-panel]');
+      var nameEl = panel.querySelector('.lc-code-name');
+      if (nameEl && !nameEl.value) nameEl.value = file.name;
+      var reader = new FileReader();
+      reader.onload = function () { panel.querySelector('.lc-code-text').value = reader.result; };
+      reader.readAsText(file);
+    });
+  });
+  function lcSaveCode(btn, type) {
+    var panel = btn.closest('[data-panel]');
+    var name = (panel.querySelector('.lc-code-name').value || '').trim();
+    var code = panel.querySelector('.lc-code-text').value;
+    var status = panel.querySelector('.lc-save-status');
+    var link = panel.querySelector('.lc-test-link');
+    if (!name) { status.textContent = 'Give the strategy a filename first (e.g. my_strategy.py).'; return; }
+    if (!code.trim()) { status.textContent = 'Paste some code first.'; return; }
+    status.textContent = 'Saving…';
+    var fd = new FormData();
+    fd.append('strategy_type', type);
+    fd.append('filename', name);
+    fd.append('code', code);
+    fetch('/strategies/save-code', { method: 'POST', body: fd })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok || !res.d.ok) { status.textContent = 'Could not save: ' + (res.d.error || 'unknown error'); return; }
+        status.textContent = 'Saved to the ' + type + ' library.';
+        link.href = '/full-pipeline?load_strategy_type=' + encodeURIComponent(type) + '&load_strategy_name=' + encodeURIComponent(name);
+        link.style.display = '';
+      })
+      .catch(function (e) { status.textContent = 'Could not save: ' + e; });
+  }
+</script>
+{% endif %}
 
 <div class="card">
   <h2>&#128161; What this section is for</h2>

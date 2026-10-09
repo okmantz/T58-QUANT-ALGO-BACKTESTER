@@ -1,0 +1,13 @@
+{# v9.7 right-rail "How this runs" card. These are the v9.5 hardened
+   defaults every lifecycle run goes through (build_run_context:
+   prop account model, fit-stop sizing, intrabar replay, per-attempt
+   Monte Carlo). Read-only here; Advanced options can change some of
+   them, and every run's report restates exactly what was used. #}
+<div class="lc-side-card">
+  <h4>🎛 How this runs (read-only)</h4>
+  <div class="lc-kv"><span class="k">Sizing</span><span class="v">fit-stop (shrinks to budget)</span></div>
+  <div class="lc-kv"><span class="k">Account model</span><span class="v">prop firm, per-attempt</span></div>
+  <div class="lc-kv"><span class="k">Costs</span><span class="v">instrument defaults + spread</span></div>
+  <div class="lc-kv"><span class="k">Intrabar replay</span><span class="v">on (finer bars underneath)</span></div>
+  <div class="lc-kv"><span class="k">READY bar</span><span class="v">&ge;70% attempts, &ge;100 trades</span></div>
+</div>

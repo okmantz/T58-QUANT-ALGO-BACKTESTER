@@ -3324,12 +3324,32 @@ def section_start_here(section):
     data = _SECTION_START_HERE.get(section)
     if data is None:
         return render_template("support.html", active_page="support"), 404
+    extra: dict = {}
+    if section == "create":
+        # v9.7: the Create step page gets real inputs -- recently saved
+        # strategies (to jump straight into Test) and stored dataset
+        # names for the plain-English idea form (/discover/run).
+        try:
+            extra["recent_strategies"] = [
+                {"name": s.name, "strategy_type": s.strategy_type,
+                 "status": s.status_display, "modified": s.modified}
+                for s in list_saved_strategies()[:8]
+            ]
+        except Exception:
+            extra["recent_strategies"] = []
+        try:
+            extra["create_datasets"] = [d.name for d in list_stored_datasets()]
+        except Exception:
+            extra["create_datasets"] = []
+        extra["create_csrf"] = session.get("csrf_token", "")
     return render_template(
         "section_start_here.html",
         active_page_key=f"start_here_{section}",
+        section=section,
         section_title=data["title"], tagline=data["tagline"], accent_color=data["accent_color"],
         description=data["description"], roadmap=data.get("roadmap", []),
         primary_buttons=data.get("primary_buttons", []), tools=data.get("tools", []),
+        **extra,
     )
 
 
@@ -4917,6 +4937,20 @@ def full_pipeline_batch_job_status(job_id):
 @app.route("/full-pipeline")
 def full_pipeline_form():
     saved_ai = load_ollama_settings()
+    # v9.7: Previous runs list in the preview-style shell (same source as
+    # the dashboard). report_html is a filesystem path; convert to a
+    # served URL the same way the dashboard does.
+    try:
+        recent_runs = []
+        for run in run_history.load_runs()[-6:][::-1]:
+            run = dict(run)
+            report_html = run.get("report_html") or ""
+            run["report_url"] = (
+                _dashboard_report_url(report_html) if report_html.endswith(".html") else None
+            )
+            recent_runs.append(run)
+    except Exception:
+        recent_runs = []
     return render_template(
         "full_pipeline.html",
         stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
@@ -4926,6 +4960,7 @@ def full_pipeline_form():
         alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"),
         fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES,
         prop_presets_json=_prop_presets_json(),
+        recent_runs=recent_runs,
         ai_enabled=saved_ai.enabled,
         ai_host=saved_ai.host,
         ai_model=saved_ai.model, **_alpaca_template_context())
@@ -8429,7 +8464,14 @@ def forward_test_info():
     mt5_accounts = [a for a in load_accounts() if a.platform == "MT4/MT5"]
     with _FORWARD_TEST_LOCK:
         running = _FORWARD_TEST_SESSION["session"] is not None and _FORWARD_TEST_SESSION["session"].status.running
-    return render_template("forward_test.html", mt5_accounts=mt5_accounts, running=running, **_alpaca_template_context())
+    # v9.7: the Deploy step's warm-up card shows the current champion
+    # (the strategy that should be forward tested first).
+    try:
+        deploy_champion = champion_board.strongest_validated_candidate(champion_board.list_board())
+    except Exception:
+        deploy_champion = None
+    return render_template("forward_test.html", mt5_accounts=mt5_accounts, running=running,
+                           deploy_champion=deploy_champion, **_alpaca_template_context())
 
 
 @app.route("/forward-test/start", methods=["POST"])

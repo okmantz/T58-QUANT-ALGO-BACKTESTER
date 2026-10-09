@@ -1,0 +1,25 @@
+{# v9.7 lifecycle stepper (preview shell). Set lc_step to one of
+   create/test/optimize/validate/champion/deploy before including.
+   Earlier steps render as done (check), the current one is filled.
+   Each step links straight to that step's main page -- the same targets
+   the sidebar's lifecycle section headers use. Carries .t58-stepper so
+   t58-chrome.js does not inject its own second stepper above this one. #}
+{% set lc_steps = [
+  ('create',   '1', 'Create',   '/start-here/create'),
+  ('test',     '2', 'Test',     '/full-pipeline'),
+  ('optimize', '3', 'Optimize', '/optimize-simple'),
+  ('validate', '4', 'Validate', '/validate-simple'),
+  ('champion', '5', 'Champion', '/champion-simple'),
+  ('deploy',   '6', 'Deploy',   '/forward-test'),
+] %}
+{% set lc_idx = {'create':0,'test':1,'optimize':2,'validate':3,'champion':4,'deploy':5}[lc_step] %}
+<div class="lc-stepper t58-stepper">
+  {% for key, num, label, href in lc_steps %}
+  {% set i = loop.index0 %}
+  <a class="lc-step {{ 'done' if i < lc_idx else ('now' if i == lc_idx else '') }}" href="{{ href }}">
+    <span class="dotc">{{ '&#10003;'|safe if i < lc_idx else num }}</span>
+    <span class="slbl">{{ label }}</span>
+  </a>
+  {% if not loop.last %}<div class="lc-steplink {{ 'done' if i < lc_idx else '' }}"></div>{% endif %}
+  {% endfor %}
+</div>

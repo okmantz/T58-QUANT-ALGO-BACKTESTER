@@ -9,6 +9,7 @@
 <meta name="theme-color" content="#05070a">
 <link rel="stylesheet" href="/static/theme.css">
 <link rel="stylesheet" href="/static/job-theme.css">
+{% include '_lifecycle_css.html' %}
 </head>
 <body>
 <header><h1>T58 Quant Algo Backtester — Full Pipeline</h1></header>
@@ -16,16 +17,25 @@
   <a href="/dashboard" class="back-btn">&larr; Back</a>
   <a href="/full-pipeline">New Full Pipeline Run</a>
 </nav>
-<main>
+<main style="max-width:1180px;">
 
 {% if not_found %}
 <div class="error">Job "{{ job_id }}" was not found (the server may have restarted since it ran).</div>
 {% else %}
 
-<div class="card">
-  <h2 id="status-title"><span class="spinner" id="spinner"></span>Full Pipeline running&hellip;</h2>
-  <div id="log">Starting&hellip;</div>
-  <div id="next-step" style="display:none; margin-top:10px; padding:12px 14px; border-radius:8px; background:#152615; color:#b7e8b7; font-size:13px; line-height:1.5;"></div>
+<div class="lc-scope"><div class="lc-wrap">
+{% set lc_step = 'test' %}
+{% include '_lifecycle_stepper.html' %}
+<div class="lc-crumb">Test &rsaquo; <b>Full Pipeline</b> · running</div>
+
+<div class="lc-run-grid">
+<div class="lc-run-main">
+
+<div class="lc-card">
+  <h2 id="status-title" style="margin:0 0 10px; font-size:16px;"><span class="spinner" id="spinner"></span>Full Pipeline running&hellip;</h2>
+  <h3 style="margin:0 0 8px;">Run log — live</h3>
+  <div class="lc-logbox tall" id="log">Starting&hellip;</div>
+  <div id="next-step" style="display:none; margin-top:10px; padding:12px 14px; border-radius:8px; background:#152615; color:#b7e8b7; font-size:13px; line-height:1.5; text-align:left;"></div>
   <button class="stop-btn" type="button" id="stop-btn" onclick="stopFullPipeline()" style="margin-top:12px; padding:10px 22px; border-radius:10px; border:1px solid #6b2323; background:#3a1616; color:#ffb4b4; font-size:14px; font-weight:700; cursor:pointer;">Stop</button>
 </div>
 
@@ -37,8 +47,8 @@
    display:none until the finished job's recovery plan arrives. #}
 {% include '_recovery_panel.html' %}
 
-<div class="card" id="sweep-card" style="display:none;">
-  <h2>Timeframe sweep</h2>
+<div class="lc-card" id="sweep-card" style="display:none;">
+  <h2 style="margin:0 0 10px; font-size:16px;">Timeframe sweep</h2>
   <p class="note" id="sweep-note"></p>
   <div style="overflow-x:auto;"><table style="width:100%;font-size:13px;">
     <thead><tr><th align="left">Timeframe</th><th>Verdict</th><th>T58 score</th><th>Eval pass</th><th>Ruin</th><th>Trades</th><th>Net profit</th><th>Report</th></tr></thead>
@@ -46,8 +56,8 @@
   </table></div>
 </div>
 
-<div class="card" id="summary-card" style="display:none;">
-  <h2>Baseline vs. final</h2>
+<div class="lc-card" id="summary-card" style="display:none;">
+  <h2 style="margin:0 0 10px; font-size:16px;">Baseline vs. final</h2>
   <div class="headline">
     <div class="stat"><div class="label">Trades (baseline &rarr; final)</div><div class="value" id="s-trades">-</div></div>
     <div class="stat"><div class="label">Net profit (baseline &rarr; final)</div><div class="value" id="s-profit">-</div></div>
@@ -65,6 +75,41 @@
 </div>
 
 <div class="error" id="error-card" style="display:none;"></div>
+
+</div>
+<div class="lc-run-side">
+  <div class="lc-side-card">
+    <h4>&#9654; Run progress</h4>
+    <div style="display:flex; align-items:baseline; gap:10px;"><span class="lc-pct-big" id="lc-job-pct">…</span><span class="lc-hint" id="lc-job-state">running</span></div>
+    <div class="lc-progress indet" id="lc-job-bar" style="margin:8px 0;"><div></div></div>
+    <div class="lc-kv"><span class="k">Polling</span><span class="v lc-ok">live · every 2s</span></div>
+  </div>
+
+  <div class="lc-side-card">
+    <h4>&#128203; Run checklist</h4>
+    <div class="lc-kv"><span class="k">Baseline</span><span class="v">first</span></div>
+    <div class="lc-kv"><span class="k">Preflight</span><span class="v">in dollars, before the clock starts</span></div>
+    <div class="lc-kv"><span class="k">Search</span><span class="v">walk-forward-aware</span></div>
+    <div class="lc-kv"><span class="k">Monte Carlo</span><span class="v">re-validated</span></div>
+    <div class="lc-kv"><span class="k">OOS + holdout</span><span class="v">never tuned on</span></div>
+    <div class="lc-kv"><span class="k">Verdict</span><span class="v">READY bar &ge;70% · &ge;100 trades</span></div>
+  </div>
+
+  {% include '_lifecycle_how.html' %}
+
+  <div class="lc-side-card">
+    <h4>&#129517; What happens next</h4>
+    <p class="lc-hint" style="font-size:12.5px; color:var(--lc-text);">READY &rarr; moves to <b>Champion</b>.<br>NOT READY &rarr; one button carries these exact settings into <b>Optimize</b>.<br>Preflight block &rarr; the reason (and the fix) shows in the log, in dollars.</p>
+  </div>
+
+  <div class="lc-side-card">
+    <h4>&#9888; Watch-outs</h4>
+    <p class="lc-hint" style="font-size:12.5px;">A NOT READY verdict is the app working, not failing. Don't widen the stop just to get past a preflight block — on ES that hides real risk in the far tail.</p>
+  </div>
+</div>
+</div>
+
+</div></div>
 
 {% endif %}
 </main>
@@ -239,6 +284,34 @@
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/static/sw.js').catch(() => {});
   }
+</script>
+<script>
+  // v9.7: right-rail run progress mirrors the job state without touching
+  // the poller above. The job API publishes no numeric %; the bar stays
+  // indeterminate while running and lands at 100% when the job finishes.
+  (function () {
+    var pct = document.getElementById('lc-job-pct');
+    var state = document.getElementById('lc-job-state');
+    var bar = document.getElementById('lc-job-bar');
+    if (!pct) return;
+    function tick() {
+      var title = (document.getElementById('status-title') || {}).textContent || '';
+      var errShown = document.getElementById('error-card') && document.getElementById('error-card').style.display === 'block';
+      if (/complete/i.test(title)) {
+        pct.textContent = '100%'; state.textContent = 'complete';
+        bar.classList.remove('indet'); bar.firstElementChild.style.width = '100%';
+        return;
+      }
+      if (/stopped|failed/i.test(title) || errShown) {
+        pct.textContent = '—'; state.textContent = 'stopped';
+        bar.classList.remove('indet'); bar.firstElementChild.style.width = '0%';
+        return;
+      }
+      pct.textContent = '…'; state.textContent = 'running';
+      setTimeout(tick, 2000);
+    }
+    tick();
+  })();
 </script>
 {% endif %}
 {% include '_project_chat_embed.html' %}
