@@ -224,8 +224,9 @@ def test_form_page_renders_with_dropdowns_and_sidebar_link(client):
     assert "AAA_5M.csv" in body and "BBB_5M.csv" in body
     assert 'name="families"' in body
     assert "t58-multiselect.js" in body
-    # reachable from every page's sidebar
-    assert 'href="/cross-instrument"' in client.get("/dashboard").get_data(as_text=True)
+    # v9.8: the link moved from the sidebar into the Optimize page's
+    # Individual tools grid (the sidebar keeps single lifecycle links).
+    assert 'href="/cross-instrument"' in client.get("/optimize-simple").get_data(as_text=True)
 
 
 def test_start_requires_two_instruments(client):

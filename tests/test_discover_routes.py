@@ -24,7 +24,9 @@ def test_form_renders_and_sidebar_links():
     c = app.test_client()
     r = c.get("/discover")
     assert r.status_code == 200 and b"Your idea" in r.data
-    assert b"/discover" in c.get("/cpcv").data  # sidebar link present on other pages
+    # v9.8: sidebar lifecycle sections are single links (Owen's spec), so
+    # tool pages are reached from the section page's Individual tools grid.
+    assert b"/discover" in c.get("/validate-simple").data  # Your Idea tool card
 
 
 def test_unknown_job_status():
