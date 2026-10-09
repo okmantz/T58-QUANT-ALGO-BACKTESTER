@@ -17,7 +17,7 @@ from flask import Blueprint, jsonify, request
 
 accuracy_bp = Blueprint("accuracy_form", __name__)
 
-SIZING_MODES = ("skip", "fit_stop", "fixed_contracts", "micro_fallback")
+SIZING_MODES = ("skip", "fit_stop", "fixed_contracts", "micro_fallback", "rr_planned")
 
 
 def _num(v):
