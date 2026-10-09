@@ -536,6 +536,7 @@ def random_entry_distribution(
     metric: str = "net_profit",
     n_seeds: int = 200,
     seed: int = 0,
+    progress_cb=None,
 ) -> dict:
     """Random-entry null as a DISTRIBUTION (not one seed).
 
@@ -545,7 +546,13 @@ def random_entry_distribution(
     'expectancy'). Returns the null values and the one-sided p-value
     (1 + #null >= observed) / (1 + N): the share of random-timing runs that did
     at least as well as the real strategy. Old single-seed null_baselines is
-    unchanged."""
+    unchanged.
+
+    progress_cb: optional callable(done, total), invoked every 25 seeds
+    (and never otherwise) purely so a caller can show this loop is alive --
+    on a large dataset these are 200 FULL engine runs and used to take
+    many minutes with no output at all, which read as a hung page. The
+    callback cannot affect the draws, the values, or the p-value."""
     risk = build_run_context(risk)
     from app.backtest.statistics import compute_statistics
     rng = np.random.default_rng(seed)
@@ -553,7 +560,12 @@ def random_entry_distribution(
     hold = max(1, int(hold_bars))
     vals: list[float] = []
     import warnings
-    for _ in range(int(n_seeds)):
+    for _seed_idx in range(int(n_seeds)):
+        if progress_cb is not None and (_seed_idx + 1) % 25 == 0:
+            try:
+                progress_cb(_seed_idx + 1, int(n_seeds))
+            except Exception:  # noqa: BLE001 -- progress must never sink the run
+                pass
         k = max(1, min(int(n_entries), n // (hold + 1)))
         slots = rng.choice(np.arange(0, n - hold - 1, hold + 1), size=min(k, max(1, (n - hold - 1) // (hold + 1))), replace=False)
         sig = np.zeros(n, dtype=int)
