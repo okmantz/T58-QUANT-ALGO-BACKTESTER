@@ -41,7 +41,8 @@ import tempfile
 import threading
 import time
 import uuid
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor
+from concurrent.futures import wait as futures_wait
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
@@ -272,10 +273,41 @@ class WalkforwardGAResult:
 
 class WalkforwardGACancelled(Exception):
     """Raised out of run_walkforward_aware_refinement when a caller-
-    supplied cancel_event is set -- checked once per generation, so a
-    Stop click takes effect at the next generation boundary rather than
-    instantly. Used by Quick Optimize's web job (previously had no way to
-    stop a run in progress at all)."""
+    supplied cancel_event is set. Checked at every generation boundary
+    AND inside evaluate_batch's 1-second completion poll, so a Stop click
+    takes effect within about a second instead of waiting out the current
+    generation's candidate evaluations."""
+
+
+def _terminate_pool_workers(pool) -> None:
+    """Stop a candidate-evaluation pool NOW: cancel queued futures and
+    terminate the worker processes, so a user Stop doesn't sit waiting for
+    every in-flight backtest + Monte Carlo to finish (the old
+    pool.shutdown(wait=True) path could take many minutes on a wide
+    generation, which is what made Stop look broken) and no orphan worker
+    processes are left burning CPU afterward. Same terminate pattern as
+    app.search.batch_runner / app.evolution.engine. Only ever called on
+    the cancel path; normal completion still shuts the pool down cleanly
+    with wait=True."""
+    try:
+        pool.shutdown(wait=False, cancel_futures=True)
+    except Exception:  # noqa: BLE001 -- best-effort teardown
+        pass
+    try:
+        procs = list(getattr(pool, "_processes", {}).values())
+    except Exception:  # noqa: BLE001
+        procs = []
+    for proc in procs:
+        try:
+            if proc.is_alive():
+                proc.terminate()
+        except Exception:  # noqa: BLE001
+            pass
+    for proc in procs:
+        try:
+            proc.join(timeout=5)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def run_walkforward_aware_refinement(
@@ -544,20 +576,28 @@ def run_walkforward_aware_refinement(
                 try:
                     futures = {pool.submit(_ga_eval_task, g): i for i, g in enumerate(genome_list)}
                     results: list = [None] * len(genome_list)
-                    for fut in as_completed(futures):
-                        # Cancellation must not wait for EVERY in-flight
-                        # candidate's backtest + Monte Carlo (that made
-                        # Stop look broken): check as each one finishes,
-                        # cancel whatever is still queued, and bail.
+                    # Poll with a 1s timeout instead of as_completed():
+                    # as_completed blocks until the NEXT candidate finishes,
+                    # so a stop click during one long candidate evaluation
+                    # was not noticed until that candidate completed (and
+                    # the pool's shutdown then waited for the rest). The
+                    # cancel flag is now checked every second regardless of
+                    # how long individual candidates take. Results are
+                    # stored by genome index either way, so scores are
+                    # unchanged.
+                    pending = set(futures)
+                    while pending:
                         if cancel_event is not None and cancel_event.is_set():
-                            for pending in futures:
-                                pending.cancel()
+                            for pending_fut in pending:
+                                pending_fut.cancel()
                             raise WalkforwardGACancelled(
                                 "Walk-forward-aware GA search stopped by user."
                             )
-                        i = futures[fut]
-                        fitness, tc = fut.result()
-                        results[i] = _Cand(genome_list[i], fitness, tc)
+                        done, pending = futures_wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+                        for fut in done:
+                            i = futures[fut]
+                            fitness, tc = fut.result()
+                            results[i] = _Cand(genome_list[i], fitness, tc)
                     total_evaluations[0] += len(results)
                     return results
                 except WalkforwardGACancelled:
@@ -751,7 +791,12 @@ def run_walkforward_aware_refinement(
                 best_ever = max(population + [baseline], key=lambda c: c.fitness)
         finally:
             if pool is not None:
-                pool.shutdown(wait=True)
+                if cancel_event is not None and cancel_event.is_set():
+                    # User Stop: kill the workers now instead of waiting
+                    # for every in-flight candidate to finish evaluating.
+                    _terminate_pool_workers(pool)
+                else:
+                    pool.shutdown(wait=True)
             if pool_tmp_dir is not None:
                 shutil.rmtree(pool_tmp_dir, ignore_errors=True)
 
