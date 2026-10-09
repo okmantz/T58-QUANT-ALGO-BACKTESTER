@@ -441,6 +441,15 @@ class FullPipelineResult:
     # same dedicated prominence Quick Optimize gives its own copy of
     # this field.
     account_mismatch_warning: str | None = None
+    # v9.10: set when the Step-1 gate auto-applied a sizing remedy
+    # (micro fallback / fit_stop floor) so the run could proceed -- the
+    # run log carries the same text; nothing about the strategy or its
+    # stop was changed by the remedy.
+    sizing_adjustment: dict | None = None
+    # v9.10: set when the strategy defined no stop and the pipeline's
+    # visible discretionary-style default (2 x ATR(14)) replaced the
+    # engine's silent 1%-of-price placeholder for this run.
+    stop_default_applied: dict | None = None
     # -- v5 validation hard gates -----------------------------------------
     dsr_gate_result: "DeflatedSharpeGateResult | None" = None
     dsr_skip_reason: str | None = None
@@ -1270,26 +1279,238 @@ def run_full_pipeline(
     # blown account gets a fresh eval and keeps going" true end to end.
     risk = replace(risk, reset_on_breach=cfg.reset_on_breach)
 
+    # v9.10 (Owen's risk model, stated 2026-10-09): Full Pipeline sizes
+    # the discretionary way -- the risk budget is a CAP (1% of the
+    # account size), planned risk scales with the setup (target $ / RR),
+    # and contracts (mini, else micro) are chosen to land as close as
+    # possible under planned, never above the cap and never by
+    # shrinking the stop. fit_stop's shrink-to-spend-the-budget is
+    # exactly what this replaces. Explicit fixed_contracts /
+    # micro_fallback choices are honored as deliberate alternatives.
+    if risk.sizing_mode in ("skip", "fit_stop"):
+        risk = replace(risk, sizing_mode="rr_planned")
+
     adaptive_risk = build_limit_aware_preset(prop_rules, daily_profit_lock_pct=cfg.adaptive_risk_daily_profit_lock_pct) \
         if cfg.adaptive_risk_enabled else None
     if adaptive_risk is not None:
         log(f"Adaptive risk enabled: {len(adaptive_risk.rules)} limit-aware throttle rule(s) applied to every backtest below.")
 
     # -- Step 1: baseline -----------------------------------------------
+    # v9.10 (Owen, 2026-10-09): a strategy that defines NO stop gets its
+    # risk priced by the engine's silent 1%-of-price placeholder (~78
+    # pts on ES = ~$3,900 on one mini -- a stop no discretionary trader
+    # would place, and wider than the whole risk budget, which is why
+    # fit_stop refused to shrink below 20% of it and preflight BLOCKed
+    # every run). Say so plainly up front; if that placeholder makes
+    # the run unaffordable, the sizing gate below substitutes the
+    # visible discretionary-style default (2 x ATR(14)) instead of
+    # trading the placeholder. A strategy carrying its own stop, and
+    # any run the placeholder prices affordably, is never touched.
+    sizing_adjustment: dict | None = None
+    stop_default_applied: dict | None = None
+    _stopless_manual = False
+    if strategy.source_type == "manual":
+        from app.validation.preflight import strategy_defines_stop
+
+        _stopless_manual = not strategy_defines_stop(strategy)
+    if _stopless_manual and risk.contract_size:
+        # Whole-contract run: substitute BEFORE the baseline, so the
+        # placeholder never prices a single trade in this run.
+        from app.validation.preflight import apply_no_stop_default
+
+        strategy, _stop_note = apply_no_stop_default(strategy, dev_df)
+        if _stop_note is not None:
+            stop_default_applied = _stop_note
+            _med = _stop_note.get("median_stop_points")
+            _ph = _stop_note.get("placeholder_stop_points")
+            _cs = float(risk.contract_size)
+            _budget = risk.risk_amount(float(risk.initial_balance))
+            _txt = (
+                f"STOP DEFAULT: '{display_name}' defines no stop of its own, so this run trades it "
+                f"the discretionary way: stop = {_stop_note['multiple']:g} x ATR({_stop_note['period']})"
+            )
+            if _med:
+                _txt += f" (median {_med:.1f} pts on this data = ${(_med * _cs):,.0f} on one full-size contract)"
+            _txt += f", sized against the ${_budget:,.0f} risk budget."
+            if _ph:
+                _txt += (
+                    f" The engine's silent placeholder would have been 1% of price (~{_ph:.0f} pts "
+                    f"= ${(_ph * _cs):,.0f} on one contract) -- a stop no discretionary trader would "
+                    "place, and the thing that used to BLOCK this run at preflight."
+                )
+            _txt += (
+                " To use your own stop instead, set risk_management (stop_type fixed/atr + "
+                "stop_value) or stop_loss_pips on the strategy."
+            )
+            log(f"  {_txt}")
+            warnings.append(_txt)
+    elif _stopless_manual:
+        # Fractional sizing: the placeholder is a scalar here, not a
+        # priced contract stop; the engine already warns about it, and
+        # the pipeline's locked-parameter runs are built on these.
+        try:
+            _ph_txt = f" (~{0.01 * float(dev_df['close'].median()):.2f} price units on this data)"
+        except Exception:  # noqa: BLE001 -- explanatory text only
+            _ph_txt = ""
+        log(
+            f"  NOTE: '{display_name}' defines no stop of its own; on fractional sizing the engine "
+            f"prices its risk with a 1%-of-price placeholder stop{_ph_txt} (see the run warnings). "
+            "On a whole-contract (futures) run the pipeline substitutes the visible 2 x ATR(14) "
+            "default instead -- set risk_management or stop_loss_pips on the strategy to use your own."
+        )
+
     log(f"Step 1/7: Baseline run for '{display_name}'...")
-    preflight_signal_check(dev_df, strategy, risk, "Full Pipeline")
     baseline_bt = run_backtest(dev_df, strategy, risk, adaptive_risk=adaptive_risk)
     for w in baseline_bt.warnings:
         log(f"  WARNING: {w}")
         warnings.append(w)
-    if getattr(cfg, "preflight_enforce", True):
-        from app.validation.preflight import baseline_preflight, enforce_preflight
+    _skipped_signals = int(
+        ((baseline_bt.equity_curve.attrs.get("sizing_halt") or {}).get("skipped") or 0)
+    )
+    if baseline_bt.trades or _skipped_signals:
+        from app.validation.preflight import (
+            SIZING_BLOCK_CODES,
+            baseline_preflight,
+            enforce_preflight,
+            sizing_remedy_candidates,
+        )
+
+        _min_trades = getattr(cfg, "preflight_min_trades", 100)
         _pf = baseline_preflight(baseline_bt, dev_df, risk, prop_rules, symbol=instrument,
-                                 min_trades=getattr(cfg, "preflight_min_trades", 100))
+                                 min_trades=_min_trades)
         log("  " + _pf.render().replace("\n", "\n  "))
-        for _i in _pf.by_severity("warn"):
-            warnings.append(_i.message)
-        enforce_preflight(_pf, "Full Pipeline")
+        # v9.10 sizing remedies: preflight BLOCKs when the budget cannot
+        # buy a contract at the strategy's stop. Before accepting that,
+        # fix the cheapest dishonesty first, then the levers the BLOCK
+        # message itself names -- re-running the baseline honestly under
+        # each. Whatever is adopted is logged, warned, and stored on the
+        # result; if nothing clears the sizing block, the BLOCK stands.
+        if _pf.blocked and {i.code for i in _pf.by_severity("block")} & SIZING_BLOCK_CODES:
+            _ratio_before = float(_pf.facts.get("sizing_skip_ratio", 0.0))
+            # Remedy 0 (strategy level): the invented stop itself. A
+            # stop-less manual strategy is re-run with the visible
+            # 2 x ATR(14) default; the sizing remedies below then work
+            # on that honest stop if it still does not fit.
+            if _stopless_manual:
+                from app.validation.preflight import apply_no_stop_default
+
+                _strat2, _stop_note = apply_no_stop_default(strategy, dev_df)
+                if _stop_note is not None:
+                    _bt2 = run_backtest(dev_df, _strat2, risk, adaptive_risk=adaptive_risk)
+                    _pf2 = baseline_preflight(_bt2, dev_df, risk, prop_rules, symbol=instrument,
+                                              min_trades=_min_trades)
+                    _med = _stop_note.get("median_stop_points")
+                    _ph = _stop_note.get("placeholder_stop_points")
+                    _cs = float(risk.contract_size) if risk.contract_size else None
+                    _budget = risk.risk_amount(float(risk.initial_balance))
+                    _txt = (
+                        f"STOP DEFAULT (automatic, this run only): '{display_name}' defines no stop "
+                        f"of its own, so this run trades it the discretionary way: stop = "
+                        f"{_stop_note['multiple']:g} x ATR({_stop_note['period']})"
+                    )
+                    if _med:
+                        _txt += f" (median {_med:.1f} pts on this data"
+                        if _cs:
+                            _txt += f" = ${(_med * _cs):,.0f} on one full-size contract"
+                        _txt += ")"
+                    _txt += f", sized against the ${_budget:,.0f} risk budget."
+                    if _ph:
+                        _txt += (
+                            f" The engine's silent placeholder was 1% of price (~{_ph:.0f} pts"
+                            + (f" = ${(_ph * _cs):,.0f} on one contract" if _cs else "")
+                            + ") -- wider than the budget itself, which is what BLOCKED this run above."
+                        )
+                    _txt += (
+                        " To use your own stop instead, set risk_management (stop_type fixed/atr "
+                        "+ stop_value) or stop_loss_pips on the strategy."
+                    )
+                    strategy, baseline_bt, _pf = _strat2, _bt2, _pf2
+                    stop_default_applied = _stop_note
+                    if {i.code for i in _pf.by_severity("block")} & SIZING_BLOCK_CODES:
+                        log(f"  {_txt} Still sizing-blocked "
+                            f"({float(_pf.facts.get('sizing_skip_ratio', 0.0)):.0%} of signals "
+                            "skipped) -- trying the sizing remedies on this stop.")
+                    else:
+                        log(f"  {_txt}")
+                    warnings.append(_txt)
+                    for w in baseline_bt.warnings:
+                        log(f"  WARNING: {w}")
+                        warnings.append(w)
+            _cands = sizing_remedy_candidates(risk, instrument) \
+                if {i.code for i in _pf.by_severity("block")} & SIZING_BLOCK_CODES else []
+            for _kind, _detail, _cand_risk in _cands:
+                if _kind == "micro_fallback":
+                    _desc = (
+                        f"the micro contract {_detail['micro_symbol']} "
+                        f"(${_detail['micro_contract_size']:g}/point, SAME stop distance) "
+                        "instead of the full-size contract"
+                    )
+                else:
+                    _desc = (
+                        "fit_stop with the don't-shrink-below floor lowered "
+                        f"{float(risk.fit_stop_min_fraction):g} -> {_detail['fit_stop_min_fraction']:g} "
+                        "(stops are still never capped below that fraction of the strategy's own)"
+                    )
+                _bt2 = run_backtest(dev_df, strategy, _cand_risk, adaptive_risk=adaptive_risk)
+                _pf2 = baseline_preflight(_bt2, dev_df, _cand_risk, prop_rules, symbol=instrument,
+                                          min_trades=_min_trades)
+                _ratio_after = float(_pf2.facts.get("sizing_skip_ratio", 0.0))
+                if {i.code for i in _pf2.by_severity("block")} & SIZING_BLOCK_CODES:
+                    log(f"  Sizing remedy tried: {_desc} -- still blocked "
+                        f"({_ratio_after:.0%} of signals skipped); no adoption.")
+                    continue
+                _adj_txt = (
+                    f"SIZING ADJUSTMENT (automatic, this run only): preflight was blocked with "
+                    f"{_ratio_before:.0%} of signals unaffordable at the configured sizing. This run "
+                    f"now sizes with {_desc}. This remedy changed no strategy parameter and did "
+                    f"not move the stop distance; skipped signals after the adjustment: {_ratio_after:.0%}."
+                )
+                log(f"  {_adj_txt}")
+                warnings.append(_adj_txt)
+                sizing_adjustment = {
+                    "applied": True,
+                    "kind": _kind,
+                    **_detail,
+                    "mode_before": risk.sizing_mode,
+                    "skip_ratio_before": _ratio_before,
+                    "skip_ratio_after": _ratio_after,
+                    "stop_distance_changed": _kind == "fit_stop_floor",
+                }
+                risk, baseline_bt, _pf = _cand_risk, _bt2, _pf2
+                for w in baseline_bt.warnings:
+                    log(f"  WARNING: {w}")
+                    warnings.append(w)
+                break
+        if getattr(cfg, "preflight_enforce", True):
+            for _i in _pf.by_severity("warn"):
+                warnings.append(_i.message)
+            enforce_preflight(_pf, "Full Pipeline")
+    if baseline_bt.trades or _skipped_signals:
+        # v9.10: the run's risk model in plain numbers (Owen's ask).
+        _ss = baseline_bt.equity_curve.attrs.get("sizing_summary") or {}
+        _micro_n = int(_ss.get("micro_fallback", 0) or 0)
+        _taken_n = int(_ss.get("entries_taken", 0) or 0)
+        _cap = risk.risk_amount(float(risk.initial_balance))
+        if risk.risk_mode == "fixed":
+            _cap_txt = f"cap ${_cap:,.0f}/trade (fixed-dollar cap -- a ceiling, never a target)"
+        else:
+            _cap_txt = (
+                f"cap ${_cap:,.0f}/trade ({float(risk.risk_value):g}% of the "
+                f"${float(risk.initial_balance):,.0f} account -- a ceiling, never a target)"
+            )
+        log(
+            f"  RISK MODEL: {_cap_txt}. Planned risk = ${float(risk.planned_target_dollars):,.0f} "
+            "target / RR when the setup carries a target (e.g. $300 at 1:2 RR -> $150 planned), "
+            "otherwise up to the cap; sizing picks mini, else micro, landing as close as possible "
+            f"under planned without exceeding it. Baseline sizing: {_taken_n - _micro_n} full-size, "
+            f"{_micro_n} micro, {int(_ss.get('skipped_for_sizing', 0) or 0)} skipped "
+            f"(reasons: {_ss.get('skip_reasons', {})})."
+        )
+    if not baseline_bt.trades:
+        # Genuine never-fires (or a sizing case the remedies above could
+        # not rescue with enforcement off): keep the fast, specific
+        # zero-trades diagnosis instead of a wall of zero-trade folds.
+        preflight_signal_check(dev_df, strategy, risk, "Full Pipeline")
 
     lookahead_summary = None
     lookahead_bug_detected = False
@@ -2014,6 +2235,8 @@ def run_full_pipeline(
             instrument, report_basename, account_mismatch_warning,
             dsr_gate_result=dsr_gate_result, dsr_skip_reason=dsr_skip_reason,
             pbo_gate_result=pbo_gate_result, pbo_skip_reason=pbo_skip_reason,
+            sizing_adjustment=sizing_adjustment,
+            stop_default_applied=stop_default_applied,
         )
     finally:
         if final_tmp_dir is not None:
@@ -2035,6 +2258,8 @@ def _finish(
     dsr_skip_reason: str | None = None,
     pbo_gate_result: "PBOGateResult | None" = None,
     pbo_skip_reason: str | None = None,
+    sizing_adjustment: dict | None = None,
+    stop_default_applied: dict | None = None,
 ) -> FullPipelineResult:
     """Writes the report + (for code strategies) saves the winner into the
     Strategy Library. Split out of run_full_pipeline only to keep that
@@ -2481,6 +2706,8 @@ def _finish(
         report_paths=report_paths,
         elapsed_seconds=elapsed,
         account_mismatch_warning=account_mismatch_warning,
+        sizing_adjustment=sizing_adjustment,
+        stop_default_applied=stop_default_applied,
         warnings=warnings,
     )
 
