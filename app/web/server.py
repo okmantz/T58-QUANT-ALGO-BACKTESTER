@@ -197,7 +197,7 @@ from app.validation.walk_forward_opt import run_walk_forward_optimization
 from app.strategy.library import (
     STRATEGY_STATUSES, STRATEGY_TYPES, StrategyAlreadyExists, delete_many,
     delete_saved_strategy, export_library_zip_bytes, list_all_markets, list_all_tags,
-    list_saved_strategies, load_strategy_text, record_backtest_result, record_lookahead_result,
+    library_fingerprint, list_saved_strategies, load_strategy_text, record_backtest_result, record_lookahead_result,
     record_search_result, record_optimize_result, record_validation_result, record_champion_check_result,
     rename_saved_strategy, save_strategy_bytes, save_strategy_metadata,
     save_strategy_text, set_strategy_status, set_strategy_tags,
@@ -539,6 +539,14 @@ def _license_gate():
         return None
 
     from app.licensing import client as license_client
+    if license_client.resolve_license_server_url() is None:
+        # v9.9: no license server configured (no T58_LICENSE_SERVER_URL
+        # env var, no baked build_config.py) -- a source/owner build.
+        # Licensing only engages when a build ships WITH a server URL;
+        # with none configured there is nothing to validate against,
+        # so don't gate (same boundary as the desktop gate in
+        # app/licensing/gate.py).
+        return None
     ok, message = license_client.validate()
     _license_ok_cached = ok
     if ok:
@@ -1001,6 +1009,9 @@ def _prop_rules_from_search_evo_form(form) -> PropRules:
     )
 
 
+_SAVED_STRATEGIES_JSON_CACHE: tuple | None = None
+
+
 def _saved_strategies_json() -> str:
     """{"python": [{"name", "description", "market", "tags", "status",
     "last_run", "lookahead", "last_search", "evolution"}, ...], "pinescript": [...],
@@ -1011,8 +1022,18 @@ def _saved_strategies_json() -> str:
     or ones promoted off its leaderboard -- see
     app.evolution.engine.evolution_stats_metadata) -- None for anything
     hand-built, uploaded, or AI-generated.
-    """
-    return json.dumps({
+
+    PERF (v9.11): most page renders embed this blob, and rebuilding it
+    re-serialized the whole library every time. It is now cached on the
+    library's own fingerprint (see app.strategy.library): any strategy
+    save/delete/metadata write changes the fingerprint and the next
+    render rebuilds it -- never TTL-stale."""
+    global _SAVED_STRATEGIES_JSON_CACHE
+    fingerprint = library_fingerprint()
+    cached = _SAVED_STRATEGIES_JSON_CACHE
+    if cached is not None and cached[0] == fingerprint:
+        return cached[1]
+    payload = json.dumps({
         t: [
             {
                 "name": s.name,
@@ -1029,6 +1050,8 @@ def _saved_strategies_json() -> str:
         ]
         for t in STRATEGY_TYPES
     })
+    _SAVED_STRATEGIES_JSON_CACHE = (fingerprint, payload)
+    return payload
 
 
 def _alpaca_template_context() -> dict:
@@ -5471,9 +5494,10 @@ def full_pipeline_job(job_id):
 def full_pipeline_job_stop(job_id):
     """Signals cancellation to a running single-strategy Full Pipeline job
     -- see run_full_pipeline's cancel_event param. Checked between each of
-    the 7 steps, so this stops the run at the next step boundary rather
-    than instantly, same tradeoff the batch job's stop button already
-    makes."""
+    the 7 steps AND inside Step 2's GA (1-second pool poll + worker
+    termination, v9.11), so the run lands in its terminal 'stopped' state
+    within a few seconds of the click instead of at the next step
+    boundary."""
     job = JOB_MANAGER.get(job_id)
     if job is None:
         return jsonify({"found": False}), 404
@@ -5526,14 +5550,14 @@ def full_pipeline_job_status(job_id):
         "best_timeframe": job.get("best_timeframe"),
         "sweep_skipped": job.get("sweep_skipped"),
         "next_step": (
-            pipeline_guide.after_full_pipeline(result.verdict, bool(result.saved_library_note), result=result)
+            _safe_guide_text(pipeline_guide.after_full_pipeline, result)
             if result is not None else None
         ),
         # Structured verdict guidance (headline / points / numbered steps)
         # so the job page can render a readable verdict card instead of
         # one wall-of-text paragraph. Same text as next_step, split.
         "next_step_parts": (
-            pipeline_guide.after_full_pipeline_parts(result.verdict, bool(result.saved_library_note), result=result)
+            _safe_guide_text(pipeline_guide.after_full_pipeline_parts, result)
             if result is not None else None
         ),
         # v9: structured recovery plan (gate, margin, ordered concrete actions).
@@ -9538,6 +9562,20 @@ def _safe_recovery(fn, *args, **kwargs) -> dict | None:
     """v9: never let recovery-plan computation break a status endpoint."""
     try:
         return fn(*args, **kwargs).to_dict()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _safe_guide_text(fn, result):
+    """v9.11: the verdict-guidance text for a finished job must never be
+    able to break the status endpoint itself. This payload is what the job
+    page polls every 2 seconds; if computing the guidance ever raised
+    (an unusual result shape), every poll after completion would 500 and
+    the page would spin on 'running' forever even though the run had
+    finished -- the verdict/summary in the same payload are the payload
+    of record, the guidance is decoration."""
+    try:
+        return fn(result.verdict, bool(result.saved_library_note), result=result)
     except Exception:  # noqa: BLE001
         return None
 
