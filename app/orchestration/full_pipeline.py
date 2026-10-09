@@ -108,7 +108,7 @@ from app.monte_carlo.engine import MonteCarloConfig, MonteCarloResult, default_m
 from app.optimize.code_parameter_space import patched_source_for_strategy
 from app.optimize.parameter_space import RefinementError
 from app.optimize.refinement import RefinementConfig, preflight_signal_check
-from app.optimize.walkforward_ga import WalkforwardGAResult, run_walkforward_aware_refinement
+from app.optimize.walkforward_ga import WalkforwardGACancelled, WalkforwardGAResult, run_walkforward_aware_refinement
 from app.orchestration.resource_guard import safe_worker_count
 from app.prop.simulator import AccountSimResult, PropRules, simulate_account
 from app.reports.crash_log import log_crash
@@ -1049,6 +1049,7 @@ def _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt
         sr = final_strategy.generate(d2)
         if getattr(sr, "entry_orders", None) is not None:
             return replay, null, cost_stress
+        log(f"  Attempt replay: re-running from {cfg.attempt_replay_starts} fresh-account start dates...")
         try:
             from app.prop.attempt_replay import run_attempt_replay
             replay = run_attempt_replay(
@@ -1069,11 +1070,14 @@ def _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt
                 holds = sorted((t.exit_time - t.entry_time).total_seconds() for t in trades)
                 bar_s = max(1.0, float(pd.Series(pd.to_datetime(d2["timestamp"])).diff().dt.total_seconds().median()))
                 hold_bars = max(1, int(round(holds[len(holds) // 2] / bar_s)))
+                log(f"  Random-entry null: {cfg.null_n_seeds} full engine runs over {len(d2):,} bars "
+                    f"(the quietest stretch of this step -- progress prints every 25 runs)...")
                 null = random_entry_distribution(
                     d2, risk, float(final_bt.statistics.net_profit), len(trades), longs / len(trades), hold_bars,
                     stop_loss_pips=sr.stop_loss_pips, take_profit_pips=sr.take_profit_pips,
                     stop_loss_distance=sr.stop_loss_distance, take_profit_distance=sr.take_profit_distance,
                     n_seeds=cfg.null_n_seeds,
+                    progress_cb=lambda done, total: log(f"    Random-entry null: {done}/{total} runs done..."),
                 )
                 if null.get("p_value") is not None:
                     log(f"  Random-entry null: p = {null['p_value']:.3f} over {null['n_seeds']} runs "
@@ -1089,6 +1093,7 @@ def _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt
         from dataclasses import replace as _replace_risk
 
         _mult = float(getattr(cfg, "break_cost_mult", 2.0))
+        log(f"  Cost stress: re-running the final strategy at {_mult:g}x spread/slippage/commission...")
         _srisk = _replace_risk(
             risk,
             spread_pips=risk.spread_pips * _mult,
@@ -1170,14 +1175,15 @@ def run_full_pipeline(
     previous call's report -- pass a distinct report_basename per
     strategy when running more than one against the same output_dir.
 
-    cancel_event: optional. Checked between each of the 7 steps below
-    (not sub-step-by-sub-step -- Step 2's own GA already checks its own
-    cancellation deep inside the worker-pool loop for the batch path, but
-    a single-strategy run stopping between steps rather than mid-GA-
-    generation is still a large improvement over "no stop button at all",
-    which was the actual prior behavior of the web app's single Full
-    Pipeline run). Raises FullPipelineCancelled the moment it's noticed;
-    callers should treat that the same as FullPipelineBatchCancelled.
+    cancel_event: optional. Checked between each of the 7 steps below,
+    and (v9.11) also passed into Step 2's walk-forward-aware GA, which
+    polls it every second inside its worker pool and terminates the pool
+    workers when it fires -- so a Stop click takes effect within a few
+    seconds even mid-generation, instead of only at the next step
+    boundary (the prior behavior, which left a multi-minute GA
+    uninterruptible). Raises FullPipelineCancelled the moment it's
+    noticed; callers should treat that the same as
+    FullPipelineBatchCancelled.
 
     ollama_settings: optional. When provided and `.is_usable` (enabled,
     with a host configured -- see app.ai.ollama_settings), Step 2's
@@ -1726,6 +1732,11 @@ def run_full_pipeline(
                 parallel=cfg.parallel_search,
                 max_workers=cfg.parallel_search_max_workers,
                 adaptive_risk=adaptive_risk,
+                # v9.11: the pipeline's own cancel_event now reaches the
+                # search itself (previously Step 2 ran uninterruptibly to
+                # the end of the GA -- Owen's 791s generation -- and Stop
+                # only took effect at the NEXT step boundary).
+                cancel_event=cancel_event,
             )
             refinement_ran = True
             if ga_result.best.oos_trade_count > 0:
@@ -1749,6 +1760,11 @@ def run_full_pipeline(
                     "trades -- keeping the original baseline configuration as final instead of a "
                     "'winner' that never actually traded out-of-sample."
                 )
+        except WalkforwardGACancelled:
+            # The search noticed the stop first (its own exception type);
+            # translate so the caller sees the pipeline's cancel contract.
+            log("\nStop requested -- ending this Full Pipeline run.")
+            raise FullPipelineCancelled("Full Pipeline stopped by user during the Step 2 search.")
         except RefinementError as exc:
             refinement_skip_reason = str(exc)
             log(f"  Optimization skipped: {exc}")
@@ -2368,6 +2384,7 @@ def _finish(
         finally:
             rmtree(_tmp_report_dir, ignore_errors=True)
 
+    log("  Compiling the final report (HTML + JSON + trade CSVs)...")
     report_paths = generate_full_report(
         output_dir=output_dir,
         strategy_name=final_strategy_name,
