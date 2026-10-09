@@ -2282,6 +2282,7 @@ class MainWindow:
             (None, None, "OVERVIEW", None, None),
             ("dashboard", "", "Dashboard", self.tab_dashboard, GREEN),
             ("aiassistant", "", "AI Assistant", self.tab_ai_assistant, GREEN),
+            ("stratlibrary", "", "Strategy Library", self.tab_stratlibrary, NEON_VIOLET),
             ("manual", "", "User Manual", self.tab_manual, GREEN),
 
             (None, "SUPERHEADER", "Lifecycle", None, None),
@@ -2300,7 +2301,6 @@ class MainWindow:
             ("speedrun", "", "\u26a1 Speed Run", self.tab_speedrun, NEON_VIOLET),
             ("speedrunmulti", "", "\u26a1 Multi-Instrument Speed Run", self.tab_speedrun_multi, NEON_VIOLET),
             ("forge", "", "\u26a1 Forge Strategy", self.tab_forge, NEON_LIME),
-            ("stratlibrary", "", "Strategy Library", self.tab_stratlibrary, NEON_VIOLET),
             ("strategy", "", "Strategy Builder", self.tab_strategy, NEON_VIOLET),
 
             (None, None, "\u2461 TEST", None, NEON_CYAN),
