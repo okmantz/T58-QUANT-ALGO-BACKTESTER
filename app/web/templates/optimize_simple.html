@@ -41,7 +41,7 @@
         <label class="flabel" for="lc-strategy-pick">Strategy</label>
         <select class="inp" name="strategy_pick" id="lc-strategy-pick">
           {% for s in strategies %}
-          <option value="{{ s.type }}::{{ s.name }}">{{ s.name }} ({{ s.type }})</option>
+          <option value="{{ s.type }}::{{ s.name }}"{% if prefill.strategy_pick == s.type ~ '::' ~ s.name %} selected{% endif %}>{{ s.name }} ({{ s.type }})</option>
           {% endfor %}
         </select>
       </div>
@@ -51,13 +51,10 @@
           <option value="">— upload a CSV instead —</option>
           {% for g in dataset_groups %}
           <optgroup label="{{ g.instrument }}">
-            {% for d in g.datasets %}
-            <option value="{{ d.name }}">{{ d.name }}</option>
+            {% for f in g.files %}
+            <option value="{{ f.full_name }}"{% if prefill.existing_dataset == f.full_name %} selected{% endif %}>{{ f.name }}</option>
             {% endfor %}
           </optgroup>
-          {% endfor %}
-          {% for d in stored_datasets %}
-          <option value="{{ d.name }}">{{ d.name }}</option>
           {% endfor %}
         </select>
         <label class="flabel" style="margin-top:10px;" for="lc-csv-file">…or upload market data (CSV)</label>
@@ -68,10 +65,20 @@
         <select class="inp" name="prop_preset" id="lc-prop-preset">
           <option value="">— type the rules in Advanced —</option>
           {% for p in prop_presets %}
-          <option value="{{ p.key }}">{{ p.label }}</option>
+          <option value="{{ p.key }}"{% if prefill.prop_preset == p.key %} selected{% endif %}>{{ p.label }}</option>
           {% endfor %}
         </select>
         <div class="lc-hint" style="margin-top:5px;">Its rules show in the rail &rarr; and harden this run.</div>
+      </div>
+      <div class="lc-col">
+        <label class="flabel" for="lc-timeframe">Timeframe</label>
+        <select class="inp" name="timeframe" id="lc-timeframe">
+          <option value="">Dataset's native timeframe (default)</option>
+          {% for tf in timeframe_choices %}
+          <option value="{{ tf }}"{% if prefill.timeframe == tf %} selected{% endif %}>{{ tf }}</option>
+          {% endfor %}
+        </select>
+        <div class="lc-hint" style="margin-top:5px;">The data is resampled to this bar size before anything runs — never a silent 1m. A timeframe declared inside the strategy itself still wins.</div>
       </div>
     </div>
     <div class="lc-rules-line" id="lc-rules-line"></div>
@@ -110,8 +117,54 @@
         <div class="cname"><span class="cbox"></span>Multi-Objective</div>
         <div class="cdesc">Runs on its own page — ticked engines get a link in the job result.</div>
       </label>
+      <label class="lc-checkcard">
+        <input class="lc-check-input" type="checkbox" name="engine_deep_search" id="e_ds">
+        <div class="cname"><span class="cbox"></span>Deep search (PropFit)</div>
+        <div class="cdesc">Thousands of variants — parameters × timeframes × datasets — ranked by PropFit, then verified. Hand it a failing strategy; it looks for the variant that passes. Settings below.</div>
+      </label>
     </div>
     <div class="lc-hint" style="margin-top:10px;" id="lc-engine-count"></div>
+  </div>
+
+  <div class="lc-card">
+    <h3>Deep search (PropFit) — settings</h3>
+    <p class="lc-hint" style="margin-bottom:10px;">{{ propfit_formula }}</p>
+    <div class="lc-row">
+      <div class="lc-col">
+        <label class="flabel" for="ds-datasets">Market datasets (with "search across datasets" on)</label>
+        <select class="inp" name="ds_datasets" id="ds-datasets" multiple size="6">
+          {% for g in dataset_groups %}
+          <optgroup label="{{ g.instrument }}">
+            {% for f in g.files %}
+            <option value="{{ f.full_name }}">{{ f.name }}</option>
+            {% endfor %}
+          </optgroup>
+          {% endfor %}
+        </select>
+        <div class="lc-hint" style="margin-top:5px;">Nothing picked = the dataset chosen above.</div>
+      </div>
+      <div class="lc-col">
+        <label class="flabel" for="ds-timeframes">Timeframes</label>
+        <select class="inp" name="ds_timeframes" id="ds-timeframes" multiple size="6">
+          {% for tf in timeframe_choices %}
+          <option value="{{ tf }}"{% if tf in ['5m', '15m', '1h'] %} selected{% endif %}>{{ tf }}</option>
+          {% endfor %}
+        </select>
+        <div class="lc-hint" style="margin-top:5px;">Each dataset's bars are resampled to each picked size (cached). Sizes finer than the data are skipped with the reason logged.</div>
+      </div>
+      <div class="lc-col">
+        <label class="flabel" for="ds-budget">Variant budget</label>
+        <select class="inp" name="ds_budget" id="ds-budget">
+          <option value="500">500 variants (quick)</option>
+          <option value="2000" selected>2,000 variants</option>
+          <option value="10000">10,000 variants (long)</option>
+        </select>
+        <label class="checkbox-row" style="margin-top:12px; display:block;"><input type="checkbox" name="ds_vary_params" checked> Vary indicator/parameters</label>
+        <label class="checkbox-row" style="display:block;"><input type="checkbox" name="ds_vary_timeframes" checked> Vary timeframes</label>
+        <label class="checkbox-row" style="display:block;"><input type="checkbox" name="ds_vary_datasets"> Search across the picked datasets</label>
+      </div>
+    </div>
+    <p class="lc-hint">Stage 1 scores every variant with PropFit on full data (a slice screen prunes first on big budgets). Stage 2 re-verifies the top 20 with walk-forward/CPCV, seed dispersion and a 2x cost stress — a variant whose edge evaporates is shown evaporated, never crowned. PropFit ranks only; the 70% per-attempt READY gate is untouched.</p>
   </div>
 
   <details class="lc-adv">
@@ -150,6 +203,25 @@
     <div class="lc-logbox"><div><span class="lt">--:--:--</span>  Press OPTIMIZE and the run streams live on the job page — every engine ticked, in order. No silent screens.</div></div>
   </div>
 
+  <details class="lc-adv">
+    <summary>Individual tools <span class="lc-hint">every engine keeps its own full page — nothing was removed</span></summary>
+    <div class="adv-body">
+      <div class="lc-toolgrid" style="margin-top:12px;">
+        <a class="lc-toolcard" href="/optimize"><div class="tname">Optimize — Start Here</div><div class="tdesc">Which optimizer should you use? The guided picker.</div></a>
+        <a class="lc-toolcard" href="/quick-optimize"><div class="tname">Quick Optimize</div><div class="tdesc">GA over tunable parameters, full page.</div></a>
+        <a class="lc-toolcard" href="/refine"><div class="tname">Iterative Refinement</div><div class="tdesc">Multi-round Monte-Carlo refinement.</div></a>
+        <a class="lc-toolcard" href="/risk-sweep"><div class="tname">Risk Sweep</div><div class="tdesc">Risk-per-trade levels against the prop rules.</div></a>
+        <a class="lc-toolcard" href="/search"><div class="tname">Search Lab</div><div class="tdesc">Broad rule-space search over a strategy family.</div></a>
+        <a class="lc-toolcard" href="/evolution"><div class="tname">Evolution Lab (GA)</div><div class="tdesc">Genetic evolution with a live leaderboard.</div></a>
+        <a class="lc-toolcard" href="/multi-objective"><div class="tname">Multi-Objective</div><div class="tdesc">Pareto optimization across competing objectives.</div></a>
+        <a class="lc-toolcard" href="/search/multi-instrument"><div class="tname">Multi-Instrument Search</div><div class="tdesc">Search Lab across several instruments at once.</div></a>
+        <a class="lc-toolcard" href="/evolution/multi-instrument"><div class="tname">Multi-Instrument Evolution</div><div class="tdesc">Evolution Lab across several instruments at once.</div></a>
+        <a class="lc-toolcard" href="/cross-instrument"><div class="tname">Cross-Instrument Search</div><div class="tdesc">One rule set, judged on multiple instruments.</div></a>
+        <a class="lc-toolcard" href="/multi-market"><div class="tname">Multi-Market Search</div><div class="tdesc">Search aggregated across markets.</div></a>
+      </div>
+    </div>
+  </details>
+
 </div>
 <div class="lc-run-side">
   <div class="lc-side-card">
@@ -176,7 +248,8 @@
 
   <div class="lc-side-card">
     <h4>&#129517; What happens next</h4>
-    <p class="lc-hint" style="font-size:12.5px; color:var(--lc-text);">Best variation is still only a candidate &rarr; run it through <b>Test it properly</b> (Full Pipeline) before believing it — optimizing and validating on the same data is how curve-fits happen.</p>
+    <p class="lc-hint" style="font-size:12.5px; color:var(--lc-text);">Best variation is still only a candidate &rarr; check it in <b>Validate</b> before believing it — optimizing and validating on the same data is how curve-fits happen. The button carries this strategy, data, firm and timeframe across.</p>
+    <button type="button" class="lc-btn" id="lc-next-step" style="width:100%; margin-top:10px;">Next step: Validate →</button>
   </div>
 
   <div class="lc-side-card">
@@ -203,6 +276,28 @@
     }
     document.querySelectorAll('.lc-checkcard input.lc-check-input').forEach(function (i) { i.addEventListener('change', updateCount); });
     updateCount();
+  })();
+</script>
+
+<script>
+  // Guided lifecycle handoff: carry this page's current picks into the
+  // next step's URL; the receiving page renders them selected.
+  (function () {
+    var btn = document.getElementById('lc-next-step');
+    if (!btn) return;
+    function val(sel) { var el = document.querySelector(sel); return el ? el.value : ''; }
+    btn.addEventListener('click', function () {
+      var q = new URLSearchParams();
+      var sp = val('select[name="strategy_pick"]');
+      if (sp) q.set('strategy_pick', sp);
+      var ds = val('select[name="existing_dataset"]');
+      if (ds) q.set('existing_dataset', ds);
+      var tf = val('select[name="timeframe"]');
+      if (tf) q.set('timeframe', tf);
+      var pp = val('select[name="prop_preset"]');
+      if (pp) q.set('prop_preset', pp);
+      window.location = '/validate-simple' + (q.toString() ? '?' + q.toString() : '');
+    });
   })();
 </script>
 </body>

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Deep search results — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<link rel="stylesheet" href="/static/job-theme.css">
+{% include '_lifecycle_css.html' %}
+</head>
+<body>
+<header><h1><span class="mark"></span>T58 Quant Algo Backtester — Optimize · Deep search</h1></header>
+<nav>
+  <a href="/dashboard" class="back-btn">&larr; Back</a>
+  <a href="/optimize-simple">New Optimize run</a>
+  <a href="/optimize-simple/job/{{ job_id }}">Job log</a>
+</nav>
+<main style="max-width:1180px;">
+<div class="lc-scope"><div class="lc-wrap">
+
+{% set lc_step = 'optimize' %}
+{% include '_lifecycle_stepper.html' %}
+<div class="lc-crumb">Lifecycle · 3 · <b>Optimize</b> · Deep search</div>
+<h1 class="lc-title">Deep search results</h1>
+
+{% if not_found %}
+<div class="lc-error">Deep search job "{{ job_id }}" was not found (the server may have restarted since it ran, or the search failed before recording results — check the job log).</div>
+{% else %}
+
+<div class="lc-card">
+  <h3>How these were ranked — PropFit</h3>
+  <p class="lc-hint" style="font-size:13px;">{{ ds.formula }}</p>
+  <p class="lc-hint" style="font-size:13px;">Searched {{ ds.n_variants }} variants. Stage 1 scored each on full data; Stage 2 re-verified the top 20 (walk-forward/CPCV, Monte Carlo seed dispersion, 2x cost stress). <b>Screen</b> and <b>Verified</b> are side by side so an edge that evaporates is visible, not crowned. PropFit never overrides the 70% per-attempt READY gate.</p>
+</div>
+
+{% if ds.no_winner %}
+<div class="lc-verdict" style="border-color:var(--lc-amber);">
+  <h3 style="color:var(--lc-amber);">No robust winner</h3>
+  <p style="font-size:13.5px;">{{ ds.message }}</p>
+</div>
+{% else %}
+<div class="lc-verdict pass">
+  <h3>Verified winner</h3>
+  <p style="font-size:13.5px;">{{ ds.message }}</p>
+  {% set w = ds.rows[0] %}
+  <p class="lc-hint" style="font-size:12.5px;">Per-attempt eval pass after verification: {{ '%.1f%%'|format((w.eval_pass_verified or 0) * 100) }} — {{ 'clears' if (w.eval_pass_verified or 0) >= 0.70 else 'still below' }} the 70% READY bar. PropFit ranked it first; the READY verdict still belongs to Test/Validate.</p>
+</div>
+{% endif %}
+
+<div class="lc-card">
+  <h3>Finalists — verified ranking</h3>
+  <div style="overflow-x:auto;">
+  <table class="lc-tbl">
+    <thead><tr>
+      <th>#</th><th>Variant</th><th>Data</th><th>TF</th><th>Trades</th><th>Net</th>
+      <th>Eval%</th><th>Payout%</th><th>PF</th><th>Screen</th><th>Verified</th>
+      <th>CPCV PF</th><th>2x stress</th><th></th>
+    </tr></thead>
+    <tbody>
+    {% for r in ds.rows %}
+      <tr{% if loop.first and not ds.no_winner %} style="background:rgba(52,255,170,.07);"{% endif %}>
+        <td>{{ loop.index }}</td>
+        <td><b>{{ r.params_label }}</b><div class="lc-hint">{{ r.label }}{% if r.saved_as %}<br>saved as {{ r.saved_as.split('::')[-1] }}{% endif %}</div></td>
+        <td>{{ r.dataset }}</td>
+        <td>{{ r.timeframe }}</td>
+        <td>{{ r.n_trades }}</td>
+        <td>{{ '$%s'|format('{:,.0f}'.format(r.net)) }}</td>
+        <td>{{ '%.0f%%'|format(r.eval_pass * 100) }}</td>
+        <td>{{ '%.0f%%'|format(r.payout * 100) }}</td>
+        <td>{{ '%.2f'|format(r.profit_factor) }}</td>
+        <td>{{ '%.1f'|format(r.propfit) }}{% if r.components and r.components.penalties %} <span class="lc-hint">(pen −{{ '%.0f'|format(r.components.penalties) }})</span>{% endif %}</td>
+        <td><b>{{ '%.1f'|format(r.verified or 0) }}</b></td>
+        <td>{{ '%.2f'|format(r.cpcv_oos_pf) if r.cpcv_oos_pf is not none else '—' }}</td>
+        <td>{{ '$%s'|format('{:,.0f}'.format(r.stress_net or 0)) }}</td>
+        <td>{% if r.validate_url %}<a class="lc-btn small" href="{{ r.validate_url }}">Validate →</a>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="lc-hint" style="margin-top:8px;">The top 3 finalists were saved to the strategy library (names start "DeepSearch"), so Validate opens with the exact variant selected — its dataset, timeframe and prop firm carried over. Seed dispersion drag is already inside Verified (up to −20 for unstable pass rates).</p>
+</div>
+
+{% endif %}
+
+</div></div>
+</main>
+{% include '_project_chat_embed.html' %}
+</body>
+</html>

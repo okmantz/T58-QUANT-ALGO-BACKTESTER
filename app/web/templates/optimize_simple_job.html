@@ -100,6 +100,8 @@ function renderSummary(summary){
       continue;
     }
     for (const [k, v] of Object.entries(r)) {
+      if (k === 'results_url') { html += '<div class="lc-kv"><span class="k">results</span><span class="v"><a href="' + esc(v) + '" style="color:var(--lc-acc);">Open the Deep search results table →</a></span></div>'; continue; }
+      if (k === 'rows' || k === 'formula') continue;
       if (k === 'result') html += '<div class="lc-kv"><span class="k">' + esc(k) + '</span><span class="v"><pre style="white-space:pre-wrap;font-size:11px;text-align:left;">' + esc(v) + '</pre></span></div>';
       else html += '<div class="lc-kv"><span class="k">' + esc(k) + '</span><span class="v">' + esc(v) + '</span></div>';
     }

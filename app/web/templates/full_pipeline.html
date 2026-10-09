@@ -52,62 +52,17 @@
 <div class="lc-run-main">
 
   <div class="lc-card">
-    <div style="margin-bottom:14px;">
-      <div class="lc-tabs" id="strategy-tabs">
-        <button type="button" data-mode="manual" class="lc-tab-btn active">Manual</button>
-        <button type="button" data-mode="python" class="lc-tab-btn">Python</button>
-        <button type="button" data-mode="pinescript" class="lc-tab-btn">PineScript</button>
-        <button type="button" data-mode="mql5" class="lc-tab-btn">MQL5</button>
-      </div>
-      <input type="hidden" name="strategy_mode" id="strategy_mode" value="manual">
-    </div>
     <div class="lc-row">
-      <div class="lc-col" style="min-width:260px;">
-        <label class="flabel">Strategy</label>
-        <div id="manual-fields">
-          <div class="lc-row">
-            <div class="lc-col" style="min-width:90px;"><label class="flabel">SMA fast</label><input type="number" name="sma_fast" value="20"></div>
-            <div class="lc-col" style="min-width:90px;"><label class="flabel">SMA slow</label><input type="number" name="sma_slow" value="50"></div>
-          </div>
-          <div class="lc-row">
-            <div class="lc-col" style="min-width:90px;"><label class="flabel">Stop loss (pips)</label><input type="number" name="sl_pips" value="20"></div>
-            <div class="lc-col" style="min-width:90px;"><label class="flabel">Take profit (pips)</label><input type="number" name="tp_pips" value="40"></div>
-          </div>
-        </div>
-        <div id="code-fields" style="display:none;">
-          <label class="flabel">Search the library (name / description / market)</label>
-          <input type="text" id="strategy_search_input" placeholder="e.g. fvg, XAUUSD..." oninput="onLibraryFiltersChanged()">
-          <div class="lc-row">
-            <div class="lc-col" style="min-width:100px;">
-              <label class="flabel">Browse market</label>
-              <select id="strategy_filter_market" onchange="onLibraryFiltersChanged()"><option value="">All markets</option></select>
-            </div>
-            <div class="lc-col" style="min-width:100px;">
-              <label class="flabel">Browse tag</label>
-              <select id="strategy_filter_tag" onchange="onLibraryFiltersChanged()"><option value="">All tags</option></select>
-            </div>
-            <div class="lc-col" style="min-width:100px;">
-              <label class="flabel">Browse status</label>
-              <select id="strategy_filter_status" onchange="onLibraryFiltersChanged()">
-                <option value="">All statuses</option>
-                {% for s in strategy_statuses|default([]) %}
-                <option value="{{ s }}">{{ s }}</option>
-                {% endfor %}
-              </select>
-            </div>
-          </div>
-          <label class="flabel">Load a saved strategy from the library</label>
-          <select id="existing_strategy_select" onchange="loadFromLibrary()">
-            <option value="">— none, paste or upload below —</option>
-          </select>
-          <a href="#" onclick="fpViewStrategyCode(); return false;" style="font-size:12px;color:var(--lc-acc);display:inline-block;margin-top:6px;">View code of selected strategy</a>
-          <p class="lc-hint" style="margin-top:6px;" id="library-count-note"></p>
-
-          <label class="flabel" style="margin-top:14px;">Or upload a strategy file (from this computer or your phone)</label>
-          <input type="file" id="strategy_file_input" name="strategy_file" accept=".py,.pine,.mq5">
-
-          <label class="flabel" style="margin-top:10px;">Or paste strategy source</label>
-          <textarea class="code" name="strategy_code" id="strategy_code" placeholder="Paste your Python / PineScript / MQL5 strategy here"></textarea>
+      <div class="lc-col" style="min-width:280px;">
+        <label class="flabel" for="lc-strategy-pick">Strategy</label>
+        <select class="inp" id="lc-strategy-pick">
+          <option value="">— pick a saved strategy —</option>
+        </select>
+        <input type="hidden" name="strategy_mode" id="strategy_mode" value="manual">
+        <input type="hidden" id="lc-existing-strategy" name="existing_strategy_manual" value="">
+        <div style="margin-top:6px; display:flex; gap:12px; align-items:baseline; flex-wrap:wrap;">
+          <a href="#" id="lc-view-code" style="font-size:12px;color:var(--lc-acc);">View its code</a>
+          <span class="lc-hint" id="lc-strategy-note">No saved strategy picked — the quick builder / paste box in Advanced is used instead.</span>
         </div>
       </div>
       <div class="lc-col" style="min-width:220px;">
@@ -118,7 +73,7 @@
           {% for g in dataset_groups %}
           <optgroup label="{{ g.instrument }}">
             {% for file in g.files %}
-            <option value="{{ file.full_name }}">{{ file.name }} ({{ (file.size_bytes / 1024) | round(1) }} KB){{ ' — empty' if file.empty else '' }}</option>
+            <option value="{{ file.full_name }}"{% if prefill and prefill.existing_dataset == file.full_name %} selected{% endif %}>{{ file.name }} ({{ (file.size_bytes / 1024) | round(1) }} KB){{ ' — empty' if file.empty else '' }}</option>
             {% endfor %}
           </optgroup>
           {% endfor %}
@@ -141,6 +96,18 @@
         <script>document.addEventListener('DOMContentLoaded', function () { t58PopulateInstrumentPicker('fp_instrument_select'); });</script>
       </div>
     </div>
+    <div class="lc-row" style="margin-top:14px;">
+      <div class="lc-col" style="min-width:220px;">
+        <label class="flabel" for="lc-timeframe">Timeframe</label>
+        <select class="inp" name="timeframe" id="lc-timeframe">
+          <option value="">Dataset's native timeframe (default)</option>
+          {% for tf in timeframe_choices %}
+          <option value="{{ tf }}"{% if prefill and prefill.timeframe == tf %} selected{% endif %}>{{ tf }}</option>
+          {% endfor %}
+        </select>
+        <div class="lc-hint" style="margin-top:5px;">The data is resampled to this bar size before the pipeline runs — never a silent 1m. A timeframe declared inside the strategy itself still wins. (Advanced can additionally run the whole pipeline on several timeframes.)</div>
+      </div>
+    </div>
     <div class="lc-rules-line" id="lc-rules-line"></div>
   </div>
 
@@ -158,6 +125,19 @@
   <details class="lc-adv">
     <summary>Advanced options <span class="lc-hint">defaults are sensible — skip this unless you know why</span></summary>
     <div class="adv-body">
+      <div class="lc-subhead">Strategy — build, paste or upload</div>
+      <p class="lc-field-note">Only used when no saved strategy is picked above (a pick above wins, and pasting code here overrides the pick). To write a brand-new strategy in plain English, use <a href="/start-here/create" style="color:var(--lc-acc);">Create</a>.</p>
+      <div class="lc-adv-grid">
+        <div class="lc-adv-field"><label class="flabel">SMA fast (quick builder)</label><input type="number" name="sma_fast" value="20"></div>
+        <div class="lc-adv-field"><label class="flabel">SMA slow (quick builder)</label><input type="number" name="sma_slow" value="50"></div>
+        <div class="lc-adv-field"><label class="flabel">Stop loss (pips)</label><input type="number" name="sl_pips" value="20"></div>
+        <div class="lc-adv-field"><label class="flabel">Take profit (pips)</label><input type="number" name="tp_pips" value="40"></div>
+      </div>
+      <label class="flabel" style="margin-top:12px;">Or upload a strategy file (from this computer or your phone)</label>
+      <input type="file" id="strategy_file_input" name="strategy_file" accept=".py,.pine,.mq5,.json">
+      <label class="flabel" style="margin-top:10px;">Or paste strategy source</label>
+      <textarea class="code" name="strategy_code" id="strategy_code" placeholder="Paste a manual strategy JSON config, or Python / PineScript / MQL5 source"></textarea>
+
       {% include "_accuracy_fields.html" %}
 
       <div class="lc-subhead">Risk &amp; prop rules</div>
@@ -267,6 +247,18 @@
     <div class="lc-logbox"><div><span class="lt">--:--:--</span>  Press RUN FULL PIPELINE and the log streams live on the job page. No silent screens.</div></div>
   </div>
 
+  <details class="lc-adv">
+    <summary>Individual tools <span class="lc-hint">the rest of the Test section keeps its own pages</span></summary>
+    <div class="adv-body">
+      <div class="lc-toolgrid" style="margin-top:12px;">
+        <a class="lc-toolcard" href="/"><div class="tname">Run &amp; Report</div><div class="tdesc">One quick backtest with a full report — no pipeline verdict.</div></a>
+        <a class="lc-toolcard" href="/payout-probability"><div class="tname">Payout Probability</div><div class="tdesc">Monte Carlo pass/payout odds for a finished backtest.</div></a>
+        <a class="lc-toolcard" href="/prop-firm-recommender"><div class="tname">Prop-Firm Recommender</div><div class="tdesc">Which firm's rules fit this strategy best?</div></a>
+        <a class="lc-toolcard" href="/start-here/test"><div class="tname">Test — Start Here</div><div class="tdesc">The guided overview of this section.</div></a>
+      </div>
+    </div>
+  </details>
+
 </div>
 <div class="lc-run-side">
   <div class="lc-side-card">
@@ -295,7 +287,8 @@
 
   <div class="lc-side-card">
     <h4>&#129517; What happens next</h4>
-    <p class="lc-hint" style="font-size:12.5px; color:var(--lc-text);">READY &rarr; moves to <b>Champion</b>.<br>NOT READY &rarr; one button on the job page carries these exact settings into <b>Optimize</b>.<br>Blocked preflight &rarr; it says why in dollars, with one-click fixes, right there.</p>
+    <p class="lc-hint" style="font-size:12.5px; color:var(--lc-text);">READY &rarr; moves to <b>Champion</b>.<br>NOT READY &rarr; tune it in <b>Optimize</b> — the button below carries this strategy, data, firm and timeframe across with it.<br>Blocked preflight &rarr; it says why in dollars, with one-click fixes, right there.</p>
+    <button type="button" class="lc-btn" id="lc-next-step" style="width:100%; margin-top:10px;">Next step: Optimize →</button>
   </div>
 
   <div class="lc-side-card">
@@ -312,11 +305,11 @@
 
 <script src="/static/prop-presets.js"></script>
 <script>
-  const tabs = document.querySelectorAll('#strategy-tabs button');
-  const modeInput = document.getElementById('strategy_mode');
-  const manualFields = document.getElementById('manual-fields');
-  const codeFields = document.getElementById('code-fields');
   const SAVED_STRATEGIES = {{ saved_strategies_json | safe }};
+  const strategyPick = document.getElementById('lc-strategy-pick');
+  const modeInput = document.getElementById('strategy_mode');
+  const existingHidden = document.getElementById('lc-existing-strategy');
+  const strategyNote = document.getElementById('lc-strategy-note');
 
   function fpDetectPipSize() {
     const statusEl = document.getElementById('fp_pip_detect_status');
@@ -397,80 +390,75 @@
     set('max_dd', p.max_drawdown_pct);
   }
 
-  function filteredLibraryItems(mode) {
-    const query = (document.getElementById('strategy_search_input').value || '').toLowerCase().trim();
-    const market = document.getElementById('strategy_filter_market').value;
-    const tag = document.getElementById('strategy_filter_tag').value;
-    const status = document.getElementById('strategy_filter_status').value;
-    const all = SAVED_STRATEGIES[mode] || [];
-    return all.filter(s => {
-      if (query && !(s.name + ' ' + s.description + ' ' + s.market + ' ' + (s.tags || []).join(' ')).toLowerCase().includes(query)) return false;
-      if (market && s.market !== market) return false;
-      if (tag && !(s.tags || []).map(t => t.toLowerCase()).includes(tag.toLowerCase())) return false;
-      if (status && s.status !== status) return false;
-      return true;
-    });
-  }
-
-  function populateFilterOptions(mode) {
-    const all = SAVED_STRATEGIES[mode] || [];
-    const markets = [...new Set(all.map(s => s.market).filter(Boolean))].sort();
-    const tags = [...new Set(all.flatMap(s => s.tags || []))].sort((a, b) => a.localeCompare(b));
-    const marketSelect = document.getElementById('strategy_filter_market');
-    const keepMarket = marketSelect.value;
-    marketSelect.innerHTML = '<option value="">All markets</option>' + markets.map(m => `<option value="${m}">${m}</option>`).join('');
-    if (markets.includes(keepMarket)) marketSelect.value = keepMarket;
-    const tagSelect = document.getElementById('strategy_filter_tag');
-    const keepTag = tagSelect.value;
-    tagSelect.innerHTML = '<option value="">All tags</option>' + tags.map(t => `<option value="${t}">${t}</option>`).join('');
-    if (tags.includes(keepTag)) tagSelect.value = keepTag;
-  }
-
-  function populateLibrarySelect(mode) {
-    populateFilterOptions(mode);
-    const select = document.getElementById('existing_strategy_select');
-    select.name = 'existing_strategy_' + mode;
-    const note = document.getElementById('library-count-note');
-    const all = SAVED_STRATEGIES[mode] || [];
-    const items = filteredLibraryItems(mode);
-    select.innerHTML = '<option value="">— none, paste or upload below —</option>';
-    items.forEach(s => {
-      const opt = document.createElement('option');
-      opt.value = s.name;
-      const label = s.description ? `${s.name} — ${s.description}` : s.name;
-      opt.textContent = `[${s.status}] ${label}`;
-      select.appendChild(opt);
-    });
-    if (!all.length) {
-      note.textContent = `No saved ${mode} strategies yet — upload or paste one below.`;
-    } else if (!items.length) {
-      note.textContent = `No saved ${mode} strategies match the current search/filters.`;
-    } else {
-      note.textContent = items.length === all.length
-        ? `${all.length} saved ${mode} strategy(ies) in the library.`
-        : `${items.length} of ${all.length} saved ${mode} strategy(ies) shown.`;
+  // Guided handoff: a prop firm carried over from an earlier lifecycle
+  // step (?prop_preset=<key>) is applied exactly like picking it here.
+  (function applyPrefillPreset() {
+    const want = {{ ((prefill.prop_preset if prefill else '') or '') | tojson }};
+    if (!want) return;
+    const select = document.getElementById('fp_prop_preset_select');
+    if (!select) return;
+    for (const o of select.options) {
+      if (!o.value) continue;
+      try {
+        if (JSON.parse(o.value).key === want) {
+          select.value = o.value;
+          fpApplyPropPreset(o.value);
+          break;
+        }
+      } catch (e) { /* not a JSON option */ }
     }
+  })();
+
+  // v9.8: ONE simple strategy dropdown (saved strategies grouped by
+  // type). Picking one fills the same strategy_mode / existing_strategy_*
+  // fields the backend has always read; the quick builder, paste box and
+  // upload live in Advanced and only apply when nothing is picked.
+  const FP_TYPE_LABELS = [['manual', 'Manual'], ['python', 'Python'], ['pinescript', 'PineScript'], ['mql5', 'MQL5']];
+  (function buildStrategyPick() {
+    FP_TYPE_LABELS.forEach(([t, label]) => {
+      const items = SAVED_STRATEGIES[t] || [];
+      if (!items.length) return;
+      const og = document.createElement('optgroup');
+      og.label = label;
+      items.forEach(s => {
+        const o = document.createElement('option');
+        o.value = t + '::' + s.name;
+        o.textContent = s.name;
+        og.appendChild(o);
+      });
+      strategyPick.appendChild(og);
+    });
+    const total = FP_TYPE_LABELS.reduce((n, [t]) => n + (SAVED_STRATEGIES[t] || []).length, 0);
+    if (!total) strategyNote.textContent = 'No saved strategies yet — use the quick builder / paste box in Advanced, or write one in Create.';
+  })();
+
+  function onStrategyPick() {
+    const v = strategyPick.value;
+    if (!v) {
+      modeInput.value = 'manual';
+      existingHidden.name = 'existing_strategy_manual';
+      existingHidden.value = '';
+      strategyNote.textContent = 'No saved strategy picked — the quick builder / paste box in Advanced is used instead.';
+    } else {
+      const i = v.indexOf('::');
+      const t = v.slice(0, i), n = v.slice(i + 2);
+      modeInput.value = t;
+      existingHidden.name = 'existing_strategy_' + t;
+      existingHidden.value = n;
+      strategyNote.textContent = 'Runs the saved ' + t + ' strategy "' + n + '" exactly as stored. Pasting code in Advanced overrides this pick.';
+    }
+    updateFpSummary();
   }
+  strategyPick.addEventListener('change', onStrategyPick);
 
-  function onLibraryFiltersChanged() { populateLibrarySelect(modeInput.value); }
-
-  function loadFromLibrary() {
-    const mode = modeInput.value;
-    const name = document.getElementById('existing_strategy_select').value;
-    if (!name) return;
-    fetch(`/strategies/${encodeURIComponent(mode)}/${encodeURIComponent(name)}`)
-      .then(r => r.ok ? r.text() : Promise.reject())
-      .then(text => { document.getElementById('strategy_code').value = text; })
-      .catch(() => alert('Could not load that saved strategy.'));
-  }
-
-  function fpViewStrategyCode() {
-    const mode = modeInput.value;
-    const name = document.getElementById('existing_strategy_select').value;
-    if (!name) { alert('Pick a saved strategy from the dropdown first.'); return; }
-    const url = `/strategies/view-code?strategy_type=${encodeURIComponent(mode)}&filename=${encodeURIComponent(name)}`;
+  document.getElementById('lc-view-code').addEventListener('click', function (e) {
+    e.preventDefault();
+    const v = strategyPick.value;
+    if (!v) { alert('Pick a saved strategy from the dropdown first.'); return; }
+    const i = v.indexOf('::');
+    const url = '/strategies/view-code?strategy_type=' + encodeURIComponent(v.slice(0, i)) + '&filename=' + encodeURIComponent(v.slice(i + 2));
     window.open(url, '_blank');
-  }
+  });
 
   document.getElementById('strategy_file_input').addEventListener('change', (e) => {
     const file = e.target.files[0];
@@ -480,40 +468,15 @@
     reader.readAsText(file);
   });
 
-  tabs.forEach(btn => btn.addEventListener('click', () => {
-    tabs.forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    modeInput.value = btn.dataset.mode;
-    manualFields.style.display = 'block';
-    codeFields.style.display = 'block';
-    const fileInput = document.getElementById('strategy_file_input');
-    const codeArea = document.getElementById('strategy_code');
-    if (btn.dataset.mode === 'manual') {
-      if (fileInput) fileInput.setAttribute('accept', '.json');
-      if (codeArea) codeArea.setAttribute('placeholder', 'Optional: paste a manual strategy JSON config here, or pick one below -- leave blank to use the quick SMA builder fields above instead.');
-    } else {
-      if (fileInput) fileInput.setAttribute('accept', '.py,.pine,.mq5');
-      if (codeArea) codeArea.setAttribute('placeholder', 'Paste your Python / PineScript / MQL5 strategy here');
-    }
-    populateLibrarySelect(btn.dataset.mode);
-  }));
-
   (function () {
     const params = new URLSearchParams(window.location.search);
     const loadType = params.get('load_strategy_type');
     const loadName = params.get('load_strategy_name');
-    if (!loadType || !loadName) return;
-    const targetTab = Array.from(tabs).find(b => b.dataset.mode === loadType);
-    if (targetTab) targetTab.click();
-    populateLibrarySelect(loadType);
-    const select = document.getElementById('existing_strategy_select');
-    if (select) {
-      select.value = loadName;
-      loadFromLibrary();
+    if (loadType && loadName) {
+      strategyPick.value = loadType + '::' + loadName;
+      if (strategyPick.value) onStrategyPick();
     }
   })();
-
-  document.querySelector('#strategy-tabs button.active')?.click();
 
   (function populateBatchList() {
     const container = document.getElementById('batch-strategy-list');
@@ -537,6 +500,31 @@
       container.innerHTML = '<p style="font-size:13px;color:#999;">No saved strategies yet -- save one from the Strategy picker above (or run Evolution Lab / Search Lab) before using the batch button.</p>';
     }
   })();
+
+  function updateFpSummary() {
+    function selText(sel) {
+      if (!sel || !sel.value) return '';
+      const o = sel.options[sel.selectedIndex];
+      return o ? o.textContent.trim() : '';
+    }
+    const preset = document.getElementById('fp_prop_preset_select');
+    const stratLabel = strategyPick.value
+      ? strategyPick.options[strategyPick.selectedIndex].textContent
+      : 'the quick-builder strategy (Advanced)';
+    const dsSel = document.querySelector('select[name="existing_dataset"]');
+    const ds = selText(dsSel) || 'uploaded data';
+    const firm = selText(preset) || 'the typed rules';
+    const tfSel = document.getElementById('lc-timeframe');
+    const tf = tfSel && tfSel.value ? tfSel.value : "the dataset's native timeframe";
+    const wr = document.getElementById('lc-will-run');
+    if (wr) wr.innerHTML = 'Will run <b>' + stratLabel.replace(/</g, '&lt;') + '</b> on <b>' + ds.replace(/</g, '&lt;') + '</b> at <b>' + tf.replace(/</g, '&lt;') + '</b> against the <b>' + firm.replace(/</g, '&lt;') + '</b> rules — baseline &rarr; search &rarr; Monte Carlo &rarr; holdout &rarr; verdict.';
+    const ckS = document.getElementById('lc-ck-strategy');
+    if (ckS) ckS.textContent = stratLabel;
+    const ckD = document.getElementById('lc-ck-dataset');
+    if (ckD) ckD.textContent = ds;
+    const ckF = document.getElementById('lc-ck-firm');
+    if (ckF) ckF.textContent = firm;
+  }
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/static/sw.js').catch(() => {});
@@ -578,51 +566,45 @@ document.addEventListener('DOMContentLoaded', function () {
 <script>window.LC_PROP_PRESETS = {{ (prop_presets_json | default('[]')) | safe }};</script>
 {% include '_lifecycle_rules_js.html' %}
 <script>
-  // v9.7: prop-firm rules panel + checklist/will-run summary wiring. The
-  // preset select keeps its existing onchange (fpApplyPropPreset fills
-  // the Advanced rule fields); this only mirrors the selection into the
-  // right rail and the checklist.
+  // v9.8: prop-firm rules panel wiring. The preset select keeps its
+  // existing onchange (fpApplyPropPreset fills the Advanced rule
+  // fields); this only mirrors the selection into the right rail, the
+  // checklist and the will-run summary (updateFpSummary, defined above).
   (function () {
     var preset = document.getElementById('fp_prop_preset_select');
     if (window.lcBindPropPreset) window.lcBindPropPreset(preset);
-    function selText(sel) {
-      if (!sel || !sel.value) return '';
-      var o = sel.options[sel.selectedIndex];
-      return o ? o.textContent.trim() : '';
-    }
-    function updateSummary() {
-      var stratSel = document.getElementById('existing_strategy_select');
-      var strat = selText(stratSel);
-      var mode = (document.getElementById('strategy_mode') || {}).value || 'manual';
-      var stratLabel = strat || (mode === 'manual' ? 'the SMA builder strategy' : 'a pasted/uploaded ' + mode + ' strategy');
-      var dsSel = document.querySelector('select[name="existing_dataset"]');
-      var ds = selText(dsSel) || 'uploaded data';
-      var firm = selText(preset) || 'the typed rules';
-      var wr = document.getElementById('lc-will-run');
-      if (wr) wr.innerHTML = 'Will run <b>' + stratLabel.replace(/</g, '&lt;') + '</b> on <b>' + ds.replace(/</g, '&lt;') + '</b> against the <b>' + firm.replace(/</g, '&lt;') + '</b> rules — baseline &rarr; search &rarr; Monte Carlo &rarr; holdout &rarr; verdict.';
-      var ckS = document.getElementById('lc-ck-strategy');
-      if (ckS) ckS.textContent = strat || mode;
-      var ckD = document.getElementById('lc-ck-dataset');
-      if (ckD) ckD.textContent = ds;
-      var ckF = document.getElementById('lc-ck-firm');
-      if (ckF) ckF.textContent = firm;
-    }
-    ['existing_strategy_select', 'lc-dataset-pick', 'strategy_mode'].forEach(function (id) {
-      var el = document.getElementById(id);
-      if (el) el.addEventListener('change', updateSummary);
-    });
-    if (preset) preset.addEventListener('change', updateSummary);
-    if (preset) preset.addEventListener('lc:preset', updateSummary);
-    tabs.forEach(function (b) { b.addEventListener('click', function () { setTimeout(updateSummary, 0); }); });
+    var dsSel = document.querySelector('select[name="existing_dataset"]');
+    if (dsSel) dsSel.addEventListener('change', updateFpSummary);
+    var tfSel = document.getElementById('lc-timeframe');
+    if (tfSel) tfSel.addEventListener('change', updateFpSummary);
+    if (preset) preset.addEventListener('change', updateFpSummary);
+    if (preset) preset.addEventListener('lc:preset', updateFpSummary);
     window.addEventListener('load', function () {
       if (window.lcRenderPropRules && window.lcPresetFromSelect) {
         window.lcRenderPropRules(window.lcPresetFromSelect(preset));
       }
-      updateSummary();
+      updateFpSummary();
     });
-    updateSummary();
+    updateFpSummary();
   })();
 </script>
 
+
+<script>
+  // Guided lifecycle handoff: carry this page's current picks into
+  // Optimize's URL; the receiving page renders them selected.
+  document.getElementById('lc-next-step').addEventListener('click', function () {
+    var q = new URLSearchParams();
+    var pick = document.getElementById('lc-strategy-pick');
+    if (pick && pick.value) q.set('strategy_pick', pick.value);
+    var ds = document.querySelector('select[name="existing_dataset"]');
+    if (ds && ds.value) q.set('existing_dataset', ds.value);
+    var tf = document.getElementById('lc-timeframe');
+    if (tf && tf.value) q.set('timeframe', tf.value);
+    var pp = document.getElementById('fp_prop_preset_select');
+    if (pp && pp.value) { try { var k = JSON.parse(pp.value).key; if (k) q.set('prop_preset', k); } catch (e) {} }
+    window.location = '/optimize-simple' + (q.toString() ? '?' + q.toString() : '');
+  });
+</script>
 </body>
 </html>

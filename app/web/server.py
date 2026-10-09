@@ -36,8 +36,11 @@ import re
 import tempfile
 import threading
 from dataclasses import replace
+from urllib.parse import urlencode
 import time
 import uuid
+
+from werkzeug.datastructures import MultiDict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -89,10 +92,10 @@ from app.data.london_strategic_edge_source import (
 from app.data.importer import import_csv, import_csv_bytes
 from app.data.folder_import import import_uploaded_files
 from app.data.instrument_specs import KNOWN_INSTRUMENTS, get_instrument_spec, guess_instrument_symbol
-from app.data.timeframe_resample import infer_timeframe_label
+from app.data.timeframe_resample import TimeframeError, infer_timeframe_label, normalize_timeframe_label
 from app.web.alpaca_shared import alpaca_template_context
 from app.web.lse_shared import lse_template_context
-from app.data.storage import get_app_base_dir, get_raw_data_dir, list_datasets_by_instrument, list_stored_datasets, resolve_stored_dataset, store_csv_bytes, data_dir_status, log_data_dir_status
+from app.data.storage import get_app_base_dir, get_raw_data_dir, list_datasets_by_instrument, list_datasets_grouped_for_picker, list_stored_datasets, resolve_stored_dataset, store_csv_bytes, data_dir_status, log_data_dir_status
 from app.ensemble.auto_builder import AutoEnsembleError, build_diversified_ensemble
 from app.ensemble.ensemble import EnsembleError, EnsembleVoteConfig, run_ensemble_blend, run_ensemble_vote
 from app.evolution import checkpoint as evo_checkpoint
@@ -125,7 +128,7 @@ from app.orchestration.resource_guard import (
 from app.orchestration.forge import ForgeConfig, run_forge
 from app.research import director as research_director
 from app.evolution.multi_instrument import EvolutionInstrumentJob, MultiInstrumentEvolutionGroup
-from app.data.timeframe_sweep import DEFAULT_SWEEP_TIMEFRAMES, parse_sweep_timeframes
+from app.data.timeframe_sweep import DEFAULT_SWEEP_TIMEFRAMES, build_timeframe_sweep, parse_sweep_timeframes, stamp_manual_timeframe
 from app.orchestration.report_timeframe_sweep import run_report_timeframe_sweep
 from app.orchestration.multi_timeframe_jobs import (
     describe_skipped, evolution_jobs_from_expansion, expand_dataset_across_timeframes,
@@ -185,6 +188,7 @@ from app.validation.cpcv import CPCVError, compute_pbo, run_cpcv
 from app.validation.sensitivity import compute_2d_heatmap
 from app.optimize.parameter_space import apply_genome, extract_genome
 from app.optimize.code_parameter_space import apply_code_genome, discover_code_genes
+from app.optimize import deep_search
 from app.strategy.library_loader import load_strategy_object
 from app.validation.parameter_robustness import compute_parameter_robustness
 from app.validation.regime_matrix import run_regime_matrix
@@ -1594,26 +1598,57 @@ def _simple_strategy_options() -> list[dict]:
     return [{"type": s.strategy_type, "name": s.name} for s in list_saved_strategies()]
 
 
+def _lc_prefill() -> dict:
+    """Guided lifecycle handoff (Create -> Test -> Optimize -> Validate
+    -> Champion -> Deploy): each step's "Next step" button puts the
+    current strategy / dataset / prop-firm / timeframe into the next
+    page's URL, and the receiving page renders those picks selected.
+    Returns blanks when the page was opened directly."""
+    a = request.args
+    return {
+        "strategy_pick": (a.get("strategy_pick") or "").strip(),
+        "existing_dataset": (a.get("existing_dataset") or "").strip(),
+        "timeframe": (a.get("timeframe") or "").strip(),
+        "prop_preset": (a.get("prop_preset") or "").strip(),
+        "candidate": (a.get("candidate") or "").strip(),
+    }
+
+
 def _simple_pickers(form=None) -> dict:
     form = form or {}
     return {
         "strategies": _simple_strategy_options(),
         "stored_datasets": list_stored_datasets(),
-        "dataset_groups": list_datasets_by_instrument(),
+        # v9.8: pickers group by instrument-symbol prefix (ES1! -> its
+        # files, NQ1! -> its files), not by data/raw subfolder.
+        "dataset_groups": list_datasets_grouped_for_picker(),
         "prop_presets": list_prop_firm_presets(),
         "prop_presets_json": _prop_presets_json(),
         "saved_strategies_json": _saved_strategies_json(),
+        "timeframe_choices": TIMEFRAME_CHOICES,
+        "prefill": _lc_prefill(),
+        "propfit_formula": deep_search.formula_text(),
     }
 
 
 def _simple_load_strategy(form):
     """Saved-library pick (strategy_pick = 'type::filename') first; fall
-    back to the shared builder fields (strategy_mode/strategy_code)."""
+    back to the shared builder fields (strategy_mode/strategy_code).
+
+    A pick is translated into the strategy_mode / existing_strategy_*
+    fields and loaded through _build_strategy -- the one chokepoint
+    every other run page uses. (v9.8 audit fix: this used to call
+    build_strategy_from_code directly, which has no 'manual' branch, so
+    every manual-library strategy -- most of the library, including
+    everything Search/Evolution save -- failed on these pages with
+    'Unknown strategy mode: manual'.)"""
     pick = (form.get("strategy_pick") or "").strip()
     if pick and "::" in pick:
         stype, fname = pick.split("::", 1)
-        code = load_strategy_text(stype, fname)
-        return build_strategy_from_code(stype, code), (stype, fname)
+        merged = form.copy()
+        merged["strategy_mode"] = stype
+        merged[f"existing_strategy_{stype}"] = fname
+        return _build_strategy(stype, merged, request.files)
     return _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
 
 
@@ -1643,6 +1678,43 @@ def _simple_base_risk(form, rules):
         contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
     )
     return harden_risk_config(risk, prop_rules=rules, form=form)
+
+
+# v9.8: explicit timeframe selector on every lifecycle run page. The
+# choices are the bar sizes this app trades on; "" (the form default)
+# means "the dataset's own native bars". A real pick resamples the loaded
+# dataframe through the SAME machinery the timeframe sweep uses
+# (app.data.timeframe_sweep.build_timeframe_sweep) BEFORE the run sees
+# it, so the selector changes what executes -- it is never a dead field,
+# and a run never silently falls back to 1m. A timeframe declared inside
+# the strategy itself still wins afterwards (run_backtest's
+# prepare_timeframe_aligned_data), which the form hint says out loud.
+TIMEFRAME_CHOICES = ("5m", "15m", "30m", "1h", "4h", "1d")
+
+
+def _apply_timeframe_choice(df, form):
+    """(df, note, error, label): resample `df` to the form's `timeframe`
+    pick. Empty/"native" -> (df, None, None, None). An unbuildable pick
+    (finer than the data, too few bars left) -> error text naming why,
+    never a silent substitution."""
+    raw = (form.get("timeframe") or "").strip()
+    if not raw or raw.lower() == "native":
+        return df, None, None, None
+    try:
+        label = normalize_timeframe_label(raw)
+    except TimeframeError as exc:
+        return df, None, f"Timeframe: {exc}", None
+    plan = build_timeframe_sweep(df, [label])
+    if not plan.targets:
+        reason = plan.skipped[0].reason if plan.skipped else "could not be built from this dataset"
+        return df, None, f"Timeframe {label}: {reason}", None
+    target = plan.targets[0]
+    note = (
+        f"Timeframe: running on {target.label} bars resampled from the dataset's native "
+        f"~{plan.native_minutes:.0f}-minute bars ({target.bar_count} bars). "
+        "A timeframe declared inside the strategy itself still wins."
+    )
+    return target.dataframe, note, None, label
 
 
 def _num_or_none(v):
@@ -1759,7 +1831,238 @@ def _dispatch_validation_checks(df, strategy, risk, rules, checks, form, baselin
     return out
 
 
-def _run_optimize_simple_job(job_id: str, df, strategy, risk, rules, engines, form) -> None:
+# ---------------------------------------------------------------------------
+# v9.8 item 12: Deep search (PropFit) — thousands of variants across
+# params x timeframes x datasets, ranked by app/optimize/deep_search.py's
+# PropFit, then verified. Runs inside the Optimize job; results land on
+# /optimize-simple/deep-search/<job_id>.
+# ---------------------------------------------------------------------------
+
+def _ds_build_strategy(payload):
+    if payload["kind"] == "manual":
+        return ManualStrategy(payload["config"])
+    return build_strategy_from_code(payload["mode"], payload["text"])
+
+
+def _ds_base_payload(strategy, library_ref):
+    """(payload, genes, mode) for variant materialization, or
+    (None, [], None) when variants cannot be rebuilt (code strategy not
+    tied to a library entry)."""
+    if isinstance(strategy, ManualStrategy):
+        return {"kind": "manual", "config": strategy.config}, extract_genome(strategy.config), "manual"
+    if library_ref:
+        mode, fname = library_ref
+        try:
+            text = load_strategy_text(mode, fname)
+            return {"kind": "code", "mode": mode, "text": text}, discover_code_genes(strategy), mode
+        except Exception:  # noqa: BLE001
+            return None, [], None
+    return None, [], None
+
+
+def _ds_variant_payload(base_payload, genes, genome):
+    if not genes:
+        return base_payload
+    if base_payload["kind"] == "manual":
+        return {"kind": "manual", "config": apply_genome(base_payload["config"], genes, genome)}
+    return {"kind": "code", "mode": base_payload["mode"],
+            "text": apply_code_genome(base_payload["text"], genes, genome)}
+
+
+def _ds_params_label(genes, genome, base_genome) -> str:
+    parts = []
+    for g, v, b in zip(genes, genome, base_genome):
+        if float(v) != float(b):
+            parts.append(f"{str(g.label).split('.')[-1]}={float(v):g}")
+    if not parts:
+        return "as saved"
+    return ", ".join(parts[:3]) + (f" +{len(parts) - 3} more" if len(parts) > 3 else "")
+
+
+def _ds_evaluate_task(task):
+    """Process-pool worker: one variant, one backtest, one PropFit."""
+    variant, df, risk, rules, mc_sims = task
+    try:
+        strat = _ds_build_strategy(variant["payload"])
+        res = run_backtest(df, strat, risk)
+        trades, stats = res.trades, res.statistics
+        nt = len(trades)
+        row = {
+            "variant": variant, "label": variant["label"], "dataset": variant["dataset"],
+            "timeframe": variant["timeframe"], "params_label": variant["params_label"],
+            "n_trades": nt, "net": float(stats.net_profit),
+            "eval_pass": 0.0, "payout": 0.0, "profit_factor": float(stats.profit_factor or 0.0),
+            "propfit": 0.0, "components": {},
+        }
+        if nt == 0:
+            return row
+        mc = run_monte_carlo(trades, rules, MonteCarloConfig(n_simulations=mc_sims, random_seed=7))
+        stressed = sum(float(t.pnl or 0) - float(t.commission or 0) for t in trades)
+        score, comps = deep_search.propfit_from_metrics(
+            eval_pass=float(mc.evaluation_pass_probability),
+            payout=float(mc.first_payout_probability),
+            profit_factor=float(stats.profit_factor or 0.0), n_trades=nt,
+            expectancy=float(stats.expectancy or 0.0),
+            max_dd_pct=float(stats.max_drawdown_pct or 0.0),
+            dd_limit_pct=float(rules.max_drawdown_pct or 0.0), stressed_net=stressed)
+        row.update({"eval_pass": float(mc.evaluation_pass_probability),
+                    "payout": float(mc.first_payout_probability),
+                    "propfit": score, "components": comps})
+        return row
+    except Exception:  # noqa: BLE001 -- a dead variant is a 0, not a dead job
+        return None
+
+
+def _ds_run(job_id, strategy, library_ref, form, risk, rules, page_df, page_label) -> dict:
+    log = lambda m: JOB_MANAGER.log(job_id, f"Deep search: {m}")
+    base_payload, genes, mode = _ds_base_payload(strategy, library_ref)
+    if base_payload is None:
+        return {"ran": False, "error": "Deep search needs a strategy it can rebuild variants of: pick a saved library strategy (or any manual strategy)."}
+    try:
+        budget = int(form.get("ds_budget", 2000) or 2000)
+    except ValueError:
+        budget = 2000
+    vary_params = form.get("ds_vary_params") == "on"
+    vary_tf = form.get("ds_vary_timeframes") == "on"
+
+    picked_datasets = [d for d in form.getlist("ds_datasets") if d]
+    dataset_names = picked_datasets or [page_label]
+    tf_picked = [t for t in form.getlist("ds_timeframes") if t]
+    page_tf = (form.get("timeframe") or "").strip()
+
+    # Resampled-bar cache per (dataset, timeframe label); "native" = as loaded.
+    frames: dict[tuple[str, str], object] = {}
+    labels_by_dataset: dict[str, list[str]] = {}
+    for name in dataset_names:
+        if name == page_label:
+            df0 = page_df
+        else:
+            df0, _lbl, _note, err = _resolve_dataset(MultiDict({"existing_dataset": name}), MultiDict())
+            if err:
+                log(f"Skipping dataset {name}: {err}")
+                continue
+        wanted = tf_picked if vary_tf else ([page_tf] if page_tf else ["native"])
+        label_to_df = {"native": df0}
+        sweep_labels = [w for w in wanted if w != "native"]
+        if sweep_labels:
+            plan = build_timeframe_sweep(df0, sweep_labels)
+            for t in plan.targets:
+                label_to_df[t.label] = t.dataframe
+            for s in plan.skipped:
+                log(f"{name}: timeframe {s.requested} skipped — {s.reason}")
+        labels = [w for w in wanted if w in label_to_df] or ["native"]
+        labels_by_dataset[name] = labels
+        for lab in labels:
+            frames[(name, lab)] = label_to_df[lab]
+    if not frames:
+        return {"ran": False, "error": "Deep search found no usable dataset/timeframe combination."}
+
+    combos = [(ds, tf) for ds, tfs in labels_by_dataset.items() for tf in tfs]
+    base_genome = [float(g.base_value) for g in genes] if genes else []
+    genomes = deep_search.sample_genomes(genes, max(1, -(-budget // max(1, len(combos)))) if vary_params else 1) \
+        if genes else [[]]
+    if not vary_params:
+        genomes = [base_genome]
+    if vary_params and not genes:
+        log("This strategy exposes no tunable parameters — searching timeframes/datasets with the saved settings.")
+
+    base_label = getattr(strategy, "name", None) or (library_ref[1] if library_ref else "strategy")
+    variants = []
+    for ds_name, tf_label in combos:
+        for genome in genomes:
+            payload = _ds_variant_payload(base_payload, genes, genome)
+            variants.append({
+                "dataset": ds_name, "timeframe": tf_label, "genome": list(genome),
+                "payload": payload,
+                "label": f"{base_label} [{ds_name} @ {tf_label}]",
+                "params_label": _ds_params_label(genes, genome, base_genome) if genes else "as saved",
+            })
+    if len(variants) > budget:
+        variants = variants[:budget]
+    log(f"{len(variants)} variants across {len(combos)} dataset/timeframe combos "
+        f"(budget {budget}); {len(genes)} tunable parameter(s).")
+
+    def evaluate_many(batch, phase):
+        tasks = []
+        for v in batch:
+            dfv = frames[(v["dataset"], v["timeframe"])]
+            if phase == "slice":
+                dfv = dfv.head(max(50, int(len(dfv) * deep_search.SLICE_FRAC)))
+            tasks.append((v, dfv, risk, rules, 60 if phase == "slice" else 150))
+        rows = []
+        for i in range(0, len(tasks), 100):
+            chunk = tasks[i:i + 100]
+            try:
+                from concurrent.futures import ProcessPoolExecutor
+                with ProcessPoolExecutor(max_workers=min(4, os.cpu_count() or 2)) as ex:
+                    rows.extend(ex.map(_ds_evaluate_task, chunk))
+            except Exception:  # noqa: BLE001 -- pool trouble must not kill the search
+                rows.extend(_ds_evaluate_task(t) for t in chunk)
+            log(f"…{min(i + 100, len(tasks))}/{len(tasks)} variants scored ({phase}).")
+        return rows
+
+    def verify(row):
+        from dataclasses import replace as _replace
+        import statistics as _stats
+        v = row["variant"]
+        dfv = frames[(v["dataset"], v["timeframe"])]
+        strat = _ds_build_strategy(v["payload"])
+        bt = run_backtest(dfv, strat, risk)
+        cpcv_pf = None
+        try:
+            cpcv = run_cpcv(dfv, lambda s=strat: s, risk, n_groups=4, n_test_groups=2,
+                            metric="profit_factor", prop_rules=rules,
+                            mc_cfg=MonteCarloConfig(n_simulations=200), max_paths=10)
+            cpcv_pf = float(cpcv.mean_oos_metric) if cpcv.mean_oos_metric is not None else None
+        except Exception as exc:  # noqa: BLE001
+            log(f"CPCV failed for {row['label']}: {exc}")
+        probs = []
+        for seed in (11, 22, 33, 44, 55):
+            mc = run_monte_carlo(bt.trades, rules, MonteCarloConfig(n_simulations=400, random_seed=seed))
+            probs.append(float(mc.evaluation_pass_probability))
+        srisk = _replace(risk, spread_pips=risk.spread_pips * 2, slippage_pips=risk.slippage_pips * 2,
+                         commission_per_trade=risk.commission_per_trade * 2,
+                         commission_per_contract=risk.commission_per_contract * 2)
+        sbt = run_backtest(dfv, strat, srisk)
+        # Dispersion is measured across the verify seeds AND the stage-1
+        # estimate: a screen that only looked good on its one seed must
+        # show up here as instability, not hide behind agreeing seeds.
+        dispersion = [float(row.get("eval_pass") or 0.0)] + probs
+        return {"cpcv_oos_pf": cpcv_pf, "stress_net": float(sbt.statistics.net_profit),
+                "seed_std_pts": (_stats.pstdev(dispersion) * 100.0 if len(dispersion) > 1 else 0.0),
+                "eval_pass_verified": (sum(probs) / len(probs) if probs else 0.0)}
+
+    out = deep_search.run_search(variants, None, verify, evaluate_many=evaluate_many,
+                                 log=lambda m: JOB_MANAGER.log(job_id, m))
+
+    # Save the top-3 verified finalists so the results table's
+    # carry-forward buttons land on Validate with the variant selected.
+    prop_key = (form.get("prop_preset") or "").strip()
+    for rank, row in enumerate(out["rows"][:3], 1):
+        pl = row["variant"]["payload"]
+        try:
+            text = json.dumps(pl["config"], indent=1) if pl["kind"] == "manual" else pl["text"]
+            smode = "manual" if pl["kind"] == "manual" else pl["mode"]
+            saved = save_strategy_text(text, f"DeepSearch {base_label} #{rank}", smode)
+            row["saved_as"] = f"{smode}::{saved.name}"
+            q = {"strategy_pick": row["saved_as"], "existing_dataset": row["dataset"]}
+            if row["timeframe"] != "native":
+                q["timeframe"] = row["timeframe"]
+            if prop_key:
+                q["prop_preset"] = prop_key
+            row["validate_url"] = "/validate-simple?" + urlencode(q)
+        except Exception as exc:  # noqa: BLE001
+            log(f"Could not save finalist #{rank} to the library: {exc}")
+    for row in out["rows"]:
+        row["variant"] = {"dataset": row["variant"]["dataset"], "timeframe": row["variant"]["timeframe"]}
+    winner = out["winner"]
+    return {"ran": True, "results_url": f"/optimize-simple/deep-search/{job_id}",
+            "n_variants": out["n_variants"], "winner": (winner or {}).get("label"),
+            "message": out["message"], "formula": deep_search.formula_text(),
+            "no_winner": winner is None, "rows": out["rows"]}
+
+
+def _run_optimize_simple_job(job_id: str, df, strategy, risk, rules, engines, form, library_ref=None, dataset_label="") -> None:
     summary: dict = {}
     try:
         for eng in engines:
@@ -1801,6 +2104,8 @@ def _run_optimize_simple_job(job_id: str, df, strategy, risk, rules, engines, fo
                     summary[eng] = {"ran": True,
                                     "best_risk_value": (sweep.best_point.risk_value if sweep.best_point else None),
                                     "n_points": len(sweep.points)}
+                elif eng == "deep_search":
+                    summary[eng] = _ds_run(job_id, strategy, library_ref, form, risk, rules, df, dataset_label)
                 elif eng in _OPT_LINK_ENGINES:
                     url, label = _OPT_LINK_ENGINES[eng]
                     summary[eng] = {"ran": False, "linked": True, "url": url, "label": label,
@@ -1821,7 +2126,7 @@ def optimize_simple_form():
 @app.route("/optimize-simple/start", methods=["POST"])
 def optimize_simple_start():
     form = request.form
-    engines = [e for e in ("quick_optimize", "refine", "risk_sweep", "search", "evolution", "multi_objective")
+    engines = [e for e in ("quick_optimize", "refine", "risk_sweep", "search", "evolution", "multi_objective", "deep_search")
                if form.get(f"engine_{e}") == "on"]
     ctx = lambda **kw: dict(active_page="optimize_simple", **_simple_pickers(), **kw)
     if not engines:
@@ -1830,15 +2135,20 @@ def optimize_simple_start():
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             return render_template("optimize_simple.html", **ctx(error=dataset_error)), 400
-        strategy, _library_ref = _simple_load_strategy(form)
+        df, tf_note, tf_error, _tf_label = _apply_timeframe_choice(df, form)
+        if tf_error:
+            return render_template("optimize_simple.html", **ctx(error=tf_error)), 400
+        strategy, library_ref = _simple_load_strategy(form)
         rules = _simple_prop_rules(form)
         risk = _simple_base_risk(form, rules)
         job_id = JOB_MANAGER.create(tool="Optimize (pick engines)", page_template="/optimize-simple/job/{job_id}",
-                                    log=[f"Loaded {len(df)} bars from {active_label}.", f"Engines: {', '.join(engines)}."],
+                                    log=[f"Loaded {len(df)} bars from {active_label}."] + ([tf_note] if tf_note else []) + [f"Engines: {', '.join(engines)}."],
                                     instrument=active_label)
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         threading.Thread(target=_run_optimize_simple_job,
-                         args=(job_id, df, strategy, risk, rules, engines, form), daemon=True).start()
+                         args=(job_id, df, strategy, risk, rules, engines, form),
+                         kwargs={"library_ref": library_ref, "dataset_label": active_label},
+                         daemon=True).start()
         return redirect(url_for("optimize_simple_job", job_id=job_id))
     except (StrategyError, RefinementError, ValueError) as exc:
         return render_template("optimize_simple.html", **ctx(error=str(exc))), 400
@@ -1852,6 +2162,17 @@ def optimize_simple_job(job_id):
     if job is None:
         return render_template("optimize_simple_job.html", job_id=job_id, not_found=True), 404
     return render_template("optimize_simple_job.html", job_id=job_id, not_found=False)
+
+
+@app.route("/optimize-simple/deep-search/<job_id>")
+def optimize_simple_deep_search_results(job_id):
+    job = JOB_MANAGER.get(job_id)
+    ds = ((job or {}).get("summary") or {}).get("deep_search") if job else None
+    if not ds or not ds.get("ran"):
+        return render_template("deep_search_results.html", job_id=job_id,
+                               not_found=True, ds=None), 404
+    return render_template("deep_search_results.html", job_id=job_id,
+                           not_found=False, ds=ds)
 
 
 @app.route("/optimize-simple/job/<job_id>/status.json")
@@ -1881,6 +2202,9 @@ def validate_simple_start():
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             return render_template("validate_simple.html", **ctx(error=dataset_error, checks=None, baseline=None, simulation_text=None)), 400
+        df, tf_note, tf_error, _tf_label = _apply_timeframe_choice(df, form)
+        if tf_error:
+            return render_template("validate_simple.html", **ctx(error=tf_error, checks=None, baseline=None, simulation_text=None)), 400
         strategy, library_ref = _simple_load_strategy(form)
         rules = _simple_prop_rules(form)
         risk = _simple_base_risk(form, rules)
@@ -1893,7 +2217,7 @@ def validate_simple_start():
         results = _dispatch_validation_checks(df, strategy, risk, rules, checks, form,
                                                 baseline_trades=baseline.trades)
         return render_template("validate_simple.html", **ctx(
-            checks=results, baseline=baseline_summary,
+            checks=results, baseline=baseline_summary, timeframe_note=tf_note,
             simulation_text=describe_simulation_text(risk, rules),
             strategy_name=getattr(strategy, "name", "Strategy"),
         ))
@@ -1943,8 +2267,14 @@ def champion_simple_rerun():
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             return render_template("champion_simple.html", **base_ctx, checks_result=None, notice=dataset_error, notice_ok="0"), 400
-        code = load_strategy_text(strategy_type, filename)
-        strategy = build_strategy_from_code(strategy_type, code)
+        df, tf_note, tf_error, _tf_label = _apply_timeframe_choice(df, form)
+        if tf_error:
+            return render_template("champion_simple.html", **base_ctx, checks_result=None, notice=tf_error, notice_ok="0"), 400
+        load_form = form
+        if not (form.get("strategy_pick") or "").strip():
+            load_form = form.copy()
+            load_form["strategy_pick"] = candidate
+        strategy, _library_ref = _simple_load_strategy(load_form)
         rules = _simple_prop_rules(form)
         risk = _simple_base_risk(form, rules)
         baseline = run_backtest(df, strategy, risk)
@@ -1953,6 +2283,7 @@ def champion_simple_rerun():
         return render_template("champion_simple.html", **base_ctx, checks_result={
             "candidate": f"{strategy_type}::{filename}", "dataset": active_label,
             "baseline_trades": len(baseline.trades), "checks": results,
+            "timeframe_note": tf_note,
         })
     except Exception as exc:  # noqa: BLE001
         return render_template("champion_simple.html", **base_ctx, checks_result=None,
@@ -3341,6 +3672,14 @@ def section_start_here(section):
             extra["create_datasets"] = [d.name for d in list_stored_datasets()]
         except Exception:
             extra["create_datasets"] = []
+        # v9.8: the Create form's dataset picker is ONE grouped
+        # multi-select (instrument headers, files sorted), not a wall of
+        # per-file checkboxes.
+        try:
+            extra["create_dataset_groups"] = list_datasets_grouped_for_picker()
+        except Exception:
+            extra["create_dataset_groups"] = []
+        extra["timeframe_choices"] = TIMEFRAME_CHOICES
         extra["create_csrf"] = session.get("csrf_token", "")
     return render_template(
         "section_start_here.html",
@@ -4586,6 +4925,19 @@ def full_pipeline_start_batch():
             daily_loss_limit_pct=float(form.get("daily_loss", 5)),
             max_drawdown_pct=float(form.get("max_dd", 10)),
         )
+        # v9.8: explicit Timeframe selector -- resample the loaded data
+        # to the picked bar size before the pipeline runs (the multi-
+        # timeframe sweep below still resamples per listed timeframe from
+        # this). A manual strategy gets the pick stamped as its declared
+        # timeframe so a saved winner keeps trading on this bar size --
+        # the same treatment sweep winners already get.
+        df, tf_note, tf_error, tf_label = _apply_timeframe_choice(df, form)
+        if tf_error:
+            HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
+            return render_template("full_pipeline.html", error=tf_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_grouped_for_picker(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, prop_presets_json=_prop_presets_json(), timeframe_choices=TIMEFRAME_CHOICES, **_alpaca_template_context()), 400
+        if tf_label:
+            strategy = stamp_manual_timeframe(strategy, tf_label)
+
         library_status_raw = (form.get("library_status") or "").strip()
         cfg = FullPipelineConfig(
             n_folds=int(form.get("n_folds", 4) or 4),
@@ -4953,13 +5305,15 @@ def full_pipeline_form():
         recent_runs = []
     return render_template(
         "full_pipeline.html",
-        stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+        stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_grouped_for_picker(),
         saved_strategies_json=_saved_strategies_json(),
         strategy_statuses=STRATEGY_STATUSES,
         alpaca_notice=request.args.get("alpaca_notice"),
         alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"),
         fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES,
         prop_presets_json=_prop_presets_json(),
+        timeframe_choices=TIMEFRAME_CHOICES,
+        prefill=_lc_prefill(),
         recent_runs=recent_runs,
         ai_enabled=saved_ai.enabled,
         ai_host=saved_ai.host,
@@ -4977,13 +5331,13 @@ def full_pipeline_start():
                 f"one heavy job (Search Lab / Evolution Lab / Full Pipeline / Speed Run) at the same "
                 f"time can exhaust available memory. Wait for it to finish before starting Full Pipeline."
             ),
-            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
-            fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context()), 409
+            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_grouped_for_picker(), saved_strategies_json=_saved_strategies_json(),
+            fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, timeframe_choices=TIMEFRAME_CHOICES, **_alpaca_template_context()), 409
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
         if dataset_error:
             HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
-            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
+            return render_template("full_pipeline.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_grouped_for_picker(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, prop_presets_json=_prop_presets_json(), timeframe_choices=TIMEFRAME_CHOICES, **_alpaca_template_context()), 400
 
         strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
 
@@ -5003,6 +5357,16 @@ def full_pipeline_start():
             daily_loss_limit_pct=float(form.get("daily_loss", 5)),
             max_drawdown_pct=float(form.get("max_dd", 10)),
         )
+        # v9.8: explicit Timeframe selector -- resample the loaded data
+        # to the picked bar size before the pipeline runs (same wiring
+        # as the batch path above). Without this call the run below
+        # crashed on `tf_note` and no timeframe pick ever took effect.
+        df, tf_note, tf_error, tf_label = _apply_timeframe_choice(df, form)
+        if tf_error:
+            HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
+            return render_template("full_pipeline.html", error=tf_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_grouped_for_picker(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, prop_presets_json=_prop_presets_json(), timeframe_choices=TIMEFRAME_CHOICES, **_alpaca_template_context()), 400
+        if tf_label:
+            strategy = stamp_manual_timeframe(strategy, tf_label)
 
         # T58 BACKTEST INTEGRITY CHECK -- same pre-flight gate as Run &
         # Report's /run route and Quick Optimize (see
@@ -5018,9 +5382,9 @@ def full_pipeline_start():
             HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
             return render_template(
                 "full_pipeline.html", error=integrity_report.render(),
-                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
+                stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_grouped_for_picker(),
                 saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES,
-                prop_presets_json=_prop_presets_json(), **_alpaca_template_context(),
+                prop_presets_json=_prop_presets_json(), timeframe_choices=TIMEFRAME_CHOICES, **_alpaca_template_context(),
             ), 400
 
         library_status_raw = (form.get("library_status") or "").strip()
@@ -5060,6 +5424,8 @@ def full_pipeline_start():
                 pass  # best-effort -- a save failure shouldn't block the run itself
 
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
+        if tf_note:
+            initial_log.append(tf_note)
         if import_note:
             initial_log.append(import_note)
         cancel_event = threading.Event()
@@ -5086,11 +5452,11 @@ def full_pipeline_start():
 
     except StrategyError as exc:
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
-        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 400
+        return render_template("full_pipeline.html", error=str(exc), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_grouped_for_picker(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, prop_presets_json=_prop_presets_json(), timeframe_choices=TIMEFRAME_CHOICES, **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_FULL_PIPELINE)
         log_crash("Full Pipeline (web, start)", exc=exc)
-        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, prop_presets_json=_prop_presets_json(), **_alpaca_template_context()), 500
+        return render_template("full_pipeline.html", error=f"Unexpected error: {exc}", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_grouped_for_picker(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, prop_presets_json=_prop_presets_json(), timeframe_choices=TIMEFRAME_CHOICES, **_alpaca_template_context()), 500
 
 
 @app.route("/full-pipeline/job/<job_id>")
@@ -8471,7 +8837,9 @@ def forward_test_info():
     except Exception:
         deploy_champion = None
     return render_template("forward_test.html", mt5_accounts=mt5_accounts, running=running,
-                           deploy_champion=deploy_champion, **_alpaca_template_context())
+                           deploy_champion=deploy_champion, strategies=_simple_strategy_options(),
+                           prefill_strategy=(request.args.get("strategy") or "").strip(),
+                           **_alpaca_template_context())
 
 
 @app.route("/forward-test/start", methods=["POST"])
@@ -8607,7 +8975,8 @@ def deploy_live_info():
     from app.live_deploy.live_settings import load_accounts
     with _LIVE_DEPLOY_LOCK:
         running = _LIVE_DEPLOY_SESSION["session"] is not None and _LIVE_DEPLOY_SESSION["session"].status.running
-    return render_template("deploy_live.html", broker_accounts=load_accounts(), running=running, **_alpaca_template_context())
+    return render_template("deploy_live.html", broker_accounts=load_accounts(), running=running,
+                           strategies=_simple_strategy_options(), **_alpaca_template_context())
 
 
 @app.route("/deploy-live/start", methods=["POST"])

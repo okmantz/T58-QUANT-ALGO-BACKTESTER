@@ -39,7 +39,7 @@
         <div class="lc-hint">{{ deploy_champion.strategy_type }} · stage: {{ deploy_champion.promotion.stage_title }}</div></div>
       <span class="lc-pill {{ 'green' if deploy_champion.verdict == 'READY' else ('red' if deploy_champion.verdict == 'NOT READY' else 'amber') }}">{{ deploy_champion.verdict or deploy_champion.status }}</span>
     </div>
-    <p class="lc-hint" style="margin-top:8px;">This is the strategy warm-up is for. The form below currently tests with the Manual Strategy Builder parameters (same first-pass scope as before) — code strategies are covered by the guarded live-deploy screen linked in the rail.</p>
+    <p class="lc-hint" style="margin-top:8px;">This is the strategy warm-up is for — it's preselected in the Strategy dropdown in the form below, so the forward test runs the champion itself, not a placeholder.</p>
   </div>
 {% else %}
   <div class="lc-card">
@@ -47,6 +47,16 @@
     <p class="lc-hint">Nothing has earned Validated in <a href="/champion-simple" style="color:var(--lc-acc);">Champion</a> — you can still forward test a Manual Builder setup, but a champion is what belongs here.</p>
   </div>
 {% endif %}
+
+<div class="lc-card">
+  <h3>Deploy section — where to?</h3>
+  <div class="lc-toolgrid">
+    <a class="lc-toolcard" href="/forward-test"><div class="tname">Forward Test (MT5) — you are here</div><div class="tdesc">Run a strategy against a real terminal's live bars, demo first.</div></a>
+    <a class="lc-toolcard" href="/deploy-live"><div class="tname">Deploy Live</div><div class="tdesc">Real-money deployment — separately guarded and armed on purpose.</div></a>
+    <a class="lc-toolcard" href="/live-market"><div class="tname">Monitor (Live Market)</div><div class="tdesc">Watch live prices and open positions.</div></a>
+    <a class="lc-toolcard" href="/replay"><div class="tname">Interactive Replay</div><div class="tdesc">Play a session back bar by bar and re-decide it.</div></a>
+  </div>
+</div>
 
 <div class="lc-run-grid">
 <div class="lc-run-main">
@@ -77,11 +87,23 @@
 
   <div class="lc-card">
     <h3>2. Strategy</h3>
-    <p class="lc-hint" style="margin-bottom:10px;">Manual Strategy Builder parameters for this first pass — same scope note as the Multi-Market Search page.</p>
-    <input type="hidden" name="strategy_mode" value="manual">
+    <label class="flabel" for="lc-deploy-strategy-pick">Saved strategy</label>
+    <select class="inp" id="lc-deploy-strategy-pick">
+      <option value="">— use the Manual Strategy Builder below —</option>
+      {% for t, label in [('manual', 'Manual'), ('python', 'Python'), ('pinescript', 'PineScript'), ('mql5', 'MQL5')] %}
+      <optgroup label="{{ label }}">
+        {% for s in strategies if s.type == t %}
+        <option value="{{ s.type }}::{{ s.name }}">{{ s.name }}</option>
+        {% endfor %}
+      </optgroup>
+      {% endfor %}
+    </select>
+    <input type="hidden" name="strategy_mode" id="ft-strategy-mode" value="manual">
+    <input type="hidden" id="ft-existing-strategy" name="existing_strategy_manual" value="">
+    <p class="lc-hint" id="ft-strategy-note" style="margin:6px 0 12px;">Picking a saved strategy is what the forward test runs — the builder below only applies when nothing is picked.</p>
     <div class="lc-row">
-      <div class="lc-col"><label class="flabel">SMA fast</label><input type="number" name="sma_fast" value="20"></div>
-      <div class="lc-col"><label class="flabel">SMA slow</label><input type="number" name="sma_slow" value="50"></div>
+      <div class="lc-col"><label class="flabel">SMA fast (manual builder)</label><input type="number" name="sma_fast" value="20"></div>
+      <div class="lc-col"><label class="flabel">SMA slow (manual builder)</label><input type="number" name="sma_slow" value="50"></div>
     </div>
     <div class="lc-row">
       <div class="lc-col"><label class="flabel">Stop loss (pips)</label><input type="number" name="sl_pips" value="20"></div>
@@ -150,6 +172,7 @@
   <div class="lc-side-card">
     <h4>&#129517; What happens next</h4>
     <p class="lc-hint" style="font-size:12.5px; color:var(--lc-text);">Forward-test clean &rarr; watch it in <a href="/live-market" style="color:var(--lc-acc);">Live Market</a>.<br>Missed a move? <a href="/replay" style="color:var(--lc-acc);">Replay</a> plays it back bar by bar.<br>Real-money deployment lives in <a href="/deploy-live" style="color:var(--lc-acc);">Deploy → Deploy Live</a> — separately guarded and armed on purpose.</p>
+    <a class="lc-btn" href="/live-market" style="display:block; text-align:center; margin-top:10px;">Next step: Monitor →</a>
   </div>
 
   <div class="lc-side-card">
@@ -164,6 +187,40 @@
 </div>
 
 <script>
+  // v9.8: saved-strategy dropdown drives the same strategy_mode /
+  // existing_strategy_* fields /forward-test/start has always read, so
+  // the pick IS the strategy the session runs (and, coming from the
+  // library, its result gets recorded on stop).
+  (function () {
+    var pick = document.getElementById('lc-deploy-strategy-pick');
+    var mode = document.getElementById('ft-strategy-mode');
+    var hidden = document.getElementById('ft-existing-strategy');
+    var note = document.getElementById('ft-strategy-note');
+    if (!pick || !mode || !hidden) return;
+    function sync() {
+      var v = pick.value;
+      if (!v) {
+        mode.value = 'manual';
+        hidden.name = 'existing_strategy_manual';
+        hidden.value = '';
+        if (note) note.textContent = 'Forward test will run the Manual Strategy Builder parameters below.';
+        return;
+      }
+      var i = v.indexOf('::');
+      mode.value = v.slice(0, i);
+      hidden.name = 'existing_strategy_' + v.slice(0, i);
+      hidden.value = v.slice(i + 2);
+      if (note) note.textContent = 'Forward test will run the saved ' + v.slice(0, i) + ' strategy "' + v.slice(i + 2) + '". The builder fields below are ignored.';
+    }
+    pick.addEventListener('change', sync);
+    {% if prefill_strategy %}
+    pick.value = {{ prefill_strategy | tojson }};  // carried over from Champion
+    {% elif deploy_champion %}
+    pick.value = {{ (deploy_champion.strategy_type ~ '::' ~ deploy_champion.filename) | tojson }};
+    {% endif %}
+    sync();
+  })();
+
   const fmt = (v, d) => (v === null || v === undefined) ? '—' : Number(v).toFixed(d === undefined ? 2 : d);
   let polling = null;
 

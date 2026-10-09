@@ -99,11 +99,23 @@
 
   <div class="card">
     <h2>2. Strategy</h2>
-    <p class="help">Manual Strategy Builder parameters for this first pass -- same scope note as Multi-Market Search and Forward Test.</p>
-    <input type="hidden" name="strategy_mode" value="manual">
+    <label>Saved strategy</label>
+    <select id="lc-deploy-strategy-pick">
+      <option value="">— use the Manual Strategy Builder below —</option>
+      {% for t, label in [('manual', 'Manual'), ('python', 'Python'), ('pinescript', 'PineScript'), ('mql5', 'MQL5')] %}
+      <optgroup label="{{ label }}">
+        {% for s in strategies if s.type == t %}
+        <option value="{{ s.type }}::{{ s.name }}">{{ s.name }}</option>
+        {% endfor %}
+      </optgroup>
+      {% endfor %}
+    </select>
+    <input type="hidden" name="strategy_mode" id="dl-strategy-mode" value="manual">
+    <input type="hidden" id="dl-existing-strategy" name="existing_strategy_manual" value="">
+    <p class="help" id="dl-strategy-note">Picking a saved strategy is what goes live — the Manual Strategy Builder parameters below only apply when nothing is picked.</p>
     <div class="row">
-      <div><label>SMA fast</label><input type="number" name="sma_fast" value="20"></div>
-      <div><label>SMA slow</label><input type="number" name="sma_slow" value="50"></div>
+      <div><label>SMA fast (manual builder)</label><input type="number" name="sma_fast" value="20"></div>
+      <div><label>SMA slow (manual builder)</label><input type="number" name="sma_slow" value="50"></div>
     </div>
     <div class="row">
       <div><label>Stop loss (pips)</label><input type="number" name="sl_pips" value="20"></div>
@@ -165,6 +177,33 @@
 </div>
 
 <script>
+  // v9.8: saved-strategy dropdown drives the same strategy_mode /
+  // existing_strategy_* fields /deploy-live/start has always read.
+  (function () {
+    var pick = document.getElementById('lc-deploy-strategy-pick');
+    var mode = document.getElementById('dl-strategy-mode');
+    var hidden = document.getElementById('dl-existing-strategy');
+    var note = document.getElementById('dl-strategy-note');
+    if (!pick || !mode || !hidden) return;
+    function sync() {
+      var v = pick.value;
+      if (!v) {
+        mode.value = 'manual';
+        hidden.name = 'existing_strategy_manual';
+        hidden.value = '';
+        if (note) note.textContent = 'Deployment will run the Manual Strategy Builder parameters below.';
+        return;
+      }
+      var i = v.indexOf('::');
+      mode.value = v.slice(0, i);
+      hidden.name = 'existing_strategy_' + v.slice(0, i);
+      hidden.value = v.slice(i + 2);
+      if (note) note.textContent = 'Deployment will run the saved ' + v.slice(0, i) + ' strategy "' + v.slice(i + 2) + '". The builder fields below are ignored.';
+    }
+    pick.addEventListener('change', sync);
+    sync();
+  })();
+
   const fmt = (v, d) => (v === null || v === undefined) ? '—' : Number(v).toFixed(d === undefined ? 2 : d);
   let polling = null;
 

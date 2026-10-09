@@ -59,7 +59,7 @@
       <tbody>
       {% for r in board_rows %}
         <tr>
-          <td><input type="radio" name="candidate" value="{{ r.strategy_type }}::{{ r.filename }}" form="champion-actions"></td>
+          <td><input type="radio" name="candidate" value="{{ r.strategy_type }}::{{ r.filename }}"{% if prefill.candidate == r.strategy_type ~ '::' ~ r.filename %} checked{% endif %} form="champion-actions"></td>
           <td><b>{{ r.display_name }}</b><div class="lc-hint">{{ r.strategy_type }}</div></td>
           <td><span class="lc-pill {{ 'green' if r.verdict == 'READY' else ('red' if r.verdict == 'NOT READY' else ('amber' if r.verdict == 'MARGINAL' else 'grey')) }}">{{ r.verdict or 'UNTESTED' }}</span></td>
           <td>{{ '%.0f%%'|format(r.eval_pct) if r.eval_pct is not none else '—' }}</td>
@@ -96,7 +96,7 @@
 {% if checks_result %}
   <div class="lc-card">
     <h3>Re-run results — {{ checks_result.candidate }}</h3>
-    <p class="lc-hint">Dataset: {{ checks_result.dataset }} · baseline trades: {{ checks_result.baseline_trades }}</p>
+    <p class="lc-hint">Dataset: {{ checks_result.dataset }} · baseline trades: {{ checks_result.baseline_trades }}{% if checks_result.timeframe_note %} · {{ checks_result.timeframe_note }}{% endif %}</p>
     {% for r in checks_result.checks %}
     <div class="lc-verdict {{ 'pass' if r.ok else '' }}">
       <span class="lc-pill {{ 'green' if r.ok else 'red' }}">{{ 'RAN' if r.ok else 'FAILED' }}</span>
@@ -124,13 +124,10 @@
           <option value="">— upload a CSV instead —</option>
           {% for g in dataset_groups %}
           <optgroup label="{{ g.instrument }}">
-            {% for d in g.datasets %}
-            <option value="{{ d.name }}">{{ d.name }}</option>
+            {% for f in g.files %}
+            <option value="{{ f.full_name }}"{% if prefill.existing_dataset == f.full_name %} selected{% endif %}>{{ f.name }}</option>
             {% endfor %}
           </optgroup>
-          {% endfor %}
-          {% for d in stored_datasets %}
-          <option value="{{ d.name }}">{{ d.name }}</option>
           {% endfor %}
         </select>
         <label class="flabel" style="margin-top:10px;" for="lc-csv-file">…or upload market data (CSV)</label>
@@ -141,7 +138,7 @@
         <select class="inp" name="prop_preset" id="lc-prop-preset">
           <option value="">— typed rules / account size only —</option>
           {% for p in prop_presets %}
-          <option value="{{ p.key }}">{{ p.label }}</option>
+          <option value="{{ p.key }}"{% if prefill.prop_preset == p.key %} selected{% endif %}>{{ p.label }}</option>
           {% endfor %}
         </select>
         <div class="lc-hint" style="margin-top:5px;">Its rules show in the rail &rarr;</div>
@@ -151,6 +148,16 @@
     <div class="lc-row" style="margin-top:6px;">
       <div class="lc-col"><label class="flabel">Account size ($)</label><input type="number" step="any" name="account_size" value="100000"></div>
       <div class="lc-col"><label class="flabel">Initial balance ($)</label><input type="number" step="any" name="initial_balance" value="100000"></div>
+      <div class="lc-col">
+        <label class="flabel" for="lc-timeframe">Timeframe</label>
+        <select class="inp" name="timeframe" id="lc-timeframe">
+          <option value="">Dataset's native timeframe (default)</option>
+          {% for tf in timeframe_choices %}
+          <option value="{{ tf }}"{% if prefill.timeframe == tf %} selected{% endif %}>{{ tf }}</option>
+          {% endfor %}
+        </select>
+        <div class="lc-hint" style="margin-top:5px;">Resampled before the re-run — never a silent 1m.</div>
+      </div>
     </div>
   </div>
 
@@ -220,6 +227,21 @@
     <p class="lc-hint" style="font-size:13px;">READY from the Full Pipeline (&ge;70% per-attempt pass, &ge;100 trades, seed-stable) &rarr; stress-checked in Validate &rarr; listed here. Nothing reaches this board by being profitable on one lucky backtest.</p>
   </div>
 
+  <details class="lc-adv">
+    <summary>Individual tools <span class="lc-hint">the rest of the Champion section keeps its own pages</span></summary>
+    <div class="adv-body">
+      <div class="lc-toolgrid" style="margin-top:12px;">
+        <a class="lc-toolcard" href="/dashboard"><div class="tname">Champion Board / Leaderboard</div><div class="tdesc">The dashboard scoreboard across every run.</div></a>
+        <a class="lc-toolcard" href="/compare"><div class="tname">Compare Strategies</div><div class="tdesc">Two or more strategies, side by side.</div></a>
+        <a class="lc-toolcard" href="/quant-lab/strategy-health"><div class="tname">Strategy Health / Auto Re-Tune</div><div class="tdesc">Decay checks and re-tune proposals for live strategies.</div></a>
+        <a class="lc-toolcard" href="/family-diversity"><div class="tname">Family Diversity</div><div class="tdesc">How distinct the surviving families really are.</div></a>
+        <a class="lc-toolcard" href="/universe"><div class="tname">Universe Map</div><div class="tdesc">Every strategy's standing, mapped.</div></a>
+        <a class="lc-toolcard" href="/portfolio"><div class="tname">Multi-Asset Portfolio</div><div class="tdesc">Combine strategies into one portfolio.</div></a>
+        <a class="lc-toolcard" href="/ensemble"><div class="tname">Multi-Strategy Ensemble</div><div class="tdesc">Blend or vote across strategies.</div></a>
+      </div>
+    </div>
+  </details>
+
 </div>
 <div class="lc-run-side">
   <div class="lc-side-card">
@@ -251,7 +273,8 @@
 
   <div class="lc-side-card">
     <h4>&#129517; What happens next</h4>
-    <p class="lc-hint" style="font-size:12.5px; color:var(--lc-text);">Promoted &rarr; <b>Deploy</b>: forward test it on live prices first.<br>Not ready &rarr; the row names the missing checks; run them in <b>Validate</b>.<br>Untested &rarr; its button goes straight to the <b>Full Pipeline</b>.</p>
+    <p class="lc-hint" style="font-size:12.5px; color:var(--lc-text);">Promoted &rarr; <b>Deploy</b>: forward test it on live prices first — the button carries the candidate you picked in the board (or the board champion) into the Deploy form.<br>Not ready &rarr; the row names the missing checks; run them in <b>Validate</b>.<br>Untested &rarr; its button goes straight to the <b>Full Pipeline</b>.</p>
+    <button type="button" class="lc-btn" id="lc-next-step" style="width:100%; margin-top:10px;">Next step: Deploy →</button>
   </div>
 
   <div class="lc-side-card">
@@ -270,6 +293,20 @@
   (function () {
     if (window.lcBindPropPreset) window.lcBindPropPreset(document.getElementById('lc-prop-preset'));
     if (window.lcSyncCheckCards) window.lcSyncCheckCards(document);
+  })();
+</script>
+
+<script>
+  // Guided lifecycle handoff: the board candidate picked above (or the
+  // board champion) becomes the Deploy page's strategy pick.
+  (function () {
+    var btn = document.getElementById('lc-next-step');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var sel = document.querySelector('input[name="candidate"]:checked');
+      var v = sel ? sel.value : {{ ((champion.strategy_type ~ '::' ~ champion.filename) if champion else '') | tojson }};
+      window.location = '/forward-test' + (v ? '?strategy=' + encodeURIComponent(v) : '');
+    });
   })();
 </script>
 </body>

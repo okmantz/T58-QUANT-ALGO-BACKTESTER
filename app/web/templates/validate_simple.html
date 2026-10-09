@@ -41,7 +41,7 @@
         <label class="flabel" for="lc-strategy-pick">Strategy</label>
         <select class="inp" name="strategy_pick" id="lc-strategy-pick">
           {% for s in strategies %}
-          <option value="{{ s.type }}::{{ s.name }}">{{ s.name }} ({{ s.type }})</option>
+          <option value="{{ s.type }}::{{ s.name }}"{% if prefill.strategy_pick == s.type ~ '::' ~ s.name %} selected{% endif %}>{{ s.name }} ({{ s.type }})</option>
           {% endfor %}
         </select>
       </div>
@@ -51,13 +51,10 @@
           <option value="">— upload a CSV instead —</option>
           {% for g in dataset_groups %}
           <optgroup label="{{ g.instrument }}">
-            {% for d in g.datasets %}
-            <option value="{{ d.name }}">{{ d.name }}</option>
+            {% for f in g.files %}
+            <option value="{{ f.full_name }}"{% if prefill.existing_dataset == f.full_name %} selected{% endif %}>{{ f.name }}</option>
             {% endfor %}
           </optgroup>
-          {% endfor %}
-          {% for d in stored_datasets %}
-          <option value="{{ d.name }}">{{ d.name }}</option>
           {% endfor %}
         </select>
         <label class="flabel" style="margin-top:10px;" for="lc-csv-file">…or upload market data (CSV)</label>
@@ -68,10 +65,20 @@
         <select class="inp" name="prop_preset" id="lc-prop-preset">
           <option value="">— type the rules in Advanced —</option>
           {% for p in prop_presets %}
-          <option value="{{ p.key }}">{{ p.label }}</option>
+          <option value="{{ p.key }}"{% if prefill.prop_preset == p.key %} selected{% endif %}>{{ p.label }}</option>
           {% endfor %}
         </select>
         <div class="lc-hint" style="margin-top:5px;">Its rules show in the rail &rarr; and harden this run.</div>
+      </div>
+      <div class="lc-col">
+        <label class="flabel" for="lc-timeframe">Timeframe</label>
+        <select class="inp" name="timeframe" id="lc-timeframe">
+          <option value="">Dataset's native timeframe (default)</option>
+          {% for tf in timeframe_choices %}
+          <option value="{{ tf }}"{% if prefill.timeframe == tf %} selected{% endif %}>{{ tf }}</option>
+          {% endfor %}
+        </select>
+        <div class="lc-hint" style="margin-top:5px;">The data is resampled to this bar size before anything runs — never a silent 1m. A timeframe declared inside the strategy itself still wins.</div>
       </div>
     </div>
     <div class="lc-rules-line" id="lc-rules-line"></div>
@@ -165,6 +172,7 @@
     {% if baseline %}
     <div class="lc-summary-band" style="margin-top:14px;">
       <div>Baseline{% if strategy_name %} — <b>{{ strategy_name }}</b>{% endif %} on <b>{{ baseline.dataset }}</b>: <b>{{ baseline.trades }}</b> trades · net <b>{{ '%.2f'|format(baseline.net_profit) }}</b> · win rate <b>{{ '%.1f'|format(baseline.win_rate) }}%</b> · max drawdown <b>{{ '%.2f'|format(baseline.max_drawdown_pct) }}%</b></div>
+      {% if timeframe_note %}<div class="est">{{ timeframe_note }}</div>{% endif %}
     </div>
     {% endif %}
     {% if checks %}
@@ -193,6 +201,24 @@
     </details>
   </div>
   {% endif %}
+
+  <details class="lc-adv">
+    <summary>Individual tools <span class="lc-hint">every check above also keeps its own full page — nothing was removed</span></summary>
+    <div class="adv-body">
+      <div class="lc-toolgrid" style="margin-top:12px;">
+        <a class="lc-toolcard" href="/validate"><div class="tname">Validation Checklist</div><div class="tdesc">The guided hub: what's already on record for the current strategy.</div></a>
+        <a class="lc-toolcard" href="/payout-probability"><div class="tname">Monte Carlo</div><div class="tdesc">Payout probability simulator against the prop rules.</div></a>
+        <a class="lc-toolcard" href="/cpcv"><div class="tname">CPCV</div><div class="tdesc">Combinatorial purged cross-validation, full page.</div></a>
+        <a class="lc-toolcard" href="/pbo"><div class="tname">PBO</div><div class="tdesc">Probability of backtest overfitting, full page.</div></a>
+        <a class="lc-toolcard" href="/walk-forward-opt"><div class="tname">Walk-Forward Optimization</div><div class="tdesc">Rolling/anchored OOS optimization folds.</div></a>
+        <a class="lc-toolcard" href="/walk-forward-ga"><div class="tname">Walk-Forward GA</div><div class="tdesc">Walk-forward-aware genetic refinement.</div></a>
+        <a class="lc-toolcard" href="/sensitivity"><div class="tname">Sensitivity</div><div class="tdesc">One-parameter-at-a-time sweeps, full page.</div></a>
+        <a class="lc-toolcard" href="/parameter-robustness"><div class="tname">Parameter Robustness</div><div class="tdesc">Plateau-vs-cliff robustness map.</div></a>
+        <a class="lc-toolcard" href="/regime-matrix"><div class="tname">Regime Matrix</div><div class="tdesc">Performance split by market regime.</div></a>
+        <a class="lc-toolcard" href="/discover"><div class="tname">Your Idea</div><div class="tdesc">Plain-English idea, tested against shuffled nulls.</div></a>
+      </div>
+    </div>
+  </details>
 
 </div>
 <div class="lc-run-side">
@@ -227,7 +253,8 @@
 
   <div class="lc-side-card">
     <h4>&#129517; What happens next</h4>
-    <p class="lc-hint" style="font-size:12.5px; color:var(--lc-text);">Checks pass &rarr; take it to <b>Champion</b> and promote it.<br>A knob is a cliff &rarr; fix it in <b>Optimize</b>, then re-check.<br>Nothing here retunes the strategy — that is Optimize&rsquo;s job.</p>
+    <p class="lc-hint" style="font-size:12.5px; color:var(--lc-text);">Checks pass &rarr; take it to <b>Champion</b> and promote it — the button below carries this strategy (as the candidate), data and timeframe across.<br>A knob is a cliff &rarr; fix it in <b>Optimize</b>, then re-check.<br>Nothing here retunes the strategy — that is Optimize&rsquo;s job.</p>
+    <button type="button" class="lc-btn" id="lc-next-step" style="width:100%; margin-top:10px;">Next step: Champion →</button>
   </div>
 
   <div class="lc-side-card">
@@ -271,6 +298,28 @@
       if (bar) { bar.parentElement.classList.add('indet'); }
       var btn = document.getElementById('lc-run-btn');
       if (btn) { btn.disabled = true; btn.textContent = 'RUNNING…'; }
+    });
+  })();
+</script>
+
+<script>
+  // Guided lifecycle handoff: carry this page's current picks into the
+  // next step's URL; the receiving page renders them selected.
+  (function () {
+    var btn = document.getElementById('lc-next-step');
+    if (!btn) return;
+    function val(sel) { var el = document.querySelector(sel); return el ? el.value : ''; }
+    btn.addEventListener('click', function () {
+      var q = new URLSearchParams();
+      var sp = val('select[name="strategy_pick"]');
+      if (sp) q.set('candidate', sp);
+      var ds = val('select[name="existing_dataset"]');
+      if (ds) q.set('existing_dataset', ds);
+      var tf = val('select[name="timeframe"]');
+      if (tf) q.set('timeframe', tf);
+      var pp = val('select[name="prop_preset"]');
+      if (pp) q.set('prop_preset', pp);
+      window.location = '/champion-simple' + (q.toString() ? '?' + q.toString() : '');
     });
   })();
 </script>

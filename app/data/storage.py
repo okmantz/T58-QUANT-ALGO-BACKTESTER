@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import threading
@@ -362,6 +363,58 @@ def list_datasets_by_instrument(count_rows: bool = True) -> list[dict]:
             "total_rows": sum(f["rows"] for f in files if f["rows"] >= 0),
         })
     return result
+
+
+# ---------------------------------------------------------------------------
+# v9.8: ONE shared grouping for every dataset PICKER (lifecycle pages and
+# the tool pages sharing their forms). list_datasets_by_instrument above
+# groups by the data/raw/ SUBFOLDER a file lives in -- right for the
+# Dashboard's library card, wrong for a picker when files sit flat in
+# data/raw/: everything lands in one "(ungrouped)" bucket with no
+# instrument headers. Pickers group by the instrument symbol PREFIX of
+# the filename instead -- "ES1!" then its files sorted, then "NQ1!" then
+# its files -- which is how the files are actually named on disk.
+# ---------------------------------------------------------------------------
+_INSTRUMENT_PREFIX_RE = re.compile(r"^([A-Za-z]{1,8}\d*!?)")
+
+
+def dataset_instrument_label(name: str) -> str:
+    """The picker group header for one stored dataset name: the subfolder
+    when the file lives in one ("EURUSD/EURUSD5.csv" -> "EURUSD"), else
+    the leading symbol token of the filename ("ES1!_5m.csv" -> "ES1!",
+    "eurusd (2).csv" -> "EURUSD", "AAA_5M.csv" -> "AAA"). Never raises;
+    a name with no readable prefix groups under "(UNGROUPED)"."""
+    parts = [p for p in str(name).replace("\\", "/").split("/") if p]
+    if not parts:
+        return "(UNGROUPED)"
+    if len(parts) > 1:
+        return parts[0]
+    stem = parts[-1].rsplit(".", 1)[0]
+    m = _INSTRUMENT_PREFIX_RE.match(stem)
+    return m.group(1).upper() if m else "(UNGROUPED)"
+
+
+def list_datasets_grouped_for_picker(count_rows: bool = False) -> list[dict]:
+    """[{"instrument": <header>, "files": [{name, full_name, size_bytes,
+    rows, empty}, ...]}, ...] for <optgroup> dataset pickers: groups
+    sorted A->Z by instrument header, files sorted by name inside each
+    group. Same per-file dict shape as list_datasets_by_instrument (which
+    it regroups), so templates written against either helper render.
+    count_rows=False (the picker default) never reads file contents --
+    the "empty" flag then only fires on placeholder-sized files."""
+    groups: dict[str, list[dict]] = {}
+    for group in list_datasets_by_instrument(count_rows=count_rows):
+        for f in group["files"]:
+            groups.setdefault(dataset_instrument_label(f["full_name"]), []).append(f)
+    return [
+        {
+            "instrument": label,
+            "files": sorted(files, key=lambda x: x["name"]),
+            "file_count": len(files),
+            "empty_count": sum(1 for f in files if f["empty"]),
+        }
+        for label, files in sorted(groups.items())
+    ]
 
 
 def sanitize_stored_filename(filename: str) -> str:

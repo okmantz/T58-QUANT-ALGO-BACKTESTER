@@ -67,22 +67,47 @@
     <label class="flabel">Describe the strategy in plain English</label>
     <textarea name="idea" placeholder="Strategies that go long after price sweeps below the Asian low and reclaims it on ES 15m…"></textarea>
     <label class="flabel" style="margin-top:10px;">Market data to test it on</label>
-    {% if create_datasets %}
-    <div class="lc-checkcards" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr));">
-      {% for d in create_datasets %}
-      <label class="lc-checkline" style="border:1px solid var(--lc-border2); border-radius:8px; padding:8px 10px;">
-        <input type="checkbox" name="datasets" value="{{ d }}"> {{ d }}
-      </label>
+    {% if create_dataset_groups %}
+    <select id="create_datasets_pick" name="datasets" multiple size="8">
+      {% for g in create_dataset_groups %}
+      <optgroup label="{{ g.instrument }}">
+        {% for f in g.files %}
+        <option value="{{ f.full_name }}">{{ f.name }}</option>
+        {% endfor %}
+      </optgroup>
       {% endfor %}
-    </div>
+    </select>
+    <div class="lc-hint" style="margin:2px 0 4px;">One dropdown for all market data, grouped by instrument. Ctrl/Cmd-click (or Shift-click) to pick every dataset the idea makes sense on — the search runs it across each one picked.</div>
     {% else %}
     <p class="lc-hint">No stored datasets yet — import one from the Data section first, then come back here.</p>
     {% endif %}
     <div class="lc-row" style="margin-top:10px;">
-      <div class="lc-col"><label class="flabel">Timeframes (comma-separated, optional)</label><input type="text" name="timeframes" placeholder="e.g. 15m, 30m, 1h"></div>
+      <div class="lc-col">
+        <label class="flabel">Timeframes to test</label>
+        <select id="create_timeframes_pick" multiple size="5">
+          {% for tf in timeframe_choices %}
+          <option value="{{ tf }}"{% if tf in ['5m', '15m', '30m', '1h'] %} selected{% endif %}>{{ tf }}</option>
+          {% endfor %}
+        </select>
+        <div class="lc-hint" style="margin:2px 0 4px;">The idea is tested at each of these bar sizes instead of running one silently at 1m. 5m / 15m / 30m / 1h start selected — Ctrl/Cmd-click to change.</div>
+        <input type="hidden" name="timeframes" id="create_timeframes_hidden" value="5m, 15m, 30m, 1h">
+      </div>
       <div class="lc-col"><label class="flabel">Max bars</label><input type="number" name="max_bars" value="60000"></div>
       <div class="lc-col"><label class="flabel">Null comparisons</label><input type="number" name="n_null" value="200"></div>
     </div>
+    <script>
+      (function () {
+        var pick = document.getElementById('create_timeframes_pick');
+        var hidden = document.getElementById('create_timeframes_hidden');
+        if (!pick || !hidden) return;
+        function sync() {
+          var picked = Array.prototype.map.call(pick.selectedOptions, function (o) { return o.value; });
+          if (picked.length) hidden.value = picked.join(', ');
+        }
+        pick.addEventListener('change', sync);
+        sync();
+      })();
+    </script>
     <button class="lc-btn big" type="submit" style="margin-top:14px;">See if it survives &rarr;</button>
     <p class="lc-hint" style="margin-top:8px;">Runs the real discovery pipeline — data checked, idea compiled against shuffled nulls, results deflated for the number of things you tried.</p>
   </form>
@@ -102,6 +127,15 @@
     <p class="lc-hint lc-save-status" style="margin-top:8px;"></p>
   </div>
   {% endfor %}
+</div>
+
+<div style="margin-top:14px;">
+  {% if recent_strategies %}
+  <a class="lc-btn big" href="/full-pipeline?load_strategy_type={{ recent_strategies[0].strategy_type }}&load_strategy_name={{ recent_strategies[0].name | urlencode }}">Next step: Test “{{ recent_strategies[0].name }}” →</a>
+  {% else %}
+  <a class="lc-btn big" href="/full-pipeline">Next step: Test →</a>
+  {% endif %}
+  <p class="lc-hint" style="margin-top:6px;">Carries the newest saved strategy into the Test page, already selected.</p>
 </div>
 
 {% if recent_strategies %}
