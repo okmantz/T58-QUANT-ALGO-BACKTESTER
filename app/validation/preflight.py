@@ -18,6 +18,7 @@ Checks:
 """
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -304,6 +305,141 @@ def enforce_preflight(rep: PreflightReport, feature_name: str) -> None:
         return
     from app.optimize.parameter_space import RefinementError
     raise RefinementError(f"{feature_name} stopped at preflight, before any search:\n" + rep.render())
+
+
+# ---------------------------------------------------------------------------
+# Sizing remedies + the no-stop default (v9.10) ------------------------------
+#
+# Owen's discretionary reality check (2026-10-09): "I'm able to easily take
+# a trade with 1 mini contract and risk less than $500. It's pretty
+# flexible, just depending on where I put my stop." Correct -- risk is
+# stop distance x $/point, and the stop is a CHOICE. The pipeline broke
+# that twice over for stop-less strategies: the engine silently invented
+# a 1%-of-price stop (~78 pts on ES = ~$3,900 on one mini, a stop no
+# discretionary trader would place), then fit_stop refused to shrink
+# below 20% of that invented distance, so preflight BLOCKed every run.
+# The fix order below mirrors how a trader actually solves it: a sane,
+# visible stop first; then mini if it fits, micro if it doesn't; BLOCK
+# only when even one micro at that stop busts the budget.
+
+SIZING_BLOCK_CODES = frozenset({"sizing_skips", "sizing_infeasible"})
+
+# fit_stop auto-remedy hard floor: a capped stop is never shrunk below
+# this fraction of the strategy's own stop. Below that it is a different
+# strategy, and the run blocks instead (the BLOCK message says so).
+FIT_STOP_HARD_FLOOR = 0.10
+
+# The no-stop default: stop = 2 x ATR(14). On ES 5m that is ~6-12 pts --
+# the $300-600 zone on one mini at a $500 budget, i.e. where a
+# discretionary trader actually risks. Documented here, printed in the
+# run log (points and dollars) by the caller, and recorded on the result.
+DEFAULT_NO_STOP_ATR_MULTIPLE = 2.0
+DEFAULT_NO_STOP_ATR_PERIOD = 14
+
+
+def strategy_defines_stop(strategy) -> bool:
+    """True when the strategy carries its own stop, so the pipeline must
+    not substitute one. Manual (JSON) strategies define one via a
+    risk_management stop_type of fixed/atr with a value, a legacy
+    top-level stop_loss_pips, or a zone_entry block (zones carry their
+    own stop geometry). Code strategies are assumed to manage their own
+    stops (their signals carry the distances)."""
+    if getattr(strategy, "source_type", None) != "manual":
+        return True
+    cfg = getattr(strategy, "config", None) or {}
+    if cfg.get("zone_entry"):
+        return True
+    rm = cfg.get("risk_management") or {}
+    if str(rm.get("stop_type", "")).lower() in ("fixed", "atr") and rm.get("stop_value") not in (None, ""):
+        return True
+    return cfg.get("stop_loss_pips") not in (None, "")
+
+
+def apply_no_stop_default(strategy, df):
+    """(strategy, note | None). For a stop-less MANUAL strategy: a copy
+    whose risk_management carries the ATR default above, plus a note
+    describing the rule and the median stop (points) it produces on
+    `df`. Anything else comes back unchanged with note=None. The
+    caller's strategy object is never mutated."""
+    if strategy_defines_stop(strategy):
+        return strategy, None
+    from app.strategy.manual import ManualStrategy
+
+    new_cfg = copy.deepcopy(getattr(strategy, "config", {}) or {})
+    rm = dict(new_cfg.get("risk_management") or {})
+    rm.update({
+        "stop_type": "atr",
+        "stop_value": DEFAULT_NO_STOP_ATR_MULTIPLE,
+        "stop_atr_period": DEFAULT_NO_STOP_ATR_PERIOD,
+    })
+    new_cfg["risk_management"] = rm
+    note = {
+        "rule": "atr",
+        "multiple": DEFAULT_NO_STOP_ATR_MULTIPLE,
+        "period": DEFAULT_NO_STOP_ATR_PERIOD,
+        "median_stop_points": None,
+        "placeholder_stop_points": None,
+    }
+    try:
+        from app.strategy.indicators import build_indicator_series
+
+        atr = build_indicator_series(df, "atr", period=DEFAULT_NO_STOP_ATR_PERIOD, column="close")
+        med = float(atr.median())
+        if med == med and med > 0:  # not NaN
+            note["median_stop_points"] = DEFAULT_NO_STOP_ATR_MULTIPLE * med
+        note["placeholder_stop_points"] = 0.01 * float(df["close"].median())
+    except Exception:  # noqa: BLE001 -- the note explains; it must never block a run
+        pass
+    return ManualStrategy(new_cfg), note
+
+
+def sizing_remedy_candidates(risk, symbol=None):
+    """Ordered (kind, detail, remedied RiskConfig) fallbacks for a
+    sizing-blocked run, cheapest-to-the-strategy first:
+
+    (a) micro_fallback -- the SAME stop distance on the micro contract's
+        $/point (the remedy the sizing_skips message itself names);
+    (b) fit_stop with the don't-shrink-below floor lowered to
+        FIT_STOP_HARD_FLOOR -- only when fit_stop is the run's mode, and
+        never below that hard floor.
+
+    Neither changes the strategy; (a) never changes the stop at all. The
+    caller re-runs and re-checks preflight per candidate and logs any
+    adoption. If every candidate still blocks, the original BLOCK
+    stands (remedy (c): even one micro at the stop busts the budget)."""
+    from dataclasses import replace as _dc_replace
+
+    out = []
+    mode = getattr(risk, "sizing_mode", "skip")
+    if mode == "rr_planned":
+        # Owen's model already IS the mini -> micro -> skip ladder run
+        # against planned risk; what remains (budget, target) is the
+        # user's call, so there is nothing honest to auto-adopt.
+        return out
+    if mode != "micro_fallback":
+        micro = None
+        try:
+            from app.data.instrument_specs import guess_any_instrument_symbol, micro_equivalent
+
+            root = guess_any_instrument_symbol(str(symbol)) if symbol else None
+            micro = micro_equivalent(root) if root else None
+        except Exception:  # noqa: BLE001
+            micro = None
+        if micro is not None:
+            upd = {"sizing_mode": "micro_fallback"}
+            if not getattr(risk, "micro_contract_size", None):
+                upd["micro_contract_size"] = float(micro.contract_size)
+            if getattr(risk, "micro_commission_per_contract", None) is None:
+                upd["micro_commission_per_contract"] = float(micro.default_commission_round_turn)
+            out.append(("micro_fallback",
+                        {"micro_symbol": micro.symbol,
+                         "micro_contract_size": float(micro.contract_size)},
+                        _dc_replace(risk, **upd)))
+    if mode == "fit_stop" and float(getattr(risk, "fit_stop_min_fraction", 0.2) or 0.2) > FIT_STOP_HARD_FLOOR:
+        out.append(("fit_stop_floor",
+                    {"fit_stop_min_fraction": FIT_STOP_HARD_FLOOR},
+                    _dc_replace(risk, fit_stop_min_fraction=FIT_STOP_HARD_FLOOR)))
+    return out
 
 
 _PRESET_COMPARE_FIELDS = (
