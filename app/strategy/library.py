@@ -46,6 +46,7 @@ import json
 import re
 import shutil
 import sys
+import threading
 import time
 import zipfile
 from dataclasses import dataclass, field
@@ -475,6 +476,95 @@ def _looks_like_manual_config(path: Path) -> bool:
     return isinstance(data, dict) and "entry_conditions" in data
 
 
+# ---------------------------------------------------------------------------
+# Library scan cache (PERF, v9.11). list_saved_strategies used to glob the
+# four library folders and READ + JSON-parse every strategy's metadata
+# sidecar (plus parse extensionless manual configs) on every call -- and
+# it is called by most page renders in the web app (via
+# _saved_strategies_json), by the dashboard, and by the desktop Strategy
+# Library tab, so tab/page switches re-paid the full disk scan every
+# time. The scan is now cached behind a content-free fingerprint (file
+# name + size + mtime of every library entry, sidecars included): any
+# save / delete / metadata write -- from the app or externally -- changes
+# the fingerprint and the next call rescans. Between changes, calls only
+# pay the directory stat pass. Nothing here is TTL-based, so the library
+# can never show a stale strategy list; live job status is unaffected
+# (it never came from this module).
+# ---------------------------------------------------------------------------
+_LIBRARY_SCAN_CACHE: dict[str, Any] = {"key": None, "rows": None}
+_LIBRARY_SCAN_LOCK = threading.Lock()
+
+
+def library_fingerprint() -> tuple:
+    """(type, ((name, size, mtime_ns), ...)) for every library folder --
+    cheap change detector for the scan cache below and for callers that
+    serialize the library (the web app's saved-strategies JSON)."""
+    parts = []
+    for t in STRATEGY_TYPES:
+        d = get_strategy_library_dir(t)
+        try:
+            entries = sorted(d.iterdir(), key=lambda p: p.name)
+        except OSError:
+            parts.append((t, ()))
+            continue
+        sig = []
+        for f in entries:
+            try:
+                st = f.stat()
+                sig.append((f.name, st.st_size, st.st_mtime_ns))
+            except OSError:
+                sig.append((f.name, -1, -1))
+        parts.append((t, tuple(sig)))
+    return tuple(parts)
+
+
+def _scan_library_rows() -> list[tuple[str, Path, int, float, dict]]:
+    """The expensive half of list_saved_strategies: glob + stat + read and
+    parse every metadata sidecar. Returns (type, path, size, modified,
+    metadata) rows in STRATEGY_TYPES order; filtering/sorting happen on
+    fresh StoredStrategy objects rebuilt per call."""
+    rows: list[tuple[str, Path, int, float, dict]] = []
+    for t in STRATEGY_TYPES:
+        d = get_strategy_library_dir(t)
+        _files = list(sorted(d.glob(f"*{_EXTENSIONS[t]}")))
+        if t == "manual":
+            # v9.5: manual strategies saved WITHOUT the .json extension
+            # (e.g. "ES1! Momentum Continuation 5m" from a GitHub upload)
+            # are invisible to the extension glob; extensionless files
+            # that parse as a manual config are strategies too.
+            for _cand in sorted(d.iterdir()):
+                if (
+                    _cand.is_file()
+                    and _cand.suffix == ""
+                    and not _cand.name.endswith(_META_SUFFIX)
+                    and _looks_like_manual_config(_cand)
+                ):
+                    _files.append(_cand)
+        for f in _files:
+            if not f.is_file():
+                continue
+            # The manual glob also matches metadata sidecars themselves
+            # (<file>.meta.json ends in .json) -- without this skip every
+            # manual strategy would appear twice.
+            if f.name.endswith(_META_SUFFIX):
+                continue
+            stat = f.stat()
+            meta = _read_metadata_file(_metadata_path(d, f.name))
+            rows.append((t, f, stat.st_size, stat.st_mtime, meta))
+    return rows
+
+
+def _library_rows_cached() -> list[tuple[str, Path, int, float, dict]]:
+    key = library_fingerprint()
+    with _LIBRARY_SCAN_LOCK:
+        if _LIBRARY_SCAN_CACHE["key"] == key and _LIBRARY_SCAN_CACHE["rows"] is not None:
+            return _LIBRARY_SCAN_CACHE["rows"]
+        rows = _scan_library_rows()
+        _LIBRARY_SCAN_CACHE["key"] = key
+        _LIBRARY_SCAN_CACHE["rows"] = rows
+        return rows
+
+
 def list_saved_strategies(
     strategy_type: str | None = None,
     query: str = "",
@@ -498,52 +588,27 @@ def list_saved_strategies(
     market_q = market.strip().lower() if market else None
     status_q = _normalize_status(status) if status else None
 
+    wanted = set(types)
     out: list[StoredStrategy] = []
-    for t in types:
-        d = get_strategy_library_dir(t)
-        _files = list(sorted(d.glob(f"*{_EXTENSIONS[t]}")))
-        if t == "manual":
-            # v9.5: a manual strategy saved/uploaded WITHOUT the .json
-            # extension (e.g. "ES1! Momentum Continuation 5m" from a
-            # GitHub upload) was invisible to the extension glob above --
-            # the file sat in strategies/manual/ and never appeared in
-            # the app. Extensionless files that parse as a manual config
-            # (JSON object carrying entry_conditions) are strategies too.
-            for _cand in sorted(d.iterdir()):
-                if (
-                    _cand.is_file()
-                    and _cand.suffix == ""
-                    and not _cand.name.endswith(_META_SUFFIX)
-                    and _looks_like_manual_config(_cand)
-                ):
-                    _files.append(_cand)
-        for f in _files:
-            if not f.is_file():
-                continue
-            # "manual"'s own extension (.json) is a suffix of every
-            # metadata sidecar's name (<file>.meta.json), so for manual
-            # strategies (and only manual -- .py/.pine/.mq5 sidecars
-            # never collide with their own type's glob) the glob above
-            # also matches sidecars themselves. Without this check every
-            # manual strategy appeared twice: once as the real strategy,
-            # once as its own metadata file misidentified as a strategy.
-            if f.name.endswith(_META_SUFFIX):
-                continue
-            stat = f.stat()
-            meta = _read_metadata_file(_metadata_path(d, f.name))
-            item = StoredStrategy(
-                name=f.name, strategy_type=t, path=f,
-                size_bytes=stat.st_size, modified=stat.st_mtime, metadata=meta,
-            )
-            if q and not _matches_query(item, q):
-                continue
-            if tag_q and tag_q not in [x.lower() for x in item.tags]:
-                continue
-            if market_q and market_q != str(item.metadata.get("market", "")).strip().lower():
-                continue
-            if status_q and status_q != item.status:
-                continue
-            out.append(item)
+    for t, f, size_bytes, modified, meta in _library_rows_cached():
+        if t not in wanted:
+            continue
+        # Fresh object (and a fresh top-level metadata dict) per call:
+        # the cached row's dict is shared state, exactly like a fresh
+        # parse would hand each caller its own.
+        item = StoredStrategy(
+            name=f.name, strategy_type=t, path=f,
+            size_bytes=size_bytes, modified=modified, metadata=dict(meta),
+        )
+        if q and not _matches_query(item, q):
+            continue
+        if tag_q and tag_q not in [x.lower() for x in item.tags]:
+            continue
+        if market_q and market_q != str(item.metadata.get("market", "")).strip().lower():
+            continue
+        if status_q and status_q != item.status:
+            continue
+        out.append(item)
     out.sort(key=lambda s: s.modified, reverse=True)
     return out
 
