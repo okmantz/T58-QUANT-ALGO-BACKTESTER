@@ -316,13 +316,23 @@ def ensure_licensed(interactive: bool = True) -> bool:
     # dead placeholder domain.
     url_ok, url_message = client.check_license_server_configured()
     if not url_ok:
-        if not interactive:
-            print(f"T58 license configuration error: {url_message}")
-            return False
-        return show_activation_window(
-            initial_message=url_message,
-            initial_email=client.load_state().email,
+        # v9.9 -- no license server configured anywhere (no
+        # T58_LICENSE_SERVER_URL env var, no baked build_config.py):
+        # this copy was never given a way to activate, so demanding a
+        # key here just strands the app on an activation window that
+        # can never succeed -- the main window never opens ("the app
+        # won't open" on a fresh GitHub download). The gate exists for
+        # builds that ship WITH a server URL baked in (CI creates
+        # build_config.py from the repo secret); with no URL there is
+        # nothing to activate against, so this is a source/owner build
+        # and it starts without activation. Behavior is unchanged the
+        # moment any URL is configured.
+        print(
+            "T58 licensing: no license server configured "
+            "(T58_LICENSE_SERVER_URL unset, no baked build_config) -- "
+            "starting without activation (source/owner build)."
         )
+        return True
 
     if not interactive:
         print(f"T58 license check failed: {message}")
