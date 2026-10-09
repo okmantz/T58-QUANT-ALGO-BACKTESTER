@@ -87,7 +87,14 @@
   .lc-col{flex:1; min-width:200px;}
   .lc-field-note{font-size:12px; color:#888; margin-top:4px; line-height:1.5;}
 
-  .lc-btn{background:var(--lc-acc); color:var(--lc-acc-ink); border:0; border-radius:9px; padding:10px 18px; font-weight:700; font-size:13px; cursor:pointer; display:inline-block; text-decoration:none; text-align:center;}
+  /* a.lc-btn included explicitly: .lc-scope a{color:inherit} above has
+     higher specificity than a bare .lc-btn, so anchor-styled buttons
+     (the Create page's "Next step ->" is an <a>) used to inherit the
+     near-white scope text color onto the mint accent background --
+     white-on-mint, unreadable (Owen, 2026-10-09). Variant rules below
+     (.ghost/.danger/.batch...) still win over this via their own
+     higher-specificity selectors, for anchors and buttons alike. */
+  .lc-btn, a.lc-btn{background:var(--lc-acc); color:var(--lc-acc-ink); border:0; border-radius:9px; padding:10px 18px; font-weight:700; font-size:13px; cursor:pointer; display:inline-block; text-decoration:none; text-align:center;}
   .lc-btn:hover{background:#2bf0b4;}
   .lc-btn.big{font-size:15px; padding:13px 30px; border-radius:10px;}
   .lc-btn.ghost{background:transparent; color:var(--lc-text); border:1px solid var(--lc-border2);}

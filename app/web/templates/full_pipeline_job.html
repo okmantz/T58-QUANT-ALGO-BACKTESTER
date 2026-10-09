@@ -33,6 +33,7 @@
 
 <div class="lc-card">
   <h2 id="status-title" style="margin:0 0 10px; font-size:16px;"><span class="spinner" id="spinner"></span>Full Pipeline running&hellip;</h2>
+  <div id="run-clock" style="font-size:12px; color:var(--text-muted); margin:-4px 0 10px;"></div>
   <h3 style="margin:0 0 8px;">Run log — live</h3>
   <div class="lc-logbox tall" id="log">Starting&hellip;</div>
   <div id="next-step" style="display:none; margin-top:10px; padding:12px 14px; border-radius:8px; background:#152615; color:#b7e8b7; font-size:13px; line-height:1.5; text-align:left;"></div>
@@ -117,6 +118,20 @@
 {% if not not_found %}
 <script>
   const jobId = {{ job_id | tojson }};
+  // v9.11: a visible heartbeat. Long quiet stretches inside a run (the
+  // Step 7 evidence pass runs hundreds of full backtests) used to be
+  // indistinguishable from a hung page; the clock + "last updated" line
+  // makes alive-vs-stuck obvious, and a failed poll now says so instead
+  // of retrying silently forever.
+  const startedAt = Date.now();
+  const fmtElapsed = () => {
+    const s = Math.floor((Date.now() - startedAt) / 1000);
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  };
+  const setClock = (msg) => {
+    const el = document.getElementById('run-clock');
+    if (el) el.textContent = msg;
+  };
   const fmt = (v, d) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d === undefined ? 2 : d);
   const money = (v) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : '$' + Number(v).toLocaleString(undefined, {maximumFractionDigits: 0});
 
@@ -133,6 +148,10 @@
         if (!data.found) return;
         document.getElementById('log').textContent = data.log.filter(Boolean).join('\n');
         document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
+
+        if (!data.done && !data.cancelled && !data.error) {
+          setClock('Running for ' + fmtElapsed() + ' — log updated just now. Quiet stretches are normal (Step 7 re-runs hundreds of backtests); watch the log for progress lines.');
+        }
 
         if (data.cancelled) {
           document.getElementById('spinner').style.display = 'none';
@@ -277,7 +296,10 @@
         }
         setTimeout(poll, 2000);
       })
-      .catch(() => setTimeout(poll, 3000));
+      .catch(() => {
+        setClock('Lost contact with the app — retrying… (running ' + fmtElapsed() + '). If this message stays for minutes, the app itself may have closed.');
+        setTimeout(poll, 3000);
+      });
   }
   poll();
 
