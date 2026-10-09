@@ -110,15 +110,34 @@ def _lookup_tags(strategy_name: str, source_type: str) -> list[str]:
     return []
 
 
+# PERF (v9.11): dashboard_data() and friends re-parsed this JSON file
+# (700KB+ and growing with every recorded run) on EVERY dashboard/page
+# load. The parse is now memoized on the file's (size, mtime_ns): any
+# record_run/_save_runs write -- or an external edit -- changes the key
+# and the next call re-parses. Callers get fresh top-level dicts so an
+# in-place tweak by one reader can't poison the cache for the next.
+_RUNS_CACHE: tuple[tuple[int, int], list[dict[str, Any]]] | None = None
+
+
 def load_runs() -> list[dict[str, Any]]:
+    global _RUNS_CACHE
     path = history_path()
     if not path.exists():
         return []
     try:
+        st = path.stat()
+        key = (st.st_size, st.st_mtime_ns)
+    except OSError:
+        key = None
+    if key is not None and _RUNS_CACHE is not None and _RUNS_CACHE[0] == key:
+        return [dict(r) for r in _RUNS_CACHE[1]]
+    try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, list):
-            return data
+            if key is not None:
+                _RUNS_CACHE = (key, data)
+            return [dict(r) for r in data]
     except Exception:
         pass
     return []
