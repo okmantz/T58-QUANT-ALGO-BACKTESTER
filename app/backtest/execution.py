@@ -133,7 +133,7 @@ class Trade:
 
 
 from app.backtest.risk import (  # noqa: E402  (grouped with the sizing constants on purpose)
-    SKIP_COSTS_EXCEED_BUDGET, SKIP_NO_MICRO, SKIP_STOP_CAP_TOO_TIGHT,
+    SKIP_COSTS_EXCEED_BUDGET, SKIP_NO_MICRO, SKIP_PLANNED_RISK, SKIP_STOP_CAP_TOO_TIGHT,
     SKIP_STOP_TOO_WIDE, SKIP_TOO_WIDE_FOR_MICRO,
 )
 
@@ -142,7 +142,7 @@ from app.backtest.risk import (  # noqa: E402  (grouped with the sizing constant
 # diagnostic and the preflight's skip-rate gate.
 _SIZING_SKIP_REASONS = frozenset({
     SKIP_STOP_TOO_WIDE, SKIP_COSTS_EXCEED_BUDGET, SKIP_STOP_CAP_TOO_TIGHT,
-    SKIP_TOO_WIDE_FOR_MICRO, SKIP_NO_MICRO,
+    SKIP_TOO_WIDE_FOR_MICRO, SKIP_NO_MICRO, SKIP_PLANNED_RISK,
 })
 
 DEFAULT_STOP_PCT_OF_PRICE = 0.01  # 1% of entry price, used only when a strategy defines no stop at all
@@ -1486,7 +1486,7 @@ def run_execution(
                 # contract ABOVE the risk budget is gone: the only way to
                 # exceed the budget now is the explicit, tagged
                 # allow_single_contract_minimum opt-in below.
-                decision = risk.size_for_stop(equity, sl_price_dist)
+                decision = risk.size_for_stop(equity, sl_price_dist, tp_distance=bar_tp_distance)
                 size = decision.units
                 pos_contract_size = decision.contract_size if decision.contract_size else risk.contract_size
                 pos_commission_pc = decision.commission_per_contract
@@ -1504,7 +1504,7 @@ def run_execution(
                 _deadlock_guard = False
                 if size <= 0 and risk.contract_size and equity > 0 and decision.skip_reason is not None \
                         and sizing_mode_is_contract_skip(risk):
-                    _fresh = risk.size_for_stop(risk.initial_balance, sl_price_dist)
+                    _fresh = risk.size_for_stop(risk.initial_balance, sl_price_dist, tp_distance=bar_tp_distance)
                     if _fresh.units > 0 and _fresh.contracts >= 1:
                         _one = risk.worst_case_loss(
                             float(risk.contract_size), sl_price_dist, risk.contract_size, risk.commission_per_contract,

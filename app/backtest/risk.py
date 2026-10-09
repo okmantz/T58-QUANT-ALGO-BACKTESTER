@@ -38,7 +38,7 @@ from dataclasses import dataclass
 #                     equivalent (ES->MES etc.) when THAT fits; otherwise
 #                     skip. Never oversizes.
 # ---------------------------------------------------------------------------
-SIZING_MODES = ("skip", "fit_stop", "fixed_contracts", "micro_fallback")
+SIZING_MODES = ("skip", "fit_stop", "fixed_contracts", "micro_fallback", "rr_planned")
 FIT_STOP_TARGET_MODES = ("scale", "keep", "fixed_r")
 
 # Reasons a SizingDecision can have units == 0 (the entry is skipped).
@@ -50,6 +50,7 @@ SKIP_STOP_CAP_TOO_TIGHT = "stop_cap_too_tight"
 SKIP_NO_MICRO = "no_micro_defined"
 SKIP_TOO_WIDE_FOR_MICRO = "stop_too_wide_even_for_micro"
 SKIP_POSITION_CAP = "position_cap_below_one_contract"
+SKIP_PLANNED_RISK = "stop_exceeds_planned_risk"
 
 
 @dataclass(frozen=True)
@@ -310,6 +311,11 @@ class RiskConfig:
     # reward:risk), "keep" (leave the strategy's own target), "fixed_r"
     # (target = fit_stop_target_r x the capped stop, e.g. 1.0 = 1:1).
     fit_stop_target_r: float = 1.0
+    planned_target_dollars: float = 300.0
+    # rr_planned only: the run's per-trade profit-target anchor ($).
+    # Planned risk = this / RR (target distance / stop distance) when
+    # the setup carries a target -- e.g. $300 at 1:2 RR plans $150 of
+    # risk, NOT the full cap. Owen's standing minimum target: $300.
     micro_contract_size: float | None = None
     # micro_fallback only: sizing units per ONE micro contract (MES = 5).
     # Filled by app.data.instrument_specs.apply_instrument_spec from the
@@ -376,7 +382,8 @@ class RiskConfig:
             return max(self.risk_value, 0.0)
         return max(equity_for_sizing * (self.risk_value / 100.0), 0.0)
 
-    def size_for_stop(self, current_equity: float, stop_distance: float) -> "SizingDecision":
+    def size_for_stop(self, current_equity: float, stop_distance: float,
+                      tp_distance: float | None = None) -> "SizingDecision":
         """The ONE sizing routine (see SIZING_MODES). `stop_distance` is the
         strategy's own stop in PRICE units. Returns a SizingDecision whose
         `units` is 0 when the entry must be skipped, with `skip_reason`
@@ -385,7 +392,14 @@ class RiskConfig:
         Budget accounting: the worst-case loss at the stop INCLUDES the
         exit-side spread/slippage and commission (see worst_case_loss), so a
         trade that stops out for exactly its sized risk never reads as an
-        "overshoot"."""
+        "overshoot".
+
+        `tp_distance` (the setup's target distance, same units) only feeds
+        sizing_mode="rr_planned" (Owen's risk model): the budget there is a
+        CAP anchored to the account (initial_balance), planned risk is
+        planned_target_dollars / RR when a target exists, and contracts
+        (mini, else micro) are chosen to land as close as possible under
+        planned without ever exceeding the cap."""
         mode = self.sizing_mode if self.sizing_mode in SIZING_MODES else "skip"
         budget = self.risk_amount(current_equity)
         D = float(stop_distance) if stop_distance is not None and math.isfinite(stop_distance) else 0.0
@@ -398,13 +412,29 @@ class RiskConfig:
         fixed = self.commission_per_trade
         avail = budget - fixed
 
+        # rr_planned: re-anchor the budget to the CAP (risk % of the
+        # ACCOUNT, not of whatever equity happens to remain) and derive
+        # the planned risk for THIS setup. planned_avail is what sizing
+        # may actually spend; the cap only bounds it.
+        planned_avail: float | None = None
+        if mode == "rr_planned":
+            budget = self.risk_amount(self.initial_balance) if self.initial_balance else budget
+            avail = budget - fixed
+            planned = budget
+            if tp_distance is not None and float(tp_distance) > 0:
+                rr = float(tp_distance) / D
+                if rr > 0:
+                    planned = min(budget, float(self.planned_target_dollars) / rr)
+            planned_avail = planned - fixed
+
         # -- fractional-unit instruments (FX/CFD/crypto): no whole-contract
         # constraint, so every mode reduces to "size so the worst case fits".
         if not self.contract_size:
-            if avail <= 0:
+            spend = avail if planned_avail is None else planned_avail
+            if spend <= 0:
                 return SizingDecision(budget=budget, original_stop_distance=D, stop_distance=D,
-                                      skip_reason=SKIP_COSTS_EXCEED_BUDGET)
-            units = avail / (D + c)
+                                      skip_reason=SKIP_PLANNED_RISK if planned_avail is not None else SKIP_COSTS_EXCEED_BUDGET)
+            units = spend / (D + c)
             if self.max_position_size is not None:
                 units = min(units, self.max_position_size)
             if self.max_contracts is not None:
@@ -427,11 +457,13 @@ class RiskConfig:
                 n = min(n, int(self.max_contracts))
             return max(n, 0)
 
-        def _fit(dist: float, contract_units: float, per_contract_commission: float) -> int:
+        def _fit(dist: float, contract_units: float, per_contract_commission: float,
+                 budget_avail: float | None = None) -> int:
+            spend = avail if budget_avail is None else budget_avail
             denom = contract_units * (dist + c) + per_contract_commission
-            if avail <= 0 or denom <= 0:
+            if spend <= 0 or denom <= 0:
                 return 0
-            return int(math.floor(avail / denom + 1e-9))
+            return int(math.floor(spend / denom + 1e-9))
 
         def _decision(n: int, dist: float, contract_units: float, per_contract_commission: float,
                       capped: bool = False, micro: bool = False, above: bool = False) -> "SizingDecision":
@@ -456,6 +488,28 @@ class RiskConfig:
             if d.risk_at_stop > budget * 1.001:
                 d = _decision(n, D, cs, cpc, above=True)
             return d
+
+        if mode == "rr_planned":
+            # Mini first, then micro, both against PLANNED (never the
+            # cap): the largest whole-contract count whose worst case
+            # stays at or under planned. If even one micro exceeds
+            # planned, the signal is skipped and counted -- the stop is
+            # never shrunk to force the trade (Owen's model, 2026-10-09).
+            n = _cap_contracts(_fit(D, cs, cpc, planned_avail), cs)
+            if n >= 1:
+                return _decision(n, D, cs, cpc)
+            if not self.micro_contract_size:
+                return _skip(SKIP_PLANNED_RISK)
+            m_cs = float(self.micro_contract_size)
+            m_cpc = float(self.micro_commission_per_contract if self.micro_commission_per_contract is not None else cpc)
+            n_m = _fit(D, m_cs, m_cpc, planned_avail)
+            if self.max_position_size is not None:
+                n_m = min(n_m, int(math.floor(self.max_position_size / m_cs + 1e-9)))
+            if self.max_contracts is not None:
+                n_m = min(n_m, int(self.max_contracts) * max(int(round(cs / m_cs)), 1))
+            if n_m >= 1:
+                return _decision(n_m, D, m_cs, m_cpc, micro=True)
+            return _skip(SKIP_PLANNED_RISK)
 
         if mode == "fit_stop":
             D_eff = D
@@ -530,7 +584,7 @@ class RiskConfig:
         d = self.size_for_stop(current_equity, stop_loss_pips * self.pip_size)
         return d.units <= 0 and d.skip_reason in (
             SKIP_STOP_TOO_WIDE, SKIP_COSTS_EXCEED_BUDGET, SKIP_STOP_CAP_TOO_TIGHT,
-            SKIP_TOO_WIDE_FOR_MICRO, SKIP_NO_MICRO,
+            SKIP_TOO_WIDE_FOR_MICRO, SKIP_NO_MICRO, SKIP_PLANNED_RISK,
         )
 
     def max_trade_loss(self, equity_at_entry: float) -> float:
