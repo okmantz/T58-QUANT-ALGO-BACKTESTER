@@ -8,11 +8,16 @@ from app.web.server import app
 
 
 @pytest.fixture(autouse=True)
-def reset_license_cache():
+def reset_license_cache(monkeypatch):
     """The gate caches the license check for the life of the process
     (see app.web.server._license_gate's docstring) -- reset that cache
     before and after every test so tests can't leak the cached
     True/False into each other."""
+    # v9.9: the web gate only engages when a license server URL is
+    # configured (a distributed build). These tests simulate exactly
+    # that build, so configure a URL; validate()/activate() themselves
+    # are patched per-test below and never touch the network.
+    monkeypatch.setenv("T58_LICENSE_SERVER_URL", "https://license.example.invalid")
     server_module._license_ok_cached = None
     yield
     server_module._license_ok_cached = None
