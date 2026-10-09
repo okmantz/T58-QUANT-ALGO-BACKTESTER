@@ -13,6 +13,7 @@
       <select name="sizing_mode">
         <option value="skip">skip - no trade if the stop is too wide for the budget</option>
         <option value="fit_stop" selected>fit_stop - shrink the stop to fit the dollar budget</option>
+        <option value="rr_planned">rr_planned - planned risk = target/RR under the 1% cap (mini, else micro; never shrinks the stop)</option>
         <option value="micro_fallback">micro_fallback - use the micro contract</option>
         <option value="fixed_contracts">fixed_contracts</option>
       </select></div>
