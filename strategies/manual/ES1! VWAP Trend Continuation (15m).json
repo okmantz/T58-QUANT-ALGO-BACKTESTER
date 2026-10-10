@@ -1,0 +1,146 @@
+{
+  "name": "ES1! VWAP Trend Continuation (v9.14)",
+  "timeframe": "15m",
+  "entry_conditions": {
+    "long": [
+      {
+        "left": {
+          "type": "time_of_day",
+          "session_start": "09:45",
+          "session_end": "15:00"
+        },
+        "operator": "==",
+        "right": {
+          "type": "value",
+          "value": 1
+        }
+      },
+      {
+        "left": {
+          "type": "close",
+          "field": "close",
+          "period": 1
+        },
+        "operator": ">",
+        "right": {
+          "type": "session_vwap"
+        }
+      },
+      {
+        "left": {
+          "type": "ema",
+          "period": 20,
+          "field": "close"
+        },
+        "operator": ">",
+        "right": {
+          "type": "ema",
+          "period": 60,
+          "field": "close"
+        }
+      },
+      {
+        "left": {
+          "type": "rsi",
+          "period": 14,
+          "field": "close"
+        },
+        "operator": "<",
+        "right": {
+          "type": "value",
+          "value": 72
+        }
+      }
+    ],
+    "long_connectors": [
+      "AND",
+      "AND",
+      "AND"
+    ],
+    "short": [
+      {
+        "left": {
+          "type": "time_of_day",
+          "session_start": "09:45",
+          "session_end": "15:00"
+        },
+        "operator": "==",
+        "right": {
+          "type": "value",
+          "value": 1
+        }
+      },
+      {
+        "left": {
+          "type": "close",
+          "field": "close",
+          "period": 1
+        },
+        "operator": "<",
+        "right": {
+          "type": "session_vwap"
+        }
+      },
+      {
+        "left": {
+          "type": "ema",
+          "period": 20,
+          "field": "close"
+        },
+        "operator": "<",
+        "right": {
+          "type": "ema",
+          "period": 60,
+          "field": "close"
+        }
+      },
+      {
+        "left": {
+          "type": "rsi",
+          "period": 14,
+          "field": "close"
+        },
+        "operator": ">",
+        "right": {
+          "type": "value",
+          "value": 28
+        }
+      }
+    ],
+    "short_connectors": [
+      "AND",
+      "AND",
+      "AND"
+    ]
+  },
+  "exit_conditions": {
+    "long": [
+      {
+        "left": {
+          "type": "close",
+          "field": "close",
+          "period": 1
+        },
+        "operator": "cross below",
+        "right": {
+          "type": "session_vwap"
+        }
+      }
+    ],
+    "short": [
+      {
+        "left": {
+          "type": "close",
+          "field": "close",
+          "period": 1
+        },
+        "operator": "cross above",
+        "right": {
+          "type": "session_vwap"
+        }
+      }
+    ]
+  },
+  "stop_loss_pips": 12.0,
+  "take_profit_pips": 24.0
+}

@@ -1,0 +1,122 @@
+{
+  "name": "GC1! Overlap Momentum Breakout (v9.14)",
+  "timeframe": "15m",
+  "entry_conditions": {
+    "long": [
+      {
+        "left": {
+          "type": "time_of_day",
+          "session_start": "08:20",
+          "session_end": "10:30"
+        },
+        "operator": "==",
+        "right": {
+          "type": "value",
+          "value": 1.4842652268416212
+        }
+      },
+      {
+        "left": {
+          "type": "close",
+          "field": "close",
+          "period": 1
+        },
+        "operator": ">",
+        "right": {
+          "type": "donchian_upper",
+          "period": 8,
+          "field": "close"
+        }
+      },
+      {
+        "left": {
+          "type": "close",
+          "field": "close",
+          "period": 3
+        },
+        "operator": ">",
+        "right": {
+          "type": "session_vwap"
+        }
+      }
+    ],
+    "long_connectors": [
+      "AND",
+      "AND"
+    ],
+    "short": [
+      {
+        "left": {
+          "type": "time_of_day",
+          "session_start": "08:20",
+          "session_end": "10:30"
+        },
+        "operator": "==",
+        "right": {
+          "type": "value",
+          "value": 0.0
+        }
+      },
+      {
+        "left": {
+          "type": "close",
+          "field": "close",
+          "period": 2
+        },
+        "operator": "<",
+        "right": {
+          "type": "donchian_lower",
+          "period": 2,
+          "field": "close"
+        }
+      },
+      {
+        "left": {
+          "type": "close",
+          "field": "close",
+          "period": 1
+        },
+        "operator": "<",
+        "right": {
+          "type": "session_vwap"
+        }
+      }
+    ],
+    "short_connectors": [
+      "AND",
+      "AND"
+    ]
+  },
+  "exit_conditions": {
+    "long": [
+      {
+        "left": {
+          "type": "time_of_day",
+          "session_start": "13:30",
+          "session_end": "23:59"
+        },
+        "operator": "==",
+        "right": {
+          "type": "value",
+          "value": 1.1523421783310708
+        }
+      }
+    ],
+    "short": [
+      {
+        "left": {
+          "type": "time_of_day",
+          "session_start": "13:30",
+          "session_end": "23:59"
+        },
+        "operator": "==",
+        "right": {
+          "type": "value",
+          "value": 1.1523421783310708
+        }
+      }
+    ]
+  },
+  "stop_loss_pips": 5.341935191818374,
+  "take_profit_pips": 15.67776155716579
+}
