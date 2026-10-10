@@ -93,6 +93,14 @@ class PropFirmPreset:
     trailing_lock_offset_pct: float = 0.0
     max_contracts: int | None = None     # per-firm cap on mini-equivalent contracts
     rules_checked_on: str = ""      # date the dd/lock/contract fields above were checked against the firm
+    # v9.16 audit fixes: three rule fields that to_prop_rules() used to drop.
+    # trailing_distance_basis "account" = fixed dollar distance (account_size x pct),
+    # how futures firms state a trailing MLL; "peak" = % of peak (legacy).
+    trailing_distance_basis: str = "peak"
+    max_eval_calendar_days: int | None = None   # eval time limit in calendar days (None = no limit)
+    # Futures session flatten: positions must be flat by this America/Chicago
+    # wall-clock time ("15:45" = 4:45 pm ET). None = rule not modeled.
+    flatten_time_ct: str | None = None
     as_of: str = ""                 # date this preset was last checked against the firm's own rules page
     source_note: str = ""           # short pointer to what to re-check and where
 
@@ -133,6 +141,9 @@ class PropFirmPreset:
             trailing_lock_offset_pct=self.trailing_lock_offset_pct,
             max_contracts=self.max_contracts,
             rules_checked_on=self.rules_checked_on,
+            trailing_distance_basis=self.trailing_distance_basis,
+            max_eval_calendar_days=self.max_eval_calendar_days,
+            flatten_time_ct=self.flatten_time_ct,
         )
 
     def to_dict(self) -> dict:
@@ -568,6 +579,7 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
         # $52,100; $1,200 daily loss is a soft breach (day locked, account kept); 4 mini / 40 micro.
         dd_basis="eod", daily_loss_basis="floating", daily_loss_action="lock_day",
         trailing_lock=True, trailing_lock_offset_pct=0.2, max_contracts=4, rules_checked_on="2026-10-07",
+        trailing_distance_basis="account", flatten_time_ct="15:45",
         consistency_rule_pct=None, min_trading_days=1,
         payout_frequency_days=3,
         funded_consistency_rule_pct=40.0,

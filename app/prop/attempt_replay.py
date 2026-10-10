@@ -47,6 +47,48 @@ def _wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
     return (max(0.0, c - h), min(1.0, c + h))
 
 
+def _wilson_float(p: float, n: float, z: float = 1.96) -> tuple[float, float]:
+    """Wilson interval for a proportion with a (possibly fractional) effective n."""
+    if n <= 0:
+        return (0.0, 1.0)
+    d = 1 + z * z / n
+    c = (p + z * z / (2 * n)) / d
+    h = z * math.sqrt(max(p * (1 - p) / n + z * z / (4 * n * n), 0.0)) / d
+    return (max(0.0, c - h), min(1.0, c + h))
+
+
+def _block_bootstrap_ci(flags, block_len: int, n_boot: int = 2000, seed: int = 7,
+                        alpha: float = 0.05) -> tuple[float, float]:
+    """Moving-block bootstrap CI for the mean of a 0/1 sequence of
+    attempts that were started at ordered, overlapping dates. Resampling
+    whole blocks of consecutive starts (block_len ~ horizon / spacing)
+    keeps the dependence the overlap creates, so the interval is wide
+    when only a few truly independent windows exist -- unlike Wilson,
+    which treats N overlapping starts as N independent trials."""
+    x = np.asarray(flags, dtype=float)
+    n = len(x)
+    if n == 0:
+        return (0.0, 1.0)
+    L = int(max(1, min(block_len, n)))
+    if L >= n:
+        # one block = no independent replication at all
+        return (0.0, 1.0)
+    rng = np.random.default_rng(seed)
+    n_blocks = int(math.ceil(n / L))
+    starts = rng.integers(0, n - L + 1, size=(n_boot, n_blocks))
+    csum = np.concatenate([[0.0], np.cumsum(x)])
+    block_sums = csum[starts + L] - csum[starts]
+    means = block_sums.sum(axis=1) / (n_blocks * L)
+    lo, hi = np.quantile(means, [alpha / 2, 1 - alpha / 2])
+    # A bootstrap of an all-0 / all-1 sequence collapses to a point (0-0%): never claim that
+    # much certainty. Take the union with a Wilson interval on the EFFECTIVE sample size
+    # (about one independent trial per horizon-length of data).
+    n_eff = max(1.0, n / L)
+    p_hat = float(x.mean())
+    w_lo, w_hi = _wilson_float(p_hat, n_eff)
+    return (float(max(0.0, min(lo, w_lo))), float(min(1.0, max(hi, w_hi))))
+
+
 @dataclass
 class AttemptOutcome:
     start_bar: int
@@ -57,6 +99,10 @@ class AttemptOutcome:
     n_trades: int
     end_balance: float
     bust_before_pass: bool
+    # v9.16: CALENDAR days from the account purchase to its first payout
+    # (None = no payout inside the replay window). Only filled when the
+    # replay ran with track_payout=True.
+    first_payout_days: float | None = None
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -81,6 +127,16 @@ class AttemptReplayResult:
     min_attempts: int
     notes: list = field(default_factory=list)
     attempts: list = field(default_factory=list)
+    # -- v9.16 (audit P0-1 / P1-4): the metric the business actually needs, and honest CIs
+    payout_tracked: bool = False
+    n_payout: int = 0
+    payout_within_rate: dict = field(default_factory=dict)       # {30: share of ALL fresh accounts with a payout inside 30 calendar days}
+    payout_within_ci: dict = field(default_factory=dict)         # {30: (lo, hi)} block-bootstrap, honest
+    median_days_to_payout: float | None = None
+    pass_ci_honest: tuple = (0.0, 1.0)                            # block-bootstrap CI that respects overlapping start windows
+    n_effective: float = 0.0                                      # ~ independent windows in the sample (span / horizon)
+    horizon_days: int = 0
+    spacing_days: float = 0.0
 
     def to_dict(self) -> dict:
         d = dict(self.__dict__)
@@ -101,6 +157,18 @@ class AttemptReplayResult:
             lines.append(f"Expected fee cost per pass  ${self.expected_cost_per_pass:,.0f}")
         if self.median_days_to_pass is not None:
             lines.append(f"Median days to pass {self.median_days_to_pass:.0f}")
+        if self.n_effective:
+            hlo, hhi = self.pass_ci_honest
+            lines.append(
+                f"Honest 95% CI       {hlo * 100:.1f}-{hhi * 100:.1f}%  (~{self.n_effective:.1f} independent windows; "
+                "the Wilson CI above assumes every start is independent, which overlapping starts are not)")
+        if self.payout_tracked:
+            for d_, r_ in sorted(self.payout_within_rate.items()):
+                ci_ = self.payout_within_ci.get(d_, (0.0, 1.0))
+                lines.append(
+                    f"First payout <= {d_} calendar days   {r_ * 100:.1f}%   (honest 95% CI {ci_[0] * 100:.1f}-{ci_[1] * 100:.1f}%)")
+            if self.median_days_to_payout is not None:
+                lines.append(f"Median calendar days to first payout  {self.median_days_to_payout:.0f}")
         lines += [f"NOTE: {n}" for n in self.notes]
         return "\n".join(lines)
 
@@ -144,7 +212,22 @@ def _replay_one_start(s: int, df, signals, risk_p, rules, stop_loss_pips,
         outcome = "passed"
     if outcome == "failed" and a.get("passed_evaluation"):
         outcome = "passed"   # passed the evaluation, later busted funded: still a pass
+    fp_days = None
+    fpt = a.get("first_payout_time")
+    st_ = a.get("start_time")
+    if fpt is not None and st_ is not None:
+        try:
+            _f = pd.Timestamp(fpt)
+            _s = pd.Timestamp(st_)
+            if _f.tzinfo is not None:
+                _f = _f.tz_convert("UTC").tz_localize(None)
+            if _s.tzinfo is not None:
+                _s = _s.tz_convert("UTC").tz_localize(None)
+            fp_days = float((_f - _s).total_seconds() / 86400.0)
+        except Exception:  # noqa: BLE001 -- a bad timestamp just means "no payout day"
+            fp_days = None
     return AttemptOutcome(
+        first_payout_days=fp_days,
         start_bar=s, start_time=str(ts[s]), outcome=outcome,
         failure_reason=a.get("failure_reason") if outcome == "failed" else None,
         days_to_pass=a.get("days_to_pass"), n_trades=int(a.get("n_trades") or 0),
@@ -199,6 +282,8 @@ def run_attempt_replay(
     keep_attempts: bool = True,
     max_workers: int | None = None,
     progress_cb=None,
+    track_payout: bool = False,
+    payout_windows: tuple = (30,),
     **exec_kwargs,
 ) -> AttemptReplayResult:
     """Run `n_starts` evenly spread fresh-account attempts.
@@ -215,8 +300,20 @@ def run_attempt_replay(
     existing caller on the exact serial path. progress_cb, when given,
     is invoked as (done, total) as attempts complete; purely
     observational.
+
+    track_payout (v9.16): keep each account alive past the evaluation
+    pass (stop_on_pass is forced False) so the funded stage's FIRST
+    PAYOUT is observed, then report the share of fresh accounts that were
+    paid within each of `payout_windows` calendar days of purchase -- the
+    "payout in under thirty days" objective measured directly. Intervals
+    for pass/payout rates are moving-block bootstrap CIs that respect the
+    overlap between neighbouring start dates (pass_ci_honest,
+    payout_within_ci); the Wilson pass_ci is kept for backward
+    compatibility.
     """
     from dataclasses import replace
+    if track_payout:
+        stop_on_pass = False
     n = len(df)
     if n < 50:
         raise ValueError("Not enough bars for an attempt replay.")
@@ -302,7 +399,37 @@ def run_attempt_replay(
         notes.append(f"{opened / N * 100:.0f}% of attempts neither passed nor busted inside {horizon_days} days; "
                      "the target may be unreachable at this risk level or the strategy trades too rarely.")
     from collections import Counter
+    # -- v9.16 honest dependence-aware intervals + payout-window metrics
+    start_ts = [pd.Timestamp(o.start_time) for o in outcomes]
+    if len(start_ts) > 1:
+        gaps = [(b - a_).total_seconds() / 86400.0 for a_, b in zip(start_ts[:-1], start_ts[1:])]
+        spacing = float(np.median(gaps)) if gaps else 0.0
+    else:
+        spacing = 0.0
+    span_days = (start_ts[-1] - start_ts[0]).total_seconds() / 86400.0 + horizon_days if start_ts else 0.0
+    block_len = int(math.ceil(horizon_days / spacing)) if spacing > 0 else N
+    n_eff = float(min(N, span_days / horizon_days)) if horizon_days else float(N)
+    pass_flags = [1.0 if o.outcome == "passed" else 0.0 for o in outcomes]
+    ci_honest = _block_bootstrap_ci(pass_flags, block_len)
+    pw_rate: dict = {}
+    pw_ci: dict = {}
+    n_payout = 0
+    pay_days: list = []
+    if track_payout:
+        pay_days = sorted(o.first_payout_days for o in outcomes if o.first_payout_days is not None)
+        n_payout = len(pay_days)
+        for w in payout_windows:
+            flags = [1.0 if (o.first_payout_days is not None and o.first_payout_days <= w) else 0.0 for o in outcomes]
+            pw_rate[int(w)] = (sum(flags) / N) if N else 0.0
+            pw_ci[int(w)] = _block_bootstrap_ci(flags, block_len, seed=11 + int(w))
+        if n_eff < 4:
+            notes.append(
+                f"only ~{n_eff:.1f} independent {horizon_days}-day windows in this data: pass/payout rates have very wide "
+                "honest intervals; do not read the point estimate as precise.")
     return AttemptReplayResult(
+        payout_tracked=bool(track_payout), n_payout=n_payout, payout_within_rate=pw_rate, payout_within_ci=pw_ci,
+        median_days_to_payout=(float(pay_days[len(pay_days) // 2]) if pay_days else None),
+        pass_ci_honest=ci_honest, n_effective=n_eff, horizon_days=int(horizon_days), spacing_days=spacing,
         n_attempts=N, n_passed=passed, n_failed=failed, n_open=opened,
         pass_rate=pass_rate, bust_rate=(failed / N if N else 0.0), open_rate=(opened / N if N else 0.0),
         pass_ci=_wilson(passed, N),

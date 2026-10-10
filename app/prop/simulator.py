@@ -149,6 +149,10 @@ class PropRules:
     # (+ trailing_lock_offset_pct of it). False = the floor trails forever.
     trailing_lock_offset_pct: float = 0.0
     trailing_distance_basis: str = "peak"
+    # v9.16: futures session flatten, America/Chicago "HH:MM" ("15:45" = 4:45 pm ET).
+    # The bar engine force-closes any open position at the first bar at/after this
+    # time and blocks entries until the 17:00 CT session roll. None = off.
+    flatten_time_ct: str | None = None
     # "peak" (default, the repo's long-standing convention): floor =
     # peak x (1 - max_drawdown_pct). "account": floor = peak - account_size x
     # max_drawdown_pct, i.e. a fixed dollar distance, which is how most
