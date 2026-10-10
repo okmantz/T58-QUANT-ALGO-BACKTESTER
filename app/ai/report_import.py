@@ -283,26 +283,25 @@ def _import_screenshot(path: Path, settings=None) -> ImportedReport:
         "report numbers that are visibly printed in the image -- never estimate or infer a number that "
         "isn't shown. If you can't read the image or it isn't a backtest report, say so plainly."
     )
+    # v9.14: shared streaming transport (health/model check + warm-up
+    # with its own budget) instead of a single 120s non-streaming POST
+    # -- the reason now distinguishes unreachable / not pulled /
+    # timed out instead of one generic failure.
+    from app.ai import ollama_transport as transport
+
     host = (settings.host or "").rstrip("/")
-    headers = {"Content-Type": "application/json"}
-    if getattr(settings, "api_key", None):
-        headers["Authorization"] = f"Bearer {settings.api_key}"
     try:
-        resp = requests.post(
-            f"{host}/api/generate",
-            headers=headers,
-            json={
-                "model": settings.model, "prompt": prompt, "images": [image_b64], "stream": False,
-            },
-            timeout=120,
+        raw_text = transport.generate(
+            settings, prompt, images=[image_b64], total_timeout=300.0,
         )
-        resp.raise_for_status()
-        raw_text = resp.json().get("response", "")
-    except requests.exceptions.ConnectionError:
+    except transport.OllamaError as exc:
         return ImportedReport(
             source_path=str(path), kind="screenshot", is_ai_estimated=True,
-            summary_text=f"Couldn't reach Ollama at {host} to read '{path.name}'.",
-            warnings=[f"connection error: {host}"],
+            summary_text=(
+                f"Ollama request to read '{path.name}' failed: {exc}. If '{settings.model}' isn't a "
+                f"vision-capable model, pull one (e.g. `ollama pull llama3.2-vision`) and select it above."
+            ),
+            warnings=[str(exc)],
         )
     except Exception as exc:
         return ImportedReport(

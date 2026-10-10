@@ -61,7 +61,8 @@ from app.monte_carlo.engine import MonteCarloConfig, MonteCarloResult, run_monte
 from app.prop.simulator import PropRules, simulate_account, summarize_single_run
 from app.strategy.base import Strategy
 
-DEFAULT_TIMEOUT_SECONDS = 120
+# v9.14: TOTAL budget for one (streamed) completion via app.ai.ollama_transport.
+DEFAULT_TIMEOUT_SECONDS = 600
 DEFAULT_MAX_STEPS = 6
 DEFAULT_MAX_TOTAL_SECONDS = 600
 
@@ -624,35 +625,25 @@ class ResearchAgent:
         self.max_total_seconds = max_total_seconds
 
     def _call_ollama(self, prompt: str) -> tuple[str | None, str | None]:
-        import requests
+        # v9.14: shared streaming transport -- health/model check first,
+        # model warmed under its own budget, completion streamed with
+        # stall/total deadlines, and every failure returns the concrete
+        # reason (which run() surfaces as result.error, as before).
+        from app.ai import ollama_transport as transport
+
         if not self.settings.is_usable:
             from app.ai.llm_client import complete_text
             return complete_text(prompt)
 
-        host = (self.settings.host or "").rstrip("/")
-        if not host:
-            return None, "No Ollama host configured."
-        headers = {"Content-Type": "application/json"}
-        if self.settings.api_key:
-            headers["Authorization"] = f"Bearer {self.settings.api_key}"
         try:
-            resp = requests.post(
-                f"{host}/api/generate",
-                headers=headers,
-                json={
-                    "model": self.settings.model, "prompt": prompt, "stream": False,
-                    "keep_alive": ollama_settings.INTERACTIVE_KEEP_ALIVE,
-                },
-                timeout=self.timeout,
+            text = transport.generate(
+                self.settings, prompt,
+                keep_alive=ollama_settings.INTERACTIVE_KEEP_ALIVE,
+                total_timeout=float(self.timeout),
             )
-            resp.raise_for_status()
-            return resp.json().get("response", ""), None
-        except requests.exceptions.ConnectionError:
-            return None, f"Couldn't reach Ollama at {host} (is it running?)."
-        except requests.exceptions.Timeout:
-            return None, f"Ollama at {host} didn't respond in time."
-        except Exception as exc:
-            return None, f"Ollama request failed: {exc}"
+            return text, None
+        except transport.OllamaError as exc:
+            return None, str(exc)
 
     def run(
         self,

@@ -87,37 +87,23 @@ class OllamaEmbedder:
         return headers
 
     def embed_one(self, text: str) -> tuple[list[float] | None, str | None]:
-        import requests
+        # v9.14: shared transport (health/model check + warm-up, then
+        # the embeddings call) with the concrete reason on failure --
+        # including "model not pulled", which the transport's precheck
+        # now catches before the request instead of after it.
+        from app.ai import ollama_transport as transport
 
         host = (self.settings.host or "").rstrip("/")
         if not host:
             return None, "No Ollama host configured."
         try:
-            resp = requests.post(
-                f"{host}/api/embeddings",
-                headers=self._headers(),
-                json={
-                    "model": self.model, "prompt": text,
-                    "keep_alive": ollama_settings.INTERACTIVE_KEEP_ALIVE,
-                },
-                timeout=self.timeout,
+            vector = transport.embed(
+                self.settings, text, model=self.model,
+                total_timeout=max(float(self.timeout), 60.0),
             )
-            resp.raise_for_status()
-            data = resp.json()
-        except requests.exceptions.ConnectionError:
-            return None, f"Couldn't reach Ollama at {host} (is it running?)."
-        except requests.exceptions.Timeout:
-            return None, f"Ollama at {host} didn't respond in time."
-        except Exception as exc:
-            return None, f"Ollama embedding request failed: {exc}"
-
-        vector = data.get("embedding")
-        if not isinstance(vector, list) or not vector:
-            return None, (
-                f"Ollama responded, but returned no embedding -- is '{self.model}' pulled? "
-                f"(Try: ollama pull {self.model})"
-            )
-        return [float(v) for v in vector], None
+            return vector, None
+        except transport.OllamaError as exc:
+            return None, str(exc)
 
     def embed_many(self, texts: list[str]) -> EmbeddingResult:
         """Embeds each text one at a time (Ollama's embeddings endpoint has

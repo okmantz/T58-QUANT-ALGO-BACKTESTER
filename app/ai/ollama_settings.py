@@ -57,6 +57,12 @@ class OllamaSettings:
     model: str = DEFAULT_MODEL
     api_key: str = ""  # optional -- only needed for a remote Ollama behind auth
     vision_model: str = DEFAULT_VISION_MODEL  # used only for screenshot analysis (chart/trade images)
+    # v9.14: total budget (seconds) for ONE completion through
+    # app.ai.ollama_transport. 0 = the transport default (600s, or
+    # T58_OLLAMA_TIMEOUT_S). Sized for local inference: a CPU-only
+    # model legitimately needs minutes for a long answer, which is
+    # exactly what the old single 90s non-streaming timeouts killed.
+    timeout_seconds: int = 0
 
     @property
     def is_usable(self) -> bool:
@@ -107,6 +113,7 @@ def save_settings(settings: OllamaSettings) -> None:
         "host": (settings.host or DEFAULT_HOST).strip(),
         "model": (settings.model or DEFAULT_MODEL).strip(),
         "vision_model": (settings.vision_model or DEFAULT_VISION_MODEL).strip(),
+        "timeout_seconds": int(getattr(settings, "timeout_seconds", 0) or 0),
     }
     _settings_path().write_text(json.dumps(payload), encoding="utf-8")
 
@@ -139,6 +146,7 @@ def load_settings() -> OllamaSettings:
     just to read config."""
     path = _settings_path()
     enabled, host, model, vision_model = False, DEFAULT_HOST, DEFAULT_MODEL, DEFAULT_VISION_MODEL
+    timeout_seconds = 0
     if path.exists():
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -146,6 +154,7 @@ def load_settings() -> OllamaSettings:
             host = data.get("host") or DEFAULT_HOST
             model = data.get("model") or DEFAULT_MODEL
             vision_model = data.get("vision_model") or DEFAULT_VISION_MODEL
+            timeout_seconds = int(data.get("timeout_seconds") or 0)
         except Exception:
             pass
 
@@ -164,4 +173,5 @@ def load_settings() -> OllamaSettings:
             except Exception:
                 api_key = ""
 
-    return OllamaSettings(enabled=enabled, host=host, model=model, api_key=api_key, vision_model=vision_model)
+    return OllamaSettings(enabled=enabled, host=host, model=model, api_key=api_key, vision_model=vision_model,
+                          timeout_seconds=timeout_seconds)

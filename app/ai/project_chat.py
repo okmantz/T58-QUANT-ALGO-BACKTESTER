@@ -29,7 +29,8 @@ from __future__ import annotations
 from app.ai import ollama_settings
 from app.ai.ollama_settings import OllamaSettings
 
-DEFAULT_TIMEOUT_SECONDS = 120
+# v9.14: TOTAL budget for one (streamed) reply via app.ai.ollama_transport.
+DEFAULT_TIMEOUT_SECONDS = 600
 
 # Same reasoning as app.ai.trading_assistant.TradingAssistantClient's own
 # identical constant: bounds how long a chatty local/CPU-only model can
@@ -113,38 +114,28 @@ class ProjectChatClient:
         self, project_name: str, user_message: str,
         history: list[dict] | None = None, activity_lines: list[str] | None = None,
     ) -> tuple[str, str | None]:
-        """Calls Ollama's /api/chat (non-streaming). Returns (reply,
-        error) -- reply is "" and error is set on any failure, the exact
-        fail-safe convention app.ai.ollama_client and
-        app.ai.trading_assistant both already use, so callers can treat
-        "AI Assist disabled" and "Ollama unreachable" identically."""
-        import requests
+        """Calls Ollama's /api/chat via the shared streaming transport
+        (v9.14). Returns (reply, error) -- reply is "" and error is set
+        on any failure, the exact fail-safe convention
+        app.ai.ollama_client and app.ai.trading_assistant both already
+        use, so callers can treat "AI Assist disabled" and "Ollama
+        unreachable" identically -- except the error now names the
+        concrete reason instead of a bare timeout."""
+        from app.ai import ollama_transport as transport
 
         if not self.settings.is_usable:
             return "", "Ollama isn't enabled/configured yet. Turn it on in AI Assistant settings."
 
-        host = (self.settings.host or "").rstrip("/")
         system_prompt = build_system_prompt(project_name, activity_lines)
         messages = self._build_messages(system_prompt, user_message, history)
 
         try:
-            resp = requests.post(
-                f"{host}/api/chat",
-                headers=self._headers(),
-                json={
-                    "model": self.settings.model, "messages": messages, "stream": False,
-                    "keep_alive": ollama_settings.INTERACTIVE_KEEP_ALIVE,
-                    "options": {"num_predict": DEFAULT_NUM_PREDICT},
-                },
-                timeout=self.timeout,
+            reply = transport.chat(
+                self.settings, messages,
+                keep_alive=ollama_settings.INTERACTIVE_KEEP_ALIVE,
+                options={"num_predict": DEFAULT_NUM_PREDICT},
+                total_timeout=float(self.timeout),
             )
-            resp.raise_for_status()
-            data = resp.json()
-            reply = (data.get("message") or {}).get("content", "")
             return reply, None
-        except requests.exceptions.ConnectionError:
-            return "", f"Couldn't reach Ollama at {host} (is `ollama serve` running?)."
-        except requests.exceptions.Timeout:
-            return "", f"Ollama at {host} didn't respond in time."
-        except Exception as exc:
-            return "", f"Ollama request failed: {exc}"
+        except transport.OllamaError as exc:
+            return "", str(exc)

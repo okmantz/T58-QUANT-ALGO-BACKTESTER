@@ -331,86 +331,41 @@ def generate_strategy(
     prior_examples = gather_prior_examples(language, max_examples=n_prior_examples)
 
     prompt = _build_prompt(language, idea, research_excerpts=research_excerpts, prior_examples=prior_examples)
-    host = (settings.host or "").rstrip("/")
-    headers = {"Content-Type": "application/json"}
-    if settings.api_key:
-        headers["Authorization"] = f"Bearer {settings.api_key}"
 
-    payload = {
-        "model": settings.model,
-        "prompt": prompt,
-        "stream": True,
-        "keep_alive": KEEP_ALIVE,
-        "options": {
-            # Keep resource usage minimal: a small context window and a
-            # capped output length are both plenty for a strategy file
-            # this app's own parsers can actually load, and both directly
-            # reduce RAM/VRAM and per-token compute versus a model's
-            # (often much larger) defaults.
-            "num_ctx": max(512, int(num_ctx)),
-            "num_predict": max(64, int(num_predict)),
-            "temperature": 0.2,
-        },
-    }
+    # v9.14: the shared transport provides this module's streaming (it
+    # was the one call site that already streamed) PLUS the health /
+    # model-pulled check and the cold-load warm-up with their own
+    # budgets, so a generation can no longer die against a 90s-scale
+    # first-read on a cold model. `timeout` stays the stall limit and
+    # `max_total_seconds` the total ceiling, exactly as documented on
+    # this function.
+    from app.ai import ollama_transport as transport
 
     raw_text_parts: list[str] = []
     t0 = time.monotonic()
     last_progress = t0
     try:
-        # timeout=(connect, read): the read half applies PER SOCKET READ
-        # while streaming, not to the request as a whole -- so as long as
-        # another token/chunk keeps arriving within `timeout` seconds, the
-        # request keeps going even past `timeout` seconds of total elapsed
-        # time. This is what actually fixes "didn't respond in time" for a
-        # slow local model that's still working, as opposed to one that's
-        # genuinely stuck.
-        resp = requests.post(
-            f"{host}/api/generate", headers=headers, json=payload,
-            stream=True, timeout=(10, timeout),
-        )
-        resp.raise_for_status()
-        for line in resp.iter_lines(decode_unicode=True):
-            if not line:
-                continue
-            elapsed = time.monotonic() - t0
-            if elapsed > max_total_seconds:
-                resp.close()
-                return GenerationResult(
-                    error=f"Ollama at {host} has been generating for over "
-                          f"{max_total_seconds // 60} minutes without finishing -- stopped it. "
-                          f"Try a smaller/more specific idea or a smaller, faster model.",
-                    rationale="".join(raw_text_parts)[:1000],
-                )
-            try:
-                chunk = json.loads(line)
-            except (json.JSONDecodeError, ValueError):
-                continue
-            piece = chunk.get("response", "")
-            if piece:
-                raw_text_parts.append(piece)
-                if progress_cb and (time.monotonic() - last_progress) >= 1.5:
-                    last_progress = time.monotonic()
-                    try:
-                        progress_cb(len(raw_text_parts), elapsed)
-                    except Exception:
-                        pass
-            if chunk.get("error"):
-                return GenerationResult(error=f"Ollama error: {chunk['error']}")
-            if chunk.get("done"):
-                break
+        for piece in transport.stream_generate(
+            settings, prompt,
+            keep_alive=KEEP_ALIVE,
+            options={
+                "num_ctx": max(512, int(num_ctx)),
+                "num_predict": max(64, int(num_predict)),
+                "temperature": 0.2,
+            },
+            total_timeout=float(max_total_seconds),
+            stall_timeout=float(timeout),
+        ):
+            raw_text_parts.append(piece)
+            if progress_cb and (time.monotonic() - last_progress) >= 1.5:
+                last_progress = time.monotonic()
+                try:
+                    progress_cb(len(raw_text_parts), time.monotonic() - t0)
+                except Exception:
+                    pass
         raw_text = "".join(raw_text_parts)
-    except requests.exceptions.ConnectionError:
-        return GenerationResult(error=f"Couldn't reach Ollama at {host} (is it running?).")
-    except requests.exceptions.Timeout:
-        return GenerationResult(
-            error=f"Ollama at {host} went quiet for over {timeout}s mid-generation (no new output at "
-                  f"all in that window) -- the model may be stuck, or the machine is out of resources. "
-                  f"Try a smaller idea, a smaller/faster model, or lowering the context/output-length "
-                  f"settings above.",
-            rationale="".join(raw_text_parts)[:1000],
-        )
-    except Exception as exc:
-        return GenerationResult(error=f"Ollama request failed: {exc}")
+    except transport.OllamaError as exc:
+        return GenerationResult(error=str(exc), rationale="".join(raw_text_parts)[:1000])
 
     code = _extract_code(raw_text)
     if not code:

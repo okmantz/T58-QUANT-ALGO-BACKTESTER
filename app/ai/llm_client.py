@@ -50,9 +50,13 @@ class ScriptedClient:
 
 
 class OllamaTextClient:
-    def __init__(self, settings=None, timeout: int = 90, json_mode: bool = True):
+    def __init__(self, settings=None, timeout: int | None = None, json_mode: bool = True):
         from app.ai import ollama_settings as _os
         self.settings = settings or _os.load_settings()
+        # v9.14: None -> app.ai.ollama_transport resolves the budget
+        # (settings.timeout_seconds / T58_OLLAMA_TIMEOUT_S / 600s), and
+        # the request STREAMS underneath -- the old single 90s
+        # non-streaming POST was the discovery layer's timeout machine.
         self.timeout = timeout
         self.json_mode = json_mode
 
@@ -60,19 +64,14 @@ class OllamaTextClient:
         s = self.settings
         if not getattr(s, "is_usable", False):
             raise LLMUnavailable("Ollama is not enabled in settings")
+        from app.ai import ollama_transport as transport
         try:
-            import requests
-            headers = {"Authorization": f"Bearer {s.api_key}"} if s.api_key else {}
-            body = {"model": s.model, "prompt": prompt, "stream": False}
-            if self.json_mode:
-                body["format"] = "json"
-            if system:
-                body["system"] = system
-            r = requests.post(s.host.rstrip("/") + "/api/generate", json=body, headers=headers, timeout=self.timeout)
-            r.raise_for_status()
-            return str(r.json().get("response", ""))
-        except Exception as exc:  # noqa: BLE001
-            raise LLMUnavailable(f"Ollama request failed: {exc}") from exc
+            return transport.generate(
+                s, prompt, system=system, format_json=self.json_mode,
+                total_timeout=float(self.timeout) if self.timeout else None,
+            )
+        except transport.OllamaError as exc:
+            raise LLMUnavailable(str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -140,8 +139,9 @@ def preferred_client(ollama_settings=None):
             ollama_settings = _os.load_settings()
         if getattr(ollama_settings, "is_usable", False):
             return OllamaTextClient(ollama_settings)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 -- v9.14: never swallow silently; say why we fell through
+        import logging
+        logging.getLogger("t58.ollama").warning("preferred_client: Ollama settings unusable (%s); falling back", exc)
     return remote_client() or NullClient()
 
 

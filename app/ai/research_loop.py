@@ -253,6 +253,11 @@ def _ask_ollama_next_hypothesis(
         _p = ("A trading strategy failed. Original hypothesis: " + prior_idea + "\nComputed diagnostic: " + str(suggestion) +
               "\nIn 2-3 sentences propose ONE specific structural change to test next. No code. Reply with only the revised hypothesis.")
         _t, _e = complete_text(_p)
+        if _e:
+            # v9.14: no silent fallback -- the reason goes to the log.
+            import logging
+            logging.getLogger("t58.ollama").warning(
+                "research loop: hosted-model hypothesis unavailable (%s); using computed diagnostic", _e)
         return ((_t or "").strip() or fallback), bool(_t and _t.strip())
 
     prompt = (
@@ -264,28 +269,25 @@ def _ask_ollama_next_hypothesis(
         "specific filter, threshold, or exit rule). Do not write code. Do not restate the diagnostic. "
         "Respond with only the revised hypothesis as plain text."
     )
+    # v9.14: shared streaming transport (health check + warm + streamed
+    # completion). `timeout` stays this call's total budget; on ANY
+    # failure the concrete reason is logged before falling back -- the
+    # loop still makes progress on the computed diagnostic either way,
+    # but never silently (the old bare `except: pass` is why "Ollama
+    # never works" was undiagnosable from the loop's own logs).
+    from app.ai import ollama_transport as transport
     try:
-        import requests
-        host = (settings.host or "").rstrip("/")
-        headers = {"Content-Type": "application/json"}
-        if settings.api_key:
-            headers["Authorization"] = f"Bearer {settings.api_key}"
-        resp = requests.post(
-            f"{host}/api/generate",
-            headers=headers,
-            json={
-                "model": settings.model, "prompt": prompt, "stream": False,
-                "keep_alive": ollama_settings.INTERACTIVE_KEEP_ALIVE,
-                "options": {"num_ctx": 2048, "num_predict": 200, "temperature": 0.4},
-            },
-            timeout=(10, timeout),
-        )
-        resp.raise_for_status()
-        text = (resp.json().get("response") or "").strip()
+        text = transport.generate(
+            settings, prompt,
+            keep_alive=ollama_settings.INTERACTIVE_KEEP_ALIVE,
+            options={"num_ctx": 2048, "num_predict": 200, "temperature": 0.4},
+            total_timeout=float(timeout),
+        ).strip()
         if text:
             return text, True
-    except Exception:
-        pass
+        transport.logger.warning("research loop: Ollama returned an empty hypothesis; using computed diagnostic")
+    except transport.OllamaError as exc:
+        transport.logger.warning("research loop: Ollama hypothesis unavailable (%s); using computed diagnostic", exc)
     return fallback, False
 
 

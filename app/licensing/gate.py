@@ -45,7 +45,7 @@ VIOLET = "#7B3DFF"
 CYAN = "#00D4FF"
 ACCENT = GREEN  # primary accent (kept as a name other code may import)
 
-KEY_PLACEHOLDER = "T58-XXXX-XXXX-XXXX-XXXX"
+KEY_PLACEHOLDER = "T58-XXXXX-XXXX"
 
 
 def _blend(c1: str, c2: str, t: float) -> str:
@@ -54,7 +54,7 @@ def _blend(c1: str, c2: str, t: float) -> str:
     return "#%02x%02x%02x" % tuple(r)
 
 
-def show_activation_window(initial_message: str = "", initial_email: str = "") -> bool:
+def show_activation_window(initial_message: str = "", initial_email: str = "", initial_info: str = "") -> bool:
     """Builds and runs the activation window, returns True iff the person
     successfully activated a license before closing it. tkinter (and the
     ActivationWindow class itself) is defined inside this function so
@@ -132,6 +132,12 @@ def show_activation_window(initial_message: str = "", initial_email: str = "") -
                 pad, text="Enter the email and license key from your purchase confirmation.",
                 bg=PANEL_2, fg=TEXT_MUTED, font=_font(9), wraplength=330, justify="center",
             ).pack(pady=(4, 20))
+
+            if initial_info:
+                tk.Label(
+                    pad, text=initial_info, bg=PANEL_2, fg=CYAN, font=_font(8),
+                    wraplength=330, justify="center",
+                ).pack(pady=(0, 12))
 
             self.email_var = tk.StringVar(self, value=initial_email)
             self.key_var = tk.StringVar(self)
@@ -306,44 +312,48 @@ def ensure_licensed(interactive: bool = True) -> bool:
     if ok:
         return True
 
-    # v7 -- FAIL LOUDLY when this build has no license server URL
-    # configured. A cached master-key activation already returned True
-    # above, so reaching here means: no usable cached license AND no
-    # server to ask. The activation form below could then only ever
-    # succeed via a master key (fully offline), so say that plainly
-    # instead of letting the person type a server key into a form that
-    # is guaranteed to fail -- the old code died confusingly against the
-    # dead placeholder domain.
-    url_ok, url_message = client.check_license_server_configured()
-    if not url_ok:
-        # v9.9 -- no license server configured anywhere (no
-        # T58_LICENSE_SERVER_URL env var, no baked build_config.py):
-        # this copy was never given a way to activate, so demanding a
-        # key here just strands the app on an activation window that
-        # can never succeed -- the main window never opens ("the app
-        # won't open" on a fresh GitHub download). The gate exists for
-        # builds that ship WITH a server URL baked in (CI creates
-        # build_config.py from the repo secret); with no URL there is
-        # nothing to activate against, so this is a source/owner build
-        # and it starts without activation. Behavior is unchanged the
-        # moment any URL is configured.
-        print(
-            "T58 licensing: no license server configured "
-            "(T58_LICENSE_SERVER_URL unset, no baked build_config) -- "
-            "starting without activation (source/owner build)."
-        )
-        return True
+    # v9.14 -- the activation window is BACK on first launch (Owen's
+    # explicit reversal of the v9.9 source-build bypass below). A fresh
+    # install with no valid stored activation ALWAYS lands here, whether
+    # or not this build carries a license-server URL:
+    #   * URL configured      -> server-issued keys validate online
+    #     (client.activate posts to the server), master key offline.
+    #   * No URL configured   -> the window can only succeed with a
+    #     master key, which activates fully offline (client.activate
+    #     checks the key's hash BEFORE any server call), so it is NOT
+    #     the v9.9 "form that can never succeed" any more -- say so on
+    #     the window (initial_info) instead of skipping the gate.
+    url_ok, _url_message = client.check_license_server_configured()
 
     if not interactive:
         print(f"T58 license check failed: {message}")
-        print("Run the app normally (without any CLI flags) once to activate, or check your license status.")
+        if not url_ok:
+            print(
+                "This build has no license server configured (T58_LICENSE_SERVER_URL unset, "
+                "no baked build_config), so only a master key can activate it -- fully offline. "
+                "Start the app normally once and enter the master key in the activation window, "
+                "or set T58_LICENSE_SERVER_URL."
+            )
+        else:
+            print("Run the app normally (without any CLI flags) once to activate, or check your license status.")
         return False
 
     state = client.load_state()
     # "Not activated." is the normal state of a brand-new install, not an error --
     # don't greet a first-time user with red error text.
     first_run = message.strip() == "Not activated."
-    activated = show_activation_window(initial_message="" if first_run else message, initial_email=state.email)
+    initial_info = ""
+    if not url_ok:
+        initial_info = (
+            "This build has no license server configured, so it activates fully OFFLINE with a "
+            "master key -- enter the email and master key from your purchase confirmation. "
+            "(A server-issued key needs a build with a license server configured.)"
+        )
+    activated = show_activation_window(
+        initial_message="" if first_run else message,
+        initial_email=state.email,
+        initial_info=initial_info,
+    )
     if not activated:
         return False
     # activate() just talked to the license server and saved the result, so

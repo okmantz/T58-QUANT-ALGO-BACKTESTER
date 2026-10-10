@@ -32,7 +32,10 @@ from dataclasses import asdict, is_dataclass
 from app.ai import ollama_settings
 from app.ai.ollama_settings import OllamaSettings
 
-DEFAULT_TIMEOUT_SECONDS = 120
+# v9.14: TOTAL budget for one assistant reply via the streaming
+# transport (was: a single 120s non-streaming read that a CPU model's
+# load + generation routinely exceeded).
+DEFAULT_TIMEOUT_SECONDS = 600
 
 # ---------------------------------------------------------------------------
 # Owen's own strategy documents, reproduced verbatim as the fixed system
@@ -601,38 +604,27 @@ class TradingAssistantClient:
         return messages
 
     def _chat(self, system_prompt: str, user_message: str, history: list[dict] | None = None) -> tuple[str, str | None]:
-        """Calls Ollama's /api/chat (non-streaming). Returns (reply, error)
-        -- reply is "" and error is set on any failure, mirroring
-        app.ai.ollama_client's fail-safe convention exactly."""
-        import requests
+        """Calls Ollama's /api/chat via the shared streaming transport
+        (v9.14). Returns (reply, error) -- reply is "" and error is set
+        on any failure, mirroring app.ai.ollama_client's fail-safe
+        convention exactly; the error now carries the concrete reason
+        (unreachable / not pulled / stalled / over budget)."""
+        from app.ai import ollama_transport as transport
 
         if not self.settings.is_usable:
             return "", "Ollama isn't enabled/configured yet. Turn it on and set a host in AI Assistant settings."
 
-        host = (self.settings.host or "").rstrip("/")
         messages = self._build_messages(system_prompt, user_message, history)
-
         try:
-            resp = requests.post(
-                f"{host}/api/chat",
-                headers=self._headers(),
-                json={
-                    "model": self.settings.model, "messages": messages, "stream": False,
-                    "keep_alive": ollama_settings.INTERACTIVE_KEEP_ALIVE,
-                    "options": {"num_predict": self.DEFAULT_NUM_PREDICT},
-                },
-                timeout=self.timeout,
+            reply = transport.chat(
+                self.settings, messages,
+                keep_alive=ollama_settings.INTERACTIVE_KEEP_ALIVE,
+                options={"num_predict": self.DEFAULT_NUM_PREDICT},
+                total_timeout=float(self.timeout),
             )
-            resp.raise_for_status()
-            data = resp.json()
-            reply = (data.get("message") or {}).get("content", "")
             return reply, None
-        except requests.exceptions.ConnectionError:
-            return "", f"Couldn't reach Ollama at {host} (is `ollama serve` running?)."
-        except requests.exceptions.Timeout:
-            return "", f"Ollama at {host} didn't respond in time."
-        except Exception as exc:
-            return "", f"Ollama request failed: {exc}"
+        except transport.OllamaError as exc:
+            return "", str(exc)
 
     def _chat_stream(self, system_prompt: str, user_message: str, history: list[dict] | None = None):
         """Generator form of _chat: yields reply text incrementally as
@@ -650,46 +642,23 @@ class TradingAssistantClient:
         can distinguish "stream ended normally" from "stream failed
         partway through" without raising out of a generator mid-response.
         """
-        import json as _json
-        import requests
+        from app.ai import ollama_transport as transport
 
         if not self.settings.is_usable:
             yield {"error": "Ollama isn't enabled/configured yet. Turn it on and set a host in AI Assistant settings."}
             return
 
-        host = (self.settings.host or "").rstrip("/")
         messages = self._build_messages(system_prompt, user_message, history)
-
         try:
-            resp = requests.post(
-                f"{host}/api/chat",
-                headers=self._headers(),
-                json={
-                    "model": self.settings.model, "messages": messages, "stream": True,
-                    "keep_alive": ollama_settings.INTERACTIVE_KEEP_ALIVE,
-                    "options": {"num_predict": self.DEFAULT_NUM_PREDICT},
-                },
-                timeout=self.timeout, stream=True,
-            )
-            resp.raise_for_status()
-            for line in resp.iter_lines():
-                if not line:
-                    continue
-                try:
-                    chunk = _json.loads(line)
-                except ValueError:
-                    continue
-                piece = (chunk.get("message") or {}).get("content", "")
-                if piece:
-                    yield {"text": piece}
-                if chunk.get("done"):
-                    break
-        except requests.exceptions.ConnectionError:
-            yield {"error": f"Couldn't reach Ollama at {host} (is `ollama serve` running?)."}
-        except requests.exceptions.Timeout:
-            yield {"error": f"Ollama at {host} didn't respond in time."}
-        except Exception as exc:
-            yield {"error": f"Ollama request failed: {exc}"}
+            for piece in transport.stream_chat(
+                self.settings, messages,
+                keep_alive=ollama_settings.INTERACTIVE_KEEP_ALIVE,
+                options={"num_predict": self.DEFAULT_NUM_PREDICT},
+                total_timeout=float(self.timeout),
+            ):
+                yield {"text": piece}
+        except transport.OllamaError as exc:
+            yield {"error": str(exc)}
 
     def _chat_vision(
         self, system_prompt: str, user_message: str, image_b64: str, model: str | None = None,
@@ -702,36 +671,24 @@ class TradingAssistantClient:
         needs a separate, explicitly multimodal model (e.g. llava,
         llama3.2-vision); the default text model can't see the image at
         all and most will simply ignore the `images` field or error."""
-        import requests
+        from app.ai import ollama_transport as transport
 
         if not self.settings.is_usable:
             return "", "Ollama isn't enabled/configured yet. Turn it on and set a host in AI Assistant settings."
 
-        host = (self.settings.host or "").rstrip("/")
         vision_model = model or getattr(self.settings, "vision_model", "") or "llava"
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message, "images": [image_b64]},
         ]
         try:
-            resp = requests.post(
-                f"{host}/api/chat",
-                headers=self._headers(),
-                json={
-                    "model": vision_model, "messages": messages, "stream": False,
-                    "keep_alive": ollama_settings.INTERACTIVE_KEEP_ALIVE,
-                },
-                timeout=self.timeout,
+            reply = transport.chat(
+                self.settings, messages, model=vision_model,
+                keep_alive=ollama_settings.INTERACTIVE_KEEP_ALIVE,
+                total_timeout=float(self.timeout),
             )
-            resp.raise_for_status()
-            data = resp.json()
-            reply = (data.get("message") or {}).get("content", "")
             return reply, None
-        except requests.exceptions.ConnectionError:
-            return "", f"Couldn't reach Ollama at {host} (is `ollama serve` running?)."
-        except requests.exceptions.Timeout:
-            return "", f"Ollama at {host} didn't respond in time (vision models can be slow -- try a smaller model)."
-        except Exception as exc:
+        except transport.OllamaError as exc:
             return "", (
                 f"Ollama vision request failed: {exc}. Make sure `{vision_model}` is a vision-capable "
                 f"model that's actually been pulled (e.g. `ollama pull llava`)."

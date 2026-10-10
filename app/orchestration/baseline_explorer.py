@@ -12,9 +12,12 @@ trade list into the aggregates the run page shows live during the run:
   * where the losses cluster: worst hour buckets, worst weekdays,
     longest losing streaks, and the biggest contiguous loss clusters
     with their time windows,
-  * 1-3 concrete, honest suggestions derived from those clusters, with
+  * where the wins cluster (v9.14): the exact mirror -- best hour
+    buckets and weekdays with % of gross profit, longest winning
+    streaks, and the biggest contiguous win clusters with windows,
+  * 1-4 concrete, honest suggestions derived from those clusters, with
     real numbers ("entries at 02:00-04:00 lost $X -- Y% of all baseline
-    losses").
+    losses"; "entries at 14:00 made $Y -- Z% of gross profit").
 
 Everything here is a pure function of the trade list (no engine calls,
 no globals), so the web endpoint serves it mid-run and tests pin the
@@ -102,6 +105,33 @@ def _losing_streaks(ordered: list[dict]) -> list[dict]:
     ]
 
 
+def _winning_streaks(ordered: list[dict]) -> list[dict]:
+    """Mirror of _losing_streaks for the win side: contiguous runs of
+    winning trades (pnl > 0) in chronological order. Breakeven trades
+    (pnl == 0) break a winning streak exactly like they break a losing
+    one -- the definition is symmetric so the two panels are always
+    comparable."""
+    streaks: list[dict] = []
+    cur: list[dict] = []
+    for tr in ordered:
+        if tr["pnl"] > 0:
+            cur.append(tr)
+        elif cur:
+            streaks.append(cur)
+            cur = []
+    if cur:
+        streaks.append(cur)
+    return [
+        {
+            "trades": len(s),
+            "total_pnl": round(sum(t["pnl"] for t in s), 2),
+            "start": s[0]["entry_time"],
+            "end": s[-1]["entry_time"],
+        }
+        for s in streaks
+    ]
+
+
 def summarize_baseline_trades(trades: list[dict]) -> dict:
     """Aggregates a baseline trade payload (see trades_to_payload) into
     the explorer panel's numbers. Pure arithmetic over the given
@@ -128,6 +158,7 @@ def summarize_baseline_trades(trades: list[dict]) -> dict:
     weekday_profile = [0.0] * 7
     weekday_counts = [0] * 7
     gross_loss = 0.0
+    gross_profit = 0.0
     for r in parsed:
         matrix[r["weekday"]][r["hour"]] += r["pnl"]
         matrix_counts[r["weekday"]][r["hour"]] += 1
@@ -137,6 +168,8 @@ def summarize_baseline_trades(trades: list[dict]) -> dict:
         weekday_counts[r["weekday"]] += 1
         if r["pnl"] < 0:
             gross_loss += -r["pnl"]
+        elif r["pnl"] > 0:
+            gross_profit += r["pnl"]
     net_total = sum(r["pnl"] for r in parsed)
 
     def _share(loss: float) -> float:
@@ -163,9 +196,34 @@ def summarize_baseline_trades(trades: list[dict]) -> dict:
     longest_streaks = sorted(streaks, key=lambda s: (-s["trades"], s["total_pnl"]))[:3]
     biggest_clusters = sorted(streaks, key=lambda s: s["total_pnl"])[:3]
 
+    def _pshare(profit: float) -> float:
+        return round(100.0 * profit / gross_profit, 1) if gross_profit > 0 else 0.0
+
+    best_hours = sorted(
+        (
+            {"hour": h, "pnl": round(hour_profile[h], 2), "trades": hour_counts[h],
+             "share_of_gross_profits_pct": _pshare(hour_profile[h])}
+            for h in range(24) if hour_profile[h] > 0
+        ),
+        key=lambda r: -r["pnl"],
+    )[:5]
+    best_weekdays = sorted(
+        (
+            {"weekday": d, "label": WEEKDAY_LABELS[d], "pnl": round(weekday_profile[d], 2),
+             "trades": weekday_counts[d], "share_of_gross_profits_pct": _pshare(weekday_profile[d])}
+            for d in range(7) if weekday_profile[d] > 0
+        ),
+        key=lambda r: -r["pnl"],
+    )[:4]
+
+    win_streaks = _winning_streaks(parsed)
+    longest_win_streaks = sorted(win_streaks, key=lambda s: (-s["trades"], -s["total_pnl"]))[:3]
+    biggest_win_clusters = sorted(win_streaks, key=lambda s: -s["total_pnl"])[:3]
+
     suggestions = _build_suggestions(
         parsed, worst_hours, worst_weekdays, streaks,
         gross_loss=gross_loss, net_total=net_total,
+        best_hours=best_hours, gross_profit=gross_profit,
     )
 
     return {
@@ -184,6 +242,11 @@ def summarize_baseline_trades(trades: list[dict]) -> dict:
         "worst_weekdays": worst_weekdays,
         "longest_losing_streaks": longest_streaks,
         "biggest_loss_clusters": biggest_clusters,
+        "gross_profit": round(gross_profit, 2),
+        "best_hours": best_hours,
+        "best_weekdays": best_weekdays,
+        "longest_winning_streaks": longest_win_streaks,
+        "biggest_win_clusters": biggest_win_clusters,
         "suggestions": suggestions,
     }
 
@@ -192,7 +255,8 @@ def _fmt_money(v: float) -> str:
     return f"${v:,.0f}"
 
 
-def _build_suggestions(parsed, worst_hours, worst_weekdays, streaks, *, gross_loss, net_total) -> list[str]:
+def _build_suggestions(parsed, worst_hours, worst_weekdays, streaks, *, gross_loss, net_total,
+                       best_hours=None, gross_profit: float = 0.0) -> list[str]:
     """1-3 honest, numbers-first suggestions. Every figure is computed
     from the baseline trades themselves; the hypothetical ("excluding
     those entries would have changed net by $W") is arithmetic on the
@@ -240,7 +304,23 @@ def _build_suggestions(parsed, worst_hours, worst_weekdays, streaks, *, gross_lo
                 "check what the market (and the strategy's own state) was doing in that window "
                 "before trusting the averages."
             )
-    return out[:3]
+    # Win window worth favoring (v9.14: the win-side mirror). Same honesty
+    # rule as the loss suggestions: arithmetic on recorded trades only.
+    if best_hours and gross_profit > 0:
+        hours = sorted(h["hour"] for h in best_hours[:3])
+        in_hours = [r for r in parsed if r["hour"] in hours]
+        block_net = sum(r["pnl"] for r in in_hours)
+        winners = sum(1 for r in in_hours if r["pnl"] > 0)
+        if block_net > 0:
+            hour_txt = ", ".join(f"{h:02d}:00" for h in hours)
+            out.append(
+                f"Entries at {hour_txt} made {_fmt_money(block_net)} across {len(in_hours)} trades "
+                f"({winners} winners) -- {_share_txt(block_net, gross_profit)} of all baseline "
+                "gross profit. If a next run concentrates size or session filters anywhere, "
+                "these are the entry hours the baseline says to favor (recorded trades only -- "
+                "not a promise about the next run's fills)."
+            )
+    return out[:4]
 
 
 def _share_txt(loss: float, gross_loss: float) -> str:

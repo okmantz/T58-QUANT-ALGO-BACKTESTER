@@ -165,7 +165,7 @@ def _baked_master_key_hash() -> str:
 # and stripped of surrounding whitespace, then hashed, exactly as
 # _is_master_key() checks it. This is the zero-configuration fallback so
 # the master key activates offline in every build with nothing to set up.
-_DEFAULT_MASTER_KEY_HASH = "fcfe701fc0367a1328746e744805a96d76e8b2c1a06638908a0fa6c92a327ea0"
+_DEFAULT_MASTER_KEY_HASH = "5cce872f1fdac2d290e817e707376212e224c96a1d97976c2809e7ec45922f5c"
 
 
 def _master_key_hash() -> str | None:

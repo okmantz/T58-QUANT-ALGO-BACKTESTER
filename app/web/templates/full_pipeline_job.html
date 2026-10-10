@@ -65,6 +65,8 @@
     </div>
     <h3 style="margin:14px 0 6px; font-size:13px;">Where the losses cluster</h3>
     <div id="explorer-clusters" style="font-size:13px; line-height:1.55;"></div>
+    <h3 style="margin:14px 0 6px; font-size:13px;">Where the wins cluster</h3>
+    <div id="explorer-win-clusters" style="font-size:13px; line-height:1.55;"></div>
     <h3 style="margin:14px 0 6px; font-size:13px;">For the next run</h3>
     <ul id="explorer-suggestions" style="font-size:13px; line-height:1.55; margin:0 0 4px 18px; padding:0;"></ul>
     <div id="explorer-3d-wrap" style="display:none; margin-top:10px;">
@@ -477,6 +479,29 @@
         }).join(' · ') + '</div>');
       }
       document.getElementById('explorer-clusters').innerHTML = lines.join('') || '<div>No losing buckets — the baseline lost money nowhere by these groupings.</div>';
+      // Win clusters (mirror of the loss panel above).
+      var wlines = [];
+      if (s.best_hours.length) {
+        wlines.push('<div><b>Best entry hours:</b> ' + s.best_hours.map(function (w) {
+          return String(w.hour).padStart(2, '0') + ':00 ' + moneyFmt(w.pnl) + ' (' + w.share_of_gross_profits_pct + '% of gross profit, ' + w.trades + ' trades)';
+        }).join(' · ') + '</div>');
+      }
+      if (s.best_weekdays.length) {
+        wlines.push('<div><b>Best weekdays:</b> ' + s.best_weekdays.map(function (w) {
+          return w.label + ' ' + moneyFmt(w.pnl) + ' (' + w.share_of_gross_profits_pct + '% of gross profit, ' + w.trades + ' trades)';
+        }).join(' · ') + '</div>');
+      }
+      if (s.longest_winning_streaks.length) {
+        wlines.push('<div><b>Longest winning streaks:</b> ' + s.longest_winning_streaks.map(function (w) {
+          return w.trades + ' trades, ' + moneyFmt(w.total_pnl) + ' (' + String(w.start).slice(0, 16) + ' → ' + String(w.end).slice(0, 16) + ')';
+        }).join(' · ') + '</div>');
+      }
+      if (s.biggest_win_clusters.length) {
+        wlines.push('<div><b>Biggest win clusters:</b> ' + s.biggest_win_clusters.map(function (w) {
+          return w.trades + ' straight winners, ' + moneyFmt(w.total_pnl) + ' (' + String(w.start).slice(0, 16) + ' → ' + String(w.end).slice(0, 16) + ')';
+        }).join(' · ') + '</div>');
+      }
+      document.getElementById('explorer-win-clusters').innerHTML = wlines.join('') || '<div>No winning buckets — the baseline made money nowhere by these groupings.</div>';
       // Suggestions.
       var ul = document.getElementById('explorer-suggestions');
       ul.innerHTML = '';

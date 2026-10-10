@@ -31,7 +31,12 @@ from dataclasses import dataclass, field
 from app.ai import ollama_settings as ollama_settings_module
 from app.ai.ollama_settings import OllamaSettings
 
-DEFAULT_TIMEOUT_SECONDS = 90
+# v9.14: this is now the TOTAL budget for one (streamed) suggestion
+# request through app.ai.ollama_transport -- not the old single
+# non-streaming read timeout that had to cover model load + prompt +
+# every token inside 90s (the structural cause of "Ollama always
+# times out and the app defaults without it").
+DEFAULT_TIMEOUT_SECONDS = 600
 DEFAULT_N_SUGGESTIONS = 3
 
 
@@ -187,28 +192,20 @@ class OllamaClient:
     def test_connection(self) -> tuple[bool, str]:
         """Pings the configured host and confirms the configured model is
         actually pulled. Never raises -- returns (ok, message) for direct
-        display in the UI."""
-        import requests
+        display in the UI. (v9.14: via app.ai.ollama_transport, so this
+        answers in seconds with the exact reason -- unreachable vs not
+        pulled -- instead of hanging on a long request timeout.)"""
+        from app.ai import ollama_transport as transport
 
         host = (self.settings.host or "").rstrip("/")
         if not host:
             return False, "No Ollama host configured."
         try:
-            resp = requests.get(f"{host}/api/tags", headers=self._headers(), timeout=self.timeout)
-            resp.raise_for_status()
-        except requests.exceptions.ConnectionError:
-            return False, f"Couldn't reach Ollama at {host}. Is it running? (Try: ollama serve)"
-        except requests.exceptions.Timeout:
-            return False, f"Timed out reaching Ollama at {host}."
-        except Exception as exc:
-            return False, f"Couldn't reach Ollama at {host}: {exc}"
-
-        try:
-            names = [m.get("name", "") for m in resp.json().get("models", [])]
-        except Exception:
-            names = []
+            names = transport.list_models(self.settings)
+        except transport.OllamaError as exc:
+            return False, str(exc)
         model = self.settings.model
-        if names and not any(n == model or n.startswith(f"{model}:") for n in names):
+        if names and not transport.model_available(names, model):
             available = ", ".join(names[:8]) or "(none)"
             return False, (
                 f"Connected to Ollama, but model '{model}' isn't pulled. "
@@ -226,35 +223,23 @@ class OllamaClient:
         keystroke. Never raises; a failed warm-up just means the first
         real request pays the load cost as before -- nothing is broken by
         skipping this."""
-        import requests
+        from app.ai import ollama_transport as transport
 
         host = (self.settings.host or "").rstrip("/")
         if not host:
             return False, "No Ollama host configured."
         target_model = model or self.settings.model
         try:
-            resp = requests.post(
-                f"{host}/api/generate",
-                headers=self._headers(),
-                json={
-                    "model": target_model, "prompt": "", "stream": False,
-                    "keep_alive": ollama_settings_module.INTERACTIVE_KEEP_ALIVE,
-                    "options": {"num_predict": 1},
-                },
-                # A cold load of a large model can genuinely take a couple
-                # of minutes on CPU-only hardware -- this call runs on a
-                # background thread wherever it's used, so it's fine to
-                # wait longer than a normal interactive request would.
-                timeout=max(self.timeout, 120),
+            # The transport's ensure_ready IS the warm-up now (checks
+            # /api/ps, loads the model under a first-token budget sized
+            # for cold CPU loads -- max(self.timeout, 120) preserved).
+            transport.ensure_ready(
+                self.settings, target_model,
+                first_token_timeout=float(max(self.timeout, 120)),
             )
-            resp.raise_for_status()
             return True, f"'{target_model}' is warm."
-        except requests.exceptions.ConnectionError:
-            return False, f"Couldn't reach Ollama at {host} to warm up '{target_model}'."
-        except requests.exceptions.Timeout:
-            return False, f"Timed out warming up '{target_model}' (it may still be loading)."
-        except Exception as exc:
-            return False, f"Warm-up request failed: {exc}"
+        except transport.OllamaError as exc:
+            return False, str(exc)
 
     def suggest_parameter_adjustments(
         self,
@@ -284,7 +269,7 @@ class OllamaClient:
         app.ai.research_library.find_relevant_excerpts(). Omitting it
         behaves exactly as before this parameter existed.
         """
-        import requests
+        from app.ai import ollama_transport as transport
 
         if not genes:
             return AISuggestionResult(error="Strategy has no tunable parameters for the AI to suggest values for.")
@@ -293,25 +278,19 @@ class OllamaClient:
             strategy_name, source_type, genes, baseline_stats, prop_rules_summary, n_suggestions,
             failure_analysis_lines=failure_analysis_lines, research_excerpts=research_excerpts,
         )
-        host = (self.settings.host or "").rstrip("/")
         try:
-            resp = requests.post(
-                f"{host}/api/generate",
-                headers=self._headers(),
-                json={
-                    "model": self.settings.model, "prompt": prompt, "stream": False,
-                    "keep_alive": ollama_settings_module.INTERACTIVE_KEEP_ALIVE,
-                },
-                timeout=self.timeout,
+            # v9.14: streamed through the shared transport -- health and
+            # model-presence checked first (fast, exact reason), model
+            # warmed under its own load budget, tokens streamed so a
+            # slow-but-working CPU model is never killed by one blunt
+            # non-streaming timeout again.
+            raw_text = transport.generate(
+                self.settings, prompt,
+                keep_alive=ollama_settings_module.INTERACTIVE_KEEP_ALIVE,
+                total_timeout=float(self.timeout),
             )
-            resp.raise_for_status()
-            raw_text = resp.json().get("response", "")
-        except requests.exceptions.ConnectionError:
-            return AISuggestionResult(error=f"Couldn't reach Ollama at {host} (is it running?).")
-        except requests.exceptions.Timeout:
-            return AISuggestionResult(error=f"Ollama at {host} didn't respond in time.")
-        except Exception as exc:
-            return AISuggestionResult(error=f"Ollama request failed: {exc}")
+        except transport.OllamaError as exc:
+            return AISuggestionResult(error=str(exc))
 
         genomes = _parse_suggestions(raw_text, genes)
         if not genomes:

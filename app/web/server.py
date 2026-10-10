@@ -539,14 +539,12 @@ def _license_gate():
         return None
 
     from app.licensing import client as license_client
-    if license_client.resolve_license_server_url() is None:
-        # v9.9: no license server configured (no T58_LICENSE_SERVER_URL
-        # env var, no baked build_config.py) -- a source/owner build.
-        # Licensing only engages when a build ships WITH a server URL;
-        # with none configured there is nothing to validate against,
-        # so don't gate (same boundary as the desktop gate in
-        # app/licensing/gate.py).
-        return None
+    # v9.14: the gate engages on EVERY build that has no valid stored
+    # activation (Owen's explicit reversal of the v9.9 no-URL skip) --
+    # client.validate() itself resolves the master-key path fully
+    # offline when no license server is configured, so a fresh
+    # download lands on /activate exactly like the desktop build's
+    # first-launch window (see app/licensing/gate.py).
     ok, message = license_client.validate()
     _license_ok_cached = ok
     if ok:
