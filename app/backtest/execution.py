@@ -326,6 +326,7 @@ def run_execution(
     prop_locked_bar_date = -1
     prop_attempts: list[dict] = []
     prop_payouts_seen = 0
+    prop_first_payout_time = None   # v9.16: timestamp of this attempt's first payout
     prop_done = False
     prop_attempt_start_time = None
     if prop_mode:
@@ -582,6 +583,23 @@ def run_execution(
         _week_ends_at[-1] = True
         _week_ends_at[:-1] = _dow[1:] <= _dow[:-1]
 
+    # v9.16 (audit P1-6): futures session flatten. Firms require positions
+    # closed before the session ends (Lucid: 4:45 pm ET = 15:45 CT). _flat_zone[i]
+    # is True for bars from the flatten time up to the 17:00 CT session roll.
+    # Off (all False) unless the prop rules carry flatten_time_ct, so every
+    # run without it is byte-identical to before.
+    _flat_zone = np.zeros(n, dtype=bool)
+    _flatten_str = getattr(prop_rules, "flatten_time_ct", None) if prop_mode else None
+    if _flatten_str and n:
+        try:
+            _fh, _fm = (int(x) for x in str(_flatten_str).split(":"))
+            _ct = pd.DatetimeIndex(ts).tz_localize("UTC").tz_convert("America/Chicago")
+            _mod = (_ct.hour * 60 + _ct.minute).to_numpy()
+            _flat_zone = (_mod >= _fh * 60 + _fm) & (_mod < 17 * 60)
+        except Exception:  # noqa: BLE001 -- a bad time string disables the rule, never the run
+            _flat_zone = np.zeros(n, dtype=bool)
+    flatten_close_count = 0
+
     sl_dist_vals = stop_loss_distance.values if stop_loss_distance is not None else None
     tp_dist_vals = take_profit_distance.values if take_profit_distance is not None else None
     trail_dist_vals = trailing_stop_distance.values if trailing_stop_distance is not None else None
@@ -655,6 +673,7 @@ def run_execution(
             "time_stop": "time_stop",
             "daily_loss_limit_forced_close": "daily_loss_close",
             "weekend_hold_forced_close": "session_close",
+            "session_flatten_forced_close": "session_close",
             "account_blown_forced_close": "session_close",
             "partial_take_profit": "take_profit",
             "end_of_data": "end_of_data",
@@ -673,17 +692,25 @@ def run_execution(
     def _prop_feed_close(pnl_: float, bar_date_: int, risk_dollars, i_: int) -> None:
         """Feed one realized close to the attempt's PropAccount and sync
         the engine's equity with the account balance (payouts withdraw)."""
-        nonlocal equity, prop_pending, prop_locked_bar_date, prop_payouts_seen
+        nonlocal equity, prop_pending, prop_locked_bar_date, prop_payouts_seen, prop_first_payout_time
         pday = _prop_day(bar_date_)
+        # v9.16 (audit P1-5): under an END-OF-DAY trailing basis the high-water
+        # mark must move only at the session close (acct.end_day, called at the
+        # day roll below). Passing is_last_of_day=True here ratcheted the peak
+        # after EVERY winning close, so an intraday high that was later given
+        # back still raised the floor -- stricter than the firm. Other bases
+        # are unaffected by the flag.
         res = acct.on_trade_close(
-            pnl_, pday, is_last_of_day=True, trade_initial_risk=risk_dollars,
-            floating_handled=True,
+            pnl_, pday, is_last_of_day=(getattr(acct, "dd_basis", None) != "eod"),
+            trade_initial_risk=risk_dollars, floating_handled=True,
         )
         if res == _FAILED:
             prop_pending = "failed"
         elif res == _DAY_LOCKED:
             prop_locked_bar_date = bar_date_
         if len(acct.payouts) > prop_payouts_seen:
+            if prop_first_payout_time is None:
+                prop_first_payout_time = _restore_tz(ts[i_])
             for rec in acct.payouts[prop_payouts_seen:]:
                 reset_events.append({
                     "kind": "payout", "reset_at": _restore_tz(ts[i_]),
@@ -879,10 +906,11 @@ def run_execution(
     prop_last_bar_date = None
 
     def _prop_new_account(i_: int) -> None:
-        nonlocal acct, prop_payouts_seen, prop_pending, prop_attempt_start_time
+        nonlocal acct, prop_payouts_seen, prop_pending, prop_attempt_start_time, prop_first_payout_time
         acct = PropAccount(prop_rules, start_day_index=len(prop_day_dates), day_dates=prop_day_dates)
         acct.start_date = _unique_days[day_idx[min(i_, n - 1)]]
         prop_payouts_seen = 0
+        prop_first_payout_time = None
         prop_pending = None
         prop_attempt_start_time = _restore_tz(ts[min(i_, n - 1)])
 
@@ -907,6 +935,7 @@ def run_execution(
             "days_to_pass": acct.days_to_pass, "end_balance": acct.balance,
             "n_trades": acct.n_trades, "total_payout": acct.total_payout_amount,
             "max_dd_pct": acct.max_dd_pct_reached,
+            "first_payout_time": prop_first_payout_time,
         })
         reset_events.append({
             "kind": "breach" if failed else "attempt_pass",
@@ -967,6 +996,13 @@ def run_execution(
         # below even though the latch is only set at week-end.
         if _weekend_hold and _dow[i] == 0:
             weekend_entry_block = False
+
+        # v9.16: session flatten -- close at this bar's open (the first bar at/after
+        # the flatten time), before any further management of the position.
+        if open_trade is not None and _flat_zone[i]:
+            _settle_exit(open_trade, opens[i], "session_flatten_forced_close", open_trade["direction"], i)
+            open_trade = None
+            flatten_close_count += 1
 
         # --- manage open trade: trailing stop / break-even, then stop/take intrabar ---
         if open_trade is not None:
@@ -1433,7 +1469,7 @@ def run_execution(
         # while the weekend-hold block is active (weekend bars themselves
         # or the latch set by a week-end force-close, until Monday).
         news_blackout_today = bool(_news_blackout_bar[i])
-        weekend_blocked_today = _weekend_hold and (_dow[i] >= 5 or weekend_entry_block)
+        weekend_blocked_today = (_weekend_hold and (_dow[i] >= 5 or weekend_entry_block)) or bool(_flat_zone[i])
         if open_trade is None and sig[i] != 0 and not daily_limit_breached and not account_blown and not cooldown_active and not news_blackout_today and not weekend_blocked_today:
             # B2-2: a market entry fills at open[i + fill_lag_bars], not at
             # the signal bar's close. No future bar to fill on (signal on
@@ -1728,6 +1764,7 @@ def run_execution(
             "days_to_pass": acct.days_to_pass, "end_balance": acct.balance,
             "n_trades": acct.n_trades, "total_payout": acct.total_payout_amount,
             "max_dd_pct": acct.max_dd_pct_reached,
+            "first_payout_time": prop_first_payout_time,
         })
 
     # UPGRADE (speed): building the DataFrame straight from the two
@@ -1780,6 +1817,7 @@ def run_execution(
         "weekend_hold": blocked_weekend_hold_count,
     }
     equity_df.attrs["weekend_hold_close_count"] = weekend_close_count
+    equity_df.attrs["session_flatten_close_count"] = flatten_close_count
     # Plain-language, chronological log of every account reset / payout, so a
     # report can show exactly when and why the account restarted.
     equity_df.attrs["account_reset_log"] = [ev["message"] for ev in reset_events if ev.get("message")]
@@ -1985,7 +2023,10 @@ def run_execution(
             RuntimeWarning,
         )
 
-    if atr_scale_mismatch_count:
+    # v9.16: a couple of tight-stop trades out of thousands is noise, not a scale mismatch --
+    # but this warning also gates the whole GA search (has_instrument_scale_mismatch), so it
+    # now fires only when the affected trades are a real share of the run (>= 5%, min 3).
+    if atr_scale_mismatch_count and atr_scale_mismatch_count >= max(3, int(0.05 * max(len(trades), 1))):
         import warnings
         warnings.warn(
             f"{atr_scale_mismatch_count} trade(s) had a fixed-pips stop "

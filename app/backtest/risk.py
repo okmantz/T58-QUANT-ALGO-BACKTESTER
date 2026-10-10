@@ -701,6 +701,15 @@ def with_prop_safety_defaults(risk: "RiskConfig", prop_rules) -> "RiskConfig":
     if prop_rules is not None:
         updates["account_model"] = "prop"
         updates["prop_account_rules"] = prop_rules
+        # v9.16 (audit P1-9): the default per-trade loss clamp (3x intended risk)
+        # hid gap/tail losses in prop runs. In a prop evaluation the account
+        # floor already bounds any loss (the engine liquidates at the floor), so
+        # clamp only at the account's max drawdown -- a gap through the stop now
+        # shows its real cost instead of being capped at 3R.
+        if getattr(risk, "max_loss_per_trade_pct", None) is None:
+            _mdd = getattr(prop_rules, "max_drawdown_pct", None)
+            if _mdd:
+                updates["max_loss_per_trade_pct"] = float(_mdd)
         # Sizing: "risk UP TO the budget" is how a trader actually trades
         # (pick the dollars, then place the stop). The legacy default
         # "skip" derives contracts from the strategy's own stop and sizes
