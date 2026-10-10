@@ -66,7 +66,7 @@ equity.attrs["prop_attempts"]    # one record per purchased account
 * **The real-account check has not been run.** It needs your ~20 real sessions (entries, exits, sizes, fees). It is the only test that proves the model matches a funded account.
 * The execution loop is **not compiled** (no numba); the speed gain is the lookahead cache only.
 * Pine/MQL5 zone output is generated text; it has **not been compiled or run** in TradingView/MetaEditor. No cTrader zone output.
-* Back-adjustment exists as a module but is **not wired into the importer**; run it explicitly on roll-contract data.
+* Back-adjustment IS wired into the importer (`_maybe_back_adjust_continuous`). For equity-index products (ES/NQ/YM/RTY and micros) v9.16 restricts roll candidates to Mar/Jun/Sep/Dec, days 4-21; other products still use the size + session-break heuristic only, which can mistake a real gap for a roll.
 * Hosted LLM calls were written against the documented APIs and **not exercised live**.
 * The keyword idea compiler is crude: it can ignore numbers in the idea (e.g. "stop 1 ATR") and fall back to defaults. Read the rule shown on the "Your idea" screen before trusting the result.
 * The stop-in-dollars limit in the GA is enforced by the skip-rate penalty, not by a bound on the stop gene.
