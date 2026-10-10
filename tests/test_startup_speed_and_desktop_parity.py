@@ -135,9 +135,19 @@ def test_web_start_here_pages_still_render():
     from app.orchestration.section_guides import SECTION_GUIDES
     from app.web import server
     client = server.app.test_client()
+    # v9.15 (Owen): the Quant Lab and Account Start Here pages were
+    # deliberately removed from the WEB app (Quant Lab's explainer moved
+    # onto the Quant Lab page itself). Their shared SECTION_GUIDES data
+    # stays for the DESKTOP app, which still renders its own Start Here
+    # pages for them -- so on web they must 404, not 200. Every other
+    # section still renders.
+    web_removed = {"quantlab", "account"}
     for section in SECTION_GUIDES:
         resp = client.get(f"/start-here/{section}")
-        assert resp.status_code == 200, section
+        if section in web_removed:
+            assert resp.status_code == 404, section
+        else:
+            assert resp.status_code == 200, section
 
 
 # ------------------------------------------------------------------ Tk thread-safety layer
