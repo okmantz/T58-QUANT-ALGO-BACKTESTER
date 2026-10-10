@@ -90,6 +90,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
+import numpy as np
 import pandas as pd
 
 from app.backtest.engine import BacktestResult, run_backtest, run_holdout_comparison
@@ -140,7 +141,18 @@ class FullPipelineConfig:
     preflight_min_trades: int = 100
     extra_gates_enabled: bool = field(default_factory=lambda: __import__('os').environ.get('T58_SKIP_EXTRA_GATES', '0') != '1')
     attempt_replay_starts: int = 24       # fresh-account attempts re-run through the real engine
+    # v9.16 (audit P0-1/P0-2): the business target is "first payout within 30 calendar days of
+    # buying the account". These accounts are replayed through the real engine for
+    # payout_horizon_days (30 + a few days margin), on the in-sample dev slice AND on the
+    # untouched holdout. The gate uses the holdout when it is long enough, else dev.
+    payout_window_days: int = 30
+    payout_horizon_days: int = 35
+    payout_replay_starts_dev: int = 48
+    payout_replay_starts_oos: int = 36
+    payout30_min_pct: float = 35.0        # READY needs >= this % of fresh accounts paid within the window
+    payout30_min_effective_windows: float = 3.0   # fewer independent windows than this = "not enough evidence" note, no gate
     null_n_seeds: int = 200               # random-entry null runs (v9.5: raised from 100 per accuracy plan)
+    null_first_batch: int = 100           # v9.16: first batch; the rest only runs when 0.03 < p < 0.30 after it
     break_cost_mult: float = 2.0          # v9.5 break-it gate: verdict must survive costs at this multiple
     seed_rescore_seeds: int = 3           # v9.5: extra Monte Carlo seeds for winner seed-stability check
     seed_rescore_sims: int = 2000         # sims per seed-rescore run (dispersion check, not the headline MC)
@@ -1039,7 +1051,7 @@ _VERDICT_TO_LIBRARY_STATUS = {
     "NOT READY": "tested_failed",
 }
 
-def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 25.0, null_result=None, null_p_max: float = 0.10, cost_stress=None, mc_dispersion_pts=None, **kwargs):
+def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 25.0, null_result=None, null_p_max: float = 0.10, cost_stress=None, mc_dispersion_pts=None, payout30=None, payout30_min_pct: float = 35.0, payout30_min_windows: float = 3.0, **kwargs):
     """Accuracy-overhaul wrapper around the original verdict logic.
 
     Adds two honesty gates that can only DEMOTE a READY verdict to MARGINAL
@@ -1095,6 +1107,18 @@ def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 2
             "-- the edge does not survive realistic cost slippage; capped at MARGINAL."
         )
         return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
+    # v9.16 (audit P0-1): the objective itself -- paid within the window, measured on fresh
+    # accounts through the real engine. Demote-only like every other gate here.
+    if payout30 and payout30.get("rate") is not None and float(payout30.get("n_effective", 0.0)) >= payout30_min_windows:
+        _rate_pct = float(payout30["rate"]) * 100.0
+        if _rate_pct < payout30_min_pct:
+            reasons.append(
+                f"30-DAY PAYOUT: only {_rate_pct:.0f}% of {payout30.get('n', '?')} fresh accounts "
+                f"({payout30.get('source', 'replay')}) reached a first payout within {payout30.get('window', 30)} calendar days "
+                f"(honest 95% CI {float(payout30['ci'][0]) * 100:.0f}-{float(payout30['ci'][1]) * 100:.0f}%; READY needs >= {payout30_min_pct:.0f}%) "
+                "-- capped at MARGINAL."
+            )
+            return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
     if mc_dispersion_pts is not None and float(mc_dispersion_pts) > 10.0:
         reasons.append(
             f"SEED INSTABILITY: per-attempt pass probability swings with a standard deviation of "
@@ -1106,7 +1130,7 @@ def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 2
 
 
 def _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt, cfg, log,
-                              workers: int = 1, progress_hook=None):
+                              workers: int = 1, progress_hook=None, run_null: bool = True):
     """Evidence the verdict wrapper gates on, computed once on the final
     strategy: (a) the real engine re-run from many start dates on fresh
     accounts, (b) a random-entry null DISTRIBUTION with the strategy's own
@@ -1150,7 +1174,9 @@ def _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt
         try:
             from app.research.director import random_entry_distribution
             trades = final_bt.trades
-            if len(trades) >= 20:
+            if not run_null:
+                pass
+            elif len(trades) >= 20:
                 longs = sum(1 for t in trades if t.direction == 1)
                 holds = sorted((t.exit_time - t.entry_time).total_seconds() for t in trades)
                 bar_s = max(1.0, float(pd.Series(pd.to_datetime(d2["timestamp"])).diff().dt.total_seconds().median()))
@@ -1162,14 +1188,32 @@ def _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt
                     if progress_hook is not None:
                         progress_hook(7, 0.16 + 0.38 * (done / max(total, 1)), "Random-entry null")
 
-                null = random_entry_distribution(
-                    d2, risk, float(final_bt.statistics.net_profit), len(trades), longs / len(trades), hold_bars,
+                # v9.16 (speed): staged null. A first batch decides clear-cut cases (p well below the
+                # READY limit, or well above it); only the ambiguous middle pays for the second batch.
+                # Same estimator as before -- the p-value is computed over all runs actually made.
+                _total_seeds = int(cfg.null_n_seeds)
+                _first = max(8, min(_total_seeds, int(getattr(cfg, "null_first_batch", 100))))
+                _null_kw = dict(
                     stop_loss_pips=sr.stop_loss_pips, take_profit_pips=sr.take_profit_pips,
                     stop_loss_distance=sr.stop_loss_distance, take_profit_distance=sr.take_profit_distance,
-                    n_seeds=cfg.null_n_seeds,
-                    progress_cb=_null_progress,
-                    max_workers=workers,
+                    progress_cb=_null_progress, max_workers=workers,
                 )
+                null = random_entry_distribution(
+                    d2, risk, float(final_bt.statistics.net_profit), len(trades), longs / len(trades), hold_bars,
+                    n_seeds=_first, seed=0, **_null_kw,
+                )
+                _p1 = null.get("p_value")
+                if _total_seeds > _first and _p1 is not None and 0.03 < _p1 < 0.30:
+                    _more = random_entry_distribution(
+                        d2, risk, float(final_bt.statistics.net_profit), len(trades), longs / len(trades), hold_bars,
+                        n_seeds=_total_seeds - _first, seed=1, **_null_kw,
+                    )
+                    _arr = np.array(list(null.get("null", [])) + list(_more.get("null", [])), dtype=float)
+                    if len(_arr):
+                        _obs = float(null["observed"])
+                        null = {**null, "n_seeds": int(len(_arr)), "null": _arr.tolist(),
+                                "p_value": float((1 + np.sum(_arr >= _obs)) / (1 + len(_arr))),
+                                "null_mean": float(_arr.mean()), "null_p95": float(np.percentile(_arr, 95))}
                 if null.get("p_value") is not None:
                     log(f"  Random-entry null: p = {null['p_value']:.3f} over {null['n_seeds']} runs "
                         f"(null mean ${null['null_mean']:,.0f}, p95 ${null['null_p95']:,.0f}, observed ${null['observed']:,.0f}).")
@@ -1206,6 +1250,84 @@ def _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt
     except Exception as exc:  # noqa: BLE001
         log(f"  Cost-stress evidence skipped: {exc}")
     return replay, null, cost_stress
+
+
+def _payout_window_evidence(final_strategy, full_df, dev_df, risk, prop_rules, cfg, log,
+                            workers: int = 1, progress_hook=None):
+    """v9.16: P(first payout within `cfg.payout_window_days` calendar days of purchase),
+    measured by buying fresh accounts on many real start dates and running the real engine
+    for `cfg.payout_horizon_days`. Computed twice: on the dev slice (in-sample -- the
+    optimizer saw it) and on the untouched holdout (out-of-sample). Returns a dict with
+    both replays and the one the verdict should gate on; never raises."""
+    out = {"dev": None, "oos": None, "gate": None}
+    if not getattr(cfg, "extra_gates_enabled", True):
+        return out
+    try:
+        from app.data.timeframe_resample import prepare_timeframe_aligned_data
+        from app.prop.attempt_replay import run_attempt_replay
+
+        win = int(cfg.payout_window_days)
+        d_all, _ = prepare_timeframe_aligned_data(full_df, final_strategy)
+        sr = final_strategy.generate(d_all)
+        if getattr(sr, "entry_orders", None) is not None:
+            return out
+        def _naive_utc(x):
+            x = pd.DatetimeIndex(pd.to_datetime(x))
+            return (x.tz_convert("UTC").tz_localize(None) if x.tz is not None else x).values
+
+        ts_all = _naive_utc(d_all["timestamp"])
+        split_val = _naive_utc([dev_df["timestamp"].iloc[-1]])[0]
+        b = int(np.searchsorted(ts_all, split_val, side="right"))
+        has_holdout = 0 < b < len(d_all) - 200 and len(d_all) != len(dev_df)
+
+        def _slice(lo, hi):
+            kw = {}
+            for name in ("stop_loss_distance", "take_profit_distance", "trailing_stop_distance"):
+                v = getattr(sr, name, None)
+                kw[name] = v.iloc[lo:hi].reset_index(drop=True) if isinstance(v, pd.Series) and len(v) == len(d_all) else v
+            sl, tp = sr.stop_loss_pips, sr.take_profit_pips
+            sl = sl.iloc[lo:hi].reset_index(drop=True) if isinstance(sl, pd.Series) and len(sl) == len(d_all) else sl
+            tp = tp.iloc[lo:hi].reset_index(drop=True) if isinstance(tp, pd.Series) and len(tp) == len(d_all) else tp
+            return (d_all.iloc[lo:hi].reset_index(drop=True), sr.signals.iloc[lo:hi].reset_index(drop=True), sl, tp, kw)
+
+        def _run(lo, hi, n_starts, label, frac_lo, frac_hi):
+            d, sg, sl, tp, kw = _slice(lo, hi)
+            return run_attempt_replay(
+                d, sg, risk, prop_rules, sl, tp,
+                horizon_days=int(cfg.payout_horizon_days), n_starts=int(n_starts),
+                track_payout=True, payout_windows=(win,),
+                breakeven_trigger_r=sr.breakeven_trigger_r, partial_exit_config=sr.partial_exit,
+                max_workers=workers, keep_attempts=False,
+                progress_cb=(lambda dn, tt: progress_hook(
+                    7, frac_lo + (frac_hi - frac_lo) * (dn / max(tt, 1)), label)) if progress_hook else None,
+                **kw,
+            )
+
+        b_dev = b if has_holdout else len(d_all)
+        log(f"  Payout-window replay: {cfg.payout_replay_starts_dev} fresh accounts on the dev slice, "
+            f"{cfg.payout_replay_starts_oos if has_holdout else 0} on the untouched holdout "
+            f"(each run {cfg.payout_horizon_days} calendar days; counting first payouts within {win}).")
+        out["dev"] = _run(0, b_dev, cfg.payout_replay_starts_dev, "Payout replay (dev)", 0.02, 0.10)
+        if has_holdout:
+            out["oos"] = _run(b, len(d_all), cfg.payout_replay_starts_oos, "Payout replay (holdout)", 0.10, 0.16)
+        for key, r in (("dev", out["dev"]), ("oos", out["oos"])):
+            if r is not None:
+                rate = r.payout_within_rate.get(win, 0.0)
+                lo, hi = r.payout_within_ci.get(win, (0.0, 1.0))
+                log(f"  Payout within {win}d [{'holdout' if key == 'oos' else 'dev'}]: {rate * 100:.0f}% of {r.n_attempts} fresh accounts "
+                    f"(honest 95% CI {lo * 100:.0f}-{hi * 100:.0f}%, ~{r.n_effective:.1f} independent windows); "
+                    f"pass {r.pass_rate * 100:.0f}%, bust {r.bust_rate * 100:.0f}%.")
+        pick, src = (out["oos"], "out-of-sample holdout") if out["oos"] is not None and out["oos"].n_effective >= cfg.payout30_min_effective_windows \
+            else (out["dev"], "in-sample dev slice" + ("" if not has_holdout else " (holdout too short)"))
+        if pick is not None:
+            out["gate"] = {
+                "rate": pick.payout_within_rate.get(win, 0.0), "ci": pick.payout_within_ci.get(win, (0.0, 1.0)),
+                "n": pick.n_attempts, "n_effective": pick.n_effective, "window": win, "source": src,
+                "median_days": pick.median_days_to_payout,
+            }
+    except Exception as exc:  # noqa: BLE001 -- evidence must never sink the run
+        log(f"  Payout-window replay skipped: {exc}")
+    return out
 
 
 def _library_save_note_suffix(verdict: str, verdict_reasons: list[str]) -> str:
@@ -2394,8 +2516,42 @@ def run_full_pipeline(
         _check_cancel()
         log("Step 7/7: Generating final report...")
         _progress(7, 0.0, "Attempt replay + random-entry null")
+
+        def _vc(**evidence):
+            return _make_verdict(
+                final_mc, oos_validation, icir_gate,
+                statistics=final_bt.statistics, prop_rules=prop_rules,
+                risk_of_ruin_cap=cfg.risk_of_ruin_cap, parsimony=parsimony_result,
+                cpcv_primary_result=cpcv_primary_result, cpcv_supporting_result=cpcv_supporting_result,
+                lookahead_bug_detected=lookahead_bug_detected,
+                min_trades_for_ready=cfg.min_trades_for_ready,
+                holdout=final_holdout,
+                min_holdout_trades_for_gate=cfg.min_holdout_trades_for_gate,
+                min_per_attempt_pass_pct=cfg.min_per_attempt_pass_pct,
+                dsr_gate_result=dsr_gate_result, pbo_gate_result=pbo_gate_result,
+                primary_robustness_method=cfg.primary_robustness_method,
+                gates_advisory_only=cfg.validation_gates_advisory_only,
+                **evidence,
+            )
+
+        # v9.16 (speed): every Step-7 break-it gate below can only DEMOTE a READY verdict.
+        # When the evidence so far already says NOT READY / MARGINAL-by-core, the slowest
+        # of them (the 200-run random-entry null, the seed-stability MC) cannot change the
+        # outcome, so they are skipped instead of burning minutes on a number nobody can act on.
+        try:
+            _pre_verdict = _vc()[0]
+        except Exception:  # noqa: BLE001 -- if the preview fails, run everything as before
+            _pre_verdict = "READY"
+        _can_be_ready = (_pre_verdict == "READY")
+        if not _can_be_ready:
+            log(f"  Verdict is already {_pre_verdict} before the break-it gates; those gates can only demote a READY verdict, so the "
+                "slow random-entry null and seed-stability re-scoring are skipped.")
         _replay_ev, _null_ev, _cost_ev = _replay_and_null_evidence(
             final_strategy, dev_df, risk, prop_rules, final_bt, cfg, log,
+            workers=_mc_workers, progress_hook=_progress, run_null=_can_be_ready,
+        )
+        _payout_ev = _payout_window_evidence(
+            final_strategy, df, dev_df, risk, prop_rules, cfg, log,
             workers=_mc_workers, progress_hook=_progress,
         )
         _progress(7, 0.6, "Seed-stability Monte Carlo")
@@ -2407,8 +2563,10 @@ def run_full_pipeline(
         _mc_disp = None
         # v9.15 (WS-F): ONE shared pool serves all seed-rescore MC calls
         # (previously a fresh spawn per seed); shut down with this step.
-        _mc_pool = _make_mc_pool(_mc_workers)
+        _mc_pool = _make_mc_pool(_mc_workers) if _can_be_ready else None
         try:
+            if not _can_be_ready:
+                raise RuntimeError("skipped: verdict cannot reach READY")
             import statistics as _stats_mod
 
             _rates = []
@@ -2427,27 +2585,18 @@ def run_full_pipeline(
                 _mc_disp = float(_stats_mod.pstdev(_rates))
                 log(f"  Seed stability: per-attempt pass {['%.0f%%' % r for r in _rates]} (sd {_mc_disp:.1f} pts).")
         except Exception as exc:  # noqa: BLE001
-            log(f"  Seed-stability check skipped: {exc}")
+            if _can_be_ready:
+                log(f"  Seed-stability check skipped: {exc}")
         finally:
             if _mc_pool is not None:
                 _mc_pool.shutdown(wait=False)
                 _mc_pool = None
         _progress(7, 0.92, "Verdict + report")
-        verdict, verdict_reasons, scorecard, risk_of_ruin_hard_fail, lookahead_hard_fail = _make_verdict(
-            final_mc, oos_validation, icir_gate,
+        verdict, verdict_reasons, scorecard, risk_of_ruin_hard_fail, lookahead_hard_fail = _vc(
             attempt_replay=_replay_ev, null_result=_null_ev, null_p_max=cfg.null_p_max,
             cost_stress=_cost_ev, mc_dispersion_pts=_mc_disp,
-            statistics=final_bt.statistics, prop_rules=prop_rules,
-            risk_of_ruin_cap=cfg.risk_of_ruin_cap, parsimony=parsimony_result,
-            cpcv_primary_result=cpcv_primary_result, cpcv_supporting_result=cpcv_supporting_result,
-            lookahead_bug_detected=lookahead_bug_detected,
-            min_trades_for_ready=cfg.min_trades_for_ready,
-            holdout=final_holdout,
-            min_holdout_trades_for_gate=cfg.min_holdout_trades_for_gate,
-            min_per_attempt_pass_pct=cfg.min_per_attempt_pass_pct,
-            dsr_gate_result=dsr_gate_result, pbo_gate_result=pbo_gate_result,
-            primary_robustness_method=cfg.primary_robustness_method,
-            gates_advisory_only=cfg.validation_gates_advisory_only,
+            payout30=_payout_ev.get("gate"), payout30_min_pct=cfg.payout30_min_pct,
+            payout30_min_windows=cfg.payout30_min_effective_windows,
         )
 
         verdict_reasons = list(verdict_reasons)
@@ -2456,6 +2605,22 @@ def run_full_pipeline(
                 f"Evidence (attempt replay): {_replay_ev.n_attempts} fresh accounts started on real dates through the actual engine -> "
                 f"{_replay_ev.pass_rate * 100:.0f}% passed, {_replay_ev.bust_rate * 100:.0f}% busted, {_replay_ev.open_rate * 100:.0f}% unresolved; "
                 f"bust-before-pass {_replay_ev.bust_before_pass_rate * 100:.0f}%.")
+        for _k, _lbl in (("dev", "in-sample dev slice"), ("oos", "UNSEEN holdout")):
+            _pr = _payout_ev.get(_k)
+            if _pr is not None and _pr.payout_tracked:
+                _w = int(cfg.payout_window_days)
+                _lo, _hi = _pr.payout_within_ci.get(_w, (0.0, 1.0))
+                verdict_reasons.append(
+                    f"Evidence (first payout within {_w} days, {_lbl}): {_pr.payout_within_rate.get(_w, 0.0) * 100:.0f}% of "
+                    f"{_pr.n_attempts} fresh accounts were paid inside {_w} calendar days "
+                    f"(honest 95% CI {_lo * 100:.0f}-{_hi * 100:.0f}%, ~{_pr.n_effective:.1f} independent windows); "
+                    f"{_pr.pass_rate * 100:.0f}% passed the evaluation, {_pr.bust_rate * 100:.0f}% busted"
+                    + (f"; median {_pr.median_days_to_payout:.0f} days to first payout." if _pr.median_days_to_payout is not None else "."))
+        if _replay_ev is not None and getattr(_replay_ev, "n_effective", 0):
+            _hl, _hh = _replay_ev.pass_ci_honest
+            verdict_reasons.append(
+                f"Evidence (honest interval): the attempt-replay pass rate's dependence-aware 95% CI is "
+                f"{_hl * 100:.0f}-{_hh * 100:.0f}% (~{_replay_ev.n_effective:.1f} independent windows), wider than the naive Wilson interval because neighbouring start dates overlap.")
         if _null_ev and _null_ev.get("p_value") is not None:
             verdict_reasons.append(
                 f"Evidence (random-entry null): {_null_ev['n_seeds']} random-timing runs with this strategy's exits and trade count; "
