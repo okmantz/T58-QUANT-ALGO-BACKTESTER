@@ -846,7 +846,16 @@ def _maybe_back_adjust_continuous(df: pd.DataFrame, source_name: str, issues: li
         return df
     from app.data.continuous_contract import back_adjust, describe
 
-    adjusted, rolls = back_adjust(df)
+    # v9.16 (audit P1-7): the size+session-break heuristic alone also matched ordinary
+    # weekend gaps in non-roll months (and removed them from history). Equity-index
+    # futures roll only in Mar/Jun/Sep/Dec, in the week before the third Friday, so
+    # for those products candidates outside that calendar window are not rolls.
+    _kw: dict = {}
+    _base = str(source_name or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+    import re as _re
+    if _re.search(r"(^|[^a-z])(m?es|m?nq|m?ym|m2k|rty)(1!|2!|\.f|_|$|[^a-z])", _base):
+        _kw = {"roll_months": (3, 6, 9, 12), "roll_days": range(4, 22)}
+    adjusted, rolls = back_adjust(df, **_kw)
     adjusted.attrs["roll_adjustment"] = describe(rolls)
     adjusted.attrs["roll_adjusted"] = bool(rolls)
     if rolls:
