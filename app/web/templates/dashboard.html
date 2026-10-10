@@ -167,7 +167,7 @@
   {% if current_metrics %}
   <div class="t58-grid cols-4" style="gap:10px;">
     <div class="t58-metric-box"><div class="lbl">Win rate</div><div class="val">{{ "%.1f"|format(current_metrics.win_rate) }}%</div></div>
-    <div class="t58-metric-box"><div class="lbl">Eval pass probability</div><div class="val">{{ "%.1f"|format(current_metrics.eval_pass_probability) }}%</div></div>
+    <div class="t58-metric-box"><div class="lbl">Eval pass probability (per attempt)</div><div class="val">{{ "%.1f"|format(current_metrics.eval_pass_probability) }}%</div></div>
     <div class="t58-metric-box"><div class="lbl">First payout probability</div><div class="val">{{ "%.1f"|format(current_metrics.get('first_payout_probability', 0)) }}%</div></div>
     <div class="t58-metric-box"><div class="lbl">Sharpe ratio</div><div class="val">{{ "%.2f"|format(current_metrics.sharpe_ratio) }}</div></div>
     <div class="t58-metric-box"><div class="lbl">Net P&amp;L</div><div class="val {{ 't58-glow-teal' if current_metrics.net_profit >= 0 else 't58-glow-coral' }}">${{ "{:,.0f}".format(current_metrics.net_profit) }}</div></div>

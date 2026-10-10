@@ -222,6 +222,68 @@ def _metric_value(stats: dict, metric: str, trades: list | None = None, prop_rul
     return float(v)
 
 
+# v9.15 (WS-F): worker state/task for parallel run_walk_forward. Folds
+# are independent (fixed config, disjoint slice construction), so they
+# can evaluate across a process pool. The builder lambda most callers
+# pass is not picklable under spawn, so parallel execution is
+# spec-driven (workers rebuild from `strategy_spec` per fold); results
+# are collected by fold index, keeping the returned WalkForwardResult
+# identical to the serial run. Any pool failure falls back to the
+# serial builder loop for every fold.
+_WF_WORKER: dict = {}
+
+
+def _wf_worker_init(df, risk, metric, prop_rules, mc_cfg, strategy_spec, tmp_dir) -> None:
+    global _WF_WORKER
+    _WF_WORKER = {
+        "df": df, "risk": risk, "metric": metric, "prop_rules": prop_rules,
+        "mc_cfg": mc_cfg, "spec": strategy_spec, "tmp_dir": tmp_dir,
+    }
+
+
+def _wf_one_fold(fold_idx, train_df, test_df, strategy_builder, risk, metric, prop_rules, mc_cfg):
+    """One walk-forward fold: two backtests + two metric reads. Returns
+    (WalkForwardFold, train_val, test_val), or None for a thin fold --
+    exactly the serial loop's `continue`. Pure function of its inputs."""
+    from app.backtest.engine import run_backtest
+
+    if len(train_df) < 10 or len(test_df) < 5:
+        return None
+    train_result = run_backtest(train_df, strategy_builder(), risk)
+    test_result = run_backtest(test_df, strategy_builder(), risk)
+    train_stats = train_result.statistics.to_dict()
+    test_stats = test_result.statistics.to_dict()
+    train_val = _metric_value(train_stats, metric, train_result.trades, prop_rules, mc_cfg)
+    test_val = _metric_value(test_stats, metric, test_result.trades, prop_rules, mc_cfg)
+    fold = WalkForwardFold(
+        fold_index=fold_idx,
+        train_period=(str(train_df["timestamp"].iloc[0]), str(train_df["timestamp"].iloc[-1])),
+        test_period=(str(test_df["timestamp"].iloc[0]), str(test_df["timestamp"].iloc[-1])),
+        train_bars=len(train_df), test_bars=len(test_df),
+        train_metric=train_val, test_metric=test_val,
+    )
+    return fold, train_val, test_val
+
+
+def _wf_worker_task(task):
+    fold_idx, train_end, test_end = task
+    w = _WF_WORKER
+    df = w["df"]
+    train_df = df.iloc[:train_end].reset_index(drop=True)
+    test_df = df.iloc[train_end:test_end].reset_index(drop=True)
+    return fold_idx, _wf_one_fold(
+        fold_idx, train_df, test_df,
+        lambda: _build_spec_strategy(w["spec"], w["tmp_dir"]),
+        w["risk"], w["metric"], w["prop_rules"], w["mc_cfg"],
+    )
+
+
+def _build_spec_strategy(spec, tmp_dir):
+    from app.search.strategy_space import build_strategy_from_spec
+
+    return build_strategy_from_spec(spec, tmp_dir)
+
+
 def run_walk_forward(
     df: pd.DataFrame,
     strategy_builder,
@@ -232,6 +294,9 @@ def run_walk_forward(
     prop_rules=None,
     mc_cfg=None,
     embargo_start_bar: int | None = None,
+    max_workers: int | None = None,
+    strategy_spec=None,
+    tmp_dir=None,
 ):
     """
     strategy_builder: a zero-argument callable returning a FRESH Strategy
@@ -307,32 +372,56 @@ def run_walk_forward(
     if fold_size < 10:
         return None
 
+    # v9.15 (WS-F): fold spans first, then serial -- or, when a
+    # candidate spec is supplied and max_workers > 1, spec-driven
+    # parallel evaluation with indexed collection. `folds` and the two
+    # metric lists end up in fold order either way, so the returned
+    # WalkForwardResult is identical; any pool failure falls back to
+    # the serial builder loop for every fold.
+    fold_spans = [
+        (i, fold_size * (i + 1), min(fold_size * (i + 2), n)) for i in range(n_folds)
+    ]
+    fold_results: list = [None] * len(fold_spans)
+    _want_wf_parallel = (
+        strategy_spec is not None and max_workers is not None
+        and int(max_workers) > 1 and len(fold_spans) > 1
+    )
+    if _want_wf_parallel:
+        try:
+            import multiprocessing
+            from concurrent.futures import ProcessPoolExecutor
+
+            from app.orchestration.resource_guard import safe_worker_count
+
+            workers = safe_worker_count(
+                df, requested=int(max_workers), max_candidates_in_flight=len(fold_spans))
+            if workers > 1:
+                ctx = multiprocessing.get_context("spawn")
+                with ProcessPoolExecutor(
+                    max_workers=workers, mp_context=ctx,
+                    initializer=_wf_worker_init,
+                    initargs=(df, risk, metric, prop_rules, mc_cfg,
+                              strategy_spec, str(tmp_dir) if tmp_dir is not None else None),
+                ) as pool:
+                    for _fi, _res in pool.map(_wf_worker_task, fold_spans):
+                        fold_results[_fi] = _res
+        except Exception:  # noqa: BLE001 -- serial below is the same math
+            fold_results = [None] * len(fold_spans)
+
     folds: list[WalkForwardFold] = []
     train_metrics, test_metrics = [], []
-    for i in range(n_folds):
-        train_end = fold_size * (i + 1)
-        test_end = min(fold_size * (i + 2), n)
-        train_df = df.iloc[:train_end].reset_index(drop=True)
-        test_df = df.iloc[train_end:test_end].reset_index(drop=True)
-        if len(train_df) < 10 or len(test_df) < 5:
+    for i, train_end, test_end in fold_spans:
+        _one = fold_results[i]
+        if _one is None:
+            train_df = df.iloc[:train_end].reset_index(drop=True)
+            test_df = df.iloc[train_end:test_end].reset_index(drop=True)
+            _one = _wf_one_fold(i, train_df, test_df, strategy_builder, risk, metric, prop_rules, mc_cfg)
+        if _one is None:
             continue
-
-        train_result = run_backtest(train_df, strategy_builder(), risk)
-        test_result = run_backtest(test_df, strategy_builder(), risk)
-        train_stats = train_result.statistics.to_dict()
-        test_stats = test_result.statistics.to_dict()
-        train_val = _metric_value(train_stats, metric, train_result.trades, prop_rules, mc_cfg)
-        test_val = _metric_value(test_stats, metric, test_result.trades, prop_rules, mc_cfg)
+        _fold, train_val, test_val = _one
         train_metrics.append(train_val)
         test_metrics.append(test_val)
-
-        folds.append(WalkForwardFold(
-            fold_index=i,
-            train_period=(str(train_df["timestamp"].iloc[0]), str(train_df["timestamp"].iloc[-1])),
-            test_period=(str(test_df["timestamp"].iloc[0]), str(test_df["timestamp"].iloc[-1])),
-            train_bars=len(train_df), test_bars=len(test_df),
-            train_metric=train_val, test_metric=test_val,
-        ))
+        folds.append(_fold)
 
     if not folds:
         return None

@@ -145,17 +145,62 @@ def python_indicator_library() -> list[str]:
     )
 
 
+def _manual_source_text() -> str:
+    """Best-effort source text for app.strategy.manual. NEVER raises.
+
+    v9.15: inspect.getsource() raises OSError("could not get source
+    code") in Owen's compiled/frozen build (no .py shipped alongside
+    the .pyc), which used to propagate straight into the Basic Outlook
+    API response. Fall back to reading the module's own file when
+    getsource fails; if that file is compiled/missing/unreadable,
+    return "" so the caller degrades to its conservative static
+    result instead of raising."""
+    try:
+        from app.strategy import manual
+    except Exception:  # noqa: BLE001 -- grounding must never break chat/outlook
+        return ""
+    try:
+        return inspect.getsource(manual)
+    except Exception:  # noqa: BLE001 -- OSError/TypeError in frozen builds
+        pass
+    try:
+        module_file = getattr(manual, "__file__", "") or ""
+        if module_file.endswith(".py"):
+            from pathlib import Path
+
+            return Path(module_file).read_text(encoding="utf-8", errors="ignore")
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
 @lru_cache(maxsize=1)
 def manual_condition_kinds() -> list[str]:
     """The `kind` values app.strategy.manual's condition builder actually
     dispatches on -- extracted from its own source text (the dispatch is a
     plain if/elif chain, not a lookup table), so a new condition kind
     added there is picked up here automatically the next time this
-    process starts, with no second list to keep in sync."""
-    from app.strategy import manual
+    process starts, with no second list to keep in sync.
 
-    source = inspect.getsource(manual)
-    return sorted(set(_MANUAL_KIND_RE.findall(source)))
+    NEVER raises (v9.15): when no source text is available at all
+    (compiled build), returns the conservative static result [] --
+    "no manual condition kinds confirmed" -- rather than inventing a
+    list or leaking a raw OSError into a chat/outlook response."""
+    source = _manual_source_text()
+    if not source:
+        return []
+    try:
+        kinds = set(_MANUAL_KIND_RE.findall(source))
+        # The dispatch also uses membership forms the original
+        # `kind == "x"` regex missed entirely (e.g.
+        # `kind in ("atr_regime", "atr_expansion", ...)` at
+        # app.strategy.manual's operand evaluation -- those kinds
+        # were silently absent from this list even from source).
+        for group in re.findall(r'kind\s+in\s*[\(\{]([^\)\}]*)', source):
+            kinds.update(re.findall(r'"([a-z0-9_]+)"', group))
+        return sorted(kinds)
+    except Exception:  # noqa: BLE001
+        return []
 
 
 def build_pinescript_contract_text() -> str:
@@ -242,13 +287,22 @@ def chat_capability_note() -> dict:
     outlook request, so it stays a short fact block, not a full contract
     dump). Ground every "is X supported" answer against this instead of
     guessing."""
-    ps = pinescript_capabilities()
-    mq = mql5_capabilities()
+    # NEVER raises (v9.15): each introspection degrades independently
+    # to an empty list, so one unavailable source (e.g. a compiled
+    # manual module) can't take down the whole chat/outlook context.
+    def _safe(fn, default):
+        try:
+            return fn()
+        except Exception:  # noqa: BLE001
+            return default
+
+    ps = _safe(pinescript_capabilities, {"ta_functions": [], "directives": []})
+    mq = _safe(mql5_capabilities, {"indicator_functions": [], "directives": []})
     return {
-        "python_indicators_available": python_indicator_library(),
-        "manual_json_condition_types": manual_condition_kinds(),
-        "pinescript_ta_functions": [f"ta.{f}" for f in ps["ta_functions"]],
-        "pinescript_directives": ps["directives"],
-        "mql5_indicator_functions": mq["indicator_functions"],
-        "mql5_directives": mq["directives"],
+        "python_indicators_available": _safe(python_indicator_library, []),
+        "manual_json_condition_types": _safe(manual_condition_kinds, []),
+        "pinescript_ta_functions": [f"ta.{f}" for f in ps.get("ta_functions", [])],
+        "pinescript_directives": ps.get("directives", []),
+        "mql5_indicator_functions": mq.get("indicator_functions", []),
+        "mql5_directives": mq.get("directives", []),
     }

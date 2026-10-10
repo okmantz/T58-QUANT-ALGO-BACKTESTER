@@ -147,7 +147,7 @@ def run_batch_test(
                     "net_profit": round(bt_result.statistics.net_profit, 2),
                     "win_rate": round(bt_result.statistics.win_rate, 1),
                     "max_dd": round(bt_result.statistics.max_drawdown_pct, 2),
-                    "eval_pass_probability": round(mc_result.evaluation_pass_probability, 1),
+                    "eval_pass_probability": round(mc_result.headline_evaluation_pass_probability, 1),
                     "report_html": str(paths["html"]),
                 })
             except Exception:  # noqa: BLE001 -- recording to the library is a convenience, not core output
@@ -167,8 +167,8 @@ def run_batch_test(
                 win_rate=bt_result.statistics.win_rate,
                 profit_factor=bt_result.statistics.profit_factor,
                 max_drawdown_pct=bt_result.statistics.max_drawdown_pct,
-                eval_pass_probability=mc_result.evaluation_pass_probability,
-                first_payout_probability=mc_result.first_payout_probability,
+                eval_pass_probability=mc_result.headline_evaluation_pass_probability,
+                first_payout_probability=mc_result.headline_first_payout_probability,
                 risk_of_ruin_pct=mc_result.risk_of_ruin_pct,
             )
         except Exception:  # noqa: BLE001 -- T58 Research Memory is a bonus record, not core output
@@ -176,12 +176,12 @@ def run_batch_test(
 
         log(
             f"  Trades: {len(bt_result.trades)}  Net profit: ${bt_result.statistics.net_profit:,.2f}  "
-            f"Eval pass probability: {mc_result.evaluation_pass_probability:.1f}%  Report: {paths['html'].name}"
+            f"Eval pass probability (per attempt): {mc_result.headline_evaluation_pass_probability:.1f}%  Report: {paths['html'].name}"
         )
         outcomes.append(BatchTestOutcome(
             item.label, ok=True, trades=len(bt_result.trades),
             net_profit=bt_result.statistics.net_profit,
-            eval_pass_probability=mc_result.evaluation_pass_probability,
+            eval_pass_probability=mc_result.headline_evaluation_pass_probability,
             report_html=paths["html"], report_json=paths.get("json"),
         ))
 

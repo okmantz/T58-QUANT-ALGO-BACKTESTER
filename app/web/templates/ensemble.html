@@ -70,7 +70,7 @@
     {% if result.mode == 'blend' %}
     <div class="stat"><div class="label">Sharpe</div><div class="value">{{ '%.2f' % result.sharpe }}</div></div>
     {% else %}
-    <div class="stat"><div class="label">Eval pass probability</div><div class="value">{{ '%.1f' % result.eval_pass_probability }}%</div></div>
+    <div class="stat"><div class="label">Eval pass probability (per attempt)</div><div class="value">{{ '%.1f' % result.eval_pass_probability }}%</div></div>
     {% endif %}
   </div>
   {% if result.mode == 'blend' %}

@@ -40,8 +40,17 @@
       <div class="lc-col">
         <label class="flabel" for="lc-strategy-pick">Strategy</label>
         <select class="inp" name="strategy_pick" id="lc-strategy-pick">
-          {% for s in strategies %}
-          <option value="{{ s.type }}::{{ s.name }}"{% if prefill.strategy_pick == s.type ~ '::' ~ s.name %} selected{% endif %}>{{ s.name }} ({{ s.type }})</option>
+          {# v9.15: grouped by strategy type (Manual / Python / PineScript /
+             MQL5) -- the same optgroup structure the Test page and
+             Deploy/Forward-Test pickers already use. Option values are
+             unchanged ('type::name'), so _simple_load_strategy and the
+             guided prefill keep working exactly as before. #}
+          {% for t, label in [('manual', 'Manual'), ('python', 'Python'), ('pinescript', 'PineScript'), ('mql5', 'MQL5')] %}
+          <optgroup label="{{ label }}">
+            {% for s in strategies if s.type == t %}
+            <option value="{{ s.type }}::{{ s.name }}"{% if prefill.strategy_pick == s.type ~ '::' ~ s.name %} selected{% endif %}>{{ s.name }}</option>
+            {% endfor %}
+          </optgroup>
           {% endfor %}
         </select>
       </div>

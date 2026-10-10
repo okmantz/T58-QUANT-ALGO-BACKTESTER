@@ -258,8 +258,10 @@ async function loadRankings() {
     const data = await res.json();
     document.getElementById('rankings-note').textContent = data.macro_note || '';
     if (!data.rankings.length) {
-      const errs = (data.errors || []).slice(0, 3).join(' | ');
-      panel.innerHTML = `<div>No market data available yet. ${escapeHtml(errs || 'Connect MT5 on the Forward Test tab, or Alpaca for crypto.')}</div>`;
+      // v9.15: honest empty state only -- per-symbol feed errors are
+      // never the headline (symbols with no real bars, from a feed or
+      // a local dataset, are skipped quietly server-side).
+      panel.innerHTML = `<div>No market data loaded yet. Connect MT5 on the Forward Test tab or Alpaca for crypto, or add a dataset under Market Data -- rankings compute from whichever real bars are available.</div>`;
       return;
     }
     const rows = data.rankings.map(r => `
@@ -294,11 +296,21 @@ const DIRECTOR_ACTION_LABELS = {
 async function loadDirector() {
   const panel = document.getElementById('director-panel');
   try {
-    const res = await fetch('/assistant/api/director');
+    // v9.15: finite client-side wait, matching the server's bounded
+    // scan + Ollama budgets -- the panel always reaches a terminal
+    // state (list, empty note, or this error) instead of "Loading..."
+    // forever.
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 120000);
+    let res;
+    try { res = await fetch('/assistant/api/director', { signal: ctl.signal }); }
+    finally { clearTimeout(timer); }
     const data = await res.json();
     const directives = data.directives || [];
     if (!directives.length) {
-      panel.innerHTML = `<div>Nothing in the Strategy Library needs action right now. Start a new idea via Strategy Generator, Search Lab, or the Research Loop.</div>`;
+      panel.innerHTML = data.error
+        ? `<div><small class="err">${escapeHtml(data.error)}</small></div>`
+        : `<div>Nothing in the Strategy Library needs action right now. Start a new idea via Strategy Generator, Search Lab, or the Research Loop.</div>`;
       return;
     }
     const rows = directives.map((d, i) => `
@@ -350,6 +362,7 @@ async function generateDirectorBriefing() {
       if (sawError) break;
     }
     if (sawError) reply.textContent = sawError;
+    else if (!fullReply) reply.textContent = 'No briefing returned. The deterministic priority list above still applies.';
   } catch (err) {
     // Fallback: the older blocking endpoint (also includes the always-on
     // deterministic list as a prefix, same posture as Basic Outlook).

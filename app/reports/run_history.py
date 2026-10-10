@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from app.data.storage import get_app_base_dir
+from app.reports.mc_headline import monte_carlo_headline
 
 MAX_ENTRIES = 1000
 EQUITY_POINTS = 60
@@ -159,6 +160,7 @@ def record_run(report: dict, paths: dict, backtest_result=None) -> None:
         stats = report.get("historical_backtest", {}).get("statistics", {})
         prop_single = report.get("prop_firm_single_run", {})
         mc = report.get("monte_carlo", {})
+        _mch = monte_carlo_headline(mc)
 
         equity_curve: list[float] = []
         heatmap = [[0.0] * 24 for _ in range(7)]
@@ -186,8 +188,17 @@ def record_run(report: dict, paths: dict, backtest_result=None) -> None:
             "max_drawdown_pct": float(stats.get("max_drawdown_pct", 0.0) or 0.0),
             "profit_factor": float(stats.get("profit_factor", 0.0) or 0.0) if math.isfinite(stats.get("profit_factor", 0.0) or 0.0) else 0.0,
             "sharpe_ratio": float(stats.get("sharpe_ratio", 0.0) or 0.0) if math.isfinite(stats.get("sharpe_ratio", 0.0) or 0.0) else 0.0,
-            "eval_pass_probability": float(mc.get("evaluation_pass_probability", 0.0) or 0.0),
-            "first_payout_probability": float(mc.get("first_payout_probability", 0.0) or 0.0),
+            # v9.15: Dashboard/Champion read these two keys as "the"
+            # eval-pass / payout probabilities, so store the canonical
+            # per-attempt headline (app.reports.mc_headline -- the gate
+            # metric), NOT the chain-level "any attempt ever passed"
+            # fields that used to sit here (a 90.0% dashboard card next
+            # to an 8.7% pipeline verdict, Owen 2026-10-10). The chain
+            # figures stay available under their explicit names.
+            "eval_pass_probability": _mch["eval_pass_probability"],
+            "first_payout_probability": _mch["first_payout_probability"],
+            "any_attempt_eval_pass_probability": _mch["any_attempt_eval_pass_probability"],
+            "any_attempt_first_payout_probability": _mch["any_attempt_first_payout_probability"],
             "risk_of_ruin_pct": float(mc.get("risk_of_ruin_pct", 0.0) or 0.0),
             "expected_payout": float(mc.get("expected_payout", 0.0) or 0.0),
             "single_run_passed": bool(prop_single.get("evaluation_pass_pct", 0.0) == 100.0),

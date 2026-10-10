@@ -40,8 +40,17 @@
       <div class="lc-col">
         <label class="flabel" for="lc-strategy-pick">Strategy</label>
         <select class="inp" name="strategy_pick" id="lc-strategy-pick">
-          {% for s in strategies %}
-          <option value="{{ s.type }}::{{ s.name }}"{% if prefill.strategy_pick == s.type ~ '::' ~ s.name %} selected{% endif %}>{{ s.name }} ({{ s.type }})</option>
+          {# v9.15: grouped by strategy type (Manual / Python / PineScript /
+             MQL5) -- the same optgroup structure the Test page and
+             Deploy/Forward-Test pickers already use. Option values are
+             unchanged ('type::name'), so _simple_load_strategy and the
+             guided prefill keep working exactly as before. #}
+          {% for t, label in [('manual', 'Manual'), ('python', 'Python'), ('pinescript', 'PineScript'), ('mql5', 'MQL5')] %}
+          <optgroup label="{{ label }}">
+            {% for s in strategies if s.type == t %}
+            <option value="{{ s.type }}::{{ s.name }}"{% if prefill.strategy_pick == s.type ~ '::' ~ s.name %} selected{% endif %}>{{ s.name }}</option>
+            {% endfor %}
+          </optgroup>
           {% endfor %}
         </select>
       </div>
@@ -185,7 +194,7 @@
         <div class="lc-kv"><span class="k">{{ k }}</span><span class="v">{% if v is mapping or v is sequence and v is not string %}<pre style="white-space:pre-wrap;font-size:11px;text-align:left;">{{ v | tojson(indent=2) }}</pre>{% else %}{{ v }}{% endif %}</span></div>
         {% endfor %}
         {% else %}
-        <p class="lc-hint" style="color:#ffb4b4;">{{ r.error }}</p>
+        <p class="lc-hint" style="color:var(--lc-red);">{{ r.error }}</p>
         {% endif %}
       </div>
       {% endfor %}
@@ -197,7 +206,7 @@
     <h3>How this was simulated</h3>
     <details>
       <summary style="cursor:pointer; font-size:13px;">Simulation assumptions for this run</summary>
-      <pre style="white-space:pre-wrap; font-size:12px; color:#bbb;">{{ simulation_text }}</pre>
+      <pre style="white-space:pre-wrap; font-size:12px; color:var(--lc-text);">{{ simulation_text }}</pre>
     </details>
   </div>
   {% endif %}

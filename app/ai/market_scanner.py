@@ -21,8 +21,11 @@ touches this data.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Callable, Optional
+
+logger = logging.getLogger(__name__)
 
 import pandas as pd
 
@@ -77,7 +80,9 @@ def fetch_symbol_bars(symbol: str, bar_fetcher: BarFetcher, h1_count: int = 300,
         h1 = bar_fetcher(symbol, 60, h1_count)
         m15 = bar_fetcher(symbol, 15, m15_count)
         if h1 is None or h1.empty:
-            return SymbolFetchResult(symbol=symbol, error="No H1 bars returned for this symbol.")
+            # v9.15: no bars from feed OR local datasets is a quiet
+            # skip, not a panel headline -- see rank_markets().
+            return SymbolFetchResult(symbol=symbol, error="no bars available")
         return SymbolFetchResult(symbol=symbol, h1=h1, m15=m15)
     except Exception as exc:
         return SymbolFetchResult(symbol=symbol, error=str(exc))
@@ -116,8 +121,12 @@ def rank_markets(
     fundamental_bias_by_symbol: dict[str, str] | None = None,
 ) -> tuple[list[MarketRanking], list[str]]:
     """Scans every symbol in `universe`, returns (rankings sorted best
-    first by T58 score then ATR-normalized move, list of per-symbol error
-    strings for anything that couldn't be fetched). macro_bias_by_symbol
+    first by T58 score then ATR-normalized move, errors). v9.15: a
+    symbol with no bars from any source (feed or local dataset) is
+    SKIPPED QUIETLY -- logged at debug, never added to `errors` -- so
+    per-symbol feed failures can never become the Best Markets panel
+    headline. `errors` is retained for API shape compatibility and
+    stays empty for ordinary no-data skips. macro_bias_by_symbol
     should come from app.ai.trading_assistant's macro read (see that
     module) -- defaults every symbol to "neutral" if not supplied, which
     will correctly keep every assessment at WAIT/PASS rather than
@@ -138,7 +147,10 @@ def rank_markets(
         for symbol in symbols:
             fetched = fetch_symbol_bars(symbol, bar_fetcher)
             if fetched.error or fetched.h1 is None or len(fetched.h1) < 60:
-                errors.append(f"{symbol}: {fetched.error or 'not enough bars returned'}")
+                logger.debug(
+                    "market_scanner: skipping %s (%s)",
+                    symbol, fetched.error or "not enough bars returned",
+                )
                 continue
             snapshot = t58.build_market_snapshot(
                 symbol=symbol,

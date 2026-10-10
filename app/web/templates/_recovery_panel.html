@@ -4,10 +4,10 @@
    the RecoveryPlan dict from app/funnel/recovery.py (see the status.json
    routes). All rendering is defensive: a malformed plan never breaks the
    page's poll loop. #}
-<div id="recovery-panel" style="display:none; margin-top:14px; border:1px solid var(--border-light); border-radius:10px; padding:14px; background:#101418;">
+<div id="recovery-panel" style="display:none; margin-top:14px; border:1px solid var(--lc-border, var(--border-light)); border-radius:10px; padding:14px; background:var(--lc-panel, #101418); color:var(--lc-text, inherit);">
   <div style="font-weight:700; font-size:15px; margin-bottom:6px;">&#129514; What to do next</div>
-  <div id="recovery-headline" style="font-size:13px; color:#ddd; margin-bottom:8px;"></div>
-  <div id="recovery-gate" style="font-size:12px; color:#9ab; margin-bottom:10px;"></div>
+  <div id="recovery-headline" style="font-size:13px; color:var(--lc-text, #ddd); margin-bottom:8px;"></div>
+  <div id="recovery-gate" style="font-size:12px; color:var(--lc-muted, #9ab); margin-bottom:10px;"></div>
   <div id="recovery-actions"></div>
 </div>
 <script>
@@ -104,12 +104,12 @@
       box.innerHTML = '';
       rec.actions.forEach((action, i) => {
         const card = document.createElement('div');
-        card.style.cssText = 'border:1px solid var(--border-light); border-radius:8px; padding:10px 12px; margin-bottom:8px; background:#0d1117;';
+        card.style.cssText = 'border:1px solid var(--lc-border, var(--border-light)); border-radius:8px; padding:10px 12px; margin-bottom:8px; background:var(--lc-panel2, #0d1117);';
         const head = document.createElement('div');
         head.style.cssText = 'font-weight:600; font-size:13px; margin-bottom:4px;';
         head.textContent = `${i + 1}. ${action.title || 'Next step'}`;
         const why = document.createElement('div');
-        why.style.cssText = 'font-size:12px; color:#aab; margin-bottom:8px;';
+        why.style.cssText = 'font-size:12px; color:var(--lc-muted, #aab); margin-bottom:8px;';
         why.textContent = action.rationale || '';
         card.appendChild(head);
         card.appendChild(why);

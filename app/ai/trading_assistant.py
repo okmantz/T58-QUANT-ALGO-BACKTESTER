@@ -443,11 +443,28 @@ def build_context(rankings: list, news_events: list, watchlist_symbols: list[str
     from app.ai import capability_reference
     from app.ai.market_scanner import ranking_to_dict
 
+    # v9.15: capability grounding must NEVER sink the context (Owen's
+    # compiled build raised OSError("could not get source code") here,
+    # which surfaced verbatim as the Basic Outlook). Degrade to empty
+    # capability lists -- the model then says "not confirmed" rather
+    # than the API leaking a raw exception.
+    try:
+        engine_capabilities = capability_reference.chat_capability_note()
+    except Exception:  # noqa: BLE001
+        engine_capabilities = {
+            "python_indicators_available": [],
+            "manual_json_condition_types": [],
+            "pinescript_ta_functions": [],
+            "pinescript_directives": [],
+            "mql5_indicator_functions": [],
+            "mql5_directives": [],
+        }
+
     ctx = {
         "best_markets": [ranking_to_dict(r) for r in rankings],
         "watchlist_symbols": watchlist_symbols or [],
         "market_structure": market_structure_by_symbol or {},
-        "engine_capabilities": capability_reference.chat_capability_note(),
+        "engine_capabilities": engine_capabilities,
         "upcoming_news": [
             {
                 "title": e.title,
@@ -603,30 +620,46 @@ class TradingAssistantClient:
         messages.append({"role": "user", "content": user_message})
         return messages
 
-    def _chat(self, system_prompt: str, user_message: str, history: list[dict] | None = None) -> tuple[str, str | None]:
+    def _chat(self, system_prompt: str, user_message: str, history: list[dict] | None = None,
+              total_timeout: float | None = None, stall_timeout: float | None = None,
+              first_token_timeout: float | None = None) -> tuple[str, str | None]:
         """Calls Ollama's /api/chat via the shared streaming transport
         (v9.14). Returns (reply, error) -- reply is "" and error is set
         on any failure, mirroring app.ai.ollama_client's fail-safe
         convention exactly; the error now carries the concrete reason
-        (unreachable / not pulled / stalled / over budget)."""
+        (unreachable / not pulled / stalled / over budget).
+
+        v9.15: optional per-call budgets are forwarded to the SAME
+        transport (no second timeout stack) -- the AI Director passes
+        tighter total/stall/first-token bounds so its panel always
+        reaches a terminal state instead of "Generating..." forever;
+        omitted values keep the transport's own defaults."""
         from app.ai import ollama_transport as transport
 
         if not self.settings.is_usable:
             return "", "Ollama isn't enabled/configured yet. Turn it on and set a host in AI Assistant settings."
 
         messages = self._build_messages(system_prompt, user_message, history)
+        kwargs: dict = {}
+        if stall_timeout is not None:
+            kwargs["stall_timeout"] = float(stall_timeout)
+        if first_token_timeout is not None:
+            kwargs["first_token_timeout"] = float(first_token_timeout)
         try:
             reply = transport.chat(
                 self.settings, messages,
                 keep_alive=ollama_settings.INTERACTIVE_KEEP_ALIVE,
                 options={"num_predict": self.DEFAULT_NUM_PREDICT},
-                total_timeout=float(self.timeout),
+                total_timeout=float(total_timeout) if total_timeout is not None else float(self.timeout),
+                **kwargs,
             )
             return reply, None
         except transport.OllamaError as exc:
             return "", str(exc)
 
-    def _chat_stream(self, system_prompt: str, user_message: str, history: list[dict] | None = None):
+    def _chat_stream(self, system_prompt: str, user_message: str, history: list[dict] | None = None,
+                     total_timeout: float | None = None, stall_timeout: float | None = None,
+                     first_token_timeout: float | None = None):
         """Generator form of _chat: yields reply text incrementally as
         Ollama produces it (stream=True against /api/chat, one JSON object
         per line -- see https://github.com/ollama/ollama/blob/main/docs/api.md#chat-request-streaming),
@@ -649,12 +682,18 @@ class TradingAssistantClient:
             return
 
         messages = self._build_messages(system_prompt, user_message, history)
+        kwargs: dict = {}
+        if stall_timeout is not None:
+            kwargs["stall_timeout"] = float(stall_timeout)
+        if first_token_timeout is not None:
+            kwargs["first_token_timeout"] = float(first_token_timeout)
         try:
             for piece in transport.stream_chat(
                 self.settings, messages,
                 keep_alive=ollama_settings.INTERACTIVE_KEEP_ALIVE,
                 options={"num_predict": self.DEFAULT_NUM_PREDICT},
-                total_timeout=float(self.timeout),
+                total_timeout=float(total_timeout) if total_timeout is not None else float(self.timeout),
+                **kwargs,
             ):
                 yield {"text": piece}
         except transport.OllamaError as exc:
@@ -855,16 +894,18 @@ class TradingAssistantClient:
             context, mode="personal",
         )
 
-    def director_briefing(self, director_user_message: str) -> tuple[str, str | None]:
+    def director_briefing(self, director_user_message: str, **budgets) -> tuple[str, str | None]:
         """Backs the AI Director panel -- see DIRECTOR_SYSTEM_PROMPT and
         app.ai.ai_director.build_director_prompt(), which builds
         `director_user_message`. Kept as its own method (rather than
         routed through ask()) because the Director has its own fixed
         system prompt and doesn't take a `mode` -- there's only one
-        Director briefing format, same reasoning as market_outlook()."""
-        return self._chat(DIRECTOR_SYSTEM_PROMPT, director_user_message)
+        Director briefing format, same reasoning as market_outlook().
+        `budgets` (total_timeout/stall_timeout/first_token_timeout) are
+        forwarded to the shared transport -- see _chat (v9.15)."""
+        return self._chat(DIRECTOR_SYSTEM_PROMPT, director_user_message, **budgets)
 
-    def director_briefing_stream(self, director_user_message: str):
+    def director_briefing_stream(self, director_user_message: str, **budgets):
         """Streaming twin of director_briefing() -- see _chat_stream's
         docstring for the yielded chunk shape."""
-        yield from self._chat_stream(DIRECTOR_SYSTEM_PROMPT, director_user_message)
+        yield from self._chat_stream(DIRECTOR_SYSTEM_PROMPT, director_user_message, **budgets)

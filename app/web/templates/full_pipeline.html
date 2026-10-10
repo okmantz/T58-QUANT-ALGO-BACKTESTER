@@ -18,8 +18,8 @@
   .lc-scope .checkbox-row input { width: auto; accent-color: var(--lc-acc); }
   .lc-scope .batch-strategy-list { max-height: 260px; overflow-y: auto; border: 1px solid var(--lc-border2); border-radius: 8px; padding: 8px 12px; }
   .lc-scope .batch-item { font-size: 13px; }
-  .lc-btn.batch { border-color: #7ee787; color: #7ee787; }
-  .lc-btn.schedule { border-color: #f5c451; color: #f5c451; }
+  .lc-btn.batch { border-color: var(--lc-acc); color: var(--lc-acc); }
+  .lc-btn.schedule { border-color: var(--lc-amber); color: var(--lc-amber); }
   .lc-subhead { font-size: 12px; letter-spacing: .8px; text-transform: uppercase; color: var(--lc-muted); margin: 16px 0 6px; font-weight: 700; }
 </style>
 </head>
@@ -326,22 +326,22 @@
       haveSource = true;
     }
     if (!haveSource) {
-      statusEl.style.color = '#ffcf7a';
+      statusEl.style.color = 'var(--lc-amber)';
       statusEl.textContent = 'Select a market data CSV or a stored dataset above first.';
       return;
     }
-    statusEl.style.color = '#888';
+    statusEl.style.color = 'var(--lc-muted)';
     statusEl.textContent = 'Detecting...';
     fetch('/data/detect-pip-size', { method: 'POST', body: fd })
       .then(r => r.json().then(data => ({ ok: r.ok, data })))
       .then(({ ok, data }) => {
         if (!ok || data.error) {
-          statusEl.style.color = '#ff9d9d';
+          statusEl.style.color = 'var(--lc-red)';
           statusEl.textContent = data.error || "Couldn't detect pip size.";
           return;
         }
         if (data.warning) {
-          statusEl.style.color = '#ff9d9d';
+          statusEl.style.color = 'var(--lc-red)';
           statusEl.style.fontWeight = 'bold';
           statusEl.textContent = '!!! ' + data.warning;
           return;
@@ -352,12 +352,12 @@
         if (cEl && data.contract_size != null && !cEl.value) cEl.value = data.contract_size;
         const comEl = document.getElementById('fp_commission_field');
         if (comEl && data.commission != null && (comEl.value === '' || comEl.value === '0' || comEl.value === '0.0')) comEl.value = data.commission;
-        statusEl.style.color = '#b4ffcb';
+        statusEl.style.color = 'var(--lc-acc)';
         statusEl.style.fontWeight = 'normal';
         statusEl.textContent = (data.symbol ? 'Detected ' + data.symbol + ' -- ' : '') + data.message;
       })
       .catch(err => {
-        statusEl.style.color = '#ff9d9d';
+        statusEl.style.color = 'var(--lc-red)';
         statusEl.textContent = "Couldn't detect: " + err;
       });
   }
@@ -497,7 +497,7 @@
       });
     });
     if (!any) {
-      container.innerHTML = '<p style="font-size:13px;color:#999;">No saved strategies yet -- save one from the Strategy picker above (or run Evolution Lab / Search Lab) before using the batch button.</p>';
+      container.innerHTML = '<p style="font-size:13px;color:var(--lc-muted);">No saved strategies yet -- save one from the Strategy picker above (or run Evolution Lab / Search Lab) before using the batch button.</p>';
     }
   })();
 

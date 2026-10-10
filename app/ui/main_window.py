@@ -11292,7 +11292,7 @@ class MainWindow:
         # ================= SECURITY =================
         security_section = self._section(
             f, "Security",
-            "An OPTIONAL local app lock -- useful mainly if you use Phone Access on a shared "
+            "An OPTIONAL local app lock -- useful mainly if you use Mobile Access on a shared "
             "Wi-Fi, since it's the same lock the web app's own Account Settings page sets. The "
             "desktop app itself has no login session of its own to lock or log out of.",
             emphasize=True,
@@ -11460,13 +11460,13 @@ class MainWindow:
 
         # The desktop app has no login session of its own -- unlike the web
         # app (which gates browser access behind session["t58_unlocked"]
-        # for Phone Access), there's nothing here to actually log out of.
+        # for Mobile Access), there's nothing here to actually log out of.
         # Stated plainly rather than pretending this button does something
         # it can't, matching this app's own honest-about-its-limits style.
         if load_account_settings().has_password:
             self.acct_security_status.config(
                 text="The desktop app has no login session to log out of. Your local app lock "
-                     "password still gates Phone Access (the web app running on this machine) "
+                     "password still gates Mobile Access (the web app running on this machine) "
                      "the same as before.",
                 fg=TEXT_MUTED,
             )

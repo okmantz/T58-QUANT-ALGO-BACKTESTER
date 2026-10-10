@@ -189,7 +189,21 @@ _TOOLS = [
 
 @quant_lab_bp.route("/")
 def index():
-    return render_template("quant_lab_index.html", tools=_TOOLS)
+    # v9.15 (Owen): the Quant Lab "what this section is for" explainer
+    # moved here from the removed /start-here/quantlab page -- same
+    # shared guide data (app.orchestration.section_guides), rendered as
+    # an intro block on the Quant Lab page itself.
+    from app.orchestration.section_guides import SECTION_GUIDES
+
+    guide = SECTION_GUIDES.get("quantlab", {})
+    return render_template(
+        "quant_lab_index.html", tools=_TOOLS,
+        what_this_is={
+            "tagline": guide.get("tagline", ""),
+            "description": guide.get("description", ""),
+            "roadmap": guide.get("roadmap", []),
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

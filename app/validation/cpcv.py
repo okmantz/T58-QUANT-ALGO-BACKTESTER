@@ -135,6 +135,72 @@ class CPCVResult:
         return d
 
 
+def _cpcv_path_frames(df: pd.DataFrame, bounds, embargo: int, test_groups):
+    """(train_df, test_df) for one CPCV path -- the exact slicing the
+    serial loop has always done (embargo-trimmed group slices, test
+    groups concatenated in group order, train likewise)."""
+    test_group_set = set(test_groups)
+    test_frames, train_frames = [], []
+    n = len(df)
+    for g, (lo, hi) in enumerate(bounds):
+        if g in test_group_set:
+            test_frames.append(_slice_with_embargo(df, lo, hi, embargo, n))
+        else:
+            train_frames.append(_slice_with_embargo(df, lo, hi, embargo, n))
+    test_df = pd.concat(test_frames, ignore_index=True) if test_frames else df.iloc[0:0]
+    train_df = pd.concat(train_frames, ignore_index=True) if train_frames else df.iloc[0:0]
+    return train_df, test_df
+
+
+def _cpcv_one_path(path_idx, test_groups, df, bounds, embargo, strategy_builder, risk, metric, prop_rules, mc_cfg):
+    """One CPCV path: fresh train/test strategies, two backtests, two
+    metric reads. Returns None when the path's slices are too thin --
+    exactly the serial loop's `continue`. Pure function of its inputs,
+    so serial and worker execution produce identical CPCVPathResults."""
+    train_df, test_df = _cpcv_path_frames(df, bounds, embargo, test_groups)
+    if len(test_df) < 5 or len(train_df) < 10:
+        return None
+    train_bt = run_backtest(train_df, strategy_builder(), risk)
+    test_bt = run_backtest(test_df, strategy_builder(), risk)
+    is_val = _metric_value(train_bt.statistics.to_dict(), metric, train_bt.trades, prop_rules, mc_cfg)
+    oos_val = _metric_value(test_bt.statistics.to_dict(), metric, test_bt.trades, prop_rules, mc_cfg)
+    return CPCVPathResult(
+        path_index=path_idx,
+        test_group_indices=tuple(test_groups),
+        train_bars=len(train_df),
+        test_bars=len(test_df),
+        in_sample_metric=is_val,
+        out_of_sample_metric=oos_val,
+    )
+
+
+# v9.15 (WS-F): worker state/task for parallel run_cpcv. The builder
+# lambda other callers pass is not picklable under spawn, so parallel
+# execution is spec-driven: workers rebuild the strategy from
+# `strategy_spec` per path (uuid-named candidate files make concurrent
+# builds in one tmp_dir safe -- see build_strategy_from_spec).
+_CPCV_WORKER: dict = {}
+
+
+def _cpcv_worker_init(df, bounds, embargo, risk, metric, prop_rules, mc_cfg, strategy_spec, tmp_dir) -> None:
+    global _CPCV_WORKER
+    _CPCV_WORKER = {
+        "df": df, "bounds": bounds, "embargo": embargo, "risk": risk,
+        "metric": metric, "prop_rules": prop_rules, "mc_cfg": mc_cfg,
+        "spec": strategy_spec, "tmp_dir": tmp_dir,
+    }
+
+
+def _cpcv_worker_task(task):
+    path_idx, test_groups = task
+    w = _CPCV_WORKER
+    return path_idx, _cpcv_one_path(
+        path_idx, test_groups, w["df"], w["bounds"], w["embargo"],
+        lambda: build_strategy_from_spec(w["spec"], w["tmp_dir"]),
+        w["risk"], w["metric"], w["prop_rules"], w["mc_cfg"],
+    )
+
+
 def run_cpcv(
     df: pd.DataFrame,
     strategy_builder,
@@ -147,12 +213,24 @@ def run_cpcv(
     max_paths: int | None = 30,
     prop_rules=None,
     mc_cfg=None,
+    strategy_spec=None,
+    tmp_dir=None,
+    max_workers: int | None = None,
 ) -> CPCVResult:
     """
     strategy_builder: zero-argument callable returning a FRESH Strategy
     instance each call (same convention as app.search.robustness.
     run_walk_forward) -- required because some strategy sources cache
     state keyed to the data they last saw.
+
+    strategy_spec / tmp_dir / max_workers (v9.15, WS-F): when a
+    candidate spec is supplied and max_workers > 1, paths evaluate
+    across a process pool (workers rebuild from the spec; the builder
+    is not used). Paths are independent and results are collected by
+    path index, so the CPCVResult is identical to the serial run --
+    same paths, same order, same metrics. Any pool failure falls back
+    to the serial builder loop for every path. Without a spec, this
+    runs exactly as before (spawn cannot pickle builder closures).
     """
     risk = build_run_context(risk, prop_rules)
     if metric == "eval_pass_probability" and prop_rules is None:
@@ -175,34 +253,56 @@ def run_cpcv(
         idx = rng.choice(len(all_combos), size=max_paths, replace=False)
         all_combos = [all_combos[i] for i in sorted(idx)]
 
+    # v9.15 (WS-F): spec-driven parallel path evaluation. Indexed
+    # collection keeps `paths` in combo order (thin paths omitted,
+    # exactly as the serial loop's `continue` omits them); any pool
+    # failure falls back to the serial loop for ALL paths, so a broken
+    # pool can never change the result, only the speed.
+    path_results: list = [None] * len(all_combos)
+    _want_cpcv_parallel = (
+        strategy_spec is not None and max_workers is not None
+        and int(max_workers) > 1 and len(all_combos) > 1
+    )
+    if _want_cpcv_parallel:
+        try:
+            import multiprocessing
+            from concurrent.futures import ProcessPoolExecutor
+
+            from app.orchestration.resource_guard import safe_worker_count
+
+            workers = safe_worker_count(
+                df, requested=int(max_workers), max_candidates_in_flight=len(all_combos))
+            if workers > 1:
+                ctx = multiprocessing.get_context("spawn")
+                with ProcessPoolExecutor(
+                    max_workers=workers, mp_context=ctx,
+                    initializer=_cpcv_worker_init,
+                    initargs=(df, bounds, embargo, risk, metric, prop_rules, mc_cfg,
+                              strategy_spec, str(tmp_dir) if tmp_dir is not None else None),
+                ) as pool:
+                    for _pi, _res in pool.map(_cpcv_worker_task, list(enumerate(all_combos))):
+                        path_results[_pi] = _res
+        except Exception:  # noqa: BLE001 -- serial below is the same math
+            path_results = [None] * len(all_combos)
+
     paths: list[CPCVPathResult] = []
     for path_idx, test_groups in enumerate(all_combos):
-        test_group_set = set(test_groups)
-        test_frames, train_frames = [], []
-        for g, (lo, hi) in enumerate(bounds):
-            if g in test_group_set:
-                test_frames.append(_slice_with_embargo(df, lo, hi, embargo, n))
-            else:
-                train_frames.append(_slice_with_embargo(df, lo, hi, embargo, n))
-
-        test_df = pd.concat(test_frames, ignore_index=True) if test_frames else df.iloc[0:0]
-        train_df = pd.concat(train_frames, ignore_index=True) if train_frames else df.iloc[0:0]
-        if len(test_df) < 5 or len(train_df) < 10:
-            continue
-
-        train_bt = run_backtest(train_df, strategy_builder(), risk)
-        test_bt = run_backtest(test_df, strategy_builder(), risk)
-        is_val = _metric_value(train_bt.statistics.to_dict(), metric, train_bt.trades, prop_rules, mc_cfg)
-        oos_val = _metric_value(test_bt.statistics.to_dict(), metric, test_bt.trades, prop_rules, mc_cfg)
-
-        paths.append(CPCVPathResult(
-            path_index=path_idx,
-            test_group_indices=tuple(test_groups),
-            train_bars=len(train_df),
-            test_bars=len(test_df),
-            in_sample_metric=is_val,
-            out_of_sample_metric=oos_val,
-        ))
+        _one = path_results[path_idx]
+        if _one is None and not _want_cpcv_parallel:
+            _one = _cpcv_one_path(path_idx, test_groups, df, bounds, embargo,
+                                  strategy_builder, risk, metric, prop_rules, mc_cfg)
+        elif _one is None and _want_cpcv_parallel:
+            # Parallel ran but this path was thin (worker returned
+            # None) OR the pool failed and path_results was reset --
+            # recompute serially only when the pool never produced a
+            # result for ANY path (distinguishable: a thin path also
+            # yields None serially, so recomputing thin paths is both
+            # safe and identical; a failed pool needs the full serial
+            # pass, which this per-path recompute also delivers).
+            _one = _cpcv_one_path(path_idx, test_groups, df, bounds, embargo,
+                                  strategy_builder, risk, metric, prop_rules, mc_cfg)
+        if _one is not None:
+            paths.append(_one)
 
     if not paths:
         raise CPCVError("No CPCV path produced enough train/test bars to evaluate.")
@@ -254,16 +354,23 @@ class PBOResult:
         return dict(self.__dict__)
 
 
-def _evaluate_pbo_path(task: dict):
-    """One CSCV path of compute_pbo: rank every candidate in-sample and
-    out-of-sample. Top-level so ProcessPoolExecutor can pickle it.
-    Returns (path_idx, is_vals, oos_vals), or None when the path's
-    slices have too few bars."""
-    df = task["df"]
-    bounds = task["bounds"]
-    embargo = task["embargo"]
+# v9.15 (WS-F): compute_pbo worker state. The serial/legacy task dict
+# carried the WHOLE dataframe per path, so pool.map pickled a full copy
+# of the frame for every CPCV path (10 paths x a multi-hundred-MB frame
+# on 1m data). The frame (and every other path-invariant input) now
+# rides the worker initializer once per worker; tasks are just
+# (path_idx, test_groups). The per-path math is _evaluate_pbo_path's
+# own body, shared verbatim via _pbo_path_values.
+_PBO_WORKER: dict = {}
+
+
+def _pbo_path_values(df, bounds, embargo, test_groups, candidate_specs, risk, metric, prop_rules, mc_cfg, tmp_dir):
+    """(is_vals, oos_vals) for one PBO path, or None when the path's
+    slices have too few bars. Extracted verbatim from
+    _evaluate_pbo_path so the serial fallback and the worker can never
+    drift apart."""
     n = len(df)
-    test_group_set = set(task["test_groups"])
+    test_group_set = set(test_groups)
     test_frames, train_frames = [], []
     for g, (lo, hi) in enumerate(bounds):
         if g in test_group_set:
@@ -276,19 +383,55 @@ def _evaluate_pbo_path(task: dict):
         return None
 
     is_vals, oos_vals = [], []
-    for spec in task["candidate_specs"]:
+    for spec in candidate_specs:
         try:
-            train_strategy = build_strategy_from_spec(spec, task["tmp_dir"])
-            test_strategy = build_strategy_from_spec(spec, task["tmp_dir"])
+            train_strategy = build_strategy_from_spec(spec, tmp_dir)
+            test_strategy = build_strategy_from_spec(spec, tmp_dir)
         except StrategySpaceError:
             is_vals.append(0.0)
             oos_vals.append(0.0)
             continue
-        train_bt = run_backtest(train_df, train_strategy, task["risk"])
-        test_bt = run_backtest(test_df, test_strategy, task["risk"])
-        is_vals.append(_metric_value(train_bt.statistics.to_dict(), task["metric"], train_bt.trades, task["prop_rules"], task["mc_cfg"]))
-        oos_vals.append(_metric_value(test_bt.statistics.to_dict(), task["metric"], test_bt.trades, task["prop_rules"], task["mc_cfg"]))
-    return task["path_idx"], is_vals, oos_vals
+        train_bt = run_backtest(train_df, train_strategy, risk)
+        test_bt = run_backtest(test_df, test_strategy, risk)
+        is_vals.append(_metric_value(train_bt.statistics.to_dict(), metric, train_bt.trades, prop_rules, mc_cfg))
+        oos_vals.append(_metric_value(test_bt.statistics.to_dict(), metric, test_bt.trades, prop_rules, mc_cfg))
+    return is_vals, oos_vals
+
+
+def _pbo_worker_init(df, bounds, embargo, candidate_specs, risk, metric, prop_rules, mc_cfg, tmp_dir) -> None:
+    global _PBO_WORKER
+    _PBO_WORKER = {
+        "df": df, "bounds": bounds, "embargo": embargo,
+        "candidate_specs": candidate_specs, "risk": risk, "metric": metric,
+        "prop_rules": prop_rules, "mc_cfg": mc_cfg, "tmp_dir": tmp_dir,
+    }
+
+
+def _pbo_worker_task(task):
+    path_idx, test_groups = task
+    w = _PBO_WORKER
+    vals = _pbo_path_values(
+        w["df"], w["bounds"], w["embargo"], test_groups, w["candidate_specs"],
+        w["risk"], w["metric"], w["prop_rules"], w["mc_cfg"], w["tmp_dir"],
+    )
+    if vals is None:
+        return path_idx, None, None
+    return path_idx, vals[0], vals[1]
+
+
+def _evaluate_pbo_path(task: dict):
+    """One CSCV path of compute_pbo: rank every candidate in-sample and
+    out-of-sample. Top-level so ProcessPoolExecutor can pickle it.
+    Returns (path_idx, is_vals, oos_vals), or None when the path's
+    slices have too few bars."""
+    vals = _pbo_path_values(
+        task["df"], task["bounds"], task["embargo"], task["test_groups"],
+        task["candidate_specs"], task["risk"], task["metric"],
+        task["prop_rules"], task["mc_cfg"], task["tmp_dir"],
+    )
+    if vals is None:
+        return None
+    return task["path_idx"], vals[0], vals[1]
 
 
 def compute_pbo(
@@ -302,6 +445,7 @@ def compute_pbo(
     max_paths: int | None = 30,
     prop_rules=None,
     mc_cfg=None,
+    max_workers: int | None = None,
 ) -> PBOResult:
     """
     candidate_specs: the same uniform candidate-spec dicts used throughout
@@ -362,6 +506,15 @@ def compute_pbo(
         # evaluate across a process pool. Results are re-keyed by
         # path_idx, making the aggregate bit-identical to the serial
         # loop; any pool failure falls back to serial for ALL paths.
+        # v9.15 (WS-F): the frame and other path-invariant inputs ride
+        # the worker initializer ONCE per worker instead of being
+        # pickled into every path's task (the old task dict carried a
+        # full copy of `df` per path), and the worker count is capped
+        # by the same memory guard the rest of the app uses (the old
+        # code used raw os.cpu_count() regardless of frame size).
+        # `max_workers` (optional) lets a caller thread its own memory-
+        # safe budget through; None keeps the previous cpu-count cap as
+        # the requested upper bound before the memory guard applies.
         tasks = [
             {
                 "path_idx": _pi, "df": df, "bounds": bounds,
@@ -375,13 +528,28 @@ def compute_pbo(
         path_results: list = [None] * len(tasks)
         if len(tasks) > 1:
             try:
+                import multiprocessing
                 from concurrent.futures import ProcessPoolExecutor
 
-                workers = min(len(tasks), os.cpu_count() or 1)
+                from app.orchestration.resource_guard import safe_worker_count
+
+                requested = int(max_workers) if max_workers else (os.cpu_count() or 1)
+                workers = safe_worker_count(
+                    df, requested=min(requested, len(tasks)),
+                    max_candidates_in_flight=len(tasks))
                 if workers > 1:
-                    with ProcessPoolExecutor(max_workers=workers) as pool:
-                        for _pi, _isv, _oosv in pool.map(_evaluate_pbo_path, tasks):
-                            path_results[_pi] = (_isv, _oosv)
+                    ctx = multiprocessing.get_context("spawn")
+                    with ProcessPoolExecutor(
+                        max_workers=workers, mp_context=ctx,
+                        initializer=_pbo_worker_init,
+                        initargs=(df, bounds, embargo, candidate_specs, risk,
+                                  metric, prop_rules, mc_cfg,
+                                  str(tmp_dir) if tmp_dir is not None else None),
+                    ) as pool:
+                        light_tasks = [(t["path_idx"], t["test_groups"]) for t in tasks]
+                        for _pi, _isv, _oosv in pool.map(_pbo_worker_task, light_tasks):
+                            if _isv is not None:
+                                path_results[_pi] = (_isv, _oosv)
             except Exception:  # noqa: BLE001 -- serial below is the same math
                 path_results = [None] * len(tasks)
         for _i, _task in enumerate(tasks):

@@ -49,6 +49,20 @@ _CACHE_TTL_RANKINGS = 60   # seconds -- bounds how often we hammer the MT5/Alpac
 _CACHE_TTL_STRUCTURE = 300  # seconds -- daily-bar BOS/ChoCH/Wyckoff facts don't change within a minute
 _cache: dict = {}
 
+# v9.15: AI Director budgets. The panel used to sit on "Loading... /
+# Generating..." indefinitely because this path stacked an unbounded
+# sequential market scan (per-symbol feed attempts in
+# app.ai.market_intelligence, each now individually bounded there)
+# in front of a 600s Ollama completion. Each half now has its own
+# finite budget, enforced through the SHARED transport's own timeout
+# parameters (no second timeout stack): on expiry the endpoint still
+# returns the deterministic directive list plus the transport's named
+# error, so the UI always reaches a terminal state.
+DIRECTOR_RANKINGS_TIMEOUT_S = 25.0
+DIRECTOR_OLLAMA_TOTAL_TIMEOUT_S = 45.0
+DIRECTOR_OLLAMA_STALL_TIMEOUT_S = 15.0
+DIRECTOR_OLLAMA_FIRST_TOKEN_TIMEOUT_S = 20.0
+
 
 def _json_safe(view):
     """BUGFIX (Sep 2026): every route in this blueprint used to have zero
@@ -361,6 +375,35 @@ def api_outlook():
     return jsonify({"text": text, "error": None})
 
 
+def _rankings_within_budget():
+    """Today's rankings, or ([], honest-note) if the scan doesn't
+    finish within DIRECTOR_RANKINGS_TIMEOUT_S. The scan keeps running
+    in its worker (and populates the shared rankings cache when it
+    lands); the Director simply stops waiting on it and computes its
+    deterministic list without today's market-alignment bonus rather
+    than hanging the panel. This is a wait bound on OUR scan, not a
+    new data/Ollama timeout stack."""
+    import concurrent.futures
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="t58-director-scan")
+    try:
+        future = executor.submit(_cached, "rankings", _CACHE_TTL_RANKINGS, _compute_rankings)
+        rankings, _errors = future.result(timeout=DIRECTOR_RANKINGS_TIMEOUT_S)
+        return rankings, None
+    except concurrent.futures.TimeoutError:
+        return [], (
+            f"Best Markets scan didn't finish within {DIRECTOR_RANKINGS_TIMEOUT_S:.0f}s -- "
+            "showing the library priority list without today's market alignment."
+        )
+    except Exception:  # noqa: BLE001 -- a scan failure degrades the same way
+        return [], "Best Markets scan was unavailable -- showing the library priority list without today's market alignment."
+    finally:
+        try:
+            executor.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            executor.shutdown(wait=False)
+
+
 def _compute_director_directives():
     """Shared by /api/director and /api/director/stream. Surveys the
     WHOLE Strategy Library (all three languages) plus today's Best
@@ -368,7 +411,11 @@ def _compute_director_directives():
     app.ai.ai_director for the deterministic scoring itself. Never
     raises: a library/DB read failure just means an empty directive list
     (the deterministic text below already handles that gracefully),
-    never a 500 for the panel."""
+    never a 500 for the panel.
+
+    v9.15: returns a third value, `scan_note` -- None when the market
+    scan landed in budget, otherwise an honest note that directives
+    were computed without it."""
     from app.ai import experiment_memory
     from app.strategy import library
 
@@ -376,14 +423,24 @@ def _compute_director_directives():
         strategies = library.list_saved_strategies()
     except Exception:
         strategies = []
-    rankings, _errors = _cached("rankings", _CACHE_TTL_RANKINGS, _compute_rankings)
+    rankings, scan_note = _rankings_within_budget()
     ranking_dicts = [market_scanner.ranking_to_dict(r) for r in rankings] if rankings else []
     try:
         memory_counts = experiment_memory.get_summary_counts()
     except Exception:
         memory_counts = {"total": 0, "by_verdict": {}, "top_strategies": {}}
     directives = ai_director.compute_directives(strategies, rankings=ranking_dicts)
-    return directives, memory_counts
+    return directives, memory_counts, scan_note
+
+
+def _director_budgets() -> dict:
+    """The Director's Ollama budgets, forwarded to the shared v9.14
+    transport via TradingAssistantClient (see module constants)."""
+    return {
+        "total_timeout": DIRECTOR_OLLAMA_TOTAL_TIMEOUT_S,
+        "stall_timeout": DIRECTOR_OLLAMA_STALL_TIMEOUT_S,
+        "first_token_timeout": DIRECTOR_OLLAMA_FIRST_TOKEN_TIMEOUT_S,
+    }
 
 
 @ai_assistant_bp.route("/api/director")
@@ -394,8 +451,10 @@ def api_director():
     app.strategy.library / app.ai.market_scanner / app.ai.experiment_memory);
     appends Ollama's narrative briefing on top only if it's enabled/
     reachable -- identical fallback posture to /api/outlook."""
-    directives, memory_counts = _compute_director_directives()
+    directives, memory_counts, scan_note = _compute_director_directives()
     deterministic = ai_director.build_deterministic_briefing(directives, memory_counts)
+    if scan_note:
+        deterministic += f"\n\n({scan_note})"
     payload = {"directives": [d.to_dict() for d in directives], "memory_counts": memory_counts}
 
     settings = load_ollama_settings()
@@ -407,7 +466,7 @@ def api_director():
 
     client = trading_assistant.TradingAssistantClient(settings)
     user_message = ai_director.build_director_prompt(directives, memory_counts)
-    reply, error = client.director_briefing(user_message)
+    reply, error = client.director_briefing(user_message, **_director_budgets())
     if error:
         text = deterministic + f"\n\n(Ollama narrative unavailable: {error})"
     else:
@@ -424,7 +483,7 @@ def api_director_stream():
     expected to have already rendered the deterministic list from a
     prior /api/director call before triggering this; this endpoint only
     ever streams the narrative briefing text."""
-    directives, memory_counts = _compute_director_directives()
+    directives, memory_counts, _scan_note = _compute_director_directives()
     settings = load_ollama_settings()
     if not settings.is_usable:
         def generate_off():
@@ -437,7 +496,11 @@ def api_director_stream():
 
     def generate():
         import json as _json
-        for chunk in client.director_briefing_stream(user_message):
+        # Bounded by the shared transport's stall/first-token/total
+        # deadlines (see _director_budgets): a stalled model yields
+        # one terminal {"error": "...named cause..."} chunk instead
+        # of the browser's "Generating..." spinning forever.
+        for chunk in client.director_briefing_stream(user_message, **_director_budgets()):
             yield _json.dumps(chunk) + "\n"
 
     return Response(generate(), mimetype="application/x-ndjson")

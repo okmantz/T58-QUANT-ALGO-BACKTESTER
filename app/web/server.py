@@ -152,6 +152,7 @@ from app.prop.recommender import recommend_prop_firms, render_recommendation_tab
 from app.prop.scaling import ScalingPlan, run_scaling_stress_test
 from app.prop.survival_engine import PropSurvivalConfig, ResetEconomics, run_prop_survival_analysis
 from app.reports.generator import generate_full_report
+from app.reports.mc_headline import monte_carlo_headline
 from app.reports.crash_log import install_thread_excepthook, log_crash
 from app.reports.refinement_report import generate_refinement_report
 from app.reports.survival_report import generate_survival_report
@@ -1760,8 +1761,10 @@ def _dispatch_validation_checks(df, strategy, risk, rules, checks, form, baselin
                     raise ValueError("Baseline backtest produced no trades to resample.")
                 mc = run_monte_carlo(baseline_trades, rules, MonteCarloConfig(n_simulations=mc_sims))
                 summary = {
-                    "evaluation_pass_probability": mc.evaluation_pass_probability,
-                    "first_payout_probability": mc.first_payout_probability,
+                    "evaluation_pass_probability": mc.headline_evaluation_pass_probability,
+                    "first_payout_probability": mc.headline_first_payout_probability,
+                    "any_attempt_evaluation_pass_probability": mc.evaluation_pass_probability,
+                    "any_attempt_first_payout_probability": mc.first_payout_probability,
                     "risk_of_ruin_pct": mc.risk_of_ruin_pct,
                     "expected_payout": mc.expected_payout,
                     "n_simulations": mc.n_simulations,
@@ -3192,8 +3195,8 @@ def run_pipeline():
                 "max_dd": bt_result.statistics.max_drawdown_pct,
                 "passed_eval": single_run.passed_evaluation,
                 "reached_payout": single_run.reached_first_payout,
-                "eval_pass_prob": mc_result.evaluation_pass_probability,
-                "first_payout_prob": mc_result.first_payout_probability,
+                "eval_pass_prob": mc_result.headline_evaluation_pass_probability,
+                "first_payout_prob": mc_result.headline_first_payout_probability,
                 "risk_of_ruin": mc_result.risk_of_ruin_pct,
                 "expected_payout": mc_result.expected_payout,
                 "n_sims": mc_result.n_simulations,
@@ -3670,11 +3673,20 @@ def support_page():
 # section is for" framing rather than getting a second, separate page.
 from app.orchestration.section_guides import SECTION_GUIDES as _SECTION_START_HERE  # shared with the desktop app
 
+# v9.15 (Owen): the Quant Lab and Account "Start Here" pages are
+# removed from the WEB app -- the Quant Lab explainer now lives on the
+# Quant Lab page itself (app.web.quant_lab_routes.index passes it as
+# `what_this_is`), and the Account section's links stand on their own.
+# The shared SECTION_GUIDES data itself stays untouched: the desktop
+# app still renders its own Start Here pages for these sections from
+# the same data (DESKTOP_SECTIONS in app.orchestration.section_guides).
+_WEB_REMOVED_START_HERE = frozenset({"quantlab", "account"})
+
 
 @app.route("/start-here/<section>")
 def section_start_here(section):
     data = _SECTION_START_HERE.get(section)
-    if data is None:
+    if data is None or section in _WEB_REMOVED_START_HERE:
         return render_template("support.html", active_page="support"), 404
     extra: dict = {}
     if section == "create":
@@ -4763,6 +4775,10 @@ def _run_fullpipeline_job(
     cancel_event: threading.Event | None = None, notify_webhook_url: str | None = None,
 ) -> None:
     tracker, _progress_hook, _baseline_ready_cb = _fp_job_hooks(job_id)
+    # v9.15: stash the exact risk/rules this run uses so the finished
+    # page's recovery plan (and a one-click Quick Optimize launched from
+    # it) runs under the SAME risk setup instead of dataclass defaults.
+    JOB_MANAGER.update(job_id, risk=risk, rules=rules)
     try:
         result = run_full_pipeline(
             df, strategy, risk, rules, FULL_PIPELINE_DIR, cfg,
@@ -5545,6 +5561,7 @@ def full_pipeline_job_status(job_id):
     result = job.get("result")
     summary = None
     if result is not None:
+        _mch = monte_carlo_headline(result.final_mc.to_dict())
         summary = {
             "verdict": result.verdict,
             "verdict_reasons": result.verdict_reasons,
@@ -5554,8 +5571,20 @@ def full_pipeline_job_status(job_id):
             "final_net_profit": result.final_bt.statistics.net_profit,
             "final_win_rate": result.final_bt.statistics.win_rate,
             "final_max_dd": result.final_bt.statistics.max_drawdown_pct,
-            "eval_pass_probability": result.final_mc.evaluation_pass_probability,
-            "first_payout_probability": result.final_mc.first_payout_probability,
+            # v9.15: per-attempt headline (the gate metric) from the ONE
+            # canonical derivation (app.reports.mc_headline) -- the same
+            # numbers the report and Dashboard show. The chain-level
+            # pair rides along under explicit any_attempt_* names; the
+            # page labels them "any attempt in chain", never as the
+            # headline. (Was: raw evaluation_pass_probability -- the
+            # chain figure, 90.0% on Owen's NQ run vs the report's
+            # per-attempt 8.7%.)
+            "eval_pass_probability": _mch["eval_pass_probability"],
+            "eval_pass_ci95": _mch["eval_pass_ci95"],
+            "first_payout_probability": _mch["first_payout_probability"],
+            "first_payout_ci95": _mch["first_payout_ci95"],
+            "any_attempt_eval_pass_probability": _mch["any_attempt_eval_pass_probability"],
+            "any_attempt_first_payout_probability": _mch["any_attempt_first_payout_probability"],
             "risk_of_ruin_pct": result.final_mc.risk_of_ruin_pct,
             "refinement_ran": result.refinement_ran,
             "refinement_skip_reason": result.refinement_skip_reason,
@@ -5598,9 +5627,13 @@ def full_pipeline_job_status(job_id):
             if result is not None else None
         ),
         # v9: structured recovery plan (gate, margin, ordered concrete actions).
+        # v9.15: pass the run's own risk/rules so one-click follow-ups
+        # (Quick Optimize above all) inherit this run's risk setup.
         "recovery": (
             _safe_recovery(funnel_recovery.diagnose_pipeline,
-                           result, dataset_label=job.get("instrument", "") or "")
+                           result, dataset_label=job.get("instrument", "") or "",
+                           risk=_job_risk_rules_dicts(job)[0],
+                           rules=_job_risk_rules_dicts(job)[1])
             if result is not None else None
         ),
     })
@@ -6788,7 +6821,7 @@ def ensemble_run():
             return render_template("ensemble.html", **ctx(result={
                 "mode": "vote", "legs": names, "trades": len(bt_result.trades),
                 "net_profit": bt_result.statistics.net_profit, "max_dd": bt_result.statistics.max_drawdown_pct,
-                "eval_pass_probability": mc_result.evaluation_pass_probability,
+                "eval_pass_probability": mc_result.headline_evaluation_pass_probability,
                 "report_html": f"/ensemble_reports/{Path(paths['html']).name}",
                 "report_json": f"/ensemble_reports/{Path(paths['json']).name}",
             }), **_alpaca_template_context())
@@ -7543,6 +7576,9 @@ def _run_quickopt_job(
 ) -> None:
     with _QUICKOPT_ACTIVE_LOCK:
         _QUICKOPT_ACTIVE_JOB_IDS.add(job_id)
+    # v9.15: same risk/rules stash as the Full Pipeline runner, so this
+    # job's own recovery panel inherits its real risk setup too.
+    JOB_MANAGER.update(job_id, risk=risk, rules=rules)
     try:
         result = run_quick_optimize(
             df, strategy, risk, rules, cfg, progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
@@ -7786,9 +7822,12 @@ def quickopt_job_status(job_id):
         "log": job["log"], "instrument": job.get("instrument"), "summary": summary,
         "best_timeframe": job.get("best_timeframe"), "sweep_timeframes": job.get("sweep_timeframes"),
         # v9: structured recovery plan for the Quick Optimize result.
+        # v9.15: pass the run's own risk/rules (see the pipeline status).
         "recovery": (
             _safe_recovery(funnel_recovery.diagnose_quickopt,
-                           result, dataset_label=job.get("instrument", "") or "")
+                           result, dataset_label=job.get("instrument", "") or "",
+                           risk=_job_risk_rules_dicts(job)[0],
+                           rules=_job_risk_rules_dicts(job)[1])
             if (job["done"] and result is not None) else None
         ),
     })
@@ -7801,12 +7840,40 @@ def quickopt_job_status(job_id):
 # ---------------------------------------------------------------------------
 
 def _dataclass_from_dict(cls, data: dict):
-    """Build a dataclass from a JSON dict, ignoring unknown keys."""
+    """Build a dataclass from a JSON dict, ignoring unknown keys.
+
+    v9.15: `cls` must be a dataclass TYPE. This module shadows the name
+    `RiskConfig` with a request-aware factory function (see the top of
+    this file), and the recovery route below used to pass that function
+    here -- dataclasses.fields() then died with the cryptic
+    "must be called with a dataclass type or instance" (Owen's
+    'Could not start Quick Optimize' alert, 2026-10-10). Fail loudly
+    and by name instead so a shadowed name can never turn into that
+    opaque 500 again."""
     import dataclasses
+    if not (isinstance(cls, type) and dataclasses.is_dataclass(cls)):
+        raise TypeError(
+            f"_dataclass_from_dict expected a dataclass type, got {cls!r}. "
+            "If this is the module-level RiskConfig factory, pass "
+            "_BaseRiskConfig (the real dataclass) instead.")
     if not isinstance(data, dict):
         return cls()
     known = {f.name for f in dataclasses.fields(cls)}
     return cls(**{k: v for k, v in data.items() if k in known})
+
+
+def _job_risk_rules_dicts(job) -> tuple[dict, dict]:
+    """v9.15: the (risk, rules) plain-dict pair a finished job ran with,
+    for recovery-plan diagnosis. Job runners stash the live objects on
+    the job (`risk` / `rules`); older jobs that never stashed them fall
+    back to {} (defaults), matching pre-v9.15 behavior. Mirrors the
+    conversion idiom in _recovery_dict_for_search_job."""
+    import dataclasses
+    risk = job.get("risk")
+    rules = job.get("rules")
+    risk_d = dataclasses.asdict(risk) if dataclasses.is_dataclass(risk) else (risk or {})
+    rules_d = dataclasses.asdict(rules) if dataclasses.is_dataclass(rules) else (rules or {})
+    return risk_d, rules_d
 
 
 @app.route("/recovery/quick-optimize", methods=["POST"])
@@ -7880,7 +7947,11 @@ def recovery_quick_optimize():
                             f"Dataset '{dataset_label}' is no longer available. "
                             "Re-select it on the Quick Optimize page."}), 400
 
-        risk = _dataclass_from_dict(RiskConfig, body.get("risk") or {})
+        # v9.15: _BaseRiskConfig, NOT the module-level `RiskConfig`
+        # factory function that shadows the dataclass name in this
+        # module -- passing the factory was the "must be called with a
+        # dataclass type or instance" crash Owen hit.
+        risk = _dataclass_from_dict(_BaseRiskConfig, body.get("risk") or {})
         rules = _dataclass_from_dict(PropRules, body.get("rules") or {})
         cfg = _dataclass_from_dict(QuickOptimizeConfig, qo_cfg_d)
 
@@ -11104,8 +11175,8 @@ def speed_run_job_status(job_id):
                 "candidate_id": result.winner.candidate_id,
                 "family": result.winner.family,
                 "verdict": pr.verdict,
-                "eval_pass_probability": pr.final_mc.evaluation_pass_probability,
-                "first_payout_probability": pr.final_mc.first_payout_probability,
+                "eval_pass_probability": pr.final_mc.headline_evaluation_pass_probability,
+                "first_payout_probability": pr.final_mc.headline_first_payout_probability,
                 "saved_library_note": pr.saved_library_note,
                 "report_html": _report_url(pr.report_paths),
             }
@@ -11115,8 +11186,8 @@ def speed_run_job_status(job_id):
                 pr = r.pipeline_result
                 candidates.append({
                     "candidate_id": r.candidate_id, "family": r.family, "verdict": pr.verdict,
-                    "eval_pass_probability": pr.final_mc.evaluation_pass_probability,
-                    "first_payout_probability": pr.final_mc.first_payout_probability,
+                    "eval_pass_probability": pr.final_mc.headline_evaluation_pass_probability,
+                    "first_payout_probability": pr.final_mc.headline_first_payout_probability,
                     "report_html": _report_url(pr.report_paths),
                 })
             else:
@@ -11300,8 +11371,8 @@ def overnight_autopilot_job_status(job_id):
             winner = {
                 "candidate_id": sr.winner.candidate_id, "family": sr.winner.family,
                 "verdict": pr.verdict,
-                "eval_pass_probability": pr.final_mc.evaluation_pass_probability,
-                "first_payout_probability": pr.final_mc.first_payout_probability,
+                "eval_pass_probability": pr.final_mc.headline_evaluation_pass_probability,
+                "first_payout_probability": pr.final_mc.headline_first_payout_probability,
                 "report_html": report_html,
             }
         summary = {
@@ -11369,8 +11440,8 @@ def _run_multi_speedrun_job(
                 winner_ctx = {
                     "candidate_id": r.winner.candidate_id, "family": r.winner.family,
                     "verdict": pr.verdict,
-                    "eval_pass_probability": pr.final_mc.evaluation_pass_probability,
-                    "first_payout_probability": pr.final_mc.first_payout_probability,
+                    "eval_pass_probability": pr.final_mc.headline_evaluation_pass_probability,
+                    "first_payout_probability": pr.final_mc.headline_first_payout_probability,
                     "report_html": (
                         f"/speed_run_reports_multi/{job_id}/{label.replace('/', '_')}/"
                         f"{Path(pr.report_paths['html']).name}"

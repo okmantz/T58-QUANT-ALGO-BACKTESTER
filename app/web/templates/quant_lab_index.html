@@ -24,6 +24,13 @@
   }
   h1 { font-size: 18px; margin: 0 0 4px; }
   p.lede { color: var(--text-muted); font-size: 13px; margin: 0 0 20px; }
+  .qlab-intro {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 16px; margin: 0 0 18px;
+  }
+  .qlab-intro h2 { font-size: 13px; margin: 0 0 6px; color: var(--text); letter-spacing: .02em; }
+  .qlab-intro p { margin: 0 0 8px; font-size: 13px; color: var(--text-muted); line-height: 1.55; }
+  .qlab-intro ul { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--text-muted); line-height: 1.6; }
 </style>
 </head>
 <body>
@@ -33,6 +40,18 @@
 <div class="t58-main">
   <h1>Quant Lab</h1>
   <p class="lede">Standalone quant-finance tools -- each one a real, tested backend module, wired up here for direct use without the desktop app or a script.</p>
+  {% if what_this_is and what_this_is.description %}
+  <div class="qlab-intro">
+    <h2>What this section is for</h2>
+    {% if what_this_is.tagline %}<p><b>{{ what_this_is.tagline }}</b></p>{% endif %}
+    <p>{{ what_this_is.description }}</p>
+    {% if what_this_is.roadmap %}
+    <ul>
+      {% for item in what_this_is.roadmap %}<li>{{ item }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+  {% endif %}
   <div class="qlab-grid">
     {% for tool in tools %}
     <a class="qlab-card" href="{{ tool.url }}">

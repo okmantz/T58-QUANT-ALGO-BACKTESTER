@@ -721,6 +721,71 @@ def _mc_worker_task(payload: list) -> list:
     return out
 
 
+# v9.15 (WS-F): stateless chunk task for a CALLER-OWNED shared pool. The
+# per-call pool above binds (base_dates, rules, day_structure) in the
+# worker initializer, which forces a fresh process spawn for every
+# run_monte_carlo call -- Full Pipeline alone calls it 5x per run
+# (baseline, final, 3x seed-rescore), and on Windows each spawn
+# re-imports the whole app in every worker. This task instead carries
+# the (small) shared state per chunk, so ONE pool can serve every MC
+# call in a pipeline run. The per-path math is _mc_simulate_path itself,
+# draws still happen in the parent in sim order, and rows are collected
+# by sim index -- bit-identical to the serial and per-call-pool paths.
+def _mc_chunk_task(task):
+    base_dates, rules, fallback_ds, reset_on_breach, items = task
+    return [
+        _mc_simulate_path(
+            sim_pnls, base_dates, rules,
+            sim_ds if sim_ds is not None else fallback_ds,
+            reset_on_breach, sim_risks,
+        )
+        for sim_pnls, sim_ds, sim_risks in items
+    ]
+
+
+def _mc_rows_on_pool(pool, n_sims, draw_one, *, base_dates, rules, day_structure,
+                     reset_on_breach, progress_cb, chunk_cap=256):
+    """_mc_rows_parallel's contract (draw in sim order in THIS process,
+    indexed collection, identical aggregation) against a caller-owned
+    ProcessPoolExecutor instead of a fresh one. The pool is never shut
+    down here -- its lifecycle belongs to the caller. Raises on any pool
+    failure; the caller falls back exactly as _mc_rows_parallel's does."""
+    from concurrent.futures import FIRST_COMPLETED
+    from concurrent.futures import wait as _futures_wait
+
+    workers = max(1, int(getattr(pool, "_max_workers", 2) or 2))
+    rows: list = [None] * n_sims
+    chunk = max(16, min(chunk_cap, n_sims // max(1, workers * 16)))
+    done = 0
+    next_i = 0
+    pending: dict = {}
+
+    def _submit_more() -> None:
+        nonlocal next_i
+        while next_i < n_sims and len(pending) < workers * 2:
+            start = next_i
+            payload = [draw_one() for _ in range(start, min(start + chunk, n_sims))]
+            next_i = start + len(payload)
+            task = (base_dates, rules, day_structure, reset_on_breach, payload)
+            pending[pool.submit(_mc_chunk_task, task)] = start
+
+    _submit_more()
+    while pending:
+        finished, _ = _futures_wait(list(pending), return_when=FIRST_COMPLETED)
+        for fut in finished:
+            start = pending.pop(fut)
+            for off, row in enumerate(fut.result()):
+                rows[start + off] = row
+                done += 1
+            if progress_cb is not None:
+                try:
+                    progress_cb(done, n_sims)
+                except Exception:  # noqa: BLE001 -- progress must never sink the run
+                    pass
+        _submit_more()
+    return rows
+
+
 def _mc_rows_parallel(n_sims, draw_one, *, base_dates, rules, day_structure,
                       reset_on_breach, workers, progress_cb, chunk_cap=256):
     """Draws paths via draw_one() (in sim order, this process) and
@@ -776,6 +841,7 @@ def run_monte_carlo(
     selection_bias_caveat: bool = False,
     max_workers: int | None = None,
     progress_cb=None,
+    pool=None,
 ) -> MonteCarloResult:
     """
     selection_bias_caveat: MC-004. Pass True when `trades` are known (or
@@ -792,6 +858,15 @@ def run_monte_carlo(
     returned MonteCarloResult is bit-identical to the serial run (see
     _mc_rows_parallel). None (the default) keeps every existing caller
     on the exact serial path it has always used.
+
+    pool (v9.15, WS-F): an optional caller-owned ProcessPoolExecutor.
+    When given (and n_simulations clears the same floor), paths are
+    evaluated on THAT pool via the stateless _mc_chunk_task instead of
+    spawning a fresh pool per call -- one spawn can then serve every
+    Monte Carlo call in a pipeline run. Same bit-identical contract;
+    the pool is never shut down here (the caller owns its lifecycle),
+    and any failure falls back to the max_workers/serial paths with a
+    re-seeded rng, so a broken shared pool can never change the numbers.
 
     progress_cb: optional callable(done, total), invoked as paths
     complete (at most ~20 times). Purely observational; exceptions in
@@ -871,10 +946,30 @@ def run_monte_carlo(
 
     n_sims = int(cfg.n_simulations)
     rows: list | None = None
+    # v9.15 (WS-F): a caller-owned shared pool (pool=...) is tried first:
+    # one spawn serves every MC call in a pipeline run instead of a
+    # spawn/teardown per call. Draws stay in this process in sim order
+    # either way, so all three paths (shared pool, per-call pool, serial)
+    # produce bit-identical results; any pool failure re-seeds the rng
+    # before the next attempt, exactly as the per-call path always has.
+    _attempted_parallel = False
+    if pool is not None and n_sims >= _MC_PARALLEL_MIN_SIMS:
+        _attempted_parallel = True
+        try:
+            rows = _mc_rows_on_pool(
+                pool, n_sims, _draw_one, base_dates=base_dates, rules=rules,
+                day_structure=day_structure, reset_on_breach=cfg.reset_on_breach,
+                progress_cb=progress_cb,
+                chunk_cap=32 if use_day_blocks else 256,
+            )
+        except Exception:  # noqa: BLE001 -- a broken pool must never change the numbers
+            rows = None
+            rng = np.random.default_rng(cfg.random_seed)
     _want_parallel = (
         max_workers is not None and int(max_workers) > 1 and n_sims >= _MC_PARALLEL_MIN_SIMS
     )
-    if _want_parallel:
+    if rows is None and _want_parallel:
+        _attempted_parallel = True
         try:
             rows = _mc_rows_parallel(
                 n_sims, _draw_one, base_dates=base_dates, rules=rules,
@@ -885,7 +980,7 @@ def run_monte_carlo(
         except Exception:  # noqa: BLE001 -- a broken pool must never change the numbers
             rows = None
     if rows is None:
-        if _want_parallel:
+        if _attempted_parallel:
             # The failed parallel attempt already consumed draws from
             # rng; re-seed so the serial loop below draws the identical
             # sequence a purely serial run would have drawn.

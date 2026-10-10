@@ -81,7 +81,7 @@
   <p style="font-size:13px;color:#ffb4b4;margin-bottom:10px;">Could not load: {{ batch_result.load_errors|join('; ') }}</p>
   {% endif %}
   <table style="width:100%;font-size:13px;border-collapse:collapse;">
-    <tr style="text-align:left;color:#888;"><th>Strategy</th><th>Trades</th><th>Net profit</th><th>Eval pass %</th><th>Report</th></tr>
+    <tr style="text-align:left;color:#888;"><th>Strategy</th><th>Trades</th><th>Net profit</th><th>Eval pass % (per attempt)</th><th>Report</th></tr>
     {% for o in batch_result.outcomes %}
     <tr style="border-top:1px solid #262626;">
       <td style="padding:6px 4px;">{{ o.label }}</td>
@@ -134,12 +134,12 @@
   <div style="margin:10px 0;border:1px solid #33506b;background:#12202e;border-radius:8px;padding:10px 12px;">
     <b style="font-size:13px;">Timeframe comparison</b> <span style="font-size:12px;color:#888;">(report below is for the &#9733; row)</span>
     <div style="overflow-x:auto;"><table style="width:100%;font-size:12px;margin-top:6px;">
-      <tr><th align="left">TF</th><th>Bars</th><th>Trades</th><th>Net profit</th><th>Win %</th><th>Max DD %</th><th>Eval pass %</th><th>Payout %</th><th>Ruin %</th></tr>
+      <tr><th align="left">TF</th><th>Bars</th><th>Trades</th><th>Net profit</th><th>Win %</th><th>Max DD %</th><th>Eval pass % (per attempt)</th><th>Payout % (per attempt)</th><th>Ruin %</th></tr>
       {% for r in result.timeframe_sweep.rows %}
       <tr style="{{ 'font-weight:700;' if r.is_best else '' }}text-align:center;">
         <td align="left">{{ r.label }}{{ ' &#9733;'|safe if r.is_best else '' }}</td><td>{{ r.bars }}</td><td>{{ r.trades }}</td>
         <td>${{ "{:,.0f}".format(r.net_profit) }}</td><td>{{ "%.1f"|format(r.win_rate) }}</td><td>{{ "%.1f"|format(r.max_dd_pct) }}</td>
-        <td>{{ "%.1f"|format(r.eval_pass_probability) }}</td><td>{{ "%.1f"|format(r.first_payout_probability) }}</td><td>{{ "%.1f"|format(r.risk_of_ruin_pct) }}</td>
+        <td>{{ "%.1f"|format(r.eval_pass_probability_per_attempt) }}</td><td>{{ "%.1f"|format(r.first_payout_probability_per_attempt) }}</td><td>{{ "%.1f"|format(r.risk_of_ruin_pct) }}</td>
       </tr>
       {% endfor %}
     </table></div>
@@ -150,7 +150,7 @@
   {% endif %}
   <p style="font-size:12px;color:#888;margin-bottom:10px;">Ran against: <b>{{ result.active_dataset }}</b></p>
   <div class="headline">
-    <div class="stat"><div class="label">Eval Pass Probability</div><div class="value">{{ "%.1f"|format(result.eval_pass_prob) }}%</div></div>
+    <div class="stat"><div class="label">Eval Pass Probability (per attempt)</div><div class="value">{{ "%.1f"|format(result.eval_pass_prob) }}%</div></div>
     <div class="stat"><div class="label">First Payout Probability</div><div class="value">{{ "%.1f"|format(result.first_payout_prob) }}%</div></div>
     <div class="stat"><div class="label">Risk of Ruin</div><div class="value">{{ "%.1f"|format(result.risk_of_ruin) }}%</div></div>
     <div class="stat"><div class="label">Expected Payout</div><div class="value">${{ "{:,.0f}".format(result.expected_payout) }}</div></div>

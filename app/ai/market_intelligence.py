@@ -40,27 +40,247 @@ proxy, or having to eyeball structure from price alone.
 """
 from __future__ import annotations
 
+import concurrent.futures
+import logging
+import time
+
 import pandas as pd
 
 from app.ai import market_scanner, news_forexfactory
 from app.quant_lab.market_structure import MarketStructureError, summarize_market_structure
 from app.strategy.indicators import ema
 
+logger = logging.getLogger(__name__)
+
+# v9.15: one feed attempt (MT5, then Alpaca) gets this long before the
+# local-dataset fallback takes over. Without a bound, a hung terminal /
+# SDK call stalls compute_rankings symbol-by-symbol and the AI Director
+# panel sits on "Loading..." forever (Owen's Windows report).
+FEED_ATTEMPT_TIMEOUT_S = 8.0
+
+# ---------------------------------------------------------------------------
+# v9.15 LOCAL dataset fallback. When neither feed returns bars, look for
+# a matching dataset the app ALREADY has on disk (app.data.storage's
+# registry + app.data.importer's loader -- the same pair every dataset
+# picker uses). Mapping is by underlying instrument only, never by
+# "close enough": NAS100->NQ and SPX500->ES (the CME futures on the same
+# indices), MES/MNQ/MGC->their full-size ES/NQ/GC contracts, forex/crypto
+# -> same-symbol files. Anything with no real mapping (e.g. US30 with
+# only ES/NQ files on disk) finds nothing and is skipped quietly.
+# ---------------------------------------------------------------------------
+_LOCAL_INSTRUMENT_CANDIDATES: dict[str, list[str]] = {
+    "EURUSD": ["EURUSD"], "GBPUSD": ["GBPUSD"], "USDJPY": ["USDJPY"],
+    "AUDUSD": ["AUDUSD"], "USDCAD": ["USDCAD"], "USDCHF": ["USDCHF"],
+    "NZDUSD": ["NZDUSD"], "XAUUSD": ["XAUUSD"],
+    "BTCUSD": ["BTCUSD", "BTC"], "ETHUSD": ["ETHUSD", "ETH"],
+    "NAS100": ["NAS100", "NQ", "MNQ"],
+    "SPX500": ["SPX500", "ES", "MES", "SPX"],
+    "US30": ["US30", "YM", "MYM"],
+    "MES": ["MES", "ES"], "MNQ": ["MNQ", "NQ"], "MGC": ["MGC", "GC"],
+}
+_LOCAL_DATASET_CACHE: dict[str, pd.DataFrame | None] = {}
+
+
+# When a feed attempt TIMES OUT (genuinely hung, not just empty),
+# later symbols stop paying that cost one-by-one: feed attempts are
+# skipped for a short cooldown and the scan goes straight to local
+# data. A merely-empty feed result does NOT trip this -- a connected
+# feed that lacks one symbol must still be tried for the next.
+_FEED_DOWN_UNTIL = 0.0
+_FEED_DOWN_COOLDOWN_S = 30.0
+
+
+def _feed_bars(symbol: str, timeframe_minutes: int, count: int):
+    global _FEED_DOWN_UNTIL
+    if time.monotonic() < _FEED_DOWN_UNTIL:
+        return None
+    from app.web import live_market
+
+    def _attempt():
+        bars = live_market.fetch_mt5_bars(symbol, timeframe_minutes, count)
+        if not bars:
+            bars = live_market.fetch_alpaca_bars(symbol, "Crypto", timeframe_minutes, count)
+        return bars
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="t58-feed")
+    try:
+        return executor.submit(_attempt).result(timeout=FEED_ATTEMPT_TIMEOUT_S)
+    except concurrent.futures.TimeoutError:
+        _FEED_DOWN_UNTIL = time.monotonic() + _FEED_DOWN_COOLDOWN_S
+        logger.debug("market_intelligence: feed attempt for %s timed out; cooling down", symbol)
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        try:
+            executor.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            executor.shutdown(wait=False)
+
+
+def _local_instrument_candidates(symbol: str) -> list[str]:
+    sym = (symbol or "").strip().upper()
+    return _LOCAL_INSTRUMENT_CANDIDATES.get(sym, [sym] if sym else [])
+
+
+def _dataset_match_score(dataset_name: str, candidates: list[str]) -> int | None:
+    """Score how honestly `dataset_name` matches one of `candidates`
+    (best candidate wins). Matches the instrument LABEL (subfolder or
+    filename prefix, via app.data.storage.dataset_instrument_label),
+    allowing the app's own "1!" continuous-future suffix (ES1! -> ES).
+    Returns None for no match -- never a substring guess."""
+    try:
+        from app.data.storage import dataset_instrument_label
+
+        label = dataset_instrument_label(dataset_name).upper()
+    except Exception:  # noqa: BLE001
+        return None
+    label_root = label.rstrip("!")
+    if label_root.endswith("1"):
+        label_root = label_root[:-1]
+    best: int | None = None
+    for idx, cand in enumerate(candidates):
+        cand_root = cand.upper().rstrip("!")
+        score = None
+        if label == cand.upper() or label_root == cand_root:
+            score = 100 - idx
+        if score is not None and (best is None or score > best):
+            best = score
+    return best
+
+
+def _find_local_dataset(symbol: str):
+    """The best-matching stored dataset for `symbol`, or None. Uses
+    app.data.storage.list_stored_datasets() -- the app's own registry.
+    Ties break toward the largest file (longest history, most bars to
+    resample from). Never raises."""
+    try:
+        from app.data.storage import list_stored_datasets
+
+        datasets = list_stored_datasets()
+    except Exception:  # noqa: BLE001
+        return None
+    candidates = _local_instrument_candidates(symbol)
+    if not candidates:
+        return None
+    best = None
+    best_key: tuple[int, int] | None = None
+    for ds in datasets:
+        try:
+            if getattr(ds, "size_bytes", 0) <= 32:
+                continue
+            score = _dataset_match_score(ds.name, candidates)
+        except Exception:  # noqa: BLE001
+            continue
+        if score is None:
+            continue
+        key = (score, int(ds.size_bytes))
+        if best_key is None or key > best_key:
+            best, best_key = ds, key
+    return best
+
+
+def _load_local_dataset(path) -> pd.DataFrame | None:
+    """Load one stored dataset via app.data.importer.import_csv (the
+    loader every web dataset picker funnels through), normalized to
+    timestamp/open/high/low/close/volume and cached by path+mtime+size
+    so a full-universe scan loads each file at most once. Never raises."""
+    try:
+        from pathlib import Path
+
+        p = Path(path)
+        st = p.stat()
+        cache_key = f"{p}|{st.st_size}|{st.st_mtime_ns}"
+    except Exception:  # noqa: BLE001
+        return None
+    if cache_key in _LOCAL_DATASET_CACHE:
+        return _LOCAL_DATASET_CACHE[cache_key]
+    df: pd.DataFrame | None = None
+    try:
+        from app.data.importer import import_csv
+
+        result = import_csv(str(p))
+        raw = getattr(result, "dataframe", None)
+        if raw is not None and not raw.empty:
+            work = raw.copy()
+            work["timestamp"] = pd.to_datetime(work["timestamp"], utc=True, errors="coerce")
+            work = work.dropna(subset=["timestamp"]).sort_values("timestamp")
+            for col in ("open", "high", "low", "close"):
+                work[col] = pd.to_numeric(work[col], errors="coerce")
+            if "volume" not in work.columns:
+                work["volume"] = 0.0
+            work["volume"] = pd.to_numeric(work["volume"], errors="coerce").fillna(0.0)
+            work = work.dropna(subset=["close"])
+            df = work[["timestamp", "open", "high", "low", "close", "volume"]].reset_index(drop=True)
+            if df.empty:
+                df = None
+    except Exception:  # noqa: BLE001
+        df = None
+    _LOCAL_DATASET_CACHE[cache_key] = df
+    return df
+
+
+def _timeframe_label(timeframe_minutes: int) -> str:
+    minutes = int(timeframe_minutes)
+    if minutes >= 1440 and minutes % 1440 == 0:
+        return "1d" if minutes == 1440 else f"{minutes // 1440}d"
+    if minutes >= 60 and minutes % 60 == 0:
+        return f"{minutes // 60}h"
+    return f"{minutes}m"
+
+
+def local_bars(symbol: str, timeframe_minutes: int, count: int) -> pd.DataFrame | None:
+    """Bars for `symbol` from a matching LOCAL stored dataset, resampled
+    to the requested timeframe with the app's own resampling
+    (app.data.timeframe_resample.resample_ohlcv). Returns None -- a
+    quiet skip -- when no dataset honestly maps to the symbol, when
+    the local data is COARSER than requested (never upsampled /
+    fabricated), or when anything fails to load. Never raises."""
+    try:
+        ds = _find_local_dataset(symbol)
+        if ds is None:
+            return None
+        df = _load_local_dataset(ds.path)
+        if df is None or df.empty:
+            return None
+        from app.data.multi_timeframe import infer_timeframe_minutes
+
+        try:
+            native_minutes = float(infer_timeframe_minutes(df))
+        except Exception:  # noqa: BLE001
+            native_minutes = float(timeframe_minutes)
+        if native_minutes > float(timeframe_minutes) + 1e-6:
+            return None
+        if abs(native_minutes - float(timeframe_minutes)) < 1e-6:
+            out = df.tail(int(count))
+        else:
+            from app.data.timeframe_resample import resample_ohlcv
+
+            out = resample_ohlcv(df, _timeframe_label(timeframe_minutes)).tail(int(count))
+        if out is None or out.empty:
+            return None
+        return out.reset_index(drop=True)
+    except Exception:  # noqa: BLE001
+        logger.debug("market_intelligence: local fallback failed for %s", symbol, exc_info=True)
+        return None
+
 
 def bar_fetcher(symbol: str, timeframe_minutes: int, count: int):
     """Adapts the app's existing data sources to app.ai.market_scanner's
-    BarFetcher shape. Tries the shared MT5 connection first, then Alpaca
-    (crypto/US-listed only) if MT5 has nothing for this symbol."""
-    from app.web import live_market
-
-    bars = live_market.fetch_mt5_bars(symbol, timeframe_minutes, count)
-    if not bars:
-        bars = live_market.fetch_alpaca_bars(symbol, "Crypto", timeframe_minutes, count)
-    if not bars:
-        return None
-    df = pd.DataFrame(bars)
-    df["timestamp"] = pd.to_datetime(df["time"], unit="s", utc=True)
-    return df[["timestamp", "open", "high", "low", "close", "volume"]]
+    BarFetcher shape. Feed first (shared MT5 connection, then Alpaca
+    crypto fallback), each attempt time-bounded; when the feed returns
+    nothing, falls back to a matching LOCAL stored dataset (v9.15 --
+    see _LOCAL_INSTRUMENT_CANDIDATES). Returns None when no source has
+    real bars for this symbol; callers skip such symbols quietly."""
+    bars = _feed_bars(symbol, timeframe_minutes, count)
+    if bars:
+        try:
+            df = pd.DataFrame(bars)
+            df["timestamp"] = pd.to_datetime(df["time"], unit="s", utc=True)
+            return df[["timestamp", "open", "high", "low", "close", "volume"]]
+        except Exception:  # noqa: BLE001 -- malformed feed rows -> try local data instead
+            pass
+    return local_bars(symbol, timeframe_minutes, count)
 
 
 def daily_trend_bias(symbol: str) -> str:

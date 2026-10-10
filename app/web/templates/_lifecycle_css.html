@@ -174,4 +174,39 @@
   .lc-pill.grey{background:var(--lc-panel3); color:var(--lc-muted); border:1px solid var(--lc-border2);}
   .lc-dropzone{border:2px dashed var(--lc-border2); border-radius:12px; padding:24px; text-align:center; color:var(--lc-muted); cursor:pointer;}
   .lc-dropzone:hover{border-color:var(--lc-acc); color:var(--lc-text);}
+
+  /* ---------- v9.15 WS-E light-theme repair ----------
+     This block used to be a fixed dark palette "by design", so in light
+     mode the Validate / Full Pipeline pages showed dark slabs stranded
+     on the light page (Owen's screenshot). The dark tokens above are
+     untouched; this block only re-points the --lc-* tokens when the app
+     theme toggle is light, mirroring theme.css's light family (white
+     cards on a grey page, borders that read). Values measured:
+     text 17.89:1 on panel / 15.34:1 on page, muted 7.71/6.61,
+     faint 5.48/4.70, accent 5.31 on panel. */
+  html[data-theme="light"] .lc-scope{
+    --lc-bg:#e9eef4; --lc-panel:#ffffff; --lc-panel2:#f4f7fa; --lc-panel3:#e7edf3;
+    --lc-border:#b9c5d3; --lc-border2:#93a5ba;
+    --lc-text:#101820; --lc-muted:#46555f; --lc-faint:#5b6b7a;
+    --lc-acc:#0a6f54; --lc-acc-ink:#ffffff; --lc-acc-dim:#dff3ec;
+    --lc-red:#c9332e; --lc-amber:#9a6208; --lc-cyan:#00688a;
+  }
+  /* Hardcoded-hex rules above that token overrides cannot reach: */
+  html[data-theme="light"] .lc-scope .lc-btn:hover{background:#0a5c46;}
+  html[data-theme="light"] .lc-scope .lc-btn.ghost:hover{background:var(--lc-panel3);}
+  html[data-theme="light"] .lc-scope .lc-btn.danger{background:#fbe9e8; color:#a52a26; border-color:#d89a97;}
+  html[data-theme="light"] .lc-scope .lc-tab-btn.active{border-color:#7fb8a6;}
+  html[data-theme="light"] .lc-scope .lc-checkcard.selected{background:#eef7f3;}
+  html[data-theme="light"] .lc-scope .lc-logbox{background:#f8fafc; border-color:var(--lc-border2); color:#24303c;}
+  html[data-theme="light"] .lc-scope .lc-logbox .lt{color:#5b6b7a;}
+  html[data-theme="light"] .lc-scope .lc-verdict{border-color:#d89a97; background:#fdf0ef;}
+  html[data-theme="light"] .lc-scope .lc-verdict.pass{border-color:#7fb8a6; background:#eef7f3;}
+  html[data-theme="light"] .lc-scope .lc-summary-band{border-color:#7fb8a6; background:#eef7f3;}
+  html[data-theme="light"] .lc-scope .lc-error{background:#fdf0ef; border-color:#d89a97; color:#8f1f1b;}
+  html[data-theme="light"] .lc-scope .lc-notice{background:#eef7f3; border-color:#7fb8a6; color:#14532d;}
+  html[data-theme="light"] .lc-scope .lc-notice.bad{background:#fdf0ef; border-color:#d89a97; color:#8f1f1b;}
+  html[data-theme="light"] .lc-scope .lc-pill.green{border-color:#7fb8a6;}
+  html[data-theme="light"] .lc-scope .lc-pill.red{background:#fbe9e8; color:#a52a26; border-color:#d89a97;}
+  html[data-theme="light"] .lc-scope .lc-pill.amber{background:#fdf3e0; color:#7c4f06; border-color:#d9b96a;}
+  html[data-theme="light"] .lc-scope .lc-field-note{color:#5b6b7a;}
 </style>

@@ -29,6 +29,7 @@ from app.prop.simulator import AccountSimResult, PropRules, summarize_single_run
 from app.reports.charts import svg_histogram, svg_line_chart
 from app.reports.trade_chart import build_trade_chart_html
 from app.reports import run_history
+from app.reports.mc_headline import monte_carlo_headline
 
 
 def _headline_risk_flags(
@@ -311,6 +312,50 @@ def build_report(
         "account_attempts": [asdict(a) for a in (prop_single_run.attempts or [])],
         "monte_carlo": monte_carlo_result.to_dict(),
     }
+    # v9.15: explicit window scopes + ONE headline block. The
+    # `historical_backtest` section above is computed over the FULL
+    # window (development + holdout); the Full Pipeline job page's
+    # "final" numbers are the DEVELOPMENT window only -- with no labels
+    # the two read as a contradiction (Owen, 2026-10-10: page net
+    # -$16,724 over 639 trades vs report -$21,270 over 861). So: the
+    # full-window block is tagged, and `headline` carries the
+    # development-window backtest (== the job page's final) plus the
+    # canonical Monte Carlo headline from app.reports.mc_headline --
+    # the same derivation the job page and Dashboard now read, so the
+    # three surfaces cannot drift apart again.
+    _hb = report["historical_backtest"]
+    _hc = holdout_comparison or {}
+    _full_stats = _hb["statistics"]
+
+    def _window_block(stats: dict, trades, scope: str) -> dict:
+        return {
+            "scope": scope,
+            "trades": int(trades if trades is not None
+                          else (stats.get("total_trades", 0) or 0)),
+            "net_profit": float(stats.get("net_profit", 0.0) or 0.0),
+            "win_rate": float(stats.get("win_rate", 0.0) or 0.0),
+            "max_drawdown_pct": float(stats.get("max_drawdown_pct", 0.0) or 0.0),
+            "profit_factor": float(stats.get("profit_factor", 0.0) or 0.0),
+        }
+
+    _hb["scope"] = "full_window"
+    _hb["scope_label"] = ("Full window (development + holdout)" if _hc
+                          else "Full window (no holdout reserved)")
+    if _hc:
+        _dev_block = _window_block(_hc.get("in_sample_statistics") or {},
+                                   _hc.get("in_sample_trades"),
+                                   "development_window")
+        _holdout_block = _window_block(_hc.get("holdout_statistics") or {},
+                                       _hc.get("holdout_trades"), "holdout")
+    else:
+        _dev_block = _window_block(_full_stats, _hb["total_trades"], "full_window")
+        _holdout_block = None
+    report["headline"] = {
+        "development": _dev_block,
+        "holdout": _holdout_block,
+        "full_window": _window_block(_full_stats, _hb["total_trades"], "full_window"),
+        "monte_carlo": monte_carlo_headline(report["monte_carlo"]),
+    }
     # HEADLINE-RISK-FLAGS (2026-09-24): see _headline_risk_flags's own
     # docstring. Computed once, here, from data already in `report`/
     # `verdict_reasons`/`backtest_result.statistics` so every current and
@@ -556,8 +601,8 @@ Instrument: {instrument} &middot; Timeframe: {timeframe} &middot; Period: {perio
 
 <h2>The Number That Matters Most</h2>
 <div class="headline">
-  <div class="card"><div class="label">Evaluation Pass Probability</div><div class="value">{eval_pass:.1f}%</div></div>
-  <div class="card"><div class="label">First Payout Probability</div><div class="value">{first_payout:.1f}%</div></div>
+  <div class="card"><div class="label">Evaluation Pass Probability (per attempt)</div><div class="value">{eval_pass:.1f}%</div><div class="muted" style="font-size:11px;">{eval_pass_ci}</div></div>
+  <div class="card"><div class="label">First Payout Probability (per attempt)</div><div class="value">{first_payout:.1f}%</div><div class="muted" style="font-size:11px;">{first_payout_ci}</div></div>
   <div class="card"><div class="label">Failure Before Payout</div><div class="value">{failure_before_payout:.1f}%</div></div>
   <div class="card"><div class="label">Median Days to Payout</div><div class="value">{median_days_payout}</div></div>
   <div class="card"><div class="label">Expected Payout</div><div class="value">${expected_payout:,.0f}</div></div>
@@ -570,7 +615,7 @@ Instrument: {instrument} &middot; Timeframe: {timeframe} &middot; Period: {perio
 {final_parameters_section}
 
 <h2>Historical Backtest Statistics</h2>
-<p class="muted">Computed over the full, uninterrupted trade sequence with prop-firm rules (daily loss limit, max drawdown, etc.) <b>not</b> enforced. Compare against "Prop-Firm Single-Run Result[...]
+<p class="muted">Computed over the full, uninterrupted trade sequence with prop-firm rules (daily loss limit, max drawdown, etc.) <b>not</b> enforced. Compare against "Prop-Firm Single-Run Result" below, which walks the same trades under the rules. <b>Scope: {backtest_scope_label}.</b></p>
 {reset_chain_banner}
 {backtest_table}
 
@@ -1024,7 +1069,7 @@ def _reliability_header(report: dict) -> str:
         if skip > 20:
             flag += f" {skip:.0f}% of signals were skipped for sizing."
         return (f'<div class="{cls}" style="padding:8px 12px;border:1px solid #ccc;margin:8px 0">'
-                f'<b>Sample:</b> {n_tr} trades &middot; {att} account attempt(s) &middot; {skip:.0f}% of signals skipped for sizing.{flag}</div>')
+                f'<b>Sample:</b> {n_tr} trades (full window) &middot; {att} account attempt(s) &middot; {skip:.0f}% of signals skipped for sizing.{flag}</div>')
     except Exception:  # noqa: BLE001
         return ""
 
@@ -1132,6 +1177,27 @@ def _account_attempts_section(attempts) -> str:
 never had a payout chance, so it stays out of that denominator.</p>"""
 
 
+def _mc_ci_note(mch: dict, which: str) -> str:
+    """Muted sub-line under the report's headline MC cards (v9.15): the
+    per-attempt 95% CI, plus the chain-level figure ONLY under its
+    explicit "any attempt in chain" label (and only when it actually
+    differs from the per-attempt headline)."""
+    if which == "eval":
+        ci = mch.get("eval_pass_ci95")
+        chain = mch.get("any_attempt_eval_pass_probability")
+        val = mch.get("eval_pass_probability")
+    else:
+        ci = mch.get("first_payout_ci95")
+        chain = mch.get("any_attempt_first_payout_probability")
+        val = mch.get("first_payout_probability")
+    parts = []
+    if ci:
+        parts.append(f"95% CI {ci[0]:.1f}–{ci[1]:.1f}")
+    if chain is not None and val is not None and abs(chain - val) >= 0.05:
+        parts.append(f"any attempt in chain {chain:.1f}%")
+    return " · ".join(parts)
+
+
 def export_html(
     report: dict,
     path: str | Path,
@@ -1143,6 +1209,10 @@ def export_html(
 
     mc = report["monte_carlo"]
     single = report["prop_firm_single_run"]
+    # v9.15: headline cards derive from the ONE canonical derivation
+    # (app.reports.mc_headline) -- the same numbers the job page tiles
+    # and the Dashboard read, so the surfaces cannot disagree.
+    _mch = monte_carlo_headline(mc)
 
     if backtest_result is not None:
         trade_chart_html = build_trade_chart_html(
@@ -1217,8 +1287,10 @@ def export_html(
         risk_config_table=_risk_config_table(report.get("risk_config")),
         simulation_section=_simulation_section(report),
         risk_reconciliation_section=_risk_reconciliation_section(report["historical_backtest"]["statistics"]),
-        eval_pass=(mc["per_attempt_pass_probability"] if mc.get("reset_on_breach") else mc["evaluation_pass_probability"]),
-        first_payout=(mc["per_attempt_payout_probability"] if mc.get("reset_on_breach") else mc["first_payout_probability"]),
+        eval_pass=_mch["eval_pass_probability"],
+        eval_pass_ci=_mc_ci_note(_mch, "eval"),
+        first_payout=_mch["first_payout_probability"],
+        first_payout_ci=_mc_ci_note(_mch, "payout"),
         failure_before_payout=(mc.get("per_attempt_failure_before_payout_probability", mc["failure_before_payout_probability"]) if mc.get("reset_on_breach") else mc["failure_before_payout_probability"]),
         median_days_payout=mc["median_days_to_first_payout"] if mc["median_days_to_first_payout"] is not None else "N/A",
         expected_payout=mc["expected_payout"],
@@ -1227,6 +1299,11 @@ def export_html(
             mc, report["historical_backtest"]["statistics"].get("is_reset_chain", False)
         ),
         reset_chain_banner=_reset_chain_banner(report["historical_backtest"]["statistics"]),
+        backtest_scope_label=(
+            report["historical_backtest"].get("scope_label", "Full window")
+            + (" -- the development-window result (what the run page headlines) is the "
+               "In-Sample column of the Out-of-Sample Holdout Check below"
+               if report.get("holdout_comparison") else "")),
         backtest_table=_dict_to_table(report["historical_backtest"]["statistics"]),
         concentration_table=_concentration_table(report.get("concentration_check", {})),
         cost_ladder_table=_cost_ladder_table(report.get("cost_ladder", [])),

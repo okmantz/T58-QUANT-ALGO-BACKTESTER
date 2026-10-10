@@ -38,6 +38,12 @@ class TimeframeRow:
     first_payout_probability: float
     risk_of_ruin_pct: float
     is_best: bool = False
+    # v9.15: per-attempt (gate-metric) pair for DISPLAY. The chain-level
+    # fields above still drive the best-timeframe pick (unchanged
+    # behavior); the table shows these so its "Eval pass %" column
+    # answers the same one-account question as every other surface.
+    eval_pass_probability_per_attempt: float = 0.0
+    first_payout_probability_per_attempt: float = 0.0
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -90,6 +96,8 @@ def run_report_timeframe_sweep(
             win_rate=float(st.win_rate), max_dd_pct=float(st.max_drawdown_pct),
             eval_pass_probability=float(mc.evaluation_pass_probability),
             first_payout_probability=float(mc.first_payout_probability), risk_of_ruin_pct=float(mc.risk_of_ruin_pct),
+            eval_pass_probability_per_attempt=float(mc.headline_evaluation_pass_probability),
+            first_payout_probability_per_attempt=float(mc.headline_first_payout_probability),
         ))
         frames[label] = (target.dataframe, run_strategy)
 

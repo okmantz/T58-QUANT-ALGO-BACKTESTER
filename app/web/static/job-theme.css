@@ -192,6 +192,25 @@ input[type=text] {
 }
 input[type=text]:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), 0.15); }
 
+/* ---- v9.15 WS-E light-theme repair (light scope only) ----
+   #log / .step .observation sit on var(--bg); in light mode that made
+   the run log a flat page-grey slab whose edge was the old 1.20:1
+   --border. Give the log a proper white console surface with a border
+   that reads (2.52:1 on the page) and full-strength text; log text was
+   --text-muted (5.96:1, passes) and is now --text (17.89:1). The
+   back-btn glow hardcodes the dark teal rgb (53,224,176) -- swap the
+   shadow to the light accent rgb so it doesn't bloom neon on white. */
+html[data-theme="light"] #log {
+  background: #ffffff; color: var(--text); border-color: var(--border-light);
+}
+html[data-theme="light"] .step .observation {
+  background: #ffffff; color: var(--text); border-color: var(--border-light);
+}
+html[data-theme="light"] .back-btn { box-shadow: 0 0 10px rgba(10, 111, 84, 0.18); }
+html[data-theme="light"] .back-btn:hover { color: #ffffff; }
+html[data-theme="light"] .save-btn { color: #ffffff; }
+html[data-theme="light"] input[type=text] { background: #ffffff; }
+
 /* ---- Research Agent step trace ---- */
 .card.step { border-left: 2px solid var(--violet); padding-left: 12px; }
 .step .thought { font-size: 13px; color: var(--text); margin-bottom: 4px; }

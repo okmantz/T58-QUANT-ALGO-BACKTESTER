@@ -89,46 +89,55 @@
 /* ---- Light theme -- a genuinely distinct palette, not an inversion ---- */
 html[data-theme="light"] {
   color-scheme: light;
-  --bg: #f5f7fa;
-  --bg-1: #eef2f6;
+  /* v9.15 WS-E light repair: page is a real grey so white cards read as
+     cards (was #f5f7fa-on-#ffffff at 1.07:1 with a 1.20:1 border);
+     border steps darkened until a card edge actually reads against
+     both surfaces (border 1.50:1 on page / 1.75:1 on panel,
+     border-light 2.16:1 / 2.52:1); text-dim stepped from #7c8894
+     (3.37:1 on page -- failed 4.5:1 at the 10px sizes it is used at)
+     to #5b6b7a (4.70:1 page / 5.48:1 panel / 4.65:1 panel-3); link
+     teal stepped from #0f9f78 (3.13-3.36:1, failed) to #0a6f54
+     (4.55:1 page / 5.31:1 white). Dark values untouched. */
+  --bg: #e9eef4;
+  --bg-1: #e9eef4;
   --panel: #ffffff;
   --panel-2: #ffffff;
-  --panel-3: #eef2f6;
+  --panel-3: #e7edf3;
   --panel-elevated: #ffffff;
-  --border: #dde3ea;
-  --border-light: #c9d2db;
+  --border: #b9c5d3;
+  --border-light: #93a5ba;
   --text: #101820;
-  --text-muted: #52616c;
-  --text-dim: #7c8894;
+  --text-muted: #46555f;
+  --text-dim: #5b6b7a;
 
-  --teal: #0f9f78;
-  --teal-dim: #0a7259;
-  --teal-rgb: 15, 159, 120;
-  --violet: #602bef;
+  --teal: #0a6f54;
+  --teal-dim: #0a5c46;
+  --teal-rgb: 10, 111, 84;
+  --violet: #5b21e8;
   --violet-dim: #421dc4;
-  --violet-rgb: 96, 43, 239;
-  --coral: #e0453f;
-  --coral-dim: #b8352f;
-  --coral-rgb: 224, 69, 63;
-  --amber: #b8790f;
-  --amber-rgb: 184, 121, 15;
+  --violet-rgb: 91, 33, 232;
+  --coral: #c9332e;
+  --coral-dim: #a52a26;
+  --coral-rgb: 201, 51, 46;
+  --amber: #9a6208;
+  --amber-rgb: 154, 98, 8;
 
   /* Same desaturated-for-light-backgrounds treatment as the desktop
      app's own THEMES["light"] NEON_* set (see app/ui/main_window.py) --
      same hue identity per accent, tuned for contrast on white/near-white
      instead of matching the dark theme's raw brightness. */
-  --blue: #2c64d6;
-  --blue-rgb: 44, 100, 214;
-  --neon-cyan: #0079a3;
-  --neon-cyan-rgb: 0, 121, 163;
-  --neon-magenta: #b01c93;
-  --neon-magenta-rgb: 176, 28, 147;
-  --neon-lime: #5d8a12;
-  --neon-lime-rgb: 93, 138, 18;
-  --neon-violet: #6438c9;
-  --neon-violet-rgb: 100, 56, 201;
-  --neon-amber: #a66a16;
-  --neon-amber-rgb: 166, 106, 22;
+  --blue: #1f56c4;
+  --blue-rgb: 31, 86, 196;
+  --neon-cyan: #00688a;
+  --neon-cyan-rgb: 0, 104, 138;
+  --neon-magenta: #9c1478;
+  --neon-magenta-rgb: 156, 20, 120;
+  --neon-lime: #4c720e;
+  --neon-lime-rgb: 76, 114, 14;
+  --neon-violet: #5730b8;
+  --neon-violet-rgb: 87, 48, 184;
+  --neon-amber: #8f5c0e;
+  --neon-amber-rgb: 143, 92, 14;
 
   --shadow-sm: 0 1px 2px rgba(16, 24, 32, 0.08);
   --shadow-md: 0 6px 20px rgba(16, 24, 32, 0.10);
@@ -136,6 +145,18 @@ html[data-theme="light"] {
   --glass-bg: rgba(255, 255, 255, 0.75);
   --glass-border: rgba(16, 24, 32, 0.08);
 }
+
+/* v9.15 WS-E: filled-button ink. The base .t58-btn.primary/.danger/.live
+   rules hardcode near-black ink (#04120e / #2a0a0a / #0d0820), tuned for
+   the dark theme's bright fills; on the light theme's darker fills that
+   ink drops under 4.5:1. Light scope only -- dark rendering unchanged. */
+html[data-theme="light"] .t58-btn.primary { color: #ffffff; }
+html[data-theme="light"] .t58-btn.danger { color: #ffffff; }
+html[data-theme="light"] .t58-btn.live { color: #ffffff; }
+html[data-theme="light"] .t58-status.live { color: #ffffff; }
+html[data-theme="light"] .t58-status.live::before { background: #ffffff; }
+html[data-theme="light"] .t58-nav-item.active { text-shadow: none; }
+html[data-theme="light"] .t58-stepper a.current { text-shadow: none; }
 
 * { box-sizing: border-box; }
 

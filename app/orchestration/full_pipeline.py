@@ -527,6 +527,79 @@ def _leaderboard_candidate_spec(cand, final_source_type: str) -> dict:
     }
 
 
+# -- v9.15 (WS-F): shared Monte Carlo pool factory + parallel DSR trials --
+# Step 6c's DSR gate re-backtests the GA leaderboard (<= ga_population
+# full backtests) one at a time; each is independent and deterministic,
+# so they fan out across a spawn pool with indexed collection and the
+# resulting trial-Sharpe list is identical (same order, same skips) to
+# the serial loop. The pool carries `df` in its initializer (once per
+# worker) rather than per task. Any pool failure falls back to the
+# serial loop for every spec, so a broken pool can only cost speed.
+_DSR_WORKER: dict = {}
+
+
+def _dsr_worker_init(df, risk, tmp_dir) -> None:
+    global _DSR_WORKER
+    _DSR_WORKER = {"df": df, "risk": risk, "tmp_dir": tmp_dir}
+
+
+def _dsr_worker_task(spec):
+    try:
+        bt = run_backtest(
+            _DSR_WORKER["df"],
+            build_strategy_from_spec(spec, _DSR_WORKER["tmp_dir"]),
+            _DSR_WORKER["risk"],
+        )
+        return float(bt.statistics.sharpe_ratio)
+    except Exception:  # noqa: BLE001 -- one bad genome must not kill the gate
+        return None
+
+
+def _trial_sharpes_for_specs(specs: list, df, risk, tmp_dir, workers) -> list[float]:
+    """One full backtest per candidate spec, in spec order, failures
+    skipped -- the exact list the DSR gate's serial loop produced.
+    Parallel (spawn pool, initializer-held frame) when there are enough
+    specs to amortize the spawn; serial otherwise and on any failure."""
+    if workers is not None and int(workers) > 1 and len(specs) >= 4:
+        try:
+            import multiprocessing
+
+            ctx = multiprocessing.get_context("spawn")
+            with ProcessPoolExecutor(
+                max_workers=int(workers), mp_context=ctx,
+                initializer=_dsr_worker_init,
+                initargs=(df, risk, str(tmp_dir) if tmp_dir is not None else None),
+            ) as pool:
+                results = list(pool.map(_dsr_worker_task, specs))
+            return [v for v in results if v is not None]
+        except Exception:  # noqa: BLE001 -- serial below is the same math
+            pass
+    out: list[float] = []
+    for spec in specs:
+        try:
+            cand_bt = run_backtest(df, build_strategy_from_spec(spec, tmp_dir), risk)
+            out.append(float(cand_bt.statistics.sharpe_ratio))
+        except Exception:  # noqa: BLE001 -- one bad genome must not kill the gate
+            continue
+    return out
+
+
+def _make_mc_pool(workers: int):
+    """A spawn ProcessPoolExecutor for run_monte_carlo(pool=...), or None
+    when parallel MC is pointless/unavailable. Caller owns shutdown.
+    One pool can serve several MC calls (v9.15 WS-F: Full Pipeline used
+    to spawn a fresh pool for each of its 5 MC calls per run)."""
+    if workers is None or int(workers) <= 1:
+        return None
+    try:
+        import multiprocessing
+
+        return ProcessPoolExecutor(
+            max_workers=int(workers), mp_context=multiprocessing.get_context("spawn"))
+    except Exception:  # noqa: BLE001 -- serial MC is always available
+        return None
+
+
 def _pnl_skew_kurtosis(pnls: list[float]) -> tuple[float, float]:
     """Trade-PnL skew/kurtosis for the DSR gate's PSR denominator -- Sharpe
     ratios on fat-tailed, skewed trade distributions (typical for
@@ -1602,12 +1675,21 @@ def run_full_pipeline(
     pnls = [t.pnl for t in baseline_bt.trades]
     dates = [t.entry_time for t in baseline_bt.trades]
     baseline_single_run = simulate_account(pnls, dates, prop_rules, reset_on_breach=cfg.reset_on_breach)
-    baseline_mc = run_monte_carlo(
-        baseline_bt.trades, prop_rules,
-        MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=cfg.baseline_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
-        max_workers=_mc_workers,
-        progress_cb=lambda d, t: _progress(1, 0.35 + 0.6 * (d / max(t, 1)), "Baseline Monte Carlo"),
-    )
+    # v9.15 (WS-F): short-lived shared MC pool for this call, shut down
+    # before Step 2 so idle MC workers never hold RAM against the GA's
+    # own worker pool during the longest step of the run.
+    _mc_pool = _make_mc_pool(_mc_workers)
+    try:
+        baseline_mc = run_monte_carlo(
+            baseline_bt.trades, prop_rules,
+            MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=cfg.baseline_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
+            max_workers=_mc_workers, pool=_mc_pool,
+            progress_cb=lambda d, t: _progress(1, 0.35 + 0.6 * (d / max(t, 1)), "Baseline Monte Carlo"),
+        )
+    finally:
+        if _mc_pool is not None:
+            _mc_pool.shutdown(wait=False)
+            _mc_pool = None
     _progress(1, 1.0, "Baseline done")
     log(
         format_run_summary_line(
@@ -1976,17 +2058,25 @@ def run_full_pipeline(
             full_history_single_run = final_single_run
 
         _progress(3, 0.25, "Final Monte Carlo")
-        final_mc = run_monte_carlo(
-            final_bt.trades, prop_rules,
-            MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
-            # MC-004: these trades came from Step 2's GA search over this
-            # same dev_df when refinement actually ran -- see
-            # run_monte_carlo's docstring. Steps 4-6 below provide the
-            # genuinely independent evidence this number alone doesn't.
-            selection_bias_caveat=refinement_ran,
-            max_workers=_mc_workers,
-            progress_cb=lambda d, t: _progress(3, 0.25 + 0.72 * (d / max(t, 1)), "Final Monte Carlo"),
-        )
+        # v9.15 (WS-F): short-lived shared MC pool for the final MC,
+        # shut down before Steps 4-6 spawn their own validation pools.
+        _mc_pool = _make_mc_pool(_mc_workers)
+        try:
+            final_mc = run_monte_carlo(
+                final_bt.trades, prop_rules,
+                MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
+                # MC-004: these trades came from Step 2's GA search over this
+                # same dev_df when refinement actually ran -- see
+                # run_monte_carlo's docstring. Steps 4-6 below provide the
+                # genuinely independent evidence this number alone doesn't.
+                selection_bias_caveat=refinement_ran,
+                max_workers=_mc_workers, pool=_mc_pool,
+                progress_cb=lambda d, t: _progress(3, 0.25 + 0.72 * (d / max(t, 1)), "Final Monte Carlo"),
+            )
+        finally:
+            if _mc_pool is not None:
+                _mc_pool.shutdown(wait=False)
+                _mc_pool = None
         _progress(3, 1.0, "Final validation done")
         log(
             format_run_summary_line(
@@ -2021,6 +2111,12 @@ def run_full_pipeline(
                 n_folds=cfg.oos_check_folds, metric=cfg.oos_check_metric,
                 prop_rules=prop_rules, mc_cfg=MonteCarloConfig(n_simulations=cfg.ga_search_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
                 embargo_start_bar=embargo_start_bar,
+                # v9.15 (WS-F): folds are independent -- evaluate them
+                # across workers (spec-driven, indexed collection;
+                # identical WalkForwardResult, serial fallback on any
+                # pool failure). The builder above stays as the
+                # fallback path.
+                max_workers=_mc_workers, strategy_spec=final_spec, tmp_dir=final_tmp_dir,
             )
             if oos_validation is None:
                 oos_skip_reason = "Not enough bars to build the requested number of out-of-sample folds."
@@ -2126,6 +2222,10 @@ def run_full_pipeline(
                     n_groups=cfg.cpcv_n_groups, n_test_groups=cfg.cpcv_n_test_groups,
                     metric=cfg.oos_check_metric, prop_rules=prop_rules,
                     mc_cfg=MonteCarloConfig(n_simulations=cfg.ga_search_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
+                    # v9.15 (WS-F): paths are independent -- evaluate
+                    # across workers (spec-driven, indexed collection;
+                    # identical CPCVResult, serial fallback on failure).
+                    strategy_spec=final_spec, tmp_dir=final_tmp_dir, max_workers=_mc_workers,
                 )
                 log(
                     f"  CPCV: {cpcv_result.n_paths} path(s), mean OOS/IS "
@@ -2176,14 +2276,18 @@ def run_full_pipeline(
                 )
                 trial_sharpes: list[float] = []
                 if refinement_ran and ga_result is not None and ga_result.leaderboard:
+                    # v9.15 (WS-F): the leaderboard re-backtests are
+                    # independent -- fan them out (identical Sharpe list:
+                    # same order, same per-genome failure skips; serial
+                    # fallback on any pool failure).
+                    _dsr_specs = []
                     for cand in ga_result.leaderboard:
                         try:
-                            cand_spec = _leaderboard_candidate_spec(cand, final_source_type)
-                            cand_bt = _run_backtest_dsr(
-                                dev_df, build_strategy_from_spec(cand_spec, final_tmp_dir), risk)
-                            trial_sharpes.append(float(cand_bt.statistics.sharpe_ratio))
+                            _dsr_specs.append(_leaderboard_candidate_spec(cand, final_source_type))
                         except Exception:  # noqa: BLE001 -- one bad genome must not kill the gate
                             continue
+                    trial_sharpes = _trial_sharpes_for_specs(
+                        _dsr_specs, dev_df, risk, final_tmp_dir, _mc_workers)
                 if not trial_sharpes:
                     # No GA leaderboard to sample a spread from (refinement
                     # didn't run or produced nothing re-backtestable): fall
@@ -2242,6 +2346,11 @@ def run_full_pipeline(
                         max_paths=cfg.pbo_max_paths,
                         metric=cfg.oos_check_metric, prop_rules=prop_rules,
                         mc_cfg=MonteCarloConfig(n_simulations=cfg.pbo_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
+                        # v9.15 (WS-F): thread the pipeline's memory-safe
+                        # worker budget through (compute_pbo's pool now
+                        # also holds the frame in its initializer instead
+                        # of pickling it per path).
+                        max_workers=_mc_workers,
                     )
                     pbo_gate_result = pbo_gate(pbo_res, max_pbo=cfg.pbo_max)
                     log(f"  {pbo_gate_result.reason}")
@@ -2296,6 +2405,9 @@ def run_full_pipeline(
         # thin sample; a winner whose number swings >10 points with the
         # seed is partly luck, and the verdict now says so.
         _mc_disp = None
+        # v9.15 (WS-F): ONE shared pool serves all seed-rescore MC calls
+        # (previously a fresh spawn per seed); shut down with this step.
+        _mc_pool = _make_mc_pool(_mc_workers)
         try:
             import statistics as _stats_mod
 
@@ -2305,7 +2417,7 @@ def run_full_pipeline(
                 _m = run_monte_carlo(
                     final_bt.trades, prop_rules,
                     MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=int(getattr(cfg, "seed_rescore_sims", 2000)), random_seed=_seed, reset_on_breach=cfg.reset_on_breach),
-                    max_workers=_mc_workers,
+                    max_workers=_mc_workers, pool=_mc_pool,
                     progress_cb=lambda d, t, _i=_si: _progress(
                         7, 0.6 + 0.28 * ((_i + d / max(t, 1)) / max(len(_rescore_seeds), 1)),
                         "Seed-stability Monte Carlo"),
@@ -2316,6 +2428,10 @@ def run_full_pipeline(
                 log(f"  Seed stability: per-attempt pass {['%.0f%%' % r for r in _rates]} (sd {_mc_disp:.1f} pts).")
         except Exception as exc:  # noqa: BLE001
             log(f"  Seed-stability check skipped: {exc}")
+        finally:
+            if _mc_pool is not None:
+                _mc_pool.shutdown(wait=False)
+                _mc_pool = None
         _progress(7, 0.92, "Verdict + report")
         verdict, verdict_reasons, scorecard, risk_of_ruin_hard_fail, lookahead_hard_fail = _make_verdict(
             final_mc, oos_validation, icir_gate,
