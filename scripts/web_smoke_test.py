@@ -24,8 +24,14 @@ PAGES = [
     "/optimize", "/full-pipeline", "/walk-forward-opt", "/walk-forward-ga", "/cpcv", "/pbo", "/sensitivity",
     "/parameter-robustness", "/regime-matrix", "/payout-probability", "/forward-test", "/live-market",
     "/start-here/create", "/start-here/test", "/start-here/champion", "/start-here/deployment",
-    "/start-here/graveyard", "/start-here/quantlab", "/start-here/account", "/support", "/user-manual",
+    "/start-here/graveyard", "/support", "/user-manual",
 ]
+
+# v9.15 (Owen): the Quant Lab and Account Start Here pages were
+# deliberately removed from the web app (Quant Lab's explainer moved
+# onto the Quant Lab page itself; the shared guide data stays for the
+# desktop app). They must 404 here, not 200.
+EXPECTED_404 = ["/start-here/quantlab", "/start-here/account"]
 
 
 def _free_port() -> int:
@@ -119,6 +125,11 @@ def _run_pages(server) -> int:
         status, _ = _get(base + path)
         print(f"{'ok  ' if status == 200 else 'FAIL'} {status} {path}")
         if status != 200:
+            failures.append(path)
+    for path in EXPECTED_404:
+        status, _ = _get(base + path)
+        print(f"{'ok  ' if status == 404 else 'FAIL'} {status} {path}  (removed -- expect 404)")
+        if status != 404:
             failures.append(path)
 
     _, validate_html = _get(base + "/validate")
