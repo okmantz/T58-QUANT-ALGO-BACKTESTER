@@ -262,6 +262,53 @@ def test_baseline_explorer_aggregation_math():
     assert s["suggestions"] and "03:00" in s["suggestions"][0]
 
 
+def test_baseline_explorer_win_clusters_mirror_losses():
+    """v9.14 WS-1: the win side aggregates the SAME trades with the same
+    arithmetic as the loss side -- bucket sums must match the trade
+    list exactly, and breakeven trades break winning streaks exactly
+    like they break losing ones."""
+    from app.orchestration.baseline_explorer import summarize_baseline_trades
+
+    # 2026-01-05 Mon, 2026-01-06 Tue, 2026-01-07 Wed, 2026-01-08 Thu.
+    trades = [
+        _trade("2026-01-05", 14, 200.0),
+        _trade("2026-01-05", 14, 150.0, direction=-1),
+        _trade("2026-01-06", 9, -80.0),
+        _trade("2026-01-06", 14, 100.0),
+        _trade("2026-01-07", 10, 0.0),          # breakeven breaks the win streak
+        _trade("2026-01-07", 14, 50.0),
+        _trade("2026-01-08", 9, 25.0),
+    ]
+    s = summarize_baseline_trades(trades)
+    wins = [t for t in trades if t["pnl"] > 0]
+    assert s["gross_profit"] == round(sum(t["pnl"] for t in wins), 2) == 525.0
+    # Best hour = 14:00 with 200+150+100+50 = 500 of 525 gross profit.
+    best = s["best_hours"][0]
+    assert best["hour"] == 14 and best["pnl"] == 500.0
+    assert best["share_of_gross_profits_pct"] == round(100.0 * 500.0 / 525.0, 1)
+    # Weekday buckets are NET (same convention as worst_weekdays): Mon
+    # 350, Tue -80+100=20, Wed 50, Thu 25 -- all positive, all listed.
+    by_label = {w["label"]: w["pnl"] for w in s["best_weekdays"]}
+    assert by_label == {"Mon": 350.0, "Tue": 20.0, "Wed": 50.0, "Thu": 25.0}
+    # Winning streaks: [Mon14, Mon14] then the Tue 09:00 loser and the
+    # Wed 10:00 breakeven break the rest into single-trade runs.
+    assert s["longest_winning_streaks"][0]["trades"] == 2
+    assert s["longest_winning_streaks"][0]["total_pnl"] == 350.0
+    assert s["biggest_win_clusters"][0]["total_pnl"] == 350.0
+    # The win-window suggestion cites the best hour with real numbers.
+    assert any("14:00" in txt and "gross profit" in txt for txt in s["suggestions"])
+
+
+def test_baseline_explorer_all_winners_has_no_loss_side():
+    """All-win baseline: loss panel stays empty/graceful and the win
+    panel still aggregates (not a division-by-zero anywhere)."""
+    from app.orchestration.baseline_explorer import summarize_baseline_trades
+
+    s = summarize_baseline_trades([_trade("2026-01-05", 10, 10.0), _trade("2026-01-05", 11, 20.0)])
+    assert s["worst_hours"] == [] and s["gross_loss"] == 0.0
+    assert s["best_hours"][0]["pnl"] == 20.0 and s["gross_profit"] == 30.0
+
+
 def test_baseline_explorer_empty_is_graceful():
     from app.orchestration.baseline_explorer import summarize_baseline_trades
 

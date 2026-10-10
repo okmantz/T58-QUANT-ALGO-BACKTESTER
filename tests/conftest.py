@@ -60,22 +60,48 @@ from app.web import server as web_server_module
 
 
 @pytest.fixture(autouse=True)
-def _bypass_license_gate_by_default():
-    """UPGRADE (licensing, web app): app.web.server._license_gate blocks
-    every route until app.licensing.client.validate() succeeds -- real
-    and correct for a shipped build, but this test suite predates that
-    gate and exercises hundreds of routes directly with no license ever
-    activated. Same treatment as the pre-existing, OPT-IN account
-    password lock (which is a no-op for tests because no test ever sets
-    a password): sets the process-wide license cache to already-valid
-    before each test and clears it after, so the gate is transparent to
-    every test by default. tests/test_web_license_gate.py, which
-    specifically exercises the gate itself, resets this back to None in
-    its own fixture before testing the unlicensed path -- see that
-    file's `reset_license_cache` fixture."""
-    web_server_module._license_ok_cached = True
+def _license_activated_by_default(monkeypatch, tmp_path_factory):
+    """v9.14: the suite reaches the web app through a REAL activation,
+    not a cache poke. app.web.server._license_gate blocks every route
+    until app.licensing.client.validate() succeeds -- real and correct
+    for a shipped build (and, since v9.14, engaged on first launch even
+    with no license server configured), but this test suite exercises
+    hundreds of routes directly. So each test gets a genuine stored
+    activation: a test-only master key whose SHA-256 hash is supplied
+    through the client's documented T58_MASTER_LICENSE_KEY_HASH env
+    override, activated through client.activate() itself (the exact
+    code path the desktop window and /activate/submit call), with
+    storage isolated to a tmp app-data dir and the keyring disabled so
+    nothing touches the developer's real license. The gate's process
+    cache is then RESET to None, so the first request in each test
+    revalidates through the real client code and caches True itself.
+    tests/test_web_license_gate.py, which specifically exercises the
+    gate, patches validate()/activate() per test on top of this --
+    see that file's `reset_license_cache` fixture."""
+    import hashlib
+
+    from app.licensing import client as _lic
+
+    fixture_key = "T58-FIXTURE-KEY"
+    monkeypatch.setenv(
+        "T58_MASTER_LICENSE_KEY_HASH",
+        hashlib.sha256(fixture_key.strip().upper().encode("utf-8")).hexdigest(),
+    )
+    # Its own dir (NOT the test's tmp_path): licensing tests patch
+    # get_app_base_dir to their own tmp_path and expect pristine
+    # storage -- the suite-wide activation must never leak into it.
+    license_home = tmp_path_factory.mktemp("t58-license")
+    monkeypatch.setattr(_lic, "get_app_base_dir", lambda: license_home)
+    monkeypatch.setattr(_lic, "_try_keyring", lambda: None)
+    _lic._session_state = None
+    _lic._session_only_active = False
+    ok, msg = _lic.activate("pytest@t58.local", fixture_key)
+    assert ok, f"conftest license activation failed: {msg}"
+    web_server_module._license_ok_cached = None
     yield
     web_server_module._license_ok_cached = None
+    _lic._session_state = None
+    _lic._session_only_active = False
 
 
 @pytest.fixture(autouse=True)

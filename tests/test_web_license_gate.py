@@ -13,10 +13,11 @@ def reset_license_cache(monkeypatch):
     (see app.web.server._license_gate's docstring) -- reset that cache
     before and after every test so tests can't leak the cached
     True/False into each other."""
-    # v9.9: the web gate only engages when a license server URL is
-    # configured (a distributed build). These tests simulate exactly
-    # that build, so configure a URL; validate()/activate() themselves
-    # are patched per-test below and never touch the network.
+    # v9.14: the web gate engages on first launch on EVERY build with
+    # no valid stored activation (the v9.9 no-URL skip was reversed).
+    # These tests simulate a configured (distributed) build, so a URL
+    # is set anyway; validate()/activate() themselves are patched
+    # per-test below and never touch the network.
     monkeypatch.setenv("T58_LICENSE_SERVER_URL", "https://license.example.invalid")
     server_module._license_ok_cached = None
     yield
