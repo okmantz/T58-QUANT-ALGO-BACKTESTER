@@ -140,7 +140,10 @@ def _chained_fitness(
     single_run = simulate_account(pnls, dates, prop_rules, reset_on_breach=mc_cfg.reset_on_breach)
     mc = run_monte_carlo(all_trades, prop_rules, mc_cfg)
     prop_summary = summarize_single_run(single_run)
-    fitness = compute_fitness(stats.to_dict(), prop_summary, mc, fitness_metric, risk_of_ruin_cap=risk_of_ruin_cap)
+    fitness = compute_fitness(
+        stats.to_dict(), prop_summary, mc, fitness_metric, risk_of_ruin_cap=risk_of_ruin_cap,
+        trades=ordered, prop_rules=prop_rules,
+    )
     fitness = apply_ga_reliability_adjustments(fitness, len(all_trades), _skipped)
     return (fitness if math.isfinite(fitness) else float("-inf")), len(all_trades)
 
@@ -472,8 +475,14 @@ def run_walkforward_aware_refinement(
             mc = run_monte_carlo(bt.trades, prop_rules, search_mc_cfg)
             fitness = compute_fitness(
                 bt.statistics.to_dict(), summarize_single_run(single_run), mc, cfg.fitness_metric,
-                risk_of_ruin_cap=cfg.risk_of_ruin_cap,
+                risk_of_ruin_cap=cfg.risk_of_ruin_cap, trades=bt.trades, prop_rules=prop_rules,
             )
+            # Same reliability scaling as the OOS side so overfitting_gap compares like with like.
+            try:
+                _sk = int(bt.equity_curve.attrs.get("sizing_halt", {}).get("skipped", 0))
+            except Exception:  # noqa: BLE001
+                _sk = 0
+            fitness = apply_ga_reliability_adjustments(fitness, len(bt.trades), _sk)
             return fitness if math.isfinite(fitness) else float("-inf")
 
         class _Cand:
@@ -905,6 +914,16 @@ def _flatlined(summaries: list, patience: int) -> bool:
 # identically for these two modes -- neither one bypasses it.
 # ---------------------------------------------------------------------------
 
+def _top_across_batches(all_population: list, size: int) -> list:
+    """Leaderboard for sequential-batch optimizers (TPE / CMA-ES): the best
+    `size` candidates across EVERY batch, not just the final one. These
+    samplers deliberately keep exploring, so the final batch is often worse
+    than an earlier one; keeping only the tail silently discarded the best
+    genome ever found."""
+    ranked = sorted(all_population, key=lambda c: c.fitness if math.isfinite(c.fitness) else float("-inf"), reverse=True)
+    return ranked[:max(1, size)]
+
+
 def _run_tpe_batches(genes: list, evaluate_batch: Callable, cfg: RefinementConfig, log) -> tuple[list, list]:
     try:
         import optuna
@@ -946,7 +965,7 @@ def _run_tpe_batches(genes: list, evaluate_batch: Callable, cfg: RefinementConfi
         log(f"TPE batch {gen}/{cfg.generations}: best OOS fitness={gen_summaries[-1].best_fitness:.3f} "
             f"mean={gen_summaries[-1].mean_fitness:.3f}")
 
-    return all_population[-cfg.population_size:], gen_summaries
+    return _top_across_batches(all_population, cfg.population_size), gen_summaries
 
 
 def _run_cma_es_batches(genes: list, evaluate_batch: Callable, cfg: RefinementConfig, log) -> tuple[list, list]:
@@ -1000,5 +1019,5 @@ def _run_cma_es_batches(genes: list, evaluate_batch: Callable, cfg: RefinementCo
             f"mean={gen_summaries[-1].mean_fitness:.3f}")
         gen += 1
 
-    return last_batch or all_population, gen_summaries
+    return _top_across_batches(all_population, cfg.population_size) if all_population else last_batch, gen_summaries
 

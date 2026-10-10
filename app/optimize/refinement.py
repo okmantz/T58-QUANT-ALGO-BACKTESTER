@@ -92,6 +92,11 @@ FITNESS_METRICS: dict[str, str] = {
     "first_payout_probability": "First Payout Probability",
     "fastest_payout": "Fastest Payout -- optimizes for SPEED to first payout under a safety floor (for tight deadlines)",
     "expected_payout": "Expected Payout ($)",
+    # v9.17: ranks on what the user actually wants -- a fresh account that
+    # reaches a payout inside the window -- measured on rolling fresh-account
+    # windows over the candidate's own (out-of-sample) trades, blended with
+    # the Monte Carlo per-attempt pass probability as a smooth tie-breaker.
+    "payout_30d": "Payout-in-30-Days -- rolling fresh-account windows reaching a payout within 30 days (recommended for fast payouts)",
     "net_profit": "Long-Term Net Profit ($) -- for long-term trading, no prop firm",
     "profit_factor": "Profit Factor",
     "sharpe_ratio": "Sharpe Ratio",
@@ -559,6 +564,62 @@ def _apply_ruin_penalty(fitness: float, mc: "MonteCarloResult", risk_of_ruin_cap
     return fitness * (1.0 - min(frac, 0.95))
 
 
+def _payout_window_fitness(
+    trades: list | None, prop_rules: "PropRules | None", mc: MonteCarloResult,
+    window_days: int = 30, step_days: int = 5, max_windows: int = 60,
+) -> float:
+    """v9.17 payout-in-window fitness. Starts a FRESH account every
+    `step_days` over the span of `trades`, lets it trade only `window_days`
+    of calendar time, and scores the fraction that reached a first payout
+    (0.60), the fraction that passed the evaluation (0.25) and the Monte
+    Carlo per-attempt pass probability (0.15, a smooth tie-breaker so a
+    population where every candidate scores 0/1 windows still has a
+    gradient). Returns -inf when there is nothing to score."""
+    from app.prop.simulator import simulate_account
+    mc_pass = getattr(mc, "per_attempt_pass_probability", None)
+    mc_pass = float(mc_pass if mc_pass is not None else getattr(mc, "evaluation_pass_probability", 0.0) or 0.0)
+    if not trades or prop_rules is None:
+        return float("-inf") if not trades else 0.15 * mc_pass
+    try:
+        ordered = sorted(trades, key=lambda t: t.entry_time)
+        t0 = pd.Timestamp(ordered[0].entry_time)
+        t_end = pd.Timestamp(ordered[-1].entry_time)
+    except Exception:  # noqa: BLE001
+        return 0.15 * mc_pass
+    span_days = (t_end - t0).total_seconds() / 86400.0
+    if span_days < window_days:
+        return 0.15 * mc_pass
+    entries = [pd.Timestamp(t.entry_time) for t in ordered]
+    step = max(1, int(step_days))
+    n_starts = int((span_days - window_days) // step) + 1
+    if n_starts > max_windows:
+        step = int(math.ceil((span_days - window_days) / max_windows))
+        n_starts = int((span_days - window_days) // step) + 1
+    n_win = n_pass = n_pay = 0
+    import bisect
+    ts_ns = [e.value for e in entries]
+    win_ns = int(window_days * 86400 * 1e9)
+    for k in range(n_starts):
+        s_ns = t0.value + int(k * step * 86400 * 1e9)
+        lo = bisect.bisect_left(ts_ns, s_ns)
+        hi = bisect.bisect_right(ts_ns, s_ns + win_ns)
+        if hi <= lo:
+            n_win += 1
+            continue
+        sub = ordered[lo:hi]
+        res = simulate_account(
+            [t.pnl for t in sub], [t.entry_time for t in sub], prop_rules, reset_on_breach=False,
+        )
+        n_win += 1
+        if res.passed_evaluation:
+            n_pass += 1
+        if res.reached_first_payout:
+            n_pay += 1
+    if n_win == 0:
+        return 0.15 * mc_pass
+    return 0.60 * (n_pay / n_win) + 0.25 * (n_pass / n_win) + 0.15 * mc_pass
+
+
 def compute_fitness(
     stats: dict, prop_summary: dict | None, mc: MonteCarloResult, metric: str,
     risk_of_ruin_cap: float | None = None,
@@ -623,6 +684,8 @@ def compute_fitness(
         # prop_summary is the single-run sim summary that carries the
         # headroom ratios; absent ratios (older summaries) contribute 0.0.
         fitness += _headroom_bonus(prop_summary)
+    elif metric == "payout_30d":
+        fitness = _payout_window_fitness(trades, prop_rules, mc)
     elif metric == "prop_guide_score":
         fitness = _prop_guide_score(stats, mc, prop_rules=prop_rules)
     elif metric == "avg_give_back_r":
@@ -640,7 +703,7 @@ def compute_fitness(
     if (
         isinstance(_n_src, (int, float)) and 0 < _n_src < 15
         and metric in ("eval_pass_probability", "first_payout_probability", "composite_prop_score",
-                       "fastest_payout", "expected_payout", "prop_guide_score")
+                       "payout_30d", "fastest_payout", "expected_payout", "prop_guide_score")
         and math.isfinite(fitness) and fitness > 0
     ):
         fitness *= float(_n_src) / 15.0
