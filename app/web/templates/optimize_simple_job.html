@@ -34,7 +34,8 @@
   <div class="lc-card">
     <h3 id="status-title"><span class="spinner" id="spinner"></span>Optimize running&hellip;</h3>
     <div id="log" class="lc-logbox tall">Starting&hellip;</div>
-    <button type="button" id="stop-btn" class="lc-btn danger small" style="margin-top:12px;" onclick="stopPolling()">Stop watching</button>
+    <button type="button" id="stop-btn" class="lc-btn danger small" style="margin-top:12px;" onclick="stopRun()">Stop run</button>
+    <button type="button" id="unwatch-btn" class="lc-btn small" style="margin-top:12px;margin-left:8px;" onclick="stopPolling()">Stop watching</button>
   </div>
 
   <div class="lc-card" id="summary-card" style="display:none;">
@@ -78,7 +79,22 @@
 <script>
 const JOB_ID = {{ job_id | tojson }};
 let stopped = false;
-function stopPolling(){ stopped = true; document.getElementById('stop-btn').disabled = true; }
+function stopPolling(){ stopped = true; document.getElementById('unwatch-btn').disabled = true; }
+async function stopRun(){
+  const b = document.getElementById('stop-btn'); b.disabled = true; b.textContent = 'Stopping…';
+  try { await fetch('/optimize-simple/job/' + JOB_ID + '/stop', {method: 'POST'}); } catch (e) {}
+}
+function renderProgress(prog){
+  const pct = document.getElementById('lc-pct'), stage = document.getElementById('lc-stage'),
+        line = document.getElementById('lc-stage-line'), bar = document.getElementById('lc-progress');
+  if (!prog || typeof prog.percent !== 'number') return;
+  const p = Math.max(0, Math.min(100, prog.percent));
+  pct.textContent = p.toFixed(0) + '%';
+  stage.textContent = 'running';
+  bar.classList.remove('indet'); bar.querySelector('div').style.width = p + '%';
+  const eng = prog.step ? ('Engine ' + prog.step + ' of ' + prog.step_total + ' — ') : '';
+  line.textContent = eng + (prog.label || 'working…');
+}
 function esc(s){ const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
 function engineRow(name, r){
   if (r && r.error) return '<div class="lc-kv"><span class="k">' + esc(name) + '</span><span class="v lc-bad">failed</span></div>';
@@ -118,15 +134,18 @@ async function poll(){
     const logEl = document.getElementById('log');
     logEl.innerHTML = (data.log || []).map(esc).join('<br>');
     logEl.scrollTop = logEl.scrollHeight;
+    window.__lcJobProgress = data.progress || null;
+    if (!data.done) renderProgress(data.progress);
     if (data.done) {
       document.getElementById('spinner').style.display = 'none';
       document.getElementById('stop-btn').style.display = 'none';
-      document.getElementById('status-title').textContent = data.error ? 'Optimize finished with errors' : 'Optimize finished';
+      document.getElementById('unwatch-btn').style.display = 'none';
+      document.getElementById('status-title').textContent = data.cancelled ? 'Optimize stopped' : (data.error ? 'Optimize finished with errors' : 'Optimize finished');
       document.getElementById('summary-card').style.display = 'block';
       const pct = document.getElementById('lc-pct'), stage = document.getElementById('lc-stage'),
             line = document.getElementById('lc-stage-line'), prog = document.getElementById('lc-progress');
-      if (pct) pct.textContent = '100%';
-      if (stage) stage.textContent = 'done';
+      if (pct) pct.textContent = data.cancelled ? '—' : '100%';
+      if (stage) stage.textContent = data.cancelled ? 'stopped' : 'done';
       if (line) line.textContent = data.error ? 'Finished with errors' : 'All ticked engines finished';
       if (prog) { prog.classList.remove('indet'); prog.querySelector('div').style.width = '100%'; }
       renderSummary(data.summary);

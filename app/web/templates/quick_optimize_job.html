@@ -24,6 +24,14 @@
 
 <div class="card">
   <h2 id="status-title"><span class="spinner" id="spinner"></span>Quick Optimize running&hellip;</h2>
+  <div style="margin:10px 0 14px;">
+    <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:6px;">
+      <span id="qo-prog-label">Starting&hellip;</span><b id="qo-prog-pct">0%</b>
+    </div>
+    <div style="height:10px; border-radius:6px; background:#1b2430; overflow:hidden;">
+      <div id="qo-prog-bar" style="height:100%; width:0%; background:#3aa6ff; transition:width .6s ease;"></div>
+    </div>
+  </div>
   <div id="log">Starting&hellip;</div>
   <button type="button" id="stop-btn" onclick="stopQuickOptimize()" style="margin-top:12px; padding:10px 22px; border-radius:10px; border:1px solid #6b2323; background:#3a1616; color:#ffb4b4; font-size:14px; font-weight:700; cursor:pointer;">Stop</button>
 </div>
@@ -121,6 +129,14 @@
         if (!data.found) return;
         document.getElementById('log').textContent = data.log.filter(Boolean).join('\n');
         document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
+
+        window.__lcJobProgress = data.progress || null;
+        if (data.progress && typeof data.progress.percent === 'number') {
+          const pp = Math.max(0, Math.min(100, data.progress.percent));
+          document.getElementById('qo-prog-pct').textContent = pp.toFixed(0) + '%';
+          document.getElementById('qo-prog-bar').style.width = pp + '%';
+          if (data.progress.label) document.getElementById('qo-prog-label').textContent = data.progress.label;
+        }
 
         if (data.stopping && !data.done) {
           document.getElementById('status-title').innerHTML =

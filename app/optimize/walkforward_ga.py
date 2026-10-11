@@ -119,7 +119,7 @@ def _chained_fitness(
     all_trades: list[Trade] = []
     _skipped = 0
     for test_df in slices:
-        bt = run_backtest(test_df, strategy_to_run, risk_to_use, adaptive_risk=adaptive_risk, lookahead_check="skip")
+        bt = run_backtest(test_df, strategy_to_run, risk_to_use, adaptive_risk=adaptive_risk, lookahead_check="skip", compute_stats=False)
         all_trades.extend(bt.trades)
         try:
             _skipped += int(bt.equity_curve.attrs.get("sizing_halt", {}).get("skipped", 0))
@@ -329,8 +329,14 @@ def run_walkforward_aware_refinement(
     max_workers: int | None = None,
     adaptive_risk=None,
     cancel_event: "threading.Event | None" = None,
+    preflight: bool = True,
+    batch_progress_cb: "Callable[[int, int], None] | None" = None,
 ) -> WalkforwardGAResult:
     """
+    preflight: False skips this function's own full-data signal check (the
+    caller already ran an equivalent full backtest). batch_progress_cb(done,
+    total) is called as genome evaluations finish (for live progress bars).
+
     parallel: when True (the default) and the search is large enough to be
     worth it (see _MIN_EVALUATIONS_FOR_PARALLEL), each generation's genome
     evaluations run across multiple worker processes instead of one at a
@@ -426,7 +432,8 @@ def run_walkforward_aware_refinement(
     # app.search.robustness.run_walk_forward's embargo_start_bar.
     max_test_bar_used = max((f.test_end_bar for f in folds), default=None)
 
-    preflight_signal_check(df, strategy, risk, "Walk-Forward-Aware GA")
+    if preflight:
+        preflight_signal_check(df, strategy, risk, "Walk-Forward-Aware GA")
 
     tmp_dir: Path | None = None
     if strategy.source_type == "python":
@@ -578,7 +585,42 @@ def run_walkforward_aware_refinement(
                     pool.shutdown(wait=False, cancel_futures=True)
                 pool = None
 
+        _memo: dict[tuple, tuple[float, int]] = {}
+
+        def _count_progress(n: int) -> None:
+            if batch_progress_cb is not None:
+                try:
+                    batch_progress_cb(n, len(genome_list_ref[0]))
+                except Exception:  # noqa: BLE001 -- progress must never break the GA
+                    pass
+
+        genome_list_ref: list = [[]]
+
         def evaluate_batch(genome_list: list[list[float]]) -> list["_Cand"]:
+            # Memoized wrapper: identical genomes (elites carried over,
+            # clamped duplicates) are scored once. Counted in
+            # total_evaluations as before so Bonferroni stays identical.
+            if not genome_list:
+                return []
+            keys = [tuple(float(x) for x in g) for g in genome_list]
+            todo_idx: list[int] = []
+            seen: dict[tuple, int] = {}
+            for i, k in enumerate(keys):
+                if k not in _memo and k not in seen:
+                    seen[k] = i
+                    todo_idx.append(i)
+            fresh = _evaluate_batch_raw([genome_list[i] for i in todo_idx])
+            for i, c in zip(todo_idx, fresh):
+                _memo[keys[i]] = (c.fitness, c.trade_count)
+            out = []
+            for g, k in zip(genome_list, keys):
+                f, tc = _memo[k]
+                out.append(_Cand(g, f, tc))
+            total_evaluations[0] += len(genome_list) - len(todo_idx)
+            return out
+
+        def _evaluate_batch_raw(genome_list: list[list[float]]) -> list["_Cand"]:
+            genome_list_ref[0] = genome_list
             if not genome_list:
                 return []
             if pool is not None:
@@ -607,6 +649,7 @@ def run_walkforward_aware_refinement(
                             i = futures[fut]
                             fitness, tc = fut.result()
                             results[i] = _Cand(genome_list[i], fitness, tc)
+                            _count_progress(sum(1 for r in results if r is not None))
                     total_evaluations[0] += len(results)
                     return results
                 except WalkforwardGACancelled:
@@ -620,6 +663,7 @@ def run_walkforward_aware_refinement(
                         "Walk-forward-aware GA search stopped by user."
                     )
                 results.append(make(g))
+                _count_progress(len(results))
             total_evaluations[0] += len(results)
             return results
 

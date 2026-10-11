@@ -141,7 +141,7 @@ from app.orchestration.multi_instrument_search import (
 from app.orchestration.multi_instrument_speed_run import (
     best_speed_run_across_instruments, run_multi_instrument_speed_run,
 )
-from app.orchestration.run_progress import PipelineProgress, ProgressTracker
+from app.orchestration.run_progress import PipelineProgress, ProgressTracker, SimpleProgress
 from app.orchestration.speed_run import SpeedRunConfig, SpeedRunResult, run_speed_run
 from app.orchestration.speed_run import _rank_key as _speedrun_rank_key
 from app.orchestration.overnight_autopilot import AutopilotConfig, run_overnight_autopilot
@@ -2162,13 +2162,23 @@ def _ds_run(job_id, strategy, library_ref, form, risk, rules, page_df, page_labe
             "no_winner": winner is None, "rows": out["rows"]}
 
 
-def _run_optimize_simple_job(job_id: str, df, strategy, risk, rules, engines, form, library_ref=None, dataset_label="") -> None:
+def _run_optimize_simple_job(job_id: str, df, strategy, risk, rules, engines, form, library_ref=None, dataset_label="",
+                             cancel_event=None) -> None:
     summary: dict = {}
+    tracker = SimpleProgress(engine_total=len(engines))
+    JOB_MANAGER.update(job_id, progress=tracker.payload())
     try:
-        for eng in engines:
+        for _eng_i, eng in enumerate(engines):
+            if cancel_event is not None and cancel_event.is_set():
+                JOB_MANAGER.finish(job_id, cancelled=True, summary=summary, progress=tracker.payload())
+                return
             JOB_MANAGER.log(job_id, f"Optimize (pick engines): running {eng}...")
+            JOB_MANAGER.update(job_id, progress=tracker.begin_engine(_eng_i, eng.replace("_", " ")))
             try:
                 if eng == "quick_optimize":
+                    def _hook(fraction, label="", _t=tracker):
+                        JOB_MANAGER.update(job_id, progress=_t.update(fraction, label))
+
                     res = run_quick_optimize(
                         df, strategy, risk, rules,
                         QuickOptimizeConfig(
@@ -2176,15 +2186,25 @@ def _run_optimize_simple_job(job_id: str, df, strategy, risk, rules, engines, fo
                             ga_generations=int(form.get("ga_generations", 6) or 6),
                             fitness_metric=form.get("fitness_metric", "eval_pass_probability") or "eval_pass_probability",
                             save_to_library=False,
+                            # Same scoring basis as Full Pipeline (a blown eval
+                            # resets and keeps going) unless explicitly unticked.
+                            reset_on_breach=(form.get("reset_on_breach", "on") == "on"),
                         ),
                         progress_cb=lambda m: JOB_MANAGER.log(job_id, m),
+                        progress_hook=_hook,
+                        cancel_event=cancel_event,
+                        instrument_label=dataset_label,
                     )
                     summary[eng] = {"ran": True,
                                     "baseline_net_profit": getattr(res, "baseline_net_profit", None),
                                     "optimized_net_profit": getattr(res, "optimized_net_profit", None),
                                     "baseline_eval_pass_probability": getattr(res, "baseline_eval_pass_probability", None),
                                     "optimized_eval_pass_probability": getattr(res, "optimized_eval_pass_probability", None),
-                                    "improved": getattr(res, "improved", None)}
+                                    "improved": getattr(res, "improved", None),
+                                    "optimized_per_attempt_pass_probability": getattr(res, "optimized_per_attempt_pass_probability", None),
+                                    "oos_trade_count": getattr(res, "oos_trade_count", None),
+                                    "ready_gate_passed": getattr(res, "ready_gate_passed", None),
+                                    "ready_gate_reasons": " | ".join(getattr(res, "ready_gate_reasons", None) or []) or None}
                 elif eng == "refine":
                     res = run_iterative_refinement(
                         df, strategy, risk, rules,
@@ -2210,9 +2230,12 @@ def _run_optimize_simple_job(job_id: str, df, strategy, risk, rules, engines, fo
                     url, label = _OPT_LINK_ENGINES[eng]
                     summary[eng] = {"ran": False, "linked": True, "url": url, "label": label,
                                     "note": "This engine keeps its own page and settings; settings are not auto-carried on web. Open it and re-pick the strategy/dataset there."}
+            except WalkforwardGACancelled:
+                JOB_MANAGER.finish(job_id, cancelled=True, summary=summary, progress=tracker.payload())
+                return
             except Exception as exc:  # noqa: BLE001 -- one engine must not sink the rest
                 summary[eng] = {"ran": False, "error": str(exc)}
-        JOB_MANAGER.finish(job_id, summary=summary)
+        JOB_MANAGER.finish(job_id, summary=summary, progress=tracker.finish())
     except Exception as exc:  # noqa: BLE001
         JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
 
@@ -2239,15 +2262,23 @@ def optimize_simple_start():
         if tf_error:
             return render_template("optimize_simple.html", **ctx(error=tf_error)), 400
         strategy, library_ref = _simple_load_strategy(form)
+        try:
+            strategy = stamp_manual_timeframe(strategy, _tf_label)
+        except Exception:  # noqa: BLE001 -- stamping is cosmetic provenance only
+            pass
         rules = _simple_prop_rules(form)
         risk = _simple_base_risk(form, rules)
+        cancel_event = threading.Event()
         job_id = JOB_MANAGER.create(tool="Optimize (pick engines)", page_template="/optimize-simple/job/{job_id}",
                                     log=[f"Loaded {len(df)} bars from {active_label}."] + ([tf_note] if tf_note else []) + [f"Engines: {', '.join(engines)}."],
-                                    instrument=active_label)
+                                    instrument=active_label, cancel_event=cancel_event, cancelled=False,
+                                    progress={"percent": 0.0, "step": None, "step_total": len(engines), "step_label": "",
+                                              "label": "Starting", "elapsed_seconds": 0.0, "done": False})
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         threading.Thread(target=_run_optimize_simple_job,
                          args=(job_id, df, strategy, risk, rules, engines, form),
-                         kwargs={"library_ref": library_ref, "dataset_label": active_label},
+                         kwargs={"library_ref": library_ref, "dataset_label": active_label,
+                                 "cancel_event": cancel_event},
                          daemon=True).start()
         return redirect(url_for("optimize_simple_job", job_id=job_id))
     except (StrategyError, RefinementError, ValueError) as exc:
@@ -2280,8 +2311,22 @@ def optimize_simple_job_status(job_id):
     job = JOB_MANAGER.get(job_id)
     if job is None:
         return jsonify({"found": False}), 404
+    _ce = job.get("cancel_event")
     return jsonify({"found": True, "done": job["done"], "error": job["error"], "log": job["log"],
-                    "instrument": job.get("instrument"), "summary": job.get("summary")})
+                    "instrument": job.get("instrument"), "summary": job.get("summary"),
+                    "progress": job.get("progress"), "cancelled": job.get("cancelled", False),
+                    "stopping": bool(_ce is not None and _ce.is_set() and not job["done"])})
+
+
+@app.route("/optimize-simple/job/<job_id>/stop", methods=["POST"])
+def optimize_simple_job_stop(job_id):
+    job = JOB_MANAGER.get(job_id)
+    if job is None:
+        return jsonify({"found": False}), 404
+    ce = job.get("cancel_event")
+    if ce is not None and not job["done"]:
+        ce.set()
+    return jsonify({"found": True, "stopping": ce is not None and not job["done"]})
 
 
 @app.route("/validate-simple")
@@ -7664,11 +7709,17 @@ def _run_quickopt_job(
     # job's own recovery panel inherits its real risk setup too.
     JOB_MANAGER.update(job_id, risk=risk, rules=rules)
     try:
+        _qo_tracker = SimpleProgress()
+
+        def _qo_hook(fraction, label=""):
+            JOB_MANAGER.update(job_id, progress=_qo_tracker.update(fraction, label))
+
         result = run_quick_optimize(
             df, strategy, risk, rules, cfg, progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
             cancel_event=cancel_event, instrument_label=instrument_label,
+            progress_hook=_qo_hook,
         )
-        JOB_MANAGER.finish(job_id, result=result)
+        JOB_MANAGER.finish(job_id, result=result, progress=_qo_tracker.finish())
     except WalkforwardGACancelled:
         JOB_MANAGER.finish(job_id, cancelled=True)
     except RefinementError as exc:
@@ -7907,6 +7958,7 @@ def quickopt_job_status(job_id):
         # spinning like the click did nothing.
         "stopping": bool(_cancel_event is not None and _cancel_event.is_set() and not job["done"]),
         "log": job["log"], "instrument": job.get("instrument"), "summary": summary,
+        "progress": job.get("progress"),
         "best_timeframe": job.get("best_timeframe"), "sweep_timeframes": job.get("sweep_timeframes"),
         # v9: structured recovery plan for the Quick Optimize result.
         # v9.15: pass the run's own risk/rules (see the pipeline status).

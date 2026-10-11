@@ -184,10 +184,25 @@ def _reset_segment_ids(equity_df: pd.DataFrame) -> np.ndarray | None:
     if not events:
         return None
     ts = equity_df["timestamp"]
-    seg_id = np.zeros(len(ts), dtype=np.int64)
-    for ev in events:
-        seg_id += (ts >= ev["reset_at"]).to_numpy().astype(np.int64)
-    return seg_id
+    # SPEED (2026-10-11): the original loop did one full-length compare per
+    # reset event -- O(bars x events). Under the prop account model a long
+    # run records thousands of events, so on ~470k bars this single helper
+    # cost 5-15 s per backtest (profiled on ES 5m). The segment id of a bar
+    # is exactly "how many reset events happened at or before its
+    # timestamp", i.e. a sorted-search count -- identical output, computed
+    # in O((bars + events) log events). Falls back to the original loop if
+    # the timestamps can't be searched directly (mixed tz-aware/naive, NaT).
+    try:
+        reset_ats = pd.DatetimeIndex(pd.to_datetime([ev["reset_at"] for ev in events])).sort_values()
+        bar_ts = pd.DatetimeIndex(pd.to_datetime(ts))
+        if bar_ts.isna().any() or reset_ats.isna().any():
+            raise ValueError("NaT in timestamps")
+        return reset_ats.searchsorted(bar_ts, side="right").astype(np.int64)
+    except Exception:  # noqa: BLE001 -- fall back to the exact original computation
+        seg_id = np.zeros(len(ts), dtype=np.int64)
+        for ev in events:
+            seg_id += (ts >= ev["reset_at"]).to_numpy().astype(np.int64)
+        return seg_id
 
 
 def _drawdown_series(equity: pd.Series, seg_id: np.ndarray | None = None) -> pd.Series:

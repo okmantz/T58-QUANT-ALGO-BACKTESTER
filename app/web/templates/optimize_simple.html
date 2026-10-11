@@ -191,9 +191,10 @@
         <div class="lc-adv-field"><label class="flabel">Max trades / day</label><input type="number" name="max_trades_day" value="10"></div>
         <div class="lc-adv-field"><label class="flabel">Pip size</label><input type="number" step="any" name="pip_size" value="0.0001"></div>
         <div class="lc-adv-field"><label class="flabel">Contract size</label><input type="number" step="any" name="contract_size" placeholder="auto"></div>
-        <div class="lc-adv-field"><label class="flabel">Spread (pips)</label><input type="number" step="any" name="spread_pips" value="1.0"></div>
-        <div class="lc-adv-field"><label class="flabel">Slippage (pips)</label><input type="number" step="any" name="slippage_pips" value="0.5"></div>
+        <div class="lc-adv-field"><label class="flabel">Spread (blank = instrument default)</label><input type="number" step="any" name="spread_pips" value="" placeholder="auto (instrument default)"></div>
+        <div class="lc-adv-field"><label class="flabel">Slippage (blank = instrument default)</label><input type="number" step="any" name="slippage_pips" value="" placeholder="auto (instrument default)"></div>
         <div class="lc-adv-field"><label class="flabel">Commission / trade</label><input type="number" step="any" name="commission" value="0"></div>
+        <div class="lc-adv-field"><label class="flabel">Reset a blown eval and keep going (like Full Pipeline)</label><input type="checkbox" name="reset_on_breach" checked></div>
         <div class="lc-adv-field"><label class="flabel">GA population (Quick Optimize)</label><input type="number" name="ga_population" value="16"></div>
         <div class="lc-adv-field"><label class="flabel">GA generations (Quick Optimize)</label><input type="number" name="ga_generations" value="6"></div>
         <div class="lc-adv-field"><label class="flabel">Population (Refine)</label><input type="number" name="population_size" value="10"></div>

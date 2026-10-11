@@ -280,8 +280,17 @@ def baseline_preflight(
                 "fraction of the strategy's stop is skipped instead of shrunk); tighten the strategy stop; or raise the risk budget. "
                 f"Reasons: {halt.get('skip_reasons', {})}"
             )
-            if needed is not None and budget is not None:
+            if needed is not None and budget is not None and needed > budget * 1.0001:
                 msg += f" This would need ≈ ${needed:,.0f} per trade at the current stop, vs ${budget:,.0f} configured."
+            elif needed is not None and budget is not None:
+                # The one-contract figure above came from a trade that WAS
+                # taken (it fits the budget), so quoting it against the budget
+                # read as a contradiction ("$500 vs $500"). The skipped
+                # signals are the ones whose stops are WIDER than that.
+                msg += (
+                    f" (The ${needed:,.0f} figure is a taken trade's stop; the skipped signals carry "
+                    "wider stops that one contract cannot fit under the budget.)"
+                )
             add("block", "sizing_skips", msg)
     except Exception:  # noqa: BLE001
         pass
@@ -468,3 +477,102 @@ def compare_rules_to_preset(rules, preset_key: str) -> list[PreflightIssue]:
                 f"{f}: config has {a!r} but {preset.label} uses {b!r}"
                 + (f" (checked {preset.rules_checked_on})" if preset.rules_checked_on else " (not re-verified)") + "."))
     return out
+
+
+def resolve_baseline_sizing(
+    df,
+    strategy,
+    risk,
+    rules,
+    *,
+    run_backtest_fn,
+    adaptive_risk=None,
+    symbol: str | None = None,
+    min_trades: int = 100,
+    log=None,
+    match_full_pipeline_sizing: bool = True,
+):
+    """Full Pipeline's sizing resolution, shared so Optimize behaves the same.
+
+    Order: (1) skip/fit_stop -> rr_planned (never shrinks the stop);
+    (2) a stop-less manual strategy gets the visible 2 x ATR(14) default
+    BEFORE the baseline (whole-contract runs); (3) run the baseline; if
+    preflight blocks on sizing, apply the stop default (if not yet) and then
+    the sizing remedies, adopting the first that clears the block.
+
+    Returns (strategy, risk, baseline_bt, preflight_report, notes) where notes
+    is {"warnings": [...], "stop_default": dict|None, "sizing_adjustment":
+    dict|None, "rr_planned_converted": bool}. Never raises on a block -- the
+    caller decides whether to enforce."""
+    from dataclasses import replace
+
+    _log = log or (lambda _m: None)
+    notes: dict = {"warnings": [], "stop_default": None, "sizing_adjustment": None,
+                   "rr_planned_converted": False}
+    if match_full_pipeline_sizing and risk.sizing_mode in ("skip", "fit_stop"):
+        risk = replace(risk, sizing_mode="rr_planned")
+        notes["rr_planned_converted"] = True
+
+    stopless = False
+    if getattr(strategy, "source_type", None) == "manual":
+        stopless = not strategy_defines_stop(strategy)
+
+    def _stop_text(note, when):
+        med = note.get("median_stop_points")
+        ph = note.get("placeholder_stop_points")
+        cs = float(risk.contract_size) if risk.contract_size else None
+        budget = risk.risk_amount(float(risk.initial_balance))
+        txt = (f"STOP DEFAULT ({when}): this strategy defines no stop of its own, so it is traded the "
+               f"discretionary way: stop = {note['multiple']:g} x ATR({note['period']})")
+        if med:
+            txt += f" (median {med:.1f} pts" + (f" = ${med * cs:,.0f} on one full-size contract" if cs else "") + ")"
+        txt += f", sized against the ${budget:,.0f} risk budget."
+        if ph:
+            txt += (f" The engine's silent placeholder is 1% of price (~{ph:.0f} pts"
+                    + (f" = ${ph * cs:,.0f} on one contract" if cs else "") + ") -- wider than the budget itself.")
+        return txt + " To use your own stop, set risk_management or stop_loss_pips on the strategy."
+
+    if stopless and risk.contract_size:
+        strategy, note = apply_no_stop_default(strategy, df)
+        if note is not None:
+            notes["stop_default"] = note
+            t = _stop_text(note, "this run only")
+            _log(f"  {t}")
+            notes["warnings"].append(t)
+
+    bt = run_backtest_fn(df, strategy, risk, adaptive_risk=adaptive_risk)
+    skipped = int(((bt.equity_curve.attrs.get("sizing_halt") or {}).get("skipped") or 0))
+    pf = None
+    if bt.trades or skipped:
+        pf = baseline_preflight(bt, df, risk, rules, symbol=symbol, min_trades=min_trades)
+        _log("  " + pf.render().replace("\n", "\n  "))
+        if pf.blocked and {i.code for i in pf.by_severity("block")} & SIZING_BLOCK_CODES:
+            ratio_before = float(pf.facts.get("sizing_skip_ratio", 0.0))
+            if stopless and notes["stop_default"] is None:
+                s2, note = apply_no_stop_default(strategy, df)
+                if note is not None:
+                    bt2 = run_backtest_fn(df, s2, risk, adaptive_risk=adaptive_risk)
+                    pf2 = baseline_preflight(bt2, df, risk, rules, symbol=symbol, min_trades=min_trades)
+                    t = _stop_text(note, "automatic, this run only")
+                    strategy, bt, pf = s2, bt2, pf2
+                    notes["stop_default"] = note
+                    notes["warnings"].append(t)
+                    _log(f"  {t}")
+            if {i.code for i in pf.by_severity("block")} & SIZING_BLOCK_CODES:
+                for kind, detail, cand in sizing_remedy_candidates(risk, symbol):
+                    bt2 = run_backtest_fn(df, strategy, cand, adaptive_risk=adaptive_risk)
+                    pf2 = baseline_preflight(bt2, df, cand, rules, symbol=symbol, min_trades=min_trades)
+                    after = float(pf2.facts.get("sizing_skip_ratio", 0.0))
+                    if {i.code for i in pf2.by_severity("block")} & SIZING_BLOCK_CODES:
+                        _log(f"  Sizing remedy '{kind}' tried -- still blocked ({after:.0%} skipped).")
+                        continue
+                    txt = (f"SIZING ADJUSTMENT (automatic, this run only): {ratio_before:.0%} of signals were "
+                           f"unaffordable at the configured sizing; this run now uses '{kind}' "
+                           f"(skipped after: {after:.0%}). No strategy parameter was changed.")
+                    _log(f"  {txt}")
+                    notes["warnings"].append(txt)
+                    notes["sizing_adjustment"] = {"applied": True, "kind": kind, **detail,
+                                                  "skip_ratio_before": ratio_before, "skip_ratio_after": after}
+                    risk, bt, pf = cand, bt2, pf2
+                    break
+    return strategy, risk, bt, pf, notes

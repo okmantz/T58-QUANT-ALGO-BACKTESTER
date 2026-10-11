@@ -212,8 +212,15 @@ def run_backtest(
     adaptive_risk: AdaptiveRiskConfig | None = None,
     intrabar_df: pd.DataFrame | None = None,
     lookahead_check: str = "auto",
+    compute_stats: bool = True,
 ) -> BacktestResult:
     """
+    compute_stats: False skips compute_statistics and returns
+        ``statistics=None`` (trades, equity curve and warnings are
+        unchanged). Only for inner search loops that read nothing but the
+        trade list / equity-curve attrs (the walk-forward GA scores every
+        candidate that way); every caller that reads ``.statistics`` keeps
+        the default True.
     intrabar_df: finer-timeframe (e.g. 1-minute) frame for fill-order replay
         (used only when risk.intrabar_replay is True).
     lookahead_check: "auto" (default) runs the behavioural lookahead check once
@@ -352,6 +359,16 @@ def run_backtest(
             intrabar_df=intrabar_df,
         )
     execution_warnings = [str(w.message) for w in caught if issubclass(w.category, RuntimeWarning)]
+
+    if not compute_stats:
+        return BacktestResult(
+            strategy_name=strat_result.name,
+            trades=trades,
+            equity_curve=equity_curve,
+            statistics=None,
+            initial_balance=risk.initial_balance,
+            warnings=timeframe_warnings + condition_warnings + execution_warnings,
+        )
 
     stats = compute_statistics(trades, equity_curve, initial_balance=risk.initial_balance)
 

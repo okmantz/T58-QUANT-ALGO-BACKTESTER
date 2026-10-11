@@ -408,3 +408,72 @@ class PipelineProgress:
             "elapsed_seconds": round(max(0.0, end - self._started_at), 1),
             "done": self._finished_at is not None,
         }
+
+
+
+class SimpleProgress:
+    """v9.11: percent tracker for jobs that report a plain 0..1 fraction
+    (Quick Optimize, the Optimize page's multi-engine runs). Same payload
+    keys as PipelineProgress so the shared right-rail renderer
+    (window.__lcJobProgress) works unchanged. Monotonic and thread-safe.
+
+    engine_total > 1 splits the bar into equal slices, one per engine;
+    call begin_engine(i, label) before each engine's run."""
+
+    def __init__(self, engine_total: int = 1, clock: Callable[[], float] = time.time) -> None:
+        self._lock = threading.Lock()
+        self._clock = clock
+        self._started_at = clock()
+        self._finished_at: Optional[float] = None
+        self._engine_total = max(1, int(engine_total))
+        self._engine_index = 0
+        self._engine_label = ""
+        self._percent = 0.0
+        self._label = ""
+
+    def begin_engine(self, index: int, label: str = "") -> dict:
+        with self._lock:
+            self._engine_index = max(0, min(int(index), self._engine_total - 1))
+            self._engine_label = label
+            self._label = label
+            base = self._engine_index / self._engine_total * 100.0
+            if base > self._percent:
+                self._percent = round(base, 1)
+            return self._payload_locked()
+
+    def update(self, fraction: float, label: str = "") -> dict:
+        with self._lock:
+            try:
+                f = max(0.0, min(1.0, float(fraction)))
+            except (TypeError, ValueError):
+                f = 0.0
+            overall = (self._engine_index + f) / self._engine_total * 100.0
+            overall = min(overall, 99.0)  # only finish() reaches 100
+            if overall > self._percent:
+                self._percent = round(overall, 1)
+            if label:
+                self._label = label
+            return self._payload_locked()
+
+    def finish(self) -> dict:
+        with self._lock:
+            if self._finished_at is None:
+                self._finished_at = self._clock()
+            self._percent = 100.0
+            return self._payload_locked()
+
+    def payload(self) -> dict:
+        with self._lock:
+            return self._payload_locked()
+
+    def _payload_locked(self) -> dict:
+        end = self._finished_at if self._finished_at is not None else self._clock()
+        return {
+            "percent": self._percent,
+            "step": self._engine_index + 1 if self._engine_total > 1 else None,
+            "step_total": self._engine_total,
+            "step_label": self._engine_label,
+            "label": self._label,
+            "elapsed_seconds": round(max(0.0, end - self._started_at), 1),
+            "done": self._finished_at is not None,
+        }

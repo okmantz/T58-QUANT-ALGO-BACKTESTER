@@ -260,6 +260,11 @@ class QuickOptimizeConfig:
     # own checkbox to CHECKED.
     reset_on_breach: bool = False
 
+    # v9.11: size like Full Pipeline (skip/fit_stop -> rr_planned, visible
+    # 2 x ATR stop for stop-less manual strategies, sizing remedies on a
+    # preflight block). False keeps the legacy raw-sizing behavior.
+    match_full_pipeline_sizing: bool = True
+
     # Point (5) of the 2026-09-17 fix: opt-in, lightweight holdout check.
     # False (default) is byte-identical to every run before this existed --
     # baseline/GA search/final re-validation all see the whole `df`, exactly
@@ -575,8 +580,11 @@ def run_quick_optimize(
     instrument_label: str = "",
     timeframe_label: str = "",
     defer_library_save: bool = False,
+    progress_hook=None,
 ) -> QuickOptimizeResult:
-    """Runs the walk-forward-aware GA against `strategy` and returns a
+    """progress_hook(fraction 0..1, label): optional live progress for the UI.
+
+    Runs the walk-forward-aware GA against `strategy` and returns a
     before/after comparison. Raises RefinementError (same exception Full
     Pipeline surfaces for this step) if the strategy has no tunable
     parameters, or produces zero baseline trades, so the caller can show a
@@ -590,6 +598,15 @@ def run_quick_optimize(
     t0 = time.time()
     warnings: list[str] = []
     display_name = _display_name(strategy)
+
+    def _prog(frac: float, label: str) -> None:
+        if progress_hook is not None:
+            try:
+                progress_hook(max(0.0, min(1.0, float(frac))), label)
+            except Exception:  # noqa: BLE001 -- progress must never break a run
+                pass
+
+    _prog(0.0, "Starting")
 
     # v9.4 simple-name inputs (Owen's formula: instrument + timeframe +
     # leading indicator + (TEST)); see _save_optimized_to_library.
@@ -647,26 +664,48 @@ def run_quick_optimize(
     # baseline/GA-search/final/holdout backtests actually run against.
     risk = replace(risk, reset_on_breach=cfg.reset_on_breach)
 
-    log(f"Checking '{display_name}' produces trades on this data...")
-    preflight_signal_check(dev_df, strategy, risk, "Quick Optimize")
-
     adaptive_risk = build_limit_aware_preset(prop_rules, daily_profit_lock_pct=cfg.adaptive_risk_daily_profit_lock_pct) \
         if cfg.adaptive_risk_enabled else None
     if adaptive_risk is not None:
         log(f"Adaptive risk enabled: {len(adaptive_risk.rules)} limit-aware throttle rule(s) applied.")
 
+    # v9.11: ONE full-data baseline serves as the zero-trade check, the
+    # preflight and the baseline numbers (it used to run a separate
+    # preflight_signal_check backtest first, and the GA ran a third).
     log("Running baseline backtest...")
-    baseline_bt = run_backtest(dev_df, strategy, risk, adaptive_risk=adaptive_risk)
+    _prog(0.01, "Baseline backtest")
+    from app.validation.preflight import baseline_preflight, enforce_preflight, resolve_baseline_sizing
+
+    sizing_notes: dict = {}
+    if cfg.match_full_pipeline_sizing:
+        strategy, risk, baseline_bt, _pf, sizing_notes = resolve_baseline_sizing(
+            dev_df, strategy, risk, prop_rules,
+            run_backtest_fn=run_backtest, adaptive_risk=adaptive_risk,
+            symbol=instrument_label or None,
+            min_trades=getattr(cfg, "preflight_min_trades", 100), log=log,
+        )
+        warnings.extend(sizing_notes.get("warnings", []))
+        if sizing_notes.get("rr_planned_converted"):
+            _cap = risk.risk_amount(float(risk.initial_balance))
+            log(f"  RISK MODEL: rr_planned sizing like Full Pipeline -- cap ${_cap:,.0f}/trade, "
+                "planned risk scales with the setup, the stop is never shrunk to fit the budget.")
+    else:
+        baseline_bt = run_backtest(dev_df, strategy, risk, adaptive_risk=adaptive_risk)
+        _pf = None
     warnings.extend(baseline_bt.warnings)
+    if not baseline_bt.trades:
+        # Same failure preflight_signal_check raised, without a second backtest.
+        preflight_signal_check(dev_df, strategy, risk, "Quick Optimize")
     if getattr(cfg, "preflight_enforce", True):
-        from app.validation.preflight import baseline_preflight, enforce_preflight
-        _pf = baseline_preflight(baseline_bt, dev_df, risk, prop_rules,
-                                 symbol=instrument_label or None,
-                                 min_trades=getattr(cfg, "preflight_min_trades", 100))
-        log("  " + _pf.render().replace("\n", "\n  "))
+        if _pf is None:
+            _pf = baseline_preflight(baseline_bt, dev_df, risk, prop_rules,
+                                     symbol=instrument_label or None,
+                                     min_trades=getattr(cfg, "preflight_min_trades", 100))
+            log("  " + _pf.render().replace("\n", "\n  "))
         for _i in _pf.by_severity("warn"):
             warnings.append(_i.message)
         enforce_preflight(_pf, "Quick Optimize")
+    _prog(0.06, "Baseline Monte Carlo")
 
     # Escalate a pip_size/instrument-scale mismatch to the SAME prominence
     # Full Pipeline gives it, rather than letting it sit quietly inside
@@ -708,6 +747,19 @@ def run_quick_optimize(
     )
 
     log(f"Searching for a more robust configuration ({cfg.ga_generations} generations x {cfg.ga_population} candidates)...")
+    _prog(0.10, "Searching parameters")
+    _ga_state = {"batches": 0}
+    _ga_expected = max(1, int(cfg.ga_generations) + 1)
+
+    def _ga_batch(done: int, total: int) -> None:
+        if total and done >= total:
+            _ga_state["batches"] += 1
+            frac_in = 0.0
+        else:
+            frac_in = (done / total) if total else 0.0
+        g = min(0.999, (_ga_state["batches"] + frac_in) / _ga_expected)
+        _prog(0.10 + 0.68 * g, f"Searching parameters ({min(_ga_state['batches'] + 1, _ga_expected)}/{_ga_expected})")
+
     refine_cfg = RefinementConfig(
         population_size=cfg.ga_population,
         generations=cfg.ga_generations,
@@ -725,7 +777,10 @@ def run_quick_optimize(
         parallel=cfg.parallel, max_workers=cfg.parallel_max_workers,
         adaptive_risk=adaptive_risk,
         cancel_event=cancel_event,
+        preflight=False,           # the baseline above already proved the strategy trades
+        batch_progress_cb=_ga_batch,
     )
+    _prog(0.80, "Re-validating the winner")
     warnings.extend(ga_result.warnings)
 
     # Point (3) of the 2026-09-17 fix: only a real GA winner (this `else`
@@ -858,6 +913,7 @@ def run_quick_optimize(
     # step against `df`/dev_df rather than the held-out tail), using the
     # identical n_tests formula Full Pipeline uses so the two tools'
     # Bonferroni corrections are directly comparable.
+    _prog(0.88, "Significance check")
     log("Checking signal significance (ICIR / signal-decay / Bonferroni) and parsimony...")
     icir_gate = None
     icir_gate_skip_reason = None
@@ -894,6 +950,7 @@ def run_quick_optimize(
     # untrustworthy. Best-effort (same treatment as Full Pipeline's own
     # copy): a check that can't run never fails the run, it just can't
     # satisfy the gate below.
+    _prog(0.94, "Lookahead check")
     log("Checking the final configuration for lookahead bias...")
     lookahead_bug_detected = False
     lookahead_note = None
@@ -982,6 +1039,7 @@ def run_quick_optimize(
     # READY" (QO_IMPROVED_SHORT) instead of the dishonest "found nothing".
     # Nothing is crowned READY unless the gate passes; the 70% threshold
     # itself is never lowered.
+    _prog(0.98, "Acceptance gate")
     log("Evaluating the READY acceptance gate...")
     ready_gate_passed, ready_gate_reasons = _evaluate_quick_optimize_ready_gate(
         per_attempt_pass_probability=float(final_mc.per_attempt_pass_probability),
