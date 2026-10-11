@@ -839,31 +839,48 @@ def _maybe_back_adjust_continuous(df: pd.DataFrame, source_name: str, issues: li
     df.attrs, and appends a warning issue describing what was removed.
     Frames with no detected roll gaps are returned with zero offsets (the
     adjustment is then a no-op), so downstream code can rely on the
-    columns existing for continuous series."""
+    columns existing for continuous series.
+
+    AUDIT FIX (Oct 2026): this used to call the session-break heuristic
+    (`back_adjust`/`detect_rolls`), which on the shipped NQ/ES/GC vendor files
+    missed every real roll (the vendor splices at the first bar of a date, with
+    no session break) while erasing ~40 genuine weekend-open price gaps per
+    instrument. It now uses `back_adjust_continuous` (see
+    app.data.continuous_contract): isolated date-boundary splices + repair of
+    interleaved-contract windows; ordinary weekend/holiday gaps are left alone."""
     if df is None or len(df) < 50 or not _looks_like_continuous_future(source_name):
         return df
     if not {"timestamp", "open", "high", "low", "close"}.issubset(df.columns):
         return df
-    from app.data.continuous_contract import back_adjust, describe
+    from app.data.continuous_contract import back_adjust_continuous
 
-    # v9.16 (audit P1-7): the size+session-break heuristic alone also matched ordinary
-    # weekend gaps in non-roll months (and removed them from history). Equity-index
-    # futures roll only in Mar/Jun/Sep/Dec, in the week before the third Friday, so
-    # for those products candidates outside that calendar window are not rolls.
+    # Equity-index futures roll only in Mar/Jun/Sep/Dec, in the weeks around the
+    # third Friday -- candidates outside that calendar window are not rolls.
     _kw: dict = {}
     _base = str(source_name or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
     import re as _re
     if _re.search(r"(^|[^a-z])(m?es|m?nq|m?ym|m2k|rty)(1!|2!|\.f|_|$|[^a-z])", _base):
         _kw = {"roll_months": (3, 6, 9, 12), "roll_days": range(4, 22)}
-    adjusted, rolls = back_adjust(df, **_kw)
-    adjusted.attrs["roll_adjustment"] = describe(rolls)
-    adjusted.attrs["roll_adjusted"] = bool(rolls)
-    if rolls:
+    adjusted, report = back_adjust_continuous(df, **_kw)
+    desc = report.describe()
+    _has_rolls = bool(report.rolls)
+    if not _has_rolls:
+        # Fallback for exports whose splice sits AT a session break (TradingView-style ES1!/NQ1! CSVs: the
+        # new contract's first bar follows the maintenance/weekend break, so there is no contiguous
+        # date-boundary splice to find). With no vendor-style evidence at all, keep the calendar-filtered
+        # session-break heuristic exactly as it behaved before this audit.
+        from app.data.continuous_contract import back_adjust, describe as _describe_legacy
+        _legacy_adj, _legacy_rolls = back_adjust(df, **_kw)
+        if _legacy_rolls:
+            adjusted, desc, _has_rolls = _legacy_adj, _describe_legacy(_legacy_rolls), True
+    adjusted.attrs["roll_adjustment"] = desc
+    adjusted.attrs["roll_adjusted"] = _has_rolls
+    if _has_rolls:
         issues.append(
             ValidationIssue(
                 "warning",
                 "Continuous-contract data back-adjusted at import: "
-                + describe(rolls)
+                + desc
                 + " Backtests now run on the adjusted series (roll_bar/adj_offset columns kept for audit).",
             )
         )
@@ -1290,7 +1307,13 @@ def import_csv(
                     f"{_t1} (overnight displacement {_displacement / _median_tr:.1f}x median true range)"
                 )
 
-    if _roll_hits:
+    # AUDIT FIX (Oct 2026): for recognized continuous-futures files the corrected
+    # back-adjuster (app.data.continuous_contract.back_adjust_continuous, run at the
+    # end of this function) reports exactly which splices it removed. This generic
+    # heuristic cannot tell a weekend price gap from a roll, and on the shipped
+    # NQ/ES/GC files it flagged 200+ ORDINARY weekend gaps as "unadjusted rolls, not
+    # real price action" -- a false statement. Keep it for everything else.
+    if _roll_hits and not _looks_like_continuous_future(_name_of(path_or_buffer)):
         _roll_msg = (
             f"Detected {len(_roll_hits)} session-break gap(s) with an outsized price "
             f"displacement (>{_ROLL_GAP_TR_MULTIPLE:g}x median true range) near a likely "

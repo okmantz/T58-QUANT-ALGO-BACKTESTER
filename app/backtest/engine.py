@@ -238,6 +238,8 @@ def run_backtest(
     # everywhere with no other caller needing to change. A strategy that
     # declares nothing gets `df` back completely unchanged -- byte-
     # identical to every run before this existed.
+    from app.strategy.base import apply_strategy_trade_cap
+    risk = apply_strategy_trade_cap(risk, strategy)   # MAX_TRADES_PER_DAY declared by the strategy (one-shot-per-day systems)
     _raw_native_df = df
     df, timeframe_warnings = prepare_timeframe_aligned_data(df, strategy)
 

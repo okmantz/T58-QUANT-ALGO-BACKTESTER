@@ -234,6 +234,38 @@ def resolve_excluded_days_of_week(strategy) -> set[int]:
     return set()
 
 
+def resolve_max_trades_per_day(strategy) -> int | None:
+    """Per-strategy cap on entries per session day, or None when the strategy declares none.
+
+    Signals are LEVEL based (a strategy that is still "long" on the bar after its stop was hit is re-entered),
+    and generate_signals() is stateless so it cannot see its own exits. A one-shot-per-day system (opening-range
+    breakout, a single pullback entry) therefore declares ``MAX_TRADES_PER_DAY = 1`` (Python module attribute) or
+    ``"max_trades_per_day": 1`` (Manual config). The cap can only TIGHTEN the run's RiskConfig.max_trades_per_day,
+    never raise it. Applied at the run_backtest / run_full_pipeline chokepoints."""
+    source_type = getattr(strategy, "source_type", None)
+    raw = None
+    if source_type == "manual":
+        config = getattr(strategy, "config", None)
+        raw = config.get("max_trades_per_day") if isinstance(config, dict) else None
+    elif source_type == "python":
+        module_attr = getattr(strategy, "module_attr", None)
+        raw = module_attr("MAX_TRADES_PER_DAY", None) if module_attr is not None else None
+    try:
+        n = int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+    return n if n is not None and n >= 1 else None
+
+
+def apply_strategy_trade_cap(risk, strategy):
+    """`risk` with max_trades_per_day tightened to the strategy's own declared cap (see above); same object back if none."""
+    cap = resolve_max_trades_per_day(strategy)
+    if cap is None or cap >= int(getattr(risk, "max_trades_per_day", cap) or cap):
+        return risk
+    from dataclasses import replace as _replace
+    return _replace(risk, max_trades_per_day=cap)
+
+
 def apply_days_of_week_exclusion(df: pd.DataFrame, signals: pd.Series, strategy) -> pd.Series:
     """Forces `signals` flat (0) on every bar that falls on a weekday
     `strategy` has excluded (see resolve_excluded_days_of_week above). A

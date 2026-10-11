@@ -347,13 +347,16 @@ def run_integrity_check(
     # futures instrument backtested at literally $0 commission is not a
     # "maybe" -- it is definitely wrong, so this is CRITICAL (blocks the
     # backtest), not just a warning, per Owen's own framing of the fix.
+    # AUDIT FIX (Oct-2026): commission charged PER CONTRACT (the more accurate model -- a flat per-trade fee
+    # under-charges multi-contract positions) is a real commission too; only "both zero" is the $0 mistake.
+    _per_contract = float(getattr(risk, "commission_per_contract", 0.0) or 0.0)
     zero_commission_on_futures = (
-        instrument_spec is not None and risk.commission_per_trade == 0.0
+        instrument_spec is not None and risk.commission_per_trade == 0.0 and _per_contract == 0.0
     )
     commission_line = IntegrityCheckLine(
         not zero_commission_on_futures,
         "Commission",
-        f"${risk.commission_per_trade:g}/trade"
+        (f"${risk.commission_per_trade:g}/trade" + (f" + ${_per_contract:g}/contract" if _per_contract else ""))
         + (
             f" -- $0 on a known futures instrument ({instrument_spec.symbol}); a realistic round-turn "
             f"is roughly ${instrument_spec.default_commission_round_turn:g}. Every dollar figure in this "

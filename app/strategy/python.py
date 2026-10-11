@@ -11,6 +11,15 @@ Optionally the module may also define fixed, whole-backtest exit parameters:
     TAKE_PROFIT_PIPS = <float>
     STRATEGY_NAME = "<str>"
 
+ONE-SHOT-PER-DAY SYSTEMS (OPTIONAL)
+-----------------------------------
+Signals are level-based: if the series is still +1 on the bar after your stop
+was hit, the engine opens a fresh trade. generate_signals() cannot see its own
+exits, so a "one breakout per day" system declares
+
+    MAX_TRADES_PER_DAY = 1        # tightens RiskConfig.max_trades_per_day for
+                                   # every tool (never loosens it)
+
 RESTRICTING TRADING TO CERTAIN WEEKDAYS (OPTIONAL)
 ----------------------------------------------------
     EXCLUDE_DAYS_OF_WEEK = [6]     # 0=Monday..6=Sunday (pandas dt.dayofweek

@@ -106,6 +106,40 @@ GENE_KEY_RULES: dict[str, dict] = {
     "value":             dict(is_int=False, rel_span=0.5, abs_span=1.0),
 }
 
+# AUDIT FIX (Oct 2026, GA flag-gene bug). Operand kinds whose series is a 0/1 (or
+# -1/0/1) FLAG, not a continuous quantity. The comparison constant paired with one
+# of these ("time_of_day == 1.0", "supertrend_direction == 1", "rsi_zone_buy == 1")
+# is a logical selector, not a tunable threshold. The generic "value" rule gave it a
+# +/-50% window, so a GA could mutate `time_of_day == 1.0` into `== 0.627`, a
+# comparison that can NEVER be true -- silently deleting that side of the strategy
+# (the shipped "NQ1! Opening Range Breakout" short side was dead for exactly this
+# reason). Their paired "value" gene is therefore frozen.
+FLAG_OPERAND_KINDS = frozenset({
+    "time_of_day", "day_of_week", "candle_direction",
+    "swing_high", "swing_low", "liquidity_sweep", "break_of_structure", "bos",
+    "change_of_character", "choch", "fair_value_gap", "fvg", "order_block",
+    "atr_regime", "volatility_regime", "atr_expansion", "atr_contraction",
+    "rsi_regime", "rsi_zone_buy", "rsi_zone_sell", "rsi_divergence",
+    "vwap_above", "vwap_below", "vwap_outside_value_area",
+    "supertrend_direction", "psar_direction", "ttm_squeeze_on",
+    "swing_bos", "swing_choch",
+})
+
+# Operand kinds that ignore `period`/`lookback` entirely (app.strategy.manual returns
+# the raw column / constant / flag without reading them). Tuning those genes only
+# burns search budget on dead dimensions and inflates the trial count that the
+# Deflated-Sharpe gate corrects for.
+NO_PERIOD_OPERAND_KINDS = frozenset({
+    "price", "open", "high", "low", "close", "volume",
+    "value", "constant", "number",
+    "time_of_day", "day_of_week", "candle_direction",
+})
+
+
+def _is_flag_operand(node) -> bool:
+    return isinstance(node, dict) and str(node.get("type", "")).lower().strip() in FLAG_OPERAND_KINDS
+
+
 # Path-key segments that must never be descended into / mutated even if a
 # nested dict happens to reuse one of the names above for something else.
 # (Not currently needed by the known config shape, but kept as a guard
@@ -244,7 +278,8 @@ def extract_genome(config: dict) -> list[GeneMeta]:
             label=_label(new_path),
         )
 
-    def walk(node, path: tuple, value_bounds: tuple[float, float] | None = None, zero_min: float | None = None):
+    def walk(node, path: tuple, value_bounds: tuple[float, float] | None = None, zero_min: float | None = None,
+             freeze_value: bool = False):
         if isinstance(node, dict):
             is_condition = "left" in node and "right" in node and "operator" in node
             if is_condition:
@@ -252,8 +287,10 @@ def extract_genome(config: dict) -> list[GeneMeta]:
                 right_bound = _oscillator_bound(node.get("right"))
                 left_zero_min = _zero_sensitive_min_abs(node.get("left"))
                 right_zero_min = _zero_sensitive_min_abs(node.get("right"))
-                walk(node.get("left"), path + ("left",), value_bounds=right_bound, zero_min=right_zero_min)
-                walk(node.get("right"), path + ("right",), value_bounds=left_bound, zero_min=left_zero_min)
+                walk(node.get("left"), path + ("left",), value_bounds=right_bound, zero_min=right_zero_min,
+                     freeze_value=_is_flag_operand(node.get("right")))
+                walk(node.get("right"), path + ("right",), value_bounds=left_bound, zero_min=left_zero_min,
+                     freeze_value=_is_flag_operand(node.get("left")))
                 for k, v in node.items():
                     if k in ("left", "right") or k in _EXCLUDED_KEYS:
                         continue
@@ -272,12 +309,14 @@ def extract_genome(config: dict) -> list[GeneMeta]:
                     and isinstance(v, (int, float))
                     and not isinstance(v, bool)
                     and v is not None
+                    and not (k == "value" and freeze_value)
+                    and not (k in ("period", "lookback") and osc_kind in NO_PERIOD_OPERAND_KINDS)
                 ):
                     genes.append(_gene_for(k, v, new_path, value_bounds, osc_kind, zero_min))
-                walk(v, new_path, value_bounds=value_bounds, zero_min=zero_min)
+                walk(v, new_path, value_bounds=value_bounds, zero_min=zero_min, freeze_value=freeze_value)
         elif isinstance(node, list):
             for i, item in enumerate(node):
-                walk(item, path + (i,), value_bounds=value_bounds, zero_min=zero_min)
+                walk(item, path + (i,), value_bounds=value_bounds, zero_min=zero_min, freeze_value=freeze_value)
 
     walk(config, ())
     return genes

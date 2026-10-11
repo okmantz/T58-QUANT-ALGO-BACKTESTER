@@ -1518,6 +1518,8 @@ def run_full_pipeline(
     # max_account_drawdown_pct explicitly. Also forces risk.initial_balance
     # to match prop_rules.account_size (see RISK-001 note on this function).
     risk = with_prop_safety_defaults(risk, prop_rules)
+    from app.strategy.base import apply_strategy_trade_cap
+    risk = apply_strategy_trade_cap(risk, strategy)   # strategy-declared MAX_TRADES_PER_DAY reaches every stage (GA, replay, null, MC)
 
     # FIX (2026-09-18): cfg.reset_on_breach was already threaded into the
     # POST-HOC scoring layer below (simulate_account / MonteCarloConfig)

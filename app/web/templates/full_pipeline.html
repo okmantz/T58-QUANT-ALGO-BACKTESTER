@@ -88,6 +88,9 @@
         <select id="fp_prop_preset_select" onchange="fpApplyPropPreset(this.value)">
           <option value="">-- or enter rules manually in Advanced --</option>
         </select>
+        <!-- AUDIT FIX: the picked firm's KEY is submitted so the server applies the firm's FULL rule set
+             (EOD trailing DD, consistency, payout gates), not just the four numbers below. -->
+        <input type="hidden" name="prop_preset" id="fp_prop_preset_key" value="">
         <div class="lc-hint" style="margin-top:5px;">Picking one fills the rule fields in Advanced and shows the firm's actual rules in the rail &rarr;</div>
         <label class="flabel" style="margin-top:12px;">Or pick a known instrument (auto-fills pip size + $/point)</label>
         <select id="fp_instrument_select" onchange="t58ApplyInstrumentSpec({selectEl:this, pipFieldId:'fp_pip_size_field', contractFieldId:'fp_contract_size_field', commissionFieldId:'fp_commission_field', statusId:'fp_pip_detect_status'})">
@@ -379,8 +382,10 @@
   })();
 
   function fpApplyPropPreset(value) {
-    if (!value) return;
+    const keyEl = document.getElementById('fp_prop_preset_key');
+    if (!value) { if (keyEl) keyEl.value = ''; return; }
     const p = JSON.parse(value);
+    if (keyEl) keyEl.value = p.key || '';
     const form = document.getElementById('fp_prop_preset_select').closest('form');
     if (!form) return;
     const set = (name, val) => { const el = form.querySelector(`[name="${name}"]`); if (el) { el.value = val; el.dispatchEvent(new Event('input', { bubbles: true })); } };

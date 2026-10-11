@@ -1677,6 +1677,76 @@ def _simple_load_strategy(form):
     return _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
 
 
+def _instrument_label_from_form(form):
+    """Best-effort instrument symbol/label for a posted form (explicit picker, else the stored-dataset name)."""
+    try:
+        from app.web.accuracy_form import instrument_from_form
+        return instrument_from_form(form) or (form.get("existing_dataset") or "")
+    except Exception:  # noqa: BLE001
+        return form.get("existing_dataset") or ""
+
+
+_LEGACY_SLIPPAGE_PIPS, _LEGACY_SPREAD_PIPS = 0.5, 1.0
+
+
+def _posted_cost(form, name: str) -> float:
+    """A cost the user actually typed, else 0.0 (the 'unset' marker _fill_unposted_costs looks for)."""
+    raw = (form.get(name) or "").strip() if form is not None else ""
+    try:
+        return float(raw) if raw else 0.0
+    except ValueError:
+        return 0.0
+
+
+def _fill_unposted_costs(form, risk, instrument_label):
+    """AUDIT FIX (Oct-2026): the lifecycle pages post no slippage/spread fields, so every run silently used
+    the FX-style defaults 0.5 + 1.0 *pips* -- with pip_size=1.0 that is 1.5 POINTS per side on NQ/ES (~$30 /
+    $75 per side per contract; real fills are ~1 tick). When neither cost was typed, use the instrument's
+    own spec (1 tick spread + 1 tick slippage per side, spec commission) and only fall back to the legacy
+    defaults for instruments with no spec. Explicit typed values (including 0) are never overridden."""
+    posted = any(form is not None and (form.get(k) or "").strip() != "" for k in ("slippage_pips", "spread_pips"))
+    if posted:
+        return risk
+    from dataclasses import replace as _replace
+    try:
+        from app.data.instrument_specs import apply_any_instrument_spec, guess_any_instrument_symbol, get_any_instrument_spec
+        sym = guess_any_instrument_symbol(str(instrument_label or "")) if instrument_label else None
+        spec = get_any_instrument_spec(sym) if sym else None
+        if spec is not None:
+            typed_flat = float(risk.commission_per_trade or 0.0)
+            risk = apply_any_instrument_spec(risk, sym)
+            if typed_flat > 0.0:
+                # The instrument picker pre-fills the flat "commission per trade" box with the spec's own
+                # round-turn rate. Charging that flat AND the spec's per-contract rate would double-bill, and a
+                # flat fee also under-charges multi-contract positions -- so the picker's value becomes the
+                # per-contract rate; any other typed number is respected as the user's own flat fee.
+                rt = float(spec.default_commission_round_turn)
+                if abs(typed_flat - rt) < 1e-9:
+                    risk = _replace(risk, commission_per_trade=0.0, commission_per_contract=rt)
+                else:
+                    risk = _replace(risk, commission_per_contract=0.0)
+    except Exception:  # noqa: BLE001 -- never break a run over cost defaults
+        pass
+    if risk.slippage_pips == 0.0 and risk.spread_pips == 0.0:
+        risk = _replace(risk, slippage_pips=_LEGACY_SLIPPAGE_PIPS, spread_pips=_LEGACY_SPREAD_PIPS)
+    return risk
+
+
+def _apply_posted_preset(form, typed_rules):
+    """AUDIT FIX (Oct-2026): the lifecycle pages only ever posted four typed numbers
+    (account size / target % / daily loss % / max DD %), so the firm's real rules --
+    EOD trailing drawdown, consistency, payout gates, scaling -- never reached the
+    simulation. When the page also posts ``prop_preset=<key>`` the full preset wins;
+    otherwise the typed rules are used unchanged (behaviour for old forms is identical)."""
+    key = ((form.get("prop_preset") if form is not None else "") or "").strip()
+    if key:
+        try:
+            return get_prop_firm_preset(key).to_prop_rules()
+        except Exception:  # noqa: BLE001 -- unknown key: fall back to the typed numbers
+            pass
+    return typed_rules
+
+
 def _simple_prop_rules(form):
     preset_key = (form.get("prop_preset") or "").strip()
     if preset_key:
@@ -1697,11 +1767,14 @@ def _simple_base_risk(form, rules):
         risk_value=float(form.get("risk_value", 1.0) or 1.0),
         max_trades_per_day=int(form.get("max_trades_day", 10) or 10),
         commission_per_trade=float(form.get("commission", 0) or 0),
-        slippage_pips=float(form.get("slippage_pips", 0.5) or 0.5),
-        spread_pips=float(form.get("spread_pips", 1.0) or 1.0),
+        slippage_pips=_posted_cost(form, "slippage_pips"),
+        spread_pips=_posted_cost(form, "spread_pips"),
         pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
         contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
     )
+    # AUDIT FIX (Oct-2026): same instrument-aware cost defaults as the Full Pipeline routes (was a hard-coded
+    # 0.5 + 1.0 pips, and `or 0.5` meant a typed 0 could never be honoured).
+    risk = _fill_unposted_costs(form, risk, _instrument_label_from_form(form))
     return harden_risk_config(risk, prop_rules=rules, form=form)
 
 
@@ -2841,7 +2914,7 @@ def batch_test_saved_strategies_route():
         pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
     )
     payout_cap = form.get("payout_cap", "").strip()
-    rules = PropRules(
+    rules = _apply_posted_preset(form, PropRules(
         account_size=float(form.get("account_size", 100000)),
         evaluation_profit_target_pct=float(form.get("profit_target", 8)),
         daily_loss_limit_pct=float(form.get("daily_loss", 5)),
@@ -2854,7 +2927,7 @@ def batch_test_saved_strategies_route():
         payout_cap_pct=float(payout_cap) if payout_cap else None,
         payout_frequency_days=int(form.get("payout_freq", 14)),
         required_buffer_pct=float(form.get("buffer", 0)),
-    )
+    ))
     risk = harden_risk_config(risk, prop_rules=rules, form=form)
     n_sims = int(form.get("n_sims", 5000))
     mc_method = form.get("mc_method", "bootstrap")
@@ -3016,7 +3089,7 @@ def run_pipeline():
         )
 
         payout_cap = form.get("payout_cap", "").strip()
-        rules = PropRules(
+        rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000)),
             evaluation_profit_target_pct=float(form.get("profit_target", 8)),
             daily_loss_limit_pct=float(form.get("daily_loss", 5)),
@@ -3029,7 +3102,7 @@ def run_pipeline():
             payout_cap_pct=float(payout_cap) if payout_cap else None,
             payout_frequency_days=int(form.get("payout_freq", 14)),
             required_buffer_pct=float(form.get("buffer", 0)),
-        )
+        ))
 
         # FIX (audit): unlike Quick Optimize/Full Pipeline/Evolution Lab/
         # Speed Run/Walk-Forward GA, Run & Report never reconciled its
@@ -4385,12 +4458,12 @@ def refine_start():
             spread_pips=float(form.get("spread_pips", 1.0)),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
-        rules = PropRules(
+        rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000)),
             evaluation_profit_target_pct=float(form.get("profit_target", 8)),
             daily_loss_limit_pct=float(form.get("daily_loss", 5)),
             max_drawdown_pct=float(form.get("max_dd", 10)),
-        )
+        ))
         risk = harden_risk_config(risk, prop_rules=rules, form=form)
         mc_cfg = MonteCarloConfig(n_simulations=int(form.get("n_sims", 2000) or 2000))
 
@@ -4604,12 +4677,12 @@ def multi_market_start():
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
             commission_per_trade=float(form.get("commission", 0) or 0),
         )
-        rules = PropRules(
+        rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000) or 100000),
             evaluation_profit_target_pct=float(form.get("profit_target", 8) or 8),
             daily_loss_limit_pct=float(form.get("daily_loss", 5) or 5),
             max_drawdown_pct=float(form.get("max_dd", 10) or 10),
-        )
+        ))
         risk = harden_risk_config(risk, prop_rules=rules, form=form)
         mc_cfg = MonteCarloConfig(n_simulations=int(form.get("n_sims", 2000) or 2000))
         cfg = RefinementConfig(
@@ -4985,16 +5058,17 @@ def full_pipeline_start_batch():
             risk_value=float(form.get("risk_value", 1.0)),
             max_trades_per_day=int(form.get("max_trades_day", 10)),
             commission_per_trade=float(form.get("commission", 0)),
-            slippage_pips=float(form.get("slippage_pips", 0.5)),
-            spread_pips=float(form.get("spread_pips", 1.0)),
+            slippage_pips=_posted_cost(form, "slippage_pips"),
+            spread_pips=_posted_cost(form, "spread_pips"),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
-        rules = PropRules(
+        rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000)),
             evaluation_profit_target_pct=float(form.get("profit_target", 8)),
             daily_loss_limit_pct=float(form.get("daily_loss", 5)),
             max_drawdown_pct=float(form.get("max_dd", 10)),
-        )
+        ))
+        risk = _fill_unposted_costs(form, risk, active_label)
         # v9.8: explicit Timeframe selector -- resample the loaded data
         # to the picked bar size before the pipeline runs (the multi-
         # timeframe sweep below still resamples per listed timeframe from
@@ -5205,16 +5279,17 @@ def full_pipeline_schedule_batch():
             risk_value=float(form.get("risk_value", 1.0)),
             max_trades_per_day=int(form.get("max_trades_day", 10)),
             commission_per_trade=float(form.get("commission", 0)),
-            slippage_pips=float(form.get("slippage_pips", 0.5)),
-            spread_pips=float(form.get("spread_pips", 1.0)),
+            slippage_pips=_posted_cost(form, "slippage_pips"),
+            spread_pips=_posted_cost(form, "spread_pips"),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
-        rules = PropRules(
+        rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000)),
             evaluation_profit_target_pct=float(form.get("profit_target", 8)),
             daily_loss_limit_pct=float(form.get("daily_loss", 5)),
             max_drawdown_pct=float(form.get("max_dd", 10)),
-        )
+        ))
+        risk = _fill_unposted_costs(form, risk, active_label)
         library_status_raw = (form.get("library_status") or "").strip()
         cfg = FullPipelineConfig(
             n_folds=int(form.get("n_folds", 4) or 4),
@@ -5417,16 +5492,17 @@ def full_pipeline_start():
             risk_value=float(form.get("risk_value", 1.0)),
             max_trades_per_day=int(form.get("max_trades_day", 10)),
             commission_per_trade=float(form.get("commission", 0)),
-            slippage_pips=float(form.get("slippage_pips", 0.5)),
-            spread_pips=float(form.get("spread_pips", 1.0)),
+            slippage_pips=_posted_cost(form, "slippage_pips"),
+            spread_pips=_posted_cost(form, "spread_pips"),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
-        rules = PropRules(
+        rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000)),
             evaluation_profit_target_pct=float(form.get("profit_target", 8)),
             daily_loss_limit_pct=float(form.get("daily_loss", 5)),
             max_drawdown_pct=float(form.get("max_dd", 10)),
-        )
+        ))
+        risk = _fill_unposted_costs(form, risk, active_label)
         # v9.8: explicit Timeframe selector -- resample the loaded data
         # to the picked bar size before the pipeline runs (same wiring
         # as the batch path above). Without this call the run below
@@ -5761,12 +5837,12 @@ def wfo_start():
             spread_pips=float(form.get("spread_pips", 1.0)),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
-        rules = PropRules(
+        rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000)),
             evaluation_profit_target_pct=float(form.get("profit_target", 8)),
             daily_loss_limit_pct=float(form.get("daily_loss", 5)),
             max_drawdown_pct=float(form.get("max_dd", 10)),
-        )
+        ))
         risk = harden_risk_config(risk, prop_rules=rules, form=form)
         mc_cfg = MonteCarloConfig(n_simulations=int(form.get("n_sims", 1000) or 1000))
         refine_cfg = RefinementConfig(
@@ -5954,12 +6030,12 @@ def mo_start():
             spread_pips=float(form.get("spread_pips", 1.0)),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
-        rules = PropRules(
+        rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000)),
             evaluation_profit_target_pct=float(form.get("profit_target", 8)),
             daily_loss_limit_pct=float(form.get("daily_loss", 5)),
             max_drawdown_pct=float(form.get("max_dd", 10)),
-        )
+        ))
         mc_cfg = MonteCarloConfig(n_simulations=int(form.get("n_sims", 1000) or 1000))
 
         objectives = form.getlist("objectives") or list(DEFAULT_OBJECTIVES)
@@ -6112,12 +6188,12 @@ def wfga_start():
             spread_pips=float(form.get("spread_pips", 1.0)),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
-        rules = PropRules(
+        rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000)),
             evaluation_profit_target_pct=float(form.get("profit_target", 8)),
             daily_loss_limit_pct=float(form.get("daily_loss", 5)),
             max_drawdown_pct=float(form.get("max_dd", 10)),
-        )
+        ))
         # FIX (audit, Sep 2026): Walk-Forward GA is one of the nine
         # JOB_WFGA-class heavy jobs (see app.orchestration.resource_guard)
         # but, unlike Evolution Lab/Quick Optimize/Full Pipeline/Speed
@@ -6590,12 +6666,12 @@ def payout_probability_run():
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
             commission_per_trade=float(form.get("commission", 0) or 0),
         )
-        rules = PropRules(
+        rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000)),
             evaluation_profit_target_pct=float(form.get("profit_target", 8)),
             daily_loss_limit_pct=float(form.get("daily_loss", 5)),
             max_drawdown_pct=float(form.get("max_dd", 10)),
-        )
+        ))
 
         risk = harden_risk_config(risk, prop_rules=rules, form=form)
         bt_result = run_backtest(df, strategy, risk)
@@ -9343,12 +9419,12 @@ def api_suggest_loop_config():
     Loop Mode fields with. See that module's own docstring: this is a
     heuristic starting point, not an authoritative answer."""
     try:
-        rules = PropRules(
+        rules = _apply_posted_preset(request.args, PropRules(
             account_size=float(request.args.get("account_size", 100000) or 100000),
             evaluation_profit_target_pct=float(request.args.get("profit_target", 8) or 8),
             daily_loss_limit_pct=float(request.args.get("daily_loss", 5) or 5),
             max_drawdown_pct=float(request.args.get("max_dd", 10) or 10),
-        )
+        ))
     except (TypeError, ValueError) as exc:
         return jsonify({"ok": False, "error": f"Invalid prop rule value: {exc}"}), 400
     suggestion = suggest_from_prop_rules(rules)
@@ -10157,12 +10233,12 @@ def research_run():
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
             commission_per_trade=float(form.get("commission", 0) or 0),
         )
-        rules = PropRules(
+        rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000) or 100000),
             evaluation_profit_target_pct=float(form.get("profit_target", 8) or 8),
             daily_loss_limit_pct=float(form.get("daily_loss", 5) or 5),
             max_drawdown_pct=float(form.get("max_dd", 10) or 10),
-        )
+        ))
         risk = harden_risk_config(risk, prop_rules=rules, form=form)
         window_trading_days = int(form.get("window_trading_days", 30) or 30)
 
@@ -10282,12 +10358,12 @@ def forge_start():
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
             commission_per_trade=float(form.get("commission", 0) or 0),
         )
-        rules = PropRules(
+        rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000) or 100000),
             evaluation_profit_target_pct=float(form.get("profit_target", 8) or 8),
             daily_loss_limit_pct=float(form.get("daily_loss", 5) or 5),
             max_drawdown_pct=float(form.get("max_dd", 10) or 10),
-        )
+        ))
 
         # Shared, persistent graveyard path -- deliberately NOT one unique
         # file per job. A per-job graveyard file was the bug that made the
@@ -11064,12 +11140,12 @@ def speed_run_start():
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
             commission_per_trade=float(form.get("commission", 0) or 0),
         )
-        rules = PropRules(
+        rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000)),
             evaluation_profit_target_pct=float(form.get("profit_target", 8)),
             daily_loss_limit_pct=float(form.get("daily_loss", 5)),
             max_drawdown_pct=float(form.get("max_dd", 10)),
-        )
+        ))
         cfg = SpeedRunConfig(
             max_candidates=int(form.get("max_candidates", 1200) or 1200),
             stage1_top_n=int(form.get("stage1_top_n", 24) or 24),
@@ -11331,12 +11407,12 @@ def overnight_autopilot_start():
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
             commission_per_trade=float(form.get("commission", 0) or 0),
         )
-        rules = PropRules(
+        rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000)),
             evaluation_profit_target_pct=float(form.get("profit_target", 8)),
             daily_loss_limit_pct=float(form.get("daily_loss", 5)),
             max_drawdown_pct=float(form.get("max_dd", 10)),
-        )
+        ))
         speed_run_cfg = SpeedRunConfig(
             max_candidates=int(form.get("max_candidates", 1200) or 1200),
             stage1_top_n=int(form.get("stage1_top_n", 24) or 24),
@@ -11549,12 +11625,12 @@ def speed_run_multi_instrument_start():
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
             commission_per_trade=float(form.get("commission", 0) or 0),
         )
-        rules = PropRules(
+        rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000) or 100000),
             evaluation_profit_target_pct=float(form.get("profit_target", 8) or 8),
             daily_loss_limit_pct=float(form.get("daily_loss", 5) or 5),
             max_drawdown_pct=float(form.get("max_dd", 10) or 10),
-        )
+        ))
         cfg = SpeedRunConfig(
             max_candidates=int(form.get("max_candidates", 1200) or 1200),
             stage1_top_n=int(form.get("stage1_top_n", 24) or 24),

@@ -326,7 +326,7 @@ class ManualStrategy(Strategy):
             return self._vwap_profile_series(work, kind, operand)
 
         if kind == "time_of_day":
-            ts = pd.to_datetime(work["timestamp"])
+            ts = self._operand_local_ts(work["timestamp"], operand)
             session_start = operand.get("session_start", "00:00")
             session_end = operand.get("session_end", "23:59")
             return self._session_mask(ts, session_start, session_end).astype(int)
@@ -437,6 +437,23 @@ class ManualStrategy(Strategy):
             return bear_ob.fillna(False)
         return (bull_ob | bear_ob).fillna(False)
 
+    @staticmethod
+    def _operand_local_ts(timestamps: pd.Series, operand: dict[str, Any]) -> pd.Series:
+        """Timestamps as seen on the clock of ``operand['timezone']``.
+
+        Vendor data is UTC, so an unqualified "09:45" window is 09:45 UTC
+        (04:45 ET).  Strategies that mean exchange time set
+        ``"timezone": "America/New_York"`` (DST handled by zoneinfo).  The
+        default stays UTC so existing configs keep their exact behaviour.
+        """
+        ts = pd.to_datetime(timestamps)
+        tzname = operand.get("timezone")
+        if not tzname:
+            return ts
+        if ts.dt.tz is None:
+            ts = ts.dt.tz_localize("UTC")
+        return ts.dt.tz_convert(tzname)
+
     def _session_mask(self, index: pd.Series, start: str, end: str) -> pd.Series:
         t = pd.to_datetime(index)
         start_t = pd.to_datetime(start).time()
@@ -447,7 +464,7 @@ class ManualStrategy(Strategy):
         return (times >= start_t) | (times <= end_t)
 
     def _session_series(self, work: pd.DataFrame, kind: str, operand: dict[str, Any]) -> pd.Series:
-        ts = pd.to_datetime(work["timestamp"])
+        ts = self._operand_local_ts(work["timestamp"], operand)
         day = ts.dt.normalize()
         session_start = operand.get("session_start", "08:30")
         session_end = operand.get("session_end", "15:00")
