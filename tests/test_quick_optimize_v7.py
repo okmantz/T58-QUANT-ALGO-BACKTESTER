@@ -113,6 +113,9 @@ def test_quick_optimize_improves_on_held_out_data():
         fitness_metric="eval_pass_probability",
         reserve_holdout=True, holdout_frac=0.2,
         save_to_library=False, random_seed=42,
+        # Pins the optimizer-vs-baseline contract under raw engine sizing;
+        # Full-Pipeline sizing parity is covered in test_v911_optimize_parity.
+        match_full_pipeline_sizing=False,
     )
     result = run_quick_optimize(df, baseline_strategy, risk, rules, cfg)
 
