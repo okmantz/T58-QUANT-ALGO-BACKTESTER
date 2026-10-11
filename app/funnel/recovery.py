@@ -225,6 +225,19 @@ def _search_action(title: str, rationale: str, search_cfg: dict) -> RecoveryActi
                           kind="new_search", params={"search_cfg": search_cfg})
 
 
+def _search_cfg_base(dataset_label: str = "", risk: dict | None = None,
+                     rules: dict | None = None, timeframe: str = "",
+                     **extra) -> dict:
+    """v9.16: the canonical prefill payload for a new_search action -- the
+    finished run's real settings (market data, prop firm / risk, timeframe),
+    so the Search Lab opens with them pre-filled instead of blank. Extra
+    keys (family, max_candidates, seed, ...) ride along untouched."""
+    cfg = {"dataset_label": dataset_label or "", "risk": risk or {},
+           "rules": rules or {}, "timeframe": timeframe or ""}
+    cfg.update(extra)
+    return cfg
+
+
 def _attach_context(plan: RecoveryPlan, risk: dict, rules: dict) -> RecoveryPlan:
     """Stamp the run's risk/rules onto every quick_optimize action so the
     one-click POST /recovery/quick-optimize has everything it needs."""
@@ -531,11 +544,13 @@ def _decompose_mc_shortfall(mc, stats: dict) -> list:
 
 
 def _diagnose_pipeline_impl(result, dataset_label: str = "",
-                      risk: dict | None = None, rules: dict | None = None) -> RecoveryPlan:
+                      risk: dict | None = None, rules: dict | None = None,
+                      timeframe: str = "") -> RecoveryPlan:
     """Diagnose a FullPipelineResult. Decomposes NOT READY / MARGINAL into
     the failing gate + margin + concrete next actions."""
     verdict = (getattr(result, "verdict", "") or "").upper()
     risk, rules = risk or {}, rules or {}
+    timeframe = timeframe or ""
     mc = getattr(result, "final_mc", None)
     mc_d = {"risk_of_ruin_pct": getattr(mc, "risk_of_ruin_pct", None),
             "p95_drawdown_pct": getattr(mc, "p95_drawdown_pct", None),
@@ -615,6 +630,9 @@ def _diagnose_pipeline_impl(result, dataset_label: str = "",
         if "cost drag" in names:
             pf_n = _fmt(_num(stats_d.get("profit_factor")), 2)
             pf_g = _fmt(_num(stats_d.get("profit_factor_gross") or stats_d.get("gross_profit_factor")), 2)
+            _cfg = _search_cfg_base(
+                dataset_label, risk, rules, timeframe, family="all",
+                max_candidates=400, stop_mult_scale=1.5, seed=1234)
             actions.append(RecoveryAction(
                 "Re-search with wider stops (stop_mult_scale 1.5)",
                 f"Gross profit factor {pf_g} holds up but costs drag it to net {pf_n} -- the "
@@ -622,10 +640,7 @@ def _diagnose_pipeline_impl(result, dataset_label: str = "",
                 "per unit of edge. This re-searches the same space with every candidate's "
                 "ATR stop x1.5.",
                 "new_search",
-                {"search_cfg": {"dataset_label": dataset_label, "risk": risk,
-                                "rules": rules, "family": "all",
-                                "max_candidates": 400, "stop_mult_scale": 1.5,
-                                "seed": 1234}}))
+                {"search_cfg": _cfg}))
         if any(n in ("profit factor (net)", "win rate", "expectancy") for n in names):
             actions.append(_qopt_action(
                 "Quick Optimize this exact candidate",
@@ -643,15 +658,15 @@ def _diagnose_pipeline_impl(result, dataset_label: str = "",
                 "downloader, or test a lower timeframe for more bars, then re-run.",
                 "download_data", {}))
         if "risk of ruin" in names or "p95 drawdown" in names:
+            _cfg2 = _search_cfg_base(
+                dataset_label, risk, rules, timeframe, family="all",
+                max_candidates=400, max_hold_bars=48, seed=1234)
             actions.append(RecoveryAction(
                 "Cap holding time (max_hold_bars) in a re-search",
                 "Tail drawdowns come from trades that overstay. Capping bars-in-trade cuts "
                 "the worst paths without touching the entry logic.",
                 "new_search",
-                {"search_cfg": {"dataset_label": dataset_label, "risk": risk,
-                                "rules": rules, "family": "all",
-                                "max_candidates": 400, "max_hold_bars": 48,
-                                "seed": 1234}}))
+                {"search_cfg": _cfg2}))
         if not actions:
             # Genuine fallback: still concrete, never "try different parameters".
             actions.append(_qopt_action(
@@ -668,10 +683,9 @@ def _diagnose_pipeline_impl(result, dataset_label: str = "",
             "search with grammar invention ON explores genuinely new structures instead of "
             "re-tuning the same families.",
             "new_search",
-            {"search_cfg": {"dataset_label": dataset_label, "risk": risk,
-                            "rules": rules, "family": "all",
-                            "max_candidates": 600, "candidate_source": "grammar",
-                            "seed": 999}}))
+            {"search_cfg": _search_cfg_base(
+                dataset_label, risk, rules, timeframe, family="all",
+                max_candidates=600, candidate_source="grammar", seed=999)}))
         tier = "MARGINAL" if verdict == "MARGINAL" else "NOT READY"
         score_txt = ""
         if scorecard is not None and _num(getattr(scorecard, "score", None)) is not None:
@@ -705,7 +719,9 @@ def _diagnose_pipeline_impl(result, dataset_label: str = "",
                     "Run the Validate hub (CPCV + Regime Matrix) as a second opinion",
                     "READY is still a backtest verdict. An independent validation pass catches "
                     "what any single pipeline can miss.",
-                    "validate", {"display_name": getattr(result, "strategy_display_name", "")}),
+                    "validate", {"strategy_display_name": getattr(result, "strategy_display_name", ""),
+                                 "dataset_label": dataset_label, "timeframe": timeframe,
+                                 "risk": risk, "rules": rules}),
                 RecoveryAction(
                     "Paper-trade / forward-test before risking an eval",
                     "No backtest, however clean, replaces live fills. Forward-test on demo "
@@ -726,11 +742,17 @@ def _diagnose_pipeline_impl(result, dataset_label: str = "",
 # ---------------------------------------------------------------------------
 
 def _diagnose_quickopt_impl(result, dataset_label: str = "",
-                      risk: dict | None = None, rules: dict | None = None) -> RecoveryPlan:
+                      risk: dict | None = None, rules: dict | None = None,
+                      timeframe: str = "") -> RecoveryPlan:
     """Diagnose a QuickOptimizeResult."""
     risk, rules = risk or {}, rules or {}
-    base = _num(getattr(result, "baseline_eval_pass_probability", None))
-    opt = _num(getattr(result, "optimized_eval_pass_probability", None))
+    timeframe = timeframe or ""
+    # v9.16: judge on per-attempt eval-pass (the honest metric), falling
+    # back to the chain-level fields for results saved before v9.16.
+    base = _num(getattr(result, "baseline_per_attempt_pass_probability", None)
+                or getattr(result, "baseline_eval_pass_probability", None))
+    opt = _num(getattr(result, "optimized_per_attempt_pass_probability", None)
+               or getattr(result, "optimized_eval_pass_probability", None))
     improved = bool(getattr(result, "improved", False))
     btr = _num(getattr(result, "baseline_trades", None))
 
@@ -802,18 +824,18 @@ def _diagnose_quickopt_impl(result, dataset_label: str = "",
                 "structure itself is the limit. A grammar-invention search explores new "
                 "structures instead of re-tuning this one.",
                 "new_search",
-                {"search_cfg": {"dataset_label": dataset_label, "risk": risk,
-                                "rules": rules, "family": "all",
-                                "max_candidates": 600, "candidate_source": "grammar",
-                                "seed": 999}}),
+                {"search_cfg": _search_cfg_base(
+                    dataset_label, risk, rules, timeframe,
+                    family="all", max_candidates=600,
+                    candidate_source="grammar", seed=999)}),
             RecoveryAction(
                 "Try a different strategy family entirely",
                 "Pick the family with the best Stage-1 median from your last search and run a "
                 "family-focused search on it -- different structure, same data.",
                 "new_search",
-                {"search_cfg": {"dataset_label": dataset_label, "risk": risk,
-                                "rules": rules, "family": "all",
-                                "max_candidates": 400, "seed": 1234}}),
+                {"search_cfg": _search_cfg_base(
+                    dataset_label, risk, rules, timeframe,
+                    family="all", max_candidates=400, seed=1234)}),
         ])
 
 
@@ -897,16 +919,18 @@ def diagnose_search(summary, stage_cfg=None, dataset_label: str = "",
 
 
 def diagnose_pipeline(result, dataset_label: str = "",
-                      risk: dict | None = None, rules: dict | None = None) -> RecoveryPlan:
+                      risk: dict | None = None, rules: dict | None = None,
+                      timeframe: str = "") -> RecoveryPlan:
     return _attach_context(
-        _diagnose_pipeline_impl(result, dataset_label, risk, rules),
+        _diagnose_pipeline_impl(result, dataset_label, risk, rules, timeframe),
         risk or {}, rules or {})
 
 
 def diagnose_quickopt(result, dataset_label: str = "",
-                      risk: dict | None = None, rules: dict | None = None) -> RecoveryPlan:
+                      risk: dict | None = None, rules: dict | None = None,
+                      timeframe: str = "") -> RecoveryPlan:
     return _attach_context(
-        _diagnose_quickopt_impl(result, dataset_label, risk, rules),
+        _diagnose_quickopt_impl(result, dataset_label, risk, rules, timeframe),
         risk or {}, rules or {})
 
 
