@@ -687,5 +687,42 @@ document.addEventListener('DOMContentLoaded', function () {
 </script>
 
 {% include '_recovery_panel.html' %}
+{% if evo_prefill_json %}
+<script>
+// v9.16: pre-fill the Evolution Lab form from a "What to do next"
+// recovery-panel deep link (?from_recovery=1 + settings as query args).
+(function () {
+  try {
+    const prefill = JSON.parse({{ evo_prefill_json | tojson }});
+    const fields = {
+      population_size: 'input[name="population_size"]',
+      max_generations: 'input[name="max_generations"]',
+      seed: 'input[name="seed"]',
+      account_size: 'input[name="account_size"]',
+      profit_target: 'input[name="profit_target"]',
+      daily_loss: 'input[name="daily_loss"]',
+      max_dd: 'input[name="max_dd"]'
+    };
+    Object.keys(fields).forEach(k => {
+      if (prefill[k] === undefined) return;
+      const el = document.querySelector(fields[k]);
+      if (el) { el.value = prefill[k]; el.dispatchEvent(new Event('change')); }
+    });
+    if (prefill.existing_dataset) {
+      const ds = document.querySelector('select[name="existing_dataset"]');
+      if (ds) {
+        const opt = Array.from(ds.options).find(o => o.value === prefill.existing_dataset || o.text === prefill.existing_dataset);
+        if (opt) { ds.value = opt.value; ds.dispatchEvent(new Event('change')); }
+      }
+    }
+    const banner = document.createElement('div');
+    banner.style.cssText = 'margin:10px 0;padding:10px 12px;border-radius:8px;background:#1a2530;color:#a8c8e8;font-size:13px;';
+    banner.textContent = 'Settings pre-filled from the "What to do next" recovery panel. Review and press Start.';
+    const form = document.querySelector('form');
+    if (form) form.prepend(banner);
+  } catch (e) { console.warn('evolution prefill failed:', e); }
+})();
+</script>
+{% endif %}
 </body>
 </html>

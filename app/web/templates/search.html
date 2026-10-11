@@ -857,6 +857,11 @@ document.addEventListener('DOMContentLoaded', function () {
 {% if recovery_prefill_json %}
 <script>
 (function () {
+  // v9.16: pre-fill the Search Lab form from a "What to do next"
+  // recovery-panel deep link. Each field is applied independently so one
+  // missing element can never abort the rest (the old code threw on the
+  // dataset selector -- which pointed at a non-existent name="dataset"
+  // field -- and killed the pre-filled banner too).
   try {
     const prefill = JSON.parse({{ recovery_prefill_json | tojson }});
     const fields = {
@@ -866,24 +871,38 @@ document.addEventListener('DOMContentLoaded', function () {
       ga_population: 'input[name="ga_population"]', ga_generations: 'input[name="ga_generations"]',
       stage1_top_n: 'input[name="stage1_top_n"]', cost_stress_multiplier: 'input[name="cost_stress_multiplier"]',
       stop_mult_scale: 'input[name="stop_mult_scale"]', max_hold_bars: 'input[name="max_hold_bars"]',
-      session_filter: 'input[name="session_filter"]'
+      session_filter: 'input[name="session_filter"]',
+      // v9.16: the finished run's real prop-firm / risk / timeframe settings.
+      account_size: 'input[name="account_size"]', profit_target: 'input[name="profit_target"]',
+      daily_loss: 'input[name="daily_loss"]', max_dd: 'input[name="max_dd"]',
+      dd_type: 'select[name="dd_type"]', dd_check_mode: 'select[name="dd_check_mode"]',
+      consistency: 'input[name="consistency"]', min_days: 'input[name="min_days"]',
+      risk_mode: 'select[name="risk_mode"]', risk_value: 'input[name="risk_value"]',
+      commission: 'input[name="commission"]', expand_timeframes: 'input[name="expand_timeframes"]'
     };
     Object.keys(fields).forEach(k => {
       if (prefill[k] === undefined) return;
-      const el = document.querySelector(fields[k]);
-      if (el) { el.value = prefill[k]; el.dispatchEvent(new Event('change')); }
+      try {
+        const el = document.querySelector(fields[k]);
+        if (el) { el.value = prefill[k]; el.dispatchEvent(new Event('change')); }
+      } catch (e) { console.warn('prefill field skipped:', k, e); }
     });
-    if (prefill.dataset) {
-      const ds = document.querySelector('select[name="dataset"]');
-      if (ds) {
-        const opt = Array.from(ds.options).find(o => o.value === prefill.dataset || o.text === prefill.dataset);
-        if (opt) { ds.value = opt.value; ds.dispatchEvent(new Event('change')); }
-      }
+    // v9.16: the dataset select is named existing_dataset (there is no
+    // name="dataset" field -- the old selector always missed).
+    if (prefill.existing_dataset) {
+      try {
+        const ds = document.querySelector('select[name="existing_dataset"]');
+        if (ds) {
+          const opt = Array.from(ds.options).find(o => o.value === prefill.existing_dataset || o.text === prefill.existing_dataset);
+          if (opt) { ds.value = opt.value; ds.dispatchEvent(new Event('change')); }
+        }
+      } catch (e) { console.warn('prefill dataset skipped:', e); }
     }
     const banner = document.createElement('div');
     banner.style.cssText = 'margin:10px 0;padding:10px 12px;border-radius:8px;background:#1a2530;color:#a8c8e8;font-size:13px;';
     banner.textContent = 'Settings pre-filled from the "What to do next" recovery panel. Review and press Start Search.';
-    document.querySelector('form').prepend(banner);
+    const form = document.querySelector('form');
+    if (form) form.prepend(banner);
   } catch (e) { console.warn('recovery prefill failed:', e); }
 })();
 </script>

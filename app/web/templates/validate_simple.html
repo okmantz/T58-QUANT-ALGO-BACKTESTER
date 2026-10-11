@@ -48,7 +48,7 @@
           {% for t, label in [('manual', 'Manual'), ('python', 'Python'), ('pinescript', 'PineScript'), ('mql5', 'MQL5')] %}
           <optgroup label="{{ label }}">
             {% for s in strategies if s.type == t %}
-            <option value="{{ s.type }}::{{ s.name }}"{% if prefill.strategy_pick == s.type ~ '::' ~ s.name %} selected{% endif %}>{{ s.name }}</option>
+            <option value="{{ s.type }}::{{ s.name }}"{% if prefill.strategy_pick == s.type ~ '::' ~ s.name or (not prefill.strategy_pick and prefill.strategy_name and prefill.strategy_name.lower() in s.name.lower()) %} selected{% endif %}>{{ s.name }}</option>
             {% endfor %}
           </optgroup>
           {% endfor %}

@@ -19,7 +19,12 @@
 
   function searchPrefillUrl(searchCfg) {
     // Deep-link to Search Lab with the prescribed settings pre-filled.
-    // The /search route reads these query args (v9).
+    // The /search route reads these query args (v9); the template's own
+    // JS applies them to the form fields.
+    // v9.16: the finished run's REAL settings now ride along -- risk and
+    // rules are the run's own dataclass dicts (flattened here), plus the
+    // timeframe. Previously only family/budget/seed/dataset were sent,
+    // and the dataset selector was broken (see below).
     const q = new URLSearchParams();
     const map = {
       family: 'family', max_candidates: 'max_candidates', seed: 'seed',
@@ -35,17 +40,51 @@
         q.set(arg, searchCfg[k]);
       }
     }
-    if (searchCfg.dataset_label) q.set('dataset', searchCfg.dataset_label);
+    if (searchCfg.dataset_label) q.set('existing_dataset', searchCfg.dataset_label);
+    if (searchCfg.timeframe) q.set('expand_timeframes', searchCfg.timeframe);
+    // v9.16: flatten the run's risk dict (RiskConfig.asdict) onto the
+    // search form's own field names.
+    const risk = searchCfg.risk || {};
+    const riskMap = {risk_mode: 'risk_mode', risk_value: 'risk_value',
+                     commission_per_trade: 'commission'};
+    for (const [k, arg] of Object.entries(riskMap)) {
+      if (risk[k] !== undefined && risk[k] !== null && risk[k] !== '') q.set(arg, risk[k]);
+    }
+    // v9.16: flatten the run's rules dict (PropRules.asdict) onto the
+    // search form's prop-firm field names.
+    const rules = searchCfg.rules || {};
+    const rulesMap = {account_size: 'account_size',
+                      evaluation_profit_target_pct: 'profit_target',
+                      daily_loss_limit_pct: 'daily_loss',
+                      max_drawdown_pct: 'max_dd',
+                      drawdown_type: 'dd_type',
+                      drawdown_check_mode: 'dd_check_mode',
+                      consistency_rule_pct: 'consistency',
+                      min_trading_days: 'min_days'};
+    for (const [k, arg] of Object.entries(rulesMap)) {
+      if (rules[k] !== undefined && rules[k] !== null && rules[k] !== '') q.set(arg, rules[k]);
+    }
     q.set('from_recovery', '1');
     return '/search?' + q.toString();
   }
 
   function evoPrefillUrl(evoCfg) {
+    // v9.16: the /evolution route now reads these (it previously ignored
+    // every query arg). Flatten the run's risk/rules dicts like the
+    // search prefill does.
     const q = new URLSearchParams();
-    if (evoCfg.dataset_label) q.set('dataset', evoCfg.dataset_label);
+    if (evoCfg.dataset_label) q.set('existing_dataset', evoCfg.dataset_label);
     if (evoCfg.population_size) q.set('population_size', evoCfg.population_size);
     if (evoCfg.max_generations) q.set('max_generations', evoCfg.max_generations);
     if (evoCfg.seed) q.set('seed', evoCfg.seed);
+    const rules = evoCfg.rules || {};
+    const rulesMap = {account_size: 'account_size',
+                      evaluation_profit_target_pct: 'profit_target',
+                      daily_loss_limit_pct: 'daily_loss',
+                      max_drawdown_pct: 'max_dd'};
+    for (const [k, arg] of Object.entries(rulesMap)) {
+      if (rules[k] !== undefined && rules[k] !== null && rules[k] !== '') q.set(arg, rules[k]);
+    }
     q.set('from_recovery', '1');
     return '/evolution?' + q.toString();
   }
@@ -135,8 +174,10 @@
           a.textContent = '\u2192 Open Evolution Lab with these settings pre-filled';
           card.appendChild(a);
         } else if (action.kind === 'rerun_pipeline') {
+          // v9.16: the arg name must be existing_dataset -- that is what
+          // _lc_prefill() reads. ?dataset= was silently ignored.
           const a = document.createElement('a');
-          a.href = '/full-pipeline' + (params.dataset_label ? `?dataset=${encodeURIComponent(params.dataset_label)}` : '');
+          a.href = '/full-pipeline' + (params.dataset_label ? `?existing_dataset=${encodeURIComponent(params.dataset_label)}` : '');
           a.className = 'promote-btn';
           a.style.cssText = 'display:inline-block; text-decoration:none; padding:6px 12px;';
           a.textContent = '\u2192 Open Full Pipeline';
@@ -149,8 +190,17 @@
           a.textContent = '\u2192 Open Market Data downloader';
           card.appendChild(a);
         } else if (action.kind === 'validate') {
+          // v9.16: carry the finished run's settings into Validate --
+          // previously a bare link with zero prefill. The validate page
+          // reads strategy_pick / existing_dataset / timeframe /
+          // prop_preset via _lc_prefill(); strategy falls back to a
+          // display-name match in the template.
           const a = document.createElement('a');
-          a.href = '/validate-simple';
+          const vq = new URLSearchParams();
+          if (params.strategy_display_name) vq.set('strategy_name', params.strategy_display_name);
+          if (params.dataset_label) vq.set('existing_dataset', params.dataset_label);
+          if (params.timeframe) vq.set('timeframe', params.timeframe);
+          a.href = '/validate-simple' + (vq.toString() ? '?' + vq.toString() : '');
           a.className = 'promote-btn';
           a.style.cssText = 'display:inline-block; text-decoration:none; padding:6px 12px;';
           a.textContent = '\u2192 Open Validate (pick checks)';
