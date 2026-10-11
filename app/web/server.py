@@ -1629,6 +1629,9 @@ def _lc_prefill() -> dict:
     a = request.args
     return {
         "strategy_pick": (a.get("strategy_pick") or "").strip(),
+        # v9.16: display-name fallback for recovery-panel deep links that
+        # only know the strategy's display name (not its type::filename).
+        "strategy_name": (a.get("strategy_name") or "").strip(),
         "existing_dataset": (a.get("existing_dataset") or "").strip(),
         "timeframe": (a.get("timeframe") or "").strip(),
         "prop_preset": (a.get("prop_preset") or "").strip(),
@@ -5498,6 +5501,9 @@ def full_pipeline_start():
         cancel_event = threading.Event()
         job_id = JOB_MANAGER.create(tool="Full Pipeline", page_template="/full-pipeline/job/{job_id}", log=initial_log, instrument=active_label, cancel_event=cancel_event, cancelled=False,
                                     progress={"percent": 0.0, "step": None, "step_total": 7, "step_label": "", "label": "", "elapsed_seconds": 0.0, "done": False})
+        # v9.16: stash the requested timeframe so the finished run's
+        # recovery panel can pre-fill downstream labs with it.
+        JOB_MANAGER.update(job_id, timeframe=(form.get("timeframe") or "").strip())
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         expand_labels = parse_sweep_timeframes(form.get("expand_timeframes", ""))
         if expand_labels:
@@ -5629,11 +5635,13 @@ def full_pipeline_job_status(job_id):
         # v9: structured recovery plan (gate, margin, ordered concrete actions).
         # v9.15: pass the run's own risk/rules so one-click follow-ups
         # (Quick Optimize above all) inherit this run's risk setup.
+        # v9.16: also pass the run's timeframe for downstream prefill.
         "recovery": (
             _safe_recovery(funnel_recovery.diagnose_pipeline,
                            result, dataset_label=job.get("instrument", "") or "",
                            risk=_job_risk_rules_dicts(job)[0],
-                           rules=_job_risk_rules_dicts(job)[1])
+                           rules=_job_risk_rules_dicts(job)[1],
+                           timeframe=job.get("timeframe", "") or "")
             if result is not None else None
         ),
     })
@@ -7720,6 +7728,9 @@ def quickopt_start():
             initial_log.append(import_note)
         cancel_event = threading.Event()
         job_id = JOB_MANAGER.create(tool="Quick Optimize", page_template="/quick-optimize/job/{job_id}", log=initial_log, instrument=active_label, cancel_event=cancel_event, cancelled=False)
+        # v9.16: stash the requested timeframe so the finished run's
+        # recovery panel can pre-fill downstream labs with it.
+        JOB_MANAGER.update(job_id, timeframe=(form.get("timeframe") or "").strip())
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
         # FIX (multi-timeframe sweep): "Timeframes to test" runs the SAME
         # GA once per requested timeframe (df resampled per timeframe --
@@ -7823,11 +7834,13 @@ def quickopt_job_status(job_id):
         "best_timeframe": job.get("best_timeframe"), "sweep_timeframes": job.get("sweep_timeframes"),
         # v9: structured recovery plan for the Quick Optimize result.
         # v9.15: pass the run's own risk/rules (see the pipeline status).
+        # v9.16: also pass the run's timeframe for downstream prefill.
         "recovery": (
             _safe_recovery(funnel_recovery.diagnose_quickopt,
                            result, dataset_label=job.get("instrument", "") or "",
                            risk=_job_risk_rules_dicts(job)[0],
-                           rules=_job_risk_rules_dicts(job)[1])
+                           rules=_job_risk_rules_dicts(job)[1],
+                           timeframe=job.get("timeframe", "") or "")
             if (job["done"] and result is not None) else None
         ),
     })
@@ -8055,12 +8068,23 @@ HEAVY_JOB_GUARD.register_health_check(
 
 @app.route("/evolution")
 def evolution_form():
+    # v9.16: recovery-panel deep links pass ?from_recovery=1 plus settings
+    # as query args (see _recovery_panel.html's evoPrefillUrl). Forward
+    # them so the template's JS can pre-fill the form. Previously every
+    # query arg was silently ignored.
+    _evo_prefill_keys = (
+        "existing_dataset", "population_size", "max_generations", "seed",
+        "account_size", "profit_target", "daily_loss", "max_dd",
+    )
+    _evo_prefill = {k: request.args.get(k) for k in _evo_prefill_keys
+                    if request.args.get(k) not in (None, "")}
     return render_template(
         "evolution.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
         families=[{"name": n, "description": family_description(n)} for n in list_families()],
         running=(_EVOLUTION_RUNNER is not None and _EVOLUTION_RUNNER.is_running),
         optimizer_modes=OPTIMIZER_MODES,
-        prop_presets_json=_prop_presets_json(), **_alpaca_template_context())
+        prop_presets_json=_prop_presets_json(), **_alpaca_template_context(),
+        evo_prefill_json=json.dumps(_evo_prefill) if _evo_prefill else None)
 
 
 @app.route("/evolution/start", methods=["POST"])
@@ -9337,11 +9361,18 @@ def search_form():
     # prescribed settings as query args (see _recovery_panel.html's
     # searchPrefillUrl). Forward them to the template as JSON so its own
     # JS can pre-fill the form fields.
+    # v9.16: the finished run's real prop-firm / risk / timeframe settings
+    # now ride along (flattened by searchPrefillUrl from the run's own
+    # risk/rules dicts).
     _prefill_keys = (
         "family", "max_candidates", "seed", "candidate_source",
         "grammar_candidates_per_survivor", "ga_population", "ga_generations",
         "stage1_top_n", "cost_stress_multiplier", "stop_mult_scale",
-        "max_hold_bars", "session_filter", "dataset",
+        "max_hold_bars", "session_filter", "existing_dataset",
+        "expand_timeframes",
+        "account_size", "profit_target", "daily_loss", "max_dd",
+        "dd_type", "dd_check_mode", "consistency", "min_days",
+        "risk_mode", "risk_value", "commission",
     )
     _prefill = {k: request.args.get(k) for k in _prefill_keys if request.args.get(k) not in (None, "")}
     return render_template(
