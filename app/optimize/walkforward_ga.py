@@ -766,6 +766,21 @@ def run_walkforward_aware_refinement(
                         log(f"  {_flat_msg}")
                         warnings.append(_flat_msg)
                         break
+                    # v9.16 SPEED: plateau early stop -- best fitness has
+                    # not moved for plateau_patience generations. Saves
+                    # the remaining generations' evaluations on converged
+                    # runs. Deterministic (fitness history only).
+                    if _plateaued(gen_summaries, cfg.plateau_patience, cfg.plateau_min_delta):
+                        _plat_msg = (
+                            f"Stopping the search early at generation {gen}: best OOS fitness "
+                            f"has not improved for {cfg.plateau_patience} straight generations "
+                            f"(best={gen_summaries[-1].best_fitness:.3f}) -- the population has "
+                            "converged and further generations would only re-score near-identical "
+                            "mutations. The best candidate found so far is kept."
+                        )
+                        log(f"  {_plat_msg}")
+                        warnings.append(_plat_msg)
+                        break
             else:
                 # TPE / CMA-ES -- see app.optimize.refinement.OPTIMIZER_MODES
                 # for what each mode is. Both propose a whole BATCH of
@@ -901,6 +916,18 @@ def _flatlined(summaries: list, patience: int) -> bool:
         s.best_fitness == 0.0 and s.mean_fitness == 0.0
         for s in summaries[-patience:]
     )
+
+
+def _plateaued(summaries: list, patience: int, min_delta: float) -> bool:
+    """v9.16 SPEED: True when the best OOS fitness has not improved by
+    more than `min_delta` over the last `patience` generations. A
+    converged population only re-scores near-identical mutations;
+    stopping early saves the remaining generations' evaluations. Pure
+    function of fitness history -- deterministic, never wall-time based."""
+    if not patience or len(summaries) < patience + 1:
+        return False
+    recent_best = [s.best_fitness for s in summaries[-(patience + 1):]]
+    return max(recent_best) - min(recent_best) <= min_delta
 
 
 # ---------------------------------------------------------------------------

@@ -213,9 +213,20 @@ class RefinementConfig:
     # zeros still get their chance before the stop fires. 0 disables the
     # early stop entirely (previous behavior, byte-identical search).
     flatline_patience: int = 3
+    # v9.16 SPEED: plateau early stop. When the best OOS fitness has not
+    # improved by more than `plateau_min_delta` for `plateau_patience`
+    # straight generations, the search stops early -- the remaining
+    # generations would only re-score mutations of a converged population.
+    # Deterministic (pure function of fitness history, never of wall time),
+    # so identical configs still produce identical results. 0 disables
+    # (previous behavior, byte-identical search).
+    plateau_patience: int = 4
+    plateau_min_delta: float = 1e-6
 
     def __post_init__(self):
         self.flatline_patience = max(int(self.flatline_patience), 0)
+        self.plateau_patience = max(int(self.plateau_patience), 0)
+        self.plateau_min_delta = max(float(self.plateau_min_delta), 0.0)
         self.population_size = max(int(self.population_size), 4)
         self.generations = max(int(self.generations), 1)
         self.elite_count = max(1, min(int(self.elite_count), self.population_size - 1))
