@@ -330,13 +330,23 @@ class QuickOptimizeResult:
     optimized_payout_probability: float
 
     ga_result: WalkforwardGAResult | None
-    improved: bool                       # optimized beats baseline on eval-pass, then win-rate
+    improved: bool                       # v9.16: optimized beats baseline on
+                                         # PER-ATTEMPT eval-pass, then win-rate
     final_parameters: dict[str, str] | None
     final_code_text: str | None
     final_code_extension: str | None
     saved_library_path: Path | None
     saved_library_note: str | None
     elapsed_seconds: float
+    # v9.16: per-attempt eval-pass -- the HONEST metric QO is judged on.
+    # (Placed after elapsed_seconds: all fields from here have defaults,
+    # satisfying dataclass field ordering.)
+    baseline_per_attempt_pass_probability: float = 0.0
+    optimized_per_attempt_pass_probability: float = 0.0
+    # v9.16: did the winning config clear the 70% READY acceptance gate?
+    # Separate from `improved` (numerical lift) so "helped but not READY"
+    # is reportable instead of being collapsed into "no improvement".
+    ready_gate_passed: bool = False
     warnings: list[str] = field(default_factory=list)
     # Escalated copy of app.backtest.risk.instrument_scale_mismatch_message
     # when either the baseline or the optimized run flagged a pip_size/
@@ -944,21 +954,34 @@ def run_quick_optimize(
                 holdout_note = "Holdout: 0 trades -- the winning configuration never traded on the reserved slice."
             log(f"  {holdout_note}")
 
+    # v9.16: `improved` is judged on the HONEST metric -- per-attempt
+    # eval-pass probability, the same number the 70% READY gate and the
+    # Full Pipeline verdict use. Previously this compared the chain-level
+    # evaluation_pass_probability, which could say "not improved" when the
+    # GA genuinely lifted per-attempt odds (e.g. 8.7% -> 25%), or
+    # "improved" when only the chain number moved. The READY acceptance
+    # gate below is a SEPARATE flag (ready_gate_passed) -- a numerically
+    # improved but sub-70% candidate is reported honestly as
+    # "helped but not READY" (QO_IMPROVED_SHORT), never crowned, never
+    # hidden.
+    baseline_per_attempt = float(baseline_mc.per_attempt_pass_probability or 0.0)
+    final_per_attempt = float(final_mc.per_attempt_pass_probability or 0.0)
     improved = (
-        final_mc.evaluation_pass_probability > baseline_mc.evaluation_pass_probability
+        final_per_attempt > baseline_per_attempt
         or (
-            final_mc.evaluation_pass_probability == baseline_mc.evaluation_pass_probability
+            final_per_attempt == baseline_per_attempt
             and final_bt.statistics.win_rate > baseline_bt.statistics.win_rate
         )
     )
 
     # v5 READY acceptance gate: the winning configuration must clear
     # per-attempt pass >= threshold, no lookahead leak, and the OOS trade
-    # floor before it may be reported as an improvement. When it fails,
-    # `improved` is forced False below -- a candidate that cannot clear
-    # acceptance is NOT crowned as the winner, no matter how much better
-    # than baseline it looks numerically (the before/after numbers stay on
-    # the result for inspection; only the verdict changes).
+    # floor before it may be reported as READY. v9.16: this gate no longer
+    # rewrites `improved` -- a numerically-better-but-sub-70% candidate
+    # keeps improved=True so the recovery panel can say "helped but not
+    # READY" (QO_IMPROVED_SHORT) instead of the dishonest "found nothing".
+    # Nothing is crowned READY unless the gate passes; the 70% threshold
+    # itself is never lowered.
     log("Evaluating the READY acceptance gate...")
     ready_gate_passed, ready_gate_reasons = _evaluate_quick_optimize_ready_gate(
         per_attempt_pass_probability=float(final_mc.per_attempt_pass_probability),
@@ -980,12 +1003,18 @@ def run_quick_optimize(
             warnings.append(f"READY acceptance gate FAILED: {_r}")
         if improved:
             warnings.append(
-                "Not reporting this as an improvement: the GA did find a numerically better "
-                "configuration, but it failed the READY acceptance gate above -- a non-READY "
-                "candidate is never crowned the winner."
+                "Quick Optimize found a numerically better configuration "
+                f"(per-attempt {baseline_per_attempt:.1f}% -> {final_per_attempt:.1f}%), "
+                "but it failed the READY acceptance gate above -- it is NOT "
+                "crowned as the winner and is NOT READY."
             )
-            log("  Not reporting this as an improvement (acceptance gate failed).")
-        improved = False
+            log("  Numerically improved but NOT READY (acceptance gate failed).")
+        else:
+            warnings.append(
+                "No robust improvement found: no candidate beat the baseline "
+                f"on per-attempt eval-pass (baseline {baseline_per_attempt:.1f}%)."
+            )
+            log("  No robust improvement found.")
 
     # v9.4: saved-name/identity handling moved into
     # _save_optimized_to_library (Owen's simple-name formula + one
@@ -1063,11 +1092,13 @@ def run_quick_optimize(
         baseline_win_rate=baseline_bt.statistics.win_rate,
         baseline_eval_pass_probability=baseline_mc.evaluation_pass_probability,
         baseline_payout_probability=baseline_mc.first_payout_probability,
+        baseline_per_attempt_pass_probability=baseline_per_attempt,
         optimized_trades=len(final_bt.trades),
         optimized_net_profit=final_bt.statistics.net_profit,
         optimized_win_rate=final_bt.statistics.win_rate,
         optimized_eval_pass_probability=final_mc.evaluation_pass_probability,
         optimized_payout_probability=final_mc.first_payout_probability,
+        optimized_per_attempt_pass_probability=final_per_attempt,
         ga_result=ga_result,
         improved=improved,
         final_parameters=final_parameters,
