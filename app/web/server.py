@@ -186,6 +186,7 @@ from app.search.results_db import ResultsDB
 from app.strategy.base import StrategyError
 from app.data.timeframe_resample import prepare_timeframe_aligned_data, describe_resolved_timeframe
 from app.validation.cpcv import CPCVError, compute_pbo, run_cpcv
+from app.validation import simple_report
 from app.validation.sensitivity import compute_2d_heatmap
 from app.optimize.parameter_space import apply_genome, extract_genome
 from app.optimize.code_parameter_space import apply_code_genome, discover_code_genes
@@ -198,7 +199,7 @@ from app.validation.walk_forward_opt import run_walk_forward_optimization
 from app.strategy.library import (
     STRATEGY_STATUSES, STRATEGY_TYPES, StrategyAlreadyExists, delete_many,
     delete_saved_strategy, export_library_zip_bytes, list_all_markets, list_all_tags,
-    library_fingerprint, list_saved_strategies, load_strategy_text, record_backtest_result, record_lookahead_result,
+    library_fingerprint, list_saved_strategies, load_strategy_metadata, load_strategy_text, record_backtest_result, record_lookahead_result,
     record_search_result, record_optimize_result, record_validation_result, record_champion_check_result,
     rename_saved_strategy, save_strategy_bytes, save_strategy_metadata,
     save_strategy_text, set_strategy_status, set_strategy_tags,
@@ -747,11 +748,21 @@ def maybe_save_strategy_to_library(mode: str, code: str, save_name: str, form) -
     return saved_path.name
 
 
-def build_strategy_from_code(mode: str, code: str):
+def build_strategy_from_code(mode: str, code: str, name_hint: str | None = None):
     """Single source of truth for turning resolved source text into a
-    Strategy object, once code is known (see resolve_strategy_source)."""
+    Strategy object, once code is known (see resolve_strategy_source).
+
+    name_hint: the strategy's library filename (e.g. "NQ1! ORB 5m.py").
+    A Python strategy's display name defaults to its temp file's stem, so
+    without a hint every run showed up in reports, run history and the
+    dashboard scorecard as "strategy_3131c83b..." -- a random string that
+    looks nothing like the strategy the person picked. The temp file now
+    carries the library filename's stem (inside its own unique temp
+    directory, so two runs can never collide)."""
     if mode == "python":
-        tmp = Path(tempfile.mkdtemp()) / f"strategy_{uuid.uuid4().hex}.py"
+        stem = Path(str(name_hint)).stem.strip() if name_hint else ""
+        stem = re.sub(r'[\\/:*?"<>|]', "-", stem)
+        tmp = Path(tempfile.mkdtemp()) / (f"{stem}.py" if stem else f"strategy_{uuid.uuid4().hex}.py")
         tmp.write_text(code, encoding="utf-8")
         return PythonStrategy(tmp)
     if mode == "pinescript":
@@ -867,7 +878,7 @@ def _build_strategy(mode: str, form, files):
     saved_name = maybe_save_strategy_to_library(mode, code, save_name, form)
     library_ref = (mode, saved_name) if saved_name else ((mode, existing_choice) if existing_choice else None)
 
-    return build_strategy_from_code(mode, code), library_ref
+    return build_strategy_from_code(mode, code, name_hint=(library_ref[1] if library_ref else save_name)), library_ref
 
 
 def _resolve_dataset(form, files):
@@ -1613,7 +1624,7 @@ _OPT_LINK_ENGINES = {
     "evolution": ("/evolution", "Evolution Lab (GA)"),
     "multi_objective": ("/multi-objective", "Multi-Objective Optimization"),
 }
-_VALIDATE_CHECKS = ("monte_carlo", "cpcv", "pbo", "walk_forward", "sensitivity", "robustness", "regime")
+_VALIDATE_CHECKS = ("monte_carlo", "cpcv", "pbo", "walk_forward", "wfga", "sensitivity", "robustness", "regime")
 
 
 def _simple_strategy_options() -> list[dict]:
@@ -1761,8 +1772,15 @@ def _simple_prop_rules(form):
 
 
 def _simple_base_risk(form, rules):
+    # A picked prop firm already defines the account: its size IS the
+    # starting balance. (The lifecycle pages used to also post separate
+    # "account size" / "initial balance" boxes whose 100,000 default could
+    # silently disagree with the firm picked next to them.) Typed values
+    # are only used when no prop firm is selected.
+    _preset_key = (form.get("prop_preset") or "").strip()
+    _preset_balance = float(getattr(rules, "account_size", 0) or 0) if _preset_key else 0.0
     risk = RiskConfig(
-        initial_balance=float(form.get("initial_balance", 100000) or 100000),
+        initial_balance=(_preset_balance if _preset_balance > 0 else float(form.get("initial_balance", 100000) or 100000)),
         risk_mode=form.get("risk_mode", "percent") or "percent",
         risk_value=float(form.get("risk_value", 1.0) or 1.0),
         max_trades_per_day=int(form.get("max_trades_day", 10) or 10),
@@ -1823,14 +1841,31 @@ def _num_or_none(v):
     return f if f == f else None
 
 
-def _dispatch_validation_checks(df, strategy, risk, rules, checks, form, baseline_trades=None):
+def _dispatch_validation_checks(df, strategy, risk, rules, checks, form, baseline_trades=None,
+                                on_start=None, on_done=None, cancel_event=None, log=None,
+                                on_fraction=None):
     """Run the ticked checks against ONE hardened baseline. Every check is
     isolated: a failure is reported per-check, never fatal to the others.
-    Returns a list of {check, ok, summary, error} with honest numbers."""
+    Returns a list of {check, ok, summary, error} with honest numbers.
+
+    Optional hooks (all best-effort, used by the Validate job for its live
+    percent bar and to save each result onto the strategy the moment it
+    lands): on_start(check), on_done(check, result_dict),
+    on_fraction(fraction_0_to_1) for checks that can report their own
+    progress, log(message), and cancel_event (stops before the next check).
+    """
     out: list[dict] = []
     mc_sims = min(int(form.get("mc_sims", 1000) or 1000), 10_000)
     metric = form.get("validation_metric", "profit_factor") or "profit_factor"
+    _log = log or (lambda _m: None)
     for check in checks:
+        if cancel_event is not None and cancel_event.is_set():
+            break
+        if on_start is not None:
+            try:
+                on_start(check)
+            except Exception:  # noqa: BLE001 -- a progress hook must never break a check
+                pass
         try:
             if check == "monte_carlo":
                 if not baseline_trades:
@@ -1877,16 +1912,40 @@ def _dispatch_validation_checks(df, strategy, risk, rules, checks, form, baselin
                     MonteCarloConfig(n_simulations=min(mc_sims, 500)),
                     n_folds=int(form.get("wf_folds", 3) or 3),
                     window_mode=form.get("wf_window_mode", "rolling") or "rolling",
+                    progress_cb=_log,
                 )
                 summary = res.to_summary_dict() if hasattr(res, "to_summary_dict") else {
                     "n_folds_completed": len(getattr(res, "folds", []) or []),
                     "out_of_sample_efficiency": getattr(res, "out_of_sample_efficiency", None),
+                }
+            elif check == "wfga":
+                ga_res = run_walkforward_aware_refinement(
+                    df, strategy, risk, rules,
+                    MonteCarloConfig(n_simulations=min(mc_sims, 500)),
+                    RefinementConfig(
+                        population_size=int(form.get("wfga_population", 8) or 8),
+                        generations=int(form.get("wfga_generations", 4) or 4),
+                        search_monte_carlo_sims=200,
+                        fitness_metric=form.get("fitness_metric", "eval_pass_probability") or "eval_pass_probability",
+                    ),
+                    n_folds=int(form.get("wf_folds", 3) or 3),
+                    window_mode=form.get("wf_window_mode", "rolling") or "rolling",
+                    progress_cb=_log, cancel_event=cancel_event,
+                    batch_progress_cb=(lambda done, total: on_fraction(done / total) if (on_fraction and total) else None),
+                )
+                summary = {
+                    "overfitting_gap": ga_res.overfitting_gap,
+                    "in_sample_fitness": ga_res.best.in_sample_fitness,
+                    "oos_fitness": ga_res.best.fitness,
+                    "oos_trade_count": ga_res.best.oos_trade_count,
+                    "n_folds": ga_res.n_folds,
                 }
             elif check == "sensitivity":
                 res_list = compute_1d_sensitivity(
                     df, strategy, risk, rules, MonteCarloConfig(n_simulations=min(mc_sims, 500)),
                     metric=metric, pct_range=float(form.get("pct_range", 0.5) or 0.5),
                     n_steps=int(form.get("n_steps", 5) or 5), max_params=int(form.get("max_params", 4) or 4),
+                    progress_cb=_log,
                 )
                 summary = {
                     "n_parameters": len(res_list),
@@ -1925,9 +1984,17 @@ def _dispatch_validation_checks(df, strategy, risk, rules, checks, form, baselin
                 }
             else:
                 continue
-            out.append({"check": check, "ok": True, "summary": summary, "error": None})
+            result = {"check": check, "ok": True, "summary": summary, "error": None}
+        except WalkforwardGACancelled:
+            break
         except Exception as exc:  # noqa: BLE001 -- per-check isolation
-            out.append({"check": check, "ok": False, "summary": None, "error": str(exc)})
+            result = {"check": check, "ok": False, "summary": None, "error": str(exc)}
+        out.append(result)
+        if on_done is not None:
+            try:
+                on_done(check, result)
+            except Exception:  # noqa: BLE001 -- saving/reporting must never sink the rest
+                pass
     return out
 
 
@@ -2185,7 +2252,12 @@ def _run_optimize_simple_job(job_id: str, df, strategy, risk, rules, engines, fo
                             ga_population=int(form.get("ga_population", 16) or 16),
                             ga_generations=int(form.get("ga_generations", 6) or 6),
                             fitness_metric=form.get("fitness_metric", "eval_pass_probability") or "eval_pass_probability",
-                            save_to_library=False,
+                            # One strategy, one record: a library strategy is
+                            # updated in place (never overwritten by a result
+                            # that did not improve it); a copy only on request.
+                            save_to_library=bool(library_ref) or (form.get("save_as_copy") == "on"),
+                            library_ref=library_ref,
+                            save_as_copy=(form.get("save_as_copy") == "on"),
                             # Same scoring basis as Full Pipeline (a blown eval
                             # resets and keeps going) unless explicitly unticked.
                             reset_on_breach=(form.get("reset_on_breach", "on") == "on"),
@@ -2204,7 +2276,8 @@ def _run_optimize_simple_job(job_id: str, df, strategy, risk, rules, engines, fo
                                     "optimized_per_attempt_pass_probability": getattr(res, "optimized_per_attempt_pass_probability", None),
                                     "oos_trade_count": getattr(res, "oos_trade_count", None),
                                     "ready_gate_passed": getattr(res, "ready_gate_passed", None),
-                                    "ready_gate_reasons": " | ".join(getattr(res, "ready_gate_reasons", None) or []) or None}
+                                    "ready_gate_reasons": " | ".join(getattr(res, "ready_gate_reasons", None) or []) or None,
+                                    "saved": getattr(res, "saved_library_note", None)}
                 elif eng == "refine":
                     res = run_iterative_refinement(
                         df, strategy, risk, rules,
@@ -2329,57 +2402,309 @@ def optimize_simple_job_stop(job_id):
     return jsonify({"found": True, "stopping": ce is not None and not job["done"]})
 
 
+# ---------------------------------------------------------------------------
+# Validate (pick checks): background job with a live percent bar.
+#
+# This used to be one blocking POST that rendered every result inline and
+# saved NOTHING onto the strategy -- so the Champion board never saw the
+# checks as run ("you still need to run all the validate checks"). It now
+# runs as a job (same poll-and-percent shape as Test and Optimize), saves
+# each check's outcome onto the picked library strategy the moment it
+# finishes, and ends with a plain-language report plus ONE next step
+# chosen from the actual results (app.validation.simple_report).
+# ---------------------------------------------------------------------------
+
+def _vs_clean(obj):
+    """JSON-safe copy: numpy scalars -> Python, NaN/inf -> None, tuples -> lists."""
+    import math
+    if isinstance(obj, dict):
+        return {str(k): _vs_clean(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [_vs_clean(v) for v in obj]
+    if hasattr(obj, "item") and not isinstance(obj, (str, bytes)):
+        try:
+            obj = obj.item()
+        except Exception:  # noqa: BLE001
+            return str(obj)
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, (int, str, bool)) or obj is None:
+        return obj
+    return str(obj)
+
+
+_VS_RAW_DROP = {"folds", "fold_test_fitnesses", "combined_statistics", "parameters"}
+
+
+def _vs_slim(summary):
+    return {k: v for k, v in (summary or {}).items() if k not in _VS_RAW_DROP}
+
+
+def _vs_context(form, candidate: str) -> dict:
+    """Lifecycle handoff params so every next-step link lands pre-filled."""
+    return {
+        "candidate": candidate,
+        "strategy_pick": candidate,
+        "existing_dataset": (form.get("existing_dataset") or "").strip(),
+        "timeframe": (form.get("timeframe") or "").strip(),
+        "prop_preset": (form.get("prop_preset") or "").strip(),
+    }
+
+
+def _vs_oos_fields(check: str, summary: dict) -> dict:
+    """Extra fields on a saved validation record that the Champion board's
+    OOS column (champion_board.oos_pct) already knows how to read."""
+    out: dict = {}
+    try:
+        if check == "walk_forward":
+            eff = _num_or_none((summary or {}).get("out_of_sample_efficiency"))
+            if eff is not None:
+                out["efficiency"] = max(0.0, min(eff, 1.0))
+        elif check == "cpcv":
+            oos, ins = _num_or_none(summary.get("mean_oos_metric")), _num_or_none(summary.get("mean_is_metric"))
+            if oos is not None and ins and ins > 0:
+                out["efficiency"] = max(0.0, min(oos / ins, 1.0))
+            out["is_robust"] = bool(summary.get("is_robust"))
+        elif check == "pbo":
+            p = _num_or_none(summary.get("pbo"))
+            if p is not None:
+                out["pbo"] = p * 100.0 if p <= 1.0 else p  # champion_board expects a percent
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _vs_record_check(library_ref, check, result, meta: dict) -> None:
+    """Save ONE finished check onto the strategy (and the Validate hub's
+    own checklist) so the Champion board sees it. A check that failed to
+    RUN is not recorded as run."""
+    if not library_ref or not result.get("ok"):
+        return
+    item = simple_report.interpret_check(result)
+    method = simple_report.CHECK_TO_METHOD.get(check, check)
+    record_validation_result(*library_ref, {
+        "method": method, "check": check, "status": item["status"], "headline": item["headline"],
+        **_vs_oos_fields(check, result.get("summary") or {}),
+        "dataset": meta.get("dataset"), "timeframe": meta.get("timeframe"), "prop_preset": meta.get("prop_preset"),
+    })
+    kind = {"walk_forward": "wfo", "cpcv": "cpcv", "sensitivity": "sensitivity",
+            "wfga": "wfga", "regime": "regime_matrix"}.get(check)
+    if kind:
+        strategy_state.record_validation(
+            meta.get("strategy_name") or library_ref[1], meta.get("dataset") or "", kind,
+            passed=(None if item["status"] in ("info", "caution") else item["status"] == "pass"),
+            summary=item["headline"],
+            library_type=library_ref[0], library_filename=library_ref[1],
+        )
+
+
+def _run_validate_simple_job(job_id: str, df, strategy, risk, rules, checks, form, library_ref=None,
+                             dataset_label: str = "", tf_note=None, cancel_event=None, ctx=None) -> None:
+    tracker = SimpleProgress()
+    checks = sorted(checks, key=lambda c: simple_report.CHECK_ORDER.index(c) if c in simple_report.CHECK_ORDER else 99)
+    weights = {c: simple_report.CHECK_WEIGHTS.get(c, 1.0) for c in checks}
+    total_w = simple_report.BASELINE_WEIGHT + sum(weights.values())
+    state = {"done": 0.0, "cur": 0.0, "label": ""}
+    meta = {"dataset": dataset_label, "timeframe": (form.get("timeframe") or "").strip() or "native",
+            "prop_preset": (form.get("prop_preset") or "").strip(),
+            "strategy_name": getattr(strategy, "name", "") or ""}
+    partial: list[dict] = []
+
+    def push(frac_in_current: float = 0.0, label: str = "") -> None:
+        frac = (state["done"] + state["cur"] * max(0.0, min(1.0, frac_in_current))) / total_w
+        JOB_MANAGER.update(job_id, progress={
+            **tracker.update(frac, label or state["label"]),
+            "step": (len(partial) + 1) if state["cur"] else None, "step_total": len(checks),
+            "step_label": state["label"],
+        })
+
+    try:
+        JOB_MANAGER.log(job_id, "Running the baseline backtest…")
+        push(0.0, "Baseline backtest")
+        baseline = run_backtest(df, strategy, risk)
+        baseline_summary = {
+            "trades": len(baseline.trades), "net_profit": baseline.statistics.net_profit,
+            "win_rate": baseline.statistics.win_rate, "max_drawdown_pct": baseline.statistics.max_drawdown_pct,
+            "dataset": dataset_label,
+        }
+        JOB_MANAGER.update(job_id, baseline=_vs_clean(baseline_summary))
+        JOB_MANAGER.log(job_id, f"Baseline: {baseline_summary['trades']} trades, net {baseline_summary['net_profit']:.2f}.")
+        state["done"] = simple_report.BASELINE_WEIGHT
+        push(0.0, "Baseline done")
+
+        def on_start(check):
+            state["cur"], state["label"] = weights[check], simple_report.CHECK_LABELS.get(check, check)
+            JOB_MANAGER.log(job_id, f"{state['label']}: running…")
+            push(0.0, f"{state['label']} running")
+
+        def on_fraction(f):
+            push(f)
+
+        def on_done(check, result):
+            state["done"] += weights[check]
+            state["cur"] = 0.0
+            item = simple_report.interpret_check(result)
+            partial.append(item)
+            JOB_MANAGER.update(job_id, partial_items=_vs_clean(partial))
+            JOB_MANAGER.log(job_id, f"{item['label']}: {item['status'].upper()} — {item['headline']}")
+            push(0.0, f"{item['label']} done")
+            _vs_record_check(library_ref, check, result, meta)
+
+        results = _dispatch_validation_checks(
+            df, strategy, risk, rules, checks, form, baseline_trades=baseline.trades,
+            on_start=on_start, on_done=on_done, cancel_event=cancel_event,
+            log=lambda m: JOB_MANAGER.log(job_id, f"  {m}"), on_fraction=on_fraction,
+        )
+
+        on_record: set = set()
+        if library_ref:
+            try:
+                on_record = set((load_strategy_metadata(*library_ref).get("validation_methods_run") or {}).keys())
+            except Exception:  # noqa: BLE001
+                on_record = set()
+        report = simple_report.build_report(results, context=ctx or {}, methods_on_record=on_record)
+        report["saved_to_library"] = bool(library_ref)
+        report["strategy"] = library_ref[1] if library_ref else meta["strategy_name"]
+        report["library_type"] = library_ref[0] if library_ref else ""
+        if library_ref:
+            try:
+                save_strategy_metadata(*library_ref, {"last_validate_run": {
+                    "ran_at": time.time(), "dataset": dataset_label, "timeframe": meta["timeframe"],
+                    "prop_preset": meta["prop_preset"], "overall": report["overall"],
+                    "overall_label": report["overall_label"], "summary_sentence": report["summary_sentence"],
+                    "items": [{k: i[k] for k in ("check", "label", "status", "headline")} for i in report["items"]],
+                    "next_step": report["next_step"],
+                }}, merge=True)
+            except Exception:  # noqa: BLE001 -- the saved summary is a convenience
+                pass
+        cancelled = bool(cancel_event is not None and cancel_event.is_set())
+        JOB_MANAGER.finish(job_id, cancelled=cancelled, report=_vs_clean(report),
+                           raw={r["check"]: _vs_clean(_vs_slim(r.get("summary"))) for r in results if r.get("ok")},
+                           progress=tracker.finish())
+    except Exception as exc:  # noqa: BLE001
+        JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
+
+
+def _start_validate_job(form, files, candidate: str = "", source: str = "validate"):
+    """Validate the form, build everything, and launch the job thread.
+    Returns (job_id, None) on success or (None, (message, http_status))."""
+    checks = [c for c in _VALIDATE_CHECKS if form.get(f"check_{c}") == "on"]
+    if not checks:
+        return None, ("Tick at least one check.", 400)
+    try:
+        df, active_label, import_note, dataset_error = _resolve_dataset(form, files)
+        if dataset_error:
+            return None, (dataset_error, 400)
+        df, tf_note, tf_error, _tf_label = _apply_timeframe_choice(df, form)
+        if tf_error:
+            return None, (tf_error, 400)
+        load_form = form
+        if candidate and not (form.get("strategy_pick") or "").strip():
+            load_form = form.copy()
+            load_form["strategy_pick"] = candidate
+        strategy, library_ref = _simple_load_strategy(load_form)
+        rules = _simple_prop_rules(form)
+        risk = _simple_base_risk(form, rules)
+    except (StrategyError, RefinementError, ValueError) as exc:
+        return None, (str(exc), 400)
+    except Exception as exc:  # noqa: BLE001
+        return None, (f"Unexpected error: {exc}", 500)
+
+    picked = f"{library_ref[0]}::{library_ref[1]}" if library_ref else ""
+    ctx = _vs_context(form, picked)
+    cancel_event = threading.Event()
+    initial = [f"Loaded {len(df)} bars from {active_label}."] + ([tf_note] if tf_note else [])
+    if not library_ref:
+        initial.append("Note: this strategy is not in your Strategy Library, so results can't be saved to it. Save it to the library first to promote it.")
+    job_id = JOB_MANAGER.create(
+        tool="Validate (pick checks)", page_template="/validate-simple/job/{job_id}", log=initial,
+        instrument=active_label, cancel_event=cancel_event, cancelled=False,
+        progress={"percent": 0.0, "step": None, "step_total": len(checks), "step_label": "",
+                  "label": "Starting", "elapsed_seconds": 0.0, "done": False},
+    )
+    JOB_MANAGER.update(job_id, source=source, strategy=(library_ref[1] if library_ref else getattr(strategy, "name", "")),
+                       checks=[simple_report.CHECK_LABELS.get(c, c) for c in checks], handoff=ctx,
+                       timeframe_note=tf_note, simulation_text=describe_simulation_text(risk, rules),
+                       partial_items=[])
+    JOB_MANAGER.prune(max_age_seconds=6 * 3600)
+    threading.Thread(
+        target=_run_validate_simple_job,
+        args=(job_id, df, strategy, risk, rules, checks, form),
+        kwargs={"library_ref": library_ref, "dataset_label": active_label, "tf_note": tf_note,
+                "cancel_event": cancel_event, "ctx": ctx},
+        daemon=True,
+    ).start()
+    return job_id, None
+
+
 @app.route("/validate-simple")
 def validate_simple_form():
+    run = [c.strip() for c in (request.args.get("run") or "").split(",") if c.strip() in _VALIDATE_CHECKS]
     return render_template("validate_simple.html", active_page="validate_simple",
-                           error=request.args.get("error"), checks=None, baseline=None,
-                           simulation_text=None, **_simple_pickers())
+                           error=request.args.get("error"), preselect=run or None,
+                           **_simple_pickers())
 
 
 @app.route("/validate-simple/start", methods=["POST"])
 def validate_simple_start():
     form = request.form
-    checks = [c for c in _VALIDATE_CHECKS if form.get(f"check_{c}") == "on"]
-    ctx = lambda **kw: dict(active_page="validate_simple", **_simple_pickers(), **kw)
-    if not checks:
-        return render_template("validate_simple.html", **ctx(error="Tick at least one check.", checks=None, baseline=None, simulation_text=None)), 400
-    try:
-        df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
-        if dataset_error:
-            return render_template("validate_simple.html", **ctx(error=dataset_error, checks=None, baseline=None, simulation_text=None)), 400
-        df, tf_note, tf_error, _tf_label = _apply_timeframe_choice(df, form)
-        if tf_error:
-            return render_template("validate_simple.html", **ctx(error=tf_error, checks=None, baseline=None, simulation_text=None)), 400
-        strategy, library_ref = _simple_load_strategy(form)
-        rules = _simple_prop_rules(form)
-        risk = _simple_base_risk(form, rules)
-        baseline = run_backtest(df, strategy, risk)
-        baseline_summary = {
-            "trades": len(baseline.trades), "net_profit": baseline.statistics.net_profit,
-            "win_rate": baseline.statistics.win_rate, "max_drawdown_pct": baseline.statistics.max_drawdown_pct,
-            "dataset": active_label,
-        }
-        results = _dispatch_validation_checks(df, strategy, risk, rules, checks, form,
-                                                baseline_trades=baseline.trades)
-        return render_template("validate_simple.html", **ctx(
-            checks=results, baseline=baseline_summary, timeframe_note=tf_note,
-            simulation_text=describe_simulation_text(risk, rules),
-            strategy_name=getattr(strategy, "name", "Strategy"),
-        ))
-    except (StrategyError, RefinementError, ValueError) as exc:
-        return render_template("validate_simple.html", **ctx(error=str(exc), checks=None, baseline=None, simulation_text=None)), 400
-    except Exception as exc:  # noqa: BLE001
-        return render_template("validate_simple.html", **ctx(error=f"Unexpected error: {exc}", checks=None, baseline=None, simulation_text=None)), 500
+    job_id, err = _start_validate_job(form, request.files, source="validate")
+    if err:
+        msg, status = err
+        run = [c for c in _VALIDATE_CHECKS if form.get(f"check_{c}") == "on"]
+        return render_template("validate_simple.html", active_page="validate_simple", error=msg,
+                               preselect=run or None, **_simple_pickers()), status
+    return redirect(url_for("validate_simple_job", job_id=job_id))
+
+
+@app.route("/validate-simple/job/<job_id>")
+def validate_simple_job(job_id):
+    job = JOB_MANAGER.get(job_id)
+    if job is None:
+        return render_template("validate_simple_job.html", job_id=job_id, not_found=True), 404
+    return render_template("validate_simple_job.html", job_id=job_id, not_found=False,
+                           active_page="validate_simple", source=job.get("source", "validate"))
+
+
+@app.route("/validate-simple/job/<job_id>/status.json")
+def validate_simple_job_status(job_id):
+    job = JOB_MANAGER.get(job_id)
+    if job is None:
+        return jsonify({"found": False}), 404
+    _ce = job.get("cancel_event")
+    return jsonify({"found": True, "done": job["done"], "error": job["error"], "log": job["log"],
+                    "instrument": job.get("instrument"), "progress": job.get("progress"),
+                    "cancelled": job.get("cancelled", False), "strategy": job.get("strategy"),
+                    "checks": job.get("checks"), "baseline": job.get("baseline"),
+                    "partial_items": job.get("partial_items") or [], "report": job.get("report"),
+                    "raw": job.get("raw"), "source": job.get("source", "validate"),
+                    "handoff": job.get("handoff"), "timeframe_note": job.get("timeframe_note"),
+                    "simulation_text": job.get("simulation_text"),
+                    "stopping": bool(_ce is not None and _ce.is_set() and not job["done"])})
+
+
+@app.route("/validate-simple/job/<job_id>/stop", methods=["POST"])
+def validate_simple_job_stop(job_id):
+    job = JOB_MANAGER.get(job_id)
+    if job is None:
+        return jsonify({"found": False}), 404
+    ce = job.get("cancel_event")
+    if ce is not None and not job["done"]:
+        ce.set()
+    return jsonify({"found": True, "stopping": ce is not None and not job["done"]})
+
+
+def _champion_page_ctx(**extra) -> dict:
+    rows = champion_board.list_board()
+    return dict(active_page="champion_simple", board_rows=rows,
+                champion=champion_board.strongest_validated_candidate(rows),
+                **_simple_pickers(), **extra)
 
 
 @app.route("/champion-simple")
 def champion_simple_form():
-    rows = champion_board.list_board()
-    champion = champion_board.strongest_validated_candidate(rows)
-    return render_template("champion_simple.html", active_page="champion_simple",
-                           board_rows=rows, champion=champion,
-                           notice=request.args.get("notice"), notice_ok=request.args.get("ok"),
-                           checks_result=None, **_simple_pickers())
+    return render_template("champion_simple.html",
+                           **_champion_page_ctx(notice=request.args.get("notice"), notice_ok=request.args.get("ok")))
 
 
 @app.route("/champion-simple/promote", methods=["POST"])
@@ -2388,51 +2713,26 @@ def champion_simple_promote():
     strategy_type, _, filename = candidate.partition("::")
     if candidate and strategy_type and filename:
         ok, message, _stage = champion_board.promote_strategy(strategy_type, filename)
-        return redirect(url_for("champion_simple_form", notice=message, ok="1" if ok else "0"))
-    return redirect(url_for("champion_simple_form", notice="Pick a candidate to promote.", ok="0"))
+        return redirect(url_for("champion_simple_form", notice=message, ok="1" if ok else "0", candidate=candidate))
+    return redirect(url_for("champion_simple_form", notice="Pick a strategy to promote.", ok="0"))
 
 
 @app.route("/champion-simple/rerun", methods=["POST"])
 def champion_simple_rerun():
-    """Re-run ticked checks for one board candidate (validate-simple logic)."""
+    """Re-run ticked checks for one board strategy. Runs as the same
+    background job as the Validate page (live percent, results saved onto
+    the strategy) and returns to the Champion page when it finishes."""
     form = request.form
-    checks = [c for c in _VALIDATE_CHECKS if form.get(f"check_{c}") == "on"]
-    rows = champion_board.list_board()
-    candidate = (request.form.get("candidate") or "").strip()
+    candidate = (form.get("candidate") or "").strip()
     strategy_type, _, filename = candidate.partition("::")
-    base_ctx = dict(active_page="champion_simple", board_rows=rows,
-                    champion=champion_board.strongest_validated_candidate(rows), **_simple_pickers())
-    if not checks:
-        return render_template("champion_simple.html", **base_ctx, checks_result=None,
-                               notice="Tick at least one check to re-run.", notice_ok="0"), 400
     if not (strategy_type and filename):
-        return render_template("champion_simple.html", **base_ctx, checks_result=None,
-                               notice="Pick a candidate first.", notice_ok="0"), 400
-    try:
-        df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
-        if dataset_error:
-            return render_template("champion_simple.html", **base_ctx, checks_result=None, notice=dataset_error, notice_ok="0"), 400
-        df, tf_note, tf_error, _tf_label = _apply_timeframe_choice(df, form)
-        if tf_error:
-            return render_template("champion_simple.html", **base_ctx, checks_result=None, notice=tf_error, notice_ok="0"), 400
-        load_form = form
-        if not (form.get("strategy_pick") or "").strip():
-            load_form = form.copy()
-            load_form["strategy_pick"] = candidate
-        strategy, _library_ref = _simple_load_strategy(load_form)
-        rules = _simple_prop_rules(form)
-        risk = _simple_base_risk(form, rules)
-        baseline = run_backtest(df, strategy, risk)
-        results = _dispatch_validation_checks(df, strategy, risk, rules, checks, form,
-                                              baseline_trades=baseline.trades)
-        return render_template("champion_simple.html", **base_ctx, checks_result={
-            "candidate": f"{strategy_type}::{filename}", "dataset": active_label,
-            "baseline_trades": len(baseline.trades), "checks": results,
-            "timeframe_note": tf_note,
-        })
-    except Exception as exc:  # noqa: BLE001
-        return render_template("champion_simple.html", **base_ctx, checks_result=None,
-                               notice=f"Re-run failed: {exc}", notice_ok="0"), 500
+        return render_template("champion_simple.html", **_champion_page_ctx(
+            notice="Pick a strategy in the list first.", notice_ok="0")), 400
+    job_id, err = _start_validate_job(form, request.files, candidate=candidate, source="champion")
+    if err:
+        msg, status = err
+        return render_template("champion_simple.html", **_champion_page_ctx(notice=msg, notice_ok="0")), status
+    return redirect(url_for("validate_simple_job", job_id=job_id))
 
 
 @app.route("/validate")
@@ -5600,6 +5900,7 @@ def full_pipeline_start():
             skip_optimization=form.get("skip_optimization") == "on",
             library_ref=library_ref,
             replace_existing=form.get("replace_existing") == "on",
+            save_as_copy=form.get("save_as_copy") == "on",
         )
 
         ollama_settings = None
@@ -7842,6 +8143,7 @@ def quickopt_start():
             # run_quick_optimize itself when library_ref is None.
             library_ref=library_ref,
             replace_existing=form.get("replace_existing") == "on",
+            save_as_copy=form.get("save_as_copy") == "on",
         )
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
         # v7 (2026-10-05, worker B, fix #7): pip_size backstop -- WARN loudly
