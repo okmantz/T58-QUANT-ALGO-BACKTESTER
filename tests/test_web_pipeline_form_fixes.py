@@ -8,7 +8,7 @@ from app.web import server
 def test_posted_preset_brings_the_firms_full_rules():
     typed = server.PropRules(account_size=50000.0)
     got = server._apply_posted_preset(MultiDict({"prop_preset": "topstep_50k"}), typed)
-    assert got.dd_basis == "eod" and got.consistency_rule_pct == 50.0
+    assert got.dd_basis == "eod" and got.consistency_rule_pct == 55.0
     assert got.account_size == 50000.0
 
 

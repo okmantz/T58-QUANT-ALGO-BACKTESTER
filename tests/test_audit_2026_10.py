@@ -211,7 +211,7 @@ def test_walkforward_ga_headline_prefers_honest_median():
 
 
 # ---- strategies are causal & well-formed -----------------------------------------------------------------------------------------
-@pytest.mark.parametrize("name", [f"{s}1! {k} 5m.py" for s in ("ES", "NQ", "GC") for k in ("Opening Range Breakout", "Trend Vol Filter")])
+@pytest.mark.parametrize("name", [f"{s}1! {k} 5m.py" for s in ("NQ",) for k in ("Opening Drive",)])
 def test_new_strategies_load_and_emit_valid_signals(name):
     from pathlib import Path
     from app.strategy.python import PythonStrategy

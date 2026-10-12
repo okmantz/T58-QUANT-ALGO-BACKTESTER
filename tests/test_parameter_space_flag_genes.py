@@ -5,7 +5,7 @@ from pathlib import Path
 from app.optimize.parameter_space import extract_genome
 
 REPO = Path(__file__).resolve().parents[1]
-NQ = REPO / "strategies/manual/NQ1! Opening Range Breakout (5m).json"
+NQ = REPO / "tests/fixtures/nq_orb_manual.json"
 
 
 def test_nq_orb_genome_has_only_live_genes():

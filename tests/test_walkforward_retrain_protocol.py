@@ -1,6 +1,6 @@
 """Tests for the RETRAIN_PER_FOLD walk-forward retrain-context protocol
 (see app/strategy/python.py's WALK-FORWARD RETRAIN CONTEXT section and
-strategies/python/ml_classifier_direction.py's WALK-FORWARD RETRAINING
+tests/fixtures/ml_classifier_direction.py's WALK-FORWARD RETRAINING
 section) -- the fix for the ml_classifier_direction.py strategy wasting
 each fold's real training window."""
 from __future__ import annotations
@@ -14,7 +14,7 @@ from app.backtest.risk import RiskConfig
 from app.strategy.python import PythonStrategy
 from app.validation.walk_forward_opt import Fold, _run_fold_test, _wants_retrain_context, build_folds
 
-ML_STRATEGY_PATH = "strategies/python/ml_classifier_direction.py"
+ML_STRATEGY_PATH = "tests/fixtures/ml_classifier_direction.py"
 
 
 def _synthetic_df(n=1500, seed=3):

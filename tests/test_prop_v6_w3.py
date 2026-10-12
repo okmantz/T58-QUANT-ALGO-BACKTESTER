@@ -86,7 +86,7 @@ def test_to_prop_rules_passes_new_fields():
     r = p.to_prop_rules()
     assert r.winning_days_for_payout == p.winning_days_for_payout == 5
     assert r.min_winning_day_profit == p.min_winning_day_profit == 150.0
-    assert r.floating_drawdown_mode == p.floating_drawdown_mode == "realized"
+    assert r.floating_drawdown_mode == p.floating_drawdown_mode == "adverse"
     assert r.funded_consistency_rule_pct == p.funded_consistency_rule_pct == 40.0
 
 

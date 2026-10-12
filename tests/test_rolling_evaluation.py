@@ -116,3 +116,57 @@ def test_rolling_evaluation_best_and_worst_period_are_populated_with_enough_data
     if result.n_windows >= 20:
         assert result.worst_starting_period is not None
         assert result.best_starting_period is not None
+
+
+# --------------------------------------------------------------------------------------------------
+# 2026-10 audit regression: a pass inside the window must not be re-labelled as an evaluation
+# failure just because the (continuing) simulation later busts the funded account.
+# --------------------------------------------------------------------------------------------------
+def _daily_trades(pnls, start="2024-01-02"):
+    days = pd.bdate_range(start, periods=len(pnls))
+    return [
+        Trade(
+            entry_time=pd.Timestamp(d) + pd.Timedelta(hours=15), exit_time=pd.Timestamp(d) + pd.Timedelta(hours=16),
+            direction=1, entry_price=1.0, exit_price=1.0, size=1, pnl=float(p), pnl_pct=0.0,
+            exit_reason="signal", commission=0, equity_after=0,
+        )
+        for p, d in zip(pnls, days)
+    ]
+
+
+def _trailing_rules():
+    return _rules(
+        evaluation_profit_target_pct=6.0, daily_loss_limit_pct=100.0, max_drawdown_pct=4.0,
+        min_trading_days=2, consistency_rule_pct=None, drawdown_type="trailing",
+    )
+
+
+def test_pass_then_later_funded_bust_still_counts_as_a_pass_in_long_windows():
+    # 4 x $800 clears the $3,000 target on day 4; 96 flat-ish days; then three -$1,200 days bust the
+    # trailing drawdown on day ~102 -- long AFTER the evaluation was passed.
+    pnls = [800, 800, 800, 800] + [10] * 96 + [-1200, -1200, -1200]
+    trades = _daily_trades(pnls)
+    rules = _trailing_rules()
+    outcomes = {}
+    for window in (30, 60, 90, 120, 125):
+        res = run_rolling_evaluation(trades, rules, window_trading_days=window, stride=1000)  # first start day only
+        outcomes[window] = res.windows[0]
+    assert all(o.passed for o in outcomes.values()), {w: (o.passed, o.failure_category) for w, o in outcomes.items()}
+    assert all(o.failure_category is None for o in outcomes.values())
+
+
+def test_pass_rate_is_non_decreasing_in_window_length():
+    trades = _mock_trades(n=900, seed=5, mean=22.0, std=170.0, per_day=2)
+    rules = _rules(evaluation_profit_target_pct=6.0, max_drawdown_pct=8.0, daily_loss_limit_pct=5.0, min_trading_days=3)
+    rates = [run_rolling_evaluation(trades, rules, window_trading_days=w, stride=3).pass_rate_pct for w in (15, 30, 60, 120, 240)]
+    for shorter, longer in zip(rates, rates[1:]):
+        assert longer + 1e-9 >= shorter, f"pass rate fell as the window grew: {rates}"
+
+
+def test_real_failure_before_any_pass_is_still_an_evaluation_failure():
+    # Busts on day 3, long before any pass would be possible -> must remain a failure in every window.
+    pnls = [-900, -900, -900] + [800] * 10
+    trades = _daily_trades(pnls)
+    res = run_rolling_evaluation(trades, _trailing_rules(), window_trading_days=60, stride=1000)
+    first = res.windows[0]
+    assert first.passed is False and first.failure_category in {"max_drawdown", "daily_loss_limit"}

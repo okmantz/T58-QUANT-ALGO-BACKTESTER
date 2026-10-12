@@ -262,3 +262,31 @@ def test_run_backtest_no_false_positive_on_valid_strategy():
     risk = RiskConfig(initial_balance=50_000.0, risk_mode="percent", risk_value=0.5, pip_size=1.0)
     result = run_backtest(df, strategy, risk)
     assert not has_impossible_condition(result.warnings)
+
+
+# --- 2026-10 audit: 0/1 flag operands compared to a constant outside [0, 1] --------------------
+
+def _flag_cond(value):
+    return {
+        "left": {"type": "time_of_day", "session_start": "09:45", "session_end": "15:00"},
+        "operator": "==",
+        "right": {"type": "value", "value": value},
+    }
+
+
+def test_validate_flags_time_of_day_compared_to_non_boolean_constant():
+    config = _minimal_manual_config(short_condition=_flag_cond(0.627))
+    warnings = validate_bounded_conditions(config)
+    assert any("can never be true" in w and "short entry" in w and "TIME_OF_DAY" in w for w in warnings)
+    assert has_impossible_condition(warnings)
+
+
+def test_validate_flags_time_of_day_constant_above_one():
+    warnings = validate_bounded_conditions(_minimal_manual_config(short_condition=_flag_cond(7.3)))
+    assert any("TIME_OF_DAY" in w for w in warnings)
+
+
+def test_validate_accepts_time_of_day_equal_to_one_and_zero():
+    for v in (0, 1, 1.0):
+        warnings = validate_bounded_conditions(_minimal_manual_config(short_condition=_flag_cond(v)))
+        assert not any("TIME_OF_DAY" in w for w in warnings)
