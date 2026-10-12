@@ -9,8 +9,8 @@ deflate -- but every strategy you try is still a trial; the report prints how ma
   4. EV verdict (p*q*V - c) using the holdout pass rate and the preset's fee-table entry
   5. pre-purchase checklist state (real-account check is NOT done by this script -- it needs your real trades)
 
-    python scripts/strategy_evidence.py --strategy "strategies/python/ES1! Opening Range Breakout 5m.py" \
-        --data data/raw/ES1!/futures_ES.F_1m.parquet --instrument ES --preset lucid_50k --out strategies/evidence
+    python scripts/strategy_evidence.py --strategy "strategies/python/NQ1! Opening Drive 5m.py" \
+        --data data/raw/NQ1!/futures_NQ.F_1m.parquet --instrument NQ --preset lucid_50k --out strategies/evidence
 
 Writes <out>/<strategy stem>.md and .json. Losses are reported as losses.
 """
