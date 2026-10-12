@@ -79,6 +79,22 @@ STRATEGY_TYPES = ("python", "pinescript", "mql5", "manual")
 # checklist keep agreeing on what "done" means.
 VALIDATION_STEP_METHODS = ("cpcv", "wfo", "wfga", "sensitivity", "regime_matrix")
 
+# Names different tools/pages use for the same validation method, folded
+# onto the canonical VALIDATION_STEP_METHODS key when a result is recorded
+# (see record_validation_result). Without this, the Validate page's
+# "walk_forward"/"regime" checks and Full Pipeline's own "walk_forward"
+# OOS step were saved under keys the Champion gate never looked for, so
+# the gate kept reporting them as "not yet run" no matter how many times
+# they had actually run.
+VALIDATION_METHOD_ALIASES = {
+    "walk_forward": "wfo",
+    "walkforward": "wfo",
+    "walk_forward_opt": "wfo",
+    "regime": "regime_matrix",
+    "regime_survival_matrix": "regime_matrix",
+    "walk_forward_ga": "wfga",
+}
+
 _EXTENSIONS = {
     "python": ".py",
     "pinescript": ".pine",
@@ -728,6 +744,16 @@ def save_strategy_replacing_version(
     if not dest.exists():
         raise FileNotFoundError(f"No saved {t} strategy named '{name}' to replace.")
 
+    try:
+        current_text = dest.read_text(encoding="utf-8")
+    except OSError:
+        current_text = None
+    if current_text is not None and current_text == text:
+        # Nothing changed (e.g. Full Pipeline re-ran an un-mutated
+        # strategy): don't pile up identical archived versions, and
+        # don't treat earlier validation as out of date.
+        return dest
+
     versions_dir = d / ".versions" / name
     versions_dir.mkdir(parents=True, exist_ok=True)
     ts = int(time.time())
@@ -746,7 +772,19 @@ def save_strategy_replacing_version(
     existing_meta = load_strategy_metadata(t, name)
     history = list(existing_meta.get("version_history") or [])
     history.append({"path": str(archived_path.relative_to(d)), "replaced_at": ts})
-    save_strategy_metadata(t, name, {"version_history": history}, merge=True)
+    update = {"version_history": history}
+    # The strategy's content just changed, so any validation checks that
+    # were run against the OLD version no longer describe it. Move them
+    # out of the active record (the Champion gate reads
+    # "validation_methods_run") and keep a note of what was cleared, so
+    # the Champion page can say "changed since last validated -- re-run"
+    # instead of silently promoting on stale evidence.
+    stale_methods = sorted((existing_meta.get("validation_methods_run") or {}).keys())
+    if stale_methods:
+        update["validation_methods_run"] = {}
+        update["last_validation"] = {}
+        update["stale_validation"] = {"cleared_at": ts, "methods": stale_methods}
+    save_strategy_metadata(t, name, update, merge=True)
     return dest
 
 
@@ -1007,11 +1045,18 @@ def record_validation_result(strategy_type: str, filename: str, result: dict[str
     methods_run = dict(existing.get("validation_methods_run") or {})
     method = result.get("method")
     if method:
+        method = VALIDATION_METHOD_ALIASES.get(str(method), str(method))
+        result = {**result, "method": method}
         methods_run[method] = {**result, "recorded_at": time.time()}
-    return save_strategy_metadata(strategy_type, filename, {
+    update = {
         "last_validation": result,
         "validation_methods_run": methods_run,
-    }, merge=True)
+    }
+    stale = dict(existing.get("stale_validation") or {})
+    if stale and method:
+        remaining = [m for m in (stale.get("methods") or []) if m != method]
+        update["stale_validation"] = {**stale, "methods": remaining} if remaining else {}
+    return save_strategy_metadata(strategy_type, filename, update, merge=True)
 
 
 def record_champion_check_result(strategy_type: str, filename: str, result: dict[str, Any]) -> Path:
