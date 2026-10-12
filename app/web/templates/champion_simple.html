@@ -25,7 +25,7 @@
 {% include '_lifecycle_stepper.html' %}
 <div class="lc-crumb">Lifecycle · 5 · <b>Champion</b></div>
 <h1 class="lc-title">Champion board</h1>
-<p class="lc-sub">The shortlist. Every saved strategy's actual standing — Eval / Payout / OOS and how far it's been explicitly promoted through Candidate &rarr; Validated &rarr; Champion Candidate &rarr; Forward Testing &rarr; Production Ready. Promotion is manual and advances one earned stage at a time; a high raw metric alone never advances a strategy. The 70% promotion gate is unchanged.</p>
+<p class="lc-sub">Every saved strategy, ranked by how far it has earned its way up. Pick one, see exactly what it still needs, and promote it one stage at a time.</p>
 
 {% if notice %}
 <div class="lc-notice{{ '' if notice_ok == '1' else ' bad' }}">{{ notice }}</div>
@@ -35,174 +35,119 @@
 <div class="lc-run-main">
 
 {% if champion %}
-  <div class="lc-card">
-    <h3>Current champion (strongest validated candidate)</h3>
-    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
-      <div><b>{{ champion.display_name or champion.filename }}</b>
-        <div class="lc-hint">{{ champion.strategy_type }} · stage: {{ champion.promotion.stage_title }}</div></div>
-      <span class="lc-pill {{ 'green' if champion.verdict == 'READY' else ('red' if champion.verdict == 'NOT READY' else 'amber') }}">{{ champion.verdict or champion.status }}</span>
-    </div>
-    <div style="margin-top:10px;">
-      <div class="lc-kv"><span class="k">Eval pass</span><span class="v">{{ '%.0f%%'|format(champion.eval_pct) if champion.eval_pct is not none else '—' }}</span></div>
-      <div class="lc-kv"><span class="k">First payout</span><span class="v">{{ '%.0f%%'|format(champion.payout_pct) if champion.payout_pct is not none else '—' }}</span></div>
-      <div class="lc-kv"><span class="k">OOS quality</span><span class="v">{{ '%.0f%%'|format(champion.oos_pct) if champion.oos_pct is not none else '—' }}</span></div>
-    </div>
+<div class="ch-hero">
+  <div>
+    <div class="eyebrow">&#9733; Current champion</div>
+    <div class="hname">{{ champion.display_name or champion.filename }}</div>
+    <div class="lc-hint">{{ champion.strategy_type }} · {{ champion.promotion.stage_title }}</div>
   </div>
-{% endif %}
-
-  <div class="lc-card">
-    <h3>Promotion board</h3>
-    {% if board_rows %}
-    <div style="overflow-x:auto;">
-    <table class="lc-tbl">
-      <thead><tr><th></th><th>Strategy</th><th>Verdict</th><th>Eval</th><th>Payout</th><th>OOS</th><th>Stage</th><th>Next step</th></tr></thead>
-      <tbody>
-      {% for r in board_rows %}
-        <tr>
-          <td><input type="radio" name="candidate" value="{{ r.strategy_type }}::{{ r.filename }}"{% if prefill.candidate == r.strategy_type ~ '::' ~ r.filename %} checked{% endif %} form="champion-actions"></td>
-          <td><b>{{ r.display_name }}</b><div class="lc-hint">{{ r.strategy_type }}</div></td>
-          <td><span class="lc-pill {{ 'green' if r.verdict == 'READY' else ('red' if r.verdict == 'NOT READY' else ('amber' if r.verdict == 'MARGINAL' else 'grey')) }}">{{ r.verdict or 'UNTESTED' }}</span></td>
-          <td>{{ '%.0f%%'|format(r.eval_pct) if r.eval_pct is not none else '—' }}</td>
-          <td>{{ '%.0f%%'|format(r.payout_pct) if r.payout_pct is not none else '—' }}</td>
-          <td>{{ '%.0f%%'|format(r.oos_pct) if r.oos_pct is not none else '—' }}</td>
-          <td>{{ r.promotion.stage_title }}</td>
-          <td>
-            {% if r.promotion.can_promote %}
-            <span class="lc-pill green">Ready — select it and Promote below</span>
-            {% elif r.promotion.next_stage_title %}
-            {% set bt_req = r.promotion.requirements | selectattr('key', 'equalto', 'backtested') | list %}
-            {% if bt_req and not bt_req[0].met %}
-            {# v9.7: no completed test run yet -> Full Pipeline, never Validate. #}
-            <a class="lc-btn small" href="/full-pipeline?load_strategy_type={{ r.strategy_type }}&load_strategy_name={{ r.filename | urlencode }}">&#9654; Run Full Pipeline</a>
-            {% else %}
-            {% set unmet = r.promotion.requirements | rejectattr('met') | list %}
-            <span class="lc-hint">{{ unmet | length }} check{{ '' if unmet | length == 1 else 's' }} still to run</span><br>
-            <a href="/validate-simple" style="color:var(--lc-acc); font-size:12px;">Open Validate (pick checks) &rarr;</a>
-            {% endif %}
-            {% else %}
-            <span style="color:var(--lc-acc); font-size:12px;">&#9733; Final stage</span>
-            {% endif %}
-          </td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    </div>
-    {% else %}
-    <p class="lc-hint">No candidates yet — run a strategy through the Full Pipeline or Validate so it lands on the board.</p>
-    {% endif %}
+  <div class="hstats">
+    <div class="hstat"><div class="v">{{ '%.0f%%'|format(champion.eval_pct) if champion.eval_pct is not none else '—' }}</div><div class="l">Eval</div></div>
+    <div class="hstat"><div class="v">{{ '%.0f%%'|format(champion.payout_pct) if champion.payout_pct is not none else '—' }}</div><div class="l">Payout</div></div>
+    <div class="hstat"><div class="v">{{ '%.0f%%'|format(champion.oos_pct) if champion.oos_pct is not none else '—' }}</div><div class="l">OOS</div></div>
   </div>
-
-{% if checks_result %}
-  <div class="lc-card">
-    <h3>Re-run results — {{ checks_result.candidate }}</h3>
-    <p class="lc-hint">Dataset: {{ checks_result.dataset }} · baseline trades: {{ checks_result.baseline_trades }}{% if checks_result.timeframe_note %} · {{ checks_result.timeframe_note }}{% endif %}</p>
-    {% for r in checks_result.checks %}
-    <div class="lc-verdict {{ 'pass' if r.ok else '' }}">
-      <span class="lc-pill {{ 'green' if r.ok else 'red' }}">{{ 'RAN' if r.ok else 'FAILED' }}</span>
-      <h3 style="margin-top:8px;">{{ {'monte_carlo': 'Monte Carlo', 'cpcv': 'CPCV', 'pbo': 'PBO (overfitting)', 'walk_forward': 'Walk-Forward', 'sensitivity': 'Sensitivity (1-D)', 'robustness': 'Parameter Robustness', 'regime': 'Regime Matrix'}.get(r.check, r.check) }}</h3>
-      {% if r.ok %}
-      {% for k, v in r.summary.items() %}
-      <div class="lc-kv"><span class="k">{{ k }}</span><span class="v">{% if v is mapping or v is sequence and v is not string %}<pre style="white-space:pre-wrap;font-size:11px;text-align:left;">{{ v | tojson(indent=2) }}</pre>{% else %}{{ v }}{% endif %}</span></div>
-      {% endfor %}
-      {% else %}
-      <p class="lc-hint" style="color:#ffb4b4;">{{ r.error }}</p>
-      {% endif %}
-    </div>
-    {% endfor %}
-  </div>
+</div>
 {% endif %}
 
 <form id="champion-actions" method="post" enctype="multipart/form-data">
-  <div class="lc-card">
-    <h3>Re-run checks for the selected candidate</h3>
-    <p class="lc-hint" style="margin-bottom:12px;">Pick a candidate in the board above (radio button), choose a dataset and a prop firm, tick checks, then re-run. Promote is separate and uses the board's stored verdicts — it advances one earned stage and names anything unmet.</p>
-    <div class="lc-row">
-      <div class="lc-col">
-        <label class="flabel" for="lc-dataset-pick">Market data</label>
-        <select class="inp" name="existing_dataset" id="lc-dataset-pick">
-          <option value="">— upload a CSV instead —</option>
-          {% for g in dataset_groups %}
-          <optgroup label="{{ g.instrument }}">
-            {% for f in g.files %}
-            <option value="{{ f.full_name }}"{% if prefill.existing_dataset == f.full_name %} selected{% endif %}>{{ f.name }}</option>
-            {% endfor %}
-          </optgroup>
-          {% endfor %}
-        </select>
-        <label class="flabel" style="margin-top:10px;" for="lc-csv-file">…or upload market data (CSV)</label>
-        <input type="file" name="csv_file" id="lc-csv-file" accept=".csv">
+
+<div class="lc-card">
+  <h3>Your strategies</h3>
+  {% if board_rows %}
+  <div class="ch-list">
+  {% for r in board_rows %}
+    {% set pick = r.strategy_type ~ '::' ~ r.filename %}
+    <label class="ch-row{% if prefill.candidate == pick %} sel{% endif %}" data-pick="{{ pick }}" data-name="{{ r.display_name }}"
+           data-can="{{ 1 if r.promotion.can_promote else 0 }}" data-next="{{ r.promotion.next_stage_title or '' }}"
+           data-nexthref="{{ r.next.href if r.next else '' }}">
+      <input type="radio" name="candidate" value="{{ pick }}"{% if prefill.candidate == pick %} checked{% endif %}>
+      <div>
+        <div class="ch-name">{{ r.display_name }}</div>
+        <div class="ch-meta">{{ r.strategy_type }} · {{ r.promotion.stage_title }}</div>
       </div>
-      <div class="lc-col">
-        <label class="flabel" for="lc-prop-preset">Prop firm</label>
-        <select class="inp" name="prop_preset" id="lc-prop-preset">
-          <option value="">— typed rules / account size only —</option>
-          {% for p in prop_presets %}
-          <option value="{{ p.key }}"{% if prefill.prop_preset == p.key %} selected{% endif %}>{{ p.label }}</option>
-          {% endfor %}
-        </select>
-        <div class="lc-hint" style="margin-top:5px;">Its rules show in the rail &rarr;</div>
-        <div class="lc-rules-line" id="lc-rules-line"></div>
+      <div>
+        <div class="ch-nums">Eval <b>{{ '%.0f%%'|format(r.eval_pct) if r.eval_pct is not none else '—' }}</b> · Payout <b>{{ '%.0f%%'|format(r.payout_pct) if r.payout_pct is not none else '—' }}</b> · OOS <b>{{ '%.0f%%'|format(r.oos_pct) if r.oos_pct is not none else '—' }}</b></div>
+        <div class="ch-bar"><div style="width:{{ r.promotion.stage_pct or 0 }}%"></div></div>
       </div>
-    </div>
-    <div class="lc-row" style="margin-top:6px;">
-      <div class="lc-col"><label class="flabel">Account size ($)</label><input type="number" step="any" name="account_size" value="100000"></div>
-      <div class="lc-col"><label class="flabel">Initial balance ($)</label><input type="number" step="any" name="initial_balance" value="100000"></div>
-      <div class="lc-col">
-        <label class="flabel" for="lc-timeframe">Timeframe</label>
-        <select class="inp" name="timeframe" id="lc-timeframe">
-          <option value="">Dataset's native timeframe (default)</option>
-          {% for tf in timeframe_choices %}
-          <option value="{{ tf }}"{% if prefill.timeframe == tf %} selected{% endif %}>{{ tf }}</option>
-          {% endfor %}
-        </select>
-        <div class="lc-hint" style="margin-top:5px;">Resampled before the re-run — never a silent 1m.</div>
+      <div>
+        <span class="lc-pill {{ 'green' if r.verdict == 'READY' else ('red' if r.verdict == 'NOT READY' else ('amber' if r.verdict == 'MARGINAL' else 'grey')) }}">{{ r.verdict or 'UNTESTED' }}</span>
+        {% if r.validation %}<div class="ch-meta" style="margin-top:5px;">Checks {{ r.validation.ran }}/{{ r.validation.total }}{% if r.validation.has_stale %} · <span style="color:var(--lc-amber);">outdated</span>{% endif %}</div>{% endif %}
       </div>
-    </div>
+      <div class="ch-next">
+        {% if r.next %}
+          {{ r.next.text }}
+          {% if r.next.href %}<br><a href="{{ r.next.href }}" onclick="event.stopPropagation()">{{ r.next.label }} &rarr;</a>{% endif %}
+        {% endif %}
+      </div>
+    </label>
+  {% endfor %}
   </div>
 
-  <div class="lc-card">
-    <h3>Which checks to re-run?</h3>
-    <div class="lc-checkcards">
-      <label class="lc-checkcard">
-        <input class="lc-check-input" type="checkbox" name="check_monte_carlo">
-        <div class="cname"><span class="cbox"></span>Monte Carlo</div>
-        <div class="cdesc">Eval-pass / first-payout probability and ruin, resampled from the baseline trades.</div>
-      </label>
-      <label class="lc-checkcard">
-        <input class="lc-check-input" type="checkbox" name="check_cpcv">
-        <div class="cname"><span class="cbox"></span>CPCV</div>
-        <div class="cdesc">Combinatorial purged cross-validation across every train/test partition.</div>
-      </label>
-      <label class="lc-checkcard">
-        <input class="lc-check-input" type="checkbox" name="check_pbo">
-        <div class="cname"><span class="cbox"></span>PBO (overfitting)</div>
-        <div class="cdesc">Probability the "best" settings won by chance.</div>
-      </label>
-      <label class="lc-checkcard">
-        <input class="lc-check-input" type="checkbox" name="check_walk_forward">
-        <div class="cname"><span class="cbox"></span>Walk-Forward</div>
-        <div class="cdesc">Rolling/anchored out-of-sample optimization folds.</div>
-      </label>
-      <label class="lc-checkcard">
-        <input class="lc-check-input" type="checkbox" name="check_sensitivity">
-        <div class="cname"><span class="cbox"></span>Sensitivity (1-D)</div>
-        <div class="cdesc">One-parameter-at-a-time sweeps; flags cliff edges.</div>
-      </label>
-      <label class="lc-checkcard">
-        <input class="lc-check-input" type="checkbox" name="check_robustness">
-        <div class="cname"><span class="cbox"></span>Parameter Robustness</div>
-        <div class="cdesc">Plateau-vs-cliff scoring across the parameter surface.</div>
-      </label>
-      <label class="lc-checkcard">
-        <input class="lc-check-input" type="checkbox" name="check_regime">
-        <div class="cname"><span class="cbox"></span>Regime Matrix</div>
-        <div class="cdesc">Performance split by market regime; flags regimes to disable.</div>
-      </label>
+  <div class="ch-actionbar">
+    <div>
+      <div class="sel-name" id="sel-name">Select a strategy</div>
+      <div class="sel-sub" id="sel-sub">Pick one from the list to see what it needs.</div>
     </div>
+    <button class="lc-btn big" type="submit" formaction="/champion-simple/promote" id="promote-btn" disabled>&#127942; Promote</button>
   </div>
 
-  <details class="lc-adv">
+  {% for r in board_rows %}
+  <div class="ch-reqs" data-for="{{ r.strategy_type }}::{{ r.filename }}">
+    <div class="lc-hint" style="margin-bottom:4px;">{% if r.promotion.next_stage_title %}Requirements for <b>{{ r.promotion.next_stage_title }}</b>{% else %}Final stage reached{% endif %}</div>
+    {% for q in r.promotion.requirements %}
+    <div class="ch-req {{ 'ok' if q.met else 'no' }}"><span class="dot">{{ '✓' if q.met else '✗' }}</span><div>{{ q.label }}{% if q.detail %}<div class="rd">{{ q.detail }}</div>{% endif %}</div></div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+  {% else %}
+  <p class="lc-hint">No strategies yet — run one through the Full Pipeline or Validate so it lands here.</p>
+  {% endif %}
+</div>
+
+<div class="lc-card">
+  <h3>Re-run checks on the selected strategy</h3>
+  <p class="lc-hint" style="margin-bottom:12px;">Results are saved onto the strategy itself. The prop firm sets account size and balance.</p>
+  <div class="lc-row">
+    <div class="lc-col">
+      <label class="flabel" for="lc-dataset-pick">Market data</label>
+      <select class="inp" name="existing_dataset" id="lc-dataset-pick">
+        <option value="">— upload a CSV instead —</option>
+        {% for g in dataset_groups %}
+        <optgroup label="{{ g.instrument }}">
+          {% for f in g.files %}
+          <option value="{{ f.full_name }}"{% if prefill.existing_dataset == f.full_name %} selected{% endif %}>{{ f.name }}</option>
+          {% endfor %}
+        </optgroup>
+        {% endfor %}
+      </select>
+      <label class="flabel" style="margin-top:10px;" for="lc-csv-file">…or upload market data (CSV)</label>
+      <input type="file" name="csv_file" id="lc-csv-file" accept=".csv">
+    </div>
+    <div class="lc-col">
+      <label class="flabel" for="lc-prop-preset">Prop firm</label>
+      <select class="inp" name="prop_preset" id="lc-prop-preset">
+        <option value="">— no prop firm —</option>
+        {% for p in prop_presets %}
+        <option value="{{ p.key }}"{% if prefill.prop_preset == p.key %} selected{% endif %}>{{ p.label }}</option>
+        {% endfor %}
+      </select>
+      <div class="lc-rules-line" id="lc-rules-line"></div>
+      <label class="flabel" style="margin-top:10px;" for="lc-timeframe">Timeframe</label>
+      <select class="inp" name="timeframe" id="lc-timeframe">
+        <option value="">Dataset's native timeframe</option>
+        {% for tf in timeframe_choices %}
+        <option value="{{ tf }}"{% if prefill.timeframe == tf %} selected{% endif %}>{{ tf }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+  <label class="flabel" style="margin-top:14px;">Checks</label>
+  <div class="ch-toggles">
+    {% for key, label in [('monte_carlo','Monte Carlo'),('cpcv','CPCV'),('pbo','PBO'),('walk_forward','Walk-Forward'),('wfga','Walk-Forward GA'),('sensitivity','Sensitivity'),('robustness','Robustness'),('regime','Regime Matrix')] %}
+    <label class="ch-toggle"><input type="checkbox" name="check_{{ key }}" data-check="{{ key }}"><span>{{ label }}</span></label>
+    {% endfor %}
+  </div>
+  <details class="lc-adv" style="margin-top:14px;">
     <summary>Advanced — accuracy &amp; check knobs</summary>
     <div class="adv-body">
       {% include '_accuracy_fields.html' %}
@@ -215,71 +160,41 @@
       </div>
     </div>
   </details>
-
-  <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">
-    <button class="lc-btn big" type="submit" formaction="/champion-simple/rerun">Re-run checks</button>
-    <button class="lc-btn big" type="submit" formaction="/champion-simple/promote">&#127942; Promote selected candidate</button>
-  </div>
+  <div style="margin-top:16px;"><button class="lc-btn big" type="submit" formaction="/champion-simple/rerun">Re-run checks</button></div>
+</div>
 </form>
 
-  <div class="lc-card">
-    <h3>How a strategy gets here</h3>
-    <p class="lc-hint" style="font-size:13px;">READY from the Full Pipeline (&ge;70% per-attempt pass, &ge;100 trades, seed-stable) &rarr; stress-checked in Validate &rarr; listed here. Nothing reaches this board by being profitable on one lucky backtest.</p>
-  </div>
-
-  <details class="lc-adv">
-    <summary>Individual tools <span class="lc-hint">the rest of the Champion section keeps its own pages</span></summary>
-    <div class="adv-body">
-      <div class="lc-toolgrid" style="margin-top:12px;">
-        <a class="lc-toolcard" href="/dashboard"><div class="tname">Champion Board / Leaderboard</div><div class="tdesc">The dashboard scoreboard across every run.</div></a>
-        <a class="lc-toolcard" href="/compare"><div class="tname">Compare Strategies</div><div class="tdesc">Two or more strategies, side by side.</div></a>
-        <a class="lc-toolcard" href="/quant-lab/strategy-health"><div class="tname">Strategy Health / Auto Re-Tune</div><div class="tdesc">Decay checks and re-tune proposals for live strategies.</div></a>
-        <a class="lc-toolcard" href="/family-diversity"><div class="tname">Family Diversity</div><div class="tdesc">How distinct the surviving families really are.</div></a>
-        <a class="lc-toolcard" href="/universe"><div class="tname">Universe Map</div><div class="tdesc">Every strategy's standing, mapped.</div></a>
-        <a class="lc-toolcard" href="/portfolio"><div class="tname">Multi-Asset Portfolio</div><div class="tdesc">Combine strategies into one portfolio.</div></a>
-        <a class="lc-toolcard" href="/ensemble"><div class="tname">Multi-Strategy Ensemble</div><div class="tdesc">Blend or vote across strategies.</div></a>
-      </div>
+<details class="lc-adv">
+  <summary>Other tools</summary>
+  <div class="adv-body">
+    <div class="lc-toolgrid" style="margin-top:12px;">
+      <a class="lc-toolcard" href="/dashboard"><div class="tname">Leaderboard</div><div class="tdesc">The dashboard scoreboard across every run.</div></a>
+      <a class="lc-toolcard" href="/compare"><div class="tname">Compare Strategies</div><div class="tdesc">Two or more, side by side.</div></a>
+      <a class="lc-toolcard" href="/quant-lab/strategy-health"><div class="tname">Strategy Health</div><div class="tdesc">Decay checks and re-tune proposals.</div></a>
+      <a class="lc-toolcard" href="/family-diversity"><div class="tname">Family Diversity</div><div class="tdesc">How distinct the survivors are.</div></a>
+      <a class="lc-toolcard" href="/portfolio"><div class="tname">Portfolio</div><div class="tdesc">Combine strategies.</div></a>
+      <a class="lc-toolcard" href="/ensemble"><div class="tname">Ensemble</div><div class="tdesc">Blend or vote across strategies.</div></a>
     </div>
-  </details>
+  </div>
+</details>
 
 </div>
 <div class="lc-run-side">
   <div class="lc-side-card">
-    <h4>&#127942; Board status</h4>
-    {% if champion %}
-    <div class="lc-kv"><span class="k">Champion</span><span class="v">{{ champion.display_name or champion.filename }}</span></div>
-    <div class="lc-kv"><span class="k">Stage</span><span class="v">{{ champion.promotion.stage_title }}</span></div>
-    {% else %}
-    <div class="lc-kv"><span class="k">Champion</span><span class="v">none yet — nothing has earned Validated</span></div>
-    {% endif %}
-    <div class="lc-kv"><span class="k">Candidates</span><span class="v">{{ board_rows | length }}</span></div>
-    <div class="lc-kv"><span class="k">Final stage</span><span class="v">Production Ready</span></div>
-  </div>
-
-  <div class="lc-side-card">
     <h4>&#127963; Prop firm rules</h4>
     <div id="lc-rules-body"></div>
   </div>
-
   <div class="lc-side-card">
-    <h4>&#128203; Promotion gates (read-only)</h4>
-    <div class="lc-kv"><span class="k">Candidate &rarr; Validated</span><span class="v">backtest + all 5 validation steps + no lookahead leak</span></div>
+    <h4>&#128203; Promotion gates</h4>
+    <div class="lc-kv"><span class="k">&rarr; Validated</span><span class="v">backtest + 5 checks run + no leak</span></div>
     <div class="lc-kv"><span class="k">&rarr; Champion Candidate</span><span class="v">eval &ge;60% · payout &ge;55% · OOS &ge;50%</span></div>
-    <div class="lc-kv"><span class="k">&rarr; Forward Testing</span><span class="v">Champion Check READY · eval &ge;70%</span></div>
-    <div class="lc-kv"><span class="k">&rarr; Production Ready</span><span class="v">&ge;14 days in Forward Testing</span></div>
+    <div class="lc-kv"><span class="k">&rarr; Forward Testing</span><span class="v">READY · eval &ge;70%</span></div>
+    <div class="lc-kv"><span class="k">&rarr; Production Ready</span><span class="v">&ge;14 days forward</span></div>
   </div>
-
-  {% include '_lifecycle_how.html' %}
-
   <div class="lc-side-card">
-    <h4>&#129517; What happens next</h4>
-    <p class="lc-hint" style="font-size:12.5px; color:var(--lc-text);">Promoted &rarr; <b>Deploy</b>: forward test it on live prices first — the button carries the candidate you picked in the board (or the board champion) into the Deploy form.<br>Not ready &rarr; the row names the missing checks; run them in <b>Validate</b>.<br>Untested &rarr; its button goes straight to the <b>Full Pipeline</b>.</p>
-    <button type="button" class="lc-btn" id="lc-next-step" style="width:100%; margin-top:10px;">Next step: Deploy →</button>
-  </div>
-
-  <div class="lc-side-card">
-    <h4>&#9888; Watch-outs</h4>
-    <p class="lc-hint" style="font-size:12.5px;">Promotion advances exactly one stage and only when every requirement for the next stage is already met — the refusal message names what's missing. Lucid is the only preset re-verified against the firm's own page (Oct 7).</p>
+    <h4>&#129517; Next</h4>
+    <p class="lc-hint" style="font-size:12.5px; color:var(--lc-text);">Promoted? Forward test it on live prices before real money.</p>
+    <button type="button" class="lc-btn" id="lc-next-step" style="width:100%; margin-top:8px;">Forward test &rarr;</button>
   </div>
 </div>
 </div>
@@ -308,6 +223,30 @@
       window.location = '/forward-test' + (v ? '?strategy=' + encodeURIComponent(v) : '');
     });
   })();
+</script>
+<script>
+(function () {
+  var rows = document.querySelectorAll('.ch-row');
+  var btn = document.getElementById('promote-btn');
+  function select(row, prefillChecks) {
+    rows.forEach(function (r) { r.classList.toggle('sel', r === row); });
+    document.querySelectorAll('.ch-reqs').forEach(function (p) { p.classList.toggle('on', row && p.dataset['for'] === row.dataset.pick); });
+    if (!row) return;
+    document.getElementById('sel-name').textContent = row.dataset.name;
+    var can = row.dataset.can === '1';
+    document.getElementById('sel-sub').textContent = can ? ('Ready to move to ' + row.dataset.next + '.')
+      : (row.dataset.next ? ('Not ready for ' + row.dataset.next + ' yet — requirements below.') : 'Final stage reached.');
+    btn.disabled = !can;
+    if (prefillChecks) {
+      var m = /[?&]run=([^&]*)/.exec(row.dataset.nexthref || '');
+      if (m) { var want = decodeURIComponent(m[1]).split(',');
+        document.querySelectorAll('input[data-check]').forEach(function (c) { c.checked = want.indexOf(c.dataset.check) >= 0; }); }
+    }
+  }
+  rows.forEach(function (r) { r.addEventListener('click', function () { var i = r.querySelector('input'); i.checked = true; select(r, true); }); });
+  var checked = document.querySelector('.ch-row input:checked');
+  if (checked) select(checked.closest('.ch-row'), true);
+})();
 </script>
 </body>
 </html>

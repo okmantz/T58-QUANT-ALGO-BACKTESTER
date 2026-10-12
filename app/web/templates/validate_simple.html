@@ -16,6 +16,7 @@
 </head>
 <body>
 {% set active_page = active_page|default('validate_simple') %}
+{% set preselect = preselect|default(none) %}
 <div class="t58-shell">
 {% include '_sidebar.html' %}
 <div class="t58-main">
@@ -25,7 +26,7 @@
 {% include '_lifecycle_stepper.html' %}
 <div class="lc-crumb">Lifecycle · 4 · <b>Validate</b></div>
 <h1 class="lc-title">Check it won&rsquo;t fall apart</h1>
-<p class="lc-sub">Stress tests only — nothing gets tuned here. One hardened baseline backtest, then exactly the checks you tick — Monte Carlo, CPCV, PBO, Walk-Forward, Sensitivity, Parameter Robustness and Regime — all against the same risk setup, so the numbers are comparable. Each check reports honestly or fails on its own; one failure never sinks the rest.</p>
+<p class="lc-sub">Stress tests only — nothing gets tuned or changed here. One hardened baseline backtest, then exactly the checks you tick, all against the same risk setup so the numbers are comparable. Every finished check is saved onto the strategy you pick, so the Champion page knows what has been run. You get a live percent bar while it works, then a plain-language report with the next step that fits your results.</p>
 
 {% if error %}
 <div class="lc-error">{{ error }}</div>
@@ -97,50 +98,56 @@
     <h3>Which checks?</h3>
     <div class="lc-checkcards">
       <label class="lc-checkcard">
-        <input class="lc-check-input" type="checkbox" name="check_monte_carlo" id="c_mc" checked>
+        <input class="lc-check-input" type="checkbox" name="check_monte_carlo" id="c_mc"{% if preselect is none or 'monte_carlo' in preselect %} checked{% endif %}>
         <div class="cname"><span class="cbox"></span>Monte Carlo</div>
         <div class="cdesc">Resamples the baseline trades against the prop rules: eval-pass / first-payout probability, ruin.</div>
       </label>
       <label class="lc-checkcard">
-        <input class="lc-check-input" type="checkbox" name="check_cpcv" id="c_cpcv" checked>
+        <input class="lc-check-input" type="checkbox" name="check_cpcv" id="c_cpcv"{% if preselect is none or 'cpcv' in preselect %} checked{% endif %}>
         <div class="cname"><span class="cbox"></span>CPCV</div>
         <div class="cdesc">Combinatorial purged cross-validation across every train/test partition — catches curve-fitting.</div>
       </label>
       <label class="lc-checkcard">
-        <input class="lc-check-input" type="checkbox" name="check_pbo" id="c_pbo">
+        <input class="lc-check-input" type="checkbox" name="check_pbo" id="c_pbo"{% if preselect is not none and 'pbo' in preselect %} checked{% endif %}>
         <div class="cname"><span class="cbox"></span>PBO (overfitting)</div>
         <div class="cdesc">Probability of backtest overfitting vs perturbed parameter variants.</div>
       </label>
       <label class="lc-checkcard">
-        <input class="lc-check-input" type="checkbox" name="check_walk_forward" id="c_wf">
+        <input class="lc-check-input" type="checkbox" name="check_walk_forward" id="c_wf"{% if preselect is not none and 'walk_forward' in preselect %} checked{% endif %}>
         <div class="cname"><span class="cbox"></span>Walk-Forward</div>
         <div class="cdesc">Rolling/anchored out-of-sample optimization folds. The closest thing to live.</div>
       </label>
       <label class="lc-checkcard">
-        <input class="lc-check-input" type="checkbox" name="check_sensitivity" id="c_se">
+        <input class="lc-check-input" type="checkbox" name="check_wfga" id="c_wfga"{% if preselect is not none and 'wfga' in preselect %} checked{% endif %}>
+        <div class="cname"><span class="cbox"></span>Walk-Forward GA</div>
+        <div class="cdesc">A genetic search scored only on unseen folds; the gap to in-sample shows how over-fit the settings are. Slowest check.</div>
+      </label>
+      <label class="lc-checkcard">
+        <input class="lc-check-input" type="checkbox" name="check_sensitivity" id="c_se"{% if preselect is not none and 'sensitivity' in preselect %} checked{% endif %}>
         <div class="cname"><span class="cbox"></span>Sensitivity (1-D)</div>
         <div class="cdesc">Wiggles every number one at a time; flags cliff edges a real edge would survive.</div>
       </label>
       <label class="lc-checkcard">
-        <input class="lc-check-input" type="checkbox" name="check_robustness" id="c_rb">
+        <input class="lc-check-input" type="checkbox" name="check_robustness" id="c_rb"{% if preselect is not none and 'robustness' in preselect %} checked{% endif %}>
         <div class="cname"><span class="cbox"></span>Parameter Robustness</div>
         <div class="cdesc">Plateau-vs-cliff scoring across the parameter surface.</div>
       </label>
       <label class="lc-checkcard">
-        <input class="lc-check-input" type="checkbox" name="check_regime" id="c_rg">
+        <input class="lc-check-input" type="checkbox" name="check_regime" id="c_rg"{% if preselect is not none and 'regime' in preselect %} checked{% endif %}>
         <div class="cname"><span class="cbox"></span>Regime Matrix</div>
         <div class="cdesc">Performance split by market regime; flags regimes to disable.</div>
       </label>
     </div>
     <div class="lc-hint" style="margin-top:10px;" id="lc-check-count"></div>
+    <div class="lc-hint" style="margin-top:6px;">To promote a strategy to <b>Validated</b> on the Champion page, five core checks must be on record for it: CPCV, Walk-Forward, Walk-Forward GA, Sensitivity and Regime Matrix. You can run them in one go or over several runs &mdash; each result stays saved.</div>
   </div>
 
   <details class="lc-adv">
     <summary>Advanced options <span class="lc-hint">account, risk, and the knobs behind each check</span></summary>
     <div class="adv-body">
       <div class="lc-adv-grid">
-        <div class="lc-adv-field"><label class="flabel">Initial balance ($)</label><input type="number" step="any" name="initial_balance" value="100000"></div>
-        <div class="lc-adv-field"><label class="flabel">Account size ($)</label><input type="number" step="any" name="account_size" value="100000"></div>
+        <div class="lc-adv-field"><label class="flabel">Initial balance ($)</label><input type="number" step="any" name="initial_balance" value="100000"><div class="why">Only used when no prop firm is picked above &mdash; a prop firm sets its own account size.</div></div>
+        <div class="lc-adv-field"><label class="flabel">Account size ($)</label><input type="number" step="any" name="account_size" value="100000"><div class="why">Only used when no prop firm is picked above.</div></div>
         <div class="lc-adv-field"><label class="flabel">Profit target (%)</label><input type="number" step="any" name="profit_target" value="8"></div>
         <div class="lc-adv-field"><label class="flabel">Daily loss (%)</label><input type="number" step="any" name="daily_loss" value="5"></div>
         <div class="lc-adv-field"><label class="flabel">Max drawdown (%)</label><input type="number" step="any" name="max_dd" value="10"></div>
@@ -159,6 +166,8 @@
         <div class="lc-adv-field"><label class="flabel">Max paths</label><input type="number" name="cpcv_max_paths" value="15"></div>
         <div class="lc-adv-field"><label class="flabel">PBO variants</label><input type="number" name="pbo_variants" value="4"></div>
         <div class="lc-adv-field"><label class="flabel">Walk-forward folds</label><input type="number" name="wf_folds" value="3"></div>
+        <div class="lc-adv-field"><label class="flabel">Walk-Forward GA population</label><input type="number" name="wfga_population" value="8"></div>
+        <div class="lc-adv-field"><label class="flabel">Walk-Forward GA generations</label><input type="number" name="wfga_generations" value="4"></div>
         <div class="lc-adv-field"><label class="flabel">WF window</label>
           <select name="wf_window_mode"><option value="rolling">rolling</option><option value="anchored">anchored</option></select></div>
         <div class="lc-adv-field"><label class="flabel">Validation metric</label><input type="text" name="validation_metric" value="profit_factor"></div>
@@ -176,40 +185,12 @@
   <div style="margin-bottom:14px;"><button class="lc-btn big" type="submit" id="lc-run-btn">&#9654; RUN CHECKS</button></div>
 
   <div class="lc-card">
-    <h3>Run log</h3>
-    <div class="lc-logbox" id="lc-log">{% if checks %}<div><span class="lt">done</span>  Baseline + {{ checks | length }} check(s) finished — results below.</div>{% else %}<div><span class="lt">--:--:--</span>  Press RUN CHECKS and the baseline + ticked checks run against one hardened setup. Nothing is tuned here.</div>{% endif %}</div>
-    {% if baseline %}
-    <div class="lc-summary-band" style="margin-top:14px;">
-      <div>Baseline{% if strategy_name %} — <b>{{ strategy_name }}</b>{% endif %} on <b>{{ baseline.dataset }}</b>: <b>{{ baseline.trades }}</b> trades · net <b>{{ '%.2f'|format(baseline.net_profit) }}</b> · win rate <b>{{ '%.1f'|format(baseline.win_rate) }}%</b> · max drawdown <b>{{ '%.2f'|format(baseline.max_drawdown_pct) }}%</b></div>
-      {% if timeframe_note %}<div class="est">{{ timeframe_note }}</div>{% endif %}
-    </div>
-    {% endif %}
-    {% if checks %}
-      {% for r in checks %}
-      <div class="lc-verdict {{ 'pass' if r.ok else '' }}">
-        <span class="lc-pill {{ 'green' if r.ok else 'red' }}">{{ 'RAN' if r.ok else 'FAILED' }}</span>
-        <h3 style="margin-top:8px;">{{ {'monte_carlo': 'Monte Carlo', 'cpcv': 'CPCV', 'pbo': 'PBO (overfitting)', 'walk_forward': 'Walk-Forward', 'sensitivity': 'Sensitivity (1-D)', 'robustness': 'Parameter Robustness', 'regime': 'Regime Matrix'}.get(r.check, r.check) }}</h3>
-        {% if r.ok %}
-        {% for k, v in r.summary.items() %}
-        <div class="lc-kv"><span class="k">{{ k }}</span><span class="v">{% if v is mapping or v is sequence and v is not string %}<pre style="white-space:pre-wrap;font-size:11px;text-align:left;">{{ v | tojson(indent=2) }}</pre>{% else %}{{ v }}{% endif %}</span></div>
-        {% endfor %}
-        {% else %}
-        <p class="lc-hint" style="color:var(--lc-red);">{{ r.error }}</p>
-        {% endif %}
-      </div>
-      {% endfor %}
-    {% endif %}
+    <h3>What happens when you press Run</h3>
+    <div class="lc-kv"><span class="k">1</span><span class="v" style="text-align:left;flex:1;margin-left:14px;">A baseline backtest runs once, on the data, prop firm and timeframe you picked.</span></div>
+    <div class="lc-kv"><span class="k">2</span><span class="v" style="text-align:left;flex:1;margin-left:14px;">Each ticked check runs against that same baseline, with a live percent bar and log.</span></div>
+    <div class="lc-kv"><span class="k">3</span><span class="v" style="text-align:left;flex:1;margin-left:14px;">Every finished check is saved onto the strategy immediately &mdash; even if you stop early.</span></div>
+    <div class="lc-kv"><span class="k">4</span><span class="v" style="text-align:left;flex:1;margin-left:14px;">A report explains what passed, what didn&rsquo;t, and the one next step your results point to.</span></div>
   </div>
-
-  {% if simulation_text %}
-  <div class="lc-card">
-    <h3>How this was simulated</h3>
-    <details>
-      <summary style="cursor:pointer; font-size:13px;">Simulation assumptions for this run</summary>
-      <pre style="white-space:pre-wrap; font-size:12px; color:var(--lc-text);">{{ simulation_text }}</pre>
-    </details>
-  </div>
-  {% endif %}
 
   <details class="lc-adv">
     <summary>Individual tools <span class="lc-hint">every check above also keeps its own full page — nothing was removed</span></summary>
@@ -233,9 +214,9 @@
 <div class="lc-run-side">
   <div class="lc-side-card">
     <h4>&#9654; Run progress</h4>
-    <div style="display:flex; align-items:baseline; gap:10px;"><span class="lc-pct-big" id="lc-pct">{{ '100%' if checks else '0%' }}</span><span class="lc-hint" id="lc-stage">{{ 'done' if checks else 'not started' }}</span></div>
-    <div class="lc-progress" style="margin:8px 0;"><div id="lc-bar" style="width:{{ '100' if checks else '0' }}%;"></div></div>
-    <div class="lc-kv"><span class="k" id="lc-stage-line">{{ 'Baseline + checks finished' if checks else 'Waiting for RUN CHECKS' }}</span><span class="v lc-ok">live</span></div>
+    <div style="display:flex; align-items:baseline; gap:10px;"><span class="lc-pct-big" id="lc-pct">0%</span><span class="lc-hint" id="lc-stage">not started</span></div>
+    <div class="lc-progress" style="margin:8px 0;"><div id="lc-bar" style="width:0%;"></div></div>
+    <div class="lc-kv"><span class="k" id="lc-stage-line">Waiting for RUN CHECKS</span></div>
   </div>
 
   <div class="lc-side-card">
@@ -245,24 +226,17 @@
 
   <div class="lc-side-card">
     <h4>&#128203; Run checklist</h4>
-    {% if checks %}
-    <div class="lc-kv"><span class="k">Baseline backtest</span><span class="v lc-ok">{{ baseline.trades }} trades ✓</span></div>
-    {% for r in checks %}
-    <div class="lc-kv"><span class="k">{{ {'monte_carlo': 'Monte Carlo', 'cpcv': 'CPCV', 'pbo': 'PBO', 'walk_forward': 'Walk-Forward', 'sensitivity': 'Sensitivity', 'robustness': 'Robustness', 'regime': 'Regime'}.get(r.check, r.check) }}</span><span class="v {{ 'lc-ok' if r.ok else 'lc-bad' }}">{{ 'ran ✓' if r.ok else 'failed' }}</span></div>
-    {% endfor %}
-    {% else %}
     <div class="lc-kv"><span class="k">Baseline backtest</span><span class="v">runs first</span></div>
     <div class="lc-kv"><span class="k">Checks</span><span class="v">only ticked ones run</span></div>
     <div class="lc-kv"><span class="k">Sizing</span><span class="v">hardened, same for every check</span></div>
-    <div class="lc-kv"><span class="k">READY bar</span><span class="v">&ge;70% — Validate advises, Champion Check decides</span></div>
-    {% endif %}
+    <div class="lc-kv"><span class="k">Saved to</span><span class="v">the strategy you pick</span></div>
   </div>
 
   {% include '_lifecycle_how.html' %}
 
   <div class="lc-side-card">
     <h4>&#129517; What happens next</h4>
-    <p class="lc-hint" style="font-size:12.5px; color:var(--lc-text);">Checks pass &rarr; take it to <b>Champion</b> and promote it — the button below carries this strategy (as the candidate), data and timeframe across.<br>A knob is a cliff &rarr; fix it in <b>Optimize</b>, then re-check.<br>Nothing here retunes the strategy — that is Optimize&rsquo;s job.</p>
+    <p class="lc-hint" style="font-size:12.5px; color:var(--lc-text);">When the run finishes you get a report with a next step chosen from your actual results: promote it, fix an over-fit or fragile strategy in <b>Optimize</b>, switch off a losing regime, or finish the missing checks.<br>Nothing here retunes the strategy &mdash; that is Optimize&rsquo;s job.</p>
     <button type="button" class="lc-btn" id="lc-next-step" style="width:100%; margin-top:10px;">Next step: Champion →</button>
   </div>
 
@@ -292,21 +266,13 @@
     document.querySelectorAll('.lc-checkcard input.lc-check-input').forEach(function (i) { i.addEventListener('change', updateCount); });
     updateCount();
     var form = document.getElementById('lc-validate-form');
-    var log = document.getElementById('lc-log');
-    var pct = document.getElementById('lc-pct'), bar = document.getElementById('lc-bar'), stage = document.getElementById('lc-stage');
+    var pct = document.getElementById('lc-pct'), stage = document.getElementById('lc-stage'), line = document.getElementById('lc-stage-line');
     if (form) form.addEventListener('submit', function () {
-      var names = [];
-      document.querySelectorAll('.lc-checkcard input.lc-check-input:checked').forEach(function (i) {
-        var card = i.closest('.lc-checkcard');
-        var nm = card ? card.querySelector('.cname').textContent.trim() : i.name;
-        names.push(nm);
-      });
-      if (log) log.innerHTML = '<div><span class="lt">start</span>  Running baseline backtest, then: ' + names.join(', ') + '…</div>';
-      if (pct) pct.textContent = '···';
-      if (stage) stage.textContent = 'running';
-      if (bar) { bar.parentElement.classList.add('indet'); }
+      if (pct) pct.textContent = '0%';
+      if (stage) stage.textContent = 'starting';
+      if (line) line.textContent = 'Loading data and strategy…';
       var btn = document.getElementById('lc-run-btn');
-      if (btn) { btn.disabled = true; btn.textContent = 'RUNNING…'; }
+      if (btn) { btn.disabled = true; btn.textContent = 'STARTING…'; }
     });
   })();
 </script>

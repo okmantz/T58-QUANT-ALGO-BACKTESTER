@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Validate — report — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<link rel="stylesheet" href="/static/job-theme.css">
+{% include '_lifecycle_css.html' %}
+</head>
+<body>
+<header><h1><span class="mark"></span>T58 Quant Algo Backtester — Validate</h1></header>
+<nav>
+  <a href="/dashboard" class="back-btn">&larr; Back</a>
+  <a href="/validate-simple">New Run</a>
+  <a href="/champion-simple">Champion</a>
+</nav>
+<main style="max-width:1180px;">
+<div class="lc-scope"><div class="lc-wrap">
+
+{% set lc_step = 'validate' %}
+{% include '_lifecycle_stepper.html' %}
+<div class="lc-crumb">Lifecycle · 4 · <b>Validate</b></div>
+<h1 class="lc-title" id="page-title">Stress-testing your strategy</h1>
+<p class="lc-sub" id="page-sub">Each check runs in turn and is saved onto the strategy as it finishes. The report and your next step appear here when the run is done.</p>
+
+{% if not_found %}
+<div class="lc-error">Job "{{ job_id }}" was not found (the server may have restarted since it ran).</div>
+{% else %}
+
+<div class="lc-card" id="run-card">
+  <div style="display:flex; align-items:baseline; gap:12px; flex-wrap:wrap;">
+    <span class="lc-pct-big" id="lc-pct">0%</span>
+    <span class="lc-hint" id="lc-stage-line">Starting&hellip;</span>
+  </div>
+  <div class="lc-progress indet" id="lc-progress" style="margin:10px 0 14px;"><div></div></div>
+  <div id="lc-live" class="lc-livelist"></div>
+  <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+    <button type="button" id="stop-btn" class="lc-btn danger small" onclick="stopRun()">Stop run</button>
+    <button type="button" class="lc-btn ghost small" onclick="document.getElementById('log-wrap').classList.toggle('open')">Show log</button>
+  </div>
+  <div id="log-wrap" class="lc-collapse"><div id="log" class="lc-logbox tall">Starting&hellip;</div></div>
+</div>
+
+<div id="report" style="display:none;">
+  <div class="lc-overall" id="overall"></div>
+  <div class="lc-nextstep" id="nextstep"></div>
+  <div id="items"></div>
+  <div class="lc-card" id="saved-note" style="margin-top:14px;"></div>
+  <div class="lc-card" id="baseline-card" style="display:none;"><h3>Baseline backtest</h3><div id="baseline-body"></div></div>
+  <details class="lc-adv" id="sim-wrap" style="display:none;"><summary>Simulation settings used</summary>
+    <div class="adv-body"><pre id="sim-text" style="white-space:pre-wrap;font-size:11.5px;"></pre></div></details>
+  <div style="margin-top:16px; display:flex; gap:10px; flex-wrap:wrap;">
+    <a class="lc-btn ghost" href="/validate-simple">Run more checks</a>
+    {% if source == 'champion' %}<a class="lc-btn" href="/champion-simple" id="back-champ">Back to Champion &rarr;</a>{% endif %}
+  </div>
+</div>
+
+<div class="lc-error" id="err-box" style="display:none;"></div>
+{% endif %}
+
+</div></div>
+</main>
+
+{% if not not_found %}
+<script>
+const JOB_ID = {{ job_id | tojson }};
+const SOURCE = {{ (source or 'validate') | tojson }};
+let stopped = false;
+function esc(s){ const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+async function stopRun(){
+  const b = document.getElementById('stop-btn'); b.disabled = true; b.textContent = 'Stopping…';
+  try { await fetch('/validate-simple/job/' + JOB_ID + '/stop', {method: 'POST'}); } catch (e) {}
+}
+const CHIP = {pass:['passed','green'], caution:['borderline','amber'], fail:['failed','red'], error:['did not run','grey'], info:['ran','grey']};
+function chip(status){ const c = CHIP[status] || CHIP.info; return '<span class="lc-pill ' + c[1] + '">' + c[0] + '</span>'; }
+
+function renderLive(data){
+  const prog = data.progress, items = data.partial_items || [], checks = data.checks || [];
+  if (prog && typeof prog.percent === 'number') {
+    const p = Math.max(0, Math.min(100, prog.percent));
+    document.getElementById('lc-pct').textContent = p.toFixed(0) + '%';
+    const bar = document.getElementById('lc-progress'); bar.classList.remove('indet');
+    bar.querySelector('div').style.width = p + '%';
+    document.getElementById('lc-stage-line').textContent =
+      (data.stopping ? 'Stopping after the current step… ' : '') + (prog.label || 'working…');
+  }
+  const done = {}; items.forEach(i => done[i.label] = i);
+  let html = '';
+  (checks.length ? checks : items.map(i => i.label)).forEach(c => {
+    const it = done[c];
+    html += '<div class="lc-liverow"><span>' + esc(it ? it.label : c) + '</span><span>' +
+      (it ? chip(it.status) : '<span class="lc-pill grey">waiting</span>') + '</span></div>';
+  });
+  document.getElementById('lc-live').innerHTML = html;
+}
+
+function metricsHtml(ms){
+  if (!ms || !ms.length) return '';
+  return '<div class="lc-metrics">' + ms.map(m =>
+    '<div class="lc-metric"><div class="mv">' + esc(m.value) + '</div><div class="ml">' + esc(m.label) + '</div></div>').join('') + '</div>';
+}
+
+function renderReport(data){
+  const r = data.report;
+  document.getElementById('run-card').style.display = 'none';
+  document.getElementById('report').style.display = 'block';
+  if (!r) {
+    document.getElementById('page-title').textContent = data.cancelled ? 'Run stopped' : 'Run finished without a report';
+    document.getElementById('overall').innerHTML = '<div class="lc-hint">' + (data.cancelled ? 'You stopped the run. Checks that finished were already saved onto the strategy.' : 'No report was produced.') + '</div>';
+    return;
+  }
+  document.getElementById('page-title').textContent = (r.strategy || 'Strategy') + ' — validation report';
+  document.getElementById('page-sub').textContent = data.cancelled
+    ? 'Stopped early — the checks below finished and are saved. The rest did not run.'
+    : 'Every check below is saved onto this strategy.';
+  document.getElementById('overall').className = 'lc-overall ' + r.overall;
+  document.getElementById('overall').innerHTML =
+    '<div class="ov-label">' + esc(r.overall_label) + '</div><div class="ov-sum">' + esc(r.summary_sentence) + '</div>';
+
+  const n = r.next_step || {};
+  document.getElementById('nextstep').className = 'lc-nextstep ' + (n.tone || 'info');
+  document.getElementById('nextstep').innerHTML =
+    '<div class="ns-kicker">Your next step</div><div class="ns-title">' + esc(n.title) + '</div>' +
+    '<div class="ns-why">' + esc(n.why) + '</div>' +
+    (n.href ? '<a class="lc-btn" href="' + esc(n.href) + '">' + esc(n.label || 'Continue') + ' &rarr;</a>' : '');
+
+  const raw = data.raw || {};
+  document.getElementById('items').innerHTML = (r.items || []).map(i => {
+    const rawBlock = raw[i.check] ? '<details class="lc-rawnums"><summary>Raw numbers</summary><pre>' + esc(JSON.stringify(raw[i.check], null, 2)) + '</pre></details>' : '';
+    return '<div class="lc-check ' + esc(i.status) + '"><div class="ck-head"><div class="ck-name">' + esc(i.label) + '</div>' + chip(i.status) + '</div>' +
+      '<div class="ck-headline">' + esc(i.headline) + '</div>' +
+      (i.detail ? '<div class="ck-detail">' + esc(i.detail) + '</div>' : '') +
+      metricsHtml(i.metrics) + rawBlock + '</div>';
+  }).join('');
+
+  const note = document.getElementById('saved-note');
+  if (r.saved_to_library) {
+    note.innerHTML = '<b>Saved to ' + esc(r.strategy) + '.</b> <span class="lc-hint">These results now count toward promotion on the Champion page' +
+      (r.gating_missing_labels && r.gating_missing_labels.length ? ' — still missing: ' + esc(r.gating_missing_labels.join(', ')) + '.' : ' — all core checks are on record.') + '</span>';
+  } else {
+    note.innerHTML = '<b>Not saved.</b> <span class="lc-hint">This strategy was not run from your library, so nothing was recorded. Pick it from the Strategy dropdown to keep its reports and enable promotion.</span>';
+  }
+  const b = data.baseline;
+  if (b) {
+    document.getElementById('baseline-card').style.display = 'block';
+    document.getElementById('baseline-body').innerHTML = metricsHtml([
+      {label:'Trades', value:b.trades}, {label:'Net profit', value:(+b.net_profit).toFixed(2)},
+      {label:'Win rate', value:(b.win_rate > 1 ? b.win_rate : b.win_rate * 100).toFixed(1) + '%'},
+      {label:'Max drawdown', value:(+b.max_drawdown_pct).toFixed(1) + '%'}]) +
+      '<div class="lc-hint" style="margin-top:6px;">' + esc(b.dataset || '') + (data.timeframe_note ? ' · ' + esc(data.timeframe_note) : '') + '</div>';
+  }
+  if (data.simulation_text) {
+    document.getElementById('sim-wrap').style.display = 'block';
+    document.getElementById('sim-text').textContent = data.simulation_text;
+  }
+}
+
+async function poll(){
+  if (stopped) return;
+  try {
+    const res = await fetch('/validate-simple/job/' + JOB_ID + '/status.json');
+    const data = await res.json();
+    const logEl = document.getElementById('log');
+    logEl.innerHTML = (data.log || []).map(esc).join('<br>');
+    logEl.scrollTop = logEl.scrollHeight;
+    if (!data.done) { renderLive(data); }
+    else {
+      stopped = true;
+      if (data.error && !data.report) {
+        document.getElementById('run-card').style.display = 'none';
+        const e = document.getElementById('err-box'); e.style.display = 'block'; e.textContent = data.error;
+        document.getElementById('page-title').textContent = 'Validate failed';
+      } else { renderReport(data); }
+      return;
+    }
+  } catch (e) { /* keep polling through transient errors */ }
+  setTimeout(poll, 1200);
+}
+poll();
+</script>
+{% endif %}
+{% include '_project_chat_embed.html' %}
+</body>
+</html>
