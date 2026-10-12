@@ -400,6 +400,28 @@ class FullPipelineConfig:
     # run before these fields existed.
     library_ref: tuple[str, str] | None = None
     replace_existing: bool = False
+    # ONE STRATEGY, ONE RECORD (Oct 2026): when library_ref is set the
+    # run now ALWAYS updates that same library entry in place (previous
+    # version archived, every report/progress field stays on it) -- the
+    # old opt-in "replace_existing" checkbox is no longer needed, which
+    # is why a plain run used to leave an extra "<dataset> (FULL
+    # PIPELINE)" copy next to the strategy that looked untouched.
+    # save_as_copy=True is the explicit escape hatch that restores the
+    # old write-a-new-file behaviour. library_ref=None (an uploaded or
+    # pasted strategy with no library entry) still saves a new file.
+    save_as_copy: bool = False
+
+
+def _replaces_original(cfg: "FullPipelineConfig") -> bool:
+    """True when this run should update the strategy it started from
+    instead of writing a separate output file."""
+    return bool(cfg.library_ref) and not getattr(cfg, "save_as_copy", False)
+
+
+def _wants_library_save(cfg: "FullPipelineConfig") -> bool:
+    """Saving is on when the person asked for it OR when the run started
+    from a library strategy (its results always stay with that strategy)."""
+    return bool(cfg.save_to_library) or _replaces_original(cfg)
 
 
 @dataclass
@@ -2785,6 +2807,13 @@ def _finish(
     # save_name (what gets written to disk) is untouched.
     if mutated_by_ga:
         final_strategy_name = f"{display_name} (Full Pipeline, GA-modified parameters -- see Final vs Baseline Parameters)"
+    if _replaces_original(cfg):
+        # The report, run history and dashboard scorecard all key off this
+        # name. When the run updates the picked library strategy itself,
+        # label everything with that strategy's own name -- not a derived
+        # "(Full Pipeline ...)" variant -- so its reports stay with it.
+        # (Final vs Baseline parameters still appear inside the report.)
+        final_strategy_name = Path(cfg.library_ref[1]).stem
 
     # Pipeline reorg: every record_backtest_result() call below also
     # stamps these three fields into the strategy's "last_run" metadata
@@ -2865,10 +2894,10 @@ def _finish(
 
     saved_library_path = None
     saved_library_note = None
-    if cfg.save_to_library and final_source_type in ("python", "pinescript", "mql5") and final_code_text:
+    if _wants_library_save(cfg) and final_source_type in ("python", "pinescript", "mql5") and final_code_text:
         ext = {"python": ".py", "pinescript": ".pine", "mql5": ".mq5"}[final_source_type]
         status_to_set = cfg.library_status or _VERDICT_TO_LIBRARY_STATUS.get(verdict, "tested_passed")
-        if cfg.replace_existing and cfg.library_ref:
+        if _replaces_original(cfg):
             # VERSIONING: same in-place-replace this Full Pipeline run
             # started from gets applied to what it produces too -- see
             # app.orchestration.quick_optimize's identical branch (and
@@ -2981,7 +3010,7 @@ def _finish(
             except Exception as exc:  # noqa: BLE001 -- saving to the library is a convenience, not core output
                 saved_library_note = f"Could not save to the Strategy Library: {exc}"
                 log(f"  {saved_library_note}")
-    elif cfg.save_to_library and final_source_type == "manual" and final_config:
+    elif _wants_library_save(cfg) and final_source_type == "manual" and final_config:
         # Manual Strategy Builder / Search Lab / Evolution Lab configs are
         # dicts, not source files -- but app.strategy.library already has a
         # first-class "manual" strategy type that stores exactly this shape
@@ -2997,7 +3026,7 @@ def _finish(
         # python/pinescript/mql5 ones.
         status_to_set = cfg.library_status or _VERDICT_TO_LIBRARY_STATUS.get(verdict, "tested_passed")
         config_to_save = dict(final_config)
-        if cfg.replace_existing and cfg.library_ref:
+        if _replaces_original(cfg):
             ref_type, ref_filename = cfg.library_ref
             config_text = json.dumps(config_to_save, indent=2)
             try:
@@ -3417,6 +3446,16 @@ def run_full_pipeline_sweep(
     )
 
 
+def _cfg_for_batch_item(base_cfg: "FullPipelineConfig", item) -> "FullPipelineConfig":
+    """Per-strategy config for a batch run: a strategy that came from the
+    Strategy Library is updated in place (no copy), exactly like a single
+    run -- every other item keeps the batch's own settings."""
+    ref = getattr(item, "library_ref", None)
+    if ref and not getattr(base_cfg, "save_as_copy", False):
+        return replace(base_cfg, library_ref=tuple(ref))
+    return base_cfg
+
+
 def run_full_pipeline_batch(
     df: pd.DataFrame,
     items: list[FullPipelineBatchItem],
@@ -3596,7 +3635,7 @@ def run_full_pipeline_batch(
 
             try:
                 result = run_full_pipeline(
-                    df, item.strategy, risk, prop_rules, output_dir, cfg,
+                    df, item.strategy, risk, prop_rules, output_dir, _cfg_for_batch_item(cfg, item),
                     progress_cb=item_log, instrument=instrument, ollama_settings=ollama_settings,
                     report_basename=f"full_pipeline_{i:03d}_{safe_names[i]}",
                 )
@@ -3618,7 +3657,7 @@ def run_full_pipeline_batch(
                 futures = {
                     pool.submit(
                         _batch_item_worker, i, item.label, item.strategy, df, risk, prop_rules,
-                        output_dir, item_cfg, instrument, ollama_settings,
+                        output_dir, _cfg_for_batch_item(item_cfg, item), instrument, ollama_settings,
                         f"full_pipeline_{i:03d}_{safe_names[i]}",
                     ): (i, item.label)
                     for i, item in enumerate(items, start=1)
@@ -3662,7 +3701,7 @@ def run_full_pipeline_batch(
 
                 try:
                     result = run_full_pipeline(
-                        df, item.strategy, risk, prop_rules, output_dir, item_cfg,
+                        df, item.strategy, risk, prop_rules, output_dir, _cfg_for_batch_item(item_cfg, item),
                         progress_cb=item_log, instrument=instrument, ollama_settings=ollama_settings,
                         report_basename=f"full_pipeline_{i:03d}_{safe_names[i]}",
                     )

@@ -115,6 +115,7 @@ from app.strategy.library import (
     leading_indicator_name,
     provenance_stamped_name,
     record_optimize_result,
+    resolve_saved_strategy_path,
     safe_filename_stem,
     save_strategy_replacing_version,
     save_strategy_text,
@@ -323,6 +324,18 @@ class QuickOptimizeConfig:
     # -- there's nothing to replace for an ad-hoc/uploaded strategy.
     library_ref: tuple[str, str] | None = None
     replace_existing: bool = False
+    # ONE STRATEGY, ONE RECORD (Oct 2026): a run that started from a
+    # library strategy now updates THAT strategy in place by default (the
+    # old opt-in replace_existing checkbox is no longer needed -- see
+    # _replaces_original). The optimizer is the one place a person may
+    # deliberately want a second file, so save_as_copy=True restores the
+    # write-a-new-file behaviour on request. Ignored when library_ref is
+    # None (nothing to update).
+    save_as_copy: bool = False
+
+
+def _replaces_original(cfg: "QuickOptimizeConfig") -> bool:
+    return bool(cfg.library_ref) and not getattr(cfg, "save_as_copy", False)
 
 
 @dataclass
@@ -502,20 +515,35 @@ def _save_optimized_to_library(
             "baseline_eval_pass_probability": round(baseline_mc.evaluation_pass_probability, 1),
         }
 
+    def _unchanged_stats() -> dict:
+        return {
+            "improved": False,
+            "baseline_eval_pass_probability": round(baseline_mc.evaluation_pass_probability, 1),
+            "note": "No robust improvement found; the strategy was left unchanged.",
+        }
+
     saved_library_path = None
     saved_library_note = None
     if final_source_type in ("python", "pinescript", "mql5") and final_code_text:
         ext = _EXT_FOR_SOURCE[final_source_type]
-        if cfg.replace_existing and cfg.library_ref:
+        if _replaces_original(cfg):
             ref_type, ref_filename = cfg.library_ref
             try:
-                saved_library_path = save_strategy_replacing_version(final_code_text, ref_type, ref_filename)
-                set_strategy_status(ref_type, ref_filename, cfg.library_status)
-                record_optimize_result(ref_type, ref_filename, _stats())
-                saved_library_note = f"Replaced '{ref_filename}' in the Strategy Library (previous version archived, status: {cfg.library_status})."
-                log(saved_library_note)
+                if not improved:
+                    # Never overwrite the person's strategy with a candidate
+                    # that did not beat it -- record the attempt, keep the file.
+                    record_optimize_result(ref_type, ref_filename, _unchanged_stats())
+                    saved_library_path = resolve_saved_strategy_path(ref_type, ref_filename)
+                    saved_library_note = f"No improvement found -- '{ref_filename}' was left unchanged."
+                    log(saved_library_note)
+                else:
+                    saved_library_path = save_strategy_replacing_version(final_code_text, ref_type, ref_filename)
+                    set_strategy_status(ref_type, ref_filename, cfg.library_status)
+                    record_optimize_result(ref_type, ref_filename, _stats())
+                    saved_library_note = f"Updated '{ref_filename}' with the optimized parameters (previous version archived, status: {cfg.library_status})."
+                    log(saved_library_note)
             except Exception as exc:  # noqa: BLE001 -- saving is a convenience, not the core result
-                saved_library_note = f"Could not replace the Strategy Library entry: {exc}"
+                saved_library_note = f"Could not update the Strategy Library entry: {exc}"
                 log(saved_library_note)
         else:
             filename = _output_filename(ext)
@@ -537,19 +565,25 @@ def _save_optimized_to_library(
                 log(saved_library_note)
     elif final_source_type == "manual" and final_config:
         config_to_save = dict(final_config)
-        if cfg.replace_existing and cfg.library_ref:
+        if _replaces_original(cfg):
             ref_type, ref_filename = cfg.library_ref
             config_text = json.dumps(config_to_save, indent=2)
             try:
-                saved_library_path = save_strategy_replacing_version(config_text, ref_type, ref_filename)
-                set_strategy_status(ref_type, ref_filename, cfg.library_status)
-                record_optimize_result(ref_type, ref_filename, _stats())
-                saved_library_note = f"Replaced '{ref_filename}' in the Strategy Library (previous version archived, status: {cfg.library_status})."
-                log(saved_library_note)
+                if not improved:
+                    record_optimize_result(ref_type, ref_filename, _unchanged_stats())
+                    saved_library_path = resolve_saved_strategy_path(ref_type, ref_filename)
+                    saved_library_note = f"No improvement found -- '{ref_filename}' was left unchanged."
+                    log(saved_library_note)
+                else:
+                    saved_library_path = save_strategy_replacing_version(config_text, ref_type, ref_filename)
+                    set_strategy_status(ref_type, ref_filename, cfg.library_status)
+                    record_optimize_result(ref_type, ref_filename, _stats())
+                    saved_library_note = f"Updated '{ref_filename}' with the optimized parameters (previous version archived, status: {cfg.library_status})."
+                    log(saved_library_note)
                 final_code_text = config_text
                 final_code_ext = ".json"
             except Exception as exc:  # noqa: BLE001
-                saved_library_note = f"Could not replace the Strategy Library entry: {exc}"
+                saved_library_note = f"Could not update the Strategy Library entry: {exc}"
                 log(saved_library_note)
         else:
             filename = _output_filename(".json")
@@ -1097,7 +1131,7 @@ def run_quick_optimize(
     saved_library_path = None
     saved_library_note = None
     pending_library_save = None
-    if cfg.save_to_library and (
+    if (cfg.save_to_library or _replaces_original(cfg)) and (
         (final_source_type in ("python", "pinescript", "mql5") and final_code_text)
         or (final_source_type == "manual" and final_config)
     ):
@@ -1121,7 +1155,7 @@ def run_quick_optimize(
             saved_library_path, saved_library_note, final_code_text, final_code_ext = (
                 _save_optimized_to_library(**_save_call, log=log)
             )
-    elif final_source_type == "manual" and not cfg.save_to_library:
+    elif final_source_type == "manual" and not (cfg.save_to_library or _replaces_original(cfg)):
         saved_library_note = (
             "Manual Strategy Builder configuration produced, but nothing was saved (saving to the "
             "Strategy Library is turned off) -- copy the winning parameters from this result into "
@@ -1332,7 +1366,7 @@ def run_quick_optimize_sweep(
     # timeframe's. Every leg deferred its save; only the winner commits.
     _effective_cfg = cfg or QuickOptimizeConfig()
     _pending = getattr(best_result, "pending_library_save", None)
-    if _effective_cfg.save_to_library and _pending is not None:
+    if (_effective_cfg.save_to_library or _replaces_original(_effective_cfg)) and _pending is not None:
         _saved_path, _saved_note, _ct, _ce = _save_optimized_to_library(
             **_pending, log=(lambda m: progress_cb(m) if progress_cb else None),
         )
