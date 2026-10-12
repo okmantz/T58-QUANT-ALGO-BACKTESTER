@@ -410,13 +410,19 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
         daily_loss_limit_pct=100.0,  # TopStepX no longer enforces a default DLL on the Combine -- see note
         max_drawdown_pct=4.0,
         drawdown_type="trailing", drawdown_check_mode="eod",
-        consistency_rule_pct=50.0, min_trading_days=2,
+        trailing_lock=True, trailing_lock_offset_pct=0.0,   # 2026-10 audit: MLL stops trailing at the starting balance
+        floating_drawdown_mode="adverse",
+        consistency_rule_pct=55.0, min_trading_days=2,       # 2026-10 audit: Combine best-day cap 50-55%; 55 = Topstep's stated figure
         payout_frequency_days=5,
         winning_days_for_payout=5, min_winning_day_profit=150.0,
         funded_consistency_rule_pct=40.0,
         as_of=_AS_OF,
         source_note=(
-            "Re-verified 2026-09-13 against help.topstep.com. min_trading_days=2 and max_drawdown_pct=4.0 "
+            "2026-10-11 audit: MLL is an END-OF-DAY trailing floor that locks at the starting balance "
+            "(trailing_lock=True), with open-loss checked adversely (floating_drawdown_mode='adverse'); "
+            "Combine consistency target 55%; contract cap 5 minis / 50 micros -- "
+            "https://help.topstep.com/en/articles/8284204-what-is-the-maximum-loss-limit . "
+            "Earlier note: Re-verified 2026-09-13 against help.topstep.com. min_trading_days=2 and max_drawdown_pct=4.0 "
             "were already accurate (TopStep's own Help Center: 'you can pass in as few as two days'; $2,000 "
             "MLL on a $50k Combine = 4%). consistency_rule_pct is now set (was None): TopStep's Combine has "
             "a real 'Consistency Target' capping the best single day at roughly 50-55% of the PROFIT "
@@ -805,6 +811,7 @@ _VERIFIED_STAMPS = {
     "ftmo_200k": ("2026-09-13", "https://ftmo.com/en/trading-objectives/", "primary"),
     # lucid_50k: dd/lock/daily-loss fields checked 2026-10-07 against a secondary table (tradetanto.com),
     # plus pricing aggregators 2026-10-11 -- secondary tier, confirm on lucidtrading.com before paying.
+    "topstep_50k": ("2026-10-11", "https://help.topstep.com/en/articles/8284204-what-is-the-maximum-loss-limit", "primary"),
     "lucid_50k": ("2026-10-07", "https://tradetanto.com/learn/lucid-trading-rules-explained-every-plan-rule-and-limit", "secondary"),
 }
 for _p in PROP_FIRM_PRESETS:

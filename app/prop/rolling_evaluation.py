@@ -171,10 +171,27 @@ def run_rolling_evaluation(
 
         passed = False
         failure_category: str | None = None
-        if result.failed and result.failure_day_index is not None and result.failure_day_index < window_trading_days:
-            failure_category = "daily_loss_limit" if result.failure_reason == "daily_loss_limit" else "max_drawdown"
-        elif result.passed_evaluation and result.days_to_pass is not None and result.days_to_pass <= window_trading_days:
+        # 2026-10 audit fix: simulate_account() runs the WHOLE remaining tail, so `result.failed`
+        # can describe a funded-stage bust that happened AFTER the evaluation was already passed.
+        # The old order checked "failed inside the window" first, which re-labelled such accounts
+        # as evaluation failures for every window long enough to contain the later bust -- pass
+        # rates therefore FELL as the window got longer (a longer window can only add chances to
+        # pass). A pass inside the window now takes precedence; only a failure that happened
+        # before (or without) a pass counts against the evaluation.
+        _passed_in_window = (
+            result.passed_evaluation
+            and result.days_to_pass is not None
+            and result.days_to_pass <= window_trading_days
+        )
+        if _passed_in_window:
             passed = True
+        elif (
+            result.failed
+            and not result.passed_evaluation
+            and result.failure_day_index is not None
+            and result.failure_day_index < window_trading_days
+        ):
+            failure_category = "daily_loss_limit" if result.failure_reason == "daily_loss_limit" else "max_drawdown"
         else:
             # Neither a clean rule-failure nor a clean pass landed inside
             # the window -- the firm would have simply closed the
