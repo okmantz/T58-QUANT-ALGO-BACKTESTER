@@ -1,5 +1,14 @@
 # Dataset coverage audit
 
+**This file is a GATE, not a note.** `data/data_manifest.json` is generated from the same scan
+(`python scripts/build_data_manifest.py`); the pipeline reads it at the start of every run and
+`app.data.data_manifest.check_dataset` refuses a READY verdict (caps at NOT READY / MARGINAL) when the dataset is
+synthetic, has under 5 years of history, or is missing from the manifest and unreadable. Files flagged
+`<2y history` or `SYNTHETIC` can still be used for exploration, never for a READY verdict.
+The two SYNTHETIC_*_1M.csv files were deleted in the 2026-10 audit; real ES/NQ/GC 1-minute history
+(2020-01 to 2026-09) is in the `futures_*.F_1m.parquet` files. Large data files should live in Git LFS or a
+release asset, not in normal git history (see docs/ACCURACY_OVERHAUL.md, "Data").
+
 | file | symbol | bars | start | end | years | bar | flags |
 |---|---|---|---|---|---|---|---|
 | AUDUSD/AUD_USD_1m.parquet | - | 2147045 | 2021-01-03 | 2026-09-22 | 5.72 | 0 days 00:01:00 | no instrument spec |
@@ -27,7 +36,6 @@
 | DOW JONES 30/USA30IDXUSD5.csv | - | 100000 | 2025-03-05 | 2026-08-20 | 1.46 | 0 days 00:05:00 | no instrument spec, <2y history |
 | DOW JONES 30/USA30IDXUSD60.csv | - | 71462 | 2013-05-23 | 2026-08-20 | 13.24 | 0 days 01:00:00 | no instrument spec |
 | ES1!/ES_5min_20260120_20260415.csv | ES | 16786 | 2026-01-20 | 2026-04-15 | 0.23 | 0 days 00:05:00 | <2y history |
-| ES1!/SYNTHETIC_ES_1M.csv | ES | 100000 | 2026-04-30 | 2026-08-14 | 0.29 | 0 days 00:01:00 | SYNTHETIC, <2y history |
 | ES1!/futures_ES.F_1m.parquet | ES | 2353209 | 2020-01-01 | 2026-09-01 | 6.67 | 0 days 00:01:00 | ok |
 | ETHEREUM/ETHUSD1.csv | - | 100000 | 2026-06-11 | 2026-08-20 | 0.19 | 0 days 00:01:00 | no instrument spec, <2y history |
 | ETHEREUM/ETHUSD1440.csv | - | 3026 | 2017-12-11 | 2026-08-20 | 8.69 | 1 days 00:00:00 | no instrument spec |
@@ -73,7 +81,6 @@
 | NASDAQ 100/USATECHIDXUSD5.csv | NAS100 | 100000 | 2025-02-19 | 2026-08-14 | 1.48 | 0 days 00:05:00 | <2y history |
 | NASDAQ 100/USATECHIDXUSD60.csv | NAS100 | 70531 | 2013-05-22 | 2026-08-14 | 13.23 | 0 days 01:00:00 | ok |
 | NQ1!/NQ_5min_20260120_20260415.csv | NQ | 16787 | 2026-01-20 | 2026-04-15 | 0.23 | 0 days 00:05:00 | <2y history |
-| NQ1!/SYNTHETIC_NQ_1M.csv | NQ | 100000 | 2026-04-29 | 2026-08-14 | 0.29 | 0 days 00:01:00 | SYNTHETIC, <2y history |
 | NQ1!/futures_NQ.F_1m.parquet | NQ | 2164819 | 2020-01-01 | 2026-03-01 | 6.16 | 0 days 00:01:00 | ok |
 | NVIDIA/nvda-1999-2014.csv | - | - | - | - | - | - | UNREADABLE |
 | NZDUSD/NZD_USD_1m.parquet | - | 2143375 | 2021-01-03 | 2026-09-22 | 5.72 | 0 days 00:01:00 | no instrument spec |

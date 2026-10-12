@@ -74,3 +74,34 @@ equity.attrs["prop_attempts"]    # one record per purchased account
 * The break-it "out-of-sample" segment is only out-of-sample if the rule was not tuned on it.
 * `sizing_mode="skip"` keeps a bounded dead-lock guard (single contract when worst case <=1.5x budget, tagged `sized_above_risk_target`).
 * Defaults changed: Monte Carlo method is `day_block_bootstrap`; `risk_of_ruin_pct` is the per-attempt bust rate; the web form defaults sizing to `fit_stop`; the preflight gate blocks runs under 100 trades.
+
+## 2026-10-11 audit pass (T58 prop-firm audit, both PDFs)
+
+What changed and where (see each module's docstring for detail):
+
+- **Honest holdout first.** `quick_optimize` reserves a holdout by default (`reserve_holdout=True`), refuses to rank without one unless
+  `allow_no_holdout=True`, and its output stays `validated=False`. The Full Pipeline requires a clean holdout for READY.
+- **Walk-forward GA.** The chained walk-forward score is a *selection* score (the GA saw those bars). `per_fold_reoptimize=True` re-runs a
+  mini-GA on each fold's TRAIN slice only; the **median fold test score** is the headline, chained is a diagnostic.
+- **Monte Carlo.** Trades carry MAE/MFE into the account (floating/eod drawdown bases), `reset_on_breach` defaults to False,
+  `regime_shuffle` resamples whole calendar months. Missing excursions raise/warn per `T58_EXCURSION_POLICY`.
+- **Verdicts.** `app/orchestration/ev_verdict.py` adds the EV per attempt `p*q*V - c` next to READY (labels HIGH CONFIDENCE /
+  FORWARD-TEST CANDIDATE / NOT WORTH A FEE / INSUFFICIENT EVIDENCE); pass rate is deflated for the number of configurations tried.
+  `audit_layers.py` demotes READY for: lookahead-check crash, no usable clean holdout, failed data gate, unverified or hand-edited firm rules,
+  or a deflated headline below 70%. Demotion reasons print first.
+- **Firm rules.** `presets.py`: `verified_on` / `source_url` / `verification_tier` per preset; unverified presets cannot be READY.
+  `FIRM_FEES` holds challenge price, reset price, split, source, date, automation policy, written-confirmation flag. Only `lucid_50k` has a row and
+  it comes from a secondary source: **confirm price, reset price and the automation policy with the firm in writing before paying.**
+  `python -m app.prop.rulebook_tests` replays scripted days against every preset (91/91 agree with the written rules as encoded).
+- **Data.** `docs/DATA_COVERAGE.md` + `data/data_manifest.json` are a gate (synthetic or < 5 years cannot be READY). Synthetic files deleted.
+  `app/data/contract_calendar.py` audits roll splices. Large data: `.gitattributes` routes `data/raw` to Git LFS; moving already-committed
+  blobs out of history needs `git lfs migrate import` (rewrites history - do it deliberately).
+- **Behaviour rules the optimizer can search** (`BEHAVIOR_*` constants; engine overlays in `app/backtest/behavior_rules.py`): stop for the day
+  after N losses, size down near the target, no entries in news windows, flatten before close. All default off.
+- **Pre-purchase gate.** `app/validation/pre_purchase_gate.py`: null-edge test + real-account check + EV label + written firm confirmation.
+  `scripts/run_real_account_check.py` compares the backtest with your real trades (`data/real_account/`). Nothing passes it yet.
+- **Hygiene.** 96 test rows pruned from `data/run_history.json` (the audit counted 83; my criteria matched 96); `record_run` no longer writes
+  test rows. Patch file, `requirements_ADDITIONS.txt` (merged), seven losing strategies (archived with results) removed.
+
+Still true after this pass: no strategy here has a demonstrated edge (`strategies/SCREENING_RESULTS.md`), the model has not been checked
+against a real account, and the GA-objective/estimates remain estimates.
