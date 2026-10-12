@@ -103,5 +103,5 @@ What changed and where (see each module's docstring for detail):
 - **Hygiene.** 96 test rows pruned from `data/run_history.json` (the audit counted 83; my criteria matched 96); `record_run` no longer writes
   test rows. Patch file, `requirements_ADDITIONS.txt` (merged), seven losing strategies (archived with results) removed.
 
-Still true after this pass: no strategy here has a demonstrated edge (`strategies/SCREENING_RESULTS.md`), the model has not been checked
+Still true after this pass: no strategy here has a demonstrated edge (`strategies/AUDIT_2026-10_RESULTS.md`), the model has not been checked
 against a real account, and the GA-objective/estimates remain estimates.
