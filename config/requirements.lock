@@ -1,0 +1,13 @@
+# Pinned versions from the audit environment (Python 3.13, 2026-10-11). Only packages actually installed there are pinned;
+# the rest (alpaca-py, py7zr, optuna, cma, ctrader-open-api, lse-data, qrcode, Windows-only packages) were not installed in that environment
+# and are NOT pinned here -- run 'pip freeze > config/requirements.lock' on your own machine after 'pip install -r config/requirements.txt' to get a full lock.
+Flask==3.1.3
+numpy==2.5.3
+pandas==3.0.5
+pyarrow==26.0.0
+pypdf==5.9.0
+pytest==9.1.1
+reportlab==5.0.1
+requests==2.34.2
+scikit-learn==1.9.1
+scipy==1.18.1

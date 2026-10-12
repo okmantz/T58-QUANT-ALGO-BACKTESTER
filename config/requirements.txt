@@ -62,3 +62,24 @@ MetaTrader5>=5.0.45; platform_system == "Windows"
 # or below the real latest release; bump it only after confirming the new
 # version actually exists on PyPI.
 lse-data>=0.14.0
+
+# --- Merged from config/requirements_ADDITIONS.txt (2026-10 audit) ---
+
+# Deploy Live: cTrader Open API adapter (app/live_deploy/broker_ctrader.py). Optional in spirit:
+# everything else in the app works without it; only connecting a cTrader account raises a clear
+# "pip install ctrader-open-api" error if it's missing, same pattern as MetaTrader5 above.
+ctrader-open-api>=0.9.0
+
+# Native PDF report export (app/reports/pdf_export.py) -- pure-Python, no headless
+# browser/Chromium dependency. Optional in spirit: the existing HTML report's browser
+# print-to-PDF still works without this; only the new native export button needs it.
+reportlab>=4.0.0
+
+# Evolution Lab / Search Lab / Quick Optimize / Full Pipeline / Walk-Forward GA
+# "Optimizer mode" dropdown: optional TPE and CMA-ES per-family/per-search child
+# proposal strategies (app/evolution/alt_optimizers.py, app/optimize/refinement.py).
+# Optional in spirit, same pattern as everything else in this file: "genetic" (the
+# default) needs neither package; picking "tpe" or "cma_es" without the matching
+# package installed raises a clear, actionable error before the run starts.
+optuna>=3.0.0
+cma>=3.0.0
