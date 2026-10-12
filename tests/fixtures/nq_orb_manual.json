@@ -1,0 +1,120 @@
+{
+  "name": "NQ1! Opening Range Breakout (v9.14)",
+  "timeframe": "5m",
+  "entry_conditions": {
+    "long": [
+      {
+        "left": {
+          "type": "time_of_day",
+          "session_start": "09:45",
+          "session_end": "11:30"
+        },
+        "operator": "==",
+        "right": {
+          "type": "value",
+          "value": 1.0
+        }
+      },
+      {
+        "left": {
+          "type": "close",
+          "field": "close",
+          "period": 1
+        },
+        "operator": ">",
+        "right": {
+          "type": "donchian_upper",
+          "period": 18,
+          "field": "close"
+        }
+      },
+      {
+        "left": {
+          "type": "close",
+          "field": "close",
+          "period": 1
+        },
+        "operator": ">",
+        "right": {
+          "type": "session_vwap"
+        }
+      }
+    ],
+    "long_connectors": [
+      "AND",
+      "AND"
+    ],
+    "short": [
+      {
+        "left": {
+          "type": "time_of_day",
+          "session_start": "09:45",
+          "session_end": "11:30"
+        },
+        "operator": "==",
+        "right": {
+          "type": "value",
+          "value": 0.6272877990591532
+        }
+      },
+      {
+        "left": {
+          "type": "close",
+          "field": "close",
+          "period": 3
+        },
+        "operator": "<",
+        "right": {
+          "type": "donchian_lower",
+          "period": 30,
+          "field": "close"
+        }
+      },
+      {
+        "left": {
+          "type": "close",
+          "field": "close",
+          "period": 2
+        },
+        "operator": "<",
+        "right": {
+          "type": "session_vwap"
+        }
+      }
+    ],
+    "short_connectors": [
+      "AND",
+      "AND"
+    ]
+  },
+  "exit_conditions": {
+    "long": [
+      {
+        "left": {
+          "type": "close",
+          "field": "close",
+          "period": 1
+        },
+        "operator": "<",
+        "right": {
+          "type": "session_vwap"
+        }
+      }
+    ],
+    "short": [
+      {
+        "left": {
+          "type": "close",
+          "field": "close",
+          "period": 1
+        },
+        "operator": ">",
+        "right": {
+          "type": "session_vwap"
+        }
+      }
+    ]
+  },
+  "stop_loss_pips": 128.47077624515646,
+  "take_profit_pips": 119.20767234710841
+}
