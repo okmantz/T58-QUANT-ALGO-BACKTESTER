@@ -57,10 +57,11 @@ def test_reset_on_breach_off_is_byte_identical_to_before():
     assert "reset_on_breach was ON" not in result.methodology_note
 
 
-def test_reset_on_breach_is_on_by_default():
-    """Monte Carlo paths keep going after a bust (fresh account) instead of
-    ending at the first breach -- consistent with the raw backtest engine."""
-    assert MonteCarloConfig().reset_on_breach is True
+def test_reset_on_breach_is_off_by_default():
+    """2026-10 audit: a path ends at the first breach by default. Resetting on breach and chaining attempts flatters pass
+    odds (a long enough chain almost always clears the bar once); the chained mode stays available with reset_on_breach=True
+    and the bankroll simulator still chains attempts."""
+    assert MonteCarloConfig().reset_on_breach is False
 
 
 def test_reset_on_breach_chains_within_each_resampled_path():

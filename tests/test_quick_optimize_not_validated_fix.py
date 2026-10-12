@@ -195,10 +195,22 @@ def test_significance_gate_runs_or_reports_why_not():
 # Point (5) -- optional holdout split
 # ---------------------------------------------------------------------
 
-def test_holdout_disabled_by_default_is_byte_identical_shape():
-    df = _trending_df()
+def test_holdout_is_reserved_by_default_and_result_is_not_validated():
+    """2026-10 audit: reserve_holdout now defaults to True; ranking without a holdout is refused unless explicitly allowed."""
+    df = _trending_df(n=3000)
     strategy = ManualStrategy(_sma_config())
     result = run_quick_optimize(df, strategy, RiskConfig(), PropRules(), _cfg(), progress_cb=None)
+    assert result.holdout_enabled is True
+    assert result.validated is False
+
+
+def test_no_holdout_is_refused_unless_explicitly_allowed():
+    from app.optimize.parameter_space import RefinementError
+    df = _trending_df()
+    strategy = ManualStrategy(_sma_config())
+    with pytest.raises(RefinementError):
+        run_quick_optimize(df, strategy, RiskConfig(), PropRules(), _cfg(reserve_holdout=False), progress_cb=None)
+    result = run_quick_optimize(df, strategy, RiskConfig(), PropRules(), _cfg(reserve_holdout=False, allow_no_holdout=True), progress_cb=None)
     assert result.holdout_enabled is False
     assert result.holdout_trades is None
     assert result.holdout_net_profit is None

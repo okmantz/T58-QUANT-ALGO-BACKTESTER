@@ -60,7 +60,7 @@ def test_per_attempt_diverges_from_chain_when_reset_on_breach():
     the per-attempt number is ~50% -- the honest 'will ONE account
     succeed' answer."""
     trades = _trades([1600, -2100] * 30)
-    cfg = MonteCarloConfig(n_simulations=400, method="bootstrap", random_seed=11)
+    cfg = MonteCarloConfig(n_simulations=400, method="bootstrap", random_seed=11, reset_on_breach=True)  # 2026-10: default is now False
     result = run_monte_carlo(trades, _divergence_rules(), cfg)
     assert result.mean_attempts_per_path > 5  # genuinely a multi-attempt regime
     assert result.evaluation_pass_probability > 95.0  # chain-level: inflated
@@ -72,7 +72,7 @@ def test_eval_pass_probability_returns_per_attempt_not_chain():
     """The fold-level scoring primitive must return per_attempt_pass_-
     probability -- the value WF/CPCV/regime/forge callers optimize."""
     trades = _trades([1600, -2100] * 30)
-    cfg = MonteCarloConfig(n_simulations=400, method="bootstrap", random_seed=11)
+    cfg = MonteCarloConfig(n_simulations=400, method="bootstrap", random_seed=11, reset_on_breach=True)
     expected = run_monte_carlo(trades, _divergence_rules(), cfg).per_attempt_pass_probability
     got = eval_pass_probability_for_trades(trades, _divergence_rules(), cfg)
     assert got == pytest.approx(expected)

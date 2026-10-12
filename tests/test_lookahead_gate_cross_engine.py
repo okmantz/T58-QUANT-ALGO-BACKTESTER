@@ -274,7 +274,7 @@ def test_quick_optimize_and_full_pipeline_baselines_match_when_configured_equiva
     risk = RiskConfig()
     prop_rules = PropRules()
 
-    qo_cfg = QuickOptimizeConfig(reserve_holdout=False)
+    qo_cfg = QuickOptimizeConfig(reserve_holdout=False, allow_no_holdout=True)
     qo_result = run_quick_optimize(
         df, ManualStrategy(_sma_config()), risk, prop_rules, qo_cfg, progress_cb=None,
     )
