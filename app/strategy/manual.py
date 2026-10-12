@@ -60,6 +60,12 @@ from app.strategy.indicators import BOUNDED_OSCILLATOR_RANGES, build_indicator_s
 # it without string-matching the whole sentence.
 IMPOSSIBLE_CONDITION_MARKER = "can never be true"
 
+# 2026-10 audit: operands that are 0/1 flags (a bar is inside the session window or it is not).
+# Comparing one to a constant outside [0, 1] -- e.g. "time_of_day == 7.3", which a GA that perturbs
+# every numeric `value` will happily produce -- is as dead as "RSI > 102" and was previously
+# undetected, so those candidates silently traded zero bars while still burning GA budget.
+BOOLEAN_OPERAND_KINDS = frozenset({"time_of_day"})
+
 
 def validate_bounded_conditions(config: dict) -> list[str]:
     """Scan a Manual Strategy config's entry/exit conditions for a
@@ -123,8 +129,35 @@ def validate_bounded_conditions(config: dict) -> list[str]:
                         f"be satisfied and permanently disables this branch of the logic."
                     )
 
+    def scan_boolean_operands(conditions, branch_label: str):
+        for cond in conditions or []:
+            if not isinstance(cond, dict):
+                continue
+            left, right = cond.get("left"), cond.get("right")
+            for flag_node, val_node in ((left, right), (right, left)):
+                if _side_kind(flag_node) not in BOOLEAN_OPERAND_KINDS or not isinstance(val_node, dict):
+                    continue
+                if str(val_node.get("type", "")).lower().strip() not in ("value", "constant", "number"):
+                    continue
+                try:
+                    threshold = float(val_node.get("value", 0))
+                except (TypeError, ValueError):
+                    continue
+                _eq_like = str(cond.get("operator", "")).strip().lower() in ("==", "=", "!=", "is true", "is false", "equals")
+                _bad = (threshold not in (0.0, 1.0)) if _eq_like else (threshold < 0.0 or threshold > 1.0)
+                if _bad:
+                    warnings.append(
+                        f"Impossible condition in {branch_label}: {_side_label(left)} "
+                        f"{cond.get('operator', '?')} {_side_label(right)} {IMPOSSIBLE_CONDITION_MARKER} "
+                        f"-- {_side_kind(flag_node).upper()} is a 0/1 flag, so comparing it to {threshold:g} "
+                        f"can never be satisfied (or is always true) and breaks this branch of the logic."
+                    )
+
     entries = config.get("entry_conditions", {}) or {}
     exits = config.get("exit_conditions", {}) or {}
+    for _lbl, _conds in (("long entry conditions", entries.get("long")), ("short entry conditions", entries.get("short")),
+                         ("long exit conditions", exits.get("long")), ("short exit conditions", exits.get("short"))):
+        scan_boolean_operands(_conds, _lbl)
     scan_conditions(entries.get("long"), "long entry conditions")
     scan_conditions(entries.get("short"), "short entry conditions")
     scan_conditions(exits.get("long"), "long exit conditions")
