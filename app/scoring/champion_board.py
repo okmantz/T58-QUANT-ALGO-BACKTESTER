@@ -241,11 +241,20 @@ def _requirements_for_next_stage(metadata: dict[str, Any], current_stage: str) -
         # test, and the unmet list names exactly which of the 5 are still
         # outstanding instead of one vague "run a deeper check" line.
         validation_methods_run = metadata.get("validation_methods_run") or {}
+        stale_methods = set((metadata.get("stale_validation") or {}).get("methods") or [])
+
+        def _method_detail(method: str) -> str:
+            if method in validation_methods_run:
+                return ""
+            if method in stale_methods:
+                return "Strategy changed since this was last run -- run it again on the Validate page."
+            return "Not yet run -- run it on the Validate page."
+
         method_requirements = [
             PromotionRequirement(
                 f"validated_{method}", f"{_VALIDATION_METHOD_LABELS[method]} has been run",
                 method in validation_methods_run,
-                "" if method in validation_methods_run else "Not yet run -- open the Validate hub to run it.",
+                _method_detail(method),
             )
             for method in VALIDATION_STEP_METHODS
         ]
@@ -395,12 +404,23 @@ def candidate_dimensions(metadata: dict[str, Any]) -> dict[str, Any]:
     last_validation = metadata.get("last_validation") or {}
     last_champion_check = metadata.get("last_champion_check") or {}
     verdict = str(last_champion_check.get("verdict") or last_run.get("verdict") or "").upper() or None
+    # "last_validation" is only whichever check ran most recently (often one
+    # with no efficiency figure, e.g. Sensitivity), so prefer the best OOS
+    # reading from ANY validation method on record, then fall back to it.
+    oos_value = None
+    methods_run = metadata.get("validation_methods_run") or {}
+    for key in ("wfo", "cpcv", "wfga", "pbo"):
+        oos_value = oos_pct(methods_run.get(key) or {})
+        if oos_value is not None:
+            break
+    if oos_value is None:
+        oos_value = oos_pct(last_validation)
     return {
         "status": status_from_verdict(verdict),
         "verdict": verdict,
         "eval_pct": _num(last_run, "eval_pass_probability"),
         "payout_pct": _num(last_run, "first_payout_probability", "eval_pass_probability"),
-        "oos_pct": oos_pct(last_validation),
+        "oos_pct": oos_value,
         "t58_score": _num(last_champion_check, "t58_score"),
     }
 
@@ -422,6 +442,82 @@ def _composite_strength(dims: dict[str, Any]) -> Optional[float]:
     if total_w == 0:
         return None
     return round(total_v / total_w, 2)
+
+
+def validation_summary(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Which of the 5 gating validation methods are on record for this
+    strategy (and when), for the Champion page's per-strategy checklist.
+    Reads only what record_validation_result already saved."""
+    run = metadata.get("validation_methods_run") or {}
+    stale = set((metadata.get("stale_validation") or {}).get("methods") or [])
+    methods = []
+    for m in VALIDATION_STEP_METHODS:
+        rec = run.get(m) or {}
+        methods.append({
+            "key": m,
+            "label": _VALIDATION_METHOD_LABELS[m],
+            "ran": m in run,
+            "stale": (m not in run) and (m in stale),
+            "recorded_at": rec.get("recorded_at"),
+        })
+    return {
+        "methods": methods,
+        "ran": sum(1 for x in methods if x["ran"]),
+        "total": len(methods),
+        "complete": all(x["ran"] for x in methods),
+        "has_stale": any(x["stale"] for x in methods),
+    }
+
+
+# Validation method key -> the Validate page's check key (for deep links that
+# pre-tick exactly the checks a strategy is still missing).
+_METHOD_TO_VALIDATE_CHECK: dict[str, str] = {
+    "cpcv": "cpcv", "wfo": "walk_forward", "wfga": "wfga",
+    "sensitivity": "sensitivity", "regime_matrix": "regime",
+}
+
+
+def row_next_step(row: dict[str, Any]) -> dict[str, str]:
+    """ONE concrete next action for a board row, with a deep link that lands
+    on the right page already pointed at this strategy. kind is one of
+    "promote" (nothing to do but press Promote), "final", or "work"."""
+    from urllib.parse import urlencode
+
+    promo = row["promotion"]
+    pick = f"{row['strategy_type']}::{row['filename']}"
+    if promo["next_stage"] is None:
+        return {"kind": "final", "text": "Final stage reached", "href": "", "label": ""}
+    if promo["can_promote"]:
+        return {"kind": "promote", "text": f"Ready for {promo['next_stage_title']}", "href": "", "label": ""}
+
+    unmet = [r for r in promo["requirements"] if not r["met"]]
+    first = unmet[0]
+    missing_checks = [
+        _METHOD_TO_VALIDATE_CHECK[r["key"][len("validated_"):]]
+        for r in unmet
+        if r["key"].startswith("validated_") and r["key"][len("validated_"):] in _METHOD_TO_VALIDATE_CHECK
+    ]
+    if first["key"] == "backtested":
+        q = urlencode({"load_strategy_type": row["strategy_type"], "load_strategy_name": row["filename"]})
+        return {"kind": "work", "text": "Needs a first test run", "href": f"/full-pipeline?{q}", "label": "Run Full Pipeline"}
+    if missing_checks:
+        n = len(missing_checks)
+        q = urlencode({"strategy_pick": pick, "run": ",".join(missing_checks)})
+        return {"kind": "work", "text": f"{n} validation check{'s' if n != 1 else ''} still to run",
+                "href": f"/validate-simple?{q}", "label": f"Run {n} missing check{'s' if n != 1 else ''}"}
+    base = _REQUIREMENT_HREF.get(first["key"], "/validate-simple")
+    base = {"/quick-optimize": "/optimize-simple", "/cpcv": "/validate-simple"}.get(base, base)
+    if base == "/full-pipeline":
+        q = urlencode({"load_strategy_type": row["strategy_type"], "load_strategy_name": row["filename"]})
+    elif base in ("/optimize-simple", "/validate-simple"):
+        q = urlencode({"strategy_pick": pick})
+    else:
+        q = ""
+    label = {"/optimize-simple": "Open Optimize", "/full-pipeline": "Run Full Pipeline",
+             "/validate-simple": "Open Validate", "/forward-test": "Open Forward Test",
+             "/library": "Open Library"}.get(base, "Open")
+    return {"kind": "work", "text": first["label"] + (f" — {first['detail']}" if first.get("detail") else ""),
+            "href": base + (f"?{q}" if q else ""), "label": label}
 
 
 def list_board(strategy_type: Optional[str] = None) -> list[dict[str, Any]]:
@@ -448,10 +544,19 @@ def list_board(strategy_type: Optional[str] = None) -> list[dict[str, Any]]:
                 "metadata_name": str(item.metadata.get("name") or "").strip(),
                 **dims,
                 "strength": _composite_strength(dims),
+                "validation": validation_summary(item.metadata),
                 "promotion": promo.to_dict(),
                 "modified": item.modified,
             })
-    rows.sort(key=lambda r: r["modified"], reverse=True)
+    for r in rows:
+        r["next"] = row_next_step(r)
+    # Leaderboard order: furthest along first, then strongest, then most
+    # recently touched -- so the champion sits at the top of the list.
+    rows.sort(key=lambda r: (
+        PROMOTION_STAGES.index(r["promotion"]["stage"]),
+        r["strength"] if r["strength"] is not None else -1.0,
+        r["modified"],
+    ), reverse=True)
     return rows
 
 
