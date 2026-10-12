@@ -27,6 +27,10 @@ class BacktestResult:
     statistics: BacktestStatistics
     initial_balance: float
     warnings: list[str] = field(default_factory=list)
+    # 2026-10 audit: True when the behavioural lookahead check was requested but CRASHED. A crash used to be
+    # swallowed (``except Exception: result = None``), which read as "no leak found". It is now recorded here, emitted as
+    # a RuntimeWarning in ``warnings``, and consumers (full_pipeline) demote the verdict on it.
+    lookahead_check_failed: bool = False
     # ^ Execution-integrity warnings from app.backtest.execution.run_execution
     # (fallback stops, forced daily-limit closes, pip-size/instrument
     # mismatches, gap-through stop fills). run_execution raises these as
@@ -247,6 +251,9 @@ def run_backtest(
     # identical to every run before this existed.
     from app.strategy.base import apply_strategy_trade_cap
     risk = apply_strategy_trade_cap(risk, strategy)   # MAX_TRADES_PER_DAY declared by the strategy (one-shot-per-day systems)
+    # 2026-10 audit: behaviour rules the strategy declares (BEHAVIOR_* constants) -> engine-level overlays (see app.backtest.behavior_rules)
+    from app.backtest.behavior_rules import apply_strategy_behavior
+    risk, adaptive_risk = apply_strategy_behavior(risk, adaptive_risk, strategy)
     _raw_native_df = df
     df, timeframe_warnings = prepare_timeframe_aligned_data(df, strategy)
 
@@ -278,10 +285,11 @@ def run_backtest(
         strat_result.signals = pd.Series(arr, index=strat_result.signals.index)
 
     # P0-5 (lookahead gate): run the behavioral lookahead check on every
-    # backtest, not just Full Pipeline's gated paths. Best-effort -- a
-    # check failure must never break the backtest itself, so exceptions
-    # are swallowed here (same posture as full_pipeline's gate).
+    # backtest, not just Full Pipeline's gated paths. A crash of the check must not
+    # break the backtest itself, but it must not read as a PASS either: it is recorded
+    # (BacktestResult.lookahead_check_failed) and surfaced as a warning.
     _lookahead_result = None
+    _lookahead_error = None
     if lookahead_check != "skip":
         try:
             from app.strategy.lookahead_check import check_for_lookahead
@@ -294,8 +302,9 @@ def run_backtest(
                     if len(_LOOKAHEAD_CACHE) >= 512:
                         _LOOKAHEAD_CACHE.pop(next(iter(_LOOKAHEAD_CACHE)))
                     _LOOKAHEAD_CACHE[_key] = _lookahead_result
-        except Exception:
+        except Exception as _exc:  # noqa: BLE001
             _lookahead_result = None
+            _lookahead_error = f"{type(_exc).__name__}: {_exc}"
 
     # UPGRADE (day-of-week trading restriction): forces the strategy's own
     # signal flat (0) on any weekday it has declared excluded (Manual's
@@ -341,6 +350,12 @@ def run_backtest(
                 "LOOKAHEAD BIAS DETECTED: " + _lookahead_result.summary(),
                 RuntimeWarning,
             )
+        if _lookahead_error is not None:
+            _warnings_module.warn(
+                "LOOKAHEAD CHECK CRASHED: " + _lookahead_error + " -- the strategy was NOT cleared of using future data; "
+                "treat any pass as unverified.",
+                RuntimeWarning,
+            )
         if getattr(strat_result, "entry_orders", None) is not None:
             trades, equity_curve = _run_resting_orders(df, strat_result, strategy, risk)
         else:
@@ -368,6 +383,7 @@ def run_backtest(
             statistics=None,
             initial_balance=risk.initial_balance,
             warnings=timeframe_warnings + condition_warnings + execution_warnings,
+            lookahead_check_failed=_lookahead_error is not None,
         )
 
     stats = compute_statistics(trades, equity_curve, initial_balance=risk.initial_balance)
@@ -387,4 +403,5 @@ def run_backtest(
         statistics=stats,
         initial_balance=risk.initial_balance,
         warnings=timeframe_warnings + condition_warnings + execution_warnings + ([sizing_warning] if sizing_warning else []),
+        lookahead_check_failed=_lookahead_error is not None,
     )

@@ -163,6 +163,11 @@ class PropRules:
     rules_checked_on: str | None = None
     # ISO date the rules were last verified against the firm's rules page
     # (None = never verified). Presets store this so stale rules are visible.
+    # 2026-10 audit: which preset these rules came from and whether that preset's RULES were
+    # verified against a firm page (app.prop.presets.is_ready_eligible). Hand-typed rules have
+    # preset_key None / rules_verified False and therefore cannot reach a READY verdict.
+    preset_key: str | None = None
+    rules_verified: bool = False
 
     # P1-3: WHAT balance the drawdown failure checks trail on.
     #   "realized" (default): today's behavior, byte-identical -- checks

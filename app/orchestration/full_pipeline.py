@@ -151,6 +151,16 @@ class FullPipelineConfig:
     payout_replay_starts_oos: int = 36
     payout30_min_pct: float = 35.0        # READY needs >= this % of fresh accounts paid within the window
     payout30_min_effective_windows: float = 3.0   # fewer independent windows than this = "not enough evidence" note, no gate
+    # -- 2026-10 audit ---------------------------------------------------------------------------
+    per_fold_reoptimize: bool = True      # honest OOS headline: fresh optimizer on each fold's TRAIN slice only (median fold test score)
+    require_clean_holdout_for_ready: bool = True   # READY needs reserve_true_holdout and a usable holdout
+    holdout_mc_sims: int = 2000           # Monte Carlo sims on the clean-holdout trades (EV verdict pass rate)
+    ev_bankroll: float = 1_000.0          # bankroll used for the EV verdict's ruin-of-bankroll test
+    ev_bankroll_sims: int = 1000
+    ev_max_attempts: int = 5
+    ev_ruin_cap_pct: float = 20.0         # FORWARD-TEST CANDIDATE needs bankroll ruin <= this
+    ev_margin_multiple: float = 1.5       # ...and a deflated holdout pass rate >= break-even x this
+    ev_margin_points: float = 0.05        # ...or break-even + this many points (whichever is larger)
     null_n_seeds: int = 200               # random-entry null runs (v9.5: raised from 100 per accuracy plan)
     null_first_batch: int = 100           # v9.16: first batch; the rest only runs when 0.03 < p < 0.30 after it
     break_cost_mult: float = 2.0          # v9.5 break-it gate: verdict must survive costs at this multiple
@@ -165,7 +175,9 @@ class FullPipelineConfig:
     # UPGRADE (optimizer core): see QuickOptimizeConfig.optimizer_mode's
     # identical field/docstring -- same default, same downstream effect.
     optimizer_mode: str = "genetic"
-    fitness_metric: str = "eval_pass_probability"
+    # 2026-10 audit: the real objective is "paid within 30 days", not "passed the evaluation". payout_30d scores the
+    # Monte Carlo first-payout-within-window rate (app.optimize.refinement._payout_window_fitness).
+    fitness_metric: str = "payout_30d"
     final_mc_sims: int = 10_000
     # Step 1's baseline Monte Carlo run is diagnostic only -- it's logged
     # and reported alongside the final numbers, but never feeds the
@@ -473,6 +485,25 @@ class FullPipelineResult:
     # callers/UI say exactly which filter rejected the candidate without
     # re-parsing verdict_reasons.
     validation_gate_failures: list = field(default_factory=list)
+    # -- 2026-10 audit ---------------------------------------------------------------------------
+    # EV verdict beside READY (dict form of app.orchestration.ev_verdict.EVVerdict): label is one of
+    # HIGH CONFIDENCE / FORWARD-TEST CANDIDATE / NOT WORTH A FEE / INSUFFICIENT EVIDENCE.
+    ev_verdict: dict | None = None
+    audit_evidence: dict | None = None
+    lookahead_check_crashed: bool = False
+    # Median per-fold test score from per-fold re-optimization (the honest walk-forward headline);
+    # the chained score the GA selected on is only a diagnostic.
+    honest_median_fold_score: float | None = None
+    selection_chained_score: float | None = None
+
+
+def _manifest_warnings() -> list:
+    """Pipeline-start data-manifest check (never raises)."""
+    try:
+        from app.data.data_manifest import assert_manifest_fresh
+        return assert_manifest_fresh()
+    except Exception:  # noqa: BLE001
+        return []
 
 
 def _display_name(strategy: Strategy) -> str:
@@ -1779,6 +1810,10 @@ def run_full_pipeline(
 
     lookahead_summary = None
     lookahead_bug_detected = False
+    lookahead_check_crashed = False
+    for _w in _manifest_warnings():
+        log(f"  DATA MANIFEST: {_w}")
+        warnings.append(f"Data manifest: {_w}")
     if strategy.source_type in ("manual", "python", "pinescript", "mql5"):
         try:
             from app.strategy.lookahead_check import check_for_lookahead
@@ -1786,8 +1821,10 @@ def run_full_pipeline(
             lookahead_summary = lookahead_result.summary()
             lookahead_bug_detected = lookahead_result.bug_detected
             log(f"  Lookahead check: {lookahead_summary}")
-        except Exception:
-            log("  Lookahead check failed to run (skipped, best-effort only).")
+        except Exception as exc:  # noqa: BLE001
+            lookahead_check_crashed = True
+            lookahead_summary = f"LOOKAHEAD CHECK CRASHED ({type(exc).__name__}: {exc}) -- treated as a failure."
+            log(f"  {lookahead_summary}")
     # NOTE: this baseline-strategy check is re-run below (see "Lookahead
     # check (final configuration)") against whatever strategy actually
     # ends up as `final_strategy` after Step 2's optimization -- that
@@ -2025,6 +2062,7 @@ def run_full_pipeline(
                 # the end of the GA -- Owen's 791s generation -- and Stop
                 # only took effect at the NEXT step boundary).
                 cancel_event=cancel_event,
+                per_fold_reoptimize=bool(cfg.per_fold_reoptimize),
             )
             refinement_ran = True
             if ga_result.best.oos_trade_count > 0:
@@ -2032,9 +2070,12 @@ def run_full_pipeline(
                 final_code_text = ga_result.best.code_text
                 final_code_ext = ga_result.best.code_extension
                 log(
-                    f"  Winning configuration: chained-OOS fitness {ga_result.best.fitness:.3f} "
-                    f"({ga_result.best.oos_trade_count} OOS trades across {ga_result.n_folds} fold(s))."
+                    f"  Winning configuration: SELECTION score {ga_result.best.fitness:.3f} (chained fold-test score the GA picked on -- "
+                    f"a diagnostic, not out-of-sample) over {ga_result.best.oos_trade_count} trades / {ga_result.n_folds} fold(s)."
                 )
+                if ga_result.honest_median_fold_score is not None:
+                    log(f"  HONEST walk-forward headline: median per-fold re-optimized test score {ga_result.honest_median_fold_score:.3f} "
+                        f"(folds: {[round(v, 2) if v is not None and v == v and abs(v) != float('inf') else v for v in ga_result.honest_fold_scores]}).")
                 if ga_result.overfitting_gap is not None and ga_result.overfitting_gap > 0:
                     warnings.append(
                         f"Overfitting gap (in-sample fitness minus chained-OOS fitness): "
@@ -2133,9 +2174,12 @@ def run_full_pipeline(
                 final_lookahead_result = check_for_lookahead(final_strategy, dev_df, max_signal_checkpoints=8)
                 lookahead_summary = final_lookahead_result.summary()
                 lookahead_bug_detected = final_lookahead_result.bug_detected
+                lookahead_check_crashed = False
                 log(f"  Lookahead check (final configuration): {lookahead_summary}")
-            except Exception:
-                log("  Lookahead check on final configuration failed to run (skipped, best-effort only).")
+            except Exception as exc:  # noqa: BLE001
+                lookahead_check_crashed = True
+                lookahead_summary = f"LOOKAHEAD CHECK CRASHED on the final configuration ({type(exc).__name__}: {exc}) -- treated as a failure."
+                log(f"  {lookahead_summary}")
         else:
             # Manual (indicator-builder) strategies are causal by
             # construction (see app.strategy.lookahead_check's own scope
@@ -2627,6 +2671,21 @@ def run_full_pipeline(
             verdict_reasons.append(
                 f"Evidence (random-entry null): {_null_ev['n_seeds']} random-timing runs with this strategy's exits and trade count; "
                 f"p = {_null_ev['p_value']:.3f} (null mean ${_null_ev['null_mean']:,.0f}, observed ${_null_ev['observed']:,.0f}).")
+        # -- 2026-10 audit: demote-only honesty layers + EV verdict beside READY ----------------------
+        _progress(7, 0.97, "Audit layers + EV verdict")
+        from app.orchestration.audit_layers import apply_audit_layers
+        try:
+            _n_trials = max(1, int(ga_result.total_evaluations)) if (ga_result is not None and refinement_ran) else 1
+        except Exception:  # noqa: BLE001
+            _n_trials = 1
+        verdict, verdict_reasons, _ev, _audit_ev = apply_audit_layers(
+            verdict, verdict_reasons, cfg=cfg, prop_rules=prop_rules, df=df, dev_df=dev_df, instrument_label=instrument,
+            final_strategy=final_strategy, risk=risk, adaptive_risk=adaptive_risk, final_mc=final_mc, final_holdout=final_holdout,
+            payout_ev=_payout_ev, lookahead_check_crashed=lookahead_check_crashed, n_trials=_n_trials, log=log,
+        )
+        verdict_reasons = list(verdict_reasons) + ["EV " + _ev.render().replace("\n", " | ")]
+        log("  " + _ev.render().replace("\n", "\n  "))
+        log(f"  Final verdict after audit layers: {verdict}  |  EV verdict: {_ev.label}")
         elapsed = time.time() - t0
         return _finish(
             strategy, display_name, baseline_bt, baseline_single_run, baseline_mc, lookahead_summary,
@@ -2643,6 +2702,9 @@ def run_full_pipeline(
             pbo_gate_result=pbo_gate_result, pbo_skip_reason=pbo_skip_reason,
             sizing_adjustment=sizing_adjustment,
             stop_default_applied=stop_default_applied,
+            ev_verdict=_ev.to_dict(), audit_evidence=_audit_ev, lookahead_check_crashed=lookahead_check_crashed,
+            honest_median_fold_score=(ga_result.honest_median_fold_score if ga_result is not None else None),
+            selection_chained_score=(ga_result.selection_chained_score if ga_result is not None else None),
         )
     finally:
         if final_tmp_dir is not None:
@@ -2666,6 +2728,11 @@ def _finish(
     pbo_skip_reason: str | None = None,
     sizing_adjustment: dict | None = None,
     stop_default_applied: dict | None = None,
+    ev_verdict: dict | None = None,
+    audit_evidence: dict | None = None,
+    lookahead_check_crashed: bool = False,
+    honest_median_fold_score: float | None = None,
+    selection_chained_score: float | None = None,
 ) -> FullPipelineResult:
     """Writes the report + (for code strategies) saves the winner into the
     Strategy Library. Split out of run_full_pipeline only to keep that
@@ -3106,6 +3173,8 @@ def _finish(
         pbo_gate_result=pbo_gate_result,
         pbo_skip_reason=pbo_skip_reason,
         validation_gate_failures=_validation_gate_failure_names(verdict_reasons),
+        ev_verdict=ev_verdict, audit_evidence=audit_evidence, lookahead_check_crashed=lookahead_check_crashed,
+        honest_median_fold_score=honest_median_fold_score, selection_chained_score=selection_chained_score,
         regime_result=regime_result,
         regime_skip_reason=regime_skip_reason,
         saved_library_path=saved_library_path,

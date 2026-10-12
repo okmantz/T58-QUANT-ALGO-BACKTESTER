@@ -7833,7 +7833,7 @@ def quickopt_start():
             # unchecked by default, so an existing bookmark/saved form that
             # doesn't send this field keeps today's fully-in-sample
             # behavior. See QuickOptimizeConfig.reserve_holdout's docstring.
-            reserve_holdout=form.get("reserve_holdout") == "on",
+            reserve_holdout=True,  # 2026-10 audit: holdout is mandatory; Quick Optimize refuses to rank without it
             holdout_frac=float(form.get("holdout_frac", 0.2) or 0.2),
             # VERSIONING (stop-making-copies): only meaningful when the
             # input strategy actually came from the Strategy Library

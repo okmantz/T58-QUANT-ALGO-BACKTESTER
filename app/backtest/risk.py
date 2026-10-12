@@ -197,6 +197,13 @@ class RiskConfig:
     # The post-hoc scoring layers (simulate_account / Monte Carlo) still
     # read reset_on_breach themselves for their own pass/fail accounting.
     news_blackout_csv: str | None = None
+    # 2026-10 audit (behaviour rules): recurring clock windows, America/Chicago wall time, one per line
+    # ('HH:MM-HH:MM' every day or 'FRI 07:30-07:45'). New entries are refused inside them. Complements the
+    # date-only news_blackout_csv; None = off (byte-identical to before).
+    news_blackout_windows: str | None = None
+    # 2026-10 audit: force-flat time (America/Chicago 'HH:MM', e.g. '15:45') usable WITHOUT prop mode. In prop mode the
+    # prop rules' flatten_time_ct still applies; if both are set the earlier time wins. None = off.
+    flatten_time_ct: str | None = None
     # P2-6: path to a CSV with one YYYY-MM-DD date per line (blank lines
     # and #-comments ignored). When set, run_execution blocks ALL new
     # entries on those dates -- the backtest-path equivalent of the

@@ -40,7 +40,7 @@ import numpy as np
 import pandas as pd
 
 from app.backtest.execution import Trade
-from app.monte_carlo.engine import _apply_slippage_stress, _resample_pnls
+from app.monte_carlo.engine import _apply_slippage_stress, _effective_block_size, _resample_indices, _resample_pnls
 from app.prop.simulator import PropRules, precompute_day_structure, simulate_account
 from app.prop.survival_engine import ResetEconomics
 
@@ -82,6 +82,9 @@ class BankrollConfig:
     # setting for "what's my probability of getting paid AT ALL before I
     # go broke," a narrower and usually higher-probability question.
     stop_after_first_payout: bool = False
+    # 2026-10 audit: resample each trade's MAE/MFE with its P&L so floating / intraday-trailing
+    # rules see the open-P&L range (same index draw -> same RNG stream as before).
+    use_excursions: bool = True
 
     def __post_init__(self):
         self.starting_bankroll = max(float(self.starting_bankroll), 0.0)
@@ -180,6 +183,12 @@ def simulate_bankroll_survival(
     day_structure = precompute_day_structure(base_dates)
     resample_cfg = _ResampleCfg(cfg.method, cfg.block_size)
     econ = cfg.reset_economics
+    base_mae = base_mfe = None
+    if cfg.use_excursions:
+        from app.prop.excursions import trade_excursions
+        _ex = trade_excursions(trades)
+        base_mae = np.minimum(np.array(_ex.mae), np.minimum(base_pnls, 0.0))
+        base_mfe = np.maximum(np.array(_ex.mfe), np.maximum(base_pnls, 0.0))
 
     reached_payout_flags: list[bool] = []
     ruined_before_payout_flags: list[bool] = []
@@ -191,10 +200,18 @@ def simulate_bankroll_survival(
     low_points: list[float] = []
 
     for _ in range(cfg.n_simulations):
-        sim_pnls = _resample_pnls(rng, base_pnls, resample_cfg)
+        _idx = _resample_indices(rng, len(base_pnls), cfg.method, _effective_block_size(resample_cfg, len(base_pnls), None))
+        sim_pnls = base_pnls[_idx]
         sim_pnls = _apply_slippage_stress(sim_pnls, cfg.slippage_stress_pct)
+        _kw = {}
+        if base_mae is not None:
+            _d = sim_pnls - base_pnls[_idx]
+            _kw = dict(
+                trade_mae=np.minimum(base_mae[_idx] + np.minimum(_d, 0.0), np.minimum(sim_pnls, 0.0)),
+                trade_mfe=np.maximum(base_mfe[_idx] + np.maximum(_d, 0.0), np.maximum(sim_pnls, 0.0)),
+            )
         result = simulate_account(
-            sim_pnls, base_dates, rules, _day_structure=day_structure, reset_on_breach=True,
+            sim_pnls, base_dates, rules, _day_structure=day_structure, reset_on_breach=True, **_kw,
         )
 
         bankroll = cfg.starting_bankroll

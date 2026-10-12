@@ -6264,7 +6264,7 @@ class MainWindow:
             library_section,
             "OPTIMIZE SELECTED: reserve a holdout slice (lighter, optional check -- still not a "
             "substitute for Full Pipeline; every result stays labeled NOT OOS VALIDATED either way)",
-            False,
+            True,
         )
 
         lib_btn_row_4 = Frame(library_section, bg=PANEL)
@@ -18031,7 +18031,7 @@ class MainWindow:
         self.qopt_final_mc_sims = LabeledEntry(settings, "Final Monte Carlo sims", 1000)
         self.qopt_reset_on_breach = LabeledCheckbox(settings, "Reset-on-breach (prop-firm realistic) search basis", True)
         self.qopt_adaptive_risk = LabeledCheckbox(settings, "Enable adaptive, limit-aware position sizing", False)
-        self.qopt_reserve_holdout = LabeledCheckbox(settings, "Reserve a holdout slice (opt-in lightweight check)", False)
+        self.qopt_reserve_holdout = LabeledCheckbox(settings, "Reserve a holdout slice (required; unchecking makes Quick Optimize refuse to rank)", True)
         self.qopt_save_to_library = LabeledCheckbox(settings, "Save the result to the Strategy Library (tagged \"draft\")", True)
 
         button_row = Frame(f, bg=BG)

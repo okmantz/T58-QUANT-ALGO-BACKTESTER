@@ -57,7 +57,7 @@ import pandas as pd
 
 _VALID_TRIGGERS = {
     "consecutive_losses", "daily_loss_pct", "daily_profit_pct", "progress_to_target_pct", "drawdown_pct",
-    "volatility_percentile",
+    "volatility_percentile", "daily_losses",
 }
 
 
@@ -88,6 +88,9 @@ class AdaptiveRiskRule:
     #                             AdaptiveRiskConfig.profit_target_amount to be set; a rule using this trigger is
     #                             simply never active (multiplier 1.0) if that amount isn't supplied.
     threshold: float
+    # "daily_losses"           -- threshold = number of LOSING trades already closed TODAY (session day); the
+    #                             "stop for the day after N losses" behaviour rule. Releases by itself on the next
+    #                             session day, so a 0.0 multiplier is a safe full stop (not a permanent latch).
     # "drawdown_pct"           -- threshold = % of initial_balance the account is currently down from its
     #                             own realized-equity PEAK (all-time, not reset daily) -- this is the trigger
     #                             that targets a prop firm's overall max-drawdown floor specifically, as
@@ -151,6 +154,7 @@ class AdaptiveRiskState:
     entire point: the strategy's own signal logic still can't see it."""
     initial_balance: float = 0.0
     consecutive_losses: int = 0
+    day_loss_count: int = 0
     day_realized_pnl: float = 0.0
     cumulative_realized_pnl: float = 0.0
     peak_realized_balance: float = 0.0   # highest realized-equity level reached so far; set to initial_balance on first use
@@ -167,6 +171,7 @@ class AdaptiveRiskState:
         -- or, with a 0.0 multiplier, completely silencing -- every
         entry for the rest of a multi-year dataset."""
         self.consecutive_losses = 0
+        self.day_loss_count = 0
         self.day_realized_pnl = 0.0
         self.cumulative_realized_pnl = 0.0
         self.peak_realized_balance = self.initial_balance
@@ -189,6 +194,7 @@ class AdaptiveRiskState:
         signals after the last real entry blocked by a lock that should
         have released the next morning (2026-10-06 stall fix)."""
         self.day_realized_pnl = 0.0
+        self.day_loss_count = 0
 
     def record_trade_close(self, pnl: float, is_new_day: bool) -> None:
         # is_new_day kept as a belt-and-braces reset for any caller that
@@ -197,7 +203,10 @@ class AdaptiveRiskState:
         # twice is idempotent.
         if is_new_day:
             self.day_realized_pnl = 0.0
+            self.day_loss_count = 0
         self.day_realized_pnl += pnl
+        if pnl < 0:
+            self.day_loss_count += 1
         self.cumulative_realized_pnl += pnl
         if pnl < 0:
             self.consecutive_losses += 1
@@ -226,6 +235,8 @@ class AdaptiveRiskState:
     ) -> bool:
         if rule.trigger == "consecutive_losses":
             return self.consecutive_losses >= rule.threshold
+        if rule.trigger == "daily_losses":
+            return self.day_loss_count >= rule.threshold
         if rule.trigger == "daily_loss_pct":
             loss_pct = (-self.day_realized_pnl / self.initial_balance * 100.0) if self.initial_balance else 0.0
             return loss_pct >= rule.threshold

@@ -34,7 +34,7 @@ class MonteCarloConfig:
     # evaluate -- the pass probability being optimized was computed on
     # paths a real strategy would never produce. Explicit opt-out:
     # method="bootstrap" reproduces the pre-fix i.i.d. behavior exactly.
-    method: str = "day_block_bootstrap"  # "shuffle" | "bootstrap" | "block_bootstrap" | "day_block_bootstrap"
+    method: str = "day_block_bootstrap"  # "shuffle" | "bootstrap" | "block_bootstrap" | "day_block_bootstrap" | "regime_shuffle"
     # Block size used when method == "block_bootstrap". None (default) =
     # auto: scaled to typical trades/day from the trade timestamps --
     # max(2, round(n_trades / n_trading_days)) -- so a block approximates
@@ -53,6 +53,12 @@ class MonteCarloConfig:
     # are all per-day rules; resampling single trades (or arbitrary trade
     # blocks) cuts days in half and changes how often those rules bind.
     day_block_days: int = 3
+    # 2026-10 audit: feed each resampled trade's MAE/MFE (dollars) into the account so
+    # floating-drawdown / intraday-trailing / floating-daily-loss rules are checked on the
+    # open-P&L range, not just closed P&L. The excursions are resampled with the SAME index
+    # draw as the P&Ls. Trades without measured excursions use the closed-P&L proxy and the
+    # count is disclosed in MonteCarloResult.warnings-style notes (see excursion_note).
+    use_excursions: bool = True
     slippage_stress_pct: float = 0.0  # extra % cost applied to every trade
     # Session/volatility-aware slippage (app.monte_carlo.slippage_model) -- applied ONCE to the
     # historical trade pool before resampling, independent of and in addition to
@@ -78,7 +84,11 @@ class MonteCarloConfig:
     # attempt in the chain" rather than "the one attempt" -- see
     # MonteCarloResult's new attempts_* fields for the chain-level detail
     # that distinction papers over.
-    reset_on_breach: bool = True  # 2026-09-29: paths keep going after a bust (fresh account) -- log, don't stop
+    # 2026-10 audit: default is now False. With True the headline "pass probability" meant
+    # "at least one attempt in a mechanically rebought chain passed", which flatters the
+    # per-attempt number. Per-attempt results (what one challenge fee buys) are the default;
+    # pass reset_on_breach=True explicitly for chain / bankroll studies.
+    reset_on_breach: bool = False
 
 
 def default_method_for_adaptive_risk(adaptive_risk) -> str:
@@ -397,6 +407,43 @@ def _resample_day_blocks(rng, groups, dates, block_days: int):
     return idx, ds
 
 
+def _month_groups(dates) -> list:
+    """Groups of consecutive day-group indices that share a calendar (year, month)."""
+    out: list[list[int]] = []
+    last = None
+    for i, d in enumerate(dates):
+        key = (pd.Timestamp(d).year, pd.Timestamp(d).month)
+        if key != last:
+            out.append([])
+            last = key
+        out[-1].append(i)
+    return [np.asarray(g, dtype=np.int64) for g in out]
+
+
+def _resample_month_blocks(rng, groups, dates, month_groups):
+    """Regime-shuffle path (2026-10 audit): resample WHOLE CALENDAR MONTHS with replacement,
+    keeping each month's days (and every day's trades) in their original order, until the
+    path has as many day slots as the source. A strategy that only works in one regime (one
+    strong month carrying the sample) shows up as a wide spread between paths, which
+    day-level blocks of 3 days smooth away. Returns (trade_index_array, DayStructure)."""
+    from app.prop.simulator import DayStructure
+    nd = len(groups)
+    nm = len(month_groups)
+    chosen: list[int] = []
+    while len(chosen) < nd:
+        chosen.extend(month_groups[int(rng.integers(0, nm))].tolist())
+    chosen = chosen[:nd]
+    arrs = [groups[g] for g in chosen]
+    idx = np.concatenate(arrs).astype(np.int64)
+    counts = np.fromiter((len(a) for a in arrs), dtype=np.int64, count=nd)
+    day_index = np.repeat(np.arange(nd), counts)
+    is_last = np.zeros(len(idx), dtype=bool)
+    is_last[np.cumsum(counts) - 1] = True
+    ds = DayStructure(day_index_per_trade=day_index.tolist(), is_last_of_day=is_last.tolist(),
+                      day_dates=list(dates), n_days=nd)
+    return idx, ds
+
+
 def _resample_pnls(
     rng: np.random.Generator, pnls: np.ndarray, cfg: MonteCarloConfig,
     n_trading_days: int | None = None,
@@ -517,6 +564,7 @@ def _reset_on_breach_note(cfg: "MonteCarloConfig") -> str:
 def _methodology_note(
     cfg: "MonteCarloConfig", n_trades: int, selection_bias_caveat: bool,
     n_trading_days: int | None = None,
+    excursion_set=None,
 ) -> str:
     """MC-004: plain-language description of what THIS run's resampling
     actually did, so evaluation_pass_probability isn't read as a
@@ -579,6 +627,11 @@ def _methodology_note(
             f"{block_size}, preserving short local runs of the {n_trades} historical "
             "trades rather than treating each one as fully independent)"
         ),
+        "regime_shuffle": (
+            f"resampled {cfg.n_simulations:,} times by drawing WHOLE CALENDAR MONTHS of the "
+            f"{n_trades} historical trades with replacement (each month keeps its days and trades in "
+            "order), so a strategy that only worked in one or two regimes shows a wide, honest spread"
+        ),
     }
     method_text = method_descriptions.get(
         cfg.method, f"resampled {cfg.n_simulations:,} times (method: {cfg.method})"
@@ -589,19 +642,25 @@ def _methodology_note(
         "frequency do not). This measures robustness to trade-ordering on this exact trade "
         "sequence, not an independent out-of-sample test."
     )
-    # P1-3: honest paragraph -- the sim trails on realized balance only.
-    note += (
-        " Drawdown-modeling caveat: the account simulator trails drawdown on REALIZED "
-        "balance only (trade-close equity) -- it does not model floating intrabar drawdown "
-        "against the trailing peak. For prop firms whose trailing drawdown is enforced on "
-        "real-time floating equity, this UNDERSTATES how often the account would actually "
-        "fail: a simulated path that survives here could have breached mid-trade in reality, "
-        "and neither the pass probability nor the risk-of-ruin above accounts for it. "
-        "Re-run with PropRules(floating_drawdown_mode=\"adverse\") to degrade the check "
-        "with each trade's initial risk as a conservative floating-drawdown proxy "
-        "(documented approximation -- assumes every trade drew down to its full initial "
-        "risk before closing)."
-    )
+    # P1-3 / 2026-10 audit: say exactly what drawdown evidence the paths carry.
+    if excursion_set is not None:
+        n_all = excursion_set.n_measured + excursion_set.n_proxied
+        note += (
+            f" Drawdown modeling: each resampled trade carried its own MAE/MFE (dollars) into the "
+            f"account, so floating / intraday-trailing rules were checked on the open-P&L range, not "
+            f"just closed P&L. {excursion_set.n_measured} of {n_all} trades "
+            f"({excursion_set.measured_fraction * 100:.0f}%) had measured excursions; the other "
+            f"{excursion_set.n_proxied} use the closed-P&L proxy (min(pnl,0) / max(pnl,0)), which "
+            "understates intratrade drawdown for those trades."
+        )
+    else:
+        note += (
+            " Drawdown-modeling caveat: this run was made with use_excursions=False, so the account "
+            "simulator trails drawdown on REALIZED balance only (trade-close equity). For firms that "
+            "enforce trailing drawdown on real-time floating equity this UNDERSTATES how often the "
+            "account would actually fail. Re-run with use_excursions=True (default) or "
+            "PropRules(floating_drawdown_mode=\"adverse\")."
+        )
     if selection_bias_caveat:
         note += (
             " These trades came from an optimization/search step -- treat this result as "
@@ -656,12 +715,21 @@ class _SimRow(NamedTuple):
 def _mc_simulate_path(sim_pnls, base_dates, rules, day_structure, reset_on_breach, sim_risks) -> _SimRow:
     """Runs ONE resampled path through simulate_account and reduces it to
     a _SimRow. Extracted verbatim from run_monte_carlo's old serial loop
-    (v9.13) so the serial and parallel paths share one implementation."""
+    (v9.13) so the serial and parallel paths share one implementation.
+
+    2026-10 audit: ``sim_risks`` may be a 3-tuple ``(risks_or_None, mae, mfe)`` (the
+    excursion bundle), so the worker/pool plumbing that carries ``sim_risks`` did not need
+    a new field. A bare array / None keeps the legacy meaning."""
+    sim_mae = sim_mfe = None
+    if isinstance(sim_risks, tuple) and len(sim_risks) == 3:
+        sim_risks, sim_mae, sim_mfe = sim_risks
     result = simulate_account(
         sim_pnls, base_dates, rules,
         _day_structure=day_structure,
         reset_on_breach=reset_on_breach,
         trade_initial_risks=sim_risks,
+        trade_mae=sim_mae,
+        trade_mfe=sim_mfe,
     )
     first_attempt = result.attempts[0] if result.attempts else None
     return _SimRow(
@@ -891,6 +959,17 @@ def run_monte_carlo(
     # which keeps that check a no-op (byte-identical to not passing it).
     base_risks = np.array([_trade_dollar_risk(t) for t in trades], dtype=float)
     has_risks = bool(np.any(base_risks > 0))
+    # 2026-10 audit: per-trade MAE/MFE (dollars), shifted by the same session-slippage delta
+    # as the P&Ls so the excursions bracket the adjusted outcome, resampled with the SAME draw.
+    base_mae = base_mfe = None
+    excursion_set = None
+    if cfg.use_excursions:
+        from app.prop.excursions import trade_excursions
+        excursion_set = trade_excursions(trades)
+        _raw = np.array([float(getattr(t, "pnl", 0.0) or 0.0) for t in trades], dtype=float)
+        _delta = np.asarray(base_pnls, dtype=float) - _raw
+        base_mae = np.minimum.reduce([np.array(excursion_set.mae) + _delta, np.asarray(base_pnls, dtype=float), np.zeros(len(trades))])
+        base_mfe = np.maximum.reduce([np.array(excursion_set.mfe) + _delta, np.asarray(base_pnls, dtype=float), np.zeros(len(trades))])
     # Every simulation below reassigns the SAME fixed calendar dates
     # (base_dates never changes) to a resampled sequence of P&L values --
     # only sim_pnls' order/values differ per simulation. That means the
@@ -902,10 +981,14 @@ def run_monte_carlo(
     # reasoning; this is a pure performance change with no effect on any
     # output value.
     day_structure = precompute_day_structure(base_dates)
-    use_day_blocks = cfg.method == "day_block_bootstrap"
+    use_regime_shuffle = cfg.method == "regime_shuffle"
+    use_day_blocks = cfg.method == "day_block_bootstrap" or use_regime_shuffle
+    _month_grp = None
     if use_day_blocks:
         _groups, _gdates = _day_groups(trades)
         n_source_days = len(_groups)
+        if use_regime_shuffle:
+            _month_grp = _month_groups(_gdates)
     else:
         n_source_days = n_trading_days
 
@@ -934,7 +1017,9 @@ def run_monte_carlo(
     # _mc_rows_parallel). _draw_one() is exactly the draw sequence the
     # old serial loop performed per iteration.
     def _draw_one():
-        if use_day_blocks:
+        if use_regime_shuffle:
+            sim_idx, sim_ds = _resample_month_blocks(rng, _groups, _gdates, _month_grp)
+        elif use_day_blocks:
             sim_idx, sim_ds = _resample_day_blocks(rng, _groups, _gdates, cfg.day_block_days)
         else:
             sim_idx = _resample_indices(rng, len(base_pnls), cfg.method, eff_block_size)
@@ -942,6 +1027,14 @@ def run_monte_carlo(
         sim_pnls = base_pnls[sim_idx]
         sim_pnls = _apply_slippage_stress(sim_pnls, cfg.slippage_stress_pct)
         sim_risks = base_risks[sim_idx] if has_risks else None
+        if base_mae is not None:
+            # slippage stress changes the path P&L; keep the excursions bracketing it
+            _d = sim_pnls - base_pnls[sim_idx]
+            sim_risks = (
+                sim_risks,
+                np.minimum(base_mae[sim_idx] + np.minimum(_d, 0.0), np.minimum(sim_pnls, 0.0)),
+                np.maximum(base_mfe[sim_idx] + np.maximum(_d, 0.0), np.maximum(sim_pnls, 0.0)),
+            )
         return sim_pnls, sim_ds, sim_risks
 
     n_sims = int(cfg.n_simulations)
@@ -1102,7 +1195,7 @@ def run_monte_carlo(
         days_to_payout_distribution=days_to_first_payout_list,
         return_distribution=return_arr.tolist(),
         drawdown_distribution=dd_arr.tolist(),
-        methodology_note=_methodology_note(cfg, len(trades), selection_bias_caveat, n_trading_days=n_trading_days),
+        methodology_note=_methodology_note(cfg, len(trades), selection_bias_caveat, n_trading_days=n_trading_days, excursion_set=excursion_set),
         reset_on_breach=cfg.reset_on_breach,
         mean_attempts_per_path=float(attempts_arr.mean()) if len(attempts_arr) else 0.0,
         median_attempts_per_path=pct(attempts_arr, 50),

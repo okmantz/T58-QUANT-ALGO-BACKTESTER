@@ -107,6 +107,14 @@ _HOUR_NAME_RE = re.compile(r"HOUR", re.IGNORECASE)
 
 
 def _clamp_bounds_for_known_domains(name: str, lo: float, hi: float) -> tuple[float, float]:
+    # 2026-10 audit: behaviour-rule constants have explicit domains (0 = rule off)
+    if name.startswith("BEHAVIOR_"):
+        try:
+            from app.backtest.behavior_rules import BEHAVIOR_BOUNDS
+            if name in BEHAVIOR_BOUNDS:
+                return BEHAVIOR_BOUNDS[name]
+        except Exception:  # noqa: BLE001
+            pass
     if _HOUR_NAME_RE.search(name):
         lo, hi = max(lo, 0.0), min(hi, 23.0)
         if lo > hi:  # defensive: an already-out-of-range base value shouldn't invert the bounds

@@ -49,10 +49,67 @@ imports THIS module); `rules` is duck-typed.
 """
 from __future__ import annotations
 
+import contextlib
+import os
+import warnings as _warnings
 from dataclasses import dataclass
 from typing import Any, Sequence
 
 import pandas as pd
+
+# ---------------------------------------------------------------------------
+# Missing-excursion policy (2026-10 audit).
+#
+# Under a floating / intraday-trailing drawdown basis the account must see each
+# trade's adverse and favorable excursion (MAE/MFE). Callers that only have closed
+# P&L used to get a SILENT fallback to closed P&L, which makes intraday-trailing
+# rules look far more forgiving than a real firm's. Policy values:
+#   "raise"      -> MissingExcursionError (the pipeline / Monte Carlo / EV paths use this)
+#   "warn"       -> fall back to closed P&L and emit one UserWarning per process (default,
+#                   so ~45 legacy UI callers keep working but are no longer silent)
+#   "closed_pnl" -> fall back silently (explicit opt-in: you KNOW the numbers are optimistic)
+# Set per process with T58_EXCURSION_POLICY or scoped with `excursion_policy(...)`.
+# ---------------------------------------------------------------------------
+EXCURSION_POLICIES = ("raise", "warn", "closed_pnl")
+_excursion_policy_override: list = []
+_excursion_warned = [False]
+
+
+class MissingExcursionError(RuntimeError):
+    """A floating/intraday-trailing drawdown rule was evaluated without per-trade MAE/MFE."""
+
+
+def current_excursion_policy() -> str:
+    if _excursion_policy_override:
+        return _excursion_policy_override[-1]
+    val = (os.environ.get("T58_EXCURSION_POLICY") or "warn").strip().lower()
+    return val if val in EXCURSION_POLICIES else "warn"
+
+
+@contextlib.contextmanager
+def excursion_policy(mode: str):
+    """Scope a missing-excursion policy: ``with excursion_policy("raise"): ...``"""
+    if mode not in EXCURSION_POLICIES:
+        raise ValueError(f"excursion policy must be one of {EXCURSION_POLICIES}, got {mode!r}")
+    _excursion_policy_override.append(mode)
+    try:
+        yield
+    finally:
+        _excursion_policy_override.pop()
+
+
+def _handle_missing_excursion(dd_basis: str, daily_loss_basis: str) -> None:
+    policy = current_excursion_policy()
+    msg = (
+        f"floating/intraday drawdown rules (dd_basis={dd_basis!r}, daily_loss_basis={daily_loss_basis!r}) "
+        "were evaluated on CLOSED P&L only because the trade has no MAE/MFE. This understates how often "
+        "a real firm would stop the account out; pass trade_mae/trade_mfe (see app.prop.excursions)."
+    )
+    if policy == "raise":
+        raise MissingExcursionError(msg)
+    if policy == "warn" and not _excursion_warned[0]:
+        _excursion_warned[0] = True
+        _warnings.warn(msg, UserWarning, stacklevel=3)
 
 
 @dataclass
@@ -378,6 +435,8 @@ class PropAccount:
         # floating pre-check from the trade's own excursion
         floating_basis_active = (self.dd_basis in ("floating", "eod")) or self.daily_loss_basis == "floating"
         if floating_basis_active and not floating_handled:
+            if mae is None or mfe is None:
+                _handle_missing_excursion(self.dd_basis, self.daily_loss_basis)
             adverse = min(mae, 0.0) if mae is not None else min(pnl, 0.0)
             favorable = max(mfe, 0.0) if mfe is not None else max(pnl, 0.0)
             res = self.on_equity_extremes(cur, balance_before + favorable, balance_before + adverse)

@@ -355,6 +355,10 @@ class WalkForwardOptFold:
     best_genome: list
     test_statistics: dict | None
     test_trade_count: int
+    # 2026-10 audit: fitness of this fold's TEST slice under the genome that was
+    # optimized on this fold's TRAIN slice only (same metric as train_fitness).
+    # This -- not the train fitness -- is what an honest walk-forward headline uses.
+    test_fitness: float | None = None
 
 
 @dataclass
@@ -370,8 +374,24 @@ class WalkForwardOptResult:
     elapsed_seconds: float
     warnings: list = field(default_factory=list)
 
+    @property
+    def median_fold_test_fitness(self) -> float | None:
+        """Headline walk-forward score: the MEDIAN per-fold test fitness (each fold's genome
+        was optimized on that fold's train slice only). A fold with no trades counts as -inf so
+        it drags the median down instead of being silently dropped."""
+        vals = [f.test_fitness for f in self.folds if f.test_fitness is not None]
+        if not vals:
+            return None
+        return float(np.median(vals))
+
+    @property
+    def fold_test_fitnesses(self) -> list:
+        return [f.test_fitness for f in self.folds]
+
     def to_summary_dict(self) -> dict:
         return {
+            "median_fold_test_fitness": self.median_fold_test_fitness,
+            "fold_test_fitnesses": self.fold_test_fitnesses,
             "window_mode": self.window_mode,
             "n_folds_completed": len(self.folds),
             "combined_statistics": self.combined_statistics.to_dict(),
@@ -457,6 +477,27 @@ def _run_fold_test(fold: Fold, test_strategy: Strategy, risk: RiskConfig) -> Bac
     )
 
 
+class _SkipReference(Exception):
+    """Internal: caller asked to skip the (expensive) full-data in-sample reference GA run."""
+
+
+def _fitness_of_backtest(bt, prop_rules, mc_config, refine_cfg) -> float:
+    """Fitness (same metric as the train fitness) of one finished backtest, e.g. a fold's test slice.
+    -inf when the slice produced no trades or the scorer failed (never a silent 0)."""
+    try:
+        if not bt.trades:
+            return float("-inf")
+        pnls = [t.pnl for t in bt.trades]
+        dates = [t.entry_time for t in bt.trades]
+        single_run = simulate_account(pnls, dates, prop_rules)
+        from app.monte_carlo.engine import run_monte_carlo
+        mc = run_monte_carlo(bt.trades, prop_rules, replace(mc_config, n_simulations=refine_cfg.search_monte_carlo_sims))
+        val = compute_fitness(bt.statistics.to_dict(), summarize_single_run(single_run), mc, refine_cfg.fitness_metric)
+        return float(val) if math.isfinite(val) else float("-inf")
+    except Exception:  # noqa: BLE001 -- a scorer crash must read as "no evidence", not as a pass
+        return float("-inf")
+
+
 def run_walk_forward_optimization(
     df: pd.DataFrame,
     strategy: Strategy,
@@ -470,6 +511,7 @@ def run_walk_forward_optimization(
     refine_cfg: RefinementConfig | None = None,
     random_seed: int | None = 42,
     progress_cb: ProgressCallback | None = None,
+    compute_in_sample_reference: bool = True,
 ) -> WalkForwardOptResult:
     """
     Runs a fresh, small GA search on each fold's train window, applies the
@@ -504,6 +546,7 @@ def run_walk_forward_optimization(
     fold_results: list[WalkForwardOptFold] = []
     all_test_trades: list[Trade] = []
     per_fold_fitness: list[float] = []
+    per_fold_test_fitness: list[float] = []
 
     try:
         _, build_for_result = _build_adapter(strategy, tmp_dir) if strategy.source_type in (
@@ -540,6 +583,8 @@ def run_walk_forward_optimization(
 
             test_bt = _run_fold_test(fold, test_strategy, risk)
             per_fold_fitness.append(train_fitness if math.isfinite(train_fitness) else 0.0)
+            test_fitness = _fitness_of_backtest(test_bt, prop_rules, mc_config, refine_cfg)
+            per_fold_test_fitness.append(test_fitness)
             all_test_trades.extend(test_bt.trades)
 
             fold_results.append(WalkForwardOptFold(
@@ -552,6 +597,7 @@ def run_walk_forward_optimization(
                 best_genome=best_genome,
                 test_statistics=test_bt.statistics.to_dict(),
                 test_trade_count=len(test_bt.trades),
+                test_fitness=test_fitness,
             ))
             log(
                 f"  train_fitness={train_fitness:.3f}  "
@@ -570,6 +616,8 @@ def run_walk_forward_optimization(
             f"dataset, {len(df)} bars) for the OOS-efficiency comparison..."
         )
         try:
+            if not compute_in_sample_reference:
+                raise _SkipReference()
             full_genome, full_gene_bases, _w = _optimize_on_window(
                 df, strategy, risk, prop_rules, mc_config, refine_cfg, tmp_dir, random.Random(random_seed),
                 progress_cb=log,
@@ -588,7 +636,12 @@ def run_walk_forward_optimization(
         except Exception:
             in_sample_fitness = None
 
-        mean_oos_fitness = float(np.mean(per_fold_fitness)) if per_fold_fitness else None
+        # 2026-10 audit fix: the efficiency ratio used to divide the mean TRAIN fitness by the
+        # in-sample reference, which says nothing about out-of-sample behaviour. Use the median
+        # per-fold TEST fitness (finite folds only; a no-trade fold is already -inf and is
+        # reported in fold_test_fitnesses).
+        _finite_test = [v for v in per_fold_test_fitness if v is not None and math.isfinite(v)]
+        mean_oos_fitness = float(np.median(_finite_test)) if _finite_test else None
         oos_efficiency = None
         if in_sample_fitness and math.isfinite(in_sample_fitness) and in_sample_fitness != 0 and mean_oos_fitness is not None:
             oos_efficiency = max(min(mean_oos_fitness / in_sample_fitness, 5.0), -5.0)

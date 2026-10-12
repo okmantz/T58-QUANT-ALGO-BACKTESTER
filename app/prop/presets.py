@@ -113,6 +113,14 @@ class PropFirmPreset:
     # un-reviewed preset can never imply permission that isn't explicit.
     algo_trading_allowed: bool = False
     algo_policy_note: str = ""      # what the firm's own rules actually say; required whenever the flag was reviewed
+    # 2026-10 audit: per-preset verification stamp. ``verified_on`` is the date the RULE fields
+    # (target, drawdown, daily loss, basis, lock, consistency) were checked against a firm page;
+    # ``source_url`` is the page. Empty verified_on = unverified = NOT eligible for a READY verdict
+    # (see is_ready_eligible). ``verification_tier``: "primary" (firm's own page/help centre),
+    # "secondary" (reviewer/aggregator, needs a confirm), "" (not verified).
+    verified_on: str = ""
+    source_url: str = ""
+    verification_tier: str = ""
 
     def to_prop_rules(self) -> PropRules:
         return PropRules(
@@ -144,6 +152,8 @@ class PropFirmPreset:
             trailing_distance_basis=self.trailing_distance_basis,
             max_eval_calendar_days=self.max_eval_calendar_days,
             flatten_time_ct=self.flatten_time_ct,
+            preset_key=self.key,
+            rules_verified=bool(self.verified_on and self.source_url),
         )
 
     def to_dict(self) -> dict:
@@ -786,7 +796,130 @@ for _p in PROP_FIRM_PRESETS:
         object.__setattr__(_p, "source_note", ((_p.source_note + " ") if _p.source_note else "") + _note)
 del _p
 
+# 2026-10 audit: verification stamps. Only rows whose own source_note records a direct check of the
+# firm's page are stamped; everything else stays unverified (verified_on == "") and is therefore NOT
+# READY-eligible until someone checks it and adds a row here.
+_VERIFIED_STAMPS = {
+    "ftmo_10k": ("2026-09-13", "https://ftmo.com/en/trading-objectives/", "primary"),
+    "ftmo_100k": ("2026-09-13", "https://ftmo.com/en/trading-objectives/", "primary"),
+    "ftmo_200k": ("2026-09-13", "https://ftmo.com/en/trading-objectives/", "primary"),
+    # lucid_50k: dd/lock/daily-loss fields checked 2026-10-07 against a secondary table (tradetanto.com),
+    # plus pricing aggregators 2026-10-11 -- secondary tier, confirm on lucidtrading.com before paying.
+    "lucid_50k": ("2026-10-07", "https://tradetanto.com/learn/lucid-trading-rules-explained-every-plan-rule-and-limit", "secondary"),
+}
+for _p in PROP_FIRM_PRESETS:
+    _st = _VERIFIED_STAMPS.get(_p.key)
+    if _st:
+        object.__setattr__(_p, "verified_on", _st[0])
+        object.__setattr__(_p, "source_url", _st[1])
+        object.__setattr__(_p, "verification_tier", _st[2])
+del _p, _st
+
 _BY_KEY: dict[str, PropFirmPreset] = {p.key: p for p in PROP_FIRM_PRESETS}
+
+
+# ---------------------------------------------------------------------------
+# Firm fee & reset table (2026-10 audit, build item 2).
+#
+# The EV verdict (app.orchestration.ev_verdict) needs real money numbers: what one attempt
+# costs, what a reset costs, how much of a payout the trader keeps, and whether the firm
+# actually permits the automation being backtested. Only entries below with a source_url and
+# date_checked are real; a preset with NO entry has no fee data and the EV verdict says so
+# instead of guessing. ``written_confirmation`` is True only once the firm has confirmed in
+# WRITING (email / support ticket) that THIS strategy's automation style is permitted --
+# a published help-centre line is not a confirmation for your specific bot.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FirmFeeInfo:
+    preset_key: str
+    challenge_price: float | None       # one attempt (evaluation purchase), USD; None = unknown
+    reset_price: float | None           # re-buy after a breach, USD; None = unknown (EV falls back to challenge_price)
+    profit_split_pct: float             # trader's share of payouts, %
+    source_url: str
+    date_checked: str                   # ISO date this row was checked
+    automation_policy: str              # what the firm's own text says about bots/EAs
+    written_confirmation: bool = False  # True only after the firm confirmed IN WRITING for your setup
+    source_tier: str = "secondary"      # "primary" | "secondary"
+    notes: str = ""
+
+    @property
+    def effective_reset_price(self) -> float | None:
+        return self.reset_price if self.reset_price is not None else self.challenge_price
+
+    def to_dict(self) -> dict:
+        return dict(self.__dict__)
+
+
+FIRM_FEES: dict[str, FirmFeeInfo] = {
+    # The one firm to buy first (assumption flagged in the delivery notes): Lucid Trading $50k LucidPro,
+    # chosen because the repo already carries a dedicated, rule-checked preset for it
+    # (EOD trailing + lock, soft daily loss, 3-day payouts) and the firm publishes that automation is allowed.
+    "lucid_50k": FirmFeeInfo(
+        preset_key="lucid_50k",
+        challenge_price=172.0,
+        reset_price=None,
+        profit_split_pct=90.0,
+        source_url="https://fundedtrading.com/propfirm/lucid/",
+        date_checked="2026-10-11",
+        automation_policy=(
+            "Help centre 'Permitted Activities': automated systems permitted as long as they do not exploit the "
+            "platform; HFT, latency arbitrage and reverse/hedge arbitrage prohibited "
+            "(https://intercom.help/lucid-trading/en/articles/11321405-prohibited-trading-strategies). "
+            "tradetanto.com (2026-10-11): 'Trading bots and trade copiers are allowed'; trader is responsible for software errors."
+        ),
+        written_confirmation=False,
+        source_tier="secondary",
+        notes=(
+            "$172 is the LucidPro 50K evaluation price shown by fundedtrading.com (LucidFlex 50K: $136); Lucid's price depends "
+            "on the DLL on/off option at checkout and on promotions, so CONFIRM AT CHECKOUT. Reset price was not published on any page "
+            "read -> None (the EV code then uses the challenge price as the reset cost). Profit split 90/10 and $500 minimum payout request "
+            "per proptradingvibes.com (updated 2026-10-11). Get written confirmation from Lucid support that your specific automation "
+            "(entry method, order rate, no HFT) is allowed before paying, then set written_confirmation=True."
+        ),
+    ),
+}
+
+
+def get_fee_info(preset_key: str) -> FirmFeeInfo | None:
+    """Fee/reset row for a preset, or None when no fee data has been recorded for it."""
+    return FIRM_FEES.get(preset_key)
+
+
+def fee_table() -> list[dict]:
+    """Every preset with whatever fee data exists (None fields where unknown) -- for UIs and reports."""
+    out = []
+    for p in PROP_FIRM_PRESETS:
+        f = FIRM_FEES.get(p.key)
+        out.append({
+            "preset_key": p.key, "label": p.label,
+            "challenge_price": f.challenge_price if f else None,
+            "reset_price": f.reset_price if f else None,
+            "profit_split_pct": f.profit_split_pct if f else None,
+            "source_url": f.source_url if f else "",
+            "date_checked": f.date_checked if f else "",
+            "automation_policy": f.automation_policy if f else p.algo_policy_note,
+            "written_confirmation": f.written_confirmation if f else False,
+            "rules_verified_on": p.verified_on,
+            "rules_verification_tier": p.verification_tier,
+        })
+    return out
+
+
+def is_ready_eligible(preset: "PropFirmPreset") -> bool:
+    """A preset can support a READY / HIGH CONFIDENCE verdict only if its RULES were verified
+    against a firm page (verified_on + source_url). Unverified presets cap at MARGINAL."""
+    return bool(preset.verified_on and preset.source_url)
+
+
+def is_ready_eligible_key(preset_key: str | None) -> bool:
+    if not preset_key:
+        return False
+    try:
+        return is_ready_eligible(get_preset(preset_key))
+    except KeyError:
+        return False
 
 
 def list_presets() -> list[PropFirmPreset]:

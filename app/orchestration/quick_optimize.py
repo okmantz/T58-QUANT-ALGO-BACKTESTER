@@ -64,7 +64,8 @@ that gap several ways at once:
      too (best-effort, same as Full Pipeline treats them), so Quick
      Optimize is never the tool that "looked safe" purely because it
      never checked.
-  5. QuickOptimizeConfig.reserve_holdout (default False, opt-in) carves
+  5. QuickOptimizeConfig.reserve_holdout (default True since the 2026-10 audit; turning it off
+     requires allow_no_holdout=True, otherwise the run refuses to rank) carves
      off the same trailing holdout_frac of `df` Full Pipeline reserves,
      runs the baseline/GA/final steps only against the remaining dev
      slice, and additionally reports the final configuration's
@@ -283,8 +284,15 @@ class QuickOptimizeConfig:
     # exists so a caller who wants a less-than-100%-circular number out of
     # this fast tool can opt into one without waiting for a full Full
     # Pipeline run -- not so this tool can claim to replace that run.
-    reserve_holdout: bool = False
+    # 2026-10 audit fix: the holdout is now ON by default. A quick-optimize
+    # ranking computed on the same bars the search scored is selection, not
+    # validation, so every pass rate it printed was inflated. Turning the
+    # holdout off now needs the explicit ``allow_no_holdout=True`` escape
+    # hatch (tests / throw-away exploration); without it run_quick_optimize
+    # refuses to rank rather than print an inflated number.
+    reserve_holdout: bool = True
     holdout_frac: float = 0.2
+    allow_no_holdout: bool = False
 
     # v5 READY acceptance gate: the winning configuration must clear ALL
     # three of (a) per-attempt (single-account, NOT chain-level)
@@ -595,6 +603,12 @@ def run_quick_optimize(
             progress_cb(msg)
 
     cfg = cfg or QuickOptimizeConfig()
+    if not cfg.reserve_holdout and not getattr(cfg, "allow_no_holdout", False):
+        raise RefinementError(
+            "Quick Optimize refuses to rank candidates without a reserved holdout: every pass rate "
+            "computed on the bars the search scored is inflated. Enable reserve_holdout, or pass "
+            "allow_no_holdout=True to explicitly accept an in-sample-only ranking."
+        )
     t0 = time.time()
     warnings: list[str] = []
     display_name = _display_name(strategy)
@@ -961,7 +975,9 @@ def run_quick_optimize(
         lookahead_note = _lh_result.summary()
         log(f"  Lookahead check (final configuration): {lookahead_note}")
     except Exception as exc:  # noqa: BLE001 -- best-effort validation step, same treatment as the ICIR block above
-        lookahead_note = f"Lookahead check failed to run (skipped, best-effort only): {exc}"
+        # 2026-10 audit: a crash is a FAILURE of the gate, not a pass.
+        lookahead_bug_detected = True
+        lookahead_note = f"Lookahead check CRASHED ({type(exc).__name__}: {exc}) -- treated as a failed gate, not a pass."
         log(f"  {lookahead_note}")
 
     # v5 READY acceptance gate -- evaluated below, right after the

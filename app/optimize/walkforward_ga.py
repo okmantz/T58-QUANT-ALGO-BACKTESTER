@@ -28,6 +28,16 @@ harder": the optimizer can still evolve toward whatever works, but
 "works" is now defined as "keeps working on data it never got to fit
 against," across every generation, not just at a final holdout check
 tacked on at the end.
+
+IMPORTANT (2026-10 audit): the chained score above is *selection*, not
+validation. Each fixed genome is scored on every fold's test slice and the
+winner is the genome that scored best there, so those test slices have
+influenced the choice. The honest out-of-sample figure is per-fold
+re-optimization: run a fresh optimizer on each fold's TRAIN slice only, apply
+its winner to that fold's TEST slice, and take the MEDIAN fold test score
+(``per_fold_reoptimize=True`` -> WalkforwardGAResult.honest_median_fold_score /
+.headline_score). The chained score is kept as ``selection_chained_score``, a
+diagnostic. Only the reserved holdout (never seen by any of this) is clean.
 """
 from __future__ import annotations
 
@@ -272,6 +282,19 @@ class WalkforwardGAResult:
     # UPGRADE (optimizer core): evaluation-count transparency -- see
     # app.optimize.refinement.RefinementResult's identical field.
     total_evaluations: int = 0
+    # 2026-10 audit: per-fold re-optimization (see module docstring).
+    # selection_chained_score == best.fitness: the chained test-slice score the GA
+    # SELECTED on -- a diagnostic, not out-of-sample evidence.
+    selection_chained_score: float | None = None
+    honest_median_fold_score: float | None = None
+    honest_fold_scores: list = field(default_factory=list)
+
+    @property
+    def headline_score(self) -> float | None:
+        """The number to quote as "out-of-sample": the median per-fold test score from
+        per-fold re-optimization. None when per-fold re-optimization was not run -- callers
+        must not substitute the chained selection score."""
+        return self.honest_median_fold_score
 
 
 class WalkforwardGACancelled(Exception):
@@ -331,8 +354,15 @@ def run_walkforward_aware_refinement(
     cancel_event: "threading.Event | None" = None,
     preflight: bool = True,
     batch_progress_cb: "Callable[[int, int], None] | None" = None,
+    per_fold_reoptimize: bool = False,
 ) -> WalkforwardGAResult:
     """
+    per_fold_reoptimize: when True, after the search a fresh small optimizer is run on each
+    fold's TRAIN slice only (app.validation.walk_forward_opt.run_walk_forward_optimization) and
+    the MEDIAN fold test score is stored as honest_median_fold_score / headline_score. The
+    chained score the GA selected on stays available as selection_chained_score (diagnostic).
+    False keeps the legacy behaviour (no extra compute) for callers that only want the search.
+
     preflight: False skips this function's own full-data signal check (the
     caller already ran an equivalent full backtest). batch_progress_cb(done,
     total) is called as genome evaluations finish (for live progress bars).
@@ -914,6 +944,36 @@ def run_walkforward_aware_refinement(
                 config=_cc, code_text=_ct, code_extension=_ce,
             ))
 
+        honest_median = None
+        honest_scores: list = []
+        if per_fold_reoptimize:
+            try:
+                from app.validation.walk_forward_opt import run_walk_forward_optimization
+                log("Per-fold re-optimization: fresh optimizer on each fold's TRAIN slice only...")
+                _wf_cfg = replace(
+                    cfg,
+                    population_size=max(4, min(int(cfg.population_size), 8)),
+                    generations=max(2, min(int(cfg.generations), 3)),
+                    search_monte_carlo_sims=min(int(cfg.search_monte_carlo_sims), 200),
+                )
+                _wf = run_walk_forward_optimization(
+                    df, strategy, risk, prop_rules, mc_config, n_folds=n_folds, window_mode=window_mode,
+                    train_frac=train_frac, refine_cfg=_wf_cfg, progress_cb=progress_cb,
+                    compute_in_sample_reference=False,
+                )
+                honest_scores = list(_wf.fold_test_fitnesses)
+                honest_median = _wf.median_fold_test_fitness
+                warnings.extend(_wf.warnings)
+                if honest_median is not None and math.isfinite(best_ever.fitness) and math.isfinite(honest_median) \
+                        and best_ever.fitness - honest_median > 0.3 * (abs(best_ever.fitness) or 1.0):
+                    warnings.append(
+                        f"Selection score {best_ever.fitness:.3f} vs median per-fold re-optimized test score "
+                        f"{honest_median:.3f}: the chained score is inflated by selection; quote the median."
+                    )
+            except Exception as exc:  # noqa: BLE001 -- failure means NO honest score, never a silent pass
+                honest_median = None
+                warnings.append(f"Per-fold re-optimization failed ({type(exc).__name__}: {exc}); no honest out-of-sample score is available.")
+
         elapsed = time.time() - t0
         log(f"Walk-forward-aware GA complete in {elapsed:.1f}s.")
 
@@ -930,6 +990,9 @@ def run_walkforward_aware_refinement(
             warnings=warnings,
             max_test_bar_used=max_test_bar_used,
             total_evaluations=total_evaluations[0],
+            selection_chained_score=best_ever.fitness if math.isfinite(best_ever.fitness) else None,
+            honest_median_fold_score=honest_median if (honest_median is not None and math.isfinite(honest_median)) else None,
+            honest_fold_scores=honest_scores,
         )
     finally:
         if tmp_dir is not None:

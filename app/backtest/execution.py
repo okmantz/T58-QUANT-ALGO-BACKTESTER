@@ -569,6 +569,16 @@ def run_execution(
                 dtype=bool, count=n,
             )
 
+    # 2026-10 audit (behaviour rules): recurring clock windows (America/Chicago wall time) where new entries are refused.
+    _nbw = getattr(risk, "news_blackout_windows", None)
+    if _nbw and n:
+        try:
+            from app.backtest.behavior_rules import parse_windows, window_mask
+            _news_blackout_bar = _news_blackout_bar | window_mask(ts, parse_windows(_nbw))
+        except Exception as _e:  # noqa: BLE001
+            import warnings
+            warnings.warn(f"news_blackout_windows could not be applied ({_e}); window blackout is DISABLED for this run.", RuntimeWarning)
+
     # P2-6 (weekend hold): bar_dates above is wall-clock (see the P2-3
     # fix), so day-of-week here is the calendar day the data was recorded
     # in, not UTC. _week_ends_at[i] is True when the next bar belongs to
@@ -590,6 +600,16 @@ def run_execution(
     # run without it is byte-identical to before.
     _flat_zone = np.zeros(n, dtype=bool)
     _flatten_str = getattr(prop_rules, "flatten_time_ct", None) if prop_mode else None
+    # 2026-10 audit: RiskConfig.flatten_time_ct works without prop mode; the earlier time wins when both are set.
+    _risk_flat = getattr(risk, "flatten_time_ct", None)
+    if _risk_flat:
+        try:
+            _rfm = int(str(_risk_flat).split(":")[0]) * 60 + int(str(_risk_flat).split(":")[1])
+            _pfm = (int(str(_flatten_str).split(":")[0]) * 60 + int(str(_flatten_str).split(":")[1])) if _flatten_str else None
+            if _pfm is None or _rfm < _pfm:
+                _flatten_str = str(_risk_flat)
+        except Exception:  # noqa: BLE001
+            pass
     if _flatten_str and n:
         try:
             _fh, _fm = (int(x) for x in str(_flatten_str).split(":"))

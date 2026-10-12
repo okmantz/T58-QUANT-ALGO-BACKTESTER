@@ -154,8 +154,23 @@ def _save_runs(runs: list[dict[str, Any]]) -> None:
 
 def record_run(report: dict, paths: dict, backtest_result=None) -> None:
     """Append a compact summary of a just-generated report. Never raises --
-    a history-recording failure must not surface as a broken backtest run."""
+    a history-recording failure must not surface as a broken backtest run.
+
+    2026-10 audit: test runs must never land in the real history file (96 of 147 rows were fake 'TEST' runs
+    that sat beside real results in every leaderboard). Two guards: (1) under pytest, a write to the repository's
+    own data/run_history.json is skipped; (2) a row that looks like a test run (see scripts/prune_run_history.py)
+    is skipped (when writing the repository's own history file) unless T58_RECORD_TEST_RUNS=1."""
     try:
+        import os as _os
+        _repo_hist = (Path(__file__).resolve().parents[2] / "data" / "run_history.json").resolve()
+        _is_repo_file = history_path().resolve() == _repo_hist
+        if _os.environ.get("PYTEST_CURRENT_TEST") and _is_repo_file:
+            return
+        _inst = str((report.get("strategy", {}) or {}).get("instrument") or "").strip().lower()
+        _nm = str((report.get("strategy", {}) or {}).get("name") or "").strip().lower()
+        if _is_repo_file and (_inst in ("test", "test.csv") or _inst.endswith("_test") or _nm.startswith(("test_", "batch_test"))) \
+                and _os.environ.get("T58_RECORD_TEST_RUNS") != "1":
+            return
         strat = report.get("strategy", {})
         stats = report.get("historical_backtest", {}).get("statistics", {})
         prop_single = report.get("prop_firm_single_run", {})
