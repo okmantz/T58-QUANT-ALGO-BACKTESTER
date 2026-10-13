@@ -31,7 +31,7 @@ RULES (America/New_York, regular session 09:30-16:00 only)
                   the trail only starts to bite after the trade is ~+1R in profit.
   Target          none (the edge is a few large winners; capping them did not help in testing).
   Exit            stop, trail, or flat at 15:55 ET.
-  Weekdays only; partial-session days (holidays, half-days, data gaps) are skipped.
+  Weekdays only; a check is skipped if more than 3% of the bars so far today are missing (data gaps).
 
 WHAT WAS MEASURED (NQ 1-min, 2020-01 to 2026-02, $0.25/side slippage + $1.42/micro commission)
   Holdout caveat: the 2024-07+ numbers were visible while two choices (the gap filter and the 0.7 stop
@@ -149,10 +149,9 @@ def generate_signals(df):
         if m % bar == 0:
             checks[m // bar - 1] = True              # slot index of the bar that CLOSES at minute m
 
-    n_bars = ok.sum(axis=1)
+    # bars seen so far today, by slot (causal: never uses how many bars the day ends up having)
+    seen = np.cumsum(ok, axis=1)
     for d in range(ATR_DAYS + 1, nd):
-        if n_bars[d] < 0.97 * S:                      # holiday / half-day / data-gap session: sit out
-            continue
         o = O[d, 0]
         pc = last_close[d - 1]
         if not (np.isfinite(o) and np.isfinite(pc)):
@@ -210,7 +209,7 @@ def generate_signals(df):
                             stop = min(stop, ext + trail_d)
 
             # 3) decision at the close of this bar
-            if side == 0 and k in checks and k > last_exit_slot:
+            if side == 0 and k in checks and k > last_exit_slot and seen[d, k] >= 0.97 * (k + 1):
                 c = C[d, k]
                 hh = np.nanmax(H[d, :k + 1])
                 ll = np.nanmin(L[d, :k + 1])
