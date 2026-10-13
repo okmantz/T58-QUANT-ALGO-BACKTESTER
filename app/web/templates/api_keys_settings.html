@@ -126,10 +126,45 @@
   </div>
   <div class="card">
     <h2>London Strategic Edge</h2>
-    <p class="field-note" style="margin-bottom:8px;">Secure storage for this key only -- no integration is built against this service yet, so Test Connection will say so rather than pretend to succeed.</p>
+    <p class="field-note" style="margin-bottom:8px;">Used by the Market Data page's London Strategic Edge fetch card.</p>
     <label>API key</label>
     <input type="password" name="london_strategic_edge_key" value="" placeholder="{% if api_keys.london_strategic_edge_key %}(unchanged -- leave blank to keep it){% else %}API key{% endif %}">
     <p class="status">{{ status_icon(api_keys.london_strategic_edge_key) }}</p>
+  </div>
+  <div class="card">
+    <h2>Twelve Data</h2>
+    <p class="field-note" style="margin-bottom:8px;">Free tier: intraday FX/indices/ETFs; futures need a paid plan. Stored securely; used by the data fetchers in app.data.free_sources.</p>
+    <label>API key</label>
+    <input type="password" name="twelve_data_api_key" value="" placeholder="{% if api_keys.twelve_data_api_key %}(unchanged -- leave blank to keep it){% else %}API key{% endif %}">
+    <p class="status">{{ status_icon(api_keys.twelve_data_api_key) }}</p>
+  </div>
+  <div class="card">
+    <h2>Polygon.io</h2>
+    <p class="field-note" style="margin-bottom:8px;">Free tier: delayed US stocks/ETFs, limited history. Stored securely; used by the data fetchers in app.data.free_sources.</p>
+    <label>API key</label>
+    <input type="password" name="polygon_api_key" value="" placeholder="{% if api_keys.polygon_api_key %}(unchanged -- leave blank to keep it){% else %}API key{% endif %}">
+    <p class="status">{{ status_icon(api_keys.polygon_api_key) }}</p>
+  </div>
+  <div class="card">
+    <h2>Tiingo</h2>
+    <p class="field-note" style="margin-bottom:8px;">Free tier: US equities/ETFs/crypto/FX daily + some intraday. Stored securely; used by the data fetchers in app.data.free_sources.</p>
+    <label>API key</label>
+    <input type="password" name="tiingo_api_key" value="" placeholder="{% if api_keys.tiingo_api_key %}(unchanged -- leave blank to keep it){% else %}API key{% endif %}">
+    <p class="status">{{ status_icon(api_keys.tiingo_api_key) }}</p>
+  </div>
+  <div class="card">
+    <h2>Alpha Vantage</h2>
+    <p class="field-note" style="margin-bottom:8px;">Free tier: ~25 requests/day; FX, equities, crypto. Stored securely; used by the data fetchers in app.data.free_sources.</p>
+    <label>API key</label>
+    <input type="password" name="alpha_vantage_api_key" value="" placeholder="{% if api_keys.alpha_vantage_api_key %}(unchanged -- leave blank to keep it){% else %}API key{% endif %}">
+    <p class="status">{{ status_icon(api_keys.alpha_vantage_api_key) }}</p>
+  </div>
+  <div class="card">
+    <h2>Databento</h2>
+    <p class="field-note" style="margin-bottom:8px;">Paid, per-use: real CME futures (ES/NQ/GC) tick/1m data -- the best source for futures. Stored securely; used by the data fetchers in app.data.free_sources.</p>
+    <label>API key</label>
+    <input type="password" name="databento_api_key" value="" placeholder="{% if api_keys.databento_api_key %}(unchanged -- leave blank to keep it){% else %}API key{% endif %}">
+    <p class="status">{{ status_icon(api_keys.databento_api_key) }}</p>
   </div>
   <button class="submit-btn" type="submit">Save data keys</button>
 </form>
