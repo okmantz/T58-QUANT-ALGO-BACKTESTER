@@ -167,7 +167,30 @@ def infer_timeframe_label(df: pd.DataFrame) -> str:
         return "unknown"
 
 
-def resample_ohlcv(df: pd.DataFrame, timeframe_label: str) -> pd.DataFrame:
+_CME_SESSION_TZ = "America/Chicago"
+_CME_SESSION_OPEN_HOUR = 17   # 17:00 CT: Globex reopens after the daily halt = start of the trading day
+
+
+def looks_like_cme_session_data(df: pd.DataFrame) -> bool:
+    """Content-based detector (AUDIT 2026-10-12): True for intraday futures
+    data with CME's daily halt, i.e. the quietest weekday UTC hour (21 or 22)
+    holds <25% of the median hour's bars. Spot FX / crypto trade through that
+    hour, so they return False. Never raises."""
+    try:
+        ts = pd.to_datetime(df["timestamp"], errors="coerce").dropna()
+        if len(ts) < 5000 or ts.diff().median() > pd.Timedelta(minutes=15):
+            return False
+        if ts.dt.tz is not None:
+            ts = ts.dt.tz_convert("UTC")
+        wk = ts[ts.dt.dayofweek < 5]
+        counts = wk.dt.hour.value_counts().reindex(range(24), fill_value=0)
+        quiet = int(counts.idxmin())
+        return quiet in (21, 22) and counts.min() < 0.25 * float(counts.median())
+    except Exception:
+        return False
+
+
+def resample_ohlcv(df: pd.DataFrame, timeframe_label: str, anchor: str = "auto") -> pd.DataFrame:
     """Resamples a standardized OHLCV dataframe (timestamp/open/high/low/
     close[/volume]) up to a coarser bar size. Standard aggregation: open
     = first, high = max, low = min, close = last, volume = sum (if
@@ -176,17 +199,50 @@ def resample_ohlcv(df: pd.DataFrame, timeframe_label: str) -> pd.DataFrame:
     data actually does. The returned dataframe's `timestamp` column is
     the bin's START time (pandas' own resample default), a plain
     RangeIndex, matching every other OHLCV dataframe convention already
-    used across this app (see app.data.multi_timeframe)."""
+    used across this app (see app.data.multi_timeframe).
+
+    anchor (AUDIT 2026-10-12, F-DAILY):
+      "utc"          bins start at UTC midnight (the old behaviour).
+      "cme_session"  bins start at the CME trading-day open, 17:00
+                     America/Chicago (DST-aware): a "1d" bar is one real
+                     Globex trading day instead of two half-days split at
+                     ~19:00 CT, and 4h/6h/8h/12h bars never straddle the
+                     session open.
+      "auto" (default) "cme_session" when the bar size is >= 2 hours AND the
+                     data shows CME's daily halt (see looks_like_cme_session_data);
+                     otherwise "utc". Bars under 2 hours are identical either
+                     way because Chicago's UTC offset is a whole number of hours."""
     minutes = parse_timeframe_label(timeframe_label)
     freq = f"{round(minutes)}min" if minutes == int(minutes) else f"{minutes}min"
     work = df.copy()
     work["timestamp"] = pd.to_datetime(work["timestamp"])
-    work = work.sort_values("timestamp").set_index("timestamp")
+    work = work.sort_values("timestamp")
 
+    if anchor not in ("auto", "utc", "cme_session"):
+        raise ValueError(f"anchor must be 'auto', 'utc' or 'cme_session', got {anchor!r}")
+    use_session = anchor == "cme_session" or (anchor == "auto" and minutes >= 120 and looks_like_cme_session_data(work))
+
+    work = work.set_index("timestamp")
     agg = {"open": "first", "high": "max", "low": "min", "close": "last"}
     if "volume" in work.columns:
         agg["volume"] = "sum"
     agg = {k: v for k, v in agg.items() if k in work.columns}
+
+    if use_session:
+        idx = work.index
+        was_naive = idx.tz is None
+        local = (idx.tz_localize("UTC") if was_naive else idx).tz_convert(_CME_SESSION_TZ)
+        shift = pd.Timedelta(hours=_CME_SESSION_OPEN_HOUR)
+        # Session clock: local wall time minus 17h, so each trading day runs 00:00-24:00.
+        # Globex is closed through the ambiguous/non-existent DST hours, so naive wall time is safe.
+        work.index = (local.tz_localize(None) - shift)
+        res = work.resample(freq, origin="start_day").agg(agg)
+        res = res.dropna(subset=["close"]) if "close" in agg else res
+        start = (res.index + shift).tz_localize(_CME_SESSION_TZ, ambiguous="NaT", nonexistent="shift_forward").tz_convert("UTC")
+        res.index = start.tz_localize(None) if was_naive else start
+        res = res[~res.index.isna()]
+        res.index.name = "timestamp"
+        return res.reset_index()
 
     resampled = work.resample(freq).agg(agg).dropna(subset=["close"]) if "close" in agg else work.resample(freq).agg(agg)
     return resampled.reset_index()
