@@ -97,6 +97,7 @@ class PropFirmPreset:
     # trailing_distance_basis "account" = fixed dollar distance (account_size x pct),
     # how futures firms state a trailing MLL; "peak" = % of peak (legacy).
     trailing_distance_basis: str = "peak"
+    funded_starts_fresh: bool = False   # see PropRules.funded_starts_fresh
     max_eval_calendar_days: int | None = None   # eval time limit in calendar days (None = no limit)
     # Futures session flatten: positions must be flat by this America/Chicago
     # wall-clock time ("15:45" = 4:45 pm ET). None = rule not modeled.
@@ -150,6 +151,7 @@ class PropFirmPreset:
             max_contracts=self.max_contracts,
             rules_checked_on=self.rules_checked_on,
             trailing_distance_basis=self.trailing_distance_basis,
+            funded_starts_fresh=self.funded_starts_fresh,
             max_eval_calendar_days=self.max_eval_calendar_days,
             flatten_time_ct=self.flatten_time_ct,
             preset_key=self.key,
@@ -412,6 +414,7 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
         drawdown_type="trailing", drawdown_check_mode="eod",
         trailing_lock=True, trailing_lock_offset_pct=0.0,   # 2026-10 audit: MLL stops trailing at the starting balance
         floating_drawdown_mode="adverse",
+        trailing_distance_basis="account", funded_starts_fresh=True,   # 2026-10-12 audit: fixed-$ MLL; XFA starts fresh at $0 (help.topstep.com/8284204)
         consistency_rule_pct=55.0, min_trading_days=2,       # 2026-10 audit: Combine best-day cap 50-55%; 55 = Topstep's stated figure
         payout_frequency_days=5,
         winning_days_for_payout=5, min_winning_day_profit=150.0,
@@ -451,6 +454,9 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
         daily_loss_limit_pct=100.0,
         max_drawdown_pct=3.0,
         drawdown_type="trailing", drawdown_check_mode="eod",
+        trailing_lock=True, trailing_lock_offset_pct=0.0,     # 2026-10-12 audit: was missing -- 100k MLL ($3,000) also locks at the starting balance, like the 50k
+        floating_drawdown_mode="adverse",
+        trailing_distance_basis="account", funded_starts_fresh=True,
         consistency_rule_pct=50.0, min_trading_days=2,
         payout_frequency_days=5,
         winning_days_for_payout=5, min_winning_day_profit=150.0,

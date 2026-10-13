@@ -527,6 +527,10 @@ class PropAccount:
                     self.stage = "funded"
                     self.passed_evaluation = True
                     self.days_to_pass = trading_days_so_far
+                    if getattr(r, "funded_starts_fresh", False):
+                        # AUDIT 2026-10-12: fresh funded account (Topstep XFA).
+                        self.balance = float(r.account_size)
+                        self.trailing_peak = float(r.account_size)
                     self.payout_baseline_balance = self.balance
                     self.best_day_since_baseline = 0.0
                     self.funded_start_day_index = cur
@@ -537,7 +541,7 @@ class PropAccount:
                     _win_threshold = getattr(r, "min_winning_day_profit", 0.0)
                     self._winning_days_before_funded = sum(
                         1 for d, p in self.day_profit_history.items()
-                        if d < cur and p >= _win_threshold
+                        if (d <= cur if getattr(r, 'funded_starts_fresh', False) else d < cur) and p >= _win_threshold
                     )
         elif self.stage == "funded":
             self._maybe_payout(cur)

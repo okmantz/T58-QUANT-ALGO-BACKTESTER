@@ -149,6 +149,13 @@ class PropRules:
     # (+ trailing_lock_offset_pct of it). False = the floor trails forever.
     trailing_lock_offset_pct: float = 0.0
     trailing_distance_basis: str = "peak"
+    # AUDIT 2026-10-12 (F-FUNDED): True = the funded stage starts as a FRESH
+    # account (balance, trailing peak and payout baseline reset to
+    # account_size when the evaluation is passed), which is how Topstep's
+    # Express Funded Account works (starts at $0 with the full MLL). False
+    # (legacy) carries evaluation profit and the evaluation high-water mark
+    # into the funded stage, which overstates funded survival/payout odds.
+    funded_starts_fresh: bool = False
     # v9.16: futures session flatten, America/Chicago "HH:MM" ("15:45" = 4:45 pm ET).
     # The bar engine force-closes any open position at the first bar at/after this
     # time and blocks entries until the 17:00 CT session roll. None = off.
