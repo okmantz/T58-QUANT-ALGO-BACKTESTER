@@ -12024,11 +12024,11 @@ class MainWindow:
 
         self._build_ollama_settings("apikeys")  # saves Ollama fields via the shared section
         existing = load_settings()
-        save_settings(ApiKeysSettings(
-            fred_api_key=existing.fred_api_key,
+        import dataclasses as _dc
+        save_settings(_dc.replace(
+            existing,
             openai_api_key=self.apikeys_openai.get_str().strip(),
             claude_api_key=self.apikeys_claude.get_str().strip(),
-            london_strategic_edge_key=existing.london_strategic_edge_key,
         ))
         self.apikeys_ai_status.config(text="\u25cf  AI keys saved.", fg=GREEN)
 
@@ -12047,10 +12047,10 @@ class MainWindow:
         from app.accounts.api_keys import ApiKeysSettings, load_settings, save_settings
 
         existing = load_settings()
-        save_settings(ApiKeysSettings(
+        import dataclasses as _dc
+        save_settings(_dc.replace(
+            existing,
             fred_api_key=self.apikeys_fred.get_str().strip(),
-            openai_api_key=existing.openai_api_key,
-            claude_api_key=existing.claude_api_key,
             london_strategic_edge_key=self.apikeys_lse.get_str().strip(),
         ))
         self.apikeys_fred_status.config(text="\u25cf  Saved.", fg=GREEN)
