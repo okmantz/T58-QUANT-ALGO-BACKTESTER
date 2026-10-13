@@ -3893,11 +3893,11 @@ def api_keys_save_ai():
         vision_model=(form.get("ollama_vision_model") or existing_ollama.vision_model).strip(),
     ))
     existing_keys = load_api_keys_settings()
-    save_api_keys_settings(existing_keys.__class__(
-        fred_api_key=existing_keys.fred_api_key,
+    import dataclasses as _dc
+    save_api_keys_settings(_dc.replace(
+        existing_keys,
         openai_api_key=(form.get("openai_api_key") or existing_keys.openai_api_key),
         claude_api_key=(form.get("claude_api_key") or existing_keys.claude_api_key),
-        london_strategic_edge_key=existing_keys.london_strategic_edge_key,
     ))
     return redirect(url_for("api_keys_settings_form"))
 
@@ -3919,11 +3919,11 @@ def api_keys_save_data():
     from app.accounts.api_keys import save_settings as save_api_keys_settings, load_settings as load_api_keys_settings
     form = request.form
     existing = load_api_keys_settings()
-    save_api_keys_settings(existing.__class__(
-        fred_api_key=(form.get("fred_api_key") or existing.fred_api_key),
-        openai_api_key=existing.openai_api_key,
-        claude_api_key=existing.claude_api_key,
-        london_strategic_edge_key=(form.get("london_strategic_edge_key") or existing.london_strategic_edge_key),
+    import dataclasses as _dc
+    _data_fields = ("fred_api_key", "london_strategic_edge_key", "twelve_data_api_key", "polygon_api_key",
+                    "tiingo_api_key", "alpha_vantage_api_key", "databento_api_key")
+    save_api_keys_settings(_dc.replace(
+        existing, **{f: (form.get(f) or getattr(existing, f)) for f in _data_fields},
     ))
     return redirect(url_for("api_keys_settings_form"))
 
