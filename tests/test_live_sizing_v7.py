@@ -426,6 +426,9 @@ def test_engine_skips_sub_one_contract_entry(tmp_path):
 
 def test_web_deploy_disabled_by_default(monkeypatch):
     monkeypatch.delenv("T58_ENABLE_WEB_LIVE_DEPLOY", raising=False)
+    # isolate from a developer machine that already flipped the in-app switch
+    import app.live_deploy.web_deploy_config as _wdc
+    monkeypatch.setattr(_wdc, "_persisted_enabled", lambda: False)
     assert web_live_deploy_enabled() is False
     allowed, code, msg = check_web_live_deploy(True, True)
     assert allowed is False and code == 403

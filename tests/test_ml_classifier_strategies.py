@@ -18,10 +18,20 @@ from app.backtest.risk import RiskConfig
 from app.strategy.python import PythonStrategy
 from app.validation.walk_forward_opt import _run_fold_test, _wants_retrain_context, build_folds
 
-STRATEGY_PATHS = [
+import os as _os
+
+_ALL_STRATEGY_PATHS = [
     "strategies/python/ml_classifier_direction.py",
     "strategies/python/ml_classifier_gbdt_direction.py",
     "strategies/python/ml_classifier_random_forest.py",
+]
+# These three files were CUT from the shipped repo (see
+# strategies/AUDIT_2026-10_RESULTS.md: kept only as a local test fixture), so a
+# clean checkout does not contain them. Parametrize over the ones that exist;
+# if none do, a single explicit skip is reported instead of 18 failures.
+STRATEGY_PATHS = [p for p in _ALL_STRATEGY_PATHS if _os.path.exists(p)] or [
+    pytest.param(_ALL_STRATEGY_PATHS[0], marks=pytest.mark.skip(
+        reason="ml_classifier_* strategy files are not shipped in the repo (CUT in the 2026-10 audit)"))
 ]
 
 # The Forest file's feature set includes a 200-span EMA, so it needs a

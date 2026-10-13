@@ -53,11 +53,16 @@ def test_chat_when_ollama_disabled_returns_error_without_network(monkeypatch):
 def test_chat_success_returns_reply(monkeypatch):
     captured = {}
 
-    class Resp:
-        def raise_for_status(self): pass
-        def json(self): return {"message": {"content": "hello back"}}
+    import json as _json
 
-    def fake_post(url, headers=None, json=None, timeout=None):
+    class Resp:
+        # The transport streams NDJSON (v9.14), so the fake must too.
+        def raise_for_status(self): pass
+        def iter_lines(self, decode_unicode=False):
+            yield _json.dumps({"message": {"content": "hello back"}, "done": True})
+        def close(self): pass
+
+    def fake_post(url, headers=None, json=None, timeout=None, stream=False):
         captured["url"], captured["body"] = url, json
         return Resp()
 
@@ -66,7 +71,7 @@ def test_chat_success_returns_reply(monkeypatch):
 
     assert (reply, error) == ("hello back", None)
     assert captured["url"].endswith("/api/chat")
-    assert captured["body"]["stream"] is False
+    assert captured["body"]["stream"] is True
     assert "Job x (ES): done" in captured["body"]["messages"][0]["content"]
 
 
@@ -85,4 +90,4 @@ def test_chat_timeout_is_fail_safe(monkeypatch):
 
     monkeypatch.setattr(requests, "post", boom)
     reply, error = _client().chat("P", "hi")
-    assert reply == "" and "didn't respond in time" in error
+    assert reply == "" and "sent nothing" in error

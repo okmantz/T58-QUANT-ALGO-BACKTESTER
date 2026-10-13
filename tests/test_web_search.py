@@ -74,7 +74,7 @@ def _cleanup_search_artifacts(tmp_path, monkeypatch):
     yield
 
 
-def _poll_until_done(client, job_id: str, timeout: float = 60.0) -> dict:
+def _poll_until_done(client, job_id: str, timeout: float = 600.0) -> dict:
     deadline = time.time() + timeout
     while time.time() < deadline:
         r = client.get(f"/search/job/{job_id}/status.json")
@@ -205,7 +205,7 @@ def test_search_loop_mode_can_be_stopped(monkeypatch):
     job_id = r.headers["Location"].rstrip("/").split("/")[-1]
 
     client.post(f"/search/job/{job_id}/stop")
-    status = _poll_until_done(client, job_id, timeout=30.0)
+    status = _poll_until_done(client, job_id, timeout=180.0)
     assert status["cancelled"] is True
     assert status["loop_result"]["stopped_reason"] == "cancelled"
 

@@ -52,6 +52,24 @@ _INDICATOR_FNS = (
 )
 
 
+# Inline stand-in for the old shipped champion files (removed from the repo in
+# the 2026-10 strategy audit): MACD histogram + EMA trend filter.
+_MACD_CFG = {
+    "name": "MACD hist trend",
+    "timeframe": "15m",
+    "entry_conditions": {
+        "long": [
+            {"left": {"type": "macd_histogram", "period": 12, "field": "close"}, "operator": ">", "right": {"type": "value", "value": 0}},
+            {"left": {"type": "close", "field": "close", "period": 1}, "operator": ">", "right": {"type": "ema", "period": 50, "field": "close"}},
+        ],
+        "long_connectors": ["AND"],
+        "short": [],
+    },
+    "exit_conditions": {"long": [], "short": []},
+    "stop_loss_pips": 30.0, "take_profit_pips": 60.0,
+}
+
+
 def _load(path: Path) -> dict:
     return json.loads(path.read_text())
 
@@ -95,19 +113,26 @@ def _assert_group_parity(config: dict, frame: pd.DataFrame):
 @pytest.mark.parametrize("path", STRATEGY_FILES, ids=lambda p: p.name)
 @pytest.mark.parametrize("target", TARGETS)
 def test_shipped_strategies_translate(path, target):
-    out = translate_strategy("manual", _load(path), target)
+    try:
+        out = translate_strategy("manual", _load(path), target)
+    except TranslationError as exc:
+        # A strategy that uses a condition with no faithful native equivalent
+        # (session VWAP family, IB contraction) must be REFUSED with a message
+        # naming it -- never mistranslated. That is the contract; assert it.
+        assert "has no direct equivalent" in str(exc), str(exc)
+        return
     assert isinstance(out, str) and len(out) > 200
 
 
 def test_params_file_refuses_cleanly_not_crashes():
-    cfg = _load(MANUAL_DIR / "v9_champion_params.json")
+    cfg = {"name": "params only", "parameters": {"fast": 10, "slow": 30}}
     for target in TARGETS:
         with pytest.raises(TranslationError):
             translate_strategy("manual", cfg, target)
 
 
 def test_champion_macd_histogram_period_keyerror_regression():
-    cfg = _load(MANUAL_DIR / "v9_champion_momentum_continuation.json")
+    cfg = _MACD_CFG
     assert "ta.macd" in to_pinescript(cfg)
     assert "iMACD" in to_mql5(cfg)
     compile(to_python(cfg), "<champion>", "exec")
@@ -120,7 +145,10 @@ def test_champion_macd_histogram_period_keyerror_regression():
 @pytest.mark.parametrize("path", STRATEGY_FILES, ids=lambda p: p.name)
 def test_generated_python_runs_on_sample_data(path, tmp_path):
     frame = pd.read_csv(SAMPLE_CSV)
-    code = to_python(_load(path))
+    try:
+        code = to_python(_load(path))
+    except TranslationError as exc:
+        pytest.skip(f"strategy uses a condition the translator refuses by design: {str(exc)[:80]}")
     module_file = tmp_path / "generated_strategy.py"
     module_file.write_text(code)
     ns: dict = {}
@@ -133,6 +161,10 @@ def test_generated_python_runs_on_sample_data(path, tmp_path):
 @pytest.mark.parametrize("path", STRATEGY_FILES, ids=lambda p: p.name)
 def test_condition_groups_match_engine(path):
     frame = pd.read_csv(SAMPLE_CSV)
+    try:
+        translate_strategy("manual", _load(path), "python")
+    except TranslationError:
+        pytest.skip("strategy uses a condition the translator refuses by design (no parity to check)")
     _assert_group_parity(_load(path), frame)
 
 
@@ -202,7 +234,7 @@ def test_bos_bullish_fires_at_known_break_bar():
 # ---------------------------------------------------------------------------
 
 def test_round_trip_manual_pine_mql5_and_python_pine():
-    cfg = _load(MANUAL_DIR / "Gold Trend Breakout.json")
+    cfg = _MACD_CFG
     pine = translate_strategy("manual", cfg, "pinescript")
     assert "void OnTick" in translate_strategy("pinescript", pine, "mql5")
     py = translate_strategy("manual", cfg, "python")

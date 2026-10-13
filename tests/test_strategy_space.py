@@ -32,6 +32,30 @@ def _synthetic_df(n=2500, seed=0) -> pd.DataFrame:
     return pd.DataFrame({"timestamp": ts, "open": openp, "high": high, "low": low, "close": close, "volume": vol})
 
 
+def _vol_regime_df(n=2500, seed=0) -> pd.DataFrame:
+    """Calm/wild volatility blocks. ATR-expansion / ATR-contraction gates are
+    (correctly) single-leg flags since the A6 fix -- on the stationary-volatility
+    frame above they never fire, so the families built on them need data in
+    which volatility regimes actually change."""
+    rng = np.random.default_rng(seed)
+    ts = pd.date_range("2023-01-01", periods=n, freq="15min")
+    block = (np.arange(n) // 120) % 2
+    sigma = np.where(block == 0, 0.15, 0.9)
+    close = 100 + np.cumsum(rng.normal(0.01, 1, n) * sigma) + np.sin(np.arange(n) / 50) * 2
+    rngs = np.where(block == 0, 0.1, 0.6)
+    high = close + rng.random(n) * rngs
+    low = close - rng.random(n) * rngs
+    openp = close + rng.normal(0, 0.1, n) * sigma
+    return pd.DataFrame({"timestamp": ts, "open": openp, "high": high, "low": low, "close": close,
+                         "volume": rng.random(n) * 1000})
+
+
+FAMILIES_NEEDING_VOL_REGIMES = {
+    "bollinger_squeeze_expansion", "choppiness_gated_momentum",
+    "choppiness_gated_range_fade", "heikin_ashi_reversal",
+}
+
+
 _PYTHON_SRC = '''STRATEGY_NAME = "Test EMA Cross"
 EMA_FAST = 5
 EMA_SLOW = 15
@@ -204,7 +228,7 @@ def test_every_family_produces_valid_runnable_configs(family_name):
     which is structurally always-false and would otherwise show up as
     "zero trades" silently rather than as an explicit test failure.
     """
-    df = _synthetic_df()
+    df = _vol_regime_df() if family_name in FAMILIES_NEEDING_VOL_REGIMES else _synthetic_df()
     risk = RiskConfig()
     has_pair_data = family_name in FAMILIES_REQUIRING_PAIR_DATA
     if has_pair_data:

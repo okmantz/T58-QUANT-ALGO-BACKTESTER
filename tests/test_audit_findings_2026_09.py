@@ -200,12 +200,17 @@ class TestExec002ReentryCooldown:
         """Backward compatibility: reentry_cooldown_bars=0 explicitly set
         must reproduce the ORIGINAL (undocumented) same-bar reentry
         behavior -- a stop-out on bar 1 followed by a fresh same-direction
-        entry on that same bar (filled at the bar's open under the B2-2
-        fill-lag regime with entry_fill_lag_bars=0)."""
+        entry straight after it. Under the B2-2 fill model a market order
+        fills at a bar's OPEN, and the stop-out happens inside that same
+        bar, so a fill "on the stop-out bar" would pre-date the stop (an
+        impossible fill). The engine therefore re-enters at the NEXT bar's
+        open -- the earliest honest moment -- and cooldown=0 imposes no
+        further wait (contrast cooldown=2, which suppresses the re-entry)."""
         trades = self._run(cooldown=0)
         assert len(trades) == 2
         assert trades[0].exit_reason == "stop_loss"
-        assert trades[0].exit_time == trades[1].entry_time
+        assert trades[1].entry_time >= trades[0].exit_time
+        assert trades[1].entry_time - trades[0].exit_time <= pd.Timedelta(hours=1)
 
     def test_default_now_blocks_same_bar_reentry(self):
         """P2-1: the default is now reentry_cooldown_bars=1 -- a stop-out

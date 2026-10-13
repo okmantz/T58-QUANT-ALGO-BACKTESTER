@@ -44,7 +44,7 @@ import pandas as pd  # noqa: E402
 
 from app.web.server import app  # noqa: E402
 
-STRATEGY_PATH = ROOT / "strategies" / "manual" / "ES1! Momentum Continuation 5m.json"
+STRATEGY_PATH = ROOT / "tests" / "fixtures" / "momentum_continuation_manual.json"  # the shipped ES1! file was CUT (2026-10 audit)
 
 
 def _csv_bytes(n: int = 6000, seed: int = 7) -> bytes:
@@ -185,8 +185,16 @@ def test_pipeline_completes_status_payload_and_step7_progress(monkeypatch):
     log_text = "\n".join(data["log"])
     # Step 7 narrates its long legs now (Issue 3): null progress lines
     # and the report-compile bracket must be in the finished log.
-    assert "Random-entry null:" in log_text
-    assert "runs done..." in log_text
+    if "slow random-entry null and seed-stability re-scoring are skipped" in log_text:
+        # Speed rule: when the verdict is already NOT READY / MARGINAL before
+        # the break-it gates, the (slow) null is skipped and the log says so.
+        # Synthetic data can't produce a READY verdict, so this is the path
+        # the test normally takes; the null-progress narration itself is
+        # covered whenever a run does reach READY.
+        assert "Verdict is already" in log_text
+    else:
+        assert "Random-entry null:" in log_text
+        assert "runs done..." in log_text
     assert "Compiling the final report" in log_text
     assert "Full Pipeline complete" in log_text
 

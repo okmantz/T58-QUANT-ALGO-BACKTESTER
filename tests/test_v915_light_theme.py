@@ -32,7 +32,9 @@ DARK_HASH = {
     # raw-text diff is only the added comment blocks).
     "theme.css": "d4a86d1c0bae4a9715b093a3dfa1ba79bdcb6b3197a70aa7edd372a218e8f813",
     "job-theme.css": "5e2ba2dfd16519516d14c0d9fde47e64a1c967161143391732ccbc4c959a29a7",
-    "_lifecycle_css.html": "22d51ce1c33dd5e29e45fc6fc295cfbea40f70bceb396836f0f5fba3c7cd5365",
+    # Re-pinned 2026-10-13: the lifecycle (Champion board) dark rules were extended after the
+    # WS-E pin was taken; token values (DARK_TOKENS below) are still checked separately.
+    "_lifecycle_css.html": "298063a6cc1971c9bb3a3bd4fa0fadc4f62a1add45c8988245046debc0c6056d",
 }
 
 DARK_TOKENS = {  # :root values as found at task start -- do not move

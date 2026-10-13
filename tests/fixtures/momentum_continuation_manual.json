@@ -1,0 +1,22 @@
+{
+  "name": "Test Momentum Continuation 5m",
+  "timeframe": "5m",
+  "entry_conditions": {
+    "long": [
+      {"left": {"type": "close", "field": "close", "period": 1}, "operator": ">", "right": {"type": "ema", "period": 10, "field": "close"}},
+      {"left": {"type": "rsi", "period": 14, "field": "close"}, "operator": ">", "right": {"type": "value", "value": 52}}
+    ],
+    "long_connectors": ["AND"],
+    "short": [
+      {"left": {"type": "close", "field": "close", "period": 1}, "operator": "<", "right": {"type": "ema", "period": 10, "field": "close"}},
+      {"left": {"type": "rsi", "period": 14, "field": "close"}, "operator": "<", "right": {"type": "value", "value": 48}}
+    ],
+    "short_connectors": ["AND"]
+  },
+  "exit_conditions": {
+    "long": [{"left": {"type": "close", "field": "close", "period": 1}, "operator": "<", "right": {"type": "ema", "period": 10, "field": "close"}}],
+    "short": [{"left": {"type": "close", "field": "close", "period": 1}, "operator": ">", "right": {"type": "ema", "period": 10, "field": "close"}}]
+  },
+  "stop_loss_pips": 40,
+  "take_profit_pips": 80
+}

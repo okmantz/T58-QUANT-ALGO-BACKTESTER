@@ -99,12 +99,12 @@ def test_analyze_symbol_reports_no_data_gracefully_not_as_a_crash():
     must come back as a clear, actionable "no data" JSON message -- never
     an unhandled exception."""
     client = _make_client()
-    resp = client.get("/assistant/api/analyze-symbol?symbol=ES1!")
+    resp = client.get("/assistant/api/analyze-symbol?symbol=ZZNODATA1!")
     assert resp.status_code == 200
     assert resp.is_json
     data = resp.get_json()
     assert data["error"] is not None
-    assert "ES1!" in data["error"]
+    assert "ZZNODATA1!" in data["error"]
 
 
 def test_analyze_symbol_survives_an_unhandled_exception():
@@ -116,7 +116,7 @@ def test_analyze_symbol_survives_an_unhandled_exception():
     original = m._bar_fetcher
     m._bar_fetcher = boom
     try:
-        resp = client.get("/assistant/api/analyze-symbol?symbol=ES1!")
+        resp = client.get("/assistant/api/analyze-symbol?symbol=ZZNODATA1!")
     finally:
         m._bar_fetcher = original
 

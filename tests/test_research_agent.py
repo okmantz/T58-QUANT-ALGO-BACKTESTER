@@ -213,6 +213,14 @@ class _FakeResponse:
     def json(self):
         return {"response": self._text}
 
+    # The transport streams NDJSON (one chunk per line) since v9.14.
+    def iter_lines(self, decode_unicode=False):
+        import json as _json
+        yield _json.dumps({"response": self._text, "done": True})
+
+    def close(self):
+        pass
+
 
 def _stub_requests(monkeypatch, responses):
     """responses: list of raw text strings returned on successive POST calls."""

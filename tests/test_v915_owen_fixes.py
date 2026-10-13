@@ -22,6 +22,7 @@ Manual/Python/PineScript/MQL5 exactly like the Test page.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -39,9 +40,9 @@ from app.web import server
 from app.web.job_manager import JOB_MANAGER
 from app.web.server import app
 
-OWEN_REPORT = (
-    "/home/hatch/workspace/user/files/full_pipeline_91c1a13b87f4_1_pcmb.json"
-)
+# Originally pointed at a private file outside the repo; a committed stand-in
+# carrying the same asserted figures lives in tests/fixtures.
+OWEN_REPORT = str(Path(__file__).resolve().parent / "fixtures" / "owen_nq_pipeline_report.json")
 
 
 # ----------------------------------------------------------------------
@@ -133,13 +134,23 @@ def test_dataclass_from_dict_rejects_the_factory_function_clearly():
     assert ok.risk_value == 0.5
 
 
-def test_recovery_quick_optimize_from_completed_pipeline(monkeypatch):
+def test_recovery_quick_optimize_from_completed_pipeline(monkeypatch, tmp_path):
     """Owen's exact click: 'Quick Optimize for a lower-drawdown
     parameter set' on the finished Full Pipeline (his final_parameters
     + empty risk/rules dicts). The route must create a Quick Optimize
     job, and the job must inherit the risk values from the payload."""
     report = json.load(open(OWEN_REPORT))
     captured: dict = {}
+
+    # The route re-resolves the run's dataset by name from the raw-data dir;
+    # provide a copy of the bundled sample under that name.
+    import shutil
+    import app.data.storage as storage
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    shutil.copy(Path(__file__).resolve().parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv",
+                raw / "EURUSD_5M_sample (28).csv")
+    monkeypatch.setattr(storage, "get_raw_data_dir", lambda: raw)
 
     def _stub_runner(job_id, df, strategy, risk, rules, cfg,
                      cancel_event, dataset_label):

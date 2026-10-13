@@ -43,7 +43,7 @@ def test_champion_simple_page_has_board_and_actions(client):
     r = client.get("/champion-simple")
     assert r.status_code == 200
     body = r.get_data(as_text=True)
-    assert "Promotion board" in body
+    assert "Champion board" in body
     assert 'formaction="/champion-simple/promote"' in body
     assert 'formaction="/champion-simple/rerun"' in body
     for name in ("check_monte_carlo", "check_cpcv", "check_pbo"):
@@ -79,7 +79,7 @@ def test_validate_simple_dispatches_only_ticked_checks(client, monkeypatch):
                         lambda form, files: (df, "tiny.csv", "", None))
     monkeypatch.setattr(server, "load_strategy_text", lambda t, f: "code")
     monkeypatch.setattr(server, "build_strategy_from_code",
-                        lambda t, code: SimpleNamespace(name="Stub"))
+                        lambda t, code, **k: SimpleNamespace(name="Stub"))
     stats = SimpleNamespace(net_profit=10.0, win_rate=50.0, max_drawdown_pct=1.0)
     monkeypatch.setattr(server, "run_backtest",
                         lambda df_, s, risk: SimpleNamespace(trades=[], statistics=stats))
@@ -95,8 +95,9 @@ def test_validate_simple_dispatches_only_ticked_checks(client, monkeypatch):
         called["mc"] = True
         raise AssertionError("monte_carlo dispatched but not ticked")
 
-    monkeypatch.setattr(server, "run_cpcv", fake_cpcv)
-    monkeypatch.setattr(server, "run_monte_carlo", fake_mc)
+    import app.validation.runner as _vrunner  # the dispatcher now lives here
+    monkeypatch.setattr(_vrunner, "run_cpcv", fake_cpcv)
+    monkeypatch.setattr(_vrunner, "run_monte_carlo", fake_mc)
 
     r = client.post("/validate-simple/start", data={
         "strategy_pick": "python::stub.py",
@@ -104,13 +105,14 @@ def test_validate_simple_dispatches_only_ticked_checks(client, monkeypatch):
         "check_cpcv": "on",
         "initial_balance": "100000", "account_size": "100000",
     })
-    assert r.status_code == 200
-    body = r.get_data(as_text=True)
+    from tests.validate_job_helper import wait_for_validate_job
+    job = wait_for_validate_job(client, r)
+    assert not job["error"], job["error"]
     assert called.get("cpcv") is True
     assert "mc" not in called
-    assert "cpcv" in body and "mean_oos_metric" in body
-    # The report box renders on the results page too
-    assert "How this was simulated" in body
+    assert list(job.get("checks") or []) == ["CPCV"], job.get("checks")
+    # The "how this was simulated" explanation travels with the job
+    assert job.get("simulation_text")
 
 
 # --------------------------------------------- (d) risk sweep reads sizing

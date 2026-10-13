@@ -28,6 +28,7 @@ import pytest
 
 import app.data.storage as storage
 import app.web.server as server
+from tests.validate_job_helper import wait_for_validate_job
 
 
 @pytest.fixture()
@@ -150,7 +151,7 @@ def test_forward_test_has_saved_strategy_dropdown(client):
 def _fake_strategy_patches(monkeypatch, captured):
     monkeypatch.setattr(server, "load_strategy_text", lambda t, f: "code")
     monkeypatch.setattr(server, "build_strategy_from_code",
-                        lambda t, code: SimpleNamespace(name="Stub"))
+                        lambda t, code, **k: SimpleNamespace(name="Stub"))
     stats = SimpleNamespace(net_profit=10.0, win_rate=50.0, max_drawdown_pct=1.0)
 
     def fake_backtest(df_, s, risk):
@@ -158,11 +159,12 @@ def _fake_strategy_patches(monkeypatch, captured):
         return SimpleNamespace(trades=[], statistics=stats)
 
     monkeypatch.setattr(server, "run_backtest", fake_backtest)
-    monkeypatch.setattr(server, "run_cpcv", lambda *a, **k: SimpleNamespace(
+    import app.validation.runner as _vrunner  # the dispatcher now lives here
+    monkeypatch.setattr(_vrunner, "run_cpcv", lambda *a, **k: SimpleNamespace(
         n_paths=3, metric="profit_factor", mean_oos_metric=1.2,
         median_oos_metric=1.1, mean_is_metric=1.3, is_robust=True))
     monkeypatch.setattr(
-        server, "run_monte_carlo",
+        _vrunner, "run_monte_carlo",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("mc not ticked")))
 
 
@@ -189,7 +191,8 @@ def test_validate_timeframe_pick_resamples_before_the_run(client, monkeypatch):
         "timeframe": "5m",
         "initial_balance": "100000", "account_size": "100000",
     })
-    assert r.status_code == 200
+    job = wait_for_validate_job(client, r)
+    assert not job["error"], job["error"]
     assert captured["bars"] == 60  # 300 one-minute bars -> 60 five-minute bars
 
 
@@ -228,7 +231,8 @@ def test_validate_manual_library_pick_actually_loads(client, monkeypatch):
         "check_cpcv": "on",
         "initial_balance": "100000", "account_size": "100000",
     })
-    assert r.status_code == 200
+    job = wait_for_validate_job(client, r)
+    assert not job["error"], job["error"]
     assert captured["bars"] == 300
 
 
@@ -263,8 +267,9 @@ def test_champion_rerun_manual_candidate_actually_loads(client, monkeypatch):
         "check_cpcv": "on",
         "initial_balance": "100000", "account_size": "100000",
     })
-    assert r.status_code == 200
-    assert "Re-run results" in r.get_data(as_text=True)
+    job = wait_for_validate_job(client, r)
+    assert not job["error"], job["error"]
+    assert job["source"] == "champion"
     assert captured["bars"] == 300
 
 

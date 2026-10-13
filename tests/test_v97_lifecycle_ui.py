@@ -19,6 +19,13 @@ def client():
         yield c
 
 
+def _with_next(row):
+    # list_board() attaches each row's "next" step; since the tests stub
+    # list_board they must attach it the same way the real board does.
+    row["next"] = server.champion_board.row_next_step(row)
+    return row
+
+
 def _row(*, untested: bool, can_promote: bool = False):
     if untested:
         requirements = [
@@ -34,7 +41,7 @@ def _row(*, untested: bool, can_promote: bool = False):
             {"key": "validated_cpcv", "label": "Validated by CPCV", "met": False,
              "detail": "No CPCV result on record."},
         ]
-    return {
+    return _with_next({
         "strategy_type": "python",
         "filename": "demo_strategy.py",
         "display_name": "Demo Strategy",
@@ -57,7 +64,7 @@ def _row(*, untested: bool, can_promote: bool = False):
             "promoted_at": None,
         },
         "modified": 0.0,
-    }
+    })
 
 
 # ------------------------------------------------------- sidebar headers
@@ -125,7 +132,8 @@ def test_champion_board_tested_row_points_at_validate_checks(client, monkeypatch
     monkeypatch.setattr(server.champion_board, "list_board",
                         lambda: [_row(untested=False)])
     body = client.get("/champion-simple").get_data(as_text=True)
-    assert "Open Validate (pick checks)" in body
+    assert "Run 1 missing check" in body
+    assert "/validate-simple?strategy_pick=" in body
     assert "Open Validate hub" not in body
 
 

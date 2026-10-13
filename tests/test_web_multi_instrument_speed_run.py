@@ -66,7 +66,7 @@ def _isolated_speedrun_dir(tmp_path, monkeypatch):
     HEAVY_JOB_GUARD.release(JOB_SPEED_RUN)
 
 
-def _poll_until_done(client, job_id: str, timeout: float = 90.0) -> dict:
+def _poll_until_done(client, job_id: str, timeout: float = 600.0) -> dict:
     deadline = time.time() + timeout
     while time.time() < deadline:
         r = client.get(f"/speed-run/multi-instrument/job/{job_id}/status.json")

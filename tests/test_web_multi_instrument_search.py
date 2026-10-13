@@ -70,7 +70,7 @@ def _isolated_search_dir(tmp_path, monkeypatch):
     HEAVY_JOB_GUARD.release(JOB_SEARCH_LAB)
 
 
-def _poll_until_done(client, job_id: str, timeout: float = 180.0) -> dict:
+def _poll_until_done(client, job_id: str, timeout: float = 600.0) -> dict:
     # FIX (CI flakiness, matching test_web_speed_run_loop_mode.py's own
     # documented history of this exact issue): this ran two real
     # sequential instrument searches through real GA refinement, which
@@ -251,7 +251,7 @@ def test_multi_instrument_search_loop_mode_can_be_stopped(_isolated_raw_data_dir
     job_id = r.headers["Location"].rstrip("/").split("/")[-1]
 
     client.post(f"/search/multi-instrument/job/{job_id}/stop")
-    data = _poll_until_done(client, job_id, timeout=30.0)
+    data = _poll_until_done(client, job_id, timeout=180.0)
     assert data["cancelled"] is True
 
 

@@ -218,3 +218,20 @@ def pytest_sessionfinish(session, exitstatus):
                 p.unlink()
             except OSError:
                 pass
+
+
+@pytest.fixture(autouse=True)
+def _stub_ollama_readiness(request, monkeypatch):
+    """The Ollama transport verifies the server/model (GET /api/tags, /api/ps,
+    warm-up) before every completion. The unit tests that exercise the
+    embedder / research agent / project chat patch only `requests.post` (the
+    completion itself) and have no server, so the readiness probe would fail
+    them for a reason unrelated to what they test. Stub it everywhere except
+    the transport's own tests, which cover it directly."""
+    if request.module.__name__.endswith("test_v914_ollama_transport"):
+        return
+    try:
+        from app.ai import ollama_transport as _t
+    except Exception:  # noqa: BLE001
+        return
+    monkeypatch.setattr(_t, "ensure_ready", lambda settings, model=None, **kw: model or getattr(settings, "model", ""))

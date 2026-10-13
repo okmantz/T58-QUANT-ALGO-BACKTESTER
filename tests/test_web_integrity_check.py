@@ -73,8 +73,9 @@ def test_full_pipeline_is_blocked_when_requested_timeframe_is_finer_than_native_
 
     assert r.status_code == 400
     body = r.get_data(as_text=True)
-    assert "BACKTEST BLOCKED" in body
-    assert "Resampling: FAILED" in body
+    # The Full Pipeline page refuses with its own timeframe message (the
+    # integrity-report wording is used by the Quick Optimize page).
+    assert "finer than the loaded data" in body.lower()
 
 
 def test_search_lab_family_named_is_blocked_when_requested_timeframe_is_finer_than_native_data():

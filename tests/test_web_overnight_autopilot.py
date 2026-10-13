@@ -34,7 +34,8 @@ def test_overnight_autopilot_start_runs_to_completion_and_writes_report():
     assert r.status_code == 302
     job_id = r.headers["Location"].rstrip("/").split("/")[-1]
 
-    for _ in range(60):
+    # Generous: a small CI/sandbox box takes minutes, a workstation seconds.
+    for _ in range(600):
         status = client.get(f"/overnight-autopilot/job/{job_id}/status.json").get_json()
         assert status["found"]
         if status["done"]:

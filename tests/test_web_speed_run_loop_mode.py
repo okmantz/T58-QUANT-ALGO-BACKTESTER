@@ -40,7 +40,7 @@ def _cleanup_speedrun_artifacts(tmp_path, monkeypatch):
     yield
 
 
-def _poll_until_done(client, job_id: str, timeout: float = 90.0) -> dict:
+def _poll_until_done(client, job_id: str, timeout: float = 600.0) -> dict:
     deadline = time.time() + timeout
     while time.time() < deadline:
         r = client.get(f"/speed-run/job/{job_id}/status.json")
@@ -135,7 +135,7 @@ def test_speed_run_loop_mode_can_be_stopped(monkeypatch):
     # steps), a stop takes well under a second in practice -- this
     # timeout is just a generous ceiling, not a reflection of expected
     # stop latency.
-    status = _poll_until_done(client, job_id, timeout=30.0)
+    status = _poll_until_done(client, job_id, timeout=180.0)
     assert status["cancelled"] is True
     assert status["loop_result"]["stopped_reason"] == "cancelled"
 

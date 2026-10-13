@@ -31,6 +31,11 @@ def _mc(risk_of_ruin_pct: float, eval_pass=60.0, first_payout=40.0) -> MonteCarl
         risk_of_ruin_pct=risk_of_ruin_pct,
         median_max_losing_streak=3.0,
         worst_max_losing_streak=5,
+        # Fitness ranks on per-attempt (single-account) odds since P0-1; the
+        # defaults for these are 0.0, so the fixture must set them.
+        per_attempt_pass_probability=eval_pass,
+        per_attempt_payout_probability=first_payout,
+        n_source_trades=100,
     )
 
 
