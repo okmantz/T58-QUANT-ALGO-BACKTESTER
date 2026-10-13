@@ -318,7 +318,12 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
             "trading days, $250+/day winning-day gate, 50% funded consistency rule -- all modeled. "
             "A size-specific 'Safety Net' profit buffer also gates the first payout in reality and is "
             "not modeled. Verify exact dollar amounts for your chosen platform/product at "
-            "apextraderfunding.com before relying on them."
+            "apextraderfunding.com before relying on them. "
+            "2026-10-13 partial check: apextraderfunding.com/help-center/additional-helpful-items/50-consistency-requirement/ "
+            "confirms the 50% rule applies at PAYOUT request (best day / net profit since last payout or inception; "
+            "failing it only blocks the request, the account stays alive). The page's text says 'below 50%' but its own "
+            "table marks exactly 50% as met; the simulator uses <=. Target, drawdown, daily-loss and payout-gate "
+            "numbers were NOT re-verified against an Apex page (fetch of the other pages was blocked)."
         ),
         algo_trading_allowed=False,
         algo_policy_note=(
