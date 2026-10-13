@@ -829,7 +829,45 @@ def _looks_like_continuous_future(source_name: str) -> bool:
         return True
     if base.startswith("futures_") or ".f_" in base or base.endswith(".f"):
         return True
+    # AUDIT 2026-10-12 (F-ROLL): plain root-symbol exports such as
+    # "MNQ_1min_20260120_20260415.csv" or "ES_5min.csv" are continuous
+    # front-month series too (the MNQ file carried an unadjusted ~-215/+224
+    # contract flip). A root followed by a separator and NOT by a specific
+    # contract code (ESH6, NQM26, ...) is treated as continuous. Single
+    # contracts are unaffected by adjustment anyway: it only acts on isolated
+    # date-boundary splices.
+    import re as _re
+    m = _re.match(r"^(m?es|m?nq|m?ym|m2k|rty|mgc|gc|si|mcl|cl|zn|zb|zf|6e)[_\-. ](.*)$", base)
+    if m and not _re.match(r"^[fghjkmnquvxz]\d{1,2}([_\-. ]|$)", m.group(2)):
+        return True
     return False
+
+
+def _futures_timezone_warning(df: pd.DataFrame, source_name: str, issues: list) -> None:
+    """AUDIT 2026-10-12 (F-TZ): the importer treats naive timestamps as UTC.
+    CME equity/metal futures have a daily halt at 17:00 ET = 21:00 UTC
+    (summer) / 22:00 UTC (winter), i.e. the least-populated weekday hour is
+    21 or 22 in UTC. If it is elsewhere, the file is probably exchange-local
+    or otherwise shifted and session flatten, daily-loss day buckets and news
+    windows will be wrong. Warn only (never silently shift data)."""
+    try:
+        if not _looks_like_continuous_future(source_name) or df is None or len(df) < 5000:
+            return
+        ts = pd.to_datetime(df["timestamp"], errors="coerce").dropna()
+        if len(ts) < 5000 or ts.diff().median() > pd.Timedelta(minutes=15):
+            return
+        wk = ts[ts.dt.dayofweek < 5]
+        counts = wk.dt.hour.value_counts().reindex(range(24), fill_value=0)
+        quietest = int(counts.idxmin())
+        if quietest not in (21, 22):
+            issues.append(ValidationIssue(
+                "warning",
+                f"Timestamp check: the quietest weekday hour is {quietest:02d}:00, but CME futures halt at "
+                "21:00/22:00 UTC. Timestamps are assumed UTC; if this file is in exchange-local time the "
+                "session flatten, daily-loss day buckets and news windows will be misaligned. Re-export in UTC.",
+            ))
+    except Exception:
+        return
 
 
 def _maybe_back_adjust_continuous(df: pd.DataFrame, source_name: str, issues: list) -> pd.DataFrame:
@@ -1484,6 +1522,7 @@ def import_csv(
             str(path_or_buffer) if isinstance(path_or_buffer, (str, Path)) else ""
         )
         df = _maybe_back_adjust_continuous(df, _src_name, issues)
+        _futures_timezone_warning(df, _src_name, issues)
     except Exception as _adj_exc:  # never let adjustment break an import
         issues.append(
             ValidationIssue(
