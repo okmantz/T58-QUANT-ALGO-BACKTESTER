@@ -165,12 +165,23 @@ def build_folds(
             train_end = fold_span * (i + 1)
             test_start = train_end
         else:  # rolling
+            # AUDIT 2026-10-12 (F-ROLLFOLD): the old code computed train_end as
+            # int(window_end * train_frac) -- an ABSOLUTE bar index -- while
+            # train_start was window-relative. With the default 5 folds /
+            # train_frac 0.6 that made train windows shrink 1200->800->400 bars,
+            # collapse to empty for folds 3-4 (silently dropped: only 3 of 5
+            # folds ran), and made test slices of consecutive folds OVERLAP
+            # (fold 1 test 1800-3000 vs fold 2 test 2400-4000), double-counting
+            # bars in every chained walk-forward score. Now: each fold is a
+            # sliding window [fs*i, fs*(i+2)); the first train_frac of it trains,
+            # the rest tests, so test slices never overlap and every requested
+            # fold keeps a full-size train window.
+            window_start = fold_span * i
             window_end = fold_span * (i + 2)
-            train_end = int(window_end * train_frac)
-            train_end = max(train_end, fold_span // 2)
+            train_start = window_start
+            train_end = window_start + int((window_end - window_start) * train_frac)
+            train_end = max(train_end, window_start + max(fold_span // 2, 10))
             test_start = train_end
-            window_start = max(0, window_end - fold_span * 2)
-            train_start = max(window_start, 0)
 
         test_start = min(test_start + embargo_bars, n)
         test_end = min(fold_span * (i + 2), n)
