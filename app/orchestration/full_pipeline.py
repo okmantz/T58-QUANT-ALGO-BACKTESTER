@@ -615,7 +615,9 @@ def _dsr_worker_task(spec):
             build_strategy_from_spec(spec, _DSR_WORKER["tmp_dir"]),
             _DSR_WORKER["risk"],
         )
-        return float(bt.statistics.sharpe_ratio)
+        # 2026-10-12 audit (DSR UNITS): the PSR / Deflated Sharpe needs a NON-annualized per-trade Sharpe
+        # (same units as T = number of trades); statistics.sharpe_ratio is bar-level and annualized.
+        return float(bt.statistics.sharpe_per_trade)
     except Exception:  # noqa: BLE001 -- one bad genome must not kill the gate
         return None
 
@@ -643,7 +645,7 @@ def _trial_sharpes_for_specs(specs: list, df, risk, tmp_dir, workers) -> list[fl
     for spec in specs:
         try:
             cand_bt = run_backtest(df, build_strategy_from_spec(spec, tmp_dir), risk)
-            out.append(float(cand_bt.statistics.sharpe_ratio))
+            out.append(float(cand_bt.statistics.sharpe_per_trade))   # per-trade, see _dsr_worker_task
         except Exception:  # noqa: BLE001 -- one bad genome must not kill the gate
             continue
     return out
@@ -2486,16 +2488,19 @@ def run_full_pipeline(
                     # values for a spread; with fewer the benchmark is 0
                     # and the gate degrades to a plain PSR-vs-zero check,
                     # which the log says out loud rather than hiding.
-                    trial_sharpes = [float(final_bt.statistics.sharpe_ratio)]
+                    trial_sharpes = [float(final_bt.statistics.sharpe_per_trade)]
                     dsr_skip_reason = (
                         "DSR gate ran on a degenerate trial pool (no GA leaderboard Sharpes available) -- "
                         "treated as a plain significance check, not a full multiple-testing correction."
                     )
                     log(f"  {dsr_skip_reason}")
-                _pnls = [t.pnl for t in final_bt.trades]
-                _skew, _kurt = _pnl_skew_kurtosis(_pnls)
+                # 2026-10-12 audit (DSR UNITS): observed Sharpe, trial Sharpes, skew and kurtosis are ALL
+                # per-trade returns now, matching T = len(trades). Before, the annualized bar-level Sharpe
+                # was paired with T = trade count, overstating z by about sqrt(trades per year).
+                _skew = float(final_bt.statistics.pnl_skew)
+                _kurt = float(final_bt.statistics.pnl_kurtosis)
                 dsr_gate_result = deflated_sharpe_gate(
-                    float(final_bt.statistics.sharpe_ratio),
+                    float(final_bt.statistics.sharpe_per_trade),
                     trial_sharpes,
                     n_trials,
                     len(final_bt.trades),
