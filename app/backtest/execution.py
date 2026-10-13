@@ -709,6 +709,8 @@ def run_execution(
             prop_day_dates.append(_unique_days[bar_date_])
         return d
 
+    _funded_reset_logged: list = []
+
     def _prop_feed_close(pnl_: float, bar_date_: int, risk_dollars, i_: int) -> None:
         """Feed one realized close to the attempt's PropAccount and sync
         the engine's equity with the account balance (payouts withdraw)."""
@@ -744,6 +746,18 @@ def run_execution(
                     ),
                 })
             prop_payouts_seen = len(acct.payouts)
+        if (getattr(prop_rules, "funded_starts_fresh", False) and acct.passed_evaluation
+                and attempt_id not in _funded_reset_logged):
+            _funded_reset_logged.append(attempt_id)
+            reset_events.append({
+                "kind": "funded_reset", "reset_at": _restore_tz(ts[i_]),
+                "attempt_id": attempt_id,
+                "equity_before_reset": equity + pnl_, "equity_after_reset": acct.balance,
+                "message": (
+                    f"{_restore_tz(ts[i_])}: EVALUATION PASSED - attempt {attempt_id}: funded account "
+                    f"starts fresh at ${acct.balance:,.2f} (evaluation profit is not carried over)."
+                ),
+            })
         equity = acct.balance
 
     def _settle_exit(open_pos: dict, raw_exit_price: float, reason: str, direction_: int, i: int) -> float:

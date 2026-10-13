@@ -144,8 +144,45 @@ class BacktestStatistics:
     # trades, which don't track it). Purely additive -- every existing
     # report/test that never reads these fields is unaffected.
 
+    # 2026-10-12 audit (DSR UNITS): per-TRADE return statistics, the units the
+    # Bailey / Lopez de Prado Probabilistic & Deflated Sharpe Ratio is defined in.
+    # ``sharpe_ratio`` above is a BAR-level, ANNUALIZED figure; feeding it to the PSR
+    # formula together with T = number of trades overstated z by about
+    # sqrt(trades per year) (see tests/test_audit_2026_10_12.py::test_dsr_units_*).
+    # These three are computed from each trade's return on its entry equity
+    # (``Trade.pnl_pct``), are NOT annualized, and pair with ``total_trades`` as T.
+    sharpe_per_trade: float = 0.0
+    pnl_skew: float = 0.0
+    pnl_kurtosis: float = 3.0   # NON-excess (a normal distribution = 3), as the PSR formula expects
+
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def per_trade_return_stats(trades) -> tuple[float, float, float]:
+    """(sharpe_per_trade, skew, kurtosis) of the per-trade returns (``pnl_pct``), non-annualized.
+
+    Returns (0.0, 0.0, 3.0) when there are fewer than 4 finite trades or zero variance, so a
+    caller never has to special-case it. Kurtosis is the plain (non-excess) fourth standardized
+    moment, i.e. 3.0 for a normal distribution."""
+    vals = []
+    for t in trades or []:
+        v = getattr(t, "pnl_pct", None)
+        if v is not None and np.isfinite(v):
+            vals.append(float(v))
+    arr = np.asarray(vals, dtype=float)
+    if arr.size < 4:
+        return 0.0, 0.0, 3.0
+    sd = float(arr.std(ddof=1))
+    if not np.isfinite(sd) or sd <= 0:
+        return 0.0, 0.0, 3.0
+    mean = float(arr.mean())
+    z = (arr - mean) / sd
+    skew = float((z ** 3).mean())
+    kurt = float((z ** 4).mean())
+    if not (np.isfinite(skew) and np.isfinite(kurt)):
+        skew, kurt = 0.0, 3.0
+    return mean / sd, skew, kurt
 
 
 def _max_streak(bools: list[bool]) -> int:
@@ -663,6 +700,8 @@ def compute_statistics(
     avg_mae_dollars = float(np.mean(mae_values)) if mae_values else 0.0
     max_mae_dollars = float(np.max(mae_values)) if mae_values else 0.0
 
+    _sr_trade, _skew_trade, _kurt_trade = per_trade_return_stats(trades)
+
     return BacktestStatistics(
         net_profit=net_profit, gross_profit=gross_profit, gross_loss=gross_loss,
         return_pct=return_pct, average_trade=average_trade,
@@ -690,6 +729,7 @@ def compute_statistics(
         pct_trades_risk_overshoot=risk_recon["pct_trades_risk_overshoot"],
         avg_mae_dollars=avg_mae_dollars,
         max_mae_dollars=max_mae_dollars,
+        sharpe_per_trade=_sr_trade, pnl_skew=_skew_trade, pnl_kurtosis=_kurt_trade,
     )
 
 
