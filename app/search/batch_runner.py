@@ -523,7 +523,9 @@ def _stage1_score(
 
     return {
         **base, "statistics": stats,
-        "quick_score": quick_score, "sharpe": sharpe, "passed_stage1": bool(passed),
+        "quick_score": quick_score, "sharpe": sharpe,
+        "sharpe_per_trade": float(stats.get("sharpe_per_trade", 0.0) or 0.0),   # 2026-10-12: DSR needs per-trade units
+        "passed_stage1": bool(passed),
         "scale_mismatch_warning": scale_mismatch,
     }
 
@@ -1733,7 +1735,9 @@ def run_search(
 
     # ---------------- Stage 4: deflate, rank, persist ----------------
     log("Stage 4/5: computing deflated Sharpe ratios and ranking the leaderboard...")
-    trial_sharpes = [r.get("sharpe", 0.0) for r in stage1_records if isinstance(r.get("sharpe"), (int, float))]
+    # 2026-10-12 audit (DSR UNITS): deflate on NON-annualized per-trade Sharpes (T = trades), not the
+    # annualized bar-level "sharpe" kept in the records for display/ranking.
+    trial_sharpes = [r.get("sharpe_per_trade", 0.0) for r in stage1_records if isinstance(r.get("sharpe_per_trade"), (int, float))]
     n_trials = len(stage1_records)
 
     # D4(c): honest per-stage trial counts on every validated (Stage 3)
@@ -1747,9 +1751,14 @@ def run_search(
 
     for rec in stage3_records:
         rec["stage_eval_counts"] = dict(_eval_counts)
-        sharpe = rec.get("sharpe", 0.0) or 0.0
-        n_trade_returns = (rec.get("statistics") or {}).get("total_trades", 0)
-        dsr = deflated_sharpe_ratio(sharpe, trial_sharpes, n_trials, n_trade_returns)
+        _st = rec.get("statistics") or {}
+        sharpe = rec.get("sharpe_per_trade", _st.get("sharpe_per_trade", 0.0)) or 0.0
+        n_trade_returns = _st.get("total_trades", 0)
+        dsr = deflated_sharpe_ratio(
+            sharpe, trial_sharpes, n_trials, n_trade_returns,
+            returns_skew=float(_st.get("pnl_skew", 0.0) or 0.0),
+            returns_kurtosis=float(_st.get("pnl_kurtosis", 3.0) or 3.0),
+        )
         rec["deflated_sharpe"] = {
             "observed_sharpe": dsr.observed_sharpe, "benchmark_sharpe": dsr.benchmark_sharpe,
             "probabilistic_sharpe": dsr.probabilistic_sharpe, "is_significant": dsr.is_significant,
