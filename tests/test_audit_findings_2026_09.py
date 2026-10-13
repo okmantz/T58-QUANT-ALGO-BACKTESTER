@@ -282,25 +282,32 @@ class TestVal005FoldOverlapAndSilentDrop:
         """With n_folds=4 on 1000 bars (this app's own Full Pipeline/Quick
         Optimize defaults), the 4th rolling fold's train slice is empty
         and used to be dropped with NO warning at all."""
+        # 2026-10-12: the rolling-window geometry was fixed (every requested fold now keeps a
+        # full-size train window), so the old "4th fold has an empty train slice" trigger no longer
+        # exists. A fold whose TEST slice is too small to use is still dropped WITH a warning:
         df = _flat_df(n=1000)
         warnings: list[str] = []
-        folds = build_folds(df, n_folds=4, window_mode="rolling", train_frac=0.6, warnings=warnings)
-        assert len(folds) == 3
+        folds = build_folds(df, n_folds=4, window_mode="rolling", train_frac=0.999, warnings=warnings)
+        assert len(folds) == 0
         assert any("dropped" in w for w in warnings)
         assert any("fold 3" in w for w in warnings)
 
     def test_max_test_bar_used_matches_actual_fold_bounds(self):
         df = _flat_df(n=1000)
         folds = build_folds(df, n_folds=4, window_mode="rolling", train_frac=0.6)
+        assert len(folds) == 4
         max_bar = max(f.test_end_bar for f in folds)
-        assert max_bar == 800  # verified by hand against this exact fixture in the audit
+        assert max_bar == 1000  # 2026-10-12: all 4 folds are built; the last window ends at (n_folds+1)*span
+        # ...and the GA itself reserves a tail (reserve_tail_frac=0.2), so its max_test_bar_used is 800
+        ga_folds = build_folds(df.iloc[:800], n_folds=4, window_mode="rolling", train_frac=0.6)
+        assert max(f.test_end_bar for f in ga_folds) == 800
 
     def test_embargo_eliminates_overlap_with_ga_folds(self):
         """The core VAL-005 regression: Step 4's fold windows must not
         overlap the bars Step 2's GA already selected the winner against,
         once embargo_start_bar is supplied."""
         df = _flat_df(n=1000)
-        ga_folds = build_folds(df, n_folds=4, window_mode="rolling", train_frac=0.6)
+        ga_folds = build_folds(df.iloc[:800], n_folds=4, window_mode="rolling", train_frac=0.6)  # GA reserves a 20% tail
         ga_touched_ranges = [(f.test_start_bar, f.test_end_bar) for f in ga_folds]
         max_test_bar_used = max(f.test_end_bar for f in ga_folds)
 

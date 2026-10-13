@@ -162,3 +162,83 @@ def test_web_api_keys_page_and_save_roundtrip():
     c.post("/settings/api-keys/save-ai", data={"openai_api_key": "OO"})
     s = ak.load_settings()
     assert (s.tiingo_api_key, s.fred_api_key, s.openai_api_key) == ("TT", "FF", "OO")
+
+
+# --------------------------------------------------------------------------
+# F-DAILY: session-anchored daily/multi-hour bars for CME data
+# --------------------------------------------------------------------------
+def _cme_minutes(start, end):
+    t = pd.date_range(start, end, freq="1min", tz="UTC")
+    ct = t.tz_convert("America/Chicago")
+    keep = (ct.dayofweek < 5) & (ct.hour != 16)           # 16:00-17:00 CT halt, weekdays only (simplified)
+    keep &= ~((ct.dayofweek == 4) & (ct.hour >= 16))       # Fri close
+    t = t[keep]
+    n = len(t)
+    px = 100 + np.arange(n) * 0.01
+    return pd.DataFrame({"timestamp": t, "open": px, "high": px + 0.1, "low": px - 0.1, "close": px + 0.05, "volume": 1.0})
+
+
+def test_daily_bars_follow_cme_trading_day_and_dst():
+    from app.data.timeframe_resample import resample_ohlcv, looks_like_cme_session_data
+    for start, end, utc_hour in (("2026-01-05", "2026-02-27", 23), ("2026-06-01", "2026-07-24", 22)):
+        df = _cme_minutes(start, end)
+        assert looks_like_cme_session_data(df)
+        d = resample_ohlcv(df, "1d")
+        assert (d["timestamp"].dt.hour == utc_hour).all()        # 17:00 CT in UTC, DST-aware
+        # one bar per trading day, none split: first bar open == first minute of the session
+        assert d["open"].iloc[1] == df.loc[df["timestamp"] >= d["timestamp"].iloc[1], "open"].iloc[0]
+        h4 = resample_ohlcv(df, "4h")
+        assert set(h4["timestamp"].dt.tz_convert("America/Chicago").dt.hour) <= {17, 21, 1, 5, 9, 13}
+
+
+def test_resample_is_unchanged_for_24h_markets_and_short_bars():
+    from app.data.timeframe_resample import resample_ohlcv
+    t = pd.date_range("2026-01-05", periods=6000, freq="1min")
+    fx = pd.DataFrame({"timestamp": t, "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.0, "volume": 1.0})
+    assert resample_ohlcv(fx, "1d").equals(resample_ohlcv(fx, "1d", anchor="utc"))
+    cme = _cme_minutes("2026-01-05", "2026-02-27")
+    assert resample_ohlcv(cme, "1h").equals(resample_ohlcv(cme, "1h", anchor="utc"))
+
+
+# --------------------------------------------------------------------------
+# F-ROLLFOLD: rolling walk-forward folds
+# --------------------------------------------------------------------------
+def test_rolling_folds_all_survive_full_size_and_tests_do_not_overlap():
+    from app.validation.walk_forward_opt import build_folds
+    df = pd.DataFrame({"timestamp": pd.date_range("2024-01-01", periods=6000, freq="5min"),
+                       "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0})
+    fs = build_folds(df, n_folds=5, window_mode="rolling", train_frac=0.6)
+    assert len(fs) == 5
+    assert {len(f.train_df) for f in fs} == {1200}
+    spans = [(f.test_start_bar, f.test_end_bar) for f in fs]
+    for (a0, a1), (b0, b1) in zip(spans, spans[1:]):
+        assert a1 <= b0                                   # no overlap between consecutive tests
+    for f in fs:
+        assert f.train_df["timestamp"].iloc[-1] < f.test_df["timestamp"].iloc[0]   # train strictly before test
+
+
+# --------------------------------------------------------------------------
+# F-FWD: forward test must record the broker's realized P&L on SL/TP exits
+# --------------------------------------------------------------------------
+def test_forward_test_records_broker_side_stop_out_pnl_and_trips_daily_limit(tmp_path):
+    from app.backtest.risk import RiskConfig
+    from app.forward_test.engine import ForwardTestConfig, ForwardTestSession
+    from app.forward_test.journal import ForwardTestJournal
+
+    class FakeConn:
+        login, server = "1", "Demo"
+        def get_open_positions(self, symbol=None): return []                      # position vanished = SL hit
+        def closed_position_result(self, ticket): return {"exit_price": 1.0950, "pnl": -1250.0}
+
+    j = ForwardTestJournal(tmp_path / "ft.db")
+    sid = j.start_session("python", "x.py", "EURUSD", 15, "1", "Demo")
+    risk = RiskConfig(initial_balance=50_000.0, risk_value=1.0, daily_loss_limit_pct=2.0)
+    s = ForwardTestSession(strategy=None, strategy_type="python", strategy_filename="x.py", connector=FakeConn(),
+                           journal=j, config=ForwardTestConfig(symbol="EURUSD", timeframe_minutes=15, risk=risk))
+    s._session_id = sid
+    s._open_trade_row_id = j.record_open(sid, 42, 1, 1.0, 1.1000, 1.0950, None)
+    s.status.open_position_ticket = 42
+    s._reconcile_closed_trade()
+    closed = j.closed_trade_stats(sid)
+    assert closed["n_trades"] == 1 and closed["net_pnl"] == -1250.0     # previously exit=entry, pnl=0
+    assert s._daily_realized_pnl == -1250.0 and s._daily_loss_breached()  # 2% of 50K = 1,000 -> breaker trips
