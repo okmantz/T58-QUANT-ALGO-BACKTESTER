@@ -2608,7 +2608,12 @@ class EvolutionRunner:
                     gated.append(record)
                     continue
                 passed = bool(holdout["per_attempt_pass_probability"] >= target)
+                # AUDIT 2026-10-12: every candidate scored here is a "look" at the holdout and the
+                # first one to clear the bar wins, so the winner's holdout number is optimistically
+                # biased by selection (winner's curse). Count the looks so the result is read honestly.
+                self._holdout_looks = int(getattr(self, "_holdout_looks", 0)) + 1
                 record.holdout_check = {
+                    "holdout_looks": self._holdout_looks,
                     "passed": passed,
                     "per_attempt_pass_probability": holdout["per_attempt_pass_probability"],
                     "per_attempt_payout_probability": holdout["per_attempt_payout_probability"],
