@@ -36,7 +36,11 @@ from app.data.storage import get_app_base_dir
 
 SERVICE_NAME = "T58PropAlgoBacktester"
 
-_FIELDS = ("fred_api_key", "openai_api_key", "claude_api_key", "london_strategic_edge_key")
+_FIELDS = (
+    "fred_api_key", "openai_api_key", "claude_api_key", "london_strategic_edge_key",
+    # AUDIT 2026-10-12: optional alternative market-data providers (see app.data.free_sources).
+    "twelve_data_api_key", "polygon_api_key", "tiingo_api_key", "alpha_vantage_api_key", "databento_api_key",
+)
 
 
 @dataclass
@@ -45,6 +49,11 @@ class ApiKeysSettings:
     openai_api_key: str = ""
     claude_api_key: str = ""
     london_strategic_edge_key: str = ""
+    twelve_data_api_key: str = ""
+    polygon_api_key: str = ""
+    tiingo_api_key: str = ""
+    alpha_vantage_api_key: str = ""
+    databento_api_key: str = ""
 
 
 def _config_dir() -> Path:
