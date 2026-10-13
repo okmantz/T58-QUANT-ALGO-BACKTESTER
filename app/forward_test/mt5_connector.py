@@ -407,7 +407,8 @@ class MT5Connector:
             return OrderResult(ok=False, message=f"order_send returned None ({code}): {desc}")
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             return OrderResult(ok=False, message=f"Order rejected (retcode {result.retcode}): {result.comment}")
-        return OrderResult(ok=True, message="Filled.", ticket=result.order, price=result.price, volume=result.volume)
+        return OrderResult(ok=True, message="Filled.", ticket=self.position_id_for_order(result) or result.order,
+                           price=result.price, volume=result.volume)
 
     def close_position(self, ticket: int, comment: str = "T58 Forward Test close") -> OrderResult:
         positions = mt5.positions_get(ticket=ticket)
@@ -437,6 +438,43 @@ class MT5Connector:
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             return OrderResult(ok=False, message=f"Close rejected (retcode {result.retcode}): {result.comment}")
         return OrderResult(ok=True, message="Closed.", ticket=result.order, price=result.price, volume=result.volume)
+
+    def closed_position_result(self, ticket: int) -> Optional[dict]:
+        """AUDIT 2026-10-12: realized outcome of a position from the broker's
+        deal history -- {"exit_price", "pnl"} where pnl = profit + commission +
+        swap + fee summed over every deal of the position (entry deals carry
+        commission too). Returns None when history is unavailable or the
+        position has no closing deal yet. Used for broker-side SL/TP exits,
+        which the forward-test journal previously recorded as exit=entry,
+        pnl=0."""
+        try:
+            deals = mt5.history_deals_get(position=int(ticket))
+        except Exception:  # noqa: BLE001
+            return None
+        if not deals:
+            return None
+        out_deals = [d for d in deals if getattr(d, "entry", None) in (mt5.DEAL_ENTRY_OUT, getattr(mt5, "DEAL_ENTRY_OUT_BY", -1))]
+        if not out_deals:
+            return None
+        pnl = sum(float(getattr(d, "profit", 0.0)) + float(getattr(d, "commission", 0.0))
+                  + float(getattr(d, "swap", 0.0)) + float(getattr(d, "fee", 0.0)) for d in deals)
+        last = max(out_deals, key=lambda d: getattr(d, "time_msc", getattr(d, "time", 0)))
+        return {"exit_price": float(last.price), "pnl": float(pnl)}
+
+    def position_id_for_order(self, order_result) -> Optional[int]:
+        """The POSITION ticket for a just-filled market order. On hedging
+        accounts it equals the order ticket; on netting accounts it does not,
+        and tracking the order ticket made the session think its position had
+        vanished on the next poll."""
+        try:
+            deal = getattr(order_result, "deal", 0)
+            if deal:
+                got = mt5.history_deals_get(ticket=int(deal))
+                if got:
+                    return int(got[0].position_id)
+        except Exception:  # noqa: BLE001
+            pass
+        return None
 
     def close_all(self, symbol: Optional[str] = None) -> list[OrderResult]:
         return [self.close_position(p.ticket) for p in self.get_open_positions(symbol)]

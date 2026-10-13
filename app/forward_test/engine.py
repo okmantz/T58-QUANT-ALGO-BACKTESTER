@@ -337,7 +337,11 @@ class ForwardTestSession:
         if not result.ok:
             self._log("error", f"Close failed for ticket {ticket}: {result.message}")
             return
-        self._finalize_closed_trade(result.price)
+        realized = self._broker_realized(ticket)
+        if realized is None:
+            self._finalize_closed_trade(result.price)
+        else:
+            self._finalize_closed_trade(realized["exit_price"], pnl_override=realized["pnl"])
         self._log("info", f"Closed position (ticket {ticket}) -- {reason}.")
 
     def _reconcile_closed_trade(self) -> None:
@@ -350,10 +354,25 @@ class ForwardTestSession:
         still_open = any(p.ticket == ticket for p in self.connector.get_open_positions(self.cfg.symbol))
         if still_open:
             return
-        self._finalize_closed_trade(exit_price=None)
+        realized = self._broker_realized(ticket)
+        if realized is None:
+            self._log("warn", f"Position (ticket {ticket}) closed on the broker side but its deal history "
+                               "could not be read -- P&L for this trade is UNKNOWN and recorded as 0 (check MT5 history).")
+            self._finalize_closed_trade(exit_price=None)
+        else:
+            self._finalize_closed_trade(exit_price=realized["exit_price"], pnl_override=realized["pnl"])
         self._log("info", f"Position (ticket {ticket}) closed on the broker side (SL/TP hit) since last check.")
 
-    def _finalize_closed_trade(self, exit_price: Optional[float]) -> None:
+    def _broker_realized(self, ticket: int):
+        getter = getattr(self.connector, "closed_position_result", None)
+        if getter is None:
+            return None
+        try:
+            return getter(ticket)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _finalize_closed_trade(self, exit_price: Optional[float], pnl_override: Optional[float] = None) -> None:
         if self._open_trade_row_id is None:
             self.status.open_position_ticket = None
             return
@@ -362,7 +381,10 @@ class ForwardTestSession:
         pnl = 0.0
         if row is not None:
             exit_p = exit_price if exit_price is not None else row.entry_price
-            pnl = (exit_p - row.entry_price) * row.direction * row.volume
+            # AUDIT 2026-10-12: prefer the broker's realized P&L (includes contract size,
+            # commission, swap). The price-difference x volume fallback is NOT dollars for
+            # lot-sized FX/futures and is only a rough estimate when history is unavailable.
+            pnl = pnl_override if pnl_override is not None else (exit_p - row.entry_price) * row.direction * row.volume
             self.journal.record_close(row.id, exit_p, pnl)
         self._daily_realized_pnl += pnl
         self.status.open_position_ticket = None
