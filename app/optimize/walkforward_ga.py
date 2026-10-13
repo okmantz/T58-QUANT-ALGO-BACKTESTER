@@ -355,8 +355,17 @@ def run_walkforward_aware_refinement(
     preflight: bool = True,
     batch_progress_cb: "Callable[[int, int], None] | None" = None,
     per_fold_reoptimize: bool = False,
+    reserve_tail_frac: float = 0.2,
 ) -> WalkforwardGAResult:
     """
+    reserve_tail_frac (AUDIT 2026-10-12): the GA's walk-forward folds are built on the first
+    (1 - reserve_tail_frac) of `df`; the tail is never used for selection, so Full Pipeline's
+    Step 4 out-of-sample fold check (which embargoes everything the GA touched via
+    max_test_bar_used) still has genuinely unseen bars. Before the build_folds rolling-window
+    fix the broken fold geometry happened to stop at ~80% of the data and gave Step 4 this tail
+    by accident; now it is explicit. 0.0 = use all bars (the GA's test slices then reach the end
+    of `df` and a downstream embargoed check has nothing left).
+
     per_fold_reoptimize: when True, after the search a fresh small optimizer is run on each
     fold's TRAIN slice only (app.validation.walk_forward_opt.run_walk_forward_optimization) and
     the MEDIAN fold test score is stored as honest_median_fold_score / headline_score. The
@@ -438,7 +447,8 @@ def run_walkforward_aware_refinement(
     # mutate it without a `nonlocal` declaration.
     total_evaluations = [0]
 
-    folds = build_folds(df, n_folds=n_folds, window_mode=window_mode, train_frac=train_frac, warnings=warnings)
+    _ga_cut = len(df) if not reserve_tail_frac else max(1, int(len(df) * (1.0 - float(reserve_tail_frac))))
+    folds = build_folds(df.iloc[:_ga_cut], n_folds=n_folds, window_mode=window_mode, train_frac=train_frac, warnings=warnings)
     if not folds:
         raise RefinementError(
             "Not enough bars to build the requested number of walk-forward folds for the GA."
