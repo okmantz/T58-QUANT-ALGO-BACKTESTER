@@ -104,6 +104,40 @@ def _license_activated_by_default(monkeypatch, tmp_path_factory):
     _lic._session_only_active = False
 
 
+_SETTINGS_MODULES = (
+    "app.ai.ollama_settings",
+    "app.web.notifications",
+    "app.live_deploy.live_settings",
+    "app.data.alpaca_credentials",
+    "app.forward_test.mt5_settings",
+    "app.accounts.api_keys",
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_user_settings(monkeypatch, tmp_path_factory):
+    """AUDIT 2026-10-12 (F-TESTISO): credential/settings modules resolve
+    their config dir via get_app_base_dir() (= the repo root when run from
+    source) and prefer the real OS keyring. Tests that call save_settings()
+    with fake keys therefore overwrote/cleared the developer's REAL API
+    keys, MT5/Alpaca/live passwords and notification settings. Each module
+    now gets a per-test tmp base dir and no keyring. Tests that patch these
+    themselves still win (their monkeypatch is applied after this one)."""
+    import importlib
+
+    home = tmp_path_factory.mktemp("t58-settings")
+    for name in _SETTINGS_MODULES:
+        try:
+            mod = importlib.import_module(name)
+        except Exception:
+            continue
+        if hasattr(mod, "get_app_base_dir"):
+            monkeypatch.setattr(mod, "get_app_base_dir", lambda _h=home: _h)
+        if hasattr(mod, "_try_keyring"):
+            monkeypatch.setattr(mod, "_try_keyring", lambda: None)
+    yield
+
+
 @pytest.fixture(autouse=True)
 def _reset_heavy_job_guard():
     """Runs around every single test in this suite. Clears whatever
@@ -132,3 +166,55 @@ import os as _os
 # suite opts out by default; the preflight tests call the gate directly.
 _os.environ.setdefault("T58_PREFLIGHT_ENFORCE", "0")
 _os.environ.setdefault("T58_SKIP_EXTRA_GATES", "1")
+
+
+# ---------------------------------------------------------------------------
+# AUDIT 2026-10-12 (F-TESTPOLL): a full run of this suite wrote ~110 stray files
+# into the real working tree (data/raw/"EURUSD_5M_sample (N).csv", AAA/BBB.csv,
+# strategies/manual/evolab_*/searchlab_*, strategies/python/*, data/config/*,
+# account_settings.json). On a developer's machine that clutters the dataset
+# list and the strategy library. This hook never deletes by default: it reports
+# every NEW file found under those folders after the session, and removes them
+# only when T58_TEST_CLEAN_LITTER=1 (files that existed before the session are
+# never touched).
+# ---------------------------------------------------------------------------
+_LITTER_DIRS = ("data/raw", "strategies/manual", "strategies/python", "data/config", "reports")
+_LITTER_FILES = ("account_settings.json",)
+_litter_before: set = set()
+
+
+def _litter_snapshot() -> set:
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    found = set()
+    for d in _LITTER_DIRS:
+        base = root / d
+        if base.exists():
+            found.update(p for p in base.rglob("*") if p.is_file() and "__pycache__" not in p.parts)
+    found.update(root / f for f in _LITTER_FILES if (root / f).exists())
+    return found
+
+
+def pytest_sessionstart(session):
+    global _litter_before
+    _litter_before = _litter_snapshot()
+
+
+def pytest_sessionfinish(session, exitstatus):
+    new = sorted(_litter_snapshot() - _litter_before)
+    if not new:
+        return
+    clean = _os.environ.get("T58_TEST_CLEAN_LITTER") == "1"
+    print(f"\n[t58-conftest] tests created {len(new)} new file(s) in the working tree"
+          f"{' -- removing (T58_TEST_CLEAN_LITTER=1)' if clean else ' (set T58_TEST_CLEAN_LITTER=1 to remove them)'}:")
+    for p in new[:15]:
+        print(f"   {p}")
+    if len(new) > 15:
+        print(f"   ... and {len(new) - 15} more")
+    if clean:
+        for p in new:
+            try:
+                p.unlink()
+            except OSError:
+                pass
