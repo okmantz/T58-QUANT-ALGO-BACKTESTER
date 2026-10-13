@@ -298,18 +298,12 @@ def startup_banner_lines(url: str, qr_path: Path | None) -> list[str]:
         "  127.0.0.1 (that address only ever means \"this computer itself\"):",
         f"      {url}",
     ]
-    if qr_path is not None:
-        lines += [
-            "",
-            f"  A QR code also opened in a picture viewer ({qr_path}).",
-            "  Scan it with your phone's camera to jump straight there.",
-        ]
-    else:
-        lines += [
-            "",
-            "  (Could not generate a QR code image -- just type the",
-            "   address above into your phone's browser instead.)",
-        ]
+    lines += [
+        "",
+        "  To get a QR code for your phone, open the \U0001F4F1 Mobile access",
+        "  page inside the app (sidebar, or /mobile-access) -- it is not",
+        "  popped open separately.",
+    ]
     ts_addr = get_tailscale_ip()
     if ts_addr:
         lines += [

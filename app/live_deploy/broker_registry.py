@@ -8,7 +8,7 @@ a platform-specific module directly.
 from __future__ import annotations
 
 from app.live_deploy.broker_base import BrokerAdapter
-from app.live_deploy.live_settings import LiveAccount
+from app.live_deploy.live_settings import LiveAccount, normalize_platform
 
 PLATFORM_MT4_MT5 = "MT4/MT5"
 PLATFORM_CTRADER = "cTrader"
@@ -27,7 +27,7 @@ def build_adapter(account: LiveAccount) -> BrokerAdapter:
     missing from account.extra_credentials -- both are meant to surface
     as a clear form-validation-style error in the Deploy Live UI, not a
     traceback."""
-    platform = account.platform
+    platform = normalize_platform(account.platform)
 
     if platform == PLATFORM_MT4_MT5:
         from app.live_deploy.broker_mt5 import MT5BrokerAdapter

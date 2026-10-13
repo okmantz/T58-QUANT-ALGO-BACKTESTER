@@ -420,6 +420,17 @@ class EvolutionConfig:
     # evolution/selection; only evaluate_champion_on_locked_holdout()
     # touches it, for the final champion check.
     locked_holdout_frac: float = 0.2
+    # Sealed FINAL test slice (Oct 2026). The locked holdout above is
+    # re-used as a GATE every generation (_apply_holdout_gate), so every
+    # candidate that reaches the top of the leaderboard is a "look" at it
+    # and its pass rate is optimistic. This is a SECOND slice, carved off
+    # the very end of the data BEFORE the gate slice, that NOTHING touches
+    # during the run -- not evolution, not selection, not the gate. Only
+    # evaluate_champion_on_sealed_final() reads it, once, after the run has
+    # stopped. Chronological layout: [ dev | gate holdout | sealed final ].
+    # Fractions are of the WHOLE dataset. 0.0 disables it (pre-sealed
+    # behavior).
+    sealed_final_frac: float = 0.10
     walk_forward_folds: int = 4
     walk_forward_metric: str = "eval_pass_probability"
 
@@ -720,6 +731,9 @@ class EvolutionCandidateRecord:
     #  top of the leaderboard). Cached on the record so each candidate is
     #  evaluated at most once per run.
     holdout_check: dict | None = None
+    # The ONE-SHOT sealed final test verdict (see
+    # EvolutionRunner.evaluate_champion_on_sealed_final). None = never run.
+    sealed_check: dict | None = None
     fitness: object = None                     # PropFitnessBreakdown
     trade_pnls: list = field(default_factory=list)
     trades: list = field(default_factory=list)  # raw Trade objects, for date-aligned cluster correlation
@@ -747,6 +761,7 @@ class EvolutionCandidateRecord:
             "lookahead_summary": self.lookahead_summary,
             "stressed_ok": self.stressed_ok,
             "holdout_check": self.holdout_check,
+            "sealed_check": self.sealed_check,
             "fitness": self.fitness.to_dict() if self.fitness is not None else None,
             "trade_pnls": self.trade_pnls[:500],
         }
@@ -769,6 +784,7 @@ def _record_from_dict(d: dict) -> EvolutionCandidateRecord:
         lookahead_summary=d.get("lookahead_summary"),
         stressed_ok=d.get("stressed_ok"),
         holdout_check=d.get("holdout_check"),
+        sealed_check=d.get("sealed_check"),
         fitness=fitness,
         trade_pnls=d.get("trade_pnls") or [],
         trades=[],
@@ -847,19 +863,37 @@ class EvolutionRunner:
         # a selection-biased history. df=None is tolerated (as before --
         # some callers construct the runner for risk-wiring only); both
         # slices stay None and the holdout method will refuse to run.
+        self.sealed_final_df = None
+        self._sealed_looks = 0
         if df is None:
             self.df = None
             self.locked_holdout_df = None
         else:
             _n = len(df)
-            _split_idx = max(1, min(int(_n * (1 - self.cfg.locked_holdout_frac)), _n - 1)) if _n > 1 else _n
-            self.df = df.iloc[:_split_idx].reset_index(drop=True)
-            self.locked_holdout_df = df.iloc[_split_idx:].reset_index(drop=True)
+            # Chronological: [ dev | gate holdout | sealed final ]. The
+            # sealed slice is carved off the very end first, then the gate
+            # holdout immediately before it, then everything left is dev.
+            _sealed_frac = max(0.0, min(float(getattr(self.cfg, "sealed_final_frac", 0.0) or 0.0), 0.5))
+            _sealed_n = int(_n * _sealed_frac) if _n > 2 and _sealed_frac > 0 else 0
+            _sealed_n = max(0, min(_sealed_n, _n - 2))
+            _sealed_start = _n - _sealed_n
+            _gate_n = int(_n * self.cfg.locked_holdout_frac)
+            _gate_start = max(1, min(_sealed_start - _gate_n, _sealed_start - 1)) if _sealed_start > 1 else _sealed_start
+            self.df = df.iloc[:_gate_start].reset_index(drop=True)
+            self.locked_holdout_df = df.iloc[_gate_start:_sealed_start].reset_index(drop=True)
+            if _sealed_n:
+                self.sealed_final_df = df.iloc[_sealed_start:].reset_index(drop=True)
             self._log(
                 f"Reserved the final {self.cfg.locked_holdout_frac:.0%} of the dataset "
-                f"({len(self.locked_holdout_df):,} bars) as a locked out-of-sample holdout -- "
-                f"evolution runs on the first {len(self.df):,} bars only."
+                f"({len(self.locked_holdout_df):,} bars) as a locked out-of-sample holdout (used as a "
+                f"per-generation gate) -- evolution runs on the first {len(self.df):,} bars only."
             )
+            if self.sealed_final_df is not None:
+                self._log(
+                    f"Sealed the last {len(self.sealed_final_df):,} bars ({_sealed_frac:.0%}) as a FINAL test slice "
+                    f"that nothing touches until the run is over (the gate holdout is re-used every generation, "
+                    f"so its pass rate is optimistic; this slice gets exactly one look)."
+                )
         # FIX (2026-09-18): see RiskConfig.reset_on_breach's docstring --
         # self.cfg.reset_on_breach was already threaded into the post-hoc
         # simulate_account/MonteCarloConfig scoring layer (see this file's
@@ -1248,36 +1282,14 @@ class EvolutionRunner:
         pareto_frontier_for_finalists(reports)
         return [r.to_dict() for r in reports]
 
-    def evaluate_champion_on_locked_holdout(
-        self, candidate=None, mc_sims: int | None = None,
-    ) -> dict:
-        """P1-4: the final champion check on the locked holdout slice --
-        the last locked_holdout_frac of bars that evolution/selection never
-        saw (see __init__). Backtests the champion's spec on
-        self.locked_holdout_df, then runs the single-run prop sim and a
-        full Monte Carlo on those holdout trades, and returns the holdout
-        stats dict. Call once, after the run stops, not every generation.
-
-        candidate: an EvolutionCandidateRecord (or anything with a `.spec`
-        attribute); defaults to the current leaderboard champion.
-        mc_sims: Monte Carlo simulation count for the holdout check;
-        defaults to self.cfg.mc_sims.
-        """
-        rec = candidate if candidate is not None else (self.leaderboard[0] if self.leaderboard else None)
-        if rec is None:
-            raise ValueError("No champion to evaluate: the leaderboard is empty.")
-        if self.locked_holdout_df is None or not len(self.locked_holdout_df):
-            raise ValueError("No locked holdout available: this runner was constructed without data (df=None).")
+    def _evaluate_spec_on_slice(self, slice_df, rec, label: str, mc_sims: int | None) -> dict:
         spec = rec.spec if hasattr(rec, "spec") else rec.get("spec")
         if not spec:
             raise ValueError("Champion record has no strategy spec to evaluate.")
         n_sims = mc_sims if mc_sims is not None else self.cfg.mc_sims
-        self._log(
-            f"Evaluating champion on the locked holdout ({len(self.locked_holdout_df):,} bars "
-            f"never seen during evolution)..."
-        )
+        self._log(f"Evaluating champion on the {label} ({len(slice_df):,} bars never seen during evolution)...")
         strategy = build_strategy_from_spec(spec)
-        bt = run_backtest(self.locked_holdout_df, strategy, self.risk)
+        bt = run_backtest(slice_df, strategy, self.risk)
         trade_pnls = [t.pnl for t in bt.trades]
         trade_dates = [t.entry_time for t in bt.trades]
         single_run = simulate_account(
@@ -1292,8 +1304,8 @@ class EvolutionRunner:
                 reset_on_breach=self.cfg.reset_on_breach,
             ),
         )
-        holdout = {
-            "n_bars": len(self.locked_holdout_df),
+        out = {
+            "n_bars": len(slice_df),
             "n_trades": len(bt.trades),
             "statistics": bt.statistics.to_dict(),
             "single_run": summarize_single_run(single_run),
@@ -1306,11 +1318,80 @@ class EvolutionRunner:
             "methodology_note": mc.methodology_note,
         }
         self._log(
-            f"Locked holdout: {holdout['n_trades']} trades, per-attempt pass "
-            f"{holdout['per_attempt_pass_probability']:.1f}%, per-attempt payout "
-            f"{holdout['per_attempt_payout_probability']:.1f}%, RoR {holdout['risk_of_ruin_pct']:.1f}%."
+            f"{label[0].upper() + label[1:]}: {out['n_trades']} trades, per-attempt pass "
+            f"{out['per_attempt_pass_probability']:.1f}%, per-attempt payout "
+            f"{out['per_attempt_payout_probability']:.1f}%, RoR {out['risk_of_ruin_pct']:.1f}%."
         )
-        return holdout
+        return out
+
+    def evaluate_champion_on_locked_holdout(
+        self, candidate=None, mc_sims: int | None = None,
+    ) -> dict:
+        """P1-4: the champion check on the locked holdout slice -- the
+        slice that evolution/selection never trained on (see __init__) but
+        that IS re-used as a gate every generation, so its pass rate is
+        optimistic. For the honest final number see
+        evaluate_champion_on_sealed_final().
+
+        candidate: an EvolutionCandidateRecord (or anything with a `.spec`
+        attribute); defaults to the current leaderboard champion.
+        mc_sims: Monte Carlo simulation count; defaults to self.cfg.mc_sims.
+        """
+        rec = candidate if candidate is not None else (self.leaderboard[0] if self.leaderboard else None)
+        if rec is None:
+            raise ValueError("No champion to evaluate: the leaderboard is empty.")
+        if self.locked_holdout_df is None or not len(self.locked_holdout_df):
+            raise ValueError("No locked holdout available: this runner was constructed without data (df=None).")
+        return self._evaluate_spec_on_slice(self.locked_holdout_df, rec, "locked holdout", mc_sims)
+
+    def evaluate_champion_on_sealed_final(
+        self, candidate=None, mc_sims: int | None = None,
+    ) -> dict:
+        """The honest, truly-unseen FINAL test. Runs the champion on the
+        sealed slice that nothing touched during the run -- not
+        evolution, not selection, not the per-generation holdout gate.
+
+        Guard rails (so it cannot quietly become another tuning set):
+          * refuses while the run is still going -- it is a post-run check;
+          * one look per candidate: asking again returns the SAME stored
+            verdict (already_evaluated=True) instead of re-scoring;
+          * every additional DIFFERENT candidate looked at is counted in
+            `sealed_looks`, and once it is above 1 the result is marked
+            pristine=False with a warning -- picking the best of several
+            sealed looks re-introduces exactly the optimism this slice
+            exists to remove.
+        """
+        if self.is_running:
+            raise ValueError(
+                "The sealed final test can only be run after the Evolution Lab has stopped -- "
+                "stop the run first, then pick your champion."
+            )
+        rec = candidate if candidate is not None else (self.leaderboard[0] if self.leaderboard else None)
+        if rec is None:
+            raise ValueError("No champion to evaluate: the leaderboard is empty.")
+        if self.sealed_final_df is None or not len(self.sealed_final_df):
+            raise ValueError(
+                "No sealed final slice for this run (sealed_final_frac was 0, or the run has no data). "
+                "Start a new run with a sealed final test fraction above 0."
+            )
+        prior = getattr(rec, "sealed_check", None) if hasattr(rec, "spec") else rec.get("sealed_check")
+        if prior:
+            return {**prior, "already_evaluated": True}
+        self._sealed_looks += 1
+        result = self._evaluate_spec_on_slice(self.sealed_final_df, rec, "sealed final test slice", mc_sims)
+        pristine = self._sealed_looks <= 1
+        result.update({
+            "sealed_looks": self._sealed_looks,
+            "pristine": pristine,
+            "already_evaluated": False,
+            "note": ("First and only look at this slice -- this is the honest out-of-sample estimate."
+                     if pristine else
+                     f"This is look #{self._sealed_looks} at the sealed slice. Choosing among several sealed "
+                     f"looks makes the number optimistic again; treat it as a gate result, not a pristine one."),
+        })
+        if hasattr(rec, "spec"):
+            rec.sealed_check = result
+        return result
 
     def tested_candidates(self, limit: int = 500) -> list[dict]:
         """The "what was actually tested" record -- every candidate the

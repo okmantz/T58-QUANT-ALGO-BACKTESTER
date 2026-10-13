@@ -118,7 +118,8 @@ class PropFirmPreset:
     # (target, drawdown, daily loss, basis, lock, consistency) were checked against a firm page;
     # ``source_url`` is the page. Empty verified_on = unverified = NOT eligible for a READY verdict
     # (see is_ready_eligible). ``verification_tier``: "primary" (firm's own page/help centre),
-    # "secondary" (reviewer/aggregator, needs a confirm), "" (not verified).
+    # "secondary" (reviewer/aggregator, needs a confirm), "owner_attested" (the account owner signed it off;
+    # not an independent page check), "" (not verified).
     verified_on: str = ""
     source_url: str = ""
     verification_tier: str = ""
@@ -824,6 +825,16 @@ _VERIFIED_STAMPS = {
     # plus pricing aggregators 2026-10-11 -- secondary tier, confirm on lucidtrading.com before paying.
     "topstep_50k": ("2026-10-11", "https://help.topstep.com/en/articles/8284204-what-is-the-maximum-loss-limit", "primary"),
     "lucid_50k": ("2026-10-07", "https://tradetanto.com/learn/lucid-trading-rules-explained-every-plan-rule-and-limit", "secondary"),
+    # 2026-10-13: marked verified by the account owner (Owen) on request. "owner_attested" is its own tier on
+    # purpose: it is the owner's sign-off, NOT a fresh primary-source check -- the assistant that applied it could
+    # not open the firms' pages in that session. The notes appended below say so, and the figures the earlier
+    # source_notes flagged as unconfirmed (Apex target / daily-loss / payout-gate dollar amounts, Lucid $100k
+    # target and daily-loss dollars) should still be eyeballed on the firm's site before real money goes on them.
+    "apex_50k_eod": ("2026-10-13", "https://apextraderfunding.com/help-center/", "owner_attested"),
+    "apex_50k_intraday": ("2026-10-13", "https://apextraderfunding.com/help-center/", "owner_attested"),
+    "apex_100k_eod": ("2026-10-13", "https://apextraderfunding.com/help-center/", "owner_attested"),
+    "apex_100k_intraday": ("2026-10-13", "https://apextraderfunding.com/help-center/", "owner_attested"),
+    "lucid_100k": ("2026-10-13", "https://intercom.help/lucid-trading/en/", "owner_attested"),
 }
 for _p in PROP_FIRM_PRESETS:
     _st = _VERIFIED_STAMPS.get(_p.key)
@@ -831,6 +842,10 @@ for _p in PROP_FIRM_PRESETS:
         object.__setattr__(_p, "verified_on", _st[0])
         object.__setattr__(_p, "source_url", _st[1])
         object.__setattr__(_p, "verification_tier", _st[2])
+        if _st[2] == "owner_attested":
+            object.__setattr__(_p, "source_note", ((_p.source_note + " ") if _p.source_note else "") + (
+                f"Marked verified by the account owner on {_st[0]} (owner-attested). Not independently re-checked "
+                f"against the firm's page in that session -- confirm dollar figures at the firm's site before relying on them."))
 del _p, _st
 
 _BY_KEY: dict[str, PropFirmPreset] = {p.key: p for p in PROP_FIRM_PRESETS}

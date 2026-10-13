@@ -241,24 +241,190 @@ def _regime(s: dict) -> dict:
                  "The edge only exists in part of the market. Filtering those regimes is the likely fix.", metrics)
 
 
+# ---------------------------------------------------------------------------
+# Guidance: for every check that did not pass, say exactly WHY and exactly
+# WHAT TO DO to make it pass, plus a button to the right page.
+# ---------------------------------------------------------------------------
+
+def _go(label: str, path: str, ctx: Optional[dict], extra: Optional[dict] = None) -> dict:
+    return {"label": label, "href": _href(path, {**(ctx or {}), **(extra or {})})}
+
+
+def _diagnose_error(check: str, error: str, ctx: Optional[dict]) -> dict:
+    """Turn a raw exception message from a check that could not RUN into
+    plain-language cause + fix steps + a place to go. Matching is by
+    message content so every check (and any future one) gets useful help."""
+    e = (error or "").lower()
+    rerun = _go("Re-run this check", "/validate-simple", ctx, {"run": check})
+    test_page = _go("Test the strategy on this data first", "/full-pipeline", ctx)
+    data_page = _go("Open Data Center", "/data-center", ctx)
+    optimize = _go("Open Optimize", "/optimize-simple", ctx)
+
+    if "zero trades" in e or "produced zero" in e or "no trades" in e or "zero-trade" in e:
+        return {
+            "why": "The strategy never opened a single trade on this dataset and timeframe, so there is nothing to validate. "
+                   "This is a strategy/data mismatch, not a bug in the check.",
+            "steps": [
+                "Run a plain backtest of this strategy on the same dataset and timeframe (the Test step). If that also shows 0 trades, the problem is the strategy or the data.",
+                "If the strategy filters by hour or session (London/NY open, opening range, etc.), it needs INTRADAY bars. Daily bars, or data with a constant time of day, exclude every bar.",
+                "Check the dataset has enough bars for the slowest indicator to warm up (a 200-period average needs at least a few hundred bars).",
+                "Check the strategy was written for this instrument's price scale and symbol, and that the timeframe picked on the Validate page matches the one it was built on.",
+                "Loosen the entry conditions, or switch to a dataset/timeframe the strategy was designed for, then run Validate again.",
+            ],
+            "go": test_page, "go2": data_page,
+        }
+    if "tunable" in e or "no parameters" in e or "no numeric" in e or "at least 2 candidates" in e:
+        return {
+            "why": "This check works by nudging the strategy's numeric settings up and down. This strategy has no numeric settings it can safely change, so the check has nothing to vary.",
+            "steps": [
+                "Open the strategy and expose its key numbers (periods, thresholds, stop/target multiples) as plain numeric inputs/constants near the top of the file.",
+                "Save it back to your Strategy Library and run Validate again.",
+                "If the strategy is intentionally parameter-free, you can skip this check -- the other checks still count.",
+            ],
+            "go": _go("Open Strategy Library", "/library", ctx), "go2": None,
+        }
+    if "not enough bars" in e or "too few bars" in e or "insufficient" in e or "too short" in e:
+        return {
+            "why": "The dataset is too short to split into the training/test windows this check needs.",
+            "steps": [
+                "Import a longer history (more months/years) for this instrument in the Data Center.",
+                "Or lower the number of folds/groups in the Validate page's advanced settings so each window is bigger.",
+                "Run Validate again.",
+            ],
+            "go": data_page, "go2": None,
+        }
+    if "nonetype" in e or "mkdir" in e or "permission" in e or "no such file" in e or "winerror" in e or "read-only" in e:
+        return {
+            "why": "The app could not create or read a temporary working file this check needs. This is an environment problem on this machine, not a problem with your strategy.",
+            "steps": [
+                "Run the check again -- the app now creates its own scratch folder automatically.",
+                "If it fails again, make sure your user account can write to its temp folder and the app's data folder, and that antivirus is not quarantining the app's temp files.",
+                "Close other copies of the app that may be holding the same files, then retry.",
+            ],
+            "go": rerun, "go2": None,
+        }
+    if "memory" in e or "killed" in e:
+        return {
+            "why": "The machine ran out of memory while running this check.",
+            "steps": ["Close other heavy programs.", "Use a shorter date range or a coarser timeframe.", "Lower the number of simulations/paths in advanced settings and re-run."],
+            "go": rerun, "go2": None,
+        }
+    if "timeout" in e or "timed out" in e:
+        return {
+            "why": "This check took longer than allowed.",
+            "steps": ["Use a shorter date range or a coarser timeframe.", "Lower folds/paths/generations in advanced settings.", "Re-run it on its own rather than with every other check."],
+            "go": rerun, "go2": None,
+        }
+    return {
+        "why": "The check stopped on an unexpected error. The exact message is shown above so it can be diagnosed.",
+        "steps": [
+            "Re-run just this check on its own.",
+            "If it fails with the same message, run a plain backtest of this strategy on the same data (the Test step) to confirm the strategy itself runs.",
+            "Still stuck? Copy the error message above into the AI Assistant and ask it to fix the strategy or settings.",
+        ],
+        "go": rerun, "go2": _go("Ask the AI Assistant", "/assistant/", ctx),
+    }
+
+
+# What a check needs to PASS, and what to do when it doesn't (fail/caution).
+def _fix_guidance(check: str, status: str, ctx: Optional[dict]) -> Optional[dict]:
+    optimize = _go("Go to Optimize", "/optimize-simple", ctx)
+    if check == "monte_carlo":
+        return {"bar": "Eval pass chance of 70% or more.",
+                "why": "The strategy's trades, shuffled thousands of ways, do not clear the prop-firm rules often enough.",
+                "steps": ["Optimize for eval pass probability (not just net profit).",
+                          "Reduce position size or risk per trade so the daily/max loss limits are hit less often.",
+                          "Pick a prop-firm preset whose drawdown rules suit this strategy's style."],
+                "go": optimize}
+    if check == "cpcv":
+        return {"bar": "Out-of-sample results must keep most of the in-sample edge on every split.",
+                "why": "The strategy was tuned to history it has already seen, so it fades on unseen data.",
+                "steps": ["Remove parameters until only the few that matter remain.",
+                          "Re-optimize on a longer history so the fit has more to generalize from.",
+                          "Prefer parameter values in the middle of a flat region over the single best spike."],
+                "go": optimize}
+    if check == "pbo":
+        return {"bar": "Probability of overfitting under 35% (50% or more is a fail).",
+                "why": "Choosing the best in-sample variant is not reliably choosing the best out-of-sample one.",
+                "steps": ["Test fewer, more distinct ideas instead of many near-identical variants.",
+                          "Use a longer history.", "Lock in simpler logic with fewer free parameters."],
+                "go": optimize}
+    if check == "walk_forward":
+        return {"bar": "Keep at least 50% of the in-sample edge out-of-sample (25% is the floor).",
+                "why": "Re-optimizing on each training window and trading the next unseen window loses most of the edge.",
+                "steps": ["Use fewer optimizable parameters or narrower ranges.",
+                          "Increase the number of trades per window (longer data or a faster timeframe).",
+                          "Try an anchored window if rolling windows are too short."],
+                "go": optimize}
+    if check == "wfga":
+        return {"bar": "Out-of-sample fitness within 15% of in-sample (30% is the floor).",
+                "why": "The tuned parameters fit the training folds much better than the folds they were tested on.",
+                "steps": ["Reduce the parameter ranges the GA can explore.", "Lower generations/population so it cannot memorize noise.",
+                          "Make sure each test fold has enough trades to be meaningful."],
+                "go": optimize}
+    if check == "sensitivity":
+        return {"bar": "No cliff edges (at most one in three parameters on a cliff for a caution).",
+                "why": "A small nudge to some parameter changes the results sharply, so the edge depends on exact values.",
+                "steps": ["Open Sensitivity to see which parameter is fragile.", "Re-optimize and choose the middle of the flat region, not the peak.",
+                          "Widen or smooth that parameter's logic (e.g. use a threshold band instead of an exact level)."],
+                "go": _go("Open Sensitivity", "/sensitivity", ctx)}
+    if check == "robustness":
+        return {"bar": "Robustness score of 70/100 or more.",
+                "why": "The area around the chosen parameters is narrow -- the strategy only works at a pinpoint setting.",
+                "steps": ["Re-optimize preferring broad plateaus.", "Drop parameters that do not add edge.", "Re-run this check after changing."],
+                "go": _go("Open Parameter Robustness", "/parameter-robustness", ctx)}
+    if check == "regime":
+        return {"bar": "No market regime that loses money (one is a caution, more than one is a fail).",
+                "why": "The edge only exists in part of the market; the other regimes cost you money.",
+                "steps": ["Open the Regime Matrix and see which volatility/trend regimes lose.",
+                          "Add a filter to the strategy so it stands aside in those regimes.",
+                          "Re-run Validate to confirm the filter fixed it."],
+                "go": _go("Open Regime Matrix", "/regime-matrix", ctx)}
+    return None
+
+
+def _attach_guidance(item: dict, result: dict, ctx: Optional[dict]) -> dict:
+    status = item.get("status")
+    if status == "error":
+        g = _diagnose_error(item["check"], str(result.get("error") or ""), ctx)
+        g["bar"] = ""
+    elif status in ("fail", "caution"):
+        g = _fix_guidance(item["check"], status, ctx)
+        if g is None:
+            return item
+        g.setdefault("go2", None)
+    else:
+        return item
+    item["guidance"] = g
+    return item
+
+
 _INTERPRETERS = {
     "monte_carlo": _monte_carlo, "cpcv": _cpcv, "pbo": _pbo, "walk_forward": _walk_forward,
     "wfga": _wfga, "sensitivity": _sensitivity, "robustness": _robustness, "regime": _regime,
 }
 
 
-def interpret_check(result: dict) -> dict:
-    """One check result ({check, ok, summary, error}) -> display item."""
+def interpret_check(result: dict, ctx: Optional[dict] = None) -> dict:
+    """One check result ({check, ok, summary, error}) -> display item.
+    Items that did not pass carry a ``guidance`` dict (why / steps / go)."""
     check = result.get("check")
     if not result.get("ok"):
-        return _item(check, "error", "This check could not run.", str(result.get("error") or "Unknown error."))
+        raw_err = str(result.get("error") or "Unknown error.").strip()
+        # Long multi-paragraph messages (e.g. the zero-trade preflight) are
+        # summarised by the guidance block below; keep just the first
+        # paragraph here so the card stays readable.
+        short = raw_err.split("\n\n", 1)[0].strip()
+        item = _item(check, "error", "This check could not run.", short)
+        return _attach_guidance(item, result, ctx)
     fn = _INTERPRETERS.get(check)
     if fn is None:
         return _item(check, "info", "Ran.", "")
     try:
-        return fn(result.get("summary") or {})
+        item = fn(result.get("summary") or {})
     except Exception as exc:  # noqa: BLE001 -- never let a display bug hide a finished check
         return _item(check, "info", "Ran, but the result could not be summarised.", str(exc))
+    return _attach_guidance(item, result, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +449,16 @@ def _next_step(items: list[dict], ctx: dict, gating_missing: list[str]) -> dict:
     if errored:
         names = ", ".join(i["label"] for i in errored)
         run = ",".join(i["check"] for i in errored)
+        zero = [i for i in errored if str((i.get("guidance") or {}).get("why", "")).startswith("The strategy never opened")]
+        if len(zero) == len(errored):
+            return {
+                "key": "fix_zero_trades", "tone": "bad",
+                "title": "This strategy opens no trades on this data -- fix that first",
+                "why": f"{names} could not run because the strategy never fired on this dataset/timeframe. "
+                       "Run a plain test on the same data to confirm, then check the strategy's hour/session filters, "
+                       "the bar timeframe, and indicator warm-up (steps are listed on the card).",
+                "label": "Test it on this data", "href": _href("/full-pipeline", ctx),
+            }
         return {
             "key": "rerun_errors", "tone": "warn",
             "title": f"Re-run the check{'s' if len(errored) > 1 else ''} that failed to run",
@@ -373,7 +549,7 @@ def build_report(results: list[dict], *, context: Optional[dict] = None,
                          work out which of the five core checks are missing.
     """
     ctx = dict(context or {})
-    items = [interpret_check(r) for r in results]
+    items = [interpret_check(r, ctx) for r in results]
     items.sort(key=lambda i: CHECK_ORDER.index(i["check"]) if i["check"] in CHECK_ORDER else 99)
 
     on_record = set(methods_on_record or set())
@@ -408,3 +584,52 @@ def build_report(results: list[dict], *, context: Optional[dict] = None,
         "gating_missing_labels": [CHECK_LABELS[c] for c in gating_missing],
         "next_step": _next_step(items, ctx, gating_missing),
     }
+
+
+# ---------------------------------------------------------------------------
+# Plain-text rendering (desktop app / CLI / logs) -- same content the web
+# report shows, so both apps tell the user the same thing.
+# ---------------------------------------------------------------------------
+
+_STATUS_TEXT = {"pass": "PASS", "caution": "CAUTION", "fail": "FAIL", "error": "DID NOT RUN", "info": "INFO"}
+
+
+def report_to_text(report: dict, baseline: Optional[dict] = None) -> str:
+    """Render a ``build_report`` dict as readable plain text, including the
+    "why / what to do / where to go" guidance for every check that did not
+    pass. Mirrors the web report card for card."""
+    lines: list[str] = []
+    lines.append("=" * 64)
+    lines.append(f"VALIDATION REPORT -- {report.get('overall_label', '')}")
+    lines.append(report.get("summary_sentence", ""))
+    lines.append("=" * 64)
+    if baseline:
+        lines.append(
+            f"Baseline backtest: {baseline.get('trades', 0)} trades, net {baseline.get('net_profit', 0):.2f}, "
+            f"win rate {baseline.get('win_rate', 0):.1f}%, max drawdown {baseline.get('max_drawdown_pct', 0):.1f}%."
+        )
+        lines.append("")
+    for it in report.get("items", []):
+        lines.append(f"[{_STATUS_TEXT.get(it['status'], it['status'].upper())}] {it['label']} -- {it['headline']}")
+        if it.get("detail"):
+            lines.append(f"    {it['detail']}")
+        for m in it.get("metrics", []):
+            lines.append(f"    - {m['label']}: {m['value']}")
+        g = it.get("guidance")
+        if g:
+            lines.append("    WHY: " + g.get("why", ""))
+            if g.get("bar"):
+                lines.append("    TO PASS: " + g["bar"])
+            for n, step in enumerate(g.get("steps", []), 1):
+                lines.append(f"    {n}. {step}")
+            go = g.get("go")
+            if go:
+                lines.append(f"    GO TO: {go['label']}  ({go['href'].split('?')[0]})")
+        lines.append("")
+    n = report.get("next_step") or {}
+    if n:
+        lines.append("YOUR NEXT STEP: " + n.get("title", ""))
+        lines.append("    " + n.get("why", ""))
+        if n.get("href"):
+            lines.append(f"    -> {n.get('label', 'Continue')}  ({n['href'].split('?')[0]})")
+    return "\n".join(lines)

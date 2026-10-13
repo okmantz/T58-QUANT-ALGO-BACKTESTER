@@ -331,18 +331,40 @@ def apply_code_genome(text: str, genes: list[CodeGene], genome: list[float]) -> 
     return patched
 
 
+_FALLBACK_TMP_DIR: Path | None = None
+
+
+def _fallback_tmp_dir() -> Path:
+    """A process-lifetime scratch folder for callers that did not supply a
+    tmp_dir. Python strategies can only be built from a file path, so every
+    patched candidate needs somewhere to be written. Before this existed,
+    Sensitivity (and Parameter Robustness) passed tmp_dir=None and crashed
+    with "'NoneType' object has no attribute 'mkdir'" on any .py strategy."""
+    global _FALLBACK_TMP_DIR
+    if _FALLBACK_TMP_DIR is None or not _FALLBACK_TMP_DIR.exists():
+        import atexit
+        import shutil
+        import tempfile
+
+        d = Path(tempfile.mkdtemp(prefix="t58_candidates_"))
+        atexit.register(shutil.rmtree, d, True)
+        _FALLBACK_TMP_DIR = d
+    return _FALLBACK_TMP_DIR
+
+
 def materialize_python_strategy(
-    file_path: str | Path, genes: list[CodeGene], genome: list[float], tmp_dir: Path,
+    file_path: str | Path, genes: list[CodeGene], genome: list[float], tmp_dir: Path | None = None,
 ) -> PythonStrategy:
     text = Path(file_path).read_text(encoding="utf-8", errors="ignore")
     patched = apply_code_genome(text, genes, genome)
+    tmp_dir = Path(tmp_dir) if tmp_dir is not None else _fallback_tmp_dir()
     tmp_dir.mkdir(parents=True, exist_ok=True)
     tmp_path = tmp_dir / f"refine_{uuid.uuid4().hex}.py"
     tmp_path.write_text(patched, encoding="utf-8")
     return PythonStrategy(tmp_path)
 
 
-def materialize_code_strategy(strategy, genes: list[CodeGene], genome: list[float], tmp_dir: Path):
+def materialize_code_strategy(strategy, genes: list[CodeGene], genome: list[float], tmp_dir: Path | None = None):
     """Builds a fresh strategy instance of the same source type as
     `strategy`, with `genome` applied at the positions `genes` describes.
     `tmp_dir` is only used for Python strategies (which require a file path);

@@ -28,6 +28,22 @@ from app.data.storage import get_app_base_dir
 SERVICE_NAME = "T58PropAlgoBacktester"
 
 
+def normalize_platform(platform: str) -> str:
+    """The desktop app's platform dropdown says "MT5"/"MT4" while the
+    broker registry (and the web app) say "MT4/MT5" -- an account saved from
+    the desktop therefore failed to connect with "Unsupported platform
+    'MT5'" everywhere else, even though both apps share this one accounts
+    file. Everything now speaks the canonical name."""
+    p = (platform or "").strip()
+    if p.upper() in ("MT4", "MT5", "MT4/MT5", "MT5/MT4", "METATRADER", "METATRADER 4", "METATRADER 5"):
+        return "MT4/MT5"
+    low = p.lower()
+    for canon in ("cTrader", "Tradovate", "TradeLocker", "DXtrade"):
+        if low == canon.lower():
+            return canon
+    return p
+
+
 @dataclass
 class LiveAccount:
     id: str | None          # None for a not-yet-saved account; a stable uuid4 hex once saved
@@ -50,7 +66,7 @@ class LiveAccount:
 
     @property
     def is_usable(self) -> bool:
-        if self.platform == "MT4/MT5":
+        if normalize_platform(self.platform) == "MT4/MT5":
             return bool(self.login.strip()) and bool(self.server.strip()) and bool(self.password)
         return bool(self.login.strip()) or bool(self.extra_credentials)
 
@@ -192,7 +208,7 @@ def save_account(account: LiveAccount) -> str:
         "id": account_id,
         "nickname": account.nickname.strip(),
         "firm_name": account.firm_name,
-        "platform": account.platform,
+        "platform": normalize_platform(account.platform),
         "login": account.login.strip(),
         "server": account.server.strip(),
         "terminal_path": (account.terminal_path or "").strip(),
@@ -224,7 +240,7 @@ def load_accounts() -> list[LiveAccount]:
             id=account_id,
             nickname=raw.get("nickname") or "",
             firm_name=raw.get("firm_name") or "",
-            platform=raw.get("platform") or "",
+            platform=normalize_platform(raw.get("platform") or ""),
             login=raw.get("login") or "",
             server=raw.get("server") or "",
             password=_load_password(account_id),

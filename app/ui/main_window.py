@@ -77,6 +77,7 @@ from app.forward_test.journal import ForwardTestJournal
 from app.forward_test.engine import ForwardTestConfig, ForwardTestSession
 from app.live_deploy import prop_firms as live_deploy_prop_firms
 from app.live_deploy import live_settings as live_deploy_settings
+from app.live_deploy import connect_flow as live_connect_flow
 from app.live_deploy.broker_registry import build_adapter, SUPPORTED_PLATFORMS
 from app.live_deploy.execution_engine import LiveExecutionSession, LiveExecutionConfig
 from app.monte_carlo.engine import MonteCarloConfig, MonteCarloResult, run_monte_carlo
@@ -14744,6 +14745,11 @@ class MainWindow:
             "optimize on a single account with no reset)",
             True,
         )
+        self.evo_sealed_final_frac = LabeledEntry(
+            cfg_section,
+            "Sealed final test slice (fraction of data, never touched until the end; 0 = off)",
+            0.10,
+        )
 
         families_frame = Frame(cfg_section, bg=PANEL)
         families_frame.pack(fill="x", padx=18, pady=(4, 4))
@@ -14886,6 +14892,7 @@ class MainWindow:
         lb_btn_row.pack(anchor="w", padx=18, pady=(0, 12))
         self._button(lb_btn_row, "VIEW DETAILS", self._view_evolution_leader_detail, primary=True).pack(side="left")
         self._button(lb_btn_row, "PROMOTE TO STRATEGY LIBRARY", self._promote_selected_evolution_leader).pack(side="left", padx=8)
+        self._button(lb_btn_row, "FINAL TEST (SEALED)", self._final_test_selected_evolution_leader).pack(side="left", padx=8)
         self._button(lb_btn_row, "REFRESH FROM DISK", self._load_evolution_leaderboard_from_disk).pack(side="left", padx=8)
 
         self._evo_leaderboard_cache: list[dict] = []  # index-aligned with evo_leaderboard_listbox rows
@@ -15043,6 +15050,7 @@ class MainWindow:
             target_metric=loop_metric_key,
             reset_on_breach=self.evo_reset_on_breach.var.get(),
             optimizer_mode=self._optimizer_mode_label_to_key.get(self.evo_optimizer_mode.get_str(), "genetic"),
+            sealed_final_frac=max(0.0, min(self.evo_sealed_final_frac.get_float(0.10), 0.4)),
         )
         self.evo_log_text.delete("1.0", END)
         self._evo_guide_shown = False
@@ -15303,6 +15311,37 @@ class MainWindow:
         self._button(btn_row, "VIEW CODE / CONFIG", _view_code, primary=True).pack(side="left")
         self._button(btn_row, "PROMOTE TO STRATEGY LIBRARY", _promote).pack(side="left", padx=8)
         self._button(btn_row, "CLOSE", win.destroy).pack(side="left", padx=8)
+
+    def _final_test_selected_evolution_leader(self) -> None:
+        """One-shot sealed FINAL test -- same as the web Evolution Lab's
+        "Final test" button (POST /evolution/final-test)."""
+        record = self._selected_evolution_leader()
+        if record is None:
+            return
+        runner = self._evolution_runner
+        if runner is None:
+            messagebox.showinfo("No live run", "The sealed final test needs this session's run -- start (and then stop) the Evolution Lab first.")
+            return
+        rec = next((r for r in runner.leaderboard if r.candidate_id == record.get("candidate_id")), None)
+        if rec is None:
+            messagebox.showinfo("Not on the leaderboard", "That candidate is not on this session's live leaderboard.")
+            return
+        try:
+            r = runner.evaluate_champion_on_sealed_final(rec)
+        except ValueError as exc:
+            messagebox.showinfo("Final test unavailable", str(exc))
+            return
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("Final test failed", str(exc))
+            return
+        messagebox.showinfo(
+            "Sealed final test",
+            f"{r.get('n_bars', 0)} unseen bars, {r.get('n_trades', 0)} trades\n"
+            f"Per-attempt eval pass: {r.get('per_attempt_pass_probability', 0):.1f}%\n"
+            f"Per-attempt payout: {r.get('per_attempt_payout_probability', 0):.1f}%\n"
+            f"Risk of ruin: {r.get('risk_of_ruin_pct', 0):.1f}%\n\n{r.get('note', '')}"
+            + ("\n\n(Stored result from the first look -- not re-scored.)" if r.get("already_evaluated") else ""),
+        )
 
     def _promote_selected_evolution_leader(self) -> None:
         record = self._selected_evolution_leader()
@@ -18546,6 +18585,7 @@ class MainWindow:
         self.val_chk_cpcv = LabeledCheckbox(checks_section, "CPCV \u2014 combinatorial purged cross-validation (ROBUST / NOT ROBUST)", False)
         self.val_chk_pbo = LabeledCheckbox(checks_section, "PBO \u2014 probability the winner is a backtest-overfitting artifact", False)
         self.val_chk_walkforward = LabeledCheckbox(checks_section, "Walk-Forward \u2014 re-optimise per fold, test out-of-sample", False)
+        self.val_chk_wfga = LabeledCheckbox(checks_section, "Walk-Forward GA \u2014 genetic search scored only on unseen folds (slowest)", False)
         self.val_chk_sensitivity = LabeledCheckbox(checks_section, "Sensitivity \u2014 1D parameter sweeps with cliff detection", False)
         self.val_chk_robustness = LabeledCheckbox(checks_section, "Robustness \u2014 parameter stability score (0\u2013100)", False)
         self.val_chk_regime = LabeledCheckbox(checks_section, "Regime \u2014 which market regimes to gate the strategy off in", False)
@@ -18590,6 +18630,9 @@ class MainWindow:
             checks.add("pbo")
         if getattr(self, f"{prefix}walkforward").get():
             checks.add("walkforward")
+        _wfga_box = getattr(self, f"{prefix}wfga", None)
+        if _wfga_box is not None and _wfga_box.get():
+            checks.add("wfga")
         if getattr(self, f"{prefix}sensitivity").get():
             checks.add("sensitivity")
         if getattr(self, f"{prefix}robustness").get():
@@ -18610,23 +18653,62 @@ class MainWindow:
         self.val_simple_progress.start(10)
         threading.Thread(target=self._validate_simple_run_pipeline, args=(checks,), daemon=True).start()
 
+    # Desktop tick-name -> the shared (web) check key
+    _VAL_DESKTOP_TO_SHARED = {
+        "montecarlo": "monte_carlo", "cpcv": "cpcv", "pbo": "pbo", "walkforward": "walk_forward",
+        "sensitivity": "sensitivity", "robustness": "robustness", "regime": "regime",
+    }
+
     def _validate_simple_run_pipeline(self, checks: set):
+        """Runs the SAME shared dispatcher (app.validation.runner) and the
+        SAME plain-language report (app.validation.simple_report) the web
+        Validate page uses, so the desktop and web apps give identical
+        verdicts, identical failure explanations, and the same "what to do
+        next" guidance."""
         log = self._log_val_simple
         try:
             df = self.val_simple_context.load_dataframe(log)
             if df is None:
                 return
+            from app.validation import simple_report
+            from app.validation.runner import dispatch_validation_checks
             rules = self.val_simple_context.build_prop_rules()
             risk = build_run_context(self.val_simple_context.build_risk_config(), rules)
-            mc_config = self._validation_mc_config(n_simulations=self.val_simple_mc_sims.get_int(2000))
-            self._run_validation_checks(
-                checks, self._build_strategy, df, risk, rules, mc_config, log,
-                cpcv_n_groups=self.val_simple_cpcv_groups.get_int(6),
-                cpcv_n_test_groups=self.val_simple_cpcv_test_groups.get_int(2),
-                sens_pct_range=self.val_simple_sens_pct.get_float(0.5),
-                sens_steps=self.val_simple_sens_steps.get_int(9),
+            strategy = self._build_strategy()
+            shared_checks = [c for c in simple_report.CHECK_ORDER
+                             if c in {self._VAL_DESKTOP_TO_SHARED.get(x, x) for x in checks}]
+            form = {
+                "mc_sims": self.val_simple_mc_sims.get_int(2000),
+                "cpcv_groups": self.val_simple_cpcv_groups.get_int(6),
+                "cpcv_test_groups": self.val_simple_cpcv_test_groups.get_int(2),
+                "pct_range": self.val_simple_sens_pct.get_float(0.5),
+                "n_steps": self.val_simple_sens_steps.get_int(9),
+            }
+            log("Running baseline backtest (hardened risk)...")
+            baseline = run_backtest(df, strategy, risk)
+            bsum = {
+                "trades": len(baseline.trades), "net_profit": baseline.statistics.net_profit,
+                "win_rate": baseline.statistics.win_rate, "max_drawdown_pct": baseline.statistics.max_drawdown_pct,
+            }
+            log(f"Baseline: {bsum['trades']} trades, net {bsum['net_profit']:.2f}.")
+            if bsum["trades"] == 0:
+                log("Warning: the baseline opened ZERO trades on this data, so most checks cannot run. "
+                    "Each failed check below explains why and what to change.")
+
+            def _on_start(check):
+                log(f"{simple_report.CHECK_LABELS.get(check, check)}: running...")
+
+            def _on_done(check, result):
+                item = simple_report.interpret_check(result)
+                log(f"{item['label']}: {item['status'].upper()} -- {item['headline']}")
+
+            results = dispatch_validation_checks(
+                df, strategy, risk, rules, shared_checks, form, baseline_trades=baseline.trades,
+                on_start=_on_start, on_done=_on_done, log=lambda m: log("  " + str(m)),
             )
-            log("\nDone. For a check's official recorded result and HTML report, use its dedicated Validate tab.")
+            report = simple_report.build_report(results, context={})
+            log("")
+            log(simple_report.report_to_text(report, bsum))
         except StrategyError as exc:
             log(f"\nStrategy error: {exc}")
         except Exception as exc:
@@ -21939,20 +22021,16 @@ class MainWindow:
         )
         Label(
             info_section,
-            text="There is no single universal \"prop firm API\" this app can plug into -- each firm "
-                 "provides one of a small number of trading platforms for its funded accounts, and this "
-                 "app connects the same way a human trader using that platform would:\n\n"
-                 "  •  MT4 / MT5 (by far the most common) -- the exact same connection this app already "
-                 "uses for Live Demo Test, just pointed at your live/funded login instead of a demo "
-                 "one. This is the only path fully wired up below today.\n"
-                 "  •  cTrader (a growing number of firms) -- cTrader has its own Open API (OAuth-based, "
-                 "different from MT5 entirely). Not implemented yet -- see the note below.\n"
-                 "  •  DXtrade / Match-Trader / proprietary platforms -- each would need its own "
-                 "integration; none are implemented yet.\n\n"
-                 "Practically: if your prop firm gives you an MT5 login for your funded account (most "
-                 "do), you can connect it below today. If they use cTrader or something else, that "
-                 "account isn't supported yet -- let me know which platform your firm uses and that's "
-                 "the next one to wire up.",
+            text="Any prop firm works as long as it gives you a login on one of these platforms -- "
+                 "pick your firm below (or \"Other\") and the platform it gave you:\n\n"
+                 "  •  MT4 / MT5 -- login, password and server from your firm's email (Windows + the MT5 terminal).\n"
+                 "  •  cTrader -- Open API client id/secret + refresh token.\n"
+                 "  •  Tradovate -- username/password + API app id/secret, cid and sec.\n"
+                 "  •  TradeLocker and DXtrade -- login (and server / base URL).\n\n"
+                 "Not connectable: Rithmic, NinjaTrader and TopStepX/ProjectX (the firm note explains why and "
+                 "what to use instead). Only MT5 has been tested against a live account by the developer; "
+                 "the other connectors follow each platform's public API docs, so TEST CONNECTION on a "
+                 "demo/practice account first -- if it fails, the app tells you what to fix.",
             bg=PANEL, fg=TEXT_MUTED, font=_safe_font(9), wraplength=900, justify="left",
         ).pack(anchor="w", padx=18, pady=(2, 14))
 
@@ -21997,21 +22075,15 @@ class MainWindow:
         self.dl_firm = LabeledCombo(add_section, "Prop firm", firm_names, firm_names[0] if firm_names else "Other")
         self.dl_firm.combo.bind("<<ComboboxSelected>>", lambda _e: self._dl_on_firm_changed())
         self.dl_platform = LabeledCombo(
-            add_section, "Platform",
-            ["MT5", "MT4", "cTrader", "Tradovate", "TradeLocker", "DXtrade",
-             "Rithmic (not yet supported)", "NinjaTrader (not yet supported)"],
-            "MT5",
+            add_section, "Platform your firm gave you", ["MT4/MT5"], "MT4/MT5",
         )
+        self.dl_platform.combo.bind("<<ComboboxSelected>>", lambda _e: self._dl_render_fields())
         self.dl_nickname = LabeledEntry(add_section, "Account nickname (yours, e.g. 'FTMO 100k #1')", "")
-        self.dl_login = LabeledEntry(add_section, "Login / account number", "")
-        self.dl_server = LabeledEntry(add_section, "Server (from your firm's account email)", "")
-        self.dl_password = LabeledEntry(add_section, "Password", "", secret=True)
-        self.dl_terminal_path = LabeledEntry(add_section, "Terminal path (optional, only if auto-detect fails)", "")
-        self.dl_extra_credentials = LabeledEntry(
-            add_section,
-            "Extra credentials (cTrader/Tradovate/TradeLocker/DXtrade only) -- semicolon-separated key=value pairs",
-            "",
-        )
+        # Platform-specific credential fields are built from the SAME spec the
+        # web app uses (app.live_deploy.connect_flow.PLATFORM_FIELDS).
+        self.dl_fields_frame = Frame(add_section, bg=PANEL)
+        self.dl_fields_frame.pack(fill="x")
+        self._dl_field_widgets: dict = {}
 
         firm_note_row = Frame(add_section, bg=PANEL)
         firm_note_row.pack(anchor="w", padx=18, pady=(0, 8))
@@ -22034,6 +22106,7 @@ class MainWindow:
         add_btn_row = Frame(add_section, bg=PANEL)
         add_btn_row.pack(anchor="w", padx=18, pady=(8, 14))
         self._button(add_btn_row, "SAVE ACCOUNT", self._dl_save_account, primary=True).pack(side="left")
+        self._button(add_btn_row, "TEST THESE DETAILS", self._dl_test_form).pack(side="left", padx=8)
         self._button(add_btn_row, "AUTO-DETECT TERMINAL", self._dl_auto_detect_terminal).pack(side="left", padx=8)
         self._button(add_btn_row, "BROWSE...", self._dl_browse_terminal).pack(side="left")
 
@@ -22200,6 +22273,78 @@ class MainWindow:
         self._dl_on_firm_changed()
         self._dl_refresh_strategy_list()
 
+    def _dl_render_fields(self, values: dict | None = None):
+        """(Re)build the credential inputs for the selected platform."""
+        for w in list(self.dl_fields_frame.winfo_children()):
+            w.destroy()
+        self._dl_field_widgets = {}
+        values = values or {}
+        plat = live_connect_flow.normalize_platform(self.dl_platform.get_str())
+        for fld in live_connect_flow.fields_for(plat):
+            label = fld["label"] + (" *" if fld.get("required") else "")
+            default = values.get(fld["key"], fld.get("default", ""))
+            if fld["kind"] == "select":
+                labels = fld.get("option_labels", {})
+                disp = [labels.get(o, o) for o in fld["options"]]
+                cur = labels.get(str(default), str(default))
+                w = LabeledCombo(self.dl_fields_frame, label, disp, cur)
+                w._opts = {labels.get(o, o): o for o in fld["options"]}
+            else:
+                w = LabeledEntry(self.dl_fields_frame, label, "" if fld["kind"] == "secret" else default,
+                                 secret=(fld["kind"] == "secret"))
+            w.pack(anchor="w", padx=18, pady=2)
+            self._dl_field_widgets[fld["key"]] = (fld, w)
+            if fld.get("help"):
+                Label(self.dl_fields_frame, text=fld["help"], bg=PANEL, fg=TEXT_DIM, font=_safe_font(8),
+                      wraplength=820, justify="left").pack(anchor="w", padx=18)
+
+    def _dl_form_values(self) -> dict:
+        out = {}
+        for key, (fld, w) in self._dl_field_widgets.items():
+            raw = w.get_str()
+            if fld["kind"] == "select":
+                raw = getattr(w, "_opts", {}).get(raw, raw)
+            out[key] = raw
+        return out
+
+    def _dl_form_account(self):
+        plat = live_connect_flow.normalize_platform(self.dl_platform.get_str())
+        values = self._dl_form_values()
+        errs = live_connect_flow.validate_values(plat, values, editing=bool(self._dl_editing_id))
+        if errs:
+            return None, errs
+        acct = live_connect_flow.account_from_values(
+            platform=plat, firm_name=self.dl_firm.get_str(), nickname=self.dl_nickname.get_str(),
+            values=values, account_id=self._dl_editing_id,
+        )
+        if self._dl_editing_id:
+            old = next((a for a in self._dl_accounts if a.id == self._dl_editing_id), None)
+            acct = live_connect_flow.merge_saved_secrets(acct, old)
+        return acct, []
+
+    def _dl_show_test_result(self, res: dict):
+        if res.get("ok"):
+            live = res.get("live")
+            env = "LIVE environment" if live is True else ("demo/practice environment" if live is False else "environment: check your platform")
+            bal = f" balance {res['balance']:,.2f}" if res.get("balance") is not None else ""
+            self.dl_status.config(text=f"Connected ({env}).{bal} {res.get('message', '')}", fg=GREEN)
+            self.dl_start_btn.config(state="normal" if self._dl_session is None else "disabled")
+        else:
+            steps = "\n".join(f"  {i + 1}. {t}" for i, t in enumerate(res.get("fix", [])))
+            self.dl_status.config(text=f"Could not connect: {res.get('message', 'unknown error')}\nWhat to do:\n{steps}", fg=RED)
+
+    def _dl_test_form(self):
+        acct, errs = self._dl_form_account()
+        if acct is None:
+            self.dl_status.config(text="Fill in the missing fields first:\n" + "\n".join(f"  - {e}" for e in errs), fg=AMBER)
+            return
+        self.dl_status.config(text="Connecting...", fg=AMBER)
+
+        def run():
+            res = live_connect_flow.test_account(acct)
+            self.root.after(0, lambda: self._dl_show_test_result(res))
+        threading.Thread(target=run, daemon=True).start()
+
     def _dl_timeframe_minutes(self) -> int:
         mapping = {
             "1 minute": 1, "5 minutes": 5, "15 minutes": 15, "30 minutes": 30,
@@ -22280,18 +22425,18 @@ class MainWindow:
             "account details below, but connecting/trading won't work until that platform is added."
         )
         self.dl_firm_note.config(
-            text=f"Platform(s): {', '.join(firm.platforms)}. {firm.notes}{connectable_note} Always "
+            text=f"Platform(s): {', '.join(firm.platforms)}. {firm.notes}{connectable_note}"
+                 + "".join(f"\n{n['platform']}: {n['why']}" for n in next((f for f in live_connect_flow.firms_catalog() if f['name'] == firm.name), {}).get('not_connectable', []))
+                 + f" Always "
                  f"confirm the exact server name from your own account-issued email -- server names "
                  f"change and vary by region/account type even within one firm.",
             fg=TEXT_DIM if firm.connectable_today else AMBER,
         )
-        preferred = next((p for p in firm.platforms if p in ("MT4", "MT5")), firm.platforms[0] if firm.platforms else "")
-        matching = next(
-            (v for v in self.dl_platform.combo.cget("values") if v == preferred or v.startswith(preferred + " ")),
-            None,
-        )
-        if matching:
-            self.dl_platform.var.set(matching)
+        plats = live_connect_flow.firm_platforms(firm.name) or ["MT4/MT5"]
+        self.dl_platform.combo.config(values=plats)
+        if self.dl_platform.get_str() not in plats:
+            self.dl_platform.var.set(plats[0])
+        self._dl_render_fields()
 
     def _dl_refresh_accounts(self):
         self._dl_accounts = live_deploy_settings.load_accounts()
@@ -22309,25 +22454,20 @@ class MainWindow:
         self._dl_editing_id = acct.id
         self._dl_selected_account = acct
         self.dl_firm.var.set(acct.firm_name)
-        self.dl_platform.var.set(acct.platform)
+        plat = live_connect_flow.normalize_platform(acct.platform)
+        plats = live_connect_flow.firm_platforms(acct.firm_name) or ["MT4/MT5"]
+        if plat not in plats:
+            plats = plats + [plat]
+        self.dl_platform.combo.config(values=plats)
+        self.dl_platform.var.set(plat)
         self.dl_nickname.var.set(acct.nickname)
-        self.dl_login.var.set(acct.login)
-        self.dl_server.var.set(acct.server)
-        self.dl_terminal_path.var.set(acct.terminal_path)
-        # Secret-shaped extra-credential keys (see live_deploy_settings._SECRET_EXTRA_KEYS)
-        # are excluded here, same as the password field just below -- never re-displayed.
-        # Leaving them out of a re-save is safe: save_account() only overwrites a secret's
-        # stored value when a new non-empty one is actually provided for that key.
-        _secret_extra_keys = {"client_secret", "refresh_token", "app_secret", "sec", "access_token"}
-        self.dl_extra_credentials.var.set(";".join(
-            f"{k}={v}" for k, v in (acct.extra_credentials or {}).items() if k not in _secret_extra_keys
-        ))
+        self._dl_render_fields(live_connect_flow.public_values(acct))
         self.dl_firm_note.config(text="Editing this saved account. Password is never re-displayed -- leave it "
                                        "blank to keep the existing one, or enter a new one to replace it. Same "
                                        "for any secret extra-credential fields (client secret, refresh token, "
                                        "etc.) -- they're omitted above too; only re-enter them if you're "
                                        "changing that value.")
-        connectable = "(not yet supported)" not in acct.platform
+        connectable = live_connect_flow.normalize_platform(acct.platform) in live_connect_flow.PLATFORM_FIELDS
         self.dl_start_btn.config(state="normal" if connectable and self._dl_session is None else "disabled")
         self.dl_status.config(
             text=f"Selected '{acct.nickname}'. Click TEST CONNECTION, then START LIVE TRADING when ready."
@@ -22347,20 +22487,27 @@ class MainWindow:
         live_deploy_settings.delete_account(acct.id)
         self._dl_refresh_accounts()
 
+    def _dl_set_terminal_path(self, path: str):
+        entry = self._dl_field_widgets.get("terminal_path")
+        if entry is None:
+            messagebox.showinfo("Terminal path", "Terminal path only applies to MT4/MT5 accounts -- pick MT4/MT5 as the platform.")
+            return
+        entry[1].var.set(path)
+
     def _dl_browse_terminal(self):
         path = filedialog.askopenfilename(
             title="Locate your MT5/MT4 terminal executable",
             filetypes=[("Terminal executable", "terminal64.exe terminal.exe"), ("All files", "*.*")],
         )
         if path:
-            self.dl_terminal_path.var.set(path)
+            self._dl_set_terminal_path(path)
 
     def _dl_auto_detect_terminal(self):
         candidates = mt5_connector_module.find_terminal_candidates()
         if not candidates:
             messagebox.showinfo("Auto-detect", "Couldn't find a terminal in any common install location. Use Browse... instead.")
             return
-        self.dl_terminal_path.var.set(candidates[0])
+        self._dl_set_terminal_path(candidates[0])
 
     def _dl_parse_extra_credentials(self, raw: str) -> dict:
         """Parses the "Extra credentials" field: semicolon-separated
@@ -22376,17 +22523,6 @@ class MainWindow:
         return out
 
     def _dl_save_account(self):
-        platform = self.dl_platform.get_str()
-        if "(not yet supported)" in platform:
-            messagebox.showwarning(
-                "Not supported yet",
-                f"{platform.split(' (')[0]} accounts aren't wired up yet -- Rithmic and NinjaTrader "
-                "both require either a proprietary desktop plugin architecture or a licensed data "
-                "agreement that isn't a simple free API registration (see app/live_deploy/"
-                "prop_firms.py). Saving these account details now so they're ready the moment that "
-                "integration exists, but START LIVE TRADING will stay disabled for this account "
-                "until then.",
-            )
         if not self.dl_confirm_var.get():
             messagebox.showwarning(
                 "Confirmation required",
@@ -22394,24 +22530,15 @@ class MainWindow:
                 "account, not a demo.",
             )
             return
-        if not self.dl_nickname.get_str().strip() or not self.dl_login.get_str().strip() or not self.dl_server.get_str().strip():
-            messagebox.showwarning("Missing fields", "Nickname, login, and server are all required.")
+        acct, errs = self._dl_form_account()
+        if acct is None:
+            messagebox.showwarning("Missing fields", "\n".join(errs))
             return
-        live_deploy_settings.save_account(live_deploy_settings.LiveAccount(
-            id=getattr(self, "_dl_editing_id", None),
-            nickname=self.dl_nickname.get_str().strip(),
-            firm_name=self.dl_firm.get_str(),
-            platform=platform,
-            login=self.dl_login.get_str().strip(),
-            server=self.dl_server.get_str().strip(),
-            password=self.dl_password.get_str(),
-            terminal_path=self.dl_terminal_path.get_str().strip(),
-            extra_credentials=self._dl_parse_extra_credentials(self.dl_extra_credentials.get_str()),
-        ))
+        live_deploy_settings.save_account(acct)
         self._dl_editing_id = None
-        self.dl_password.var.set("")
         self.dl_confirm_var.set(False)
         self._dl_refresh_accounts()
+        self._dl_render_fields()
         messagebox.showinfo("Saved", "Account saved. Select it in the list above, then Test Connection.")
 
 
@@ -22432,34 +22559,35 @@ class MainWindow:
             messagebox.showinfo("Test connection", "Select a saved account first.")
             return
         acct = self._dl_accounts[sel[0]]
-        if "(not yet supported)" in acct.platform:
-            self.dl_status.config(text=f"{acct.platform} isn't supported yet -- see the note above.", fg=AMBER)
-            return
-        if acct.platform == "MT5" and not mt5_connector_module.is_available():
-            self.dl_status.config(text=mt5_connector_module.unavailable_reason(), fg=AMBER)
-            return
         self.dl_status.config(text="Connecting...", fg=AMBER)
         self.root.update_idletasks()
 
         def run():
-            try:
-                broker = build_adapter(acct)
-            except Exception as exc:
-                self.root.after(0, lambda: self.dl_status.config(text=str(exc), fg=RED))
-                return
-            result = broker.connect()
-            if result.ok:
-                msg = (f"Connected: account {result.account_login} @ {result.account_server} — "
-                       f"balance {result.balance:,.2f} {result.currency}, equity {result.equity:,.2f}. "
-                       f"Ready -- pick a strategy below and click START LIVE TRADING when you're sure.")
-                broker.disconnect()
-                color = GREEN
-                self.root.after(0, lambda: self.dl_start_btn.config(state="normal" if self._dl_session is None else "disabled"))
-            else:
-                msg, color = result.message, RED
-            self.root.after(0, lambda: self.dl_status.config(text=msg, fg=color))
+            res = live_connect_flow.test_account(acct)
+            self.root.after(0, lambda: self._dl_show_test_result(res))
 
         threading.Thread(target=run, daemon=True).start()
+
+    def _dl_preflight_dialog(self, acct, item) -> bool:
+        """Same pre-deploy checklist as the web page. Returns True to proceed."""
+        meta = None
+        try:
+            from app.strategy.library import load_strategy_metadata
+            meta = load_strategy_metadata(item.strategy_type, item.name)
+        except Exception:
+            meta = None
+        pf = live_connect_flow.preflight_checklist(acct, strategy_meta=meta)
+        icon = {"ok": "[OK]   ", "warn": "[CHECK]", "ack": "[STOP] ", "block": "[BLOCK]"}
+        text = "\n\n".join(f"{icon[i['level']]} {i['title']}" + (f"\n        {i['detail']}" if i["detail"] else "") for i in pf["items"])
+        if not pf["can_deploy"]:
+            messagebox.showerror("Cannot deploy yet", text)
+            return False
+        if pf["needs_ack"]:
+            return messagebox.askyesno(
+                "This firm does not clearly permit automation",
+                text + "\n\nDo you have the firm's WRITTEN permission to run this automation, and accept the risk "
+                       "of account termination?", icon="warning")
+        return messagebox.askyesno("Pre-deploy checklist", text + "\n\nContinue to the final confirmation?")
 
 
     def _dl_start_clicked(self):
@@ -22468,16 +22596,18 @@ class MainWindow:
             messagebox.showwarning("No account selected", "Select a saved live account first.")
             return
         acct = self._dl_accounts[sel[0]]
-        if "(not yet supported)" in acct.platform:
+        if live_connect_flow.normalize_platform(acct.platform) not in live_connect_flow.PLATFORM_FIELDS:
             messagebox.showwarning("Not supported yet", f"{acct.platform} isn't wired up yet -- see the note above.")
             return
-        if acct.platform == "MT5" and not mt5_connector_module.is_available():
+        if live_connect_flow.normalize_platform(acct.platform) == "MT4/MT5" and not mt5_connector_module.is_available():
             messagebox.showwarning("MT5 not available", mt5_connector_module.unavailable_reason())
             return
 
         item = self._dl_selected_strategy_item()
         if item is None:
             messagebox.showwarning("No strategy selected", "Choose a strategy from the Strategy Library first.")
+            return
+        if not self._dl_preflight_dialog(acct, item):
             return
 
         symbol = self.dl_symbol.get_str().strip()
@@ -22572,7 +22702,7 @@ class MainWindow:
                 contract_size = contract_size_for_symbol(symbol)
             if contract_size is not None and contract_size <= 0:
                 contract_size = None
-            if contract_size is None and acct.platform == "Tradovate":
+            if contract_size is None and live_connect_flow.normalize_platform(acct.platform) == "Tradovate":
                 self.root.after(0, lambda: messagebox.showerror(
                     "Missing contract size",
                     f"Tradovate orders are whole contracts and '{symbol}' is not a known futures symbol -- "

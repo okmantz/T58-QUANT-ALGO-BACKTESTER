@@ -85,11 +85,18 @@ PROP_FIRMS: list[PropFirm] = [
     ),
     PropFirm(
         "Apex Trader Funding", ["Tradovate", "Rithmic", "NinjaTrader", "TradingView"], "Futures",
-        "Tradovate-based accounts are now connectable via the new Tradovate adapter -- untested "
-        "against a live account, start on Apex's/Tradovate's demo environment. Rithmic and "
-        "NinjaTrader accounts are still NOT connectable (see module docstring). Apex explicitly "
-        "permits automated/EA trading on its current account lineup -- verify that's still true "
-        "before relying on it.",
+        "Tradovate-based accounts are connectable via the Tradovate adapter -- untested against a "
+        "live account, start on the demo environment. Rithmic and NinjaTrader accounts are NOT "
+        "connectable (see module docstring). !! Apex's own prohibited-activities page (checked "
+        "2026-10-05) says NO automation or algorithm usage is allowed -- connecting a bot to an Apex "
+        "account can get it terminated. Only continue with Apex's written permission for your exact setup.",
+    ),
+    PropFirm(
+        "Lucid Trading", ["Tradovate", "Rithmic", "NinjaTrader", "TradingView"], "Futures",
+        "Platform list not verified here -- confirm which platform(s) your Lucid account offers in "
+        "your dashboard. Tradovate-routed accounts are connectable (untested against a live account). "
+        "Lucid's help centre (checked 2026-10-05) permits automated systems that do not exploit the "
+        "platform; HFT, latency arbitrage and hedge arbitrage are prohibited.",
     ),
     PropFirm(
         "Topstep", ["TopStepX / ProjectX", "NinjaTrader", "Tradovate", "Rithmic"], "Futures",

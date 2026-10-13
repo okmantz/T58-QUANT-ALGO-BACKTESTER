@@ -187,6 +187,8 @@ from app.strategy.base import StrategyError
 from app.data.timeframe_resample import prepare_timeframe_aligned_data, describe_resolved_timeframe
 from app.validation.cpcv import CPCVError, compute_pbo, run_cpcv
 from app.validation import simple_report
+from app.validation.runner import dispatch_validation_checks as _dispatch_validation_checks
+from app.validation.runner import perturbed_variant_specs as _perturbed_variant_specs
 from app.validation.sensitivity import compute_2d_heatmap
 from app.optimize.parameter_space import apply_genome, extract_genome
 from app.optimize.code_parameter_space import apply_code_genome, discover_code_genes
@@ -1841,163 +1843,6 @@ def _num_or_none(v):
     return f if f == f else None
 
 
-def _dispatch_validation_checks(df, strategy, risk, rules, checks, form, baseline_trades=None,
-                                on_start=None, on_done=None, cancel_event=None, log=None,
-                                on_fraction=None):
-    """Run the ticked checks against ONE hardened baseline. Every check is
-    isolated: a failure is reported per-check, never fatal to the others.
-    Returns a list of {check, ok, summary, error} with honest numbers.
-
-    Optional hooks (all best-effort, used by the Validate job for its live
-    percent bar and to save each result onto the strategy the moment it
-    lands): on_start(check), on_done(check, result_dict),
-    on_fraction(fraction_0_to_1) for checks that can report their own
-    progress, log(message), and cancel_event (stops before the next check).
-    """
-    out: list[dict] = []
-    mc_sims = min(int(form.get("mc_sims", 1000) or 1000), 10_000)
-    metric = form.get("validation_metric", "profit_factor") or "profit_factor"
-    _log = log or (lambda _m: None)
-    for check in checks:
-        if cancel_event is not None and cancel_event.is_set():
-            break
-        if on_start is not None:
-            try:
-                on_start(check)
-            except Exception:  # noqa: BLE001 -- a progress hook must never break a check
-                pass
-        try:
-            if check == "monte_carlo":
-                if not baseline_trades:
-                    raise ValueError("Baseline backtest produced no trades to resample.")
-                mc = run_monte_carlo(baseline_trades, rules, MonteCarloConfig(n_simulations=mc_sims))
-                summary = {
-                    "evaluation_pass_probability": mc.headline_evaluation_pass_probability,
-                    "first_payout_probability": mc.headline_first_payout_probability,
-                    "any_attempt_evaluation_pass_probability": mc.evaluation_pass_probability,
-                    "any_attempt_first_payout_probability": mc.first_payout_probability,
-                    "risk_of_ruin_pct": mc.risk_of_ruin_pct,
-                    "expected_payout": mc.expected_payout,
-                    "n_simulations": mc.n_simulations,
-                }
-            elif check == "cpcv":
-                res = run_cpcv(
-                    df, lambda s=strategy: s, risk,
-                    n_groups=int(form.get("cpcv_groups", 4) or 4),
-                    n_test_groups=int(form.get("cpcv_test_groups", 2) or 2),
-                    metric=metric, prop_rules=rules,
-                    mc_cfg=MonteCarloConfig(n_simulations=min(mc_sims, 500)),
-                    max_paths=int(form.get("cpcv_max_paths", 15) or 15),
-                )
-                summary = {
-                    "n_paths": res.n_paths, "metric": res.metric,
-                    "mean_oos_metric": res.mean_oos_metric, "median_oos_metric": res.median_oos_metric,
-                    "mean_is_metric": res.mean_is_metric, "is_robust": bool(res.is_robust),
-                }
-            elif check == "pbo":
-                specs = [spec_from_strategy(strategy)] + _perturbed_variant_specs(
-                    strategy, int(form.get("pbo_variants", 4) or 4), 42)
-                if len(specs) < 2:
-                    raise ValueError("PBO needs at least 2 candidates; this strategy has no tunable parameters to perturb.")
-                res = compute_pbo(
-                    df, specs, risk,
-                    n_groups=int(form.get("cpcv_groups", 4) or 4),
-                    n_test_groups=int(form.get("cpcv_test_groups", 2) or 2),
-                    metric=metric, prop_rules=rules, max_paths=int(form.get("cpcv_max_paths", 15) or 15),
-                )
-                summary = {"pbo": res.pbo, "n_candidates": res.n_candidates, "n_paths": res.n_paths, "note": res.note}
-            elif check == "walk_forward":
-                res = run_walk_forward_optimization(
-                    df, strategy, risk, rules,
-                    MonteCarloConfig(n_simulations=min(mc_sims, 500)),
-                    n_folds=int(form.get("wf_folds", 3) or 3),
-                    window_mode=form.get("wf_window_mode", "rolling") or "rolling",
-                    progress_cb=_log,
-                )
-                summary = res.to_summary_dict() if hasattr(res, "to_summary_dict") else {
-                    "n_folds_completed": len(getattr(res, "folds", []) or []),
-                    "out_of_sample_efficiency": getattr(res, "out_of_sample_efficiency", None),
-                }
-            elif check == "wfga":
-                ga_res = run_walkforward_aware_refinement(
-                    df, strategy, risk, rules,
-                    MonteCarloConfig(n_simulations=min(mc_sims, 500)),
-                    RefinementConfig(
-                        population_size=int(form.get("wfga_population", 8) or 8),
-                        generations=int(form.get("wfga_generations", 4) or 4),
-                        search_monte_carlo_sims=200,
-                        fitness_metric=form.get("fitness_metric", "eval_pass_probability") or "eval_pass_probability",
-                    ),
-                    n_folds=int(form.get("wf_folds", 3) or 3),
-                    window_mode=form.get("wf_window_mode", "rolling") or "rolling",
-                    progress_cb=_log, cancel_event=cancel_event,
-                    batch_progress_cb=(lambda done, total: on_fraction(done / total) if (on_fraction and total) else None),
-                )
-                summary = {
-                    "overfitting_gap": ga_res.overfitting_gap,
-                    "in_sample_fitness": ga_res.best.in_sample_fitness,
-                    "oos_fitness": ga_res.best.fitness,
-                    "oos_trade_count": ga_res.best.oos_trade_count,
-                    "n_folds": ga_res.n_folds,
-                }
-            elif check == "sensitivity":
-                res_list = compute_1d_sensitivity(
-                    df, strategy, risk, rules, MonteCarloConfig(n_simulations=min(mc_sims, 500)),
-                    metric=metric, pct_range=float(form.get("pct_range", 0.5) or 0.5),
-                    n_steps=int(form.get("n_steps", 5) or 5), max_params=int(form.get("max_params", 4) or 4),
-                    progress_cb=_log,
-                )
-                summary = {
-                    "n_parameters": len(res_list),
-                    "n_cliffs": sum(1 for r in res_list if r.cliff_detected),
-                    "parameters": [
-                        {"label": r.gene_label, "base_value": r.base_value, "base_metric": r.base_metric,
-                         "cliff_detected": bool(r.cliff_detected), "max_pct_drop": r.max_pct_drop_between_adjacent_steps}
-                        for r in res_list
-                    ],
-                }
-            elif check == "robustness":
-                res = compute_parameter_robustness(
-                    df, strategy, risk, rules, MonteCarloConfig(n_simulations=min(mc_sims, 500)),
-                    metric=form.get("robustness_metric", "eval_pass_probability") or "eval_pass_probability",
-                    pct_range=float(form.get("pct_range", 0.5) or 0.5),
-                    n_steps_1d=int(form.get("n_steps", 5) or 5), max_params=int(form.get("max_params", 4) or 4),
-                    n_heatmap_pairs=1,
-                )
-                summary = {
-                    "parameter_robustness_score": res.parameter_robustness_score,
-                    "n_parameters_checked": res.n_parameters_checked,
-                    "n_cliffs_detected": res.n_cliffs_detected,
-                }
-            elif check == "regime":
-                res = run_regime_matrix(
-                    df, strategy, risk,
-                    dimensions=((form.get("regime_dim_a", "volatility") or "volatility"),
-                                (form.get("regime_dim_b", "environment") or "environment")),
-                )
-                if res is None:
-                    raise ValueError("Not enough bars to classify regimes reliably.")
-                summary = {
-                    "n_cells": len(res.cells),
-                    "n_disable_recommended": len(res.disable_regimes()),
-                    "notes": list(res.notes or []),
-                }
-            else:
-                continue
-            result = {"check": check, "ok": True, "summary": summary, "error": None}
-        except WalkforwardGACancelled:
-            break
-        except Exception as exc:  # noqa: BLE001 -- per-check isolation
-            result = {"check": check, "ok": False, "summary": None, "error": str(exc)}
-        out.append(result)
-        if on_done is not None:
-            try:
-                on_done(check, result)
-            except Exception:  # noqa: BLE001 -- saving/reporting must never sink the rest
-                pass
-    return out
-
-
 # ---------------------------------------------------------------------------
 # v9.8 item 12: Deep search (PropFit) — thousands of variants across
 # params x timeframes x datasets, ranked by app/optimize/deep_search.py's
@@ -2529,6 +2374,9 @@ def _run_validate_simple_job(job_id: str, df, strategy, risk, rules, checks, for
         }
         JOB_MANAGER.update(job_id, baseline=_vs_clean(baseline_summary))
         JOB_MANAGER.log(job_id, f"Baseline: {baseline_summary['trades']} trades, net {baseline_summary['net_profit']:.2f}.")
+        if baseline_summary["trades"] == 0:
+            JOB_MANAGER.log(job_id, "Warning: the baseline opened ZERO trades on this data, so most checks cannot run. "
+                                    "Each failed check below explains why and what to change.")
         state["done"] = simple_report.BASELINE_WEIGHT
         push(0.0, "Baseline done")
 
@@ -2543,7 +2391,7 @@ def _run_validate_simple_job(job_id: str, df, strategy, risk, rules, checks, for
         def on_done(check, result):
             state["done"] += weights[check]
             state["cur"] = 0.0
-            item = simple_report.interpret_check(result)
+            item = simple_report.interpret_check(result, ctx)
             partial.append(item)
             JOB_MANAGER.update(job_id, partial_items=_vs_clean(partial))
             JOB_MANAGER.log(job_id, f"{item['label']}: {item['status'].upper()} — {item['headline']}")
@@ -7490,35 +7338,6 @@ def _pool_strategy_specs(pool_refs: list[str]) -> tuple[list[dict], list[str]]:
     return specs, warnings
 
 
-def _perturbed_variant_specs(strategy, n_variants: int, seed: int) -> list[dict]:
-    """N random perturbations of `strategy`'s own tunable numeric
-    parameters, +/-30% of each gene's own range around its base value --
-    identical perturbation logic to app.main.py's run_pbo_cli, generalized
-    from manual-only to any of the 4 source types via the same gene
-    discovery/apply machinery Iterative Refinement's GA already uses."""
-    if n_variants <= 0:
-        return []
-    rng = random.Random(seed)
-    out = []
-    if strategy.source_type == "manual":
-        genes = extract_genome(strategy.config)
-        if not genes:
-            return []
-        for _ in range(n_variants):
-            genome = [max(min(g.base_value + rng.uniform(-0.3, 0.3) * (g.hi - g.lo), g.hi), g.lo) for g in genes]
-            out.append({"source_type": "manual", "config": apply_genome(strategy.config, genes, genome)})
-    else:
-        genes = discover_code_genes(strategy)
-        if not genes:
-            return []
-        base_spec = spec_from_strategy(strategy)
-        for _ in range(n_variants):
-            genome = [max(min(g.base_value + rng.uniform(-0.3, 0.3) * (g.hi - g.lo), g.hi), g.lo) for g in genes]
-            code_text = apply_code_genome(base_spec["code_text"], genes, genome)
-            out.append({"source_type": strategy.source_type, "code_text": code_text, "code_extension": base_spec["code_extension"]})
-    return out
-
-
 @app.route("/pbo")
 def pbo_form():
     return render_template(
@@ -8616,6 +8435,7 @@ def evolution_start():
             target_metric=form.get("target_metric", "cpcv_oos_eval_pass_probability") or "cpcv_oos_eval_pass_probability",
             reset_on_breach=form.get("reset_on_breach", "on") == "on",
             optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
+            sealed_final_frac=max(0.0, min(float(form.get("sealed_final_frac", 0.10) or 0.0), 0.4)),
         )
         _EVOLUTION_LOG.clear()
         _EVOLUTION_LOG.append(f"Loaded {len(df)} bars from {active_label}.")
@@ -8713,6 +8533,35 @@ def _parse_fitness_goal_form(form) -> "dict | str":
         "drawdown": float(form.get("goal_w_drawdown", 1.0) or 1.0),
         "net_profit": float(form.get("goal_w_net_profit", 0.0) or 0.0),
     }
+
+
+@app.route("/evolution/final-test", methods=["POST"])
+def evolution_final_test():
+    """One-shot sealed FINAL test: scores a leaderboard candidate on the
+    slice nothing touched during the run (see
+    EvolutionRunner.evaluate_champion_on_sealed_final). Only allowed after
+    the run has stopped; asking twice for the same candidate returns the
+    stored verdict rather than re-scoring."""
+    candidate_id = (request.form.get("candidate_id") or "").strip()
+    with _EVOLUTION_LOCK:
+        runner = _EVOLUTION_RUNNER
+    if runner is None:
+        return jsonify({"ok": False, "error": "No Evolution Lab run in this session."}), 404
+    rec = None
+    for r in runner.leaderboard:
+        if not candidate_id or r.candidate_id == candidate_id:
+            rec = r
+            break
+    if rec is None:
+        return jsonify({"ok": False, "error": f"Candidate '{candidate_id}' not found on the leaderboard."}), 404
+    try:
+        result = runner.evaluate_champion_on_sealed_final(rec)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 409
+    except Exception as exc:  # noqa: BLE001
+        log_crash("Evolution Lab sealed final test", exc=exc)
+        return jsonify({"ok": False, "error": f"Sealed final test failed: {exc}"}), 500
+    return jsonify({"ok": True, "candidate_id": rec.candidate_id, "result": _vs_clean(result)})
 
 
 @app.route("/evolution/reset", methods=["POST"])
@@ -9566,29 +9415,165 @@ def forward_test_status():
 def _web_live_deploy_guard():
     """Returns a (response, status) refusal tuple, or None when the request may proceed."""
     from app.live_deploy.web_deploy_config import check_web_live_deploy
-    try:
-        from app.accounts.settings import load_account_settings
-        has_password = bool(load_account_settings().has_password)
-    except Exception:  # noqa: BLE001 -- a settings-load failure must fail closed, never open
-        has_password = False
-    unlocked = bool(session.get("t58_unlocked"))
+    has_password, unlocked = _deploy_auth_state()  # fails closed on settings errors
     allowed, code, message = check_web_live_deploy(has_password, unlocked)
     if allowed:
         return None
     return jsonify({"ok": False, "error": message}), code
 
 
+def _deploy_auth_state():
+    try:
+        from app.accounts.settings import load_account_settings
+        has_password = bool(load_account_settings().has_password)
+    except Exception:  # noqa: BLE001 -- fail closed
+        has_password = False
+    return has_password, bool(session.get("t58_unlocked"))
+
+
+def _connect_guard():
+    """Saving/testing broker credentials needs the app lock (when a password
+    exists, the browser must be unlocked) but NOT the live-deploy enable
+    switch -- you can connect and test an account before turning on trading.
+    With no app password set, only the local machine may manage credentials.
+    """
+    has_password, unlocked = _deploy_auth_state()
+    if has_password and not unlocked:
+        return jsonify({"ok": False, "error": "Unlock this browser session with your app password first."}), 401
+    if not has_password and request.remote_addr not in ("127.0.0.1", "::1"):
+        return jsonify({"ok": False, "error": "Set an app password (Settings -> Account) before managing broker credentials from another device."}), 403
+    return None
+
+
+def _account_public(a):
+    from app.live_deploy import connect_flow
+    return {"id": a.id, "nickname": a.nickname, "platform": connect_flow.normalize_platform(a.platform),
+            "firm_name": a.firm_name, "login": a.login, "live": connect_flow.account_is_live(a),
+            "usable": bool(a.is_usable), "values": connect_flow.public_values(a)}
+
+
 @app.route("/deploy-live")
 def deploy_live_info():
-    # v7 P0-3: disabled by default; requires the app password lock when enabled.
+    # Disabled until the operator opts in; requires the app password lock.
     guard = _web_live_deploy_guard()
     if guard:
-        return guard
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest" or request.args.get("format") == "json":
+            return guard
+        from app.live_deploy.web_deploy_config import setup_checklist, ENABLE_PHRASE
+        has_password, unlocked = _deploy_auth_state()
+        return render_template("deploy_live_locked.html", checklist=setup_checklist(has_password, unlocked),
+                               enable_phrase=ENABLE_PHRASE, has_password=has_password, unlocked=unlocked,
+                               on_this_computer=request.remote_addr in ("127.0.0.1", "::1")), guard[1]
     from app.live_deploy.live_settings import load_accounts
     with _LIVE_DEPLOY_LOCK:
         running = _LIVE_DEPLOY_SESSION["session"] is not None and _LIVE_DEPLOY_SESSION["session"].status.running
     return render_template("deploy_live.html", broker_accounts=load_accounts(), running=running,
                            strategies=_simple_strategy_options(), **_alpaca_template_context())
+
+
+@app.route("/deploy-live/connect.json")
+def deploy_live_connect_json():
+    guard = _connect_guard()
+    if guard:
+        return guard
+    from app.live_deploy import connect_flow
+    from app.live_deploy.live_settings import load_accounts
+    return jsonify({"firms": connect_flow.firms_catalog(), "fields": connect_flow.PLATFORM_FIELDS,
+                    "accounts": [_account_public(a) for a in load_accounts()]})
+
+
+@app.route("/deploy-live/connect/save", methods=["POST"])
+def deploy_live_connect_save():
+    guard = _connect_guard()
+    if guard:
+        return guard
+    from app.live_deploy import connect_flow
+    from app.live_deploy.live_settings import load_accounts, save_account
+    body = request.get_json(silent=True) or {}
+    account_id = (body.get("account_id") or "").strip() or None
+    platform = connect_flow.normalize_platform(body.get("platform") or "")
+    values = body.get("values") or {}
+    errs = connect_flow.validate_values(platform, values, editing=bool(account_id))
+    if errs:
+        return jsonify({"ok": False, "errors": errs}), 400
+    acct = connect_flow.account_from_values(platform=platform, firm_name=body.get("firm_name") or "",
+                                            nickname=body.get("nickname") or "", values=values, account_id=account_id)
+    if account_id:
+        acct = connect_flow.merge_saved_secrets(acct, next((a for a in load_accounts() if a.id == account_id), None))
+    try:
+        new_id = save_account(acct)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "errors": [f"Could not save: {exc}"]}), 500
+    return jsonify({"ok": True, "account_id": new_id})
+
+
+@app.route("/deploy-live/connect/test", methods=["POST"])
+def deploy_live_connect_test():
+    guard = _connect_guard()
+    if guard:
+        return guard
+    from app.live_deploy import connect_flow
+    from app.live_deploy.live_settings import load_accounts
+    body = request.get_json(silent=True) or {}
+    aid = (body.get("account_id") or "").strip()
+    saved = next((a for a in load_accounts() if a.id == aid), None) if aid else None
+    if body.get("values") is not None and (not saved or body.get("platform")):
+        platform = connect_flow.normalize_platform(body.get("platform") or "")
+        values = body.get("values") or {}
+        errs = connect_flow.validate_values(platform, values, editing=bool(saved))
+        if errs:
+            return jsonify({"ok": False, "message": "Some required fields are empty.", "fix": errs})
+        acct = connect_flow.account_from_values(platform=platform, firm_name=body.get("firm_name") or "",
+                                                nickname=body.get("nickname") or "", values=values, account_id=aid or None)
+        acct = connect_flow.merge_saved_secrets(acct, saved)
+    elif saved:
+        acct = saved
+    else:
+        return jsonify({"ok": False, "message": "Pick a saved account or fill in the form first.", "fix": []})
+    return jsonify(connect_flow.test_account(acct))
+
+
+@app.route("/deploy-live/connect/delete", methods=["POST"])
+def deploy_live_connect_delete():
+    guard = _connect_guard()
+    if guard:
+        return guard
+    from app.live_deploy.live_settings import delete_account
+    aid = ((request.get_json(silent=True) or {}).get("account_id") or "").strip()
+    if not aid:
+        return jsonify({"ok": False, "error": "No account given."}), 400
+    delete_account(aid)
+    return jsonify({"ok": True})
+
+
+@app.route("/deploy-live/enable", methods=["POST"])
+def deploy_live_enable():
+    from app.live_deploy.web_deploy_config import enable_from_app
+    has_password, unlocked = _deploy_auth_state()
+    body = request.get_json(silent=True) or request.form
+    ok, msg = enable_from_app(is_loopback=request.remote_addr in ("127.0.0.1", "::1"), has_password=has_password,
+                              unlocked=unlocked, typed_phrase=(body.get("phrase") or ""))
+    return jsonify({"ok": ok, "message": msg}), (200 if ok else 403)
+
+
+@app.route("/deploy-live/preflight", methods=["POST"])
+def deploy_live_preflight():
+    guard = _web_live_deploy_guard()
+    if guard:
+        return guard
+    from app.live_deploy import connect_flow
+    from app.live_deploy.live_settings import load_accounts
+    body = request.get_json(silent=True) or {}
+    acct = next((a for a in load_accounts() if a.id == (body.get("account_id") or "")), None)
+    meta = None
+    pick = body.get("strategy") or ""
+    if "::" in pick:
+        t, n = pick.split("::", 1)
+        try:
+            meta = load_strategy_metadata(t, n)
+        except Exception:  # noqa: BLE001
+            meta = None
+    return jsonify(connect_flow.preflight_checklist(acct, strategy_meta=meta, preset_key=body.get("preset_key") or ""))
 
 
 @app.route("/deploy-live/start", methods=["POST"])
@@ -9640,6 +9625,13 @@ def deploy_live_start():
             strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         except (StrategyError, RefinementError) as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
+
+        from app.live_deploy import connect_flow
+        _pf = connect_flow.preflight_checklist(account)
+        if not _pf["can_deploy"]:
+            return jsonify({"ok": False, "error": "; ".join(f"{i['title']}: {i['detail']}" for i in _pf["items"] if i["level"] == "block")}), 400
+        if _pf["needs_ack"] and form.get("ack_firm_policy") != "1":
+            return jsonify({"ok": False, "error": "This firm does not clearly permit automated trading. Tick the acknowledgment box to confirm you have the firm's permission, or pick another account."}), 400
 
         try:
             broker = build_adapter(account)

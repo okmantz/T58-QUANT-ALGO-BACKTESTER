@@ -178,8 +178,14 @@ _KIND_ALIASES = {
     "fair_value_gap": "fvg",
 }
 
+_VWAP_HINT = ("session-rolled VWAP / volume-profile bands -- each platform computes session VWAP with "
+              "a different session roll and volume source, so a translation would silently disagree "
+              "with the backtest")
 _UNSUPPORTED_KIND_HINT = {
     "ib_contraction_ratio": "initial-balance contraction-vs-trailing-average filtering",
+    **{k: _VWAP_HINT for k in (
+        "session_vwap", "vwap_sigma", "vwap_vah", "vwap_val", "vwap_upper_2", "vwap_lower_2",
+        "vwap_poc", "vwap_zscore", "vwap_above", "vwap_below", "vwap_outside_value_area")},
 }
 
 

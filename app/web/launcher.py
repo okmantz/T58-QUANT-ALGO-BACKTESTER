@@ -135,16 +135,11 @@ def main() -> None:
 
     def _open_things_once_server_is_up() -> None:
         time.sleep(1.0)
-        # /mobile-access renders the QR code inline as a data: URI in the
-        # SAME browser tab flow that's already known to work (see Image 3
-        # in the bug report -- the plain app page opened here just fine),
-        # instead of depending on the OS's file-association for PNGs the
-        # way the old file-based popup did. That file-based popup is kept
-        # below too (some people like a standalone image window), but the
-        # browser tab is now the primary, always-reliable path.
-        webbrowser.open(f"http://127.0.0.1:{port}/mobile-access")
-        if qr_path is not None:
-            _open_qr_image(qr_path)
+        # Open ONLY the app itself. The phone QR code already lives inside
+        # the web app (the /mobile-access page, linked from the sidebar),
+        # so we no longer pop it open as its own browser tab or as a
+        # separate picture-viewer window on startup.
+        webbrowser.open(f"http://127.0.0.1:{port}/")
 
     threading.Thread(target=_open_things_once_server_is_up, daemon=True).start()
 

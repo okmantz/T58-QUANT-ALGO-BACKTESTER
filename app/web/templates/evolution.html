@@ -313,6 +313,11 @@
     <div class="checkbox-row"><input type="checkbox" name="resume_from_checkpoint" checked><label style="margin:0;">Resume from checkpoint if one exists for this data</label></div>
     <div class="checkbox-row"><input type="checkbox" name="adaptive_risk_enabled"><label style="margin:0;">Enable adaptive, limit-aware position sizing for every candidate evaluated</label></div>
     <div class="checkbox-row" style="background:rgba(120,200,120,0.08);border:1px solid rgba(120,200,120,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="reset_on_breach" checked><label style="margin:0;">Reset-on-breach: score every candidate on the basis that a blown account gets a fresh eval and keeps going, not a dead end (recommended -- uncheck to optimize on a single account with no reset)</label></div>
+    <div class="form-row" style="margin-top:8px;">
+      <label title="Carved off the very end of your data before anything else. Nothing -- not evolution, not selection, not the per-generation holdout gate -- ever sees it. After the run stops you get exactly one look at it per candidate, for an honest final pass rate.">Sealed final test slice (% of data, never touched until the end)</label>
+      <input type="number" name="sealed_final_frac" value="0.10" min="0" max="0.4" step="0.01">
+      <div class="hint" style="font-size:11px;opacity:.75;">The 20% locked holdout is re-used as a gate every generation, so its pass rate is optimistic. This slice is the unbiased number. 0 turns it off.</div>
+    </div>
   </div>
 
   <div class="card">
@@ -471,7 +476,15 @@
       promoteBtn.textContent = 'Promote';
       promoteBtn.style.marginLeft = '6px';
       promoteBtn.onclick = () => promoteCandidate(c.candidate_id, promoteBtn);
+      const finalBtn = document.createElement('button');
+      finalBtn.type = 'button';
+      finalBtn.className = 'lb-detail-btn';
+      finalBtn.textContent = (c.sealed_check ? 'Final: ' + fmt(c.sealed_check.per_attempt_pass_probability, 1) + '%' : 'Final test');
+      finalBtn.title = 'One-shot test on the sealed slice nothing touched during the run (run must be stopped).';
+      finalBtn.style.marginLeft = '6px';
+      finalBtn.onclick = () => finalTest(c.candidate_id, finalBtn);
       actionCell.appendChild(detailBtn);
+      actionCell.appendChild(finalBtn);
       actionCell.appendChild(promoteBtn);
       tbody.appendChild(tr);
     });
@@ -518,6 +531,26 @@
     tr.appendChild(td);
     const rows = tbody.querySelectorAll('tr');
     rows[i].insertAdjacentElement('afterend', tr);
+  }
+
+  function finalTest(candidateId, btn) {
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = '...';
+    fetch('/evolution/final-test', { method: 'POST', body: new URLSearchParams({ candidate_id: candidateId }) })
+      .then(r => r.json())
+      .then(data => {
+        btn.disabled = false;
+        if (!data.ok) { btn.textContent = original; alert(data.error || 'Could not run the final test.'); return; }
+        const r = data.result || {};
+        btn.textContent = 'Final: ' + fmt(r.per_attempt_pass_probability, 1) + '%';
+        alert('SEALED FINAL TEST (' + (r.n_bars || 0) + ' unseen bars, ' + (r.n_trades || 0) + ' trades)\n' +
+              'Per-attempt eval pass: ' + fmt(r.per_attempt_pass_probability, 1) + '%\n' +
+              'Per-attempt payout: ' + fmt(r.per_attempt_payout_probability, 1) + '%\n' +
+              'Risk of ruin: ' + fmt(r.risk_of_ruin_pct, 1) + '%\n\n' + (r.note || '') +
+              (r.already_evaluated ? '\n\n(Stored result from the first look -- it is not re-scored.)' : ''));
+      })
+      .catch(() => { btn.disabled = false; btn.textContent = original; alert('Could not reach the server.'); });
   }
 
   function promoteCandidate(candidateId, btn) {

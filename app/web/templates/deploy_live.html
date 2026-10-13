@@ -74,11 +74,10 @@
   </p>
 </div>
 
-{% if not broker_accounts %}
-<div class="card">
-  <p class="help">No broker accounts saved yet. Add one under <a href="/settings/api-keys">Settings &rarr; API Keys &rarr; Brokers/Prop Firms</a> first.</p>
-</div>
-{% endif %}
+<details class="card" style="max-width:720px;" {% if not broker_accounts %}open{% endif %}>
+  <summary style="cursor:pointer;font-weight:700;">Connect / manage prop-firm accounts</summary>
+  <div style="margin-top:12px;">{% include '_deploy_connect_panel.html' %}</div>
+</details>
 
 <div id="error-box"></div>
 
@@ -91,6 +90,8 @@
       <option value="{{ a.id }}">{{ a.nickname or a.login }} -- {{ a.platform }}{% if a.firm_name %} ({{ a.firm_name }}){% endif %}</option>
       {% endfor %}
     </select>
+    <div id="dl-preflight" style="margin-top:10px;"></div>
+    <label id="dl-ack-row" style="display:none;color:#ffd28a;"><input type="checkbox" name="ack_firm_policy" value="1" style="width:auto;"> I have this firm's written permission to run this automation, and accept the risk of account termination.</label>
     <div class="row">
       <div><label>Symbol</label><input type="text" name="symbol" value="EURUSD"></div>
       <div><label>Timeframe (minutes)</label><input type="number" name="timeframe_minutes" value="5"></div>
@@ -203,6 +204,35 @@
     pick.addEventListener('change', sync);
     sync();
   })();
+
+
+  // Connect panel -> refresh the account dropdown + pre-deploy checklist.
+  window.onDeployAccountsChanged = function (accts) {
+    var sel = document.getElementById('account_id'), keep = sel.value;
+    sel.innerHTML = accts.map(function (a) {
+      return '<option value="' + a.id + '">' + (a.nickname || a.login) + ' -- ' + a.platform + (a.firm_name ? ' (' + a.firm_name + ')' : '') + '</option>';
+    }).join('');
+    if (keep) sel.value = keep;
+    runPreflight();
+  };
+  function runPreflight() {
+    var box = document.getElementById('dl-preflight'), ack = document.getElementById('dl-ack-row');
+    var acct = document.getElementById('account_id').value;
+    if (!acct) { box.innerHTML = '<div class="warn">No account yet -- open "Connect / manage prop-firm accounts" above.</div>'; return; }
+    var strat = document.getElementById('lc-deploy-strategy-pick');
+    fetch('/deploy-live/preflight', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({account_id: acct, strategy: strat ? strat.value : ''})})
+      .then(function (r) { return r.json(); }).then(function (d) {
+        var icon = {ok: '\u2705', warn: '\u26A0\uFE0F', ack: '\u26D4', block: '\u274C'};
+        box.innerHTML = (d.items || []).map(function (i) {
+          return '<div style="font-size:12.5px;margin:4px 0;line-height:1.45;">' + icon[i.level] + ' <b>' + i.title + '</b>' + (i.detail ? '<br><span style="color:#9aa4b5;">' + i.detail + '</span>' : '') + '</div>';
+        }).join('');
+        ack.style.display = d.needs_ack ? 'block' : 'none';
+        document.getElementById('start-btn').disabled = !d.can_deploy;
+      });
+  }
+  document.getElementById('account_id').addEventListener('change', runPreflight);
+  (function () { var p = document.getElementById('lc-deploy-strategy-pick'); if (p) p.addEventListener('change', runPreflight); })();
 
   const fmt = (v, d) => (v === null || v === undefined) ? '—' : Number(v).toFixed(d === undefined ? 2 : d);
   let polling = null;

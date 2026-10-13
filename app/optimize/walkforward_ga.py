@@ -841,7 +841,7 @@ def run_walkforward_aware_refinement(
                     if _flatlined(gen_summaries, cfg.flatline_patience):
                         _flat_msg = (
                             f"Stopping the search early at generation {gen}: every candidate scored "
-                            f"exactly 0.0 fitness for {cfg.flatline_patience} straight generations -- "
+                            f"exactly 0.0 fitness (or was rejected outright) for {cfg.flatline_patience} straight generations -- "
                             "there is no selection gradient left to breed from, so the remaining "
                             "generations would only re-score mutations of a dead population. If you "
                             "expected this strategy to trade here, check the baseline's own trade "
@@ -1029,8 +1029,14 @@ def _flatlined(summaries: list, patience: int) -> bool:
     fair chance to mutate into a trading one."""
     if not patience or len(summaries) < patience:
         return False
+    # "Nothing scored" is exactly 0.0, or -inf: a candidate rejected outright
+    # (too few out-of-sample trades, failed a gate) is floored to -inf rather
+    # than 0.0. A population where every member is 0.0 or rejected has no
+    # selection gradient either way. Real negative scores (e.g. net_profit)
+    # are finite and still count as a live gradient.
+    _dead = (0.0, float("-inf"))
     return all(
-        s.best_fitness == 0.0 and s.mean_fitness == 0.0
+        s.best_fitness in _dead and s.mean_fitness in _dead
         for s in summaries[-patience:]
     )
 

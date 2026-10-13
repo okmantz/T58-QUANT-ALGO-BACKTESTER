@@ -10,6 +10,15 @@
 <link rel="stylesheet" href="/static/theme.css">
 <link rel="stylesheet" href="/static/job-theme.css">
 {% include '_lifecycle_css.html' %}
+<style>
+  .lc-guide{margin-top:10px; padding:10px 12px; border:1px dashed var(--lc-border2,#2a3345); border-radius:10px; background:rgba(255,255,255,.02);}
+  .lc-guide .lg-kicker{font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--lc-muted,#8b95a7); margin:6px 0 3px;}
+  .lc-guide .lg-why{font-size:13px; color:var(--lc-text,#e6eaf2); line-height:1.45;}
+  .lc-guide .lg-bar{font-size:12.5px; margin-top:6px; color:var(--lc-text,#e6eaf2);}
+  .lc-guide .lg-steps{margin:4px 0 8px 18px; padding:0; font-size:12.5px; line-height:1.5; color:var(--lc-text,#e6eaf2);}
+  .lc-guide .lg-go{display:flex; gap:8px; flex-wrap:wrap;}
+  .lc-guide .lc-btn.secondary{background:transparent; color:var(--lc-acc,#00e0a0); border:1px solid var(--lc-acc,#00e0a0);}
+</style>
 </head>
 <body>
 <header><h1><span class="mark"></span>T58 Quant Algo Backtester — Validate</h1></header>
@@ -104,6 +113,19 @@ function metricsHtml(ms){
     '<div class="lc-metric"><div class="mv">' + esc(m.value) + '</div><div class="ml">' + esc(m.label) + '</div></div>').join('') + '</div>';
 }
 
+function guidanceHtml(i){
+  const g = i.guidance;
+  if (!g) return '';
+  const steps = (g.steps || []).map(x => '<li>' + esc(x) + '</li>').join('');
+  const btn = (o, cls) => o && o.href ? '<a class="lc-btn' + (cls || '') + '" href="' + esc(o.href) + '">' + esc(o.label) + ' &rarr;</a> ' : '';
+  return '<div class="lc-guide">' +
+    '<div class="lg-kicker">' + (i.status === 'error' ? 'Why it could not run' : 'Why this is not a pass') + '</div>' +
+    '<div class="lg-why">' + esc(g.why || '') + '</div>' +
+    (g.bar ? '<div class="lg-bar"><b>To pass:</b> ' + esc(g.bar) + '</div>' : '') +
+    (steps ? '<div class="lg-kicker">What to do</div><ol class="lg-steps">' + steps + '</ol>' : '') +
+    '<div class="lg-go">' + btn(g.go) + btn(g.go2, ' secondary') + '</div></div>';
+}
+
 function renderReport(data){
   const r = data.report;
   document.getElementById('run-card').style.display = 'none';
@@ -134,7 +156,7 @@ function renderReport(data){
     return '<div class="lc-check ' + esc(i.status) + '"><div class="ck-head"><div class="ck-name">' + esc(i.label) + '</div>' + chip(i.status) + '</div>' +
       '<div class="ck-headline">' + esc(i.headline) + '</div>' +
       (i.detail ? '<div class="ck-detail">' + esc(i.detail) + '</div>' : '') +
-      metricsHtml(i.metrics) + rawBlock + '</div>';
+      metricsHtml(i.metrics) + guidanceHtml(i) + rawBlock + '</div>';
   }).join('');
 
   const note = document.getElementById('saved-note');
