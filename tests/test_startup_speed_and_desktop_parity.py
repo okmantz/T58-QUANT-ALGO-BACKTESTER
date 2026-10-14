@@ -146,6 +146,9 @@ def test_web_start_here_pages_still_render():
         resp = client.get(f"/start-here/{section}")
         if section in web_removed:
             assert resp.status_code == 404, section
+        elif section == "test":
+            # The Test step is the Full Pipeline page itself now.
+            assert resp.status_code == 302, section
         else:
             assert resp.status_code == 200, section
 

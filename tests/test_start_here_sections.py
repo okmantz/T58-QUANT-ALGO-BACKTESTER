@@ -22,7 +22,7 @@ from app.web.server import _SECTION_START_HERE, app
 
 
 @pytest.mark.parametrize("section", [
-    "create", "test", "champion", "deployment", "graveyard",
+    "champion", "deployment", "graveyard",
 ])
 def test_dedicated_start_here_page_renders(section):
     app.config["TESTING"] = True
@@ -38,6 +38,33 @@ def test_dedicated_start_here_page_renders(section):
     # Renders through Jinja's normal auto-escaping -- must never come out
     # double-escaped.
     assert "&amp;amp;" not in body
+
+
+def test_create_page_has_no_start_here_section():
+    """The Create page is the form itself -- no "Start Here" title and no
+    "What this section is for" overview card -- but its tools grid stays."""
+    app.config["TESTING"] = True
+    client = app.test_client()
+    r = client.get("/start-here/create")
+    assert r.status_code == 200
+    body = r.get_data(as_text=True)
+    assert "Start Here" not in body
+    assert "What this section is for" not in body
+    for tool in _SECTION_START_HERE["create"]["tools"]:
+        assert f'href="{tool["href"]}"' in body
+
+
+def test_test_start_here_redirects_to_the_test_page():
+    """The Test step is the Full Pipeline page; its separate Start Here
+    overview page is gone and the old URL lands on Test."""
+    app.config["TESTING"] = True
+    client = app.test_client()
+    r = client.get("/start-here/test")
+    assert r.status_code == 302
+    assert r.headers["Location"].endswith("/full-pipeline")
+    body = client.get("/full-pipeline").get_data(as_text=True)
+    assert "Test — Start Here" not in body
+    assert 'href="/start-here/test"' not in body
 
 
 def test_unknown_section_is_a_clean_404():
