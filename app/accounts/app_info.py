@@ -197,23 +197,48 @@ def _github_api_json(url: str) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+# Release zips that are NOT the app itself (the market-data pack, the examples-only
+# data zip). A release now carries several zips; the updater must never mistake a
+# data pack for the app.
+_NON_APP_ZIP_WORDS = ("data", "slim", "example", "market")
+
+
 def _pick_release_asset(assets: list[dict]) -> dict | None:
     """Pick the Windows install asset from a release's asset list:
-    prefer a *.exe (the PyInstaller onefile build), fall back to *.zip."""
-    exes = [a for a in assets if str(a.get("name", "")).lower().endswith(".exe")]
-    zips = [a for a in assets if str(a.get("name", "")).lower().endswith(".zip")]
+    prefer a *.exe, fall back to the app's *.zip (never a data-pack zip)."""
+    def _name(a: dict) -> str:
+        return str(a.get("name", "")).lower()
+
+    exes = [a for a in assets if _name(a).endswith(".exe")]
+    zips = [a for a in assets if _name(a).endswith(".zip") and not any(w in _name(a) for w in _NON_APP_ZIP_WORDS)]
     if exes:
         # Prefer the asset whose name mentions windows if there are several.
         for a in exes:
-            if "windows" in str(a.get("name", "")).lower():
+            if "windows" in _name(a):
                 return a
         return exes[0]
+    # The desktop app zip first, then any other Windows zip (the web edition), then whatever is left.
+    for a in zips:
+        if "windows" in _name(a) and "web" not in _name(a):
+            return a
+    for a in zips:
+        if "windows" in _name(a):
+            return a
     return zips[0] if zips else None
 
 
-def _find_checksum_asset(assets: list[dict]) -> dict | None:
-    """Find the release's published checksum file (SHA256SUMS.txt,
-    checksums.txt, or an asset with 'sha256'/'checksum' in the name)."""
+def _find_checksum_asset(assets: list[dict], asset_name: str | None = None) -> dict | None:
+    """Find the release's published checksum file for ``asset_name``.
+
+    A release publishes one ``<zip>.sha256`` per zip, so when the asset being
+    downloaded is known its OWN checksum file (``<asset_name>.sha256``) wins.
+    Otherwise (or if that exact file is absent) falls back to the first asset
+    with 'sha256'/'checksum' in its name (SHA256SUMS.txt, checksums.txt ...)."""
+    if asset_name:
+        wanted = f"{asset_name}.sha256".lower()
+        for a in assets:
+            if str(a.get("name", "")).lower() == wanted:
+                return a
     for a in assets:
         name = str(a.get("name", "")).lower()
         if "sha256" in name or "checksum" in name:
@@ -285,7 +310,7 @@ def download_update(confirmed: bool, download_dir: "str | Path | None" = None) -
                 error="The latest release has no downloadable .exe/.zip asset.",
             )
         asset_name = str(asset["name"])
-        checksum_asset = _find_checksum_asset(assets)
+        checksum_asset = _find_checksum_asset(assets, asset_name)
         if checksum_asset is None or not checksum_asset.get("browser_download_url"):
             return UpdateDownloadResult(
                 ok=False, version=check.latest_version, asset_name=asset_name,
