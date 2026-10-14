@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Auto-Fix — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<link rel="stylesheet" href="/static/job-theme.css">
+{% include '_lifecycle_css.html' %}
+<style>
+  .fx-stage{margin-top:12px; padding:12px 14px; border:1px solid var(--lc-border2,#2a3345); border-radius:10px; background:rgba(255,255,255,.02);}
+  .fx-stage h3{margin:0 0 4px; font-size:14px;}
+  .fx-stage ul{margin:6px 0 0 18px; padding:0; font-size:12.5px; line-height:1.5;}
+  .fx-table{width:100%; border-collapse:collapse; font-size:12.5px; margin-top:8px;}
+  .fx-table th,.fx-table td{text-align:left; padding:5px 8px; border-bottom:1px solid var(--lc-border2,#2a3345); vertical-align:top;}
+  .fx-table th{color:var(--lc-muted,#8b95a7); font-weight:600; font-size:11.5px;}
+  .fx-note{font-size:12.5px; color:var(--lc-muted,#8b95a7); margin-top:8px; line-height:1.5;}
+  .lc-btn.secondary{background:transparent; color:var(--lc-acc,#00e0a0); border:1px solid var(--lc-acc,#00e0a0);}
+</style>
+</head>
+<body>
+<header><h1><span class="mark"></span>T58 Quant Algo Backtester — Auto-Fix</h1></header>
+<nav>
+  <a href="/dashboard" class="back-btn">&larr; Back</a>
+  <a href="/validate-simple">New Validate run</a>
+  <a href="/validate-simple/reports">Saved reports</a>
+  <a href="/champion-simple">Champion</a>
+</nav>
+<main style="max-width:1180px;">
+<div class="lc-scope"><div class="lc-wrap">
+
+{% set lc_step = 'validate' %}
+{% include '_lifecycle_stepper.html' %}
+<div class="lc-crumb">Lifecycle · 4 · <b>Validate</b> · Auto-Fix</div>
+<h1 class="lc-title" id="page-title">Fixing the flagged checks</h1>
+<p class="lc-sub" id="page-sub">The strategy is repaired on part of the data, checked on data it never saw, and then the real checks are run again on the repaired copy. Your original strategy is never changed.</p>
+
+{% if not_found %}
+<div class="lc-error">Job "{{ job_id }}" was not found (the server may have restarted since it ran).</div>
+{% else %}
+
+<div class="lc-card" id="run-card">
+  <div style="display:flex; align-items:baseline; gap:12px; flex-wrap:wrap;">
+    <span class="lc-pct-big" id="lc-pct">0%</span>
+    <span class="lc-hint" id="lc-stage-line">Starting&hellip;</span>
+  </div>
+  <div class="lc-progress indet" id="lc-progress" style="margin:10px 0 14px;"><div></div></div>
+  <div class="lc-hint" id="fixing-line"></div>
+  <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+    <button type="button" id="stop-btn" class="lc-btn danger small" onclick="stopRun()">Stop</button>
+    <button type="button" class="lc-btn ghost small" onclick="document.getElementById('log-wrap').classList.toggle('open')">Show log</button>
+  </div>
+  <div id="log-wrap" class="lc-collapse"><div id="log" class="lc-logbox tall">Starting&hellip;</div></div>
+</div>
+
+<div id="result" style="display:none;">
+  <div class="lc-overall" id="overall"></div>
+  <div class="lc-nextstep" id="nextstep"></div>
+  <div id="stages"></div>
+  <div class="lc-card" id="compare-card" style="display:none;"><h3>The same checks, before and after</h3><div id="compare"></div></div>
+  <div id="notes"></div>
+  <div style="margin-top:16px; display:flex; gap:10px; flex-wrap:wrap;" id="actions"></div>
+</div>
+
+<div class="lc-error" id="err-box" style="display:none;"></div>
+{% endif %}
+
+</div></div>
+</main>
+
+{% if not not_found %}
+<script>
+const JOB_ID = {{ job_id | tojson }};
+let stopped = false;
+function esc(s){ const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+async function stopRun(){
+  const b = document.getElementById('stop-btn'); b.disabled = true; b.textContent = 'Stopping…';
+  try { await fetch('/validate-fix/job/' + JOB_ID + '/stop', {method: 'POST'}); } catch (e) {}
+}
+const WORD = {pass:'Pass', caution:'Borderline', fail:'Fail', error:'Did not run', info:'Ran'};
+const CHIP = {pass:'green', caution:'amber', fail:'red', error:'grey', info:'grey'};
+function chip(status){ return '<span class="lc-pill ' + (CHIP[status] || 'grey') + '">' + esc(WORD[status] || status) + '</span>'; }
+function num(v, d){ return (v === null || v === undefined || isNaN(v)) ? '—' : Number(v).toLocaleString(undefined, {maximumFractionDigits: d === undefined ? 2 : d}); }
+
+function stageHtml(st){
+  const d = st.details || {};
+  let body = '';
+  if (st.stage === 'regime' && d.before_holdout) {
+    const rows = (d.steps || []).map(s => '<tr><td>' + esc(s.round) + '</td><td>' + esc(s.excluded_cell) + (s.adopted ? '' : ' <span class="lc-hint">(not kept)</span>') + '</td><td>' + esc(s.cell_trades) +
+      '</td><td>' + num(s.cell_profit_factor) + '</td><td>' + num(s.train_net_before, 0) + ' → ' + num(s.train_net_after, 0) + '</td></tr>').join('');
+    if (rows) body += '<table class="fx-table"><tr><th>#</th><th>Regime switched off</th><th>Its trades</th><th>Its profit factor</th><th>Net profit on the data it was chosen on</th></tr>' + rows + '</table>';
+    if (d.after_holdout) {
+      const b = d.before_holdout, a = d.after_holdout;
+      body += '<table class="fx-table"><tr><th>On unseen data (' + esc(d.verification_window) + ')</th><th>Before</th><th>After</th></tr>' +
+        '<tr><td>Trades</td><td>' + num(b.trades, 0) + '</td><td>' + num(a.trades, 0) + '</td></tr>' +
+        '<tr><td>Net profit</td><td>' + num(b.net_profit, 0) + '</td><td>' + num(a.net_profit, 0) + '</td></tr>' +
+        '<tr><td>Profit factor</td><td>' + num(b.profit_factor) + '</td><td>' + num(a.profit_factor) + '</td></tr>' +
+        '<tr><td>Profit per trade</td><td>' + num(b.expectancy, 0) + '</td><td>' + num(a.expectancy, 0) + '</td></tr></table>';
+    }
+  }
+  if (st.stage === 'overfit' && (d.attempts || []).length) {
+    const o = d.original_tail || {};
+    const rows = d.attempts.map(a => {
+      const t = a.tail || {};
+      return '<tr><td>' + esc(a.search_range) + '</td><td>' + (a.gap_ratio === null || a.gap_ratio === undefined ? '—' : num(a.gap_ratio * 100, 0) + '%') +
+        '</td><td>' + num(t.profit_factor) + '</td><td>' + num(t.expectancy, 0) + '</td><td>' + num(t.trades, 0) + '</td><td>' +
+        (a.error ? esc(a.error) : (a.eligible ? '<b>eligible</b>' : esc((a.rejected_because || []).join('; ')))) + '</td></tr>';
+    }).join('');
+    body += '<table class="fx-table"><tr><th>Search range</th><th>Walk-forward gap</th><th>Unseen-tail PF</th><th>Unseen-tail profit/trade</th><th>Trades</th><th>Verdict</th></tr>' + rows +
+      '<tr><td><i>Original settings</i></td><td>—</td><td>' + num(o.profit_factor) + '</td><td>' + num(o.expectancy, 0) + '</td><td>' + num(o.trades, 0) + '</td><td>the bar to beat</td></tr></table>';
+    const ch = d.chosen && d.chosen.changed;
+    if (ch && ch.length) body += '<div class="fx-note"><b>Parameters changed:</b> ' + ch.map(c => esc(c.parameter) + ' ' + num(c.before) + ' → ' + num(c.after)).join(' · ') + '</div>';
+  }
+  const reasons = (st.reasons || []).length ? '<ul>' + st.reasons.map(r => '<li>' + esc(r) + '</li>').join('') + '</ul>' : '';
+  return '<div class="fx-stage"><div style="display:flex;justify-content:space-between;gap:8px;"><h3>' + esc(st.label) + '</h3>' +
+    '<span class="lc-pill ' + (st.accepted ? 'green' : 'amber') + '">' + (st.accepted ? 'kept' : 'not kept') + '</span></div>' +
+    '<div>' + esc(st.headline) + '</div>' + reasons + body + '</div>';
+}
+
+function compareHtml(o){
+  const before = {}; (o.before || []).forEach(r => before[r.check] = r);
+  const rows = (o.after || []).map(a => {
+    const b = before[a.check] || {};
+    return '<tr><td><b>' + esc(a.label) + '</b></td><td>' + (b.status ? chip(b.status) : '—') + '</td><td>' + chip(a.status) + '</td><td>' + esc(a.headline) + '</td></tr>';
+  }).join('');
+  return rows ? '<table class="fx-table"><tr><th>Check</th><th>Before</th><th>After</th><th>What it found now</th></tr>' + rows + '</table>' : '';
+}
+
+function render(data){
+  const o = data.outcome || {};
+  document.getElementById('run-card').style.display = 'none';
+  document.getElementById('result').style.display = 'block';
+  document.getElementById('page-title').textContent = (data.strategy || 'Strategy') + ' — Auto-Fix result';
+  if (!data.outcome) {
+    document.getElementById('overall').innerHTML = '<div class="ov-label">' + (data.cancelled ? 'Stopped' : 'No result') + '</div><div class="ov-sum">' +
+      (data.cancelled ? 'You stopped Auto-Fix before it finished. Nothing was saved.' : 'Auto-Fix did not produce a result.') + '</div>';
+    document.getElementById('overall').className = 'lc-overall mixed';
+    return;
+  }
+  const good = o.accepted && (o.newly_passing || []).length;
+  document.getElementById('overall').className = 'lc-overall ' + (good ? 'strong' : (o.accepted ? 'mixed' : 'needs_work'));
+  document.getElementById('overall').innerHTML = '<div class="ov-label">' + (o.accepted ? 'Repair kept' : 'No repair kept') + '</div><div class="ov-sum">' + esc(o.headline) + '</div>';
+
+  const fx = data.fixed_strategy;
+  const ho = data.handoff || {};
+  const nx = document.getElementById('nextstep');
+  if (fx) {
+    const q = new URLSearchParams({strategy_pick: fx.pick, candidate: fx.pick, existing_dataset: ho.existing_dataset || '', timeframe: ho.timeframe || '', prop_preset: ho.prop_preset || ''});
+    nx.className = 'lc-nextstep ' + (good ? 'good' : 'info');
+    nx.innerHTML = '<div class="ns-kicker">Saved as a new strategy</div><div class="ns-title">' + esc(fx.filename) + '</div>' +
+      '<div class="ns-why">Your original is untouched. The checks above were already run on this copy and saved onto it. Re-validate it with fresh settings when you are ready, or promote it.</div>' +
+      '<a class="lc-btn" href="/validate-simple?' + esc(q.toString()) + '">Validate the fixed copy &rarr;</a> ' +
+      '<a class="lc-btn secondary" href="/champion-simple?' + esc(new URLSearchParams({candidate: fx.pick}).toString()) + '">Champion page</a>';
+  } else {
+    nx.className = 'lc-nextstep warn';
+    nx.innerHTML = '<div class="ns-kicker">Where this leaves you</div><div class="ns-title">The strategy was left unchanged</div><div class="ns-why">' +
+      esc(data.save_error || 'Nothing that was tried held up on data it had never seen, so no new copy was saved. The reasons are listed below.') + '</div>';
+  }
+  document.getElementById('stages').innerHTML = (o.stages || []).map(stageHtml).join('');
+  const cmp = compareHtml(o);
+  if (cmp) { document.getElementById('compare-card').style.display = 'block'; document.getElementById('compare').innerHTML = cmp; }
+  document.getElementById('notes').innerHTML = (o.notes || []).map(n => '<div class="fx-note">' + esc(n) + '</div>').join('');
+
+  let acts = '';
+  if (data.downloads) {
+    acts += '<a class="lc-btn" href="' + esc(data.downloads.html) + '?download=1">Download fixed-strategy report</a> ' +
+            '<a class="lc-btn ghost" href="' + esc(data.downloads.json) + '">JSON</a> <a class="lc-btn ghost" href="' + esc(data.downloads.txt) + '">Text</a> ';
+  }
+  if (data.has_candidate) acts += '<a class="lc-btn secondary" href="/validate-fix/job/' + JOB_ID + '/candidate">Download the candidate (not recommended)</a> ';
+  if (data.source_report_id) acts += '<a class="lc-btn ghost" href="/validate-simple/report/' + esc(data.source_report_id) + '/html">Original report</a>';
+  document.getElementById('actions').innerHTML = acts;
+}
+
+async function poll(){
+  if (stopped) return;
+  try {
+    const res = await fetch('/validate-fix/job/' + JOB_ID + '/status.json');
+    const data = await res.json();
+    const logEl = document.getElementById('log');
+    logEl.innerHTML = (data.log || []).map(esc).join('<br>');
+    logEl.scrollTop = logEl.scrollHeight;
+    if (data.fixing && data.fixing.length) document.getElementById('fixing-line').textContent = 'Fixing: ' + data.fixing.join(', ');
+    if (!data.done) {
+      const prog = data.progress;
+      if (prog && typeof prog.percent === 'number') {
+        const p = Math.max(0, Math.min(100, prog.percent));
+        document.getElementById('lc-pct').textContent = p.toFixed(0) + '%';
+        const bar = document.getElementById('lc-progress'); bar.classList.remove('indet'); bar.querySelector('div').style.width = p + '%';
+        document.getElementById('lc-stage-line').textContent = (data.stopping ? 'Stopping… ' : '') + (prog.label || 'working…');
+      }
+    } else {
+      stopped = true;
+      if (data.error && !data.outcome) {
+        document.getElementById('run-card').style.display = 'none';
+        const e = document.getElementById('err-box'); e.style.display = 'block'; e.textContent = data.error;
+        document.getElementById('page-title').textContent = 'Auto-Fix failed';
+      } else { render(data); }
+      return;
+    }
+  } catch (e) { /* keep polling through transient errors */ }
+  setTimeout(poll, 1500);
+}
+poll();
+</script>
+{% endif %}
+{% include '_project_chat_embed.html' %}
+</body>
+</html>

@@ -25,6 +25,7 @@
 <nav>
   <a href="/dashboard" class="back-btn">&larr; Back</a>
   <a href="/validate-simple">New Run</a>
+  <a href="/validate-simple/reports">Saved reports</a>
   <a href="/champion-simple">Champion</a>
 </nav>
 <main style="max-width:1180px;">
@@ -56,7 +57,9 @@
 
 <div id="report" style="display:none;">
   <div class="lc-overall" id="overall"></div>
+  <div class="lc-card" id="download-card" style="display:none;"></div>
   <div class="lc-nextstep" id="nextstep"></div>
+  <div class="lc-card" id="autofix-card" style="display:none;"></div>
   <div id="items"></div>
   <div class="lc-card" id="saved-note" style="margin-top:14px;"></div>
   <div class="lc-card" id="baseline-card" style="display:none;"><h3>Baseline backtest</h3><div id="baseline-body"></div></div>
@@ -79,6 +82,7 @@
 const JOB_ID = {{ job_id | tojson }};
 const SOURCE = {{ (source or 'validate') | tojson }};
 let stopped = false;
+let REPORT_ID = '';
 function esc(s){ const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
 async function stopRun(){
   const b = document.getElementById('stop-btn'); b.disabled = true; b.textContent = 'Stopping…';
@@ -123,7 +127,43 @@ function guidanceHtml(i){
     '<div class="lg-why">' + esc(g.why || '') + '</div>' +
     (g.bar ? '<div class="lg-bar"><b>To pass:</b> ' + esc(g.bar) + '</div>' : '') +
     (steps ? '<div class="lg-kicker">What to do</div><ol class="lg-steps">' + steps + '</ol>' : '') +
-    '<div class="lg-go">' + btn(g.go) + btn(g.go2, ' secondary') + '</div></div>';
+    '<div class="lg-go">' + (g.fix_kind && REPORT_ID ? fixButton(REPORT_ID, [i.check], 'Auto-fix this') : '') +
+      btn(g.go, g.fix_kind ? ' secondary' : '') + btn(g.go2, ' secondary') + '</div></div>';
+}
+
+const FIX_LABELS = {regime: 'Regime Matrix', cpcv: 'CPCV', pbo: 'PBO', walk_forward: 'Walk-Forward', wfga: 'Walk-Forward GA', sensitivity: 'Sensitivity', robustness: 'Parameter Robustness'};
+function fixButton(reportId, checks, label, cls){
+  if (!reportId || !checks || !checks.length) return '';
+  return '<form method="post" action="/validate-fix/start" style="display:inline;">' +
+    '<input type="hidden" name="report_id" value="' + esc(reportId) + '">' +
+    '<input type="hidden" name="checks" value="' + esc(checks.join(',')) + '">' +
+    '<button type="submit" class="lc-btn' + (cls || '') + '">' + esc(label) + '</button></form> ';
+}
+function renderDownloads(r){
+  const box = document.getElementById('download-card');
+  if (r.downloads) {
+    box.style.display = 'block';
+    box.innerHTML = '<h3 style="margin-top:0;">Download the full report</h3>' +
+      '<div class="lc-hint" style="margin-bottom:8px;">One report with every check that ran — passed, failed or did not run — why, the bar it was judged against, and the raw numbers (CPCV, PBO, walk-forward folds, regime cells…). It is also saved on disk and listed under <a href="/validate-simple/reports">Saved reports</a>.</div>' +
+      '<a class="lc-btn" href="' + esc(r.downloads.html) + '?download=1">Download report (HTML)</a> ' +
+      '<a class="lc-btn ghost" href="' + esc(r.downloads.html) + '">Open in browser</a> ' +
+      '<a class="lc-btn ghost" href="' + esc(r.downloads.json) + '">JSON (all numbers)</a> ' +
+      '<a class="lc-btn ghost" href="' + esc(r.downloads.txt) + '">Plain text</a>';
+  } else if (r.report_error) {
+    box.style.display = 'block';
+    box.innerHTML = '<b>Report not saved.</b> <span class="lc-hint">' + esc(r.report_error) + '</span>';
+  }
+}
+function renderAutoFix(r){
+  const box = document.getElementById('autofix-card');
+  const fixable = r.fixable_checks || [];
+  if (!r.report_id || !fixable.length) { box.style.display = 'none'; return; }
+  box.style.display = 'block';
+  box.innerHTML = '<h3 style="margin-top:0;">Fix what failed</h3>' +
+    '<div class="lc-hint" style="margin-bottom:10px;">Flagged: <b>' + esc(fixable.map(c => FIX_LABELS[c] || c).join(', ')) + '</b>. ' +
+    'Auto-Fix repairs a copy of the strategy, checks the repair on data it never saw, then re-runs these same checks on the copy. ' +
+    'It only keeps a repair that holds up, and your original is never changed.</div>' +
+    fixButton(r.report_id, fixable, 'Auto-fix everything flagged');
 }
 
 function renderReport(data){
@@ -135,6 +175,7 @@ function renderReport(data){
     document.getElementById('overall').innerHTML = '<div class="lc-hint">' + (data.cancelled ? 'You stopped the run. Checks that finished were already saved onto the strategy.' : 'No report was produced.') + '</div>';
     return;
   }
+  REPORT_ID = r.report_id || '';
   document.getElementById('page-title').textContent = (r.strategy || 'Strategy') + ' — validation report';
   document.getElementById('page-sub').textContent = data.cancelled
     ? 'Stopped early — the checks below finished and are saved. The rest did not run.'
@@ -148,7 +189,8 @@ function renderReport(data){
   document.getElementById('nextstep').innerHTML =
     '<div class="ns-kicker">Your next step</div><div class="ns-title">' + esc(n.title) + '</div>' +
     '<div class="ns-why">' + esc(n.why) + '</div>' +
-    (n.href ? '<a class="lc-btn" href="' + esc(n.href) + '">' + esc(n.label || 'Continue') + ' &rarr;</a>' : '');
+    (n.fix_kind && REPORT_ID ? fixButton(REPORT_ID, (r.fixable_checks || []).filter(c => (n.fix_kind === 'regime') === (c === 'regime')), 'Auto-fix this for me') : '') +
+    (n.href ? '<a class="lc-btn' + (n.fix_kind && REPORT_ID ? ' secondary' : '') + '" href="' + esc(n.href) + '">' + esc(n.label || 'Continue') + ' &rarr;</a>' : '');
 
   const raw = data.raw || {};
   document.getElementById('items').innerHTML = (r.items || []).map(i => {
@@ -158,6 +200,9 @@ function renderReport(data){
       (i.detail ? '<div class="ck-detail">' + esc(i.detail) + '</div>' : '') +
       metricsHtml(i.metrics) + guidanceHtml(i) + rawBlock + '</div>';
   }).join('');
+
+  renderDownloads(r);
+  renderAutoFix(r);
 
   const note = document.getElementById('saved-note');
   if (r.saved_to_library) {

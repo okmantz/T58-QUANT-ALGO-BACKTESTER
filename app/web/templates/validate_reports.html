@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Saved validation reports — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<link rel="stylesheet" href="/static/job-theme.css">
+{% include '_lifecycle_css.html' %}
+<style>
+  .rp-table{width:100%; border-collapse:collapse; font-size:13px;}
+  .rp-table th,.rp-table td{text-align:left; padding:8px 10px; border-bottom:1px solid var(--lc-border2,#2a3345); vertical-align:top;}
+  .rp-table th{color:var(--lc-muted,#8b95a7); font-weight:600; font-size:11.5px;}
+  .lc-btn.secondary{background:transparent; color:var(--lc-acc,#00e0a0); border:1px solid var(--lc-acc,#00e0a0);}
+</style>
+</head>
+<body>
+<header><h1><span class="mark"></span>T58 Quant Algo Backtester — Validation reports</h1></header>
+<nav>
+  <a href="/dashboard" class="back-btn">&larr; Back</a>
+  <a href="/validate-simple">New Validate run</a>
+  <a href="/champion-simple">Champion</a>
+</nav>
+<main style="max-width:1180px;">
+<div class="lc-scope"><div class="lc-wrap">
+<h1 class="lc-title">Saved validation reports</h1>
+<p class="lc-sub">Every Validate run saves one report with every check that ran: pass or fail, why, the bar it was judged against, and the numbers behind it. Open the HTML to read or print it; the JSON has every raw number.</p>
+
+{% if error %}<div class="lc-error">{{ error }}</div>{% endif %}
+
+<div class="lc-card">
+{% if reports %}
+  <table class="rp-table">
+    <tr><th>When</th><th>Strategy</th><th>Result</th><th>Dataset</th><th>Download</th></tr>
+    {% for r in reports %}
+    <tr>
+      <td>{{ (r.generated_at or '')[:19].replace('T', ' ') }}</td>
+      <td>{{ r.strategy }}</td>
+      <td><b>{{ r.overall }}</b><div class="lc-hint">{{ r.summary }}</div></td>
+      <td>{{ r.dataset }}</td>
+      <td style="white-space:nowrap;">
+        {% if r.has_html %}<a class="lc-btn small" href="/validate-simple/report/{{ r.report_id }}/html">Open</a>
+        <a class="lc-btn small secondary" href="/validate-simple/report/{{ r.report_id }}/html?download=1">HTML</a>{% endif %}
+        <a class="lc-btn small secondary" href="/validate-simple/report/{{ r.report_id }}/json">JSON</a>
+        <a class="lc-btn small secondary" href="/validate-simple/report/{{ r.report_id }}/txt">Text</a>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+{% else %}
+  <div class="lc-hint">No saved reports yet. Run <a href="/validate-simple">Validate</a> and one is saved automatically when it finishes.</div>
+{% endif %}
+</div>
+
+</div></div>
+</main>
+{% include '_project_chat_embed.html' %}
+</body>
+</html>
