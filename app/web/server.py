@@ -189,6 +189,7 @@ from app.strategy.base import StrategyError
 from app.data.timeframe_resample import prepare_timeframe_aligned_data, describe_resolved_timeframe
 from app.validation.cpcv import CPCVError, compute_pbo, run_cpcv
 from app.validation import simple_report
+from app.validation import auto_fix, report_export
 from app.validation.runner import dispatch_validation_checks as _dispatch_validation_checks
 from app.validation.runner import perturbed_variant_specs as _perturbed_variant_specs
 from app.validation.sensitivity import compute_2d_heatmap
@@ -206,7 +207,7 @@ from app.strategy.library import (
     library_fingerprint, list_saved_strategies, load_strategy_metadata, load_strategy_text, record_backtest_result, record_lookahead_result,
     record_search_result, record_optimize_result, record_validation_result, record_champion_check_result,
     rename_saved_strategy, save_strategy_bytes, save_strategy_metadata,
-    save_strategy_text, set_strategy_status, set_strategy_tags,
+    save_strategy_text, set_strategy_status, set_strategy_tags, safe_filename_stem,
 )
 from app.strategy.lookahead_check import check_for_lookahead
 from app.validation.integrity_check import run_integrity_check
@@ -269,6 +270,8 @@ PAYOUT_DIR = BASE_DIR / "reports" / "payout_probability"
 PAYOUT_DIR.mkdir(parents=True, exist_ok=True)
 REGIME_DIR = BASE_DIR / "reports" / "regime_matrix"
 REGIME_DIR.mkdir(parents=True, exist_ok=True)
+VALIDATION_RUNS_DIR = BASE_DIR / "reports" / "validation_runs"   # one saved, downloadable report per Validate run
+VALIDATION_RUNS_DIR.mkdir(parents=True, exist_ok=True)
 SPEEDRUN_DIR = BASE_DIR / "reports" / "speed_run"
 SPEEDRUN_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -2395,8 +2398,35 @@ def _vs_record_check(library_ref, check, result, meta: dict) -> None:
         )
 
 
+def _vs_fixable_checks(report: dict) -> list:
+    """Checks in this run that are flagged AND that Auto-Fix knows how to act on."""
+    return [i["check"] for i in report.get("items", [])
+            if i.get("status") in ("fail", "caution") and simple_report.FIX_KIND_BY_CHECK.get(i["check"])]
+
+
+def _vs_save_run_report(report: dict, results: list, form, meta: dict, baseline_summary: dict, requested, library_ref,
+                        sim_text: str, *, auto_fix_section: dict | None = None, report_id: str | None = None) -> dict:
+    """Build + save the consolidated report for one run (see app.validation.report_export) and stamp its
+    id / download links onto `report` so the job page can offer them."""
+    raw_full = {r["check"]: report_export.clean_json(r.get("summary")) for r in results if r.get("ok")}
+    doc = report_export.build_report_document(
+        report, raw=raw_full, baseline=_vs_clean(baseline_summary),
+        meta={"strategy": report.get("strategy") or meta.get("strategy_name"),
+              "library_type": (library_ref[0] if library_ref else ""), "library_file": (library_ref[1] if library_ref else ""),
+              "dataset": meta.get("dataset"), "timeframe": meta.get("timeframe"), "prop_preset": meta.get("prop_preset")},
+        form=form, requested_checks=list(requested), simulation_text=sim_text,
+        auto_fix=auto_fix_section, report_id=report_id,
+    )
+    paths = report_export.save_report(VALIDATION_RUNS_DIR, doc)
+    rid = doc["report_id"]
+    report["report_id"] = rid
+    report["downloads"] = {fmt: f"/validate-simple/report/{rid}/{fmt}" for fmt in paths}
+    report["fixable_checks"] = _vs_fixable_checks(report)
+    return doc
+
+
 def _run_validate_simple_job(job_id: str, df, strategy, risk, rules, checks, form, library_ref=None,
-                             dataset_label: str = "", tf_note=None, cancel_event=None, ctx=None) -> None:
+                             dataset_label: str = "", tf_note=None, cancel_event=None, ctx=None, sim_text: str = "") -> None:
     tracker = SimpleProgress()
     checks = sorted(checks, key=lambda c: simple_report.CHECK_ORDER.index(c) if c in simple_report.CHECK_ORDER else 99)
     weights = {c: simple_report.CHECK_WEIGHTS.get(c, 1.0) for c in checks}
@@ -2466,9 +2496,18 @@ def _run_validate_simple_job(job_id: str, df, strategy, risk, rules, checks, for
         report["saved_to_library"] = bool(library_ref)
         report["strategy"] = library_ref[1] if library_ref else meta["strategy_name"]
         report["library_type"] = library_ref[0] if library_ref else ""
+        # One consolidated, downloadable report (HTML + JSON + text) for the whole run, saved to disk so it
+        # survives a restart and can be re-downloaded later from the Saved reports page.
+        if results:
+            try:
+                _vs_save_run_report(report, results, form, meta, baseline_summary, checks, library_ref, sim_text)
+            except Exception as exc:  # noqa: BLE001 -- a report-writing problem must never lose the run itself
+                report["report_error"] = f"The report could not be saved: {exc}"
+                JOB_MANAGER.log(job_id, report["report_error"])
         if library_ref:
             try:
                 save_strategy_metadata(*library_ref, {"last_validate_run": {
+                    "report_id": report.get("report_id"),
                     "ran_at": time.time(), "dataset": dataset_label, "timeframe": meta["timeframe"],
                     "prop_preset": meta["prop_preset"], "overall": report["overall"],
                     "overall_label": report["overall_label"], "summary_sentence": report["summary_sentence"],
@@ -2531,7 +2570,7 @@ def _start_validate_job(form, files, candidate: str = "", source: str = "validat
         target=_run_validate_simple_job,
         args=(job_id, df, strategy, risk, rules, checks, form),
         kwargs={"library_ref": library_ref, "dataset_label": active_label, "tf_note": tf_note,
-                "cancel_event": cancel_event, "ctx": ctx},
+                "cancel_event": cancel_event, "ctx": ctx, "sim_text": describe_simulation_text(risk, rules)},
         daemon=True,
     ).start()
     return job_id, None
@@ -2592,6 +2631,291 @@ def validate_simple_job_stop(job_id):
     if ce is not None and not job["done"]:
         ce.set()
     return jsonify({"found": True, "stopping": ce is not None and not job["done"]})
+
+
+# ---------------------------------------------------------------------------
+# Saved validation reports (download) + Auto-Fix
+#
+# Every Validate run writes ONE report (HTML / JSON / text) under reports/validation_runs -- see
+# app.validation.report_export. Auto-Fix (app.validation.auto_fix) then acts on the flagged checks:
+# it repairs the strategy, re-runs the real checks on the repaired copy, and saves that copy as a NEW
+# library strategy (the original is never touched) together with its own validation report.
+# ---------------------------------------------------------------------------
+
+@app.route("/validate-simple/report/<report_id>/<fmt>")
+def validate_simple_report_download(report_id, fmt):
+    """Serve a saved report. html opens in the browser; ?download=1 (and json/txt) force a file download."""
+    path = report_export.report_path(VALIDATION_RUNS_DIR, report_id, fmt)
+    if path is None:
+        return render_template("validate_reports.html", reports=[], active_page="validate_simple",
+                               error="That report was not found (it may have been deleted)."), 404
+    as_attachment = fmt != "html" or request.args.get("download") == "1"
+    return send_from_directory(VALIDATION_RUNS_DIR, path.name, as_attachment=as_attachment,
+                               download_name=path.name,
+                               mimetype={"html": "text/html", "json": "application/json", "txt": "text/plain"}[fmt])
+
+
+@app.route("/validate-simple/reports")
+def validate_simple_reports():
+    strategy = (request.args.get("strategy") or "").strip() or None
+    return render_template("validate_reports.html", active_page="validate_simple",
+                           reports=report_export.list_reports(VALIDATION_RUNS_DIR, strategy=strategy), error=None,
+                           strategy=strategy or "")
+
+
+def _fix_copy_name(original_ref, strategy) -> str:
+    base = Path(original_ref[1]).stem if original_ref else (getattr(strategy, "name", "") or "strategy")
+    base = re.sub(r"_fixed(_\d+)?$", "", base)
+    return f"{safe_filename_stem(base)}_fixed"
+
+
+def _save_fixed_strategy_copy(original_ref, strategy, outcome, source_report_id: str):
+    """Save the repaired strategy as a NEW library entry (never overwrites; the original is untouched).
+    Returns (library_type, filename)."""
+    stype = getattr(strategy, "source_type", None) or (original_ref[0] if original_ref else "manual")
+    text = outcome.source_text
+    if stype == "manual":
+        try:  # make the copy recognisable in lists by its display name too
+            cfg = json.loads(text)
+            cfg["name"] = f"{cfg.get('name') or 'strategy'} (fixed)"
+            text = json.dumps(cfg, indent=2)
+        except Exception:  # noqa: BLE001
+            pass
+    stem = _fix_copy_name(original_ref, strategy)
+    last_exc = None
+    for n in range(1, 60):
+        name = stem if n == 1 else f"{stem}_{n}"
+        try:
+            path = save_strategy_text(text, name, stype)
+            break
+        except StrategyAlreadyExists as exc:
+            last_exc = exc
+    else:
+        raise RuntimeError(f"Could not find a free name for the fixed copy: {last_exc}")
+    save_strategy_metadata(stype, path.name, {"auto_fix": {
+        "fixed_from": (original_ref[1] if original_ref else ""), "at": time.time(),
+        "source_report_id": source_report_id,
+        "repairs": [st.label for st in outcome.stages if st.accepted], "headline": outcome.headline,
+    }}, merge=True)
+    return stype, path.name
+
+
+def _run_validate_fix_job(job_id: str, df, strategy, risk, rules, doc: dict, failing: list, form, library_ref=None,
+                          dataset_label: str = "", cancel_event=None, sim_text: str = "") -> None:
+    tracker = SimpleProgress()
+    checks_ran = [c["check"] for c in doc.get("checks", []) if c.get("status") != "error"]
+    verify = sorted(set(checks_ran) | set(failing),
+                    key=lambda c: simple_report.CHECK_ORDER.index(c) if c in simple_report.CHECK_ORDER else 99)
+    plan = auto_fix._plan(failing)
+    w_overfit, w_regime = 6.0, 1.5
+    w_verify = sum(simple_report.CHECK_WEIGHTS.get(c, 1.0) for c in verify)
+    total_w = (w_overfit if "overfit" in plan else 0.0) + (w_regime if "regime" in plan else 0.0) + w_verify + 1.0
+    state = {"done": 0.0, "label": "Starting"}
+
+    def push(extra: float = 0.0, label: str = "") -> None:
+        if label:
+            state["label"] = label
+        JOB_MANAGER.update(job_id, progress=tracker.update(min(0.99, (state["done"] + extra) / total_w), state["label"]))
+
+    def on_event(kind, **kw):
+        if kind == "stage_start":
+            push(0.0, "Repairing overfitting" if kw["stage"] == "overfit" else "Looking for a regime filter")
+        elif kind == "overfit_attempt":
+            state["done"] = max(state["done"], w_overfit * (kw["index"] - 1) / max(1, kw["total"]))
+            push(0.0, f"Re-tuning ({kw['index']}/{kw['total']}, {'full' if kw['scale'] >= 1 else format(kw['scale'], '.0%')} search range)")
+        elif kind == "regime_round":
+            push(0.0, f"Regime filter: round {kw['round']}")
+        elif kind == "stage_done":
+            state["done"] = (state["done"] if kw["stage"] != "overfit" else w_overfit) + (w_regime if kw["stage"] == "regime" else 0.0)
+            push(0.0)
+        elif kind == "verify_start":
+            push(0.0, "Re-running the checks on the repaired strategy")
+        elif kind == "verify_check_done":
+            state["done"] += simple_report.CHECK_WEIGHTS.get(kw["check"], 1.0)
+            push(0.0, f"Re-checked {simple_report.CHECK_LABELS.get(kw['check'], kw['check'])}")
+
+    try:
+        JOB_MANAGER.log(job_id, "Auto-Fix: repairing the strategy and re-running the checks to confirm.")
+        push(0.0, "Starting")
+        before_items = [{"check": c["check"], "label": c["label"], "status": c["status"], "headline": c["headline"]}
+                        for c in doc.get("checks", [])]
+        before_raw = {c["check"]: c.get("raw") for c in doc.get("checks", []) if c.get("raw")}
+        outcome = auto_fix.run_auto_fix(
+            df, strategy, risk, rules, failed_checks=failing, before_items=before_items, before_raw=before_raw,
+            form=form, build_from_code=build_strategy_from_code, verify_checks=verify,
+            progress_cb=lambda m: JOB_MANAGER.log(job_id, f"  {m}"), event_cb=on_event, cancel_event=cancel_event,
+        )
+
+        new_ref = None
+        new_report_id = None
+        save_error = None
+        outcome_dict = report_export.clean_json(outcome.to_dict())
+        if outcome.after_results:
+            # The re-run on the repaired strategy IS a validation run: build its report like any other.
+            if outcome.accepted and outcome.source_text:
+                try:
+                    new_ref = _save_fixed_strategy_copy(library_ref, strategy, outcome, doc.get("report_id", ""))
+                except Exception as exc:  # noqa: BLE001
+                    save_error = f"The repaired strategy could not be saved to the library: {exc}"
+                    JOB_MANAGER.log(job_id, save_error)
+            meta = {"dataset": dataset_label, "timeframe": doc.get("timeframe") or "native",
+                    "prop_preset": doc.get("prop_preset") or "",
+                    "strategy_name": (new_ref[1] if new_ref else f"{(doc.get('strategy') or {}).get('name') or 'strategy'} (Auto-Fix candidate, not saved)")}
+            if new_ref:  # count these re-run results toward promotion for the NEW copy
+                for r in outcome.after_results:
+                    try:
+                        _vs_record_check(new_ref, r["check"], r, meta)
+                    except Exception:  # noqa: BLE001
+                        pass
+            after_ctx = {"candidate": (f"{new_ref[0]}::{new_ref[1]}" if new_ref else ""),
+                         "existing_dataset": (doc.get("form_snapshot") or {}).get("existing_dataset", ""),
+                         "timeframe": (doc.get("form_snapshot") or {}).get("timeframe", ""),
+                         "prop_preset": doc.get("prop_preset") or ""}
+            after_ctx["strategy_pick"] = after_ctx["candidate"]
+            after_report = simple_report.build_report(outcome.after_results, context=after_ctx)
+            after_report["strategy"] = meta["strategy_name"]
+            after_report["library_type"] = new_ref[0] if new_ref else ""
+            baseline = doc.get("baseline") or {}
+            try:
+                fixed_bt = run_backtest(df, outcome.strategy, risk)
+                baseline = {"trades": len(fixed_bt.trades), "net_profit": fixed_bt.statistics.net_profit,
+                            "win_rate": fixed_bt.statistics.win_rate, "max_drawdown_pct": fixed_bt.statistics.max_drawdown_pct,
+                            "dataset": dataset_label}
+            except Exception:  # noqa: BLE001
+                pass
+            af_section = dict(outcome_dict, source_report_id=doc.get("report_id"),
+                              fixed_strategy=({"library_type": new_ref[0], "filename": new_ref[1]} if new_ref else None))
+            try:
+                _vs_save_run_report(after_report, outcome.after_results, MultiDict(doc.get("form_snapshot") or {}), meta, baseline,
+                                    verify, new_ref, sim_text, auto_fix_section=af_section)
+                new_report_id = after_report.get("report_id")
+            except Exception as exc:  # noqa: BLE001
+                JOB_MANAGER.log(job_id, f"The Auto-Fix report could not be saved: {exc}")
+            if new_ref:
+                try:
+                    save_strategy_metadata(*new_ref, {"last_validate_run": {
+                        "report_id": new_report_id, "ran_at": time.time(), "dataset": dataset_label,
+                        "timeframe": meta["timeframe"], "prop_preset": meta["prop_preset"],
+                        "overall": after_report["overall"], "overall_label": after_report["overall_label"],
+                        "summary_sentence": after_report["summary_sentence"],
+                        "items": [{k: i[k] for k in ("check", "label", "status", "headline")} for i in after_report["items"]],
+                        "next_step": after_report["next_step"]}}, merge=True)
+                except Exception:  # noqa: BLE001
+                    pass
+        cancelled = bool(cancel_event is not None and cancel_event.is_set())
+        JOB_MANAGER.update(job_id, outcome=outcome_dict, fixed_strategy=(
+            {"library_type": new_ref[0], "filename": new_ref[1], "pick": f"{new_ref[0]}::{new_ref[1]}"} if new_ref else None),
+            new_report_id=new_report_id, save_error=save_error,
+            candidate_text=(outcome.source_text if (outcome.source_text and not new_ref) else None),
+            candidate_ext=(outcome.extension or None),
+            downloads=({fmt: f"/validate-simple/report/{new_report_id}/{fmt}" for fmt in ("html", "json", "txt")} if new_report_id else None))
+        JOB_MANAGER.finish(job_id, cancelled=cancelled, progress=tracker.finish())
+    except WalkforwardGACancelled:
+        JOB_MANAGER.finish(job_id, cancelled=True, progress=tracker.finish())
+    except Exception as exc:  # noqa: BLE001
+        JOB_MANAGER.fail(job_id, f"Auto-Fix stopped unexpectedly: {exc}")
+
+
+@app.route("/validate-fix/start", methods=["POST"])
+def validate_fix_start():
+    rid = report_export.safe_report_id(request.form.get("report_id", ""))
+    doc = report_export.load_report(VALIDATION_RUNS_DIR, rid) if rid else None
+    back = lambda msg: redirect(url_for("validate_simple_form", error=msg))
+    if doc is None:
+        return back("That validation report was not found, so it cannot be fixed. Run Validate again first.")
+    failing = [c["check"] for c in doc.get("checks", [])
+               if c.get("status") in ("fail", "caution") and simple_report.FIX_KIND_BY_CHECK.get(c["check"])]
+    wanted = [c.strip() for c in (request.form.get("checks") or "").split(",") if c.strip()]
+    if wanted:
+        failing = [c for c in failing if c in wanted]
+    if not failing:
+        return back("Nothing in that report can be fixed automatically (Auto-Fix handles the Regime Matrix and the overfitting checks).")
+    form = MultiDict(doc.get("form_snapshot") or {})
+    try:
+        df, active_label, _import_note, dataset_error = _resolve_dataset(form, MultiDict())
+        if dataset_error:
+            return back("Auto-Fix needs the same market data again. " + dataset_error +
+                        " (If you uploaded a CSV for that run, import it in the Data Center and re-run Validate from the stored dataset.)")
+        df, tf_note, tf_error, _tf_label = _apply_timeframe_choice(df, form)
+        if tf_error:
+            return back(tf_error)
+        strategy, library_ref = _simple_load_strategy(form)
+        rules = _simple_prop_rules(form)
+        risk = _simple_base_risk(form, rules)
+    except (StrategyError, RefinementError, ValueError) as exc:
+        return back(str(exc))
+    except Exception as exc:  # noqa: BLE001
+        return back(f"Unexpected error: {exc}")
+
+    cancel_event = threading.Event()
+    log = [f"Loaded {len(df)} bars from {active_label}."] + ([tf_note] if tf_note else []) + [
+        "Fixing: " + ", ".join(simple_report.CHECK_LABELS.get(c, c) for c in failing) + "."]
+    job_id = JOB_MANAGER.create(
+        tool="Validate (Auto-Fix)", page_template="/validate-fix/job/{job_id}", log=log, instrument=active_label,
+        cancel_event=cancel_event, cancelled=False,
+        progress={"percent": 0.0, "step": None, "step_total": 1, "step_label": "", "label": "Starting",
+                  "elapsed_seconds": 0.0, "done": False})
+    JOB_MANAGER.update(job_id, strategy=(library_ref[1] if library_ref else getattr(strategy, "name", "")),
+                       source_report_id=doc.get("report_id"), fixing=[simple_report.CHECK_LABELS.get(c, c) for c in failing],
+                       handoff={"existing_dataset": (doc.get("form_snapshot") or {}).get("existing_dataset", ""),
+                                "timeframe": (doc.get("form_snapshot") or {}).get("timeframe", ""),
+                                "prop_preset": doc.get("prop_preset") or ""})
+    JOB_MANAGER.prune(max_age_seconds=6 * 3600)
+    threading.Thread(
+        target=_run_validate_fix_job,
+        args=(job_id, df, strategy, risk, rules, doc, failing, form),
+        kwargs={"library_ref": library_ref, "dataset_label": active_label, "cancel_event": cancel_event,
+                "sim_text": describe_simulation_text(risk, rules)},
+        daemon=True,
+    ).start()
+    return redirect(url_for("validate_fix_job", job_id=job_id))
+
+
+@app.route("/validate-fix/job/<job_id>")
+def validate_fix_job(job_id):
+    job = JOB_MANAGER.get(job_id)
+    if job is None:
+        return render_template("validate_fix_job.html", job_id=job_id, not_found=True), 404
+    return render_template("validate_fix_job.html", job_id=job_id, not_found=False, active_page="validate_simple")
+
+
+@app.route("/validate-fix/job/<job_id>/status.json")
+def validate_fix_job_status(job_id):
+    job = JOB_MANAGER.get(job_id)
+    if job is None:
+        return jsonify({"found": False}), 404
+    _ce = job.get("cancel_event")
+    return jsonify({"found": True, "done": job["done"], "error": job["error"], "log": job["log"],
+                    "progress": job.get("progress"), "cancelled": job.get("cancelled", False),
+                    "strategy": job.get("strategy"), "fixing": job.get("fixing"), "outcome": job.get("outcome"),
+                    "fixed_strategy": job.get("fixed_strategy"), "new_report_id": job.get("new_report_id"),
+                    "downloads": job.get("downloads"), "save_error": job.get("save_error"),
+                    "has_candidate": bool(job.get("candidate_text")), "handoff": job.get("handoff"),
+                    "source_report_id": job.get("source_report_id"),
+                    "stopping": bool(_ce is not None and _ce.is_set() and not job["done"])})
+
+
+@app.route("/validate-fix/job/<job_id>/stop", methods=["POST"])
+def validate_fix_job_stop(job_id):
+    job = JOB_MANAGER.get(job_id)
+    if job is None:
+        return jsonify({"found": False}), 404
+    ce = job.get("cancel_event")
+    if ce is not None and not job["done"]:
+        ce.set()
+    return jsonify({"found": True, "stopping": ce is not None and not job["done"]})
+
+
+@app.route("/validate-fix/job/<job_id>/candidate")
+def validate_fix_candidate_download(job_id):
+    """The repaired strategy's source for a fix that was NOT recommended (so it was not saved to the library)."""
+    job = JOB_MANAGER.get(job_id)
+    text = (job or {}).get("candidate_text")
+    if not text:
+        return "No candidate available.", 404
+    ext = re.sub(r"[^a-z0-9]", "", str((job or {}).get("candidate_ext") or "txt").lower()) or "txt"
+    return Response(text, mimetype="text/plain",
+                    headers={"Content-Disposition": f'attachment; filename="auto_fix_candidate.{ext}"'})
 
 
 def _champion_page_ctx(**extra) -> dict:
@@ -6684,50 +7008,10 @@ _REGIME_DIMENSIONS = ("trend", "volatility", "session", "environment")
 
 
 def _apply_regime_exclusion_to_strategy(strategy, exclude_cells: list[dict]):
-    """UPGRADE (regime-exclusion-primitive-had-no-ui): builds a NEW
-    strategy object of the same source_type as `strategy`, with
-    `exclude_cells` (RegimeMatrixResult.as_exclude_filter()'s own output
-    shape) merged in as its regime-exclusion filter -- mirrors
-    app.strategy.base.resolve_excluded_regimes's three source-type
-    conventions exactly, in reverse (that function READS the filter this
-    WRITES). Returns (new_strategy, new_source_text, file_extension) so
-    the caller can both re-run a backtest/regime-matrix pass against the
-    new strategy immediately, and offer the person the updated source to
-    copy back into the editor or save to the library.
-
-    Raises StrategyError for a source_type this can't be edited for
-    (there is none today, but future strategy types should fail loudly
-    here rather than silently doing nothing)."""
-    source_type = getattr(strategy, "source_type", None)
-
-    if source_type == "manual":
-        new_cfg = copy.deepcopy(strategy.config)
-        filters = new_cfg.setdefault("filters", {})
-        existing = list(filters.get("regime_exclude") or [])
-        for cell in exclude_cells:
-            if cell not in existing:
-                existing.append(cell)
-        filters["regime_exclude"] = existing
-        text = json.dumps(new_cfg, indent=2)
-        return ManualStrategy(new_cfg), text, "json"
-
-    if source_type == "python":
-        code = strategy.file_path.read_text(encoding="utf-8")
-        # A later top-level assignment simply overrides an earlier one
-        # when the module executes, so appending is safe even if the
-        # strategy already declares its own EXCLUDE_REGIMES.
-        new_code = code.rstrip("\n") + f"\n\nEXCLUDE_REGIMES = {exclude_cells!r}\n"
-        return build_strategy_from_code("python", new_code), new_code, "py"
-
-    if source_type in ("pinescript", "mql5"):
-        code = strategy.code
-        cell_strs = [",".join(f"{k}:{v}" for k, v in cell.items()) for cell in exclude_cells]
-        directive_value = ";".join(cell_strs)
-        new_code = code.rstrip("\n") + f"\n// T58_EXCLUDE_REGIMES={directive_value}\n"
-        ext = "pine" if source_type == "pinescript" else "mq5"
-        return build_strategy_from_code(source_type, new_code), new_code, ext
-
-    raise StrategyError(f"Cannot apply a regime exclusion to strategy type '{source_type}'.")
+    """Builds a NEW strategy of the same source_type with `exclude_cells` merged into its regime-exclusion
+    filter. Returns (new_strategy, new_source_text, file_extension). The implementation now lives in
+    app.validation.auto_fix.with_regime_exclusion so Auto-Fix and this page share one code path."""
+    return auto_fix.with_regime_exclusion(strategy, exclude_cells, build_strategy_from_code)
 
 
 @app.route("/regime-matrix")
