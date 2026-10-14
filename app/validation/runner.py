@@ -154,6 +154,8 @@ def dispatch_validation_checks(df, strategy, risk, rules, checks, form, baseline
                     "oos_fitness": ga_res.best.fitness,
                     "oos_trade_count": ga_res.best.oos_trade_count,
                     "n_folds": ga_res.n_folds,
+                    "total_evaluations": getattr(ga_res, "total_evaluations", None),
+                    "warnings": list(getattr(ga_res, "warnings", None) or [])[:6],
                 }
             elif check == "sensitivity":
                 res_list = compute_1d_sensitivity(
@@ -192,10 +194,23 @@ def dispatch_validation_checks(df, strategy, risk, rules, checks, form, baseline
                 )
                 if res is None:
                     raise ValueError("Not enough bars to classify regimes reliably.")
+                def _cell_row(c):
+                    return {"label": c.label, "dims": dict(c.dims), "n_trades": c.n_trades,
+                            "win_rate": c.win_rate, "profit_factor": c.profit_factor,
+                            "net_profit": c.net_profit, "return_pct": c.return_pct,
+                            "max_drawdown_pct": c.max_drawdown_pct, "pct_of_bars": c.pct_of_bars,
+                            "t_stat": c.t_stat}
                 summary = {
                     "n_cells": len(res.cells),
                     "n_disable_recommended": len(res.disable_regimes()),
                     "notes": list(res.notes or []),
+                    # Which cells lose money (so the report and Auto-Fix know WHICH regimes), plus the
+                    # full grid and the rule used to flag them.
+                    "dimensions": list(res.primary_dimensions),
+                    "min_trades_for_verdict": res.min_trades_for_verdict,
+                    "disable_pf_threshold": res.disable_pf_threshold,
+                    "disable_cells": [_cell_row(c) for c in res.disable_regimes()],
+                    "cells": [_cell_row(c) for c in res.cells],
                 }
             else:
                 continue

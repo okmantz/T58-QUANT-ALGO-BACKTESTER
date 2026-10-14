@@ -75,6 +75,27 @@ GATING_CHECKS: tuple[str, ...] = ("cpcv", "walk_forward", "wfga", "sensitivity",
 
 STATUS_ORDER = {"pass": 0, "info": 0, "caution": 1, "fail": 2, "error": 3}
 
+# What each check needs to PASS -- shown in the downloadable report for EVERY check (pass or not),
+# so a reader can always see the bar a result was judged against.
+CHECK_BARS: dict[str, str] = {
+    "monte_carlo": "Eval pass chance of 70% or more (50-70% is borderline, under 50% fails).",
+    "cpcv": "Out-of-sample results must keep most of the in-sample edge on every train/test split.",
+    "pbo": "Probability of overfitting under 35% (35-50% is borderline, 50% or more fails).",
+    "walk_forward": "Keep at least 50% of the in-sample edge out-of-sample (25-50% is borderline, under 25% fails).",
+    "wfga": "Out-of-sample fitness within 15% of in-sample (15-30% gap is borderline, over 30% fails).",
+    "sensitivity": "No cliff edges (up to one in three parameters on a cliff is borderline, more fails).",
+    "robustness": "Robustness score of 70/100 or more (50-70 is borderline, under 50 fails).",
+    "regime": "No market regime that loses money (one losing regime is borderline, two or more fail).",
+}
+
+# Which kind of Auto-Fix can act on a flagged check (see app.validation.auto_fix). Monte Carlo is a
+# performance problem rather than a robustness one, so it has no automatic fix -- it goes to Optimize.
+FIX_KIND_BY_CHECK: dict[str, str] = {
+    "regime": "regime",
+    "cpcv": "overfit", "pbo": "overfit", "walk_forward": "overfit", "wfga": "overfit",
+    "sensitivity": "overfit", "robustness": "overfit",
+}
+
 
 def _f(v: Any) -> Optional[float]:
     try:
@@ -376,9 +397,10 @@ def _fix_guidance(check: str, status: str, ctx: Optional[dict]) -> Optional[dict
     if check == "regime":
         return {"bar": "No market regime that loses money (one is a caution, more than one is a fail).",
                 "why": "The edge only exists in part of the market; the other regimes cost you money.",
-                "steps": ["Open the Regime Matrix and see which volatility/trend regimes lose.",
-                          "Add a filter to the strategy so it stands aside in those regimes.",
-                          "Re-run Validate to confirm the filter fixed it."],
+                "steps": ["Press Auto-fix: it finds the losing regimes on the first 70% of the data, adds a filter that stands aside in them, "
+                          "and only keeps it if the last 30% (data it never looked at) holds up.",
+                          "Or open the Regime Matrix to inspect the regimes yourself and test an exclusion by hand.",
+                          "Re-validate the fixed copy to confirm it now passes."],
                 "go": _go("Open Regime Matrix", "/regime-matrix", ctx)}
     return None
 
@@ -395,6 +417,9 @@ def _attach_guidance(item: dict, result: dict, ctx: Optional[dict]) -> dict:
         g.setdefault("go2", None)
     else:
         return item
+    kind = FIX_KIND_BY_CHECK.get(item["check"])
+    if kind and status in ("fail", "caution"):
+        g["fix_kind"] = kind
     item["guidance"] = g
     return item
 
@@ -480,7 +505,7 @@ def _next_step(items: list[dict], ctx: dict, gating_missing: list[str]) -> dict:
     if overfit:
         names = ", ".join(by[c]["label"] for c in overfit)
         return {
-            "key": "reduce_overfit", "tone": "bad",
+            "key": "reduce_overfit", "tone": "bad", "fix_kind": "overfit",
             "title": "This looks over-fit -- simplify it, don't polish it",
             "why": f"{names} failed: the edge shrinks on data the strategy was not tuned on. Re-optimise with fewer free parameters or a larger out-of-sample window, or retire it.",
             "label": "Go to Optimize", "href": _href("/optimize-simple", ctx),
@@ -491,7 +516,7 @@ def _next_step(items: list[dict], ctx: dict, gating_missing: list[str]) -> dict:
     if fragile:
         names = ", ".join(by[c]["label"] for c in fragile)
         return {
-            "key": "stabilise_params", "tone": "bad",
+            "key": "stabilise_params", "tone": "bad", "fix_kind": "overfit",
             "title": "Move the parameters onto a plateau",
             "why": f"{names} found cliff edges. Re-optimise and prefer values in the middle of a flat region over the single best spike.",
             "label": "Go to Optimize", "href": _href("/optimize-simple", ctx),
@@ -500,7 +525,7 @@ def _next_step(items: list[dict], ctx: dict, gating_missing: list[str]) -> dict:
     # 5. A regime is bleeding.
     if st("regime") == "fail":
         return {
-            "key": "filter_regimes", "tone": "bad",
+            "key": "filter_regimes", "tone": "bad", "fix_kind": "regime",
             "title": "Switch off the losing market regimes",
             "why": "More than one regime loses money. The Regime Matrix page shows which and lets you test the exclusion.",
             "label": "Open Regime Matrix", "href": _href("/regime-matrix", ctx),

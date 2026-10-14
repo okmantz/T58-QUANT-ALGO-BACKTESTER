@@ -296,6 +296,11 @@ class RegimeCellResult:
     max_drawdown_pct: float  # peak-to-trough on that same pooled, regime-isolated equity curve
     is_profitable: bool
     recommend_disable: bool
+    # Informational only (never changes a verdict): t-statistic of this cell's per-trade P&L,
+    # mean / (stdev / sqrt(n)). Around -1 or lower means the loss is unlikely to be pure chance;
+    # near 0 means the "losing" cell is statistically indistinguishable from noise. With 25 cells,
+    # a few will look like losers by luck alone -- this is how a reader can tell them apart.
+    t_stat: float | None = None
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -303,7 +308,8 @@ class RegimeCellResult:
 
 def _pooled_stats(trades_subset: list, initial_balance: float) -> dict:
     if not trades_subset:
-        return {"win_rate": 0.0, "profit_factor": 0.0, "net_profit": 0.0, "return_pct": 0.0, "max_drawdown_pct": 0.0}
+        return {"win_rate": 0.0, "profit_factor": 0.0, "net_profit": 0.0, "return_pct": 0.0, "max_drawdown_pct": 0.0,
+                "t_stat": None}
     ordered = sorted(trades_subset, key=lambda t: t.exit_time)
     pnls = [t.pnl for t in ordered]
     gross_profit = sum(p for p in pnls if p > 0)
@@ -318,6 +324,11 @@ def _pooled_stats(trades_subset: list, initial_balance: float) -> dict:
     # the real account curve, since other regimes' trades happened in
     # between chronologically. Clearly documented rather than presented
     # as the real account drawdown.
+    t_stat = None
+    if len(pnls) >= 3:
+        sd = float(np.std(pnls, ddof=1))
+        if sd > 0:
+            t_stat = float(np.mean(pnls)) / (sd / (len(pnls) ** 0.5))
     cum = np.cumsum(pnls)
     equity = initial_balance + cum
     running_max = np.maximum.accumulate(np.concatenate([[initial_balance], equity]))[1:]
@@ -326,7 +337,7 @@ def _pooled_stats(trades_subset: list, initial_balance: float) -> dict:
     return_pct = float(cum[-1]) / initial_balance * 100.0
     return {
         "win_rate": win_rate, "profit_factor": profit_factor, "net_profit": net_profit,
-        "return_pct": return_pct, "max_drawdown_pct": max_dd_pct,
+        "return_pct": return_pct, "max_drawdown_pct": max_dd_pct, "t_stat": t_stat,
     }
 
 
@@ -510,7 +521,7 @@ def build_regime_matrix(
                 net_profit=stats["net_profit"], return_pct=stats["return_pct"],
                 max_drawdown_pct=stats["max_drawdown_pct"],
                 is_profitable=bool(n_trades and stats["net_profit"] > 0),
-                recommend_disable=recommend_disable,
+                recommend_disable=recommend_disable, t_stat=stats.get("t_stat"),
             ))
         return cells
 
