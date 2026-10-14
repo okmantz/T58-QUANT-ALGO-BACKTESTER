@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>{{ section_title }} — Start Here — T58 Quant Algo Backtester</title>
+<title>{{ section_title }}{{ '' if section == 'create' else ' — Start Here' }} — T58 Quant Algo Backtester</title>
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/static/icon-192.png">
 <link rel="apple-touch-icon" href="/static/icon-192.png">
@@ -41,7 +41,7 @@
 {% include '_sidebar.html' %}
 <div class="t58-main">
 <div class="t58-page-header">
-  <h1>{{ section_title }} — Start Here</h1>
+  <h1>{{ section_title }}{{ '' if section == 'create' else ' — Start Here' }}</h1>
   <p>{{ tagline }}</p>
 </div>
 
@@ -197,6 +197,8 @@
 </script>
 {% endif %}
 
+{# Create has no "Start Here" overview card -- the form above is the page. #}
+{% if section != 'create' %}
 <div class="card">
   <h2>&#128161; What this section is for</h2>
   <p>{{ description }}</p>
@@ -215,6 +217,7 @@
   </div>
   {% endif %}
 </div>
+{% endif %}
 
 <div class="card" style="max-width: none;">
   <h2>&#8981; Everything in {{ section_title }}</h2>

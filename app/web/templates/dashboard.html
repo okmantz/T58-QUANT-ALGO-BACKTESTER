@@ -21,8 +21,11 @@
 <div class="t58-page-header">
   <h1>Dashboard</h1>
   <p>Live stats across every strategy run through the app -- desktop, web, and Search Lab all feed this.</p>
-  <!-- First-run guided tour (see /static/t58-tour.js). Auto-starts once per
-       browser after activation; this button replays it any time. -->
+  <!-- First-run guided tour (see /static/t58-tour.js). The server decides
+       whether it auto-starts (first Dashboard visit after activation, then
+       never again -- see app/web/onboarding.py); this button replays it any
+       time. -->
+  <script>window.T58_TOUR_AUTOSTART = {{ 'true' if auto_tour else 'false' }};</script>
   <button type="button" class="t58-btn ghost sm" data-t58-tour-start style="margin-top:10px;">&#127891; Take the 60-second tour</button>
 </div>
 
@@ -30,15 +33,15 @@
 <div class="t58-card">
   <h2>Your workflow</h2>
   <div class="t58-pipeline">
-    <a class="step" href="/generate-strategies"><span class="n">01</span><span class="t">Generate</span></a>
+    <a class="step" href="/start-here/create"><span class="n">01</span><span class="t">Create</span></a>
     <span class="arrow">&rarr;</span>
-    <a class="step" href="/"><span class="n">02</span><span class="t">Backtest</span></a>
+    <a class="step" href="/full-pipeline"><span class="n">02</span><span class="t">Test</span></a>
     <span class="arrow">&rarr;</span>
-    <a class="step" href="/search"><span class="n">03</span><span class="t">Optimize</span></a>
+    <a class="step" href="/optimize-simple"><span class="n">03</span><span class="t">Optimize</span></a>
     <span class="arrow">&rarr;</span>
-    <a class="step" href="/cpcv"><span class="n">04</span><span class="t">Validate</span></a>
+    <a class="step" href="/validate-simple"><span class="n">04</span><span class="t">Validate</span></a>
     <span class="arrow">&rarr;</span>
-    <a class="step" href="/portfolio"><span class="n">05</span><span class="t">Portfolio</span></a>
+    <a class="step" href="/champion-simple"><span class="n">05</span><span class="t">Champion</span></a>
     <span class="arrow">&rarr;</span>
     <a class="step" href="/forward-test"><span class="n">06</span><span class="t">Forward test</span></a>
     <span class="arrow">&rarr;</span>

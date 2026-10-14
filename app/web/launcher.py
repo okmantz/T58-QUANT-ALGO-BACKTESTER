@@ -135,11 +135,13 @@ def main() -> None:
 
     def _open_things_once_server_is_up() -> None:
         time.sleep(1.0)
-        # Open ONLY the app itself. The phone QR code already lives inside
-        # the web app (the /mobile-access page, linked from the sidebar),
-        # so we no longer pop it open as its own browser tab or as a
-        # separate picture-viewer window on startup.
-        webbrowser.open(f"http://127.0.0.1:{port}/")
+        # Open ONLY the app itself, straight at the Dashboard. A first
+        # launch is redirected through the license page (/activate) and
+        # lands back on the Dashboard, where the first-run tour starts.
+        # The phone QR code lives inside the web app (the /mobile-access
+        # page, linked from the sidebar), so we don't pop it open as its
+        # own browser tab or picture-viewer window on startup.
+        webbrowser.open(f"http://127.0.0.1:{port}/dashboard")
 
     threading.Thread(target=_open_things_once_server_is_up, daemon=True).start()
 

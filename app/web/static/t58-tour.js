@@ -8,8 +8,10 @@
 
    - Self-contained: injects its own CSS, reads the app's theme variables
      (--panel-2, --teal, ...) so it follows the light/dark toggle.
-   - Shows once per browser (localStorage key below). Finishing, skipping,
-     or closing it all count as "seen". If localStorage is blocked (some
+   - Shows once, the first time the Dashboard opens after the license is
+     activated (the server decides -- see app/web/onboarding.py -- and falls
+     back to the localStorage key below). Finishing, skipping, or closing
+     it all count as "seen". If localStorage is blocked (some
      desktop WebView shells), a sessionStorage fallback still shows it at
      most once per app session, so nobody gets nagged on every page load
      but a genuine first run is never silently skipped.
@@ -49,14 +51,14 @@
       title: "Welcome to T58 \uD83D\uDC4B",
       text: [
         "T58 answers one question: **if you trade this strategy under your prop firm's rules, what are your odds of passing the evaluation and reaching a payout?**",
-        "Getting to that answer takes five simple moves. This quick tour shows you where each one lives."
+        "Getting to that answer follows the steps in the sidebar. This quick tour shows you where each one lives."
       ],
-      chips: ["Data", "Strategy", "Test", "Full Pipeline", "Verdict"]
+      chips: ["Data", "Create", "Test", "Optimize", "Validate"]
     },
     {
       title: "1 \u00B7 Add your market data",
       text: [
-        "Every test needs price history. Open **Data Center** to import a file (CSV, TSV or Parquet). Or skip ahead and upload straight into box 1 on Run & Report.",
+        "Every test needs price history. Open **Data Center** to import a file (CSV, TSV or Parquet), or fetch data straight from the Test page.",
         "Either way it's saved, so you only upload once. Columns needed: **timestamp, open, high, low, close, volume**."
       ],
       target: function () { return navLink("/data-center"); },
@@ -64,41 +66,37 @@
       action: { label: "Open Data Center", href: "/data-center" }
     },
     {
-      title: "2 \u00B7 Create or bring a strategy",
+      title: "2 \u00B7 Create a strategy",
       text: [
-        "**No idea yet?** Let T58 hunt for one: Forge Strategy or Speed Run, one button each.",
-        "**Have an idea?** Describe it in plain English with Generate Strategies (AI, optional), or build it yourself. Run & Report takes a no-code Manual builder, Python, PineScript or MQL5.",
-        "Everything you save lands in the **Strategy Library**."
+        "**Create** is where strategies enter. Describe an idea in plain English and let T58 turn it into testable candidates, or paste your own Python, PineScript or MQL5.",
+        "No idea yet? The tools grid on the same page has Forge Strategy and Speed Run, one button each. Everything you save lands in the **Strategy Library**."
       ],
-      target: function () { return navGroup("/forge"); },
-      group: function () { return navGroup("/forge"); },
-      action: { label: "Open Forge Strategy", href: "/forge" }
+      target: function () { return navLink("/start-here/create"); },
+      action: { label: "Open Create", href: "/start-here/create" }
     },
     {
-      title: "3 \u00B7 Run your first test",
+      title: "3 \u00B7 Test it properly",
       text: [
-        "**Run & Report** is your first stop. Pick your data, pick your strategy, then set your prop-firm rules. FTMO, Apex, TopStep, The5%ers, FundedNext and Lucid are built in as quick-fill presets.",
-        "Set your risk, hit Run, and you get a report with your **probability of passing and reaching a payout**."
-      ],
-      target: function () { return navLink("/"); },
-      group: function () { return navGroup("/"); },
-      action: { label: "Open Run & Report", href: "/" }
-    },
-    {
-      title: "4 \u00B7 Full Pipeline: the deep test",
-      text: [
-        "Same inputs, but **one button does everything**: baseline backtest, lookahead-bias check, a search for a version that holds up out-of-sample, Monte Carlo, then a plain verdict: **READY, MARGINAL or NOT READY**, with reasons.",
-        "It's the slowest tool in the app, so try a quick Run & Report first. Winners are saved to your Strategy Library automatically."
+        "**Test** runs the full pipeline: baseline backtest, lookahead-bias check, a search for a version that holds up out-of-sample, Monte Carlo, then a plain verdict: **READY, MARGINAL or NOT READY**, with reasons.",
+        "Pick your data and strategy, set your prop-firm rules (FTMO, Apex, TopStep, The5%ers, FundedNext and Lucid are built-in presets) and hit run. It is the slowest tool in the app, so give it a moment."
       ],
       target: function () { return navLink("/full-pipeline"); },
-      group: function () { return navGroup("/full-pipeline"); },
-      action: { label: "Open Full Pipeline", href: "/full-pipeline" }
+      action: { label: "Open Test", href: "/full-pipeline" }
+    },
+    {
+      title: "4 \u00B7 Optimize, then Validate",
+      text: [
+        "Verdict NOT READY? **Optimize** searches for better parameters. Once something looks good, **Validate** tries to break it with walk-forward, CPCV and robustness checks.",
+        "Strategies that survive move on to **Champion**, **Deploy** (forward test it, including through a TradingView webhook) and finally live."
+      ],
+      target: function () { return navLink("/optimize-simple"); },
+      action: { label: "Open Optimize", href: "/optimize-simple" }
     },
     {
       title: "Your home base: what's next?",
       text: [
         "This panel is the Dashboard's headline. After every run it tells you **what you're working on, whether it's working, why, and the exact next step**, so you never have to guess the order.",
-        "Your saved strategies live in Create \u2192 Strategy Library."
+        "The workflow cards above it jump straight to each step. Your saved strategies live in the Strategy Library."
       ],
       target: function () {
         return document.querySelector(".t58-champion") || document.querySelector(".t58-page-header");
@@ -108,11 +106,11 @@
     {
       title: "Help is always one click away",
       text: [
-        "The **User Manual** is the full walkthrough. Every section in the sidebar also has its own \uD83D\uDCA1 **Start Here** page, and Education and Resources cover the trading basics.",
+        "The **User Manual** is the full walkthrough, and Education and Resources cover the trading basics.",
         "Want this tour again? Use the **Take the tour** button at the top of the Dashboard."
       ],
       target: function () { return navLink("/user-manual"); },
-      action: { label: "Start my first test \u2192", href: "/", primary: true }
+      action: { label: "Start my first test \u2192", href: "/start-here/create", primary: true }
     }
   ];
 
@@ -131,6 +129,14 @@
   function markSeen(how) {
     try { localStorage.setItem(STORE_KEY, how || "done"); } catch (e) {}
     try { sessionStorage.setItem(STORE_KEY, how || "done"); } catch (e) {}
+    // The server keeps the real "seen" flag (see app/web/onboarding.py), so
+    // the tour does not depend on which browser/origin opened the app.
+    try {
+      fetch("/api/onboarding/tour-seen", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ how: how || "done" }), keepalive: true
+      });
+    } catch (e) {}
   }
   function isMobile() {
     return !!(window.matchMedia && window.matchMedia(MOBILE_QUERY).matches);
@@ -512,7 +518,13 @@
     var q = "";
     try { q = new URLSearchParams(window.location.search).get("tour"); } catch (e) {}
     if (q === "0") return;
-    if (q === "1" || !seen()) {
+    // The Dashboard renders window.T58_TOUR_AUTOSTART from the server's own
+    // first-run flag: true only on the first Dashboard visit after the
+    // license is activated. Browser storage is only a fallback for pages
+    // that don't set it.
+    var serverSays = window.T58_TOUR_AUTOSTART;
+    var shouldStart = (typeof serverSays === "boolean") ? serverSays : !seen();
+    if (q === "1" || shouldStart) {
       // let the sidebar finish restoring its own open/closed groups first
       window.setTimeout(start, 650);
     }

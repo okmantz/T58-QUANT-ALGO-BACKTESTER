@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Webhook Relay — T58 Quant Algo Backtester</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+{% include '_lifecycle_css.html' %}
+<style>
+  .wr-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  .wr-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; word-break: break-all; }
+  .wr-copy { display: flex; gap: 8px; align-items: stretch; }
+  .wr-copy .box { flex: 1; background: var(--lc-panel2); border: 1px solid var(--lc-border2); border-radius: 9px; padding: 9px 11px; }
+  .wr-copy pre.box { margin: 0; white-space: pre-wrap; }
+  .wr-scope input[type=text], .wr-scope input[type=number], .wr-scope textarea, .wr-scope select {
+    width: 100%; background: var(--lc-panel2); color: var(--lc-text); border: 1px solid var(--lc-border2);
+    border-radius: 9px; padding: 8px 10px; font: inherit; font-size: 13px; }
+  .wr-scope textarea { min-height: 62px; resize: vertical; }
+  .wr-scope label.flabel { display: block; font-size: 11.5px; color: var(--lc-muted); margin: 10px 0 4px; }
+  .wr-check { display: flex; gap: 8px; align-items: center; font-size: 13px; margin: 8px 0 0; }
+  .wr-check input { width: auto; accent-color: var(--lc-acc); }
+  .wr-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .wr-table th { text-align: left; color: var(--lc-muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--lc-border2); }
+  .wr-table td { padding: 6px 8px; border-bottom: 1px solid var(--lc-border); vertical-align: top; }
+  .wr-pos { color: var(--lc-acc); } .wr-neg { color: var(--lc-red); }
+  .wr-msg { font-size: 12.5px; margin-top: 8px; min-height: 18px; }
+  .wr-steps li { margin: 6px 0; line-height: 1.6; font-size: 13.5px; }
+</style>
+</head>
+<body>
+{% set active_page = 'webhook_relay' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="lc-scope wr-scope"><div class="lc-wrap">
+
+{% set lc_step = 'deploy' %}
+{% include '_lifecycle_stepper.html' %}
+<div class="lc-crumb">Deploy &rsaquo; <b>Webhook Relay</b></div>
+<h1 class="lc-title">TradingView webhook relay</h1>
+<p class="lc-sub">Run your Pine Script strategy on TradingView and let its alerts drive a forward test here. Every alert moves a <b>T58 paper account</b> (the demo account: real-time signals, simulated fills, full P&amp;L stats), and can optionally mirror to a <b>demo/practice broker account</b> you have saved under Deploy. Live accounts are refused.</p>
+
+<div class="lc-card">
+  <h3>How it fits together</h3>
+  <ol class="wr-steps">
+    <li><b>Pine strategy on TradingView</b> places entries/exits on the chart as usual.</li>
+    <li>A TradingView <b>alert</b> on that strategy sends a webhook to the URL below, carrying the order details.</li>
+    <li>T58 turns it into a position change on the paper account, and (if you chose one) on your demo broker account.</li>
+  </ol>
+  <p class="lc-hint">TradingView's own Paper Trading cannot be driven by webhooks, so T58's paper account plays that role: it keeps the position, fills, P&amp;L and win rate for the forward test.</p>
+</div>
+
+<div class="lc-card">
+  <h3>1 · Public address TradingView can reach</h3>
+  <p class="lc-hint">TradingView's servers must be able to call this machine, and it only accepts port 80/443 over http(s). <code class="ic">{{ local_url }}</code> works only on this computer, so open a tunnel and paste its https address:</p>
+  <div class="wr-grid" style="margin:8px 0;">
+    <div class="wr-mono lc-toolcard"><div class="tname">ngrok</div><div class="tdesc">ngrok http {{ host.split(':')[-1] if ':' in host else '5000' }}</div></div>
+    <div class="wr-mono lc-toolcard"><div class="tname">Cloudflare Tunnel</div><div class="tdesc">cloudflared tunnel --url http://localhost:{{ host.split(':')[-1] if ':' in host else '5000' }}</div></div>
+    <div class="wr-mono lc-toolcard"><div class="tname">Tailscale Funnel</div><div class="tdesc">tailscale funnel {{ host.split(':')[-1] if ':' in host else '5000' }}</div></div>
+  </div>
+  <div class="lc-row">
+    <div class="lc-col" style="min-width:300px;">
+      <label class="flabel">Public https address</label>
+      <input type="text" id="wr-public-url" value="{{ public_url }}" placeholder="https://abc123.ngrok-free.app">
+    </div>
+    <div class="lc-col" style="flex:0 0 auto; align-self:flex-end;">
+      <button type="button" class="lc-btn" id="wr-save-url">Save address</button>
+    </div>
+  </div>
+  <div class="wr-msg" id="wr-url-msg">{% if not public_url %}<span class="lc-hint">Not set yet &mdash; the webhook URLs below show this computer's local address until you save one.</span>{% endif %}</div>
+</div>
+
+<div class="lc-card" style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+  <div><h3 style="margin:0;">2 · Relays</h3><span class="lc-hint">One relay = one webhook URL and its rules. Make one per strategy so each keeps its own track record.</span></div>
+  <button type="button" class="lc-btn big" id="wr-new">+ New relay</button>
+</div>
+
+{% for r in relays %}
+<div class="lc-card wr-relay" data-id="{{ r.id }}">
+  <div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center;">
+    <h3 style="margin:0;">{{ r.name }}</h3>
+    <span class="lc-pill {{ 'green' if r.enabled else 'grey' }}">{{ 'on' if r.enabled else 'off' }}</span>
+  </div>
+
+  <label class="flabel">Webhook URL &mdash; paste into the TradingView alert's "Webhook URL" box</label>
+  <div class="wr-copy"><div class="box wr-mono">{{ r.url }}</div><button type="button" class="lc-btn ghost small" data-copy="{{ r.url }}">Copy</button></div>
+
+  <label class="flabel">Alert message &mdash; paste into the alert's "Message" box (strategy alerts)</label>
+  <div class="wr-copy"><pre class="box wr-mono">{{ r.alert_message }}</pre><button type="button" class="lc-btn ghost small" data-copy="{{ r.alert_message }}">Copy</button></div>
+
+  <div class="wr-grid" style="margin-top:14px;">
+    <div class="lc-side-card"><h4>Paper account</h4><div class="wr-paper wr-mono">loading…</div></div>
+    <div class="lc-side-card"><h4>Test it from here</h4>
+      <div class="lc-row">
+        <div class="lc-col"><label class="flabel">Ticker</label><input type="text" class="wr-t-ticker" value="NQ1!"></div>
+        <div class="lc-col"><label class="flabel">Price</label><input type="number" step="any" class="wr-t-price" placeholder="e.g. 18000"></div>
+        <div class="lc-col"><label class="flabel">Qty</label><input type="number" step="any" class="wr-t-qty" placeholder="default"></div>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
+        <button type="button" class="lc-btn small" data-test="long">Test long</button>
+        <button type="button" class="lc-btn small" data-test="short">Test short</button>
+        <button type="button" class="lc-btn ghost small" data-test="flat">Test flat</button>
+        <button type="button" class="lc-btn ghost small" data-act="reset-paper">Reset paper account</button>
+      </div>
+      <div class="wr-msg wr-test-msg"></div>
+    </div>
+  </div>
+
+  <details class="lc-adv" style="margin-top:14px;"><summary>Rules &amp; destination</summary>
+    <div class="adv-body"><form class="wr-form">
+      <div class="lc-row">
+        <div class="lc-col"><label class="flabel">Name</label><input type="text" name="name" value="{{ r.name }}"></div>
+        <div class="lc-col"><label class="flabel">Passphrase (optional, must also be in the alert)</label><input type="text" name="passphrase" value="{{ r.passphrase }}" autocomplete="off"></div>
+      </div>
+      <div class="lc-row">
+        <div class="lc-col"><label class="flabel">Default quantity</label><input type="number" step="any" name="default_qty" value="{{ r.default_qty }}"></div>
+        <div class="lc-col"><label class="flabel">Max quantity (hard cap)</label><input type="number" step="any" name="max_qty" value="{{ r.max_qty }}"></div>
+        <div class="lc-col"><label class="flabel">Ignore repeat alerts within (sec)</label><input type="number" step="any" name="dedupe_seconds" value="{{ r.dedupe_seconds }}"></div>
+      </div>
+      <div class="lc-row">
+        <div class="lc-col"><label class="flabel">Only trade these tickers (blank = any)</label><input type="text" name="allowed_tickers" value="{{ r.allowed_text }}" placeholder="NQ, ES"></div>
+        <div class="lc-col"><label class="flabel">Broker symbol map (one per line: NQ=NQZ6)</label><textarea name="symbol_map">{{ r.symbol_map_text }}</textarea></div>
+      </div>
+      <label class="wr-check"><input type="checkbox" name="enabled" value="1" {{ 'checked' if r.enabled }}> Relay is on</label>
+      <label class="wr-check"><input type="checkbox" name="allow_short" value="1" {{ 'checked' if r.allow_short }}> Allow short signals</label>
+      <label class="wr-check"><input type="checkbox" name="force_default_qty" value="1" {{ 'checked' if r.force_default_qty }}> Always use the default quantity (ignore the alert's size)</label>
+
+      <label class="flabel">Also mirror to a demo broker account (optional)</label>
+      <select name="broker_account_id">
+        <option value="">None: paper account only</option>
+        {% for a in accounts %}
+        <option value="{{ a.id }}" {{ 'selected' if a.id == r.broker_account_id }} {{ 'disabled' if a.live }}>{{ a.label }} &middot; {{ a.env }}{{ ' (refused: live)' if a.live }}</option>
+        {% endfor %}
+      </select>
+      <label class="wr-check"><input type="checkbox" name="confirm_demo" value="1" {{ 'checked' if r.confirm_demo }}> This broker account is a demo/practice account (required for MT5 and DXtrade, which can't report it)</label>
+      <p class="lc-hint">Quantity goes to the broker in its own units: whole contracts on Tradovate, lots on MT5/cTrader/TradeLocker/DXtrade. Add accounts under <a href="/deploy-live" style="color:var(--lc-acc);">Deploy Live</a>.</p>
+
+      <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;">
+        <button type="submit" class="lc-btn">Save rules</button>
+        <button type="button" class="lc-btn ghost" data-act="rotate">New webhook URL</button>
+        <button type="button" class="lc-btn ghost" data-act="delete" style="border-color:var(--lc-red); color:var(--lc-red);">Delete relay</button>
+      </div>
+      <div class="wr-msg wr-save-msg"></div>
+    </form></div>
+  </details>
+
+  <h4 style="margin:16px 0 6px;">Recent alerts</h4>
+  <table class="wr-table"><thead><tr><th>Time (UTC)</th><th>Ticker</th><th>Target</th><th>Price</th><th>Result</th></tr></thead>
+    <tbody class="wr-log"><tr><td colspan="5" class="lc-hint">No alerts yet.</td></tr></tbody></table>
+</div>
+{% else %}
+<div class="lc-card"><p class="lc-hint">No relays yet &mdash; click <b>+ New relay</b>.</p></div>
+{% endfor %}
+
+<div class="lc-card">
+  <h3>3 · Set up the alert in TradingView</h3>
+  <ol class="wr-steps">
+    <li>Add your Pine <b>strategy</b> to a chart (the chart's symbol and timeframe are what the alert will trade).</li>
+    <li>Click <b>Alerts &rarr; Create alert</b>. Condition: your strategy, with "Order fills only".</li>
+    <li>Open the <b>Notifications</b> tab, tick <b>Webhook URL</b> and paste the URL from your relay.</li>
+    <li>In the <b>Message</b> box, replace the text with the alert message from your relay. TradingView fills the <code class="ic">{{ '{{' }}placeholders{{ '}}' }}</code> when the alert fires.</li>
+    <li>Save. Use <b>Test it from here</b> first to check the whole chain before you wait for a real signal.</li>
+  </ol>
+  <p class="lc-hint">TradingView requires a paid plan with webhooks and two-factor sign-in enabled on your account. Entries and exits both need an alert; "Order fills only" on a strategy alert covers both. The relay reads the strategy's resulting position, so duplicate or reordered alerts can't stack extra size.</p>
+  <p class="lc-hint">The paper account fills at the price in the alert and applies the instrument's standard round-turn commission but no slippage, so expect real fills to be a little worse.</p>
+</div>
+
+</div></div>
+</div>
+</div>
+
+<script>
+(function () {
+  var CSRF = {{ csrf_token()|tojson }};
+  function post(url, data) {
+    var body = new URLSearchParams(data || {});
+    return fetch(url, { method: 'POST', headers: { 'X-CSRF-Token': CSRF }, body: body })
+      .then(function (r) { return r.json().then(function (j) { j._status = r.status; return j; }); });
+  }
+  function money(v) { if (v === null || v === undefined) return '–'; return (v < 0 ? '-$' : '$') + Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 2 }); }
+  function cls(v) { return v > 0 ? 'wr-pos' : (v < 0 ? 'wr-neg' : ''); }
+  function esc(t) { var d = document.createElement('div'); d.textContent = t == null ? '' : String(t); return d.innerHTML; }
+
+  document.addEventListener('click', function (e) {
+    var c = e.target.closest('[data-copy]');
+    if (c) { navigator.clipboard.writeText(c.getAttribute('data-copy')).then(function () { var t = c.textContent; c.textContent = 'Copied'; setTimeout(function () { c.textContent = t; }, 1200); }); }
+  });
+
+  document.getElementById('wr-save-url').addEventListener('click', function () {
+    post('/webhook-relay/public-url', { public_url: document.getElementById('wr-public-url').value }).then(function (j) {
+      var m = document.getElementById('wr-url-msg');
+      if (j.ok) { m.textContent = 'Saved. Reloading…'; location.reload(); } else { m.textContent = j.error || 'Could not save.'; }
+    });
+  });
+  document.getElementById('wr-new').addEventListener('click', function () {
+    var name = prompt('Name this relay (e.g. the strategy it will follow):', 'My Pine strategy');
+    if (name === null) return;
+    post('/webhook-relay/relays', { name: name }).then(function () { location.reload(); });
+  });
+
+  document.querySelectorAll('.wr-relay').forEach(function (card) {
+    var id = card.getAttribute('data-id');
+    var logBody = card.querySelector('.wr-log'), paperBox = card.querySelector('.wr-paper');
+
+    function render(state) {
+      var p = state.paper, rows = [];
+      rows.push('Realized: <b class="' + cls(p.realized) + '">' + money(p.realized) + '</b> &nbsp; Open P&amp;L: <b class="' + cls(p.unrealized) + '">' + money(p.unrealized) + '</b>');
+      rows.push('Trades: ' + p.trades + ' &nbsp; Win rate: ' + (p.win_rate == null ? '–' : p.win_rate + '%') + ' &nbsp; Profit factor: ' + (p.profit_factor == null ? '–' : p.profit_factor));
+      rows.push('Max drawdown: ' + money(-p.max_drawdown));
+      if (p.open.length) {
+        p.open.forEach(function (o) { rows.push('<b>' + esc(o.side.toUpperCase()) + ' ' + o.qty + ' ' + esc(o.root) + '</b> @ ' + o.entry + (o.unrealized == null ? '' : ' (' + money(o.unrealized) + ')')); });
+      } else { rows.push('Flat'); }
+      paperBox.innerHTML = rows.join('<br>');
+      if (!state.signals.length) { logBody.innerHTML = '<tr><td colspan="5" class="lc-hint">No alerts yet.</td></tr>'; return; }
+      logBody.innerHTML = state.signals.map(function (s) {
+        var broker = s.broker ? ' <span class="lc-hint">broker: ' + esc(s.broker.state || '') + (s.broker.message ? ' – ' + esc(s.broker.message) : '') + '</span>' : '';
+        var color = (s.status === 'executed' ? 'wr-pos' : (s.status === 'error' || s.status === 'rejected' ? 'wr-neg' : ''));
+        return '<tr><td>' + esc((s.ts || '').replace('T', ' ').replace('+00:00', '')) + '</td><td>' + esc(s.ticker) + '</td><td>' + esc(s.target) +
+          '</td><td>' + (s.price == null ? '–' : s.price) + '</td><td class="' + color + '">' + esc(s.status) + ': ' + esc(s.message) + broker + '</td></tr>';
+      }).join('');
+    }
+    function refresh() { fetch('/webhook-relay/relays/' + id + '/state.json').then(function (r) { return r.json(); }).then(function (s) { if (s.ok) render(s); }).catch(function () {}); }
+    refresh(); setInterval(refresh, 4000);
+
+    card.querySelectorAll('[data-test]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var msg = card.querySelector('.wr-test-msg'); msg.textContent = 'Sending…';
+        post('/webhook-relay/relays/' + id + '/test', {
+          target: b.getAttribute('data-test'), ticker: card.querySelector('.wr-t-ticker').value,
+          price: card.querySelector('.wr-t-price').value, quantity: card.querySelector('.wr-t-qty').value
+        }).then(function (j) {
+          msg.textContent = (j.ok ? '' : 'Not accepted: ') + (j.message || j.error || '') + (j.broker && j.broker.message ? '  |  broker: ' + j.broker.message : '');
+          refresh();
+        });
+      });
+    });
+    card.querySelector('[data-act="reset-paper"]').addEventListener('click', function () {
+      if (confirm('Clear this relay\'s paper account and alert history?')) post('/webhook-relay/relays/' + id + '/reset-paper').then(refresh);
+    });
+    card.querySelector('[data-act="rotate"]').addEventListener('click', function () {
+      if (confirm('Make a new webhook URL? The old one stops working, so update your TradingView alerts.')) post('/webhook-relay/relays/' + id + '/rotate').then(function () { location.reload(); });
+    });
+    card.querySelector('[data-act="delete"]').addEventListener('click', function () {
+      if (confirm('Delete this relay and its paper history?')) post('/webhook-relay/relays/' + id + '/delete').then(function () { location.reload(); });
+    });
+    card.querySelector('.wr-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var fd = new FormData(e.target), data = {};
+      fd.forEach(function (v, k) { data[k] = v; });
+      post('/webhook-relay/relays/' + id + '/save', data).then(function (j) {
+        var m = card.querySelector('.wr-save-msg'); m.textContent = j.ok ? 'Saved.' : (j.error || 'Could not save.');
+        if (j.ok) setTimeout(function () { location.reload(); }, 500);
+      });
+    });
+  });
+})();
+</script>
+</body>
+</html>

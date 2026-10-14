@@ -55,7 +55,9 @@ from app.web.notifications import (
     NotificationSettings, load_notification_settings, notify_job_finished, save_notification_settings,
     send_job_notification, _send_email_notification,
 )
+from app.web import onboarding
 from app.web.quant_lab_routes import quant_lab_bp
+from app.web.webhook_relay_routes import webhook_relay_bp
 from app.web.extra_routes import extra_bp
 from app.web.ai_assistant_routes import ai_assistant_bp
 from app.web.options_outlook_routes import options_outlook_bp
@@ -525,7 +527,28 @@ _license_ok_cached: bool | None = None
 # itself (else nobody could ever activate), and the same static/PWA
 # assets the lock gate exempts (so the activation page can render with
 # its icon/manifest/theme).
-_LICENSE_GATE_EXEMPT_PREFIXES = ("/activate", "/static/", "/manifest.json", "/favicon.ico")
+# "/webhook/tradingview/" is called by TradingView's servers (no browser, no
+# redirect possible); its handler checks the license itself and the secret
+# token in the URL is its credential -- see app/web/webhook_relay_routes.py.
+_LICENSE_GATE_EXEMPT_PREFIXES = ("/activate", "/static/", "/manifest.json", "/favicon.ico", "/webhook/tradingview/")
+
+
+def _license_ok_for_webhook() -> bool:
+    """License check for the webhook handler, which is exempt from the
+    redirect gate above: reuses the cached result, or validates once (fast
+    path -- opens immediately on a recent successful check)."""
+    global _license_ok_cached
+    if _license_ok_cached is None:
+        from app.licensing import client as license_client
+        try:
+            ok, _message = license_client.validate_fast_start()
+        except Exception:  # noqa: BLE001
+            ok = False
+        _license_ok_cached = ok
+    return bool(_license_ok_cached)
+
+
+app.config["t58_license_check"] = _license_ok_for_webhook
 
 
 @app.before_request
@@ -558,14 +581,29 @@ def _license_gate():
     return jsonify({"error": "not_licensed", "message": message}), 401
 
 
+def _post_activation_target(raw_next: str | None) -> str:
+    """Where to send someone after the license is accepted: the Dashboard,
+    or the Mobile Access page if that is what they were heading to -- never
+    the bare "/" (Run & Report) the launcher used to open. Only same-site
+    relative paths are honoured (no "//host" or "http://host" open
+    redirects)."""
+    target = (raw_next or "").strip()
+    if not target.startswith("/") or target.startswith("//") or "\\" in target:
+        return "/dashboard"
+    path = target.split("?", 1)[0].rstrip("/") or "/"
+    if path in ("/", "/activate"):
+        return "/dashboard"
+    return target
+
+
 @app.route("/activate", methods=["GET"])
 def activate_form():
     from app.licensing import client as license_client
     if _license_ok_cached:
-        return redirect(request.args.get("next") or url_for("dashboard"))
+        return redirect(_post_activation_target(request.args.get("next")))
     state = license_client.load_state()
     return render_template(
-        "activate.html", next=request.args.get("next") or "/dashboard",
+        "activate.html", next=_post_activation_target(request.args.get("next")),
         error=None, email=state.email,
     )
 
@@ -574,7 +612,7 @@ def activate_form():
 def activate_submit():
     global _license_ok_cached
     from app.licensing import client as license_client
-    next_path = request.form.get("next") or "/dashboard"
+    next_path = _post_activation_target(request.form.get("next"))
     email = request.form.get("email", "")
     license_key = request.form.get("license_key", "")
     remember = request.form.get("remember") == "1"
@@ -594,7 +632,7 @@ def activate_submit():
 # _account_lock_gate's own comment for why this one exemption is safe).
 _LOCK_GATE_EXEMPT_PREFIXES = (
     "/lock", "/static/", "/manifest.json", "/favicon.ico",
-    "/settings/account",
+    "/settings/account", "/webhook/tradingview/",
 )
 
 
@@ -677,6 +715,9 @@ app.register_blueprint(discover_bp)
 app.register_blueprint(risk_sweep_bp)
 app.register_blueprint(project_bp)
 app.register_blueprint(telemetry_bp)
+# TradingView webhook relay (Pine strategy alert -> T58 paper forward test,
+# optionally mirrored to a demo broker) -- see app/web/webhook_relay_routes.py.
+app.register_blueprint(webhook_relay_bp)
 # Belt-and-suspenders alongside run_web.py's own call (this module can also
 # be run directly via `python -m app.web.server`, which never goes through
 # run_web.py) -- idempotent either way. See app.reports.crash_log.
@@ -1501,7 +1542,18 @@ def dashboard():
         board_rows=board_rows,
         champion=champion,
         snapshot=snapshot,
+        auto_tour=onboarding.should_autostart_tour(),
     )
+
+
+@app.route("/api/onboarding/tour-seen", methods=["POST"])
+def api_onboarding_tour_seen():
+    """Called by the tour script when the first-run tour is finished,
+    skipped or closed, so the server (not just one browser's storage)
+    remembers it was shown."""
+    payload = request.get_json(silent=True) or {}
+    onboarding.mark_tour_seen(str(payload.get("how") or request.form.get("how") or "done"))
+    return jsonify({"ok": True})
 
 
 @app.route("/champion/promote", methods=["POST"])
@@ -3954,6 +4006,10 @@ _WEB_REMOVED_START_HERE = frozenset({"quantlab", "account"})
 
 @app.route("/start-here/<section>")
 def section_start_here(section):
+    if section == "test":
+        # The Test step lives on the Full Pipeline page; its separate
+        # "Start Here" overview page was removed.
+        return redirect(url_for("full_pipeline_form"))
     data = _SECTION_START_HERE.get(section)
     if data is None or section in _WEB_REMOVED_START_HERE:
         return render_template("support.html", active_page="support"), 404
