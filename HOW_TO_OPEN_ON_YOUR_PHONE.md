@@ -8,7 +8,10 @@ phone need to be on the **same Wi-Fi network** whenever you use it.
 ## One-time setup
 
 1. On your **Windows PC**, download `T58-Web-App-Windows.zip` from the
-   GitHub Releases page and extract it anywhere (Desktop is fine).
+   GitHub Releases page and extract the whole zip into a short folder such
+   as `C:\T58-Web\` (keep the `_internal` folder next to the `.exe`). For
+   real market data also extract `T58-Market-Data.zip` into that same
+   folder.
 2. Double-click **`T58-Web-App.exe`** inside the extracted folder.
    - Windows may show a blue "Windows protected your PC" SmartScreen
      warning because the exe isn't code-signed. Click **"More info"**

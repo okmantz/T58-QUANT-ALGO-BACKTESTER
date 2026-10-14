@@ -75,8 +75,15 @@ come up below.
 
 **Windows `.exe`, no Python needed:** push this repo to GitHub, then go to
 **Actions → build-exe → (latest run)** and download the
-**T58-Quant-Algo-Backtester-windows-exe** artifact. Tagging a release also
-attaches it to a GitHub Release directly.
+**T58-Quant-Algo-Backtester-Windows** artifact. GitHub hands it to you as a
+zip that contains `T58-Quant-Algo-Backtester-Windows.zip` — extract that
+inner zip into a short folder such as `C:\T58\` and double-click
+`T58-Quant-Algo-Backtester.exe` (keep the `_internal` folder beside it).
+Market data is a **separate download** so the app stays small: take the
+**T58-Market-Data** artifact from **Actions → build-data-pack** and extract
+its `T58-Market-Data.zip` into the same folder as the `.exe`. Tagging a
+release (`v*`) attaches the app zip, the data zip and their `.sha256`
+checksums to a GitHub Release directly (no zip-inside-a-zip there).
 
 **Local Python app (Windows/macOS/Linux):**
 
@@ -136,10 +143,11 @@ build a standalone app folder per OS.
    selected for multi-timeframe analysis (e.g. 60m bias + 15m zone + 5m
    entry). Alpaca API fetch is also supported for US equities/crypto.
 
-   **About downloads & data (buyers read this):** the release zips ship
-   with the full historical datasets under `data/raw/` bundled in --
-   redistribution of this market data is licensed, so it travels with the
-   app. You can also add more data any time after install: in the desktop
+   **About downloads & data (buyers read this):** the full historical
+   datasets under `data/raw/` ship as their own download,
+   `T58-Market-Data.zip` (redistribution of this market data is licensed),
+   which you extract into the app folder next to the `.exe`; the app zip
+   itself carries only the small sample. You can also add more data any time after install: in the desktop
    app use the "Import folder..." button on the Market Data tab (or drag a
    folder onto the tab), and in the web app use the drag-and-drop folder
    zone in the Data Center -- every recognized file is run through the
