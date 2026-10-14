@@ -6,39 +6,24 @@ on:
     tags: [ "v*" ]
   workflow_dispatch: {}
 
-# FIX (2026-09, "this has been loading/compiling for over an hour --
-# that's not normal"): see build.yml's own concurrency block for the
-# full reasoning -- the short version is that several commits pushed
-# close together used to each queue their own complete run of this
-# workflow with nothing canceling the older, now-stale one.
+# A newer push cancels the stale run for the same ref instead of letting
+# several full runs pile up (see build.yml for the full reasoning).
 concurrency:
   group: build-web-exe-${{ github.ref }}
   cancel-in-progress: true
 
+# PACKAGING CHANGES (2026-10-14) -- same fixes as build-exe.yml, see the note
+# at the top of that file: one-folder build from build_tools/t58_web.spec,
+# market data shipped separately (T58-Market-Data.zip), zip written by
+# build_tools/package_release.py, and the frozen exe is really started and
+# asked for its pages in CI (build_tools/frozen_smoke.py) before it ships.
+# The old command line also forgot app/ui/assets and config/.
+
 jobs:
-  # FIX (2026-09, root cause of the hour-plus hangs): this workflow's
-  # "Run test suite" gate against the FULL 2000+-test suite used to run
-  # directly on windows-latest, inside the same job that then runs
-  # PyInstaller. Windows runners are dramatically slower than Linux for
-  # this kind of numpy/pandas-heavy workload (no manylinux wheels to
-  # reuse as-is, slower filesystem/process-spawn overhead for a suite
-  # this size), so a suite that takes 25-30+ minutes on Linux (see
-  # build.yml, which already gates every push this same way -- and see
-  # that workflow's own timeout-minutes comment for how that runtime has
-  # grown as the suite grew) could take well over an hour here -- and
-  # because the exe build itself couldn't even START until that finished,
-  # the whole workflow sat "in progress" the entire time with no visible
-  # sign of whether it was working or stuck. Splitting the test gate into
-  # its OWN fast ubuntu-latest job that the Windows build job depends on
-  # (needs:) keeps exactly the same protection (a red test suite still
-  # blocks the release exe -- see the windows job's own comment) while
-  # removing the slow-OS re-run entirely from the critical path.
+  # The full test suite runs on Linux (much faster than Windows runners) and
+  # gates the Windows build below.
   test:
     runs-on: ubuntu-latest
-    # See build.yml's matching timeout-minutes comment: 30 was too tight
-    # once the suite grew past ~2000 tests and started getting killed by
-    # the timeout itself (shown as "cancelled") rather than by a real
-    # failure. 60 gives real headroom.
     timeout-minutes: 60
     steps:
       - name: Checkout repository
@@ -60,11 +45,7 @@ jobs:
   build-windows-web-exe:
     needs: test
     runs-on: windows-latest
-    # The exe build itself (dependency install + PyInstaller packaging,
-    # no test suite anymore -- see the `test` job above) should be well
-    # under this; a real hang here now fails loudly instead of running
-    # for hours.
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
@@ -80,15 +61,9 @@ jobs:
       - name: Install dependencies
         shell: pwsh
         run: |
-          # pwsh does NOT stop on a failed native command (non-zero exit)
-          # the way bash does -- a failing `pip install` here would
-          # otherwise be silently ignored and the workflow would carry on
-          # to build an .exe missing whatever didn't install (this is
-          # exactly what happened when config/requirements.txt briefly had
-          # an unsatisfiable version pin: pip failed, PyInstaller still
-          # ran, and the resulting .exe crashed on first launch with
-          # "No module named 'pandas'"). Check $LASTEXITCODE after every
-          # pip call so a resolution failure stops the build immediately.
+          # pwsh does NOT stop on a failed native command, so every pip call is
+          # checked explicitly -- a failed install must stop the build instead
+          # of producing an exe that crashes with "No module named ...".
           python -m pip install --upgrade pip
           if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed (exit $LASTEXITCODE)" }
           pip install -r config/requirements.txt
@@ -99,56 +74,40 @@ jobs:
       - name: Verify critical dependencies actually imported
         shell: pwsh
         run: |
-          # Belt-and-suspenders check: even if pip reports success, make
-          # sure every package the app actually imports at runtime is
-          # really importable before we spend time building an .exe out of
-          # it. This would have caught the pandas-missing build instantly
-          # instead of only surfacing when Owen launched the app.
           python -c "import pandas, numpy, flask, alpaca, keyring, qrcode, requests, pyarrow, py7zr, pypdf, scipy, sklearn, lightgbm; print('All critical dependencies import OK')"
           if ($LASTEXITCODE -ne 0) { throw "One or more required Python packages failed to import after installation -- building would produce a broken .exe. Check config/requirements.txt." }
 
       - name: Verify repository structure
         shell: pwsh
         run: |
-          Write-Host "=== VERIFYING REPOSITORY ==="
-
-          if (-not (Test-Path "run_web.py")) {
-            Write-Error "run_web.py was NOT found."
+          $required = @(
+            "run_web.py",
+            "app\web\server.py",
+            "app\web\launcher.py",
+            "app\web\templates",
+            "app\web\static",
+            "build_tools\t58_web.spec",
+            "build_tools\spec_common.py",
+            "build_tools\package_release.py",
+            "build_tools\frozen_smoke.py",
+            "config\pyproject.toml",
+            "data\examples",
+            "strategies"
+          )
+          $missing = $required | Where-Object { -not (Test-Path $_) }
+          if ($missing) {
+            Write-Error ("Missing from the repository: " + ($missing -join ", "))
             exit 1
           }
-
-          if (-not (Test-Path "app\web\server.py")) {
-            Write-Error "app/web/server.py was NOT found."
-            exit 1
-          }
-
-          if (-not (Test-Path "app\web\launcher.py")) {
-            Write-Error "app/web/launcher.py was NOT found."
-            exit 1
-          }
-
-          if (-not (Test-Path "app\web\templates")) {
-            Write-Error "app/web/templates was NOT found."
-            exit 1
-          }
-
-          if (-not (Test-Path "app\web\static")) {
-            Write-Error "app/web/static was NOT found."
-            exit 1
-          }
+          Write-Host "Repository structure OK"
 
       - name: Bake license build config
         shell: pwsh
         run: |
-          # v7: generates app/licensing/build_config.py from the release
-          # secrets (T58_LICENSE_SERVER_URL, T58_MASTER_LICENSE_KEY_HASH),
-          # so the shipped .exe has a real license URL and a per-release
-          # master-key hash instead of a placeholder / repo-baked hash.
-          # Both secrets are OPTIONAL: absent values are left empty and
-          # the app degrades loudly at startup (see app/licensing/client.py
-          # and app/licensing/gate.py), never silently insecure.
-          # Owen sets both once per repo: GitHub Settings -> Secrets and
-          # variables -> Actions. Full checklist: license_server/DEPLOY.md.
+          # Generates app/licensing/build_config.py from the release secrets
+          # (T58_LICENSE_SERVER_URL, T58_MASTER_LICENSE_KEY_HASH). Both are
+          # OPTIONAL: absent values are left empty and the app degrades loudly
+          # at startup (see app/licensing/client.py and gate.py).
           python -c "
           import json, os
           config = {
@@ -174,94 +133,34 @@ jobs:
       - name: Build Windows web-app executable
         shell: pwsh
         run: |
-          pyinstaller `
-            --noconfirm `
-            --clean `
-            --onefile `
-            --console `
-            --name "T58-Web-App" `
-            --paths . `
-            --hidden-import "pandas" `
-            --hidden-import "numpy" `
-            --hidden-import "flask" `
-            --hidden-import "app" `
-            --hidden-import "app.web" `
-            --hidden-import "app.web.server" `
-            --hidden-import "app.web.launcher" `
-            --hidden-import "app.strategy" `
-            --hidden-import "app.strategy.manual" `
-            --hidden-import "app.strategy.expr" `
-            --hidden-import "app.strategy.indicators" `
-            --hidden-import "app.strategy.base" `
-            --hidden-import "app.strategy.mql5" `
-            --hidden-import "app.strategy.pinescript" `
-            --hidden-import "app.strategy.python" `
-            --hidden-import "app.ai" `
-            --hidden-import "app.ai.ollama_client" `
-            --hidden-import "app.ai.ollama_settings" `
-            --hidden-import "requests" `
-            --hidden-import "app.backtest" `
-            --hidden-import "app.backtest.engine" `
-            --hidden-import "app.backtest.risk" `
-            --hidden-import "app.backtest.statistics" `
-            --hidden-import "app.backtest.execution" `
-            --hidden-import "app.data" `
-            --hidden-import "app.data.importer" `
-            --hidden-import "app.data.storage" `
-            --hidden-import "app.data.multi_timeframe" `
-            --hidden-import "app.monte_carlo" `
-            --hidden-import "app.monte_carlo.engine" `
-            --hidden-import "app.prop" `
-            --hidden-import "app.prop.simulator" `
-            --hidden-import "app.reports" `
-            --hidden-import "app.reports.generator" `
-            --hidden-import "app.reports.charts" `
-            --hidden-import "app.reports._assets" `
-            --hidden-import "app.reports.run_history" `
-            --hidden-import "app.evolution" `
-            --hidden-import "app.evolution.engine" `
-            --hidden-import "app.evolution.checkpoint" `
-            --hidden-import "app.evolution.knowledge_graph" `
-            --hidden-import "app.evolution.prop_fitness" `
-            --collect-all "py7zr" `
-            --collect-all "pyarrow" `
-            --hidden-import "qrcode" `
-            --hidden-import "PIL" `
-            --add-data "app/web/templates;app/web/templates" `
-            --add-data "app/web/static;app/web/static" `
-            --add-data "data/examples;data/examples" `
-            --add-data "strategies;strategies" `
-            run_web.py
+          pyinstaller --noconfirm --clean build_tools/t58_web.spec
+          if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed (exit $LASTEXITCODE)" }
 
       - name: Verify executable
         shell: pwsh
         run: |
-          Write-Host "=== VERIFYING EXE ==="
+          $exe = "dist\T58-Web-App\T58-Web-App.exe"
+          if (-not (Test-Path $exe)) { throw "Executable was not created: $exe" }
+          if (-not (Test-Path "dist\T58-Web-App\_internal")) { throw "The _internal folder was not created next to the exe." }
+          $item = Get-Item $exe
+          Write-Host "EXE CREATED: $($item.FullName) ($($item.Length) bytes)"
+          $total = (Get-ChildItem "dist\T58-Web-App" -Recurse -File | Measure-Object Length -Sum).Sum
+          Write-Host ("Whole app folder: {0:N0} MB" -f ($total / 1MB))
 
-          if (-not (Test-Path "dist\T58-Web-App.exe")) {
-            Write-Error "Executable was not created."
-            exit 1
-          }
-
-          $exe = Get-Item "dist\T58-Web-App.exe"
-
-          Write-Host "EXE CREATED:"
-          Write-Host "Path: $($exe.FullName)"
-          Write-Host "Size: $($exe.Length) bytes"
+      - name: Smoke-test the built exe
+        shell: pwsh
+        run: |
+          # Starts the frozen web app, waits for its HTTP server, and requests
+          # pages that need the bundled templates / static files. A build that
+          # cannot start or cannot find its own files fails here.
+          python build_tools/frozen_smoke.py web "dist\T58-Web-App\T58-Web-App.exe" 240
+          if ($LASTEXITCODE -ne 0) { throw "The built exe failed its smoke test -- see the output above." }
 
       - name: Code-sign the executable (optional)
         shell: pwsh
         run: |
-          # P0-7 (Oct 2026): sign the built web .exe with signtool so
-          # Windows SmartScreen doesn't block every non-technical buyer.
-          # Runs BEFORE packaging so the signed exe is what gets copied.
-          #
-          # Owen has NO code-signing certificate yet: until the SIGN_CERT
-          # (base64-encoded .pfx) and SIGN_CERT_PASSWORD repository secrets
-          # are created, this step prints the notice below and EXITS 0 --
-          # the build is NOT broken by the missing cert; it just ships
-          # unsigned. To enable signing, add the two secrets and this step
-          # signs dist\T58-Web-App.exe in place.
+          # Skipped (exit 0) until the SIGN_CERT (base64 .pfx) and
+          # SIGN_CERT_PASSWORD repository secrets exist -- the build then ships unsigned.
           $certB64 = "${{ secrets.SIGN_CERT }}"
           if ([string]::IsNullOrWhiteSpace($certB64)) {
             Write-Host "SIGN_CERT secret is not set -- skipping code signing (no certificate configured yet). The build continues UNSIGNED."
@@ -273,78 +172,27 @@ jobs:
             $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
               Select-Object -First 1 -ExpandProperty FullName
             if (-not $signtool) { throw "signtool.exe not found -- install the Windows SDK on the runner image." }
-            & $signtool sign /f $pfxPath /p "${{ secrets.SIGN_CERT_PASSWORD }}" /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "dist\T58-Web-App.exe"
+            & $signtool sign /f $pfxPath /p "${{ secrets.SIGN_CERT_PASSWORD }}" /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "dist\T58-Web-App\T58-Web-App.exe"
             if ($LASTEXITCODE -ne 0) { throw "signtool failed (exit $LASTEXITCODE)." }
-            Write-Host "Signed dist\T58-Web-App.exe."
+            Write-Host "Signed dist\T58-Web-App\T58-Web-App.exe."
           } finally {
             Remove-Item $pfxPath -Force -ErrorAction SilentlyContinue
           }
 
-      - name: Create application package
-        shell: pwsh
-        run: |
-          Write-Host "=== CREATING RELEASE PACKAGE ==="
-
-          Remove-Item -Recurse -Force "release-web" -ErrorAction SilentlyContinue
-
-          New-Item -ItemType Directory -Force -Path "release-web" | Out-Null
-          New-Item -ItemType Directory -Force -Path "release-web\data" | Out-Null
-          New-Item -ItemType Directory -Force -Path "release-web\data\examples" | Out-Null
-          New-Item -ItemType Directory -Force -Path "release-web\data\raw" | Out-Null
-          New-Item -ItemType Directory -Force -Path "release-web\strategies" | Out-Null
-
-          Copy-Item `
-            "dist\T58-Web-App.exe" `
-            "release-web\T58-Web-App.exe" `
-            -Force
-
-          if (Test-Path "data\examples") {
-            $exampleFiles = Get-ChildItem "data\examples" -File -ErrorAction SilentlyContinue
-            if ($exampleFiles.Count -gt 0) {
-              Copy-Item "data\examples\*" "release-web\data\examples\" -Recurse -Force
-            }
-          }
-
-          if (Test-Path "data\raw") {
-            $rawFiles = Get-ChildItem "data\raw" -File -Recurse -ErrorAction SilentlyContinue
-            if ($rawFiles.Count -gt 0) {
-              Copy-Item "data\raw\*" "release-web\data\raw\" -Recurse -Force
-            }
-          }
-
-          if (Test-Path "strategies") {
-            $strategyFiles = Get-ChildItem "strategies" -File -Recurse -ErrorAction SilentlyContinue
-            if ($strategyFiles.Count -gt 0) {
-              Copy-Item "strategies\*" "release-web\strategies\" -Recurse -Force
-            }
-          }
-
-          Copy-Item "HOW_TO_OPEN_ON_YOUR_PHONE.md" "release-web\HOW_TO_OPEN_ON_YOUR_PHONE.md" -Force -ErrorAction SilentlyContinue
-
-          Write-Host ""
-          Write-Host "=== FINAL RELEASE STRUCTURE ==="
-          Get-ChildItem "release-web" -Recurse | Select-Object FullName, Length
-
       - name: Create ZIP package
         shell: pwsh
         run: |
-          Compress-Archive `
-            -Path "release-web\*" `
-            -DestinationPath "T58-Web-App-Windows.zip" `
-            -Force
-
-          Write-Host ""
-          Write-Host "=== ZIP CREATED ==="
+          # The app only (exe + _internal + examples + strategies + docs).
+          # Market data is a separate download: T58-Market-Data.zip.
+          python build_tools/package_release.py app --dist "dist\T58-Web-App" --out "T58-Web-App-Windows.zip"
+          if ($LASTEXITCODE -ne 0) { throw "Packaging failed -- see the file-name problems listed above." }
           $zip = Get-Item "T58-Web-App-Windows.zip"
-          Write-Host "Path: $($zip.FullName)"
-          Write-Host "Size: $($zip.Length) bytes"
+          Write-Host ("ZIP CREATED: {0} ({1:N0} MB)" -f $zip.FullName, ($zip.Length / 1MB))
 
       - name: Publish SHA-256 checksum
-        # v7: the desktop updater (app/accounts/app_info.py) refuses any
-        # download whose release has no checksum asset -- these zips used
-        # to ship with no checksum at all, so in-app updates never
-        # worked. Writes '<hex>  <filename>' lines (parsed by
-        # _published_sha256_for()); the '.sha256' name is what
+        # The desktop updater (app/accounts/app_info.py) refuses any download
+        # whose release has no checksum asset. Writes '<hex>  <filename>'
+        # (parsed by _published_sha256_for()); the '.sha256' name is what
         # _find_checksum_asset() matches on the release assets.
         shell: pwsh
         run: |
@@ -360,6 +208,7 @@ jobs:
           path: |
             T58-Web-App-Windows.zip
             T58-Web-App-Windows.zip.sha256
+          compression-level: 0
           if-no-files-found: error
 
       - name: Attach Windows web-app package to release

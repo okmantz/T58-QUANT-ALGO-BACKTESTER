@@ -1,0 +1,64 @@
+# build-data-pack -- the market-data download (data/raw/**), separate from the app.
+#
+# The app zips used to carry all of data/raw (~740 MB, mostly .parquet that does
+# not compress), which made one huge download that failed to extract. The app is
+# now small; the data is this one optional zip: extract it INTO the app folder
+# so the files land in data\raw\<instrument>\... next to the .exe.
+#
+# Runs on Linux (no Windows runner needed) and only when data/raw or the
+# packaging script changes, on a tag, or when started by hand.
+
+name: build-data-pack
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ "v*" ]
+    paths:
+      - "data/raw/**"
+      - "build_tools/package_release.py"
+      - ".github/workflows/build-data-pack.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: build-data-pack-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  data-pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build the market-data zip
+        run: |
+          set -euo pipefail
+          python build_tools/package_release.py data --out T58-Market-Data.zip
+          ls -la T58-Market-Data.zip T58-Market-Data.zip.sha256
+          cat T58-Market-Data.zip.sha256
+
+      - name: Upload market-data pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: T58-Market-Data
+          path: |
+            T58-Market-Data.zip
+            T58-Market-Data.zip.sha256
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Attach market-data pack to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            T58-Market-Data.zip
+            T58-Market-Data.zip.sha256
