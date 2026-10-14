@@ -55,13 +55,15 @@ it:
 
 ## What's actually in this folder
 
-Included are research papers covering everything from validation and 
-over-fitting, to different strategies and prop firm economics. The
-sources included are all verified research papers from validated sources
-such as the Federal Reserve, ICMA Centre, and other University research centers.
+Markdown documents (the app reads `.pdf`, `.txt` and `.md`; drop more in any time):
 
-Other good candidates: papers on momentum/mean-reversion/trend-following mechanics, market
-microstructure, walk-forward validation and overfitting (the kind of
-thing already referenced in `app/validation/icir.py`'s docstrings),
-volatility regime detection, or anything specific to the instruments and
-timeframes you actually trade.
+- `00_Start_Here/` -- the two guidance reports: A (the prop-eval math and
+  what quants do) and B (evidence, math and a simple strategy spec).
+- `01_Intraday_Momentum_and_Core_Signals/` through
+  `04_Regime_Events_and_Data/` -- reading lists behind Report B's
+  recommended strategy, with links to the primary papers.
+- `05_Repo_Research_Library_Index/` -- index of the 44 PDFs this folder
+  used to hold, kept so the reading lists can still refer to them.
+
+The reading lists link out to the papers rather than bundling them; open
+each link and confirm it before relying on it.
