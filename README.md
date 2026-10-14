@@ -274,6 +274,17 @@ target) apply across every optimizer above.
   prices, reusing the exact signal/sizing engine the backtester uses.
   Journals every trade, flags win-rate drift, ships a kill switch. Demo
   accounts only. Desktop-only (needs a running MT5 terminal).
+- **Webhook Relay (TradingView)** — a TradersPost-style relay for forward
+  testing a Pine Script strategy. Create a relay at `/webhook-relay`, paste
+  its URL and the generated alert message into a TradingView alert on the
+  strategy, and every order fill arrives as a webhook. Each signal is
+  checked against the relay's rules (passphrase, allowed tickers, max
+  quantity, duplicate filter, long/short), then applied to a T58 paper
+  account (costs from the instrument specs) and, optionally, mirrored to a
+  **demo** broker account (live accounts are refused). Web only. Needs a
+  public https address for the app (ngrok, cloudflared or Tailscale Funnel)
+  and a TradingView plan that supports webhooks; TradingView's own Paper
+  Trading cannot receive webhooks, so the T58 paper account is the demo.
 - **Overnight Autopilot** — chains Speed Run discovery straight into a
   live MT5 forward test of the winner: runs the search, and if it lands on
   a READY/MARGINAL strategy, starts forward-testing it automatically and
