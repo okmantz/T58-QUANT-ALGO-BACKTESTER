@@ -336,6 +336,18 @@ def _terminate_pool_workers(pool) -> None:
             pass
 
 
+def _shrink_gene(gene, scale: float):
+    """A copy of `gene` whose [lo, hi] is shrunk to `scale` of its half-width on each side of
+    base_value (never excluding base_value itself; integer genes keep integer bounds)."""
+    base = float(gene.base_value)
+    lo = max(float(gene.lo), base - (base - float(gene.lo)) * scale)
+    hi = min(float(gene.hi), base + (float(gene.hi) - base) * scale)
+    if getattr(gene, "is_int", False):
+        lo, hi = float(math.floor(lo)), float(math.ceil(hi))
+        lo, hi = min(lo, math.floor(base)), max(hi, math.ceil(base))
+    return replace(gene, lo=lo, hi=hi)
+
+
 def run_walkforward_aware_refinement(
     df: pd.DataFrame,
     strategy: Strategy,
@@ -356,8 +368,16 @@ def run_walkforward_aware_refinement(
     batch_progress_cb: "Callable[[int, int], None] | None" = None,
     per_fold_reoptimize: bool = False,
     reserve_tail_frac: float = 0.2,
+    gene_range_scale: float | None = None,
 ) -> WalkforwardGAResult:
     """
+    gene_range_scale (Auto-Fix): when set to a value in (0, 1), every tunable gene's search
+    range is shrunk to that fraction of its normal half-width around the strategy's CURRENT
+    value (integers stay integers, the current value always stays inside). A narrower search
+    space has less room to memorise noise, which is the lever the Validate page's Auto-Fix
+    uses when a strategy fails the overfitting checks. None / 1.0 = the normal, full range --
+    byte-identical to the behaviour before this parameter existed.
+
     reserve_tail_frac (AUDIT 2026-10-12): the GA's walk-forward folds are built on the first
     (1 - reserve_tail_frac) of `df`; the tail is never used for selection, so Full Pipeline's
     Step 4 out-of-sample fold check (which embargoes everything the GA touched via
@@ -486,6 +506,9 @@ def run_walkforward_aware_refinement(
                 "This strategy has no tunable numeric parameters -- there is nothing "
                 "for a walk-forward-aware GA to search over."
             )
+        if gene_range_scale is not None and 0.0 < float(gene_range_scale) < 1.0:
+            genes = [_shrink_gene(g, float(gene_range_scale)) for g in genes]
+            log(f"Search ranges narrowed to {float(gene_range_scale):.0%} of normal around the current values.")
 
         rng = random.Random(cfg.random_seed)
         search_mc_cfg = replace(mc_config, n_simulations=cfg.search_monte_carlo_sims)
