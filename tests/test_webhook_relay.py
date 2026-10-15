@@ -244,3 +244,130 @@ def test_setup_page_and_management_routes():
 def test_relay_page_linked_from_deploy_section():
     body = app.test_client().get("/forward-test").get_data(as_text=True)
     assert 'href="/webhook-relay"' in body
+
+
+# ------------------------------------------------------------------ TradingView only accepts port 80 / 443
+
+@pytest.mark.parametrize("bad", [
+    "http://127.0.0.1:5004",            # what the page used to show: this computer only, wrong port
+    "http://100.104.34.41:5004",        # a Tailscale address (private VPN range) on the app port
+    "http://localhost:5000",
+    "http://192.168.1.20:5000",
+    "https://abc123.ngrok-free.app:8443",   # public host, but a port TradingView refuses
+])
+def test_public_address_tradingview_would_reject_is_refused(bad):
+    clean, problem = relay_config.check_public_url(bad)
+    assert clean == "" and problem
+    with pytest.raises(ValueError):
+        relay_config.set_public_url(bad)
+
+
+@pytest.mark.parametrize("good,expected", [
+    ("https://abc123.ngrok-free.app", "https://abc123.ngrok-free.app"),
+    ("abc123.ngrok-free.app/", "https://abc123.ngrok-free.app"),             # scheme added, slash trimmed
+    ("https://my-box.tail1234.ts.net", "https://my-box.tail1234.ts.net"),
+    ("http://example.com:80", "http://example.com:80"),
+    ("https://example.com:443", "https://example.com:443"),
+])
+def test_public_address_that_tradingview_accepts_is_kept(good, expected):
+    clean, problem = relay_config.check_public_url(good)
+    assert problem == "" and clean == expected
+
+
+def test_page_never_hands_out_a_url_tradingview_will_reject(monkeypatch):
+    """Regression: with no public address saved the page showed http://127.0.0.1:5004/webhook/..., which
+    TradingView's alert box rejects with "Only port 80 is allowed for HTTP"."""
+    c = app.test_client()
+    monkeypatch.delenv("T58_PUBLIC_URL", raising=False)
+    rid = c.post("/webhook-relay/relays", data={"name": "NQ1! strategy"}).get_json()["id"]
+    page = c.get("/webhook-relay").get_data(as_text=True)
+    token = relay_config.get_relay(rid).token
+    assert token not in page                                   # no URL until a valid address is saved
+    assert "Finish step 1 first" in page
+    assert c.post("/webhook-relay/public-url", data={"public_url": "http://127.0.0.1:5004"}).status_code == 400
+    assert c.post("/webhook-relay/public-url", data={"public_url": "https://abc.ngrok-free.app"}).get_json()["ok"]
+    page = c.get("/webhook-relay").get_data(as_text=True)
+    assert f"https://abc.ngrok-free.app/webhook/tradingview/{token}" in page
+
+
+def test_a_bad_address_saved_by_an_older_version_is_not_shown(monkeypatch):
+    (relay_config._dir() / relay_config.PUBLIC_URL_FILE).write_text(json.dumps({"url": "http://127.0.0.1:5004"}), encoding="utf-8")
+    c = app.test_client()
+    rid = c.post("/webhook-relay/relays", data={"name": "old"}).get_json()["id"]
+    page = c.get("/webhook-relay").get_data(as_text=True)
+    assert relay_config.get_relay(rid).token not in page
+
+
+def test_address_check_endpoint_reports_clearly_for_bad_input():
+    c = app.test_client()
+    out = c.post("/webhook-relay/check-public-url", data={"public_url": "http://100.104.34.41:5004"})
+    assert out.status_code == 400 and "TradingView" in out.get_json()["error"]
+
+
+# ------------------------------------------------------------------ one-click tunnel (cloudflared quick tunnel)
+
+def _fake_cloudflared(tmp_path, body: str):
+    import stat
+    import sys
+    script = tmp_path / "fake_cloudflared.py"
+    script.write_text(body, encoding="utf-8")
+    launcher = tmp_path / "cloudflared"
+    launcher.write_text(f"#!/bin/sh\nexec {sys.executable} {script} \"$@\"\n", encoding="utf-8")
+    launcher.chmod(launcher.stat().st_mode | stat.S_IEXEC)
+    return str(launcher)
+
+
+def _wait_state(tunnel, want, timeout=10.0):
+    import time
+    end = time.time() + timeout
+    while time.time() < end:
+        st = tunnel.status()
+        if st["state"] == want:
+            return st
+        time.sleep(0.05)
+    return tunnel.status()
+
+
+def test_tunnel_starts_saves_the_public_address_and_stops(monkeypatch, tmp_path):
+    from app.webhook_relay import tunnel
+    fake = _fake_cloudflared(tmp_path, (
+        "import sys, time\n"
+        "print('2026-10-14 INF Requesting new quick Tunnel on trycloudflare.com...', flush=True)\n"
+        "print('2026-10-14 INF |  https://quiet-river-demo-1234.trycloudflare.com  |', flush=True)\n"
+        "print('ARGS', ' '.join(sys.argv[1:]), flush=True)\n"
+        "time.sleep(30)\n"))
+    monkeypatch.setattr(tunnel, "find_binary", lambda: fake)
+    try:
+        st = tunnel.start(5004, relay_config.set_public_url)
+        assert st["state"] in ("starting", "running")
+        st = _wait_state(tunnel, "running")
+        assert st["state"] == "running" and st["url"] == "https://quiet-river-demo-1234.trycloudflare.com"
+        assert relay_config.get_public_url() == "https://quiet-river-demo-1234.trycloudflare.com"
+        assert any("tunnel --url http://127.0.0.1:5004" in line for line in st["log"])   # forwards to THIS app's port
+        assert tunnel.start(5004, relay_config.set_public_url)["state"] == "running"        # second click: no second process
+    finally:
+        assert tunnel.stop()["state"] == "stopped"
+
+
+def test_tunnel_reports_a_clear_error_when_cloudflared_exits_early(monkeypatch, tmp_path):
+    from app.webhook_relay import tunnel
+    fake = _fake_cloudflared(tmp_path, "print('failed to connect to the edge', flush=True)\n")
+    monkeypatch.setattr(tunnel, "find_binary", lambda: fake)
+    try:
+        tunnel.start(5004, relay_config.set_public_url)
+        st = _wait_state(tunnel, "error")
+        assert st["state"] == "error" and "cloudflared exited" in st["error"] and st["url"] == ""
+    finally:
+        tunnel.stop()
+
+
+def test_tunnel_routes_without_cloudflared_explain_how_to_install(monkeypatch):
+    from app.webhook_relay import tunnel
+    monkeypatch.setattr(tunnel, "find_binary", lambda: None)
+    c = app.test_client()
+    out = c.post("/webhook-relay/tunnel/start")
+    body = out.get_json()
+    assert out.status_code == 400 and body["ok"] is False and "cloudflared" in body["error"] and body["install_hint"]
+    assert c.get("/webhook-relay/tunnel/status").get_json()["available"] is False
+    page = c.get("/webhook-relay").get_data(as_text=True)
+    assert "wr-tunnel-start" in page and "Start tunnel" in page

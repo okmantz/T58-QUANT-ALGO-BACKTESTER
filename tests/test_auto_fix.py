@@ -149,6 +149,55 @@ def test_fix_regime_finds_losing_regimes_and_proves_it_on_unseen_data():
     assert json.loads(res.source_text)["filters"]["regime_exclude"] == d["excluded_cells"]
 
 
+def test_fix_regime_skips_a_cell_that_does_not_help_instead_of_giving_up():
+    """Regression: the worst-looking regime used to end the whole repair when removing it did not help the
+    discovery window, even though the next regime would have. (Seed/block chosen so the first cell is skipped.)"""
+    res = fix_regime(_market(seed=5, block=400), ManualStrategy(dict(_CFG)), _RISK, build_from_code=_NO_BUILD)
+    steps = res.details["steps"]
+    assert steps and steps[0]["adopted"] is False, steps
+    assert res.accepted, (res.headline, res.reasons)
+    assert res.details["after_holdout"]["net_profit"] >= res.details["before_holdout"]["net_profit"]
+
+
+def test_fix_regime_keeps_the_prefix_that_holds_up_when_a_later_cell_does_not():
+    """Regression: one late regime that overfits used to throw away earlier regimes that held up on unseen data."""
+    res = fix_regime(_market(seed=2, block=700), ManualStrategy(dict(_CFG)), _RISK, build_from_code=_NO_BUILD)
+    assert res.accepted, (res.headline, res.reasons)
+    d = res.details
+    assert d["rounds_kept"] < d["rounds_tried"]
+    assert len(d["excluded_cells"]) == d["rounds_kept"]
+    assert res.strategy.config["filters"]["regime_exclude"] == d["excluded_cells"]
+    assert d["after_holdout"]["profit_factor"] >= d["before_holdout"]["profit_factor"]
+
+
+def test_regime_fix_is_kept_when_unseen_data_improves_even_if_the_flagged_count_does_not_drop():
+    """Regression: blocking one regime lets other trades fill in and can surface a new borderline cell, so the
+    Regime Matrix count of flagged cells may not drop. The out-of-sample proof must still count as progress."""
+    from app.validation.runner import dispatch_validation_checks
+    from app.backtest.engine import run_backtest
+    df, rules, strat = _market(seed=5, block=400), PropRules(account_size=100000), ManualStrategy(dict(_CFG))
+    form = {"mc_sims": 100}
+    before = dispatch_validation_checks(df, strat, _RISK, rules, ["regime"], form,
+                                        baseline_trades=run_backtest(df, strat, _RISK).trades)
+    items = [simple_report.interpret_check(r) for r in before]
+    assert {i["check"]: i["status"] for i in items}["regime"] in ("fail", "caution")
+    out = run_auto_fix(df, strat, _RISK, rules, failed_checks=["regime"], before_items=items,
+                       before_raw={r["check"]: r["summary"] for r in before if r["ok"]}, form=form,
+                       build_from_code=_NO_BUILD, verify_checks=["regime"])
+    assert out.accepted, (out.headline, out.notes)
+    assert any("unseen" in str(r.get("progress", "")) or r.get("progress") for r in out.improved + out.newly_passing)
+    assert out.strategy is not strat and out.source_text
+
+
+def test_regime_check_score_measures_how_much_the_flagged_cells_lose():
+    worse = {"n_disable_recommended": 2, "disable_cells": [{"net_profit": -5000.0}, {"net_profit": -3000.0}]}
+    better = {"n_disable_recommended": 2, "disable_cells": [{"net_profit": -800.0}, {"net_profit": -200.0}]}
+    none = {"n_disable_recommended": 0, "disable_cells": []}
+    assert check_score("regime", better) > check_score("regime", worse)
+    assert check_score("regime", none) == 0.0
+    assert check_score("regime", {"n_disable_recommended": 3}) == -3          # old summaries still work
+
+
 def test_fix_regime_with_no_trades_is_not_attempted():
     flat = _market()
     flat["close"] = flat["open"] = flat["high"] = flat["low"] = 1900.0
