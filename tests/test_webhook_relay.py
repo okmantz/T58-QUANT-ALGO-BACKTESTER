@@ -364,6 +364,7 @@ def test_tunnel_reports_a_clear_error_when_cloudflared_exits_early(monkeypatch, 
 def test_tunnel_routes_without_cloudflared_explain_how_to_install(monkeypatch):
     from app.webhook_relay import tunnel
     monkeypatch.setattr(tunnel, "find_binary", lambda: None)
+    monkeypatch.setattr(tunnel, "find_ssh", lambda: None)
     c = app.test_client()
     out = c.post("/webhook-relay/tunnel/start")
     body = out.get_json()
@@ -371,3 +372,53 @@ def test_tunnel_routes_without_cloudflared_explain_how_to_install(monkeypatch):
     assert c.get("/webhook-relay/tunnel/status").get_json()["available"] is False
     page = c.get("/webhook-relay").get_data(as_text=True)
     assert "wr-tunnel-start" in page and "Start tunnel" in page
+
+
+# ------------------------------------------------------------------ no-install option: ssh -> localhost.run
+
+def test_tunnel_falls_back_to_ssh_when_cloudflared_is_missing(monkeypatch, tmp_path):
+    from app.webhook_relay import tunnel
+    fake = _fake_cloudflared(tmp_path, (
+        "import sys, time\n"
+        "print('ARGS', ' '.join(sys.argv[1:]), flush=True)\n"
+        "print('abc123def.lhr.life tunneled with tls termination, https://abc123def.lhr.life', flush=True)\n"
+        "time.sleep(30)\n"))
+    monkeypatch.setattr(tunnel, "find_binary", lambda: None)
+    monkeypatch.setattr(tunnel, "find_ssh", lambda: fake)
+    try:
+        assert tunnel.status()["available"] is True          # ssh alone is enough
+        st = tunnel.start(5004, relay_config.set_public_url)
+        st = _wait_state(tunnel, "running")
+        assert st["state"] == "running" and st["provider"] == "ssh" and st["url"] == "https://abc123def.lhr.life"
+        assert relay_config.get_public_url() == "https://abc123def.lhr.life"
+        args = " ".join(st["log"])
+        assert "-R 80:127.0.0.1:5004" in args and "nokey@localhost.run" in args and "BatchMode=yes" in args
+    finally:
+        assert tunnel.stop()["state"] == "stopped"
+
+
+def test_tunnel_prefers_cloudflared_and_ssh_can_be_forced(monkeypatch):
+    from app.webhook_relay import tunnel
+    monkeypatch.setattr(tunnel, "find_binary", lambda: "/x/cloudflared")
+    monkeypatch.setattr(tunnel, "find_ssh", lambda: "/x/ssh")
+    assert tunnel.pick_provider() == "cloudflared" and tunnel.pick_provider("ssh") == "ssh"
+    monkeypatch.setattr(tunnel, "find_ssh", lambda: None)
+    assert tunnel.pick_provider("ssh") is None
+    try:
+        tunnel.start(5004, relay_config.set_public_url, provider="ssh")
+        assert False, "expected TunnelError"
+    except tunnel.TunnelError as exc:
+        assert "ssh was not found" in str(exc)
+
+
+def test_tunnel_ssh_exit_gives_a_clear_error(monkeypatch, tmp_path):
+    from app.webhook_relay import tunnel
+    fake = _fake_cloudflared(tmp_path, "print('connection refused', flush=True)\n")
+    monkeypatch.setattr(tunnel, "find_binary", lambda: None)
+    monkeypatch.setattr(tunnel, "find_ssh", lambda: fake)
+    try:
+        tunnel.start(5004, relay_config.set_public_url)
+        st = _wait_state(tunnel, "error")
+        assert st["state"] == "error" and "ssh (localhost.run) exited" in st["error"]
+    finally:
+        tunnel.stop()
