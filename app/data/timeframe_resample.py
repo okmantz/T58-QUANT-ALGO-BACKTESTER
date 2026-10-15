@@ -66,7 +66,10 @@ per-tool changes needed.
 """
 from __future__ import annotations
 
+import os
 import re
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 
 import pandas as pd
@@ -190,7 +193,7 @@ def looks_like_cme_session_data(df: pd.DataFrame) -> bool:
         return False
 
 
-def resample_ohlcv(df: pd.DataFrame, timeframe_label: str, anchor: str = "auto") -> pd.DataFrame:
+def _resample_ohlcv_uncached(df: pd.DataFrame, timeframe_label: str, anchor: str = "auto") -> pd.DataFrame:
     """Resamples a standardized OHLCV dataframe (timestamp/open/high/low/
     close[/volume]) up to a coarser bar size. Standard aggregation: open
     = first, high = max, low = min, close = last, volume = sum (if
@@ -246,6 +249,69 @@ def resample_ohlcv(df: pd.DataFrame, timeframe_label: str, anchor: str = "auto")
 
     resampled = work.resample(freq).agg(agg).dropna(subset=["close"]) if "close" in agg else work.resample(freq).agg(agg)
     return resampled.reset_index()
+
+
+# ---------------------------------------------------------------------------
+# Resample cache (2026-10-15 review, quick speed fix).
+#
+# Profiling showed the 1-minute -> N-minute resample is ~20% of every engine
+# run, and the validation pipeline performs hundreds of engine runs (random-
+# entry nulls, attempt replays, GA candidates) over the SAME dataset and
+# timeframe. This memoizes the result. The cache key is a CONTENT fingerprint
+# (length, first/last timestamp, hash of every OHLCV column's bytes), never
+# object identity, so a mutated or different frame can never be served a stale
+# result. Callers always get a private COPY (several callers add indicator
+# columns to the returned frame). Small LRU, so memory stays bounded. Set
+# T58_DISABLE_RESAMPLE_CACHE=1 to bypass it entirely.
+# ---------------------------------------------------------------------------
+_RESAMPLE_CACHE_MAX = 4
+_RESAMPLE_CACHE: "OrderedDict[tuple, pd.DataFrame]" = OrderedDict()
+_RESAMPLE_CACHE_LOCK = threading.Lock()
+
+
+def _frame_fingerprint(df: pd.DataFrame):
+    """Cheap, content-based identity for a standardized OHLCV frame, or None
+    when it cannot be computed safely (the caller then skips the cache)."""
+    try:
+        n = len(df)
+        if n == 0 or "timestamp" not in df.columns:
+            return None
+        parts = [n, str(df["timestamp"].iloc[0]), str(df["timestamp"].iloc[-1]), tuple(df.columns)]
+        for col in ("open", "high", "low", "close", "volume"):
+            if col in df.columns:
+                parts.append(hash(df[col].to_numpy().tobytes()))
+        return tuple(parts)
+    except Exception:  # noqa: BLE001 -- any doubt means "do not cache"
+        return None
+
+
+def clear_resample_cache() -> None:
+    with _RESAMPLE_CACHE_LOCK:
+        _RESAMPLE_CACHE.clear()
+
+
+def resample_ohlcv(df: pd.DataFrame, timeframe_label: str, anchor: str = "auto") -> pd.DataFrame:
+    """Cached front door for the resampler -- see _resample_ohlcv_uncached for
+    the full behavior/arguments. Identical output to the uncached function."""
+    if os.environ.get("T58_DISABLE_RESAMPLE_CACHE") == "1":
+        return _resample_ohlcv_uncached(df, timeframe_label, anchor)
+    fp = _frame_fingerprint(df)
+    if fp is None:
+        return _resample_ohlcv_uncached(df, timeframe_label, anchor)
+    key = (fp, str(timeframe_label), str(anchor))
+    with _RESAMPLE_CACHE_LOCK:
+        hit = _RESAMPLE_CACHE.get(key)
+        if hit is not None:
+            _RESAMPLE_CACHE.move_to_end(key)
+    if hit is not None:
+        return hit.copy()
+    out = _resample_ohlcv_uncached(df, timeframe_label, anchor)
+    with _RESAMPLE_CACHE_LOCK:
+        _RESAMPLE_CACHE[key] = out
+        _RESAMPLE_CACHE.move_to_end(key)
+        while len(_RESAMPLE_CACHE) > _RESAMPLE_CACHE_MAX:
+            _RESAMPLE_CACHE.popitem(last=False)
+    return out.copy()
 
 
 def _merge_htf_onto_base(base_df: pd.DataFrame, htf_native_df: pd.DataFrame, prefix: str) -> pd.DataFrame:
