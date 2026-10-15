@@ -473,7 +473,15 @@ def test_holdout_thin_is_unproven_not_failed():
     )
 
 
-def test_holdout_winning_does_not_reject():
+def _no_coverage_cap(monkeypatch):
+    """These tests exercise the holdout / WF-starvation caps with a deliberately sparse scorecard; the
+    2026-10-15 weight-coverage cap (tested in test_review_2026_10_15) is switched off so it can't mask them."""
+    import app.scoring.t58_scorecard as _sc
+    monkeypatch.setattr(_sc, "MIN_WEIGHT_COVERAGE_FOR_READY", 0.0)
+
+
+def test_holdout_winning_does_not_reject(monkeypatch):
+    _no_coverage_cap(monkeypatch)
     verdict, reasons, _sc, _rf, _lf = _make_verdict(
         _mc(strong=True), None, None, holdout=_holdout(net=500.0, pf=1.8),
     )
@@ -498,7 +506,8 @@ def test_holdout_gate_respects_advisory_mode():
 # D5: WF-starved cap
 # ---------------------------------------------------------------------------
 
-def test_wf_starved_cap():
+def test_wf_starved_cap(monkeypatch):
+    _no_coverage_cap(monkeypatch)
     """No walk-forward, no CPCV, holdout gate didn't run (holdout=None):
     an Elite-tier scorecard is capped at MARGINAL, not READY."""
     verdict, reasons, scorecard, _rf, _lf = _make_verdict(_mc(strong=True), None, None)
@@ -507,7 +516,8 @@ def test_wf_starved_cap():
     assert any("CAPPED AT MARGINAL" in r and "walk-forward" in r.lower() for r in reasons)
 
 
-def test_wf_starved_cap_not_applied_when_holdout_gate_ran():
+def test_wf_starved_cap_not_applied_when_holdout_gate_ran(monkeypatch):
+    _no_coverage_cap(monkeypatch)
     """A holdout that ran with enough trades and won leaves the verdict
     alone (gate ran -> D5 does not fire)."""
     verdict, _reasons, _sc, _rf, _lf = _make_verdict(

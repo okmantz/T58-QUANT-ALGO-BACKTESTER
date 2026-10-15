@@ -1,6 +1,7 @@
 """Tests for app.scoring.t58_scorecard."""
 from __future__ import annotations
 
+import pytest
 from dataclasses import dataclass
 
 from app.scoring.t58_scorecard import (
@@ -102,12 +103,15 @@ def test_score_from_results_maps_real_objects_end_to_end():
         mc_result=_FakeMC(), walk_forward_result=_FakeWF(), robustness_result=_FakeRobustness(),
         statistics=_FakeStats(), prop_max_drawdown_pct=10.0,
     )
-    assert result.n_components_used == 8
+    # 2026-10-15: Monte Carlo robustness is no longer derived from the (degenerate) median-return ratio,
+    # so it is MISSING here (no seed-dispersion measurement) -> 7 components, not 8.
+    assert result.n_components_used == 7
+    assert result.components["monte_carlo_robustness"]["value"] is None
     # risk_of_ruin_pct=10 -> inverted score 90; drawdown 4/10 used -> score 60;
-    # expectancy 0.5R/2R -> 25; everything else passed through directly.
+    # expectancy 0.5R on the rescaled 0.6R-full-score scale -> 83.3; everything else passed through directly.
     assert result.components["risk_of_ruin"]["value"] == 90.0
     assert result.components["drawdown"]["value"] == 60.0
-    assert result.components["expectancy"]["value"] == 25.0
+    assert result.components["expectancy"]["value"] == pytest.approx(0.5 / 0.6 * 100.0)
     assert 0.0 < result.score <= 100.0
 
 

@@ -246,7 +246,17 @@ def test_walkforward_ga_headline_prefers_honest_median():
 
 
 # ---- strategies are causal & well-formed -----------------------------------------------------------------------------------------
-@pytest.mark.parametrize("name", [f"{s}1! {k} 5m.py" for s in ("NQ",) for k in ("Opening Drive",)])
+def _shipped_python_strategies():
+    """Every strategy file actually present in strategies/python. This used to hard-code
+    'NQ1! Opening Drive 5m.py', which is not in the repository, so the test failed with
+    'file not found' instead of checking anything. Discovering the folder keeps the check
+    (loads, signals are causal and in {-1, 0, 1}) on whatever strategies are really shipped."""
+    from pathlib import Path
+    folder = Path(__file__).resolve().parents[1] / "strategies" / "python"
+    return sorted(p.name for p in folder.glob("*.py") if not p.name.startswith("_")) if folder.is_dir() else []
+
+
+@pytest.mark.parametrize("name", _shipped_python_strategies() or [pytest.param("<no python strategies shipped>", marks=pytest.mark.skip(reason="strategies/python is empty"))])
 def test_new_strategies_load_and_emit_valid_signals(name):
     from pathlib import Path
     from app.strategy.python import PythonStrategy

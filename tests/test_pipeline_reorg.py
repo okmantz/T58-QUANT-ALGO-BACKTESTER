@@ -195,13 +195,33 @@ def test_min_trades_floor_caps_thin_sample_at_marginal():
 
 
 def test_min_trades_floor_does_not_affect_a_healthy_sample():
+    from types import SimpleNamespace
+
     mc, wf = _elite_leaning_mc_and_wf()
+    # 2026-10-15: READY now also needs enough of the scorecard measured (missing evidence caps a verdict
+    # instead of lifting the score), so a "healthy" sample must carry expectancy and drawdown too.
+    stats = _fake_statistics(250)
+    stats.average_r = 0.5
+    stats.max_drawdown_pct = 2.0
     verdict, reasons, scorecard, hard_fail, lookahead_hard_fail = _make_verdict(
         mc, wf, icir_gate=None, risk_of_ruin_cap=20.0,
-        statistics=_fake_statistics(250), min_trades_for_ready=100,
+        statistics=stats, prop_rules=SimpleNamespace(max_drawdown_pct=10.0), min_trades_for_ready=100,
     )
     assert verdict == "READY"
     assert not any("CAPPED AT MARGINAL" in r for r in reasons)
+
+
+def test_thin_scorecard_coverage_caps_ready_at_marginal():
+    """2026-10-15 (report P1): a strong score built from only 4 of 11 components must not read READY --
+    omitting evidence may not lift a verdict."""
+    mc, wf = _elite_leaning_mc_and_wf()
+    verdict, reasons, scorecard, _, _ = _make_verdict(
+        mc, wf, icir_gate=None, risk_of_ruin_cap=20.0,
+        statistics=_fake_statistics(250), min_trades_for_ready=100,
+    )
+    assert scorecard.tier in ("Elite", "Strong") and scorecard.weight_coverage < 0.70
+    assert verdict == "MARGINAL"
+    assert any("scorecard weight was measured" in r for r in reasons)
 
 
 def test_min_trades_floor_never_downgrades_an_already_marginal_verdict():
