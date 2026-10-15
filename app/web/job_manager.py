@@ -78,6 +78,14 @@ from typing import Any, Callable, Optional
 from app.orchestration.run_progress import ProgressTracker
 
 
+# 2026-10-15 review fix: job logs were an unbounded in-memory list, so an
+# overnight run (hundreds of thousands of progress lines) became a slow memory
+# leak and ever-slower status polling. Keep only the most recent lines; the
+# count of lines dropped from the front is kept in job["log_dropped"] so a
+# poller that tracks "lines seen" can still compute its offset.
+MAX_JOB_LOG_LINES = 5000
+
+
 class JobManager:
     """Thread-safe tracker for background jobs identified by a short hex
     id. One instance is meant to be shared by every job-based tool that
@@ -194,6 +202,10 @@ class JobManager:
             if job is None:
                 return
             job["log"].append(message)
+            _excess = len(job["log"]) - MAX_JOB_LOG_LINES
+            if _excess > 0:
+                del job["log"][:_excess]
+                job["log_dropped"] = int(job.get("log_dropped", 0)) + _excess
             tracker = job.get("_tracker")
         if tracker is not None:
             tracker.feed(message)  # outside our lock: the tracker has its own
