@@ -876,6 +876,9 @@ class FirmFeeInfo:
     written_confirmation: bool = False  # True only after the firm confirmed IN WRITING for your setup
     source_tier: str = "secondary"      # "primary" | "secondary"
     notes: str = ""
+    # One-time fee charged when an evaluation is PASSED (before the funded account starts), USD.
+    # 0.0 for firms with none. The EV verdict charges it on every pass: EV = p*(q*V - A) - c.
+    activation_fee: float = 0.0
 
     @property
     def effective_reset_price(self) -> float | None:
@@ -889,6 +892,40 @@ FIRM_FEES: dict[str, FirmFeeInfo] = {
     # The one firm to buy first (assumption flagged in the delivery notes): Lucid Trading $50k LucidPro,
     # chosen because the repo already carries a dedicated, rule-checked preset for it
     # (EOD trailing + lock, soft daily loss, 3-day payouts) and the firm publishes that automation is allowed.
+    # 2026-10-15 review item 5: Topstep 50K row. Without it get_fee_info("topstep_50k") returned None and
+    # the EV verdict could only ever say INSUFFICIENT EVIDENCE for Topstep. Prices below were read on
+    # 2026-10-15 from Topstep's own help-centre pages (PRIMARY source, no profit-split figure on them);
+    # the 90/10 split is from a secondary page.
+    "topstep_50k": FirmFeeInfo(
+        preset_key="topstep_50k",
+        challenge_price=49.0,
+        reset_price=49.0,
+        profit_split_pct=90.0,
+        source_url="https://help.topstep.com/en/articles/14289835",
+        date_checked="2026-10-15",
+        automation_policy=(
+            "Topstep's TopstepX API Access article says traders may build and run automated strategies and connect "
+            "third-party tools (summarised by pickmytrade.io, 2026-09-08, which cites help.topstep.com). Conditions: all "
+            "trading must originate from your own personal device -- VPS/VPN/remote-server order placement is prohibited "
+            "(a private server may only log/backtest/chart); the Prohibited Trading Strategies article bans unfair-advantage "
+            "systems (HFT / latency arbitrage); rule breaches are treated the same whether a person or a script placed the "
+            "order; Topstep does not support third-party tools."
+        ),
+        written_confirmation=False,
+        source_tier="primary",
+        activation_fee=149.0,
+        notes=(
+            "Prices (help.topstep.com/en/articles/14289835 and the older intercom.help/topstep-llc/en/articles/9208217-topstep-pricing, "
+            "both read 2026-10-15; neither shows a calendar date, only 'updated over 2 weeks / 3 months ago'): the 50K Trading Combine is "
+            "$49 PER MONTH (a subscription, not a one-off fee -- an evaluation that takes 3 months to pass costs ~$147, and this EV model "
+            "charges ONE month; treat its EV as optimistic for slow passers). 50K Reset $49. Standard path: $149 one-time ACTIVATION fee "
+            "per Express Funded Account earned (modelled via activation_fee). 'No Activation Fee' path: $95 per month and $95 reset, $0 "
+            "activation -- not the path modelled here. Paths cannot be changed after purchase. Profit split 90/10 flat from the first dollar "
+            "for traders who signed up on/after 2026-01-12 per proptradingvibes.com/blog/topstep-payout-rules (updated 2026-10-09, SECONDARY; "
+            "earlier accounts may be grandfathered at 100% of the first $10,000). Get written confirmation from Topstep support that your "
+            "specific automation is allowed (own-device execution) before paying, then set written_confirmation=True."
+        ),
+    ),
     "lucid_50k": FirmFeeInfo(
         preset_key="lucid_50k",
         challenge_price=172.0,
@@ -929,6 +966,7 @@ def fee_table() -> list[dict]:
             "preset_key": p.key, "label": p.label,
             "challenge_price": f.challenge_price if f else None,
             "reset_price": f.reset_price if f else None,
+            "activation_fee": f.activation_fee if f else None,
             "profit_split_pct": f.profit_split_pct if f else None,
             "source_url": f.source_url if f else "",
             "date_checked": f.date_checked if f else "",

@@ -279,6 +279,11 @@ class AttemptRecord:
     reached_first_payout: bool
     payout_amount: float            # total $ paid out (gross, before any profit split) during this attempt
     ending_balance: float
+    # 2026-10-15 review (time-bounded ruin): how long this attempt actually lived, in CALENDAR
+    # days (first trade day through the day it ended), and the trade-day count at which it
+    # passed its evaluation. Defaults keep every existing constructor call working.
+    calendar_days_used: int = 0
+    days_to_pass: int | None = None
 
 
 @dataclass
@@ -332,6 +337,17 @@ class AccountSimResult:
     @property
     def total_payout_amount(self) -> float:
         return sum(p.amount for p in self.payouts)
+
+
+def _attempt_calendar_days(day_dates, start_idx: int, end_idx: int) -> int:
+    """Calendar days an attempt lived: first trade day through its last day, inclusive.
+    Returns 0 when the indices do not point into day_dates (never raises)."""
+    try:
+        if start_idx is None or end_idx is None or start_idx < 0 or end_idx < start_idx:
+            return 0
+        return int((pd.Timestamp(day_dates[end_idx]) - pd.Timestamp(day_dates[start_idx])).days) + 1
+    except Exception:  # noqa: BLE001 -- bookkeeping must never sink a simulation
+        return 0
 
 
 @dataclass
@@ -651,6 +667,8 @@ def simulate_account(
             reached_first_payout=acct.first_payout_day_index is not None,
             payout_amount=sum(p.amount for p in payouts_this_attempt),
             ending_balance=balance,
+            calendar_days_used=_attempt_calendar_days(day_dates, attempt_start_day_idx, acct.attempt_last_day_index),
+            days_to_pass=acct.days_to_pass,
         ))
         overall_payouts.extend(payouts_this_attempt)
         if not overall_passed_evaluation and acct.passed_evaluation:
