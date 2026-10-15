@@ -14,18 +14,38 @@ already exists:
                                           rebuys and is only a fallback for results built before the
                                           per-attempt fields existed). Gates on the pessimistic end of
                                           MC noise, not the point estimate
-    First payout probability      20     ...per_attempt_payout_ci95 lower bound (same reason)
-    Risk of ruin                 -20     ...risk_of_ruin_pct (subtracted)
+    First payout probability      20     ...per_attempt_paid_ci95 lower bound: P(pass AND get paid) per
+                                          purchased attempt -- the PRODUCT of pass x payout, which is
+                                          what the README question ("pass the evaluation and reach my
+                                          first payout") actually asks. (Until 2026-10-15 this slot used
+                                          the CONDITIONAL rate -- payouts per FUNDED account -- which
+                                          flatters a strategy that rarely passes but pays when it does.
+                                          The conditional rate is still reported, and is the fallback
+                                          for results built before the paid-product fields existed)
+    Risk of ruin                  20     100 minus MonteCarloResult.risk_of_ruin_pct (inverted so that
+                                          higher is better). Since 2026-10-15 that percentage is
+                                          TIME-BOUNDED: share of purchased accounts that breach within
+                                          the first ruin_horizon_days (default 90) calendar days, so a
+                                          longer backtest no longer raises it
     Walk-forward stability        15     app.search.robustness.WalkForwardResult.walk_forward_efficiency
                                           (or CPCV, if that's the run's chosen primary generalization
                                           test -- see app.orchestration.full_pipeline's
                                           primary_robustness_method config; whichever one is primary
                                           for a given run fills THIS slot)
-    Monte Carlo robustness        10     see _mc_robustness_score below
+    Monte Carlo robustness        10     seed-to-seed dispersion of the per-attempt pass rate (see
+                                          _mc_robustness_score). REPLACED 2026-10-15: the old
+                                          "25-75 percentile spread / median return" ratio was
+                                          degenerate -- payouts reset the balance, so the median return
+                                          sits near 0 and the ratio exploded (or the component was
+                                          dropped at exactly 0, which RAISED the score). Missing when
+                                          no dispersion measurement exists -- never derived from the
+                                          median-return ratio
     Parameter stability            5     app.validation.parameter_robustness.ParameterRobustnessResult
                                           (or the cheaper app.search.robustness.RobustnessResult, if
                                           that's the one already computed -- both are 0-100-like already)
-    Expectancy                     5     app.backtest.statistics.BacktestStatistics.average_r
+    Expectancy                     5     app.backtest.statistics.BacktestStatistics.average_r, rescaled
+                                          2026-10-15 so a realistic good edge scores 50+ (0R -> 0,
+                                          0.3R -> 50, 0.6R or better -> 100)
     Drawdown                      10     app.backtest.statistics.BacktestStatistics.max_drawdown_pct
     Parsimony                      5     app.scoring.parsimony.ParsimonyResult.score -- reward for
                                           reaching the same result with fewer unnecessary degrees of
@@ -45,6 +65,12 @@ already exists:
                                           app.ai.t58_strategy_engine). See "WHAT THE SCORE MEASURES"
                                           below -- this component deliberately measures something
                                           DIFFERENT from every row above it.
+
+    The weights sum to 125 (25+20+20+15+10+5+5+10+5+5+5), NOT 90 or 100: a component's
+    share of the score is weight/125, e.g. expectancy is 5/125 = 4% of the total. (Older
+    text called expectancy "5/90ths" -- that predates the parsimony, CPCV-supporting and
+    conformance components and is wrong.) The score itself is
+    sum(weight x value) / sum(weight of the components PRESENT).
 
 WHAT THE SCORE MEASURES -- READ BEFORE REINTERPRETING IT
 
@@ -87,14 +113,17 @@ caller that wants to supply the 0-100 numbers itself (e.g. from records
 already persisted in app.search.results_db, where a fresh Monte Carlo/
 robustness object may not be sitting in memory anymore).
 
-IMPORTANT -- missing-aware, not a gate: compute_t58_score() re-normalizes
-over whichever components are actually present (see its own docstring).
-A strategy that hasn't been walk-forward tested yet, or whose parsimony
-couldn't be counted, is NOT penalized as if it had failed that check --
-it's simply scored on the evidence that does exist. This is what makes
-it safe to use as the Full Pipeline's actual verdict logic (see
-app.orchestration.full_pipeline._make_verdict) instead of a hard AND
-across every metric.
+IMPORTANT -- missing-aware, but missing evidence can never lift a verdict:
+compute_t58_score() re-normalizes over whichever components are actually
+present (see its own docstring), so a strategy that hasn't been walk-forward
+tested yet, or whose parsimony couldn't be counted, is not scored as if it
+had FAILED that check. Re-normalizing alone, though, lets a strategy that
+omits its weakest components score higher than it should (omitting the five
+weakest moved one audit example from 70.9 to 83.2). So every result also
+carries `weight_coverage` (the share of the 125 total weight that was
+actually measured) and `missing_core` (any of pass / payout / ruin absent),
+and app.orchestration.full_pipeline._make_verdict_core caps READY at
+MARGINAL when coverage is too thin or a core survival component is missing.
 """
 from __future__ import annotations
 
@@ -125,6 +154,13 @@ _WEIGHTS: dict[str, float] = {
 _TIERS: list[tuple[float, str]] = [
     (92.0, "Elite"), (85.0, "Strong"), (75.0, "Promising"), (65.0, "Research"),
 ]
+
+
+# The three survival components every READY verdict must have measured, and the minimum
+# share of total scorecard weight that must have been measured for READY. Used by
+# app.orchestration.full_pipeline._make_verdict_core.
+_CORE_COMPONENTS = ("pass_probability", "first_payout_probability", "risk_of_ruin")
+MIN_WEIGHT_COVERAGE_FOR_READY = 0.70
 
 
 def _clip(v: float, lo: float = 0.0, hi: float = 100.0) -> float:
@@ -168,6 +204,11 @@ class T58ScorecardResult:
     n_components_used: int
     n_components_total: int
     notes: list = field(default_factory=list)
+    # 2026-10-15: share (0-1) of the total scorecard weight that was actually measured, and which
+    # of the three core survival components (pass / payout / ruin) were absent. Missing evidence
+    # must cap a verdict, not lift a score -- see the module docstring.
+    weight_coverage: float = 1.0
+    missing_core: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -217,21 +258,28 @@ def compute_t58_score(inputs: T58ScorecardInputs) -> T58ScorecardResult:
 
     n_total = len(_WEIGHTS)
     n_used = sum(1 for c in components.values() if c["value"] is not None)
+    total_weight_all = sum(abs(w) for w in _WEIGHTS.values()) * 100.0
+    coverage = (total_weight_available / total_weight_all) if total_weight_all > 0 else 0.0
+    missing_core = [n for n in _CORE_COMPONENTS if components[n]["value"] is None]
     if total_weight_available <= 0:
         notes.append("No scorecard components were available -- score is 0 by default, not a real evaluation.")
         return T58ScorecardResult(score=0.0, tier="Reject", components=components,
-                                   n_components_used=0, n_components_total=n_total, notes=notes)
+                                   n_components_used=0, n_components_total=n_total, notes=notes,
+                                   weight_coverage=0.0, missing_core=missing_core)
 
     score = _clip(weighted_sum / total_weight_available * 100.0)
     if n_used < n_total:
         missing = [name for name, c in components.items() if c["value"] is None]
         notes.append(
             f"{n_total - n_used} of {n_total} checks weren't available ({', '.join(missing)}) -- "
-            "score is re-normalized over what WAS checked, not penalized for what wasn't."
+            "score is re-normalized over what WAS checked, not penalized for what wasn't; "
+            f"{coverage * 100:.0f}% of the scorecard weight was measured, and a verdict cannot reach "
+            "READY on thin coverage."
         )
     return T58ScorecardResult(
         score=score, tier=tier_for_score(score), components=components,
         n_components_used=n_used, n_components_total=n_total, notes=notes,
+        weight_coverage=coverage, missing_core=missing_core,
     )
 
 
@@ -249,37 +297,59 @@ def _walk_forward_score(walk_forward_efficiency: float) -> float:
     return _clip(walk_forward_efficiency * 100.0)
 
 
-def _mc_robustness_score(mc_result) -> float | None:
-    """'Monte Carlo robustness' isn't a metric the Masterclass material
-    defines precisely beyond 'calculate distributions, not just expected
-    profit' -- interpreted here as how TIGHT the simulated return
-    distribution is: a strategy whose 25th-75th percentile return spread
-    is small relative to its median return is more robust (every
-    simulated path tells a similar story) than one where the outcome
-    swings wildly simulation to simulation, even if the median is the
-    same. Returns None (not 0) if the percentiles this needs weren't
-    computed, so a missing input doesn't get scored as maximally
-    UNROBUST."""
-    pcts = getattr(mc_result, "return_percentiles", None) or {}
-    p25, p50, p75 = pcts.get(25), pcts.get(50), pcts.get(75)
-    if p25 is None or p50 is None or p75 is None or p50 == 0:
+# Seed-to-seed swing (in percentage points, standard deviation of the per-attempt pass rate across
+# independent Monte Carlo seeds) at which the robustness component reaches 0. A swing of 0 scores 100;
+# the pipeline's own seed-instability cap is 10 points, which scores 50 here.
+_MC_DISPERSION_ZERO_AT_PTS = 20.0
+
+
+def _mc_robustness_score(mc_result=None, dispersion_pts: float | None = None) -> float | None:
+    """'Monte Carlo robustness' = how STABLE the headline pass rate is when the Monte Carlo is
+    re-run with different random seeds: 0 points of seed-to-seed standard deviation scores 100,
+    `_MC_DISPERSION_ZERO_AT_PTS` (20) points or more scores 0, linear between.
+
+    REPLACED 2026-10-15. The previous definition divided the 25th-75th percentile return spread
+    by the MEDIAN return. In a prop simulation payouts reset the account balance, so the median
+    return of a healthy strategy sits near zero and that ratio exploded: the component scored 0
+    for a strong edge (70% win rate scored LOWER than 58% in the audit's edge ladder) and when
+    the median was exactly 0 the component was silently DROPPED, which re-normalized the score
+    upward. A stronger edge could therefore score lower, and missing data could score higher.
+
+    Returns None (missing -- UNPROVEN, not 0) when no dispersion measurement was supplied. It
+    is never derived from the median-return ratio any more. `mc_result` is accepted only so
+    existing callers keep working; a result object may carry an optional
+    `seed_dispersion_pts` attribute, which is used when `dispersion_pts` is not given."""
+    d = dispersion_pts
+    if d is None:
+        d = getattr(mc_result, "seed_dispersion_pts", None)
+    if d is None:
         return None
-    spread_ratio = abs(p75 - p25) / abs(p50)
-    # A spread as wide as the median itself (ratio 1.0) scores 0; no
-    # spread at all (ratio 0.0) scores 100 -- linear between.
-    return _clip(100.0 * (1.0 - min(spread_ratio, 1.0)))
+    try:
+        d = float(d)
+    except (TypeError, ValueError):
+        return None
+    if d != d or d < 0:  # NaN or nonsensical
+        return None
+    return _clip(100.0 * (1.0 - d / _MC_DISPERSION_ZERO_AT_PTS))
+
+
+# Average R per trade at which the expectancy component reaches 100 (0R scores 0; the midpoint,
+# 0.3R, scores 50).
+_EXPECTANCY_FULL_SCORE_R = 0.6
 
 
 def _expectancy_score(average_r: float | None) -> float | None:
     """average_r is the strategy's mean R-multiple per trade (see
-    app.backtest.statistics). 0R or worse scores 0; 2R or better scores
-    100 (the Masterclass material's own Lesson 1 example strategy,
-    +0.44R expected, would score 22/100 here -- a real, working edge
-    can still be a LOW number on this component alone, which is why
-    it's only weighted 5/90ths of the total score)."""
+    app.backtest.statistics). 0R or worse scores 0; 0.6R or better scores 100, linear between,
+    so a realistic good edge (0.3R) scores 50.
+
+    RESCALED 2026-10-15: it used to be 0R -> 0 and 2R -> 100, which scored a genuinely good 0.3R
+    edge at 15/100 and a 0.44R edge (the Masterclass Lesson 1 example) at 22/100. Combined with
+    the other components that put the maximum reachable score at ~84.6 even with everything else
+    perfect -- just under the 85 'Strong' cut. This component is 5/125 = 4% of the total score."""
     if average_r is None:
         return None
-    return _clip(average_r / 2.0 * 100.0)
+    return _clip(average_r / _EXPECTANCY_FULL_SCORE_R * 100.0)
 
 
 def _drawdown_score(max_drawdown_pct: float | None, prop_max_drawdown_pct: float | None) -> float | None:
@@ -306,15 +376,23 @@ def _cpcv_score(cpcv_result) -> float | None:
     'generalization efficiency' scale _walk_forward_score uses: how much
     of the in-sample metric survived out-of-sample, averaged across every
     CPCV path (mean_oos_metric / mean_is_metric), clipped to [0, 1] then
-    scaled x100. Falls back to 100 if the in-sample metric was already
-    <= 0 and OOS didn't get worse (mirrors _walk_forward_score's own
-    floor logic), and to 0 if OOS went negative while IS was positive."""
+    scaled x100. Scores 0 when the in-sample metric was already <= 0 (no
+    edge to retain -- this used to score 100, which rewarded strategies that
+    lose equally in and out of sample) and 0 when the out-of-sample paths
+    lost money."""
     mean_is = getattr(cpcv_result, "mean_is_metric", None)
     mean_oos = getattr(cpcv_result, "mean_oos_metric", None)
     if mean_is is None or mean_oos is None:
         return None
+    # 2026-10-15 (audit item 10): a strategy that did not make money out of sample has nothing
+    # to "generalize", however its in/out-of-sample metrics compare.
+    if getattr(cpcv_result, "oos_profitable", None) is False:
+        return 0.0
     if mean_is <= 0:
-        return 100.0 if mean_oos >= mean_is else 0.0
+        # No in-sample edge to retain. This used to score 100 whenever OOS "didn't get worse" --
+        # i.e. a strategy that lost equally in and out of sample (profit factors 0.85-0.95 in the
+        # audit) scored as perfectly generalizing. Nothing to retain scores 0.
+        return 0.0
     return _clip((mean_oos / mean_is) * 100.0)
 
 
@@ -533,6 +611,7 @@ def score_from_results(
     cpcv_supporting_result=None,
     t58_conformance: float | None = None,
     manual_config: dict | None = None,
+    mc_dispersion_pts: float | None = None,
 ) -> T58ScorecardResult:
     """Convenience entry point: pass whichever of this app's own result
     objects you already have in hand (any/all may be None -- a partial
@@ -554,7 +633,9 @@ def score_from_results(
     accepts a Manual Strategy Builder config dict from which the
     per-condition conformance is derived when `t58_conformance` isn't
     given. Omit both and the component is simply absent -- the pre-
-    existing prop-survival-only score is unchanged."""
+    existing prop-survival-only score is unchanged. `mc_dispersion_pts` is the seed-to-seed
+    standard deviation (percentage points) of the per-attempt pass rate; it feeds the Monte Carlo
+    robustness component, which is missing when it is not supplied."""
     # v5 (2026-10-04): gate on the Wilson 95% LOWER bound, not the point
     # estimate. A point estimate vs a hard acceptance bar flips inside MC
     # noise (69.2% vs 70% is the same measurement), so the verdict only
@@ -580,10 +661,18 @@ def score_from_results(
     _payout_ci = _preferred_payout_ci(mc_result)
     if _payout_ci is not None:
         first_payout_probability = float(_payout_ci[0])
+    # 2026-10-15: prefer the pass-AND-paid PRODUCT (per purchased attempt) over the conditional
+    # payout rate (per funded account) -- the README question is "pass AND get paid". Falls back
+    # to the conditional interval/point estimate for results built before the product existed.
+    _paid_ci = getattr(mc_result, "per_attempt_paid_ci95", None)
+    if _nonzero_ci(_paid_ci):
+        first_payout_probability = float(_paid_ci[0])
 
     walk_forward_stability = None
     if walk_forward_result is not None:
         walk_forward_stability = _walk_forward_score(walk_forward_result.walk_forward_efficiency)
+        if getattr(walk_forward_result, "oos_profitable", None) is False:
+            walk_forward_stability = 0.0   # lost money out of sample: nothing generalized
 
     parameter_stability = None
     if robustness_result is not None:
@@ -611,7 +700,7 @@ def score_from_results(
         first_payout_probability=first_payout_probability,
         risk_of_ruin=_risk_of_ruin_score(risk_of_ruin_pct),
         walk_forward_stability=walk_forward_stability,
-        monte_carlo_robustness=_mc_robustness_score(mc_result) if mc_result is not None else None,
+        monte_carlo_robustness=_mc_robustness_score(mc_result, mc_dispersion_pts) if (mc_result is not None or mc_dispersion_pts is not None) else None,
         parameter_stability=parameter_stability,
         expectancy=_expectancy_score(average_r),
         drawdown=_drawdown_score(max_drawdown_pct, prop_max_drawdown_pct),
