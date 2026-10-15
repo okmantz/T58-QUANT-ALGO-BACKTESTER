@@ -59,7 +59,7 @@
   <p class="lc-hint"><b>Why this step exists:</b> TradingView's servers call your webhook from the internet, and they only accept <b>https on port 443</b> (or http on port 80). This app runs on port <code class="ic">{{ local_port }}</code> on your own computer, so an address like <code class="ic">http://127.0.0.1:{{ local_port }}</code> (or a Tailscale <code class="ic">100.x.x.x:{{ local_port }}</code> one) is rejected with <i>"Only port 80 is allowed for HTTP"</i>. A tunnel fixes that: it gives you a public https address with no port that forwards to this app.</p>
   <div class="lc-side-card" id="wr-tunnel" style="margin:10px 0;">
     <h4 style="margin:0 0 4px;">Easiest: let T58 open the tunnel for you</h4>
-    <div class="lc-hint" id="wr-tunnel-note">Uses the free Cloudflare quick tunnel (no account). Click once and the address below fills itself in.</div>
+    <div class="lc-hint" id="wr-tunnel-note">Nothing to install: this uses the free Cloudflare quick tunnel if you have it, otherwise the <code class="ic">ssh</code> program already built into Windows 10+, macOS and Linux (through localhost.run). No account. Click once and the address below fills itself in.</div>
     <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
       <button type="button" class="lc-btn" id="wr-tunnel-start">Start tunnel</button>
       <button type="button" class="lc-btn ghost" id="wr-tunnel-stop" style="display:none;">Stop tunnel</button>
@@ -229,12 +229,12 @@
     var startB = document.getElementById('wr-tunnel-start'), stopB = document.getElementById('wr-tunnel-stop');
     var msg = document.getElementById('wr-tunnel-msg'), note = document.getElementById('wr-tunnel-note'), timer = null, wasRunning = false;
     function paint(s) {
-      if (!s.available) { startB.disabled = true; msg.className = 'wr-msg'; msg.textContent = 'cloudflared is not installed yet. ' + (s.install_hint || ''); return; }
+      if (!s.available) { startB.disabled = true; msg.className = 'wr-msg'; msg.textContent = 'Neither cloudflared nor ssh was found on this computer. ' + (s.install_hint || ''); return; }
       startB.disabled = (s.state === 'starting' || s.state === 'running');
       stopB.style.display = (s.state === 'starting' || s.state === 'running') ? '' : 'none';
       if (s.state === 'starting') { msg.className = 'wr-msg'; msg.textContent = 'Opening the tunnel… this takes a few seconds.'; }
       else if (s.state === 'running') {
-        msg.className = 'wr-msg wr-pos'; msg.textContent = 'Tunnel is up: ' + s.url + (s.error ? '  (' + s.error + ')' : '');
+        msg.className = 'wr-msg wr-pos'; msg.textContent = 'Tunnel is up' + (s.provider === 'ssh' ? ' (via ssh)' : '') + ': ' + s.url + (s.error ? '  (' + s.error + ')' : '');
         if (!wasRunning) { wasRunning = true; setTimeout(function () { location.reload(); }, 900); }
       }
       else if (s.state === 'error') { msg.className = 'wr-msg wr-neg'; msg.textContent = s.error || 'The tunnel could not start.'; }
