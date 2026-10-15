@@ -462,7 +462,8 @@ def run_speed_run(
             result = run_full_pipeline(
                 df, strategy, risk, prop_rules, output_dir / "speed_run",
                 fp_cfg, progress_cb=None, instrument=instrument,
-                report_basename=f"speed_run_{cid}",
+                report_basename=__import__("app.reports.naming", fromlist=["report_stem"]).report_stem(
+                    str(cid), "Speed-Run-Validation", output_dir=output_dir / "speed_run"),
                 # FIX (CI flakiness / stop-doesn't-stop): this call used to
                 # omit cancel_event entirely, so a Phase 2 validation
                 # already in flight when /stop was pressed had no way to

@@ -2895,6 +2895,8 @@ def _finish(
         verdict_reasons=verdict_reasons,
         final_parameters=final_parameters,
         baseline_parameters=baseline_parameters,
+        test_label="Full Pipeline",
+        tested_strategy_name=(Path(cfg.library_ref[1]).stem if _replaces_original(cfg) else display_name),
     )
 
     saved_library_path = None
@@ -3625,6 +3627,14 @@ def run_full_pipeline_batch(
     for i, item in enumerate(items, start=1):
         safe_names[i] = re.sub(r"[^A-Za-z0-9_-]+", "_", item.label) or f"strategy_{i}"
 
+    def _batch_stem(i: int, label: str) -> str:
+        """<Strategy>__Full-Pipeline__<timestamp> (plus _<n> only when two batch items share a label)."""
+        from app.reports.naming import report_stem
+
+        stem = report_stem(label or f"strategy_{i}", "Full-Pipeline", output_dir=output_dir)
+        dupes = sum(1 for it in items if it.label == label)
+        return f"{stem}_{i}" if dupes > 1 else stem
+
     if max_parallel_strategies <= 1 or len(items) <= 1:
         for i, item in enumerate(items, start=1):
             if cancel_event is not None and cancel_event.is_set():
@@ -3642,7 +3652,7 @@ def run_full_pipeline_batch(
                 result = run_full_pipeline(
                     df, item.strategy, risk, prop_rules, output_dir, _cfg_for_batch_item(cfg, item),
                     progress_cb=item_log, instrument=instrument, ollama_settings=ollama_settings,
-                    report_basename=f"full_pipeline_{i:03d}_{safe_names[i]}",
+                    report_basename=_batch_stem(i, item.label),
                 )
             except Exception as exc:  # noqa: BLE001 -- one bad strategy must not stop the batch
                 _record(i, item.label, False, None, str(exc))
@@ -3663,7 +3673,7 @@ def run_full_pipeline_batch(
                     pool.submit(
                         _batch_item_worker, i, item.label, item.strategy, df, risk, prop_rules,
                         output_dir, _cfg_for_batch_item(item_cfg, item), instrument, ollama_settings,
-                        f"full_pipeline_{i:03d}_{safe_names[i]}",
+                        _batch_stem(i, item.label),
                     ): (i, item.label)
                     for i, item in enumerate(items, start=1)
                 }
@@ -3708,7 +3718,7 @@ def run_full_pipeline_batch(
                     result = run_full_pipeline(
                         df, item.strategy, risk, prop_rules, output_dir, _cfg_for_batch_item(item_cfg, item),
                         progress_cb=item_log, instrument=instrument, ollama_settings=ollama_settings,
-                        report_basename=f"full_pipeline_{i:03d}_{safe_names[i]}",
+                        report_basename=_batch_stem(i, item.label),
                     )
                 except Exception as item_exc:  # noqa: BLE001
                     _record(i, item.label, False, None, str(item_exc))
