@@ -216,9 +216,74 @@ def get_public_url() -> str:
         return ""
 
 
+def _is_private_host(host: str) -> bool:
+    """True for addresses TradingView's servers can never reach: localhost,
+    LAN ranges, and Tailscale's 100.64.0.0/10 (a private VPN range)."""
+    import ipaddress
+
+    h = (host or "").strip().lower().strip("[]")
+    if h in ("localhost", "0.0.0.0"):
+        return True
+    try:
+        ip = ipaddress.ip_address(h)
+    except ValueError:
+        return h == "localhost" or h.endswith(".localhost") or "." not in h
+    return bool(ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_unspecified
+                or ip in ipaddress.ip_network("100.64.0.0/10"))
+
+
+def check_public_url(url: str) -> tuple[str, str]:
+    """Validate and normalise the address TradingView will call.
+
+    Returns ``(clean_url, problem)``; ``problem`` is "" when the address is
+    usable. TradingView only calls http on port 80 and https on port 443,
+    and its servers sit on the public internet, so ``127.0.0.1:5004`` or a
+    Tailscale ``100.x.x.x:5004`` address can never work.
+    """
+    from urllib.parse import urlsplit
+
+    raw = (url or "").strip()
+    if not raw:
+        return "", "Enter the address first, like https://abc123.ngrok-free.app"
+    if re.search(r"\s", raw):
+        return "", "That doesn't look like a web address. Paste the https:// address your tunnel printed."
+    if "://" not in raw:
+        raw = "https://" + raw
+    try:
+        parts = urlsplit(raw)
+        port = parts.port
+    except ValueError:
+        return "", "That doesn't look like a web address. Paste the https:// address your tunnel printed."
+    host = parts.hostname or ""
+    if parts.scheme not in ("http", "https") or not host:
+        return "", "Paste the full https:// address your tunnel printed, like https://abc123.ngrok-free.app"
+    if _is_private_host(host):
+        return "", (f"{host} is only reachable from your own network, and TradingView's servers can't call it. "
+                    "Use the public https:// address from a tunnel (ngrok, Cloudflare Tunnel or Tailscale Funnel).")
+    if port not in (None, 80, 443):
+        return "", (f"TradingView only allows port 80 (http) or 443 (https), so :{port} will be rejected. "
+                    "Remove the port: a tunnel's https:// address already uses 443 and forwards to this app for you.")
+    if parts.scheme == "http" and port not in (None, 80):
+        return "", "Use the https:// address from your tunnel."
+    return f"{parts.scheme}://{parts.netloc}", ""
+
+
+def public_url_problem() -> str:
+    """Why the currently saved/configured public address won't work with
+    TradingView ("" when it is fine, or "Not set" text when absent)."""
+    url = get_public_url()
+    if not url:
+        return "Not set yet."
+    return check_public_url(url)[1]
+
+
 def set_public_url(url: str) -> str:
-    url = (url or "").strip().rstrip("/")
-    if url and not re.match(r"^https?://[^\s/]+", url):
-        raise ValueError("Enter the full address, like https://abc123.ngrok-free.app")
-    (_dir() / PUBLIC_URL_FILE).write_text(json.dumps({"url": url}), encoding="utf-8")
-    return url
+    url = (url or "").strip()
+    if not url:                      # allow clearing it
+        (_dir() / PUBLIC_URL_FILE).write_text(json.dumps({"url": ""}), encoding="utf-8")
+        return ""
+    clean, problem = check_public_url(url)
+    if problem:
+        raise ValueError(problem)
+    (_dir() / PUBLIC_URL_FILE).write_text(json.dumps({"url": clean}), encoding="utf-8")
+    return clean
