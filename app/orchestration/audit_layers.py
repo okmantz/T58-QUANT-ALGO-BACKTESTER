@@ -179,6 +179,7 @@ def _compute_ev(verdict, cfg, prop_rules, payout_ev, p_hold, hold_trades, eviden
         legacy_verdict=verdict, holdout_pass_rate=p_hold, window_payout_rate=r30,
         payout_value=payout_value, challenge_price=fee.challenge_price if fee else None,
         reset_price=fee.reset_price if fee else None, profit_split_pct=fee.profit_split_pct if fee else None,
+        activation_fee=(fee.activation_fee if fee else 0.0),
         bankroll_ruin_pct=ruin, ruin_cap_pct=float(getattr(cfg, "ev_ruin_cap_pct", getattr(cfg, "risk_of_ruin_cap", 20.0))),
         margin_multiple=float(getattr(cfg, "ev_margin_multiple", 1.5)), margin_points=float(getattr(cfg, "ev_margin_points", 0.05)),
         n_trials=n_trials, n_effective=n_eff, rules_verified=ok_rules, lookahead_ok=lookahead_ok,

@@ -150,6 +150,9 @@ class FullPipelineConfig:
     payout_replay_starts_dev: int = 48
     payout_replay_starts_oos: int = 36
     payout30_min_pct: float = 35.0        # READY needs >= this % of fresh accounts paid within the window
+    # 2026-10-15: READY needs the Wilson lower bound of P(pass AND paid) per purchased attempt >= this %
+    # (the README question). The conditional payout rate per funded account is reported but not gated on.
+    min_per_attempt_paid_pct: float = 35.0
     payout30_min_effective_windows: float = 3.0   # fewer independent windows than this = "not enough evidence" note, no gate
     # -- 2026-10 audit ---------------------------------------------------------------------------
     per_fold_reoptimize: bool = True      # honest OOS headline: fresh optimizer on each fold's TRAIN slice only (median fold test score)
@@ -744,6 +747,9 @@ def _make_verdict_core(
     pbo_gate_result: "PBOGateResult | None" = None,
     primary_robustness_method: str = "walk_forward",
     gates_advisory_only: bool = False,
+    # 2026-10-15: seed-to-seed standard deviation (pct points) of the per-attempt pass rate --
+    # feeds the scorecard's Monte Carlo robustness component (missing when None).
+    mc_dispersion_pts: float | None = None,
 ) -> tuple[str, list[str], "T58ScorecardResult", bool, bool]:
     """Pipeline reorg item #1: the verdict is now a hard safety gate
     (risk of ruin, and -- FIX (audit) -- a confirmed lookahead-bias leak)
@@ -795,6 +801,7 @@ def _make_verdict_core(
             mc_result=final_mc, walk_forward_result=oos_validation, statistics=statistics,
             prop_max_drawdown_pct=getattr(prop_rules, "max_drawdown_pct", None),
             parsimony_result=parsimony, cpcv_supporting_result=cpcv_supporting_result,
+            mc_dispersion_pts=mc_dispersion_pts,
         )
         reasons.append(
             "HARD SAFETY GATE FAILED: the lookahead-bias check detected that this strategy's "
@@ -821,6 +828,7 @@ def _make_verdict_core(
             mc_result=final_mc, statistics=statistics,
             prop_max_drawdown_pct=getattr(prop_rules, "max_drawdown_pct", None),
             parsimony_result=parsimony, cpcv_supporting_result=cpcv_supporting_result,
+            mc_dispersion_pts=mc_dispersion_pts,
         )
         from app.scoring.t58_scorecard import T58ScorecardInputs, compute_t58_score
         inputs = T58ScorecardInputs(**{k: v["value"] for k, v in scorecard.components.items()})
@@ -831,13 +839,15 @@ def _make_verdict_core(
             mc_result=final_mc, walk_forward_result=oos_validation, statistics=statistics,
             prop_max_drawdown_pct=getattr(prop_rules, "max_drawdown_pct", None),
             parsimony_result=parsimony, cpcv_supporting_result=cpcv_supporting_result,
+            mc_dispersion_pts=mc_dispersion_pts,
         )
 
     # -- The one legitimate hard gate ------------------------------------
     if ruin_hard_fail:
         reasons.append(
-            f"HARD SAFETY GATE FAILED: Monte Carlo risk of ruin is {ruin:.1f}%, above the "
-            f"configured cap of {risk_of_ruin_cap:.1f}%. This strategy is NOT READY regardless of "
+            f"HARD SAFETY GATE FAILED: Monte Carlo risk of ruin is {ruin:.1f}% "
+            f"({getattr(final_mc, 'risk_of_ruin_definition', 'share of purchased accounts that breached a firm rule')}), "
+            f"above the configured cap of {risk_of_ruin_cap:.1f}%. This strategy is NOT READY regardless of "
             f"how the rest of the evidence looks -- ruin is the one metric this pipeline treats as "
             f"a genuine pass/fail requirement rather than evidence to weigh (see "
             f"FullPipelineConfig.risk_of_ruin_cap)."
@@ -884,7 +894,14 @@ def _make_verdict_core(
             f"{tag}: {reason}"
         )
 
-    if oos_validation is not None and not oos_validation.is_stable:
+    if oos_validation is not None and not oos_validation.is_stable and getattr(oos_validation, "oos_profitable", None) is False:
+        _record_gate_failure(
+            f"the walk-forward out-of-sample folds LOST money (net ${float(getattr(oos_validation, 'total_test_net_profit', 0.0) or 0.0):,.2f} over "
+            f"{int(getattr(oos_validation, 'total_test_trades', 0) or 0)} trades"
+            + (f", mean fold profit factor {oos_validation.mean_test_profit_factor:.2f}" if getattr(oos_validation, "mean_test_profit_factor", None) is not None else "")
+            + ") -- a strategy that loses equally in and out of sample has no edge to retain, so this is not a pass."
+        )
+    elif oos_validation is not None and not oos_validation.is_stable:
         _record_gate_failure(
             f"the walk-forward check is NOT stable: walk-forward efficiency "
             f"{oos_validation.walk_forward_efficiency:.2f} is below the "
@@ -897,6 +914,11 @@ def _make_verdict_core(
             _record_gate_failure(
                 "CPCV was selected as this run's primary robustness method "
                 "(primary_robustness_method='cpcv') but produced no result -- NOT TESTED."
+            )
+        elif not cpcv_primary_result.is_robust and getattr(cpcv_primary_result, "oos_profitable", None) is False:
+            _record_gate_failure(
+                f"the CPCV out-of-sample paths LOST money (mean net ${float(getattr(cpcv_primary_result, 'mean_oos_net_profit', 0.0) or 0.0):,.2f} per path) -- "
+                f"a strategy that loses equally in and out of sample has no edge to retain, so this is not a pass."
             )
         elif not cpcv_primary_result.is_robust:
             _record_gate_failure(
@@ -1026,6 +1048,25 @@ def _make_verdict_core(
             "regardless of how good its score is. See FullPipelineConfig.min_trades_for_ready."
         )
 
+    # -- 2026-10-15: missing evidence must cap a verdict, never lift it ------------------
+    # compute_t58_score() re-normalizes over the components that were measured. That is fair to
+    # a strategy whose parsimony simply could not be counted, but it also means omitting weak
+    # components RAISES the score. So READY additionally requires the three core survival
+    # components (pass / paid / ruin) to exist and a minimum share of the total scorecard
+    # weight to have been measured.
+    from app.scoring.t58_scorecard import MIN_WEIGHT_COVERAGE_FOR_READY as _MIN_COV
+    if verdict == "READY":
+        _cov = float(getattr(scorecard, "weight_coverage", 1.0))
+        _miss_core = list(getattr(scorecard, "missing_core", []) or [])
+        if _miss_core or _cov < _MIN_COV:
+            verdict = "MARGINAL"
+            reasons.append(
+                "CAPPED AT MARGINAL: the T58 Score alone would have called this READY, but "
+                + (f"core survival component(s) {', '.join(_miss_core)} were not measured" if _miss_core else
+                   f"only {_cov * 100:.0f}% of the scorecard weight was measured (READY needs >= {_MIN_COV * 100:.0f}%)")
+                + " -- missing evidence caps a verdict instead of raising the score."
+            )
+
     # -- D1: holdout gate ------------------------------------------------
     # A holdout that RAN with enough trades to mean something (>=
     # min_holdout_trades_for_gate) and LOST money (net < 0 or profit
@@ -1106,7 +1147,7 @@ _VERDICT_TO_LIBRARY_STATUS = {
     "NOT READY": "tested_failed",
 }
 
-def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 25.0, null_result=None, null_p_max: float = 0.10, cost_stress=None, mc_dispersion_pts=None, payout30=None, payout30_min_pct: float = 35.0, payout30_min_windows: float = 3.0, **kwargs):
+def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 25.0, null_result=None, null_p_max: float = 0.10, cost_stress=None, mc_dispersion_pts=None, payout30=None, payout30_min_pct: float = 35.0, payout30_min_windows: float = 3.0, paid_min_pct: float = 35.0, **kwargs):
     """Accuracy-overhaul wrapper around the original verdict logic.
 
     Adds two honesty gates that can only DEMOTE a READY verdict to MARGINAL
@@ -1121,12 +1162,35 @@ def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 2
         account would actually experience.
     Same return shape as the original.
     """
-    out = _make_verdict_core(*args, **kwargs)
+    out = _make_verdict_core(*args, mc_dispersion_pts=mc_dispersion_pts, **kwargs)
     verdict, reasons, scorecard, ruin_fail, look_fail = out
     final_mc = args[0] if args else kwargs.get("final_mc")
     if verdict != "READY":
         return out
     reasons = list(reasons)
+    # 2026-10-15: ruin is time-bounded (first N calendar days of an attempt). When the source
+    # history is shorter than that window the number is UNDERSTATED, so it cannot support READY.
+    if final_mc is not None and getattr(final_mc, "ruin_horizon_covered", True) is False:
+        reasons.append(
+            f"RUIN WINDOW NOT COVERED: the source history spans only {getattr(final_mc, 'n_source_calendar_days', '?')} calendar day(s), "
+            f"shorter than the {getattr(final_mc, 'ruin_horizon_days', '?')}-day ruin window, so the reported risk of ruin "
+            f"({final_mc.risk_of_ruin_pct:.1f}%) is understated -- capped at MARGINAL until the history covers the window."
+        )
+        return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
+    # 2026-10-15: gate on the PRODUCT P(pass AND paid) per purchased attempt (Wilson lower bound),
+    # not only on the conditional payout rate per funded account. Demote-only like the gates below.
+    _paid_ci = getattr(final_mc, "per_attempt_paid_ci95", None) if final_mc is not None else None
+    if _paid_ci is not None and tuple(_paid_ci) != (0.0, 0.0) and float(_paid_ci[0]) < paid_min_pct:
+        _cond = getattr(final_mc, "per_attempt_payout_probability", None)
+        reasons.append(
+            f"PASS-AND-PAID TOO LOW: the lower bound of P(pass the evaluation AND reach a first payout) per purchased "
+            f"attempt is {float(_paid_ci[0]):.1f}% (point estimate {final_mc.per_attempt_paid_probability:.1f}%; "
+            f"READY needs >= {paid_min_pct:.0f}%)"
+            + (f". The conditional payout rate per FUNDED account is {_cond:.1f}%, which overstates what one purchase buys"
+               if _cond is not None else "")
+            + " -- capped at MARGINAL."
+        )
+        return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
     if final_mc is not None and getattr(final_mc, "sample_ok", True) is False:
         notes = " ".join(getattr(final_mc, "sample_notes", []) or [])
         reasons.append(
@@ -2601,6 +2665,7 @@ def run_full_pipeline(
                 holdout=final_holdout,
                 min_holdout_trades_for_gate=cfg.min_holdout_trades_for_gate,
                 min_per_attempt_pass_pct=cfg.min_per_attempt_pass_pct,
+                paid_min_pct=getattr(cfg, "min_per_attempt_paid_pct", 35.0),
                 dsr_gate_result=dsr_gate_result, pbo_gate_result=pbo_gate_result,
                 primary_robustness_method=cfg.primary_robustness_method,
                 gates_advisory_only=cfg.validation_gates_advisory_only,
@@ -2925,6 +2990,7 @@ def _finish(
                     "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
                     "eval_pass_probability": round(final_mc.headline_evaluation_pass_probability, 1),
                     "first_payout_probability": round(final_mc.headline_first_payout_probability, 1),
+                    "pass_and_paid_probability": round(final_mc.headline_pass_and_paid_probability, 1),
                     "verdict": verdict,
                     "report_html": str(report_paths["html"]),
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
@@ -2975,6 +3041,7 @@ def _finish(
                     "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
                     "eval_pass_probability": round(final_mc.headline_evaluation_pass_probability, 1),
                     "first_payout_probability": round(final_mc.headline_first_payout_probability, 1),
+                    "pass_and_paid_probability": round(final_mc.headline_pass_and_paid_probability, 1),
                     "verdict": verdict,
                     "report_html": str(report_paths["html"]),
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
@@ -3047,6 +3114,7 @@ def _finish(
                     "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
                     "eval_pass_probability": round(final_mc.headline_evaluation_pass_probability, 1),
                     "first_payout_probability": round(final_mc.headline_first_payout_probability, 1),
+                    "pass_and_paid_probability": round(final_mc.headline_pass_and_paid_probability, 1),
                     "verdict": verdict,
                     "report_html": str(report_paths["html"]),
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
@@ -3107,6 +3175,7 @@ def _finish(
                     "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
                     "eval_pass_probability": round(final_mc.headline_evaluation_pass_probability, 1),
                     "first_payout_probability": round(final_mc.headline_first_payout_probability, 1),
+                    "pass_and_paid_probability": round(final_mc.headline_pass_and_paid_probability, 1),
                     "verdict": verdict,
                     "report_html": str(report_paths["html"]),
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
@@ -3580,6 +3649,7 @@ def run_full_pipeline_batch(
                     "max_dd": round(result.final_bt.statistics.max_drawdown_pct, 2),
                     "eval_pass_probability": round(result.final_mc.headline_evaluation_pass_probability, 1),
                     "first_payout_probability": round(result.final_mc.headline_first_payout_probability, 1),
+                    "pass_and_paid_probability": round(result.final_mc.headline_pass_and_paid_probability, 1),
                     "verdict": result.verdict,
                     "report_html": str(result.report_paths["html"]),
                     "first_payout_amount": result.full_history_single_run.first_payout_amount,

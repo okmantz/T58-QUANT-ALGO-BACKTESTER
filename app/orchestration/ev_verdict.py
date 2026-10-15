@@ -3,14 +3,15 @@
 READY asks "is the pass probability above 70%?". That is a confidence statement, not an
 economic one. A challenge fee is a bet, so the question that decides whether to spend it is
 
-        EV per attempt  =  p x q x V  -  c
+        EV per attempt  =  p x q x V  -  p x A  -  c
 
     p  probability ONE fresh attempt passes the evaluation (measured on the CLEAN HOLDOUT)
     q  probability a passed account is then paid (derived: q = r / p, r = P(paid within the window))
     V  what the trader keeps from that payout (profit split x first-payout size)
+    A  one-time activation fee charged on a PASS (0 for most firms; Topstep standard path $149)
     c  cost of the attempt (challenge price from app.prop.presets.FIRM_FEES)
 
-Break-even pass rate is  p* = c / (q x V)  (c=$100, q=0.45, V=$2,500 -> 8.9%).
+Break-even pass rate is  p* = c / (q x V - A)  (c=$100, q=0.45, V=$2,500, A=0 -> 8.9%).
 
 Labels (``EVVerdict.label``):
     HIGH CONFIDENCE       the legacy 70% gate (verdict == "READY") passed and the EV is positive
@@ -32,14 +33,15 @@ NOT_WORTH_A_FEE = "NOT WORTH A FEE"
 INSUFFICIENT_EVIDENCE = "INSUFFICIENT EVIDENCE"
 
 
-def compute_ev(p: float, q: float, v: float, c: float) -> float:
-    """EV per attempt = p*q*V - c (all probabilities as fractions 0..1, money in dollars)."""
-    return float(p) * float(q) * float(v) - float(c)
+def compute_ev(p: float, q: float, v: float, c: float, activation_fee: float = 0.0) -> float:
+    """EV per attempt = p*q*V - p*A - c (all probabilities as fractions 0..1, money in dollars;
+    A = one-time activation fee paid only when the evaluation is passed, default 0)."""
+    return float(p) * float(q) * float(v) - float(p) * float(activation_fee) - float(c)
 
 
-def break_even_pass_rate(c: float, q: float, v: float) -> float | None:
-    """p* = c / (q*V). None when q*V <= 0 (no pass rate can pay for the attempt)."""
-    denom = float(q) * float(v)
+def break_even_pass_rate(c: float, q: float, v: float, activation_fee: float = 0.0) -> float | None:
+    """p* = c / (q*V - A). None when q*V - A <= 0 (no pass rate can pay for the attempt)."""
+    denom = float(q) * float(v) - float(activation_fee)
     if denom <= 0:
         return None
     return float(c) / denom
@@ -112,6 +114,7 @@ def evaluate_ev(
     challenge_price: float | None,
     reset_price: float | None = None,
     profit_split_pct: float | None = None,
+    activation_fee: float = 0.0,
     bankroll_ruin_pct: float | None = None,
     ruin_cap_pct: float = 20.0,
     margin_multiple: float = 1.5,
@@ -156,13 +159,16 @@ def evaluate_ev(
     n_eff = n_effective if (n_effective and n_effective > 0) else 30.0
     p_def = deflate_pass_rate(p, n_trials, n_eff)
     v.p, v.p_deflated, v.q, v.v, v.c = p, p_def, q, net_v, c
-    v.ev = compute_ev(p_def, q, net_v, c)
-    v.break_even_p = break_even_pass_rate(c, q, net_v)
+    a = max(float(activation_fee or 0.0), 0.0)
+    v.ev = compute_ev(p_def, q, net_v, c, a)
+    v.break_even_p = break_even_pass_rate(c, q, net_v, a)
     v.bankroll_ruin_pct, v.ruin_cap_pct = bankroll_ruin_pct, ruin_cap_pct
 
     reasons = v.reasons
     if reset_price is None:
         reasons.append("Reset price unknown -> the challenge price is used for re-buys as well.")
+    if a > 0:
+        reasons.append(f"Activation fee ${a:,.0f} is charged on every pass (EV = p x q x V - p x ${a:,.0f} - c).")
     if n_trials > 1:
         reasons.append(
             f"Pass rate deflated from {p * 100:.1f}% to {p_def * 100:.1f}% for {n_trials} configurations tried "
@@ -170,7 +176,11 @@ def evaluate_ev(
         )
     if v.break_even_p is None:
         v.label = NOT_WORTH_A_FEE
-        reasons.append("q x V is zero: no pass rate pays for the fee.")
+        reasons.append(
+            "q x V does not cover the activation fee"
+            + (f" (${a:,.0f})" if a > 0 else "")
+            + ": no pass rate pays for the fee."
+        )
         return v
     need = max(v.break_even_p * margin_multiple, v.break_even_p + margin_points)
     v.margin_required = need

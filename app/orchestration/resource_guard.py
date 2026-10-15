@@ -81,8 +81,21 @@ _MAX_MEMORY_FRACTION = 0.5
 
 # Per-worker overhead multiplier on top of the raw DataFrame size --
 # indicator columns, intermediate arrays, and the backtest engine's
-# own bookkeeping cost roughly this much again per worker in practice.
-_WORKER_OVERHEAD_MULTIPLIER = 1.6
+# own bookkeeping cost.
+#
+# 2026-10-15 review fix: this used to be 1.6x the frame with no fixed term,
+# which UNDER-counted a real worker. Measured on a 2.16M-row 1-minute NQ
+# frame (123 MB): a worker also carries ~110-135 MB of interpreter + imported
+# modules (numpy/pandas/the app's own packages), unpickles its own full copy
+# of the data, and builds indicator/resampled copies on top. The review's
+# working budget is therefore ~150 MB base + ~3x the frame per worker.
+_WORKER_OVERHEAD_MULTIPLIER = 3.0
+_WORKER_BASE_BYTES = 150 * 1024 ** 2
+
+# Memory watchdog floor: when free RAM falls under this fraction of total
+# RAM, long-running loops should stop launching new heavy work (see
+# memory_pressure_ok / shrink_pool_for_memory_pressure below).
+_MIN_FREE_MEMORY_FRACTION = 0.15
 
 
 def _available_memory_bytes() -> int:
@@ -151,11 +164,47 @@ def safe_worker_count_for_bytes(
     if one_worker_payload_bytes <= 0:
         return cpu_cap
 
-    one_copy_bytes = float(one_worker_payload_bytes) * _WORKER_OVERHEAD_MULTIPLIER
+    # Per-worker cost = fixed interpreter/module base + a multiple of the data it holds.
+    one_copy_bytes = _WORKER_BASE_BYTES + float(one_worker_payload_bytes) * _WORKER_OVERHEAD_MULTIPLIER
     budget = _available_memory_bytes() * _MAX_MEMORY_FRACTION
     memory_cap = max(1, int(budget // one_copy_bytes))
 
-    return max(1, min(cpu_cap, memory_cap))
+    # Watchdog: when free RAM is already under the floor, size the pool down
+    # again rather than adding load to a machine that is about to thrash.
+    return shrink_pool_for_memory_pressure(max(1, min(cpu_cap, memory_cap)))
+
+
+def _total_memory_bytes() -> int:
+    if _HAS_PSUTIL:
+        try:
+            return int(psutil.virtual_memory().total)
+        except Exception:
+            pass
+    return 0
+
+
+def memory_pressure_ok(min_free_fraction: float = _MIN_FREE_MEMORY_FRACTION) -> bool:
+    """Low-memory watchdog check: True while free RAM is at or above
+    `min_free_fraction` of total RAM. Returns True (assume fine) when psutil
+    is unavailable, because with no way to measure there is nothing to act on.
+    Callers that loop over heavy work (worker-pool dispatch, null-model seeds,
+    GA generations) should call this between units of work and stop
+    submitting new work -- or shrink their pool -- when it returns False,
+    instead of letting the OS freeze the desktop."""
+    total = _total_memory_bytes()
+    if total <= 0:
+        return True
+    return _available_memory_bytes() >= total * float(min_free_fraction)
+
+
+def shrink_pool_for_memory_pressure(current_workers: int, min_free_fraction: float = _MIN_FREE_MEMORY_FRACTION) -> int:
+    """Watchdog helper: returns `current_workers` unchanged while memory is
+    healthy, and half of it (never below 1) when free RAM is under the floor.
+    Use it to size the NEXT batch of work, not to kill workers already running."""
+    n = max(1, int(current_workers))
+    if memory_pressure_ok(min_free_fraction):
+        return n
+    return max(1, n // 2)
 
 
 class HeavyJobGuard:
