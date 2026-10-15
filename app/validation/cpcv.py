@@ -110,6 +110,13 @@ class CPCVPathResult:
     test_bars: int
     in_sample_metric: float
     out_of_sample_metric: float
+    # 2026-10-15 (audit item 10): absolute out-of-sample P&L facts, independent of the chosen metric.
+    oos_net_profit: float = 0.0
+    oos_trades: int = 0
+
+
+# Minimum pooled out-of-sample trades (summed over paths) before "did it make money OOS" can convict.
+MIN_OOS_TRADES_FOR_PROFIT_CHECK = 10
 
 
 @dataclass
@@ -128,6 +135,10 @@ class CPCVResult:
     degradation: float  # mean_is_metric - mean_oos_metric
     is_robust: bool
     robustness_threshold: float
+    # True/False once the out-of-sample paths had enough trades to judge whether the strategy made
+    # money out of sample; None = too few trades to say (unproven, never a failure).
+    oos_profitable: bool | None = None
+    mean_oos_net_profit: float | None = None
 
     def to_dict(self) -> dict:
         d = {k: v for k, v in self.__dict__.items() if k != "paths"}
@@ -164,6 +175,9 @@ def _cpcv_one_path(path_idx, test_groups, df, bounds, embargo, strategy_builder,
     test_bt = run_backtest(test_df, strategy_builder(), risk)
     is_val = _metric_value(train_bt.statistics.to_dict(), metric, train_bt.trades, prop_rules, mc_cfg)
     oos_val = _metric_value(test_bt.statistics.to_dict(), metric, test_bt.trades, prop_rules, mc_cfg)
+    _oos_stats = test_bt.statistics.to_dict()
+    _np = _oos_stats.get("net_profit")
+    _nt = _oos_stats.get("total_trades")
     return CPCVPathResult(
         path_index=path_idx,
         test_group_indices=tuple(test_groups),
@@ -171,6 +185,8 @@ def _cpcv_one_path(path_idx, test_groups, df, bounds, embargo, strategy_builder,
         test_bars=len(test_df),
         in_sample_metric=is_val,
         out_of_sample_metric=oos_val,
+        oos_net_profit=float(_np) if isinstance(_np, (int, float)) and math.isfinite(_np) else 0.0,
+        oos_trades=int(_nt) if isinstance(_nt, (int, float)) and math.isfinite(_nt) else 0,
     )
 
 
@@ -312,6 +328,17 @@ def run_cpcv(
     mean_oos = float(oos_vals.mean())
     mean_is = float(is_vals.mean())
 
+    _total_oos_trades = int(sum(p.oos_trades for p in paths))
+    _mean_oos_net = float(np.mean([p.oos_net_profit for p in paths]))
+    _oos_profitable = (_mean_oos_net > 0) if _total_oos_trades >= MIN_OOS_TRADES_FOR_PROFIT_CHECK else None
+    # 2026-10-15 (audit item 10): with mean_is <= 0 the old rule was "robust iff mean_oos >= 0", and
+    # with a ratio metric like profit factor (always >= 0) that is true even for a strategy that loses
+    # money in and out of sample. Robust now also requires the out-of-sample paths to have MADE money
+    # whenever there are enough trades to tell.
+    _robust = (mean_oos >= robustness_threshold * mean_is) if mean_is > 0 else (mean_oos >= 0)
+    if _oos_profitable is False:
+        _robust = False
+
     return CPCVResult(
         metric=metric,
         n_groups=n_groups,
@@ -325,8 +352,10 @@ def run_cpcv(
         pct_paths_oos_below_is=float((oos_vals < is_vals).mean() * 100),
         mean_is_metric=mean_is,
         degradation=mean_is - mean_oos,
-        is_robust=(mean_oos >= robustness_threshold * mean_is) if mean_is > 0 else (mean_oos >= 0),
+        is_robust=_robust,
         robustness_threshold=robustness_threshold,
+        oos_profitable=_oos_profitable,
+        mean_oos_net_profit=_mean_oos_net if _total_oos_trades else None,
     )
 
 
