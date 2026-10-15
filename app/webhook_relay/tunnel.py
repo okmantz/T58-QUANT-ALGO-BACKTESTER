@@ -12,6 +12,13 @@ themselves. The only prerequisite is the free ``cloudflared`` program being inst
 says how on this operating system). Nothing here is required: ngrok / Tailscale Funnel still work by pasting
 their address into the page.
 
+No cloudflared? There is a no-install fallback: ``ssh`` (already part of Windows 10+, macOS and Linux) can open a
+free tunnel through localhost.run with nothing to download::
+
+    ssh -R 80:127.0.0.1:<port> nokey@localhost.run
+
+``start(..., provider="auto")`` uses cloudflared when it is installed and ssh otherwise.
+
 The address changes every time the tunnel is started (that is how quick tunnels work), so after a restart the
 person needs to start it again and then paste the NEW webhook URL into the TradingView alert.
 """
@@ -26,13 +33,16 @@ import threading
 from collections import deque
 from typing import Callable, Optional
 
-_URL_RE = re.compile(r"https://[a-z0-9][a-z0-9-]*\.trycloudflare\.com", re.IGNORECASE)
+_URL_RE = re.compile(r"https://[a-z0-9][a-z0-9-]*\.(?:trycloudflare\.com|lhr\.life|localhost\.run)", re.IGNORECASE)
+_SSH_HOST = "nokey@localhost.run"
+_LABELS = {"cloudflared": "cloudflared", "ssh": "ssh (localhost.run)"}
 
 _LOCK = threading.RLock()
 _PROC: Optional[subprocess.Popen] = None
 _STATE = "stopped"          # stopped | starting | running | error
 _URL = ""
 _ERROR = ""
+_PROVIDER = ""
 _LOG: deque = deque(maxlen=40)
 
 
@@ -42,6 +52,22 @@ class TunnelError(RuntimeError):
 
 def find_binary() -> Optional[str]:
     return shutil.which("cloudflared") or shutil.which("cloudflared.exe")
+
+
+def find_ssh() -> Optional[str]:
+    return shutil.which("ssh") or shutil.which("ssh.exe")
+
+
+def pick_provider(preferred: str = "auto") -> Optional[str]:
+    """"cloudflared" or "ssh" (whichever is usable), or None when neither is."""
+    preferred = (preferred or "auto").lower()
+    if preferred == "cloudflared":
+        return "cloudflared" if find_binary() else None
+    if preferred == "ssh":
+        return "ssh" if find_ssh() else None
+    if find_binary():
+        return "cloudflared"
+    return "ssh" if find_ssh() else None
 
 
 def install_hint() -> str:
@@ -60,7 +86,8 @@ def status() -> dict:
         if state in ("starting", "running") and not running:
             state = "stopped" if state == "running" else "error"
         return {
-            "available": find_binary() is not None, "install_hint": install_hint(),
+            "available": pick_provider() is not None, "cloudflared_available": find_binary() is not None,
+            "ssh_available": find_ssh() is not None, "provider": _PROVIDER, "install_hint": install_hint(),
             "state": state, "url": _URL if state == "running" else "", "error": _ERROR, "log": list(_LOG)[-8:],
         }
 
@@ -90,32 +117,41 @@ def _reader(proc: subprocess.Popen, on_url: Callable[[str], None]) -> None:
         with _LOCK:
             if proc is _PROC and _STATE != "stopped":
                 if _STATE == "starting":
-                    _STATE, _ERROR = "error", _ERROR or "cloudflared exited before it printed a public address."
+                    _STATE, _ERROR = "error", _ERROR or f"{_LABELS.get(_PROVIDER, 'The tunnel')} exited before it printed a public address."
                 else:
                     _STATE = "stopped"
 
 
-def start(port: int, on_url: Callable[[str], None]) -> dict:
-    """Start a quick tunnel to ``http://127.0.0.1:<port>``. Returns ``status()`` immediately; the address shows
-    up in a few seconds (poll ``status()``)."""
-    global _PROC, _STATE, _URL, _ERROR
-    binary = find_binary()
-    if binary is None:
-        raise TunnelError("cloudflared is not installed. " + install_hint())
+def start(port: int, on_url: Callable[[str], None], provider: str = "auto") -> dict:
+    """Start a tunnel to ``http://127.0.0.1:<port>``. Returns ``status()`` immediately; the address shows
+    up in a few seconds (poll ``status()``). ``provider``: "auto" (cloudflared if installed, else ssh),
+    "cloudflared" or "ssh"."""
+    global _PROC, _STATE, _URL, _ERROR, _PROVIDER
+    chosen = pick_provider(provider)
+    if chosen is None:
+        if (provider or "auto").lower() == "ssh":
+            raise TunnelError("ssh was not found on this computer. Windows 10+, macOS and Linux normally include it; "
+                              "on Windows turn on 'OpenSSH Client' under Settings > Optional features.")
+        raise TunnelError("Neither cloudflared nor ssh was found. " + install_hint())
+    port = int(port)
+    if chosen == "ssh":
+        cmd = [find_ssh(), "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
+               "-o", "ServerAliveInterval=30", "-o", "ExitOnForwardFailure=yes",
+               "-R", f"80:127.0.0.1:{port}", _SSH_HOST]
+    else:
+        cmd = [find_binary(), "tunnel", "--url", f"http://127.0.0.1:{port}", "--no-autoupdate"]
     with _LOCK:
         if _PROC is not None and _PROC.poll() is None:
             return status()
-        _STATE, _URL, _ERROR = "starting", "", ""
+        _STATE, _URL, _ERROR, _PROVIDER = "starting", "", "", chosen
         _LOG.clear()
     try:
-        proc = subprocess.Popen(
-            [binary, "tunnel", "--url", f"http://127.0.0.1:{int(port)}", "--no-autoupdate"],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True, bufsize=1,
-        )
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                text=True, bufsize=1)
     except OSError as exc:
         with _LOCK:
             _STATE, _ERROR = "error", str(exc)
-        raise TunnelError(f"Could not start cloudflared: {exc}") from exc
+        raise TunnelError(f"Could not start {_LABELS[chosen]}: {exc}") from exc
     with _LOCK:
         _PROC = proc
     threading.Thread(target=_reader, args=(proc, on_url), daemon=True, name="t58-tunnel-reader").start()
