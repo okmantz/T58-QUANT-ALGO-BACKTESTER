@@ -198,6 +198,21 @@ def check_score(check: str, summary: Optional[dict]) -> Optional[float]:
     if check == "robustness":
         return f("parameter_robustness_score")
     if check == "regime":
+        # How much the flagged regimes lose in total (closer to zero = better). The plain COUNT of flagged
+        # cells is a poor yardstick on its own: blocking one regime lets other trades fill the gap, which can
+        # surface a new borderline cell even though the strategy as a whole got better.
+        cells = s.get("disable_cells")
+        if isinstance(cells, list):
+            losses = []
+            for c in cells:
+                try:
+                    v = float(c.get("net_profit"))
+                except (AttributeError, TypeError, ValueError):
+                    continue
+                if math.isfinite(v):
+                    losses.append(min(v, 0.0))
+            if losses or not f("n_disable_recommended"):
+                return sum(losses)
         v = f("n_disable_recommended")
         return None if v is None else -v
     if check == "pbo":
@@ -369,9 +384,15 @@ def fix_regime(
     current, bt = strategy, base_bt
     excluded: list[dict] = []
     labels_excluded: list[str] = []
+    skipped: list[dict] = []            # flagged cells whose removal did not help the discovery window
     final_text, final_ext = strategy_source(strategy)
+    best: Optional[dict] = None         # best prefix of the greedy chain that also passes on the UNSEEN window
+    last_reasons: list[str] = []
+    last_verifiable = True
 
-    for i in range(max_cells):
+    attempts = 0
+    while len(excluded) < max_cells and attempts < max_cells * 4:
+        attempts += 1
         if _stopped():
             break
         train, _hold = _split_trades(bt.trades, split_ts)
@@ -380,7 +401,7 @@ def fix_regime(
         if matrix is None:
             return StageResult("regime", label, False, False,
                                "Not enough valid bars to classify regimes reliably.", [], details)
-        flagged = [c for c in matrix.disable_regimes() if c.dims not in excluded]
+        flagged = [c for c in matrix.disable_regimes() if c.dims not in excluded and c.dims not in skipped]
         if not flagged:
             break
         worst = min(flagged, key=lambda c: c.net_profit)
@@ -388,54 +409,76 @@ def fix_regime(
         trial_bt = run_backtest(df, trial, rc)
         t_train, t_hold = _split_trades(trial_bt.trades, split_ts)
         before_tr, after_tr = window_metrics(train), window_metrics(t_train)
+        hold_m = window_metrics(t_hold)
         step = {
-            "round": i + 1, "excluded_cell": worst.label, "dims": dict(worst.dims),
+            "round": len(details["steps"]) + 1, "excluded_cell": worst.label, "dims": dict(worst.dims),
             "cell_trades": worst.n_trades, "cell_profit_factor": worst.profit_factor, "cell_net_profit": worst.net_profit,
             "train_net_before": before_tr["net_profit"], "train_net_after": after_tr["net_profit"],
             "train_pf_before": before_tr["profit_factor"], "train_pf_after": after_tr["profit_factor"],
-            "holdout_net_after": window_metrics(t_hold)["net_profit"],
-            "holdout_pf_after": window_metrics(t_hold)["profit_factor"],
+            "holdout_net_after": hold_m["net_profit"],
+            "holdout_pf_after": hold_m["profit_factor"],
             "holdout_trades_after": len(t_hold),
         }
         if after_tr["net_profit"] <= before_tr["net_profit"]:
+            # This cell loses on paper but removing it does not help (the trades it blocks are replaced by
+            # others). Leave it and try the next-worst cell instead of giving up on the whole repair.
             step["adopted"] = False
             step["note"] = "Skipping this regime: removing it did not improve the discovery window."
             details["steps"].append(step)
-            break
+            skipped.append(dict(worst.dims))
+            if excluded:
+                break          # already have a filter: stop adding regimes once one stops helping
+            continue           # nothing adopted yet: try the next-worst regime instead of giving up
         step["adopted"] = True
-        details["steps"].append(step)
         current, bt = trial, trial_bt
         excluded.append(dict(worst.dims))
         labels_excluded.append(worst.label)
         final_text, final_ext = text, ext
+        # Judge THIS prefix of the chain on the unseen window right away, so a late cell that overfits
+        # cannot sink earlier cells that genuinely held up.
+        verifiable, why = regime_holdout_verdict(
+            base_hold, hold_m, holdout_frac=holdout_frac, min_holdout_trades=min_holdout_trades,
+            min_keep_frac=min_holdout_keep_frac)
+        step["holdout_ok"] = bool(verifiable and not why)
+        details["steps"].append(step)
+        last_reasons, last_verifiable = why, verifiable
+        if verifiable and not why:        # latest prefix that still holds up on unseen data
+            best = {"strategy": current, "text": text, "ext": ext, "excluded": list(excluded),
+                    "labels": list(labels_excluded), "train": after_tr, "hold": hold_m}
         if event_cb:
-            event_cb("regime_round", round=i + 1, cell=worst.label)
+            event_cb("regime_round", round=len(excluded), cell=worst.label)
 
     if not excluded:
         why = ["No market regime had enough trades AND a losing profit factor in the first "
                f"{round((1 - holdout_frac) * 100)}% of the data, so there is nothing reliable to filter."]
+        if skipped:
+            why = ["Some regimes looked like losers in the first "
+                   f"{round((1 - holdout_frac) * 100)}% of the data, but removing them did not improve results there "
+                   "(the trades they block are replaced by other trades), so there is nothing reliable to filter."]
         if base_hold["trades"] and base_hold["net_profit"] < 0:
             why.append("The weakness shows up in the most recent part of the data, which is exactly the part held back "
                        "for verification -- a regime filter chosen earlier cannot be justified from it.")
         return StageResult("regime", label, True, False, "No regime filter that can be justified from the data.", why, details)
 
+    if best is not None:
+        details.update({"excluded_cells": best["excluded"], "excluded_labels": best["labels"],
+                        "after_train": best["train"], "after_holdout": best["hold"],
+                        "rounds_tried": len(excluded), "rounds_kept": len(best["excluded"])})
+        dropped = len(excluded) - len(best["excluded"])
+        headline = (f"Filter keeps the strategy out of {len(best['excluded'])} regime(s): {', '.join(best['labels'])}. "
+                    f"On unseen data: profit factor {base_hold['profit_factor']:.2f} -> {best['hold']['profit_factor']:.2f}, "
+                    f"net {base_hold['net_profit']:,.2f} -> {best['hold']['net_profit']:,.2f}.")
+        if dropped:
+            headline += f" ({dropped} further regime(s) were tried and dropped because they did not hold up on unseen data.)"
+        return StageResult("regime", label, True, True, headline, [], details, best["strategy"], best["text"], best["ext"])
+
     train_f, hold_f = _split_trades(bt.trades, split_ts)
     after_train, after_hold = window_metrics(train_f), window_metrics(hold_f)
     details.update({"excluded_cells": excluded, "excluded_labels": labels_excluded,
                     "after_train": after_train, "after_holdout": after_hold})
-
-    verifiable, reasons = regime_holdout_verdict(
-        base_hold, after_hold, holdout_frac=holdout_frac, min_holdout_trades=min_holdout_trades,
-        min_keep_frac=min_holdout_keep_frac)
-    accepted = verifiable and not reasons
-    if accepted:
-        headline = (f"Filter keeps the strategy out of {len(excluded)} regime(s): {', '.join(labels_excluded)}. "
-                    f"On unseen data: profit factor {base_hold['profit_factor']:.2f} -> {after_hold['profit_factor']:.2f}, "
-                    f"net {base_hold['net_profit']:,.2f} -> {after_hold['net_profit']:,.2f}.")
-        return StageResult("regime", label, True, True, headline, [], details, current, final_text, final_ext)
     return StageResult("regime", label, True, False,
                        "The regime filter found on the first part of the data did not hold up on the unseen part, so it was not kept.",
-                       reasons, details)
+                       last_reasons, details)
 
 
 # ---------------------------------------------------------------------------
@@ -618,6 +661,13 @@ def run_auto_fix(
 
     before_raw = dict(before_raw or {})
     after_raw = {r["check"]: r.get("summary") for r in after_results}
+    regime_proof = None
+    for st_ in stages:
+        if st_.stage == "regime" and st_.accepted:
+            bh, ah = st_.details.get("before_holdout") or {}, st_.details.get("after_holdout") or {}
+            if bh and ah:
+                regime_proof = (f"on the unseen last 30% of the data, profit factor {bh.get('profit_factor', 0):.2f} -> "
+                                f"{ah.get('profit_factor', 0):.2f} and net {bh.get('net_profit', 0):,.0f} -> {ah.get('net_profit', 0):,.0f}")
     newly_passing, improved, regressions, still_failing = [], [], [], []
     for r in after:
         c = r["check"]
@@ -634,6 +684,12 @@ def run_auto_fix(
         elif c in failed_checks and _score_improved(check_score(c, before_raw.get(c)), check_score(c, after_raw.get(c))):
             # same pass/fail band, but the number the check is built on moved the right way
             improved.append({**r, "was": b, "progress": "moved the right way inside the same band"})
+        elif (c in failed_checks and a_rank == b_rank and regime_proof is not None
+              and simple_report.FIX_KIND_BY_CHECK.get(c) == "regime"):
+            # The regime filter was chosen on the first 70% of the data and then PROVED better on the last 30%
+            # it never saw. The re-run check recounts losing cells on the whole history (where the filter was
+            # fitted), so the count can sit still even though the strategy genuinely improved out of sample.
+            improved.append({**r, "was": b, "progress": regime_proof})
     # a check that was flagged before and produced no result now is a gap, not a pass
     for c in failed_checks:
         if c not in after_status:

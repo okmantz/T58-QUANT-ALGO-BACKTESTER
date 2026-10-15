@@ -73,10 +73,13 @@ def safe_report_id(report_id: str) -> Optional[str]:
     return rid if _REPORT_ID_RE.match(rid) and ".." not in rid else None
 
 
-def new_report_id(strategy_name: str, when: Optional[float] = None) -> str:
-    stem = re.sub(r"[^A-Za-z0-9]+", "-", str(strategy_name or "strategy")).strip("-")[:48] or "strategy"
-    stamp = datetime.fromtimestamp(when if when is not None else time.time()).strftime("%Y%m%d-%H%M%S")
-    return f"{stamp}_{stem}"
+def new_report_id(strategy_name: str, when: Optional[float] = None, test: str = "Validation") -> str:
+    """``<Strategy>__<Test>__<YYYYmmdd-HHMMSS>`` -- the saved report's file title says WHICH strategy was
+    tested and WHAT test it was (see app.reports.naming). Reports saved under the older
+    ``<timestamp>_<strategy>`` ids keep loading: ids are only ever looked up by exact name."""
+    from app.reports.naming import report_stem
+
+    return report_stem(strategy_name or "strategy", test, when=when)
 
 
 def sanitize_form(form: Any) -> dict:
@@ -104,7 +107,7 @@ def build_report_document(
     report: dict, *, raw: Optional[dict] = None, baseline: Optional[dict] = None,
     meta: Optional[dict] = None, form: Optional[Any] = None, requested_checks: Optional[list] = None,
     simulation_text: str = "", report_id: Optional[str] = None, generated_at: Optional[float] = None,
-    auto_fix: Optional[dict] = None,
+    auto_fix: Optional[dict] = None, test_label: str = "Validation",
 ) -> dict:
     """The complete, JSON-safe record of one Validate run.
 
@@ -117,7 +120,8 @@ def build_report_document(
     raw = raw or {}
     meta = dict(meta or {})
     ts = generated_at if generated_at is not None else time.time()
-    rid = safe_report_id(report_id or "") or new_report_id(meta.get("strategy") or report.get("strategy") or "strategy", ts)
+    rid = safe_report_id(report_id or "") or new_report_id(
+        meta.get("strategy") or report.get("strategy") or "strategy", ts, test=test_label)
     snapshot = sanitize_form(form) if form is not None else {}
 
     checks: list[dict] = []
@@ -145,6 +149,7 @@ def build_report_document(
     doc = {
         "schema": SCHEMA,
         "report_id": rid,
+        "test": test_label,
         "generated_at": datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(),
         "strategy": {
             "name": meta.get("strategy") or report.get("strategy") or "",
@@ -231,6 +236,11 @@ def _render_value(v: Any, depth: int = 0) -> str:
             return f"<table><tr>{head}</tr>{body}</table>"
         return ", ".join(_fmt(x) for x in v)
     return _fmt(v)
+
+
+def _test_title(doc: dict) -> str:
+    """Human wording for the test that produced this report ("Validation", "Validation Auto-Fix", ...)."""
+    return str(doc.get("test") or "Validation").replace("-", " ")
 
 
 def _render_autofix_html(af: Optional[dict]) -> str:
@@ -328,9 +338,10 @@ def render_html(doc: dict) -> str:
     count_line = " · ".join(f"{counts.get(k, 0)} {w}" for k, w in (("pass", "passed"), ("caution", "borderline"), ("fail", "failed"), ("error", "did not run")))
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Validation report — {_e(st.get("name"))}</title><style>{_CSS}</style></head>
+<title>{_e(st.get("name") or "strategy")} — {_e(_test_title(doc))} report</title><style>{_CSS}</style></head>
 <body><div class="wrap">
-<h1>Validation report — {_e(st.get("name") or "strategy")}</h1>
+<h1>{_e(st.get("name") or "strategy")} — {_e(_test_title(doc))} report</h1>
+<div class="sub"><b>Strategy tested:</b> {_e(st.get("name") or "strategy")} · <b>Test:</b> {_e(_test_title(doc))}</div>
 <div class="sub">T58 Quant Algo Backtester · generated {_e(doc.get("generated_at"))} · report id {_e(doc.get("report_id"))}</div>
 <div class="card overall"><b>{_e(ov.get("label"))}</b> — {_e(ov.get("summary"))}<div class="small" style="margin-top:4px">{_e(count_line)}</div>
 {('<div style="margin-top:8px"><b>Next step:</b> ' + _e(nx.get("title")) + ' — ' + _e(nx.get("why")) + '</div>') if nx.get("title") else ''}{missing}</div>
@@ -350,7 +361,8 @@ def render_text(doc: dict) -> str:
     ov = doc.get("overall") or {}
     lines = [
         "=" * 70,
-        f"VALIDATION REPORT -- {st.get('name') or 'strategy'}",
+        f"{_test_title(doc).upper()} REPORT -- {st.get('name') or 'strategy'}",
+        f"Strategy tested: {st.get('name') or 'strategy'}   Test: {_test_title(doc)}",
         f"{ov.get('label', '')}: {ov.get('summary', '')}",
         f"Generated {doc.get('generated_at')}   (id {doc.get('report_id')})",
         f"Dataset: {doc.get('dataset')}   Timeframe: {doc.get('timeframe')}   Prop preset: {doc.get('prop_preset') or '(typed rules)'}",
