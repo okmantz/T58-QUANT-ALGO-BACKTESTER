@@ -575,6 +575,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   </div>
 </div>
 <div class="content">
+{strategy_banner}
 {sizing_halt_banner}
 <p class="meta">Generated {generated_at} &middot; Strategy: <b>{strategy_name}</b> ({source_type}) &middot;
 Instrument: {instrument} &middot; Timeframe: {timeframe} &middot; Period: {period_start} → {period_end}</p>
@@ -1198,6 +1199,26 @@ def _mc_ci_note(mch: dict, which: str) -> str:
     return " · ".join(parts)
 
 
+def _strategy_banner(report: dict) -> str:
+    """A prominent "which strategy, which test" line at the top of the report, so a saved or shared report
+    always says WHAT was tested even when the file has been renamed or opened out of context."""
+    import html as _html
+
+    tested = str(report.get("tested_strategy") or (report.get("strategy") or {}).get("name") or "").strip()
+    if not tested:
+        return ""
+    test = str(report.get("test_label") or "").strip()
+    inst = str((report.get("strategy") or {}).get("instrument") or "").strip()
+    bits = [f'Strategy tested: <b style="font-size:17px;">{_html.escape(tested)}</b>']
+    if test:
+        bits.append(f"Test: <b>{_html.escape(test)}</b>")
+    if inst:
+        bits.append(f"Market: {_html.escape(inst)}")
+    return ('<div style="margin:0 0 14px;padding:12px 16px;border:1px solid #2f6fed;border-left-width:5px;'
+            'border-radius:8px;background:rgba(47,111,237,.08);font-size:14px;">'
+            + " &nbsp;&middot;&nbsp; ".join(bits) + "</div>")
+
+
 def export_html(
     report: dict,
     path: str | Path,
@@ -1270,6 +1291,7 @@ def export_html(
 
     html = _HTML_TEMPLATE.format(
         logo_base64=T58_LOGO_BASE64,
+        strategy_banner=_strategy_banner(report),
         strategy_name=report["strategy"]["name"],
         source_type=report["strategy"]["source_type"],
         instrument=report["strategy"]["instrument"],
@@ -1371,6 +1393,8 @@ def generate_full_report(
     verdict_reasons: list[str] | None = None,
     final_parameters: dict[str, str] | None = None,
     baseline_parameters: dict[str, str] | None = None,
+    test_label: str = "",
+    tested_strategy_name: str = "",
 ) -> dict[str, Path]:
     """Builds the report dict and writes JSON + summary CSV + trades CSV + HTML to output_dir.
 
@@ -1392,6 +1416,12 @@ def generate_full_report(
         verdict=verdict, verdict_reasons=verdict_reasons, final_parameters=final_parameters,
         baseline_parameters=baseline_parameters,
     )
+    # Which strategy and which test this report is for (shown in a banner at the top of the HTML and kept
+    # in the JSON). ``tested_strategy`` is the plain name of the strategy the person picked; ``strategy.name``
+    # may carry run decorations such as "(Full Pipeline, GA-modified parameters ...)".
+    report["tested_strategy"] = tested_strategy_name or strategy_name
+    if test_label:
+        report["test_label"] = test_label
     output_dir = Path(output_dir)
     paths = {
         "json": export_json(report, output_dir / f"{basename}.json"),
