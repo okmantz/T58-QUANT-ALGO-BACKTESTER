@@ -3,7 +3,9 @@
     python scripts/build_data_manifest.py            # scan data/raw, write data/data_manifest.json
     python scripts/build_data_manifest.py --from-coverage-doc   # just re-parse docs/DATA_COVERAGE.md
 
-Flags written per file: SYNTHETIC (file name contains SYNTHETIC/FAKE), <2y history, UNREADABLE.
+Flags written per file: SYNTHETIC (file name contains SYNTHETIC/FAKE), <2y history, UNREADABLE,
+UNADJUSTED ROLL GAPS (futures-style files that still carry contract-roll jumps -- re-import them back-adjusted
+with app.data.continuous_contract.back_adjust_continuous).
 The pipeline's data gate (app.data.data_manifest.check_dataset) refuses READY on synthetic data or on
 less than 5 years of history, using this manifest plus the actual span of the loaded frame.
 """
@@ -19,7 +21,9 @@ sys.path.insert(0, str(ROOT))
 
 import pandas as pd  # noqa: E402
 
-from app.data.data_manifest import MIN_YEARS_FOR_READY, manifest_from_coverage_markdown  # noqa: E402
+from app.data.data_manifest import (  # noqa: E402
+    MIN_ROLL_EVENTS_TO_FLAG, MIN_YEARS_FOR_READY, looks_like_futures, manifest_from_coverage_markdown, roll_gap_counts,
+)
 
 
 def _scan_file(p: Path, raw: Path) -> dict:
@@ -45,6 +49,16 @@ def _scan_file(p: Path, raw: Path) -> dict:
             flags.append("<2y history")
         if row["years"] < MIN_YEARS_FOR_READY:
             flags.append(f"<{MIN_YEARS_FOR_READY:g}y (not READY-eligible)")
+        if looks_like_futures(rel) or looks_like_futures(p.parent.name):
+            frame = pd.DataFrame({
+                "timestamp": pd.to_datetime(df[tcol], errors="coerce", utc=True),
+                **{c: pd.to_numeric(df[cols[c]], errors="coerce") for c in ("open", "high", "low", "close") if c in cols},
+            }).dropna().reset_index(drop=True)
+            counts = roll_gap_counts(frame)
+            if counts is not None:
+                row["roll_gaps"] = f"{counts[0]} splice(s), {counts[1]} interleaved flip(s)"
+                if counts[0] + counts[1] >= MIN_ROLL_EVENTS_TO_FLAG:
+                    flags.append("UNADJUSTED ROLL GAPS")
     except Exception as exc:  # noqa: BLE001
         flags.append("UNREADABLE")
         row["error"] = f"{type(exc).__name__}: {exc}"[:200]
