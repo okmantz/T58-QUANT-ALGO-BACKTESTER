@@ -89,6 +89,21 @@ class MonteCarloConfig:
     # per-attempt number. Per-attempt results (what one challenge fee buys) are the default;
     # pass reset_on_breach=True explicitly for chain / bankroll studies.
     reset_on_breach: bool = False
+    # 2026-10-15 review (time-bounded ruin): the headline risk_of_ruin_pct now counts
+    # only account deaths that happen within this many CALENDAR days of an attempt's
+    # start (default 90 ~ a typical evaluation + first-payout window). The old
+    # definition counted ANY breach across the whole replayed history, so the same
+    # strategy scored a longer backtest as far riskier (18.5% ruin on 80 trades,
+    # 59.3% on 157) purely because accounts had more time to bust. 90- and 180-day
+    # ruin, ruin before first payout, and funded-account bust are always reported
+    # alongside (see MonteCarloResult); lifetime-in-sample ruin stays available as
+    # per_attempt_bust_probability.
+    ruin_horizon_days: int = 90
+
+
+# Fixed reporting windows for time-bounded ruin (calendar days).
+RUIN_WINDOW_SHORT_DAYS = 90
+RUIN_WINDOW_LONG_DAYS = 180
 
 
 def default_method_for_adaptive_risk(adaptive_risk) -> str:
@@ -246,6 +261,24 @@ class MonteCarloResult:
     n_source_trades: int = 0
     n_source_days: int = 0
 
+    # -- 2026-10-15 review: time-bounded ruin + the pass-AND-paid product ------------------
+    # risk_of_ruin_pct (above) is now ruin WITHIN `ruin_horizon_days` calendar days of an
+    # attempt's start. The fields below break it out. All are % of purchased attempts unless
+    # stated; all default to 0 so results built/deserialized before this change still load.
+    ruin_horizon_days: int = 90
+    ruin_within_90d_pct: float = 0.0
+    ruin_within_180d_pct: float = 0.0
+    ruin_before_first_payout_pct: float = 0.0     # attempts that failed having never reached a payout
+    lifetime_ruin_pct: float = 0.0                # the OLD definition: any breach in the replayed history
+    funded_bust_pct: float = 0.0                  # of FUNDED (passed) attempts, % that later breached -- lifetime in the replayed history
+    n_source_calendar_days: int = 0               # calendar span of the source trades
+    ruin_horizon_covered: bool = True             # False when the source history is shorter than ruin_horizon_days
+    # Pass-AND-paid per purchased attempt = P(pass) x P(paid | passed): what the README
+    # question actually asks. per_attempt_payout_probability stays the CONDITIONAL rate
+    # (payouts per FUNDED account) and is shown next to it, never instead of it.
+    per_attempt_paid_probability: float = 0.0
+    per_attempt_paid_ci95: tuple = (0.0, 0.0)
+
     # -- headline numbers (Owen's accounting) --------------------------------
     # What reports/dashboards should show as "the" eval-pass / payout
     # rates: per-attempt (passed/attempted evals, funded reaching
@@ -264,6 +297,16 @@ class MonteCarloResult:
     def headline_first_payout_probability(self) -> float:
         if self.reset_on_breach and self.total_independent_attempts:
             return self.per_attempt_payout_probability
+        return self.first_payout_probability
+
+    @property
+    def headline_pass_and_paid_probability(self) -> float:
+        """P(pass the evaluation AND reach a first payout) per purchased attempt --
+        the product the README promises. Falls back to the path-level payout rate
+        (identical when reset_on_breach is off) for results built before the
+        per-attempt paid field existed."""
+        if self.total_independent_attempts and (self.per_attempt_paid_probability or self.per_attempt_paid_ci95 != (0.0, 0.0)):
+            return self.per_attempt_paid_probability
         return self.first_payout_probability
 
     def to_dict(self) -> dict:
@@ -679,8 +722,10 @@ def _methodology_note(
     # LOWER bounds are what the acceptance verdict gates on.
     note += (
         " Risk of ruin counts any simulated account death (daily-loss-limit "
-        "breach, max-drawdown breach, or inactivity closure), not just "
-        "max-drawdown breaches. Wilson 95% CIs on the PER-ATTEMPT "
+        "breach, max-drawdown breach, or inactivity closure) that happens within the "
+        f"first {int(cfg.ruin_horizon_days)} calendar days of an attempt (time-bounded, so the "
+        "length of the backtest does not change it; 90/180-day ruin, ruin before first payout "
+        "and funded-account bust are reported separately). Wilson 95% CIs on the PER-ATTEMPT "
         "pass/payout probabilities (not the chain-level intervals) are "
         "reported alongside the point estimates; the acceptance verdict "
         "gates on their lower bounds."
@@ -710,6 +755,14 @@ class _SimRow(NamedTuple):
     total_payout_amount: float
     max_drawdown_pct: float
     max_losing_streak: int
+    # 2026-10-15 review: time-bounded ruin inputs (defaults keep any older constructor working).
+    # failed_calendar_days = how many CALENDAR days each failed attempt lived (0 = unknown, which
+    # the aggregator counts as "within any window"); carrying the raw days lets run_monte_carlo
+    # apply any ruin horizon in the parent process, so no horizon has to be plumbed through the
+    # worker-pool / shared-pool paths.
+    failed_calendar_days: tuple = ()
+    failed_before_payout_attempts: int = 0
+    funded_failed: int = 0
 
 
 def _mc_simulate_path(sim_pnls, base_dates, rules, day_structure, reset_on_breach, sim_risks) -> _SimRow:
@@ -749,6 +802,9 @@ def _mc_simulate_path(sim_pnls, base_dates, rules, day_structure, reset_on_breac
         total_payout_amount=result.total_payout_amount,
         max_drawdown_pct=result.max_drawdown_pct_reached,
         max_losing_streak=_max_losing_streak(sim_pnls),
+        failed_calendar_days=tuple(int(a.calendar_days_used or 0) for a in result.attempts if a.failed),
+        failed_before_payout_attempts=sum(1 for a in result.attempts if a.failed and not a.reached_first_payout),
+        funded_failed=sum(1 for a in result.attempts if a.failed and a.passed_evaluation),
     )
 
 
@@ -1010,6 +1066,9 @@ def run_monte_carlo(
     death_flags: list[bool] = []
     first_bust_flags: list[bool] = []
     sum_attempts_failed = 0
+    failed_days_all: list[int] = []          # calendar days lived by EVERY failed attempt (0 = unknown)
+    sum_failed_before_payout = 0
+    sum_funded_failed = 0
 
     # v9.13: the draw for each path happens HERE, in sim order, whether
     # the path itself is then simulated in this process or a worker --
@@ -1110,6 +1169,9 @@ def run_monte_carlo(
         death_flags.append(row.any_attempt_failed)
         first_bust_flags.append(row.first_attempt_bust)
         sum_attempts_failed += row.attempts_failed
+        failed_days_all.extend(row.failed_calendar_days)
+        sum_failed_before_payout += row.failed_before_payout_attempts
+        sum_funded_failed += row.funded_failed
 
         if row.days_to_pass is not None:
             days_to_pass_list.append(row.days_to_pass)
@@ -1145,8 +1207,27 @@ def run_monte_carlo(
     # definition approaches 100% for any strategy that can bust once and
     # says nothing about one account's odds.
     per_attempt_bust = (sum_attempts_failed / sum_total_attempts) if sum_total_attempts else 0.0
-    ruin_arr = np.array([per_attempt_bust])
     attempts_arr = np.array(attempts_per_path)
+
+    # 2026-10-15 review: TIME-BOUNDED ruin. Share of purchased attempts that died within H
+    # calendar days of their own start. An attempt whose length is unknown (0) counts as inside
+    # the window -- a bookkeeping gap must never make ruin look smaller. Because only the first
+    # H days of each attempt can contribute, a longer source history can no longer raise ruin
+    # just by giving accounts more time to bust after funding.
+    _failed_days = np.asarray(failed_days_all, dtype=float)
+
+    def _ruin_within(days: int) -> float:
+        if not sum_total_attempts:
+            return 0.0
+        return float(np.count_nonzero(_failed_days <= float(days)) / sum_total_attempts)
+
+    _horizon = max(1, int(cfg.ruin_horizon_days))
+    ruin_horizon_frac = _ruin_within(_horizon)
+    ruin_90_frac = _ruin_within(RUIN_WINDOW_SHORT_DAYS)
+    ruin_180_frac = _ruin_within(RUIN_WINDOW_LONG_DAYS)
+    ruin_arr = np.array([ruin_horizon_frac])
+    _cal_span = (max(base_dates) - min(base_dates)).days + 1 if base_dates else 0
+    _horizon_covered = _cal_span >= _horizon
 
     def pct(arr, q):
         return float(np.percentile(arr, q)) if len(arr) else 0.0
@@ -1188,6 +1269,9 @@ def run_monte_carlo(
         p95_drawdown_pct=pct(dd_arr, 95),
         worst_drawdown_pct=float(dd_arr.max()) if len(dd_arr) else 0.0,
         risk_of_ruin_pct=float(ruin_arr.mean() * 100),
+        risk_of_ruin_definition=(
+            f"share of purchased accounts (attempts) that breached a firm rule within {_horizon} calendar days of starting"
+        ),
         median_max_losing_streak=float(np.median(streak_arr)) if len(streak_arr) else 0.0,
         worst_max_losing_streak=int(streak_arr.max()) if len(streak_arr) else 0,
         return_percentiles={q: pct(return_arr, q) for q in (5, 25, 50, 75, 95)},
@@ -1195,7 +1279,16 @@ def run_monte_carlo(
         days_to_payout_distribution=days_to_first_payout_list,
         return_distribution=return_arr.tolist(),
         drawdown_distribution=dd_arr.tolist(),
-        methodology_note=_methodology_note(cfg, len(trades), selection_bias_caveat, n_trading_days=n_trading_days, excursion_set=excursion_set),
+        methodology_note=_methodology_note(cfg, len(trades), selection_bias_caveat, n_trading_days=n_trading_days, excursion_set=excursion_set)
+        + (
+            ""
+            if _horizon_covered
+            else (
+                f" RUIN WINDOW NOT COVERED: the source history spans only {_cal_span} calendar day(s), shorter than the "
+                f"{_horizon}-day ruin window, so the reported risk of ruin is UNDERSTATED (accounts were never exposed for the "
+                "full window); a READY verdict is capped at MARGINAL until the history covers the window."
+            )
+        ),
         reset_on_breach=cfg.reset_on_breach,
         mean_attempts_per_path=float(attempts_arr.mean()) if len(attempts_arr) else 0.0,
         median_attempts_per_path=pct(attempts_arr, 50),
@@ -1224,5 +1317,15 @@ def run_monte_carlo(
         sample_notes=_notes,
         n_source_trades=len(trades),
         n_source_days=int(n_source_days),
+        ruin_horizon_days=_horizon,
+        ruin_within_90d_pct=float(ruin_90_frac * 100),
+        ruin_within_180d_pct=float(ruin_180_frac * 100),
+        ruin_before_first_payout_pct=float(sum_failed_before_payout / sum_total_attempts * 100) if sum_total_attempts else 0.0,
+        lifetime_ruin_pct=float(per_attempt_bust * 100),
+        funded_bust_pct=float(sum_funded_failed / sum_attempts_passed * 100) if sum_attempts_passed else 0.0,
+        n_source_calendar_days=int(_cal_span),
+        ruin_horizon_covered=bool(_horizon_covered),
+        per_attempt_paid_probability=float(sum_attempts_reached_payout / sum_total_attempts * 100) if sum_total_attempts else 0.0,
+        per_attempt_paid_ci95=_wilson_score_interval(int(sum_attempts_reached_payout), int(sum_total_attempts)),
     )
     return result
