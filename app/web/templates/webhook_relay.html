@@ -55,23 +55,42 @@
 </div>
 
 <div class="lc-card">
-  <h3>1 · Public address TradingView can reach</h3>
-  <p class="lc-hint">TradingView's servers must be able to call this machine, and it only accepts port 80/443 over http(s). <code class="ic">{{ local_url }}</code> works only on this computer, so open a tunnel and paste its https address:</p>
-  <div class="wr-grid" style="margin:8px 0;">
-    <div class="wr-mono lc-toolcard"><div class="tname">ngrok</div><div class="tdesc">ngrok http {{ host.split(':')[-1] if ':' in host else '5000' }}</div></div>
-    <div class="wr-mono lc-toolcard"><div class="tname">Cloudflare Tunnel</div><div class="tdesc">cloudflared tunnel --url http://localhost:{{ host.split(':')[-1] if ':' in host else '5000' }}</div></div>
-    <div class="wr-mono lc-toolcard"><div class="tname">Tailscale Funnel</div><div class="tdesc">tailscale funnel {{ host.split(':')[-1] if ':' in host else '5000' }}</div></div>
+  <h3>1 · Public address TradingView can reach {% if url_ready %}<span class="lc-pill green">ready</span>{% else %}<span class="lc-pill grey">needed</span>{% endif %}</h3>
+  <p class="lc-hint"><b>Why this step exists:</b> TradingView's servers call your webhook from the internet, and they only accept <b>https on port 443</b> (or http on port 80). This app runs on port <code class="ic">{{ local_port }}</code> on your own computer, so an address like <code class="ic">http://127.0.0.1:{{ local_port }}</code> (or a Tailscale <code class="ic">100.x.x.x:{{ local_port }}</code> one) is rejected with <i>"Only port 80 is allowed for HTTP"</i>. A tunnel fixes that: it gives you a public https address with no port that forwards to this app.</p>
+  <div class="lc-side-card" id="wr-tunnel" style="margin:10px 0;">
+    <h4 style="margin:0 0 4px;">Easiest: let T58 open the tunnel for you</h4>
+    <div class="lc-hint" id="wr-tunnel-note">Uses the free Cloudflare quick tunnel (no account). Click once and the address below fills itself in.</div>
+    <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
+      <button type="button" class="lc-btn" id="wr-tunnel-start">Start tunnel</button>
+      <button type="button" class="lc-btn ghost" id="wr-tunnel-stop" style="display:none;">Stop tunnel</button>
+    </div>
+    <div class="wr-msg" id="wr-tunnel-msg"></div>
   </div>
+  <p class="lc-hint">Or do it by hand with any tunnel you already use:</p>
+  <ol class="wr-steps">
+    <li>Pick one tunnel and run its command in a terminal (leave it running):
+      <div class="wr-grid" style="margin:8px 0;">
+        <div class="wr-mono lc-toolcard"><div class="tname">ngrok (easiest)</div><div class="tdesc">ngrok http {{ local_port }}</div></div>
+        <div class="wr-mono lc-toolcard"><div class="tname">Cloudflare Tunnel</div><div class="tdesc">cloudflared tunnel --url http://localhost:{{ local_port }}</div></div>
+        <div class="wr-mono lc-toolcard"><div class="tname">Tailscale Funnel</div><div class="tdesc">tailscale funnel {{ local_port }}</div></div>
+      </div>
+    </li>
+    <li>Copy the <b>https://</b> address it prints (no <code class="ic">:{{ local_port }}</code> on the end), paste it below, and click <b>Save &amp; test</b>.</li>
+  </ol>
   <div class="lc-row">
     <div class="lc-col" style="min-width:300px;">
       <label class="flabel">Public https address</label>
       <input type="text" id="wr-public-url" value="{{ public_url }}" placeholder="https://abc123.ngrok-free.app">
     </div>
     <div class="lc-col" style="flex:0 0 auto; align-self:flex-end;">
-      <button type="button" class="lc-btn" id="wr-save-url">Save address</button>
+      <button type="button" class="lc-btn" id="wr-save-url">Save &amp; test</button>
     </div>
   </div>
-  <div class="wr-msg" id="wr-url-msg">{% if not public_url %}<span class="lc-hint">Not set yet &mdash; the webhook URLs below show this computer's local address until you save one.</span>{% endif %}</div>
+  <div class="wr-msg" id="wr-url-msg">
+    {% if url_ready %}<span class="wr-pos">Saved. The webhook URLs below are ready to paste into TradingView.</span>
+    {% elif public_url %}<span class="wr-neg">{{ url_problem }}</span>
+    {% else %}<span class="lc-hint">Not set yet. The webhook URLs below appear as soon as you save a valid address.</span>{% endif %}
+  </div>
 </div>
 
 <div class="lc-card" style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
@@ -87,7 +106,11 @@
   </div>
 
   <label class="flabel">Webhook URL &mdash; paste into the TradingView alert's "Webhook URL" box</label>
+  {% if r.url_ready %}
   <div class="wr-copy"><div class="box wr-mono">{{ r.url }}</div><button type="button" class="lc-btn ghost small" data-copy="{{ r.url }}">Copy</button></div>
+  {% else %}
+  <div class="wr-copy"><div class="box wr-mono wr-neg">Finish step 1 first: save your public https address and this URL will appear here.</div></div>
+  {% endif %}
 
   <label class="flabel">Alert message &mdash; paste into the alert's "Message" box (strategy alerts)</label>
   <div class="wr-copy"><pre class="box wr-mono">{{ r.alert_message }}</pre><button type="button" class="lc-btn ghost small" data-copy="{{ r.alert_message }}">Copy</button></div>
@@ -161,7 +184,7 @@
   <ol class="wr-steps">
     <li>Add your Pine <b>strategy</b> to a chart (the chart's symbol and timeframe are what the alert will trade).</li>
     <li>Click <b>Alerts &rarr; Create alert</b>. Condition: your strategy, with "Order fills only".</li>
-    <li>Open the <b>Notifications</b> tab, tick <b>Webhook URL</b> and paste the URL from your relay.</li>
+    <li>Open the <b>Notifications</b> tab, tick <b>Webhook URL</b> and paste the URL from your relay. It starts with <code class="ic">https://</code> and has no port number. If TradingView shows "Only port 80 is allowed", the URL has a port like <code class="ic">:{{ local_port }}</code> in it: redo step 1.</li>
     <li>In the <b>Message</b> box, replace the text with the alert message from your relay. TradingView fills the <code class="ic">{{ '{{' }}placeholders{{ '}}' }}</code> when the alert fires.</li>
     <li>Save. Use <b>Test it from here</b> first to check the whole chain before you wait for a real signal.</li>
   </ol>
@@ -191,11 +214,40 @@
   });
 
   document.getElementById('wr-save-url').addEventListener('click', function () {
-    post('/webhook-relay/public-url', { public_url: document.getElementById('wr-public-url').value }).then(function (j) {
-      var m = document.getElementById('wr-url-msg');
-      if (j.ok) { m.textContent = 'Saved. Reloading…'; location.reload(); } else { m.textContent = j.error || 'Could not save.'; }
+    var val = document.getElementById('wr-public-url').value, m = document.getElementById('wr-url-msg');
+    m.className = 'wr-msg'; m.textContent = 'Saving…';
+    post('/webhook-relay/public-url', { public_url: val }).then(function (j) {
+      if (!j.ok) { m.className = 'wr-msg wr-neg'; m.textContent = j.error || 'Could not save.'; return; }
+      m.textContent = 'Saved. Testing the address…';
+      post('/webhook-relay/check-public-url', { public_url: j.public_url }).then(function (t) {
+        if (t.ok) { m.className = 'wr-msg wr-pos'; m.textContent = t.message + ' Reloading…'; setTimeout(function () { location.reload(); }, 900); }
+        else { m.className = 'wr-msg wr-neg'; m.textContent = 'Saved, but: ' + (t.error || 'could not reach it.'); setTimeout(function () { location.reload(); }, 3500); }
+      });
     });
   });
+  (function () {
+    var startB = document.getElementById('wr-tunnel-start'), stopB = document.getElementById('wr-tunnel-stop');
+    var msg = document.getElementById('wr-tunnel-msg'), note = document.getElementById('wr-tunnel-note'), timer = null, wasRunning = false;
+    function paint(s) {
+      if (!s.available) { startB.disabled = true; msg.className = 'wr-msg'; msg.textContent = 'cloudflared is not installed yet. ' + (s.install_hint || ''); return; }
+      startB.disabled = (s.state === 'starting' || s.state === 'running');
+      stopB.style.display = (s.state === 'starting' || s.state === 'running') ? '' : 'none';
+      if (s.state === 'starting') { msg.className = 'wr-msg'; msg.textContent = 'Opening the tunnel… this takes a few seconds.'; }
+      else if (s.state === 'running') {
+        msg.className = 'wr-msg wr-pos'; msg.textContent = 'Tunnel is up: ' + s.url + (s.error ? '  (' + s.error + ')' : '');
+        if (!wasRunning) { wasRunning = true; setTimeout(function () { location.reload(); }, 900); }
+      }
+      else if (s.state === 'error') { msg.className = 'wr-msg wr-neg'; msg.textContent = s.error || 'The tunnel could not start.'; }
+      else { msg.className = 'wr-msg'; msg.textContent = ''; }
+    }
+    function poll() { fetch('/webhook-relay/tunnel/status').then(function (r) { return r.json(); }).then(function (s) { paint(s); if (s.state === 'starting') timer = setTimeout(poll, 1500); }).catch(function () {}); }
+    startB.addEventListener('click', function () {
+      msg.className = 'wr-msg'; msg.textContent = 'Starting…';
+      post('/webhook-relay/tunnel/start', {}).then(function (j) { paint(j); if (j.ok) { clearTimeout(timer); poll(); } });
+    });
+    stopB.addEventListener('click', function () { post('/webhook-relay/tunnel/stop', {}).then(function (j) { wasRunning = false; paint(j); }); });
+    fetch('/webhook-relay/tunnel/status').then(function (r) { return r.json(); }).then(function (s) { wasRunning = (s.state === 'running'); paint(s); if (s.state === 'starting') poll(); }).catch(function () {});
+  })();
   document.getElementById('wr-new').addEventListener('click', function () {
     var name = prompt('Name this relay (e.g. the strategy it will follow):', 'My Pine strategy');
     if (name === null) return;

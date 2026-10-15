@@ -1,0 +1,28 @@
+{# Small "which strategy is this run testing?" line for every job page (full pipeline, validation, optimize,
+   walk-forward, CPCV, ...). It reads the job id from the page URL and asks /job-strategy/<id> for the name, so it
+   works on every job page without each page's own status feed having to carry it. Stays visible after the run. #}
+<div id="t58-strategy-chip" style="display:none; margin:8px 0 12px; padding:7px 12px; border:1px solid #2a3340;
+     border-left:4px solid #19d3a2; border-radius:8px; background:rgba(25,211,162,.07); font-size:13px; line-height:1.4;">
+  <span style="opacity:.75;">Strategy tested:</span> <b id="t58-strategy-name"></b>
+</div>
+<script>
+(function () {
+  var m = location.pathname.match(/\/(?:batch-)?job\/([A-Za-z0-9_-]+)/);
+  if (!m) return;
+  var chip = document.getElementById('t58-strategy-chip'), nameEl = document.getElementById('t58-strategy-name');
+  var tries = 0;
+  function show(name) {
+    nameEl.textContent = name; chip.style.display = 'block';
+  }
+  function poll() {
+    fetch('/job-strategy/' + encodeURIComponent(m[1]), { credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (j && j.strategy) { show(j.strategy); return; }
+        if (++tries < 40) setTimeout(poll, 1500);
+      })
+      .catch(function () { if (++tries < 40) setTimeout(poll, 3000); });
+  }
+  poll();
+})();
+</script>

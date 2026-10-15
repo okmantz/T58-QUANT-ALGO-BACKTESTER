@@ -36,6 +36,7 @@
 {% include '_lifecycle_stepper.html' %}
 <div class="lc-crumb">Lifecycle · 4 · <b>Validate</b> · Auto-Fix</div>
 <h1 class="lc-title" id="page-title">Fixing the flagged checks</h1>
+{% include '_job_strategy_chip.html' %}
 <p class="lc-sub" id="page-sub">The strategy is repaired on part of the data, checked on data it never saw, and then the real checks are run again on the repaired copy. Your original strategy is never changed.</p>
 
 {% if not_found %}
@@ -162,7 +163,8 @@ function render(data){
   document.getElementById('stages').innerHTML = (o.stages || []).map(stageHtml).join('');
   const cmp = compareHtml(o);
   if (cmp) { document.getElementById('compare-card').style.display = 'block'; document.getElementById('compare').innerHTML = cmp; }
-  document.getElementById('notes').innerHTML = (o.notes || []).map(n => '<div class="fx-note">' + esc(n) + '</div>').join('');
+  const gains = (o.improved || []).filter(r => r.progress).map(r => '<div class="fx-note"><b>' + esc(r.label) + ' improved:</b> ' + esc(r.progress) + '.</div>').join('');
+  document.getElementById('notes').innerHTML = gains + (o.notes || []).map(n => '<div class="fx-note">' + esc(n) + '</div>').join('');
 
   let acts = '';
   if (data.downloads) {
