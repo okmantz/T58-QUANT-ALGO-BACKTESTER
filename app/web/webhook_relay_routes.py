@@ -193,10 +193,12 @@ def relay_tunnel_status():
 
 @webhook_relay_bp.route("/webhook-relay/tunnel/start", methods=["POST"])
 def relay_tunnel_start():
-    """One-click public address: starts a Cloudflare quick tunnel to this app and saves the https address it
-    prints as the public address (see app.webhook_relay.tunnel)."""
+    """One-click public address: starts a tunnel to this app (cloudflared if installed, otherwise the built-in
+    ssh / localhost.run option that needs no download) and saves the https address it prints as the public
+    address (see app.webhook_relay.tunnel). Optional form/JSON field ``provider``: auto | cloudflared | ssh."""
+    provider = str(request.values.get("provider") or (request.get_json(silent=True) or {}).get("provider") or "auto")
     try:
-        state = tunnel.start(_app_port(), relay_config.set_public_url)
+        state = tunnel.start(_app_port(), relay_config.set_public_url, provider=provider)
     except tunnel.TunnelError as exc:
         return jsonify({"ok": False, "error": str(exc), **tunnel.status()}), 400
     return jsonify({"ok": True, **state})
