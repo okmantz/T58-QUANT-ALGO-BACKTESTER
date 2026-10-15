@@ -183,6 +183,12 @@ class WalkForwardFold:
     test_bars: int
     train_metric: float
     test_metric: float
+    # 2026-10-15 (audit item 10): absolute out-of-sample P&L facts, independent of the chosen
+    # metric, so a "pass" can be told apart from a strategy that simply loses equally in and
+    # out of sample. Defaults keep older constructors working.
+    test_net_profit: float = 0.0
+    test_trades: int = 0
+    test_profit_factor: float | None = None
 
 
 @dataclass
@@ -201,6 +207,27 @@ class WalkForwardResult:
     # run_walk_forward's own docstring for why this exists.
     embargo_applied_bars: int = 0
     warnings: list = field(default_factory=list)
+    # 2026-10-15 (audit item 10): True/False once the pooled out-of-sample folds had enough trades
+    # to judge whether the strategy actually MADE MONEY out of sample; None = too few OOS trades to
+    # say (unproven, never a failure). A walk-forward "pass" on a strategy that loses equally in and
+    # out of sample (profit factors of 0.85-0.95 in the audit) is no evidence of an edge.
+    oos_profitable: bool | None = None
+    total_test_net_profit: float | None = None
+    total_test_trades: int = 0
+    mean_test_profit_factor: float | None = None
+
+
+# Minimum pooled out-of-sample trades before the "did it make money OOS" check can convict.
+MIN_OOS_TRADES_FOR_PROFIT_CHECK = 10
+
+
+def _finite_or(v, default, inf_value: float | None = None):
+    """float(v) when it is a finite number; `inf_value` for +inf when given; else `default`."""
+    if v == float("inf") and inf_value is not None:
+        return inf_value
+    if v is None or isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+        return default
+    return float(v)
 
 
 def _metric_value(stats: dict, metric: str, trades: list | None = None, prop_rules=None, mc_cfg=None) -> float:
@@ -261,6 +288,9 @@ def _wf_one_fold(fold_idx, train_df, test_df, strategy_builder, risk, metric, pr
         test_period=(str(test_df["timestamp"].iloc[0]), str(test_df["timestamp"].iloc[-1])),
         train_bars=len(train_df), test_bars=len(test_df),
         train_metric=train_val, test_metric=test_val,
+        test_net_profit=_finite_or(test_stats.get("net_profit"), 0.0),
+        test_trades=int(_finite_or(test_stats.get("total_trades"), 0.0)),
+        test_profit_factor=_finite_or(test_stats.get("profit_factor"), None, inf_value=10.0),
     )
     return fold, train_val, test_val
 
@@ -428,19 +458,41 @@ def run_walk_forward(
 
     mean_train = float(np.mean(train_metrics))
     mean_test = float(np.mean(test_metrics))
-    if mean_train == 0:
+    if mean_train <= 0:
+        # 2026-10-15 (audit item 10): there is no in-sample edge to retain. The old code divided
+        # test by train for any non-zero train, so a strategy that LOST equally in and out of
+        # sample (negative / negative = +1.0) scored as perfectly "efficient".
         wfe = 0.0
     else:
         wfe = max(min(mean_test / mean_train, 5.0), -5.0)
+
+    total_test_trades = int(sum(f.test_trades for f in folds))
+    total_test_net = float(sum(f.test_net_profit for f in folds))
+    _pfs = [f.test_profit_factor for f in folds if f.test_profit_factor is not None and f.test_trades > 0]
+    mean_test_pf = float(np.mean(_pfs)) if _pfs else None
+    oos_profitable: bool | None = None
+    if total_test_trades >= MIN_OOS_TRADES_FOR_PROFIT_CHECK:
+        oos_profitable = total_test_net > 0
+        if not oos_profitable:
+            wfe = min(wfe, 0.0)
+            warnings = list(warnings) + [
+                f"Out-of-sample folds LOST money (net ${total_test_net:,.2f} over {total_test_trades} trades"
+                + (f", mean fold profit factor {mean_test_pf:.2f}" if mean_test_pf is not None else "")
+                + "): a strategy that loses equally in and out of sample is not 'stable', it has no edge to retain."
+            ]
 
     return WalkForwardResult(
         folds=folds, n_folds=len(folds), metric=metric,
         mean_train_metric=mean_train, mean_test_metric=mean_test,
         walk_forward_efficiency=wfe,
-        is_stable=wfe >= stability_threshold,
+        is_stable=(wfe >= stability_threshold) and (oos_profitable is not False),
         stability_threshold=stability_threshold,
         embargo_applied_bars=embargo_applied_bars,
         warnings=warnings,
+        oos_profitable=oos_profitable,
+        total_test_net_profit=total_test_net if total_test_trades else None,
+        total_test_trades=total_test_trades,
+        mean_test_profit_factor=mean_test_pf,
     )
 
 
