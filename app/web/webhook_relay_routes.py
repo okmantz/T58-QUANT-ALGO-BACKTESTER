@@ -22,7 +22,7 @@ from collections import defaultdict, deque
 from flask import Blueprint, current_app, jsonify, render_template, request
 
 from app.webhook_relay import config as relay_config
-from app.webhook_relay import engine, journal
+from app.webhook_relay import engine, journal, tunnel
 from app.webhook_relay.paper import PaperLedger
 from app.webhook_relay.signals import MAX_BODY_BYTES, SignalError, parse_alert, pine_alert_message
 
@@ -97,7 +97,13 @@ def _demo_accounts() -> list[dict]:
 
 def _relay_view(relay, public_url: str) -> dict:
     d = relay.to_public()
-    d["url"] = f"{public_url or request.host_url.rstrip('/')}/webhook/tradingview/{relay.token}"
+    # Only hand out a URL TradingView will accept. A local / LAN / Tailscale
+    # address or a port other than 80/443 is rejected by TradingView's alert
+    # box ("Only port 80 is allowed for HTTP"), so showing it just sets the
+    # person up to hit that error.
+    ready = bool(public_url) and not relay_config.check_public_url(public_url)[1]
+    d["url_ready"] = ready
+    d["url"] = f"{public_url}/webhook/tradingview/{relay.token}" if ready else ""
     d["alert_message"] = pine_alert_message(relay.passphrase)
     d["symbol_map_text"] = "\n".join(f"{k}={v}" for k, v in relay.symbol_map.items())
     d["allowed_text"] = ", ".join(relay.allowed_tickers)
@@ -107,9 +113,12 @@ def _relay_view(relay, public_url: str) -> dict:
 @webhook_relay_bp.route("/webhook-relay")
 def webhook_relay_page():
     public_url = relay_config.get_public_url()
+    problem = relay_config.public_url_problem()
     relays = [_relay_view(r, public_url) for r in relay_config.list_relays()]
+    port = request.host.rsplit(":", 1)[-1] if ":" in request.host else "80"
     return render_template(
         "webhook_relay.html", active_page="webhook_relay", relays=relays, public_url=public_url,
+        url_problem=problem, url_ready=not problem, local_port=port,
         local_url=request.host_url.rstrip("/"), host=request.host, accounts=_demo_accounts(),
     )
 
@@ -139,6 +148,63 @@ def relay_public_url():
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     return jsonify({"ok": True, "public_url": url})
+
+
+@webhook_relay_bp.route("/webhook-relay/check-public-url", methods=["POST"])
+def relay_check_public_url():
+    """Call our own public address from this machine and report whether it
+    gets back to this app, so a broken tunnel is caught before TradingView."""
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    clean, problem = relay_config.check_public_url(request.form.get("public_url") or relay_config.get_public_url())
+    if problem:
+        return jsonify({"ok": False, "error": problem}), 400
+    relays = relay_config.list_relays()
+    if not relays:
+        return jsonify({"ok": False, "error": "Make a relay first (step 2), then test the address."}), 400
+    url = f"{clean}/webhook/tradingview/{relays[0].token}/ping"
+    req = urllib.request.Request(url, headers={"ngrok-skip-browser-warning": "1", "User-Agent": "T58-address-check"})
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:  # noqa: S310 -- URL validated by check_public_url
+            data = _json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
+    except urllib.error.HTTPError as exc:
+        return jsonify({"ok": False, "error": f"The address answered with HTTP {exc.code}. Check the tunnel points at port "
+                        f"{request.host.rsplit(':', 1)[-1] if ':' in request.host else '80'} on this computer."}), 200
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": f"Couldn't reach that address ({exc}). Is the tunnel still running?"}), 200
+    if not data.get("ok"):
+        return jsonify({"ok": False, "error": "The address is up but isn't this app. Check the tunnel's target port."}), 200
+    return jsonify({"ok": True, "message": "Reachable. TradingView can call this address."})
+
+
+def _app_port() -> int:
+    try:
+        return int(request.environ.get("SERVER_PORT") or (request.host.rsplit(":", 1)[-1] if ":" in request.host else 80))
+    except (TypeError, ValueError):
+        return 80
+
+
+@webhook_relay_bp.route("/webhook-relay/tunnel/status")
+def relay_tunnel_status():
+    return jsonify({"ok": True, **tunnel.status()})
+
+
+@webhook_relay_bp.route("/webhook-relay/tunnel/start", methods=["POST"])
+def relay_tunnel_start():
+    """One-click public address: starts a Cloudflare quick tunnel to this app and saves the https address it
+    prints as the public address (see app.webhook_relay.tunnel)."""
+    try:
+        state = tunnel.start(_app_port(), relay_config.set_public_url)
+    except tunnel.TunnelError as exc:
+        return jsonify({"ok": False, "error": str(exc), **tunnel.status()}), 400
+    return jsonify({"ok": True, **state})
+
+
+@webhook_relay_bp.route("/webhook-relay/tunnel/stop", methods=["POST"])
+def relay_tunnel_stop():
+    return jsonify({"ok": True, **tunnel.stop()})
 
 
 @webhook_relay_bp.route("/webhook-relay/relays", methods=["POST"])

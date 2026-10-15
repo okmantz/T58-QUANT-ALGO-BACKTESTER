@@ -165,6 +165,7 @@ from app.reports.validation_reports import (
 from app.reports import run_history
 from app.reports import strategy_state
 from app.reports import strategy_folder
+from app.reports.naming import report_stem, strategy_label
 from app.web.job_manager import JOB_MANAGER
 from app.scoring.t58_scorecard import score_from_results
 from app.search.batch_runner import (
@@ -2129,8 +2130,41 @@ def _ds_run(job_id, strategy, library_ref, form, risk, rules, page_df, page_labe
             "no_winner": winner is None, "rows": out["rows"]}
 
 
+# ---------------------------------------------------------------------------
+# "Which strategy is this run testing?" -- stamped onto every job so each job page (Full Pipeline, Validate,
+# Optimize, Walk-Forward, CPCV, ...) can show it during AND after the run (see _job_strategy_chip.html).
+# ---------------------------------------------------------------------------
+
+def _stamp_job_strategy(job_id: str, strategy, *, library_ref=None, explicit: str = "") -> None:
+    """Best-effort: a label must never be the reason a run fails."""
+    try:
+        name = strategy_label(strategy, library_ref=library_ref, explicit=explicit, fallback="")
+        if name:
+            JOB_MANAGER.update(job_id, strategy=name)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _batch_strategy_names(batch_items) -> str:
+    labels = [str(getattr(i, "label", "") or "") for i in (batch_items or [])]
+    labels = [l for l in labels if l]
+    if not labels:
+        return ""
+    shown = ", ".join(labels[:4]) + (f" (+{len(labels) - 4} more)" if len(labels) > 4 else "")
+    return f"{len(labels)} strategies: {shown}" if len(labels) > 1 else labels[0]
+
+
+@app.route("/job-strategy/<job_id>")
+def job_strategy_name(job_id):
+    job = JOB_MANAGER.get(job_id)
+    if job is None:
+        return jsonify({"found": False, "strategy": ""}), 404
+    return jsonify({"found": True, "strategy": str(job.get("strategy") or "")})
+
+
 def _run_optimize_simple_job(job_id: str, df, strategy, risk, rules, engines, form, library_ref=None, dataset_label="",
                              cancel_event=None) -> None:
+    _stamp_job_strategy(job_id, strategy, library_ref=library_ref)
     summary: dict = {}
     tracker = SimpleProgress(engine_total=len(engines))
     JOB_MANAGER.update(job_id, progress=tracker.payload())
@@ -2405,7 +2439,8 @@ def _vs_fixable_checks(report: dict) -> list:
 
 
 def _vs_save_run_report(report: dict, results: list, form, meta: dict, baseline_summary: dict, requested, library_ref,
-                        sim_text: str, *, auto_fix_section: dict | None = None, report_id: str | None = None) -> dict:
+                        sim_text: str, *, auto_fix_section: dict | None = None, report_id: str | None = None,
+                        test_label: str = "Validation") -> dict:
     """Build + save the consolidated report for one run (see app.validation.report_export) and stamp its
     id / download links onto `report` so the job page can offer them."""
     raw_full = {r["check"]: report_export.clean_json(r.get("summary")) for r in results if r.get("ok")}
@@ -2415,7 +2450,7 @@ def _vs_save_run_report(report: dict, results: list, form, meta: dict, baseline_
               "library_type": (library_ref[0] if library_ref else ""), "library_file": (library_ref[1] if library_ref else ""),
               "dataset": meta.get("dataset"), "timeframe": meta.get("timeframe"), "prop_preset": meta.get("prop_preset")},
         form=form, requested_checks=list(requested), simulation_text=sim_text,
-        auto_fix=auto_fix_section, report_id=report_id,
+        auto_fix=auto_fix_section, report_id=report_id, test_label=test_label,
     )
     paths = report_export.save_report(VALIDATION_RUNS_DIR, doc)
     rid = doc["report_id"]
@@ -2427,6 +2462,7 @@ def _vs_save_run_report(report: dict, results: list, form, meta: dict, baseline_
 
 def _run_validate_simple_job(job_id: str, df, strategy, risk, rules, checks, form, library_ref=None,
                              dataset_label: str = "", tf_note=None, cancel_event=None, ctx=None, sim_text: str = "") -> None:
+    _stamp_job_strategy(job_id, strategy, library_ref=library_ref)
     tracker = SimpleProgress()
     checks = sorted(checks, key=lambda c: simple_report.CHECK_ORDER.index(c) if c in simple_report.CHECK_ORDER else 99)
     weights = {c: simple_report.CHECK_WEIGHTS.get(c, 1.0) for c in checks}
@@ -2702,6 +2738,7 @@ def _save_fixed_strategy_copy(original_ref, strategy, outcome, source_report_id:
 
 def _run_validate_fix_job(job_id: str, df, strategy, risk, rules, doc: dict, failing: list, form, library_ref=None,
                           dataset_label: str = "", cancel_event=None, sim_text: str = "") -> None:
+    _stamp_job_strategy(job_id, strategy, library_ref=library_ref)
     tracker = SimpleProgress()
     checks_ran = [c["check"] for c in doc.get("checks", []) if c.get("status") != "error"]
     verify = sorted(set(checks_ran) | set(failing),
@@ -2787,7 +2824,7 @@ def _run_validate_fix_job(job_id: str, df, strategy, risk, rules, doc: dict, fai
                               fixed_strategy=({"library_type": new_ref[0], "filename": new_ref[1]} if new_ref else None))
             try:
                 _vs_save_run_report(after_report, outcome.after_results, MultiDict(doc.get("form_snapshot") or {}), meta, baseline,
-                                    verify, new_ref, sim_text, auto_fix_section=af_section)
+                                    verify, new_ref, sim_text, auto_fix_section=af_section, test_label="Validation-Auto-Fix")
                 new_report_id = after_report.get("report_id")
             except Exception as exc:  # noqa: BLE001
                 JOB_MANAGER.log(job_id, f"The Auto-Fix report could not be saved: {exc}")
@@ -3803,7 +3840,9 @@ def run_pipeline():
             prop_rules=rules,
             prop_single_run=single_run,
             monte_carlo_result=mc_result,
-            basename=f"report_{run_id}",
+            basename=report_stem(strategy_label(strategy, explicit=getattr(bt_result, "strategy_name", "")),
+                                 "Backtest", output_dir=REPORTS_DIR),
+            test_label="Backtest",
             holdout_comparison=holdout_comparison,
             risk_config=risk,
             price_df=df,
@@ -4966,6 +5005,7 @@ def _run_refinement_job(
     library_ref: tuple[str, str] | None = None,
     adaptive_risk=None,
 ) -> None:
+    _stamp_job_strategy(job_id, strategy, library_ref=library_ref)
     try:
         result = run_iterative_refinement(
             df, strategy, risk, rules, mc_cfg, cfg,
@@ -4977,7 +5017,8 @@ def _run_refinement_job(
             output_dir=REFINEMENT_DIR, result=result,
             strategy_name=getattr(strategy, "name", "Strategy"),
             instrument=active_label, timeframe=infer_timeframe_label(df), backtest_period=period,
-            basename=f"refinement_{job_id}", price_df=df,
+            basename=report_stem(strategy_label(strategy, library_ref=library_ref), "Refinement", output_dir=REFINEMENT_DIR),
+            price_df=df,
         )
         if library_ref:
             try:
@@ -5423,6 +5464,7 @@ def _run_fullpipeline_job(
     cfg: FullPipelineConfig, active_label: str, ollama_settings: OllamaSettings | None,
     cancel_event: threading.Event | None = None, notify_webhook_url: str | None = None,
 ) -> None:
+    _stamp_job_strategy(job_id, strategy, library_ref=getattr(cfg, 'library_ref', None))
     tracker, _progress_hook, _baseline_ready_cb = _fp_job_hooks(job_id)
     # v9.15: stash the exact risk/rules this run uses so the finished
     # page's recovery plan (and a one-click Quick Optimize launched from
@@ -5433,7 +5475,8 @@ def _run_fullpipeline_job(
             df, strategy, risk, rules, FULL_PIPELINE_DIR, cfg,
             progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
             instrument=active_label, ollama_settings=ollama_settings,
-            report_basename=f"full_pipeline_{job_id}",
+            report_basename=report_stem(strategy_label(strategy, library_ref=getattr(cfg, "library_ref", None)),
+                                        "Full-Pipeline", output_dir=FULL_PIPELINE_DIR),
             cancel_event=cancel_event,
             progress_hook=_progress_hook,
             baseline_ready_cb=_baseline_ready_cb,
@@ -5469,6 +5512,7 @@ def _run_fullpipeline_sweep_job(
     all resampled from the one loaded file. The job's `result` is the WINNING
     timeframe's FullPipelineResult, so the existing status page/summary work
     unchanged; `sweep_timeframes` adds the side-by-side table."""
+    _stamp_job_strategy(job_id, strategy, library_ref=getattr(cfg, 'library_ref', None))
     from app.orchestration.full_pipeline import run_full_pipeline_sweep
     tracker, _progress_hook, _baseline_ready_cb = _fp_job_hooks(job_id, run_count=max(1, len(expand_labels)))
     try:
@@ -5476,7 +5520,9 @@ def _run_fullpipeline_sweep_job(
             df, strategy, risk, rules, FULL_PIPELINE_DIR, expand_labels, cfg,
             progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
             instrument=active_label, ollama_settings=ollama_settings,
-            report_basename=f"full_pipeline_{job_id}", cancel_event=cancel_event,
+            report_basename=report_stem(strategy_label(strategy, library_ref=getattr(cfg, "library_ref", None)),
+                                        "Full-Pipeline-Timeframe-Sweep", output_dir=FULL_PIPELINE_DIR),
+            cancel_event=cancel_event,
             progress_hook=_progress_hook,
             baseline_ready_cb=_baseline_ready_cb,
         )
@@ -5533,6 +5579,7 @@ def _run_fullpipeline_batch_job(
     cfg: FullPipelineConfig, active_label: str, ollama_settings: OllamaSettings | None,
     cancel_event: threading.Event | None = None, notify_webhook_url: str | None = None,
 ) -> None:
+    _stamp_job_strategy(job_id, None, explicit=_batch_strategy_names(batch_items))
     try:
         summary = run_full_pipeline_batch(
             df, batch_items, risk, rules, FULL_PIPELINE_DIR, cfg=cfg,
@@ -6346,13 +6393,16 @@ def _run_wfo_job(
     n_folds: int, window_mode: str, train_frac: float, embargo_bars: int, refine_cfg: RefinementConfig,
     strategy_name: str = "", instrument: str = "", library_ref: tuple[str, str] | None = None,
 ) -> None:
+    _stamp_job_strategy(job_id, strategy, library_ref=library_ref, explicit=strategy_name)
     try:
         result = run_walk_forward_optimization(
             df, strategy, risk, rules, mc_cfg, n_folds=n_folds, window_mode=window_mode,
             train_frac=train_frac, embargo_bars=embargo_bars, refine_cfg=refine_cfg,
             progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
         )
-        paths = generate_walk_forward_report(WFO_DIR, result, basename=f"walk_forward_opt_{job_id}")
+        paths = generate_walk_forward_report(
+            WFO_DIR, result, basename=report_stem(strategy_label(strategy, library_ref=library_ref, explicit=strategy_name),
+                                                  "Walk-Forward-Optimization", output_dir=WFO_DIR))
         report_html = f"/wfo_reports/{Path(paths['html']).name}"
         JOB_MANAGER.finish(job_id, result=result, report_html=report_html, report_json=f"/wfo_reports/{Path(paths['json']).name}")
         eff = getattr(result, "out_of_sample_efficiency", None)
@@ -6492,12 +6542,14 @@ def serve_wfo_report(filename):
 # ---------------------------------------------------------------------------
 
 def _run_mo_job(job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, mc_cfg: MonteCarloConfig, mo_cfg: MultiObjectiveConfig) -> None:
+    _stamp_job_strategy(job_id, strategy)
     try:
         result = run_multi_objective_refinement(
             df, strategy, risk, rules, mc_cfg, mo_cfg,
             progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
         )
-        paths = generate_multi_objective_report(MULTI_OBJ_DIR, result, basename=f"multi_objective_{job_id}")
+        paths = generate_multi_objective_report(
+            MULTI_OBJ_DIR, result, basename=report_stem(strategy_label(strategy), "Multi-Objective-Optimize", output_dir=MULTI_OBJ_DIR))
         JOB_MANAGER.finish(job_id, result=result, report_html=f"/mo_reports/{Path(paths['html']).name}", report_json=f"/mo_reports/{Path(paths['json']).name}")
     except RefinementError as exc:
         JOB_MANAGER.fail(job_id, str(exc))
@@ -6526,6 +6578,7 @@ def _run_mo_sweep_job(
     unchanged; `job["sweep_results"]` carries every timeframe's own
     summary + report link for the job page's per-timeframe breakdown.
     """
+    _stamp_job_strategy(job_id, strategy)
     try:
         sweep = run_multi_objective_sweep(
             df, strategy, risk, rules, mc_cfg, timeframes, mo_cfg,
@@ -6535,7 +6588,8 @@ def _run_mo_sweep_job(
         first_result = None
         for label, result in sweep.per_timeframe.items():
             paths = generate_multi_objective_report(
-                MULTI_OBJ_DIR, result, basename=f"multi_objective_{job_id}_{label}",
+                MULTI_OBJ_DIR, result,
+                basename=report_stem(strategy_label(strategy), f"Multi-Objective-Optimize-{label}", output_dir=MULTI_OBJ_DIR),
             )
             report_html = f"/mo_reports/{Path(paths['html']).name}"
             if first_result is None:
@@ -6700,12 +6754,15 @@ def _run_wfga_job(
     refine_cfg: RefinementConfig, n_folds: int, window_mode: str, train_frac: float,
     strategy_name: str = "", instrument: str = "", library_ref: tuple[str, str] | None = None,
 ) -> None:
+    _stamp_job_strategy(job_id, strategy, library_ref=library_ref, explicit=strategy_name)
     try:
         result = run_walkforward_aware_refinement(
             df, strategy, risk, rules, mc_cfg, refine_cfg, n_folds=n_folds, window_mode=window_mode,
             train_frac=train_frac, progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
         )
-        paths = generate_walkforward_ga_report(WFGA_DIR, result, basename=f"walkforward_ga_{job_id}")
+        paths = generate_walkforward_ga_report(
+            WFGA_DIR, result, basename=report_stem(strategy_label(strategy, library_ref=library_ref, explicit=strategy_name),
+                                                   "Walk-Forward-GA", output_dir=WFGA_DIR))
         report_html = f"/wfga_reports/{Path(paths['html']).name}"
         JOB_MANAGER.finish(job_id, result=result, report_html=report_html, report_json=f"/wfga_reports/{Path(paths['json']).name}")
         gap = getattr(result, "overfitting_gap", None)
@@ -6976,7 +7033,9 @@ def portfolio_run():
         )
         result = run_portfolio_backtest(legs, config)
         run_id = uuid.uuid4().hex[:10]
-        paths = generate_portfolio_report(PORTFOLIO_DIR, result, basename=f"portfolio_{run_id}")
+        paths = generate_portfolio_report(
+            PORTFOLIO_DIR, result,
+            basename=report_stem(" + ".join(leg_labels)[:60] or "Portfolio", "Portfolio", output_dir=PORTFOLIO_DIR))
 
         return render_template("portfolio.html", **ctx(result={
             "legs": leg_labels,
@@ -7233,7 +7292,7 @@ def payout_probability_run():
         run_id = uuid.uuid4().hex[:10]
         paths = generate_survival_report(
             PAYOUT_DIR, result, bt_result.strategy_name, active_label, rules, cfg,
-            basename=f"payout_{run_id}",
+            basename=report_stem(strategy_label(None, explicit=bt_result.strategy_name), "Payout-Survival", output_dir=PAYOUT_DIR),
         )
 
         # Optional account-scaling stress test (Owen's ask: "does the
@@ -7433,7 +7492,9 @@ def ensemble_run():
             paths = generate_full_report(
                 output_dir=ENSEMBLE_DIR, strategy_name=bt_result.strategy_name, strategy_source_type="ensemble_vote",
                 instrument=active_label, timeframe=infer_timeframe_label(df), backtest_period=period, backtest_result=bt_result,
-                prop_rules=rules, prop_single_run=single_run, monte_carlo_result=mc_result, basename=f"ensemble_vote_{run_id}",
+                prop_rules=rules, prop_single_run=single_run, monte_carlo_result=mc_result,
+                basename=report_stem(strategy_label(None, explicit=bt_result.strategy_name), "Ensemble-Vote", output_dir=ENSEMBLE_DIR),
+                test_label="Ensemble Vote",
                 risk_config=risk, price_df=df,
             )
             return render_template("ensemble.html", **ctx(result={
@@ -7447,7 +7508,8 @@ def ensemble_run():
         config = PortfolioConfig(initial_balance=balance, correlation_penalty_strength=float(form.get("correlation_penalty_strength", 0.6) or 0.6))
         result = run_ensemble_blend(df, strategies, risk, names=names, config=config)
         run_id = uuid.uuid4().hex[:10]
-        paths = generate_portfolio_report(ENSEMBLE_DIR, result, basename=f"ensemble_blend_{run_id}")
+        paths = generate_portfolio_report(
+            ENSEMBLE_DIR, result, basename=report_stem(" + ".join(names)[:60] or "Ensemble", "Ensemble-Blend", output_dir=ENSEMBLE_DIR))
         return render_template("ensemble.html", **ctx(result={
             "mode": "blend", "legs": names, "trades": result.combined_statistics.total_trades,
             "net_profit": result.combined_statistics.net_profit, "max_dd": result.combined_statistics.max_drawdown_pct,
@@ -7481,6 +7543,7 @@ def serve_ensemble_report(filename):
 
 
 def _run_cpcv_job(job_id: str, df, strategy, risk: RiskConfig, n_groups: int, n_test_groups: int, embargo_frac: float, metric: str, robustness_threshold: float, max_paths: int, prop_rules=None, strategy_name: str = "", instrument: str = "", library_ref: tuple[str, str] | None = None) -> None:
+    _stamp_job_strategy(job_id, strategy, library_ref=library_ref, explicit=strategy_name)
     try:
         JOB_MANAGER.log(job_id, f"Running CPCV: {n_groups} groups, {n_test_groups} held out per path, metric={metric}...")
         result = run_cpcv(
@@ -7489,7 +7552,9 @@ def _run_cpcv_job(job_id: str, df, strategy, risk: RiskConfig, n_groups: int, n_
             prop_rules=prop_rules,
         )
         JOB_MANAGER.log(job_id, f"Done: {result.n_paths} paths evaluated.")
-        paths = generate_cpcv_report(CPCV_DIR, result, basename=f"cpcv_{job_id}")
+        paths = generate_cpcv_report(
+            CPCV_DIR, result, basename=report_stem(strategy_label(strategy, library_ref=library_ref, explicit=strategy_name),
+                                                   "CPCV", output_dir=CPCV_DIR))
         report_html = f"/cpcv_reports/{Path(paths['html']).name}"
         JOB_MANAGER.finish(job_id, result=result, report_html=report_html, report_json=f"/cpcv_reports/{Path(paths['json']).name}")
         strategy_state.record_validation(
@@ -7620,6 +7685,7 @@ def serve_cpcv_report(filename):
 # ---------------------------------------------------------------------------
 
 def _run_pbo_job(job_id: str, df, specs: list[dict], risk: RiskConfig, n_groups: int, n_test_groups: int, embargo_frac: float, metric: str, max_paths: int, prop_rules=None, strategy_name: str = "", instrument: str = "", library_ref: tuple[str, str] | None = None) -> None:
+    _stamp_job_strategy(job_id, None, library_ref=library_ref, explicit=strategy_name)
     try:
         JOB_MANAGER.log(job_id, f"Running PBO across {len(specs)} candidate(s): {n_groups} groups, {n_test_groups} held out per path, metric={metric}...")
         result = compute_pbo(
@@ -7627,7 +7693,9 @@ def _run_pbo_job(job_id: str, df, specs: list[dict], risk: RiskConfig, n_groups:
             embargo_frac=embargo_frac, metric=metric, max_paths=max_paths, prop_rules=prop_rules,
         )
         JOB_MANAGER.log(job_id, f"Done: {result.n_paths} paths evaluated, PBO = {result.pbo * 100:.1f}%.")
-        paths = generate_pbo_report(PBO_DIR, result, basename=f"pbo_{job_id}")
+        paths = generate_pbo_report(
+            PBO_DIR, result, basename=report_stem(strategy_label(None, library_ref=library_ref, explicit=strategy_name, fallback="Candidates"),
+                                                  "PBO", output_dir=PBO_DIR))
         report_html = f"/pbo_reports/{Path(paths['html']).name}"
         JOB_MANAGER.finish(job_id, result=result, report_html=report_html, report_json=f"/pbo_reports/{Path(paths['json']).name}")
         # PBO is diagnostic (how likely is picking a winner among these
@@ -7784,6 +7852,7 @@ def serve_pbo_report(filename):
 # ---------------------------------------------------------------------------
 
 def _run_sensitivity_job(job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, mc_cfg: MonteCarloConfig, metric: str, pct_range: float, n_steps: int, max_params: int, strategy_name: str = "", instrument: str = "", library_ref: tuple[str, str] | None = None) -> None:
+    _stamp_job_strategy(job_id, strategy, library_ref=library_ref, explicit=strategy_name)
     try:
         JOB_MANAGER.log(job_id, f"Sweeping up to {max_params} tunable parameter(s), {n_steps} steps each, metric={metric}...")
         results = compute_1d_sensitivity(
@@ -7791,7 +7860,9 @@ def _run_sensitivity_job(job_id: str, df, strategy, risk: RiskConfig, rules: Pro
             progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
         )
         JOB_MANAGER.log(job_id, f"Done: swept {len(results)} parameter(s).")
-        paths = generate_sensitivity_report(SENSITIVITY_DIR, results, basename=f"sensitivity_{job_id}")
+        paths = generate_sensitivity_report(
+            SENSITIVITY_DIR, results,
+            basename=report_stem(strategy_label(strategy, library_ref=library_ref, explicit=strategy_name), "Sensitivity", output_dir=SENSITIVITY_DIR))
         report_html = f"/sensitivity_reports/{Path(paths['html']).name}"
         # Kept for an on-demand 2D heatmap requested from the job page --
         # see _run_sensitivity_heatmap_job below. Not put in the JSON
@@ -7838,7 +7909,9 @@ def _run_sensitivity_heatmap_job(job_id: str, param_a: str, param_b: str, pct_ra
             progress_cb=lambda msg: JOB_MANAGER.log(job_id, msg),
         )
         results = job.get("results") or []
-        paths = generate_sensitivity_report(SENSITIVITY_DIR, results, heatmap, basename=f"sensitivity_{job_id}")
+        paths = generate_sensitivity_report(
+            SENSITIVITY_DIR, results, heatmap,
+            basename=report_stem(strategy_label(ctx.get("strategy")), "Sensitivity-Heatmap", output_dir=SENSITIVITY_DIR))
         JOB_MANAGER.update(
             job_id, heatmap_done=True, heatmap_running=False, heatmap_error=None,
             heatmap=heatmap, report_html=f"/sensitivity_reports/{Path(paths['html']).name}",
@@ -7987,6 +8060,7 @@ def _run_param_robustness_job(
     max_params: int, n_heatmap_pairs: int, strategy_name: str = "", instrument: str = "",
     library_ref: tuple[str, str] | None = None,
 ) -> None:
+    _stamp_job_strategy(job_id, strategy, library_ref=library_ref, explicit=strategy_name)
     try:
         JOB_MANAGER.log(
             job_id,
@@ -8163,6 +8237,7 @@ def _run_quickopt_job(
     job_id: str, df, strategy, risk: RiskConfig, rules: PropRules, cfg: QuickOptimizeConfig,
     cancel_event: threading.Event | None = None, instrument_label: str = "",
 ) -> None:
+    _stamp_job_strategy(job_id, strategy)
     with _QUICKOPT_ACTIVE_LOCK:
         _QUICKOPT_ACTIVE_JOB_IDS.add(job_id)
     # v9.15: same risk/rules stash as the Full Pipeline runner, so this
@@ -8202,6 +8277,7 @@ def _run_quickopt_sweep_job(
     adds `job["sweep_timeframes"]`, a plain label -> headline-numbers dict
     for the extra per-timeframe comparison table on the job page.
     """
+    _stamp_job_strategy(job_id, strategy)
     with _QUICKOPT_ACTIVE_LOCK:
         _QUICKOPT_ACTIVE_JOB_IDS.add(job_id)
     try:
