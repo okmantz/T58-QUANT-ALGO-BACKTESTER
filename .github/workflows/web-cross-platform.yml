@@ -45,9 +45,9 @@ jobs:
         shell: bash
         run: >
           pytest -q -p no:cacheprovider
-          tests/test_web.py tests/test_web_license_gate.py tests/test_storage.py
-          tests/test_validate_hub_links.py tests/test_startup_speed_and_desktop_parity.py
-          tests/test_cross_platform_web.py tests/test_start_here_sections.py
+          tests/web/test_web.py tests/web/test_web_license_gate.py tests/data/test_storage.py
+          tests/web/test_validate_hub_links.py tests/ui/test_startup_speed_and_desktop_parity.py
+          tests/web/test_cross_platform_web.py tests/web/test_start_here_sections.py
       - name: Start the real server and request every main page
         shell: bash
         run: python scripts/web_smoke_test.py
