@@ -879,6 +879,11 @@ class FirmFeeInfo:
     # One-time fee charged when an evaluation is PASSED (before the funded account starts), USD.
     # 0.0 for firms with none. The EV verdict charges it on every pass: EV = p*(q*V - A) - c.
     activation_fee: float = 0.0
+    # 2026-10-15 audit: True when challenge_price is a MONTHLY SUBSCRIPTION (Topstep's Trading Combine), not a one-off
+    # purchase. The EV verdict then charges challenge_price for every billing period the evaluation is expected to
+    # take (see app.orchestration.ev_verdict.evaluation_months), instead of exactly one.
+    monthly_subscription: bool = False
+    billing_period_days: int = 30
 
     @property
     def effective_reset_price(self) -> float | None:
@@ -914,11 +919,12 @@ FIRM_FEES: dict[str, FirmFeeInfo] = {
         written_confirmation=False,
         source_tier="primary",
         activation_fee=149.0,
+        monthly_subscription=True,
         notes=(
             "Prices (help.topstep.com/en/articles/14289835 and the older intercom.help/topstep-llc/en/articles/9208217-topstep-pricing, "
             "both read 2026-10-15; neither shows a calendar date, only 'updated over 2 weeks / 3 months ago'): the 50K Trading Combine is "
-            "$49 PER MONTH (a subscription, not a one-off fee -- an evaluation that takes 3 months to pass costs ~$147, and this EV model "
-            "charges ONE month; treat its EV as optimistic for slow passers). 50K Reset $49. Standard path: $149 one-time ACTIVATION fee "
+            "$49 PER MONTH (a subscription, not a one-off fee -- an evaluation that takes 3 months to pass costs ~$147; since 2026-10-15 the EV model "
+            "charges every expected month (monthly_subscription=True), estimated from the holdout days-to-pass). 50K Reset $49. Standard path: $149 one-time ACTIVATION fee "
             "per Express Funded Account earned (modelled via activation_fee). 'No Activation Fee' path: $95 per month and $95 reset, $0 "
             "activation -- not the path modelled here. Paths cannot be changed after purchase. Profit split 90/10 flat from the first dollar "
             "for traders who signed up on/after 2026-01-12 per proptradingvibes.com/blog/topstep-payout-rules (updated 2026-10-09, SECONDARY; "
