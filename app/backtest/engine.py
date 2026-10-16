@@ -73,6 +73,138 @@ def _lookahead_cache_key(strategy, df):
         return None
 
 
+# -- 2026-10-15: persistent lookahead cache ---------------------------------------------------------------
+# The in-memory cache above dies with the process, and for Python strategies its key hashes the file PATH, so an
+# edited file under the same name kept a stale verdict. The disk cache is keyed on what actually determines the
+# answer: the strategy's CONTENT hash, a strong fingerprint of the data it ran on, a fingerprint of the code that
+# runs the check, and the check's parameters. Only checks that really ran (checked=True) are stored; a crash or a
+# skip is never cached. Anything that goes wrong reading/writing the cache just means "recompute".
+_LOOKAHEAD_DISK_SCHEMA = 1
+_code_fp_memo: list = []
+
+
+def _lookahead_disk_enabled() -> bool:
+    import os
+    return os.environ.get("T58_LOOKAHEAD_DISK_CACHE", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def _lookahead_cache_dir():
+    import os
+    from pathlib import Path
+    override = os.environ.get("T58_CACHE_DIR")
+    if override:
+        return Path(override) / "lookahead"
+    from app.data.storage import user_data_dir
+    return Path(user_data_dir()) / "cache" / "lookahead"
+
+
+def _lookahead_code_fingerprint() -> str:
+    """Hash of the source that decides a lookahead verdict (strategy adapters + the checker + resampling)."""
+    if _code_fp_memo:
+        return _code_fp_memo[0]
+    import hashlib
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    h = hashlib.blake2b(digest_size=16)
+    files = sorted((root / "strategy").glob("*.py")) + [root / "data" / "timeframe_resample.py"]
+    for f in files:
+        try:
+            h.update(f.name.encode())
+            h.update(f.read_bytes())
+        except OSError:
+            h.update(b"?")
+    _code_fp_memo.append(h.hexdigest())
+    return _code_fp_memo[0]
+
+
+def _strategy_content_hash(strategy):
+    import hashlib
+    import json
+    from pathlib import Path
+    cfg = getattr(strategy, "config", None)
+    if getattr(strategy, "source_type", None) == "manual" and isinstance(cfg, dict):
+        body = json.dumps(_structure_only(cfg), sort_keys=True, default=str).encode("utf-8", "ignore")
+    else:
+        fp = getattr(strategy, "file_path", None)
+        if fp is not None and Path(fp).is_file():
+            body = Path(fp).read_bytes()          # CONTENT, not the path
+        else:
+            code = getattr(strategy, "code", None)
+            if code is None:
+                return None
+            body = str(code).encode("utf-8", "ignore")
+    h = hashlib.blake2b(digest_size=16)
+    h.update(type(strategy).__name__.encode())
+    h.update(b"\0")
+    h.update(body)
+    return h.hexdigest()
+
+
+def _data_fingerprint(df) -> str:
+    import hashlib
+    import numpy as np
+    h = hashlib.blake2b(digest_size=16)
+    h.update(f"{len(df)}|{','.join(map(str, df.columns))}".encode())
+    if len(df):
+        h.update(str(df["timestamp"].iloc[0]).encode())
+        h.update(str(df["timestamp"].iloc[-1]).encode())
+    for col in ("close", "high", "low"):
+        if col in df.columns:
+            h.update(np.ascontiguousarray(df[col].to_numpy(dtype="float64", copy=False)).tobytes())
+    return h.hexdigest()
+
+
+def _lookahead_disk_path(strategy, df):
+    import hashlib
+    sh = _strategy_content_hash(strategy)
+    if sh is None:
+        return None
+    from app.strategy import lookahead_check as _lc
+    params = repr((getattr(_lc, "DEFAULT_FRACTIONS", None), getattr(_lc, "MAX_SIGNAL_CHECKPOINTS", None),
+                   getattr(_lc, "MIN_BARS_FOR_CHECK", None), _LOOKAHEAD_DISK_SCHEMA))
+    key = hashlib.blake2b(
+        f"{sh}|{_data_fingerprint(df)}|{_lookahead_code_fingerprint()}|{params}".encode(), digest_size=20
+    ).hexdigest()
+    return _lookahead_cache_dir() / f"{key}.json"
+
+
+def _lookahead_disk_load(strategy, df):
+    if not _lookahead_disk_enabled():
+        return None
+    try:
+        import json
+        from app.strategy.lookahead_check import LookaheadCheckResult
+        path = _lookahead_disk_path(strategy, df)
+        if path is None or not path.is_file():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("schema") != _LOOKAHEAD_DISK_SCHEMA:
+            return None
+        res = LookaheadCheckResult(**data["result"])
+        return res if res.checked else None
+    except Exception:  # noqa: BLE001 -- a bad cache entry is just a miss
+        return None
+
+
+def _lookahead_disk_store(strategy, df, result) -> None:
+    if not _lookahead_disk_enabled() or result is None or not getattr(result, "checked", False):
+        return
+    try:
+        import dataclasses
+        import json
+        import os
+        path = _lookahead_disk_path(strategy, df)
+        if path is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps({"schema": _LOOKAHEAD_DISK_SCHEMA, "result": dataclasses.asdict(result)}),
+                       encoding="utf-8")
+        os.replace(tmp, path)                      # atomic: concurrent workers never see a half-written file
+    except Exception:  # noqa: BLE001 -- caching must never break a backtest
+        pass
+
+
 def _run_resting_orders(df, strat_result, strategy, risk):
     """Resting-order / zone strategies: fills from app.backtest.resting_orders
     (same sizing and costs as the bar engine), then a per-bar equity curve."""
@@ -100,6 +232,19 @@ def _run_resting_orders(df, strat_result, strategy, risk):
     curve.attrs["sizing_halt"] = {"halted": False, "skipped": 0, "skip_ratio": 0.0, "last_trade_exit": trades[-1].exit_time if trades else None,
                                   "risk_value": risk.risk_value, "contract_size": risk.contract_size, "sizing_mode": risk.sizing_mode, "skip_reasons": {}}
     return trades, curve
+
+
+def _trade_pnl_moments(trades) -> dict:
+    """Mean / sample std / n of per-trade P&L, used by the holdout gate to put an
+    upper confidence bound on expectancy (a thin holdout that merely lost money
+    is noise, not proof of no edge)."""
+    vals = [float(getattr(t, "pnl", 0.0) or 0.0) for t in trades or []]
+    n = len(vals)
+    if n == 0:
+        return {"n": 0, "mean": None, "std": None}
+    mean = sum(vals) / n
+    var = (sum((v - mean) ** 2 for v in vals) / (n - 1)) if n > 1 else 0.0
+    return {"n": n, "mean": mean, "std": var ** 0.5}
 
 
 def run_holdout_comparison(
@@ -184,6 +329,7 @@ def run_holdout_comparison(
             "holdout_ok": len(hold_tr) >= min_holdout_trades,
             "in_sample_statistics": _stats(ins_tr, ins_curve, float(risk.initial_balance)),
             "holdout_statistics": _stats(hold_tr, hold_curve, hold_start),
+            "holdout_trade_pnl": _trade_pnl_moments(hold_tr),
         }
 
     in_sample_df = df.iloc[:split_idx].reset_index(drop=True)
@@ -206,6 +352,7 @@ def run_holdout_comparison(
         "holdout_bars": len(holdout_df),
         "in_sample_statistics": in_sample_result.statistics.to_dict() if in_sample_result else None,
         "holdout_statistics": holdout_result.statistics.to_dict() if holdout_result else None,
+        "holdout_trade_pnl": _trade_pnl_moments(holdout_result.trades) if holdout_result else None,
     }
 
 
@@ -297,7 +444,11 @@ def run_backtest(
             if _key is not None and _key in _LOOKAHEAD_CACHE:
                 _lookahead_result = _LOOKAHEAD_CACHE[_key]
             else:
-                _lookahead_result = check_for_lookahead(strategy, df)
+                _lookahead_result = _lookahead_disk_load(strategy, df) if _key is not None else None
+                if _lookahead_result is None:
+                    _lookahead_result = check_for_lookahead(strategy, df)
+                    if _key is not None:
+                        _lookahead_disk_store(strategy, df, _lookahead_result)
                 if _key is not None:
                     if len(_LOOKAHEAD_CACHE) >= 512:
                         _LOOKAHEAD_CACHE.pop(next(iter(_LOOKAHEAD_CACHE)))
