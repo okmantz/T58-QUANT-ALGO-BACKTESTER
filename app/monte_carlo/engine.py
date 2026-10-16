@@ -426,25 +426,54 @@ def _day_groups(trades) -> tuple[list, list]:
     return [np.asarray(g, dtype=np.int64) for g in groups], dates
 
 
-def _resample_day_blocks(rng, groups, dates, block_days: int):
+class _DayBlockTables(NamedTuple):
+    """Per-run tables for the numpy day-block resampler: the cumulative offsets are computed ONCE
+    (not once per path), so drawing/gathering a path is a handful of vectorized operations."""
+    counts: np.ndarray    # trades in each source day group
+    starts: np.ndarray    # offset of each group inside `order`
+    order: np.ndarray     # all trade indices, groups concatenated in day order
+
+
+def _day_block_tables(groups) -> _DayBlockTables:
+    counts = np.fromiter((len(g) for g in groups), dtype=np.int64, count=len(groups))
+    starts = np.cumsum(counts) - counts
+    order = np.concatenate(groups).astype(np.int64) if len(groups) else np.zeros(0, dtype=np.int64)
+    return _DayBlockTables(counts, starts, order)
+
+
+def _draw_day_block_choices(rng, nd: int, block_days: int, n_paths: int) -> np.ndarray:
+    """Group ids for ``n_paths`` paths at once: (n_paths, nd). ONE ``rng.integers`` call draws every
+    block start for every path, path-major -- the identical stream the old per-path scalar draws
+    consumed (ceil(nd/k) draws per path, in path order), so every result is unchanged."""
+    k = max(1, min(int(block_days), nd))
+    nb = -(-nd // k)
+    starts = rng.integers(0, nd - k + 1, size=(n_paths, nb))
+    return (starts[:, :, None] + np.arange(k)[None, None, :]).reshape(n_paths, nb * k)[:, :nd]
+
+
+def _resample_day_blocks(rng, groups, dates, block_days: int, tables: "_DayBlockTables | None" = None):
     """Draws consecutive-day blocks (non-circular) until the path has as many
     day slots as the source. Returns (trade_index_array, DayStructure) -- the
     structure is built with numpy straight from the drawn slots, so no
-    per-trade timestamp parsing happens inside the simulation loop."""
+    per-trade timestamp parsing happens inside the simulation loop.
+
+    2026-10-15: numpy rewrite. All block starts for the path come from ONE
+    ``rng.integers`` call and the trade gather uses precomputed cumulative
+    offsets (``tables``, built once per run by the caller; computed here when
+    omitted so existing callers keep working). Draw stream and output are
+    identical to the previous per-block Python loop."""
     from app.prop.simulator import DayStructure
     nd = len(groups)
-    k = max(1, min(int(block_days), nd))
-    chosen: list[int] = []
-    while len(chosen) < nd:
-        start = int(rng.integers(0, nd - k + 1))
-        chosen.extend(range(start, start + k))
-    chosen = chosen[:nd]
-    arrs = [groups[g] for g in chosen]
-    idx = np.concatenate(arrs).astype(np.int64)
-    counts = np.fromiter((len(a) for a in arrs), dtype=np.int64, count=nd)
-    day_index = np.repeat(np.arange(nd), counts)
-    is_last = np.zeros(len(idx), dtype=bool)
-    is_last[np.cumsum(counts) - 1] = True
+    tb = tables if tables is not None else _day_block_tables(groups)
+    chosen = _draw_day_block_choices(rng, nd, block_days, 1)[0]
+    cnt = tb.counts[chosen]
+    total = int(cnt.sum())
+    blk_end = np.cumsum(cnt)
+    pos = np.arange(total) - np.repeat(blk_end - cnt, cnt)
+    idx = tb.order[np.repeat(tb.starts[chosen], cnt) + pos]
+    day_index = np.repeat(np.arange(nd), cnt)
+    is_last = np.zeros(total, dtype=bool)
+    is_last[blk_end - 1] = True
     ds = DayStructure(day_index_per_trade=day_index.tolist(), is_last_of_day=is_last.tolist(),
                       day_dates=list(dates), n_days=nd)
     return idx, ds
@@ -808,6 +837,163 @@ def _mc_simulate_path(sim_pnls, base_dates, rules, day_structure, reset_on_breac
     )
 
 
+# -- 2026-10-15: vectorized path evaluation ------------------------------------------------------
+# One numpy state array per rule value, looping over the TRADE INDEX instead of over simulations
+# (app.prop.vector_account). Same draws (batched, stream-identical), same per-path arithmetic, so the
+# rows are identical to _mc_simulate_path's; rule sets the kernel does not cover fall back to the
+# original per-path loop (see supports_vectorized). T58_MC_VECTORIZE=0 turns it off.
+_VEC_MIN_SIMS = 48
+_VEC_CELL_BUDGET_DAYBLOCK = 20_000_000     # (trades x paths) cells per chunk; ~9 bytes each
+_VEC_CELL_BUDGET_GENERIC = 4_000_000       # generic path stacks float matrices -> smaller chunks
+
+
+def _vec_rows_from_result(res, rules, tables) -> list:
+    acct = float(rules.account_size)
+    passed = res.passed.tolist()
+    failed = res.failed.tolist()
+    dtp = res.days_to_pass.tolist()
+    fpd = res.first_payout_day.tolist()
+    npay = res.n_payouts.tolist()
+    tpay = res.total_payout.tolist()
+    ret = ((res.final_balance - acct) / acct * 100.0).tolist()
+    mdd = res.max_dd_pct.tolist()
+    streak = res.max_losing_streak.tolist()
+    cal_used = (tables.cal0[np.clip(res.last_slot, 0, len(tables.cal0) - 1)] + 1).tolist()
+    rows = []
+    for k in range(len(passed)):
+        p, f = passed[k], failed[k]
+        reached = fpd[k] >= 0
+        rows.append(_SimRow(
+            passed=p, reached_first_payout=reached,
+            failed_before_payout=f and not reached,
+            multiple_payouts=npay[k] > 1,
+            total_attempts=1, attempts_passed=1 if p else 0, attempts_reached_payout=1 if reached else 0,
+            any_attempt_failed=f, first_attempt_bust=f and not p,
+            attempts_failed=1 if f else 0,
+            days_to_pass=dtp[k] if dtp[k] >= 0 else None,
+            first_payout_day_index=fpd[k] if reached else None,
+            return_pct=ret[k], total_payout_amount=tpay[k], max_drawdown_pct=mdd[k],
+            max_losing_streak=streak[k],
+            failed_calendar_days=(int(cal_used[k] or 0),) if f else (),
+            failed_before_payout_attempts=1 if (f and not reached) else 0,
+            funded_failed=1 if (f and p) else 0,
+        ))
+    return rows
+
+
+def _mc_rows_vectorized(*, n_sims, rng, cfg, rules, base_pnls, base_risks, has_risks, base_mae, base_mfe,
+                        use_day_blocks, use_regime_shuffle, groups, gdates, tables, draw_one,
+                        progress_cb, base_ds=None) -> list:
+    from app.prop.vector_account import build_day_tables, simulate_paths
+    stress = cfg.slippage_stress_pct
+    rows: list = []
+    done = 0
+
+    def _report():
+        if progress_cb is not None:
+            try:
+                progress_cb(done, n_sims)
+            except Exception:  # noqa: BLE001 -- progress must never sink the run
+                pass
+
+    fast = use_day_blocks and not use_regime_shuffle and groups is not None
+    if fast:
+        nd = len(groups)
+        day_tables = build_day_tables(gdates)
+        avg_len = max(1, int(len(tables.order)))
+        chunk = int(max(256, min(8192, _VEC_CELL_BUDGET_DAYBLOCK // max(avg_len, 1))))
+        while done < n_sims:
+            P = min(chunk, n_sims - done)
+            chosen = _draw_day_block_choices(rng, nd, cfg.day_block_days, P)
+            cnt = tables.counts[chosen]                       # (P, nd)
+            path_len = cnt.sum(axis=1)
+            L = int(path_len.max())
+            fc = cnt.ravel()
+            fg = chosen.ravel()
+            total = int(fc.sum())
+            blk_end = np.cumsum(fc)
+            pos = np.arange(total) - np.repeat(blk_end - fc, fc)
+            trade_idx = tables.order[np.repeat(tables.starts[fg], fc) + pos]
+            row_of = np.repeat(np.arange(P), path_len)
+            col_of = np.arange(total) - np.repeat(np.cumsum(path_len) - path_len, path_len)
+            idx2 = np.zeros((L, P), dtype=np.int32)
+            slot2 = np.full((L, P), -1, dtype=np.int32)
+            last2 = np.zeros((L, P), dtype=bool)
+            idx2[col_of, row_of] = trade_idx
+            slot2[col_of, row_of] = np.repeat(np.tile(np.arange(nd), P), fc)
+            last_flat = np.zeros(total, dtype=bool)
+            last_flat[blk_end - 1] = True
+            last2[col_of, row_of] = last_flat
+
+            def get_step(t, idx2=idx2, slot2=slot2, last2=last2):
+                ix = idx2[t]
+                pn = _apply_slippage_stress(base_pnls[ix], stress)
+                mae = mfe = None
+                if base_mae is not None:
+                    d = pn - base_pnls[ix]
+                    mae = np.minimum(base_mae[ix] + np.minimum(d, 0.0), np.minimum(pn, 0.0))
+                    mfe = np.maximum(base_mfe[ix] + np.maximum(d, 0.0), np.maximum(pn, 0.0))
+                risk = base_risks[ix] if has_risks else None
+                return pn, mae, mfe, risk, slot2[t], last2[t]
+
+            res = simulate_paths(rules, path_len, get_step, L, day_tables)
+            rows.extend(_vec_rows_from_result(res, rules, day_tables))
+            done += P
+            _report()
+        return rows
+
+    # generic path (iid / block / regime-shuffle methods): draws stay per path, evaluation is batched
+    first = draw_one()
+    ds0 = first[1] if first[1] is not None else base_ds
+    if ds0 is None:
+        raise ValueError("generic vector path needs a DayStructure")
+    L0 = len(first[0])
+    chunk = int(max(64, min(4096, _VEC_CELL_BUDGET_GENERIC // max(L0, 1))))
+    day_tables = build_day_tables(ds0.day_dates)
+    pending = [first]
+    while done < n_sims:
+        P = min(chunk, n_sims - done)
+        draws = pending + [draw_one() for _ in range(P - len(pending))]
+        pending = []
+        lens = np.array([len(d[0]) for d in draws], dtype=np.int64)
+        L = int(lens.max())
+        pnl2 = np.zeros((L, P)); slot2 = np.full((L, P), -1, dtype=np.int64); last2 = np.zeros((L, P), dtype=bool)
+        mae2 = mfe2 = risk2 = None
+        has_exc = isinstance(draws[0][2], tuple) and len(draws[0][2]) == 3
+        if has_exc:
+            mae2 = np.zeros((L, P)); mfe2 = np.zeros((L, P))
+            if draws[0][2][0] is not None:
+                risk2 = np.zeros((L, P))
+        elif draws[0][2] is not None:
+            risk2 = np.zeros((L, P))
+        for c, (pn, ds, rk) in enumerate(draws):
+            ds = ds if ds is not None else base_ds
+            n = len(pn)
+            sl = np.asarray(ds.day_index_per_trade, dtype=np.int64)
+            if n == 0 or sl[0] != 0 or (np.diff(sl) > 1).any() or (np.diff(sl) < 0).any() or len(ds.day_dates) != len(day_tables.cal0):
+                raise ValueError("day structure not contiguous")
+            pnl2[:n, c] = pn
+            slot2[:n, c] = sl
+            last2[:n, c] = np.asarray(ds.is_last_of_day, dtype=bool)
+            if has_exc:
+                r_, ma_, mf_ = rk
+                mae2[:n, c] = ma_; mfe2[:n, c] = mf_
+                if risk2 is not None:
+                    risk2[:n, c] = r_
+            elif rk is not None:
+                risk2[:n, c] = rk
+
+        def get_step(t, pnl2=pnl2, slot2=slot2, last2=last2, mae2=mae2, mfe2=mfe2, risk2=risk2):
+            return (pnl2[t], None if mae2 is None else mae2[t], None if mfe2 is None else mfe2[t],
+                    None if risk2 is None else risk2[t], slot2[t], last2[t])
+
+        res = simulate_paths(rules, lens, get_step, L, day_tables)
+        rows.extend(_vec_rows_from_result(res, rules, day_tables))
+        done += P
+        _report()
+    return rows
+
+
 # -- v9.13: cross-process path evaluation --------------------------------
 # The resample DRAWS are the only part of a Monte Carlo run that must
 # stay sequential (they consume one rng stream); given a drawn path,
@@ -1042,6 +1228,7 @@ def run_monte_carlo(
     _month_grp = None
     if use_day_blocks:
         _groups, _gdates = _day_groups(trades)
+        _tables = _day_block_tables(_groups)
         n_source_days = len(_groups)
         if use_regime_shuffle:
             _month_grp = _month_groups(_gdates)
@@ -1079,7 +1266,7 @@ def run_monte_carlo(
         if use_regime_shuffle:
             sim_idx, sim_ds = _resample_month_blocks(rng, _groups, _gdates, _month_grp)
         elif use_day_blocks:
-            sim_idx, sim_ds = _resample_day_blocks(rng, _groups, _gdates, cfg.day_block_days)
+            sim_idx, sim_ds = _resample_day_blocks(rng, _groups, _gdates, cfg.day_block_days, _tables)
         else:
             sim_idx = _resample_indices(rng, len(base_pnls), cfg.method, eff_block_size)
             sim_ds = None
@@ -1098,6 +1285,24 @@ def run_monte_carlo(
 
     n_sims = int(cfg.n_simulations)
     rows: list | None = None
+    # 2026-10-15: vectorized-across-paths evaluation (see _mc_rows_vectorized). Tried first; anything the
+    # kernel does not cover, or any failure, falls through to the original per-path paths below with a
+    # re-seeded rng, so it can change the speed but never the numbers.
+    from app.prop.vector_account import supports_vectorized, vectorize_enabled
+    if (n_sims >= _VEC_MIN_SIMS and vectorize_enabled()
+            and supports_vectorized(rules, cfg.reset_on_breach, have_excursions=base_mae is not None)):
+        try:
+            rows = _mc_rows_vectorized(
+                n_sims=n_sims, rng=rng, cfg=cfg, rules=rules, base_pnls=base_pnls, base_risks=base_risks,
+                has_risks=has_risks, base_mae=base_mae, base_mfe=base_mfe,
+                use_day_blocks=use_day_blocks, use_regime_shuffle=use_regime_shuffle,
+                groups=_groups if use_day_blocks else None, gdates=_gdates if use_day_blocks else None,
+                tables=_tables if use_day_blocks else None, draw_one=_draw_one, progress_cb=progress_cb,
+                base_ds=day_structure,
+            )
+        except Exception:  # noqa: BLE001 -- never let the fast path change the numbers
+            rows = None
+            rng = np.random.default_rng(cfg.random_seed)
     # v9.15 (WS-F): a caller-owned shared pool (pool=...) is tried first:
     # one spawn serves every MC call in a pipeline run instead of a
     # spawn/teardown per call. Draws stay in this process in sim order
@@ -1105,7 +1310,12 @@ def run_monte_carlo(
     # produce bit-identical results; any pool failure re-seeds the rng
     # before the next attempt, exactly as the per-call path always has.
     _attempted_parallel = False
-    if pool is not None and n_sims >= _MC_PARALLEL_MIN_SIMS:
+    if rows is None and pool is None and max_workers is not None and int(max_workers) > 1 and n_sims >= _MC_PARALLEL_MIN_SIMS:
+        # 2026-10-15: no caller-owned pool -> use the process-wide persistent one instead of spawning a
+        # fresh pool for this call (falls back to the per-call pool below if it cannot be created).
+        from app.monte_carlo.shared_pool import get_shared_mc_pool
+        pool = get_shared_mc_pool(int(max_workers))
+    if rows is None and pool is not None and n_sims >= _MC_PARALLEL_MIN_SIMS:
         _attempted_parallel = True
         try:
             rows = _mc_rows_on_pool(
