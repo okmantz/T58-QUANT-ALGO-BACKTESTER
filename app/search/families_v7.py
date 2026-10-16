@@ -26,7 +26,7 @@ Every family here follows app.search.strategy_space's existing conventions:
   defaults" means for a template family: the family is scale-agnostic by
   construction, so the same grid runs on ES, NQ, GC, or EURUSD without a
   silent FX-pip trap.
-* Lookahead: every family is exercised by tests/test_families_v7.py,
+* Lookahead: every family is exercised by tests/strategy/test_families_v7.py,
   which builds candidates on synthetic ES-scale OHLC and runs
   app.strategy.lookahead_check.check_for_lookahead on each -- a family
   that fails that check fails the suite.

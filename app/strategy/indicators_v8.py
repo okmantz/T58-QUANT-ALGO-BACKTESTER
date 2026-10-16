@@ -46,7 +46,7 @@ back to V8_INDICATOR_BUILDERS here for any kind neither it nor the v7
 module knows (additive only), app.strategy.manual._series_from_operand
 routes the new kind names into build_indicator_series, and
 app.search.grammar.INDICATOR_KINDS registers them as grammar terminals.
-Covered by tests/test_indicators_v8.py (reference-value agreement on
+Covered by tests/backtest/test_indicators_v8.py (reference-value agreement on
 synthetic data, the prefix-invariance property the repo's behavioral
 lookahead check rests on, and the behavioral check itself via a Manual
 strategy that trades on each kind).

@@ -78,7 +78,6 @@ from app.reports.generator import generate_full_report
 from app.search.failure_triage import aggregate_failure_reasons
 from app.search.family_diversity import enforce_family_diversity
 from app.search.graveyard import GraveyardEntry, graveyard_path_for, param_signature, record_rejections
-from app.search.instrument_risk import resolve_leg_risk
 from app.search.results_db import ResultsDB
 from app.search.robustness import (
     deflated_sharpe_ratio, parameter_neighborhood_robustness, run_walk_forward,

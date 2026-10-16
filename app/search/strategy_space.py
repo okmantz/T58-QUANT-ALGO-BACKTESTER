@@ -62,10 +62,8 @@ from typing import Any, Callable
 
 import numpy as np
 
-from app.optimize.code_parameter_space import (
-    CodeGene, apply_code_genome, discover_code_genes,
-)
-from app.optimize.parameter_space import GeneMeta, apply_genome, extract_genome
+from app.optimize.code_parameter_space import apply_code_genome, discover_code_genes
+from app.optimize.parameter_space import apply_genome, extract_genome
 from app.strategy.base import Strategy
 from app.strategy.manual import ManualStrategy
 from app.strategy.mql5 import MQL5Strategy

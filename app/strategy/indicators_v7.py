@@ -17,7 +17,7 @@ Workstream-C list that had no builder yet at HEAD 9a98914:
 Lookahead safety: every series is built only from the current and past
 bars -- rolling windows, ewm with adjust=False, and .shift(+n) (past bars)
 only. No negative shifts, no centered windows, no whole-frame aggregates.
-Each is covered by tests/test_indicators_v7.py (reference-value agreement
+Each is covered by tests/backtest/test_indicators_v7.py (reference-value agreement
 on synthetic data + the repo's behavioral lookahead check,
 app.strategy.lookahead_check, via a Manual strategy that trades on the
 kind).
@@ -103,7 +103,7 @@ def linreg_slope(series: pd.Series, period: int = 14) -> pd.Series:
     g - N + 1, sum(j*y_j) = sum(g*y) - s*sum(y), all three sums being plain
     trailing rolling sums -- so each bar's slope uses only bars at or
     before it. Verified term-by-term against np.polyfit in
-    tests/test_indicators_v7.py.
+    tests/backtest/test_indicators_v7.py.
     """
     n = _period(period)
     y = pd.Series(series).astype(float)

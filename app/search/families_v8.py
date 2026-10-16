@@ -24,7 +24,7 @@ conventions:
 * Instrument awareness: no family hardcodes a pip_size or any FX-scale
   assumption. All stops/targets are ATR multiples resolved against the
   instrument's own volatility at backtest time.
-* Lookahead: every family is exercised by tests/test_families_v8.py,
+* Lookahead: every family is exercised by tests/strategy/test_families_v8.py,
   which builds candidates on synthetic ES-scale OHLC and runs
   app.strategy.lookahead_check.check_for_lookahead on each -- a family
   that fails that check fails the suite.

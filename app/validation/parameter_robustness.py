@@ -49,8 +49,11 @@ from app.optimize.parameter_space import RefinementError
 from app.prop.simulator import PropRules
 from app.strategy.base import Strategy
 from app.validation.sensitivity import (
-    Sensitivity1DResult, Sensitivity2DResult, compute_1d_sensitivity, compute_2d_heatmap,
-    compute_base_metric, list_tunable_parameters,
+    Sensitivity2DResult,
+    compute_1d_sensitivity,
+    compute_2d_heatmap,
+    compute_base_metric,
+    list_tunable_parameters,
 )
 
 # eval_pass_probability (and first_payout_probability) are already

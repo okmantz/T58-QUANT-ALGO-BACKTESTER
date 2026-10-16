@@ -47,8 +47,14 @@ versions.
 from __future__ import annotations
 
 from app.strategy.translator import (
-    ParsedStrategy, TranslationError, _ConditionGroup, _Condition, _Operand,
-    _collect_indicators, _config_directive_lines, _fmt_num, _risk_todo_lines,
+    TranslationError,
+    _ConditionGroup,
+    _Condition,
+    _Operand,
+    _collect_indicators,
+    _config_directive_lines,
+    _fmt_num,
+    _risk_todo_lines,
     parse_manual_config,
 )
 

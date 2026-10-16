@@ -565,7 +565,7 @@ def _null_eval_signal(df, sig, risk, stop_loss_pips, take_profit_pips,
 # the original order and workers only run the engine; values are
 # collected by seed index, so the null list (and therefore the p-value)
 # is bit-identical to the serial run -- pinned by
-# tests/test_v913_progress_explorer_speed.py. Spawn matches every other
+# tests/search/test_v913_progress_explorer_speed.py. Spawn matches every other
 # pool in this app; any pool failure finishes the remaining seeds
 # serially in-process from the already-drawn signals.
 _NULL_WORKER: dict = {}
