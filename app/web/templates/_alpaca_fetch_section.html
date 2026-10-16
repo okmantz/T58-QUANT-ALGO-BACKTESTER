@@ -17,7 +17,7 @@
 <div class="card">
   <details{{ ' open' if alpaca_notice else '' }}>
     <summary>Or fetch data from Alpaca</summary>
-    <p style="font-size:12px;color:#888;margin:8px 0 10px;">
+    <p style="font-size:12px;color:var(--t-faint);margin:8px 0 10px;">
       Pulls bars via the Alpaca API (stocks + crypto only — no forex/futures/CFD feed) and saves
       them into data/raw/, where they'll appear in the "previously stored dataset" dropdown below.
       A free Alpaca paper-trading account provides API keys for data access.
@@ -34,7 +34,7 @@
           <input type="password" name="alpaca_secret_key" autocomplete="off" placeholder="{{ '••••••••••• (saved)' if alpaca_has_saved_keys else '' }}">
         </div>
       </div>
-      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#ccc;margin-top:10px;">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t-soft);margin-top:10px;">
         <input type="checkbox" name="alpaca_save_keys" style="width:auto;" checked>
         Save these keys on this computer for next time
       </label>
@@ -87,7 +87,7 @@
     {% if alpaca_has_saved_keys %}
     <form method="post" action="/data/alpaca/forget" style="margin-top:8px;">
       <input type="hidden" name="alpaca_return_to" value="{{ alpaca_return_to | default('index') }}">
-      <button type="submit" style="background:none;border:1px solid var(--border-light);color:#999;padding:8px 12px;border-radius:8px;font-size:12px;width:100%;">
+      <button type="submit" style="background:none;border:1px solid var(--border-light);color:var(--t-faint2);padding:8px 12px;border-radius:8px;font-size:12px;width:100%;">
         Forget saved Alpaca keys
       </button>
     </form>

@@ -1,18 +1,11 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Activate — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <style>
-  :root { color-scheme: dark; }
   * { box-sizing: border-box; }
-  body { background: var(--bg, #05070a); min-height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0; padding: 20px; }
+  body { background: var(--bg, var(--bg)); min-height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0; padding: 20px; }
   .activate-card {
     background: var(--panel-2); border: 1px solid var(--border); border-radius: 14px;
     padding: 28px 26px; width: 100%; max-width: 380px;
@@ -28,7 +21,7 @@
   input:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), 0.15); }
   .submit-btn {
     width: 100%; padding: 13px 20px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal);
-    color: #04120e; font-weight: 700; font-size: 14px; margin-top: 4px; cursor: pointer;
+    color: var(--on-teal); font-weight: 700; font-size: 14px; margin-top: 4px; cursor: pointer;
   }
   .error-note { color: var(--danger); font-size: 13px; margin: 14px 0 0; text-align: center; }
   .hint { color: var(--text-muted); font-size: 11px; text-align: center; margin: 16px 0 0; }

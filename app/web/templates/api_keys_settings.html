@@ -1,16 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>API Keys — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <style>
-  :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 14px; max-width: 640px; }
   .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 4px; }
@@ -23,7 +16,7 @@
   }
   .category-label:first-of-type { margin-top: 0; }
   .category-label .cat-icon { font-size: 15px; }
-  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  label { display: block; font-size: 13px; color: var(--t-soft); margin: 10px 0 4px; }
   input[type=text], input[type=password], input[type=number], select {
     width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-light);
     background: var(--panel-3); color: var(--text); font-size: 14px;
@@ -32,7 +25,7 @@
   .row > div { flex: 1; min-width: 140px; }
   .submit-btn {
     padding: 11px 18px; border-radius: 8px; border: 1px solid var(--teal); background: var(--teal);
-    color: #04120e; font-weight: 700; font-size: 13px; margin-top: 10px; cursor: pointer;
+    color: var(--on-teal); font-weight: 700; font-size: 13px; margin-top: 10px; cursor: pointer;
   }
   .test-btn {
     padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-light); background: transparent;
@@ -43,8 +36,8 @@
   .divider { border: none; border-top: 1px solid var(--border-light); margin: 14px 0; }
   .account-row { border: 1px solid var(--border-light); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
   .account-row .meta { font-size: 12.5px; color: var(--text-muted); }
-  .delete-btn { background: transparent; border: 1px solid #6b2323; color: #ff8a8a; padding: 6px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; }
-  .field-note { font-size: 12px; color: #888; margin-top: 4px; }
+  .delete-btn { background: transparent; border: 1px solid var(--err-bd); color: var(--err-fg2); padding: 6px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+  .field-note { font-size: 12px; color: var(--t-faint); margin-top: 4px; }
   .platform-fields { display: none; }
   .platform-fields.active { display: block; }
 </style>
