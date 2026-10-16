@@ -4,21 +4,21 @@
 <style>
   .dc-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 14px; max-width: 720px; }
   .dc-card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
-  .dc-card label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  .dc-card label { display: block; font-size: 13px; color: var(--t-soft); margin: 10px 0 4px; }
   .dc-card input[type=text], .dc-card input[type=password], .dc-card select {
     width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-light);
     background: var(--panel-3); color: var(--text); font-size: 14px; box-sizing: border-box;
   }
-  .dc-card .dc-help { font-size: 12px; color: #8b95a7; margin: 4px 0 0; line-height: 1.45; }
+  .dc-card .dc-help { font-size: 12px; color: var(--t-mute2); margin: 4px 0 0; line-height: 1.45; }
   .dc-note { font-size: 12.5px; line-height: 1.5; margin: 8px 0; padding: 10px 12px; border-radius: 8px; background: #1b2230; color: #c8d0de; }
-  .dc-note.warn { background: #2a1e0a; color: #ffd28a; border: 1px solid #7a5210; }
-  .dc-note.bad { background: #2a1414; color: #ffb4b4; border: 1px solid #6b2323; }
-  .dc-note.good { background: #10261b; color: #a6efc6; border: 1px solid #1f6b46; }
-  .dc-btn { padding: 10px 16px; border-radius: 9px; border: 1px solid #2a8f6a; background: #00c389; color: #04130d; font-weight: 700; font-size: 13px; cursor: pointer; margin: 10px 8px 0 0; }
+  .dc-note.warn { background: var(--warn-bg); color: var(--warn-fg2); border: 1px solid var(--warn-bd); }
+  .dc-note.bad { background: var(--err-bg); color: var(--err-fg); border: 1px solid var(--err-bd); }
+  .dc-note.good { background: var(--ok-bg4); color: var(--ok-fg4); border: 1px solid var(--ok-bd3); }
+  .dc-btn { padding: 10px 16px; border-radius: 9px; border: 1px solid #2a8f6a; background: #00c389; color: var(--on-teal2); font-weight: 700; font-size: 13px; cursor: pointer; margin: 10px 8px 0 0; }
   .dc-btn.secondary { background: transparent; color: #00e0a0; }
-  .dc-btn.danger { background: transparent; color: #ff8a8a; border-color: #6b2323; }
+  .dc-btn.danger { background: transparent; color: var(--err-fg2); border-color: var(--err-bd); }
   .dc-acct { border: 1px solid var(--border-light); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
-  .dc-acct .meta { font-size: 12px; color: #8b95a7; margin: 3px 0 6px; }
+  .dc-acct .meta { font-size: 12px; color: var(--t-mute2); margin: 3px 0 6px; }
   .dc-steps { margin: 6px 0 0 18px; padding: 0; font-size: 12.5px; line-height: 1.5; }
 </style>
 
@@ -28,7 +28,7 @@
 </div>
 
 <div class="dc-card" id="dc-form-card">
-  <h2>Connect an account <span id="dc-editing-tag" style="color:#ffd28a;text-transform:none;"></span></h2>
+  <h2>Connect an account <span id="dc-editing-tag" style="color:var(--warn-fg2);text-transform:none;"></span></h2>
   <label>Prop firm</label>
   <select id="dc-firm"></select>
   <div id="dc-firm-note" class="dc-note"></div>

@@ -1,24 +1,17 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>PBO — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <style>
-  :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
   .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
-  .card p.help { font-size: 12px; color: #888; margin: 0 0 10px; line-height: 1.5; }
-  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  .card p.help { font-size: 12px; color: var(--t-faint); margin: 0 0 10px; line-height: 1.5; }
+  label { display: block; font-size: 13px; color: var(--t-soft); margin: 10px 0 4px; }
   input[type=text], input[type=number], select, textarea {
     width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light);
     background: var(--panel-3); color: var(--text); font-size: 15px;
@@ -29,26 +22,26 @@
   textarea { min-height: 140px; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
   .row { display: flex; gap: 10px; }
   .row > div { flex: 1; }
-  input[type=file] { width: 100%; color: #ccc; }
+  input[type=file] { width: 100%; color: var(--t-soft); }
   .tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
   .tabs button {
     flex: 1; min-width: 70px; padding: 10px 6px; border-radius: 8px; border: 1px solid var(--border-light);
-    background: var(--panel-3); color: #ccc; font-size: 13px;
+    background: var(--panel-3); color: var(--t-soft); font-size: 13px;
   }
-  .tabs button.active { background: var(--teal); color: #04120e; font-weight: 600; border-color: var(--teal); }
+  .tabs button.active { background: var(--teal); color: var(--on-teal); font-weight: 600; border-color: var(--teal); }
   .submit-btn {
-    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: #04120e;
+    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: var(--on-teal);
     font-size: 16px; font-weight: 700; margin-top: 6px;
     box-shadow: 0 0 22px rgba(53,224,176,0.35);
   }
-  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
-  .notice { background: #142a1a; border: 1px solid #235a32; color: #b4ffcb; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
-  details summary { font-size: 13px; color: #999; cursor: pointer; }
+  .error { background: var(--err-bg); border: 1px solid var(--err-bd); color: var(--err-fg); padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .notice { background: var(--ok-bg); border: 1px solid var(--ok-bd); color: var(--ok-fg); padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  details summary { font-size: 13px; color: var(--t-faint2); cursor: pointer; }
   .pool-list { max-height: 260px; overflow-y: auto; border: 1px solid var(--border-light); border-radius: 8px; padding: 6px; background: var(--panel-3); }
   .pool-item { display: flex; align-items: center; gap: 8px; padding: 7px 6px; border-bottom: 1px solid var(--border); font-size: 13px; }
   .pool-item:last-child { border-bottom: none; }
   .pool-item input[type=checkbox] { width: auto; }
-  .pool-item .meta { color: #888; font-size: 11px; }
+  .pool-item .meta { color: var(--t-faint); font-size: 11px; }
   .pool-count { font-size: 12px; color: var(--teal); margin-top: 8px; }
 </style>
 </head>

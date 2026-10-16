@@ -1,24 +1,17 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Quick Optimize — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <style>
-  :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
   .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
-  .card p.help { font-size: 12px; color: #888; margin: 0 0 10px; line-height: 1.5; }
-  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  .card p.help { font-size: 12px; color: var(--t-faint); margin: 0 0 10px; line-height: 1.5; }
+  label { display: block; font-size: 13px; color: var(--t-soft); margin: 10px 0 4px; }
   input[type=text], input[type=number], select, textarea {
     width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light);
     background: var(--panel-3); color: var(--text); font-size: 15px;
@@ -29,21 +22,21 @@
   textarea { min-height: 140px; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
   .row { display: flex; gap: 10px; }
   .row > div { flex: 1; }
-  input[type=file] { width: 100%; color: #ccc; }
+  input[type=file] { width: 100%; color: var(--t-soft); }
   .tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
   .tabs button {
     flex: 1; min-width: 70px; padding: 10px 6px; border-radius: 8px; border: 1px solid var(--border-light);
-    background: var(--panel-3); color: #ccc; font-size: 13px;
+    background: var(--panel-3); color: var(--t-soft); font-size: 13px;
   }
-  .tabs button.active { background: var(--teal); color: #04120e; font-weight: 600; border-color: var(--teal); }
+  .tabs button.active { background: var(--teal); color: var(--on-teal); font-weight: 600; border-color: var(--teal); }
   .submit-btn {
-    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: #04120e;
+    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: var(--on-teal);
     font-size: 16px; font-weight: 700; margin-top: 6px;
     box-shadow: 0 0 22px rgba(53,224,176,0.35);
   }
-  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
-  .notice { background: #142a1a; border: 1px solid #235a32; color: #b4ffcb; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
-  details summary { font-size: 13px; color: #999; cursor: pointer; }
+  .error { background: var(--err-bg); border: 1px solid var(--err-bd); color: var(--err-fg); padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .notice { background: var(--ok-bg); border: 1px solid var(--ok-bd); color: var(--ok-fg); padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  details summary { font-size: 13px; color: var(--t-faint2); cursor: pointer; }
 </style>
 </head>
 <body>
@@ -138,7 +131,7 @@
         <option value="">— none, paste or upload below —</option>
       </select>
       <a href="#" onclick="qoViewStrategyCode(); return false;" style="font-size:12px;color:var(--teal);display:inline-block;margin-top:6px;">View code of selected strategy</a>
-      <p style="font-size:12px;color:#888;margin-top:6px;" id="library-count-note"></p>
+      <p style="font-size:12px;color:var(--t-faint);margin-top:6px;" id="library-count-note"></p>
 
       <label style="margin-top:14px;">Or upload a strategy file (from this computer or your phone)</label>
       <input type="file" id="strategy_file_input" name="strategy_file" accept=".py,.pine,.mq5">
@@ -203,7 +196,7 @@
           <option value="{{ key }}" {{ 'selected' if key == 'eval_pass_probability' else '' }}>{{ label }}</option>
           {% endfor %}
         </select>
-        <p style="font-size:12px;color:#888;margin-top:4px;">Not trading a prop-firm evaluation? Pick "Long-Term Net Profit" -- it scores candidates purely on total P&amp;L and ignores prop-firm drawdown/payout rules entirely.</p>
+        <p style="font-size:12px;color:var(--t-faint);margin-top:4px;">Not trading a prop-firm evaluation? Pick "Long-Term Net Profit" -- it scores candidates purely on total P&amp;L and ignores prop-firm drawdown/payout rules entirely.</p>
       </div>
     </div>
     <div class="row">
@@ -213,24 +206,24 @@
           <option value="{{ key }}" {{ 'selected' if key == 'genetic' else '' }}>{{ label }}</option>
           {% endfor %}
         </select>
-        <p style="font-size:12px;color:#888;margin-top:4px;">All three run the exact same chained out-of-sample scoring per candidate -- only how the next configuration to try is chosen differs. TPE/CMA-ES need the optuna / cma packages on the server; you'll get a clear error here if one isn't installed.</p>
+        <p style="font-size:12px;color:var(--t-faint);margin-top:4px;">All three run the exact same chained out-of-sample scoring per candidate -- only how the next configuration to try is chosen differs. TPE/CMA-ES need the optuna / cma packages on the server; you'll get a clear error here if one isn't installed.</p>
       </div>
     </div>
     <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;"><input type="checkbox" name="save_to_library" checked style="width:auto;">Save the result to the Strategy Library (tagged "draft")</label>
     <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;background:rgba(90,220,180,0.08);border:1px solid rgba(90,220,180,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="save_as_copy" style="width:auto;">Save the optimized version as a separate copy instead of updating the original (by default the strategy you picked is updated in place — its previous version is archived, never deleted, and its reports stay with it. Tick this only when you want to keep the original untouched and split off a new strategy.)</label>
     <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;background:rgba(255,200,80,0.08);border:1px solid rgba(255,200,80,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="adaptive_risk_enabled" style="width:auto;">Enable adaptive, limit-aware position sizing on the search</label>
     <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;background:rgba(120,200,120,0.08);border:1px solid rgba(120,200,120,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="reset_on_breach" checked style="width:auto;">Reset-on-breach: score on the basis that a blown account gets a fresh eval and keeps going, not a dead end (recommended)</label>
-    <p style="font-size:12px;color:#888;margin-top:4px;">Off by default. This setting is NOT saved with the optimized strategy -- if you later run this strategy through Full Pipeline, its own "Enable adaptive, limit-aware position sizing" checkbox (off by default there too) needs to match whatever you choose here, or the two results are not comparable.</p>
+    <p style="font-size:12px;color:var(--t-faint);margin-top:4px;">Off by default. This setting is NOT saved with the optimized strategy -- if you later run this strategy through Full Pipeline, its own "Enable adaptive, limit-aware position sizing" checkbox (off by default there too) needs to match whatever you choose here, or the two results are not comparable.</p>
     <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;background:rgba(90,160,255,0.08);border:1px solid rgba(90,160,255,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="reserve_holdout" style="width:auto;" checked disabled>Reserve a holdout slice (always on: Quick Optimize will not rank without one; still not a substitute for Full Pipeline)</label>
     <div class="row" id="holdout-frac-row">
       <div><label>Holdout fraction</label><input type="number" name="holdout_frac" value="0.2" min="0.05" max="0.5" step="0.05"></div>
     </div>
-    <p style="font-size:12px;color:#888;margin-top:4px;">Off by default -- unchanged, fully in-sample behavior. When checked, the LAST fraction of the dataset below is carved off before the baseline/search run at all, and the winning configuration is backtested against it once, purely to report a less-than-100%-circular number. This is NOT the same as Full Pipeline's own holdout check: there's no walk-forward OOS-fold re-verification and no ICIR/Bonferroni re-check of the holdout segment itself. Every Quick Optimize result -- with or without this on -- is still labeled "NOT OOS VALIDATED"; run Full Pipeline for that.</p>
+    <p style="font-size:12px;color:var(--t-faint);margin-top:4px;">Off by default -- unchanged, fully in-sample behavior. When checked, the LAST fraction of the dataset below is carved off before the baseline/search run at all, and the winning configuration is backtested against it once, purely to report a less-than-100%-circular number. This is NOT the same as Full Pipeline's own holdout check: there's no walk-forward OOS-fold re-verification and no ICIR/Bonferroni re-check of the holdout segment itself. Every Quick Optimize result -- with or without this on -- is still labeled "NOT OOS VALIDATED"; run Full Pipeline for that.</p>
   </div>
 
   <div class="card">
     <h2>5. Timeframes to test (optional)</h2>
-    <p style="font-size:12px;color:#888;">
+    <p style="font-size:12px;color:var(--t-faint);">
       Leave blank to optimize only against the loaded data's own native bar spacing, as before. Fill in a
       list (e.g. "5m, 15m, 30m, 1h, 4h") and the GA above runs independently once per timeframe -- the
       dataset gets resampled to each one -- and whichever timeframe's optimized result has the higher

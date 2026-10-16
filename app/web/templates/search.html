@@ -1,24 +1,17 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Search Lab — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <style>
-  :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
   .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
-  .card p.help { font-size: 12px; color: #888; margin: 0 0 10px; line-height: 1.5; }
-  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  .card p.help { font-size: 12px; color: var(--t-faint); margin: 0 0 10px; line-height: 1.5; }
+  label { display: block; font-size: 13px; color: var(--t-soft); margin: 10px 0 4px; }
   input[type=text], input[type=number], select, textarea {
     width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light);
     background: var(--panel-3); color: var(--text); font-size: 15px;
@@ -32,21 +25,21 @@
   .checkbox-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
   .checkbox-row input { width: auto; }
   .checkbox-row label { margin: 0; }
-  input[type=file] { width: 100%; color: #ccc; }
+  input[type=file] { width: 100%; color: var(--t-soft); }
   .tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
   .tabs button {
     flex: 1; min-width: 70px; padding: 10px 6px; border-radius: 8px; border: 1px solid var(--border-light);
-    background: var(--panel-3); color: #ccc; font-size: 13px;
+    background: var(--panel-3); color: var(--t-soft); font-size: 13px;
   }
-  .tabs button.active { background: var(--teal); color: #04120e; font-weight: 600; border-color: var(--teal); }
+  .tabs button.active { background: var(--teal); color: var(--on-teal); font-weight: 600; border-color: var(--teal); }
   .submit-btn {
-    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: #04120e;
+    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: var(--on-teal);
     font-size: 16px; font-weight: 700; margin-top: 6px;
     box-shadow: 0 0 22px rgba(53,224,176,0.35);
   }
-  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
-  .notice { background: #142a1a; border: 1px solid #235a32; color: #b4ffcb; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
-  details summary { font-size: 13px; color: #999; cursor: pointer; }
+  .error { background: var(--err-bg); border: 1px solid var(--err-bd); color: var(--err-fg); padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .notice { background: var(--ok-bg); border: 1px solid var(--ok-bd); color: var(--ok-fg); padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  details summary { font-size: 13px; color: var(--t-faint2); cursor: pointer; }
 </style>
 </head>
 <body>
@@ -176,11 +169,11 @@
           <option value="">— none, paste or upload below —</option>
         </select>
         <a href="#" onclick="searchViewSelectedCode(); return false;" style="font-size:12px;color:var(--teal);display:inline-block;margin-top:6px;">View code of selected strategy</a>
-        <p style="font-size:12px;color:#888;margin-top:6px;" id="library-count-note"></p>
+        <p style="font-size:12px;color:var(--t-faint);margin-top:6px;" id="library-count-note"></p>
 
-        <div id="library-manage-panel" style="display:none;border:1px solid #262626;border-radius:8px;padding:10px;margin-top:8px;">
-          <p style="font-size:12px;color:#999;margin:0 0 8px;">Managing: <b id="library-manage-name"></b></p>
-          <p style="font-size:12px;color:#9ecbff;margin:0 0 8px;white-space:pre-line;" id="library-manage-last-run"></p>
+        <div id="library-manage-panel" style="display:none;border:1px solid var(--surface-x-bd);border-radius:8px;padding:10px;margin-top:8px;">
+          <p style="font-size:12px;color:var(--t-faint2);margin:0 0 8px;">Managing: <b id="library-manage-name"></b></p>
+          <p style="font-size:12px;color:var(--info-fg);margin:0 0 8px;white-space:pre-line;" id="library-manage-last-run"></p>
 
           <div class="mini-form" data-action="/strategies/status" style="margin-bottom:8px;">
             <input type="hidden" name="strategy_type" id="status_strategy_type">
@@ -222,7 +215,7 @@
             <input type="hidden" name="strategy_type" id="delete_strategy_type">
             <input type="hidden" name="filename" id="delete_filename">
             <input type="hidden" name="return_to" value="search">
-            <button type="button" class="submit-btn" style="padding:10px;font-size:13px;background:#3a1616;color:#ffb4b4;" onclick="t58SubmitMiniForm(this.closest('.mini-form'))">Delete From Library</button>
+            <button type="button" class="submit-btn" style="padding:10px;font-size:13px;background:var(--err-bg2);color:var(--err-fg);" onclick="t58SubmitMiniForm(this.closest('.mini-form'))">Delete From Library</button>
           </div>
         </div>
 
@@ -232,7 +225,7 @@
             <input type="hidden" name="return_to" value="search">
             <div id="bulk-checklist" style="margin:8px 0;font-size:13px;"></div>
             <div class="row">
-              <button type="button" class="submit-btn" style="padding:10px;font-size:13px;background:#3a1616;color:#ffb4b4;" onclick="t58SubmitMiniForm(this.closest('.mini-form'))">Delete Checked</button>
+              <button type="button" class="submit-btn" style="padding:10px;font-size:13px;background:var(--err-bg2);color:var(--err-fg);" onclick="t58SubmitMiniForm(this.closest('.mini-form'))">Delete Checked</button>
               <button type="button" class="submit-btn" style="padding:10px;font-size:13px;" onclick="exportChecked()">Export Checked</button>
             </div>
           </div>
@@ -325,7 +318,7 @@
       <div><label>Rounds with no improvement before widening</label><input type="number" name="loop_stall_rounds" value="2"></div>
     </div>
     <button type="button" id="suggest-loop-btn" onclick="t58SuggestLoopConfig()" style="margin-top:8px;">Suggest settings from my prop rules</button>
-    <p id="suggest-loop-note" style="display:none; margin-top:8px; padding:8px 10px; border-radius:6px; background:#1a2530; color:#a8c8e8; font-size:12px; white-space:pre-line;"></p>
+    <p id="suggest-loop-note" style="display:none; margin-top:8px; padding:8px 10px; border-radius:6px; background:var(--info-bg); color:var(--info-fg2); font-size:12px; white-space:pre-line;"></p>
   </div>
 
   <script>
@@ -481,10 +474,10 @@
         <option value="sharpe_ratio">Sharpe ratio</option>
         <option value="profit_factor">Profit factor</option>
       </select>
-      <p style="font-size:12px;color:#888;margin-top:4px;">Not trading a prop-firm evaluation? Pick "Long-term net profit" -- it scores candidates purely on total P&amp;L and ignores prop-firm drawdown/payout rules entirely.</p>
+      <p style="font-size:12px;color:var(--t-faint);margin-top:4px;">Not trading a prop-firm evaluation? Pick "Long-term net profit" -- it scores candidates purely on total P&amp;L and ignores prop-firm drawdown/payout rules entirely.</p>
       <label>Stage 3 acceptance floor — first-payout probability (%)</label>
       <input type="number" name="min_first_payout_probability" value="50.0" min="0" max="100" step="0.5">
-      <p style="font-size:12px;color:#888;margin-top:4px;">Candidates below this per-attempt first-payout probability fail the Stage 3 gate no matter how stable they look. 0–100 scale (50 = 50%).</p>
+      <p style="font-size:12px;color:var(--t-faint);margin-top:4px;">Candidates below this per-attempt first-payout probability fail the Stage 3 gate no matter how stable they look. 0–100 scale (50 = 50%).</p>
     </details>
   </div>
 

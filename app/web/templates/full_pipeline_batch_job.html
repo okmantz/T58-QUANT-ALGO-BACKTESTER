@@ -1,13 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Full Pipeline Batch — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <link rel="stylesheet" href="/static/job-theme.css">
 <style>
   table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }
@@ -17,8 +12,8 @@
   .badge { padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; }
   .badge.READY { background: #143a1e; color: #7ee89a; }
   .badge.MARGINAL { background: #3a3414; color: #e8d17e; }
-  .badge.NOTREADY { background: #3a1616; color: #ffb4b4; }
-  .stop-btn { padding: 10px 22px; border-radius: 10px; border: 1px solid #6b2323; background: #3a1616; color: #ffb4b4; font-size: 14px; font-weight: 700; cursor: pointer; }
+  .badge.NOTREADY { background: var(--err-bg2); color: var(--err-fg); }
+  .stop-btn { padding: 10px 22px; border-radius: 10px; border: 1px solid var(--err-bd); background: var(--err-bg2); color: var(--err-fg); font-size: 14px; font-weight: 700; cursor: pointer; }
   .stop-btn:disabled { opacity: 0.5; cursor: default; }
 </style>
 </head>
@@ -37,9 +32,9 @@
 
 <div class="card">
   <h2 id="status-title"><span class="spinner" id="spinner"></span>Running Full Pipeline on {{ total }} strateg{{ 'y' if total == 1 else 'ies' }}&hellip;</h2>
-  <p style="font-size:13px;color:#999;" id="progress-line">Starting&hellip;</p>
+  <p style="font-size:13px;color:var(--t-faint2);" id="progress-line">Starting&hellip;</p>
   <div id="log">Starting&hellip;</div>
-  <p id="next-step" style="display:none; margin-top:10px; padding:10px 12px; border-radius:8px; background:#152615; color:#b7e8b7; font-size:13px;"></p>
+  <p id="next-step" style="display:none; margin-top:10px; padding:10px 12px; border-radius:8px; background:var(--ok-bg3); color:var(--ok-fg3); font-size:13px;"></p>
   <form id="stop-form" method="post" action="/full-pipeline/batch-job/{{ job_id }}/stop" style="margin-top:10px;" onsubmit="return stopBatch(event)">
     <button class="stop-btn" type="submit" id="stop-btn">Stop</button>
   </form>

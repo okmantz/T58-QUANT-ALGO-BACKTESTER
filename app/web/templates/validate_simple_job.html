@@ -1,21 +1,16 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Validate — report — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <link rel="stylesheet" href="/static/job-theme.css">
 {% include '_lifecycle_css.html' %}
 <style>
-  .lc-guide{margin-top:10px; padding:10px 12px; border:1px dashed var(--lc-border2,#2a3345); border-radius:10px; background:rgba(255,255,255,.02);}
-  .lc-guide .lg-kicker{font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--lc-muted,#8b95a7); margin:6px 0 3px;}
-  .lc-guide .lg-why{font-size:13px; color:var(--lc-text,#e6eaf2); line-height:1.45;}
-  .lc-guide .lg-bar{font-size:12.5px; margin-top:6px; color:var(--lc-text,#e6eaf2);}
-  .lc-guide .lg-steps{margin:4px 0 8px 18px; padding:0; font-size:12.5px; line-height:1.5; color:var(--lc-text,#e6eaf2);}
+  .lc-guide{margin-top:10px; padding:10px 12px; border:1px dashed var(--lc-border2,var(--bd-x)); border-radius:10px; background:rgba(255,255,255,.02);}
+  .lc-guide .lg-kicker{font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--lc-muted,var(--t-mute2)); margin:6px 0 3px;}
+  .lc-guide .lg-why{font-size:13px; color:var(--lc-text,var(--t-strong)); line-height:1.45;}
+  .lc-guide .lg-bar{font-size:12.5px; margin-top:6px; color:var(--lc-text,var(--t-strong));}
+  .lc-guide .lg-steps{margin:4px 0 8px 18px; padding:0; font-size:12.5px; line-height:1.5; color:var(--lc-text,var(--t-strong));}
   .lc-guide .lg-go{display:flex; gap:8px; flex-wrap:wrap;}
   .lc-guide .lc-btn.secondary{background:transparent; color:var(--lc-acc,#00e0a0); border:1px solid var(--lc-acc,#00e0a0);}
 </style>

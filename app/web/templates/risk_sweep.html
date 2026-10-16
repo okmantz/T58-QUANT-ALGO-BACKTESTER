@@ -1,19 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Risk Sweep — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <style>
-  :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
   .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
-  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  label { display: block; font-size: 13px; color: var(--t-soft); margin: 10px 0 4px; }
   input[type=number], input[type=text], select, textarea {
     width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light);
     background: var(--panel-3); color: var(--text); font-size: 15px;
@@ -22,12 +16,12 @@
   .row > div { flex: 1; min-width: 140px; }
   .pick-list { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto;
                border: 1px solid var(--border-light); border-radius: 8px; padding: 8px; background: var(--panel-3); }
-  .pick-list label { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; color: #ddd; }
+  .pick-list label { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; color: var(--t-soft2); }
   .submit-btn {
-    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: #04120e;
+    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: var(--on-teal);
     font-size: 16px; font-weight: 700; margin-top: 10px;
   }
-  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .error { background: var(--err-bg); border: 1px solid var(--err-bd); color: var(--err-fg); padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
   .note { background: #142225; border: 1px solid #24494f; color: #b7e6ee; padding: 10px 12px; border-radius: 10px; margin-bottom: 14px; font-size: 12px; line-height: 1.5; }
   table.sweep-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   table.sweep-table th, table.sweep-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: right; }
@@ -36,7 +30,7 @@
   tr.best-row { color: var(--teal); font-weight: 700; }
   .best-callout { background: linear-gradient(160deg, var(--panel-2), var(--panel-elevated)); border: 1px solid rgba(var(--teal-rgb), .3);
                   border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; font-size: 14px; }
-  details summary { font-size: 13px; color: #999; cursor: pointer; }
+  details summary { font-size: 13px; color: var(--t-faint2); cursor: pointer; }
 </style>
 </head>
 <body>

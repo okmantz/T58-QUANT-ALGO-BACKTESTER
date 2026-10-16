@@ -1,25 +1,20 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Parameter Stability / Robustness Map Job — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <link rel="stylesheet" href="/static/job-theme.css">
 <style>
   .verdict-badge { display:inline-block; padding:6px 14px; border-radius:999px; font-weight:700; font-size:14px; letter-spacing:.03em; }
-  .verdict-ROBUST { background:#142a1a; color:#b4ffcb; border:1px solid #235a32; }
+  .verdict-ROBUST { background:var(--ok-bg); color:var(--ok-fg); border:1px solid var(--ok-bd); }
   .verdict-WATCH { background:#2a2414; color:#ffe1a8; border:1px solid #5a4a23; }
-  .verdict-FRAGILE { background:#2a1414; color:#ffb4b4; border:1px solid #6b2323; }
+  .verdict-FRAGILE { background:var(--err-bg); color:var(--err-fg); border:1px solid var(--err-bd); }
   .score-hero { display:flex; align-items:baseline; gap:14px; margin:8px 0 14px; }
   .score-hero .num { font-size:44px; font-weight:800; }
   .heatmap-grid { border-collapse:collapse; font-size:12px; }
   .heatmap-grid td, .heatmap-grid th { padding:6px 9px; text-align:center; border:1px solid rgba(255,255,255,0.08); }
-  .heatmap-grid th { color:#999; font-weight:600; }
-  .heatmap-grid td.base-cell { outline:2px solid #35e0b0; outline-offset:-2px; font-weight:700; }
+  .heatmap-grid th { color:var(--t-faint2); font-weight:600; }
+  .heatmap-grid td.base-cell { outline:2px solid var(--teal); outline-offset:-2px; font-weight:700; }
 </style>
 </head>
 <body>
@@ -47,8 +42,8 @@
     <div>/ 100</div>
     <span class="verdict-badge" id="verdict-badge"></span>
   </div>
-  <p id="score-note" style="font-size:13px;color:#ccc;line-height:1.6;"></p>
-  <ul id="notes-list" style="font-size:13px;color:#ccc;line-height:1.7;"></ul>
+  <p id="score-note" style="font-size:13px;color:var(--t-soft);line-height:1.6;"></p>
+  <ul id="notes-list" style="font-size:13px;color:var(--t-soft);line-height:1.7;"></ul>
 </div>
 
 <div class="card" id="params-card" style="display:none;">
@@ -63,7 +58,7 @@
 
 <div class="card" id="heatmap-card" style="display:none;">
   <h2>Neighborhood heatmap(s)</h2>
-  <p style="font-size:12px;color:#888;">The highlighted cell is your current setting. A "mountain" of good values around it is what you want; a lone peak surrounded by weak neighbors is the "sweet spot" pattern that usually means overfitting, not a real edge.</p>
+  <p style="font-size:12px;color:var(--t-faint);">The highlighted cell is your current setting. A "mountain" of good values around it is what you want; a lone peak surrounded by weak neighbors is the "sweet spot" pattern that usually means overfitting, not a real edge.</p>
   <div id="heatmaps"></div>
 </div>
 

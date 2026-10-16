@@ -1,19 +1,14 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Multi-Market Search Job — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <link rel="stylesheet" href="/static/job-theme.css">
 <style>
   /* v8 (2026-10-05): poll-loop heartbeat -- proves the page is still
      receiving updates; turns amber when a job stalls. */
-  .heartbeat { font-size: 11px; color: #777; margin: 6px 0; }
-  .heartbeat.stale { color: #ff9f43; }
+  .heartbeat { font-size: 11px; color: var(--t-faint3); margin: 6px 0; }
+  .heartbeat.stale { color: var(--warn-fg3); }
 </style>
 </head>
 <body>
@@ -42,14 +37,14 @@
     <div class="stat"><div class="label">Best</div><div class="value" id="s-best">-</div></div>
     <div class="stat"><div class="label">Candidates tested</div><div class="value" id="s-evals">-</div></div>
   </div>
-  <h3 style="font-size:13px;color:#999;margin-top:16px;">Per-market breakdown (best candidate)</h3>
+  <h3 style="font-size:13px;color:var(--t-faint2);margin-top:16px;">Per-market breakdown (best candidate)</h3>
   <div class="table-scroll">
     <table>
       <thead><tr><th>Market</th><th>Fitness</th><th>Trades</th></tr></thead>
       <tbody id="per-market-body"></tbody>
     </table>
   </div>
-  <p style="font-size:13px;color:#999;margin-top:12px;" id="s-detail"></p>
+  <p style="font-size:13px;color:var(--t-faint2);margin-top:12px;" id="s-detail"></p>
 </div>
 
 <div class="card" id="generations-card" style="display:none;">

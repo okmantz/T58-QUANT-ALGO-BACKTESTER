@@ -1,17 +1,11 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Deploy — Forward test (MT5) — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 {% include '_lifecycle_css.html' %}
 <style>
-  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .error { background: var(--err-bg); border: 1px solid var(--err-bd); color: var(--err-fg); padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
   .ft-stats { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; }
   .ft-stat { flex: 1; min-width: 100px; }
   .ft-stat .label { font-size: 11px; color: var(--lc-muted, #9aa4b2); text-transform: uppercase; letter-spacing: .05em; }
@@ -139,7 +133,7 @@
     <div class="ft-stat"><div class="label">Equity</div><div class="value" id="s-equity">-</div></div>
     <div class="ft-stat"><div class="label">Trades closed</div><div class="value" id="s-trades">-</div></div>
     <div class="ft-stat"><div class="label">Net P&amp;L</div><div class="value" id="s-pnl">-</div></div>
-    <div class="ft-stat"><div class="label">Halted</div><div class="value" id="s-halted" style="font-size:13px; color:#ff8a8a;">—</div></div>
+    <div class="ft-stat"><div class="label">Halted</div><div class="value" id="s-halted" style="font-size:13px; color:var(--err-fg2);">—</div></div>
   </div>
   <h3 style="margin:16px 0 8px;">Run log — live</h3>
   <div class="lc-logbox tall" id="log"></div>

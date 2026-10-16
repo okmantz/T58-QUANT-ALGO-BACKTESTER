@@ -19,7 +19,7 @@
 <div class="card">
   <details{{ ' open' if lse_notice else '' }}>
     <summary>Or fetch data from London Strategic Edge</summary>
-    <p style="font-size:12px;color:#888;margin:8px 0 10px;">
+    <p style="font-size:12px;color:var(--t-faint);margin:8px 0 10px;">
       Pulls OHLCV candles via the London Strategic Edge API (stocks, forex, crypto, commodities,
       indices, ETFs and futures -- one key covers all of them) and saves them into data/raw/,
       where they'll appear in the "previously stored dataset" dropdown below. Get a free key at
@@ -31,7 +31,7 @@
         <label>London Strategic Edge API key{{ ' (leave blank to reuse saved key)' if lse_has_saved_key else '' }}</label>
         <input type="password" name="lse_api_key" autocomplete="off" placeholder="{{ '••••••••••• (saved)' if lse_has_saved_key else '' }}">
       </div>
-      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#ccc;margin-top:10px;">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t-soft);margin-top:10px;">
         <input type="checkbox" name="lse_save_key" style="width:auto;" checked>
         Save this key on this computer for next time
       </label>
@@ -58,7 +58,7 @@
     {% if lse_has_saved_key %}
     <form method="post" action="/data/lse/forget" style="margin-top:8px;">
       <input type="hidden" name="lse_return_to" value="{{ lse_return_to | default('index') }}">
-      <button type="submit" style="background:none;border:1px solid var(--border-light);color:#999;padding:8px 12px;border-radius:8px;font-size:12px;width:100%;">
+      <button type="submit" style="background:none;border:1px solid var(--border-light);color:var(--t-faint2);padding:8px 12px;border-radius:8px;font-size:12px;width:100%;">
         Forget saved London Strategic Edge key
       </button>
     </form>

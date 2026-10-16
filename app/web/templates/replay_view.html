@@ -1,17 +1,11 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Interactive Replay — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <script src="/static/lightweight-charts.standalone.production.js"></script>
 <script src="/static/chart_drawing_tools.js"></script>
 <style>
-  :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
   .chart-toolbar-row { display: flex; justify-content: flex-end; margin-bottom: 6px; }
@@ -22,16 +16,16 @@
     padding: 10px 16px; border-radius: 8px; border: 1px solid var(--teal); background: transparent;
     color: var(--teal); font-weight: 700; font-size: 13px; cursor: pointer;
   }
-  .controls button.primary { background: var(--teal); color: #04120e; }
+  .controls button.primary { background: var(--teal); color: var(--on-teal); }
   .controls select { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); }
   #scrubber { width: 100%; margin-top: 10px; }
   .stat-grid { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; }
   .stat { flex: 1; min-width: 100px; }
   .stat .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; }
   .stat .value { font-size: 18px; font-weight: 700; }
-  .stat .value.up { color: #35e0b0; }
-  .stat .value.down { color: #ff6b6b; }
-  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; }
+  .stat .value.up { color: var(--teal); }
+  .stat .value.down { color: var(--err-fg4); }
+  .error { background: var(--err-bg); border: 1px solid var(--err-bd); color: var(--err-fg); padding: 12px; border-radius: 10px; }
   #trade-log { background: var(--panel-3); border-radius: 8px; padding: 8px; font-family: ui-monospace, monospace; font-size: 11.5px; max-height: 160px; overflow-y: auto; margin-top: 10px; }
   .replay-layout { display: flex; gap: 14px; align-items: flex-start; }
   .replay-main { flex: 1; min-width: 0; }
@@ -47,11 +41,11 @@
   }
   .trade-row:last-child { border-bottom: none; }
   .trade-row .side { font-weight: 700; }
-  .trade-row .side.long { color: #35e0b0; }
-  .trade-row .side.short { color: #ff6b6b; }
+  .trade-row .side.long { color: var(--teal); }
+  .trade-row .side.short { color: var(--err-fg4); }
   .trade-row .right { text-align: right; }
-  .trade-row .pnl.up { color: #35e0b0; }
-  .trade-row .pnl.down { color: #ff6b6b; }
+  .trade-row .pnl.up { color: var(--teal); }
+  .trade-row .pnl.down { color: var(--err-fg4); }
   .trade-row .bal { font-size: 11px; color: var(--text-muted); }
   .trade-row .tpsl { font-size: 10.5px; color: var(--text-muted); }
   .side-card h2 {
@@ -59,7 +53,7 @@
     margin: 0 0 8px; border-top: 1px solid var(--border); padding-top: 10px;
   }
   .side-card h2:first-child { border-top: none; padding-top: 0; }
-  .side-note { font-size: 11px; color: var(--text-dim, #777); margin: 0 0 8px; line-height: 1.5; }
+  .side-note { font-size: 11px; color: var(--text-dim, var(--t-faint3)); margin: 0 0 8px; line-height: 1.5; }
   .field-row { display: flex; gap: 8px; margin-bottom: 8px; }
   .field-row > div { flex: 1; min-width: 0; }
   .field-row label { display: block; font-size: 10.5px; color: var(--text-muted); margin-bottom: 3px; }
@@ -71,9 +65,9 @@
     padding: 8px 10px; border-radius: 7px; border: 1px solid var(--border-light); background: var(--panel-3);
     color: var(--text); font-weight: 700; font-size: 12px; cursor: pointer; flex: 1;
   }
-  .mini-btn.buy { border-color: #35e0b0; color: #35e0b0; }
-  .mini-btn.sell { border-color: #ff6b6b; color: #ff6b6b; }
-  .mini-btn.apply { border-color: var(--teal); background: var(--teal); color: #04120e; width: 100%; margin-top: 4px; }
+  .mini-btn.buy { border-color: var(--teal); color: var(--teal); }
+  .mini-btn.sell { border-color: #ff6b6b; color: var(--err-fg4); }
+  .mini-btn.apply { border-color: var(--teal); background: var(--teal); color: var(--on-teal); width: 100%; margin-top: 4px; }
   .mini-btn.close-pos { border-color: var(--border-light); width: 100%; margin-top: 6px; }
   .mini-btn:disabled { opacity: .4; cursor: not-allowed; }
   .open-pos-box {
@@ -83,9 +77,9 @@
   .prop-limit-row { display: flex; justify-content: space-between; align-items: center; font-size: 12px; padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
   .prop-limit-row:last-child { border-bottom: none; }
   .prop-limit-row .tag { font-size: 10px; padding: 2px 7px; border-radius: 10px; font-weight: 700; }
-  .prop-limit-row .tag.ok { background: rgba(53,224,176,.15); color: #35e0b0; }
-  .prop-limit-row .tag.breach { background: rgba(255,107,107,.15); color: #ff6b6b; }
-  .prop-limit-row .tag.na { background: rgba(255,255,255,.06); color: var(--text-dim,#777); }
+  .prop-limit-row .tag.ok { background: rgba(53,224,176,.15); color: var(--teal); }
+  .prop-limit-row .tag.breach { background: rgba(255,107,107,.15); color: var(--err-fg4); }
+  .prop-limit-row .tag.na { background: rgba(255,255,255,.06); color: var(--text-dim,var(--t-faint3)); }
 </style>
 </head>
 <body>
@@ -195,7 +189,7 @@
   <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-muted);margin-bottom:6px;">
     <span>Realized P&amp;L</span><span id="manual-realized-pnl">$0.00</span>
   </div>
-  <div id="manual-ticker"><p style="font-size:12px;color:var(--text-dim,#777);">No manual trades yet.</p></div>
+  <div id="manual-ticker"><p style="font-size:12px;color:var(--text-dim,var(--t-faint3));">No manual trades yet.</p></div>
 </div>
 
 <div class="card side-card">

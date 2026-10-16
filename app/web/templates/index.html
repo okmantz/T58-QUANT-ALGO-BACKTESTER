@@ -1,23 +1,16 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Run & Report — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <style>
-  :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
   .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
-  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  label { display: block; font-size: 13px; color: var(--t-soft); margin: 10px 0 4px; }
   input[type=text], input[type=number], select, textarea {
     width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light);
     background: var(--panel-3); color: var(--text); font-size: 15px;
@@ -28,27 +21,27 @@
   textarea { min-height: 140px; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
   .row { display: flex; gap: 10px; }
   .row > div { flex: 1; }
-  input[type=file] { width: 100%; color: #ccc; }
+  input[type=file] { width: 100%; color: var(--t-soft); }
   .tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
   .tabs button {
     flex: 1; min-width: 70px; padding: 10px 6px; border-radius: 8px; border: 1px solid var(--border-light);
-    background: var(--panel-3); color: #ccc; font-size: 13px;
+    background: var(--panel-3); color: var(--t-soft); font-size: 13px;
   }
-  .tabs button.active { background: var(--teal); color: #04120e; font-weight: 600; border-color: var(--teal); }
+  .tabs button.active { background: var(--teal); color: var(--on-teal); font-weight: 600; border-color: var(--teal); }
   .submit-btn {
-    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: #04120e;
+    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: var(--on-teal);
     font-size: 16px; font-weight: 700; margin-top: 6px;
     box-shadow: 0 0 22px rgba(53,224,176,0.35);
   }
-  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
-  .notice { background: #142a1a; border: 1px solid #235a32; color: #b4ffcb; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
-  .warning { background: #2a2314; border: 1px solid #6b5423; color: #ffcf7a; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .error { background: var(--err-bg); border: 1px solid var(--err-bd); color: var(--err-fg); padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .notice { background: var(--ok-bg); border: 1px solid var(--ok-bd); color: var(--ok-fg); padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .warning { background: var(--warn-bg2); border: 1px solid var(--warn-bd2); color: var(--warn-fg); padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
   .headline { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .stat { background: var(--panel-3); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
   .stat .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; }
   .stat .value { font-size: 22px; font-weight: 700; margin-top: 2px; color: var(--teal); text-shadow: 0 0 12px rgba(53,224,176,.4); }
   .links a { display: block; color: var(--teal); font-size: 14px; margin-top: 8px; text-decoration: none; }
-  details summary { font-size: 13px; color: #999; cursor: pointer; }
+  details summary { font-size: 13px; color: var(--t-faint2); cursor: pointer; }
 </style>
 </head>
 <body>
@@ -76,27 +69,27 @@
 {% if batch_result %}
 <div class="card">
   <h2>Batch test results</h2>
-  <p style="font-size:12px;color:#888;margin-bottom:10px;">Ran against: <b>{{ batch_result.active_dataset }}</b></p>
+  <p style="font-size:12px;color:var(--t-faint);margin-bottom:10px;">Ran against: <b>{{ batch_result.active_dataset }}</b></p>
   {% if batch_result.load_errors %}
-  <p style="font-size:13px;color:#ffb4b4;margin-bottom:10px;">Could not load: {{ batch_result.load_errors|join('; ') }}</p>
+  <p style="font-size:13px;color:var(--err-fg);margin-bottom:10px;">Could not load: {{ batch_result.load_errors|join('; ') }}</p>
   {% endif %}
   <table style="width:100%;font-size:13px;border-collapse:collapse;">
-    <tr style="text-align:left;color:#888;"><th>Strategy</th><th>Trades</th><th>Net profit</th><th>Eval pass % (per attempt)</th><th>Report</th></tr>
+    <tr style="text-align:left;color:var(--t-faint);"><th>Strategy</th><th>Trades</th><th>Net profit</th><th>Eval pass % (per attempt)</th><th>Report</th></tr>
     {% for o in batch_result.outcomes %}
-    <tr style="border-top:1px solid #262626;">
+    <tr style="border-top:1px solid var(--surface-x-bd);">
       <td style="padding:6px 4px;">{{ o.label }}</td>
       {% if o.ok %}
       <td style="padding:6px 4px;">{{ o.trades }}</td>
       <td style="padding:6px 4px;">${{ "{:,.2f}".format(o.net_profit) }}</td>
       <td style="padding:6px 4px;">{{ "%.1f"|format(o.eval_pass_probability) }}%</td>
-      <td style="padding:6px 4px;"><a href="{{ o.report_html }}" target="_blank" style="color:#35e0b0;">Open report</a></td>
+      <td style="padding:6px 4px;"><a href="{{ o.report_html }}" target="_blank" style="color:var(--teal);">Open report</a></td>
       {% else %}
-      <td colspan="4" style="padding:6px 4px;color:#ffb4b4;">Skipped — {{ o.reason }}</td>
+      <td colspan="4" style="padding:6px 4px;color:var(--err-fg);">Skipped — {{ o.reason }}</td>
       {% endif %}
     </tr>
     {% endfor %}
   </table>
-  <p style="font-size:12px;color:#888;margin-top:10px;">Every successful result above is also saved to the Strategy Library's own record and on the Dashboard.</p>
+  <p style="font-size:12px;color:var(--t-faint);margin-top:10px;">Every successful result above is also saved to the Strategy Library's own record and on the Dashboard.</p>
 </div>
 {% endif %}
 
@@ -104,26 +97,26 @@
 <div class="card">
   <h2>Result</h2>
   {% if result.import_note %}
-  <p style="font-size:13px;color:#9ecbff;margin-bottom:10px;">{{ result.import_note }}</p>
+  <p style="font-size:13px;color:var(--info-fg);margin-bottom:10px;">{{ result.import_note }}</p>
   {% endif %}
   {% if result.lookahead_warning %}
-  <p style="font-size:13px;color:#ffcf7a;margin-bottom:10px;border:1px solid #6b5423;background:#2a2314;padding:10px;border-radius:8px;">⚠ {{ result.lookahead_warning }}</p>
+  <p style="font-size:13px;color:var(--warn-fg);margin-bottom:10px;border:1px solid var(--warn-bd2);background:var(--warn-bg2);padding:10px;border-radius:8px;">⚠ {{ result.lookahead_warning }}</p>
   {% endif %}
   {% if result.integrity_check %}
   <details style="margin-bottom:10px;border:1px solid #333;background:#1a1a1a;border-radius:8px;padding:8px 12px;">
     <summary style="cursor:pointer;font-size:13px;color:{{ '#7be08a' if result.integrity_check_status == 'VALID' else '#ffcf7a' }};">
       T58 Backtest Integrity Check -- {{ result.integrity_check_status }}
     </summary>
-    <pre style="white-space:pre-wrap;font-size:12px;color:#ccc;margin-top:8px;">{{ result.integrity_check }}</pre>
+    <pre style="white-space:pre-wrap;font-size:12px;color:var(--t-soft);margin-top:8px;">{{ result.integrity_check }}</pre>
   </details>
   {% endif %}
   {% if result.execution_warnings %}
-  <details {{ 'open' if result.zero_size_contract_floor_count else '' }} style="margin-bottom:10px;border:1px solid #6b5423;background:#2a2314;border-radius:8px;padding:8px 12px;">
-    <summary style="cursor:pointer;font-size:13px;color:#ffcf7a;">
+  <details {{ 'open' if result.zero_size_contract_floor_count else '' }} style="margin-bottom:10px;border:1px solid var(--warn-bd2);background:var(--warn-bg2);border-radius:8px;padding:8px 12px;">
+    <summary style="cursor:pointer;font-size:13px;color:var(--warn-fg);">
       ⚠ {{ result.execution_warnings|length }} execution warning(s){{ " -- including why 0 trades were taken" if result.trades == 0 and result.zero_size_contract_floor_count else "" }}
     </summary>
     {% for w in result.execution_warnings %}
-    <p style="font-size:12px;color:#ccc;margin-top:8px;white-space:pre-wrap;">{{ w }}</p>
+    <p style="font-size:12px;color:var(--t-soft);margin-top:8px;white-space:pre-wrap;">{{ w }}</p>
     {% endfor %}
   </details>
   {% endif %}
@@ -132,7 +125,7 @@
   {% endif %}
   {% if result.timeframe_sweep %}
   <div style="margin:10px 0;border:1px solid #33506b;background:#12202e;border-radius:8px;padding:10px 12px;">
-    <b style="font-size:13px;">Timeframe comparison</b> <span style="font-size:12px;color:#888;">(report below is for the &#9733; row)</span>
+    <b style="font-size:13px;">Timeframe comparison</b> <span style="font-size:12px;color:var(--t-faint);">(report below is for the &#9733; row)</span>
     <div style="overflow-x:auto;"><table style="width:100%;font-size:12px;margin-top:6px;">
       <tr><th align="left">TF</th><th>Bars</th><th>Trades</th><th>Net profit</th><th>Win %</th><th>Max DD %</th><th>Eval pass % (per attempt)</th><th>Payout % (per attempt)</th><th>Ruin %</th></tr>
       {% for r in result.timeframe_sweep.rows %}
@@ -143,12 +136,12 @@
       </tr>
       {% endfor %}
     </table></div>
-    {% if result.timeframe_sweep.note %}<p style="font-size:12px;color:#ffcf7a;margin-top:6px;">{{ result.timeframe_sweep.note }}</p>{% endif %}
+    {% if result.timeframe_sweep.note %}<p style="font-size:12px;color:var(--warn-fg);margin-top:6px;">{{ result.timeframe_sweep.note }}</p>{% endif %}
     {% for k, v in result.timeframe_sweep.errors.items() %}<p style="font-size:12px;color:#c99;">{{ k }}: {{ v }}</p>{% endfor %}
     {% for x in result.timeframe_sweep.skipped %}<p style="font-size:12px;color:#c99;">Skipped {{ x }}</p>{% endfor %}
   </div>
   {% endif %}
-  <p style="font-size:12px;color:#888;margin-bottom:10px;">Ran against: <b>{{ result.active_dataset }}</b></p>
+  <p style="font-size:12px;color:var(--t-faint);margin-bottom:10px;">Ran against: <b>{{ result.active_dataset }}</b></p>
   <div class="headline">
     <div class="stat"><div class="label">Eval Pass Probability (per attempt)</div><div class="value">{{ "%.1f"|format(result.eval_pass_prob) }}%</div></div>
     <div class="stat"><div class="label">First Payout Probability</div><div class="value">{{ "%.1f"|format(result.first_payout_prob) }}%</div></div>
@@ -156,9 +149,9 @@
     <div class="stat"><div class="label">Expected Payout</div><div class="value">${{ "{:,.0f}".format(result.expected_payout) }}</div></div>
   </div>
   {% if result.reset_on_breach %}
-  <p style="font-size:12px;color:#ffcf7a;margin-top:10px;">Reset-on-breach was ON: the probabilities above mean "at least one mechanical rebuy in the chain succeeded" -- mean {{ "%.1f"|format(result.mean_attempts_per_path) }} attempts per simulated path (median {{ "%.0f"|format(result.median_attempts_per_path) }}). See the full HTML report's methodology note for the exact wording, or use <a href="/payout-probability" style="color:#9ecbff;">Payout Probability</a>'s Bankroll / EV Survival section to price this against a real starting bankroll and reset fees.</p>
+  <p style="font-size:12px;color:var(--warn-fg);margin-top:10px;">Reset-on-breach was ON: the probabilities above mean "at least one mechanical rebuy in the chain succeeded" -- mean {{ "%.1f"|format(result.mean_attempts_per_path) }} attempts per simulated path (median {{ "%.0f"|format(result.median_attempts_per_path) }}). See the full HTML report's methodology note for the exact wording, or use <a href="/payout-probability" style="color:var(--info-fg);">Payout Probability</a>'s Bankroll / EV Survival section to price this against a real starting bankroll and reset fees.</p>
   {% endif %}
-  <p style="font-size:13px;color:#999;margin-top:12px;">
+  <p style="font-size:13px;color:var(--t-faint2);margin-top:12px;">
     {{ result.trades }} historical trades &middot; net profit ${{ "{:,.0f}".format(result.net_profit) }} &middot;
     win rate {{ "%.1f"|format(result.win_rate) }}% &middot; max DD {{ "%.1f"|format(result.max_dd) }}% &middot;
     {{ result.n_sims }} Monte Carlo runs
@@ -169,12 +162,12 @@
     <a href="{{ result.report_csv }}" target="_blank">Download summary CSV &rarr;</a>
   </div>
   {% if result.next_step %}
-  <p style="margin-top:14px; padding:10px 12px; border-radius:8px; background:#152615; color:#b7e8b7; font-size:13px;">{{ result.next_step }}</p>
+  <p style="margin-top:14px; padding:10px 12px; border-radius:8px; background:var(--ok-bg3); color:var(--ok-fg3); font-size:13px;">{{ result.next_step }}</p>
   {% endif %}
   {% if result.simulation_text %}
   <details style="margin-top:14px;">
     <summary>How this was simulated</summary>
-    <pre style="white-space:pre-wrap; font-size:12px; color:#bbb;">{{ result.simulation_text }}</pre>
+    <pre style="white-space:pre-wrap; font-size:12px; color:var(--t-soft3);">{{ result.simulation_text }}</pre>
   </details>
   {% endif %}
 </div>
@@ -187,7 +180,7 @@
 <div class="card">
   <details style="margin-top:10px;">
     <summary>Or fetch forex/CFD/futures history from Dukascopy (free, no API key)</summary>
-    <p style="font-size:12px;color:#888;margin:8px 0 10px;">
+    <p style="font-size:12px;color:var(--t-faint);margin:8px 0 10px;">
       Pulls tick data directly from Dukascopy's free public feed and resamples it into bars,
       saved into data/raw/ the same way Alpaca fetches are. Covers what Alpaca can't: FX majors/
       minors, metals, and a few index CFDs. One HTTP request per hour of history, so this is
@@ -260,11 +253,11 @@
       </optgroup>
       {% endfor %}
     </select>
-    <p style="font-size:12px;color:#888;margin-top:6px;">{{ stored_datasets|length }} dataset(s) currently in data/raw/.</p>
+    <p style="font-size:12px;color:var(--t-faint);margin-top:6px;">{{ stored_datasets|length }} dataset(s) currently in data/raw/.</p>
     {% endif %}
     <label>Or upload new CSV file(s) (timestamp, open, high, low, close, volume)</label>
     <input type="file" name="csv_file" accept=".csv,.tsv,.txt,.parquet,.zip,.7z" multiple>
-    <p style="font-size:12px;color:#888;margin-top:6px;">
+    <p style="font-size:12px;color:var(--t-faint);margin-top:6px;">
       You can select multiple files at once. Each one is validated and automatically saved to
       data/raw/ so it's already there next time you open the app.
     </p>
@@ -326,11 +319,11 @@
       <select id="existing_strategy_select" onchange="loadFromLibrary()">
         <option value="">— none, paste or upload below —</option>
       </select>
-      <p style="font-size:12px;color:#888;margin-top:6px;" id="library-count-note"></p>
+      <p style="font-size:12px;color:var(--t-faint);margin-top:6px;" id="library-count-note"></p>
 
-      <div id="library-manage-panel" style="display:none;border:1px solid #262626;border-radius:8px;padding:10px;margin-top:8px;">
-        <p style="font-size:12px;color:#999;margin:0 0 8px;">Managing: <b id="library-manage-name"></b></p>
-        <p style="font-size:12px;color:#9ecbff;margin:0 0 8px;white-space:pre-line;" id="library-manage-last-run"></p>
+      <div id="library-manage-panel" style="display:none;border:1px solid var(--surface-x-bd);border-radius:8px;padding:10px;margin-top:8px;">
+        <p style="font-size:12px;color:var(--t-faint2);margin:0 0 8px;">Managing: <b id="library-manage-name"></b></p>
+        <p style="font-size:12px;color:var(--info-fg);margin:0 0 8px;white-space:pre-line;" id="library-manage-last-run"></p>
 
         <div class="mini-form" data-action="/strategies/status" style="margin-bottom:8px;">
           <input type="hidden" name="strategy_type" id="status_strategy_type">
@@ -372,7 +365,7 @@
           <input type="hidden" name="strategy_type" id="delete_strategy_type">
           <input type="hidden" name="filename" id="delete_filename">
           <input type="hidden" name="return_to" value="index">
-          <button type="button" class="submit-btn" style="padding:10px;font-size:13px;background:#3a1616;color:#ffb4b4;" onclick="t58SubmitMiniForm(this.closest('.mini-form'))">Delete From Library</button>
+          <button type="button" class="submit-btn" style="padding:10px;font-size:13px;background:var(--err-bg2);color:var(--err-fg);" onclick="t58SubmitMiniForm(this.closest('.mini-form'))">Delete From Library</button>
         </div>
       </div>
 
@@ -382,12 +375,12 @@
           <input type="hidden" name="return_to" value="index">
           <div id="bulk-checklist" style="margin:8px 0;font-size:13px;"></div>
           <div class="row">
-            <button type="button" class="submit-btn" style="padding:10px;font-size:13px;background:#3a1616;color:#ffb4b4;" onclick="t58SubmitMiniForm(this.closest('.mini-form'))">Delete Checked</button>
+            <button type="button" class="submit-btn" style="padding:10px;font-size:13px;background:var(--err-bg2);color:var(--err-fg);" onclick="t58SubmitMiniForm(this.closest('.mini-form'))">Delete Checked</button>
             <button type="button" class="submit-btn" style="padding:10px;font-size:13px;" onclick="exportChecked()">Export Checked</button>
             <button type="button" class="submit-btn" style="padding:10px;font-size:13px;" onclick="batchTestChecked()">Batch Test Checked</button>
           </div>
         </div>
-        <p style="font-size:11px;color:#888;margin-top:6px;">
+        <p style="font-size:11px;color:var(--t-faint);margin-top:6px;">
           Batch Test Checked runs every checked strategy through the same pipeline as the
           Run button below (using whichever market data / risk / prop-rule settings are set on
           this page right now) and produces one report per strategy.
@@ -444,7 +437,7 @@
         </div>
       </div>
       <div class="row">
-        <div><label>Account size ($)</label><input type="number" name="account_size" id="account_size_input" value="100000"><div class="hint" style="font-size:0.8em;color:#888;">Kept in sync with Initial balance below (RISK-001) -- these must be the same account.</div></div>
+        <div><label>Account size ($)</label><input type="number" name="account_size" id="account_size_input" value="100000"><div class="hint" style="font-size:0.8em;color:var(--t-faint);">Kept in sync with Initial balance below (RISK-001) -- these must be the same account.</div></div>
         <div><label>Eval profit target (%)</label><input type="number" step="0.1" name="profit_target" value="8"></div>
       </div>
       <div class="row">
@@ -482,7 +475,7 @@
     <details>
       <summary>4. Risk &amp; Execution</summary>
       <div class="row">
-        <div><label>Initial balance ($)</label><input type="number" name="initial_balance" id="initial_balance_input" value="100000"><div class="hint" style="font-size:0.8em;color:#888;">Kept in sync with Account size above (RISK-001) -- these must be the same account.</div></div>
+        <div><label>Initial balance ($)</label><input type="number" name="initial_balance" id="initial_balance_input" value="100000"><div class="hint" style="font-size:0.8em;color:var(--t-faint);">Kept in sync with Account size above (RISK-001) -- these must be the same account.</div></div>
         <div><label>Risk mode</label>
           <select name="risk_mode"><option value="percent">Percent</option><option value="fixed">Fixed $</option></select>
         </div>
@@ -511,13 +504,13 @@
     </div>
     <script>document.addEventListener('DOMContentLoaded', function () { t58PopulateInstrumentPicker('instrument_select'); });</script>
       <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;background:rgba(255,200,80,0.08);border:1px solid rgba(255,200,80,0.35);border-radius:8px;padding:8px 10px;margin-top:10px;"><input type="checkbox" name="adaptive_risk_enabled" style="width:auto;">Enable adaptive, limit-aware position sizing (throttles risk as the account nears its daily-loss/max-drawdown limits)</label>
-      <p style="font-size:12px;color:#888;margin-top:4px;">Off by default. If you ran Quick Optimize, Full Pipeline, or Iterative Refinement on this strategy with this ON, leave it ON here too -- comparing a Run &amp; Report result with this enabled against one of those with it OFF (or vice versa) is not an apples-to-apples comparison and can show wildly different results for the identical strategy and data.</p>
+      <p style="font-size:12px;color:var(--t-faint);margin-top:4px;">Off by default. If you ran Quick Optimize, Full Pipeline, or Iterative Refinement on this strategy with this ON, leave it ON here too -- comparing a Run &amp; Report result with this enabled against one of those with it OFF (or vice versa) is not an apples-to-apples comparison and can show wildly different results for the identical strategy and data.</p>
     </details>
   </div>
 
   <div class="card">
     <h2 style="font-size:16px;">Timeframes to test (optional)</h2>
-    <p style="font-size:12px;color:#888;">Leave blank to run on the loaded file's own bar size. Enter e.g. <b>5m, 15m, 30m, 1h, 4h</b> to resample the loaded data (even 1-minute data) to each bar size, run the strategy on every one, and get the full report for the best. A comparison table shows all of them.</p>
+    <p style="font-size:12px;color:var(--t-faint);">Leave blank to run on the loaded file's own bar size. Enter e.g. <b>5m, 15m, 30m, 1h, 4h</b> to resample the loaded data (even 1-minute data) to each bar size, run the strategy on every one, and get the full report for the best. A comparison table shows all of them.</p>
     <input type="text" name="expand_timeframes" placeholder="e.g. 5m, 15m, 30m, 1h, 4h">
   </div>
   <div class="card">
@@ -534,9 +527,9 @@
         </div>
       </div>
       <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;background:rgba(255,200,80,0.08);border:1px solid rgba(255,200,80,0.35);border-radius:8px;padding:8px 10px;margin-top:10px;"><input type="checkbox" name="reset_on_breach" style="width:auto;" checked>Reset-on-breach: chain mechanical rebuys within each simulated path instead of stopping at the first bust</label>
-      <p style="font-size:12px;color:#888;margin-top:4px;">On by default. (The raw backtest itself now always trades to the last bar of your data and logs every account reset.) Turns evaluation-pass/first-payout probability into "at least one attempt in the chain succeeded" rather than "the one attempt succeeded" -- see the full report's methodology note for the exact wording. For the version priced against a real starting bankroll and real reset fees, use <a href="/payout-probability" style="color:#9ecbff;">Payout Probability</a>'s Bankroll / EV Survival section instead.</p>
+      <p style="font-size:12px;color:var(--t-faint);margin-top:4px;">On by default. (The raw backtest itself now always trades to the last bar of your data and logs every account reset.) Turns evaluation-pass/first-payout probability into "at least one attempt in the chain succeeded" rather than "the one attempt succeeded" -- see the full report's methodology note for the exact wording. For the version priced against a real starting bankroll and real reset fees, use <a href="/payout-probability" style="color:var(--info-fg);">Payout Probability</a>'s Bankroll / EV Survival section instead.</p>
       <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;background:rgba(120,220,160,0.08);border:1px solid rgba(120,220,160,0.35);border-radius:8px;padding:8px 10px;margin-top:10px;"><input type="checkbox" name="reset_on_target" style="width:auto;" checked>Reset-on-target: once the RAW backtest crosses the Profit Target % above, withdraw the excess as a tracked payout and keep trading (instead of just accumulating on one ever-growing equity number)</label>
-      <p style="font-size:12px;color:#888;margin-top:4px;">On by default. Uses the same Profit Target % set under Prop Rules above for every payout cycle. This is a raw-backtest-engine feature (RiskConfig.reset_on_target), separate from and independent of Reset-on-breach -- a run can use either, both, or neither. Each payout is recorded distinctly from a breach (see the report's Account Resets / Payouts section) and never force-closes an open position.</p>
+      <p style="font-size:12px;color:var(--t-faint);margin-top:4px;">On by default. Uses the same Profit Target % set under Prop Rules above for every payout cycle. This is a raw-backtest-engine feature (RiskConfig.reset_on_target), separate from and independent of Reset-on-breach -- a run can use either, both, or neither. Each payout is recorded distinctly from a breach (see the report's Account Resets / Payouts section) and never force-closes an open position.</p>
     </details>
   </div>
 

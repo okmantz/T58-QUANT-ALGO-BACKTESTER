@@ -1,16 +1,11 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Search Lab Job — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <link rel="stylesheet" href="/static/job-theme.css">
 <style>
-  .stop-btn { padding: 10px 22px; border-radius: 10px; border: 1px solid #6b2323; background: #3a1616; color: #ffb4b4; font-size: 14px; font-weight: 700; cursor: pointer; }
+  .stop-btn { padding: 10px 22px; border-radius: 10px; border: 1px solid var(--err-bd); background: var(--err-bg2); color: var(--err-fg); font-size: 14px; font-weight: 700; cursor: pointer; }
   .stop-btn:disabled { opacity: 0.5; cursor: default; }
 </style>
 </head>
@@ -32,8 +27,8 @@
 <div class="card">
   <h2 id="status-title"><span class="spinner" id="spinner"></span>Search running&hellip;</h2>
   <div id="log">Starting&hellip;</div>
-  <p id="loop-status" style="display:none; margin-top:10px; padding:10px 12px; border-radius:8px; background:#1a2530; color:#a8c8e8; font-size:13px;"></p>
-  <p id="next-step" style="display:none; margin-top:10px; padding:10px 12px; border-radius:8px; background:#152615; color:#b7e8b7; font-size:13px;"></p>
+  <p id="loop-status" style="display:none; margin-top:10px; padding:10px 12px; border-radius:8px; background:var(--info-bg); color:var(--info-fg2); font-size:13px;"></p>
+  <p id="next-step" style="display:none; margin-top:10px; padding:10px 12px; border-radius:8px; background:var(--ok-bg3); color:var(--ok-fg3); font-size:13px;"></p>
   <form id="stop-form" method="post" action="/search/job/{{ job_id }}/stop" style="margin-top:10px;" onsubmit="return stopSearch(event)">
     <button class="stop-btn" type="submit" id="stop-btn">Stop</button>
   </form>
@@ -50,26 +45,26 @@
     <div class="stat"><div class="label">Stage 2</div><div class="value" id="s-stage2">-</div></div>
     <div class="stat"><div class="label">Stage 3</div><div class="value" id="s-stage3">-</div></div>
   </div>
-  <p style="font-size:13px;color:#999;margin-top:12px;" id="s-champion"></p>
+  <p style="font-size:13px;color:var(--t-faint2);margin-top:12px;" id="s-champion"></p>
   <div class="links" id="s-report-links"></div>
   <div style="margin-top:14px;border-top:1px solid var(--border-light, #2a323d);padding-top:14px;">
     <button class="promote-btn" id="auto-ensemble-btn" onclick="buildAutoEnsemble(this)">Auto-Build Ensemble from this leaderboard</button>
-    <p style="font-size:12px;color:#8a97a8;margin-top:6px;">Greedily assembles a 3-5-leg, weakly-correlated basket straight from this run's stage-3 candidates instead of hand-picking legs on the Ensemble tab.</p>
+    <p style="font-size:12px;color:var(--t-mute3);margin-top:6px;">Greedily assembles a 3-5-leg, weakly-correlated basket straight from this run's stage-3 candidates instead of hand-picking legs on the Ensemble tab.</p>
     <div id="auto-ensemble-result" style="display:none;margin-top:10px;"></div>
   </div>
 </div>
 
 <div class="card" id="distribution-card" style="display:none;">
   <h2>Optimization results -- distribution, not just a winner</h2>
-  <p style="font-size:12.5px;color:#999;margin:0 0 12px;" id="d-tested"></p>
+  <p style="font-size:12.5px;color:var(--t-faint2);margin:0 0 12px;" id="d-tested"></p>
   <div class="table-scroll">
     <table>
       <thead><tr><th></th><th>Median</th><th>Best (raw optimum)</th></tr></thead>
       <tbody id="d-rows"></tbody>
     </table>
   </div>
-  <p style="font-size:12.5px;color:#999;margin-top:12px;" id="d-robust"></p>
-  <p style="font-size:11.5px;color:#777;margin-top:8px;">
+  <p style="font-size:12.5px;color:var(--t-faint2);margin-top:12px;" id="d-robust"></p>
+  <p style="font-size:11.5px;color:var(--t-faint3);margin-top:8px;">
     "Median" is across every stage-3 candidate on this run's leaderboard -- not just the champion above.
     "Candidates tested" is the total funnel size before Stage 1/2/3 narrowed it down, so you can see how
     wide the search actually was, not just how it ended. "Robust candidates" is a simple, transparent

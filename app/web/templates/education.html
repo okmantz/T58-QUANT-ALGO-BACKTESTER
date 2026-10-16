@@ -1,14 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Education — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
@@ -56,7 +50,7 @@
     padding: 10px 18px; border-radius: 8px; font-size: 13px; cursor: pointer;
   }
   .edu-nav button:disabled { opacity: .35; cursor: default; }
-  .edu-nav button.primary { background: var(--teal); color: #04120e; border-color: var(--teal); font-weight: 700; }
+  .edu-nav button.primary { background: var(--teal); color: var(--on-teal); border-color: var(--teal); font-weight: 700; }
   .edu-progress { font-size: 12px; color: var(--text-dim); }
 </style>
 </head>

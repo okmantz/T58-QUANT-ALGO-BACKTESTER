@@ -1,19 +1,14 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Multi-Objective Job — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <link rel="stylesheet" href="/static/job-theme.css">
 <style>
   /* v8 (2026-10-05): poll-loop heartbeat -- proves the page is still
      receiving updates; turns amber when a job stalls. */
-  .heartbeat { font-size: 11px; color: #777; margin: 6px 0; }
-  .heartbeat.stale { color: #ff9f43; }
+  .heartbeat { font-size: 11px; color: var(--t-faint3); margin: 6px 0; }
+  .heartbeat.stale { color: var(--warn-fg3); }
 </style>
 </head>
 <body>

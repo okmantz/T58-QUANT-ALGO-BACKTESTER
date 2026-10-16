@@ -1,20 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Interactive Replay — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <style>
-  :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
   .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
-  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  label { display: block; font-size: 13px; color: var(--t-soft); margin: 10px 0 4px; }
   input[type=text], input[type=number], select {
     width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light);
     background: var(--panel-3); color: var(--text); font-size: 15px;
@@ -22,16 +15,16 @@
   .row { display: flex; gap: 10px; }
   .row > div { flex: 1; }
   .submit-btn {
-    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: #04120e;
+    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: var(--on-teal);
     font-size: 16px; font-weight: 700; margin-top: 6px;
     box-shadow: 0 0 22px rgba(53,224,176,0.35);
   }
-  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .error { background: var(--err-bg); border: 1px solid var(--err-bd); color: var(--err-fg); padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
   .strategy-tab-btn {
     flex: 1; padding: 10px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3);
-    color: #ccc; font-size: 13px; font-weight: 600; cursor: pointer;
+    color: var(--t-soft); font-size: 13px; font-weight: 600; cursor: pointer;
   }
-  .strategy-tab-btn.active { background: var(--teal); color: #04120e; border-color: var(--teal); }
+  .strategy-tab-btn.active { background: var(--teal); color: var(--on-teal); border-color: var(--teal); }
 </style>
 </head>
 <body>
@@ -79,7 +72,7 @@
     <input type="hidden" name="strategy_mode" id="strategy_mode_field" value="manual">
 
     <div id="quick-strategy-fields">
-      <p style="font-size:12.5px;color:#888;margin-bottom:10px;">A simple SMA-crossover Manual Strategy Builder config for a first pass -- same scope note as Multi-Market Search and Forward Test.</p>
+      <p style="font-size:12.5px;color:var(--t-faint);margin-bottom:10px;">A simple SMA-crossover Manual Strategy Builder config for a first pass -- same scope note as Multi-Market Search and Forward Test.</p>
       <div class="row">
         <div><label>SMA fast</label><input type="number" name="sma_fast" value="20"></div>
         <div><label>SMA slow</label><input type="number" name="sma_slow" value="50"></div>
@@ -91,20 +84,20 @@
     </div>
 
     <div id="library-strategy-fields" style="display:none;">
-      <p style="font-size:12.5px;color:#888;margin-bottom:10px;">Pick any saved strategy -- Replay shows exactly where IT actually enters and exits on this dataset, not a generic quick strategy.</p>
+      <p style="font-size:12.5px;color:var(--t-faint);margin-bottom:10px;">Pick any saved strategy -- Replay shows exactly where IT actually enters and exits on this dataset, not a generic quick strategy.</p>
       <label>Saved strategy</label>
       <select id="library_strategy_select">
         <option value="">— pick a saved strategy —</option>
       </select>
       <input type="hidden" name="library_strategy_type" id="library_strategy_type_field">
       <input type="hidden" name="library_strategy_name" id="library_strategy_name_field">
-      <p style="font-size:12px;color:#888;margin-top:6px;" id="library-empty-note"></p>
+      <p style="font-size:12px;color:var(--t-faint);margin-top:6px;" id="library-empty-note"></p>
     </div>
   </div>
 
   <div class="card">
     <h2>3. Prop Account (optional)</h2>
-    <p style="font-size:12.5px;color:#888;margin-bottom:10px;">Only sets the starting balance shown on the replay's running-balance panel -- Replay is a visualization of one plain backtest's own trade sequence, not a prop-firm evaluation/payout simulation.</p>
+    <p style="font-size:12.5px;color:var(--t-faint);margin-bottom:10px;">Only sets the starting balance shown on the replay's running-balance panel -- Replay is a visualization of one plain backtest's own trade sequence, not a prop-firm evaluation/payout simulation.</p>
     <label>Prop firm preset</label>
     <select id="prop_preset_select"><option value="">— none, set account size manually —</option></select>
     <div class="row">
@@ -133,7 +126,7 @@
       <div><label>Commission per trade ($)</label><input type="number" step="0.01" name="commission" value="0"></div>
     </div>
     <button type="button" onclick="detectPipSize()" style="margin-top:6px;background:none;border:1px solid var(--border-light);color:var(--teal);padding:9px 12px;border-radius:8px;font-size:13px;width:100%;">Detect pip size from data</button>
-    <p id="pip_detect_status" style="font-size:12px;color:#888;margin-top:6px;"></p>
+    <p id="pip_detect_status" style="font-size:12px;color:var(--t-faint);margin-top:6px;"></p>
   </div>
 
   <button class="submit-btn" type="submit">Prepare Replay</button>

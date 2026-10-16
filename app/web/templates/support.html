@@ -1,30 +1,23 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Support — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <style>
-  :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 14px; max-width: 640px; }
   .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 8px; }
-  .card p { font-size: 14px; color: #ccc; line-height: 1.55; margin: 0 0 12px; }
+  .card p { font-size: 14px; color: var(--t-soft); line-height: 1.55; margin: 0 0 12px; }
   .btn {
     display: inline-flex; align-items: center; gap: 8px; padding: 12px 18px; border-radius: 10px;
-    border: 1px solid var(--teal); background: var(--teal); color: #04120e; font-weight: 700;
+    border: 1px solid var(--teal); background: var(--teal); color: var(--on-teal); font-weight: 700;
     font-size: 14px; text-decoration: none; cursor: pointer;
   }
   .btn.secondary { background: transparent; color: var(--teal); }
   .btn.discord { border-color: #5865F2; background: #5865F2; color: #fff; }
   details { border: 1px solid var(--border-light); border-radius: 8px; padding: 10px 14px; margin-bottom: 8px; }
-  details summary { font-size: 14px; font-weight: 600; cursor: pointer; color: #ddd; }
-  details p { margin: 10px 0 0; font-size: 13.5px; color: #bbb; }
+  details summary { font-size: 14px; font-weight: 600; cursor: pointer; color: var(--t-soft2); }
+  details p { margin: 10px 0 0; font-size: 13.5px; color: var(--t-soft3); }
   textarea {
     width: 100%; min-height: 120px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-light);
     background: var(--panel-3); color: var(--text); font-size: 14px; font-family: inherit;

@@ -1,37 +1,30 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Strategy Graveyard — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <style>
-  :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
   .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
-  .card p.help { font-size: 12px; color: #888; margin: 0 0 10px; line-height: 1.5; }
+  .card p.help { font-size: 12px; color: var(--t-faint); margin: 0 0 10px; line-height: 1.5; }
   select { padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 14px; }
   .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06); vertical-align: top; }
-  th { color: #999; text-transform: uppercase; font-size: 11px; letter-spacing: .03em; }
+  th { color: var(--t-faint2); text-transform: uppercase; font-size: 11px; letter-spacing: .03em; }
   tr:hover td { background: rgba(255,255,255,0.02); }
   .n-tested { font-weight: 700; color: #ffb454; }
-  .stage-cpcv { color: #ff8a8a; }
+  .stage-cpcv { color: var(--err-fg2); }
   .stage-stress { color: #ffcf5c; }
-  .stage-not_ranked { color: #888; }
-  .best-pct { color: #35e0b0; font-weight: 600; }
-  .empty { color: #888; font-size: 14px; padding: 20px 0; }
+  .stage-not_ranked { color: var(--t-faint); }
+  .best-pct { color: var(--teal); font-weight: 600; }
+  .empty { color: var(--t-faint); font-size: 14px; padding: 20px 0; }
   .sig { font-family: monospace; font-size: 11px; color: #7dd3fc; word-break: break-all; }
-  .filesel { font-size: 12px; color: #999; }
+  .filesel { font-size: 12px; color: var(--t-faint2); }
 </style>
 </head>
 <body>

@@ -1,22 +1,16 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Deploy Live — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <style>
-  :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   .step { display: flex; gap: 12px; align-items: flex-start; background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 10px; max-width: 720px; }
-  .step .dot { width: 26px; height: 26px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; font-weight: 700; background: #2a1e0a; color: #ffd28a; border: 1px solid #7a5210; }
-  .step.done .dot { background: #10261b; color: #a6efc6; border-color: #1f6b46; }
+  .step .dot { width: 26px; height: 26px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; font-weight: 700; background: var(--warn-bg); color: var(--warn-fg2); border: 1px solid var(--warn-bd); }
+  .step.done .dot { background: var(--ok-bg4); color: var(--ok-fg4); border-color: var(--ok-bd3); }
   .step h3 { margin: 0 0 4px; font-size: 14px; }
   .step p { margin: 0 0 6px; font-size: 12.5px; color: #9aa4b5; line-height: 1.5; }
-  .go { display: inline-block; padding: 8px 14px; border-radius: 8px; background: #00c389; color: #04130d; font-weight: 700; font-size: 13px; text-decoration: none; }
+  .go { display: inline-block; padding: 8px 14px; border-radius: 8px; background: #00c389; color: var(--on-teal2); font-weight: 700; font-size: 13px; text-decoration: none; }
   .enable-box input { padding: 9px 12px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); width: 260px; }
   .enable-box button { padding: 9px 14px; border-radius: 8px; border: 1px solid #ff4444; background: #ff4444; color: #200; font-weight: 700; cursor: pointer; }
   #en-msg { font-size: 12.5px; margin-top: 8px; }
@@ -47,7 +41,7 @@
         <div id="en-msg"></div>
       </div>
       {% else %}
-      <p style="color:#ffd28a;">This switch only works from the computer the app runs on. Open http://127.0.0.1:5000 there, or start the app with T58_ENABLE_WEB_LIVE_DEPLOY=1.</p>
+      <p style="color:var(--warn-fg2);">This switch only works from the computer the app runs on. Open http://127.0.0.1:5000 there, or start the app with T58_ENABLE_WEB_LIVE_DEPLOY=1.</p>
       {% endif %}
     {% endif %}
   </div>

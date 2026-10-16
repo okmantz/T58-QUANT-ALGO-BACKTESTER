@@ -1,45 +1,38 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Evolution Lab — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <style>
-  :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
   .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
-  .card p.help { font-size: 12px; color: #888; margin: 0 0 10px; line-height: 1.5; }
-  label { display: block; font-size: 13px; color: #ccc; margin: 10px 0 4px; }
+  .card p.help { font-size: 12px; color: var(--t-faint); margin: 0 0 10px; line-height: 1.5; }
+  label { display: block; font-size: 13px; color: var(--t-soft); margin: 10px 0 4px; }
   input[type=number], select { width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 15px; }
-  input[type=file] { width: 100%; color: #ccc; }
+  input[type=file] { width: 100%; color: var(--t-soft); }
   .row { display: flex; gap: 10px; }
   .row > div { flex: 1; }
-  .submit-btn { width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: #04120e; font-size: 16px; font-weight: 700; margin-top: 6px; box-shadow: 0 0 22px rgba(53,224,176,0.35); }
-  .stop-btn { width: 100%; padding: 15px; border-radius: 10px; border: 1px solid #6b2323; background: #3a1616; color: #ffb4b4; font-size: 16px; font-weight: 700; margin-top: 6px; }
-  .reset-btn { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: #ccc; font-size: 13px; margin-top: 8px; }
-  .error { background: #2a1414; border: 1px solid #6b2323; color: #ffb4b4; padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .submit-btn { width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: var(--on-teal); font-size: 16px; font-weight: 700; margin-top: 6px; box-shadow: 0 0 22px rgba(53,224,176,0.35); }
+  .stop-btn { width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--err-bd); background: var(--err-bg2); color: var(--err-fg); font-size: 16px; font-weight: 700; margin-top: 6px; }
+  .reset-btn { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--t-soft); font-size: 13px; margin-top: 8px; }
+  .error { background: var(--err-bg); border: 1px solid var(--err-bd); color: var(--err-fg); padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
   .badge { font-size: 10px; padding: 3px 8px; border-radius: 6px; }
-  .badge.running { background: #123b1c; color: #7ee08a; }
-  .badge.stopped { background: #262626; color: #999; }
-  #log { background: #0d0d0d; border: 1px solid var(--border-light); border-radius: 8px; padding: 10px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: #ccc; max-height: 220px; overflow-y: auto; white-space: pre-wrap; }
+  .badge.running { background: var(--ok-bg2); color: var(--ok-fg2); }
+  .badge.stopped { background: var(--surface-x); color: var(--t-faint2); }
+  #log { background: var(--code-bg); border: 1px solid var(--border-light); border-radius: 8px; padding: 10px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--t-soft); max-height: 220px; overflow-y: auto; white-space: pre-wrap; }
   table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
   th, td { padding: 6px 4px; border-bottom: 1px solid var(--border-light); text-align: left; }
-  th { color: #888; font-weight: 600; text-transform: uppercase; font-size: 10px; }
+  th { color: var(--t-faint); font-weight: 600; text-transform: uppercase; font-size: 10px; }
   .table-scroll { overflow-x: auto; max-height: 640px; overflow-y: auto; }
-  .lb-detail-btn, .lb-promote-btn { font-size: 11px; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border-light); background: var(--panel-3); color: #ccc; }
+  .lb-detail-btn, .lb-promote-btn { font-size: 11px; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--t-soft); }
   .lb-promote-btn { border-color: var(--teal); color: var(--teal); }
   .lb-promote-btn[disabled] { opacity: .5; }
-  .lb-detail-row td { background: #0d0d0d; white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: #ccc; }
-  .journal-entry { font-size: 12px; color: #ccc; border-left: 2px solid var(--border-light); padding-left: 8px; margin-bottom: 8px; white-space: pre-wrap; }
+  .lb-detail-row td { background: var(--code-bg); white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--t-soft); }
+  .journal-entry { font-size: 12px; color: var(--t-soft); border-left: 2px solid var(--border-light); padding-left: 8px; margin-bottom: 8px; white-space: pre-wrap; }
   .checkbox-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
   .checkbox-row input { width: auto; }
 </style>
@@ -61,7 +54,7 @@
 <div class="card">
   <h2>Status <span class="badge {{ 'running' if running else 'stopped' }}" id="status-badge">{{ 'RUNNING' if running else 'STOPPED' }}</span></h2>
   <div id="log">Loading&hellip;</div>
-  <p id="next-step" style="display:none; margin-top:10px; padding:10px 12px; border-radius:8px; background:#152615; color:#b7e8b7; font-size:13px;"></p>
+  <p id="next-step" style="display:none; margin-top:10px; padding:10px 12px; border-radius:8px; background:var(--ok-bg3); color:var(--ok-fg3); font-size:13px;"></p>
   <div id="controls" style="margin-top:10px;">
     {% if running %}
     <form method="post" action="/evolution/stop"><button class="stop-btn" type="submit">Stop</button></form>
@@ -83,15 +76,15 @@
 
 <div class="card" id="distribution-card" style="display:none;">
   <h2>Optimization results -- distribution, not just a winner</h2>
-  <p style="font-size:12.5px;color:#999;margin:0 0 12px;" id="d-tested"></p>
+  <p style="font-size:12.5px;color:var(--t-faint2);margin:0 0 12px;" id="d-tested"></p>
   <div class="table-scroll">
     <table>
       <thead><tr><th></th><th>Median</th><th>Best (raw optimum)</th></tr></thead>
       <tbody id="d-rows"></tbody>
     </table>
   </div>
-  <p style="font-size:12.5px;color:#999;margin-top:12px;" id="d-robust"></p>
-  <p style="font-size:11.5px;color:#777;margin-top:8px;">
+  <p style="font-size:12.5px;color:var(--t-faint2);margin-top:12px;" id="d-robust"></p>
+  <p style="font-size:11.5px;color:var(--t-faint3);margin-top:8px;">
     "Median" is across every candidate on this run's own leaderboard -- not just the top one. "Candidates
     tested" is generations &times; population size, an approximation of the total funnel size, not an
     exact count. "Robust candidates" is a simple, transparent count of genuinely different genomes that
@@ -233,7 +226,7 @@
           <option value="{{ key }}" {{ 'selected' if key == 'genetic' else '' }}>{{ label }}</option>
           {% endfor %}
         </select>
-        <p style="font-size:12px;color:#888;margin-top:4px;">All three run the exact same generation-by-generation search per family -- only how each family's next children are proposed differs. TPE/CMA-ES need the optuna / cma packages on the server; you'll get a clear error here if one isn't installed.</p>
+        <p style="font-size:12px;color:var(--t-faint);margin-top:4px;">All three run the exact same generation-by-generation search per family -- only how each family's next children are proposed differs. TPE/CMA-ES need the optuna / cma packages on the server; you'll get a clear error here if one isn't installed.</p>
       </div>
       <div><label>Max generations (blank = run until STOP)</label><input type="number" name="max_generations" value=""></div>
     </div>
@@ -244,7 +237,7 @@
           <option value="{{ key }}" {{ 'selected' if key == 'genetic' else '' }}>{{ label }}</option>
           {% endfor %}
         </select>
-        <p style="font-size:12px;color:#888;margin-top:4px;">"Genetic" is the existing plain-mutation/GP-surrogate breeding, unchanged. TPE/CMA-ES replace it with one optimizer PER FAMILY (each family has its own gene count) -- same generate/filter/robustness/OOS/MC/prop-sim funnel either way. TPE/CMA-ES need the optuna / cma packages installed; you'll get a clear error here if one isn't.</p>
+        <p style="font-size:12px;color:var(--t-faint);margin-top:4px;">"Genetic" is the existing plain-mutation/GP-surrogate breeding, unchanged. TPE/CMA-ES replace it with one optimizer PER FAMILY (each family has its own gene count) -- same generate/filter/robustness/OOS/MC/prop-sim funnel either way. TPE/CMA-ES need the optuna / cma packages installed; you'll get a clear error here if one isn't.</p>
       </div>
     </div>
     <div class="row">
@@ -272,7 +265,7 @@
         <option value="low_drawdown">Minimize drawdown</option>
         <option value="custom">Custom weights...</option>
       </select>
-      <p style="font-size:12px;color:#888;margin:4px 0 0;">
+      <p style="font-size:12px;color:var(--t-faint);margin:4px 0 0;">
         What the lab ranks/selects candidates by. "Balanced" is the original scoring formula; the others
         emphasize one thing Owen cares about more than the others without ignoring the rest.
       </p>
@@ -289,7 +282,7 @@
           <div><label>Drawdown penalty weight</label><input type="number" step="0.1" min="0" name="goal_w_drawdown" value="1.0"></div>
           <div><label>Net profit weight (additive bonus, small e.g. 0.01-0.05)</label><input type="number" step="0.01" min="0" name="goal_w_net_profit" value="0.0"></div>
         </div>
-        <p style="font-size:12px;color:#888;margin:4px 0 0;">
+        <p style="font-size:12px;color:var(--t-faint);margin:4px 0 0;">
           1.0 = default weighting for that factor, 0.0 = ignore it entirely, higher = weight it more heavily
           than the others. Net profit is additive (raw dollars x weight), not an exponent like the rest,
           since it has no natural 0..1 ceiling.

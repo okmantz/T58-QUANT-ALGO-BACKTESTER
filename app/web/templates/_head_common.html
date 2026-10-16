@@ -1,0 +1,11 @@
+{# Shared <head> boilerplate for every full page (charset, viewport, PWA/icon links, theme.css and the
+   saved-theme bootstrap). The bootstrap runs before first paint so every page -- including the job/progress
+   pages that have no sidebar -- follows the Light/Dark choice made in the sidebar toggle. #}
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#05070a">
+<link rel="stylesheet" href="/static/theme.css">
+<script>try{if(localStorage.getItem('t58-theme')==='light')document.documentElement.setAttribute('data-theme','light')}catch(e){}</script>

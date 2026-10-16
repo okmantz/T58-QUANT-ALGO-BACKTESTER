@@ -1,13 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Speed Run Job — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <link rel="stylesheet" href="/static/job-theme.css">
 </head>
 <body>
@@ -28,7 +23,7 @@
 <div class="card">
   <h2 id="status-title"><span class="spinner" id="spinner"></span>Speed Run running&hellip;</h2>
   <div id="log">Starting&hellip;</div>
-  <p id="loop-status" style="display:none; margin-top:10px; padding:10px 12px; border-radius:8px; background:#1a2530; color:#a8c8e8; font-size:13px;"></p>
+  <p id="loop-status" style="display:none; margin-top:10px; padding:10px 12px; border-radius:8px; background:var(--info-bg); color:var(--info-fg2); font-size:13px;"></p>
   <form id="stop-form" method="post" action="/speed-run/job/{{ job_id }}/stop" style="display:none; margin-top:10px;" onsubmit="return stopSpeedRun(event)">
     <button class="stop-btn" type="submit" id="stop-btn">Stop</button>
   </form>

@@ -1,19 +1,14 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Saved validation reports — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <link rel="stylesheet" href="/static/job-theme.css">
 {% include '_lifecycle_css.html' %}
 <style>
   .rp-table{width:100%; border-collapse:collapse; font-size:13px;}
-  .rp-table th,.rp-table td{text-align:left; padding:8px 10px; border-bottom:1px solid var(--lc-border2,#2a3345); vertical-align:top;}
-  .rp-table th{color:var(--lc-muted,#8b95a7); font-weight:600; font-size:11.5px;}
+  .rp-table th,.rp-table td{text-align:left; padding:8px 10px; border-bottom:1px solid var(--lc-border2,var(--bd-x)); vertical-align:top;}
+  .rp-table th{color:var(--lc-muted,var(--t-mute2)); font-weight:600; font-size:11.5px;}
   .lc-btn.secondary{background:transparent; color:var(--lc-acc,#00e0a0); border:1px solid var(--lc-acc,#00e0a0);}
 </style>
 </head>

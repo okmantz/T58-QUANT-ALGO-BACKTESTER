@@ -1,13 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Quick Optimize Job — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <link rel="stylesheet" href="/static/job-theme.css">
 </head>
 <body>
@@ -34,7 +29,7 @@
     </div>
   </div>
   <div id="log">Starting&hellip;</div>
-  <button type="button" id="stop-btn" onclick="stopQuickOptimize()" style="margin-top:12px; padding:10px 22px; border-radius:10px; border:1px solid #6b2323; background:#3a1616; color:#ffb4b4; font-size:14px; font-weight:700; cursor:pointer;">Stop</button>
+  <button type="button" id="stop-btn" onclick="stopQuickOptimize()" style="margin-top:12px; padding:10px 22px; border-radius:10px; border:1px solid var(--err-bd); background:var(--err-bg2); color:var(--err-fg); font-size:14px; font-weight:700; cursor:pointer;">Stop</button>
 </div>
 
 <div id="research-wrap" style="display:none;">

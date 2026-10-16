@@ -1,16 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Strategy Library — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <style>
-  :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
   .filters input, .filters select { padding: 9px 12px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 13px; }
@@ -44,7 +37,7 @@
   .badge { display: inline-block; padding: 2px 7px; border-radius: 5px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; margin-right: 4px; }
   .badge.type { background: var(--panel-3); color: #aaa; }
   .badge.status { background: rgba(53,224,176,0.15); color: var(--teal); }
-  .tag { display: inline-block; background: var(--panel-3); color: #ccc; padding: 1px 6px; border-radius: 4px; font-size: 10.5px; margin: 4px 4px 0 0; }
+  .tag { display: inline-block; background: var(--panel-3); color: var(--t-soft); padding: 1px 6px; border-radius: 4px; font-size: 10.5px; margin: 4px 4px 0 0; }
   /* ---- Detail panel (modal-style overlay) ---- */
   #detail-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 50; }
   #detail-panel {
@@ -52,13 +45,13 @@
     border-left: 1px solid var(--border); z-index: 51; overflow-y: auto; padding: 18px;
   }
   #detail-panel h2 { margin: 0 0 4px; font-size: 18px; }
-  .close-btn { position: absolute; top: 14px; right: 14px; background: none; border: none; color: #999; font-size: 22px; cursor: pointer; }
+  .close-btn { position: absolute; top: 14px; right: 14px; background: none; border: none; color: var(--t-faint2); font-size: 22px; cursor: pointer; }
   .detail-tabs { display: flex; gap: 6px; margin: 14px 0; flex-wrap: wrap; }
   .detail-tabs button {
     padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3);
-    color: #ccc; font-size: 12.5px; cursor: pointer;
+    color: var(--t-soft); font-size: 12.5px; cursor: pointer;
   }
-  .detail-tabs button.active { background: var(--teal); color: #04120e; border-color: var(--teal); font-weight: 700; }
+  .detail-tabs button.active { background: var(--teal); color: var(--on-teal); border-color: var(--teal); font-weight: 700; }
   .detail-section { display: none; }
   .detail-section.active { display: block; }
   textarea#code-editor {
@@ -67,9 +60,9 @@
   }
   .submit-btn {
     padding: 10px 16px; border-radius: 8px; border: 1px solid var(--teal); background: var(--teal);
-    color: #04120e; font-weight: 700; font-size: 13px; cursor: pointer; margin-top: 8px;
+    color: var(--on-teal); font-weight: 700; font-size: 13px; cursor: pointer; margin-top: 8px;
   }
-  .delete-btn { border: 1px solid #6b2323; background: transparent; color: #ff8a8a; padding: 10px 16px; border-radius: 8px; font-size: 13px; cursor: pointer; }
+  .delete-btn { border: 1px solid var(--err-bd); background: transparent; color: var(--err-fg2); padding: 10px 16px; border-radius: 8px; font-size: 13px; cursor: pointer; }
   input[type=text], select, textarea { width: 100%; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 13px; margin-bottom: 8px; }
   .notice { background: rgba(53,224,176,0.1); border: 1px solid var(--teal); color: var(--teal); padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; font-size: 13px; }
   .result-block { background: var(--panel-3); border-radius: 8px; padding: 10px; font-family: ui-monospace, monospace; font-size: 11.5px; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
@@ -111,7 +104,7 @@
 </div>
 
 <div class="strategy-grid" id="strategy-grid"></div>
-<p style="color:#888;font-size:13px;margin-top:14px;" id="empty-note" style="display:none;"></p>
+<p style="color:var(--t-faint);font-size:13px;margin-top:14px;" id="empty-note" style="display:none;"></p>
 
 </div>
 </div>
@@ -121,7 +114,7 @@
 <div id="detail-panel">
   <button class="close-btn" onclick="closeDetail()">&times;</button>
   <h2 id="d-name">-</h2>
-  <p style="font-size:12.5px;color:#888;" id="d-meta">-</p>
+  <p style="font-size:12.5px;color:var(--t-faint);" id="d-meta">-</p>
   <div id="d-stage-bar" style="margin: 8px 0 4px;"></div>
   <div class="stage-labels"><span>Create</span><span>Test</span><span>Optimize</span><span>Validate</span><span>Champion</span><span>Ready</span></div>
   <p style="font-size:12px;color:var(--teal);margin:6px 0 0;" id="d-next-step"></p>
@@ -142,24 +135,24 @@
   </div>
 
   <div class="detail-section" data-section="backtest">
-    <p style="font-size:13px;color:#ccc;">Opens Full Pipeline with this strategy already loaded -- pick a dataset there and run. (A dataset is always required and has no sensible default, so this is one step short of a blind one-click run.)</p>
+    <p style="font-size:13px;color:var(--t-soft);">Opens Full Pipeline with this strategy already loaded -- pick a dataset there and run. (A dataset is always required and has no sensible default, so this is one step short of a blind one-click run.)</p>
     <button class="submit-btn" onclick="goToTool('/full-pipeline')">Open in Full Pipeline &rarr;</button>
   </div>
 
   <div class="detail-section" data-section="optimize">
-    <p style="font-size:13px;color:#ccc;">Opens Quick Optimize with this strategy already loaded -- pick a dataset there and run.</p>
+    <p style="font-size:13px;color:var(--t-soft);">Opens Quick Optimize with this strategy already loaded -- pick a dataset there and run.</p>
     <button class="submit-btn" onclick="goToTool('/quick-optimize')">Open in Quick Optimize &rarr;</button>
   </div>
 
   <div class="detail-section" data-section="results">
-    <h3 style="font-size:13px;color:#999;">Last Full Pipeline run</h3>
+    <h3 style="font-size:13px;color:var(--t-faint2);">Last Full Pipeline run</h3>
     <div class="result-block" id="d-last-run">No recorded run yet.</div>
-    <h3 style="font-size:13px;color:#999;margin-top:14px;">Last search result</h3>
+    <h3 style="font-size:13px;color:var(--t-faint2);margin-top:14px;">Last search result</h3>
     <div class="result-block" id="d-last-search">No recorded search yet.</div>
   </div>
 
   <div class="detail-section" data-section="deployments">
-    <p style="font-size:13px;color:#ccc;">Forward Test (demo) and Deploy Live (real accounts) currently support Manual strategies only -- see each page's own notes for Python/PineScript/MQL5 support.</p>
+    <p style="font-size:13px;color:var(--t-soft);">Forward Test (demo) and Deploy Live (real accounts) currently support Manual strategies only -- see each page's own notes for Python/PineScript/MQL5 support.</p>
     <a class="submit-btn" style="display:inline-block;text-decoration:none;text-align:center;" href="/forward-test">Go to Forward Test</a>
     <a class="submit-btn" style="display:inline-block;text-decoration:none;text-align:center;margin-left:8px;background:#ff4444;border-color:#ff4444;color:#200;" href="/deploy-live">Go to Deploy Live</a>
   </div>
@@ -169,11 +162,11 @@
       <input type="hidden" name="strategy_type" id="set-type-1">
       <input type="hidden" name="filename" id="set-filename-1">
       <input type="hidden" name="return_to" value="library">
-      <label style="font-size:13px;color:#ccc;">Description</label>
+      <label style="font-size:13px;color:var(--t-soft);">Description</label>
       <input type="text" name="description" id="set-description">
-      <label style="font-size:13px;color:#ccc;">Market</label>
+      <label style="font-size:13px;color:var(--t-soft);">Market</label>
       <input type="text" name="market" id="set-market">
-      <label style="font-size:13px;color:#ccc;">Tags (comma-separated)</label>
+      <label style="font-size:13px;color:var(--t-soft);">Tags (comma-separated)</label>
       <input type="text" name="tags" id="set-tags">
       <button class="submit-btn" type="submit">Save info</button>
     </form>
@@ -182,7 +175,7 @@
       <input type="hidden" name="strategy_type" id="set-type-2">
       <input type="hidden" name="filename" id="set-filename-2">
       <input type="hidden" name="return_to" value="library">
-      <label style="font-size:13px;color:#ccc;">Status</label>
+      <label style="font-size:13px;color:var(--t-soft);">Status</label>
       <select name="status" id="set-status">
         {% for s in strategy_statuses %}
         <option value="{{ s }}">{{ s }}</option>
@@ -195,7 +188,7 @@
       <input type="hidden" name="strategy_type" id="set-type-3">
       <input type="hidden" name="old_filename" id="set-old-filename">
       <input type="hidden" name="return_to" value="library">
-      <label style="font-size:13px;color:#ccc;">Rename to</label>
+      <label style="font-size:13px;color:var(--t-soft);">Rename to</label>
       <input type="text" name="new_filename" id="set-new-filename">
       <button class="submit-btn" type="submit">Rename</button>
     </form>

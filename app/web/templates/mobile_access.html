@@ -1,19 +1,12 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Mobile Access — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <style>
-  :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
   .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
@@ -24,9 +17,9 @@
     background: var(--panel-3); border: 1px solid var(--border-light); border-radius: 8px;
     padding: 10px 14px; word-break: break-all; text-align: center; width: 100%; max-width: 360px;
   }
-  .warn { font-size: 13px; color: var(--amber, #f0b429); line-height: 1.5; margin-top: 6px; }
-  .note { font-size: 12px; color: #888; line-height: 1.6; }
-  ol { padding-left: 20px; color: #ccc; font-size: 13px; line-height: 1.7; }
+  .warn { font-size: 13px; color: var(--amber, var(--amber)); line-height: 1.5; margin-top: 6px; }
+  .note { font-size: 12px; color: var(--t-faint); line-height: 1.6; }
+  ol { padding-left: 20px; color: var(--t-soft); font-size: 13px; line-height: 1.7; }
 </style>
 </head>
 <body>

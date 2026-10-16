@@ -1,13 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Scheduled Full Pipeline Run — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <link rel="stylesheet" href="/static/job-theme.css">
 </head>
 <body>
@@ -24,8 +19,8 @@
 
 <div class="card">
   <h2 id="status-title"><span class="spinner" id="spinner"></span>Waiting for the scheduled time&hellip;</h2>
-  <div id="detail" style="font-size:14px;color:#ccc;line-height:1.7;"></div>
-  <button id="cancel-btn" style="margin-top:14px;padding:10px 16px;border-radius:8px;border:1px solid #6b2323;background:#2a1414;color:#ffb4b4;cursor:pointer;">Cancel scheduled run</button>
+  <div id="detail" style="font-size:14px;color:var(--t-soft);line-height:1.7;"></div>
+  <button id="cancel-btn" style="margin-top:14px;padding:10px 16px;border-radius:8px;border:1px solid var(--err-bd);background:var(--err-bg);color:var(--err-fg);cursor:pointer;">Cancel scheduled run</button>
 </div>
 
 <div class="links" id="job-link" style="margin-top:14px;"></div>

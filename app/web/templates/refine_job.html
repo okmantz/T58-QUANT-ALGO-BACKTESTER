@@ -1,13 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Iterative Refinement Job — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <link rel="stylesheet" href="/static/job-theme.css">
 </head>
 <body>
@@ -35,7 +30,7 @@
     <div class="stat"><div class="label">Best fitness</div><div class="value" id="s-best">-</div></div>
     <div class="stat"><div class="label">Improvement</div><div class="value" id="s-improvement">-</div></div>
   </div>
-  <p style="font-size:13px;color:#999;margin-top:12px;" id="s-detail"></p>
+  <p style="font-size:13px;color:var(--t-faint2);margin-top:12px;" id="s-detail"></p>
   <div class="links" id="s-report-links"></div>
 </div>
 

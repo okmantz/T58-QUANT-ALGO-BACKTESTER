@@ -1,13 +1,8 @@
 <!DOCTYPE html>
 <html lang="en" data-theme="{{ theme }}">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Live Market — T58 Quant Algo Backtester</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icon-192.png">
-<meta name="theme-color" content="#05070a">
-<link rel="stylesheet" href="/static/theme.css">
+{% include '_head_common.html' %}
 <script src="/static/lightweight-charts.standalone.production.js"></script>
 <script src="/static/chart_drawing_tools.js"></script>
 <style>
@@ -70,8 +65,8 @@
      a filled accent button makes it read as the distinct "leave this
      app" action it actually is. */
   .lm-btn#lm-tradingview {
-    background: var(--lm-accent, #35e0b0) !important; color: #04120e !important;
-    border-color: var(--lm-accent, #35e0b0) !important; font-weight: 700 !important;
+    background: var(--lm-accent, var(--teal)) !important; color: var(--on-teal) !important;
+    border-color: var(--lm-accent, var(--teal)) !important; font-weight: 700 !important;
     box-shadow: 0 0 12px rgba(53,224,176,0.35);
   }
   .lm-btn#lm-tradingview:hover { opacity: .88; box-shadow: 0 0 18px rgba(53,224,176,0.5); }
@@ -84,7 +79,7 @@
   }
   .lm-status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
   .lm-status-live { color: var(--lm-up); box-shadow: 0 0 0 rgba(62,214,133,0.5); animation: lm-pulse 1.6s infinite; }
-  .lm-status-delayed { color: #f0b429; }
+  .lm-status-delayed { color: var(--amber); }
   .lm-status-replay { color: var(--lm-accent); }
   .lm-status-error { color: var(--lm-down); }
   @keyframes lm-pulse {
@@ -125,10 +120,10 @@
     border: 1px solid var(--lm-border); color: var(--lm-text-muted); background: var(--lm-panel-2);
     user-select: none;
   }
-  .lm-chip.on { color: #05070a; }
-  .lm-chip[data-series="ema20"].on  { background: #35e0b0; border-color: #35e0b0; }
+  .lm-chip.on { color: var(--on-teal3); }
+  .lm-chip[data-series="ema20"].on  { background: var(--teal); border-color: var(--teal); }
   .lm-chip[data-series="ema50"].on  { background: #8b7cff; border-color: #8b7cff; color: #fff; }
-  .lm-chip[data-series="vwap"].on   { background: #f0b429; border-color: #f0b429; }
+  .lm-chip[data-series="vwap"].on   { background: var(--amber); border-color: var(--amber); }
   .lm-chip[data-series="volume"].on { background: #6f7684; border-color: #6f7684; color: #fff; }
 
   .lm-below {

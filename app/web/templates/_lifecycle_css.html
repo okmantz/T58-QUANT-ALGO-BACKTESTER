@@ -85,7 +85,7 @@
   .lc-hint{color:var(--lc-muted); font-size:12px;}
   .lc-row{display:flex; gap:14px; flex-wrap:wrap;}
   .lc-col{flex:1; min-width:200px;}
-  .lc-field-note{font-size:12px; color:#888; margin-top:4px; line-height:1.5;}
+  .lc-field-note{font-size:12px; color:var(--t-faint); margin-top:4px; line-height:1.5;}
 
   /* a.lc-btn included explicitly: .lc-scope a{color:inherit} above has
      higher specificity than a bare .lc-btn, so anchor-styled buttons
@@ -99,7 +99,7 @@
   .lc-btn.big{font-size:15px; padding:13px 30px; border-radius:10px;}
   .lc-btn.ghost{background:transparent; color:var(--lc-text); border:1px solid var(--lc-border2);}
   .lc-btn.ghost:hover{background:var(--lc-panel2);}
-  .lc-btn.danger{background:#3a1420; color:#ff8b96; border:1px solid #6e2432;}
+  .lc-btn.danger{background:var(--err-bg3); color:var(--err-fg5); border:1px solid var(--err-bd2);}
   .lc-btn.small{padding:6px 12px; font-size:12px;}
   .lc-btn:disabled{opacity:.45; cursor:not-allowed;}
 
@@ -118,7 +118,7 @@
   /* ---------- type tabs ---------- */
   .lc-tabs{display:flex; gap:6px; flex-wrap:wrap;}
   .lc-tab-btn{background:var(--lc-panel2); color:var(--lc-muted); border:1px solid var(--lc-border2); padding:7px 16px; border-radius:999px; font-size:12.5px; font-weight:600; cursor:pointer;}
-  .lc-tab-btn.active{background:var(--lc-acc-dim); color:var(--lc-acc); border-color:#14503c;}
+  .lc-tab-btn.active{background:var(--lc-acc-dim); color:var(--lc-acc); border-color:var(--ok-bd2);}
   .lc-seg{display:inline-flex; background:var(--lc-panel2); border:1px solid var(--lc-border2); border-radius:10px; padding:3px; gap:3px;}
   .lc-seg button{background:transparent; border:0; color:var(--lc-muted); padding:7px 18px; border-radius:8px; font-weight:600; font-size:13px; cursor:pointer;}
   .lc-seg button.active{background:var(--lc-acc); color:var(--lc-acc-ink);}
@@ -127,7 +127,7 @@
   .lc-checkcards{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:14px;}
   .lc-checkcard{background:var(--lc-panel); border:1px solid var(--lc-border2); border-radius:12px; padding:14px; cursor:pointer; display:block; position:relative;}
   .lc-checkcard:hover{border-color:var(--lc-acc);}
-  .lc-checkcard.selected{border-color:var(--lc-acc); background:#0a1f18;}
+  .lc-checkcard.selected{border-color:var(--lc-acc); background:var(--ok-bg5);}
   .lc-checkcard .cname{font-weight:700; font-size:14px; display:flex; align-items:center; gap:8px; color:var(--lc-text);}
   .lc-checkcard .cbox{width:17px;height:17px;border-radius:5px;border:2px solid var(--lc-border2); display:inline-flex;align-items:center;justify-content:center; color:var(--lc-acc-ink); font-size:12px; flex:0 0 17px;}
   .lc-checkcard.selected .cbox{background:var(--lc-acc); border-color:var(--lc-acc);}
@@ -147,19 +147,19 @@
   .lc-rules-line{color:var(--lc-acc); font-size:12.5px; margin-top:10px; line-height:1.55;}
 
   /* ---------- log / verdict / bands ---------- */
-  .lc-logbox{background:#05070a; border:1px solid var(--lc-border); border-radius:10px; padding:12px 14px;
+  .lc-logbox{background:var(--bg); border:1px solid var(--lc-border); border-radius:10px; padding:12px 14px;
     font-family:Consolas,"Courier New",monospace; font-size:12px; line-height:1.65; height:230px; overflow-y:auto;
     white-space:pre-wrap; word-break:break-word; color:#c6ccd9;}
   .lc-logbox.tall{height:340px;}
   .lc-logbox .lt{color:#5f7086;} .lc-logbox .lok{color:var(--lc-acc);} .lc-logbox .lwarn{color:var(--lc-amber);}
-  .lc-verdict{border-radius:12px; padding:16px 18px; margin-top:14px; border:1px solid #6e2432; background:#22101a;}
-  .lc-verdict.pass{border-color:#14503c; background:#0a1f18;}
+  .lc-verdict{border-radius:12px; padding:16px 18px; margin-top:14px; border:1px solid var(--err-bd2); background:var(--err-bg4);}
+  .lc-verdict.pass{border-color:var(--ok-bd2); background:var(--ok-bg5);}
   .lc-verdict h3{font-size:16px; margin:0 0 4px; text-transform:none; letter-spacing:0; color:var(--lc-text);}
-  .lc-summary-band{border:1px solid #14503c; background:#0a1a14; border-radius:12px; padding:14px 18px; margin-bottom:14px; font-size:14px; color:var(--lc-text);}
+  .lc-summary-band{border:1px solid var(--ok-bd2); background:#0a1a14; border-radius:12px; padding:14px 18px; margin-bottom:14px; font-size:14px; color:var(--lc-text);}
   .lc-summary-band .est{color:var(--lc-muted); font-size:12px; margin-top:4px;}
-  .lc-error{background:#2a1414; border:1px solid #6b2323; color:#ffb4b4; padding:12px; border-radius:10px; margin-bottom:14px; font-size:14px;}
-  .lc-notice{background:#142a1a; border:1px solid #235a32; color:#b4ffcb; padding:12px; border-radius:10px; margin-bottom:14px; font-size:14px;}
-  .lc-notice.bad{background:#2a1414; border-color:#6b2323; color:#ffb4b4;}
+  .lc-error{background:var(--err-bg); border:1px solid var(--err-bd); color:var(--err-fg); padding:12px; border-radius:10px; margin-bottom:14px; font-size:14px;}
+  .lc-notice{background:var(--ok-bg); border:1px solid var(--ok-bd); color:var(--ok-fg); padding:12px; border-radius:10px; margin-bottom:14px; font-size:14px;}
+  .lc-notice.bad{background:var(--err-bg); border-color:var(--err-bd); color:var(--err-fg);}
   .lc-prev-row{display:flex; justify-content:space-between; align-items:center; gap:10px; padding:9px 2px; border-bottom:1px solid var(--lc-border); font-size:13px;}
   .lc-prev-row:last-child{border-bottom:0;}
 
@@ -168,9 +168,9 @@
   table.lc-tbl th{text-align:left; color:var(--lc-muted); font-size:11px; letter-spacing:.8px; text-transform:uppercase; padding:8px 10px; border-bottom:1px solid var(--lc-border2);}
   table.lc-tbl td{padding:10px; border-bottom:1px solid var(--lc-border); color:var(--lc-text); vertical-align:top;}
   .lc-pill{display:inline-block; padding:2px 9px; border-radius:999px; font-size:11px; font-weight:700; white-space:nowrap;}
-  .lc-pill.green{background:var(--lc-acc-dim); color:var(--lc-acc); border:1px solid #14503c;}
-  .lc-pill.red{background:#3a1420; color:#ff8b96; border:1px solid #6e2432;}
-  .lc-pill.amber{background:#33240d; color:#ffd9a8; border:1px solid #6b4d16;}
+  .lc-pill.green{background:var(--lc-acc-dim); color:var(--lc-acc); border:1px solid var(--ok-bd2);}
+  .lc-pill.red{background:var(--err-bg3); color:var(--err-fg5); border:1px solid var(--err-bd2);}
+  .lc-pill.amber{background:#33240d; color:#ffd9a8; border:1px solid var(--warn-bd3);}
   .lc-pill.grey{background:var(--lc-panel3); color:var(--lc-muted); border:1px solid var(--lc-border2);}
   .lc-dropzone{border:2px dashed var(--lc-border2); border-radius:12px; padding:24px; text-align:center; color:var(--lc-muted); cursor:pointer;}
   .lc-dropzone:hover{border-color:var(--lc-acc); color:var(--lc-text);}
@@ -217,9 +217,9 @@
   .lc-overall{border-radius:14px; padding:18px 20px; border:1px solid var(--lc-border2); background:var(--lc-panel); margin-bottom:12px;}
   .lc-overall .ov-label{font-size:22px; font-weight:800; letter-spacing:-.01em;}
   .lc-overall .ov-sum{color:var(--lc-muted); font-size:14px; margin-top:3px;}
-  .lc-overall.strong{border-color:#14503c; background:#0a1f18;} .lc-overall.strong .ov-label{color:var(--lc-acc);}
-  .lc-overall.mixed{border-color:#6b4d16; background:#211a0b;} .lc-overall.mixed .ov-label{color:var(--lc-amber);}
-  .lc-overall.needs_work,.lc-overall.incomplete{border-color:#6e2432; background:#22101a;} .lc-overall.needs_work .ov-label,.lc-overall.incomplete .ov-label{color:var(--lc-red);}
+  .lc-overall.strong{border-color:var(--ok-bd2); background:var(--ok-bg5);} .lc-overall.strong .ov-label{color:var(--lc-acc);}
+  .lc-overall.mixed{border-color:var(--warn-bd3); background:#211a0b;} .lc-overall.mixed .ov-label{color:var(--lc-amber);}
+  .lc-overall.needs_work,.lc-overall.incomplete{border-color:var(--err-bd2); background:var(--err-bg4);} .lc-overall.needs_work .ov-label,.lc-overall.incomplete .ov-label{color:var(--lc-red);}
   .lc-nextstep{border-radius:14px; padding:18px 20px; border:1px solid var(--lc-acc); background:linear-gradient(135deg,var(--lc-acc-dim),var(--lc-panel)); margin-bottom:16px;}
   .lc-nextstep.warn{border-color:var(--lc-amber); background:linear-gradient(135deg,#2a1f0a,var(--lc-panel));}
   .lc-nextstep.bad{border-color:var(--lc-red); background:linear-gradient(135deg,#2a121a,var(--lc-panel));}
