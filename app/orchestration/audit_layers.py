@@ -124,7 +124,8 @@ def apply_audit_layers(
                 evidence["holdout_mc"] = {"pass_pct": hold_mc.per_attempt_pass_probability, "n_trades": len(hold_trades),
                                           "ci95": list(hold_mc.per_attempt_pass_ci95), "ruin_pct": hold_mc.risk_of_ruin_pct,
                                           "median_payout": hold_mc.median_payout, "expected_payout": hold_mc.expected_payout,
-                                          "first_payout_pct": hold_mc.first_payout_probability}
+                                          "first_payout_pct": hold_mc.first_payout_probability,
+                                          "median_days_to_pass": hold_mc.median_days_to_pass}
                 log(f"  Clean-holdout Monte Carlo: per-attempt pass {hold_mc.per_attempt_pass_probability:.1f}% on {len(hold_trades)} holdout trades.")
         except Exception as exc:  # noqa: BLE001 -- failure = no evidence, never a pass
             log(f"  Clean-holdout Monte Carlo skipped: {exc}")
@@ -175,7 +176,12 @@ def _compute_ev(verdict, cfg, prop_rules, payout_ev, p_hold, hold_trades, eviden
         except Exception as exc:  # noqa: BLE001
             log(f"  Bankroll survival skipped: {exc}")
             evidence["bankroll_error"] = str(exc)
+    from app.orchestration.ev_verdict import evaluation_months
+    _sub = bool(fee.monthly_subscription) if fee else False
+    _months = evaluation_months(hm.get("median_days_to_pass"), int(getattr(fee, "billing_period_days", 30)) if fee else 30) if _sub else 1
+    evidence["subscription_months"] = _months if _sub else None
     ev = evaluate_ev(
+        challenge_months=_months, monthly_subscription=_sub,
         legacy_verdict=verdict, holdout_pass_rate=p_hold, window_payout_rate=r30,
         payout_value=payout_value, challenge_price=fee.challenge_price if fee else None,
         reset_price=fee.reset_price if fee else None, profit_split_pct=fee.profit_split_pct if fee else None,

@@ -140,7 +140,7 @@ class FullPipelineConfig:
     preflight_enforce: bool = field(default_factory=lambda: __import__('os').environ.get('T58_PREFLIGHT_ENFORCE', '1') != '0')          # stop at step 0 on a structurally bad configuration
     preflight_min_trades: int = 100
     extra_gates_enabled: bool = field(default_factory=lambda: __import__('os').environ.get('T58_SKIP_EXTRA_GATES', '0') != '1')
-    attempt_replay_starts: int = 24       # fresh-account attempts re-run through the real engine
+    attempt_replay_starts: int = 48       # (2026-10-15: raised from 24) fresh-account attempts re-run through the real engine
     # v9.16 (audit P0-1/P0-2): the business target is "first payout within 30 calendar days of
     # buying the account". These accounts are replayed through the real engine for
     # payout_horizon_days (30 + a few days margin), on the in-sample dev slice AND on the
@@ -166,6 +166,7 @@ class FullPipelineConfig:
     ev_margin_points: float = 0.05        # ...or break-even + this many points (whichever is larger)
     null_n_seeds: int = 200               # random-entry null runs (v9.5: raised from 100 per accuracy plan)
     null_first_batch: int = 100           # v9.16: first batch; the rest only runs when 0.03 < p < 0.30 after it
+    cost_stress_min_retained_pct: float = 25.0   # 2026-10-15: READY needs >= this % of base net profit to survive the cost stress
     break_cost_mult: float = 2.0          # v9.5 break-it gate: verdict must survive costs at this multiple
     seed_rescore_seeds: int = 3           # v9.5: extra Monte Carlo seeds for winner seed-stability check
     seed_rescore_sims: int = 2000         # sims per seed-rescore run (dispersion check, not the headline MC)
@@ -363,7 +364,7 @@ class FullPipelineConfig:
     # factor < 1.0) while the in-sample run traded. Below this trade
     # count the holdout is too thin to convict -- it stays UNPROVEN (the
     # empty-holdout MARGINAL cap still applies), not FAILED.
-    min_holdout_trades_for_gate: int = 10
+    min_holdout_trades_for_gate: int = 30   # 2026-10-15 audit: 10 trades rejects 15-35% of real edges; 30 minimum
     # B2(d): the acceptance verdict gates on the PER-ATTEMPT pass odds,
     # not the inflated chain-level number. A strategy whose per-attempt
     # pass CI lower bound (fallback: per-attempt point estimate) sits
@@ -655,19 +656,12 @@ def _trial_sharpes_for_specs(specs: list, df, risk, tmp_dir, workers) -> list[fl
 
 
 def _make_mc_pool(workers: int):
-    """A spawn ProcessPoolExecutor for run_monte_carlo(pool=...), or None
-    when parallel MC is pointless/unavailable. Caller owns shutdown.
-    One pool can serve several MC calls (v9.15 WS-F: Full Pipeline used
-    to spawn a fresh pool for each of its 5 MC calls per run)."""
-    if workers is None or int(workers) <= 1:
-        return None
-    try:
-        import multiprocessing
-
-        return ProcessPoolExecutor(
-            max_workers=int(workers), mp_context=multiprocessing.get_context("spawn"))
-    except Exception:  # noqa: BLE001 -- serial MC is always available
-        return None
+    """The process-wide persistent MC pool (app.monte_carlo.shared_pool), or None when parallel MC is
+    pointless/unavailable. 2026-10-15: ONE pool serves every Monte Carlo call in the run (and later runs);
+    callers must NOT shut it down -- it is reaped when idle and at exit. Kept under this name so existing
+    call sites and tests keep working."""
+    from app.monte_carlo.shared_pool import get_shared_mc_pool
+    return get_shared_mc_pool(workers)
 
 
 def _pnl_skew_kurtosis(pnls: list[float]) -> tuple[float, float]:
@@ -718,6 +712,29 @@ def _validation_gate_failure_names(verdict_reasons: list[str]) -> list[str]:
     return [n for n in names if not (n in seen or seen.add(n))]
 
 
+def _holdout_gate_state(holdout, min_trades: int, z: float = 1.645) -> dict:
+    """Shared by the verdict core and the early-gate check: did the holdout run with enough trades, did it
+    lose money, and is that loss statistically convincing (upper confidence bound on per-trade expectancy
+    still below zero)? ``hard_fail`` is the only state that rejects; a losing-but-inconclusive holdout caps
+    READY instead (2026-10-15 audit: 10 trades rejected 15-35% of real edges)."""
+    ho = holdout or {}
+    st = ho.get("holdout_statistics") or {}
+    ins = ho.get("in_sample_statistics") or {}
+    trades = st.get("total_trades") or 0
+    in_trades = ins.get("total_trades") or 0
+    ran = bool(trades >= min_trades and in_trades > 0)
+    net, pf = st.get("net_profit"), st.get("profit_factor")
+    losing = ran and ((net is not None and net < 0) or (pf is not None and pf < 1.0))
+    mom = ho.get("holdout_trade_pnl") or {}
+    upper = None
+    if mom.get("mean") is not None and mom.get("std") is not None and (mom.get("n") or 0) > 1:
+        upper = float(mom["mean"]) + z * float(mom["std"]) / (float(mom["n"]) ** 0.5)
+    hard_fail = bool(losing and (upper is None or upper < 0))
+    return {"ran": ran, "losing": bool(losing), "upper": upper, "hard_fail": hard_fail,
+            "inconclusive": bool(losing and not hard_fail), "trades": trades, "in_trades": in_trades,
+            "net": net, "pf": pf}
+
+
 def _make_verdict_core(
     final_mc: MonteCarloResult,
     oos_validation: WalkForwardResult | None,
@@ -733,7 +750,8 @@ def _make_verdict_core(
     holdout: dict | None = None,
     # D1: minimum holdout trade count for the holdout gate to count as
     # "ran" (see FullPipelineConfig.min_holdout_trades_for_gate).
-    min_holdout_trades_for_gate: int = 10,
+    min_holdout_trades_for_gate: int = 30,
+    holdout_reject_z: float = 1.645,
     # B2(d): minimum per-attempt pass odds for the acceptance verdict
     # (see FullPipelineConfig.min_per_attempt_pass_pct).
     min_per_attempt_pass_pct: float = 70.0,
@@ -1075,6 +1093,113 @@ def _make_verdict_core(
     # UNPROVEN, not FAILED (the empty-holdout MARGINAL cap below still
     # applies) -- a gate that can't measure can't convict, the same
     # couldn't-run distinction the walk-forward gate makes.
+    _hg = _holdout_gate_state(holdout, min_holdout_trades_for_gate, holdout_reject_z)
+    _ho_trades, _ho_in_trades = _hg["trades"], _hg["in_trades"]
+    # The gate "ran" only when the holdout produced enough trades to be a real check AND the in-sample run
+    # actually traded (otherwise there is no in-sample edge to falsify). D5 keys off this same flag.
+    holdout_gate_ran = _hg["ran"]
+    _ho_losing_inconclusive = _hg["inconclusive"]
+    if _hg["hard_fail"]:
+        _net_txt = f"${_hg['net']:,.2f}" if _hg["net"] is not None else "n/a"
+        _pf_txt = f"{_hg['pf']:.2f}" if _hg["pf"] is not None else "n/a"
+        _ub_txt = (f", upper 95% bound on expectancy ${_hg['upper']:,.2f}/trade (still below zero)"
+                   if _hg["upper"] is not None else "")
+        _record_gate_failure(
+            f"the holdout check LOST money on untouched data: holdout net {_net_txt} "
+            f"(profit factor {_pf_txt}) over {_ho_trades} trade(s){_ub_txt} while the in-sample "
+            f"run took {_ho_in_trades} trade(s) -- the edge did not survive data the "
+            f"search never saw."
+        )
+    if validation_gate_failures and not gates_advisory_only:
+        reasons.append(f"For reference, {scorecard.render_line()} (not the reason for this verdict).")
+        _hold_note = _holdout_untestable_note(holdout)
+        if _hold_note:
+            reasons.append(_hold_note)
+        reasons.append(
+            "This verdict does NOT lock the strategy: it can still be sent through the Validate hub "
+            "(CPCV, Walk-Forward, Sensitivity, Regime Matrix) to see where it is weak."
+        )
+        return "NOT READY", reasons, scorecard, False, False
+
+    if icir_gate is None:
+        reasons.append(
+            "ICIR / signal-decay / Bonferroni-corrected significance gate couldn't run -- kept as "
+            "a supporting diagnostic only, not part of the T58 Score."
+        )
+    elif not icir_gate.ok and not icir_hard_failed:
+        reasons.append(
+            "Supporting diagnostic: did NOT pass the ICIR / signal-decay / Bonferroni-corrected "
+            "significance gate (" + " ".join(icir_gate.reasons) + "). Not scored into the T58 Score "
+            "or gated on -- section 14 of the pipeline reorg plan treats this as informational once "
+            "a primary generalization test already ran."
+        )
+
+    # UPGRADE (buried-position-sizing-deviation): informational, not
+    # gated/scored -- same treatment as the ICIR gate note just above --
+    # but now actually said in the verdict, not just left as a number in
+    # a report table nothing points at. See app.backtest.risk.position_
+    # sizing_deviation_message; this is also already in `reasons`'
+    # sibling BacktestResult.warnings (final_bt.warnings) whenever it
+    # fired, so this line specifically calls it out as relevant to THIS
+    # verdict rather than requiring a person to notice it buried there.
+    if statistics is not None:
+        sizing_note = position_sizing_deviation_message(statistics.to_dict())
+        if sizing_note:
+            reasons.append(f"Supporting diagnostic: {sizing_note}")
+
+    reasons.append(scorecard.render_line())
+    for name, comp in scorecard.components.items():
+        if comp["value"] is not None:
+            reasons.append(f"  {name}: {comp['value']:.1f}/100 (weight {comp['weight']:+.0f})")
+    reasons.extend(scorecard.notes)
+
+    if scorecard.tier in ("Elite", "Strong"):
+        verdict = "READY"
+    elif scorecard.tier in ("Promising", "Research"):
+        verdict = "MARGINAL"
+    else:
+        verdict = "NOT READY"
+
+    # -- Minimum trade-count floor for READY (see FullPipelineConfig.
+    # min_trades_for_ready's own docstring for why this exists) ----------
+    total_trades = getattr(statistics, "total_trades", None) if statistics is not None else None
+    if verdict == "READY" and total_trades is not None and total_trades < min_trades_for_ready:
+        verdict = "MARGINAL"
+        reasons.append(
+            f"CAPPED AT MARGINAL: the T58 Score alone would have called this READY, but the final "
+            f"backtest only produced {total_trades} trade(s), below the {min_trades_for_ready}-trade "
+            "floor this pipeline requires before trusting a result enough to call it READY -- a small "
+            "sample can look strong by chance (or on the strength of one or two outsized trades) "
+            "regardless of how good its score is. See FullPipelineConfig.min_trades_for_ready."
+        )
+
+    # -- 2026-10-15: missing evidence must cap a verdict, never lift it ------------------
+    # compute_t58_score() re-normalizes over the components that were measured. That is fair to
+    # a strategy whose parsimony simply could not be counted, but it also means omitting weak
+    # components RAISES the score. So READY additionally requires the three core survival
+    # components (pass / paid / ruin) to exist and a minimum share of the total scorecard
+    # weight to have been measured.
+    from app.scoring.t58_scorecard import MIN_WEIGHT_COVERAGE_FOR_READY as _MIN_COV
+    if verdict == "READY":
+        _cov = float(getattr(scorecard, "weight_coverage", 1.0))
+        _miss_core = list(getattr(scorecard, "missing_core", []) or [])
+        if _miss_core or _cov < _MIN_COV:
+            verdict = "MARGINAL"
+            reasons.append(
+                "CAPPED AT MARGINAL: the T58 Score alone would have called this READY, but "
+                + (f"core survival component(s) {', '.join(_miss_core)} were not measured" if _miss_core else
+                   f"only {_cov * 100:.0f}% of the scorecard weight was measured (READY needs >= {_MIN_COV * 100:.0f}%)")
+                + " -- missing evidence caps a verdict instead of raising the score."
+            )
+
+    # -- D1: holdout gate ------------------------------------------------
+    # A holdout that RAN with enough trades to mean something (>=
+    # min_holdout_trades_for_gate) and LOST money (net < 0 or profit
+    # factor < 1.0) while the in-sample run traded is a hard rejection:
+    # the edge did not survive untouched data. An empty/thin holdout is
+    # UNPROVEN, not FAILED (the empty-holdout MARGINAL cap below still
+    # applies) -- a gate that can't measure can't convict, the same
+    # couldn't-run distinction the walk-forward gate makes.
     _ho = holdout or {}
     _ho_stats = _ho.get("holdout_statistics") or {}
     _ho_in_stats = _ho.get("in_sample_statistics") or {}
@@ -1086,18 +1211,30 @@ def _make_verdict_core(
     holdout_gate_ran = bool(
         _ho_trades >= min_holdout_trades_for_gate and _ho_in_trades > 0
     )
+    _ho_losing_inconclusive = False
     if holdout_gate_ran:
         _ho_net = _ho_stats.get("net_profit")
         _ho_pf = _ho_stats.get("profit_factor")
-        if (_ho_net is not None and _ho_net < 0) or (_ho_pf is not None and _ho_pf < 1.0):
+        _losing = (_ho_net is not None and _ho_net < 0) or (_ho_pf is not None and _ho_pf < 1.0)
+        # 2026-10-15 audit: a thin holdout that merely lost money is usually noise. Reject only when the
+        # UPPER confidence bound on per-trade expectancy (mean + z*std/sqrt(n)) is still below zero, i.e.
+        # the losses are statistically convincing. A losing-but-inconclusive holdout caps READY instead.
+        _mom = _ho.get("holdout_trade_pnl") or {}
+        _upper = None
+        if _mom.get("mean") is not None and _mom.get("std") is not None and (_mom.get("n") or 0) > 1:
+            _upper = float(_mom["mean"]) + holdout_reject_z * float(_mom["std"]) / (float(_mom["n"]) ** 0.5)
+        if _losing and (_upper is None or _upper < 0):
             _net_txt = f"${_ho_net:,.2f}" if _ho_net is not None else "n/a"
             _pf_txt = f"{_ho_pf:.2f}" if _ho_pf is not None else "n/a"
+            _ub_txt = f", upper 95% bound on expectancy ${_upper:,.2f}/trade (still below zero)" if _upper is not None else ""
             _record_gate_failure(
                 f"the holdout check LOST money on untouched data: holdout net {_net_txt} "
-                f"(profit factor {_pf_txt}) over {_ho_trades} trade(s) while the in-sample "
+                f"(profit factor {_pf_txt}) over {_ho_trades} trade(s){_ub_txt} while the in-sample "
                 f"run took {_ho_in_trades} trade(s) -- the edge did not survive data the "
                 f"search never saw."
             )
+        elif _losing:
+            _ho_losing_inconclusive = True
     if validation_gate_failures and not gates_advisory_only:
         reasons.append(f"For reference, {scorecard.render_line()} (not the reason for this verdict).")
         _hold_note = _holdout_untestable_note(holdout)
@@ -1132,6 +1269,14 @@ def _make_verdict_core(
             verdict = "MARGINAL"
             reasons.append("CAPPED AT MARGINAL: a strategy is not called READY while its holdout check is empty.")
 
+    if _ho_losing_inconclusive and verdict == "READY":
+        verdict = "MARGINAL"
+        reasons.append(
+            f"CAPPED AT MARGINAL: the holdout ({_ho_trades} trades) lost money but not by enough to prove the edge is "
+            "gone (the upper confidence bound on per-trade expectancy is above zero). It is not rejected, but a "
+            "losing holdout cannot support READY."
+        )
+
     return verdict, reasons, scorecard, False, False
 
 
@@ -1147,7 +1292,7 @@ _VERDICT_TO_LIBRARY_STATUS = {
     "NOT READY": "tested_failed",
 }
 
-def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 25.0, null_result=None, null_p_max: float = 0.10, cost_stress=None, mc_dispersion_pts=None, payout30=None, payout30_min_pct: float = 35.0, payout30_min_windows: float = 3.0, paid_min_pct: float = 35.0, **kwargs):
+def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 25.0, replay_min_gap_pts: float = 10.0, null_result=None, null_p_max: float = 0.10, cost_stress=None, cost_stress_min_retained: float = 0.25, mc_dispersion_pts=None, payout30=None, payout30_min_pct: float = 35.0, payout30_min_windows: float = 3.0, paid_min_pct: float = 35.0, **kwargs):
     """Accuracy-overhaul wrapper around the original verdict logic.
 
     Adds two honesty gates that can only DEMOTE a READY verdict to MARGINAL
@@ -1201,11 +1346,30 @@ def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 2
     if attempt_replay is not None and getattr(attempt_replay, "sample_ok", False) and final_mc is not None:
         mc_pct = float(getattr(final_mc, "per_attempt_pass_probability", 0.0))
         rp_pct = float(attempt_replay.pass_rate) * 100.0
-        if abs(mc_pct - rp_pct) > replay_disagreement_pts:
+        # 2026-10-15 audit: compare INTERVALS, not just points. The replay's honest (block-bootstrap) CI and the
+        # Monte Carlo per-attempt Wilson CI (0-100 scale) must overlap; if they are disjoint and the point gap is practically
+        # meaningful, the resampled number is not describing a fresh account. Without usable intervals fall back to
+        # the plain point-gap rule.
+        _mc_ci = getattr(final_mc, "per_attempt_pass_ci95", None)
+        _rp_ci = getattr(attempt_replay, "pass_ci_honest", None)
+        _have_ci = (_mc_ci is not None and tuple(_mc_ci) != (0.0, 0.0)
+                    and _rp_ci is not None and float(getattr(attempt_replay, "n_effective", 0.0) or 0.0) > 0)
+        _gap = abs(mc_pct - rp_pct)
+        if _have_ci:
+            _mlo, _mhi = float(_mc_ci[0]), float(_mc_ci[1])
+            _rlo, _rhi = float(_rp_ci[0]) * 100.0, float(_rp_ci[1]) * 100.0
+            _disjoint = _rlo > _mhi or _mlo > _rhi
+            _disagree = _disjoint and _gap >= replay_min_gap_pts
+            _ci_txt = (f" (Monte Carlo 95% CI {_mlo:.0f}-{_mhi:.0f}% vs replay honest 95% CI {_rlo:.0f}-{_rhi:.0f}%, "
+                       "no overlap)")
+        else:
+            _disagree = _gap > replay_disagreement_pts
+            _ci_txt = ""
+        if _disagree:
             reasons.append(
                 f"REPLAY DISAGREES: resampled Monte Carlo says {mc_pct:.0f}% per-attempt pass odds but "
                 f"re-running the engine from {attempt_replay.n_attempts} real start dates passes "
-                f"{rp_pct:.0f}% -- the resampled number is not describing what a fresh account "
+                f"{rp_pct:.0f}%{_ci_txt} -- the resampled number is not describing what a fresh account "
                 "experiences; capped at MARGINAL."
             )
             return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
@@ -1219,11 +1383,15 @@ def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 2
     # v9.5 break-it gates (same demote-only posture): an edge that dies at
     # 2x costs, or whose pass rate swings wildly with the Monte Carlo
     # seed, is not an edge a funded account can rely on.
-    if cost_stress is not None and float(cost_stress.get("base_net_profit", 0.0)) > 0 and float(cost_stress.get("net_profit", 0.0)) <= 0:
+    if cost_stress is not None and float(cost_stress.get("base_net_profit", 0.0)) > 0 and \
+            float(cost_stress.get("net_profit", 0.0)) < cost_stress_min_retained * float(cost_stress.get("base_net_profit", 0.0)):
+        _base = float(cost_stress.get("base_net_profit", 0.0))
+        _kept = float(cost_stress.get("net_profit", 0.0)) / _base * 100.0
         reasons.append(
             f"COST STRESS: at {float(cost_stress.get('multiplier', 2.0)):g}x spread/slippage/commission the same "
-            f"trades net ${float(cost_stress.get('net_profit', 0.0)):,.0f} (vs ${float(cost_stress.get('base_net_profit', 0.0)):,.0f} at 1x) "
-            "-- the edge does not survive realistic cost slippage; capped at MARGINAL."
+            f"trades net ${float(cost_stress.get('net_profit', 0.0)):,.0f} (vs ${_base:,.0f} at 1x) -- only {_kept:.0f}% of the "
+            f"profit survives, READY needs >= {cost_stress_min_retained * 100:.0f}% -- "
+            "the edge does not survive realistic cost slippage; capped at MARGINAL."
         )
         return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
     # v9.16 (audit P0-1): the objective itself -- paid within the window, measured on fresh
@@ -1924,21 +2092,14 @@ def run_full_pipeline(
     pnls = [t.pnl for t in baseline_bt.trades]
     dates = [t.entry_time for t in baseline_bt.trades]
     baseline_single_run = simulate_account(pnls, dates, prop_rules, reset_on_breach=cfg.reset_on_breach)
-    # v9.15 (WS-F): short-lived shared MC pool for this call, shut down
-    # before Step 2 so idle MC workers never hold RAM against the GA's
-    # own worker pool during the longest step of the run.
+    # 2026-10-15: the persistent shared MC pool (never shut down here).
     _mc_pool = _make_mc_pool(_mc_workers)
-    try:
-        baseline_mc = run_monte_carlo(
-            baseline_bt.trades, prop_rules,
-            MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=cfg.baseline_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
-            max_workers=_mc_workers, pool=_mc_pool,
-            progress_cb=lambda d, t: _progress(1, 0.35 + 0.6 * (d / max(t, 1)), "Baseline Monte Carlo"),
-        )
-    finally:
-        if _mc_pool is not None:
-            _mc_pool.shutdown(wait=False)
-            _mc_pool = None
+    baseline_mc = run_monte_carlo(
+        baseline_bt.trades, prop_rules,
+        MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=cfg.baseline_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
+        max_workers=_mc_workers, pool=_mc_pool,
+        progress_cb=lambda d, t: _progress(1, 0.35 + 0.6 * (d / max(t, 1)), "Baseline Monte Carlo"),
+    )
     _progress(1, 1.0, "Baseline done")
     log(
         format_run_summary_line(
@@ -2313,35 +2474,7 @@ def run_full_pipeline(
             full_history_bt = final_bt
             full_history_single_run = final_single_run
 
-        _progress(3, 0.25, "Final Monte Carlo")
-        # v9.15 (WS-F): short-lived shared MC pool for the final MC,
-        # shut down before Steps 4-6 spawn their own validation pools.
-        _mc_pool = _make_mc_pool(_mc_workers)
-        try:
-            final_mc = run_monte_carlo(
-                final_bt.trades, prop_rules,
-                MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
-                # MC-004: these trades came from Step 2's GA search over this
-                # same dev_df when refinement actually ran -- see
-                # run_monte_carlo's docstring. Steps 4-6 below provide the
-                # genuinely independent evidence this number alone doesn't.
-                selection_bias_caveat=refinement_ran,
-                max_workers=_mc_workers, pool=_mc_pool,
-                progress_cb=lambda d, t: _progress(3, 0.25 + 0.72 * (d / max(t, 1)), "Final Monte Carlo"),
-            )
-        finally:
-            if _mc_pool is not None:
-                _mc_pool.shutdown(wait=False)
-                _mc_pool = None
         _progress(3, 1.0, "Final validation done")
-        log(
-            format_run_summary_line(
-                "  Final", len(final_bt.trades), final_bt.statistics,
-                final_mc.evaluation_pass_probability, final_mc.first_payout_probability,
-                final_mc.per_attempt_pass_probability, final_mc.per_attempt_payout_probability,
-                final_mc.total_independent_attempts,
-            )
-        )
 
         # -- Step 4: out-of-sample fold check (no re-tuning) --------------
         _check_cancel()
@@ -2578,6 +2711,52 @@ def run_full_pipeline(
                 log(f"  {dsr_skip_reason}")
 
         _progress(6, 0.65, "PBO gate")
+        # -- Step 3b: final Monte Carlo (2026-10-15: moved AFTER the cheap, decisive gates) ----------------
+        # The walk-forward sign, the holdout sign and the Deflated-Sharpe gate each cost seconds; the final
+        # Monte Carlo is the single most expensive call in Step 3. When one of those gates has ALREADY forced
+        # NOT READY (and the gates are not advisory-only) the headline Monte Carlo cannot change the verdict,
+        # so it runs at a reduced size instead of the full final_mc_sims -- the report still gets numbers.
+        _check_cancel()
+        _early_fail = []
+        if oos_validation is not None and not oos_validation.is_stable:
+            _early_fail.append("walk-forward")
+        try:
+            if _holdout_gate_state(final_holdout, cfg.min_holdout_trades_for_gate)["hard_fail"]:
+                _early_fail.append("holdout")
+        except Exception:  # noqa: BLE001
+            pass
+        if dsr_gate_result is not None and not dsr_gate_result.passed:
+            _early_fail.append("deflated-Sharpe")
+        _final_mc_sims = int(cfg.final_mc_sims)
+        if _early_fail and not cfg.validation_gates_advisory_only:
+            _reduced = min(_final_mc_sims, 2000)
+            if _reduced < _final_mc_sims:
+                log(f"  Hard gate(s) already failed ({', '.join(_early_fail)}) -- the verdict is NOT READY whatever "
+                    f"the Monte Carlo says, so the final Monte Carlo runs at {_reduced:,} paths instead of {_final_mc_sims:,}.")
+                _final_mc_sims = _reduced
+        _progress(6, 0.55, "Final Monte Carlo")
+        # the persistent shared MC pool (never shut down here)
+        _mc_pool = _make_mc_pool(_mc_workers)
+        final_mc = run_monte_carlo(
+            final_bt.trades, prop_rules,
+            MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=_final_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
+            # MC-004: these trades came from Step 2's GA search over this
+            # same dev_df when refinement actually ran -- see
+            # run_monte_carlo's docstring. Steps 4-6 above provide the
+            # genuinely independent evidence this number alone doesn't.
+            selection_bias_caveat=refinement_ran,
+            max_workers=_mc_workers, pool=_mc_pool,
+            progress_cb=lambda d, t: _progress(6, 0.55 + 0.09 * (d / max(t, 1)), "Final Monte Carlo"),
+        )
+        log(
+            format_run_summary_line(
+                "  Final", len(final_bt.trades), final_bt.statistics,
+                final_mc.evaluation_pass_probability, final_mc.first_payout_probability,
+                final_mc.per_attempt_pass_probability, final_mc.per_attempt_payout_probability,
+                final_mc.total_independent_attempts,
+            )
+        )
+
         # -- v5 Step 6d/7: PBO gate (was the SELECTION process overfit?) ---
         # Genuine Bailey et al. (2017) PBO over the GA's final-generation
         # leaderboard: for every CPCV path, rank the pool in-sample, take
@@ -2700,7 +2879,7 @@ def run_full_pipeline(
         # seed is partly luck, and the verdict now says so.
         _mc_disp = None
         # v9.15 (WS-F): ONE shared pool serves all seed-rescore MC calls
-        # (previously a fresh spawn per seed); shut down with this step.
+        # (previously a fresh spawn per seed); persistent, never shut down here.
         _mc_pool = _make_mc_pool(_mc_workers) if _can_be_ready else None
         try:
             if not _can_be_ready:
@@ -2725,14 +2904,10 @@ def run_full_pipeline(
         except Exception as exc:  # noqa: BLE001
             if _can_be_ready:
                 log(f"  Seed-stability check skipped: {exc}")
-        finally:
-            if _mc_pool is not None:
-                _mc_pool.shutdown(wait=False)
-                _mc_pool = None
         _progress(7, 0.92, "Verdict + report")
         verdict, verdict_reasons, scorecard, risk_of_ruin_hard_fail, lookahead_hard_fail = _vc(
             attempt_replay=_replay_ev, null_result=_null_ev, null_p_max=cfg.null_p_max,
-            cost_stress=_cost_ev, mc_dispersion_pts=_mc_disp,
+            cost_stress=_cost_ev, cost_stress_min_retained=float(getattr(cfg, 'cost_stress_min_retained_pct', 25.0)) / 100.0, mc_dispersion_pts=_mc_disp,
             payout30=_payout_ev.get("gate"), payout30_min_pct=cfg.payout30_min_pct,
             payout30_min_windows=cfg.payout30_min_effective_windows,
         )
@@ -3016,6 +3191,7 @@ def _finish(
                     "verdict": verdict,
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
                     "t58_tier": t58_tier,
+                    "reasons": [str(_r)[:600] for _r in (verdict_reasons or [])[:40]],
                 })
                 saved_library_note = f"Replaced '{filename}' in the Strategy Library (previous version archived, status: {status_to_set})." + _library_save_note_suffix(verdict, verdict_reasons)
                 log(f"  {saved_library_note}")
@@ -3078,6 +3254,7 @@ def _finish(
                     "verdict": verdict,
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
                     "t58_tier": t58_tier,
+                    "reasons": [str(_r)[:600] for _r in (verdict_reasons or [])[:40]],
                 })
                 saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {status_to_set})." + (" Updated the existing Full Pipeline output for this instrument/timeframe -- previous version archived." if _fp_updated_existing else "") + _library_save_note_suffix(verdict, verdict_reasons)
                 log(f"  {saved_library_note}")
@@ -3140,6 +3317,7 @@ def _finish(
                     "verdict": verdict,
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
                     "t58_tier": t58_tier,
+                    "reasons": [str(_r)[:600] for _r in (verdict_reasons or [])[:40]],
                 })
                 saved_library_note = f"Replaced '{filename}' in the Strategy Library (previous version archived, status: {status_to_set})." + _library_save_note_suffix(verdict, verdict_reasons)
                 log(f"  {saved_library_note}")
@@ -3201,6 +3379,7 @@ def _finish(
                     "verdict": verdict,
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
                     "t58_tier": t58_tier,
+                    "reasons": [str(_r)[:600] for _r in (verdict_reasons or [])[:40]],
                 })
                 saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {status_to_set})." + (" Updated the existing Full Pipeline output for this instrument/timeframe -- previous version archived." if _fp_updated_existing else "") + _library_save_note_suffix(verdict, verdict_reasons)
                 log(f"  {saved_library_note}")

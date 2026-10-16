@@ -9,7 +9,9 @@ economic one. A challenge fee is a bet, so the question that decides whether to 
     q  probability a passed account is then paid (derived: q = r / p, r = P(paid within the window))
     V  what the trader keeps from that payout (profit split x first-payout size)
     A  one-time activation fee charged on a PASS (0 for most firms; Topstep standard path $149)
-    c  cost of the attempt (challenge price from app.prop.presets.FIRM_FEES)
+    c  cost of the attempt (challenge price from app.prop.presets.FIRM_FEES). For a MONTHLY SUBSCRIPTION
+       (Topstep's Trading Combine: $49 per month, not one-off) c = price x months the evaluation is expected
+       to take (``evaluation_months``) -- charging one month made the EV optimistic for slow passers.
 
 Break-even pass rate is  p* = c / (q x V - A)  (c=$100, q=0.45, V=$2,500, A=0 -> 8.9%).
 
@@ -31,6 +33,15 @@ HIGH_CONFIDENCE = "HIGH CONFIDENCE"
 FORWARD_TEST_CANDIDATE = "FORWARD-TEST CANDIDATE"
 NOT_WORTH_A_FEE = "NOT WORTH A FEE"
 INSUFFICIENT_EVIDENCE = "INSUFFICIENT EVIDENCE"
+
+
+def evaluation_months(median_days_to_pass: float | None, billing_period_days: int = 30,
+                      trading_to_calendar: float = 7.0 / 5.0) -> int:
+    """Billing periods a subscription evaluation is expected to run: the median TRADING days to pass converted to
+    calendar days (x7/5) and rounded UP to whole billing periods, never below 1. Unknown -> 1 (the caller says so)."""
+    if median_days_to_pass is None or not math.isfinite(float(median_days_to_pass)) or median_days_to_pass <= 0:
+        return 1
+    return max(1, int(math.ceil(float(median_days_to_pass) * trading_to_calendar / max(int(billing_period_days), 1))))
 
 
 def compute_ev(p: float, q: float, v: float, c: float, activation_fee: float = 0.0) -> float:
@@ -125,6 +136,8 @@ def evaluate_ev(
     lookahead_ok: bool = True,
     holdout_clean: bool = True,
     automation_confirmed: bool | None = None,
+    challenge_months: int = 1,
+    monthly_subscription: bool = False,
 ) -> EVVerdict:
     """Compute the EV verdict.
 
@@ -154,7 +167,8 @@ def evaluate_ev(
     r = min(max(float(window_payout_rate), 0.0), 1.0)
     net_v = float(payout_value) * (float(profit_split_pct) / 100.0 if profit_split_pct is not None else 1.0)
     # an attempt that has to be re-bought after a bust costs the reset price; the first attempt costs the challenge price
-    c = float(challenge_price)
+    months = max(1, int(challenge_months)) if monthly_subscription else 1
+    c = float(challenge_price) * months
     q = min(r / p, 1.0) if p > 0 else 0.0
     n_eff = n_effective if (n_effective and n_effective > 0) else 30.0
     p_def = deflate_pass_rate(p, n_trials, n_eff)
@@ -167,6 +181,12 @@ def evaluate_ev(
     reasons = v.reasons
     if reset_price is None:
         reasons.append("Reset price unknown -> the challenge price is used for re-buys as well.")
+    if monthly_subscription:
+        reasons.append(
+            f"Subscription pricing: ${float(challenge_price):,.0f} per month x {months} expected month(s) "
+            f"(median time to pass) = ${c:,.0f} per attempt."
+            + (" Time to pass unknown -> one month charged; EV is optimistic for slow passers." if months == 1 and challenge_months <= 1 else "")
+        )
     if a > 0:
         reasons.append(f"Activation fee ${a:,.0f} is charged on every pass (EV = p x q x V - p x ${a:,.0f} - c).")
     if n_trials > 1:
