@@ -16,7 +16,7 @@
     <span></span><span></span><span></span>
   </button>
   <div class="t58-mobile-topbar-brand">
-    <div class="mark">T58</div>
+    <img class="mark-img" src="/static/t58-logo.png" alt="T58" width="34" height="34">
     <span>T58 Quant Algo Backtester</span>
   </div>
 </div>
@@ -24,7 +24,7 @@
 
 <div class="t58-sidebar" id="t58-sidebar">
   <div class="t58-brand">
-    <div class="mark">T58</div>
+    <img class="mark-img" src="/static/t58-logo.png" alt="T58" width="34" height="34">
     <div>
       <div class="name">T58 Quant Algo Backtester</div>
       <div class="sub">T58 Trading</div>
@@ -61,10 +61,20 @@
       if (sec < 60) return sec + 's';
       return Math.floor(sec / 60) + 'm ' + (sec % 60) + 's';
     }
-    function poll() {
+    // 2026-10-15: idle backoff -- while nothing is running, poll 5s -> 10s -> 20s -> 30s (cap) instead of every
+    // 5s forever; any running job (or the tab coming back into view) snaps it back to 5s. Hidden tabs do not
+    // poll at all (see /static/t58-poll.js).
+    var delay = 5000, timer = null, busy = false;
+    function schedule() { busy = false; timer = setTimeout(pollJobs, delay); }
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden && !busy) { delay = 5000; clearTimeout(timer); pollJobs(); }
+    });
+    function pollJobs() {
+      busy = true;
       fetch('/api/running-jobs.json').then(function (r) { return r.json(); }).then(function (data) {
         var jobs = (data && data.running) || [];
-        if (!jobs.length) { box.style.display = 'none'; return; }
+        if (!jobs.length) { box.style.display = 'none'; delay = Math.min(delay * 2, 30000); return; }
+        delay = 5000;
         list.innerHTML = '';
         jobs.forEach(function (j) {
           var a = document.createElement('a');
@@ -80,10 +90,9 @@
           list.appendChild(a);
         });
         box.style.display = 'block';
-      }).catch(function () {});
+      }).catch(function () { delay = Math.min(delay * 2, 30000); }).then(schedule);
     }
-    poll();
-    setInterval(poll, 5000);
+    pollJobs();
   })();
   </script>
 

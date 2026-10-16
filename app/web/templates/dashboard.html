@@ -67,13 +67,13 @@
   {% if snapshot %}
   <div class="title-row">
     <h3>{{ snapshot.what }}</h3>
-    <span class="t58-status {{ 'validated' if snapshot.is_it_working == 'READY' else ('rejected' if snapshot.is_it_working in ('NOT READY',) else 'optimized') }}">
+    <span class="t58-status {{ 'validated' if snapshot.is_it_working == 'READY' else ('rejected' if snapshot.is_it_working in ('NOT READY',) else 'optimized') }}" data-ve='{{ snapshot.verdict_explain|tojson }}' tabindex="0" role="button" title="Click to see why">
       {{ snapshot.is_it_working }}
     </span>
   </div>
   <div class="t58-five-q">
     <div class="q"><div class="lbl">Where is it in the process?</div><div class="val">{{ snapshot.where }} &mdash; {{ snapshot.where_pct }}%</div></div>
-    <div class="q"><div class="lbl">Is it working?</div><div class="val t58-glow-{{ 'teal' if snapshot.is_it_working == 'READY' else ('coral' if snapshot.is_it_working == 'NOT READY' else 'amber') }}">{{ snapshot.is_it_working }}</div></div>
+    <div class="q"><div class="lbl">Is it working?</div><div class="val t58-glow-{{ 'teal' if snapshot.is_it_working == 'READY' else ('coral' if snapshot.is_it_working == 'NOT READY' else 'amber') }}" data-ve='{{ snapshot.verdict_explain|tojson }}' tabindex="0" role="button" title="Click to see why">{{ snapshot.is_it_working }}</div></div>
     <div class="q"><div class="lbl">Why?</div><div class="val">{{ snapshot.why }}</div></div>
     <div class="q"><div class="lbl">What should I do next?</div><div class="val t58-glow-teal">{{ snapshot.next_action }}</div></div>
   </div>
@@ -263,7 +263,7 @@
       {% for r in board_rows[:25] %}
       <tr>
         <td>{{ r.display_name }}</td>
-        <td><span class="t58-pill {{ 'pass' if r.status == 'READY' else ('fail' if r.status == 'NOT READY' else '') }}">{{ r.status }}</span></td>
+        <td><span class="t58-pill {{ 'pass' if r.status == 'READY' else ('fail' if r.status == 'NOT READY' else '') }}" data-ve='{{ r.verdict_explain|tojson }}' tabindex="0" role="button" title="Click to see why">{{ r.status }}</span></td>
         <td>{{ "%.0f%%"|format(r.eval_pct) if r.eval_pct is not none else "--" }}</td>
         <td>{{ "%.0f%%"|format(r.payout_pct) if r.payout_pct is not none else "--" }}</td>
         <td>{{ "%.0f%%"|format(r.oos_pct) if r.oos_pct is not none else "--" }}</td>
