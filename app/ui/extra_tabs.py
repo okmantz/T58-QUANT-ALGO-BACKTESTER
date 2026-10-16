@@ -15,9 +15,7 @@ from __future__ import annotations
 import json
 import threading
 import time
-from tkinter import (
-    BooleanVar, Button, Canvas, END, Entry, Frame, Label, StringVar, Text, filedialog, messagebox, ttk,
-)
+from tkinter import BooleanVar, Button, Canvas, END, Entry, Frame, Label, StringVar, Text, messagebox, ttk
 
 # ======================================================================
 # Start Here pages
