@@ -33,13 +33,21 @@ function ensureGlowFilter(svg, id, color, stdDev) {
   defs.appendChild(filter);
 }
 
-/* ---- Equity comparison chart ---- */
+/* ---- Equity comparison chart ----
+   Click a line (or its legend entry) to spotlight that strategy: it is drawn
+   thick and bright with its name labelled at the end, the others fade. Click
+   it again (or the empty chart) to clear. The selection is remembered across
+   the dashboard's periodic repaints. */
+let t58EquitySelected = null;
+
 function renderEquityChart(container, series) {
   container.innerHTML = "";
   if (!series || !series.length) {
     container.innerHTML = '<div class="t58-empty">No completed runs yet -- run a strategy to populate this chart.</div>';
     return;
   }
+  if (t58EquitySelected !== null && !series.some(s => s.name === t58EquitySelected)) t58EquitySelected = null;
+
   const width = 560, height = 200, pad = 28;
   const svg = svgEl("svg", { viewBox: `0 0 ${width} ${height}`, width: "100%", height: "220" });
   ensureGlowFilter(svg, "t58-glow-line", null, 2.2);
@@ -57,27 +65,75 @@ function renderEquityChart(container, series) {
 
   svg.appendChild(svgEl("line", { x1: pad, y1: height - pad, x2: width - pad, y2: height - pad, stroke: T58_COLORS.grid }));
 
-  series.forEach((s, idx) => {
+  const parts = [];   // {name, glow, line, hit, legend, color}
+  const select = name => {
+    t58EquitySelected = (t58EquitySelected === name) ? null : name;
+    apply();
+  };
+
+  series.forEach(s => {
     const color = s.passed ? T58_COLORS.teal : T58_COLORS.coral;
     const points = s.values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
     const glow = svgEl("polyline", { points, fill: "none", stroke: color, "stroke-width": 2.5, opacity: 0.5, filter: "url(#t58-glow-line)" });
     const line = svgEl("polyline", { points, fill: "none", stroke: color, "stroke-width": 1.6 });
+    const hit = svgEl("polyline", { points, fill: "none", stroke: "transparent", "stroke-width": 12, style: "cursor:pointer;pointer-events:stroke;" });
+    const tip = svgEl("title", {});
+    tip.textContent = `${s.name} (${s.passed ? "passed" : "failed"}) -- click to highlight`;
+    hit.appendChild(tip);
+    hit.addEventListener("click", e => { e.stopPropagation(); select(s.name); });
     svg.appendChild(glow);
     svg.appendChild(line);
+    svg.appendChild(hit);
+    const last = s.values.length ? s.values[s.values.length - 1] : null;
+    parts.push({ s, color, glow, line, hit, end: last === null ? null : [x(s.values.length - 1), y(last)] });
   });
+
+  const label = svgEl("text", { "font-size": 10, "font-weight": 600, "pointer-events": "none", "text-anchor": "end" });
+  svg.appendChild(label);
+  svg.addEventListener("click", () => { if (t58EquitySelected !== null) { t58EquitySelected = null; apply(); } });
 
   container.appendChild(svg);
 
   const legend = document.createElement("div");
-  legend.style.cssText = "display:flex;flex-wrap:wrap;gap:12px;margin-top:8px;";
-  series.forEach(s => {
-    const color = s.passed ? T58_COLORS.teal : T58_COLORS.coral;
-    const item = document.createElement("div");
-    item.style.cssText = "display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-muted);";
-    item.innerHTML = `<span style="width:9px;height:9px;border-radius:50%;background:${color};box-shadow:0 0 6px ${color};display:inline-block;"></span>${s.name}`;
+  legend.style.cssText = "display:flex;flex-wrap:wrap;gap:6px 8px;margin-top:8px;";
+  parts.forEach(p => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.style.cssText = "display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-muted);background:none;border:1px solid transparent;border-radius:999px;padding:2px 8px;cursor:pointer;font-family:inherit;";
+    item.innerHTML = `<span style="width:9px;height:9px;border-radius:50%;background:${p.color};box-shadow:0 0 6px ${p.color};display:inline-block;"></span>`;
+    item.appendChild(document.createTextNode(p.s.name));
+    item.title = "Click to highlight this strategy";
+    item.addEventListener("click", e => { e.stopPropagation(); select(p.s.name); });
     legend.appendChild(item);
+    p.legend = item;
   });
   container.appendChild(legend);
+
+  function apply() {
+    const sel = t58EquitySelected;
+    label.textContent = "";
+    parts.forEach(p => {
+      const on = sel === null || p.s.name === sel;
+      const hot = sel !== null && p.s.name === sel;
+      p.line.setAttribute("stroke-width", hot ? 3.4 : 1.6);
+      p.line.setAttribute("opacity", on ? 1 : 0.15);
+      p.glow.setAttribute("opacity", hot ? 0.9 : (on ? 0.5 : 0.04));
+      p.legend.style.opacity = on ? 1 : 0.4;
+      p.legend.style.borderColor = hot ? p.color : "transparent";
+      p.legend.style.color = hot ? "var(--text)" : "var(--text-muted)";
+      if (hot) {
+        svg.appendChild(p.glow); svg.appendChild(p.line); svg.appendChild(p.hit);   // draw on top
+        if (p.end) {
+          label.setAttribute("x", Math.min(width - 4, p.end[0]));
+          label.setAttribute("y", Math.max(12, p.end[1] - 8));
+          label.setAttribute("fill", p.color);
+          label.textContent = p.s.name;
+          svg.appendChild(label);
+        }
+      }
+    });
+  }
+  apply();
 }
 
 /* ---- Weekday x hour heatmap ---- */

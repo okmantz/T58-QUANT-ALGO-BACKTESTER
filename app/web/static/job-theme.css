@@ -23,7 +23,7 @@ header {
 header h1 { font-size: 15px; margin: 0; font-weight: 700; letter-spacing: .01em; }
 header h1 .mark {
   display: inline-flex; width: 20px; height: 20px; border-radius: 6px; margin-right: 8px;
-  background: linear-gradient(135deg, var(--teal), var(--violet)); vertical-align: middle;
+  background: url('/static/t58-logo.png') center/cover no-repeat; vertical-align: middle;
 }
 nav { display: flex; gap: 14px; padding: 0; }
 nav a {

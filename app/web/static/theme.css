@@ -204,6 +204,8 @@ a { color: var(--teal); }
   box-shadow: 0 0 16px rgba(var(--neon-cyan-rgb), 0.35);
   flex-shrink: 0;
 }
+.t58-brand .mark-img { width: 34px; height: 34px; border-radius: 8px; flex-shrink: 0; display: block; }
+.t58-mobile-topbar-brand .mark-img { width: 28px; height: 28px; border-radius: 7px; flex-shrink: 0; display: block; }
 .t58-brand .name { font-size: 13px; font-weight: 700; letter-spacing: .02em; }
 .t58-brand .sub { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .06em; margin-top: 1px; }
 

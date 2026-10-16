@@ -469,3 +469,71 @@ function t58SetCheckboxes(containerId, checked) {
     cb.checked = checked;
   });
 }
+
+/* ---- Verdict "why?" popup -------------------------------------------------
+ * Any element carrying data-ve='{"verdict":..,"title":..,"summary":..,"points":[..]}'
+ * (see app/scoring/verdict_explain.py) opens a small plain-English box on
+ * click / Enter / Space. Esc, outside-click or the x closes it. Event
+ * delegation, so it also works for rows repainted by the dashboard poll. */
+(function () {
+  var box = null, lastFocus = null;
+  function css() {
+    if (document.getElementById("t58-ve-css")) return;
+    var s = document.createElement("style");
+    s.id = "t58-ve-css";
+    s.textContent =
+      "[data-ve]{cursor:pointer}[data-ve]:hover{filter:brightness(1.2)}" +
+      "[data-ve]:focus-visible{outline:2px solid var(--teal,#35e0b0);outline-offset:2px}" +
+      ".t58-ve{position:absolute;z-index:9999;width:min(320px,calc(100vw - 24px));padding:14px 16px;" +
+      "background:var(--panel-2,#12161f);color:var(--text,#e8ecf3);border:1px solid var(--border,#2a3142);" +
+      "border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.45);font-size:13px;line-height:1.45}" +
+      ".t58-ve h4{margin:0 22px 6px 0;font-size:14px}.t58-ve p{margin:0 0 8px;color:var(--text-dim,#9aa4b8)}" +
+      ".t58-ve ul{margin:0;padding-left:18px}.t58-ve li{margin:0 0 5px}" +
+      ".t58-ve .x{position:absolute;top:6px;right:8px;background:none;border:0;color:inherit;font-size:18px;cursor:pointer}" +
+      ".t58-ve.READY h4{color:var(--teal,#35e0b0)}.t58-ve.MARGINAL h4{color:var(--amber,#f5b83d)}" +
+      ".t58-ve.NOT h4{color:var(--coral,#ff6f6f)}";
+    document.head.appendChild(s);
+  }
+  function close() {
+    if (box) { box.remove(); box = null; }
+    if (lastFocus && lastFocus.focus) { try { lastFocus.focus(); } catch (e) {} }
+    lastFocus = null;
+  }
+  function esc(t) { var d = document.createElement("div"); d.textContent = String(t == null ? "" : t); return d.innerHTML; }
+  function open(el) {
+    var d;
+    try { d = JSON.parse(el.getAttribute("data-ve")); } catch (e) { return; }
+    if (!d) return;
+    var wasSame = box && box._src === el;
+    close();
+    if (wasSame) return;
+    css();
+    lastFocus = el;
+    box = document.createElement("div");
+    box._src = el;
+    box.className = "t58-ve " + (d.verdict === "NOT READY" ? "NOT" : d.verdict);
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-label", d.title || "Verdict explanation");
+    var pts = (d.points || []).map(function (p) { return "<li>" + esc(p) + "</li>"; }).join("");
+    box.innerHTML = '<button class="x" aria-label="Close">×</button><h4>' + esc(d.title) + "</h4><p>" +
+      esc(d.summary) + "</p>" + (pts ? "<ul>" + pts + "</ul>" : "");
+    document.body.appendChild(box);
+    var r = el.getBoundingClientRect(), w = box.offsetWidth;
+    var left = Math.max(12, Math.min(window.scrollX + r.left, window.scrollX + document.documentElement.clientWidth - w - 12));
+    box.style.left = left + "px";
+    box.style.top = (window.scrollY + r.bottom + 8) + "px";
+    box.querySelector(".x").addEventListener("click", function (e) { e.stopPropagation(); close(); });
+  }
+  document.addEventListener("click", function (e) {
+    var el = e.target.closest && e.target.closest("[data-ve]");
+    if (el) { e.preventDefault(); e.stopPropagation(); open(el); return; }
+    if (box && !box.contains(e.target)) close();
+  }, true);
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { close(); return; }
+    if ((e.key === "Enter" || e.key === " ") && e.target.closest && e.target.closest("[data-ve]")) {
+      e.preventDefault(); open(e.target.closest("[data-ve]"));
+    }
+  });
+  window.addEventListener("resize", close);
+})();
