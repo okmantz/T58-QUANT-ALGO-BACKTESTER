@@ -172,14 +172,36 @@ silently inaccurate backtest.
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
+import threading
 import uuid
+from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from app.strategy.base import Strategy, StrategyError, StrategyResult
+
+
+# 2026-10-15: loaded-module cache. _load_module used to re-execute the strategy file on EVERY generate(),
+# module_flag() and module_attr() call -- thousands of times in a GA search over one file, each paying the file's
+# imports and any module-level setup. Modules are now cached per (resolved path, mtime_ns, size), bounded LRU:
+# editing the file (new mtime/size) loads a fresh module. A strategy that keeps mutable state at module level
+# opts out by declaring ``T58_STATEFUL = True``; ``T58_MODULE_CACHE=0`` disables the cache globally.
+_MODULE_CACHE: "OrderedDict[tuple, object]" = OrderedDict()
+_MODULE_CACHE_MAX = 32
+_MODULE_CACHE_LOCK = threading.Lock()
+
+
+def _module_cache_enabled() -> bool:
+    return os.environ.get("T58_MODULE_CACHE", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def clear_module_cache() -> None:
+    with _MODULE_CACHE_LOCK:
+        _MODULE_CACHE.clear()
 
 
 class PythonStrategy(Strategy):
@@ -192,7 +214,31 @@ class PythonStrategy(Strategy):
         if self.file_path.suffix != ".py":
             raise StrategyError("Python strategy must be a .py file.")
 
+    def _cache_key(self):
+        try:
+            st = self.file_path.stat()
+            return (str(self.file_path.resolve()), st.st_mtime_ns, st.st_size)
+        except OSError:
+            return None
+
     def _load_module(self):
+        key = self._cache_key() if _module_cache_enabled() else None
+        if key is not None:
+            with _MODULE_CACHE_LOCK:
+                hit = _MODULE_CACHE.get(key)
+                if hit is not None:
+                    _MODULE_CACHE.move_to_end(key)
+                    return hit
+        module = self._load_module_uncached()
+        if key is not None and not bool(getattr(module, "T58_STATEFUL", False)):
+            with _MODULE_CACHE_LOCK:
+                _MODULE_CACHE[key] = module
+                _MODULE_CACHE.move_to_end(key)
+                while len(_MODULE_CACHE) > _MODULE_CACHE_MAX:
+                    _MODULE_CACHE.popitem(last=False)
+        return module
+
+    def _load_module_uncached(self):
         module_name = f"user_strategy_{uuid.uuid4().hex}"
         spec = importlib.util.spec_from_file_location(module_name, self.file_path)
         if spec is None or spec.loader is None:
