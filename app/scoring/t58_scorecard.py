@@ -57,7 +57,8 @@ already exists:
                                           IS the primary test (that would double-count the same
                                           evidence in two components -- see section 40/41 of the
                                           pipeline reorg plan on avoiding exactly this).
-    T58 conformance                5     t58_conformance_score() below -- NEW (P2-9/M8, 2026-10-03):
+    (T58 conformance -- informational only, NOT scored since 2026-10-15; see below)
+                                         t58_conformance_score() below -- (P2-9/M8, 2026-10-03):
                                           fraction of the strategy's entry conditions that reference
                                           Market Structure / Liquidity / Supply-Demand primitives
                                           (resolved via app.strategy.dna tags) plus a premium/
@@ -66,8 +67,8 @@ already exists:
                                           below -- this component deliberately measures something
                                           DIFFERENT from every row above it.
 
-    The weights sum to 125 (25+20+20+15+10+5+5+10+5+5+5), NOT 90 or 100: a component's
-    share of the score is weight/125, e.g. expectancy is 5/125 = 4% of the total. (Older
+    The weights sum to 120 (25+20+20+15+10+5+5+10+5+5), NOT 90 or 100: a component's
+    share of the score is weight/120, e.g. expectancy is 5/120 = 4.2% of the total. (Older
     text called expectancy "5/90ths" -- that predates the parsimony, CPCV-supporting and
     conformance components and is wrong.) The score itself is
     sum(weight x value) / sum(weight of the components PRESENT).
@@ -84,7 +85,7 @@ nothing about whether the strategy trades the way Owen's T58 framework
 RSI-mean-reversion bot can score Elite here without a single structural
 idea in it.
 
-`t58_conformance` (new, weight 5) measures FRAMEWORK CONFORMANCE instead:
+`t58_conformance` (informational badge, weight 0 -- removed from the score on 2026-10-15) measures FRAMEWORK CONFORMANCE instead:
 how much of the strategy's entry logic is expressed in Market Structure
 / Liquidity / Supply-Demand primitives, and whether its long/short
 entries align with premium/discount location (longs want discount,
@@ -94,8 +95,8 @@ a working strategy that does NOT trade the T58 way; a high conformance
 with a low total score is a T58-faithful strategy the prop-survival
 evidence rejects. The two readings complement each other; neither
 redefines the other, and the old score's meaning is unchanged -- when
-`t58_conformance` isn't supplied, compute_t58_score() re-normalizes over
-the other components exactly as before (byte-identical results).
+`t58_conformance` is supplied it is only echoed on the result as a badge; it never
+changes the score, the weight coverage or the READY verdict.
 
 Tiers, also verbatim from the Masterclass material:
 
@@ -120,7 +121,7 @@ tested yet, or whose parsimony couldn't be counted, is not scored as if it
 had FAILED that check. Re-normalizing alone, though, lets a strategy that
 omits its weakest components score higher than it should (omitting the five
 weakest moved one audit example from 70.9 to 83.2). So every result also
-carries `weight_coverage` (the share of the 125 total weight that was
+carries `weight_coverage` (the share of the 120 total weight that was
 actually measured) and `missing_core` (any of pass / payout / ruin absent),
 and app.orchestration.full_pipeline._make_verdict_core caps READY at
 MARGINAL when coverage is too thin or a core survival component is missing.
@@ -140,15 +141,10 @@ _WEIGHTS: dict[str, float] = {
     "drawdown": 10.0,
     "parsimony": 5.0,
     "cpcv_supporting": 5.0,
-    # t58_conformance: weight 5.0 -- deliberately tiebreaker-class, like
-    # parsimony. Conformance is a property of the strategy's DESIGN (how
-    # T58-faithful its entry logic is), not performance evidence, so it
-    # should nudge rankings toward framework-faithful strategies without
-    # overriding the prop-survival components (pass probability 25, first
-    # payout 20, ruin 20) that decide whether a strategy can actually get
-    # paid. Missing-aware like everything else: strategies scored without
-    # a strategy text/config simply omit it and re-normalize.
-    "t58_conformance": 5.0,
+    # t58_conformance is NO LONGER scored (2026-10-15 audit): it measures how T58-styled the entry logic is,
+    # not whether the strategy survives a prop evaluation. It is reported beside the score as an
+    # informational badge (T58ScorecardResult.t58_conformance) and never enters the score, the weight
+    # coverage, or the READY verdict.
 }
 
 _TIERS: list[tuple[float, str]] = [
@@ -209,6 +205,8 @@ class T58ScorecardResult:
     # must cap a verdict, not lift a score -- see the module docstring.
     weight_coverage: float = 1.0
     missing_core: list = field(default_factory=list)
+    # Informational only (0-100 or None): how T58-styled the entry logic is. NOT part of the score.
+    t58_conformance: float | None = None
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -243,6 +241,8 @@ def compute_t58_score(inputs: T58ScorecardInputs) -> T58ScorecardResult:
     total_weight_available = 0.0
     weighted_sum = 0.0
     notes: list[str] = []
+    _c = values.get("t58_conformance")
+    _conf = None if _c is None else _clip(float(_c))
 
     for name, weight in _WEIGHTS.items():
         val = values.get(name)
@@ -265,7 +265,8 @@ def compute_t58_score(inputs: T58ScorecardInputs) -> T58ScorecardResult:
         notes.append("No scorecard components were available -- score is 0 by default, not a real evaluation.")
         return T58ScorecardResult(score=0.0, tier="Reject", components=components,
                                    n_components_used=0, n_components_total=n_total, notes=notes,
-                                   weight_coverage=0.0, missing_core=missing_core)
+                                   weight_coverage=0.0, missing_core=missing_core,
+                                   t58_conformance=_conf)
 
     score = _clip(weighted_sum / total_weight_available * 100.0)
     if n_used < n_total:
@@ -279,7 +280,7 @@ def compute_t58_score(inputs: T58ScorecardInputs) -> T58ScorecardResult:
     return T58ScorecardResult(
         score=score, tier=tier_for_score(score), components=components,
         n_components_used=n_used, n_components_total=n_total, notes=notes,
-        weight_coverage=coverage, missing_core=missing_core,
+        weight_coverage=coverage, missing_core=missing_core, t58_conformance=_conf,
     )
 
 
@@ -346,7 +347,7 @@ def _expectancy_score(average_r: float | None) -> float | None:
     RESCALED 2026-10-15: it used to be 0R -> 0 and 2R -> 100, which scored a genuinely good 0.3R
     edge at 15/100 and a 0.44R edge (the Masterclass Lesson 1 example) at 22/100. Combined with
     the other components that put the maximum reachable score at ~84.6 even with everything else
-    perfect -- just under the 85 'Strong' cut. This component is 5/125 = 4% of the total score."""
+    perfect -- just under the 85 'Strong' cut. This component is 5/120 = 4.2% of the total score."""
     if average_r is None:
         return None
     return _clip(average_r / _EXPECTANCY_FULL_SCORE_R * 100.0)

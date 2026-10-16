@@ -37,6 +37,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from app.scoring.verdict_explain import explain_verdict
+
 from app.strategy.library import (
     STRATEGY_TYPES,
     VALIDATION_STEP_METHODS,
@@ -415,9 +417,14 @@ def candidate_dimensions(metadata: dict[str, Any]) -> dict[str, Any]:
             break
     if oos_value is None:
         oos_value = oos_pct(last_validation)
+    _score = _num(last_champion_check, "t58_score")
     return {
         "status": status_from_verdict(verdict),
         "verdict": verdict,
+        "verdict_explain": explain_verdict(
+            verdict, last_champion_check.get("reasons"), score=_score,
+            tier=last_champion_check.get("t58_tier"),
+        ),
         "eval_pct": _num(last_run, "eval_pass_probability"),
         "payout_pct": _num(last_run, "first_payout_probability", "eval_pass_probability"),
         "oos_pct": oos_value,
@@ -550,6 +557,10 @@ def list_board(strategy_type: Optional[str] = None) -> list[dict[str, Any]]:
             })
     for r in rows:
         r["next"] = row_next_step(r)
+        _ve = r.get("verdict_explain") or {}
+        if not _ve.get("points"):  # older runs stored no reasons -> use the board's own one-line diagnosis
+            r["verdict_explain"] = explain_verdict(
+                r.get("verdict"), None, score=r.get("t58_score"), fallback=_diagnose_why(r))
     # Leaderboard order: furthest along first, then strongest, then most
     # recently touched -- so the champion sits at the top of the list.
     rows.sort(key=lambda r: (
@@ -760,5 +771,6 @@ def five_question_snapshot(current: Optional[dict], rows: list[dict[str, Any]]) 
         "why": _diagnose_why(row),
         "next_action": _next_action(row),
         "next_action_href": _next_action_href(row),
+        "verdict_explain": row.get("verdict_explain"),
         "row": row,
     }
