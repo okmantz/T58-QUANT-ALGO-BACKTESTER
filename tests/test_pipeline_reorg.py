@@ -212,7 +212,7 @@ def test_min_trades_floor_does_not_affect_a_healthy_sample():
 
 
 def test_thin_scorecard_coverage_caps_ready_at_marginal():
-    """2026-10-15 (report P1): a strong score built from only 4 of 11 components must not read READY --
+    """2026-10-15 (report P1): a strong score built from only 4 of 10 components must not read READY --
     omitting evidence may not lift a verdict."""
     mc, wf = _elite_leaning_mc_and_wf()
     verdict, reasons, scorecard, _, _ = _make_verdict(

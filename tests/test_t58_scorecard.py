@@ -43,7 +43,7 @@ def test_missing_components_are_renormalized_not_penalized():
     result = compute_t58_score(inputs)
     assert result.score == 100.0
     assert result.n_components_used == 2
-    assert result.n_components_total == 11
+    assert result.n_components_total == 10
     assert result.notes
 
 
@@ -119,3 +119,13 @@ def test_score_from_results_handles_all_none_gracefully():
     result = score_from_results()
     assert result.score == 0.0
     assert result.n_components_used == 0
+
+
+def test_conformance_is_informational_and_never_changes_the_score():
+    base = compute_t58_score(T58ScorecardInputs(pass_probability=80, first_payout_probability=60))
+    with_conf = compute_t58_score(T58ScorecardInputs(pass_probability=80, first_payout_probability=60,
+                                                     t58_conformance=0.0))
+    assert with_conf.score == base.score
+    assert with_conf.weight_coverage == base.weight_coverage
+    assert with_conf.t58_conformance == 0.0 and base.t58_conformance is None
+    assert "t58_conformance" not in with_conf.components
