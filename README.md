@@ -258,6 +258,91 @@ this backtest?" questions:
   trades to whichever regime was active, surfacing where its losers
   concentrate.
 
+## How READY and the T58 score work
+
+A strategy is **READY** only when its **T58 score is 85 or more** *and* it then survives a set of
+demote-only gates (a gate can lower a verdict, never raise it). Everything below is read from
+`app/scoring/t58_scorecard.py`, `app/orchestration/full_pipeline.py` and `app/orchestration/audit_layers.py`.
+
+Click any verdict pill (READY / MARGINAL / NOT READY) on the **Dashboard** or the **Champion** page to see, in plain
+English, why that strategy got it.
+
+### The T58 score (weights sum to 120)
+
+| Score component | Weight | Share | Measures |
+|---|---:|---:|---|
+| Pass probability | 25 | 20.8% | Per-attempt Monte Carlo pass rate, Wilson 95% lower bound |
+| First payout (pass AND paid) | 20 | 16.7% | P(pass) × P(paid given pass), lower bound |
+| Risk of ruin (inverted) | 20 | 16.7% | Share of purchased accounts that breach within 90 days |
+| Walk-forward stability | 15 | 12.5% | Test metric ÷ train metric, capped at 1.0 |
+| Monte Carlo robustness | 10 | 8.3% | Seed-to-seed spread of the pass rate |
+| Drawdown | 10 | 8.3% | Max drawdown as a share of the firm's drawdown limit |
+| Parameter stability | 5 | 4.2% | Neighbour-parameter robustness |
+| Expectancy | 5 | 4.2% | Average R: 0R scores 0, 0.6R scores 100 |
+| Parsimony | 5 | 4.2% | Fewer degrees of freedom scores higher |
+| CPCV / PBO (supporting) | 5 | 4.2% | Out-of-sample retention across CPCV paths |
+
+The score is the weighted average over the components that were **measured** (a missing check is never scored as a
+zero, and thin coverage caps the verdict instead). Tiers: **92+ Elite, 85+ Strong, 75+ Promising, 65+ Research,
+below 65 Reject.** Elite and Strong can become READY, Promising and Research are MARGINAL, Reject is NOT READY.
+
+**T58 conformance is a badge, not a score term.** It measures how much of the entry logic is written in Market
+Structure / Liquidity / Supply & Demand terms. That is a *style*, not survival, and prop firms do not score
+vocabulary, so it is shown beside the score and **never** affects the score, the weight coverage or READY.
+
+Pass, paid and ruin are 65 of the 120 points (54%) and come from one simulation; the independent robustness
+evidence (walk-forward, CPCV, parameter stability, seed stability) is 35 points.
+
+### The gates (defaults)
+
+| Gate | Effect |
+|---|---|
+| Lookahead bias detected (or the check crashed) | NOT READY |
+| Risk of ruin above 20% | NOT READY |
+| Walk-forward not stable, CPCV not robust, ICIR fail, deflated Sharpe (PSR 0.95) fail, PBO above 0.5 | NOT READY |
+| Per-attempt pass lower bound below 70% | NOT READY |
+| Holdout (needs **30+ trades**) loses money **and** the upper 95% bound on per-trade expectancy is still below zero | NOT READY |
+| Holdout loses money but the loss is not statistically convincing | Capped at MARGINAL |
+| Fewer than 100 trades; scorecard coverage below 70%; a core component missing | Capped at MARGINAL |
+| Pass-and-paid lower bound below 35%; 30-day payout rate below 35% | Capped at MARGINAL |
+| Random-entry null p above 0.10 | Capped at MARGINAL |
+| **2× costs keep less than 25% of base net profit** (was: net profit of $1 passed) | Capped at MARGINAL |
+| Seed spread above 10 points | Capped at MARGINAL |
+| Attempt replay (**48** real start dates) disagrees with Monte Carlo: the two 95% intervals do not overlap **and** the gap is 10+ points | Capped at MARGINAL |
+| No clean holdout, unverified firm rules, failed data gate, search-bias haircut | Capped at MARGINAL |
+
+### What READY effectively asks for
+
+Real scorecard runs at the gate floors (every other component set to the value shown, walk-forward 100):
+
+| Pass lower bound | Paid lower bound | Ruin | Other components | Score | Verdict |
+|---:|---:|---:|---:|---:|---|
+| 70% | 35% | 20% | 80 | 72.9 | MARGINAL (Research) |
+| 80% | 45% | 10% | 85 | 80.0 | MARGINAL (Promising) |
+| 90% | 40% | 5% | 90 | 83.8 | MARGINAL (Promising) |
+| 90% | 60% | 5% | 90 | 87.1 | READY, if every gate also passes |
+| 90% | 70% | 5% | 90 | 88.8 | READY, if every gate also passes |
+
+So the 85-point cut, not the individual gates, is the binding constraint: READY effectively means roughly 90% of
+purchased accounts pass, a clear majority of them also get paid, and ruin sits near 5%. Public aggregates put real
+challenge pass rates around 10-20%, so READY is a top-percentile bar by design, and a strategy that clears it is rare.
+
+### Expected value beside READY
+
+The EV verdict (HIGH CONFIDENCE / FORWARD-TEST CANDIDATE / NOT WORTH A FEE / INSUFFICIENT EVIDENCE) answers the
+economic question: `EV = p × q × V − p × A − c`. For firms that charge a **monthly subscription** (Topstep's Trading
+Combine, $49 per month) `c` is the monthly price × the months the evaluation is expected to take (median time to pass,
+rounded up to whole 30-day periods), so slow passers are no longer priced as if they paid for one month.
+
+### Speed switches
+
+Monte Carlo runs vectorised across simulated paths (numpy only, bit-identical to the per-path loop; set
+`T58_MC_VECTORIZE=0` to fall back). Lookahead results are cached on disk keyed on the strategy's content, the data and
+the checker's code (`T58_LOOKAHEAD_DISK_CACHE=0` disables; `T58_CACHE_DIR` moves it). Python strategy modules are
+loaded once per file version (`T58_MODULE_CACHE=0` disables; a strategy that keeps mutable module-level state declares
+`T58_STATEFUL = True`). One persistent worker pool serves every Monte Carlo call, and browser tabs stop polling while
+hidden.
+
 ## Champion
 
 - **Multi-Asset Portfolio** — runs a strategy across several instruments,
