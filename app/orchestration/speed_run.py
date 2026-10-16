@@ -79,7 +79,7 @@ import tempfile
 import threading
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed, wait
+from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -91,7 +91,6 @@ from app.orchestration.full_pipeline import (
     FullPipelineCancelled, FullPipelineConfig, FullPipelineResult, run_full_pipeline,
 )
 from app.prop.simulator import PropRules
-from app.reports.crash_log import log_crash
 from app.search.batch_runner import SearchCancelled, SearchStageConfig, SearchSummary, _spec_from_record, run_search
 from app.search.strategy_space import build_strategy_from_spec, generate_search_space
 

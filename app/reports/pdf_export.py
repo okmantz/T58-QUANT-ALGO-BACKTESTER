@@ -59,9 +59,7 @@ def export_pdf(report: dict, path: str | Path) -> Path:
     from reportlab.lib.pagesizes import letter
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import inch
-    from reportlab.platypus import (
-        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak,
-    )
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

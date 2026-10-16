@@ -58,7 +58,7 @@ from app.backtest.risk import RiskConfig, build_run_context
 from app.analysis.exit_quality import analyze_exit_quality
 from app.monte_carlo.engine import MonteCarloConfig, MonteCarloResult, run_monte_carlo
 from app.optimize.code_parameter_space import discover_code_genes, materialize_code_strategy, patched_source_for_strategy
-from app.optimize.parameter_space import GeneMeta, RefinementError, apply_genome, extract_genome
+from app.optimize.parameter_space import RefinementError, apply_genome, extract_genome
 from app.prop.simulator import AccountSimResult, PropRules, simulate_account, summarize_single_run
 from app.strategy.base import Strategy
 from app.strategy.manual import ManualStrategy
@@ -1069,7 +1069,7 @@ def _run_genetic_search(
     rng: random.Random, baseline: Candidate,
 ) -> tuple[list, list["GenerationSummary"], Candidate]:
     """The original genetic algorithm, extracted verbatim (no behavior
-    change -- see tests/test_refinement.py's full existing suite, which
+    change -- see tests/validation/test_refinement.py's full existing suite, which
     covers this exact code unchanged) so app.optimize.multi_market_refinement
     can reuse it for multi-market aggregate scoring instead of duplicating
     it. Takes the already-evaluated `baseline` candidate (tracked by the

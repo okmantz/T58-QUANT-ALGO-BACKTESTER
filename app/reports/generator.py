@@ -15,7 +15,7 @@ import json
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
@@ -30,6 +30,9 @@ from app.reports.charts import svg_histogram, svg_line_chart
 from app.reports.trade_chart import build_trade_chart_html
 from app.reports import run_history
 from app.reports.mc_headline import monte_carlo_headline
+
+if TYPE_CHECKING:
+    from app.backtest.statistics import BacktestStatistics
 
 
 def _headline_risk_flags(

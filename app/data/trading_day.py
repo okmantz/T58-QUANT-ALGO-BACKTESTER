@@ -70,7 +70,7 @@ def trading_days(index, *, tz: str = "America/Chicago", roll_hour: int = 17):
     75k-bar frame that loop alone was roughly half the wall-clock of a
     single backtest, and every Full Pipeline step pays it again. The two
     implementations are pinned elementwise-equal by
-    tests/test_v913_progress_explorer_speed.py over naive, tz-aware, and
+    tests/search/test_v913_progress_explorer_speed.py over naive, tz-aware, and
     DST-boundary inputs, so this can never quietly drift from the scalar
     semantics the rest of the app (and its older tests) rely on."""
     if not 0 <= roll_hour < 24:

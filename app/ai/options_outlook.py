@@ -23,9 +23,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from app.quant_lab.options_pricing import (
-    OptionsPricingError, black_scholes_greeks, black_scholes_price, norm_cdf,
-)
+from app.quant_lab.options_pricing import OptionsPricingError, black_scholes_greeks, black_scholes_price
 
 # Target deltas (absolute value) used to pick candidate strikes around the
 # current spot price. 0.50 ~ ATM, 0.25 ~ a "normal" directional play,

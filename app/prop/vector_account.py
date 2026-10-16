@@ -6,7 +6,7 @@ the SAME state machine across P paths in lock-step: it loops over the TRADE
 INDEX (not over simulations) and keeps one numpy state array per rule value
 (balance, trailing peak, day P&L, ...). The arithmetic is the same IEEE-754
 double operations in the same order as PropAccount, so results are bit-identical
-(pinned by tests/test_vector_account_parity.py, which differential-tests it
+(pinned by tests/backtest/test_vector_account_parity.py, which differential-tests it
 against simulate_account on random rule sets and random paths).
 
 Scope. The kernel covers one attempt per path (``reset_on_breach=False``, the
@@ -25,7 +25,7 @@ No new dependency: numpy only. ``T58_MC_VECTORIZE=0`` switches it off.
 from __future__ import annotations
 
 import os
-from typing import Any, NamedTuple, Optional
+from typing import Any, NamedTuple
 
 import numpy as np
 

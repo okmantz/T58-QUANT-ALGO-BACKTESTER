@@ -1003,7 +1003,7 @@ def _mc_rows_vectorized(*, n_sims, rng, cfg, rules, base_pnls, base_risks, has_r
 # the exact same aggregation, in the exact same order, as the serial
 # loop. Identical draws + identical per-path math + identical
 # aggregation order = a bit-identical MonteCarloResult; this is pinned
-# by tests/test_v913_progress_explorer_speed.py. Spawn (not fork) to
+# by tests/search/test_v913_progress_explorer_speed.py. Spawn (not fork) to
 # match every other pool in this app, and any pool failure falls back
 # to the serial loop with a freshly seeded rng (see run_monte_carlo).
 _MC_PARALLEL_MIN_SIMS = 200

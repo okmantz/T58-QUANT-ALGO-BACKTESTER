@@ -68,9 +68,7 @@ from app.search.family_diversity import summarize_family_performance
 from app.search.failure_diagnosis import CandidateDiagnosis, diagnose_candidate
 from app.search.graveyard import GraveyardEntry, is_known_dead_neighborhood, load_graveyard, param_signature, record_rejections
 from app.search.results_db import ResultsDB
-from app.search.strategy_space import (
-    StrategySpaceError, build_strategy_from_spec, generate_search_space, hypothesis_question,
-)
+from app.search.strategy_space import build_strategy_from_spec, generate_search_space, hypothesis_question
 from app.strategy.family_taxonomy import family_label
 from app.validation.cpcv import CPCVError, compute_pbo, run_cpcv
 from app.validation.regime_testing import run_regime_test

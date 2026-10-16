@@ -46,13 +46,16 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from app.backtest.risk import RiskConfig
 from app.data.importer import import_csv
 from app.prop.simulator import PropRules
 from app.search.batch_runner import SearchStageConfig, SearchSummary, run_search
 from app.search.strategy_space import SearchSpace
+
+if TYPE_CHECKING:
+    from app.orchestration.loop_runner import SearchLoopResult
 
 ProgressCallback = Callable[[str, str], None]   # (job_label, message)
 

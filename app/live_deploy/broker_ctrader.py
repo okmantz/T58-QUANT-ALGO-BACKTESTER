@@ -44,17 +44,22 @@ from app.live_deploy.broker_base import (
 )
 
 try:
-    from ctrader_open_api import Client, Protobuf, TcpProtocol
+    from ctrader_open_api import Client, TcpProtocol
     from ctrader_open_api.endpoints import EndPoints
     from ctrader_open_api.messages.OpenApiMessages_pb2 import (
-        ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq, ProtoOAGetTrendbarsReq,
-        ProtoOANewOrderReq, ProtoOAClosePositionReq, ProtoOAReconcileReq,
-        ProtoOATraderReq, ProtoOAGetAccountListByAccessTokenReq, ProtoOASymbolsListReq,
+        ProtoOAApplicationAuthReq,
+        ProtoOAAccountAuthReq,
+        ProtoOAGetTrendbarsReq,
+        ProtoOANewOrderReq,
+        ProtoOAClosePositionReq,
+        ProtoOAReconcileReq,
+        ProtoOATraderReq,
+        ProtoOASymbolsListReq,
     )
     from ctrader_open_api.messages.OpenApiModelMessages_pb2 import (
         ProtoOAOrderType, ProtoOATradeSide, ProtoOATrendbarPeriod,
     )
-    from twisted.internet import reactor, defer
+    from twisted.internet import reactor
     _CTRADER_IMPORT_ERROR: Optional[str] = None
 except Exception as exc:  # noqa: BLE001
     Client = None  # type: ignore

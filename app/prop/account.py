@@ -190,7 +190,7 @@ class PropAccount:
         # count is total - before_funded, an identical integer; the
         # payout decisions, and therefore every number downstream, are
         # unchanged. Pinned by tests/test_account_parity.py and
-        # tests/test_v913_progress_explorer_speed.py.
+        # tests/search/test_v913_progress_explorer_speed.py.
         self._winning_days_total = 0
         self._winning_days_before_funded = 0
         self.day_peak: dict = {}

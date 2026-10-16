@@ -40,7 +40,7 @@ import numpy as np
 import pandas as pd
 
 from app.backtest.execution import Trade
-from app.monte_carlo.engine import _apply_slippage_stress, _effective_block_size, _resample_indices, _resample_pnls
+from app.monte_carlo.engine import _apply_slippage_stress, _effective_block_size, _resample_indices
 from app.prop.simulator import PropRules, precompute_day_structure, simulate_account
 from app.prop.survival_engine import ResetEconomics
 

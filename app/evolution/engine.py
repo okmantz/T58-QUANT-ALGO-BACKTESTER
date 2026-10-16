@@ -340,7 +340,7 @@ class EvolutionConfig:
     # population before any elite child was bred (n_children = 0) -- the
     # lab was ~95% random sampling with almost no elite compounding. 200
     # restores a real exploitation budget. Guarded by
-    # tests/test_search_v7.py::test_evolution_n_children_positive_at_defaults.
+    # tests/search/test_search_v7.py::test_evolution_n_children_positive_at_defaults.
     population_size: int = 200
     elite_keep: int = 10
     # FIX (2026-09-22): this used to be accepted-but-ignored -- the web
@@ -490,7 +490,7 @@ class EvolutionConfig:
     # population_size raise above, the immigrant floor drops from ~170 to
     # ~95 while the population grows to 200, so n_children > 0 at defaults
     # and elite compounding actually happens. Guarded by
-    # tests/test_search_v7.py::test_evolution_n_children_positive_at_defaults.
+    # tests/search/test_search_v7.py::test_evolution_n_children_positive_at_defaults.
     min_immigrants_per_family: int = 1   # every family gets at least this many fresh candidates, every generation
     max_elite_frac_per_family: float = 0.5   # no single family may hold more than this share of the elite/breeding pool
 

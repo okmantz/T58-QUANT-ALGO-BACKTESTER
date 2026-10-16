@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.ai.ollama_settings import OllamaSettings
-from app.ai.vector_store import OllamaEmbedder, VectorStore, content_hash
+from app.ai.vector_store import OllamaEmbedder, VectorStore
 
 VECTOR_COLLECTION = "research"
 

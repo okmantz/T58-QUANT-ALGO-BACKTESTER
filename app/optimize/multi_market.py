@@ -59,7 +59,6 @@ from app.backtest.risk import RiskConfig, build_run_context
 from app.monte_carlo.engine import MonteCarloConfig
 from app.optimize.parameter_space import RefinementError
 from app.optimize.refinement import (
-    FITNESS_METRICS,
     OPTIMIZER_MODES,
     RefinementConfig,
     _build_adapter,

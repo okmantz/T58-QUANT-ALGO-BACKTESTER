@@ -14,7 +14,7 @@ app.evolution.engine) are performance-critical and heavily tested; every one
 of them already funnels ALL progress through a single ``progress_cb(str)``.
 Reading that one stream costs the engines nothing and can't change what they
 compute. The trade-off is that this module is coupled to their log wording,
-so tests/test_run_progress.py pins every pattern against the real wording AND
+so tests/search/test_run_progress.py pins every pattern against the real wording AND
 greps the engine source for each anchor phrase -- if someone rewords a log
 line, a test fails instead of the banner silently freezing.
 

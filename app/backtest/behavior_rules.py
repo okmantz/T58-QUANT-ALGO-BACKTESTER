@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import replace
-from datetime import time as dt_time
 
 import numpy as np
 import pandas as pd

@@ -90,7 +90,7 @@ see _position_size_vec: a trade whose intended risk doesn't reach one
 whole contract sizes to 0 whole contracts and is skipped, exactly like
 the real engine. (This was the one previously-undocumented divergence;
 it is now parity, verified by
-tests/test_vectorized_fastpath.py::test_position_size_parity_with_contract_size.)
+tests/backtest/test_vectorized_fastpath.py::test_position_size_parity_with_contract_size.)
 
 Any candidate ineligible for this fast path (or that this module errors
 on) MUST fall back to the existing scalar `_stage1_task` path -- see
@@ -181,7 +181,7 @@ def is_vectorizable(strat_result) -> bool:
 def _risk_amount_vec(equity: np.ndarray, risk: RiskConfig) -> np.ndarray:
     """Vectorized mirror of RiskConfig.risk_amount. Kept deliberately
     tiny and side-by-side testable against the scalar version --
-    see tests/test_vectorized_fastpath.py::test_risk_amount_parity."""
+    see tests/backtest/test_vectorized_fastpath.py::test_risk_amount_parity."""
     eq_for_sizing = np.maximum(equity, 0.0)
     if risk.risk_mode == "fixed":
         return np.full_like(eq_for_sizing, max(risk.risk_value, 0.0))
@@ -190,7 +190,7 @@ def _risk_amount_vec(equity: np.ndarray, risk: RiskConfig) -> np.ndarray:
 
 def _position_size_vec(equity: np.ndarray, sizing_pips: np.ndarray, risk: RiskConfig) -> np.ndarray:
     """Vectorized mirror of RiskConfig.position_size -- see
-    tests/test_vectorized_fastpath.py::test_position_size_parity."""
+    tests/backtest/test_vectorized_fastpath.py::test_position_size_parity."""
     safe_pips = np.where(sizing_pips > 0, sizing_pips, 10.0)
     stop_distance = safe_pips * risk.pip_size
     risk_amt = _risk_amount_vec(equity, risk)

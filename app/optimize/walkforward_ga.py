@@ -67,7 +67,7 @@ from app.backtest.statistics import compute_statistics
 from app.monte_carlo.engine import MonteCarloConfig, run_monte_carlo
 from app.monte_carlo.slippage_model import SessionVolatilitySlippageConfig
 from app.optimize.code_parameter_space import materialize_code_strategy
-from app.optimize.parameter_space import GeneMeta, RefinementError, apply_genome
+from app.optimize.parameter_space import RefinementError, apply_genome
 from app.orchestration.resource_guard import safe_worker_count_for_bytes
 from app.optimize.refinement import (
     RefinementConfig,

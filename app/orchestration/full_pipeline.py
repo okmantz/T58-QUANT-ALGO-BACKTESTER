@@ -88,7 +88,7 @@ from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor
 from concurrent.futures import wait as futures_wait
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 import pandas as pd
@@ -130,7 +130,10 @@ from app.strategy.library import StrategyAlreadyExists, provenance_stamped_name,
     instrument_from_dataset_label, simple_run_filename, simple_run_name
 from app.validation.cpcv import CPCVError, CPCVResult, PBOGateResult, compute_pbo, pbo_gate, run_cpcv
 from app.validation.icir import ICIRGateResult, run_icir_gate_from_backtest
-from app.validation.regime_matrix import RegimeMatrixResult, build_regime_matrix
+from app.validation.regime_matrix import RegimeMatrixResult
+
+if TYPE_CHECKING:
+    from app.ai.ollama_settings import OllamaSettings
 
 ProgressCallback = Callable[[str], None]
 
@@ -2653,7 +2656,6 @@ def run_full_pipeline(
         if cfg.dsr_gate_enabled:
             log("Step 6c/7: Deflated Sharpe gate (multiple-testing correction)...")
             try:
-                from app.backtest.engine import run_backtest as _run_backtest_dsr
                 n_trials = count_all_trials(
                     baseline_count=1,
                     ga_total_evaluations=(ga_result.total_evaluations
