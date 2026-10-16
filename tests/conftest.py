@@ -2,7 +2,7 @@
 
 FIX (audit, Sep 2026): this file didn't exist before. The CI failures
 that prompted this fix (see CHANGES_SUMMARY.md) were two tests in
-tests/test_web_speed_run_loop_mode.py flaking ONLY when run as part of
+tests/web/test_web_speed_run_loop_mode.py flaking ONLY when run as part of
 the full ~1650-test suite (`pytest tests`), never in isolation --
 exactly the signature of state leaking between tests rather than a bug
 in either test itself.
@@ -75,7 +75,7 @@ def _license_activated_by_default(monkeypatch, tmp_path_factory):
     nothing touches the developer's real license. The gate's process
     cache is then RESET to None, so the first request in each test
     revalidates through the real client code and caches True itself.
-    tests/test_web_license_gate.py, which specifically exercises the
+    tests/web/test_web_license_gate.py, which specifically exercises the
     gate, patches validate()/activate() per test on top of this --
     see that file's `reset_license_cache` fixture."""
     import hashlib
