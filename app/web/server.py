@@ -52,8 +52,11 @@ from app.ai.ollama_settings import OllamaSettings
 from app.education import content as education_content
 from app.web.network_info import lan_url, print_startup_banner, qr_code_data_uri, qr_code_file, tailscale_url
 from app.web.notifications import (
-    NotificationSettings, load_notification_settings, notify_job_finished, save_notification_settings,
-    send_job_notification, _send_email_notification,
+    NotificationSettings,
+    load_notification_settings,
+    notify_job_finished,
+    save_notification_settings,
+    _send_email_notification,
 )
 from app.web import onboarding
 from app.web.quant_lab_routes import quant_lab_bp
@@ -106,7 +109,7 @@ from app.orchestration import pipeline_guide
 from app.funnel import recovery as funnel_recovery
 from app.monte_carlo.engine import MonteCarloConfig, run_monte_carlo
 from app.monte_carlo.bankroll import BankrollConfig, simulate_bankroll_survival
-from app.optimize.risk_sweep import DEFAULT_RISK_VALUES, run_risk_sweep
+from app.optimize.risk_sweep import run_risk_sweep
 from app.optimize.multi_objective import (    DEFAULT_OBJECTIVES, MultiObjectiveConfig, OBJECTIVE_DIRECTIONS, run_multi_objective_refinement,
     run_multi_objective_sweep,
 )
@@ -130,7 +133,7 @@ from app.orchestration.resource_guard import (
 from app.orchestration.forge import ForgeConfig, run_forge
 from app.research import director as research_director
 from app.evolution.multi_instrument import EvolutionInstrumentJob, MultiInstrumentEvolutionGroup
-from app.data.timeframe_sweep import DEFAULT_SWEEP_TIMEFRAMES, build_timeframe_sweep, parse_sweep_timeframes, stamp_manual_timeframe
+from app.data.timeframe_sweep import build_timeframe_sweep, parse_sweep_timeframes, stamp_manual_timeframe
 from app.orchestration.report_timeframe_sweep import run_report_timeframe_sweep
 from app.orchestration.multi_timeframe_jobs import (
     describe_skipped, evolution_jobs_from_expansion, expand_dataset_across_timeframes,
@@ -150,7 +153,7 @@ from app.orchestration.overnight_autopilot import AutopilotConfig, run_overnight
 from app.portfolio.portfolio import InstrumentLeg, PortfolioConfig, PortfolioError, run_portfolio_backtest
 from app.prop.simulator import PropRules, simulate_account
 from app.prop.presets import get_preset as get_prop_firm_preset, list_presets as list_prop_firm_presets
-from app.prop.recommender import recommend_prop_firms, render_recommendation_table
+from app.prop.recommender import recommend_prop_firms
 from app.prop.scaling import ScalingPlan, run_scaling_stress_test
 from app.prop.survival_engine import PropSurvivalConfig, ResetEconomics, run_prop_survival_analysis
 from app.reports.generator import generate_full_report
@@ -203,12 +206,29 @@ from app.validation.regime_matrix import run_regime_matrix
 from app.validation.sensitivity import compute_1d_sensitivity
 from app.validation.walk_forward_opt import run_walk_forward_optimization
 from app.strategy.library import (
-    STRATEGY_STATUSES, STRATEGY_TYPES, StrategyAlreadyExists, delete_many,
-    delete_saved_strategy, export_library_zip_bytes, list_all_markets, list_all_tags,
-    library_fingerprint, list_saved_strategies, load_strategy_metadata, load_strategy_text, record_backtest_result, record_lookahead_result,
-    record_search_result, record_optimize_result, record_validation_result, record_champion_check_result,
-    rename_saved_strategy, save_strategy_bytes, save_strategy_metadata,
-    save_strategy_text, set_strategy_status, set_strategy_tags, safe_filename_stem,
+    STRATEGY_STATUSES,
+    STRATEGY_TYPES,
+    StrategyAlreadyExists,
+    delete_many,
+    delete_saved_strategy,
+    export_library_zip_bytes,
+    list_all_markets,
+    list_all_tags,
+    library_fingerprint,
+    list_saved_strategies,
+    load_strategy_metadata,
+    load_strategy_text,
+    record_backtest_result,
+    record_lookahead_result,
+    record_search_result,
+    record_validation_result,
+    rename_saved_strategy,
+    save_strategy_bytes,
+    save_strategy_metadata,
+    save_strategy_text,
+    set_strategy_status,
+    set_strategy_tags,
+    safe_filename_stem,
 )
 from app.strategy.lookahead_check import check_for_lookahead
 from app.validation.integrity_check import run_integrity_check
@@ -5279,7 +5299,7 @@ def multi_market_start():
                 **_alpaca_template_context(),
             ), 400
 
-        dfs: dict[str, pd.DataFrame] = {}
+        dfs: dict = {}
         load_warnings: list[str] = []
         for name in selected:
             candidate_path = get_raw_data_dir() / name

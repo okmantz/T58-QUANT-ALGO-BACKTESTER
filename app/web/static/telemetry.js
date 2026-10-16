@@ -8,7 +8,7 @@
  * and safe to load twice (guarded below), since several partials include it.
  *
  * The pure helpers (clipRange, nearestDot, formatMoney, ...) are exposed on
- * window.T58Telemetry so tests/test_telemetry_js.py can exercise them under
+ * window.T58Telemetry so tests/web/test_telemetry_js.py can exercise them under
  * node without a browser.
  */
 (function (root) {

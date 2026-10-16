@@ -653,3 +653,121 @@ a { color: var(--teal); }
   .t58-main .t58-card, .t58-main .t58-champion { animation: none; }
 }
 
+
+
+/* ---- Page tokens (status tints, ink colors, soft grays) ----
+   Dark values are the exact literals the page templates used to hardcode (dark rendering is unchanged);
+   light values are legible counterparts so Light mode no longer shows dark-only tints and white-on-white text.
+   Pages reference these as var(--token). ---- */
+:root {
+  --t-soft: #ccc;
+  --t-soft2: #ddd;
+  --t-soft3: #bbb;
+  --t-faint: #888;
+  --t-faint2: #999;
+  --t-faint3: #777;
+  --t-mute2: #8b95a7;
+  --t-mute3: #8a97a8;
+  --t-mute4: #9aa0aa;
+  --t-strong: #e6eaf2;
+  --on-teal: #04120e;
+  --on-teal2: #04130d;
+  --on-violet: #0c0620;
+  --on-teal3: #05070a;
+  --err-fg: #ffb4b4;
+  --err-fg2: #ff8a8a;
+  --err-fg3: #ff9d9d;
+  --err-fg4: #ff6b6b;
+  --err-fg5: #ff8b96;
+  --ok-fg: #b4ffcb;
+  --ok-fg2: #7ee08a;
+  --ok-fg3: #b7e8b7;
+  --ok-fg4: #a6efc6;
+  --info-fg: #9ecbff;
+  --info-fg2: #a8c8e8;
+  --warn-fg: #ffcf7a;
+  --warn-fg2: #ffd28a;
+  --warn-fg3: #ff9f43;
+  --violet-fg: #cfc3ff;
+  --err-bg: #2a1414;
+  --err-bg2: #3a1616;
+  --err-bg3: #3a1420;
+  --err-bg4: #22101a;
+  --ok-bg: #142a1a;
+  --ok-bg2: #123b1c;
+  --ok-bg3: #152615;
+  --ok-bg4: #10261b;
+  --ok-bg5: #0a1f18;
+  --warn-bg: #2a1e0a;
+  --warn-bg2: #2a2314;
+  --violet-bg: #1c1533;
+  --info-bg: #1a2530;
+  --code-bg: #0d0d0d;
+  --surface-x: #262626;
+  --err-bd: #6b2323;
+  --err-bd2: #6e2432;
+  --ok-bd: #235a32;
+  --ok-bd2: #14503c;
+  --ok-bd3: #1f6b46;
+  --warn-bd: #7a5210;
+  --warn-bd2: #6b5423;
+  --warn-bd3: #6b4d16;
+  --bd-x: #2a3345;
+  --surface-x-bd: #262626;
+}
+html[data-theme="light"] {
+  --t-soft: #2d3a45;
+  --t-soft2: #26323d;
+  --t-soft3: #34424e;
+  --t-faint: #5b6b7a;
+  --t-faint2: #546370;
+  --t-faint3: #5b6b7a;
+  --t-mute2: #46555f;
+  --t-mute3: #46555f;
+  --t-mute4: #46555f;
+  --t-strong: #101820;
+  --on-teal: #ffffff;
+  --on-teal2: #ffffff;
+  --on-violet: #ffffff;
+  --on-teal3: #ffffff;
+  --err-fg: #8e1f1a;
+  --err-fg2: #a3241f;
+  --err-fg3: #a3241f;
+  --err-fg4: #c9332e;
+  --err-fg5: #a3241f;
+  --ok-fg: #0e5a3c;
+  --ok-fg2: #17622a;
+  --ok-fg3: #17622a;
+  --ok-fg4: #0e5a3c;
+  --info-fg: #1b4f9c;
+  --info-fg2: #1b4f9c;
+  --warn-fg: #7a4a00;
+  --warn-fg2: #7a4a00;
+  --warn-fg3: #9a5400;
+  --violet-fg: #4a2bb8;
+  --err-bg: #fdecea;
+  --err-bg2: #fbdcd9;
+  --err-bg3: #fbdcd9;
+  --err-bg4: #fdecea;
+  --ok-bg: #e6f5ec;
+  --ok-bg2: #d5eedd;
+  --ok-bg3: #e6f5ec;
+  --ok-bg4: #e6f5ec;
+  --ok-bg5: #e6f5ec;
+  --warn-bg: #fdf3e0;
+  --warn-bg2: #fdf3e0;
+  --violet-bg: #efeafd;
+  --info-bg: #e6eefa;
+  --code-bg: #f1f4f8;
+  --surface-x: #e3e8ee;
+  --err-bd: #e2a7a3;
+  --err-bd2: #e2a7a3;
+  --ok-bd: #9bd2b0;
+  --ok-bd2: #9bd2b0;
+  --ok-bd3: #9bd2b0;
+  --warn-bd: #e3c48a;
+  --warn-bd2: #e3c48a;
+  --warn-bd3: #e3c48a;
+  --bd-x: #b9c5d3;
+  --surface-x-bd: #c9d2db;
+}

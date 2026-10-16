@@ -2,7 +2,7 @@
 Risk Sweep -- the missing UI for app.optimize.risk_sweep.run_risk_sweep.
 
 That module was already fully implemented and covered by 6 passing tests
-(tests/test_risk_sweep.py) -- it re-runs a strategy at 8 candidate
+(tests/prop/test_risk_sweep.py) -- it re-runs a strategy at 8 candidate
 risk-per-trade levels (0.10% through 1.00%) and scores each one against
 the full app.prop.survival_engine model (pass probability, first-payout
 probability, median days to payout, drawdown recovery) to find which
@@ -160,8 +160,8 @@ def risk_sweep_run():
             contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
             **accuracy_kwargs(form),  # v9.6 A3a: the form renders these -- read them
         )
-        base_risk = harden_risk_config(base_risk, prop_rules=rules, form=form)
         prop_rules = _prop_rules_from_form(form)
+        base_risk = harden_risk_config(base_risk, prop_rules=prop_rules, form=form)
     except ValueError as exc:
         return _render_form(error=f"Invalid input: {exc}", form_values=form_values)
 

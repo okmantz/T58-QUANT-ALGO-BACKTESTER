@@ -21,7 +21,7 @@ migrated onto it as a concrete, working example (see ``_run_wfo_job``/
 routes) -- every other job type listed above still uses its own
 hand-rolled dict-and-lock for now. Deliberately NOT a big-bang rewrite of
 all 18 at once: this file has no test coverage of its own yet beyond
-``tests/test_job_manager.py``, and migrating every long-running tool in
+``tests/search/test_job_manager.py``, and migrating every long-running tool in
 a single pass, in a codebase this size, with no way to exercise the real
 UI here, is a good way to silently break one of them. The intended path
 is to migrate the rest incrementally, one tool per change, following the
