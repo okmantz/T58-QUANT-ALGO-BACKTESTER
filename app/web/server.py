@@ -479,6 +479,28 @@ def _csrf_issue_token():
 app.jinja_env.globals["csrf_token"] = lambda: session.get("csrf_token", "")
 
 
+# 2026-10-15 (audit): every HTML page gets the polling governor (/static/t58-poll.js) injected as the first script in
+# <head>, so background tabs stop polling and long-running poll loops back off -- without editing ~100 templates.
+import re as _re_poll
+_POLL_TAG = '<script src="/static/t58-poll.js"></script>'
+_HEAD_RE = _re_poll.compile(r"<head(\s[^>]*)?>", _re_poll.IGNORECASE)
+
+
+@app.after_request
+def _inject_poll_governor(resp):
+    try:
+        if (resp.mimetype == "text/html" and resp.status_code == 200 and not resp.direct_passthrough
+                and not resp.is_streamed):
+            body = resp.get_data(as_text=True)
+            if "t58-poll.js" not in body:
+                new, n = _HEAD_RE.subn(lambda m: m.group(0) + _POLL_TAG, body, count=1)
+                if n:
+                    resp.set_data(new)
+    except Exception:  # noqa: BLE001 -- never break a page over an optimisation
+        pass
+    return resp
+
+
 @app.before_request
 def _csrf_check():
     if request.method not in ("POST", "PUT", "PATCH", "DELETE"):
