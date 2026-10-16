@@ -2,7 +2,7 @@
 
 Both ``t58_desktop.spec`` and ``t58_web.spec`` import this module so the two
 builds always bundle the same things. It is plain Python (no PyInstaller
-import at module level) so ``tests/test_package_release.py`` can import and
+import at module level) so ``tests/packaging/test_package_release.py`` can import and
 check it on any machine.
 
 Why specs instead of the long ``pyinstaller --hidden-import ...`` command
