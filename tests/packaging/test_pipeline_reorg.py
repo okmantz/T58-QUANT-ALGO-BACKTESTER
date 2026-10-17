@@ -203,11 +203,16 @@ def test_min_trades_floor_does_not_affect_a_healthy_sample():
     stats = _fake_statistics(250)
     stats.average_r = 0.5
     stats.max_drawdown_pct = 2.0
+    mc.per_attempt_pass_probability = 95.0          # the replay-agreement gate compares against this
     verdict, reasons, scorecard, hard_fail, lookahead_hard_fail = _make_verdict(
         mc, wf, icir_gate=None, risk_of_ruin_cap=20.0,
         statistics=stats, prop_rules=SimpleNamespace(max_drawdown_pct=10.0), min_trades_for_ready=100,
+        # 2026-10-17: the expectancy lower bound is part of the score and a hard gate -- a healthy sample carries one.
+        expectancy_bound={"n": 250, "mean": 0.5, "lb": 0.25, "ub": 0.75},
+        attempt_replay=type("R", (), {"sample_ok": True, "pass_rate": 0.94, "n_attempts": 60, "pass_ci_honest": (0.85, 0.98),
+                                      "n_effective": 20.0, "bust_before_pass_rate": 0.02})(),
     )
-    assert verdict == "READY"
+    assert verdict == "READY", reasons
     assert not any("CAPPED AT MARGINAL" in r for r in reasons)
 
 
@@ -250,7 +255,7 @@ def test_min_trades_floor_never_downgrades_an_already_marginal_verdict():
 
 
 def test_min_trades_floor_is_configurable_via_full_pipeline_config():
-    assert FullPipelineConfig().min_trades_for_ready == 100
+    assert FullPipelineConfig().min_trades_for_ready == 300      # raised from 100 on 2026-10-17 (audit item 5)
     assert FullPipelineConfig(min_trades_for_ready=10).min_trades_for_ready == 10
 
 

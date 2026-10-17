@@ -302,7 +302,9 @@ def test_generate_population_stratifies_immigrants_across_all_families():
     runner = EvolutionRunner(_trending_df(n=500), RiskConfig(), PropRules(), cfg)
 
     population = runner._generate_population(0, [])
-    families_seen = {meta.get("family") for _, _, meta in population}
+    # 2026-10-17: random-entry controls ride along in every pool as their own pseudo-family; they are not part of the
+    # strategy search, so they are excluded from the diversity check.
+    families_seen = {meta.get("family") for _, _, meta in population if not meta.get("control")}
     expected = set(list_families().keys()) - set(FAMILIES_REQUIRING_PAIR_DATA) - set(FAMILIES_REQUIRING_CALENDAR_DATA)
     # v5 B1-1: the "grammar" pseudo-family joins the stratified draw when
     # use_structural_operators is on (the default).
@@ -562,3 +564,36 @@ def test_family_exclusions_never_collapse_active_families_below_the_floor(tmp_pa
     assert status["family_health"]["applied"] is True
     assert status["family_health"]["active_family_count"] == len(all_families)
     assert set(status["family_health"]["excluded"]) == set(all_families) - survivors_to_keep
+
+
+def test_lab_upgrades_end_to_end(tmp_path):
+    """2026-10-17: random controls ride along in every generation and are only measured; tribes tag the population;
+    the live feed gets cards; status/finalists expose the new fields."""
+    df = _trending_df()
+    cfg = EvolutionConfig(
+        population_size=12, elite_keep=2, max_generations=2,
+        min_trades=3, min_profit_factor=0.0, max_drawdown_buffer_mult=20.0,
+        mc_sims=50, robustness_neighbors=1, walk_forward_folds=2,
+        cpcv_top_n=2, cpcv_max_paths=3, cpcv_n_groups=3, parallel_workers=1,
+        random_controls_per_generation=4, tribe_merge_generation=5,
+        save_to_library=False, knowledge_graph_path=str(tmp_path / "kg.jsonl"),
+        checkpoint_path=str(tmp_path / "checkpoint.json"),
+        tested_log_path=str(tmp_path / "tested_candidates.jsonl"),
+    )
+    runner = EvolutionRunner(df, RiskConfig(), PropRules(), cfg, progress_cb=None)
+    pop = runner._generate_population(0, [])
+    controls = [p for p in pop if p[2].get("control")]
+    evolved = [p for p in pop if not p[2].get("control")]
+    assert len(controls) == 4 and len({c[0] for c in pop}) == len(pop)          # unique ids
+    assert {p[2].get("tribe") for p in evolved} == {"consistency", "growth"}     # both tribes populated
+    runner._run_loop()
+    rep = runner.control_tracker.report()
+    assert rep["control_tested"] >= 4 and rep["evolved_tested"] >= 1            # controls were measured alongside
+    assert not any((r.meta or {}).get("control") for r in runner.leaderboard)   # ...and never crowned
+    feed = runner.curve_store.since(0)
+    assert feed["items"], "the live gallery should have received cards"
+    assert all(len(i["curve"]) <= cfg.curve_points for i in feed["items"])
+    assert any(i["control"] for i in feed["items"]) or rep["control_passed"] == 0
+    st = runner.status()["lab"]
+    assert "controls" in st and st["tribes_active"] is True
+    assert (tmp_path / "tested_candidates.jsonl").exists()

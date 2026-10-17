@@ -93,7 +93,7 @@ def test_core_rejects_only_convincing_holdout_losses_and_caps_inconclusive_ones(
 # -- conformance ----------------------------------------------------------------------------------------
 def test_conformance_is_not_a_scored_component():
     from app.scoring import t58_scorecard as sc
-    assert "t58_conformance" not in sc._WEIGHTS and sum(abs(w) for w in sc._WEIGHTS.values()) == 120.0
+    assert "t58_conformance" not in sc._WEIGHTS and sum(abs(w) for w in sc._WEIGHTS.values()) == 100.0
 
 
 # -- verdict explanations --------------------------------------------------------------------------------

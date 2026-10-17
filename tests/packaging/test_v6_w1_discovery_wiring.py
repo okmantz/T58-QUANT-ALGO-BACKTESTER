@@ -273,7 +273,8 @@ def _budget_runner(tmp_path, **overrides):
 
 def test_structural_budget_children_count(tmp_path):
     runner = _budget_runner(tmp_path)
-    pop = runner._generate_population(3, _elite_specs())
+    # the budget belongs to the core generator; the public wrapper additionally splits tribes (one budget each, 2026-10-17)
+    pop = runner._generate_population_core(3, _elite_specs())
     budget = [(cid, spec, meta) for cid, spec, meta in pop if meta.get("structural_budget")]
     # max(2, int(24 * 0.15)) == 3, drawn even though the immigrant floor
     # fills the whole population (n_children == 0 here).

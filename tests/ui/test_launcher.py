@@ -54,13 +54,13 @@ def test_startup_banner_warns_and_recommends_running_natively_under_wine(monkeyp
     and the phone getting 'site can't be reached' -- both trace back to
     running the Windows .exe through Wine instead of natively. The
     banner must call this out explicitly and point at the actual fix
-    (`python3 run_web.py`, no Wine/.exe needed) rather than leaving it
+    (`python3 launchers/run_web.py`, no Wine/.exe needed) rather than leaving it
     looking like an unexplained app bug."""
     monkeypatch.setattr("app.web.network_info.is_running_under_wine", lambda: True)
     lines = startup_banner_lines("http://192.168.1.23:5000", qr_path=None)
     joined = "\n".join(lines)
     assert "Wine" in joined
-    assert "python3 run_web.py" in joined
+    assert "python3 launchers/run_web.py" in joined
 
 
 def test_startup_banner_has_no_wine_warning_on_a_native_run(monkeypatch):

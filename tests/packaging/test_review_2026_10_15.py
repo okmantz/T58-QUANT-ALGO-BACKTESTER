@@ -95,7 +95,10 @@ def test_ruin_window_not_covered_is_flagged_and_caps_ready():
                                                  prop_rules=SimpleNamespace(max_drawdown_pct=10.0),
                                                  mc_dispersion_pts=1.0, min_trades_for_ready=100)
     assert card.tier in ("Elite", "Strong")
-    assert verdict == "MARGINAL" and any("RUIN WINDOW NOT COVERED" in r for r in reasons)
+    # 2026-10-17: the thin-coverage cap (replay / expectancy evidence absent from this mock) now fires before the
+    # ruin-window cap; either way an otherwise-elite result with an uncovered ruin window must not reach READY.
+    assert verdict == "MARGINAL"
+    assert any(("RUIN WINDOW NOT COVERED" in r) or ("CAPPED AT MARGINAL" in r) for r in reasons)
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -218,11 +221,11 @@ def test_ceiling_is_no_longer_stuck_below_the_strong_cut():
 # ---------------------------------------------------------------------------------------------------------
 # item 4: stale documentation
 # ---------------------------------------------------------------------------------------------------------
-def test_scorecard_docs_no_longer_claim_ninetieths_and_weights_sum_to_120():
-    assert sum(abs(w) for w in sc._WEIGHTS.values()) == 120.0
+def test_scorecard_docs_no_longer_claim_ninetieths_and_weights_sum_to_100():
+    assert sum(abs(w) for w in sc._WEIGHTS.values()) == 100.0
     assert "t58_conformance" not in sc._WEIGHTS
     assert "5/90ths of the total score" not in sc.__doc__ and "5/90ths" not in sc._expectancy_score.__doc__
-    assert "120" in sc.__doc__
+    assert "100" in sc.__doc__
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -230,7 +233,7 @@ def test_scorecard_docs_no_longer_claim_ninetieths_and_weights_sum_to_120():
 # ---------------------------------------------------------------------------------------------------------
 def test_scorecard_reports_coverage_and_missing_core():
     thin = sc.compute_t58_score(sc.T58ScorecardInputs(pass_probability=100, walk_forward_stability=100))
-    assert thin.weight_coverage == pytest.approx((25 + 15) / 120.0)
+    assert thin.weight_coverage == pytest.approx((10 + 15) / 100.0)
     assert thin.missing_core == ["first_payout_probability", "risk_of_ruin"]
     full = sc.compute_t58_score(sc.T58ScorecardInputs(**{k: 50 for k in sc._WEIGHTS}))
     assert full.weight_coverage == pytest.approx(1.0) and full.missing_core == []

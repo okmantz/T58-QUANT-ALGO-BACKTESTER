@@ -378,7 +378,7 @@ def test_numeric_only_flag_is_reproducible(tmp_path):
                               knowledge_graph_path=str(tmp_path / "kg.json"),
                               use_structural_operators=False, **kw)
         r = EvolutionRunner(_trending_df(n=500), RiskConfig(), PropRules(), cfg)
-        return [(cid, spec, meta) for cid, spec, meta in r._generate_population(3, _elite_specs())]
+        return [(cid, spec, meta) for cid, spec, meta in r._generate_population(3, _elite_specs()) if not meta.get("control")]
 
     p1, p2 = _pop(), _pop()
     assert [(c, m) for c, _, m in p1] == [(c, m) for c, _, m in p2]

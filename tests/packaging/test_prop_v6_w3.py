@@ -293,8 +293,8 @@ def test_apex_split_values():
     specs = {
         "apex_50k_eod":      (2.0, 4.0, "eod", 250.0),
         "apex_50k_intraday": (100.0, 4.0, "intrabar", 200.0),
-        "apex_100k_eod":     (1.5, 3.0, "eod", 250.0),
-        "apex_100k_intraday": (100.0, 3.0, "intrabar", 200.0),
+        "apex_100k_eod":     (1.5, 3.0, "eod", 300.0),   # 2026-10-17: Apex help centre says $300 at 100K EOD
+        "apex_100k_intraday": (100.0, 3.0, "intrabar", 250.0),  # 2026-10-17: $250 at 100K
     }
     for key, (dll, mdd, mode, gate) in specs.items():
         p = get_preset(key)
@@ -325,7 +325,7 @@ def test_fundednext_values():
         assert p.evaluation_profit_target_pct == 8.0
         assert p.payout_frequency_days == 14
         assert "21" in p.source_note  # 21-day first-payout caveat documented
-        assert p.consistency_rule_pct == 40.0
+        assert p.consistency_rule_pct is None          # 2026-10-17: no consistency rule in the Stellar evaluation
         assert p.funded_consistency_rule_pct == 40.0
         assert p.min_trading_days == 5
         assert p.winning_days_for_payout == 5
@@ -338,10 +338,10 @@ def test_the5ers_high_stakes_relabel():
         p = get_preset(key)
         assert "High-Stakes" in p.label
         assert "Bootcamp" not in p.label
-        # numbers unchanged: 8% / 5% / 10%-static / 30% / 3d
+        # 2026-10-17 re-verification: 10% target / 3% (stricter of two conflicting official pages) / 10% static / no consistency / 3d
         assert (p.evaluation_profit_target_pct, p.daily_loss_limit_pct,
                 p.max_drawdown_pct, p.drawdown_type,
-                p.consistency_rule_pct, p.min_trading_days) == (8.0, 5.0, 10.0, "static", 30.0, 3)
+                p.consistency_rule_pct, p.min_trading_days) == (10.0, 3.0, 10.0, "static", None, 3)
     note = get_preset("the5ers_20k").source_note
     assert "Bootcamp" in note and "NOT modeled" in note
 

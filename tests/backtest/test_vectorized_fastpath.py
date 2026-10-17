@@ -206,13 +206,16 @@ def test_is_vectorizable_allows_perbar_stops_rejects_unsupported():
     assert is_vectorizable(StrategyResult(**base, stop_loss_distance=pd.Series([0.5])))
     assert is_vectorizable(StrategyResult(
         **base, stop_loss_distance=pd.Series([0.5]), take_profit_distance=pd.Series([1.0])))
-    assert not is_vectorizable(StrategyResult(
+    # 2026-10-17: per-bar trailing distances vectorize now
+    assert is_vectorizable(StrategyResult(
         **base, stop_loss_distance=pd.Series([0.5]), trailing_stop_distance=pd.Series([0.5])))
+    assert not is_vectorizable(StrategyResult(
+        **base, stop_loss_distance=pd.Series([0.5]), trailing_stop_distance=0.5))
     assert not is_vectorizable(StrategyResult(
         **base, stop_loss_distance=pd.Series([0.5]), breakeven_trigger_r=1.5))
     assert not is_vectorizable(StrategyResult(
         **base, stop_loss_distance=pd.Series([0.5]), partial_exit={"r_multiple": 1.0, "fraction": 0.5}))
-    assert not is_vectorizable(StrategyResult(**base, trailing_stop_distance=pd.Series([0.5])))
+    assert is_vectorizable(StrategyResult(**base, trailing_stop_distance=pd.Series([0.5])))
     assert not is_vectorizable(StrategyResult(**base, breakeven_trigger_r=1.5))
 
 
@@ -469,3 +472,45 @@ def test_is_vectorizable_perbar_shapes():
         take_profit_distance=pd.Series([1.0])))
     # Unknown shapes fall back to the scalar path rather than failing.
     assert not is_vectorizable(StrategyResult(**base, stop_loss_distance=2.5))
+
+
+# ---------------------------------------------------------------------------------------------------------
+# 2026-10-17 (audit item 8): trailing stops on the fast path, trade-by-trade parity with the scalar engine
+# ---------------------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("take", [False, True])
+@pytest.mark.parametrize("seed", [3, 7, 21])
+def test_trailing_stop_matches_scalar_engine(take, seed):
+    df = _gapless_df(seed=seed)
+    n = len(df)
+    sig = _alternating_signals(n, seed=seed + 100)
+    sig[-5:] = 0
+    idx = np.arange(n)
+    sl_dist = pd.Series(1.0 + 0.2 * np.sin(idx / 25.0))
+    tr_dist = pd.Series(0.6 + 0.15 * np.cos(idx / 17.0))
+    tp_dist = pd.Series(2.5 + 0.3 * np.cos(idx / 31.0)) if take else None
+    risk = RiskConfig(initial_balance=10_000.0, risk_value=1.0, pip_size=0.01, spread_pips=1.0,
+                      slippage_pips=0.5, commission_per_trade=0.5, max_trades_per_day=999)
+    scalar_trades, _ = run_execution(
+        df, pd.Series(sig), risk, None, None,
+        stop_loss_distance=sl_dist, take_profit_distance=tp_dist, trailing_stop_distance=tr_dist,
+    )
+    outcomes = run_vectorized_batch(
+        df, [VectorizedCandidate("c", sig, None, None, stop_distances=sl_dist.to_numpy(),
+                                 take_distances=None if tp_dist is None else tp_dist.to_numpy(),
+                                 trail_distances=tr_dist.to_numpy())], risk)
+    assert len(scalar_trades) > 20
+    _assert_trades_match_lag_shift(scalar_trades, outcomes["c"].trades, df)
+
+
+def test_trailing_stop_differs_from_no_trailing():
+    """Guard against the trailing array being silently ignored (the old failure mode)."""
+    df = _gapless_df(seed=5)
+    n = len(df)
+    sig = _alternating_signals(n, seed=9)
+    sig[-5:] = 0
+    sl = np.full(n, 1.5)
+    tr = np.full(n, 0.4)
+    risk = RiskConfig(initial_balance=10_000.0, risk_value=1.0, pip_size=0.01, max_trades_per_day=999)
+    with_tr = run_vectorized_batch(df, [VectorizedCandidate("a", sig, None, None, stop_distances=sl, trail_distances=tr)], risk)["a"].trades
+    without = run_vectorized_batch(df, [VectorizedCandidate("a", sig, None, None, stop_distances=sl)], risk)["a"].trades
+    assert [t.exit_price for t in with_tr] != [t.exit_price for t in without]

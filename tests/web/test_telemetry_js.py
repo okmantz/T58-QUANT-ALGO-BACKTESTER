@@ -42,7 +42,7 @@ console.log(JSON.stringify(out));
 
 @pytest.fixture(scope="module")
 def result():
-    proc = subprocess.run([NODE, "-e", HARNESS], capture_output=True, text=True, timeout=30,
+    proc = subprocess.run([NODE, "-e", HARNESS], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
                           env={**os.environ, "TELEMETRY_JS": str(STATIC / "telemetry.js")})
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])
@@ -72,7 +72,8 @@ def test_nearest_dot(result):
     assert result["near"] == [0, -1, -1]
 
 
-@pytest.mark.parametrize("name", ["telemetry.js", "project_chat.js", "t58-chrome.js"])
+@pytest.mark.parametrize("name", ["telemetry.js", "project_chat.js", "t58-chrome.js", "evolution-lab.js"])
 def test_scripts_parse(name):
-    proc = subprocess.run([NODE, "--check", str(STATIC / name)], capture_output=True, text=True)
+    proc = subprocess.run([NODE, "--check", str(STATIC / name)], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
     assert proc.returncode == 0, proc.stderr

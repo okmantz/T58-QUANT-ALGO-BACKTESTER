@@ -989,7 +989,7 @@ function run(responses, key) {
 
 @pytest.mark.skipif(NODE is None, reason="node not installed")
 def test_banner_polls_while_live_and_stops_when_done_missing_or_untracked():
-    proc = subprocess.run([NODE, "-e", POLL_HARNESS], capture_output=True, text=True, timeout=30,
+    proc = subprocess.run([NODE, "-e", POLL_HARNESS], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
                           env={**os.environ, "TELEMETRY_JS": str(STATIC / "telemetry.js")})
     assert proc.returncode == 0, proc.stderr
     r = json.loads(proc.stdout.strip().splitlines()[-1])

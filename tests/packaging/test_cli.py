@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-import cli
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "launchers"))  # cli.py lives in launchers/ (repo root kept clean)
+import cli  # noqa: E402
 from app.strategy.library import delete_saved_strategy, save_strategy_metadata, save_strategy_text
 
 
