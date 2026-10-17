@@ -24,7 +24,7 @@ PRISTINE = Path.home() / "workspace" / "tmp-pristine"
 
 from app.web.server import app  # noqa: E402
 
-SAMPLE_CSV = ROOT / "data" / "examples" / "EURUSD_5M_sample.csv"
+SAMPLE_CSV = ROOT / "data" / "raw" / "EURUSD" / "EURUSD_5M_sample.csv"
 
 
 def _start(client, **overrides):

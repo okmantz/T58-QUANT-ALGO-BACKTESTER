@@ -43,7 +43,7 @@ from app.web.server import app
 
 _GUARD = server.HEAVY_JOB_GUARD
 _MANAGER = server.JOB_MANAGER
-SAMPLE_CSV = Path(__file__).resolve().parent.parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv"
+SAMPLE_CSV = Path(__file__).resolve().parent.parent.parent / "data" / "raw" / "EURUSD" / "EURUSD_5M_sample.csv"
 
 _ALL_NAMES = (
     JOB_SEARCH_LAB, JOB_MULTI_INSTRUMENT_SEARCH, JOB_EVOLUTION_LAB,
