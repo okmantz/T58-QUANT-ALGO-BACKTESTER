@@ -105,7 +105,7 @@ self-contained and print-to-PDF friendly.
 lightweight Flask web app reusing the exact same engine. Easiest path:
 grab `T58-Web-App-Windows.zip` from [Releases](../../releases), run
 `T58-Web-App.exe`, and scan the QR code it shows with your phone (same
-Wi-Fi). From source instead: `python run_web.py`, which prints your LAN
+Wi-Fi). From source instead: `python launchers/run_web.py`, which prints your LAN
 address and a QR code. Away from home, [Tailscale](https://tailscale.com)
 (free) lets your phone reach it from anywhere with no port forwarding —
 details on the app's own **Phone access** page. Full walkthrough:
@@ -118,10 +118,10 @@ Windows only, automatically). One command, same on every OS:
 
 | OS | Start it |
 | --- | --- |
-| Windows | double-click `run_web.bat` |
-| macOS | double-click `run_web.command` (first time: right-click → Open). If it won't open because the file lost its executable flag (happens when files are uploaded through the GitHub website), run `bash run_web.command` in Terminal once, or `chmod +x run_web.command run_web.sh` |
-| Linux | `bash run_web.sh` |
-| Any (manual) | `pip install -r config/requirements.txt` then `python run_web.py` |
+| Windows | double-click `launchers\run_web.bat` |
+| macOS | double-click `launchers/run_web.command` (first time: right-click → Open). If it won't open because the file lost its executable flag (happens when files are uploaded through the GitHub website), run `bash launchers/run_web.command` in Terminal once, or `chmod +x launchers/run_web.command launchers/run_web.sh` |
+| Linux | `bash launchers/run_web.sh` |
+| Any (manual) | `pip install -r config/requirements.txt` then `python launchers/run_web.py` |
 
 The first run creates a private `.venv` and installs the dependencies; later
 runs start immediately. If port 5000 is busy (macOS uses it for AirPlay
