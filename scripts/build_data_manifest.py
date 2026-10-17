@@ -4,8 +4,9 @@
     python scripts/build_data_manifest.py --from-coverage-doc   # just re-parse docs/DATA_COVERAGE.md
 
 Flags written per file: SYNTHETIC (file name contains SYNTHETIC/FAKE), <2y history, UNREADABLE,
-UNADJUSTED ROLL GAPS (futures-style files that still carry contract-roll jumps -- re-import them back-adjusted
-with app.data.continuous_contract.back_adjust_continuous).
+RAW ROLL GAPS (futures-style files whose raw bytes still carry contract-roll jumps; informational -- the importer
+back-adjusts continuous-future files on load, and the pipeline data gate measures the LOADED frame, so only a frame that
+still carries roll gaps after import blocks READY).
 The pipeline's data gate (app.data.data_manifest.check_dataset) refuses READY on synthetic data or on
 less than 5 years of history, using this manifest plus the actual span of the loaded frame.
 """
@@ -58,7 +59,7 @@ def _scan_file(p: Path, raw: Path) -> dict:
             if counts is not None:
                 row["roll_gaps"] = f"{counts[0]} splice(s), {counts[1]} interleaved flip(s)"
                 if counts[0] + counts[1] >= MIN_ROLL_EVENTS_TO_FLAG:
-                    flags.append("UNADJUSTED ROLL GAPS")
+                    flags.append("RAW ROLL GAPS (back-adjusted at import)")
     except Exception as exc:  # noqa: BLE001
         flags.append("UNREADABLE")
         row["error"] = f"{type(exc).__name__}: {exc}"[:200]
