@@ -11,7 +11,7 @@ from app.backtest.risk import RiskConfig as _RiskConfig
 from app.prop.simulator import PropRules as _PropRules
 from app.web.server import SEARCH_DIR, app
 
-_SAMPLE_CSV = Path(__file__).resolve().parent.parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv"
+_SAMPLE_CSV = Path(__file__).resolve().parent.parent.parent / "data" / "raw" / "EURUSD" / "EURUSD_5M_sample.csv"
 
 
 def test_regime_matrix_form_loads():

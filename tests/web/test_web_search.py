@@ -19,7 +19,7 @@ import app.web.server as server_module
 from app.web.server import app
 from app.orchestration.resource_guard import HEAVY_JOB_GUARD, JOB_EVOLUTION_LAB, JOB_SEARCH_LAB
 
-SAMPLE_CSV = Path(__file__).resolve().parent.parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv"
+SAMPLE_CSV = Path(__file__).resolve().parent.parent.parent / "data" / "raw" / "EURUSD" / "EURUSD_5M_sample.csv"
 
 _PYTHON_SRC = '''STRATEGY_NAME = "Web Test EMA Cross"
 EMA_FAST = 6

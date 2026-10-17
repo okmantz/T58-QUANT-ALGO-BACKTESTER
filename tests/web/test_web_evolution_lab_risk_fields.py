@@ -28,7 +28,7 @@ from app.orchestration.resource_guard import (
     HEAVY_JOB_GUARD, JOB_EVOLUTION_LAB, JOB_MULTI_INSTRUMENT_EVOLUTION,
 )
 
-SAMPLE_CSV = Path(__file__).resolve().parent.parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv"
+SAMPLE_CSV = Path(__file__).resolve().parent.parent.parent / "data" / "raw" / "EURUSD" / "EURUSD_5M_sample.csv"
 
 # A full set of intentionally non-default prop/risk values -- close to the
 # real numbers reported in the field (a $50k account, 6% target, 2%/4%

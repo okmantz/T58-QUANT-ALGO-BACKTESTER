@@ -124,7 +124,7 @@ def test_mobile_access_page_shows_tailscale_address_when_present(monkeypatch):
 
 def test_full_pipeline_via_manual_strategy(tmp_path):
     client = app.test_client()
-    sample_csv = Path(__file__).resolve().parent.parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv"
+    sample_csv = Path(__file__).resolve().parent.parent.parent / "data" / "raw" / "EURUSD" / "EURUSD_5M_sample.csv"
 
     with open(sample_csv, "rb") as f:
         data = {
@@ -158,7 +158,7 @@ def test_full_pipeline_accepts_eod_drawdown_check_mode(tmp_path):
     run cleanly through the same pipeline as the default intrabar mode.
     """
     client = app.test_client()
-    sample_csv = Path(__file__).resolve().parent.parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv"
+    sample_csv = Path(__file__).resolve().parent.parent.parent / "data" / "raw" / "EURUSD" / "EURUSD_5M_sample.csv"
 
     with open(sample_csv, "rb") as f:
         data = {
@@ -456,7 +456,7 @@ def test_batch_test_route_produces_one_report_per_checked_strategy(tmp_path, mon
     library.save_strategy_text(src, "web_batch_b.py", "python")
 
     client = app.test_client()
-    sample_csv = Path(__file__).resolve().parent.parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv"
+    sample_csv = Path(__file__).resolve().parent.parent.parent / "data" / "raw" / "EURUSD" / "EURUSD_5M_sample.csv"
     with open(sample_csv, "rb") as f:
         data = {
             "csv_file": (f, "EURUSD_5M_sample.csv"),
@@ -490,7 +490,7 @@ def test_search_lab_stop_button_cancels_running_job():
     import time as _time
 
     client = app.test_client()
-    sample_csv = Path(__file__).resolve().parent.parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv"
+    sample_csv = Path(__file__).resolve().parent.parent.parent / "data" / "raw" / "EURUSD" / "EURUSD_5M_sample.csv"
 
     with open(sample_csv, "rb") as f:
         data = {
@@ -571,7 +571,7 @@ def test_full_pipeline_batch_route_runs_multiple_library_strategies():
         names.append(name)
 
     client = app.test_client()
-    sample_csv = Path(__file__).resolve().parent.parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv"
+    sample_csv = Path(__file__).resolve().parent.parent.parent / "data" / "raw" / "EURUSD" / "EURUSD_5M_sample.csv"
 
     try:
         with open(sample_csv, "rb") as f:
@@ -622,7 +622,7 @@ def test_full_pipeline_batch_route_runs_multiple_library_strategies():
 
 def test_full_pipeline_start_batch_with_no_selection_shows_error():
     client = app.test_client()
-    sample_csv = Path(__file__).resolve().parent.parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv"
+    sample_csv = Path(__file__).resolve().parent.parent.parent / "data" / "raw" / "EURUSD" / "EURUSD_5M_sample.csv"
     with open(sample_csv, "rb") as f:
         data = {"csv_file": (f, "EURUSD_5M_sample.csv")}
         r = client.post("/full-pipeline/start-batch", data=data, content_type="multipart/form-data")
@@ -663,7 +663,7 @@ def test_full_pipeline_batch_job_can_be_stopped_mid_run():
         names.append(name)
 
     client = app.test_client()
-    sample_csv = Path(__file__).resolve().parent.parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv"
+    sample_csv = Path(__file__).resolve().parent.parent.parent / "data" / "raw" / "EURUSD" / "EURUSD_5M_sample.csv"
 
     try:
         with open(sample_csv, "rb") as f:

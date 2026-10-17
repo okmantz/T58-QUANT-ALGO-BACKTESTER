@@ -19,7 +19,7 @@ import app.ai.research_loop as rl
 from app.ai.strategy_generator import GenerationResult
 from app.web.server import _RESEARCH_LOOP_JOBS, app
 
-SAMPLE_CSV = Path(__file__).resolve().parent.parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv"
+SAMPLE_CSV = Path(__file__).resolve().parent.parent.parent / "data" / "raw" / "EURUSD" / "EURUSD_5M_sample.csv"
 
 _SMA_CROSS_CODE = """
 import numpy as np

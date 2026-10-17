@@ -3,7 +3,7 @@ from pathlib import Path
 
 from app.web.server import app
 
-_SAMPLE_CSV = Path("data/examples/EURUSD_5M_sample.csv")
+_SAMPLE_CSV = Path("data/raw/EURUSD/EURUSD_5M_sample.csv")
 
 
 def test_overnight_autopilot_form_loads():

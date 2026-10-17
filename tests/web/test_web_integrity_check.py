@@ -2,7 +2,7 @@ from pathlib import Path
 
 from app.web.server import REPORTS_DIR, app
 
-SAMPLE_CSV = Path(__file__).resolve().parent.parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv"
+SAMPLE_CSV = Path(__file__).resolve().parent.parent.parent / "data" / "raw" / "EURUSD" / "EURUSD_5M_sample.csv"
 
 _BASE_FORM = {
     "strategy_mode": "manual",
