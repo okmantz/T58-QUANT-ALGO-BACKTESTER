@@ -10,6 +10,13 @@ name: desktop-cross-platform
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - "docs/**"
+      - "research/**"
+      - "strategies/**"
+      - "data/**"
+      - "reports/**"
+      - "**/*.md"
     tags: [ "v*" ]
   workflow_dispatch: {}
 
@@ -36,6 +43,8 @@ jobs:
       run:
         shell: bash
     env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
       PACKAGE: T58-Quant-Algo-Backtester-${{ matrix.label }}.zip
       T58_LICENSE_SERVER_URL: ${{ secrets.T58_LICENSE_SERVER_URL }}
       T58_MASTER_LICENSE_KEY_HASH: ${{ secrets.T58_MASTER_LICENSE_KEY_HASH }}

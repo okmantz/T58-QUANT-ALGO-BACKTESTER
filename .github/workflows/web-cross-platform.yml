@@ -16,6 +16,13 @@ name: web-cross-platform
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - "docs/**"
+      - "research/**"
+      - "strategies/**"
+      - "data/**"
+      - "reports/**"
+      - "**/*.md"
     tags: [ "v*" ]
   pull_request:
     branches: [ main ]
@@ -85,7 +92,7 @@ jobs:
       - name: Verify repository structure
         run: |
           missing=0
-          for p in run_web.py app/web/server.py app/web/launcher.py app/web/templates app/web/static \
+          for p in launchers/run_web.py app/web/server.py app/web/launcher.py app/web/templates app/web/static \
                    build_tools/t58_web.spec build_tools/spec_common.py build_tools/package_release.py \
                    build_tools/frozen_smoke.py build_tools/bake_license_config.py config/pyproject.toml \
                    strategies scripts/web_smoke_test.py; do
