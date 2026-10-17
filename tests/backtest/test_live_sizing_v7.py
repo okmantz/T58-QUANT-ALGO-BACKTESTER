@@ -125,6 +125,7 @@ class _FakeResp:
 
 def test_tradovate_close_position_verifies_response():
     adapter = _tradovate()
+    adapter._session.get = lambda *a, **k: _FakeResp([{"id": 123, "contractId": 9, "netPos": 1}])
 
     adapter._session.post = lambda *a, **k: _FakeResp({"failureReason": "Unknown", "failureText": "No such position"})
     r = adapter.close_position("123")
