@@ -40,7 +40,7 @@ Whop webhook ──► your Render server ──► auto-creates license + email
 
 1. In the Render dashboard: **New → Blueprint**.
 2. Select the `T58-QUANT-ALGO-BACKTESTER` repo. Render detects
-   `render.yaml` at the repo root automatically.
+   `license_server/render.yaml` -- on the Blueprint screen set **Blueprint file path** to `license_server/render.yaml` (it no longer sits at the repo root).
 3. Review the plan (service name `t58-license-server`, Python, gunicorn,
    health check on `/health`) and click **Apply**.
 4. Wait for the first build to finish (~2–3 minutes). The service gets a
