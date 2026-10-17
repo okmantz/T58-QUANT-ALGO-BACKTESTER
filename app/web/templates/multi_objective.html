@@ -57,8 +57,6 @@
 <div class="{{ 'error' if alpaca_notice_kind == 'error' else ('warning' if alpaca_notice_kind == 'warning' else 'notice') }}">{{ alpaca_notice }}</div>
 {% endif %}
 
-{% set alpaca_return_to = 'mo_form' %}
-{% include "_alpaca_fetch_section.html" %}
 
 <form method="post" action="/multi-objective/start" enctype="multipart/form-data">
 

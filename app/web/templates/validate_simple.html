@@ -82,7 +82,7 @@
           <option value="{{ tf }}"{% if prefill.timeframe == tf %} selected{% endif %}>{{ tf }}</option>
           {% endfor %}
         </select>
-        <div class="lc-hint" style="margin-top:5px;">The data is resampled to this bar size before anything runs — never a silent 1m. A timeframe declared inside the strategy itself still wins.</div>
+        <div class="lc-hint" style="margin-top:5px;">The data is resampled to this bar size before anything runs — never a silent 1m. Pick 1m only with 1-minute data (fetch 1m bars from an API under Market data). A timeframe declared inside the strategy itself still wins.</div>
       </div>
     </div>
     <div class="lc-rules-line" id="lc-rules-line"></div>

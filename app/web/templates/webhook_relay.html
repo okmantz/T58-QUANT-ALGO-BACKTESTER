@@ -168,6 +168,11 @@
   <h4 style="margin:16px 0 6px;">Recent alerts</h4>
   <table class="wr-table"><thead><tr><th>Time (UTC)</th><th>Ticker</th><th>Target</th><th>Price</th><th>Result</th></tr></thead>
     <tbody class="wr-log"><tr><td colspan="5" class="lc-hint">No alerts yet.</td></tr></tbody></table>
+
+  <h4 style="margin:16px 0 6px;">Trades taken <a class="lc-hint" href="/webhook-relay/relays/{{ r.id }}/trades.csv" style="margin-left:8px;">Download CSV</a></h4>
+  <table class="lc-table"><thead><tr><th>Closed</th><th>Where</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Why</th></tr></thead>
+    <tbody class="wr-trades"><tr><td colspan="9" class="lc-hint">No closed trades yet.</td></tr></tbody></table>
+  <p class="lc-hint">"Where" = <b>paper</b> (T58 paper account, fills at the alert price) or <b>broker</b> (your demo broker account; hover a price to see whether it was a real broker fill or the alert price).</p>
 </div>
 {% else %}
 <div class="lc-card"><p class="lc-hint">No relays yet &mdash; click <b>+ New relay</b>.</p></div>
@@ -250,7 +255,7 @@
 
   document.querySelectorAll('.wr-relay').forEach(function (card) {
     var id = card.getAttribute('data-id');
-    var logBody = card.querySelector('.wr-log'), paperBox = card.querySelector('.wr-paper');
+    var tradesBody = card.querySelector('.wr-trades'), logBody = card.querySelector('.wr-log'), paperBox = card.querySelector('.wr-paper');
 
     function render(state) {
       var p = state.paper, rows = [];
@@ -260,7 +265,15 @@
       if (p.open.length) {
         p.open.forEach(function (o) { rows.push('<b>' + esc(o.side.toUpperCase()) + ' ' + o.qty + ' ' + esc(o.root) + '</b> @ ' + o.entry + (o.unrealized == null ? '' : ' (' + money(o.unrealized) + ')')); });
       } else { rows.push('Flat'); }
+      (state.broker_open || []).forEach(function (o) { rows.push('Broker: <b>' + esc(o.side.toUpperCase()) + ' ' + o.qty + ' ' + esc(o.symbol) + '</b> @ ' + (o.entry == null ? '?' : o.entry)); });
       paperBox.innerHTML = rows.join('<br>');
+      var tr = state.trades || [];
+      tradesBody.innerHTML = tr.length ? tr.map(function (t) {
+        var tip = esc(t.price_source || '');
+        return '<tr><td>' + esc((t.closed_at || '').replace('T', ' ').replace('+00:00', '')) + '</td><td>' + esc(t.source) + '</td><td>' + esc(t.symbol) +
+          '</td><td>' + esc(t.side) + '</td><td>' + t.qty + '</td><td title="' + tip + '">' + (t.entry == null ? '–' : t.entry) + '</td><td title="' + tip + '">' + (t.exit == null ? '–' : t.exit) +
+          '</td><td class="' + cls(t.pnl) + '">' + (t.pnl == null ? '–' : money(t.pnl)) + '</td><td>' + esc(t.why || '') + '</td></tr>';
+      }).join('') : '<tr><td colspan="9" class="lc-hint">No closed trades yet.</td></tr>';
       if (!state.signals.length) { logBody.innerHTML = '<tr><td colspan="5" class="lc-hint">No alerts yet.</td></tr>'; return; }
       logBody.innerHTML = state.signals.map(function (s) {
         var broker = s.broker ? ' <span class="lc-hint">broker: ' + esc(s.broker.state || '') + (s.broker.message ? ' – ' + esc(s.broker.message) : '') + '</span>' : '';

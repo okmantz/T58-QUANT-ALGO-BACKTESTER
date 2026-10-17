@@ -38,8 +38,6 @@
 <div class="{{ 'error' if alpaca_notice_kind == 'error' else ('warning' if alpaca_notice_kind == 'warning' else 'notice') }}">{{ alpaca_notice }}</div>
 {% endif %}
 
-{% set alpaca_return_to = 'full_pipeline_form' %}
-{% include "_alpaca_fetch_section.html" %}
 
 <form method="post" action="/full-pipeline/start" enctype="multipart/form-data">
 <div class="lc-run-grid">
@@ -102,7 +100,7 @@
           <option value="{{ tf }}"{% if prefill and prefill.timeframe == tf %} selected{% endif %}>{{ tf }}</option>
           {% endfor %}
         </select>
-        <div class="lc-hint" style="margin-top:5px;">The data is resampled to this bar size before the pipeline runs — never a silent 1m. A timeframe declared inside the strategy itself still wins. (Advanced can additionally run the whole pipeline on several timeframes.)</div>
+        <div class="lc-hint" style="margin-top:5px;">The data is resampled to this bar size before the pipeline runs — never a silent 1m. Pick 1m only with 1-minute data (fetch 1m bars from an API under Market data). A timeframe declared inside the strategy itself still wins. (Advanced can additionally run the whole pipeline on several timeframes.)</div>
       </div>
     </div>
     <div class="lc-rules-line" id="lc-rules-line"></div>
