@@ -20,7 +20,7 @@ phone need to be on the **same Wi-Fi network** whenever you use it.
 3. A console window opens and, a moment later, **a QR code picture pops
    up** on your PC screen. The console also prints a web address like
    `http://192.168.1.42:5000`.
-4. On your **Samsung phone**, open the Camera app and point it at the
+4. On your **phone**, open the Camera app and point it at the
    QR code on your PC screen. Tap the notification/link that appears —
    this opens the backtester in Chrome.
    - If the QR scan doesn't work for any reason, just type the address
