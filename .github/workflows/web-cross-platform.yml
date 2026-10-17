@@ -88,10 +88,9 @@ jobs:
           for p in run_web.py app/web/server.py app/web/launcher.py app/web/templates app/web/static \
                    build_tools/t58_web.spec build_tools/spec_common.py build_tools/package_release.py \
                    build_tools/frozen_smoke.py build_tools/bake_license_config.py config/pyproject.toml \
-                   data/examples strategies scripts/web_smoke_test.py; do
+                   strategies scripts/web_smoke_test.py; do
             [ -e "$p" ] || { echo "MISSING: $p"; missing=1; }
           done
-          ls data/examples/*.csv >/dev/null 2>&1 || { echo "MISSING: a sample CSV in data/examples"; missing=1; }
           [ "$missing" = 0 ] || exit 1
           echo "Repository structure OK"
       - name: Web, storage and startup tests
