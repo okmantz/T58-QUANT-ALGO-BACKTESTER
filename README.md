@@ -260,8 +260,9 @@ this backtest?" questions:
 
 ## How READY and the T58 score work
 
-A strategy is **READY** only when its **T58 score is 85 or more** *and* it then survives a set of
-demote-only gates (a gate can lower a verdict, never raise it). Everything below is read from
+A strategy is **READY** when it clears **every hard gate** *and* its **T58 score is 75 or more**. READY means
+"cleared the gates with a strong score", not "excellent on everything"; a score of **85+** earns the extra **Elite**
+label. The gates are demote-only (a gate can lower a verdict, never raise it). Everything below is read from
 `app/scoring/t58_scorecard.py`, `app/orchestration/full_pipeline.py` and `app/orchestration/audit_layers.py`.
 
 Click any verdict pill (READY / MARGINAL / NOT READY) on the **Dashboard** or the **Champion** page to see, in plain
@@ -283,8 +284,8 @@ English, why that strategy got it.
 | CPCV / PBO (supporting) | 5 | 4.2% | Out-of-sample retention across CPCV paths |
 
 The score is the weighted average over the components that were **measured** (a missing check is never scored as a
-zero, and thin coverage caps the verdict instead). Tiers: **92+ Elite, 85+ Strong, 75+ Promising, 65+ Research,
-below 65 Reject.** Elite and Strong can become READY, Promising and Research are MARGINAL, Reject is NOT READY.
+zero, and thin coverage caps the verdict instead). Tiers: **85+ Elite, 75+ Strong, 65+ Promising,
+below 65 Reject.** Elite and Strong are READY (if every gate also passes), Promising is MARGINAL, Reject is NOT READY.
 
 **T58 conformance is a badge, not a score term.** It measures how much of the entry logic is written in Market
 Structure / Liquidity / Supply & Demand terms. That is a *style*, not survival, and prop firms do not score
@@ -317,15 +318,15 @@ Real scorecard runs at the gate floors (every other component set to the value s
 
 | Pass lower bound | Paid lower bound | Ruin | Other components | Score | Verdict |
 |---:|---:|---:|---:|---:|---|
-| 70% | 35% | 20% | 80 | 72.9 | MARGINAL (Research) |
-| 80% | 45% | 10% | 85 | 80.0 | MARGINAL (Promising) |
-| 90% | 40% | 5% | 90 | 83.8 | MARGINAL (Promising) |
-| 90% | 60% | 5% | 90 | 87.1 | READY, if every gate also passes |
-| 90% | 70% | 5% | 90 | 88.8 | READY, if every gate also passes |
+| 70% | 35% | 20% | 80 | 72.9 | MARGINAL (Promising): gate floors alone are not enough |
+| 80% | 45% | 10% | 85 | 80.0 | READY (Strong), if every gate also passes |
+| 85% | 65% | 8% | 80 | 83.0 | READY (Strong), if every gate also passes |
+| 90% | 60% | 5% | 90 | 87.1 | READY (Elite), if every gate also passes |
 
-So the 85-point cut, not the individual gates, is the binding constraint: READY effectively means roughly 90% of
-purchased accounts pass, a clear majority of them also get paid, and ruin sits near 5%. Public aggregates put real
-challenge pass rates around 10-20%, so READY is a top-percentile bar by design, and a strategy that clears it is rare.
+So READY now asks for the gates plus a score of 75: roughly 80-85% per-attempt pass lower bound, 45-65% paid lower
+bound and ruin under about 10%, with decent (not perfect) secondary components. Elite (85+) is a label for
+strategies that are excellent across the board. Public aggregates put real challenge pass rates around 10-20%, so
+READY is still a top-percentile bar.
 
 ### Expected value beside READY
 
@@ -340,8 +341,11 @@ Monte Carlo runs vectorised across simulated paths (numpy only, bit-identical to
 `T58_MC_VECTORIZE=0` to fall back). Lookahead results are cached on disk keyed on the strategy's content, the data and
 the checker's code (`T58_LOOKAHEAD_DISK_CACHE=0` disables; `T58_CACHE_DIR` moves it). Python strategy modules are
 loaded once per file version (`T58_MODULE_CACHE=0` disables; a strategy that keeps mutable module-level state declares
-`T58_STATEFUL = True`). One persistent worker pool serves every Monte Carlo call, and browser tabs stop polling while
-hidden.
+`T58_STATEFUL = True`). One persistent worker pool serves every Monte Carlo call, and a second persistent pool serves the search stages
+(GA, walk-forward, deflated-Sharpe trials), so a Full Pipeline run spawns and imports its workers once, not per stage.
+Backtests are memoized by effective parameter values (integer parameters that round equal share one run), and the
+PBO gate scores its CPCV paths from the trade lists the deflated-Sharpe step already produced instead of
+re-backtesting every path. Browser tabs stop polling while hidden.
 
 ## Champion
 
