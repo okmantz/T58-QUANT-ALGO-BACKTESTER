@@ -9,7 +9,7 @@ import pytest
 from app.web import server as server_module
 from app.web.server import app
 from app.webhook_relay import config as relay_config
-from app.webhook_relay import engine, journal, paper
+from app.webhook_relay import engine, journal, paper, trade_book
 from app.webhook_relay.paper import PaperLedger
 from app.webhook_relay.signals import SignalError, parse_alert, pine_alert_message
 
@@ -18,6 +18,7 @@ from app.webhook_relay.signals import SignalError, parse_alert, pine_alert_messa
 def isolated(monkeypatch, tmp_path):
     monkeypatch.setattr(paper, "relay_dir", lambda: tmp_path)
     monkeypatch.setattr(journal, "relay_dir", lambda: tmp_path)
+    monkeypatch.setattr(trade_book, "relay_dir", lambda: tmp_path)
     monkeypatch.setattr(relay_config, "_dir", lambda: tmp_path)
     engine._DEDUPE.clear()
     engine._ADAPTERS.clear()
@@ -422,3 +423,35 @@ def test_tunnel_ssh_exit_gives_a_clear_error(monkeypatch, tmp_path):
         assert st["state"] == "error" and "ssh (localhost.run) exited" in st["error"]
     finally:
         tunnel.stop()
+
+
+# ------------------------------------------------------------------ trade book (what was actually taken)
+
+def test_trade_book_records_broker_fills_and_paper_trades(monkeypatch):
+    class Adapter(_FakeAdapter):
+        def place_market_order(self, symbol, direction, volume, **kw):
+            self.orders.append((symbol, direction, volume))
+            t = str(len(self.orders))
+            self.positions.append(SimpleNamespace(ticket=t, volume=volume, direction=direction,
+                                                  open_price=18001.0, open_time=None))
+            return SimpleNamespace(ok=True, message="ok", ticket=t, price=18001.0)
+
+        def close_position(self, ticket, comment=""):
+            super().close_position(ticket, comment)
+            return SimpleNamespace(ok=True, message="ok", price=18011.0)
+
+    adapter = Adapter()
+    _wire_broker(monkeypatch, _account(), adapter)
+    r = _relay(broker_account_id="acc1")
+    engine.handle(r, parse_alert(_alert(position="long", position_size="1", price="18000", time="1")), wait_for_broker=True)
+    engine.handle(r, parse_alert(_alert(position="flat", price="18010", time="2")), wait_for_broker=True)
+    rows = trade_book.all_trades(r.id)
+    by = {t["source"]: t for t in rows}
+    assert by["paper"]["entry"] == 18000 and by["paper"]["exit"] == 18010
+    assert by["broker"]["entry"] == 18001.0 and by["broker"]["exit"] == 18011.0
+    assert by["broker"]["price_source"] == "broker fill" and by["broker"]["pnl"] is not None
+    assert "source,symbol,side" in trade_book.trades_csv(r.id)
+    c = app.test_client()
+    st = c.get(f"/webhook-relay/relays/{r.id}/state.json").get_json()
+    assert len(st["trades"]) == 2 and st["broker_open"] == []
+    assert c.get(f"/webhook-relay/relays/{r.id}/trades.csv").status_code == 200
