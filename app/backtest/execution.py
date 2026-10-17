@@ -286,6 +286,7 @@ def run_execution(
     clamped_loss_count = 0
     account_blown = False
     account_blown_at = None
+    impact_events: list[tuple] = []  # (whole_contracts, entry_ts) of oversized fills; ONE aggregated warning at the end
     reset_events: list[dict] = []  # populated when risk.reset_on_breach and/or risk.reset_on_target is True
     # kind="breach" entries: account crossed the loss floor. kind="payout"
     # entries: account crossed the profit target and had the excess
@@ -1726,14 +1727,7 @@ def run_execution(
                     if pos_contract_size:
                         _whole_contracts = size / pos_contract_size
                         if _whole_contracts > MAX_CONTRACTS_BEFORE_IMPACT_WARN:
-                            import warnings
-                            warnings.warn(
-                                f"MARKET IMPACT: entry of {_whole_contracts:.0f} whole contracts "
-                                f"({_restore_tz(ts[fill_idx])}) filled at the quoted price with "
-                                f"zero market impact assumed (above the {MAX_CONTRACTS_BEFORE_IMPACT_WARN}-contract "
-                                f"guardrail). Real fills of this size move the book; this backtest does not model that.",
-                                RuntimeWarning,
-                            )
+                            impact_events.append((_whole_contracts, ts[fill_idx]))
 
                     open_trade = {
                         "entry_time": _restore_tz(ts[fill_idx]),
@@ -1855,6 +1849,18 @@ def run_execution(
     # Plain-language, chronological log of every account reset / payout, so a
     # report can show exactly when and why the account restarted.
     equity_df.attrs["account_reset_log"] = [ev["message"] for ev in reset_events if ev.get("message")]
+
+    if impact_events:
+        import warnings
+        _n_imp = len(impact_events)
+        _big = max(impact_events, key=lambda e: e[0])
+        warnings.warn(
+            f"MARKET IMPACT: {_n_imp} entr{'y' if _n_imp == 1 else 'ies'} exceeded the "
+            f"{MAX_CONTRACTS_BEFORE_IMPACT_WARN}-contract guardrail (largest {_big[0]:.0f} whole contracts, "
+            f"{_restore_tz(_big[1])}) and filled at the quoted price with zero market impact assumed. "
+            f"Real fills of this size move the book; this backtest does not model that.",
+            RuntimeWarning,
+        )
 
     _breach_events = equity_df.attrs["breach_events"]
     _payout_events = equity_df.attrs["payout_events"]
