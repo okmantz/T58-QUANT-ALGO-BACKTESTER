@@ -1,0 +1,105 @@
+name: desktop-cross-platform
+
+# THE desktop-app build (Tk window): one workflow, one zip per OS.
+# Same shape as web-cross-platform.yml. The full test suite runs there, so this
+# workflow only runs the desktop/packaging tests before building.
+#
+# Pushes to main, version tags (v*) and manual runs build the packages.
+# A tag (v*) attaches the three zips + checksums to the GitHub release.
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ "v*" ]
+  workflow_dispatch: {}
+
+concurrency:
+  group: desktop-cross-platform-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, label: Windows, platform: windows, exe: ".exe", symlinks: "" }
+          - { os: macos-latest,   label: macOS,   platform: macos,   exe: "",     symlinks: "--follow-symlinks" }
+          - { os: ubuntu-latest,  label: Linux,   platform: linux,   exe: "",     symlinks: "--follow-symlinks" }
+    defaults:
+      run:
+        shell: bash
+    env:
+      PACKAGE: T58-Quant-Algo-Backtester-${{ matrix.label }}.zip
+      T58_LICENSE_SERVER_URL: ${{ secrets.T58_LICENSE_SERVER_URL }}
+      T58_MASTER_LICENSE_KEY_HASH: ${{ secrets.T58_MASTER_LICENSE_KEY_HASH }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: config/requirements.txt
+      - name: Install libomp (macOS, needed by lightgbm)
+        if: matrix.platform == 'macos'
+        run: brew install libomp
+      - name: Install Tk (Linux)
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y python3-tk tk
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r config/requirements.txt pyinstaller pytest
+      - name: Verify critical dependencies import
+        run: python -c "import tkinter, pandas, numpy, flask, alpaca, keyring, requests, pyarrow, py7zr, scipy, sklearn, lightgbm; print('All critical dependencies import OK')"
+      - name: Desktop and packaging tests
+        run: pytest -q -p no:cacheprovider tests/packaging tests/ui
+      - name: Bake license build config
+        run: python build_tools/bake_license_config.py
+      - name: Build the desktop app (PyInstaller)
+        run: pyinstaller --noconfirm --clean build_tools/t58_desktop.spec
+      - name: Verify the build output
+        run: |
+          test -f "dist/T58-Quant-Algo-Backtester/T58-Quant-Algo-Backtester${{ matrix.exe }}" || { echo "executable missing"; ls -la dist/T58-Quant-Algo-Backtester; exit 1; }
+          test -d dist/T58-Quant-Algo-Backtester/_internal || { echo "_internal missing"; exit 1; }
+          du -sh dist/T58-Quant-Algo-Backtester
+      - name: Smoke-test the FROZEN app (loads app.main from the bundle)
+        run: python build_tools/frozen_smoke.py desktop "dist/T58-Quant-Algo-Backtester/T58-Quant-Algo-Backtester${{ matrix.exe }}" 240
+      - name: Code-sign (Windows, optional)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $certB64 = "${{ secrets.SIGN_CERT }}"
+          if ([string]::IsNullOrWhiteSpace($certB64)) { Write-Host "SIGN_CERT not set -- shipping UNSIGNED."; exit 0 }
+          $pfx = Join-Path $env:RUNNER_TEMP "t58-sign-cert.pfx"
+          try {
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($certB64))
+            $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+            if (-not $signtool) { throw "signtool.exe not found" }
+            & $signtool sign /f $pfx /p "${{ secrets.SIGN_CERT_PASSWORD }}" /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "dist\T58-Quant-Algo-Backtester\T58-Quant-Algo-Backtester.exe"
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed (exit $LASTEXITCODE)" }
+          } finally { Remove-Item $pfx -Force -ErrorAction SilentlyContinue }
+      - name: Create the zip + checksum
+        run: python build_tools/package_release.py app --dist dist/T58-Quant-Algo-Backtester --out "$PACKAGE" --platform ${{ matrix.platform }} ${{ matrix.symlinks }}
+      - name: Upload package
+        uses: actions/upload-artifact@v5
+        with:
+          name: T58-Quant-Algo-Backtester-${{ matrix.label }}
+          path: |
+            ${{ env.PACKAGE }}
+            ${{ env.PACKAGE }}.sha256
+          compression-level: 0
+          if-no-files-found: error
+      - name: Attach to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.PACKAGE }}
+            ${{ env.PACKAGE }}.sha256
