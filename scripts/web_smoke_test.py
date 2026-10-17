@@ -24,7 +24,7 @@ PAGES = [
     "/optimize", "/full-pipeline", "/walk-forward-opt", "/walk-forward-ga", "/cpcv", "/pbo", "/sensitivity",
     "/parameter-robustness", "/regime-matrix", "/payout-probability", "/forward-test", "/live-market",
     "/start-here/create", "/start-here/test", "/start-here/champion", "/start-here/deployment",
-    "/start-here/graveyard", "/support", "/user-manual",
+    "/start-here/graveyard", "/support", "/user-manual", "/webhook-relay", "/settings/api-keys", "/data/api/providers",
 ]
 
 # v9.15 (Owen): the Quant Lab and Account Start Here pages were
