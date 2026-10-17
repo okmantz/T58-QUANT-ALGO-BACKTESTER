@@ -32,7 +32,7 @@ jobs:
   test:
     name: full test suite (Linux)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -45,7 +45,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r config/requirements.txt pytest
       - name: Run the test suite
-        run: pytest -q -p no:cacheprovider tests
+        run: pytest -q -p no:cacheprovider tests --durations=15
 
   build:
     name: ${{ matrix.label }}
