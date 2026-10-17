@@ -259,7 +259,7 @@ def _optimize_on_window(
         from app.monte_carlo.engine import run_monte_carlo
         mc = run_monte_carlo(bt.trades, prop_rules, replace(mc_config, n_simulations=refine_cfg.search_monte_carlo_sims))
         prop_summary = summarize_single_run(single_run)
-        fitness = compute_fitness(bt.statistics.to_dict(), prop_summary, mc, refine_cfg.fitness_metric)
+        fitness = compute_fitness(bt.statistics.to_dict(), prop_summary, mc, refine_cfg.fitness_metric, trades=bt.trades, prop_rules=prop_rules)
         return fitness if math.isfinite(fitness) else float("-inf")
 
     # PERFORMANCE FIX (WFO slowness): every evaluate() call below is a full
@@ -503,7 +503,7 @@ def _fitness_of_backtest(bt, prop_rules, mc_config, refine_cfg) -> float:
         single_run = simulate_account(pnls, dates, prop_rules)
         from app.monte_carlo.engine import run_monte_carlo
         mc = run_monte_carlo(bt.trades, prop_rules, replace(mc_config, n_simulations=refine_cfg.search_monte_carlo_sims))
-        val = compute_fitness(bt.statistics.to_dict(), summarize_single_run(single_run), mc, refine_cfg.fitness_metric)
+        val = compute_fitness(bt.statistics.to_dict(), summarize_single_run(single_run), mc, refine_cfg.fitness_metric, trades=bt.trades, prop_rules=prop_rules)
         return float(val) if math.isfinite(val) else float("-inf")
     except Exception:  # noqa: BLE001 -- a scorer crash must read as "no evidence", not as a pass
         return float("-inf")
@@ -588,7 +588,7 @@ def run_walk_forward_optimization(
                     single_run = simulate_account(pnls, dates, prop_rules)
                     from app.monte_carlo.engine import run_monte_carlo
                     mc = run_monte_carlo(train_bt.trades, prop_rules, replace(mc_config, n_simulations=refine_cfg.search_monte_carlo_sims))
-                    train_fitness = compute_fitness(train_bt.statistics.to_dict(), summarize_single_run(single_run), mc, refine_cfg.fitness_metric)
+                    train_fitness = compute_fitness(train_bt.statistics.to_dict(), summarize_single_run(single_run), mc, refine_cfg.fitness_metric, trades=train_bt.trades, prop_rules=prop_rules)
                 else:
                     train_fitness = float("-inf")
 
@@ -643,7 +643,7 @@ def run_walk_forward_optimization(
                     single_run = simulate_account(pnls, dates, prop_rules)
                     from app.monte_carlo.engine import run_monte_carlo
                     mc = run_monte_carlo(full_bt.trades, prop_rules, replace(mc_config, n_simulations=refine_cfg.search_monte_carlo_sims))
-                    in_sample_fitness = compute_fitness(full_bt.statistics.to_dict(), summarize_single_run(single_run), mc, refine_cfg.fitness_metric)
+                    in_sample_fitness = compute_fitness(full_bt.statistics.to_dict(), summarize_single_run(single_run), mc, refine_cfg.fitness_metric, trades=full_bt.trades, prop_rules=prop_rules)
         except Exception:
             in_sample_fitness = None
 

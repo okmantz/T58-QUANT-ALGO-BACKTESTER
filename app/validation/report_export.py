@@ -184,26 +184,34 @@ def build_report_document(
 # Rendering: HTML
 # ---------------------------------------------------------------------------
 
-_CSS = """
-:root{--bg:#f6f7f9;--card:#fff;--ink:#14181f;--mute:#5d6675;--line:#dde1e8;--pass:#0a7d4f;--warn:#a86400;--fail:#c0262d;--grey:#6b7280}
-*{box-sizing:border-box}body{font:14px/1.5 -apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--ink);margin:0;padding:28px}
-.wrap{max-width:980px;margin:0 auto}h1{font-size:22px;margin:0 0 4px}h2{font-size:16px;margin:26px 0 10px}h3{font-size:14px;margin:0}
-.sub{color:var(--mute);font-size:12.5px}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:12px 0}
-.pill{display:inline-block;border-radius:999px;padding:2px 10px;font-size:11.5px;font-weight:700;color:#fff}
-.pill.pass{background:var(--pass)}.pill.caution{background:var(--warn)}.pill.fail{background:var(--fail)}.pill.error,.pill.info{background:var(--grey)}
-table{border-collapse:collapse;width:100%;font-size:13px}th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);vertical-align:top}
-th{color:var(--mute);font-weight:600;font-size:12px}.num{text-align:right;font-variant-numeric:tabular-nums}
-.check{border-left:5px solid var(--grey)}.check.pass{border-left-color:var(--pass)}.check.caution{border-left-color:var(--warn)}.check.fail{border-left-color:var(--fail)}
-.head{display:flex;justify-content:space-between;align-items:center;gap:10px}.bar{color:var(--mute);font-size:12.5px;margin-top:6px}
-.why{background:#fff7ed;border:1px solid #f3d9b1;border-radius:8px;padding:10px 12px;margin-top:10px;font-size:13px}
-ol{margin:6px 0 0 18px;padding:0}details{margin-top:10px}summary{cursor:pointer;color:var(--mute);font-size:12.5px}
-pre{background:#f1f3f6;border-radius:6px;padding:10px;overflow:auto;font-size:11.5px}.kv td:first-child{color:var(--mute);width:34%}
-.overall{font-size:15px}.small{font-size:12px;color:var(--mute)}@media print{body{background:#fff;padding:0}.card{break-inside:avoid}}
+from app.reports import theme as _theme
+from app.reports._assets import T58_LOGO_BASE64 as _LOGO
+
+_CSS = _theme.BASE_CSS + """
+.pill{display:inline-block;border-radius:999px;padding:2px 11px;font-size:11.5px;font-weight:750;color:#fff;letter-spacing:.02em;white-space:nowrap}
+.pill.pass{background:var(--good)}.pill.caution{background:var(--warn)}.pill.fail{background:var(--bad)}.pill.error,.pill.info{background:#6b7280}
+.card.check{border-left:5px solid #9ca3af;margin:12px 0}.card.check.pass{border-left-color:var(--good)}.card.check.caution{border-left-color:var(--warn)}.card.check.fail{border-left-color:var(--bad)}
+.card.check h3{font-size:15px;margin:0}
+.head{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.bar{color:var(--muted);font-size:12.5px;margin-top:6px}
+.why{background:var(--warn-bg);border:1px solid #f3d9b1;border-left:4px solid var(--warn);border-radius:10px;padding:10px 14px;margin-top:10px;font-size:13px}
+ol{margin:6px 0 0 18px;padding:0}details{margin-top:10px}summary{cursor:pointer;color:var(--muted);font-size:12.5px}
+pre{background:#f1f3f6;border-radius:8px;padding:10px;overflow:auto;font-size:11.5px}
+.kv td:first-child{color:var(--muted);width:34%}
+.card.overall{font-size:15px;border-left:5px solid var(--brand)}
+.small{font-size:12px;color:var(--muted)}
+.card table{box-shadow:none;border-radius:8px}
+.pill-meta{background:#fff;border:1px solid var(--line);border-radius:999px;padding:3px 11px;font-size:12px;color:var(--ink2)}
 """
 
 
 def _e(v: Any) -> str:
     return html.escape("" if v is None else str(v))
+
+
+def _hk(k: Any) -> str:
+    """Human label for a snake_case key; plain keys are shown as written."""
+    return _e(_theme.humanize(k)) if isinstance(k, str) and "_" in k else _e(k)
 
 
 def _fmt(v: Any) -> str:
@@ -220,7 +228,7 @@ def _render_value(v: Any, depth: int = 0) -> str:
     if isinstance(v, dict):
         if not v:
             return '<span class="small">(none)</span>'
-        rows = "".join(f"<tr><td>{_e(k)}</td><td>{_render_value(val, depth + 1)}</td></tr>" for k, val in v.items())
+        rows = "".join(f"<tr><td title='{_e(k)}'>{_hk(k)}</td><td>{_render_value(val, depth + 1)}</td></tr>" for k, val in v.items())
         return f'<table class="kv">{rows}</table>'
     if isinstance(v, list):
         if not v:
@@ -231,7 +239,7 @@ def _render_value(v: Any, depth: int = 0) -> str:
                 for k in x:
                     if k not in cols:
                         cols.append(k)
-            head = "".join(f"<th>{_e(c)}</th>" for c in cols)
+            head = "".join(f"<th title='{_e(c)}'>{_hk(c)}</th>" for c in cols)
             body = "".join("<tr>" + "".join(f"<td>{_render_value(x.get(c), depth + 1)}</td>" for c in cols) + "</tr>" for x in v)
             return f"<table><tr>{head}</tr>{body}</table>"
         return ", ".join(_fmt(x) for x in v)
@@ -336,20 +344,25 @@ def render_html(doc: dict) -> str:
 
     autofix_html = _render_autofix_html(doc.get("auto_fix"))
     count_line = " · ".join(f"{counts.get(k, 0)} {w}" for k, w in (("pass", "passed"), ("caution", "borderline"), ("fail", "failed"), ("error", "did not run")))
-    return f"""<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{_e(st.get("name") or "strategy")} — {_e(_test_title(doc))} report</title><style>{_CSS}</style></head>
-<body><div class="wrap">
-<h1>{_e(st.get("name") or "strategy")} — {_e(_test_title(doc))} report</h1>
-<div class="sub"><b>Strategy tested:</b> {_e(st.get("name") or "strategy")} · <b>Test:</b> {_e(_test_title(doc))}</div>
-<div class="sub">T58 Quant Algo Backtester · generated {_e(doc.get("generated_at"))} · report id {_e(doc.get("report_id"))}</div>
-<div class="card overall"><b>{_e(ov.get("label"))}</b> — {_e(ov.get("summary"))}<div class="small" style="margin-top:4px">{_e(count_line)}</div>
+    title_txt = f'{st.get("name") or "strategy"} — {_test_title(doc)} report'
+    overall_cls = "pass" if counts.get("fail", 0) == 0 and counts.get("error", 0) == 0 and counts.get("caution", 0) == 0 else (
+        "fail" if counts.get("fail", 0) else "caution")
+    body = f"""
+<div class="titlebar"><span class="eyebrow">Strategy tested:</span><span class="name">{_e(st.get("name") or "strategy")}</span>
+<span class="pill-meta">Test: <b>{_e(_test_title(doc))}</b></span></div>
+<div class="sub-meta">Generated {_e(doc.get("generated_at"))} · report id {_e(doc.get("report_id"))}</div>
+<div class="card overall check {overall_cls}"><b>{_e(ov.get("label"))}</b> — {_e(ov.get("summary"))}<div class="small" style="margin-top:4px">{_e(count_line)}</div>
 {('<div style="margin-top:8px"><b>Next step:</b> ' + _e(nx.get("title")) + ' — ' + _e(nx.get("why")) + '</div>') if nx.get("title") else ''}{missing}</div>
 {autofix_html}<h2>Scorecard</h2><div class="card">{scorecard}</div>{not_run}
 <h2>Every check in detail</h2>{''.join(cards)}
 {baseline_html}{settings_html}
 <p class="small">Pass/fail thresholds are fixed and stated next to each check. A pass is evidence, not a guarantee: all of these tests use historical data.</p>
-</div></body></html>"""
+"""
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{_e(title_txt)}</title><style>{_CSS}</style></head>
+<body>{_theme.masthead("Quant Algo Backtester — " + _test_title(doc) + " Report", "Precision-tested. Falsification-checked. No shortcuts.", _LOGO)}
+<div class="content">{body}</div>{_theme.PRINT_JS}</body></html>"""
 
 
 # ---------------------------------------------------------------------------
