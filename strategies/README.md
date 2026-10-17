@@ -38,7 +38,7 @@ strategies/
 
 ## A note on the packaged .exe vs. this git repo
 
-When you run the app straight out of this repo (`python run_app.py` /
+When you run the app straight out of this repo (`python launchers/run_app.py` /
 `python -m app.web.server`), saved strategies land directly in this
 `strategies/` folder and show up in `git status` right away.
 
