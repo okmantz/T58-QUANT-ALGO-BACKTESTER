@@ -74,3 +74,6 @@ data/ai_memory/
 data/discovery/
 data/evolution/
 scripts/audit_2026_10/.cache/
+
+# Per-user account profile (holds a password hash) -- written to the app folder at runtime
+account_settings.json
