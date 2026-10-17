@@ -7,7 +7,7 @@ synthetic, has under 5 years of history, or is missing from the manifest and unr
 `<2y history` or `SYNTHETIC` can still be used for exploration, never for a READY verdict.
 The two SYNTHETIC_*_1M.csv files were deleted in the 2026-10 audit; real ES/NQ/GC 1-minute history
 (2020-01 to 2026-09) is in the `futures_*.F_1m.parquet` files. Large data files should live in Git LFS or a
-release asset, not in normal git history (see docs/ACCURACY_OVERHAUL.md, "Data").
+release asset, not in normal git history.
 
 | file | symbol | bars | start | end | years | bar | flags |
 |---|---|---|---|---|---|---|---|
