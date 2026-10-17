@@ -96,7 +96,7 @@ pip install -r config/requirements.txt
 python -m app.main                    # desktop GUI
 ```
 
-Add `--cli --csv data/examples/EURUSD_5M_sample.csv --sims 10000` to run
+Add `--cli --csv data/raw/EURUSD/EURUSD_5M_sample.csv --sims 10000` to run
 headless instead; see `python -m app.main --help` for the full flag list.
 Reports land in `reports/report.{json,html}` — `report.html` is
 self-contained and print-to-PDF friendly.
@@ -138,9 +138,8 @@ does the same for the desktop app.
 ## Core workflow — Run & Report
 
 1. **Upload Market Data** — CSV/TSV/Parquet/`.zip`/`.7z`, auto column
-   mapping, gap/duplicate detection. A sample dataset ships at
-   `data/examples/EURUSD_5M_sample.csv`; broader datasets (XAUUSD, EURUSD,
-   GBPUSD, indices, etc.) ship under `data/raw`. Multiple files can be
+   mapping, gap/duplicate detection. Datasets (XAUUSD, EURUSD,
+   GBPUSD, indices, etc.) live under `data/raw`. Multiple files can be
    selected for multi-timeframe analysis (e.g. 60m bias + 15m zone + 5m
    entry). Alpaca API fetch is also supported for US equities/crypto.
 
