@@ -33,7 +33,7 @@ for pkg in common.COLLECT_ALL:
 hiddenimports, datas = common.without_test_suites(hiddenimports, datas)
 
 a = Analysis(
-    [str(ROOT / "run_app.py")],
+    [str(ROOT / "launchers" / "run_app.py")],
     pathex=[str(ROOT)],
     binaries=binaries,
     datas=datas,
