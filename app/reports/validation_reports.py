@@ -21,20 +21,12 @@ import pandas as pd
 
 from app.reports.charts import svg_heatmap, svg_line_chart, svg_multi_line_chart
 
-_CSS = """
-body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; padding: 24px;
-       background: #0e1013; color: #e7e9ec; }
-.card { background: #171a1f; border: 1px solid #2a2e35; border-radius: 10px; padding: 18px 22px; margin-bottom: 18px; }
-h1 { font-size: 20px; margin: 0 0 4px 0; }
-h2 { font-size: 15px; margin: 0 0 10px 0; color: #cfd3da; }
-.sub { color: #9aa0aa; font-size: 12px; margin-bottom: 18px; }
-table { border-collapse: collapse; width: 100%; font-size: 12px; }
-th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid #2a2e35; }
-th { color: #9aa0aa; font-weight: 600; }
-.warn { background: #3a2a12; border: 1px solid #6b4a1a; color: #f0c98a; border-radius: 8px;
-        padding: 10px 14px; font-size: 12px; margin-bottom: 12px; }
-.pill { display: inline-block; background: #22262e; border-radius: 999px; padding: 2px 10px; font-size: 11px; color: #cfd3da; margin-right: 6px;}
-.svgwrap { background: #ffffff; border-radius: 6px; padding: 8px; overflow-x: auto; }
+# Shared design system (see app.reports.theme) + the few extras these compact reports need.
+_EXTRA_CSS = """
+.svgwrap { background:#fff; border:1px solid var(--line); border-radius:10px; padding:8px; overflow-x:auto; }
+.card { margin-bottom:16px; } .card h2 { margin-bottom:10px; }
+.card p { color:var(--muted); font-size:12.5px; }
+.sub { color:var(--muted); font-size:12px; }
 """
 
 
@@ -58,19 +50,18 @@ def _write_json(data, path: Path) -> Path:
 
 
 def _page(title: str, body: str) -> str:
-    return f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>{title}</title><style>{_CSS}</style></head>
-<body>
-<div class="card"><h1>{title}</h1>
-<div class="sub">T58 Trading — Quant Algo Backtester — generated {datetime.now(timezone.utc).isoformat()}</div>
-</div>
-{body}
-</body></html>"""
+    from app.reports import theme
+    from app.reports._assets import T58_LOGO_BASE64
+    return theme.page(
+        title, body,
+        subtitle=f"Validation report · generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
+        logo_b64=T58_LOGO_BASE64, extra_head=f"<style>{_EXTRA_CSS}</style>",
+    )
 
 
 def _table(rows: list[tuple], headers: tuple[str, str] = ("Metric", "Value")) -> str:
-    body_rows = "".join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in rows)
-    return f'<table><tr><th>{headers[0]}</th><th>{headers[1]}</th></tr>{body_rows}</table>'
+    from app.reports import theme
+    return theme.table(headers, rows, raw=True)
 
 
 # ---------------------------------------------------------------------------

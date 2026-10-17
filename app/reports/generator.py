@@ -30,6 +30,7 @@ from app.reports.charts import svg_histogram, svg_line_chart
 from app.reports.trade_chart import build_trade_chart_html
 from app.reports import run_history
 from app.reports.mc_headline import monte_carlo_headline
+from app.reports import theme
 
 if TYPE_CHECKING:
     from app.backtest.statistics import BacktestStatistics
@@ -454,120 +455,13 @@ def export_summary_csv(report: dict, path: str | Path) -> Path:
     return path
 
 
-_HTML_TEMPLATE = """<!DOCTYPE html>
+_HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>T58 Quant Algo Backtester — Report: {strategy_name}</title>
-<style>
-  :root {{
-    --ink: #14161a; --muted: #6b7280; --line: #e6e8eb; --panel: #ffffff;
-    --bg: #f7f8fa; --accent: #2f6fed; --accent-dark: #111827;
-  }}
-  * {{ box-sizing: border-box; }}
-  body {{
-    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
-    margin: 0; color: var(--ink); background: var(--bg);
-  }}
-  .masthead {{
-    background: linear-gradient(135deg, #0b0d10 0%, #14171c 100%);
-    color: #e7e9ec; padding: 22px 40px; display:flex; align-items:center; gap:16px;
-  }}
-  .masthead img {{ height: 40px; display:block; }}
-  .masthead .titles h1 {{ margin:0; font-size:18px; font-weight:700; letter-spacing:.01em; border:none; padding:0; color:#f2f3f5;}}
-  .masthead .titles .sub {{ margin-top:3px; font-size:11px; color:#9aa1ac; letter-spacing:.03em; text-transform:uppercase; }}
-  .content {{ max-width: 1040px; margin: 0 auto; padding: 28px 40px 60px; }}
-  .meta {{ color: var(--muted); font-size: 12.5px; margin: 2px 0 0; }}
-  h2 {{
-    font-size: 13px; margin-top: 34px; margin-bottom: 10px; color: var(--accent-dark);
-    text-transform: uppercase; letter-spacing: .06em; font-weight: 700;
-    border-bottom: 2px solid var(--accent-dark); padding-bottom: 6px;
-  }}
-  table {{ border-collapse: collapse; width: 100%; margin-top: 4px; background: var(--panel);
-            box-shadow: 0 1px 2px rgba(16,24,40,0.04); border-radius: 6px; overflow: hidden; }}
-  td, th {{ border-bottom: 1px solid var(--line); padding: 8px 12px; font-size: 13px; text-align: left; }}
-  tr:last-child td {{ border-bottom: none; }}
-  th {{ background: #f1f2f5; font-weight: 600; color: #374151; }}
-  .headline {{ display:flex; gap: 14px; flex-wrap: wrap; margin-top: 12px; }}
-  .card {{
-    border: 1px solid var(--line); background: var(--panel); padding: 16px 20px;
-    min-width: 180px; flex: 1 1 180px; border-radius: 8px;
-    box-shadow: 0 1px 3px rgba(16,24,40,0.05);
-  }}
-  .card .label {{ font-size:10.5px; color: var(--muted); text-transform:uppercase; letter-spacing:.05em; font-weight:600;}}
-  .card .value {{ font-size:26px; font-weight:700; margin-top:6px; color: var(--accent-dark); }}
-  .muted {{ color: var(--muted); font-size: 12px; }}
-  .chart {{ border: 1px solid var(--line); background: var(--panel); padding: 12px;
-             margin-top: 8px; border-radius: 8px; box-shadow: 0 1px 3px rgba(16,24,40,0.05); }}
-  .chart-row {{ display:flex; gap:16px; flex-wrap:wrap; }}
-  .chart-row .chart {{ flex: 1 1 340px; }}
-  .chart svg {{ width: 100%; height: auto; display:block; }}
-  .footer-note {{ margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--line); }}
-  .tabs {{ display:flex; gap:4px; margin-top:20px; border-bottom: 2px solid var(--line); }}
-  .tab-btn {{
-    background:none; border:none; padding:10px 18px; font-size:12.5px; font-weight:700;
-    color: var(--muted); cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-2px;
-    text-transform:uppercase; letter-spacing:.04em; font-family:inherit;
-  }}
-  .tab-btn:hover {{ color: var(--accent-dark); }}
-  .tab-btn.active {{ color: var(--accent-dark); border-bottom-color: var(--accent); }}
-  .tab-panel {{ display:none; }}
-  .tab-panel.active {{ display:block; }}
-  .warning-banner {{
-    background: #fff4e5; border: 1px solid #f0b429; border-left: 4px solid #f0b429;
-    border-radius: 6px; padding: 14px 18px; margin: 16px 0 20px;
-  }}
-  .info-banner {{
-    background: #eff6ff; border: 1px solid #2f6fed; border-left: 4px solid #2f6fed;
-    border-radius: 6px; padding: 14px 18px; margin: 16px 0 20px;
-  }}
-  .info-banner .info-title {{
-    font-weight: 700; font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em;
-    color: #1e3a8a; margin-bottom: 8px;
-  }}
-  .info-banner p {{ font-size: 13px; color: #1e3a8a; margin: 0 0 8px; }}
-  .info-banner p:last-child {{ margin-bottom: 0; }}
-  .warning-banner .warning-title {{
-    font-weight: 700; font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em;
-    color: #92400e; margin-bottom: 8px;
-  }}
-  .warning-banner ul {{ margin: 0; padding-left: 18px; }}
-  .warning-banner li {{ font-size: 13px; color: #78350f; margin-bottom: 6px; }}
-  .warning-banner li:last-child {{ margin-bottom: 0; }}
-  .verdict-banner {{
-    border-radius: 6px; padding: 14px 18px; margin: 16px 0 20px; border-left: 4px solid;
-  }}
-  .verdict-banner.verdict-ready {{ background: #ecfdf3; border-color: #12b76a; }}
-  .verdict-banner.verdict-marginal {{ background: #fff4e5; border-color: #f0b429; }}
-  .verdict-banner.verdict-not-ready {{ background: #fef3f2; border-color: #f04438; }}
-  .risk-flags-banner {{
-    border-radius: 6px; padding: 14px 18px; margin: 16px 0 20px; border-left: 4px solid #f04438;
-    background: #fef3f2;
-  }}
-  .risk-flags-banner .verdict-title {{
-    font-weight: 700; font-size: 14px; text-transform: uppercase; letter-spacing: .04em;
-    margin-bottom: 8px; color: #b42318;
-  }}
-  .risk-flags-banner ul {{ margin: 0; padding-left: 18px; }}
-  .risk-flags-banner li {{ font-size: 13px; margin-bottom: 4px; }}
-  .sizing-halt-banner {{
-    border-radius: 6px; padding: 16px 18px; margin: 16px 0 20px;
-    border: 2px solid #f04438; background: #fef3f2;
-    -webkit-print-color-adjust: exact; print-color-adjust: exact;
-  }}
-  .sizing-halt-banner .halt-title {{
-    font-weight: 800; font-size: 16px; text-transform: uppercase; letter-spacing: .04em;
-    color: #b42318; margin-bottom: 8px;
-  }}
-  .sizing-halt-banner p {{ font-size: 13px; color: #7a271a; margin: 0; }}
-  .verdict-banner .verdict-title {{
-    font-weight: 700; font-size: 14px; text-transform: uppercase; letter-spacing: .04em;
-    margin-bottom: 8px;
-  }}
-  .verdict-banner ul {{ margin: 0; padding-left: 18px; }}
-  .verdict-banner li {{ font-size: 13px; margin-bottom: 4px; }}
-  @media print {{ .masthead {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }} }}
-</style>
+<style>{base_css}</style>
 </head>
 <body>
 <div class="masthead">
@@ -579,15 +473,30 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 </div>
 <div class="content">
 {strategy_banner}
+<div class="pills">
+  <span class="pill">Generated <b>{generated_at}</b></span>
+  <span class="pill">Source <b>{source_type}</b></span>
+  <span class="pill">Instrument <b>{instrument}</b></span>
+  <span class="pill">Timeframe <b>{timeframe}</b></span>
+  <span class="pill">Period <b>{period_start}</b> → <b>{period_end}</b></span>
+</div>
 {sizing_halt_banner}
-<p class="meta">Generated {generated_at} &middot; Strategy: <b>{strategy_name}</b> ({source_type}) &middot;
-Instrument: {instrument} &middot; Timeframe: {timeframe} &middot; Period: {period_start} → {period_end}</p>
+{verdict_section}
+
+<section class="sec" id="headline">
+<h2>Headline numbers (per account attempt)</h2>
+{headline_kpis}
+<p class="muted intro" style="margin-top:12px">"Risk of Ruin" is the probability that max drawdown is breached at <b>some point</b> across the full simulated path -- including after passing the evaluation and collecting payouts. It is a different question from "Failure Before Payout", which only counts failures that happen before the first payout.</p>
+{reset_chain_headline_section}
+</section>
 
 {warnings_section}
-
 {headline_warnings_section}
 
-{verdict_section}
+<nav class="toc">
+  <a href="#headline">Headline</a><a href="#stats">Backtest statistics</a><a href="#robust">Robustness checks</a>
+  <a href="#prop">Prop-firm result</a><a href="#mc">Monte Carlo</a><a href="#assumptions">Assumptions &amp; configuration</a>
+</nav>
 
 <div class="tabs">
   <button class="tab-btn active" data-tab="overview" type="button">Overview</button>
@@ -595,79 +504,73 @@ Instrument: {instrument} &middot; Timeframe: {timeframe} &middot; Period: {perio
 </div>
 
 <div class="tab-panel active" id="tab-overview">
-<h2>Backtest Configuration</h2>
-<p class="muted">The exact execution/risk assumptions used to produce every dollar figure below. Recorded here so this report can be reproduced or audited later.</p>
-{risk_config_table}
-
-{simulation_section}
-
-{risk_reconciliation_section}
-
-<h2>The Number That Matters Most</h2>
-<div class="headline">
-  <div class="card"><div class="label">Evaluation Pass Probability (per attempt)</div><div class="value">{eval_pass:.1f}%</div><div class="muted" style="font-size:11px;">{eval_pass_ci}</div></div>
-  <div class="card"><div class="label">First Payout Probability (per attempt)</div><div class="value">{first_payout:.1f}%</div><div class="muted" style="font-size:11px;">{first_payout_ci}</div></div>
-  <div class="card"><div class="label">Failure Before Payout</div><div class="value">{failure_before_payout:.1f}%</div></div>
-  <div class="card"><div class="label">Median Days to Payout</div><div class="value">{median_days_payout}</div></div>
-  <div class="card"><div class="label">Expected Payout</div><div class="value">${expected_payout:,.0f}</div></div>
-  <div class="card"><div class="label">Risk of Ruin</div><div class="value">{risk_of_ruin:.1f}%</div></div>
-</div>
-<p class="muted">"Risk of Ruin" is the probability that max drawdown is breached at <b>some point</b> across the full simulated path -- including after passing the evaluation and collecting payou[...]
-
-{reset_chain_headline_section}
 
 {final_parameters_section}
 
-<h2>Historical Backtest Statistics</h2>
-<p class="muted">Computed over the full, uninterrupted trade sequence with prop-firm rules (daily loss limit, max drawdown, etc.) <b>not</b> enforced. Compare against "Prop-Firm Single-Run Result" below, which walks the same trades under the rules. <b>Scope: {backtest_scope_label}.</b></p>
+<section class="sec" id="stats">
+<h2>Historical backtest statistics</h2>
+<p class="muted intro">Computed over the full, uninterrupted trade sequence with prop-firm rules (daily loss limit, max drawdown, etc.) <b>not</b> enforced. Compare against "Prop-firm single-run result" below, which walks the same trades under the rules. <b>Scope: {backtest_scope_label}.</b></p>
 {reset_chain_banner}
 {backtest_table}
-
-<h2>Concentration Check</h2>
-<p class="muted">Is one lucky trade or one lucky day carrying the whole result? A repeatable edge shouldn't evaporate when its single best outcome is removed.</p>
-{concentration_table}
-
-<h2>Cost Ladder</h2>
-<p class="muted">The same trade sequence above, re-costed at increasing added round-turn friction. A real edge should degrade gracefully as costs rise; an edge that only exists at 0% added cost i[...]
-{cost_ladder_table}
-
-{exit_quality_section}
-
-<h2>Equity Curve (Historical Backtest)</h2>
+<h3>Equity curve</h3>
 <div class="chart">{equity_chart}</div>
+</section>
 
+<section class="sec" id="robust">
+<h2>Robustness checks</h2>
+<h3>Concentration check</h3>
+<p class="muted intro">Is one lucky trade or one lucky day carrying the whole result? A repeatable edge shouldn't evaporate when its single best outcome is removed.</p>
+{concentration_table}
+<h3>Cost ladder</h3>
+<p class="muted intro">The same trade sequence, re-costed at increasing added round-turn friction. A real edge should degrade gracefully as costs rise; an edge that only exists at 0% added cost is not an edge.</p>
+{cost_ladder_table}
+{exit_quality_section}
 {holdout_section}
+</section>
 
-<h2>Prop-Firm Rules Used</h2>
-{rules_table}
-
-<h2>Prop-Firm Single-Run Result (Historical Sequence)</h2>
-<p class="muted">Same trades as above, but the account stops the instant a prop-firm rule is breached (this run may therefore reflect fewer effective trading days than the historical stats above)[...]
+<section class="sec" id="prop">
+<h2>Prop-firm result (historical sequence)</h2>
+<p class="muted intro">Same trades as above, but the account stops the instant a prop-firm rule is breached (this run may therefore reflect fewer effective trading days than the historical stats above).</p>
 {single_run_table}
 {account_attempts_section}
+</section>
 
-<h2>Monte Carlo Simulation ({n_sims:,} simulated accounts)</h2>
-<p class="muted">{mc_methodology_note}</p>
+<section class="sec" id="mc">
+<h2>Monte Carlo simulation ({n_sims:,} simulated accounts)</h2>
+{mc_methodology_note}
 {monte_carlo_table}
-
 <div class="chart-row">
   <div class="chart">{return_chart}</div>
   <div class="chart">{drawdown_chart}</div>
 </div>
+</section>
+
+<section class="sec" id="assumptions">
+<h2>Assumptions &amp; configuration</h2>
+<p class="muted intro">Everything that produced the dollar figures above, recorded so this report can be reproduced or audited later.</p>
+{simulation_section}
+{risk_reconciliation_section}
+<details class="fold"><summary><span class="fold-title">Backtest configuration (execution &amp; risk)</span></summary><div class="fold-body">{risk_config_table}</div></details>
+<details class="fold"><summary><span class="fold-title">Prop-firm rules used</span></summary><div class="fold-body">{rules_table}</div></details>
+</section>
 
 </div><!-- /tab-overview -->
 
 <div class="tab-panel" id="tab-tradechart">
-<h2>Interactive Trade Chart</h2>
+<section class="sec"><h2>Interactive trade chart</h2>
 {trade_chart_html}
+</section>
 </div><!-- /tab-tradechart -->
 
-<p class="footer-note muted">Report generated by T58 Trading — Quant Algo Backtester. All figures are simulated estimates based on historical data and resampling; past performance and simulated[...]
+<p class="footer-note muted">Report generated by T58 Trading — Quant Algo Backtester. All figures are simulated estimates based on historical data and resampling; past performance and simulated results do not guarantee future results.</p>
 </div>
 <script src="https://cdn.plot.ly/plotly-2.32.0.min.js" charset="utf-8"></script>
 <script>
 (function() {{
   var tradeChartRendered = false;
+  window.addEventListener("beforeprint", function() {{
+    document.querySelectorAll("details.fold").forEach(function(d) {{ d.open = true; }});
+  }});
 
   function renderTradeChartIfNeeded() {{
     var el = document.getElementById("t58-trade-chart");
@@ -697,16 +600,12 @@ Instrument: {instrument} &middot; Timeframe: {timeframe} &middot; Period: {perio
 </script>
 </body>
 </html>
-"""
+'''
 
 
 def _dict_to_table(d: dict) -> str:
-    rows = "\n".join(
-        f"<tr><td>{k}</td><td>{v:,.4f}</td></tr>" if isinstance(v, float)
-        else f"<tr><td>{k}</td><td>{v}</td></tr>"
-        for k, v in d.items()
-    )
-    return f"<table><tr><th>Metric</th><th>Value</th></tr>{rows}</table>"
+    """Metric table with human labels and unit-aware values (the raw key stays visible, muted, under each label)."""
+    return theme.kv_table(d)
 
 
 def _cost_ladder_table(ladder: list[dict]) -> str:
@@ -742,13 +641,10 @@ def _verdict_section(verdict: str | None, verdict_reasons: list[str] | None) -> 
     if not verdict:
         return ""
     css_class = {"READY": "verdict-ready", "MARGINAL": "verdict-marginal"}.get(verdict, "verdict-not-ready")
-    reasons_html = "".join(f"<li>{r}</li>" for r in (verdict_reasons or []))
-    reasons_block = f"<ul>{reasons_html}</ul>" if reasons_html else ""
     return (
         f'<div class="verdict-banner {css_class}">'
-        f'<div class="verdict-title">Full Pipeline Verdict: {verdict}</div>'
-        f"{reasons_block}"
-        "</div>"
+        + theme.verdict_hero(verdict, verdict_reasons)
+        + "</div>"
     )
 
 
@@ -1052,7 +948,7 @@ def _risk_reconciliation_section(stats: dict) -> str:
             "share is large.</p>"
         )
     return f"""<h2>Risk Reconciliation</h2>
-<p class="muted">Reconciles the risk % you configured against what actually happened to it on a trade-by-trade basis -- two different, independent gaps to watch for: sizing that comes in UNDER yo[...]
+<p class="muted">Reconciles the risk % you configured against what actually happened to it on a trade-by-trade basis -- two different, independent gaps to watch for: sizing that comes in UNDER your target (a position cap or adaptive-risk throttle engaged) and realized losses that come in OVER the stop risk (gap-through fills or forced closes).</p>
 {table}
 {cap_note}{overshoot_note}"""
 
@@ -1212,14 +1108,63 @@ def _strategy_banner(report: dict) -> str:
         return ""
     test = str(report.get("test_label") or "").strip()
     inst = str((report.get("strategy") or {}).get("instrument") or "").strip()
-    bits = [f'Strategy tested: <b style="font-size:17px;">{_html.escape(tested)}</b>']
+    pills = []
     if test:
-        bits.append(f"Test: <b>{_html.escape(test)}</b>")
+        pills.append(f'<span class="pill">Test: <b>{_html.escape(test)}</b></span>')
     if inst:
-        bits.append(f"Market: {_html.escape(inst)}")
-    return ('<div style="margin:0 0 14px;padding:12px 16px;border:1px solid #2f6fed;border-left-width:5px;'
-            'border-radius:8px;background:rgba(47,111,237,.08);font-size:14px;">'
-            + " &nbsp;&middot;&nbsp; ".join(bits) + "</div>")
+        pills.append(f'<span class="pill">Market: <b>{_html.escape(inst)}</b></span>')
+    return (
+        '<div class="titlebar"><span class="eyebrow">Strategy tested:</span>'
+        f'<span class="name">{_html.escape(tested)}</span>' + "".join(pills) + "</div>"
+    )
+
+
+def _methodology_block(note: str) -> str:
+    """The Monte Carlo methodology note is one very long paragraph; show it as a short list of sentences inside an
+    open fold so it can be skimmed (text unchanged)."""
+    import re as _re
+    note = (note or "").strip()
+    if not note:
+        return ""
+    parts = [p.strip() for p in _re.split(r"(?<=[.;])\s+(?=[A-Z])", note) if p.strip()]
+    items = "".join(f"<li>{html.escape(p)}</li>" for p in parts)
+    return theme.details("How these Monte Carlo numbers were produced (read before relying on them)", f'<ul class="method">{items}</ul>', open_=True, count=len(parts))
+
+
+def _fix_negative_money(page_html: str) -> str:
+    """'$-1,234.50' -> '-$1,234.50' everywhere in the rendered page."""
+    import re as _re
+    return _re.sub(r"\$-(\d[\d,]*(?:\.\d+)?)", r"-$\1", page_html)
+
+
+def _headline_kpis(mch: dict, mc: dict) -> str:
+    """The six per-attempt numbers that matter most, as tone-coded tiles (green/amber/red vs the usual gates)."""
+    def tone(v, good, warn, higher_better=True):
+        if v is None:
+            return ""
+        ok = v >= good if higher_better else v <= good
+        mid = v >= warn if higher_better else v <= warn
+        return "good" if ok else "warn" if mid else "bad"
+
+    ep, fp = mch["eval_pass_probability"], mch["first_payout_probability"]
+    fail = (mc.get("per_attempt_failure_before_payout_probability", mc["failure_before_payout_probability"])
+            if mc.get("reset_on_breach") else mc["failure_before_payout_probability"])
+    ror = mc["risk_of_ruin_pct"]
+    med = mc["median_days_to_first_payout"]
+    items = [
+        ("Evaluation pass probability", f'<span class="kpi-value {tone(ep, 70, 50)}">{ep:.1f}%</span>', _mc_ci_note(mch, "eval") or "per attempt"),
+        ("First payout probability", f'<span class="kpi-value {tone(fp, 35, 20)}">{fp:.1f}%</span>', _mc_ci_note(mch, "payout") or "per attempt"),
+        ("Failure before payout", f'<span class="kpi-value {tone(fail, 30, 50, False)}">{fail:.1f}%</span>', "account breaches a rule first"),
+        ("Median days to payout", f'<span class="kpi-value">{med if med is not None else "N/A"}</span>', "trading days"),
+        ("Expected payout", f'<span class="kpi-value">${mc["expected_payout"]:,.0f}</span>', "mean per simulated account"),
+        ("Risk of ruin", f'<span class="kpi-value {tone(ror, 20, 35, False)}">{ror:.1f}%</span>', "drawdown breached at any point"),
+    ]
+    tiles = "".join(
+        f'<div class="kpi"><div class="kpi-label">{html.escape(l)}</div><div>{v}</div>'
+        + (f'<div class="kpi-sub">{sub}</div>' if sub else "") + "</div>"
+        for l, v, sub in items
+    )
+    return f'<div class="kpis">{tiles}</div>'
 
 
 def export_html(
@@ -1312,6 +1257,8 @@ def export_html(
         risk_config_table=_risk_config_table(report.get("risk_config")),
         simulation_section=_simulation_section(report),
         risk_reconciliation_section=_risk_reconciliation_section(report["historical_backtest"]["statistics"]),
+        base_css=theme.BASE_CSS,
+        headline_kpis=_headline_kpis(_mch, mc),
         eval_pass=_mch["eval_pass_probability"],
         eval_pass_ci=_mc_ci_note(_mch, "eval"),
         first_payout=_mch["first_payout_probability"],
@@ -1329,7 +1276,7 @@ def export_html(
             + (" -- the development-window result (what the run page headlines) is the "
                "In-Sample column of the Out-of-Sample Holdout Check below"
                if report.get("holdout_comparison") else "")),
-        backtest_table=_dict_to_table(report["historical_backtest"]["statistics"]),
+        backtest_table=theme.stat_groups(report["historical_backtest"]["statistics"]),
         concentration_table=_concentration_table(report.get("concentration_check", {})),
         cost_ladder_table=_cost_ladder_table(report.get("cost_ladder", [])),
         exit_quality_section=_exit_quality_section(report.get("exit_quality")),
@@ -1342,13 +1289,14 @@ def export_html(
             k: v for k, v in mc.items()
             if not isinstance(v, (dict, list)) and k != "methodology_note"
         }),
-        mc_methodology_note=mc.get("methodology_note", ""),
+        mc_methodology_note=_methodology_block(mc.get("methodology_note", "")),
         return_chart=return_chart,
         drawdown_chart=drawdown_chart,
         n_sims=mc["n_simulations"],
         trade_chart_html=trade_chart_html,
     )
 
+    html = _fix_negative_money(html)
     with open(path, "w", encoding="utf-8") as f:
         f.write(html)
 

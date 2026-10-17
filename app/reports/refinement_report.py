@@ -131,72 +131,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <title>T58 Quant Algo Backtester — Iterative Refinement: {strategy_name}</title>
-<style>
-  :root {{
-    --ink: #14161a; --muted: #6b7280; --line: #e6e8eb; --panel: #ffffff;
-    --bg: #f7f8fa; --accent: #B8862F; --accent-dark: #111827;
-  }}
-  * {{ box-sizing: border-box; }}
-  body {{
-    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
-    margin: 0; color: var(--ink); background: var(--bg);
-  }}
-  .masthead {{
-    background: linear-gradient(135deg, #0b0d10 0%, #14171c 100%);
-    color: #e7e9ec; padding: 22px 40px; display:flex; align-items:center; gap:16px;
-  }}
-  .masthead img {{ height: 40px; display:block; }}
-  .masthead .titles h1 {{ margin:0; font-size:18px; font-weight:700; letter-spacing:.01em; border:none; padding:0; color:#f2f3f5;}}
-  .masthead .titles .sub {{ margin-top:3px; font-size:11px; color:#9aa1ac; letter-spacing:.03em; text-transform:uppercase; }}
-  .content {{ max-width: 1040px; margin: 0 auto; padding: 28px 40px 60px; }}
-  .meta {{ color: var(--muted); font-size: 12.5px; margin: 2px 0 0; }}
-  h2 {{
-    font-size: 13px; margin-top: 34px; margin-bottom: 10px; color: var(--accent-dark);
-    text-transform: uppercase; letter-spacing: .06em; font-weight: 700;
-    border-bottom: 2px solid var(--accent-dark); padding-bottom: 6px;
-  }}
-  table {{ border-collapse: collapse; width: 100%; margin-top: 4px; background: var(--panel);
-           box-shadow: 0 1px 2px rgba(16,24,40,0.04); border-radius: 6px; overflow: hidden; }}
-  td, th {{ border-bottom: 1px solid var(--line); padding: 8px 12px; font-size: 13px; text-align: left; }}
-  tr:last-child td {{ border-bottom: none; }}
-  th {{ background: #f1f2f5; font-weight: 600; color: #374151; }}
-  .headline {{ display:flex; gap: 14px; flex-wrap: wrap; margin-top: 12px; }}
-  .card {{
-    border: 1px solid var(--line); background: var(--panel); padding: 16px 20px;
-    min-width: 180px; flex: 1 1 180px; border-radius: 8px;
-    box-shadow: 0 1px 3px rgba(16,24,40,0.05);
-  }}
-  .card .label {{ font-size:10.5px; color: var(--muted); text-transform:uppercase; letter-spacing:.05em; font-weight:600;}}
-  .card .value {{ font-size:26px; font-weight:700; margin-top:6px; color: var(--accent-dark); }}
-  .card.win .value {{ color: #1a7f4b; }}
-  .muted {{ color: var(--muted); font-size: 12px; }}
-  .chart {{ border: 1px solid var(--line); background: var(--panel); padding: 12px;
-            margin-top: 8px; border-radius: 8px; box-shadow: 0 1px 3px rgba(16,24,40,0.05); }}
-  .chart-row {{ display:flex; gap:16px; flex-wrap:wrap; }}
-  .chart-row .chart {{ flex: 1 1 340px; }}
-  .chart svg {{ width: 100%; height: auto; display:block; }}
-  .warning {{
-    background: #FFF7E6; border: 1px solid #F0C36D; color: #6B4E00; border-radius: 8px;
-    padding: 14px 18px; margin-top: 14px; font-size: 13px; line-height: 1.5;
-  }}
-  .warning b {{ display:block; font-size: 12.5px; text-transform:uppercase; letter-spacing:.04em; margin-bottom:4px; }}
-  pre.config {{
-    background: #0B0D10; color: #d6e3ff; padding: 16px; border-radius: 8px; overflow-x: auto;
-    font-size: 12px; line-height: 1.5; max-height: 420px; overflow-y: auto;
-  }}
-  .footer-note {{ margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--line); }}
-  .tabs {{ display:flex; gap:4px; margin-top:20px; border-bottom: 2px solid var(--line); }}
-  .tab-btn {{
-    background:none; border:none; padding:10px 18px; font-size:12.5px; font-weight:700;
-    color: var(--muted); cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-2px;
-    text-transform:uppercase; letter-spacing:.04em; font-family:inherit;
-  }}
-  .tab-btn:hover {{ color: var(--accent-dark); }}
-  .tab-btn.active {{ color: var(--accent-dark); border-bottom-color: var(--accent); }}
-  .tab-panel {{ display:none; }}
-  .tab-panel.active {{ display:block; }}
-  @media print {{ .masthead {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }} }}
-</style>
+<style>/*THEME*/</style>
 </head>
 <body>
 <div class="masthead">
@@ -327,6 +262,7 @@ search converges on a region of the parameter space.</p>
 </body>
 </html>
 """
+_HTML_TEMPLATE = _HTML_TEMPLATE.replace("/*THEME*/", __import__("app.reports.theme", fromlist=["theme"]).TEMPLATE_CSS)
 
 
 def _dict_to_table(d: dict) -> str:
