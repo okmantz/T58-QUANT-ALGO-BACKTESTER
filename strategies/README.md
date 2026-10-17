@@ -7,8 +7,8 @@ needs so the backtester knows how to place trades, exit, and set
 stop-loss/take-profit. This file below is about the *library* mechanics
 (save/load/export) rather than the file format itself.
 
-**What is in here and why:** see [`AUDIT_2026-10_RESULTS.md`](./AUDIT_2026-10_RESULTS.md) -- the Oct-2026
-audit kept ONE research candidate (`python/NQ1! Opening Drive 5m.py`) and removed fourteen that showed no edge.
+**What is in here:** the research candidates kept after the Oct-2026 audit (`python/NQ1! ...`). None has a proven edge;
+run them through the Full Pipeline before trusting any of them.
 
 This folder is the app's built-in strategy library. Strategies saved here
 (from the desktop app's Strategy tab or the mobile web app) are available
@@ -16,7 +16,7 @@ on every future run without re-uploading them from your computer or phone.
 
 ```
 strategies/
-├── manual/       *.json Manual Strategy configs (empty by default -- see AUDIT_2026-10_RESULTS.md)
+├── manual/       *.json Manual Strategy configs (empty by default)
 ├── python/       *.py strategy files (+ *.py.meta.json sidecars)
 ├── pinescript/   *.pine strategy files (+ *.pine.meta.json sidecars)
 └── mql5/         *.mq5 strategy files (+ *.mq5.meta.json sidecars)
