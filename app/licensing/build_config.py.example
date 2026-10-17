@@ -4,7 +4,7 @@ Build-time license configuration for the T58 Quant Algo Backtester.
 THIS FILE IS A TEMPLATE -- copy it to build_config.py (same directory) and
 fill in your values, or let the GitHub Actions build workflows generate
 build_config.py from the T58_LICENSE_SERVER_URL / T58_MASTER_LICENSE_KEY_HASH
-secrets (see .github/workflows/build-exe.yml "Bake license build config").
+secrets (see build_tools/bake_license_config.py).
 
 NEVER commit a build_config.py with real values -- it would ship your
 license server URL and master-key hash to everyone who can read the repo.
