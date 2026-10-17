@@ -118,8 +118,8 @@ T58 Quant Algo Backtester  --  READ ME FIRST
 4. MARKET DATA is a separate download (so this zip stays small):
    download  T58-Market-Data.zip  from the same release/run and extract it
    INTO THIS SAME FOLDER, so you end up with  data\\raw\\EURUSD\\...  next to
-   the .exe. Restart the app. The small sample in  data\\examples  works
-   without it.
+   the .exe. Restart the app. Without the market data the app opens but
+   has no datasets to test on.
 
 Troubleshooting
 ---------------
@@ -164,8 +164,8 @@ T58 Quant Algo Backtester  --  READ ME FIRST  ({platform})
 3. MARKET DATA is a separate download (so this zip stays small):
    download  T58-Market-Data.zip  from the same release/run and unzip it
    INTO THIS SAME FOLDER, so you end up with  data/raw/EURUSD/...  next to
-   the program. Restart the app. The small sample in  data/examples  works
-   without it.
+   the program. Restart the app. Without the market data the app opens but
+   has no datasets to test on.
 
 Troubleshooting
 ---------------
@@ -211,7 +211,6 @@ def collect_app_entries(dist: Path, tmp_dir: Path, platform: str = "windows") ->
         raise PackagingError(f"{dist} has no top-level executable -- did the PyInstaller build finish?")
     if not any(a.startswith("_internal/") for _, a in entries):
         raise PackagingError(f"{dist} has no _internal/ folder -- expected a PyInstaller one-folder build.")
-    entries += _walk(ROOT / "data" / "examples", "data/examples")
     entries += _walk(ROOT / "strategies", "strategies")
     # Customer-facing docs only -- the EULA / privacy / refund / Sentry files in
     # docs/buyer are templates with placeholders for the owner, not for customers.

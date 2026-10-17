@@ -29,7 +29,6 @@ from pathlib import Path
 COMMON_DATA = [
     ("config", "config"),                    # config/pyproject.toml -> version shown in the Account tab
     ("strategies", "strategies"),            # built-in Strategy Library (seeded on first run)
-    ("data/examples", "data/examples"),      # small sample dataset
     ("app/ui/assets", "app/ui/assets"),      # logo/icons used by the desktop UI and activation window
 ]
 WEB_DATA = [
