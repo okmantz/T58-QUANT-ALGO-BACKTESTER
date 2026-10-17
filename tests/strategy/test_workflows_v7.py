@@ -11,11 +11,12 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# workflow file -> release zip it produces
+# workflow file -> release zip name pattern it produces (one zip per OS, named via $PACKAGE)
 WORKFLOWS = {
-    ".github/workflows/build-exe.yml": "T58-Quant-Algo-Backtester-Windows.zip",
-    ".github/workflows/build-web-exe.yml": "T58-Web-App-Windows.zip",
+    ".github/workflows/desktop-cross-platform.yml": "T58-Quant-Algo-Backtester-${{ matrix.label }}.zip",
+    ".github/workflows/web-cross-platform.yml": "T58-Web-App-${{ matrix.label }}.zip",
 }
+PKG = "${{ env.PACKAGE }}"
 
 
 def _read(rel: str) -> str:
@@ -25,45 +26,31 @@ def _read(rel: str) -> str:
 
 
 def test_checksum_step_present_in_both_workflows():
+    # build_tools/package_release.py writes <zip>.sha256 for every app zip
+    # (and CRC-tests the archive), on every OS.
     for rel, zip_name in WORKFLOWS.items():
-        text = _read(rel).lower()
-        assert "get-filehash" in text and "sha256" in text, (
-            f"{rel}: no SHA-256 checksum step found "
-            f"(expected a Get-FileHash -Algorithm SHA256 step)"
-        )
+        text = _read(rel)
+        assert "package_release.py app" in text and f"PACKAGE: {zip_name}" in text, rel
+    assert "sha256" in (REPO_ROOT / "build_tools/package_release.py").read_text(encoding="utf-8").lower()
 
 
 def test_checksum_file_written_beside_the_zip():
-    for rel, zip_name in WORKFLOWS.items():
+    for rel in WORKFLOWS:
         text = _read(rel)
-        assert f"{zip_name}.sha256" in text, (
-            f"{rel}: the checksum step must write {zip_name}.sha256"
-        )
+        assert f"{PKG}.sha256" in text, f"{rel}: the checksum file must be uploaded next to the zip"
 
 
 def test_checksum_attached_to_github_release():
-    # The checksum is useless if it never leaves the runner: it must be
-    # attached to the GitHub Release next to the zip (softprops
-    # action-gh-release `files:`), where download_update() fetches it.
-    for rel, zip_name in WORKFLOWS.items():
+    for rel in WORKFLOWS:
         text = _read(rel)
         assert "action-gh-release" in text, f"{rel}: no release-attach step"
-        release_block = text.split("action-gh-release")[-1]
-        # only look at the release step's own `files:` input, not the whole file
-        files_input = release_block.split("files:")[1].split("\n\n")[0]
-        assert f"{zip_name}.sha256" in files_input, (
-            f"{rel}: {zip_name}.sha256 is not attached to the GitHub Release"
-        )
-        assert zip_name in files_input, f"{rel}: {zip_name} missing from release files"
+        files_input = text.split("action-gh-release")[-1].split("files:")[1]
+        assert f"{PKG}.sha256" in files_input and PKG in files_input, rel
 
 
 def test_checksum_uploaded_as_artifact():
-    # Artifact parity: the checksum should travel with the zip in the
-    # uploaded artifact too, for debugging a release without re-running.
-    for rel, zip_name in WORKFLOWS.items():
+    for rel in WORKFLOWS:
         text = _read(rel)
         assert "upload-artifact" in text, f"{rel}: no artifact-upload step"
-        artifact_block = text.split("upload-artifact")[-1].split("\n\n")[0]
-        assert f"{zip_name}.sha256" in artifact_block, (
-            f"{rel}: {zip_name}.sha256 is not in the uploaded artifact"
-        )
+        artifact_block = text.split("upload-artifact")[1].split("- name:")[0]
+        assert f"{PKG}.sha256" in artifact_block, rel
