@@ -59,7 +59,7 @@ _SKIP_PREFIXES = (
 )
 
 _SUMMARY = {
-    "READY": "All of T58's safety gates passed and the score is strong. This is the best verdict, not a guarantee.",
+    "READY": "Every T58 safety gate passed and the score is 75 or more (85+ is labelled Elite). This is the best verdict, not a guarantee.",
     "MARGINAL": "Promising, but something held it back from READY. Fix the points below, then re-run the check.",
     "NOT READY": "It failed a hard safety gate or scored too weakly to trust with real money.",
 }

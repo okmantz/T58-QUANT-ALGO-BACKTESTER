@@ -1,7 +1,7 @@
 """
 Best-effort "notify me when done" webhook helper.
 
-Closes the gap flagged in WEB_PARITY_ROADMAP-adjacent notes: every
+Closes a web/desktop parity gap: every
 long-running job (Evolution Lab, Search Lab, Full Pipeline batch) needed a
 human to come back and watch a progress page, with no email/SMS/webhook
 integration anywhere in the app besides a static "join our Discord" link.

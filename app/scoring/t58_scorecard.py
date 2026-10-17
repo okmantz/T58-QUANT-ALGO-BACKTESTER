@@ -98,9 +98,12 @@ redefines the other, and the old score's meaning is unchanged -- when
 `t58_conformance` is supplied it is only echoed on the result as a badge; it never
 changes the score, the weight coverage or the READY verdict.
 
-Tiers, also verbatim from the Masterclass material:
+Tiers (recalibrated 2026-10-17 so the score matches the gates; the Masterclass cuts of 92/85/75/65 made READY
+mean "excellent on everything"):
 
-    92+  Elite       85+  Strong       75+  Promising      65+  Research      <65  Reject
+    85+  Elite       75+  Strong       65+  Promising      <65  Reject
+
+READY = every hard gate passed AND score >= 75 (Strong or Elite). Elite is a label, not the READY bar.
 
 Several of these inputs (Monte Carlo robustness, parameter stability,
 expectancy, drawdown, parsimony, CPCV-as-supporting) aren't already
@@ -147,8 +150,13 @@ _WEIGHTS: dict[str, float] = {
     # coverage, or the READY verdict.
 }
 
+# Tier meaning (2026-10-17 recalibration): READY = every hard gate passed AND score >= READY_MIN_SCORE (75, the
+# "Strong" tier -- roughly 85% pass LB / 65% paid LB / 8% ruin with good secondary components). "Elite" (>= 85) is a
+# label for excellence on everything, NOT the READY bar. "Promising" (65-75) is MARGINAL; below 65 is Reject.
+READY_MIN_SCORE = 75.0
+ELITE_MIN_SCORE = 85.0
 _TIERS: list[tuple[float, str]] = [
-    (92.0, "Elite"), (85.0, "Strong"), (75.0, "Promising"), (65.0, "Research"),
+    (85.0, "Elite"), (75.0, "Strong"), (65.0, "Promising"),
 ]
 
 
@@ -195,7 +203,7 @@ class T58ScorecardInputs:
 @dataclass
 class T58ScorecardResult:
     score: float                 # 0-100
-    tier: str                    # "Elite" | "Strong" | "Promising" | "Research" | "Reject"
+    tier: str                    # "Elite" | "Strong" | "Promising" | "Reject"
     components: dict             # component name -> {"value": float|None, "weight": float, "contribution": float|None}
     n_components_used: int
     n_components_total: int
@@ -347,7 +355,7 @@ def _expectancy_score(average_r: float | None) -> float | None:
     RESCALED 2026-10-15: it used to be 0R -> 0 and 2R -> 100, which scored a genuinely good 0.3R
     edge at 15/100 and a 0.44R edge (the Masterclass Lesson 1 example) at 22/100. Combined with
     the other components that put the maximum reachable score at ~84.6 even with everything else
-    perfect -- just under the 85 'Strong' cut. This component is 5/120 = 4.2% of the total score."""
+    perfect -- just under the 85 'Elite' cut. This component is 5/120 = 4.2% of the total score."""
     if average_r is None:
         return None
     return _clip(average_r / _EXPECTANCY_FULL_SCORE_R * 100.0)

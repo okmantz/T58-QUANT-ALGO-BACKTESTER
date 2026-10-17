@@ -60,6 +60,7 @@ from typing import Callable
 import pandas as pd
 import numpy as np
 
+from app.optimize.genome_cache import genome_key
 from app.backtest.engine import run_backtest
 from app.backtest.execution import Trade
 from app.backtest.risk import RiskConfig, build_run_context
@@ -624,23 +625,23 @@ def run_walkforward_aware_refinement(
                 n_workers = safe_worker_count_for_bytes(
                     total_fold_bytes, requested=n_workers, max_candidates_in_flight=cfg.population_size,
                 )
-                pool = ProcessPoolExecutor(
-                    max_workers=n_workers,
-                    initializer=_ga_worker_init,
-                    initargs=(
+                # 2026-10-17: the persistent shared pool (app.orchestration.stage_pool) instead of a pool of our own -- the
+                # workers are spawned/imported once per run and reused by the walk-forward and DSR stages. The initializer
+                # runs lazily in each worker the first time it sees a task of this stage.
+                from app.orchestration.stage_pool import acquire_stage
+
+                pool = acquire_stage(
+                    n_workers, _ga_worker_init,
+                    (
                         worker_kind, manual_cfg, code_shim, genes, slice_paths,
                         asdict(risk), asdict(prop_rules), str(pool_tmp_dir),
                         asdict(search_mc_cfg), cfg.fitness_metric,
                         cfg.cost_stress_enabled, cfg.cost_stress_multiplier, cfg.cost_stress_penalty_weight,
                         adaptive_risk, cfg.risk_of_ruin_cap,
                     ),
-                    # Runs from a background thread in real usage (the
-                    # desktop GUI's Full Pipeline / Walk-Forward-Aware GA
-                    # tabs, the web app's search job) -- see
-                    # app.search.batch_runner's identical note for why
-                    # spawn is used instead of the platform-default fork.
-                    mp_context=multiprocessing.get_context("spawn"),
                 )
+                if pool is None:
+                    raise RuntimeError("shared worker pool unavailable")
                 log(f"Parallel search enabled across {n_workers} worker process(es).")
             except Exception as exc:  # noqa: BLE001 -- must never break the GA
                 log(f"Parallel search unavailable ({exc}) -- continuing on a single process.")
@@ -648,7 +649,7 @@ def run_walkforward_aware_refinement(
                     pool.shutdown(wait=False, cancel_futures=True)
                 pool = None
 
-        _memo: dict[tuple, tuple[float, int]] = {}
+        _memo: dict[tuple, tuple[float, int]] = {}   # keyed by genome_key: int genes rounded as the strategy will be built
 
         def _count_progress(n: int) -> None:
             if batch_progress_cb is not None:
@@ -665,7 +666,7 @@ def run_walkforward_aware_refinement(
             # total_evaluations as before so Bonferroni stays identical.
             if not genome_list:
                 return []
-            keys = [tuple(float(x) for x in g) for g in genome_list]
+            keys = [genome_key(genes, g) for g in genome_list]
             todo_idx: list[int] = []
             seen: dict[tuple, int] = {}
             for i, k in enumerate(keys):

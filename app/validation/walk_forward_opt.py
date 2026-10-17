@@ -248,7 +248,14 @@ def _optimize_on_window(
     if not genes:
         return [], None, None
 
+    from app.optimize.genome_cache import MemoTable, genome_key
+
+    _memo = MemoTable()    # 2026-10-17: identical (effective) genomes -- elites, clamped/rounded duplicates -- are scored once per window
+
     def evaluate(genome: list) -> float:
+        return _memo.get_or_compute(genome_key(genes, genome), lambda: _evaluate_uncached(genome))
+
+    def _evaluate_uncached(genome: list) -> float:
         candidate_strategy = build(genome)
         bt = run_backtest(train_df, candidate_strategy, risk)
         if not bt.trades:

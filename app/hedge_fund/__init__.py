@@ -5,8 +5,8 @@ built: closed-form math where possible, honest documented approximations
 where not, and glue code between desks that already exist in this
 codebase rather than a bolted-on fifth engine.
 
-Desk mapping (see docs/HEDGE_FUND_MANAGER.md for the full writeup this
-module was commissioned from):
+Desk mapping (Research -> Portfolio -> Execution -> Oversight; the Kronos / skfolio / NautilusTrader /
+Vibe-Trading desks re-implemented here rather than added as dependencies):
 
   Research   -> app.hedge_fund.research        (the "Kronos" seat)
   Portfolio  -> app.hedge_fund.black_litterman (the "skfolio" seat)

@@ -957,6 +957,91 @@ FIRM_FEES: dict[str, FirmFeeInfo] = {
     ),
 }
 
+# 2026-10-17: rows for the remaining presets so the EV verdict is no longer blind. EVERY figure below was read from a
+# SECONDARY comparison/review page on 2026-10-17 (none from the firm's own checkout), so each row is source_tier
+# "secondary" with written_confirmation=False. Where a source gave two prices or none, the HIGHER price is used
+# (conservative for EV) or the price is None (EV then reports INSUFFICIENT EVIDENCE rather than guess). CONFIRM
+# EVERY PRICE AT CHECKOUT before relying on an EV number.
+_CHECKED = "2026-10-17"
+
+
+def _secondary_fee(key: str, price, reset, split, url: str, policy_from_preset: bool = True, *, activation: float = 0.0,
+                   monthly: bool = False, notes: str = "") -> FirmFeeInfo:
+    preset = next((p for p in PROP_FIRM_PRESETS if p.key == key), None)
+    return FirmFeeInfo(
+        preset_key=key, challenge_price=price, reset_price=reset, profit_split_pct=split, source_url=url,
+        date_checked=_CHECKED, automation_policy=(preset.algo_policy_note if preset is not None else "") or "see preset note",
+        written_confirmation=False, source_tier="secondary", notes=notes, activation_fee=activation, monthly_subscription=monthly,
+    )
+
+
+_APEX_URL = "https://propfirmmap.com/blog/apex-trader-funding-review-2026-payouts-profit-split-otp"
+_APEX_NOTE = ("Apex went from monthly subscriptions to a ONE-TIME fee on 2026-03-01; prices verified by PropFirmMap on 2026-04-18 "
+              "(page modified 2026-09-14). Split: 100% until $25,000 cumulatively withdrawn, then 90/10 -- 90 used here (conservative). "
+              "Reset price not published on the page -> None. APEX BANS AUTOMATION (see automation_policy): READY/EV for a bot on Apex is "
+              "moot unless Apex confirms in writing.")
+_FIRM_FEE_ROWS = [
+    _secondary_fee("apex_50k_eod", 197.0, None, 90.0, _APEX_URL, activation=99.0, notes=_APEX_NOTE),
+    _secondary_fee("apex_50k_intraday", 132.0, None, 90.0, _APEX_URL, activation=79.0, notes=_APEX_NOTE),
+    _secondary_fee("apex_100k_eod", 297.0, None, 90.0, _APEX_URL, activation=99.0, notes=_APEX_NOTE),
+    _secondary_fee("apex_100k_intraday", 198.0, None, 90.0, _APEX_URL, activation=79.0, notes=_APEX_NOTE),
+    _secondary_fee(
+        "topstep_100k", 99.0, 99.0, 90.0, "https://proptradingvibes.com/blog/topstep-pricing-breakdown", activation=149.0, monthly=True,
+        notes="Standard Path: $99 PER MONTH (subscription), $99 reset (free if a matching Reset Credit is banked), $149 one-time activation "
+              "when passed. 'No Activation Fee' path ($149/mo, $0 activation) is not modelled. 90/10 from the first dollar for traders who "
+              "joined the dashboard on/after 2026-01-12. Page 'Updated September 7, 2026'; tradingfunder.com agrees on $99/$149/$149."),
+    _secondary_fee(
+        "the5ers_20k", None, None, 80.0, "https://thegodfunded.com/en/firms/the5ers",
+        notes="No High Stakes $20K price found on any page read (tiers shown: 2.5K, 5K, 10K, 25K, 50K, 100K) -> None, so EV says "
+              "INSUFFICIENT EVIDENCE. Split starts at 80% (scales to 100%). Automation needs the firm's prior WRITTEN approval."),
+    _secondary_fee(
+        "the5ers_100k", 545.0, None, 80.0, "https://propfirmsfinder.com/prop-firm/the5ers/challenges/",
+        notes="Sources disagree: $491 (fundedtrading.com, June 2026), ~$495 (same page text), $545 (propfirmsfinder.com) -> the highest used. "
+              "Refund terms conflict between pages (staged refund incl. non-withdrawable Hub Credits) so NO refund is modelled. "
+              "Split starts at 80%. Automation needs prior written approval."),
+    _secondary_fee(
+        "fundednext_25k", 189.99, None, 80.0, "https://propfirmmap.com/firms/fundednext",
+        notes="Page showed $189.99 and $142.49 for the 25K (probably list vs discounted) -> list price used. Split 'up to 95%'; 80% is a "
+              "CONSERVATIVE ASSUMPTION for the base split, not a verified figure. Fee 'refundable with 1st reward' is NOT modelled. "
+              "Terms last checked by the source 2026-07-18."),
+    _secondary_fee(
+        "fundednext_100k", 529.99, None, 80.0, "https://propfirmmap.com/firms/fundednext",
+        notes="Split 'up to 95%'; 80% is a CONSERVATIVE ASSUMPTION for the base split, not a verified figure. Refund-with-first-reward not "
+              "modelled. $50k+ FundedNext accounts must be traded manually (see automation_policy)."),
+    _secondary_fee(
+        "lucid_100k", None, None, 90.0, "https://tradingfunder.com/firms/lucid-trading/",
+        notes="No LucidPro 100K price could be attributed with confidence (propfirmmap listed a '$100K 1 Step' row at $225.40 sale / $307 list, "
+              "not labelled LucidPro) -> None. Lucid's price depends on DLL on/off and promotions. 90/10 split (tradingfunder.com, updated 2026-07-20)."),
+    _secondary_fee(
+        "e8_one_100k", 488.0, None, 80.0, "https://fundedtrading.com/propfirm/e8-markets/",
+        notes="Page (2026-09-03) showed $488 and $440 for the 100K -> higher used. Split is selectable at checkout (80/90/100%); 80% base used. "
+              "No fixed reset price; 10% discount for retrying within 7 days. One-time fee, no activation/subscription (proptradingvibes.com, 2026-08-26)."),
+    _secondary_fee(
+        "funderpro_one_phase_100k", 539.0, None, 80.0, "https://fundedtrading.com/hi/propfirm/funderpro/",
+        notes="$539 (July 2026). 80% base split, 90% with the Performance Reward add-on (not modelled). Fee refunded with first reward (not modelled). "
+              "No reset price published."),
+    _secondary_fee(
+        "atlas_funded_1step_100k", 478.0, None, 80.0, "https://fundedtrading.com/propfirm/atlas-funded/",
+        notes="Page showed $478 and $286 (unlabelled; the lower is probably a discount) -> higher used. The page claims '100%*' once funded with "
+              "an unexplained asterisk; 80% is a CONSERVATIVE PLACEHOLDER, not a verified split. No reset price for 1-Step on the page. No date on the page."),
+    _secondary_fee(
+        "futures_desk_50k", 144.0, 75.0, 80.0, "https://blog.traderspost.io/article/the-futures-desk-pricing-evaluation-guide",
+        notes="$50K: $144 EOD drawdown / $244 static; the $144 EOD row is used. Reset $75, activation $0 (all fees one-time). 80% split mentioned only in the "
+              "article's conclusion. Article dated 2026-02-10; The Futures Desk runs frequent promotions."),
+    _secondary_fee(
+        "ftmo_10k", None, None, 80.0, "https://tradingfunder.com/ftmo-rules/",
+        notes="Only a promotional '10K evaluation for EUR 89' (affiliate link) was found, in EUR and undated -> price left None (EUR/USD and "
+              "promo unknown). 2-Step split starts at 80% (90% with scaling/premium; 1-Step 90%). Fee refund with first reward not modelled."),
+    _secondary_fee(
+        "ftmo_100k", None, None, 80.0, "https://ftmo.com/en/",
+        notes="FTMO's pricing section is not readable by the tools used; no 100K price found -> None. Split starts at 80% (2-Step)."),
+    _secondary_fee(
+        "ftmo_200k", None, None, 80.0, "https://ftmo.com/en/",
+        notes="FTMO's pricing section is not readable by the tools used; no 200K price found -> None. Split starts at 80% (2-Step)."),
+]
+for _row in _FIRM_FEE_ROWS:
+    FIRM_FEES.setdefault(_row.preset_key, _row)
+
 
 def get_fee_info(preset_key: str) -> FirmFeeInfo | None:
     """Fee/reset row for a preset, or None when no fee data has been recorded for it."""

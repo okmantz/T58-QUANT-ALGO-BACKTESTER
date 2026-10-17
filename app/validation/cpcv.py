@@ -463,6 +463,74 @@ def _evaluate_pbo_path(task: dict):
     return task["path_idx"], vals[0], vals[1]
 
 
+def _pbo_from_path_results(path_results, n_candidates, n_groups, n_test_groups, metric, max_paths, note_suffix=""):
+    """Aggregate per-path (is_vals, oos_vals) pairs (None = skipped path) into a PBOResult."""
+    logits: list[float] = []
+    is_best_idx_per_path: list[int] = []
+    oos_rank_per_path: list[float] = []
+    is_matrix = np.zeros((len(path_results), n_candidates))
+    oos_matrix = np.zeros((len(path_results), n_candidates))
+    valid_path_count = 0
+    for path_idx, _evaluated in enumerate(path_results):
+        if _evaluated is None:
+            continue
+        is_vals, oos_vals = _evaluated
+
+        is_matrix[path_idx, :] = is_vals
+        oos_matrix[path_idx, :] = oos_vals
+        valid_path_count += 1
+
+        is_best = int(np.argmax(is_vals))
+        # OOS relative rank of that same candidate: fraction of candidates
+        # it beats out-of-sample, in (0, 1). 0.5 boundary => coin-flip.
+        oos_arr = np.array(oos_vals)
+        rank = float((oos_arr < oos_arr[is_best]).sum()) / max(n_candidates - 1, 1) if n_candidates > 1 else 1.0
+        # avoid exact 0/1 for a well-defined logit
+        rank_clamped = min(max(rank, 1e-3), 1 - 1e-3)
+        logit = math.log(rank_clamped / (1 - rank_clamped))
+
+        is_best_idx_per_path.append(is_best)
+        oos_rank_per_path.append(rank)
+        logits.append(logit)
+
+    if valid_path_count == 0:
+        raise CPCVError("No CPCV path produced enough train/test bars to evaluate any candidate.")
+
+    pbo = float(np.mean([r <= 0.5 for r in oos_rank_per_path])) if n_candidates > 1 else (0.0 if oos_rank_per_path and oos_rank_per_path[0] >= 0.5 else 1.0)
+
+    mean_is_by_candidate = is_matrix[:valid_path_count].mean(axis=0).tolist() if valid_path_count else [0.0] * n_candidates
+    mean_oos_by_candidate = oos_matrix[:valid_path_count].mean(axis=0).tolist() if valid_path_count else [0.0] * n_candidates
+    overall_best = int(np.argmax(mean_is_by_candidate))
+
+    note = (
+        f"PBO estimated from {valid_path_count} combinatorial train/test paths "
+        f"(C({n_groups},{n_test_groups}), capped at {max_paths or 'all'}). "
+        "Interpretation: the probability that the candidate which looked "
+        "best in-sample is, out-of-sample, no better than a coin flip "
+        "against the rest of the pool. Values above ~0.5 mean the search "
+        "process itself is more likely to be selecting noise than signal."
+    )
+    if n_candidates < 2:
+        note += " (n_candidates == 1: this result is degenerate -- PBO measures SELECTION among candidates.)"
+    note += note_suffix
+
+    return PBOResult(
+        n_candidates=n_candidates,
+        n_groups=n_groups,
+        n_test_groups=n_test_groups,
+        n_paths=valid_path_count,
+        metric=metric,
+        pbo=pbo,
+        logits=logits,
+        is_best_candidate_per_path=is_best_idx_per_path,
+        oos_rank_of_is_best_per_path=oos_rank_per_path,
+        overall_best_candidate_index=overall_best,
+        mean_is_by_candidate=mean_is_by_candidate,
+        mean_oos_by_candidate=mean_oos_by_candidate,
+        note=note,
+    )
+
+
 def compute_pbo(
     df: pd.DataFrame,
     candidate_specs: list[dict],
@@ -475,8 +543,17 @@ def compute_pbo(
     prop_rules=None,
     mc_cfg=None,
     max_workers: int | None = None,
+    precomputed_trades: list | None = None,
 ) -> PBOResult:
     """
+    precomputed_trades (2026-10-17): optional, aligned with ``candidate_specs`` -- each entry is the trade list from ONE
+    full backtest of that candidate on ``df`` (the Full Pipeline's DSR step already ran exactly that), or None. When
+    EVERY candidate has one and the metric is ``eval_pass_probability``, the CSCV paths are scored by partitioning those
+    trade lists by entry time into the path's train/test groups (embargoed edges dropped) instead of re-running
+    2 x n_paths x n_candidates backtests. The trade list comes from a single continuous run, so indicators are warm at
+    every group start and a trade is assigned to the group it was ENTERED in -- a closer match to how the strategy
+    would really trade than cold-started slices. Any other case runs the original per-path backtests unchanged.
+
     candidate_specs: the same uniform candidate-spec dicts used throughout
     the Search Lab (see app.search.strategy_space):
         {"source_type": "manual", "config": {...}}
@@ -515,6 +592,43 @@ def compute_pbo(
         idx = rng.choice(len(all_combos), size=max_paths, replace=False)
         all_combos = [all_combos[i] for i in sorted(idx)]
 
+    use_trade_lists = (
+        precomputed_trades is not None and len(precomputed_trades) == n_candidates
+        and all(t is not None for t in precomputed_trades)
+        and metric == "eval_pass_probability" and prop_rules is not None
+    )
+    if use_trade_lists:
+        ts_ns = pd.DatetimeIndex(df["timestamp"]).asi8
+        entry_ns = [pd.DatetimeIndex([t.entry_time for t in trades]).asi8 if trades else np.empty(0, dtype=np.int64)
+                    for trades in precomputed_trades]
+
+        def _group_range(lo: int, hi: int) -> tuple[int, int]:
+            lo2 = min(lo + embargo, hi)
+            hi2 = max(hi - embargo, lo2)
+            return (int(ts_ns[lo2]) if lo2 < n else np.iinfo(np.int64).max,
+                    int(ts_ns[hi2]) if hi2 < n else np.iinfo(np.int64).max)
+
+        ranges = [_group_range(lo, hi) for lo, hi in bounds]
+
+        def _subset(c: int, groups) -> list:
+            mask = np.zeros(len(entry_ns[c]), dtype=bool)
+            for g in groups:
+                a, b = ranges[g]
+                mask |= (entry_ns[c] >= a) & (entry_ns[c] < b)
+            return [t for t, m in zip(precomputed_trades[c], mask) if m]
+
+        path_results_fast: list = []
+        for test_groups in all_combos:
+            tg = set(test_groups)
+            train_groups = [g for g in range(n_groups) if g not in tg]
+            is_vals, oos_vals = [], []
+            for c in range(n_candidates):
+                is_vals.append(_metric_value({}, metric, _subset(c, train_groups), prop_rules, mc_cfg))
+                oos_vals.append(_metric_value({}, metric, _subset(c, sorted(tg)), prop_rules, mc_cfg))
+            path_results_fast.append((is_vals, oos_vals))
+        return _pbo_from_path_results(path_results_fast, n_candidates, n_groups, n_test_groups, metric, max_paths,
+                                      note_suffix=" (scored from the candidates' existing full-run trade lists, not re-backtested per path)")
+
     with_tmp = any(spec.get("source_type") == "python" for spec in candidate_specs)
     tmp_dir = None
     if with_tmp:
@@ -523,13 +637,6 @@ def compute_pbo(
         tmp_dir = Path(tempfile.mkdtemp(prefix="t58_pbo_"))
 
     try:
-        logits: list[float] = []
-        is_best_idx_per_path: list[int] = []
-        oos_rank_per_path: list[float] = []
-        is_matrix = np.zeros((len(all_combos), n_candidates))
-        oos_matrix = np.zeros((len(all_combos), n_candidates))
-        valid_path_count = 0
-
         # SPEED (v9.4): every path is independent (fresh strategy
         # builds, read-only slices, fixed-seed Monte Carlo), so paths
         # evaluate across a process pool. Results are re-keyed by
@@ -587,63 +694,7 @@ def compute_pbo(
                 if _ev is not None:
                     path_results[_i] = (_ev[1], _ev[2])
 
-        for path_idx, _evaluated in enumerate(path_results):
-            if _evaluated is None:
-                continue
-            is_vals, oos_vals = _evaluated
-
-            is_matrix[path_idx, :] = is_vals
-            oos_matrix[path_idx, :] = oos_vals
-            valid_path_count += 1
-
-            is_best = int(np.argmax(is_vals))
-            # OOS relative rank of that same candidate: fraction of candidates
-            # it beats out-of-sample, in (0, 1). 0.5 boundary => coin-flip.
-            oos_arr = np.array(oos_vals)
-            rank = float((oos_arr < oos_arr[is_best]).sum()) / max(n_candidates - 1, 1) if n_candidates > 1 else 1.0
-            # avoid exact 0/1 for a well-defined logit
-            rank_clamped = min(max(rank, 1e-3), 1 - 1e-3)
-            logit = math.log(rank_clamped / (1 - rank_clamped))
-
-            is_best_idx_per_path.append(is_best)
-            oos_rank_per_path.append(rank)
-            logits.append(logit)
-
-        if valid_path_count == 0:
-            raise CPCVError("No CPCV path produced enough train/test bars to evaluate any candidate.")
-
-        pbo = float(np.mean([r <= 0.5 for r in oos_rank_per_path])) if n_candidates > 1 else (0.0 if oos_rank_per_path and oos_rank_per_path[0] >= 0.5 else 1.0)
-
-        mean_is_by_candidate = is_matrix[:valid_path_count].mean(axis=0).tolist() if valid_path_count else [0.0] * n_candidates
-        mean_oos_by_candidate = oos_matrix[:valid_path_count].mean(axis=0).tolist() if valid_path_count else [0.0] * n_candidates
-        overall_best = int(np.argmax(mean_is_by_candidate))
-
-        note = (
-            f"PBO estimated from {valid_path_count} combinatorial train/test paths "
-            f"(C({n_groups},{n_test_groups}), capped at {max_paths or 'all'}). "
-            "Interpretation: the probability that the candidate which looked "
-            "best in-sample is, out-of-sample, no better than a coin flip "
-            "against the rest of the pool. Values above ~0.5 mean the search "
-            "process itself is more likely to be selecting noise than signal."
-        )
-        if n_candidates < 2:
-            note += " (n_candidates == 1: this result is degenerate -- PBO measures SELECTION among candidates.)"
-
-        return PBOResult(
-            n_candidates=n_candidates,
-            n_groups=n_groups,
-            n_test_groups=n_test_groups,
-            n_paths=valid_path_count,
-            metric=metric,
-            pbo=pbo,
-            logits=logits,
-            is_best_candidate_per_path=is_best_idx_per_path,
-            oos_rank_of_is_best_per_path=oos_rank_per_path,
-            overall_best_candidate_index=overall_best,
-            mean_is_by_candidate=mean_is_by_candidate,
-            mean_oos_by_candidate=mean_oos_by_candidate,
-            note=note,
-        )
+        return _pbo_from_path_results(path_results, n_candidates, n_groups, n_test_groups, metric, max_paths)
     finally:
         if tmp_dir is not None:
             import shutil

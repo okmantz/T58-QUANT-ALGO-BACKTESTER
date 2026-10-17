@@ -9,6 +9,8 @@
         - SYNTHETIC data (manifest flag, a SYNTHETIC token in the file name/label) -> never
         - fewer than ``MIN_YEARS_FOR_READY`` (5) years of history in the frame -> never
         - a manifest row flagged unreadable -> never
+        - futures-style data that still carries contract-roll jumps (splices / interleaved flips) -> never
+          (re-import it back-adjusted; the importer does this automatically for continuous-future files)
     and returns reasons. ``check_dataset`` never raises; if it cannot decide it says so.
   * ``assert_manifest_fresh()`` is the pipeline-start check: when a manifest exists it warns about
     manifest rows whose files are missing on disk.
@@ -23,8 +25,37 @@ from pathlib import Path
 import pandas as pd
 
 MIN_YEARS_FOR_READY = 5.0
+MIN_ROLL_EVENTS_TO_FLAG = 2     # one stray jump can be a real gap; two or more is a roll pattern
 MANIFEST_RELATIVE = Path("data") / "data_manifest.json"
 _SYNTH = re.compile(r"synthetic|\bfake\b|\bsim(ulated)?\b|\bdemo\b", re.I)
+
+
+_FUTURES_ROOTS = (
+    "es|nq|ym|rty|mes|mnq|mym|m2k|gc|mgc|si|hg|pl|pa|cl|mcl|ng|rb|ho|zn|zb|zf|zt|zc|zs|zw|zl|zm|6e|6j|6b|6a|6c|6s|le|he|vx"
+)
+_FUTURES_TOKEN = re.compile(rf"^(?:{_FUTURES_ROOTS})\d*$|^(?:futures?|fut)$")
+
+
+def looks_like_futures(label: str | None) -> bool:
+    """True when a file/label looks like a (continuous) futures series, e.g. ``NQ1!/NQ_1m.parquet``,
+    ``futures_ES.F_1m.parquet``, ``GC_1min.csv``. Spot FX / crypto / equities return False."""
+    if not label:
+        return False
+    tokens = [t for t in re.split(r"[^a-z0-9]+", str(label).lower().replace("\\", "/")) if t]
+    return any(_FUTURES_TOKEN.match(t) for t in tokens)
+
+
+def roll_gap_counts(df: pd.DataFrame | None) -> tuple[int, int] | None:
+    """(isolated contract splices, interleaved contract flips) still present in ``df``, or None if it
+    cannot be measured. Back-adjusted data returns (0, 0)."""
+    try:
+        from app.data.continuous_contract import detect_splices_and_interleaves
+        if df is None or len(df) < 1000 or not {"timestamp", "open", "high", "low", "close"} <= set(df.columns):
+            return None
+        rep = detect_splices_and_interleaves(df)
+        return len(rep.splice_rolls), len(rep.interleave_events)
+    except Exception:  # noqa: BLE001 -- the gate must never raise
+        return None
 
 
 @dataclass
@@ -94,6 +125,11 @@ def check_dataset(df: pd.DataFrame | None, label: str | None = None, *, manifest
         reasons.append("DATA GATE: could not measure the history length of this dataset; READY is not allowed on unmeasured data.")
     elif years < min_years:
         reasons.append(f"DATA GATE: only {years:.1f} years of history (< {min_years:g}); too short to cover more than one volatility regime, so READY is not allowed.")
+    if df is not None and looks_like_futures(label):
+        counts = roll_gap_counts(df)
+        if counts is not None and counts[0] + counts[1] >= MIN_ROLL_EVENTS_TO_FLAG:
+            reasons.append(f"DATA GATE: '{label}' carries unadjusted contract-roll gaps ({counts[0]} splice(s), {counts[1]} interleaved flip(s)); "
+                           "every roll is a fake price jump the strategy can 'trade', so READY is not allowed. Re-import it back-adjusted.")
     return DataGateResult(ok_for_ready=not reasons, years=years, synthetic=synthetic, reasons=reasons, manifest_row=row)
 
 

@@ -7605,7 +7605,7 @@ def serve_ensemble_report(filename):
 # multi-candidate PBO (Probability of Backtest Overfitting) needs a POOL of
 # already-tried candidates (e.g. a Search Lab leaderboard or a Refinement
 # run's final generation) as input rather than a single strategy config, so
-# it isn't wired up here yet -- see WEB_PARITY_ROADMAP.md.
+# it isn't wired up here yet.
 #
 # MIGRATED (item 2): backed by the shared JOB_MANAGER, same as WFO above.
 # ---------------------------------------------------------------------------
@@ -10361,9 +10361,13 @@ def search_start():
         # kwarg -- every /search/start POST 500'd. Valid values are only
         # "templates" | "grammar"; grammar draws ADD to the template pool,
         # they never replace it.)
+        # 2026-10-17: a grid around the user's OWN strategy (single / family_grid) must not silently mix in invented
+        # manual structures unless the form explicitly asks for them -- that made the python grid's leaderboard
+        # contain manual rows (and flaked test_search_family_grid_python_end_to_end).
+        _invent_default = "off" if mode_key in ("single", "family_grid") else "on"
         candidate_source = (
             "grammar"
-            if (form.get("invent_structures") or "on") == "on"
+            if (form.get("invent_structures") or _invent_default) == "on"
             else "templates"
         )
         stage_cfg = SearchStageConfig(
@@ -10382,6 +10386,7 @@ def search_start():
             fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
             # B1-2 (w4-forge): Stage 3 payout acceptance floor, 0-100 scale
             min_first_payout_probability=float(form.get("min_first_payout_probability", 50.0) or 50.0),
+            min_eval_pass_probability=float(form.get("min_eval_pass_probability", 70.0) or 70.0),
             workers=int(workers_raw) if workers_raw else None,
             random_seed=seed,
             reset_on_breach=form.get("reset_on_breach") == "on",
@@ -11696,6 +11701,8 @@ def search_multi_instrument_start():
             walk_forward_folds=int(form.get("walk_forward_folds", 4) or 4),
             robustness_neighbors=int(form.get("robustness_neighbors", 6) or 6),
             fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
+            min_eval_pass_probability=float(form.get("min_eval_pass_probability", 70.0) or 70.0),
+            min_first_payout_probability=float(form.get("min_first_payout_probability", 50.0) or 50.0),
             workers=None, random_seed=int(form.get("seed", 42) or 42),
             optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
         )

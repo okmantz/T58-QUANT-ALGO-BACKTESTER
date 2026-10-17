@@ -624,35 +624,47 @@ def _dsr_worker_task(spec):
         )
         # 2026-10-12 audit (DSR UNITS): the PSR / Deflated Sharpe needs a NON-annualized per-trade Sharpe
         # (same units as T = number of trades); statistics.sharpe_ratio is bar-level and annualized.
-        return float(bt.statistics.sharpe_per_trade)
+        return float(bt.statistics.sharpe_per_trade), list(bt.trades)
     except Exception:  # noqa: BLE001 -- one bad genome must not kill the gate
         return None
 
 
-def _trial_sharpes_for_specs(specs: list, df, risk, tmp_dir, workers) -> list[float]:
+def _trial_sharpes_for_specs(specs: list, df, risk, tmp_dir, workers, trade_sink: dict | None = None) -> list[float]:
     """One full backtest per candidate spec, in spec order, failures
     skipped -- the exact list the DSR gate's serial loop produced.
     Parallel (spawn pool, initializer-held frame) when there are enough
-    specs to amortize the spawn; serial otherwise and on any failure."""
+    specs to amortize the spawn; serial otherwise and on any failure.
+
+    ``trade_sink`` (optional dict): filled with ``{index_in_specs: trade_list}`` for every spec that backtested, so
+    the PBO gate can score its CSCV paths from these trade lists instead of re-running the backtests (2026-10-17)."""
     if workers is not None and int(workers) > 1 and len(specs) >= 4:
         try:
-            import multiprocessing
+            from app.orchestration.stage_pool import acquire_stage
 
-            ctx = multiprocessing.get_context("spawn")
-            with ProcessPoolExecutor(
-                max_workers=int(workers), mp_context=ctx,
-                initializer=_dsr_worker_init,
-                initargs=(df, risk, str(tmp_dir) if tmp_dir is not None else None),
-            ) as pool:
-                results = list(pool.map(_dsr_worker_task, specs))
-            return [v for v in results if v is not None]
+            stage = acquire_stage(
+                int(workers), _dsr_worker_init, (df, risk, str(tmp_dir) if tmp_dir is not None else None))
+            if stage is None:
+                raise RuntimeError("shared worker pool unavailable")
+            try:
+                results = list(stage.map(_dsr_worker_task, specs))
+            finally:
+                stage.shutdown()
+            if trade_sink is not None:
+                for _i, _r in enumerate(results):
+                    if _r is not None:
+                        trade_sink[_i] = _r[1]
+            return [r[0] for r in results if r is not None]
         except Exception:  # noqa: BLE001 -- serial below is the same math
             pass
     out: list[float] = []
-    for spec in specs:
+    if trade_sink is not None:
+        trade_sink.clear()
+    for _i, spec in enumerate(specs):
         try:
             cand_bt = run_backtest(df, build_strategy_from_spec(spec, tmp_dir), risk)
             out.append(float(cand_bt.statistics.sharpe_per_trade))   # per-trade, see _dsr_worker_task
+            if trade_sink is not None:
+                trade_sink[_i] = list(cand_bt.trades)
         except Exception:  # noqa: BLE001 -- one bad genome must not kill the gate
             continue
     return out
@@ -792,7 +804,7 @@ def _make_verdict_core(
     risk_of_ruin_hard_fail, lookahead_hard_fail).
     `verdict` stays one of the same three strings ("READY" / "MARGINAL" /
     "NOT READY") every existing caller and test already expects --
-    Elite/Strong tiers -> READY, Promising/Research -> MARGINAL, Reject
+    score >= 75 (Strong/Elite tiers) -> READY (given every hard gate), Promising -> MARGINAL, Reject
     (or a hard-fail) -> NOT READY. `scorecard_result` carries the
     actual continuous score/tier/component breakdown for anything that
     wants more resolution than the 3-way verdict (e.g. the leaderboard).
@@ -1051,7 +1063,7 @@ def _make_verdict_core(
 
     if scorecard.tier in ("Elite", "Strong"):
         verdict = "READY"
-    elif scorecard.tier in ("Promising", "Research"):
+    elif scorecard.tier == "Promising":
         verdict = "MARGINAL"
     else:
         verdict = "NOT READY"
@@ -2528,6 +2540,7 @@ def run_full_pipeline(
         _check_cancel()
         dsr_gate_result = None
         dsr_skip_reason = None
+        leaderboard_trades: dict = {}
         if cfg.dsr_gate_enabled:
             log("Step 6c/7: Deflated Sharpe gate (multiple-testing correction)...")
             try:
@@ -2547,13 +2560,18 @@ def run_full_pipeline(
                     # same order, same per-genome failure skips; serial
                     # fallback on any pool failure).
                     _dsr_specs = []
-                    for cand in ga_result.leaderboard:
+                    _dsr_lb_index = []                      # leaderboard position of each DSR spec
+                    for _lb_i, cand in enumerate(ga_result.leaderboard):
                         try:
                             _dsr_specs.append(_leaderboard_candidate_spec(cand, final_source_type))
+                            _dsr_lb_index.append(_lb_i)
                         except Exception:  # noqa: BLE001 -- one bad genome must not kill the gate
                             continue
+                    _dsr_sink: dict = {}
                     trial_sharpes = _trial_sharpes_for_specs(
-                        _dsr_specs, dev_df, risk, final_tmp_dir, _mc_workers)
+                        _dsr_specs, dev_df, risk, final_tmp_dir, _mc_workers, trade_sink=_dsr_sink)
+                    # the PBO gate (6d) reuses these full-run trade lists instead of re-backtesting every CPCV path
+                    leaderboard_trades = {_dsr_lb_index[_k]: _tr for _k, _tr in _dsr_sink.items()}
                 if not trial_sharpes:
                     # No GA leaderboard to sample a spread from (refinement
                     # didn't run or produced nothing re-backtestable): fall
@@ -2648,10 +2666,12 @@ def run_full_pipeline(
             log("Step 6d/7: PBO gate (probability of backtest overfitting)...")
             try:
                 pbo_specs = []
+                pbo_trades: list = []
                 if refinement_ran and ga_result is not None and ga_result.leaderboard:
-                    for cand in ga_result.leaderboard[: max(int(cfg.pbo_max_candidates), 2)]:
+                    for _lb_i, cand in enumerate(ga_result.leaderboard[: max(int(cfg.pbo_max_candidates), 2)]):
                         try:
                             pbo_specs.append(_leaderboard_candidate_spec(cand, final_source_type))
+                            pbo_trades.append(leaderboard_trades.get(_lb_i))
                         except Exception:  # noqa: BLE001 -- one bad genome must not kill the gate
                             continue
                 if len(pbo_specs) >= 2:
@@ -2666,6 +2686,8 @@ def run_full_pipeline(
                         # also holds the frame in its initializer instead
                         # of pickling it per path).
                         max_workers=_mc_workers,
+                        # 2026-10-17: the DSR step already backtested these exact specs on dev_df -- reuse the trade lists
+                        precomputed_trades=pbo_trades if all(t is not None for t in pbo_trades) else None,
                     )
                     pbo_gate_result = pbo_gate(pbo_res, max_pbo=cfg.pbo_max)
                     log(f"  {pbo_gate_result.reason}")

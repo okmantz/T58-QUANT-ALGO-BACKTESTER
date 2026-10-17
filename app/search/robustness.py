@@ -426,15 +426,19 @@ def run_walk_forward(
             workers = safe_worker_count(
                 df, requested=int(max_workers), max_candidates_in_flight=len(fold_spans))
             if workers > 1:
-                ctx = multiprocessing.get_context("spawn")
-                with ProcessPoolExecutor(
-                    max_workers=workers, mp_context=ctx,
-                    initializer=_wf_worker_init,
-                    initargs=(df, risk, metric, prop_rules, mc_cfg,
-                              strategy_spec, str(tmp_dir) if tmp_dir is not None else None),
-                ) as pool:
-                    for _fi, _res in pool.map(_wf_worker_task, fold_spans):
-                        fold_results[_fi] = _res
+                # 2026-10-17: shared persistent pool; the frame is spilled once and loaded by each worker.
+                from app.orchestration.stage_pool import acquire_stage
+
+                stage = acquire_stage(
+                    workers, _wf_worker_init,
+                    (df, risk, metric, prop_rules, mc_cfg, strategy_spec, str(tmp_dir) if tmp_dir is not None else None),
+                )
+                if stage is not None:
+                    try:
+                        for _fi, _res in stage.map(_wf_worker_task, fold_spans):
+                            fold_results[_fi] = _res
+                    finally:
+                        stage.shutdown()
         except Exception:  # noqa: BLE001 -- serial below is the same math
             fold_results = [None] * len(fold_spans)
 
