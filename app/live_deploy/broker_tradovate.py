@@ -113,42 +113,62 @@ class TradovateBrokerAdapter(BrokerAdapter):
         except Exception:
             return False
 
+    def _post(self, path: str, payload: dict, timeout: float = 20):
+        r = self._session.post(f"{self.base_url}{path}", json=payload, timeout=timeout)
+        try:
+            data = r.json()
+        except ValueError:
+            data = {"raw": r.text}
+        return r.status_code, data
+
     def account_summary(self) -> Optional[dict]:
         if not self.access_token:
             return None
         try:
-            cash = self._session.get(f"{self.base_url}/cashBalance/getcashbalancesnapshot",
-                                      params={"accountId": self.account_id}, timeout=15).json()
+            # getcashbalancesnapshot is a POST taking {accountId}
+            status, cash = self._post("/cashBalance/getcashbalancesnapshot", {"accountId": self.account_id}, 15)
+            if status >= 400 or not isinstance(cash, dict):
+                return None
+            bal = cash.get("totalCashValue", cash.get("cashBalance"))
+            net_liq = cash.get("netLiq")
+            if net_liq is None:
+                net_liq = (bal or 0) + (cash.get("openPnL") or 0) if bal is not None else None
             return {
                 "login": self.account_id, "server": "Tradovate",
-                "balance": cash.get("cashBalance") or cash.get("amount"),
-                "equity": cash.get("netLiq") or cash.get("cashBalance"),
-                "margin_free": None, "currency": cash.get("currency", "USD"),
+                "balance": bal, "equity": net_liq,
+                "margin_free": None, "currency": "USD",
             }
         except Exception:
             return None
 
     def fetch_completed_bars(self, symbol: str, timeframe_minutes: int, count: int) -> pd.DataFrame:
-        chart_kind, unit = _TIMEFRAME_TO_CHART.get(timeframe_minutes, (None, None))
-        if chart_kind is None:
-            raise ValueError(f"Unsupported timeframe: {timeframe_minutes} minutes. Supported: {sorted(_TIMEFRAME_TO_CHART)}.")
-        # Tradovate's real-time chart history is normally streamed over their
-        # WebSocket `md` service (md.tradovateapi.com); this REST call hits
-        # their historical-quote endpoint as a simpler (but less complete)
-        # substitute -- see module docstring.
-        resp = self._session.get(f"{self.base_url}/md/getchart", params={
-            "symbol": symbol, "chartDescription": chart_kind, "elementSize": unit,
-            "elementSizeUnit": "UnderlyingUnits", "withHistogram": "false", "count": count + 1,
-        }, timeout=20)
-        data = resp.json()
-        bars = data.get("bars", data if isinstance(data, list) else [])
-        rows = [{
-            "timestamp": pd.to_datetime(b["timestamp"], utc=True),
-            "open": float(b["open"]), "high": float(b["high"]),
-            "low": float(b["low"]), "close": float(b["close"]), "volume": float(b.get("upVolume", 0) + b.get("downVolume", 0)),
-        } for b in bars]
-        df = pd.DataFrame(rows).sort_values("timestamp").reset_index(drop=True)
-        return df.iloc[:-1] if len(df) > 1 else df
+        # Tradovate only serves chart history over its WebSocket market-data
+        # service; there is no REST equivalent. The webhook relay (TradingView
+        # supplies the signal) never needs bars from the broker, so refuse
+        # clearly instead of returning wrong data.
+        raise ValueError(
+            "Tradovate chart history is WebSocket-only and not implemented in this adapter. "
+            "Use a data source (Databento/Polygon/Alpaca/...) for bars; Tradovate is used for execution only."
+        )
+
+    def _contract_name(self, contract_id) -> str:
+        cache = self.__dict__.setdefault("_contract_cache", {})
+        if contract_id in cache:
+            return cache[contract_id]
+        try:
+            r = self._session.get(f"{self.base_url}/contract/item", params={"id": contract_id}, timeout=10)
+            name = r.json().get("name") or str(contract_id)
+        except Exception:
+            name = str(contract_id)
+        cache[contract_id] = name
+        return name
+
+    def _contract_id(self, symbol: str):
+        try:
+            r = self._session.get(f"{self.base_url}/contract/find", params={"name": symbol}, timeout=10)
+            return r.json().get("id")
+        except Exception:
+            return None
 
     def get_open_positions(self, symbol: Optional[str] = None) -> list[OpenPosition]:
         try:
@@ -159,15 +179,15 @@ class TradovateBrokerAdapter(BrokerAdapter):
         for p in positions:
             if p.get("accountId") != self.account_id or p.get("netPos", 0) == 0:
                 continue
-            sym = p.get("contractName") or str(p.get("contractId"))
+            sym = p.get("contractName") or self._contract_name(p.get("contractId"))
             if symbol and sym != symbol:
                 continue
             net = p["netPos"]
             out.append(OpenPosition(
                 ticket=str(p["id"]), symbol=sym, direction=1 if net > 0 else -1,
-                volume=abs(net), open_price=p.get("netPrice", 0.0), sl=0.0, tp=0.0,
-                open_time=pd.to_datetime(p.get("timestamp", pd.Timestamp.utcnow()), utc=True),
-                profit=p.get("openPl", 0.0),
+                volume=abs(net), open_price=float(p.get("netPrice") or p.get("prevPrice") or 0.0), sl=0.0, tp=0.0,
+                open_time=pd.to_datetime(p.get("timestamp", pd.Timestamp.now(tz="UTC")), utc=True),
+                profit=float(p.get("openPl") or 0.0),
             ))
         return out
 
@@ -191,17 +211,36 @@ class TradovateBrokerAdapter(BrokerAdapter):
         # `volume` here is broker-native: WHOLE CONTRACTS, converted via
         # to_broker_qty by the caller -- never raw sizing units (v7 P0-1).
         try:
-            resp = self._session.post(f"{self.base_url}/order/placeorder", json={
-                "accountId": self.account_id, "symbol": symbol,
+            status, data = self._post("/order/placeorder", {
+                "accountSpec": self.username, "accountId": self.account_id, "symbol": symbol,
                 "action": "Buy" if direction == 1 else "Sell",
-                "orderQty": int(volume), "orderType": "Market",
-            }, timeout=20)
-            data = resp.json()
-            if "orderId" not in data and "failureReason" in data:
-                return OrderResult(ok=False, message=data.get("failureText", str(data)))
-            return OrderResult(ok=True, message="Order submitted.", ticket=str(data.get("orderId")), volume=volume)
+                "orderQty": int(volume), "orderType": "Market", "isAutomated": True,
+            })
+            if status >= 400 or not isinstance(data, dict):
+                return OrderResult(ok=False, message=f"HTTP {status}: {data}")
+            if data.get("failureReason") or data.get("failureText") or "orderId" not in data:
+                return OrderResult(ok=False, message=data.get("failureText") or data.get("errorText") or str(data))
+            order_id = data["orderId"]
+            price = self._fill_price(order_id)
+            return OrderResult(ok=True, message="Order submitted.", ticket=str(order_id),
+                               price=price, volume=volume)
         except Exception as exc:
             return OrderResult(ok=False, message=str(exc))
+
+    def _fill_price(self, order_id) -> Optional[float]:
+        import time as _t
+        for _ in range(3):
+            try:
+                r = self._session.get(f"{self.base_url}/fill/ldeps", params={"masterids": order_id}, timeout=10)
+                fills = r.json()
+                if isinstance(fills, list) and fills:
+                    qty = sum(float(f.get("qty") or 0) for f in fills)
+                    if qty > 0:
+                        return sum(float(f.get("price") or 0) * float(f.get("qty") or 0) for f in fills) / qty
+            except Exception:
+                pass
+            _t.sleep(0.4)
+        return None
 
     def close_position(self, ticket: str, comment: str = "T58 Live close") -> OrderResult:
         # v7 P0-4: verify the API response before reporting success -- the
@@ -209,18 +248,23 @@ class TradovateBrokerAdapter(BrokerAdapter):
         # liquidation, leaving the session journal believing a position
         # was flat while it was still open.
         try:
-            resp = self._session.post(f"{self.base_url}/order/liquidateposition", json={
-                "accountId": self.account_id, "positionId": int(ticket),
-            }, timeout=20)
-            data = resp.json()
+            pos = next((p for p in self._session.get(f"{self.base_url}/position/list", timeout=15).json()
+                        if str(p.get("id")) == str(ticket)), None)
+            if pos is None:
+                return OrderResult(ok=False, message=f"Position {ticket} not found on Tradovate.")
+            status, data = self._post("/order/liquidateposition", {
+                "accountId": self.account_id, "contractId": pos["contractId"],
+                "admin": False, "customTag50": "T58",
+            })
         except Exception as exc:
             return OrderResult(ok=False, message=str(exc))
-        if resp.status_code >= 400:
+        if status >= 400:
             detail = data.get("failureText") or data.get("errorText") if isinstance(data, dict) else None
-            return OrderResult(ok=False, message=f"Tradovate rejected the close (HTTP {resp.status_code}): {detail or data}")
+            return OrderResult(ok=False, message=f"Tradovate rejected the close (HTTP {status}): {detail or data}")
         if isinstance(data, dict) and ("failureReason" in data or "failureText" in data):
             return OrderResult(
                 ok=False,
                 message=f"Tradovate rejected the close: {data.get('failureText') or data.get('failureReason')}",
             )
-        return OrderResult(ok=True, message="Close submitted.", ticket=ticket)
+        px = self._fill_price(data["orderId"]) if isinstance(data, dict) and data.get("orderId") else None
+        return OrderResult(ok=True, message="Close submitted.", ticket=ticket, price=px)

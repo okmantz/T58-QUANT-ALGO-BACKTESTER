@@ -140,7 +140,7 @@ class DXtradeBrokerAdapter(BrokerAdapter):
                 direction=1 if qty > 0 else -1, volume=abs(qty),
                 open_price=float(p.get("averagePrice", p.get("price", 0))),
                 sl=float(p.get("stopLoss", 0) or 0), tp=float(p.get("takeProfit", 0) or 0),
-                open_time=pd.to_datetime(p.get("openTime", pd.Timestamp.utcnow()), utc=True),
+                open_time=pd.to_datetime(p.get("openTime", pd.Timestamp.now(tz="UTC")), utc=True),
                 profit=float(p.get("unrealizedPnl", p.get("pnl", 0)) or 0),
             ))
         return out

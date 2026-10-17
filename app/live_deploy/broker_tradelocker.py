@@ -1,33 +1,31 @@
 """
-TradeLocker adapter -- TradeLocker is the platform behind several
-FundedNext account types and a growing list of other forex/CFD prop
-firms as an alternative to MT5/cTrader.
+TradeLocker adapter (REST + JSON) -- the platform behind several prop firms.
 
-TradeLocker's API is REST + JSON, documented at https://tradelocker.com
-(developer docs linked from your broker/firm dashboard once you have an
-account). No local terminal, no paid API tier as of this writing --
-verify current terms, since access models across all these newer
-platforms move faster than MT4/MT5's.
+Request shapes follow the official ``tradelocker`` Python client
+(github.com/TradeLocker/tradelocker-python):
 
-Auth model: email + password + the specific "server" your account lives
-on (shown in your TradeLocker dashboard, analogous to an MT5 server
-name), exchanged for a short-lived access token + a refresh token this
-adapter uses to silently re-authenticate.
+* auth      POST /auth/jwt/token     {"email","password","server"} -> accessToken/refreshToken
+* refresh   POST /auth/jwt/refresh   {"refreshToken"}
+* accounts  GET  /auth/jwt/all-accounts -> {"accounts":[{id, accNum, name, currency, ...}]}
+* every /trade/* call needs the header ``accNum``
+* config    GET  /trade/config  -> column names for array-shaped payloads
+* instruments GET /trade/accounts/{id}/instruments -> d.instruments[] with
+              tradableInstrumentId, name, routes[{id,type:"TRADE"|"INFO"}]
+* positions GET  /trade/accounts/{id}/positions -> d.positions = LIST OF LISTS
+* state     GET  /trade/accounts/{id}/state     -> d.accountDetailsData = LIST
+* order     POST /trade/accounts/{id}/orders  (routeId = the instrument's TRADE route)
+* close     DELETE /trade/positions/{positionId}  {"qty": "0"} (0 = whole position)
+* history   GET  /trade/history?tradableInstrumentId&routeId(INFO)&resolution&from&to (ms)
 
-HONESTY NOTE (see broker_base.py's module docstring): written against
-TradeLocker's published REST reference, not exercised against a live
-account by anyone on this project -- of the four new adapters in this
-package, this is the one with the least certain endpoint/field-name
-accuracy, since TradeLocker's public docs are newer and thinner than
-MT5/cTrader/Tradovate's. Treat every endpoint path and field name below
-as a first draft to verify against your own account's actual API
-responses (call each endpoint once from a REPL and print the raw JSON
-before trusting the parsed fields) rather than as confirmed-correct.
+Not exercised against a live account by this project (no account available);
+the unit tests drive it against a fake server that mimics the shapes above.
+Run it on a DEMO account first.
 """
 from __future__ import annotations
 
 import math
-from typing import Optional
+import time
+from typing import Any, Optional
 
 import pandas as pd
 import requests
@@ -39,7 +37,19 @@ from app.live_deploy.broker_base import (
 _LIVE_BASE = "https://live.tradelocker.com/backend-api"
 _DEMO_BASE = "https://demo.tradelocker.com/backend-api"
 
-_RESOLUTION_MAP = {1: "1", 5: "5", 15: "15", 30: "30", 60: "60", 240: "240", 1440: "1D"}
+_RESOLUTION_MAP = {1: "1m", 5: "5m", 15: "15m", 30: "30m", 60: "1H", 240: "4H", 1440: "1D"}
+
+# Default column order used only if /trade/config is unavailable.
+_DEFAULT_POSITION_COLS = ["id", "tradableInstrumentId", "routeId", "side", "qty", "avgPrice",
+                          "stopLossId", "takeProfitId", "openDate", "unrealizedPl", "strategyId"]
+_DEFAULT_ORDER_COLS = ["id", "tradableInstrumentId", "routeId", "qty", "side", "type", "status",
+                       "filledQty", "avgPrice", "price", "stopPrice", "validity", "expireDate",
+                       "createdDate", "lastModified", "isOpen", "positionId", "stopLoss",
+                       "stopLossType", "takeProfit", "takeProfitType", "strategyId"]
+_DEFAULT_STATE_COLS = ["balance", "projectedBalance", "availableFunds", "blockedBalance",
+                       "cashBalance", "unsettledCash", "withdrawalAvailable", "stocksValue",
+                       "optionValue", "initialMarginReq", "maintMarginReq", "marginAvailable",
+                       "accountEquity", "marginLevel"]
 
 
 def is_available() -> bool:
@@ -49,18 +59,79 @@ def is_available() -> bool:
 class TradeLockerBrokerAdapter(BrokerAdapter):
     platform_name = "TradeLocker"
 
-    def __init__(self, email: str, password: str, server: str, is_live: bool = False):
+    def __init__(self, email: str, password: str, server: str, is_live: bool = False,
+                 base_url: str | None = None):
         self.email = email
         self.password = password
         self.server = server
         self.is_live = is_live
-        self.base_url = _LIVE_BASE if is_live else _DEMO_BASE
+        self.base_url = (base_url or (_LIVE_BASE if is_live else _DEMO_BASE)).rstrip("/")
         self.access_token: str | None = None
         self.refresh_token: str | None = None
         self.account_id: str | None = None
         self.acc_num: int | None = None
+        self.currency: str | None = None
         self._session = requests.Session()
+        self._config: dict | None = None
+        self._instruments: list[dict] | None = None
+        self._token_time = 0.0
 
+    # ------------------------------------------------------------------ http
+    def _hdrs(self, acc_num: bool = True) -> dict:
+        h = {}
+        if self.access_token:
+            h["Authorization"] = f"Bearer {self.access_token}"
+        if acc_num and self.acc_num is not None:
+            h["accNum"] = str(self.acc_num)
+        return h
+
+    def _refresh(self) -> bool:
+        if not self.refresh_token:
+            return False
+        try:
+            r = self._session.post(f"{self.base_url}/auth/jwt/refresh",
+                                   json={"refreshToken": self.refresh_token}, timeout=15)
+            d = r.json()
+            if r.status_code < 400 and d.get("accessToken"):
+                self.access_token = d["accessToken"]
+                self.refresh_token = d.get("refreshToken", self.refresh_token)
+                self._token_time = time.time()
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _req(self, method: str, path: str, *, params: dict | None = None,
+             json: Any = None, timeout: float = 20) -> Any:
+        """Authenticated request; refreshes the token once on 401. Raises on HTTP
+        errors with the body in the message so it lands in the journal."""
+        url = f"{self.base_url}{path}"
+        for attempt in (0, 1):
+            r = self._session.request(method, url, params=params, json=json,
+                                      headers=self._hdrs(), timeout=timeout)
+            if r.status_code == 401 and attempt == 0 and self._refresh():
+                continue
+            break
+        try:
+            data = r.json() if r.text else {}
+        except ValueError:
+            data = {"raw": r.text}
+        if r.status_code >= 400:
+            raise RuntimeError(f"HTTP {r.status_code}: {data}")
+        if isinstance(data, dict) and data.get("s") == "error":
+            raise RuntimeError(f"TradeLocker error: {data.get('errmsg') or data}")
+        return data
+
+    def _cols(self, key: str, default: list[str]) -> list[str]:
+        try:
+            if self._config is None:
+                self._config = self._req("GET", "/trade/config").get("d", {})
+            cols = [c["id"] for c in self._config[key]["columns"]]
+            return cols or default
+        except Exception:
+            return default
+
+    # --------------------------------------------------------------- session
     def connect(self) -> ConnectionResult:
         try:
             resp = self._session.post(f"{self.base_url}/auth/jwt/token", json={
@@ -69,152 +140,227 @@ class TradeLockerBrokerAdapter(BrokerAdapter):
             data = resp.json()
         except Exception as exc:
             return ConnectionResult(ok=False, message=f"TradeLocker auth request failed: {exc}")
-        if "accessToken" not in data:
+        if not isinstance(data, dict) or "accessToken" not in data:
             return ConnectionResult(ok=False, message=f"TradeLocker login rejected: {data}")
         self.access_token = data["accessToken"]
         self.refresh_token = data.get("refreshToken")
-        self._session.headers.update({"Authorization": f"Bearer {self.access_token}"})
-
+        self._token_time = time.time()
         try:
-            accounts = self._session.get(f"{self.base_url}/auth/jwt/all-accounts", timeout=15).json()
-            accts = accounts.get("accounts", accounts) if isinstance(accounts, dict) else accounts
+            r = self._session.get(f"{self.base_url}/auth/jwt/all-accounts",
+                                  headers=self._hdrs(acc_num=False), timeout=15).json()
+            accts = r.get("accounts", []) if isinstance(r, dict) else r
             if not accts:
                 return ConnectionResult(ok=False, message="Login succeeded but no TradeLocker accounts were found.")
-            self.account_id = str(accts[0]["id"])
-            self.acc_num = accts[0].get("accNum", 0)
+            chosen = accts[0]
+            self.account_id = str(chosen["id"])
+            self.acc_num = int(chosen.get("accNum", 0) or 0)
+            self.currency = chosen.get("currency")
         except Exception as exc:
             return ConnectionResult(ok=False, message=f"Could not resolve account id: {exc}")
-
+        self._config = None
+        self._instruments = None
         summary = self.account_summary() or {}
         return ConnectionResult(
             ok=True, message="Connected.", account_login=self.account_id,
             account_server=f"TradeLocker-{self.server}",
-            balance=summary.get("balance"), equity=summary.get("equity"), currency=summary.get("currency"),
+            balance=summary.get("balance"), equity=summary.get("equity"),
+            currency=summary.get("currency") or self.currency,
         )
-
-    def _headers(self) -> dict:
-        return {"accNum": str(self.acc_num)} if self.acc_num is not None else {}
 
     def disconnect(self) -> None:
         self.access_token = None
-        self._session.headers.pop("Authorization", None)
+        self.refresh_token = None
 
     def is_alive(self) -> bool:
-        if not self.access_token:
+        if not self.access_token or not self.account_id:
             return False
         try:
-            r = self._session.get(f"{self.base_url}/trade/accounts/{self.account_id}/state",
-                                   headers=self._headers(), timeout=10)
-            return r.status_code == 200
+            self._req("GET", f"/trade/accounts/{self.account_id}/state", timeout=10)
+            return True
         except Exception:
             return False
 
     def account_summary(self) -> Optional[dict]:
-        if not self.access_token:
+        if not self.access_token or not self.account_id:
             return None
         try:
-            state = self._session.get(f"{self.base_url}/trade/accounts/{self.account_id}/state",
-                                       headers=self._headers(), timeout=15).json()
-            d = state.get("d", state)
-            return {
-                "login": self.account_id, "server": self.server,
-                "balance": d.get("balance"), "equity": d.get("equity", d.get("balance")),
-                "margin_free": d.get("availableFunds"), "currency": d.get("currency", "USD"),
-            }
+            d = self._req("GET", f"/trade/accounts/{self.account_id}/state").get("d", {})
+            vals = d.get("accountDetailsData")
+            if isinstance(vals, list):
+                cols = self._cols("accountDetailsConfig", _DEFAULT_STATE_COLS)
+                d = dict(zip(cols, vals))
+            bal = d.get("balance")
+            eq = d.get("accountEquity", d.get("projectedBalance", bal))
+            return {"login": self.account_id, "server": self.server, "balance": bal, "equity": eq,
+                    "margin_free": d.get("availableFunds"), "currency": self.currency or "USD"}
         except Exception:
             return None
 
+    # ----------------------------------------------------------- instruments
+    def _load_instruments(self) -> list[dict]:
+        if self._instruments is None:
+            d = self._req("GET", f"/trade/accounts/{self.account_id}/instruments").get("d", {})
+            self._instruments = d.get("instruments", []) if isinstance(d, dict) else []
+        return self._instruments
+
+    def _instrument(self, symbol: str) -> dict:
+        s = str(symbol).strip()
+        up = s.upper()
+        insts = self._load_instruments()
+        for key in ("name", "localizedName"):
+            for i in insts:
+                if str(i.get(key, "")).upper() == up:
+                    return i
+        for i in insts:
+            if str(i.get("tradableInstrumentId")) == s:
+                return i
+        # tolerate suffixes / separators: "EUR/USD", "EURUSD.r"
+        flat = "".join(ch for ch in up if ch.isalnum())
+        for i in insts:
+            n = "".join(ch for ch in str(i.get("name", "")).upper() if ch.isalnum())
+            if n == flat or (n and flat.startswith(n) and len(flat) - len(n) <= 2):
+                return i
+        raise ValueError(f"Instrument '{symbol}' not found on this TradeLocker account.")
+
+    @staticmethod
+    def _route(inst: dict, kind: str) -> str:
+        routes = [str(r["id"]) for r in inst.get("routes", []) if r.get("type") == kind]
+        if not routes:
+            raise ValueError(f"No {kind} route for instrument {inst.get('name')}.")
+        return routes[0]
+
+    # ------------------------------------------------------------------ data
     def fetch_completed_bars(self, symbol: str, timeframe_minutes: int, count: int) -> pd.DataFrame:
         resolution = _RESOLUTION_MAP.get(timeframe_minutes)
         if resolution is None:
             raise ValueError(f"Unsupported timeframe: {timeframe_minutes} minutes. Supported: {sorted(_RESOLUTION_MAP)}.")
-        resp = self._session.get(f"{self.base_url}/trade/history", params={
-            "routeId": symbol, "resolution": resolution, "from": 0, "to": 0, "count": count + 1,
-        }, headers=self._headers(), timeout=20)
-        data = resp.json()
-        d = data.get("d", data)
-        bars = d.get("barDetails", d if isinstance(d, list) else [])
-        rows = [{
-            "timestamp": pd.to_datetime(b.get("t") or b.get("timestamp"), unit="ms", utc=True),
+        inst = self._instrument(symbol)
+        now_ms = int(time.time() * 1000)
+        span_ms = (count + 5) * timeframe_minutes * 60_000 * 2  # x2 covers weekends
+        data = self._req("GET", "/trade/history", params={
+            "tradableInstrumentId": inst["tradableInstrumentId"],
+            "routeId": self._route(inst, "INFO"),
+            "resolution": resolution, "from": now_ms - span_ms, "to": now_ms,
+        })
+        bars = (data.get("d") or {}).get("barDetails", []) if isinstance(data, dict) else []
+        cols = ["timestamp", "open", "high", "low", "close", "volume"]
+        if not bars:
+            return pd.DataFrame(columns=cols)
+        df = pd.DataFrame([{
+            "timestamp": pd.to_datetime(int(b["t"]), unit="ms", utc=True),
             "open": float(b["o"]), "high": float(b["h"]), "low": float(b["l"]),
-            "close": float(b["c"]), "volume": float(b.get("v", 0)),
-        } for b in bars]
-        df = pd.DataFrame(rows).sort_values("timestamp").reset_index(drop=True)
-        return df.iloc[:-1] if len(df) > 1 else df
+            "close": float(b["c"]), "volume": float(b.get("v", 0) or 0),
+        } for b in bars]).sort_values("timestamp").reset_index(drop=True)
+        df = df.iloc[:-1] if len(df) > 1 else df  # drop the still-forming bar
+        return df.tail(count).reset_index(drop=True)
 
+    # ------------------------------------------------------------- positions
     def get_open_positions(self, symbol: Optional[str] = None) -> list[OpenPosition]:
         try:
-            resp = self._session.get(f"{self.base_url}/trade/accounts/{self.account_id}/positions",
-                                      headers=self._headers(), timeout=15).json()
-            positions = resp.get("d", {}).get("positions", []) if isinstance(resp, dict) else resp
+            d = self._req("GET", f"/trade/accounts/{self.account_id}/positions").get("d", {})
+            rows = d.get("positions", []) if isinstance(d, dict) else []
+            cols = self._cols("positionsConfig", _DEFAULT_POSITION_COLS)
         except Exception:
             return []
+        try:
+            id_to_name = {int(i["tradableInstrumentId"]): str(i.get("name"))
+                          for i in self._load_instruments()}
+        except Exception:
+            id_to_name = {}
+        want = None
+        if symbol:
+            try:
+                want = int(self._instrument(symbol)["tradableInstrumentId"])
+            except Exception:
+                want = None
         out = []
-        for p in positions:
-            sym = p.get("tradableInstrumentName") or str(p.get("tradableInstrumentId"))
-            if symbol and sym != symbol:
+        for row in rows:
+            p = dict(zip(cols, row)) if isinstance(row, (list, tuple)) else dict(row)
+            iid = int(p.get("tradableInstrumentId", 0) or 0)
+            if want is not None and iid != want:
                 continue
             side = str(p.get("side", "")).lower()
+            try:
+                opened = pd.to_datetime(int(p.get("openDate")), unit="ms", utc=True)
+            except Exception:
+                opened = pd.Timestamp.now(tz="UTC")
             out.append(OpenPosition(
-                ticket=str(p["id"]), symbol=sym, direction=1 if side == "buy" else -1,
-                volume=float(p.get("qty", 0)), open_price=float(p.get("avgPrice", 0)),
-                sl=float(p.get("stopLoss", 0) or 0), tp=float(p.get("takeProfit", 0) or 0),
-                open_time=pd.to_datetime(p.get("openDate", pd.Timestamp.utcnow()), utc=True),
-                profit=float(p.get("unrealizedPl", 0) or 0),
+                ticket=str(p["id"]), symbol=id_to_name.get(iid, str(iid)),
+                direction=1 if side == "buy" else -1,
+                volume=float(p.get("qty", 0) or 0), open_price=float(p.get("avgPrice", 0) or 0),
+                sl=0.0, tp=0.0, open_time=opened, profit=float(p.get("unrealizedPl", 0) or 0),
             ))
         return out
 
     def to_broker_qty(
         self, units: float, contract_size: Optional[float], units_per_lot: Optional[float],
     ) -> float:
-        # ASSUMPTION (documented, v7 P0-1): TradeLocker's order `qty` is
-        # interpreted as LOTS in the broker's native lot definition --
-        # TradeLocker is primarily a forex/CFD platform where 1 lot =
-        # 100,000 base units, so units_per_lot=100,000 is the FX-standard
-        # conversion; for futures-style symbols 1 lot = 1 contract, so
-        # callers pass units_per_lot = contract_size. Verify this
-        # assumption against your own account's first order (the order
-        # ticket echoes the accepted qty) before trusting it with size.
-        # Floored to 0.01 -- never rounded up. Refuses (0.0) when
-        # units_per_lot is missing.
+        # TradeLocker order `qty` is in lots. Floor to 0.01, never round up;
+        # refuse (0.0) when the lot conversion factor is missing.
         if not units_per_lot or units_per_lot <= 0:
             return 0.0
         return math.floor(units / units_per_lot * 100 + 1e-9) / 100.0
+
+    # ---------------------------------------------------------------- orders
+    def _order_fill(self, order_id: str) -> tuple[Optional[float], Optional[str]]:
+        """Best-effort: (fill price, positionId) of an order from ordersHistory."""
+        try:
+            cols = self._cols("ordersHistoryConfig", _DEFAULT_ORDER_COLS)
+            for _ in range(3):
+                d = self._req("GET", f"/trade/accounts/{self.account_id}/ordersHistory").get("d", {})
+                for row in d.get("ordersHistory", []):
+                    o = dict(zip(cols, row)) if isinstance(row, (list, tuple)) else dict(row)
+                    if str(o.get("id")) == str(order_id) and str(o.get("status", "")).lower() == "filled":
+                        px = o.get("avgPrice")
+                        pos = o.get("positionId")
+                        return (float(px) if px else None), (str(pos) if pos else None)
+                time.sleep(0.4)
+        except Exception:
+            pass
+        return None, None
 
     def place_market_order(
         self, symbol: str, direction: int, volume: float,
         sl_price: float | None = None, tp_price: float | None = None,
         comment: str = "T58 Live", deviation: int = 20,
     ) -> OrderResult:
-        # `volume` here is broker-native LOTS, converted via to_broker_qty
-        # by the caller -- never raw sizing units (v7 P0-1).
+        # `volume` is broker-native LOTS (see to_broker_qty).
         try:
-            body = {
-                "tradableInstrumentId": symbol, "qty": volume,
-                "side": "buy" if direction == 1 else "sell", "type": "market", "validity": "IOC",
+            inst = self._instrument(symbol)
+            body: dict[str, Any] = {
+                "price": None,
+                "qty": str(volume),
+                "routeId": self._route(inst, "TRADE"),
+                "side": "buy" if direction == 1 else "sell",
+                "validity": "IOC",
+                "tradableInstrumentId": str(inst["tradableInstrumentId"]),
+                "type": "market",
             }
             if sl_price:
-                body["stopLoss"] = sl_price
+                body.update(stopLoss=float(sl_price), stopLossType="absolute")
             if tp_price:
-                body["takeProfit"] = tp_price
-            resp = self._session.post(f"{self.base_url}/trade/accounts/{self.account_id}/orders",
-                                       json=body, headers=self._headers(), timeout=20)
-            data = resp.json()
-            if resp.status_code >= 400:
-                return OrderResult(ok=False, message=str(data))
-            order_id = data.get("d", {}).get("orderId") if isinstance(data, dict) else None
-            return OrderResult(ok=True, message="Order submitted.", ticket=str(order_id), volume=volume)
+                body.update(takeProfit=float(tp_price), takeProfitType="absolute")
+            data = self._req("POST", f"/trade/accounts/{self.account_id}/orders", json=body)
+            order_id = (data.get("d") or {}).get("orderId")
+            if not order_id:
+                return OrderResult(ok=False, message=f"Order not accepted: {data}")
+            price, pos_id = self._order_fill(str(order_id))
+            return OrderResult(ok=True, message="Order submitted.",
+                               ticket=str(pos_id or order_id), price=price, volume=volume)
         except Exception as exc:
             return OrderResult(ok=False, message=str(exc))
 
     def close_position(self, ticket: str, comment: str = "T58 Live close") -> OrderResult:
         try:
-            resp = self._session.delete(
-                f"{self.base_url}/trade/accounts/{self.account_id}/positions/{ticket}",
-                headers=self._headers(), timeout=20,
-            )
-            if resp.status_code >= 400:
-                return OrderResult(ok=False, message=resp.text)
-            return OrderResult(ok=True, message="Closed.", ticket=ticket)
+            price = None
+            try:
+                for p in self.get_open_positions():
+                    if p.ticket == str(ticket):
+                        price = None  # exit price is filled in by the relay from the quote/fill
+                        break
+            except Exception:
+                pass
+            self._req("DELETE", f"/trade/positions/{ticket}", json={"qty": "0"})
+            return OrderResult(ok=True, message="Close order sent.", ticket=str(ticket), price=price)
         except Exception as exc:
             return OrderResult(ok=False, message=str(exc))
