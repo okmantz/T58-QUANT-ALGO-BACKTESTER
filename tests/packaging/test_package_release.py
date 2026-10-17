@@ -273,8 +273,8 @@ def test_updater_prefers_exe_when_present():
 # Workflows (static)
 # --------------------------------------------------------------------------- #
 APP_WORKFLOWS = {
-    ".github/workflows/build-exe.yml": ("t58_desktop.spec", "T58-Quant-Algo-Backtester-Windows.zip", "desktop"),
-    ".github/workflows/build-web-exe.yml": ("t58_web.spec", "T58-Web-App-Windows.zip", "web"),
+    ".github/workflows/desktop-cross-platform.yml": ("t58_desktop.spec", "T58-Quant-Algo-Backtester-${{ matrix.label }}.zip", "desktop"),
+    ".github/workflows/web-cross-platform.yml": ("t58_web.spec", "T58-Web-App-${{ matrix.label }}.zip", "web"),
 }
 
 
@@ -309,3 +309,12 @@ def test_workflow_yaml_is_valid():
     for wf in (REPO_ROOT / ".github" / "workflows").glob("*.yml"):
         data = yaml.safe_load(wf.read_text(encoding="utf-8"))
         assert isinstance(data, dict) and "jobs" in data, wf.name
+
+
+def test_exactly_one_web_and_one_desktop_workflow_each_covering_three_oses():
+    names = sorted(p.name for p in (REPO_ROOT / ".github" / "workflows").glob("*.yml"))
+    assert names == ["build-data-pack.yml", "desktop-cross-platform.yml", "secrets-scan.yml", "web-cross-platform.yml"]
+    for rel in APP_WORKFLOWS:
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        for os_name in ("windows-latest", "macos-latest", "ubuntu-latest"):
+            assert os_name in text, f"{rel} must build on {os_name}"
