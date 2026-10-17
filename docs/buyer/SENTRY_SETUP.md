@@ -32,7 +32,7 @@ inject it at build time:
 **[OWEN: DECIDE]** — pick one:
 
 - **Option A (recommended):** add a GitHub Actions secret named
-  `T58_SENTRY_DSN`, then in `build-exe.yml` / `build-web-exe.yml` add it
+  `T58_SENTRY_DSN`, then in `desktop-cross-platform.yml` / `web-cross-platform.yml` add it
   to the PyInstaller build step's environment:
   ```yaml
   env:
