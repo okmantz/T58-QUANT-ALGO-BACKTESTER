@@ -400,11 +400,12 @@ def _resample_indices(rng: np.random.Generator, n: int, method: str, block_size:
             # Degenerate: the whole series is one block -- return it in
             # order rather than wrapping fragments.
             return np.arange(n)
-        idx: list[int] = []
-        while len(idx) < n:
-            start = int(rng.integers(0, n - block_size + 1))
-            idx.extend(start + j for j in range(block_size))
-        return np.array(idx[:n])
+        # Vectorised (bit-identical to the old scalar loop): ceil(n/block) block starts drawn in one call
+        # consume the same random stream as drawing them one at a time, then each start expands to a
+        # contiguous run and the result is truncated to n.
+        n_blocks = -(-n // block_size)
+        starts = rng.integers(0, n - block_size + 1, size=n_blocks)
+        return (starts[:, None] + np.arange(block_size)[None, :]).ravel()[:n]
     # default: iid bootstrap with replacement
     return rng.integers(0, n, size=n)
 
