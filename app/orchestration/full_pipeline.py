@@ -1124,131 +1124,6 @@ def _make_verdict_core(
         )
         return "NOT READY", reasons, scorecard, False, False
 
-    if icir_gate is None:
-        reasons.append(
-            "ICIR / signal-decay / Bonferroni-corrected significance gate couldn't run -- kept as "
-            "a supporting diagnostic only, not part of the T58 Score."
-        )
-    elif not icir_gate.ok and not icir_hard_failed:
-        reasons.append(
-            "Supporting diagnostic: did NOT pass the ICIR / signal-decay / Bonferroni-corrected "
-            "significance gate (" + " ".join(icir_gate.reasons) + "). Not scored into the T58 Score "
-            "or gated on -- section 14 of the pipeline reorg plan treats this as informational once "
-            "a primary generalization test already ran."
-        )
-
-    # UPGRADE (buried-position-sizing-deviation): informational, not
-    # gated/scored -- same treatment as the ICIR gate note just above --
-    # but now actually said in the verdict, not just left as a number in
-    # a report table nothing points at. See app.backtest.risk.position_
-    # sizing_deviation_message; this is also already in `reasons`'
-    # sibling BacktestResult.warnings (final_bt.warnings) whenever it
-    # fired, so this line specifically calls it out as relevant to THIS
-    # verdict rather than requiring a person to notice it buried there.
-    if statistics is not None:
-        sizing_note = position_sizing_deviation_message(statistics.to_dict())
-        if sizing_note:
-            reasons.append(f"Supporting diagnostic: {sizing_note}")
-
-    reasons.append(scorecard.render_line())
-    for name, comp in scorecard.components.items():
-        if comp["value"] is not None:
-            reasons.append(f"  {name}: {comp['value']:.1f}/100 (weight {comp['weight']:+.0f})")
-    reasons.extend(scorecard.notes)
-
-    if scorecard.tier in ("Elite", "Strong"):
-        verdict = "READY"
-    elif scorecard.tier in ("Promising", "Research"):
-        verdict = "MARGINAL"
-    else:
-        verdict = "NOT READY"
-
-    # -- Minimum trade-count floor for READY (see FullPipelineConfig.
-    # min_trades_for_ready's own docstring for why this exists) ----------
-    total_trades = getattr(statistics, "total_trades", None) if statistics is not None else None
-    if verdict == "READY" and total_trades is not None and total_trades < min_trades_for_ready:
-        verdict = "MARGINAL"
-        reasons.append(
-            f"CAPPED AT MARGINAL: the T58 Score alone would have called this READY, but the final "
-            f"backtest only produced {total_trades} trade(s), below the {min_trades_for_ready}-trade "
-            "floor this pipeline requires before trusting a result enough to call it READY -- a small "
-            "sample can look strong by chance (or on the strength of one or two outsized trades) "
-            "regardless of how good its score is. See FullPipelineConfig.min_trades_for_ready."
-        )
-
-    # -- 2026-10-15: missing evidence must cap a verdict, never lift it ------------------
-    # compute_t58_score() re-normalizes over the components that were measured. That is fair to
-    # a strategy whose parsimony simply could not be counted, but it also means omitting weak
-    # components RAISES the score. So READY additionally requires the three core survival
-    # components (pass / paid / ruin) to exist and a minimum share of the total scorecard
-    # weight to have been measured.
-    from app.scoring.t58_scorecard import MIN_WEIGHT_COVERAGE_FOR_READY as _MIN_COV
-    if verdict == "READY":
-        _cov = float(getattr(scorecard, "weight_coverage", 1.0))
-        _miss_core = list(getattr(scorecard, "missing_core", []) or [])
-        if _miss_core or _cov < _MIN_COV:
-            verdict = "MARGINAL"
-            reasons.append(
-                "CAPPED AT MARGINAL: the T58 Score alone would have called this READY, but "
-                + (f"core survival component(s) {', '.join(_miss_core)} were not measured" if _miss_core else
-                   f"only {_cov * 100:.0f}% of the scorecard weight was measured (READY needs >= {_MIN_COV * 100:.0f}%)")
-                + " -- missing evidence caps a verdict instead of raising the score."
-            )
-
-    # -- D1: holdout gate ------------------------------------------------
-    # A holdout that RAN with enough trades to mean something (>=
-    # min_holdout_trades_for_gate) and LOST money (net < 0 or profit
-    # factor < 1.0) while the in-sample run traded is a hard rejection:
-    # the edge did not survive untouched data. An empty/thin holdout is
-    # UNPROVEN, not FAILED (the empty-holdout MARGINAL cap below still
-    # applies) -- a gate that can't measure can't convict, the same
-    # couldn't-run distinction the walk-forward gate makes.
-    _ho = holdout or {}
-    _ho_stats = _ho.get("holdout_statistics") or {}
-    _ho_in_stats = _ho.get("in_sample_statistics") or {}
-    _ho_trades = _ho_stats.get("total_trades") or 0
-    _ho_in_trades = _ho_in_stats.get("total_trades") or 0
-    # The gate "ran" only when the holdout produced enough trades to be
-    # a real check AND the in-sample run actually traded (otherwise there
-    # is no in-sample edge to falsify). D5 keys off this same flag.
-    holdout_gate_ran = bool(
-        _ho_trades >= min_holdout_trades_for_gate and _ho_in_trades > 0
-    )
-    _ho_losing_inconclusive = False
-    if holdout_gate_ran:
-        _ho_net = _ho_stats.get("net_profit")
-        _ho_pf = _ho_stats.get("profit_factor")
-        _losing = (_ho_net is not None and _ho_net < 0) or (_ho_pf is not None and _ho_pf < 1.0)
-        # 2026-10-15 audit: a thin holdout that merely lost money is usually noise. Reject only when the
-        # UPPER confidence bound on per-trade expectancy (mean + z*std/sqrt(n)) is still below zero, i.e.
-        # the losses are statistically convincing. A losing-but-inconclusive holdout caps READY instead.
-        _mom = _ho.get("holdout_trade_pnl") or {}
-        _upper = None
-        if _mom.get("mean") is not None and _mom.get("std") is not None and (_mom.get("n") or 0) > 1:
-            _upper = float(_mom["mean"]) + holdout_reject_z * float(_mom["std"]) / (float(_mom["n"]) ** 0.5)
-        if _losing and (_upper is None or _upper < 0):
-            _net_txt = f"${_ho_net:,.2f}" if _ho_net is not None else "n/a"
-            _pf_txt = f"{_ho_pf:.2f}" if _ho_pf is not None else "n/a"
-            _ub_txt = f", upper 95% bound on expectancy ${_upper:,.2f}/trade (still below zero)" if _upper is not None else ""
-            _record_gate_failure(
-                f"the holdout check LOST money on untouched data: holdout net {_net_txt} "
-                f"(profit factor {_pf_txt}) over {_ho_trades} trade(s){_ub_txt} while the in-sample "
-                f"run took {_ho_in_trades} trade(s) -- the edge did not survive data the "
-                f"search never saw."
-            )
-        elif _losing:
-            _ho_losing_inconclusive = True
-    if validation_gate_failures and not gates_advisory_only:
-        reasons.append(f"For reference, {scorecard.render_line()} (not the reason for this verdict).")
-        _hold_note = _holdout_untestable_note(holdout)
-        if _hold_note:
-            reasons.append(_hold_note)
-        reasons.append(
-            "This verdict does NOT lock the strategy: it can still be sent through the Validate hub "
-            "(CPCV, Walk-Forward, Sensitivity, Regime Matrix) to see where it is weak."
-        )
-        return "NOT READY", reasons, scorecard, False, False
-
     # -- D5: WF-starved cap -----------------------------------------------
     # When BOTH the primary generalization test (walk-forward or CPCV)
     # and the holdout gate failed to produce a real check, a READY
@@ -2952,7 +2827,7 @@ def run_full_pipeline(
             final_strategy=final_strategy, risk=risk, adaptive_risk=adaptive_risk, final_mc=final_mc, final_holdout=final_holdout,
             payout_ev=_payout_ev, lookahead_check_crashed=lookahead_check_crashed, n_trials=_n_trials, log=log,
         )
-        verdict_reasons = list(verdict_reasons) + ["EV " + _ev.render().replace("\n", " | ")]
+        verdict_reasons = list(verdict_reasons) + [_ev.render().replace("\n", " | ")]
         log("  " + _ev.render().replace("\n", "\n  "))
         log(f"  Final verdict after audit layers: {verdict}  |  EV verdict: {_ev.label}")
         elapsed = time.time() - t0
