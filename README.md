@@ -74,8 +74,8 @@ come up below.
 ## Running it
 
 **Windows `.exe`, no Python needed:** push this repo to GitHub, then go to
-**Actions → build-exe → (latest run)** and download the
-**T58-Quant-Algo-Backtester-Windows** artifact. GitHub hands it to you as a
+**Actions → desktop-cross-platform → (latest run)** and download the
+**T58-Quant-Algo-Backtester-Windows** artifact (macOS and Linux builds sit beside it; the web app is **web-cross-platform**). GitHub hands it to you as a
 zip that contains `T58-Quant-Algo-Backtester-Windows.zip` — extract that
 inner zip into a short folder such as `C:\T58\` and double-click
 `T58-Quant-Algo-Backtester.exe` (keep the `_internal` folder beside it).
@@ -130,9 +130,10 @@ address and QR code. Where your data lives when the install folder is
 read-only: Windows `%LOCALAPPDATA%`, macOS `~/Library/Application Support`,
 Linux `~/.local/share` (folder `T58 Prop Algo Backtester`).
 `python scripts/web_smoke_test.py` starts the real server and checks every
-main page; the **web-cross-platform** GitHub Action runs that plus the web
-tests on Windows, macOS and Linux for every push, and (run manually) can
-build a standalone app folder per OS.
+main page; the **web-cross-platform** GitHub Action runs the full test suite, that smoke
+test on Windows, macOS and Linux, and (on pushes to main, tags and manual runs)
+builds and smoke-tests one packaged web app per OS. **desktop-cross-platform**
+does the same for the desktop app.
 
 ## Core workflow — Run & Report
 
