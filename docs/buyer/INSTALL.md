@@ -67,7 +67,7 @@ personal info). Choose **Yes** or **No** — you can change it anytime in
 
 If you extracted **T58-Market-Data.zip** in Step 2, you already have the
 historical datasets: restart the app and they appear in the dataset lists.
-Without it you only have the small sample in `data/examples/`.
+Without it the app opens but has no datasets to test on.
 
 To add your own data at any time: **Market Data tab → Import folder…**
 (desktop) or the drag-and-drop folder zone in the **Data Center** (web app).

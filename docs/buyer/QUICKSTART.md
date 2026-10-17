@@ -2,11 +2,11 @@
 
 Assumes [INSTALL.md](INSTALL.md) is done and the app is open.
 
-## 1. Load the sample data (2 min)
+## 1. Pick your data (2 min)
 
 1. Go to the **Backtest** tab.
-2. In the dataset picker, choose the bundled sample
-   (`data/examples/EURUSD_5M_sample.csv`).
+2. In the dataset picker, choose a dataset from the market-data pack
+   (for example EURUSD 5-minute).
 3. Leave the instrument on its default — the app fills in realistic
    spread/slippage/commission for you.
 
