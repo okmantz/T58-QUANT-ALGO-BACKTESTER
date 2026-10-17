@@ -30,12 +30,13 @@ def _preset_matches_rules(rules) -> tuple[bool, str]:
     if not key:
         return False, "these PropRules were not built from a firm preset"
     try:
-        from app.prop.presets import get_preset, is_ready_eligible
+        from app.prop.presets import get_preset, ready_eligibility
         p = get_preset(key)
     except Exception as exc:  # noqa: BLE001
         return False, f"preset '{key}' could not be loaded ({exc})"
-    if not is_ready_eligible(p):
-        return False, f"preset '{key}' has no verified_on / source_url (rules not verified against a firm page)"
+    _ok, _why = ready_eligibility(p)
+    if not _ok:
+        return False, _why
     base = p.to_prop_rules()
     for f in ("account_size", "evaluation_profit_target_pct", "daily_loss_limit_pct", "max_drawdown_pct", "drawdown_type",
               "dd_basis", "daily_loss_basis", "trailing_lock", "consistency_rule_pct", "min_trading_days"):

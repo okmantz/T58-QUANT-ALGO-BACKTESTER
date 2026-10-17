@@ -878,7 +878,7 @@ class SearchLabMixin:
                 "instead of running as a plain worker, and immediately dies. "
                 "Rebuild/redownload the .exe (run_app.py now calls "
                 "freeze_support() first thing) and try again.\n\n"
-                "If you're running from source (python run_app.py) and still see "
+                "If you're running from source (python launchers/run_app.py) and still see "
                 "this, it usually means a worker genuinely ran out of memory or "
                 "crashed hard -- try lowering 'Parallel workers' on this tab, or "
                 "reducing the candidate pool / population size."

@@ -68,6 +68,7 @@ from app.web.hedge_fund_routes import hedge_fund_bp
 from app.web.risk_sweep_routes import risk_sweep_bp
 from app.web.project_routes import project_bp
 from app.web.telemetry_routes import telemetry_bp, set_evolution_source
+from app.web.evolution_lab_routes import evolution_lab_bp, set_runner_source as set_lab_runner_source
 from app.ai.ollama_settings import load_settings as load_ollama_settings
 from app.ai.ollama_settings import save_settings as save_ollama_settings
 from app.ai.research_agent import ResearchAgentContext, ResearchAgent
@@ -761,6 +762,7 @@ app.register_blueprint(discover_bp)
 app.register_blueprint(risk_sweep_bp)
 app.register_blueprint(project_bp)
 app.register_blueprint(telemetry_bp)
+app.register_blueprint(evolution_lab_bp)
 # TradingView webhook relay (Pine strategy alert -> T58 paper forward test,
 # optionally mirrored to a demo broker) -- see app/web/webhook_relay_routes.py.
 app.register_blueprint(webhook_relay_bp)
@@ -8787,6 +8789,7 @@ JOB_MANAGER.add_reaper(_reap_evolution_job)
 # The telemetry blueprint (equity swarm for the current elite) can't import
 # this module -- circular -- so it is handed a getter instead.
 set_evolution_source(lambda: _EVOLUTION_RUNNER)
+set_lab_runner_source(lambda: _EVOLUTION_RUNNER)
 
 
 # Lets HEAVY_JOB_GUARD self-heal if Evolution Lab's slot ever gets stuck

@@ -36,8 +36,10 @@ does NOT implement everything app.backtest.execution.run_execution does:
     none), OR per-bar stop_loss_distance / take_profit_distance arrays
     in raw price units (e.g. an ATR-multiple stop -- the realistic
     strategy class the old fixed-pips-only gate excluded). Still
-    excluded: trailing stops, breakeven triggers, partial exits /
-    scale-outs. See `is_vectorizable()`.
+    excluded: breakeven triggers, partial exits / scale-outs.
+    (2026-10-17: trailing stops are now handled -- same per-bar order as
+    app.backtest.execution: best-price update, resting-stop check, ratchet,
+    stop/take check.) See `is_vectorizable()`.
   - Fill-lag parity (v5): market entries and signal-driven exits fill at
     the FILL bar's open -- `open[i + entry_fill_lag_bars]`, default 1,
     read via `getattr(risk, "entry_fill_lag_bars", 1)` -- mirroring the
@@ -132,6 +134,9 @@ class VectorizedCandidate:
     # in app.backtest.execution.run_execution.
     stop_distances: np.ndarray | None = None
     take_distances: np.ndarray | None = None
+    # 2026-10-17: per-bar TRAILING distance in raw price units (read at the decision bar, like the scalar engine's
+    # trail_dist_vals). NaN / <= 0 = no trailing stop for a trade opened on that bar.
+    trail_distances: np.ndarray | None = None
 
 
 @dataclass
@@ -172,10 +177,25 @@ def is_vectorizable(strat_result) -> bool:
     dynamic_ok = (sl is None or _is_perbar_distance(sl)) and (tp is None or _is_perbar_distance(tp))
     return (
         dynamic_ok
-        and strat_result.trailing_stop_distance is None
+        and (strat_result.trailing_stop_distance is None or _is_perbar_distance(strat_result.trailing_stop_distance))
         and strat_result.breakeven_trigger_r is None
         and getattr(strat_result, "partial_exit", None) is None
     )
+
+
+def risk_is_vectorizable(risk) -> bool:
+    """True when the RUN CONFIG uses nothing the fast path ignores. The fast path has no time stop, session flatten,
+    weekend-hold block or per-account prop state machine, so a RiskConfig that turns any of those on must take the
+    scalar engine (otherwise the two would silently disagree). 2026-10-17 (audit item 8)."""
+    if getattr(risk, "time_stop_hours", None):
+        return False
+    if getattr(risk, "flatten_time_ct", None):
+        return False
+    if getattr(risk, "block_weekend_hold", False):
+        return False
+    if getattr(risk, "prop_account_rules", None) is not None:
+        return False
+    return True
 
 
 def _risk_amount_vec(equity: np.ndarray, risk: RiskConfig) -> np.ndarray:
@@ -305,6 +325,11 @@ def run_vectorized_batch(
         fill_lag = 1
     fill_lag = max(fill_lag, 0)
 
+    trail_full = np.full((n, k), np.nan)
+    for col, c in enumerate(candidates):
+        if c.trail_distances is not None:
+            trail_full[:, col] = np.asarray(c.trail_distances, dtype=float).reshape(n)
+
     # ---- adaptive budget: up-front exact skip of silent candidates ----
     has_sig = sig_full != 0
     any_sig = has_sig.any(axis=0)
@@ -393,6 +418,8 @@ def run_vectorized_batch(
     cpc_arr = np.full(m, float(risk.commission_per_contract or 0.0), dtype=np.float64)
     stop_price = np.full(m, np.nan)
     take_price = np.full(m, np.nan)
+    best_price = np.zeros(m, dtype=np.float64)       # favourable extreme since entry (trailing ratchet input)
+    trail_dist = np.full(m, np.nan)                  # per-position trailing distance (NaN = none)
     # C2: per-column account-blown latch (prop_daily_loss_is_breach, or
     # halt_on_breach after a floor breach) -- blocks all further entries
     # for that column, mirroring the scalar engine. Compacted with the
@@ -408,7 +435,7 @@ def run_vectorized_batch(
         nonlocal sl_pips, tp_pips, equity, in_pos, direction, last_close_bar
         nonlocal entry_price, entry_ts, equity_at_entry, size_arr
         nonlocal initial_risk, stop_price, take_price, account_blown
-        nonlocal cs_arr, cpc_arr
+        nonlocal cs_arr, cpc_arr, best_price, trail_dist
         keep = np.nonzero(alive)[0]
         live_cols = live_cols[keep]
         last_sig_bar = last_sig_bar[keep]
@@ -427,6 +454,8 @@ def run_vectorized_batch(
         cpc_arr = cpc_arr[keep]
         stop_price = stop_price[keep]
         take_price = take_price[keep]
+        best_price = best_price[keep]
+        trail_dist = trail_dist[keep]
         account_blown = account_blown[keep]
         m = len(live_cols)
 
@@ -482,6 +511,7 @@ def run_vectorized_batch(
         last_close_bar[widx] = close_bar  # P2-1: EXEC-002 cooldown parity (decision bar)
         stop_price[widx] = np.nan
         take_price[widx] = np.nan
+        trail_dist[widx] = np.nan
 
     for i in range(n):
         if m == 0:
@@ -549,6 +579,12 @@ def run_vectorized_batch(
                     if getattr(risk, "prop_daily_loss_is_breach", False):
                         account_blown[_bw] = True
 
+            # Trailing-stop bookkeeping (scalar parity): best_price takes THIS bar's favourable extreme first.
+            _has_trail = in_pos & np.isfinite(trail_dist)
+            if _has_trail.any():
+                best_price[long_m] = np.maximum(best_price[long_m], h)
+                best_price[short_m] = np.minimum(best_price[short_m], l)
+
             # Honest gap-through fill: a resting stop the bar gapped
             # straight past fills at the open, not the stop level --
             # mirrors app.backtest.execution's own stop-fill logic.
@@ -559,6 +595,25 @@ def run_vectorized_batch(
             exit_price[stop_hit_short] = np.maximum(stop_price[stop_hit_short], o)
             reason[stop_hit_long] = "stop_loss"
             reason[stop_hit_short] = "stop_loss"
+
+            # Trailing ratchet (scalar: after the resting-stop check, before the final stop/take check): the stop
+            # only ever moves CLOSER to price, and the ratcheted level can fill on the SAME bar.
+            _tr = active & np.isnan(exit_price) & np.isfinite(trail_dist)
+            if _tr.any():
+                _trl = _tr & long_m
+                _trs = _tr & short_m
+                _cand_l = best_price - trail_dist
+                _cand_s = best_price + trail_dist
+                _mv_l = _trl & (np.isnan(stop_price) | (_cand_l > stop_price))
+                _mv_s = _trs & (np.isnan(stop_price) | (_cand_s < stop_price))
+                stop_price[_mv_l] = _cand_l[_mv_l]
+                stop_price[_mv_s] = _cand_s[_mv_s]
+                _hit_l = _trl & ~np.isnan(stop_price) & (l <= stop_price)
+                _hit_s = _trs & ~np.isnan(stop_price) & (h >= stop_price)
+                exit_price[_hit_l] = np.minimum(stop_price[_hit_l], o)
+                exit_price[_hit_s] = np.maximum(stop_price[_hit_s], o)
+                reason[_hit_l] = "stop_loss"
+                reason[_hit_s] = "stop_loss"
 
             remaining = active & np.isnan(exit_price)
             take_hit_long = remaining & long_m & ~np.isnan(take_price) & (h >= take_price)
@@ -767,6 +822,12 @@ def run_vectorized_batch(
                     has_any_tp[valid], entry_fill[valid] + fd * tp_dist[valid], np.nan,
                 )
                 initial_risk[fw] = sl_dist[valid]
+                best_price[fw] = entry_fill[valid]
+                _tr_bar = trail_full[i, live_cols[fw]]
+                _tr_bar = np.where(np.isfinite(_tr_bar) & (_tr_bar > 0), _tr_bar, np.nan)
+                # fit_stop shrinks a trailing distance with the stop (scalar: bar_trail_distance *= stop_scale)
+                _tr_bar = np.where(dec_capped[valid], _tr_bar * dec_scale[valid], _tr_bar)
+                trail_dist[fw] = _tr_bar
                 # v5 B2-3 parity: the per-day trade cap is counted at the
                 # FILL bar's session day, exactly like the scalar engine
                 # (execution.py increments trades_today_count[fill_bar_date]).

@@ -270,7 +270,14 @@ class FullPipelineConfig:
     # out in verdict_reasons. Does not affect MARGINAL/NOT READY verdicts
     # (a strategy already below READY isn't made worse by a thin sample --
     # that's already reflected in its score).
-    min_trades_for_ready: int = 100
+    # 2026-10-17 audit: 100 trades is too few. At a typical 1.2-1.5R standard deviation per trade, the standard error of
+    # average R at 100 trades is 0.12-0.15R -- the same size as the edge being detected. Raised to 300; the expectancy
+    # lower-bound gate (min_expectancy_lb_r) is the statistical version of the same idea.
+    min_trades_for_ready: int = 300
+    # Hard READY gate: the 95% lower bound on average R per trade AFTER the 2x cost stress must exceed this (R units).
+    min_expectancy_lb_r: float = 0.0
+    # READY demote: share of FUNDED accounts (after passing) that may breach within the ruin horizon.
+    funded_breach_cap_pct: float = 50.0
 
     # -- Lock-parameters / fixed-backtest mode (2026-09-24) --------------
     # Found via an external RoboQuant comparison: comparing "the same
@@ -750,6 +757,19 @@ def _holdout_gate_state(holdout, min_trades: int, z: float = 1.645) -> dict:
             "net": net, "pf": pf}
 
 
+def _ruin_split_text(final_mc) -> str:
+    """' Of that, X% of purchases breached before passing (cost: the fee) and Y% of FUNDED accounts breached after
+    passing (cost: the account)' -- the two stages cost different things, so they are never reported as one number.
+    Empty for results built before the split existed."""
+    if (getattr(final_mc, "effective_independent_attempts", 0.0) or 0.0) <= 0:
+        return ""
+    _fa = int(getattr(final_mc, "funded_attempts", 0) or 0)
+    return (f" Evaluation-stage breach: {float(getattr(final_mc, 'eval_breach_pct', 0.0)):.1f}% of purchased accounts (cost: the fee). "
+            + (f"Funded-stage breach: {float(getattr(final_mc, 'funded_breach_within_horizon_pct', 0.0)):.1f}% of the {_fa} funded accounts "
+               "(cost: the funded account and the payouts not yet reached)."
+               if _fa else "No simulated account reached the funded stage."))
+
+
 def _make_verdict_core(
     final_mc: MonteCarloResult,
     oos_validation: WalkForwardResult | None,
@@ -761,7 +781,7 @@ def _make_verdict_core(
     cpcv_primary_result: "CPCVResult | None" = None,
     cpcv_supporting_result: "CPCVResult | None" = None,
     lookahead_bug_detected: bool = False,
-    min_trades_for_ready: int = 100,
+    min_trades_for_ready: int = 300,
     holdout: dict | None = None,
     # D1: minimum holdout trade count for the holdout gate to count as
     # "ran" (see FullPipelineConfig.min_holdout_trades_for_gate).
@@ -783,6 +803,10 @@ def _make_verdict_core(
     # 2026-10-15: seed-to-seed standard deviation (pct points) of the per-attempt pass rate --
     # feeds the scorecard's Monte Carlo robustness component (missing when None).
     mc_dispersion_pts: float | None = None,
+    # 2026-10-17 audit: evidence that does NOT come from the resampled Monte Carlo -- the real-engine attempt replay and
+    # the lower bound on expectancy after 2x costs -- feeds the score (see app.scoring.t58_scorecard).
+    attempt_replay=None,
+    expectancy_bound: dict | None = None,
 ) -> tuple[str, list[str], "T58ScorecardResult", bool, bool]:
     """Pipeline reorg item #1: the verdict is now a hard safety gate
     (risk of ruin, and -- FIX (audit) -- a confirmed lookahead-bias leak)
@@ -823,6 +847,7 @@ def _make_verdict_core(
     reasons: list[str] = []
     ruin = final_mc.risk_of_ruin_pct
     ruin_hard_fail = ruin > risk_of_ruin_cap
+    _ruin_split = _ruin_split_text(final_mc)
 
     # -- The other hard gate: a confirmed lookahead-bias leak ------------
     # Checked before the ruin gate's early-return so a leaky strategy is
@@ -835,6 +860,7 @@ def _make_verdict_core(
             prop_max_drawdown_pct=getattr(prop_rules, "max_drawdown_pct", None),
             parsimony_result=parsimony, cpcv_supporting_result=cpcv_supporting_result,
             mc_dispersion_pts=mc_dispersion_pts,
+            attempt_replay=attempt_replay, expectancy_bound=expectancy_bound,
         )
         reasons.append(
             "HARD SAFETY GATE FAILED: the lookahead-bias check detected that this strategy's "
@@ -862,6 +888,7 @@ def _make_verdict_core(
             prop_max_drawdown_pct=getattr(prop_rules, "max_drawdown_pct", None),
             parsimony_result=parsimony, cpcv_supporting_result=cpcv_supporting_result,
             mc_dispersion_pts=mc_dispersion_pts,
+            attempt_replay=attempt_replay, expectancy_bound=expectancy_bound,
         )
         from app.scoring.t58_scorecard import T58ScorecardInputs, compute_t58_score
         inputs = T58ScorecardInputs(**{k: v["value"] for k, v in scorecard.components.items()})
@@ -873,6 +900,7 @@ def _make_verdict_core(
             prop_max_drawdown_pct=getattr(prop_rules, "max_drawdown_pct", None),
             parsimony_result=parsimony, cpcv_supporting_result=cpcv_supporting_result,
             mc_dispersion_pts=mc_dispersion_pts,
+            attempt_replay=attempt_replay, expectancy_bound=expectancy_bound,
         )
 
     # -- The one legitimate hard gate ------------------------------------
@@ -880,7 +908,7 @@ def _make_verdict_core(
         reasons.append(
             f"HARD SAFETY GATE FAILED: Monte Carlo risk of ruin is {ruin:.1f}% "
             f"({getattr(final_mc, 'risk_of_ruin_definition', 'share of purchased accounts that breached a firm rule')}), "
-            f"above the configured cap of {risk_of_ruin_cap:.1f}%. This strategy is NOT READY regardless of "
+            f"above the configured cap of {risk_of_ruin_cap:.1f}%.{_ruin_split} This strategy is NOT READY regardless of "
             f"how the rest of the evidence looks -- ruin is the one metric this pipeline treats as "
             f"a genuine pass/fail requirement rather than evidence to weigh (see "
             f"FullPipelineConfig.risk_of_ruin_cap)."
@@ -1182,7 +1210,9 @@ _VERDICT_TO_LIBRARY_STATUS = {
     "NOT READY": "tested_failed",
 }
 
-def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 25.0, replay_min_gap_pts: float = 10.0, null_result=None, null_p_max: float = 0.10, cost_stress=None, cost_stress_min_retained: float = 0.25, mc_dispersion_pts=None, payout30=None, payout30_min_pct: float = 35.0, payout30_min_windows: float = 3.0, paid_min_pct: float = 35.0, **kwargs):
+def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 25.0, replay_min_gap_pts: float = 10.0, null_result=None, null_p_max: float = 0.10, cost_stress=None, cost_stress_min_retained: float = 0.25, mc_dispersion_pts=None, payout30=None, payout30_min_pct: float = 35.0, payout30_min_windows: float = 3.0, paid_min_pct: float = 35.0,
+                  evidence_required: bool = False, min_expectancy_lb_r: float = 0.0, min_trades_for_expectancy_gate: int = 30,
+                  funded_breach_cap_pct: float = 50.0, **kwargs):
     """Accuracy-overhaul wrapper around the original verdict logic.
 
     Adds two honesty gates that can only DEMOTE a READY verdict to MARGINAL
@@ -1197,12 +1227,60 @@ def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 2
         account would actually experience.
     Same return shape as the original.
     """
-    out = _make_verdict_core(*args, mc_dispersion_pts=mc_dispersion_pts, **kwargs)
+    # 2026-10-17: the expectancy lower bound is measured on the 2x-cost re-run (see _replay_and_null_evidence).
+    _eb = kwargs.pop("expectancy_bound", None)
+    if _eb is None and cost_stress:
+        _eb = cost_stress.get("expectancy_bound")
+    out = _make_verdict_core(*args, mc_dispersion_pts=mc_dispersion_pts, attempt_replay=attempt_replay,
+                             expectancy_bound=_eb, **kwargs)
     verdict, reasons, scorecard, ruin_fail, look_fail = out
     final_mc = args[0] if args else kwargs.get("final_mc")
     if verdict != "READY":
         return out
     reasons = list(reasons)
+    # -- 2026-10-17 audit item 5: a HARD gate on the size of the edge --------------------------------------------
+    # Expectancy was 4% of the score although average R per trade drives everything else. The lower confidence bound
+    # on mean R per trade after 2x costs must clear `min_expectancy_lb_r` (default: strictly positive). A bound whose
+    # UPPER end is below zero is a statistically convincing losing edge and rejects outright.
+    if _eb is not None and _eb.get("lb") is not None and int(_eb.get("n", 0)) >= min_trades_for_expectancy_gate:
+        _lb, _ub, _mean, _n = float(_eb["lb"]), float(_eb.get("ub", 0.0)), float(_eb.get("mean", 0.0)), int(_eb["n"])
+        _mult = float((cost_stress or {}).get("multiplier", 2.0))
+        if _ub < 0.0:
+            reasons.insert(0, (
+                f"EXPECTANCY NEGATIVE AFTER COSTS: at {_mult:g}x costs average R per trade is {_mean:+.3f}R over {_n} trades and even the "
+                f"UPPER 95% bound ({_ub:+.3f}R) is below zero -- the edge is gone once costs are realistic. NOT READY."))
+            return "NOT READY", reasons, scorecard, ruin_fail, look_fail
+        if _lb <= min_expectancy_lb_r:
+            reasons.append(
+                f"EXPECTANCY NOT PROVEN: at {_mult:g}x costs average R per trade is {_mean:+.3f}R over {_n} trades, but its 95% LOWER bound "
+                f"is {_lb:+.3f}R (READY needs > {min_expectancy_lb_r:+.2f}R). With a typical 1.2-1.5R spread per trade the sample cannot yet "
+                "distinguish this edge from zero -- capped at MARGINAL.")
+            return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
+    # -- 2026-10-17 audit weakness 5: missing independent evidence caps READY (it never lifts it) -------------------
+    if evidence_required:
+        _missing = []
+        if _eb is None or _eb.get("lb") is None or int(_eb.get("n", 0)) < min_trades_for_expectancy_gate:
+            _missing.append("the lower bound on expectancy after 2x costs")
+        if attempt_replay is None or not getattr(attempt_replay, "sample_ok", False):
+            _missing.append("the real-engine attempt replay")
+        if null_result is None or null_result.get("p_value") is None:
+            _missing.append("the random-entry null test")
+        if cost_stress is None:
+            _missing.append("the 2x cost stress")
+        if _missing:
+            reasons.append(
+                "CAPPED AT MARGINAL: READY needs evidence that does not come from the resampled Monte Carlo, but "
+                + ", ".join(_missing) + (" was" if len(_missing) == 1 else " were")
+                + " not measured (the step failed, was skipped, or had too little data). Missing evidence caps a verdict instead of raising it.")
+            return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
+    # -- funded-stage breach (item 6): reported apart from evaluation-stage breach, with its own cap --------------
+    if final_mc is not None and int(getattr(final_mc, "funded_attempts", 0) or 0) >= 30 \
+            and float(getattr(final_mc, "funded_breach_within_horizon_pct", 0.0)) > funded_breach_cap_pct:
+        reasons.append(
+            f"FUNDED ACCOUNTS DIE: {float(final_mc.funded_breach_within_horizon_pct):.0f}% of the {int(final_mc.funded_attempts)} simulated accounts "
+            f"that passed the evaluation breached a rule within {int(getattr(final_mc, 'ruin_horizon_days', 90))} days of purchase "
+            f"(limit {funded_breach_cap_pct:.0f}%). Passing is not the same as keeping the account -- capped at MARGINAL.")
+        return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
     # 2026-10-15: ruin is time-bounded (first N calendar days of an attempt). When the source
     # history is shorter than that window the number is UNDERSTATED, so it cannot support READY.
     if final_mc is not None and getattr(final_mc, "ruin_horizon_covered", True) is False:
@@ -1420,6 +1498,16 @@ def _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt
             "trades": len(_sbt.trades),
             "base_net_profit": float(final_bt.statistics.net_profit),
         }
+        # 2026-10-17 audit item 5: lower confidence bound on average R per trade AFTER the stressed costs.
+        try:
+            from app.scoring.edge_bounds import expectancy_bound as _exp_bound, r_multiples as _r_mult
+            _eb = _exp_bound(_r_mult(_sbt.trades))
+            cost_stress["expectancy_bound"] = _eb
+            if _eb.get("lb") is not None:
+                log(f"  Expectancy after {_mult:g}x costs: {_eb['mean']:+.3f}R per trade over {_eb['n']} trades, "
+                    f"95% bounds [{_eb['lb']:+.3f}R, {_eb['ub']:+.3f}R].")
+        except Exception as _exc:  # noqa: BLE001
+            log(f"  Expectancy bound skipped: {_exc}")
         log(
             f"  Cost stress ({_mult:g}x): net ${cost_stress['net_profit']:,.0f} "
             f"vs ${cost_stress['base_net_profit']:,.0f} at 1x ({cost_stress['trades']} trades)."
@@ -2755,10 +2843,15 @@ def run_full_pipeline(
         # of them (the 200-run random-entry null, the seed-stability MC) cannot change the
         # outcome, so they are skipped instead of burning minutes on a number nobody can act on.
         try:
-            _pre_verdict = _vc()[0]
+            _pre = _vc()
+            _pre_verdict = _pre[0]
+            # 2026-10-17: the score now also counts the replay and the expectancy bound, which are measured AFTER this
+            # preview, so a strategy whose preview score is a little under the READY bar can still reach it. Only a
+            # hard NOT READY, or a score well below the bar, skips the slow gates.
+            _pre_score = float(getattr(_pre[2], "score", 0.0))
         except Exception:  # noqa: BLE001 -- if the preview fails, run everything as before
-            _pre_verdict = "READY"
-        _can_be_ready = (_pre_verdict == "READY")
+            _pre_verdict, _pre_score = "READY", 100.0
+        _can_be_ready = (_pre_verdict == "READY") or (_pre_verdict == "MARGINAL" and _pre_score >= 60.0)
         if not _can_be_ready:
             log(f"  Verdict is already {_pre_verdict} before the break-it gates; those gates can only demote a READY verdict, so the "
                 "slow random-entry null and seed-stability re-scoring are skipped.")
@@ -2809,6 +2902,9 @@ def run_full_pipeline(
             cost_stress=_cost_ev, cost_stress_min_retained=float(getattr(cfg, 'cost_stress_min_retained_pct', 25.0)) / 100.0, mc_dispersion_pts=_mc_disp,
             payout30=_payout_ev.get("gate"), payout30_min_pct=cfg.payout30_min_pct,
             payout30_min_windows=cfg.payout30_min_effective_windows,
+            evidence_required=bool(getattr(cfg, "extra_gates_enabled", True)),
+            min_expectancy_lb_r=float(getattr(cfg, "min_expectancy_lb_r", 0.0)),
+            funded_breach_cap_pct=float(getattr(cfg, "funded_breach_cap_pct", 50.0)),
         )
 
         verdict_reasons = list(verdict_reasons)

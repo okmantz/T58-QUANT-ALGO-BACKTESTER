@@ -1,0 +1,63 @@
+{# Evolution Lab live gallery: one equity-curve card per evaluated mutation, the random-control scoreboard, tribes and
+   second-engine parity. Data: /api/evolution/lab/feed (see app/web/evolution_lab_routes.py). #}
+<style>
+  .elab { --elab-up: var(--teal, #35e0b0); --elab-down: var(--coral, #ff6f6f); }
+  .elab-head { display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:space-between; margin-bottom:10px; }
+  .elab-chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .elab-chip { font-size:11px; padding:3px 9px; border-radius:999px; border:1px solid var(--border-light); color:var(--text-muted); background:var(--panel-3); }
+  .elab-chip.on { border-color:var(--teal); color:var(--teal); }
+  .elab-chip.bad { border-color:var(--coral); color:var(--coral); }
+  .elab-controls { border:1px solid var(--border-light); border-radius:10px; padding:10px 12px; margin-bottom:12px; background:var(--panel-3); font-size:12.5px; color:var(--text-muted); line-height:1.5; }
+  .elab-controls b { color:var(--text); }
+  .elab-bars { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
+  .elab-bar { display:grid; grid-template-columns:110px 1fr 70px; gap:8px; align-items:center; font-size:11px; }
+  .elab-bar > i { display:block; height:8px; border-radius:4px; background:var(--panel-2); overflow:hidden; }
+  .elab-bar > i > em { display:block; height:100%; border-radius:4px; }
+  .elab-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:10px; }
+  .elab-card { border:1px solid var(--border-light); border-radius:12px; padding:10px; background:var(--panel-3); position:relative; transition:border-color .2s, transform .2s; }
+  .elab-card.fresh { animation:elabIn .5s ease-out; }
+  .elab-card.elite { border-color:var(--teal); box-shadow:0 0 14px rgba(53,224,176,.22); }
+  .elab-card.control { border-style:dashed; opacity:.85; }
+  .elab-card.rejected { opacity:.6; }
+  @keyframes elabIn { from { transform:translateY(6px) scale(.98); opacity:0; } to { transform:none; opacity:1; } }
+  @media (prefers-reduced-motion: reduce) { .elab-card.fresh { animation:none; } }
+  .elab-card canvas { width:100%; height:64px; display:block; }
+  .elab-card .t { display:flex; justify-content:space-between; gap:6px; font-size:11px; color:var(--text-muted); margin-bottom:4px; }
+  .elab-card .t b { color:var(--text); font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:60%; }
+  .elab-card .m { display:flex; flex-wrap:wrap; gap:4px 10px; font-size:11px; margin-top:6px; color:var(--text-muted); }
+  .elab-card .m span b { color:var(--text); }
+  .elab-tag { font-size:9px; text-transform:uppercase; letter-spacing:.05em; padding:1px 6px; border-radius:5px; border:1px solid var(--border-light); }
+  .elab-tag.consistency { color:var(--blue,#6fa8ff); border-color:var(--blue,#6fa8ff); }
+  .elab-tag.growth { color:var(--amber,#f0b429); border-color:var(--amber,#f0b429); }
+  .elab-tag.control { color:var(--text-muted); }
+  .elab-empty { font-size:13px; color:var(--text-muted); padding:18px 4px; }
+  .elab-fin { margin-top:12px; font-size:12px; }
+  .elab-fin table { margin-top:6px; }
+  .elab-fin .ready { color:var(--teal); font-weight:700; }
+  .elab-fin .notready { color:var(--coral); font-weight:600; }
+  .elab-parity { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:8px; }
+  .elab-parity select, .elab-parity input[type=file] { font-size:12px; padding:6px 8px; width:auto; }
+  .elab-parity button { font-size:12px; padding:6px 10px; border-radius:8px; border:1px solid var(--teal); background:transparent; color:var(--teal); }
+</style>
+<div class="card elab" id="elab" data-csrf="{{ csrf_token() }}" hidden>
+  <h2>Live mutations &mdash; equity curve per candidate</h2>
+  <p class="help">Every candidate that survives the first filter gets a card the moment it is scored, so you can watch the search work.
+    Dashed cards are <b>random-entry controls</b> run through the same filters &mdash; the search only counts as skill if it clearly beats them.
+    Cards update in place; the page polls only while this tab is visible.</p>
+  <div class="elab-head">
+    <div class="elab-chips" id="elab-chips"></div>
+    <div class="elab-chips">
+      <button type="button" class="elab-chip on" data-elab-filter="all">All</button>
+      <button type="button" class="elab-chip" data-elab-filter="elite">Elites</button>
+      <button type="button" class="elab-chip" data-elab-filter="evaluated">Scored</button>
+      <button type="button" class="elab-chip" data-elab-filter="control">Controls</button>
+    </div>
+  </div>
+  <div class="elab-controls" id="elab-controls"></div>
+  <div class="elab-grid" id="elab-grid"><div class="elab-empty">Waiting for the first generation&hellip;</div></div>
+  <div class="elab-fin">
+    <button type="button" class="lb-detail-btn" id="elab-fin-btn">Check finalists &amp; readiness</button>
+    <div id="elab-fin-out"></div>
+  </div>
+</div>
+<script src="/static/evolution-lab.js" defer></script>

@@ -713,6 +713,7 @@ def _stage1_task_batch(items: list[tuple[str, dict]], filters: dict) -> list[dic
             # (mismatch -> exception -> scalar fallback below).
             sl_dist = strat_result.stop_loss_distance
             tp_dist = strat_result.take_profit_distance
+            tr_dist = strat_result.trailing_stop_distance
             vec_batch.append(VectorizedCandidate(
                 candidate_id=candidate_id,
                 signals=strat_result.signals.to_numpy(),
@@ -720,6 +721,7 @@ def _stage1_task_batch(items: list[tuple[str, dict]], filters: dict) -> list[dic
                 take_profit_pips=strat_result.take_profit_pips,
                 stop_distances=np.asarray(sl_dist, dtype=float) if sl_dist is not None else None,
                 take_distances=np.asarray(tp_dist, dtype=float) if tp_dist is not None else None,
+                trail_distances=np.asarray(tr_dist, dtype=float) if tr_dist is not None else None,
             ))
             vec_bases[candidate_id] = base
         else:

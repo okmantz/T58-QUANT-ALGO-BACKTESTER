@@ -78,6 +78,7 @@ from app.backtest.adaptive_risk import build_limit_aware_preset
 from app.backtest.engine import run_backtest
 from app.backtest.risk import RiskConfig, account_size_mismatch_message, with_prop_safety_defaults
 from app.evolution import checkpoint as evo_checkpoint
+from app.evolution import lab_extras as lx
 from app.evolution.alt_optimizers import build_family_bank
 from app.evolution.family_budget import FamilyBudgetTracker
 from app.evolution.knowledge_graph import DEFAULT_KG_PATH, KnowledgeGraph, feature_vector_for_spec
@@ -182,6 +183,13 @@ def _evo_worker_ready_ping() -> bool:
     return True
 
 
+def _spec_tmp_dir() -> Path:
+    """Scratch dir for python-source candidates (the random controls); PythonStrategy only loads from a file."""
+    d = Path(tempfile.gettempdir()) / "t58_evo_specs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def _evo_prefilter_task(
     cid: str, spec: dict, meta: dict,
     min_trades: int, min_profit_factor: float, max_drawdown_pct: float, max_drawdown_buffer_mult: float,
@@ -219,7 +227,7 @@ def _evo_prefilter_task(
     if prefilter_max_bars and len(df) > prefilter_max_bars:
         df = df.tail(prefilter_max_bars)
     try:
-        strategy = build_strategy_from_spec(spec)
+        strategy = build_strategy_from_spec(spec, _spec_tmp_dir() if spec.get("source_type") == "python" else None)
         bt = run_backtest(df, strategy, risk, adaptive_risk=_EVO_WORKER.get("adaptive_risk"))
     except Exception as exc:  # noqa: BLE001 -- a bad generated config must not kill the pool
         return (cid, spec, meta, None, ["build_or_backtest_error"], str(exc)[:300], None)
@@ -663,6 +671,23 @@ class EvolutionConfig:
     # desktop Evolution Lab form defaults its own checkbox to CHECKED.
     reset_on_breach: bool = False
 
+    # ---- 2026-10-17 Evolution Lab upgrades (see app.evolution.lab_extras) ----------------------------------
+    # Random-entry controls injected into EVERY generation's pool and pushed through the same filters, so the Lab can
+    # report whether the search beats chance. 0 turns them off.
+    random_controls_per_generation: int = 3
+    # Two tribes ("consistency", "growth") breed apart until this generation, then pool. tribes_enabled=False restores
+    # the single pool.
+    tribes_enabled: bool = True
+    tribe_merge_generation: int = 10
+    # A stress survivor whose last `decay_window_trades` trades have gone cold is not promoted.
+    decay_check_enabled: bool = True
+    decay_window_trades: int = 15
+    # Re-price survivors at an hour-of-week spread shape; a candidate whose edge disappears is not promoted.
+    hour_of_week_spread_enabled: bool = True
+    # One downsampled equity curve per evaluated mutation, for the live gallery (bounded memory, never blocks a run).
+    curves_enabled: bool = True
+    curve_points: int = 90
+
     def __post_init__(self):
         # FIX (2026-09-22): fail fast, at config construction, on an
         # unknown optimizer_mode -- matching RefinementConfig's own
@@ -969,6 +994,13 @@ class EvolutionRunner:
                 min_observations=self.cfg.surrogate_min_observations, kappa=self.cfg.surrogate_kappa,
             )
 
+        # 2026-10-17 Evolution Lab upgrades: per-run scoreboard of evolved candidates vs random controls, the live
+        # equity-curve feed, second-engine parity results keyed by candidate id, and the cached hour-of-week spread model.
+        self.control_tracker = lx.ControlTracker()
+        self.curve_store = lx.EquityCurveStore(capacity=240)
+        self.parity: dict[str, dict] = {}
+        self._how_model = None
+
         self._load_checkpoint_if_compatible()
         self._apply_family_health_exclusions()
 
@@ -1251,6 +1283,7 @@ class EvolutionRunner:
             "max_drawdown_buffer_mult": self.cfg.max_drawdown_buffer_mult,
             # Loop mode -- see EvolutionConfig.target_eval_pass_pct.
             "target_eval_pass_pct": self.cfg.target_eval_pass_pct,
+            "lab": self.lab_status(),
             "target_reached": self._target_reached_by is not None,
             "target_reached_candidate_id": (
                 self._target_reached_by.candidate_id if self._target_reached_by else None
@@ -1280,7 +1313,19 @@ class EvolutionRunner:
             self.leaderboard, self.prop_rules, top_n=top_n, window_trading_days=window_trading_days,
         )
         pareto_frontier_for_finalists(reports)
-        return [r.to_dict() for r in reports]
+        rows = [r.to_dict() for r in reports]
+        risk_pct = float(getattr(self.risk, "risk_value", 1.0) or 1.0)
+        for row in rows:
+            par = self.parity.get(row["candidate_id"])
+            row["parity"] = par or {"status": "NOT_RUN", "reasons": ["No second-engine (MT5 / real-account) trades attached yet."]}
+            row["readiness"] = lx.readiness_label(row["parity"], evidence_ready=True)
+            row["incubation_plan"] = lx.incubation_plan(risk_pct)
+            rec = next((r for r in self.leaderboard if r.candidate_id == row["candidate_id"]), None)
+            if rec is not None:
+                row["decay15"] = (rec.meta or {}).get("decay15")
+                row["how_spread"] = (rec.meta or {}).get("how_spread")
+                row["tribe"] = (rec.meta or {}).get("tribe")
+        return rows
 
     def _evaluate_spec_on_slice(self, slice_df, rec, label: str, mc_sims: int | None) -> dict:
         spec = rec.spec if hasattr(rec, "spec") else rec.get("spec")
@@ -1645,6 +1690,7 @@ class EvolutionRunner:
         self._log(f"CPCV / PBO: re-scored top {len(cpcv_pool)} candidates.")
 
         stress_survivors = self._stress_test(cpcv_pool)
+        stress_survivors = self._lab_gates(stress_survivors)
         self._log(f"STRESS TEST ({self.cfg.stress_cost_multiplier:g}x costs): "
                   f"{len(stress_survivors)}/{len(cpcv_pool)} still fitness-positive.")
         self._record_family_budget_stress(cpcv_pool, stress_survivors)
@@ -1677,7 +1723,7 @@ class EvolutionRunner:
             self._consecutive_stress_failures = 0
             clustered = self._cluster(stress_survivors)
             clustered.sort(key=lambda r: r.fitness.final_score, reverse=True)
-            new_elites = self._diversify_elites(clustered)
+            new_elites = self._select_elites(clustered, gen)
         else:
             # No genuine survivor this generation -- breed next generation
             # from the closest near-misses (ranked by fitness, same
@@ -1704,6 +1750,7 @@ class EvolutionRunner:
 
         self._record_generation_to_knowledge_graph(evaluated, {r.candidate_id for r in new_elites})
         self._append_tested_log_full_eval(evaluated, gen)
+        self._publish_evaluated(evaluated, {r.candidate_id for r in new_elites}, gen)
         if new_elites:
             self._update_leaderboard(new_elites)
             self._maybe_save_to_library(new_elites)
@@ -1832,6 +1879,52 @@ class EvolutionRunner:
                 continue
 
     def _generate_population(self, gen: int, elites: list[tuple[dict, dict]]) -> list[tuple[str, dict, dict]]:
+        """Tribes + random controls around the original generator (_generate_population_core).
+
+        While tribes are active (gen < tribe_merge_generation) the population budget is split in two: each tribe
+        breeds only from its OWN elites, with its own RNG stream, and its children are tagged ``meta["tribe"]``. After
+        the merge generation everything pools exactly as before. Random-entry controls are appended LAST in every
+        generation (they never consume the core's RNG, so turning them off does not change anything else)."""
+        cfg = self.cfg
+        if lx.tribes_active(gen, cfg.tribe_merge_generation, cfg.tribes_enabled) and cfg.population_size >= 4:
+            out: list = []
+            seen: set = set()
+            saved_pop, saved_seed = cfg.population_size, cfg.random_seed
+            force_full = self._force_full_immigrant_next
+            try:
+                cfg.population_size = max(2, saved_pop // 2)
+                for k, tribe in enumerate(lx.TRIBES):
+                    self._force_full_immigrant_next = force_full
+                    cfg.random_seed = saved_seed + 100_003 * (k + 1)
+                    mine = [e for e in elites if (e[1] or {}).get("tribe") in (tribe, None)]
+                    for cid, spec, meta in self._generate_population_core(gen, mine):
+                        if cid in seen:
+                            cid = f"{cid}-{tribe[0]}"
+                        seen.add(cid)
+                        out.append((cid, spec, {**meta, "tribe": tribe}))
+            finally:
+                cfg.population_size, cfg.random_seed = saved_pop, saved_seed
+                self._force_full_immigrant_next = False
+            population = out
+        else:
+            population = self._generate_population_core(gen, elites)
+        return population + self._random_controls(gen)
+
+    def _random_controls(self, gen: int) -> list[tuple[str, dict, dict]]:
+        n = int(getattr(self.cfg, "random_controls_per_generation", 0) or 0)
+        if n <= 0:
+            return []
+        try:
+            sl, tp = lx.control_exit_pips(self.df, getattr(self.risk, "pip_size", 0.0))
+            entries = max(40, int(self.cfg.min_trades) * 3)
+            return [(f"control-gen{gen}-{k}",
+                     lx.random_control_spec(self.cfg.random_seed * 1000 + gen * 17 + k, hold_bars=12, n_entries=entries,
+                                            stop_pips=sl, take_pips=tp),
+                     {"family": lx.CONTROL_FAMILY, "control": True, "params": {}}) for k in range(n)]
+        except Exception:  # noqa: BLE001 -- controls are diagnostics; never let them stop a generation
+            return []
+
+    def _generate_population_core(self, gen: int, elites: list[tuple[dict, dict]]) -> list[tuple[str, dict, dict]]:
         """Returns a list of (candidate_id, spec, meta). Generation 0 is
         pure random family sampling. Later generations mix mutated
         children of the previous top N with a fresh slice of random
@@ -2194,6 +2287,14 @@ class EvolutionRunner:
         tested_rows = []
 
         def _consume(cid, spec, meta, bt, reasons, error, stats):
+            if (meta or {}).get("control"):
+                # Random controls are measured, never bred: they feed the "beats chance" scoreboard and the gallery only.
+                self._observe_prefilter(cid, meta, gen, bt, reasons, error, stats)
+                return
+            _consume_core(cid, spec, meta, bt, reasons, error, stats)
+            self._observe_prefilter(cid, meta, gen, bt, reasons, error, stats)
+
+        def _consume_core(cid, spec, meta, bt, reasons, error, stats):
             # Mirrors _evo_prefilter_task's return shapes exactly (see
             # its docstring/body): the unfundable pre-screen skip, a
             # build/backtest error, a zero-trade candidate, a candidate
@@ -2306,6 +2407,116 @@ class EvolutionRunner:
         near_misses.sort(key=lambda t: t[0], reverse=True)
         near_miss_top = [(spec, meta) for _score, spec, meta in near_misses[: self.cfg.elite_keep]]
         return survivors, rejection_counts, near_miss_top
+
+    # -- 2026-10-17 Evolution Lab observers (cheap, exception-proof) ---------------------------------------------------
+    def _observe_prefilter(self, cid, meta, gen, bt, reasons, error, stats) -> None:
+        try:
+            is_control = bool((meta or {}).get("control"))
+            passed = error is None and stats is not None and not reasons
+            pf = None
+            if stats is not None:
+                v = stats.get("profit_factor")
+                pf = 10.0 if v == float("inf") else (float(v) if v is not None else None)
+            self.control_tracker.record(is_control, passed, pf)
+            if self.cfg.curves_enabled and bt is not None and getattr(bt, "trades", None):
+                self.curve_store.add({
+                    "id": cid, "gen": gen, "stage": "prefilter", "family": (meta or {}).get("family", "?"),
+                    "tribe": (meta or {}).get("tribe"), "control": is_control, "passed": bool(passed),
+                    "curve": lx.curve_from_pnls([t.pnl for t in bt.trades], self.risk.initial_balance, self.cfg.curve_points),
+                    "n_trades": (stats or {}).get("total_trades"), "profit_factor": pf,
+                    "net_profit": (stats or {}).get("net_profit"), "max_drawdown_pct": (stats or {}).get("max_drawdown_pct"),
+                })
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _publish_evaluated(self, evaluated: list, elite_ids: set, gen: int) -> None:
+        """After full evaluation: one more gallery card per scored mutation, now with fitness, tribe scores and flags."""
+        if not self.cfg.curves_enabled:
+            return
+        try:
+            for r in evaluated:
+                f = r.fitness
+                ts_ = lx.tribe_scores(f) if f is not None else {}
+                self.curve_store.add({
+                    "id": r.candidate_id, "gen": gen, "stage": "evaluated", "family": (r.meta or {}).get("family", "?"),
+                    "tribe": (r.meta or {}).get("tribe"), "control": False, "elite": r.candidate_id in elite_ids,
+                    "curve": lx.curve_from_pnls(r.trade_pnls, self.risk.initial_balance, self.cfg.curve_points),
+                    "n_trades": (r.stats or {}).get("total_trades"), "net_profit": (r.stats or {}).get("net_profit"),
+                    "max_drawdown_pct": (r.stats or {}).get("max_drawdown_pct"),
+                    "score": f.final_score if f is not None else None,
+                    "pass_probability": f.pass_probability if f is not None else None,
+                    "payout_probability": f.payout_probability if f is not None else None,
+                    "tribe_scores": ts_, "decay15": (r.meta or {}).get("decay15"), "how_spread": (r.meta or {}).get("how_spread"),
+                    "stressed_ok": r.stressed_ok,
+                })
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _lab_gates(self, survivors: list) -> list:
+        """15-trade decay check and hour-of-week spread re-pricing on the stress survivors. A candidate that fails either
+        is demoted with a plain-language note (it lands in the graveyard with that reason, not a mislabelled stress
+        failure). Both are cheap pure-Python checks on trades already in memory."""
+        keep = []
+        for r in survivors:
+            reasons = []
+            try:
+                if self.cfg.decay_check_enabled:
+                    d = lx.decay_check(r.trade_pnls, window=int(self.cfg.decay_window_trades))
+                    r.meta["decay15"] = d.to_dict()
+                    if d.decayed:
+                        reasons.append(f"15-trade decay check: {d.reason}")
+                if self.cfg.hour_of_week_spread_enabled and r.trades and getattr(self.risk, "spread_pips", 0):
+                    if self._how_model is None:
+                        self._how_model = lx.HourOfWeekSpread.fit(self.df)
+                    rc = lx.recost_trades(r.trades, self._how_model, float(self.risk.spread_pips), float(self.risk.pip_size))
+                    base = float(np.mean([t.pnl for t in r.trades])) if r.trades else 0.0
+                    r.meta["how_spread"] = {"net_change": rc["net_change"], "adjusted_expectancy": rc["adjusted_expectancy"],
+                                            "flat_expectancy": base}
+                    if base > 0 and rc["adjusted_expectancy"] <= 0:
+                        reasons.append("hour-of-week spread: the edge disappears when each trade pays the spread of the hour it traded in")
+            except Exception:  # noqa: BLE001 -- a failed diagnostic must not promote OR kill a candidate
+                reasons = []
+            if reasons:
+                if r.fitness is not None:
+                    r.fitness.notes.insert(0, "; ".join(reasons))
+                r.stressed_ok = False
+                self._log(f"  DEMOTED {r.candidate_id}: " + "; ".join(reasons))
+            else:
+                keep.append(r)
+        return keep
+
+    def _select_elites(self, clustered: list, gen: int) -> list:
+        """Per-tribe elite selection while tribes are active (each tribe ranked by ITS OWN score), pooled afterwards."""
+        cfg = self.cfg
+        if not lx.tribes_active(gen, cfg.tribe_merge_generation, cfg.tribes_enabled):
+            return self._diversify_elites(clustered)
+        out: list = []
+        saved = cfg.elite_keep
+        try:
+            cfg.elite_keep = max(1, saved // 2)
+            for tribe in lx.TRIBES:
+                mine = [r for r in clustered if (r.meta or {}).get("tribe") == tribe]
+                mine.sort(key=lambda r: lx.tribe_scores(r.fitness)[tribe], reverse=True)
+                out.extend(self._diversify_elites(mine))
+        finally:
+            cfg.elite_keep = saved
+        return out or self._diversify_elites(clustered)
+
+    def lab_status(self) -> dict:
+        """Everything the Lab page needs besides the curves."""
+        return {"controls": self.control_tracker.report(), "parity": dict(self.parity),
+                "tribes_active": lx.tribes_active(self.generation, self.cfg.tribe_merge_generation, self.cfg.tribes_enabled),
+                "tribe_merge_generation": self.cfg.tribe_merge_generation, "generation": self.generation}
+
+    def attach_parity(self, candidate_id: str, reference_trades: list) -> dict:
+        """Compares a leaderboard candidate's trades with a second engine's (MT5 report / real account) and stores the
+        verdict; finalists are only ever labelled READY once this passes."""
+        rec = next((r for r in self.leaderboard if r.candidate_id == candidate_id), None)
+        if rec is None:
+            raise KeyError(f"{candidate_id} is not on the leaderboard")
+        res = lx.parity_gate(rec.trades, reference_trades).to_dict()
+        self.parity[candidate_id] = res
+        return res
 
     def _tested_row(self, cid: str, meta: dict, gen: int, passed: bool, reasons: list[str],
                      n_trades=None, profit_factor=None, net_profit=None, max_drawdown_pct=None,

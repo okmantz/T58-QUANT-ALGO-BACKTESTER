@@ -67,10 +67,33 @@ already exists:
                                           below -- this component deliberately measures something
                                           DIFFERENT from every row above it.
 
-    The weights sum to 120 (25+20+20+15+10+5+5+10+5+5), NOT 90 or 100: a component's
-    share of the score is weight/120, e.g. expectancy is 5/120 = 4.2% of the total. (Older
-    text called expectancy "5/90ths" -- that predates the parsimony, CPCV-supporting and
-    conformance components and is wrong.) The score itself is
+    The weights sum to 100. A component's share of the score is weight/100; the score itself is
+    sum(weight x value) / sum(weight of the components PRESENT).
+
+    REWEIGHTED 2026-10-17 (audit items 3-6). The table above is the pre-audit design; the live weights are:
+
+        Monte Carlo family (ONE resampled trade list, capped at 30 points together)
+            pass probability 10  (lower bound of the TRADE-SAMPLE-aware interval, see app.scoring.edge_bounds)
+            first payout     8   (same)
+            risk of ruin     6   (evaluation-stage breach only: breaching before you pass costs the fee)
+            funded survival  6   (funded-stage breach only: breaching after you pass costs the account)
+        Independent of that Monte Carlo
+            replay pass      15  (the real engine from many real start dates, dependence-aware lower bound)
+            expectancy LB    15  (lower bound of average R per trade after 2x costs; 0R -> 0, 0.15R -> 100)
+            walk-forward     15, drawdown 8, MC robustness 5, parameter stability 5, parsimony 4, CPCV 3
+
+    Previously pass + payout + ruin were 65 of 120 points (54%) and all three came from the same Monte Carlo,
+    so adding them counted one piece of evidence three times. The "expectancy" component (5 points, 0.3R -> 50)
+    is replaced by the lower-bound component: the SIZE of the edge, with its sampling error removed, now moves
+    the score and also gates READY (see app.orchestration.full_pipeline._make_verdict).
+
+WHAT THE SCORE MEASURES"
+                                          below -- this component deliberately measures something
+                                          DIFFERENT from every row above it.
+
+    The weights sum to 100 (10+8+6+6 Monte Carlo family, 15 replay, 15 expectancy LB, 15 walk-forward,
+    8 drawdown, 5+5 robustness/parameter stability, 4 parsimony, 3 CPCV): a component's share of the
+    score is its weight / 100. (Older text said 120 or 90ths; both are stale.) The score itself is
     sum(weight x value) / sum(weight of the components PRESENT).
 
 WHAT THE SCORE MEASURES -- READ BEFORE REINTERPRETING IT
@@ -133,22 +156,34 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+# 2026-10-17 audit (items 3-6): the old card gave pass (25) + paid (20) + ruin (20) = 65 of 120 points (54%) to
+# ONE Monte Carlo of ONE trade list, which counts the same evidence three times. The Monte Carlo family is now
+# capped at 30 of 100 points, and the freed weight goes to evidence that does NOT come from that Monte Carlo:
+#   replay_pass            the real engine re-run from many real start dates (dependence-aware lower bound)
+#   expectancy_lower_bound lower confidence bound on average R per trade after 2x costs (the size of the edge)
+# Ruin is split by stage: breaching BEFORE passing costs the fee, breaching AFTER funding costs the account.
+SCORECARD_VERSION = "2026-10-17.2"
 _WEIGHTS: dict[str, float] = {
-    "pass_probability": 25.0,
-    "first_payout_probability": 20.0,
-    "risk_of_ruin": -20.0,
+    # -- Monte Carlo family (one resampled trade list): 30 points in total --------------------
+    "pass_probability": 10.0,
+    "first_payout_probability": 8.0,
+    "risk_of_ruin": -6.0,           # evaluation-stage breach, inverted
+    "funded_survival": 6.0,         # funded-stage breach, inverted
+    # -- evidence that is independent of that Monte Carlo ----------------------------------------
+    "replay_pass": 15.0,
+    "expectancy_lower_bound": 15.0,
     "walk_forward_stability": 15.0,
-    "monte_carlo_robustness": 10.0,
+    "monte_carlo_robustness": 5.0,
     "parameter_stability": 5.0,
-    "expectancy": 5.0,
-    "drawdown": 10.0,
-    "parsimony": 5.0,
-    "cpcv_supporting": 5.0,
-    # t58_conformance is NO LONGER scored (2026-10-15 audit): it measures how T58-styled the entry logic is,
-    # not whether the strategy survives a prop evaluation. It is reported beside the score as an
-    # informational badge (T58ScorecardResult.t58_conformance) and never enters the score, the weight
-    # coverage, or the READY verdict.
+    "drawdown": 8.0,
+    "parsimony": 4.0,
+    "cpcv_supporting": 3.0,
+    # t58_conformance is NO LONGER scored (2026-10-15 audit): informational badge only.
 }
+# Components that all derive from the single Monte Carlo (reported as `mc_weight_share`).
+_MC_FAMILY = ("pass_probability", "first_payout_probability", "risk_of_ruin", "funded_survival")
+# Independent evidence a READY verdict must have actually measured (missing evidence caps, never lifts).
+_INDEPENDENT_REQUIRED = ("replay_pass", "expectancy_lower_bound")
 
 # Tier meaning (2026-10-17 recalibration): READY = every hard gate passed AND score >= READY_MIN_SCORE (75, the
 # "Strong" tier -- roughly 85% pass LB / 65% paid LB / 8% ruin with good secondary components). "Elite" (>= 85) is a
@@ -187,10 +222,14 @@ class T58ScorecardInputs:
     walk_forward_stability: float | None = None
     monte_carlo_robustness: float | None = None
     parameter_stability: float | None = None
-    expectancy: float | None = None
+    expectancy: float | None = None          # informational since 2026-10-17 (replaced by expectancy_lower_bound)
     drawdown: float | None = None
     parsimony: float | None = None
     cpcv_supporting: float | None = None
+    # 2026-10-17: new components (see _WEIGHTS)
+    funded_survival: float | None = None
+    replay_pass: float | None = None
+    expectancy_lower_bound: float | None = None
     # NEW (P2-9/M8): 0-100 T58 framework-conformance value, e.g. from
     # t58_conformance_score() below. None (the default) keeps the
     # pre-existing prop-survival-only score byte-identical.
@@ -215,6 +254,11 @@ class T58ScorecardResult:
     missing_core: list = field(default_factory=list)
     # Informational only (0-100 or None): how T58-styled the entry logic is. NOT part of the score.
     t58_conformance: float | None = None
+    # 2026-10-17: share (0-1) of the MEASURED weight that comes from the single Monte Carlo, which independent
+    # evidence a READY verdict is missing, and the card version (stamped into every report).
+    mc_weight_share: float = 0.0
+    missing_independent: list = field(default_factory=list)
+    version: str = SCORECARD_VERSION
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -269,12 +313,16 @@ def compute_t58_score(inputs: T58ScorecardInputs) -> T58ScorecardResult:
     total_weight_all = sum(abs(w) for w in _WEIGHTS.values()) * 100.0
     coverage = (total_weight_available / total_weight_all) if total_weight_all > 0 else 0.0
     missing_core = [n for n in _CORE_COMPONENTS if components[n]["value"] is None]
+    missing_independent = [n for n in _INDEPENDENT_REQUIRED if components[n]["value"] is None]
+    _mc_w = sum(abs(_WEIGHTS[n]) for n in _MC_FAMILY if components[n]["value"] is not None)
+    _all_w = total_weight_available / 100.0
+    mc_share = (_mc_w / _all_w) if _all_w > 0 else 0.0
     if total_weight_available <= 0:
         notes.append("No scorecard components were available -- score is 0 by default, not a real evaluation.")
         return T58ScorecardResult(score=0.0, tier="Reject", components=components,
                                    n_components_used=0, n_components_total=n_total, notes=notes,
                                    weight_coverage=0.0, missing_core=missing_core,
-                                   t58_conformance=_conf)
+                                   t58_conformance=_conf, missing_independent=missing_independent)
 
     score = _clip(weighted_sum / total_weight_available * 100.0)
     if n_used < n_total:
@@ -289,6 +337,7 @@ def compute_t58_score(inputs: T58ScorecardInputs) -> T58ScorecardResult:
         score=score, tier=tier_for_score(score), components=components,
         n_components_used=n_used, n_components_total=n_total, notes=notes,
         weight_coverage=coverage, missing_core=missing_core, t58_conformance=_conf,
+        mc_weight_share=mc_share, missing_independent=missing_independent,
     )
 
 
@@ -610,6 +659,70 @@ def _preferred_payout_ci(mc_result):
     return None
 
 
+# Lower bound of average R per trade (after 2x costs) at which the expectancy component reaches 100.
+# A lower bound is already pessimistic, so full marks need only 0.15R; a lower bound at or below 0R scores 0.
+_EXPECTANCY_LB_FULL_SCORE_R = 0.15
+
+
+def _expectancy_lb_score(lb_r: float | None) -> float | None:
+    """Score the LOWER confidence bound on average R per trade (see app.scoring.edge_bounds.expectancy_bound).
+    0R or worse -> 0, 0.15R or better -> 100, linear between. None (not measured) stays missing."""
+    if lb_r is None:
+        return None
+    try:
+        v = float(lb_r)
+    except (TypeError, ValueError):
+        return None
+    if v != v:
+        return None
+    return _clip(v / _EXPECTANCY_LB_FULL_SCORE_R * 100.0)
+
+
+def _sample_ci(mc_result, name: str):
+    """The trade-sample-aware interval (2026-10-17), if this result carries one."""
+    ci = getattr(mc_result, name, None)
+    return ci if _nonzero_ci(ci) else None
+
+
+def _replay_pass_score(attempt_replay) -> float | None:
+    """Lower bound (percent) of the attempt replay's dependence-aware pass-rate interval -- the real engine
+    re-run from many real start dates. This is the one pass-rate measurement that does not come from the
+    resampled Monte Carlo, so it is scored in its own right. Missing when the replay did not run or had too
+    few attempts."""
+    if attempt_replay is None or not getattr(attempt_replay, "sample_ok", False):
+        return None
+    ci = getattr(attempt_replay, "pass_ci_honest", None)
+    try:
+        if ci is not None and float(getattr(attempt_replay, "n_effective", 0.0) or 0.0) > 0:
+            return _clip(float(ci[0]) * 100.0)
+        return _clip(float(attempt_replay.pass_ci[0]) * 100.0)
+    except (TypeError, ValueError, IndexError, AttributeError):
+        return None
+
+
+def _funded_survival_score(mc_result) -> float | None:
+    """100 minus the share of FUNDED accounts that breach within the ruin horizon. Missing (not 100) when too
+    few accounts reached the funded stage to say anything, so a strategy that rarely passes is not credited
+    for the funded accounts it never had."""
+    n = getattr(mc_result, "funded_attempts", 0) or 0
+    if n < 30:
+        return None
+    v = getattr(mc_result, "funded_breach_within_horizon_pct", None)
+    if v is None:
+        return None
+    return _clip(100.0 - float(v))
+
+
+def _eval_ruin_pct(mc_result) -> float | None:
+    """Evaluation-stage breach % for the ruin component. Results built before the stage split existed
+    (effective_independent_attempts == 0) fall back to the combined risk_of_ruin_pct."""
+    if mc_result is None:
+        return None
+    if (getattr(mc_result, "effective_independent_attempts", 0.0) or 0.0) > 0:
+        return float(getattr(mc_result, "eval_breach_pct", 0.0))
+    return getattr(mc_result, "risk_of_ruin_pct", None)
+
+
 def score_from_results(
     mc_result=None,
     walk_forward_result=None,
@@ -621,6 +734,8 @@ def score_from_results(
     t58_conformance: float | None = None,
     manual_config: dict | None = None,
     mc_dispersion_pts: float | None = None,
+    attempt_replay=None,
+    expectancy_bound: dict | None = None,
 ) -> T58ScorecardResult:
     """Convenience entry point: pass whichever of this app's own result
     objects you already have in hand (any/all may be None -- a partial
@@ -676,6 +791,14 @@ def score_from_results(
     _paid_ci = getattr(mc_result, "per_attempt_paid_ci95", None)
     if _nonzero_ci(_paid_ci):
         first_payout_probability = float(_paid_ci[0])
+    # 2026-10-17: when the result carries TRADE-SAMPLE-aware intervals (Wilson over the independent attempt
+    # windows the history can support, not over ~10,000 simulated attempts) the score uses those lower bounds.
+    _pass_s = _sample_ci(mc_result, "per_attempt_pass_ci95_sample")
+    if _pass_s is not None:
+        pass_probability = float(_pass_s[0])
+    _paid_s = _sample_ci(mc_result, "per_attempt_paid_ci95_sample")
+    if _paid_s is not None:
+        first_payout_probability = float(_paid_s[0])
 
     walk_forward_stability = None
     if walk_forward_result is not None:
@@ -707,7 +830,10 @@ def score_from_results(
     inputs = T58ScorecardInputs(
         pass_probability=pass_probability,
         first_payout_probability=first_payout_probability,
-        risk_of_ruin=_risk_of_ruin_score(risk_of_ruin_pct),
+        risk_of_ruin=_risk_of_ruin_score(_eval_ruin_pct(mc_result) if mc_result is not None else risk_of_ruin_pct),
+        funded_survival=_funded_survival_score(mc_result) if mc_result is not None else None,
+        replay_pass=_replay_pass_score(attempt_replay),
+        expectancy_lower_bound=_expectancy_lb_score((expectancy_bound or {}).get("lb")),
         walk_forward_stability=walk_forward_stability,
         monte_carlo_robustness=_mc_robustness_score(mc_result, mc_dispersion_pts) if (mc_result is not None or mc_dispersion_pts is not None) else None,
         parameter_stability=parameter_stability,

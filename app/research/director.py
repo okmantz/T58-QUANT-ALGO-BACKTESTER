@@ -559,6 +559,71 @@ def _null_eval_signal(df, sig, risk, stop_loss_pips, take_profit_pips,
         return float("nan")
 
 
+def _null_metric_from_trades(trades, eq, risk, metric) -> float:
+    from app.backtest.statistics import compute_statistics
+    st_ = compute_statistics(trades, eq, initial_balance=risk.initial_balance)
+    if metric == "profit_factor":
+        return float(st_.profit_factor) if np.isfinite(st_.profit_factor) else 10.0
+    if metric == "expectancy":
+        return float(np.mean([t.pnl for t in trades])) if trades else 0.0
+    return float(st_.net_profit)
+
+
+def _null_fast_eligible(df, risk, stop_loss_distance, take_profit_distance) -> bool:
+    """Same gate as the Stage-1 search: fixed-pip or per-bar-array exits, and a run config the fast path models."""
+    try:
+        from app.backtest.vectorized_fastpath import risk_is_vectorizable, _is_perbar_distance
+        if not risk_is_vectorizable(risk):
+            return False
+        for d in (stop_loss_distance, take_profit_distance):
+            if d is not None and not _is_perbar_distance(d):
+                return False
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _null_eval_batch(df, sigs, risk, stop_loss_pips, take_profit_pips,
+                     stop_loss_distance, take_profit_distance, metric,
+                     trailing_stop_distance=None) -> list[float]:
+    """Evaluates MANY drawn signals in ONE vectorised pass (audit item 8). Each seed is a column, so 200 null runs cost
+    about one engine pass instead of 200. A seed that produced no trades (or any batch-level failure) is re-run through
+    the real engine, so every value is the engine's value -- parity is pinned by tests/search/test_null_fastpath.py."""
+    import warnings
+
+    from app.backtest.vectorized_fastpath import VectorizedCandidate, run_vectorized_batch
+    n = len(df)
+
+    def _arr(x):
+        return None if x is None else np.asarray(x, dtype=float).reshape(n)
+
+    out = [float("nan")] * len(sigs)
+    try:
+        cands = [VectorizedCandidate(str(j), np.asarray(sg, dtype=np.int8), stop_loss_pips, take_profit_pips,
+                                     stop_distances=_arr(stop_loss_distance), take_distances=_arr(take_profit_distance),
+                                     trail_distances=_arr(trailing_stop_distance))
+                 for j, sg in enumerate(sigs)]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = run_vectorized_batch(df, cands, risk)
+        redo = []
+        for j in range(len(sigs)):
+            o = res.get(str(j))
+            if o is None or not o.trades or o.equity_curve is None:
+                redo.append(j)
+                continue
+            try:
+                out[j] = _null_metric_from_trades(o.trades, o.equity_curve, risk, metric)
+            except Exception:  # noqa: BLE001
+                redo.append(j)
+    except Exception:  # noqa: BLE001 -- any batch problem: trusted scalar engine for everything
+        redo = list(range(len(sigs)))
+    for j in redo:
+        out[j] = _null_eval_signal(df, sigs[j], risk, stop_loss_pips, take_profit_pips,
+                                   stop_loss_distance, take_profit_distance, metric)
+    return out
+
+
 # -- v9.13: cross-process null evaluation --------------------------------
 # The 200 null runs are independent full engine passes; only the rng
 # DRAWS must stay sequential. The parent draws every seed's signal in
@@ -606,6 +671,7 @@ def random_entry_distribution(
     seed: int = 0,
     progress_cb=None,
     max_workers: int | None = None,
+    fast: bool = True,
 ) -> dict:
     """Random-entry null as a DISTRIBUTION (not one seed).
 
@@ -653,6 +719,18 @@ def random_entry_distribution(
 
     use_parallel = max_workers is not None and int(max_workers) > 1 and n_seeds >= 8
     done_up_to = 0  # seeds [0, done_up_to) have final values in vals
+    # 2026-10-17 (audit item 8): when the exits are fast-path-shaped, evaluate the seeds as COLUMNS of one vectorised
+    # pass (same draws, same order, engine-identical values) -- far cheaper than 200 engine runs, with or without a pool.
+    if fast and _null_fast_eligible(df, risk, stop_loss_distance, take_profit_distance):
+        use_parallel = False
+        _B = 50
+        while done_up_to < n_seeds:
+            end = min(done_up_to + _B, n_seeds)
+            sigs = [_null_draw_signal(rng, n, hold, n_entries, long_fraction) for _ in range(done_up_to, end)]
+            vals[done_up_to:end] = _null_eval_batch(df, sigs, risk, stop_loss_pips, take_profit_pips,
+                                                    stop_loss_distance, take_profit_distance, metric)
+            done_up_to = end
+            _fire(done_up_to)
     if use_parallel:
         import multiprocessing
         from concurrent.futures import ProcessPoolExecutor

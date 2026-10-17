@@ -279,6 +279,23 @@ class MonteCarloResult:
     per_attempt_paid_probability: float = 0.0
     per_attempt_paid_ci95: tuple = (0.0, 0.0)
 
+    # -- 2026-10-17 audit: ruin split by stage, and intervals that include TRADE-SAMPLE uncertainty ---
+    # eval_breach_pct: % of purchased attempts that breached a rule BEFORE passing the evaluation,
+    #   within ruin_horizon_days (cost = the fee).
+    # funded_breach_within_horizon_pct: % of FUNDED attempts that breached a rule after passing,
+    #   within ruin_horizon_days of the purchase (cost = the funded account and the payouts not yet reached).
+    # risk_of_ruin_pct stays the combined figure for backward compatibility.
+    eval_breach_pct: float = 0.0
+    funded_breach_within_horizon_pct: float = 0.0
+    # The *_ci95 fields above are Wilson intervals over the SIMULATED attempts (~10,000), so they
+    # measure simulation noise (about +/-1 point). The *_sample intervals below instead use the number
+    # of INDEPENDENT attempt windows the source trade history can support, so they reflect whether the
+    # trade list itself represents the true edge. Wider, and the ones the score uses.
+    per_attempt_pass_ci95_sample: tuple = (0.0, 0.0)
+    per_attempt_paid_ci95_sample: tuple = (0.0, 0.0)
+    effective_independent_attempts: float = 0.0
+    funded_attempts: int = 0                      # attempts that passed the evaluation (denominator of the funded-stage rates)
+
     # -- headline numbers (Owen's accounting) --------------------------------
     # What reports/dashboards should show as "the" eval-pass / payout
     # rates: per-attempt (passed/attempted evals, funded reaching
@@ -793,6 +810,11 @@ class _SimRow(NamedTuple):
     failed_calendar_days: tuple = ()
     failed_before_payout_attempts: int = 0
     funded_failed: int = 0
+    # 2026-10-17: the same failure days split by STAGE. An account that dies before it passes the
+    # evaluation costs the fee; one that dies after funding costs the funded account and the
+    # payouts it never reached. Different costs, so they are reported (and scored) separately.
+    failed_days_eval: tuple = ()
+    failed_days_funded: tuple = ()
 
 
 def _mc_simulate_path(sim_pnls, base_dates, rules, day_structure, reset_on_breach, sim_risks) -> _SimRow:
@@ -835,6 +857,8 @@ def _mc_simulate_path(sim_pnls, base_dates, rules, day_structure, reset_on_breac
         failed_calendar_days=tuple(int(a.calendar_days_used or 0) for a in result.attempts if a.failed),
         failed_before_payout_attempts=sum(1 for a in result.attempts if a.failed and not a.reached_first_payout),
         funded_failed=sum(1 for a in result.attempts if a.failed and a.passed_evaluation),
+        failed_days_eval=tuple(int(a.calendar_days_used or 0) for a in result.attempts if a.failed and not a.passed_evaluation),
+        failed_days_funded=tuple(int(a.calendar_days_used or 0) for a in result.attempts if a.failed and a.passed_evaluation),
     )
 
 
@@ -878,6 +902,8 @@ def _vec_rows_from_result(res, rules, tables) -> list:
             failed_calendar_days=(int(cal_used[k] or 0),) if f else (),
             failed_before_payout_attempts=1 if (f and not reached) else 0,
             funded_failed=1 if (f and p) else 0,
+            failed_days_eval=(int(cal_used[k] or 0),) if (f and not p) else (),
+            failed_days_funded=(int(cal_used[k] or 0),) if (f and p) else (),
         ))
     return rows
 
@@ -1255,6 +1281,8 @@ def run_monte_carlo(
     first_bust_flags: list[bool] = []
     sum_attempts_failed = 0
     failed_days_all: list[int] = []          # calendar days lived by EVERY failed attempt (0 = unknown)
+    failed_days_eval_all: list[int] = []     # ... that died BEFORE passing the evaluation
+    failed_days_funded_all: list[int] = []   # ... that died AFTER passing (funded stage)
     sum_failed_before_payout = 0
     sum_funded_failed = 0
 
@@ -1381,6 +1409,8 @@ def run_monte_carlo(
         first_bust_flags.append(row.first_attempt_bust)
         sum_attempts_failed += row.attempts_failed
         failed_days_all.extend(row.failed_calendar_days)
+        failed_days_eval_all.extend(row.failed_days_eval)
+        failed_days_funded_all.extend(row.failed_days_funded)
         sum_failed_before_payout += row.failed_before_payout_attempts
         sum_funded_failed += row.funded_failed
 
@@ -1437,6 +1467,13 @@ def run_monte_carlo(
     ruin_90_frac = _ruin_within(RUIN_WINDOW_SHORT_DAYS)
     ruin_180_frac = _ruin_within(RUIN_WINDOW_LONG_DAYS)
     ruin_arr = np.array([ruin_horizon_frac])
+    # 2026-10-17: the same horizon, split by stage (see eval_breach_pct / funded_breach_within_horizon_pct).
+    _eval_days = np.asarray(failed_days_eval_all, dtype=float)
+    _funded_days = np.asarray(failed_days_funded_all, dtype=float)
+    eval_breach_frac = (float(np.count_nonzero(_eval_days <= float(_horizon)) / sum_total_attempts)
+                        if sum_total_attempts else 0.0)
+    funded_breach_frac = (float(np.count_nonzero(_funded_days <= float(_horizon)) / sum_attempts_passed)
+                          if sum_attempts_passed else 0.0)
     _cal_span = (max(base_dates) - min(base_dates)).days + 1 if base_dates else 0
     _horizon_covered = _cal_span >= _horizon
 
@@ -1456,6 +1493,18 @@ def run_monte_carlo(
     # reached a first payout" (1 of 2 funded = 50%, even when other
     # eval attempts around them failed).
     per_attempt_payout_ci95 = _wilson_score_interval(int(sum_attempts_reached_payout), int(sum_attempts_passed))
+
+    # 2026-10-17: intervals that carry TRADE-SAMPLE uncertainty (see app.scoring.edge_bounds).
+    from app.scoring.edge_bounds import sample_aware_interval as _sample_ci
+    _attempt_days = float(np.median(days_to_pass_list)) if days_to_pass_list else None
+    _p_pass_pct = float(sum_attempts_passed / sum_total_attempts * 100) if sum_total_attempts else 0.0
+    _p_paid_pct = float(sum_attempts_reached_payout / sum_total_attempts * 100) if sum_total_attempts else 0.0
+    _pass_ci_s, _n_eff = _sample_ci(
+        _p_pass_pct, len(trades), _cal_span, attempt_days=max(30.0, _attempt_days or 0.0),
+        n_simulated_attempts=float(sum_total_attempts))
+    _paid_ci_s, _ = _sample_ci(
+        _p_paid_pct, len(trades), _cal_span, attempt_days=max(30.0, _attempt_days or 0.0),
+        n_simulated_attempts=float(sum_total_attempts))
 
     _notes: list[str] = []
     if len(trades) < MIN_TRADES_FOR_VERDICT:
@@ -1538,5 +1587,11 @@ def run_monte_carlo(
         ruin_horizon_covered=bool(_horizon_covered),
         per_attempt_paid_probability=float(sum_attempts_reached_payout / sum_total_attempts * 100) if sum_total_attempts else 0.0,
         per_attempt_paid_ci95=_wilson_score_interval(int(sum_attempts_reached_payout), int(sum_total_attempts)),
+        eval_breach_pct=float(eval_breach_frac * 100.0),
+        funded_breach_within_horizon_pct=float(funded_breach_frac * 100.0),
+        per_attempt_pass_ci95_sample=_pass_ci_s,
+        per_attempt_paid_ci95_sample=_paid_ci_s,
+        effective_independent_attempts=float(_n_eff),
+        funded_attempts=int(sum_attempts_passed),
     )
     return result

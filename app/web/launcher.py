@@ -166,7 +166,7 @@ def main() -> None:
 
 
 def run() -> None:
-    """Entry point used by both `python run_web.py` and this module's own
+    """Entry point used by both `python launchers/run_web.py` and this module's own
     `if __name__ == "__main__"` guard -- wraps main() so an abnormal exit
     is printed AND the console waits for a keypress before closing.
 

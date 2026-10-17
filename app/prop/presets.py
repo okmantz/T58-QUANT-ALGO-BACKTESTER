@@ -48,6 +48,7 @@ Pipeline, Payout Probability, the Prop-Firm Recommender).
 """
 from __future__ import annotations
 
+from datetime import date  # noqa: F401  (type annotations)
 from dataclasses import dataclass, field
 
 from app.prop.simulator import PropRules
@@ -156,7 +157,7 @@ class PropFirmPreset:
             max_eval_calendar_days=self.max_eval_calendar_days,
             flatten_time_ct=self.flatten_time_ct,
             preset_key=self.key,
-            rules_verified=bool(self.verified_on and self.source_url),
+            rules_verified=is_ready_eligible(self),
         )
 
     def to_dict(self) -> dict:
@@ -814,27 +815,120 @@ for _p in PROP_FIRM_PRESETS:
         object.__setattr__(_p, "source_note", ((_p.source_note + " ") if _p.source_note else "") + _note)
 del _p
 
+# ---------------------------------------------------------------------------
+# 2026-10-17 firm-rule verification pass (audit item 7). Every row below was compared against the firm's OWN
+# help centre / product page on 2026-10-17. ``fixes`` lists the fields that DISAGREED with the firm's page and
+# were corrected (old -> new is recorded in the note so the change is auditable); fields not listed matched or
+# were not stated on the page. Nothing here was taken from a reviewer or comparison site.
+# ---------------------------------------------------------------------------
+_RULE_CORRECTIONS: dict[str, tuple[dict, str]] = {
+    "apex_50k_eod": ({"daily_loss_action": "lock_day", "max_contracts": 6, "max_eval_calendar_days": 30},
+        "Apex help centre (EOD Evaluations, EOD Drawdown Explained, EOD Payouts, read 2026-10-17): target $3,000, EOD threshold $2,000, DLL $1,000 is a SOFT limit "
+        "(pauses the session, does not fail the evaluation; was 'fail'), 6 contracts, 30 calendar days to pass, no minimum days, funded consistency 50%, "
+        "payout needs 5 winning days >= $250. In evaluations the EOD threshold locks at the profit-target balance on Rithmic/Wealthcharts but never locks on "
+        "Tradovate -- this preset models the never-locks (Tradovate) behaviour, the conservative one. APEX PROHIBITS AUTOMATION (help-centre 'Prohibited Activities': "
+        "'No Automation or Algorithm Usage allowed')."),
+    "apex_50k_intraday": ({"max_contracts": 6, "max_eval_calendar_days": 30},
+        "Apex help centre (Intraday Trailing Drawdown Evaluations / Explained / Payouts, read 2026-10-17): target $3,000, trailing threshold $2,000 following the peak "
+        "INCLUDING unrealized gains, no daily loss limit, 6 contracts, 30 days, no minimum days, payout needs 5 winning days >= $200. Evaluation threshold locks at the "
+        "profit-target balance (Rithmic/Wealthcharts) or never (Tradovate); modelled as never. APEX PROHIBITS AUTOMATION."),
+    "apex_100k_eod": ({"daily_loss_action": "lock_day", "max_contracts": 8, "max_eval_calendar_days": 30, "min_winning_day_profit": 300.0},
+        "Apex help centre (read 2026-10-17): target $6,000, EOD threshold $3,000, DLL $1,500 SOFT (was 'fail'), 8 contracts, 30 days, payout needs 5 winning days >= $300 "
+        "(was $250). Same lock behaviour note as the 50K EOD row. APEX PROHIBITS AUTOMATION."),
+    "apex_100k_intraday": ({"max_contracts": 8, "max_eval_calendar_days": 30, "min_winning_day_profit": 250.0},
+        "Apex help centre (read 2026-10-17): target $6,000, trailing threshold $3,000 incl. unrealized, no DLL, 8 contracts, 30 days, payout needs 5 winning days >= $250 "
+        "(was $200). APEX PROHIBITS AUTOMATION."),
+    "lucid_50k": ({},
+        "Lucid help centre (support.lucidtrading.com: LucidPro Evaluation Account, Drawdown, Daily Loss Limit, Consistency, Payouts; read 2026-10-17): target $3,000, "
+        "EOD trailing MLL $2,000 locking at $50,100 once the balance passes $52,100 (the $100 lock offset), DLL $1,200 is a SOFT breach (locks the session, matches "
+        "'lock_day'), 4 mini / 40 micro, consistency 40% FUNDED stage only, 90% split, $500 minimum payout. The page does not say whether the DLL counts floating loss; "
+        "'floating' is kept as the conservative reading. Prices are NOT on the help centre (see FIRM_FEES)."),
+    "lucid_100k": ({"daily_loss_limit_pct": 1.8, "daily_loss_action": "lock_day", "daily_loss_basis": "floating", "trailing_lock": True,
+                    "trailing_lock_offset_pct": 0.1, "trailing_distance_basis": "account", "max_contracts": 6, "flatten_time_ct": "15:45"},
+        "Lucid help centre (read 2026-10-17): $100K LucidPro target $6,000, EOD trailing MLL $3,000 locking at $100,100 once the balance passes $103,100, DLL $1,800 "
+        "= 1.8% (was 2.4%) and a SOFT breach (was 'fail'), 6 mini / 60 micro. Previously this row had no MLL lock and a hard daily-loss failure, both wrong."),
+    "topstep_50k": ({"max_contracts": 5},
+        "Topstep help centre (read 2026-10-17): MLL $2,000 EOD-updated trailing, monitored in real time, locks at the starting balance; Combine consistency 55% (best day / "
+        "total profit), 5 minis / 50 micros, no minimum days ('as few as two'); XFA payout: 5 winning days >= $150 or the 40% consistency path, 90/10 split, $125 minimum. "
+        "DLL is OPTIONAL ($1,000 at 50K) and a soft lock -- not modelled (none). The $3,000 profit target is the only figure not on a Topstep page the tools could read "
+        "(futureshive.com, dated 2026-10-05, agrees with the 6% already in the preset)."),
+    "topstep_100k": ({"consistency_rule_pct": 55.0, "max_contracts": 10},
+        "Topstep help centre (read 2026-10-17): Combine consistency is 55% for every size (was 50% here), MLL $3,000, 10 minis / 100 micros, DLL optional ($2,000). "
+        "The $6,000 profit target is confirmed only by futureshive.com (2026-10-05), not by a Topstep page the tools could read."),
+    "ftmo_10k": ({},
+        "FTMO trading-objectives page (read 2026-10-17), 2-Step Challenge: Phase 1 target 10% (Phase 2 5%), max daily loss 5%, max loss 10% STATIC, minimum 4 trading days -- "
+        "all match. The page gives these as percentages for every size. NOTE the 1-Step Challenge differs (3% daily, 10% trailing, 50% best-day consistency from 2026-10-12): "
+        "this preset models the 2-Step only. Challenge fees are not readable (login-gated)."),
+    "ftmo_100k": ({}, "Same FTMO 2-Step page as ftmo_10k (read 2026-10-17); rules are percentages of the account size. Fees login-gated."),
+    "ftmo_200k": ({}, "Same FTMO 2-Step page as ftmo_10k (read 2026-10-17); rules are percentages of the account size. Fees login-gated."),
+    "fundednext_25k": ({"consistency_rule_pct": None, "drawdown_check_mode": "intrabar", "dd_basis": "floating", "daily_loss_basis": "floating"},
+        "FundedNext help centre + product page (read 2026-10-17): Stellar 2-Step Phase 1 8%, Phase 2 5%, DLL 5% of the initial balance, max loss 10% ('balance or equity must "
+        "not drop below 90% ... at any point' => measured on equity, so intrabar/floating; was end-of-day/realized), 5 trading days per phase, no time limit, NO "
+        "consistency rule during the evaluation (the 40% best-day rule belongs to the funded 'On-Demand' reward; was applied here to the evaluation). EAs are allowed under "
+        "$50k only. Whether the DLL counts floating loss is not stated -- floating is kept as the conservative reading."),
+    "fundednext_100k": ({"consistency_rule_pct": None, "drawdown_check_mode": "intrabar", "dd_basis": "floating", "daily_loss_basis": "floating"},
+        "Same FundedNext sources (read 2026-10-17). $50k and larger Stellar accounts must be traded MANUALLY (EAs and the EA add-ons are unavailable), so automation is not "
+        "permitted on this preset."),
+    "the5ers_20k": ({"evaluation_profit_target_pct": 10.0, "daily_loss_limit_pct": 3.0, "consistency_rule_pct": None},
+        "The5%ers site (the5ers.com/high-stakes and /faqs/2-step-plan-rules-specifications, read 2026-10-17): Step 1 target 10% (an older 'Classic' plan used 8%), Step 2 5%, "
+        "max loss 10% of the initial balance, 3 profitable days (each >= 0.5%), NO evaluation consistency rule (was 30% here; a 50% rule applies to the funded account). "
+        "The two official pages DISAGREE on the daily loss (5% on the marketing page, 3% of the previous day's closing balance/equity on the FAQ); the stricter 3% is modelled. "
+        "THE5ERS DOES NOT LIST A $20k SIZE (published: 2.5k, 5k, 10k, 25k, 50k, 100k) -- this row is a proxy at the nearest size. Automation needs the firm's prior written approval."),
+    "the5ers_100k": ({"evaluation_profit_target_pct": 10.0, "daily_loss_limit_pct": 3.0, "consistency_rule_pct": None},
+        "Same The5%ers sources (read 2026-10-17); see the5ers_20k for the daily-loss conflict. Left UNVERIFIED because two official pages disagree on a rule that decides pass/fail."),
+    "e8_one_100k": ({"evaluation_profit_target_pct": 9.0, "drawdown_type": "trailing", "dd_basis": "realized", "trailing_lock": True,
+                    "trailing_lock_offset_pct": 0.0, "trailing_distance_basis": "account", "min_trading_days": 0, "max_inactive_days": 60,
+                    "drawdown_check_mode": "intrabar"},
+        "E8 Markets help centre + product page (help.e8markets.com 'E8 One', e8markets.com/e8-one, read 2026-10-17). E8 One is a CONFIGURABLE challenge; this preset is the $100K "
+        "configuration shown there: 6% drawdown, 80% split => profit target $9,000 (was 10%), daily drawdown $4,000 = 4% (hard breach), NO minimum trading days (was 10; one "
+        "trade must be placed and closed every 60 days), drawdown is DYNAMIC TRAILING on the highest CLOSED balance and locks at the initial balance (was modelled as static). "
+        "Ranges offered: drawdown 4-14%, daily 3-9.2%, target 6-21%. A different configuration is a different preset."),
+    "funderpro_one_phase_100k": ({"min_trading_days": 0, "consistency_rule_pct": 40.0},
+        "FunderPro 1-Phase page (funderpro.com/blog/1-phase-vs-2-phase..., read 2026-10-17): target 10%, daily drawdown 3% balance-based, overall drawdown 6%, NO minimum trading "
+        "days (was 5), best day must be <= 40% of total profit (was none). The page does not say whether the 6% is static or trailing, and gives no $100K fee or EA policy."),
+    "atlas_funded_1step_100k": ({"daily_loss_limit_pct": 4.0, "max_drawdown_pct": 7.0, "min_trading_days": 3},
+        "Atlas Funded docs (help.atlasfunded.com/one-step, read 2026-10-17): target 10% of CLOSED balance, daily loss 4% static from equity at 00:00 UTC (was 5%), max drawdown 7% "
+        "static (was 10%), 3 minimum trading days (was 5), no consistency rule, 90% split (100% add-on). The TradeLocker Hub listing for the same $100K product shows 11% / 4% / 7%, "
+        "so the target is not settled between official sources -- left UNVERIFIED."),
+    "futures_desk_50k": ({"drawdown_type": "static", "min_trading_days": 7, "consistency_rule_pct": None},
+        "The Futures Desk members page (members.thefuturesdesk.com/static-plans-framer, read 2026-10-17) lists Static Mini/Core/Pro: Core = target $4,000, STATIC drawdown $2,000, "
+        "DLL $800, 7 minimum days, reset $99, 80% split. Those match this 50K preset's 8% / 4% / 1.6% but NOT its trailing drawdown, 1 minimum day or 20% consistency, so those "
+        "three were corrected to the Static Core figures. The page does not state the account size of each plan, so the mapping to $50k is inferred -- left UNVERIFIED."),
+}
+for _p in PROP_FIRM_PRESETS:
+    _c = _RULE_CORRECTIONS.get(_p.key)
+    if _c:
+        for _f, _v in _c[0].items():
+            object.__setattr__(_p, _f, _v)
+        object.__setattr__(_p, "source_note", ((_p.source_note + " ") if _p.source_note else "") + "[2026-10-17 verification] " + _c[1])
+del _p
+try:
+    del _c, _f, _v
+except NameError:
+    pass
+
 # 2026-10 audit: verification stamps. Only rows whose own source_note records a direct check of the
 # firm's page are stamped; everything else stays unverified (verified_on == "") and is therefore NOT
 # READY-eligible until someone checks it and adds a row here.
 _VERIFIED_STAMPS = {
-    "ftmo_10k": ("2026-09-13", "https://ftmo.com/en/trading-objectives/", "primary"),
-    "ftmo_100k": ("2026-09-13", "https://ftmo.com/en/trading-objectives/", "primary"),
-    "ftmo_200k": ("2026-09-13", "https://ftmo.com/en/trading-objectives/", "primary"),
-    # lucid_50k: dd/lock/daily-loss fields checked 2026-10-07 against a secondary table (tradetanto.com),
-    # plus pricing aggregators 2026-10-11 -- secondary tier, confirm on lucidtrading.com before paying.
-    "topstep_50k": ("2026-10-11", "https://help.topstep.com/en/articles/8284204-what-is-the-maximum-loss-limit", "primary"),
-    "lucid_50k": ("2026-10-07", "https://tradetanto.com/learn/lucid-trading-rules-explained-every-plan-rule-and-limit", "secondary"),
-    # 2026-10-13: marked verified by the account owner (Owen) on request. "owner_attested" is its own tier on
-    # purpose: it is the owner's sign-off, NOT a fresh primary-source check -- the assistant that applied it could
-    # not open the firms' pages in that session. The notes appended below say so, and the figures the earlier
-    # source_notes flagged as unconfirmed (Apex target / daily-loss / payout-gate dollar amounts, Lucid $100k
-    # target and daily-loss dollars) should still be eyeballed on the firm's site before real money goes on them.
-    "apex_50k_eod": ("2026-10-13", "https://apextraderfunding.com/help-center/", "owner_attested"),
-    "apex_50k_intraday": ("2026-10-13", "https://apextraderfunding.com/help-center/", "owner_attested"),
-    "apex_100k_eod": ("2026-10-13", "https://apextraderfunding.com/help-center/", "owner_attested"),
-    "apex_100k_intraday": ("2026-10-13", "https://apextraderfunding.com/help-center/", "owner_attested"),
-    "lucid_100k": ("2026-10-13", "https://intercom.help/lucid-trading/en/", "owner_attested"),
+    "ftmo_10k": ("2026-10-17", "https://ftmo.com/en/trading-objectives/", "primary"),
+    "ftmo_100k": ("2026-10-17", "https://ftmo.com/en/trading-objectives/", "primary"),
+    "ftmo_200k": ("2026-10-17", "https://ftmo.com/en/trading-objectives/", "primary"),
+    # 2026-10-17: re-read against help.topstep.com (MLL, consistency, payout, DLL, parameters articles).
+    "topstep_50k": ("2026-10-17", "https://help.topstep.com/en/articles/8284204-what-is-the-maximum-loss-limit", "primary"),
+    "topstep_100k": ("2026-10-17", "https://help.topstep.com/en/articles/8284204-what-is-the-maximum-loss-limit", "primary"),
+    # 2026-10-17: re-read against the Apex help centre (apextraderfunding.com/help-center). Automation is PROHIBITED by Apex.
+    "apex_50k_eod": ("2026-10-17", "https://apextraderfunding.com/help-center/eod-trailing-drawdown-accounts/eod-evaluations/", "primary"),
+    "apex_50k_intraday": ("2026-10-17", "https://apextraderfunding.com/help-center/evaluation-accounts-ea/intraday-trailing-drawdown-evaluations/", "primary"),
+    "apex_100k_eod": ("2026-10-17", "https://apextraderfunding.com/help-center/eod-trailing-drawdown-accounts/eod-evaluations/", "primary"),
+    "apex_100k_intraday": ("2026-10-17", "https://apextraderfunding.com/help-center/evaluation-accounts-ea/intraday-trailing-drawdown-evaluations/", "primary"),
+    # 2026-10-17: Lucid's own help centre (support.lucidtrading.com) -- replaces the secondary tradetanto stamp and the owner-attested one.
+    "lucid_50k": ("2026-10-17", "https://support.lucidtrading.com/en/articles/12890029-lucidpro-evaluation-account", "primary"),
+    "lucid_100k": ("2026-10-17", "https://support.lucidtrading.com/en/articles/12890029-lucidpro-evaluation-account", "primary"),
+    # 2026-10-17: FundedNext help centre + product page; E8 help centre + product page.
+    "fundednext_25k": ("2026-10-17", "https://help.fundednext.com/en/articles/17255124-stellar-2-step-challenge", "primary"),
+    "fundednext_100k": ("2026-10-17", "https://help.fundednext.com/en/articles/17255124-stellar-2-step-challenge", "primary"),
+    "e8_one_100k": ("2026-10-17", "https://e8markets.com/e8-one", "primary"),
 }
 for _p in PROP_FIRM_PRESETS:
     _st = _VERIFIED_STAMPS.get(_p.key)
@@ -1042,6 +1136,24 @@ _FIRM_FEE_ROWS = [
 for _row in _FIRM_FEE_ROWS:
     FIRM_FEES.setdefault(_row.preset_key, _row)
 
+# 2026-10-17 verification pass: fee figures that disagreed with the firm's own product pages. Rows stay tier "secondary"
+# unless the figure came from the firm's checkout, which no tool here can reach -- confirm at checkout before trusting EV.
+import dataclasses as _dc
+_FEE_CORRECTIONS = {
+    "fundednext_25k": dict(challenge_price=199.99, notes="2026-10-17: FundedNext product page lists $199.99 for the 25K Stellar 2-Step (was $189.99). "
+        "Base split still a conservative 80% assumption; refund-with-first-reward not modelled."),
+    "fundednext_100k": dict(challenge_price=549.99, notes="2026-10-17: FundedNext product page lists $549.99 for the 100K (was $529.99). "
+        "Manual trading only at $50k+. Base split a conservative 80% assumption."),
+    "atlas_funded_1step_100k": dict(challenge_price=538.0, profit_split_pct=90.0, notes="2026-10-17: Atlas docs list 90% split (100% add-on) and a $538 100K "
+        "1-Step fee; the earlier $478 secondary figure is superseded. Target 10% vs 11% conflict between official pages is unresolved."),
+    "futures_desk_50k": dict(challenge_price=139.0, reset_price=99.0, notes="2026-10-17: Futures Desk Static Core: $139 evaluation, $99 reset, 80% split "
+        "(members.thefuturesdesk.com). Account-size mapping to $50k is inferred."),
+}
+for _k, _kw in _FEE_CORRECTIONS.items():
+    if _k in FIRM_FEES:
+        FIRM_FEES[_k] = _dc.replace(FIRM_FEES[_k], date_checked="2026-10-17", **_kw)
+del _k, _kw
+
 
 def get_fee_info(preset_key: str) -> FirmFeeInfo | None:
     """Fee/reset row for a preset, or None when no fee data has been recorded for it."""
@@ -1069,10 +1181,44 @@ def fee_table() -> list[dict]:
     return out
 
 
-def is_ready_eligible(preset: "PropFirmPreset") -> bool:
-    """A preset can support a READY / HIGH CONFIDENCE verdict only if its RULES were verified
-    against a firm page (verified_on + source_url). Unverified presets cap at MARGINAL."""
-    return bool(preset.verified_on and preset.source_url)
+# 2026-10-17 audit (item 6/7): READY needs the rules to have been verified against the firm's OWN page, recently.
+#   * only ``verification_tier == "primary"`` counts (owner-attested and secondary stamps cap at MARGINAL);
+#   * a stamp older than RULES_STAMP_MAX_AGE_DAYS no longer counts -- firms change rules often.
+READY_VERIFICATION_TIERS = ("primary",)
+RULES_STAMP_MAX_AGE_DAYS = 30
+
+
+def rules_stamp_age_days(preset: "PropFirmPreset", today: "date | None" = None) -> int | None:
+    """Days since the preset's rules stamp, or None when unstamped / unparseable."""
+    from datetime import date as _date
+    try:
+        stamped = _date.fromisoformat((preset.verified_on or "").strip())
+    except ValueError:
+        return None
+    return ((today or _date.today()) - stamped).days
+
+
+def ready_eligibility(preset: "PropFirmPreset", today: "date | None" = None) -> tuple[bool, str]:
+    """(eligible, reason-if-not). Eligible only when the rules carry a stamp date and source URL, the stamp is
+    PRIMARY tier (the firm's own page), and it is no older than RULES_STAMP_MAX_AGE_DAYS."""
+    if not (preset.verified_on and preset.source_url):
+        return False, f"preset '{preset.key}' has no verified_on / source_url (rules not verified against a firm page)"
+    if preset.verification_tier not in READY_VERIFICATION_TIERS:
+        return False, (f"preset '{preset.key}' rules are only '{preset.verification_tier or 'unstamped'}'-verified "
+                       "(READY needs the firm's own page: tier 'primary')")
+    age = rules_stamp_age_days(preset, today)
+    if age is None:
+        return False, f"preset '{preset.key}' has an unreadable verified_on date {preset.verified_on!r}"
+    if age > RULES_STAMP_MAX_AGE_DAYS:
+        return False, (f"preset '{preset.key}' rules were last verified {age} days ago ({preset.verified_on}); "
+                       f"READY needs a stamp no older than {RULES_STAMP_MAX_AGE_DAYS} days -- re-check the firm's page")
+    return True, ""
+
+
+def is_ready_eligible(preset: "PropFirmPreset", today: "date | None" = None) -> bool:
+    """A preset can support a READY / HIGH CONFIDENCE verdict only if its RULES were verified against the firm's
+    own page (primary tier) within RULES_STAMP_MAX_AGE_DAYS. Anything else caps at MARGINAL."""
+    return ready_eligibility(preset, today)[0]
 
 
 def is_ready_eligible_key(preset_key: str | None) -> bool:

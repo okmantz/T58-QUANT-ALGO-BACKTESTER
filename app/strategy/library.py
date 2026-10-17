@@ -27,7 +27,7 @@ That means a strategy saved from a *built .exe* lands next to that .exe,
 not inside your git repo, so it won't show up on GitHub until you copy it
 over yourself (or use export_library_zip() below and unzip it into your
 repo's strategies/ folder). Saving from the app run out of the repo
-(`python -m app.web.server` / `python run_app.py`) writes directly into
+(`python -m app.web.server` / `python launchers/run_app.py`) writes directly into
 the repo's strategies/ folder and needs no extra step.
 
 Metadata sidecars (<file>.meta.json) hold everything besides the raw

@@ -5,7 +5,7 @@ Before this module existed, there were TWO different ways to start the
 web app, and only ONE of them ever showed a QR code or a LAN address at
 all:
 
-  - `python run_web.py` (or the built T58-Web-App.exe) -- via
+  - `python launchers/run_web.py` (or the built T58-Web-App.exe) -- via
     app.web.launcher -- printed a banner with the LAN address and popped
     open a QR code image.
   - `python -m app.web.server` (the "plainer alternative" the README
@@ -270,7 +270,7 @@ def qr_code_file(url: str) -> Path | None:
 def startup_banner_lines(url: str, qr_path: Path | None) -> list[str]:
     """The exact banner text both entry points print -- pulled out as
     plain lines (rather than each entry point half-duplicating its own
-    print() calls) so `python run_web.py` and `python -m app.web.server`
+    print() calls) so `python launchers/run_web.py` and `python -m app.web.server`
     can never again drift into showing different information."""
     lines = [
         "=" * 64,
@@ -286,7 +286,7 @@ def startup_banner_lines(url: str, qr_path: Path | None) -> list[str]:
             "  same one your phone connects to, and Wine has no real image",
             "  viewer to show the QR code in. This app is plain cross-platform",
             "  Python -- run it NATIVELY on Linux instead (no Wine, no .exe):",
-            "      python3 run_web.py",
+            "      python3 launchers/run_web.py",
             "  from inside the repo folder, and use the address it prints.",
             "",
         ]
