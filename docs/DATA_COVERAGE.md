@@ -52,13 +52,7 @@ release asset, not in normal git history (see docs/ACCURACY_OVERHAUL.md, "Data")
 | EURUSD/EURUSD5.csv | EURUSD | 100000 | 2025-04-14 | 2026-08-14 | 1.33 | 0 days 00:05:00 | <2y history |
 | EURUSD/EURUSD60.csv | EURUSD | 100000 | 2010-08-03 | 2026-08-14 | 16.03 | 0 days 01:00:00 | ok |
 | EURUSD/fx_EUR_USD_1m.parquet | EURUSD | 2250078 | 2020-01-01 | 2026-01-01 | 6.0 | 0 days 00:01:00 | ok |
-| EURUSD_5M_sample (2).csv | EURUSD | 3848 | 2024-01-01 | 2024-01-18 | 0.05 | 0 days 00:05:00 | <2y history |
-| EURUSD_5M_sample (3).csv | EURUSD | 3848 | 2024-01-01 | 2024-01-18 | 0.05 | 0 days 00:05:00 | <2y history |
-| EURUSD_5M_sample (4).csv | EURUSD | 3848 | 2024-01-01 | 2024-01-18 | 0.05 | 0 days 00:05:00 | <2y history |
-| EURUSD_5M_sample (5).csv | EURUSD | 3848 | 2024-01-01 | 2024-01-18 | 0.05 | 0 days 00:05:00 | <2y history |
-| EURUSD_5M_sample (6).csv | EURUSD | 3848 | 2024-01-01 | 2024-01-18 | 0.05 | 0 days 00:05:00 | <2y history |
-| EURUSD_5M_sample (7).csv | EURUSD | 3848 | 2024-01-01 | 2024-01-18 | 0.05 | 0 days 00:05:00 | <2y history |
-| EURUSD_5M_sample.csv | EURUSD | 3848 | 2024-01-01 | 2024-01-18 | 0.05 | 0 days 00:05:00 | <2y history |
+| EURUSD/EURUSD_5M_sample.csv | EURUSD | 3848 | 2024-01-01 | 2024-01-18 | 0.05 | 0 days 00:05:00 | <2y history |
 | GBPUSD/GBPUSD1.csv | GBPUSD | 100000 | 2026-05-11 | 2026-08-14 | 0.26 | 0 days 00:01:00 | <2y history |
 | GBPUSD/GBPUSD1440.csv | GBPUSD | 5015 | 2010-08-02 | 2026-08-14 | 16.03 | 1 days 00:00:00 | ok |
 | GBPUSD/GBPUSD15.csv | GBPUSD | 100000 | 2022-08-10 | 2026-08-14 | 4.01 | 0 days 00:15:00 | ok |
@@ -137,7 +131,3 @@ release asset, not in normal git history (see docs/ACCURACY_OVERHAUL.md, "Data")
 | XCUUSD (COPPER)/XCU_USD_15s.parquet | - | 501905 | 2026-04-27 | 2026-09-22 | 0.41 | 0 days 00:00:15 | no instrument spec, <2y history, 1 long gaps |
 | XPTUSD (PLATINUM)/XPT_USD_15s.parquet | - | 523652 | 2026-04-27 | 2026-09-22 | 0.41 | 0 days 00:00:15 | no instrument spec, <2y history, 1 long gaps |
 | YAHOO/yhoo-1996-2015.csv | - | 2931 | 2004-05-12 | 2015-12-31 | 11.64 | 1 days 00:00:00 | no instrument spec |
-| a.csv | - | 1200 | 2024-01-01 | 2024-01-05 | 0.01 | 0 days 00:05:00 | no instrument spec, <2y history |
-| b.csv | - | 1200 | 2024-01-01 | 2024-01-05 | 0.01 | 0 days 00:05:00 | no instrument spec, <2y history |
-| eurusd.csv | EURUSD | 200 | 2024-01-01 | 2024-01-01 | 0.0 | 0 days 00:05:00 | <2y history |
-| leaky.csv | - | 1500 | 2024-01-01 | 2024-01-16 | 0.04 | 0 days 00:15:00 | no instrument spec, <2y history |
