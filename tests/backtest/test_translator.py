@@ -254,7 +254,7 @@ REPO = Path(__file__).resolve().parent.parent.parent
 MANUAL_DIR = REPO / "strategies" / "manual"
 
 
-SAMPLE_CSV = REPO / "data" / "examples" / "EURUSD_5M_sample.csv"
+SAMPLE_CSV = REPO / "data" / "raw" / "EURUSD" / "EURUSD_5M_sample.csv"
 
 
 STRATEGY_FILES = sorted(p for p in MANUAL_DIR.glob("*.json") if p.name != "v9_champion_params.json")

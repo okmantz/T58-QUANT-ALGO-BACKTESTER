@@ -9,7 +9,7 @@ from pathlib import Path
 
 from app.web.server import app
 
-SAMPLE_CSV = Path("data/examples/EURUSD_5M_sample.csv")
+SAMPLE_CSV = Path("data/raw/EURUSD/EURUSD_5M_sample.csv")
 
 
 def _client():
