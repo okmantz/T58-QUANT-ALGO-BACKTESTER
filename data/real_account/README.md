@@ -1,6 +1,6 @@
 # data/real_account — your REAL trades, for the model check
 
-The backtester has never been compared with a real account (`docs/ACCURACY_OVERHAUL.md`). This folder is where that
+The backtester has never been compared with a real account. This folder is where that
 comparison lives. Until `last_check.json` here says `agrees: true`, treat every pass probability as an untested model.
 
 ## What to put here
