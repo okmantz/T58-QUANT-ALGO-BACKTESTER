@@ -62,8 +62,6 @@ Markdown documents (the app reads `.pdf`, `.txt` and `.md`; drop more in any tim
 - `01_Intraday_Momentum_and_Core_Signals/` through
   `04_Regime_Events_and_Data/` -- reading lists behind Report B's
   recommended strategy, with links to the primary papers.
-- `05_Repo_Research_Library_Index/` -- index of the 44 PDFs this folder
-  used to hold, kept so the reading lists can still refer to them.
 
 The reading lists link out to the papers rather than bundling them; open
 each link and confirm it before relying on it.
