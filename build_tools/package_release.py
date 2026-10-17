@@ -146,7 +146,54 @@ Safe to re-extract over an older copy to update.
 """
 
 
-def collect_app_entries(dist: Path, tmp_dir: Path) -> list[Entry]:
+UNIX_README = """\
+T58 Quant Algo Backtester  --  READ ME FIRST  ({platform})
+============================================
+
+1. Unzip this archive anywhere (your home folder is fine).
+
+2. Open a terminal in the unzipped folder and start the app:
+
+       chmod +x ./{exe}      # only needed once
+       ./{exe}
+
+   {launch_note}
+   Keep the "_internal" folder next to the program -- it will not start
+   without it. If you move the app, move the whole folder.
+{mac_note}
+3. MARKET DATA is a separate download (so this zip stays small):
+   download  T58-Market-Data.zip  from the same release/run and unzip it
+   INTO THIS SAME FOLDER, so you end up with  data/raw/EURUSD/...  next to
+   the program. Restart the app. The small sample in  data/examples  works
+   without it.
+
+Troubleshooting
+---------------
+* The app does not start    -> run it from the terminal and read the message;
+                               logs are in  data/logs/  next to the program.
+* Linux: "cannot open shared object file"  -> install the missing system
+                               library (for the desktop app: python3-tk / tk).
+"""
+
+MAC_NOTE = """\
+   macOS may say the app "cannot be opened because the developer cannot be
+   verified" (the builds are not notarized yet). Run once:
+       xattr -dr com.apple.quarantine .
+   or right-click the program -> Open -> Open.
+"""
+
+
+def app_readme(platform: str, exe_name: str, desktop: bool) -> str:
+    """README_FIRST.txt for the app zip. Windows keeps its long-standing text."""
+    if platform == "windows":
+        return APP_README
+    launch = ("It opens the desktop window." if desktop else
+              "It starts the web app and opens it in your browser (or open the address it prints).")
+    return UNIX_README.format(platform="macOS" if platform == "macos" else "Linux", exe=exe_name,
+                              launch_note=launch, mac_note=("\n" + MAC_NOTE) if platform == "macos" else "")
+
+
+def collect_app_entries(dist: Path, tmp_dir: Path, platform: str = "windows") -> list[Entry]:
     """The app zip: PyInstaller folder at the zip root, plus the small extras."""
     entries = _walk(dist, "")
     # A PyInstaller build folder holds ONLY the exe and _internal/. Anything else
@@ -175,7 +222,8 @@ def collect_app_entries(dist: Path, tmp_dir: Path) -> list[Entry]:
     phone = ROOT / "HOW_TO_OPEN_ON_YOUR_PHONE.md"
     if phone.is_file():
         entries.append((phone, "HOW_TO_OPEN_ON_YOUR_PHONE.md"))
-    entries.append(_text_entry(tmp_dir, "README_FIRST.txt", APP_README))
+    entries.append(_text_entry(tmp_dir, "README_FIRST.txt",
+                               app_readme(platform, dist.name, desktop="Web" not in dist.name)))
     return entries
 
 
@@ -277,6 +325,8 @@ def main(argv: list[str] | None = None) -> int:
     app_p.add_argument("--out", required=True, type=Path)
     app_p.add_argument("--follow-symlinks", action="store_true",
                        help="testing only: store symlink targets (builds made on Linux/macOS contain symlinks)")
+    app_p.add_argument("--platform", choices=["windows", "macos", "linux"], default="windows",
+                       help="selects the README_FIRST.txt wording (default: windows)")
     data_p = sub.add_parser("data", help="zip data/raw/** as the separate market-data pack")
     data_p.add_argument("--out", required=True, type=Path)
     args = ap.parse_args(argv)
@@ -285,7 +335,7 @@ def main(argv: list[str] | None = None) -> int:
 
     tmp_dir = Path(os.environ.get("RUNNER_TEMP") or ROOT / ".package_tmp") / "t58_pkg_text"
     try:
-        entries = collect_app_entries(args.dist, tmp_dir) if args.kind == "app" else collect_data_entries(tmp_dir)
+        entries = collect_app_entries(args.dist, tmp_dir, args.platform) if args.kind == "app" else collect_data_entries(tmp_dir)
         problems = validate_names(entries, zip_stem=args.out.stem)
         if problems:
             print(f"REFUSING to build {args.out.name}: {len(problems)} file-name problem(s) Windows could not extract:",
