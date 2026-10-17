@@ -148,7 +148,7 @@ def test_recovery_quick_optimize_from_completed_pipeline(monkeypatch, tmp_path):
     import app.data.storage as storage
     raw = tmp_path / "raw"
     raw.mkdir()
-    shutil.copy(Path(__file__).resolve().parent.parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv",
+    shutil.copy(Path(__file__).resolve().parent.parent.parent / "data" / "raw" / "EURUSD" / "EURUSD_5M_sample.csv",
                 raw / "EURUSD_5M_sample (28).csv")
     monkeypatch.setattr(storage, "get_raw_data_dir", lambda: raw)
 
