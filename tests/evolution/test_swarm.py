@@ -12,7 +12,7 @@ import pytest
 
 from app.orchestration import swarm as sw
 
-SAMPLE = Path(__file__).resolve().parent.parent.parent / "data" / "examples" / "EURUSD_5M_sample.csv"
+SAMPLE = Path(__file__).resolve().parent.parent.parent / "data" / "raw" / "EURUSD" / "EURUSD_5M_sample.csv"
 
 
 # ---- pure helpers ------------------------------------------------------------
