@@ -3,8 +3,8 @@ In-app data-pack downloader (v7, worker D, 2026-10-05).
 
 Why this exists: release zips used to bundle the entire data/raw tree
 (~1 GB), which makes for a poor buyer experience and forces a full
-re-download for every data update. The slim release carries only
-data/examples/; everything else arrives through this module, which fetches
+re-download for every data update. The slim release carries no
+market data; all of it arrives through this module, which fetches
 data packs (zip/tar/csv/parquet archives published at a URL) with:
 
   * checksum verification (SHA-256 manifest entries -- a pack whose bytes
