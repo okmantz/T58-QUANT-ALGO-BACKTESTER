@@ -76,7 +76,7 @@ def _mc(risk_of_ruin_pct: float = 5.0, strong: bool = False) -> MonteCarloResult
     return MonteCarloResult(**kw)
 
 
-def _holdout(net: float, pf: float, ho_trades: int = 12, in_trades: int = 50) -> dict:
+def _holdout(net: float, pf: float, ho_trades: int = 40, in_trades: int = 50) -> dict:
     return {
         "holdout_statistics": {
             "total_trades": ho_trades, "net_profit": net, "profit_factor": pf,
@@ -449,7 +449,7 @@ def test_holdout_losing_rejects_not_ready():
     fails = [r for r in reasons if "HARD VALIDATION GATE FAILED" in r]
     assert len(fails) == 1
     assert "holdout" in fails[0].lower()
-    assert "$-500.00" in fails[0] and "0.80" in fails[0] and "12 trade(s)" in fails[0]
+    assert "$-500.00" in fails[0] and "0.80" in fails[0] and "40 trade(s)" in fails[0]
 
 
 def test_holdout_losing_on_pf_only_rejects():

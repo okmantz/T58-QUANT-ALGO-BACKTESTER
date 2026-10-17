@@ -131,7 +131,7 @@ def test_app_zip_contents(tmp_path):
 
     assert "T58-Web-App.exe" in names and "_internal/base_library.zip" in names
     assert "README_FIRST.txt" in names and "docs/INSTALL.md" in names
-    assert any(n.startswith("data/examples/") for n in names)
+    assert not any(n.startswith("data/examples/") for n in names)  # sample dataset retired
     assert any(n.startswith("strategies/") for n in names)
     # The market data is a separate download -- never inside the app zip.
     assert not any(n.startswith("data/raw/") for n in names)
@@ -200,7 +200,7 @@ def test_real_data_folder_names_are_windows_safe(tmp_path):
 def test_spec_data_entries_cover_what_the_app_reads():
     web = dict((d, s) for s, d in sc.data_entries(REPO_ROOT, web=True))
     desktop = dict((d, s) for s, d in sc.data_entries(REPO_ROOT, web=False))
-    for dest in ("config", "strategies", "data/examples", "app/ui/assets"):
+    for dest in ("config", "strategies", "app/ui/assets"):
         assert dest in web and dest in desktop, f"{dest} must be bundled in both builds"
     assert "app/web/templates" in web and "app/web/static" in web
     assert "app/web/templates" not in desktop
