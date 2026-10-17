@@ -4,7 +4,7 @@ Entry point.
 
 Usage:
     python -m app.main                 # launch desktop GUI
-    python -m app.main --cli --csv data/examples/EURUSD_5M_sample.csv
+    python -m app.main --cli --csv data/raw/EURUSD/EURUSD_5M_sample.csv
                                         # run the full pipeline headlessly
                                         # (useful on machines without a display,
                                         # and for scripted/CI runs)
@@ -98,11 +98,11 @@ DEFAULT_MANUAL_STRATEGY = {
 
 
 def _resolve_default_csv() -> str:
-    """Prefer a dataset already stored in data/raw/ over the bundled example."""
+    """Use the most recently added dataset stored in data/raw/."""
     stored = list_stored_datasets()
     if stored:
         return str(stored[0].path)  # most recently added
-    return "data/examples/EURUSD_5M_sample.csv"
+    return "data/raw/EURUSD/EURUSD_5M_sample.csv"
 
 
 def run_cli(
