@@ -56,10 +56,11 @@ def test_no_components_scores_0_with_a_note():
 
 def test_tier_thresholds_match_masterclass_table():
     assert tier_for_score(92) == "Elite"
-    assert tier_for_score(91.9) == "Strong"
-    assert tier_for_score(85) == "Strong"
-    assert tier_for_score(75) == "Promising"
-    assert tier_for_score(65) == "Research"
+    assert tier_for_score(85) == "Elite"
+    assert tier_for_score(84.9) == "Strong"
+    assert tier_for_score(75) == "Strong"
+    assert tier_for_score(74.9) == "Promising"
+    assert tier_for_score(65) == "Promising"
     assert tier_for_score(64.9) == "Reject"
 
 

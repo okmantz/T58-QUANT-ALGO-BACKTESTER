@@ -75,6 +75,7 @@ def test_lucid_preset_carries_verified_account_model_and_mismatch_detection():
 
 
 def test_lookahead_check_runs_once_per_structure(monkeypatch):
+    monkeypatch.setenv("T58_LOOKAHEAD_DISK_CACHE", "0")     # a result persisted by an earlier run would mean zero calls here
     import app.backtest.engine as eng
     import app.strategy.lookahead_check as lc
     from app.strategy.manual import ManualStrategy

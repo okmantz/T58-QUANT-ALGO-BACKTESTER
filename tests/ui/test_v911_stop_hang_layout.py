@@ -109,7 +109,17 @@ def _worker_children() -> list[str] | None:
             if ln.split()[:1] == [me] and "spawn_main" in ln]
 
 
+def _close_shared_pools():
+    """The persistent Monte Carlo / stage pools keep warm idle workers BY DESIGN (an idle reaper closes them later);
+    close them so this test only sees workers the Stop path failed to clean up."""
+    from app.monte_carlo.shared_pool import shutdown_shared_mc_pool
+    from app.orchestration.stage_pool import shutdown_stage_pool
+    shutdown_shared_mc_pool(wait=True)
+    shutdown_stage_pool(wait=True)
+
+
 def test_stop_during_step2_ga_reaches_terminal_state_fast():
+    _close_shared_pools()               # earlier tests in the same session leave warm pools behind
     client = app.test_client()
     # Wide GA: cannot possibly finish before Stop lands.
     job_id = _start(client, ga_population=32, ga_generations=10, ga_search_mc_sims=200,
@@ -147,6 +157,8 @@ def test_stop_during_step2_ga_reaches_terminal_state_fast():
     assert any("Step 2/7" in line for line in data["log"])
     assert any("Stop requested" in line for line in data["log"])
 
+    from app.monte_carlo.shared_pool import shutdown_shared_mc_pool
+    shutdown_shared_mc_pool(wait=True)  # the shared MC pool legitimately stays warm; the GA stage pool must already be gone (not closed here)
     workers = _worker_children()
     if workers is not None:
         settle_deadline = time.time() + 20

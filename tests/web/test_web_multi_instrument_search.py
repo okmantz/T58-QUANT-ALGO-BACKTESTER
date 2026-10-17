@@ -44,6 +44,9 @@ _FAST_FIELDS = {
     "ga_population": "4", "ga_generations": "1", "stage2_top_n": "3",
     "full_mc_sims": "50", "walk_forward_folds": "0", "robustness_neighbors": "0",
     "fitness_metric": "eval_pass_probability", "max_concurrent": "2",
+    # Stage 3 acceptance floors off: these tests exercise plumbing on synthetic data, not whether the data clears 70%/50%.
+    "min_eval_pass_probability": "0", "min_first_payout_probability": "0",
+    "invent_structures": "off",
 }
 
 

@@ -49,6 +49,7 @@ _LOOSE_STAGE_FIELDS = {
     "ga_population": "4", "ga_generations": "1", "stage2_top_n": "3",
     "full_mc_sims": "60", "walk_forward_folds": "0", "robustness_neighbors": "0",
     "fitness_metric": "composite_prop_score",
+    "invent_structures": "off",   # grammar-invented candidates triple the runtime and these tests exercise plumbing, not invention
 }
 
 

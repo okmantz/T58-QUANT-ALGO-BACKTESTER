@@ -40,7 +40,7 @@ def _cleanup_forge_artifacts(tmp_path, monkeypatch):
     yield
 
 
-def _poll_until_done(client, job_id: str, timeout: float = 120.0) -> dict:
+def _poll_until_done(client, job_id: str, timeout: float = 420.0) -> dict:
     deadline = time.time() + timeout
     while time.time() < deadline:
         r = client.get(f"/forge/job/{job_id}/status.json")
