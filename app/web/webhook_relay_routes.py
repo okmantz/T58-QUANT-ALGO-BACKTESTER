@@ -19,10 +19,10 @@ from __future__ import annotations
 import time
 from collections import defaultdict, deque
 
-from flask import Blueprint, current_app, jsonify, render_template, request
+from flask import Blueprint, Response, current_app, jsonify, render_template, request
 
 from app.webhook_relay import config as relay_config
-from app.webhook_relay import engine, journal, tunnel
+from app.webhook_relay import engine, journal, trade_book, tunnel
 from app.webhook_relay.paper import PaperLedger
 from app.webhook_relay.signals import MAX_BODY_BYTES, SignalError, parse_alert, pine_alert_message
 
@@ -131,8 +131,18 @@ def _state(relay_id: str):
         "ok": True,
         "enabled": relay.enabled,
         "paper": PaperLedger(relay.id).snapshot(),
+        "trades": trade_book.all_trades(relay.id)[:100],
+        "broker_open": trade_book.open_broker_legs(relay.id),
         "signals": journal.recent(relay.id, 40),
     }
+
+
+@webhook_relay_bp.route("/webhook-relay/relays/<relay_id>/trades.csv")
+def relay_trades_csv(relay_id: str):
+    if relay_config.get_relay(relay_id) is None:
+        return jsonify({"ok": False, "error": "Unknown relay."}), 404
+    return Response(trade_book.trades_csv(relay_id), mimetype="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename=t58_relay_trades_{relay_id}.csv"})
 
 
 @webhook_relay_bp.route("/webhook-relay/relays/<relay_id>/state.json")
@@ -240,6 +250,7 @@ def relay_delete(relay_id: str):
     if not relay_config.delete_relay(relay_id):
         return jsonify({"ok": False, "error": "Unknown relay."}), 404
     PaperLedger(relay_id).reset()
+    trade_book.BrokerTradeBook(relay_id).reset()
     journal.clear(relay_id)
     return jsonify({"ok": True})
 
@@ -249,6 +260,7 @@ def relay_reset_paper(relay_id: str):
     if relay_config.get_relay(relay_id) is None:
         return jsonify({"ok": False, "error": "Unknown relay."}), 404
     PaperLedger(relay_id).reset()
+    trade_book.BrokerTradeBook(relay_id).reset()
     journal.clear(relay_id)
     return jsonify({"ok": True})
 

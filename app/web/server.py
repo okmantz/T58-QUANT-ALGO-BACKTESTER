@@ -1355,6 +1355,31 @@ def data_alpaca_forget():
     return _alpaca_redirect("Saved Alpaca keys removed from this computer.", "success")
 
 
+@app.route("/data/api/providers")
+def data_api_providers():
+    """Providers for the inline "Download from a data provider" part of every
+    Market-data dropdown. Never returns key material -- only whether one is saved."""
+    from app.data import api_sources
+    return jsonify({"providers": api_sources.provider_list(), "timeframes": api_sources.STANDARD_TIMEFRAMES})
+
+
+@app.route("/data/api/fetch", methods=["POST"])
+def data_api_fetch():
+    """Download bars from a provider using the key already saved on Settings > API Keys,
+    store them in data/raw/<SYMBOL>/ and return the dropdown value for the new file."""
+    from app.data import api_sources
+    body = request.get_json(silent=True) or request.form
+    try:
+        info = api_sources.fetch_to_library(
+            (body.get("provider") or "").strip(), (body.get("symbol") or "").strip(),
+            (body.get("timeframe") or "").strip(), (body.get("start") or "").strip(),
+            (body.get("end") or "").strip(),
+        )
+        return jsonify({"ok": True, **info})
+    except Exception as exc:  # noqa: BLE001 -- any provider/library error becomes a readable message
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
 @app.route("/data/detect-pip-size", methods=["POST"])
 def data_detect_pip_size():
     """AJAX counterpart to the desktop app's "DETECT PIP SIZE FROM DATA"
@@ -1898,14 +1923,16 @@ def _simple_base_risk(form, rules):
 
 # v9.8: explicit timeframe selector on every lifecycle run page. The
 # choices are the bar sizes this app trades on; "" (the form default)
-# means "the dataset's own native bars". A real pick resamples the loaded
+# means "the dataset's own native bars". "1m" is offered too: it passes 1-minute
+# data through unchanged and is refused with a clear reason on coarser data (a
+# file cannot be resampled to finer bars than it has). A real pick resamples the loaded
 # dataframe through the SAME machinery the timeframe sweep uses
 # (app.data.timeframe_sweep.build_timeframe_sweep) BEFORE the run sees
 # it, so the selector changes what executes -- it is never a dead field,
 # and a run never silently falls back to 1m. A timeframe declared inside
 # the strategy itself still wins afterwards (run_backtest's
 # prepare_timeframe_aligned_data), which the form hint says out loud.
-TIMEFRAME_CHOICES = ("5m", "15m", "30m", "1h", "4h", "1d")
+TIMEFRAME_CHOICES = ("1m", "5m", "15m", "30m", "1h", "4h", "1d")
 
 
 def _apply_timeframe_choice(df, form):
