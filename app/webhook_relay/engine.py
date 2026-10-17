@@ -25,6 +25,7 @@ from app.webhook_relay import journal
 from app.webhook_relay.config import RelayConfig, root_symbol
 from app.webhook_relay.paper import PaperLedger
 from app.webhook_relay.signals import Signal
+from app.webhook_relay.trade_book import BrokerTradeBook
 
 # One worker: broker legs for successive alerts stay in the order they arrived.
 _EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="t58-relay")
@@ -98,7 +99,7 @@ def handle(relay: RelayConfig, signal: Signal, *, wait_for_broker: bool = False,
                broker={"state": "queued"} if broker_pending else None)
     if broker_pending:
         def job():
-            result = _broker_leg(relay, root, signal.target, qty)
+            result = _broker_leg(relay, root, signal.target, qty, signal.price)
             journal.patch(relay.id, rec["id"], broker=result)
             return result
         future = _EXECUTOR.submit(job)
@@ -157,11 +158,21 @@ def check_demo_account(relay: RelayConfig):
     return account, None
 
 
-def _broker_leg(relay: RelayConfig, root: str, target: str, qty: float) -> dict:
+def _fill(result, fallback: float | None) -> tuple[float | None, str]:
+    """(price, where it came from). Brokers that don't echo a fill price get
+    the alert's price, and the trade record says so."""
+    px = getattr(result, "price", None)
+    if px:
+        return float(px), "broker fill"
+    return fallback, ("alert price (broker returned no fill price)" if fallback is not None else "unknown")
+
+
+def _broker_leg(relay: RelayConfig, root: str, target: str, qty: float, alert_price: float | None = None) -> dict:
     account, error = check_demo_account(relay)
     if error:
         return {"state": "refused", "ok": False, "message": error}
     symbol = relay.symbol_map.get(root, root)
+    book = BrokerTradeBook(relay.id)
     try:
         adapter = _adapter_for(account)
         conn = adapter.ensure_connected()
@@ -171,19 +182,28 @@ def _broker_leg(relay: RelayConfig, root: str, target: str, qty: float) -> dict:
         orders: list[str] = []
         positions = [p for p in adapter.get_open_positions(symbol)]
         want = {"long": 1, "short": -1}.get(target, 0)
-        current = sum(p.volume * p.direction for p in positions)
-        wrong_side = [p for p in positions if want == 0 or p.direction != want]
-        for p in wrong_side:
+
+        def close(p, why: str) -> bool:
             r = adapter.close_position(p.ticket, comment="T58 relay close")
             orders.append(f"close {p.volume:g}: {'ok' if r.ok else r.message}")
-            if not r.ok:
+            if r.ok:
+                px, src = _fill(r, alert_price)
+                book.record_close(ticket=p.ticket, root=root, symbol=symbol,
+                                  side="long" if p.direction == 1 else "short", qty=p.volume,
+                                  broker_entry=getattr(p, "open_price", None) or None, exit_price=px, price_source=src,
+                                  why=why, opened_at=getattr(getattr(p, "open_time", None), "isoformat", lambda: None)())
+            return r.ok
+
+        for p in [p for p in positions if want == 0 or p.direction != want]:
+            if not close(p, "exit" if want == 0 else "reverse"):
                 return {"state": "failed", "ok": False, "message": "; ".join(orders)}
         if want != 0:
-            have = sum(p.volume for p in positions if p.direction == want)
+            same = [p for p in positions if p.direction == want]
+            have = sum(p.volume for p in same)
             if have > qty + 1e-9:        # reduce = close and reopen at the new size
-                for p in [p for p in positions if p.direction == want]:
-                    r = adapter.close_position(p.ticket, comment="T58 relay resize")
-                    orders.append(f"close {p.volume:g}: {'ok' if r.ok else r.message}")
+                for p in same:
+                    if not close(p, "resize"):
+                        return {"state": "failed", "ok": False, "message": "; ".join(orders)}
                 have = 0.0
             need = qty - have
             if need > 1e-9:
@@ -191,6 +211,9 @@ def _broker_leg(relay: RelayConfig, root: str, target: str, qty: float) -> dict:
                 orders.append(f"{'buy' if want == 1 else 'sell'} {need:g} {symbol}: {'ok' if r.ok else r.message}")
                 if not r.ok:
                     return {"state": "failed", "ok": False, "message": "; ".join(orders)}
+                px, src = _fill(r, alert_price)
+                book.record_open(ticket=getattr(r, "ticket", None) or f"{symbol}-{time.time():.0f}", root=root, symbol=symbol,
+                                 side=target, qty=need, entry=px, price_source=src)
         return {"state": "sent", "ok": True, "message": "; ".join(orders) or "Broker already in the target position.",
                 "account": account.nickname, "symbol": symbol}
     except Exception as exc:  # noqa: BLE001 -- never let a broker error escape the worker thread
