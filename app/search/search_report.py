@@ -62,24 +62,9 @@ _TEMPLATE = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <title>T58 Search Lab -- Leaderboard ({run_id})</title>
-<style>
-  body {{ background:#0B0D10; color:#E8E6E1; font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif; margin:0; padding:24px; }}
-  h1 {{ color:#D4AF37; font-size:20px; margin-bottom:4px; }}
-  .sub {{ color:#9AA0A6; font-size:13px; margin-bottom:20px; }}
-  .funnel {{ display:flex; gap:14px; margin-bottom:24px; flex-wrap:wrap; }}
-  .stage-card {{ background:#14171B; border:1px solid #2A2E33; border-radius:8px; padding:14px 18px; min-width:140px; }}
-  .stage-card .n {{ font-size:26px; color:#D4AF37; font-weight:600; }}
-  .stage-card .label {{ font-size:11px; color:#9AA0A6; text-transform:uppercase; letter-spacing:.04em; }}
-  table {{ border-collapse:collapse; width:100%; font-size:12px; }}
-  th {{ text-align:left; padding:8px 10px; background:#14171B; color:#9AA0A6; border-bottom:1px solid #2A2E33; position:sticky; top:0; }}
-  td {{ padding:7px 10px; border-bottom:1px solid #1C1F24; }}
-  tr.pass td.pass-badge {{ color:#3CCB7F; font-weight:600; }}
-  tr.fail td.fail-badge {{ color:#E5533D; font-weight:600; }}
-  td.notes {{ color:#9AA0A6; font-size:11px; max-width:320px; }}
-  .warn {{ background:#241C10; border:1px solid #7A5A17; color:#E8C77A; padding:12px 16px; border-radius:6px; margin-bottom:20px; font-size:13px; }}
-</style>
+<style>/*THEME*/</style>
 </head>
-<body>
+<body><div class="wrap">
   <h1>T58 Search Lab &mdash; Leaderboard</h1>
   <div class="sub">
     Run {run_id} &middot; mode={mode} &middot; family={family} &middot;
@@ -116,9 +101,10 @@ _TEMPLATE = """<!DOCTYPE html>
     net profit / profit factor and still fail the gate on lookahead, walk-forward,
     or parameter-neighborhood grounds -- see its Notes column.
   </p>
-</body>
+</div></body>
 </html>
 """
+_TEMPLATE = _TEMPLATE.replace("/*THEME*/", __import__("app.reports.theme", fromlist=["theme"]).TEMPLATE_CSS)
 
 
 def generate_search_report(
