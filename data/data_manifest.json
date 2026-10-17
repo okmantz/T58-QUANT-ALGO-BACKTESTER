@@ -443,6 +443,17 @@
    "synthetic": false
   },
   {
+   "file": "EURUSD/EURUSD_5M_sample.csv",
+   "symbol": "EURUSD",
+   "bars": 3848,
+   "start": "2024-01-01",
+   "end": "2024-01-18",
+   "years": 0.05,
+   "bar": "0 days 00:05:00",
+   "flags": "<2y history",
+   "synthetic": false
+  },
+  {
    "file": "EURUSD/fx_EUR_USD_1m.parquet",
    "symbol": "EURUSD",
    "bars": 2250078,
@@ -451,83 +462,6 @@
    "years": 6.0,
    "bar": "0 days 00:01:00",
    "flags": "ok",
-   "synthetic": false
-  },
-  {
-   "file": "EURUSD_5M_sample (2).csv",
-   "symbol": "EURUSD",
-   "bars": 3848,
-   "start": "2024-01-01",
-   "end": "2024-01-18",
-   "years": 0.05,
-   "bar": "0 days 00:05:00",
-   "flags": "<2y history",
-   "synthetic": false
-  },
-  {
-   "file": "EURUSD_5M_sample (3).csv",
-   "symbol": "EURUSD",
-   "bars": 3848,
-   "start": "2024-01-01",
-   "end": "2024-01-18",
-   "years": 0.05,
-   "bar": "0 days 00:05:00",
-   "flags": "<2y history",
-   "synthetic": false
-  },
-  {
-   "file": "EURUSD_5M_sample (4).csv",
-   "symbol": "EURUSD",
-   "bars": 3848,
-   "start": "2024-01-01",
-   "end": "2024-01-18",
-   "years": 0.05,
-   "bar": "0 days 00:05:00",
-   "flags": "<2y history",
-   "synthetic": false
-  },
-  {
-   "file": "EURUSD_5M_sample (5).csv",
-   "symbol": "EURUSD",
-   "bars": 3848,
-   "start": "2024-01-01",
-   "end": "2024-01-18",
-   "years": 0.05,
-   "bar": "0 days 00:05:00",
-   "flags": "<2y history",
-   "synthetic": false
-  },
-  {
-   "file": "EURUSD_5M_sample (6).csv",
-   "symbol": "EURUSD",
-   "bars": 3848,
-   "start": "2024-01-01",
-   "end": "2024-01-18",
-   "years": 0.05,
-   "bar": "0 days 00:05:00",
-   "flags": "<2y history",
-   "synthetic": false
-  },
-  {
-   "file": "EURUSD_5M_sample (7).csv",
-   "symbol": "EURUSD",
-   "bars": 3848,
-   "start": "2024-01-01",
-   "end": "2024-01-18",
-   "years": 0.05,
-   "bar": "0 days 00:05:00",
-   "flags": "<2y history",
-   "synthetic": false
-  },
-  {
-   "file": "EURUSD_5M_sample.csv",
-   "symbol": "EURUSD",
-   "bars": 3848,
-   "start": "2024-01-01",
-   "end": "2024-01-18",
-   "years": 0.05,
-   "bar": "0 days 00:05:00",
-   "flags": "<2y history",
    "synthetic": false
   },
   {
@@ -1386,50 +1320,6 @@
    "years": 11.64,
    "bar": "1 days 00:00:00",
    "flags": "no instrument spec",
-   "synthetic": false
-  },
-  {
-   "file": "a.csv",
-   "symbol": null,
-   "bars": 1200,
-   "start": "2024-01-01",
-   "end": "2024-01-05",
-   "years": 0.01,
-   "bar": "0 days 00:05:00",
-   "flags": "no instrument spec, <2y history",
-   "synthetic": false
-  },
-  {
-   "file": "b.csv",
-   "symbol": null,
-   "bars": 1200,
-   "start": "2024-01-01",
-   "end": "2024-01-05",
-   "years": 0.01,
-   "bar": "0 days 00:05:00",
-   "flags": "no instrument spec, <2y history",
-   "synthetic": false
-  },
-  {
-   "file": "eurusd.csv",
-   "symbol": "EURUSD",
-   "bars": 200,
-   "start": "2024-01-01",
-   "end": "2024-01-01",
-   "years": 0.0,
-   "bar": "0 days 00:05:00",
-   "flags": "<2y history",
-   "synthetic": false
-  },
-  {
-   "file": "leaky.csv",
-   "symbol": null,
-   "bars": 1500,
-   "start": "2024-01-01",
-   "end": "2024-01-16",
-   "years": 0.04,
-   "bar": "0 days 00:15:00",
-   "flags": "no instrument spec, <2y history",
    "synthetic": false
   }
  ]
