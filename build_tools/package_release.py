@@ -137,13 +137,43 @@ DATA_README = """\
 T58 Market Data pack
 ====================
 
-Extract this zip INTO the same folder as the T58 app (the folder that holds
-the .exe), so the files land in  data\\raw\\<instrument>\\...  next to it.
-Windows will offer to merge the "data" folder -- say yes.
+This pack holds EVERY dataset in the repo's data/raw folder -- one folder per
+instrument, every timeframe of that instrument inside it:
 
-Then restart the app: the datasets appear in the Data Center / dataset lists.
-Safe to re-extract over an older copy to update.
-"""
+    data\\raw\\EURUSD\\EURUSD1.csv, EURUSD5.csv, ..., fx_EUR_USD_1m.parquet
+    data\\raw\\ES1!\\futures_ES.F_1m.parquet, ES_5min_....csv
+    data\\raw\\NVIDIA\\nvda-1999-2014.csv      ... and so on.
+
+OPTION A -- nothing to import (recommended)
+  Extract this zip INTO the same folder as the T58 app (the folder that holds
+  the .exe), so the files land in  data\\raw\\<instrument>\\...  next to it.
+  Windows will offer to merge the "data" folder -- say yes.
+  Then restart the app: every dataset is already there.
+
+OPTION B -- import it from inside the app
+  Extract the zip anywhere, then open  Data Center -> Import folder  and drop
+  the extracted folder (or its  data\\raw  folder) onto the box. The app keeps
+  the instrument folders, so each instrument shows up under ONE header in the
+  dataset dropdowns with all of its timeframes listed under it.
+
+Safe to re-extract / re-import over an older copy to update: files that are
+already there are left alone.
+
+{contents}"""
+
+
+def _data_contents(entries: "list[Entry]") -> str:
+    """Per-instrument file counts for DATA_README.txt, built from what is actually in the zip."""
+    folders: dict[str, int] = {}
+    total = 0
+    for _, arc in entries:
+        parts = arc.split("/")
+        if len(parts) >= 4 and parts[0] == "data" and parts[1] == "raw":
+            folders[parts[2]] = folders.get(parts[2], 0) + 1
+            total += 1
+    lines = [f"CONTENTS: {total} data files across {len(folders)} instruments", ""]
+    lines += [f"  {name:<24} {count:>3} file{'s' if count != 1 else ''}" for name, count in sorted(folders.items())]
+    return "\n".join(lines) + "\n"
 
 
 UNIX_README = """\
@@ -232,7 +262,24 @@ def collect_data_entries(tmp_dir: Path) -> list[Entry]:
     entries = _walk(raw, "data/raw")
     if not entries:
         raise PackagingError(f"{raw} contains no files -- nothing to package.")
-    entries.append(_text_entry(tmp_dir, "DATA_README.txt", DATA_README))
+    # Completeness guard: the pack must carry EVERY data file. A Git LFS pointer stub (a ~130-byte
+    # text file starting "version https://git-lfs...") means the checkout did not fetch the real
+    # data, and zipping it would ship a "dataset" that cannot be imported -- fail the build instead.
+    stubs = []
+    for path, arc in entries:
+        try:
+            if path.stat().st_size < 1024:
+                with open(path, "rb") as fh:
+                    if fh.read(40).startswith(b"version https://git-lfs"):
+                        stubs.append(arc)
+        except OSError:
+            stubs.append(arc)
+    if stubs:
+        raise PackagingError(
+            f"{len(stubs)} file(s) under data/raw are Git LFS pointers / unreadable, not real data "
+            f"(first: {stubs[0]}). Check out the repo with LFS files fetched, then rebuild."
+        )
+    entries.append(_text_entry(tmp_dir, "DATA_README.txt", DATA_README.format(contents=_data_contents(entries))))
     return entries
 
 
