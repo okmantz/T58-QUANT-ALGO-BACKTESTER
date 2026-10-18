@@ -316,5 +316,6 @@ def test_exactly_one_web_and_one_desktop_workflow_each_covering_three_oses():
     assert names == ["build-data-pack.yml", "desktop-cross-platform.yml", "secrets-scan.yml", "web-cross-platform.yml"]
     for rel in APP_WORKFLOWS:
         text = (REPO_ROOT / rel).read_text(encoding="utf-8")
-        for os_name in ("windows-latest", "macos-latest", "ubuntu-latest"):
-            assert os_name in text, f"{rel} must build on {os_name}"
+        # Linux runners are pinned to ubuntu-24.04 in the workflows (ubuntu-latest is also accepted).
+        for os_names in (("windows-latest",), ("macos-latest",), ("ubuntu-latest", "ubuntu-24.04")):
+            assert any(n in text for n in os_names), f"{rel} must build on {os_names[0]}"

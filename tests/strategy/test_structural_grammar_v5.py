@@ -156,10 +156,15 @@ def test_building_block_pool_decomposes_templates():
         v8_names = set(V8_FAMILY_NAMES)
     except ImportError:
         v8_names = set()
-    assert len(FAMILIES) == 84 + len(v7_names) + len(v8_names), (
-        f"expected 84 frozen templates + {len(v7_names)} v7 families + {len(v8_names)} v8 families"
+    try:
+        from app.search.families_v9 import V9_FAMILY_NAMES
+        v9_names = set(V9_FAMILY_NAMES)
+    except ImportError:
+        v9_names = set()
+    assert len(FAMILIES) == 84 + len(v7_names) + len(v8_names) + len(v9_names), (
+        f"expected 84 frozen templates + {len(v7_names)} v7 + {len(v8_names)} v8 + {len(v9_names)} v9 families"
     )
-    original = set(FAMILIES) - v7_names - v8_names
+    original = set(FAMILIES) - v7_names - v8_names - v9_names
     assert len(original) == 84, "the 84 frozen templates must still exist, untouched"
     pool = building_block_pool()
     assert pool["families_used"], "no families decomposed"
@@ -177,7 +182,7 @@ def test_building_block_pool_decomposes_templates():
         assert not validate(cfg), f"pool block invalid: {validate(cfg)[:2]}"
     # Templates untouched: FAMILIES registry still has all 84 originals
     # after pooling (v7: plus the 10 new families; v8: plus 8 more).
-    assert len(FAMILIES) - len(v7_names) - len(v8_names) == 84
+    assert len(FAMILIES) - len(v7_names) - len(v8_names) - len(v9_names) == 84
 
 
 # ---------------------------------------------------------------------------
