@@ -219,3 +219,27 @@ def test_hypothesis_can_use_gex_indicator_as_the_feature():
     spec["feature"] = {"type": "indicator", "kind": "gex_regime", "op": ">", "value": 0}
     rec = hypothesis_lab.run(_bars(n=6000), spec, save=False, use_ledger=False)
     assert "criteria" in rec.results
+
+
+def test_seasonality_finds_planted_volatility_and_rejects_noise():
+    import numpy as np
+    import pandas as pd
+
+    from app.research_labs import seasonality as S
+
+    def make(plant):
+        rng = np.random.default_rng(5)
+        days = pd.bdate_range("2023-01-02", "2024-03-29")
+        idx = pd.DatetimeIndex(np.concatenate([pd.date_range(d + pd.Timedelta(hours=9, minutes=30), d + pd.Timedelta(hours=15, minutes=55), freq="5min") for d in days]))
+        r = rng.normal(0, 0.0008, len(idx))
+        if plant:
+            r[idx.hour == 10] *= 3
+        c = 100 * np.exp(np.cumsum(r))
+        o = np.r_[c[0], c[:-1]]
+        return pd.DataFrame({"timestamp": idx, "open": o, "high": np.maximum(o, c) * 1.0004, "low": np.minimum(o, c) * 0.9996, "close": c, "volume": 100})
+
+    planted = S.run(make(True), save=False).results
+    assert any(r["group"] == "time of day: 10:00 (volatility)" and r["verdict"].startswith("promising") for r in planted["slices"])
+    noise = S.run(make(False), save=False).results
+    assert noise["persistence"]["survive_correction_and_oos"] <= 2        # pure noise: (almost) nothing survives
+    assert S.run(make(False), save=False).spec_hash == S.run(make(False), save=False).spec_hash

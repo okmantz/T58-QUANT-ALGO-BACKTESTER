@@ -18,7 +18,7 @@ def client(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("url", ["/journal", "/gamma", "/runs", "/mobile-access", "/sw.js", "/manifest.json",
-                                 "/static/t58-metrics.js", "/static/t58-pwa.js", "/static/t58-runs.js"])
+                                 "/static/t58-metrics.js", "/static/t58-pwa.js"])
 def test_pages_render(client, url):
     r = client.get(url)
     assert r.status_code == 200, url
@@ -26,7 +26,9 @@ def test_pages_render(client, url):
 
 def test_sidebar_links_new_pages(client):
     html = client.get("/dashboard").get_data(as_text=True)
-    assert 'href="/journal"' in html and 'href="/gamma"' in html and 'href="/runs"' in html
+    assert 'href="/journal"' in html and 'href="/runs"' in html
+    assert 'href="/gamma"' not in html          # Gamma Center is reached through the Quant Lab only
+    assert 'href="/gamma"' in client.get("/quant-lab/").get_data(as_text=True)
 
 
 def test_service_worker_has_root_scope(client):
@@ -211,13 +213,12 @@ def test_education_labs_are_sprinkled_through_the_modules(client):
     assert html.count('class="edu-inline-lab-host"') == len(content.LESSON_LAB_SLOTS)
 
 
-def test_knowledge_check_is_its_own_page_not_in_the_labs_tab(client):
+def test_knowledge_check_is_a_module_inside_education_not_its_own_page(client):
     page = client.get("/education/knowledge-check")
-    assert page.status_code == 200
-    body = page.get_data(as_text=True)
-    assert "quiz-host" in body and "mountQuiz" in body
-    assert "labs-host" not in body
-    assert 'href="/education/knowledge-check"' in client.get("/education").get_data(as_text=True)
+    assert page.status_code == 301 and page.headers["Location"].endswith("/education#knowledge-check")
+    body = client.get("/education").get_data(as_text=True)
+    assert 'id="knowledge-check"' in body and "quiz-host" in body and "mountQuiz" in body
+    assert 'href="/education/knowledge-check"' not in body
 
 
 def test_edu_labs_logic_under_node():

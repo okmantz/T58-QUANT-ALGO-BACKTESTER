@@ -11,7 +11,7 @@ import pytest
 
 from app.web.server import app
 
-LAB_SLUGS = ["volume-profile", "order-flow", "order-book", "lead-lag", "stat-arb", "event-study", "hypothesis"]
+LAB_SLUGS = ["volume-profile", "order-flow", "order-book", "lead-lag", "stat-arb", "event-study", "seasonality", "hypothesis"]
 
 
 @pytest.fixture()
@@ -33,7 +33,7 @@ def _token(client, url="/research-labs/hypothesis") -> str:
     return re.search(r'data-csrf="([^"]+)"', client.get(url).get_data(as_text=True)).group(1)
 
 
-def test_hub_lists_all_seven_labs(client):
+def test_hub_lists_all_eight_labs(client):
     html = client.get("/research-labs/").get_data(as_text=True)
     for slug in LAB_SLUGS:
         assert f'href="/research-labs/{slug}"' in html

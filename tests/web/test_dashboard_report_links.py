@@ -69,3 +69,35 @@ def test_dashboard_route_rewrites_full_pipeline_report_links(monkeypatch):
     body = r.get_data(as_text=True)
     assert "/full_pipeline_reports/full_pipeline_042_demo.html" in body
     assert 'href="/reports/full_pipeline_042_demo.html"' not in body
+
+
+def test_dashboard_v2_layout_and_lazy_visuals(monkeypatch):
+    """Redesigned dashboard: KPI strip, focus card, recent runs, quick tools; heavy visuals live in <details> and are drawn on open;
+    no running-jobs pill or Gamma/Knowledge-check nav entries."""
+    import os
+
+    fake = {"total_strategies": 2, "total_runs": 5, "pass_rate": 50.0,
+            "best": {"strategy_name": "Alpha", "sharpe_ratio": 1.8, "report_html": None},
+            "strategies": [{"strategy_name": f"S{i}", "instrument": "EURUSD", "timeframe": "5m", "trades": 120, "net_profit": 5400.0 - i * 900, "win_rate": 55.0,
+                            "sharpe_ratio": 1.8, "max_drawdown_pct": 4.2, "run_count": 3, "single_run_passed": i % 2 == 0, "report_html": "/reports/a.html"}
+                           for i in range(10)],
+            "graph": {"nodes": [], "edges": [], "instruments": []}, "heatmap": [[1.0] * 24 for _ in range(7)],
+            "equity_series": [{"name": "S0", "passed": True, "values": [0, 1, 3, 2, 5]}]}
+    monkeypatch.setattr("app.web.server.run_history.dashboard_data", lambda: fake)
+    body = app.test_client().get("/dashboard").get_data(as_text=True)
+    for needle in ('class="db-kpis"', 'id="equity-chart"', 'id="db-heat-d"', 'id="universe-graph"', "data-t58-tour-start", "Recent runs", "Quick tools"):
+        assert needle in body, needle
+    assert "10 strategies" not in body and "2 more strategies in Runs" in body        # only the 8 latest rows are listed
+    assert "t58-runs.js" not in body and 'href="/gamma"' not in body and "/education/knowledge-check" not in body
+    if os.environ.get("T58_DUMP_DASH"):
+        open(os.environ["T58_DUMP_DASH"], "w", encoding="utf-8").write(body)
+
+
+def test_static_assets_are_gzipped_once_and_images_cached():
+    c = app.test_client()
+    a = c.get("/static/graph.js", headers={"Accept-Encoding": "gzip"})
+    b = c.get("/static/graph.js", headers={"Accept-Encoding": "gzip"})
+    assert a.headers.get("Content-Encoding") == "gzip" and a.get_data() == b.get_data()
+    import gzip
+    assert b"renderEquityChart" in gzip.decompress(a.get_data())
+    assert c.get("/static/icon-192.png").headers.get("Cache-Control") == "public, max-age=86400"
