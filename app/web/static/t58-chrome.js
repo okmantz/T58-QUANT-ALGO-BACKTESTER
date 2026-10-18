@@ -170,6 +170,45 @@
     });
   }
 
+  /* Instant navigation (2026-10-17 perf pass): when the pointer rests on a sidebar link (or a finger touches
+     it) the browser quietly prefetches that page, so the click that follows opens it from cache instead of
+     waiting on the server. Sidebar page links only -- never APIs, downloads, static files or reports -- and
+     skipped on Data-Saver / 2G connections. */
+  function initInstantNav() {
+    var conn = navigator.connection || {};
+    if (conn.saveData || /(^|-)2g$/.test(conn.effectiveType || "")) return;
+    var seen = {};
+    var hoverTimer = null;
+    var SKIP = /^\/(static|api|reports|webhook|logout|lock|activate|settings\/account)(\/|$)/;
+
+    function prefetch(a) {
+      var href = a.getAttribute("href") || "";
+      if (href.charAt(0) !== "/" || href.indexOf("//") === 0 || href.indexOf("#") !== -1) return;
+      if ((a.target && a.target !== "_self") || a.hasAttribute("download")) return;
+      if (SKIP.test(href.split("?")[0]) || seen[href]) return;
+      seen[href] = true;
+      var link = document.createElement("link");
+      link.rel = "prefetch";
+      link.as = "document";
+      link.href = href;
+      document.head.appendChild(link);
+    }
+
+    var sidebar = document.getElementById("t58-sidebar");
+    if (!sidebar) return;
+    sidebar.addEventListener("mouseover", function (e) {
+      var a = e.target.closest && e.target.closest("a.t58-nav-item[href]");
+      if (!a) return;
+      clearTimeout(hoverTimer);
+      hoverTimer = setTimeout(function () { prefetch(a); }, 90);
+    });
+    sidebar.addEventListener("mouseout", function () { clearTimeout(hoverTimer); });
+    sidebar.addEventListener("touchstart", function (e) {
+      var a = e.target.closest && e.target.closest("a.t58-nav-item[href]");
+      if (a) prefetch(a);
+    }, { passive: true });
+  }
+
   window.T58Chrome = { animateNumbers: animateNumbers };
 
   document.addEventListener("DOMContentLoaded", function () {
@@ -179,6 +218,7 @@
     initThemeToggle();
     initGlobalSearch();
     initMobileMenu();
+    initInstantNav();
   });
 })();
 
