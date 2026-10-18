@@ -45,6 +45,21 @@ jobs:
           ls -la T58-Market-Data.zip T58-Market-Data.zip.sha256
           cat T58-Market-Data.zip.sha256
 
+      - name: Verify the pack contains EVERY data/raw file
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import subprocess, zipfile
+          tracked = [p for p in subprocess.check_output(["git", "ls-files", "data/raw"], text=True).splitlines()
+                     if p and not p.endswith(".gitkeep")]
+          inside = set(zipfile.ZipFile("T58-Market-Data.zip").namelist())
+          missing = [p for p in tracked if p not in inside]
+          print(f"data/raw files in git: {len(tracked)}  |  data files in the zip: {sum(n.startswith('data/raw/') for n in inside)}")
+          if missing:
+              raise SystemExit("MISSING FROM PACK: " + ", ".join(missing[:20]))
+          print("OK: the pack contains every data/raw file")
+          PY
+
       - name: Upload market-data pack
         uses: actions/upload-artifact@v6
         with:
