@@ -25,6 +25,10 @@ PAGES = [
     "/parameter-robustness", "/regime-matrix", "/payout-probability", "/forward-test", "/live-market",
     "/start-here/create", "/start-here/test", "/start-here/champion", "/start-here/deployment",
     "/start-here/graveyard", "/support", "/user-manual", "/webhook-relay", "/settings/api-keys", "/data/api/providers",
+    # 2026-10-17 release
+    "/journal", "/gamma", "/runs", "/education", "/mobile-access", "/sw.js", "/static/t58-metrics.js",
+    "/static/t58-propsim.js", "/static/t58-edu-labs.js", "/api/journal", "/api/gamma/status", "/api/library/control",
+    "/api/prop-sim/presets", "/api/metrics/profit_factor", "/api/running-jobs.json",
 ]
 
 # v9.15 (Owen): the Quant Lab and Account Start Here pages were
