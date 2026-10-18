@@ -507,6 +507,39 @@ _POLL_TAG = '<script src="/static/t58-poll.js"></script>'
 _HEAD_RE = _re_poll.compile(r"<head(\s[^>]*)?>", _re_poll.IGNORECASE)
 
 
+# 2026-10-17 (perf): gzip text responses. The pages carry the whole dataset <option> list several times plus inline
+# CSS/JS, so a single page is 50-200 KB of HTML; compressed it is ~10-25 KB, which is what makes pages open
+# instantly over Wi-Fi / Tailscale to a phone. Registered BEFORE _inject_poll_governor on purpose: Flask runs
+# after_request hooks in reverse order, so the poll governor edits the HTML first and THIS compresses the result.
+import gzip as _gzip
+
+_COMPRESSIBLE_MIMETYPES = frozenset({
+    "text/html", "text/css", "text/plain", "text/javascript", "application/javascript",
+    "application/json", "image/svg+xml", "application/manifest+json",
+})
+_COMPRESS_MIN_BYTES = 1024
+
+
+@app.after_request
+def _compress_response(resp):
+    try:
+        if (resp.status_code != 200 or resp.direct_passthrough or resp.is_streamed
+                or "Content-Encoding" in resp.headers
+                or resp.mimetype not in _COMPRESSIBLE_MIMETYPES
+                or "gzip" not in (request.headers.get("Accept-Encoding") or "").lower()):
+            return resp
+        data = resp.get_data()
+        if len(data) < _COMPRESS_MIN_BYTES:
+            return resp
+        resp.set_data(_gzip.compress(data, compresslevel=5))
+        resp.headers["Content-Encoding"] = "gzip"
+        resp.headers["Content-Length"] = str(len(resp.get_data()))
+        resp.vary.add("Accept-Encoding")
+    except Exception:  # noqa: BLE001 -- never break a page over an optimisation
+        pass
+    return resp
+
+
 @app.after_request
 def _inject_poll_governor(resp):
     try:
@@ -4480,6 +4513,7 @@ def section_start_here(section):
         section_title=data["title"], tagline=data["tagline"], accent_color=data["accent_color"],
         description=data["description"], roadmap=data.get("roadmap", []),
         primary_buttons=data.get("primary_buttons", []), tools=data.get("tools", []),
+        more_tools=data.get("more_tools", []),
         **extra,
     )
 
