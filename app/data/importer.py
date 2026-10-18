@@ -1203,17 +1203,50 @@ def import_csv(
     # OHLC integrity
     # ---------------------------------------------------------
 
-    bad_logic = (
-        (df["high"] < df["low"])
-        | (df["high"] < df["open"])
-        | (df["high"] < df["close"])
-        | (df["low"] > df["open"])
-        | (df["low"] > df["close"])
-    )
+    def _ohlc_bad_mask(frame: pd.DataFrame) -> pd.Series:
+        return (
+            (frame["high"] < frame["low"])
+            | (frame["high"] < frame["open"])
+            | (frame["high"] < frame["close"])
+            | (frame["low"] > frame["open"])
+            | (frame["low"] > frame["close"])
+        )
+
+    bad_logic = _ohlc_bad_mask(df)
 
     n_bad_logic = int(
         bad_logic.sum()
     )
+
+    # Yahoo-style exports (e.g. the NVIDIA / YAHOO daily files in data/raw) can carry
+    # split-adjusted Open/High/Low next to a RAW, unadjusted Close. Close then sits far
+    # outside the bar's own high/low on every row before a split, so more than half the file
+    # used to be refused. When an "Adj Close" column exists and swapping it in for Close
+    # repairs the bars, use it instead of throwing the history away.
+    if n_bad_logic > max(5, int(len(df) * 0.02)) and raw.index.is_unique:
+        adj_col = next(
+            (c for c in raw.columns
+             if str(c).strip().lower().replace("_", " ") in ("adj close", "adjusted close")
+             and c != mapping.get("close")),
+            None,
+        )
+        if adj_col is not None:
+            adj = pd.to_numeric(raw[adj_col], errors="coerce").reindex(df.index)
+            candidate = df.copy()
+            candidate["close"] = adj.where(adj.notna() & (adj > 0), candidate["close"])
+            n_bad_adj = int(_ohlc_bad_mask(candidate).sum())
+            if n_bad_adj < n_bad_logic * 0.25:
+                df = candidate
+                bad_logic = _ohlc_bad_mask(df)
+                n_bad_logic = int(bad_logic.sum())
+                issues.append(
+                    ValidationIssue(
+                        "warning",
+                        f"Close did not match this file's split-adjusted Open/High/Low "
+                        f"({n_bad_logic} row(s) remain inconsistent after the fix) -- "
+                        f"used the '{adj_col}' column as Close so the history stays usable.",
+                    )
+                )
 
     if n_bad_logic:
         issues.append(

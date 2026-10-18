@@ -12,9 +12,12 @@ Recognized types mirror the Data Center's single-file import: .csv, .tsv,
 .txt, .parquet. Anything else is reported as skipped, never failed, so a
 folder containing READMEs or license files doesn't look like an error.
 
-Filenames are flattened into data/raw/ by store_csv_bytes() (which also
-applies the v1 path-traversal sanitization); the outcome's `name` keeps
-the folder-relative path so the per-file report stays readable.
+Files are filed under their INSTRUMENT FOLDER in data/raw/ by
+store_dataset_bytes() (data/raw/EURUSD/EURUSD1.csv, ...), keeping the
+structure of a market-data pack or of the folder you picked; a loose file
+is filed under the instrument its name identifies. File names still get the
+v1 path-traversal sanitization. The outcome's `name` keeps the
+folder-relative path so the per-file report stays readable.
 """
 
 from __future__ import annotations
@@ -24,6 +27,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 RECOGNIZED_SUFFIXES = (".csv", ".tsv", ".txt", ".parquet")
+
+# Documentation that rides along with a market-data pack (DATA_README.txt, README_FIRST.txt,
+# LICENSE.txt ...). They share the .txt suffix with tab/text data exports, so they are recognised
+# by name and reported as skipped -- never as a failed import.
+_DOC_STEMS = ("readme", "data_readme", "read_me", "license", "licence", "notice", "notes", "changelog",
+              "manifest", "checksums", "sha256")
+
+
+def _is_documentation_file(name: str) -> bool:
+    stem = Path(name).stem.lower()
+    return Path(name).suffix.lower() == ".txt" and any(
+        stem == d or stem.startswith(d + "_") or stem.startswith(d + "-") or stem.endswith("_" + d)
+        or stem.startswith(d + " ")
+        for d in _DOC_STEMS
+    )
 
 # Safety caps for one import action. A single folder drop should not
 # accidentally queue tens of thousands of files.
@@ -78,7 +96,7 @@ def import_file_bytes(name: str, content: bytes) -> FileImportOutcome:
     # Local imports: app.data.importer is heavy (pandas etc.); keep this
     # module import-light so UI code can import it at startup cheaply.
     from app.data.importer import import_csv_bytes
-    from app.data.storage import store_csv_bytes
+    from app.data.storage import store_dataset_bytes
 
     if not content:
         return FileImportOutcome(name, "failed", "empty file (0 bytes)")
@@ -90,11 +108,21 @@ def import_file_bytes(name: str, content: bytes) -> FileImportOutcome:
         errors = "; ".join(getattr(result, "errors", None) or []) or "validation failed"
         return FileImportOutcome(name, "failed", errors)
     try:
-        dest = store_csv_bytes(content, name)
+        dest = store_dataset_bytes(content, name)
     except Exception as exc:  # noqa: BLE001
         return FileImportOutcome(name, "failed", f"store error: {exc}")
-    stored = dest.name if isinstance(dest, Path) else str(dest)
+    stored = _stored_label(dest)
     return FileImportOutcome(name, "imported", f"saved as {stored}")
+
+
+def _stored_label(dest) -> str:
+    """"EURUSD/EURUSD1.csv" -- the path under data/raw/ -- so the per-file report shows which
+    instrument folder each file landed in."""
+    try:
+        from app.data.storage import get_raw_data_dir
+        return Path(dest).relative_to(get_raw_data_dir()).as_posix()
+    except Exception:  # noqa: BLE001
+        return dest.name if isinstance(dest, Path) else str(dest)
 
 
 def _iter_candidate_files(root: Path) -> list[tuple[str, Path]]:
@@ -141,6 +169,9 @@ def import_folder_tree(folder: str | os.PathLike) -> FolderImportReport:
                 FileImportOutcome(rel, "skipped", f"unrecognized type '{Path(rel).suffix or '(none)'}'")
             )
             continue
+        if _is_documentation_file(rel):
+            report.outcomes.append(FileImportOutcome(rel, "skipped", "documentation file, not market data"))
+            continue
         try:
             content = path.read_bytes()
         except Exception as exc:  # noqa: BLE001
@@ -162,6 +193,9 @@ def import_uploaded_files(files: list[tuple[str, bytes]]) -> FolderImportReport:
             report.outcomes.append(
                 FileImportOutcome(name, "skipped", f"unrecognized type '{Path(name).suffix or '(none)'}'")
             )
+            continue
+        if _is_documentation_file(name):
+            report.outcomes.append(FileImportOutcome(name, "skipped", "documentation file, not market data"))
             continue
         report.outcomes.append(import_file_bytes(name, content))
     if len(files) > MAX_FILES_PER_IMPORT:

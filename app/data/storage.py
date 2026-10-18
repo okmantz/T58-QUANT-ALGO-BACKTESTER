@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.data.importer import SUPPORTED_ARCHIVE_EXTENSIONS
+from app.data.instrument_folders import dataset_sort_key, instrument_folder_for_import, split_import_relpath
 
 logger = logging.getLogger(__name__)
 
@@ -98,11 +99,25 @@ def _seed_bundled_raw_data(raw_dir: Path) -> None:
                     continue
 
 
+_SEEDED_RAW_DIRS: set[str] = set()
+_SEED_LOCK = threading.Lock()
+
+
 def get_raw_data_dir() -> Path:
-    """Return the persistent data/raw directory, creating and seeding it."""
+    """Return the persistent data/raw directory, creating and seeding it.
+
+    PERF (Oct 2026): this is called from nearly every page render and dataset picker. The bundled-data
+    seeding step walks the PyInstaller bundle's whole data/raw tree (five recursive globs), so it now
+    runs ONCE per process per folder instead of on every call -- on a frozen build that walk was
+    repeated for every dropdown on every page."""
     raw_dir = get_app_base_dir() / "data" / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
-    _seed_bundled_raw_data(raw_dir)
+    key = str(raw_dir)
+    if key not in _SEEDED_RAW_DIRS:
+        with _SEED_LOCK:
+            if key not in _SEEDED_RAW_DIRS:
+                _seed_bundled_raw_data(raw_dir)
+                _SEEDED_RAW_DIRS.add(key)
     return raw_dir
 
 
@@ -148,6 +163,7 @@ class StoredDataset:
                 # rather than colliding on/hiding behind the bare filename.
     path: Path
     size_bytes: int
+    mtime_ns: int = 0  # captured by the same directory scan, so callers never need a second stat()
 
 
 def list_stored_datasets() -> list[StoredDataset]:
@@ -163,14 +179,40 @@ def list_stored_datasets() -> list[StoredDataset]:
     separators on every platform including Windows.
     """
     raw_dir = get_raw_data_dir()
-    files: list[Path] = []
-    for ext in RAW_DATA_EXTENSIONS:
-        files.extend(raw_dir.rglob(f"*{ext}"))
-    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return [
-        StoredDataset(name=f.relative_to(raw_dir).as_posix(), path=f, size_bytes=f.stat().st_size)
-        for f in files
-    ]
+    found: list[StoredDataset] = []
+    _scan_raw_tree(raw_dir, raw_dir, "", found)
+    found.sort(key=lambda d: d.mtime_ns, reverse=True)
+    return found
+
+
+def _scan_raw_tree(raw_dir: Path, directory: Path, prefix: str, out: list) -> None:
+    """ONE recursive os.scandir pass over data/raw/ (PERF, Oct 2026).
+
+    This used to be five separate rglob() walks (one per extension) followed by two stat() calls per
+    file and a pathlib relative_to() per file -- ~13 ms for 120 files here, called twice per page
+    render, so dataset listing was two-thirds of every page's time (and several times worse on
+    Windows with antivirus scanning). One scandir walk reads each directory once and reuses the
+    stat information the directory listing already carries."""
+    try:
+        with os.scandir(directory) as it:
+            entries = list(it)
+    except OSError:
+        return
+    for entry in entries:
+        name = entry.name
+        try:
+            if entry.is_dir(follow_symlinks=True):
+                if not name.startswith("."):
+                    _scan_raw_tree(raw_dir, Path(entry.path), f"{prefix}{name}/", out)
+                continue
+            if not name.lower().endswith(RAW_DATA_EXTENSIONS):
+                continue
+            st = entry.stat()
+            out.append(StoredDataset(
+                name=f"{prefix}{name}", path=Path(entry.path), size_bytes=st.st_size, mtime_ns=st.st_mtime_ns,
+            ))
+        except OSError:
+            continue
 
 
 # A CSV under this many bytes cannot contain a header plus even one data
@@ -229,15 +271,18 @@ def flush_row_count_cache() -> None:
             pass
 
 
-def _cached_row_count(path: Path) -> int | None:
-    """Cached count if the file is unchanged since it was counted, else None."""
-    try:
-        st = path.stat()
-    except OSError:
-        return None
+def _cached_row_count(path: Path, size_bytes: int | None = None, mtime_ns: int | None = None) -> int | None:
+    """Cached count if the file is unchanged since it was counted, else None. Callers that already
+    hold the file's size and mtime (the directory scan does) pass them to skip a stat()."""
+    if size_bytes is None or mtime_ns is None:
+        try:
+            st = path.stat()
+        except OSError:
+            return None
+        size_bytes, mtime_ns = st.st_size, st.st_mtime_ns
     with _ROW_COUNT_LOCK:
         hit = _load_row_cache().get(str(path))
-    if hit and hit[0] == st.st_size and hit[1] == st.st_mtime_ns:
+    if hit and hit[0] == size_bytes and hit[1] == mtime_ns:
         return hit[2]
     return None
 
@@ -317,7 +362,7 @@ def list_datasets_by_instrument(count_rows: bool = True) -> list[dict]:
                 if count_rows:
                     rows = _quick_row_count(ds.path)
                 else:
-                    cached = _cached_row_count(ds.path)
+                    cached = _cached_row_count(ds.path, ds.size_bytes, ds.mtime_ns)
                     rows = cached if cached is not None else (
                         -1 if ds.path.suffix.lower() in SUPPORTED_ARCHIVE_EXTENSIONS else ROWS_NOT_COUNTED
                     )
@@ -375,23 +420,18 @@ def list_datasets_by_instrument(count_rows: bool = True) -> list[dict]:
 # the filename instead -- "ES1!" then its files sorted, then "NQ1!" then
 # its files -- which is how the files are actually named on disk.
 # ---------------------------------------------------------------------------
-_INSTRUMENT_PREFIX_RE = re.compile(r"^([A-Za-z]{1,8}\d*!?)")
-
-
 def dataset_instrument_label(name: str) -> str:
-    """The picker group header for one stored dataset name: the subfolder
-    when the file lives in one ("EURUSD/EURUSD5.csv" -> "EURUSD"), else
-    the leading symbol token of the filename ("ES1!_5m.csv" -> "ES1!",
-    "eurusd (2).csv" -> "EURUSD", "AAA_5M.csv" -> "AAA"). Never raises;
+    """The picker group header for one stored dataset name -- ONE header per instrument.
+
+    The subfolder when the file lives in one ("EURUSD/EURUSD5.csv" -> "EURUSD"), else the instrument
+    its file name identifies ("EURUSD5.csv" -> "EURUSD", "fx_EUR_USD_1m.parquet" -> "EURUSD",
+    "futures_ES.F_1m.parquet" -> "ES1!", "ES1!_5m.csv" -> "ES1!", "AAA_5M.csv" -> "AAA"). The shared
+    resolver lives in app.data.instrument_folders; before it, a loose file was grouped by a regex
+    over the first characters of its name, which produced a header per timeframe ("EURUSD1",
+    "EURUSD5" ...) and lumped every "futures_*" / "fx_*" file under "FUTURES" / "FX". Never raises;
     a name with no readable prefix groups under "(UNGROUPED)"."""
-    parts = [p for p in str(name).replace("\\", "/").split("/") if p]
-    if not parts:
-        return "(UNGROUPED)"
-    if len(parts) > 1:
-        return parts[0]
-    stem = parts[-1].rsplit(".", 1)[0]
-    m = _INSTRUMENT_PREFIX_RE.match(stem)
-    return m.group(1).upper() if m else "(UNGROUPED)"
+    from app.data.instrument_folders import picker_label
+    return picker_label(name)
 
 
 def list_datasets_grouped_for_picker(count_rows: bool = False) -> list[dict]:
@@ -409,7 +449,7 @@ def list_datasets_grouped_for_picker(count_rows: bool = False) -> list[dict]:
     return [
         {
             "instrument": label,
-            "files": sorted(files, key=lambda x: x["name"]),
+            "files": sorted(files, key=lambda x: dataset_sort_key(x["name"])),
             "file_count": len(files),
             "empty_count": sum(1 for f in files if f["empty"]),
         }
@@ -512,6 +552,54 @@ def store_csv_path(source_path: str | Path) -> Path:
         pass
     dest = _unique_destination(raw_dir, source_path.name)
     shutil.copyfile(source_path, dest)
+    return dest
+
+
+def _safe_instrument_folder(raw_dir: Path, folder: str) -> str:
+    """A folder name that is safe to create under data/raw/ (no separators / traversal / reserved
+    characters), or "" for "store at the top level". Unlike sanitize_stored_filename this KEEPS the
+    characters real instrument folders use ("ES1!", "S&P 500", "XAUUSD (GOLD)")."""
+    folder = (folder or "").strip()
+    if not folder or folder in (".", "..") or any(c in folder for c in '/\\:*?"<>|\x00'):
+        return ""
+    if not _contained_within(raw_dir, raw_dir / folder):
+        return ""
+    return folder
+
+
+def store_dataset_bytes(content: bytes, relpath: str) -> Path:
+    """Persist one imported market-data file into its INSTRUMENT FOLDER under data/raw/.
+
+    Folder / market-data-pack imports go through here (app.data.folder_import) so the structure
+    survives the import: "EURUSD/EURUSD1.csv" -> data/raw/EURUSD/EURUSD1.csv, and a loose
+    "fx_EUR_USD_1m.parquet" is filed under EURUSD too (see app.data.instrument_folders). The
+    older store_csv_bytes() flattened every file into data/raw/ itself, which is why every
+    timeframe of one instrument ended up as its own dropdown header.
+
+    Re-importing a file that is already there with identical bytes is a no-op (no "(2)" copies);
+    a different file with the same name still gets a "(2)" suffix, so nothing is overwritten."""
+    raw_dir = get_raw_data_dir()
+    folders, name = split_import_relpath(relpath)
+    filename = sanitize_stored_filename(name or relpath)
+    try:
+        existing = [p.name for p in raw_dir.iterdir() if p.is_dir()]
+    except OSError:
+        existing = []
+    folder = _safe_instrument_folder(raw_dir, instrument_folder_for_import(relpath, existing))
+    target_dir = raw_dir / folder if folder else raw_dir
+    if folder:
+        target_dir.mkdir(parents=True, exist_ok=True)
+    candidate = target_dir / filename
+    if candidate.is_file():
+        try:
+            if candidate.stat().st_size == len(content) and candidate.read_bytes() == content:
+                return candidate
+        except OSError:
+            pass
+    dest = _unique_destination(target_dir, filename)
+    if not _contained_within(raw_dir, dest):
+        raise ValueError(f"Refusing to write outside the data directory: {relpath!r}")
+    dest.write_bytes(content)
     return dest
 
 
