@@ -1325,6 +1325,11 @@ def _build_indicator_series_uncached(frame: pd.DataFrame, kind: str, period: int
     _v8_builder = _indicators_v8.V8_INDICATOR_BUILDERS.get(kind)
     if _v8_builder is not None:
         return _v8_builder(frame, p, column, lookback)
+    # --- v9 (2026-10-17): gamma-exposure + price-structure terminals. ---
+    from app.strategy import indicators_v9 as _indicators_v9
+    _v9_builder = _indicators_v9.V9_INDICATOR_BUILDERS.get(kind)
+    if _v9_builder is not None:
+        return _v9_builder(frame, p, column, lookback)
     raise KeyError(kind)
 
 

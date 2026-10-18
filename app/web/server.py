@@ -50,7 +50,7 @@ from flask import (
 
 from app.ai.ollama_settings import OllamaSettings
 from app.education import content as education_content
-from app.web.network_info import lan_url, print_startup_banner, qr_code_data_uri, qr_code_file, tailscale_url
+from app.web.network_info import get_active_port, lan_url, print_startup_banner, qr_code_data_uri, qr_code_file, tailscale_url
 from app.web.notifications import (
     NotificationSettings,
     load_notification_settings,
@@ -62,6 +62,7 @@ from app.web import onboarding
 from app.web.quant_lab_routes import quant_lab_bp
 from app.web.webhook_relay_routes import webhook_relay_bp
 from app.web.extra_routes import extra_bp
+from app.web.v9_routes import v9_bp
 from app.web.ai_assistant_routes import ai_assistant_bp
 from app.web.options_outlook_routes import options_outlook_bp
 from app.web.hedge_fund_routes import hedge_fund_bp
@@ -610,7 +611,7 @@ _license_ok_cached: bool | None = None
 # "/webhook/tradingview/" is called by TradingView's servers (no browser, no
 # redirect possible); its handler checks the license itself and the secret
 # token in the URL is its credential -- see app/web/webhook_relay_routes.py.
-_LICENSE_GATE_EXEMPT_PREFIXES = ("/activate", "/static/", "/manifest.json", "/favicon.ico", "/webhook/tradingview/")
+_LICENSE_GATE_EXEMPT_PREFIXES = ("/activate", "/static/", "/manifest.json", "/sw.js", "/favicon.ico", "/webhook/tradingview/")
 
 
 def _license_ok_for_webhook() -> bool:
@@ -711,7 +712,7 @@ def activate_submit():
 # even from a not-yet-unlocked browser on first run -- see
 # _account_lock_gate's own comment for why this one exemption is safe).
 _LOCK_GATE_EXEMPT_PREFIXES = (
-    "/lock", "/static/", "/manifest.json", "/favicon.ico",
+    "/lock", "/static/", "/manifest.json", "/sw.js", "/favicon.ico",
     "/settings/account", "/webhook/tradingview/",
 )
 
@@ -787,6 +788,8 @@ app.register_blueprint(hedge_fund_bp)
 # see app/web/extra_routes.py's module docstring (Deploy Live's live-money
 # routes are deliberately NOT here; see that file for why).
 app.register_blueprint(extra_bp)
+# Gamma Center, Trading Journal, clickable metrics, library control feed, prop simulator presets (2026-10-17).
+app.register_blueprint(v9_bp)
 app.register_blueprint(accuracy_bp)
 app.register_blueprint(discover_bp)
 # Risk Sweep -- run_risk_sweep (app/optimize/risk_sweep.py) was already
@@ -1501,9 +1504,12 @@ def mobile_access():
     # installed and signed in on this machine. See app.web.network_info.
     ts_url = tailscale_url()
     ts_qr_data_uri = qr_code_data_uri(ts_url) if ts_url else None
+    # HTTPS address (Tailscale serve) -- the one Chrome will actually INSTALL as an app. Looked up lazily by the page via
+    # /api/pwa/status so this route never blocks on the tailscale CLI.
     return render_template(
         "mobile_access.html", active_page="mobile_access", url=url, qr_data_uri=qr_data_uri,
         tailscale_url=ts_url, tailscale_qr_data_uri=ts_qr_data_uri,
+        app_port=get_active_port(),
     )
 
 
@@ -1676,30 +1682,47 @@ def champion_promote():
     return redirect(url_for("dashboard"))
 
 
+def _job_row(job: dict, now: float) -> dict:
+    started = job.get("started_at")
+    finished = job.get("finished_at")
+    done = bool(job.get("done"))
+    elapsed_end = finished if (done and isinstance(finished, (int, float))) else now
+    err = job.get("error")
+    return {
+        "job_id": job["job_id"],
+        "tool": job.get("tool") or "Job",
+        "instrument": job.get("instrument") or "",
+        "page_url": job.get("page_url"),
+        "done": done,
+        "error": (str(err)[:160] if err else None),
+        "started_at": started if isinstance(started, (int, float)) else None,
+        "elapsed_seconds": round(elapsed_end - started, 1) if isinstance(started, (int, float)) else None,
+        "progress": (job.get("progress") or {}).get("percent") if isinstance(job.get("progress"), dict) else None,
+    }
+
+
 @app.route("/api/running-jobs.json")
 def api_running_jobs():
-    """Jobs still running, for the sidebar's "Running now" list -- so a
-    user who clicked Back (or switched pages) mid-run can get straight
-    back into a live job page instead of wondering whether it's gone.
-    Only jobs that recorded a page_url at create() time are listed."""
+    """Jobs still running, for the sidebar's "Running now" list and the floating runs pill -- so a user who clicked Back
+    (or switched pages) mid-run can get straight back into a live job page instead of wondering whether it's gone.
+    Only jobs that recorded a page_url at create() time are listed. ``recent`` carries the last few finished runs (last 6 h,
+    the same window the job feed is pruned on) so a run that just finished can still be opened."""
     import time as _time
 
-    running = []
-    for job in JOB_MANAGER.list_jobs(limit=50):
-        if job.get("done"):
+    now = _time.time()
+    running, recent = [], []
+    for job in JOB_MANAGER.list_jobs(limit=80):
+        if not job.get("page_url"):
             continue
-        page_url = job.get("page_url")
-        if not page_url:
-            continue
-        started = job.get("started_at")
-        running.append({
-            "job_id": job["job_id"],
-            "tool": job.get("tool") or "Job",
-            "instrument": job.get("instrument") or "",
-            "page_url": page_url,
-            "elapsed_seconds": round(_time.time() - started, 1) if isinstance(started, (int, float)) else None,
-        })
-    return jsonify({"running": running})
+        row = _job_row(job, now)
+        (recent if row["done"] else running).append(row)
+    return jsonify({"running": running, "recent": recent[:12], "server_time": now})
+
+
+@app.route("/runs")
+def runs_page():
+    """Every run, running or recently finished, one click from anywhere: the safety net for 'I pressed Back and lost it'."""
+    return render_template("runs.html", active_page="runs")
 
 
 @app.route("/api/dashboard-data")
@@ -3758,6 +3781,42 @@ def manifest():
     return send_from_directory(app.static_folder, "manifest.json", mimetype="application/manifest+json")
 
 
+@app.route("/sw.js")
+def service_worker():
+    """The service worker MUST be served from the site root: a worker's scope is the folder it is served from, and the one
+    at /static/sw.js only ever covered /static/ -- never the app's own pages. Chrome wants a worker that controls the
+    start URL before it offers "Install app"."""
+    resp = send_from_directory(app.static_folder, "sw.js", mimetype="text/javascript")
+    resp.headers["Service-Worker-Allowed"] = "/"
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
+@app.route("/api/pwa/status")
+def api_pwa_status():
+    """What the phone-install helper needs to explain itself: is this request on a secure origin, and is Tailscale HTTPS
+    available/enabled on this machine."""
+    from app.web import network_info as _ni
+    https_url = _ni.tailscale_https_url()
+    return jsonify({
+        "secure_request": request.is_secure or request.headers.get("X-Forwarded-Proto", "") == "https",
+        "tailscale_installed": _ni.is_tailscale_installed(),
+        "tailscale_https_url": https_url,
+        "tailscale_https_enabled": bool(https_url) and _ni.tailscale_https_enabled(),
+    })
+
+
+@app.route("/api/pwa/enable-https", methods=["POST"])
+def api_pwa_enable_https():
+    """One click: publishes this app over HTTPS through `tailscale serve` (free, publicly-trusted certificate), which is
+    what lets Chrome on a phone install it as an app."""
+    from app.web import network_info as _ni
+    if not _ni.is_tailscale_installed():
+        return jsonify({"ok": False, "message": "Tailscale is not installed on this computer. Install it from tailscale.com/download, sign in, then try again."}), 400
+    ok, message = _ni.enable_tailscale_https()
+    return jsonify({"ok": ok, "message": message, "https_url": _ni.tailscale_https_url() if ok else None}), (200 if ok else 400)
+
+
 @app.route("/run", methods=["POST"])
 def run_pipeline():
     try:
@@ -4053,10 +4112,11 @@ def api_global_search():
 def _account_settings_page_context(**extra):
     from app.accounts.app_info import APP_VERSION
     from app.accounts.settings import load_account_settings
-    from app.accounts.subscription import LICENSE_STATUS_CHOICES, load_subscription
+    from app.accounts.subscription import LICENSE_STATUS_CHOICES, PLAN_CHOICES, effective_subscription
     ctx = dict(
         settings=load_account_settings(),
-        subscription=load_subscription(),
+        subscription=effective_subscription(),
+        plan_choices=PLAN_CHOICES,
         license_status_choices=LICENSE_STATUS_CHOICES,
         app_version=APP_VERSION,
         active_page="account_settings",
@@ -4641,13 +4701,13 @@ def account_settings_delete():
 
 @app.route("/settings/account/subscription/save", methods=["POST"])
 def account_settings_subscription_save():
-    from app.accounts.subscription import SubscriptionInfo, LICENSE_STATUS_CHOICES, save_subscription
+    from app.accounts.subscription import SubscriptionInfo, LICENSE_STATUS_CHOICES, PREMIUM_PLAN, save_subscription
     form = request.form
     status = (form.get("license_status") or "unset").strip()
     if status not in LICENSE_STATUS_CHOICES:
         status = "unset"
     info = SubscriptionInfo(
-        plan=(form.get("plan") or "").strip(),
+        plan=PREMIUM_PLAN,  # a dropdown with one plan now; never trust/free-type this field
         license_key=(form.get("license_key") or "").strip(),
         license_status=status,
         renewal_date=(form.get("renewal_date") or "").strip(),
@@ -9000,6 +9060,7 @@ def evolution_start():
             group.start_all()
             with _MULTI_EVOLUTION_LOCK:
                 _MULTI_EVOLUTION_GROUPS[group_id] = group
+            _track_multi_evolution(group_id, group, active_label)
             return redirect(url_for("evolution_multi_instrument_job", group_id=group_id))
 
         with _EVOLUTION_LOCK:
@@ -9293,6 +9354,17 @@ HEAVY_JOB_GUARD.register_health_check(
 )
 
 
+def _track_multi_evolution(group_id: str, group, label: str) -> None:
+    """Shows a Multi-Instrument Evolution Lab group in "Running now" / the Runs page, so Back never loses it."""
+    try:
+        JOB_MANAGER.track_external(
+            tool="Evolution Lab (multi-instrument)", instrument=label or "",
+            page_url=f"/evolution/multi-instrument/job/{group_id}", is_running=lambda _g=group: _g.is_running,
+        )
+    except Exception:  # noqa: BLE001 -- bookkeeping must never fail a start
+        pass
+
+
 @app.route("/evolution/multi-instrument")
 def evolution_multi_instrument_form():
     # v8 audit: evict long-finished groups -- _MULTI_EVOLUTION_GROUPS
@@ -9451,6 +9523,7 @@ def evolution_multi_instrument_start():
         group.start_all()
         with _MULTI_EVOLUTION_LOCK:
             _MULTI_EVOLUTION_GROUPS[group_id] = group
+        _track_multi_evolution(group_id, group, ", ".join(str(getattr(j, "label", j)) for j in list(jobs)[:3]))
         return redirect(url_for("evolution_multi_instrument_job", group_id=group_id))
 
     except Exception as exc:  # noqa: BLE001
@@ -9750,6 +9823,11 @@ def research_loop_start():
         with _RESEARCH_LOOP_JOBS_LOCK:
             _RESEARCH_LOOP_JOBS[job_id] = {"log": initial_log, "runner": runner, "instrument": active_label}
         runner.start()
+        # Mirror into the shared job feed so "Running now" / the Runs page can take you straight back in.
+        JOB_MANAGER.track_external(
+            tool="Research Loop", instrument=active_label, page_url=f"/research-loop/job/{job_id}",
+            is_running=lambda _r=runner: _r.is_running,
+        )
         return redirect(url_for("research_loop_job", job_id=job_id))
     except Exception as exc:  # noqa: BLE001
         log_crash("Research Loop (web, start)", exc=exc)

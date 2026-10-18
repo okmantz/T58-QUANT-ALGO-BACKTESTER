@@ -5221,3 +5221,11 @@ except ImportError:
     # families_v8 is additive; a checkout without it keeps the registry
     # exactly as before (84 frozen templates + v7 families if present).
     pass
+
+# v9 (2026-10-17): gamma-exposure + structure families (app.search.families_v9).
+try:
+    from app.search.families_v9 import V9_FAMILIES, V9_HYPOTHESIS_QUESTIONS
+    FAMILIES.update(V9_FAMILIES)
+    HYPOTHESIS_QUESTIONS.update(V9_HYPOTHESIS_QUESTIONS)
+except ImportError:
+    pass

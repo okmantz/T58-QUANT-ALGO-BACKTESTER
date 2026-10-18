@@ -115,6 +115,11 @@ INDICATOR_KINDS = (
     "donchian_mid_distance", "bollinger_bandwidth",
     "volume_zscore", "overnight_gap_atr",
     "fractal_strength", "linreg_r2",
+    # v9 (2026-10-17): gamma-exposure + structure terminals from
+    # app.strategy.indicators_v9 (ATR-normalised, so scale-safe).
+    "gex_regime", "gex_flip_distance", "gex_call_wall_distance",
+    "gex_put_wall_distance", "theta_clock", "gamma_convexity",
+    "ema_stack_score", "bull_flag_score", "volume_expansion",
     # w10-astra terminals (Oct-4 analysis, Part A ports #2/#3) -- regime-
     # adaptive RSI zones + session VWAP profile levels. NOT
     # build_indicator_series kinds: they need operand-level parameters
@@ -200,6 +205,10 @@ THRESHOLD_BOUNDS: dict[str, tuple[float, float]] = {
     "atr_percentile": (0.0, 100.0),
     "efficiency_ratio": (0.0, 1.0),
     "linreg_r2": (0.0, 1.0),
+    # v9: bounded gamma/structure terminals -- see V9_BOUNDED_RANGES.
+    "gex_regime": (-1.0, 1.0),
+    "ema_stack_score": (-1.0, 1.0),
+    "theta_clock": (0.0, 1.0),
 }
 
 OPERATORS = (">", ">=", "<", "<=", "cross above", "cross below", "is true", "is false")

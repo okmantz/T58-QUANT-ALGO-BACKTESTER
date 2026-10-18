@@ -424,7 +424,8 @@ def cross_instrument_start():
             log=[f"Loaded {len(dfs)} instrument(s): {', '.join(dfs)}."] + load_warnings
                 + ["Risk setup per instrument:"] + ["  " + r.describe() for r in risk_report],
             markets=list(dfs), aggregation=kwargs["aggregation"], tool=JOB_CROSS_INSTRUMENT,
-            cancelled=False,
+            cancelled=False, page_template="/cross-instrument/job/{job_id}",
+            instrument=", ".join(list(dfs)[:3]) + ("..." if len(dfs) > 3 else ""),
         )
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         threading.Thread(target=_run_cross_instrument_job, args=(job_id, kwargs), daemon=True).start()

@@ -57,6 +57,58 @@
     as this computer. See the "Away from home" card below for anywhere-access.</p>
 </div>
 
+<div class="card" id="install-card">
+  <h2>Install it as an app (HTTPS)</h2>
+  <p class="note" style="font-size:13px;">
+    If Chrome says <strong>&ldquo;This app cannot be installed&rdquo;</strong>, that is because the address
+    above is plain <code>http://</code>. Chrome only installs apps from <strong>HTTPS</strong> pages. Tailscale can publish
+    this app over HTTPS for free with a real, trusted certificate &mdash; one click:
+  </p>
+  <div id="https-state" class="note" style="margin:8px 0;">Checking&hellip;</div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;margin:8px 0;">
+    <button class="submit-btn" id="https-enable" type="button" style="display:none;padding:9px 16px;border-radius:9px;border:1px solid var(--teal);background:var(--teal);color:#05070a;font-weight:700;cursor:pointer;">Enable HTTPS (Tailscale)</button>
+  </div>
+  <div id="https-result" class="url-box" style="display:none;"></div>
+  <ol>
+    <li>One-time, in the <a href="https://login.tailscale.com/admin/dns" target="_blank" rel="noopener">Tailscale admin console &rarr; DNS</a>:
+      make sure <strong>MagicDNS</strong> is on and press <strong>Enable HTTPS</strong>.</li>
+    <li>Press <strong>Enable HTTPS (Tailscale)</strong> above. It runs <code>tailscale serve --bg {{ app_port }}</code> for you.</li>
+    <li>On your phone (Tailscale connected) open the <code>https://&hellip;.ts.net</code> address shown here in Chrome &rarr;
+      <strong>&#8942; menu &rarr; Install app</strong> (or use the Install app button in the sidebar).</li>
+  </ol>
+  <p class="note">No Tailscale? <code>cloudflared tunnel --url http://localhost:{{ app_port }}</code> prints a free https address, or on
+    this phone only you can allow your current address in <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>.
+    A home-screen <em>shortcut</em> works without any of this.</p>
+</div>
+<script>
+(function () {
+  var st = document.getElementById('https-state'), btn = document.getElementById('https-enable'), out = document.getElementById('https-result');
+  function show(url) {
+    out.style.display = 'block';
+    out.innerHTML = '';
+    var a = document.createElement('a'); a.href = url; a.textContent = url; a.style.color = 'var(--teal)';
+    out.appendChild(a);
+  }
+  function refresh() {
+    fetch('/api/pwa/status').then(function (r) { return r.json(); }).then(function (d) {
+      if (!d.tailscale_installed) { st.textContent = 'Tailscale is not installed on this computer yet. Install it from tailscale.com/download and sign in, then reload this page.'; btn.style.display = 'none'; return; }
+      if (d.tailscale_https_enabled && d.tailscale_https_url) { st.textContent = 'HTTPS is ON. Open this address on your phone and install:'; btn.style.display = 'none'; show(d.tailscale_https_url); return; }
+      st.textContent = d.tailscale_https_url ? 'HTTPS is not on yet for ' + d.tailscale_https_url + '.' : 'Tailscale is installed, but this computer is not signed in / MagicDNS is off.';
+      btn.style.display = d.tailscale_https_url ? 'inline-block' : 'none';
+    }).catch(function () { st.textContent = 'Could not check Tailscale status.'; });
+  }
+  btn.addEventListener('click', function () {
+    btn.disabled = true; btn.textContent = 'Turning on HTTPS...';
+    var token = (document.querySelector('meta[name=csrf-token]') || {}).content || '';
+    fetch('/api/pwa/enable-https', { method: 'POST', headers: { 'X-CSRF-Token': token } }).then(function (r) { return r.json(); }).then(function (d) {
+      btn.disabled = false; btn.textContent = 'Enable HTTPS (Tailscale)';
+      if (d.ok) { refresh(); } else { st.textContent = d.message || 'Tailscale did not accept the request.'; }
+    }).catch(function () { btn.disabled = false; btn.textContent = 'Enable HTTPS (Tailscale)'; st.textContent = 'Request failed.'; });
+  });
+  refresh();
+})();
+</script>
+
 <div class="card">
   <h2>Away from home (Tailscale) — works from anywhere</h2>
   {% if tailscale_url %}

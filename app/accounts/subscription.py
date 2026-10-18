@@ -26,9 +26,18 @@ from app.data.storage import get_app_base_dir
 
 SUBSCRIPTION_FILENAME = "subscription.json"
 
-# Free-form on purpose -- until a real license server exists this is
-# whatever plan name someone chooses to type/paste for their own records.
+# The plan every signed-in (licensed) user is on. The Account tab shows this
+# as a dropdown instead of a free-text box (2026-10-17), so nobody has to type
+# their plan name and it can never be mistyped or left blank.
+PREMIUM_PLAN = "Premium Subscription"
+PLAN_CHOICES = (PREMIUM_PLAN,)
+
 LICENSE_STATUS_CHOICES = ("unset", "active", "trial", "expired", "cancelled")
+# Statuses a person (or a future license server) set on purpose -- these are
+# honoured as-is. Anything else ("unset", "trial", blank) reads as Active once
+# the person is signed in, because reaching the Account tab at all means the
+# license gate already let them in.
+_EXPLICIT_INACTIVE_STATUSES = ("expired", "cancelled")
 
 # XXXX-XXXX-XXXX-XXXX, letters/digits only -- a reasonable generic shape;
 # tighten this once a real key format exists.
@@ -64,6 +73,21 @@ def load_subscription() -> SubscriptionInfo:
         )
     except Exception:  # noqa: BLE001 -- a corrupt/unreadable file must never crash the Account tab
         return SubscriptionInfo()
+
+
+def effective_subscription(info: SubscriptionInfo | None = None) -> SubscriptionInfo:
+    """What the Account tab shows: the stored record with the plan normalised to
+    "Premium Subscription" and the status shown as "active" once the person is
+    signed in (unless an expired/cancelled status was recorded on purpose).
+    Pure -- never writes anything."""
+    info = info if info is not None else load_subscription()
+    status = info.license_status if info.license_status in _EXPLICIT_INACTIVE_STATUSES else "active"
+    return SubscriptionInfo(
+        plan=PREMIUM_PLAN,
+        license_key=info.license_key,
+        license_status=status,
+        renewal_date=info.renewal_date,
+    )
 
 
 def save_subscription(info: SubscriptionInfo) -> None:

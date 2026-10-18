@@ -38,6 +38,29 @@
   .badge.type { background: var(--panel-3); color: #aaa; }
   .badge.status { background: rgba(53,224,176,0.15); color: var(--teal); }
   .tag { display: inline-block; background: var(--panel-3); color: var(--t-soft); padding: 1px 6px; border-radius: 4px; font-size: 10.5px; margin: 4px 4px 0 0; }
+  /* ---- Control Center cards (2026-10-17) ---- */
+  .lanes { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .lane { padding: 8px 13px; border-radius: 9px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text-muted); font-size: 13px; font-weight: 700; cursor: pointer; }
+  .lane b { color: var(--text); margin-left: 6px; }
+  .lane.active { border-color: var(--teal); background: rgba(53,224,176,.12); color: var(--teal); }
+  .cc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+  .cc-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 11px 12px; cursor: pointer; transition: border-color .15s; }
+  .cc-card:hover { border-color: var(--teal); }
+  .cc-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .cc-inst { font-weight: 800; font-size: 12px; padding: 2px 8px; border-radius: 6px; background: var(--panel-3); border: 1px solid var(--border-light); }
+  .cc-status { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 5px; }
+  .cc-status.Research { background: rgba(138,147,166,.18); color: var(--text-muted); }
+  .cc-status.Developing { background: rgba(111,168,255,.16); color: var(--blue, #6fa8ff); }
+  .cc-status.Ready { background: rgba(53,224,176,.16); color: var(--teal); }
+  .cc-status.Forward { background: rgba(240,180,41,.16); color: var(--amber); }
+  .cc-name { font-weight: 700; font-size: 13.5px; margin: 7px 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cc-sub { font-size: 11px; color: var(--text-dim); margin-bottom: 6px; }
+  .cc-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 8px; margin: 6px 0; }
+  .cc-m span { display: block; font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); }
+  .cc-m b { font-size: 13px; font-variant-numeric: tabular-nums; }
+  .cc-spark { width: 100%; height: 34px; display: block; margin-top: 4px; }
+  .cc-foot { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--text-dim); margin-top: 4px; }
+  .cc-tools { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
   /* ---- Detail panel (modal-style overlay) ---- */
   #detail-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 50; }
   #detail-panel {
@@ -101,9 +124,14 @@
     <option value="{{ m }}">{{ m }}</option>
     {% endfor %}
   </select>
+  <select id="filter-instrument" onchange="renderGrid()"><option value="">All instruments</option></select>
+  <select id="filter-family" onchange="renderGrid()"><option value="">All families</option></select>
+  <select id="filter-timeframe" onchange="renderGrid()"><option value="">All timeframes</option></select>
+  <select id="filter-validation" onchange="renderGrid()"><option value="">Any validation</option><option value="Validated">Validated</option><option value="Not validated">Not validated</option></select>
 </div>
 
-<div class="strategy-grid" id="strategy-grid"></div>
+<div class="lanes" id="lanes"></div>
+<div class="cc-grid" id="strategy-grid"></div>
 <p style="color:var(--t-faint);font-size:13px;margin-top:14px;" id="empty-note" style="display:none;"></p>
 
 </div>
@@ -256,33 +284,89 @@
     return `<div class="stage-bar">${pills}</div>`;
   }
 
+  // ---- Control Center (2026-10-17): compact cards with the numbers that decide what to do next ----
+  let LANE = '';
+  const LANES = ['Research', 'Developing', 'Ready', 'Forward Testing'];
+  const CONTROL = {};
+  function fmtNum(v, d, suffix) { return v === null || v === undefined ? '--' : (Number(v).toFixed(d === undefined ? 2 : d) + (suffix || '')); }
+  function sparkSvg(vals) {
+    if (!vals || vals.length < 2) return '<svg class="cc-spark" viewBox="0 0 100 34"><text x="2" y="20" fill="#5b6478" font-size="9">no equity curve yet</text></svg>';
+    const mn = Math.min(...vals), mx = Math.max(...vals), rg = (mx - mn) || 1;
+    const pts = vals.map((v, i) => (i / (vals.length - 1) * 100).toFixed(1) + ',' + (32 - (v - mn) / rg * 30).toFixed(1)).join(' ');
+    const up = vals[vals.length - 1] >= vals[0];
+    return `<svg class="cc-spark" viewBox="0 0 100 34" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="${up ? '#35e0b0' : '#ff6f6f'}" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg>`;
+  }
+  function fillSelect(id, values) {
+    const sel = document.getElementById(id), cur = sel.value;
+    while (sel.options.length > 1) sel.remove(1);
+    values.forEach(v => { const o = document.createElement('option'); o.value = v; o.textContent = v; sel.appendChild(o); });
+    sel.value = cur;
+  }
+  function loadControl() {
+    fetch('/api/library/control').then(r => r.json()).then(d => {
+      (d.rows || []).forEach(r => { CONTROL[r.id] = r; });
+      fillSelect('filter-instrument', d.summary.instruments);
+      fillSelect('filter-family', d.summary.families);
+      fillSelect('filter-timeframe', d.summary.timeframes);
+      renderGrid();
+    }).catch(() => {});
+  }
+  function renderLanes(list) {
+    const counts = {}; LANES.forEach(l => counts[l] = 0);
+    list.forEach(s => { const c = CONTROL[s.type + '::' + s.name]; const l = c ? c.status : 'Research'; counts[l] = (counts[l] || 0) + 1; });
+    const box = document.getElementById('lanes');
+    box.innerHTML = `<div class="lane ${LANE === '' ? 'active' : ''}" data-lane="">All<b>${list.length}</b></div>` +
+      LANES.map(l => `<div class="lane ${LANE === l ? 'active' : ''}" data-lane="${l}">${l}<b>${counts[l]}</b></div>`).join('');
+    box.querySelectorAll('.lane').forEach(el => el.addEventListener('click', () => { LANE = el.getAttribute('data-lane'); renderGrid(); }));
+  }
+
   function renderGrid() {
     const q = document.getElementById('filter-search').value.toLowerCase();
     const type = document.getElementById('filter-type').value;
     const status = document.getElementById('filter-status').value;
     const market = document.getElementById('filter-market').value;
+    const inst = document.getElementById('filter-instrument').value;
+    const fam = document.getElementById('filter-family').value;
+    const tf = document.getElementById('filter-timeframe').value;
+    const val = document.getElementById('filter-validation').value;
 
-    const filtered = STRATEGIES.filter(s => {
+    const base = STRATEGIES.filter(s => {
       if (type && s.type !== type) return false;
       if (status && s.status !== status) return false;
       if (market && s.market !== market) return false;
       if (q && !(s.name.toLowerCase().includes(q) || (s.description || '').toLowerCase().includes(q))) return false;
+      const c = CONTROL[s.type + '::' + s.name];
+      if (inst && (!c || c.instrument !== inst)) return false;
+      if (fam && (!c || c.family !== fam)) return false;
+      if (tf && (!c || c.timeframe !== tf)) return false;
+      if (val && (!c || c.validation_status !== val)) return false;
       return true;
     });
+    renderLanes(base);
+    const filtered = base.filter(s => { if (!LANE) return true; const c = CONTROL[s.type + '::' + s.name]; return (c ? c.status : 'Research') === LANE; });
 
     const grid = document.getElementById('strategy-grid');
-    grid.innerHTML = filtered.map((s, i) => `
-      <div class="strategy-card" onclick='openDetail(${JSON.stringify(JSON.stringify(s))})'>
-        <div class="name">${s.name}</div>
-        <div class="meta">
-          <span class="badge type">${s.type}</span>
-          <span class="badge status">${s.status_display || s.status}</span>
+    grid.innerHTML = filtered.map(s => {
+      const c = CONTROL[s.type + '::' + s.name] || {status: 'Research', instrument: '--', timeframe: '--', family: '--', curve: []};
+      const cls = c.status === 'Forward Testing' ? 'Forward' : c.status;
+      const m = (label, key, val) => `<div class="cc-m"><span data-metric="${key}">${label}</span><b>${val}</b></div>`;
+      return `
+      <div class="cc-card" onclick='openDetail(${JSON.stringify(JSON.stringify(s))})'>
+        <div class="cc-top"><span class="cc-inst">${escapeHtml(c.instrument)}</span><span class="cc-status ${cls}">${escapeHtml(c.status)}</span></div>
+        <div class="cc-name" title="${escapeHtml(s.name)}">${escapeHtml(s.name)}</div>
+        <div class="cc-sub">${escapeHtml(c.family)} · ${escapeHtml(c.timeframe)} · ${escapeHtml(s.type)}</div>
+        <div class="cc-metrics">
+          ${m('Profit factor', 'profit_factor', fmtNum(c.profit_factor))}
+          ${m('Expectancy', 'expectancy', c.expectancy === null || c.expectancy === undefined ? '--' : '$' + Number(c.expectancy).toFixed(2))}
+          ${m('Max DD', 'max_drawdown', fmtNum(c.max_drawdown_pct, 1, '%'))}
+          ${m('Pass rate', 'eval_pass_probability', fmtNum(c.pass_rate, 1, '%'))}
+          ${m('Payout sim', 'first_payout_probability', fmtNum(c.payout_rate, 1, '%'))}
+          ${m('Robustness', 'robustness', fmtNum(c.robustness, 0, '/100'))}
         </div>
-        ${s.description ? `<div class="meta" style="margin-top:6px;">${s.description}</div>` : ''}
-        ${renderStageBar(s.pipeline_progress)}
-        ${(s.tags || []).map(t => `<span class="tag">${t}</span>`).join('')}
-      </div>
-    `).join('');
+        ${sparkSvg(c.curve)}
+        <div class="cc-foot"><span>${c.validated_on ? 'Validated ' + escapeHtml(c.validated_on) : 'Not validated'}</span><span>${(c.trades !== null && c.trades !== undefined) ? c.trades + ' trades' : ''}</span></div>
+      </div>`;
+    }).join('');
 
     document.getElementById('empty-note').style.display = filtered.length ? 'none' : 'block';
     document.getElementById('empty-note').textContent = filtered.length ? '' : 'No strategies match the current filters.';
@@ -355,6 +439,7 @@
 
   document.getElementById('detail-panel').style.display = 'none';
   renderGrid();
+  loadControl();
 </script>
 </body>
 </html>

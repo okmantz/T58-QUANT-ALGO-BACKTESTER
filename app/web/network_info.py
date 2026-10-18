@@ -222,6 +222,85 @@ def tailscale_url(port: int | None = None) -> str | None:
     return f"http://{ip}:{port or _active_port}" if ip else None
 
 
+def _run_tailscale(args: list[str], timeout: float = 8.0) -> tuple[bool, str]:
+    """Runs the tailscale CLI, returns (ok, combined stdout+stderr). Never raises."""
+    binary = _tailscale_binary()
+    if not binary:
+        return False, "Tailscale is not installed on this computer."
+    try:
+        result = subprocess.run([binary, *args], capture_output=True, text=True, timeout=timeout)
+        out = ((result.stdout or "") + (result.stderr or "")).strip()
+        return result.returncode == 0, out
+    except Exception as exc:  # noqa: BLE001
+        return False, f"Could not run tailscale: {exc}"
+
+
+def tailscale_dns_name() -> str | None:
+    """This machine's MagicDNS name (e.g. "my-pc.tail1234.ts.net"), or None.
+
+    Why this matters: Chrome only offers "Install app" on a *secure* origin.
+    A bare http://100.x.y.z:5000 address is never secure, so Chrome answers
+    "This app cannot be installed" and only offers a plain shortcut. A
+    https://<machine>.<tailnet>.ts.net address served by `tailscale serve` uses
+    a real, publicly-trusted certificate, so Chrome installs it as an app.
+    """
+    ok, out = _run_tailscale(["status", "--json"], timeout=5.0)
+    if not ok:
+        return None
+    try:
+        import json as _json
+
+        name = ((_json.loads(out).get("Self") or {}).get("DNSName") or "").strip().rstrip(".")
+    except Exception:  # noqa: BLE001
+        return None
+    return name or None
+
+
+def tailscale_https_url() -> str | None:
+    """The https:// address `tailscale serve` publishes for this machine (no port), or None."""
+    name = tailscale_dns_name()
+    return f"https://{name}" if name else None
+
+
+def tailscale_serve_status() -> str:
+    """Raw `tailscale serve status` text ("" when nothing is being served or Tailscale is missing)."""
+    ok, out = _run_tailscale(["serve", "status"], timeout=5.0)
+    return out if ok else ""
+
+
+def tailscale_https_enabled(port: int | None = None) -> bool:
+    """True when `tailscale serve` is already proxying HTTPS to this app's port."""
+    status = tailscale_serve_status()
+    if not status:
+        return False
+    p = str(port or _active_port)
+    return ("https://" in status) and (f":{p}" in status or f"localhost:{p}" in status or f"127.0.0.1:{p}" in status)
+
+
+def enable_tailscale_https(port: int | None = None) -> tuple[bool, str]:
+    """Turns on HTTPS for this app through Tailscale (free, trusted certificate).
+
+    Tries the current CLI syntax first, then the pre-1.52 syntax. Needs "HTTPS
+    Certificates" switched on once in the Tailscale admin console (DNS tab); when
+    it is not, the CLI says so and that message is returned verbatim so the page
+    can show it.
+    """
+    p = int(port or _active_port)
+    target = f"http://127.0.0.1:{p}"
+    attempts = [
+        ["serve", "--bg", "--https=443", target],
+        ["serve", "--bg", str(p)],
+        ["serve", "https", "/", target],
+    ]
+    last = "Tailscale did not accept the request."
+    for args in attempts:
+        ok, out = _run_tailscale(args, timeout=20.0)
+        last = out or last
+        if ok:
+            return True, out or "HTTPS is on."
+    return False, last
+
+
 def qr_code_data_uri(url: str) -> str | None:
     """Renders a QR code for `url` and returns it as a `data:` URI PNG a
     browser can display directly with no temp file, no filesystem write,

@@ -1,14 +1,28 @@
 {
+  "id": "/dashboard",
   "name": "T58 Quant Algo Backtester",
   "short_name": "T58 Backtester",
   "description": "Backtest strategies against prop-firm rules and estimate pass/payout probability via Monte Carlo simulation.",
-  "start_url": "/",
+  "lang": "en",
+  "dir": "ltr",
+  "start_url": "/dashboard",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#0d0d0d",
-  "theme_color": "#111111",
-  "orientation": "portrait",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "orientation": "any",
+  "background_color": "#05070a",
+  "theme_color": "#05070a",
+  "categories": ["finance", "productivity", "business"],
   "icons": [
-    { "src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png" }
+    { "src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/static/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Dashboard", "short_name": "Dashboard", "url": "/dashboard", "icons": [{ "src": "/static/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Trading Journal", "short_name": "Journal", "url": "/journal", "icons": [{ "src": "/static/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Strategy Library", "short_name": "Library", "url": "/library", "icons": [{ "src": "/static/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Running jobs", "short_name": "Runs", "url": "/runs", "icons": [{ "src": "/static/icon-192.png", "sizes": "192x192" }] }
   ]
 }

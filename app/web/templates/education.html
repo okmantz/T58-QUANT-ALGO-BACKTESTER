@@ -64,13 +64,14 @@
   <h1>🎓 Education</h1>
   <p>What the numbers and tabs in this app actually mean, and how to think quantitatively about strategy
   research -- not a generic trading course. Work through the modules below in order, or jump straight to
-  the one you need -- if you only read one, make it Validation Lab.</p>
+  the one you need -- if you only read one, make it Validation Lab. New: <a href="#labs" style="color:var(--teal)">interactive labs</a> let you play with the numbers instead of just reading about them.</p>
 </div>
 
 <div class="edu-toc" id="edu-module-tabs">
   {% for section in sections %}
   <a href="#{{ section.id }}" data-module="{{ section.id }}">{{ section.icon }} {{ loop.index }}. {{ section.title }}</a>
   {% endfor %}
+  <a href="#labs" data-module="labs">🧪 Interactive labs</a>
 </div>
 
 {% for section in sections %}
@@ -106,15 +107,29 @@
   <div class="edu-nav">
     <button type="button" class="edu-prev" {% if loop.first %}disabled{% endif %}>&larr; Previous module</button>
     <span class="edu-progress">Module {{ loop.index }} of {{ sections|length }}</span>
-    <button type="button" class="edu-next primary" {% if loop.last %}disabled{% endif %}>Next module &rarr;</button>
+    <button type="button" class="edu-next primary">{% if loop.last %}Interactive labs &rarr;{% else %}Next module &rarr;{% endif %}</button>
   </div>
 </div>
 {% endfor %}
 
+<div class="edu-section" id="labs" data-module="labs">
+  <div class="eyebrow">Hands-on</div>
+  <h2>🧪 Interactive labs</h2>
+  <p class="subtitle">Don't just read it &mdash; play with it. Drag the sliders, click the buttons, break the account, overfit a strategy on pure noise. Every number you see is computed live in your browser.</p>
+  <div id="labs-host"></div>
+  <div class="edu-nav">
+    <button type="button" class="edu-prev">&larr; Previous module</button>
+    <span class="edu-progress">Interactive labs</span>
+    <span></span>
+  </div>
+</div>
+
 </div>
 </div>
+<script src="/static/t58-edu-labs.js"></script>
 <script>
   (function () {
+    var labsMounted = false;
     var moduleIds = Array.prototype.map.call(document.querySelectorAll('.edu-section'), function (el) {
       return el.getAttribute('data-module');
     });
@@ -123,6 +138,7 @@
 
     function showModule(id) {
       if (moduleIds.indexOf(id) === -1) id = moduleIds[0];
+      if (id === 'labs' && !labsMounted && window.T58EduLabs) { labsMounted = true; T58EduLabs.mount(document.getElementById('labs-host')); }
       sections.forEach(function (el) {
         el.classList.toggle('current', el.getAttribute('data-module') === id);
       });

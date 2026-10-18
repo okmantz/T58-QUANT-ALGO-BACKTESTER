@@ -338,7 +338,12 @@ class ManualStrategy(Strategy):
                     "atr_percentile", "efficiency_ratio",
                     "donchian_mid_distance", "bollinger_bandwidth",
                     "volume_zscore", "overnight_gap_atr",
-                    "fractal_strength", "linreg_r2"}:
+                    "fractal_strength", "linreg_r2",
+                    # v9 (2026-10-17): gamma-exposure + structure terminals
+                    # (app.strategy.indicators_v9).
+                    "gex_regime", "gex_flip_distance", "gex_call_wall_distance",
+                    "gex_put_wall_distance", "theta_clock", "gamma_convexity",
+                    "ema_stack_score", "bull_flag_score", "volume_expansion"}:
             return build_indicator_series(work, kind, period=period, column=field, lookback=lookback)
 
         # --- w10-astra: regime-oscillator + VWAP-profile operand kinds ---

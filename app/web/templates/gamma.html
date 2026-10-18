@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Gamma Center — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<style>
+  * { box-sizing: border-box; }
+  .g-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .g-card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin: 0 0 10px; }
+  .g-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
+  .g-tab { padding: 9px 16px; border-radius: 9px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text-muted); font-weight: 700; cursor: pointer; }
+  .g-tab.active { background: var(--teal); color: var(--on-teal, #04130e); border-color: var(--teal); }
+  .g-btn { padding: 9px 14px; border-radius: 9px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-weight: 600; font-size: 13px; cursor: pointer; }
+  .g-btn.primary { background: var(--teal); color: var(--on-teal, #04130e); border-color: var(--teal); }
+  .g-btn:disabled { opacity: .5; cursor: progress; }
+  .g-sel, .g-in { padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 13px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .kpi { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+  .kpi .lab { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); }
+  .kpi .v { font-size: 22px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .kpi .s { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; }
+  .pos { color: var(--teal); } .neg { color: var(--coral); }
+  .msg { padding: 11px 13px; border-radius: 10px; font-size: 13px; margin-bottom: 12px; border: 1px solid var(--border-light); background: var(--panel-3); }
+  .msg.err { border-color: var(--coral); color: var(--coral); }
+  .strike-row { display: grid; grid-template-columns: 64px 1fr 84px; gap: 8px; align-items: center; font-size: 11.5px; margin: 2px 0; font-variant-numeric: tabular-nums; }
+  .strike-row.spot { background: rgba(240,180,41,.12); border-radius: 4px; }
+  .track { position: relative; height: 12px; background: var(--panel-3); border-radius: 3px; }
+  .fill { position: absolute; top: 0; bottom: 0; border-radius: 3px; }
+  .mid { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--border-light); }
+  table.t { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.t td, table.t th { padding: 7px 6px; border-bottom: 1px solid var(--border); text-align: left; }
+  .muted { color: var(--text-muted); font-size: 12.5px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; } @media (max-width: 800px) { .two { grid-template-columns: 1fr; } }
+  textarea.g-in { width: 100%; min-height: 90px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  code { background: var(--panel-3); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+{% set active_page = 'gamma' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Gamma Center</h1>
+  <p>Free gamma-exposure (GEX) for ES, NQ and GC &mdash; the gamma flip, call/put walls and positive/negative-gamma regime from the video, computed from CBOE's public delayed option chains. No account, no key. Feed it into every strategy builder with the <code>gex_*</code> indicators and the gamma strategy families.</p>
+</div>
+
+<div class="g-tabs" id="tabs"></div>
+<div class="g-tabs">
+  <label class="muted" for="dte">Expirations up to</label>
+  <select id="dte" class="g-sel"><option value="0">0 DTE (today)</option><option value="1">1 day</option><option value="7" selected>7 days</option><option value="30">30 days</option><option value="all">All</option></select>
+  <button class="g-btn primary" id="load" type="button">Load live GEX</button>
+  <button class="g-btn" id="snap" type="button" disabled>Save today's levels for backtests</button>
+</div>
+<div id="msg"></div>
+<div id="out"></div>
+
+<div class="two">
+  <div class="g-card">
+    <h2>Data on this machine</h2>
+    <div id="status" class="muted">Loading&hellip;</div>
+    <p class="muted" style="margin-top:10px">Backtests use these saved daily levels with a one-day lag (a day's levels only apply to later days &mdash; no lookahead). Days without a saved level fall back to a labelled prior-day proxy, so nothing ever fails for lack of data. Save a snapshot each trading day to build your own history, or import one below.</p>
+    <button class="g-btn" id="hist" type="button">Download free daily GEX history (SqueezeMetrics, SPX)</button>
+  </div>
+  <div class="g-card">
+    <h2>Import levels from any source</h2>
+    <p class="muted">Paste CSV from ITMatrixHQ, Barchart, SpotGamma or your own sheet. Needs a <code>date</code> column plus any of <code>gamma_flip, call_wall, put_wall, net_gex, spot</code>.</p>
+    <textarea id="csv" class="g-in" placeholder="date,gamma_flip,call_wall,put_wall,spot&#10;2026-10-14,6720,6900,6600,6750"></textarea>
+    <div style="margin-top:8px"><button class="g-btn" id="imp" type="button">Import for selected instrument</button></div>
+  </div>
+</div>
+
+<div class="g-card">
+  <h2>What was added to the strategy builders</h2>
+  <p class="muted"><b>Indicators</b> (Search Lab, Evolution Lab, Manual builder, Cross-instrument, Research Loop): <code>gex_regime</code>, <code>gex_flip_distance</code>, <code>gex_call_wall_distance</code>, <code>gex_put_wall_distance</code>, <code>theta_clock</code>, <code>gamma_convexity</code>, <code>ema_stack_score</code>, <code>bull_flag_score</code>, <code>volume_expansion</code>.</p>
+  <p class="muted"><b>Families:</b> GEX wall fade, GEX flip trend, GEX flip reclaim, negative-gamma breakout, positive-gamma pin fade, gamma convexity momentum, EMA stack + flag + volume, call/put wall breakout.</p>
+  <p class="muted"><b>Honest limits:</b> CBOE's free feed is delayed ~15 minutes and only describes today; ES maps to the SPX chain, NQ to NDX, GC to the GLD ETF. There is no free per-strike history, so older days use the proxy unless you saved or imported levels.</p>
+</div>
+</div></div>
+
+<script>
+(function () {
+  'use strict';
+  var inst = 'ES', last = null;
+  var INSTS = [['ES', 'ES · S&P 500'], ['NQ', 'NQ · Nasdaq 100'], ['GC', 'GC · Gold']];
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function money(n) { var a = Math.abs(n), u = a >= 1e9 ? [1e9, 'B'] : a >= 1e6 ? [1e6, 'M'] : a >= 1e3 ? [1e3, 'K'] : [1, '']; return (n < 0 ? '-$' : '$') + (a / u[0]).toFixed(a / u[0] >= 100 ? 0 : 1) + u[1]; }
+  function msg(text, err) { var m = document.getElementById('msg'); m.textContent = ''; if (text) { var d = el('div', 'msg' + (err ? ' err' : ''), text); m.appendChild(d); } }
+  function post(url, body) { return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }).then(function (r) { return r.json(); }); }
+
+  function tabs() {
+    var box = document.getElementById('tabs'); box.textContent = '';
+    INSTS.forEach(function (i) { var b = el('button', 'g-tab' + (inst === i[0] ? ' active' : ''), i[1]); b.type = 'button'; b.addEventListener('click', function () { inst = i[0]; last = null; document.getElementById('out').textContent = ''; document.getElementById('snap').disabled = true; tabs(); }); box.appendChild(b); });
+  }
+  function kpi(label, value, sub, metric, cls) {
+    var k = el('div', 'kpi'); k.appendChild(el('div', 'lab', label)); var v = el('div', 'v ' + (cls || ''), value);
+    if (metric) { v.setAttribute('data-metric', metric); v.setAttribute('data-metric-value', value); v.setAttribute('role', 'button'); v.setAttribute('tabindex', '0'); }
+    k.appendChild(v); if (sub) k.appendChild(el('div', 's', sub)); return k;
+  }
+  function render(g) {
+    var out = document.getElementById('out'); out.textContent = '';
+    var wrap = el('div', 'kpis');
+    wrap.appendChild(kpi('Spot (' + g.symbol + ')', g.spot.toLocaleString(), g.as_of));
+    wrap.appendChild(kpi('Net GEX / 1% move', money(g.net_gex), g.regime === 'positive' ? 'positive gamma: moves dampened' : 'negative gamma: moves amplified', 'net_gex', g.regime === 'positive' ? 'pos' : 'neg'));
+    wrap.appendChild(kpi('Gamma flip', g.gamma_flip == null ? '--' : g.gamma_flip.toLocaleString(), g.gamma_flip == null ? 'no sign change in window' : (g.spot >= g.gamma_flip ? 'spot above' : 'spot below'), 'gamma_flip'));
+    wrap.appendChild(kpi('Call wall', g.call_wall == null ? '--' : g.call_wall.toLocaleString(), 'gamma resistance', 'call_wall'));
+    wrap.appendChild(kpi('Put wall', g.put_wall == null ? '--' : g.put_wall.toLocaleString(), 'gamma support', 'put_wall'));
+    wrap.appendChild(kpi('Put/Call OI', g.put_call_oi_ratio == null ? '--' : String(g.put_call_oi_ratio), 'open interest ratio'));
+    out.appendChild(wrap);
+    var card = el('div', 'g-card'); card.appendChild(el('h2', null, 'Net gamma by strike (calls +, puts −)'));
+    var mx = Math.max.apply(null, g.strikes.map(function (s) { return Math.abs(s.net_gex); })) || 1, near = null;
+    g.strikes.forEach(function (s) { if (near === null || Math.abs(s.strike - g.spot) < Math.abs(near - g.spot)) near = s.strike; });
+    g.strikes.slice().reverse().forEach(function (s) {
+      var r = el('div', 'strike-row' + (s.strike === near ? ' spot' : '')); r.appendChild(el('div', null, String(s.strike)));
+      var tr = el('div', 'track'); tr.appendChild(el('div', 'mid')); var f = el('div', 'fill'); f.style.width = (Math.abs(s.net_gex) / mx * 50) + '%'; f.style.background = s.net_gex >= 0 ? '#35e0b0' : '#ff6f6f'; f.style[s.net_gex >= 0 ? 'left' : 'right'] = '50%'; tr.appendChild(f); r.appendChild(tr);
+      r.appendChild(el('div', s.net_gex >= 0 ? 'pos' : 'neg', money(s.net_gex))); card.appendChild(r);
+    });
+    out.appendChild(card);
+    var c2 = el('div', 'g-card'); c2.appendChild(el('h2', null, 'Largest gamma levels')); var t = el('table', 't');
+    g.top_levels.forEach(function (l) { var tr = el('tr'); tr.appendChild(el('td', null, String(l.strike))); tr.appendChild(el('td', l.net_gex >= 0 ? 'pos' : 'neg', money(l.net_gex))); tr.appendChild(el('td', null, l.kind)); t.appendChild(tr); });
+    c2.appendChild(t); (g.notes || []).forEach(function (n) { c2.appendChild(el('p', 'muted', n)); }); out.appendChild(c2);
+  }
+  function status() {
+    fetch('/api/gamma/status').then(function (r) { return r.json(); }).then(function (d) {
+      var box = document.getElementById('status'); box.textContent = '';
+      Object.keys(d.instruments).forEach(function (k) { var i = d.instruments[k]; box.appendChild(el('div', null, k + ': ' + (i.rows ? i.rows + ' saved day(s), ' + i.first + ' → ' + i.last : 'no saved levels yet'))); });
+      box.appendChild(el('div', null, 'SqueezeMetrics daily GEX history: ' + (d.history_rows ? d.history_rows + ' rows' : 'not downloaded')));
+    }).catch(function () {});
+  }
+  document.getElementById('load').addEventListener('click', function () {
+    var b = this; b.disabled = true; msg('Downloading the option chain from CBOE…');
+    fetch('/api/gamma/live/' + inst + '?dte=' + encodeURIComponent(document.getElementById('dte').value)).then(function (r) { return r.json(); }).then(function (d) {
+      b.disabled = false; if (!d.ok) { msg(d.error, true); return; } msg(''); last = d.gex; render(d.gex); document.getElementById('snap').disabled = false;
+    }).catch(function (e) { b.disabled = false; msg('Network error: ' + e, true); });
+  });
+  document.getElementById('snap').addEventListener('click', function () { post('/api/gamma/snapshot/' + inst).then(function (d) { msg(d.ok ? 'Saved today\'s ' + inst + ' levels for backtests.' : d.error, !d.ok); status(); }); });
+  document.getElementById('imp').addEventListener('click', function () { post('/api/gamma/import/' + inst, { csv: document.getElementById('csv').value }).then(function (d) { msg(d.ok ? 'Imported ' + d.imported + ' day(s) for ' + inst + '.' : d.error, !d.ok); status(); }); });
+  document.getElementById('hist').addEventListener('click', function () { msg('Downloading…'); post('/api/gamma/history/refresh').then(function (d) { msg(d.ok ? 'Downloaded ' + d.rows + ' days (' + d.first + ' → ' + d.last + ').' : d.error, !d.ok); status(); }); });
+  tabs(); status();
+})();
+</script>
+</body>
+</html>

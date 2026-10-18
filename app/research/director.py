@@ -119,10 +119,10 @@ _SESSION_KINDS = {
     "time_of_day", "session_high", "session_low", "previous_day_high",
     "previous_day_low", "previous_day_close", "opening_range_high", "opening_range_low",
 }
-_REGIME_KINDS = {"atr_regime", "volatility_regime"}
+_REGIME_KINDS = {"atr_regime", "volatility_regime", "gex_regime", "gex_flip_distance"}
 _CONFIRMATION_KINDS = {
     "candle_direction", "rsi", "macd", "macd_signal", "macd_histogram",
-    "relative_volume", "volume_delta", "average_volume",
+    "relative_volume", "volume_delta", "average_volume", "volume_expansion",
 }
 
 

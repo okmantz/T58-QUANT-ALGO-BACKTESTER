@@ -43,6 +43,12 @@
   <a href="/dashboard" class="t58-nav-item top-level {{ 'active' if active_page == 'dashboard' else '' }}">
     <span class="t58-nav-icon">&#8962;</span><span class="label">Dashboard</span>
   </a>
+  <a href="/journal" class="t58-nav-item top-level {{ 'active' if active_page == 'journal' else '' }}">
+    <span class="t58-nav-icon">&#9998;</span><span class="label">Trading Journal</span>
+  </a>
+  <a href="/gamma" class="t58-nav-item top-level {{ 'active' if active_page == 'gamma' else '' }}">
+    <span class="t58-nav-icon">&#947;</span><span class="label">Gamma Center</span>
+  </a>
 
   <!-- Running-now: live jobs you can jump back into. Populated by polling
        /api/running-jobs.json; hidden entirely when nothing is running. -->
@@ -96,6 +102,10 @@
   })();
   </script>
 
+  <a href="/runs" class="t58-nav-item top-level {{ 'active' if active_page == 'runs' else '' }}">
+    <span class="t58-nav-icon">&#9654;</span><span class="label">Runs</span>
+  </a>
+
   <a href="/assistant" class="t58-nav-item top-level {{ 'active' if active_page == 'ai_assistant' else '' }}">
     <span class="t58-nav-icon">&#9737;</span><span class="label">AI Assistant</span>
   </a>
@@ -103,6 +113,7 @@
   <a href="/mobile-access" class="t58-nav-item top-level {{ 'active' if active_page == 'mobile_access' else '' }}">
     <span class="t58-nav-icon">&#128241;</span><span class="label">Mobile Access</span>
   </a>
+  <div id="t58-install-slot"></div>
 
   <a href="/user-manual" class="t58-nav-item top-level {{ 'active' if active_page == 'user_manual' else '' }}">
     <span class="t58-nav-icon">&#128214;</span><span class="label">User Manual</span>
@@ -255,6 +266,8 @@
 </div>
 
 <script src="/static/t58-chrome.js" defer></script>
+<script src="/static/t58-pwa.js" defer></script>
+<script src="/static/t58-runs.js" defer></script>
 <script src="/static/csv-export.js" defer></script>
 <script src="/static/api-source.js" defer></script>
 

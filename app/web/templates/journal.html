@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Trading Journal — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<style>
+  * { box-sizing: border-box; }
+  .j-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+  .j-tab { padding: 9px 14px; border-radius: 9px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text-muted); font-size: 13px; font-weight: 600; cursor: pointer; }
+  .j-tab.active { background: var(--amber); color: #1a1205; border-color: var(--amber); }
+  .j-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .j-card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin: 0 0 10px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .kpi { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+  .kpi .lab { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); }
+  .kpi .v { font-size: 24px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .kpi .s { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; }
+  .pos { color: var(--teal); } .neg { color: var(--coral); }
+  .grid2 { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; }
+  @media (max-width: 800px) { .grid2 { grid-template-columns: 1fr; } }
+  .j-input, .j-sel, .j-area { width: 100%; padding: 10px 11px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 14px; }
+  .j-area { min-height: 70px; resize: vertical; }
+  .j-btn { padding: 10px 14px; border-radius: 9px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-weight: 600; font-size: 13px; cursor: pointer; }
+  .j-btn.primary { background: var(--amber); color: #1a1205; border-color: var(--amber); }
+  .j-btn.danger { color: var(--coral); }
+  .j-btn.sm { padding: 5px 9px; font-size: 12px; }
+  .frow { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .frow label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+  table.tl { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.tl th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); padding: 8px 6px; border-bottom: 1px solid var(--border); }
+  table.tl td { padding: 9px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 999px; font-size: 11.5px; border: 1px solid var(--border-light); margin: 2px 3px 2px 0; cursor: pointer; background: var(--panel-3); color: var(--text); }
+  .chip i { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
+  .chip.on { border-color: var(--amber); background: rgba(240,180,41,.14); }
+  .pb-sec { background: var(--panel-3); border: 1px solid var(--border); border-radius: 10px; padding: 10px; margin: 10px 0; }
+  .pb-sec h4 { margin: 0 0 8px; font-size: 12px; letter-spacing: .07em; }
+  .rule-row { display: flex; gap: 8px; margin-bottom: 6px; align-items: center; }
+  .check-row { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; margin: 5px 0; }
+  .tag-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+  .tagrow { display: flex; gap: 8px; align-items: center; margin-bottom: 7px; }
+  .tagrow input[type=color] { width: 30px; height: 30px; padding: 0; border: 0; background: none; cursor: pointer; }
+  .empty { color: var(--text-muted); padding: 16px 4px; font-size: 13px; }
+  .bar-row { display: grid; grid-template-columns: 38% 1fr 70px; gap: 8px; align-items: center; font-size: 12px; margin: 4px 0; }
+  .bar-track { height: 14px; background: var(--panel-3); border-radius: 4px; position: relative; }
+  .bar-fill { position: absolute; top: 0; bottom: 0; border-radius: 4px; }
+  .modal-back { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 9000; display: none; align-items: flex-start; justify-content: center; padding: 20px 12px; overflow: auto; }
+  .modal-back.show { display: flex; }
+  .modal { width: min(760px, 100%); background: var(--panel-2); border: 1px solid var(--border-light); border-radius: 14px; padding: 18px; }
+  .row-actions { white-space: nowrap; }
+  .preload-note { font-size: 12px; color: var(--text-muted); margin-bottom: 10px; }
+</style>
+</head>
+<body>
+{% set active_page = 'journal' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Trading Journal</h1>
+  <p>Log every trade against your playbook, tag it, and see exactly which setups, windows and instruments make or lose you money. Your M15 Pro Trend playbook and tag taxonomy are preloaded; everything is editable and saved on this machine.</p>
+</div>
+
+<div class="j-tabs" id="tabs"></div>
+<div id="view"></div>
+
+<div class="modal-back" id="modal-back"><div class="modal" id="modal"></div></div>
+</div></div>
+
+<script>
+(function () {
+  'use strict';
+  var S = { settings: null, trades: [], stats: null, tab: 'overview', editing: null };
+  var TABS = [['overview', 'Overview'], ['log', 'Trade Log'], ['playbooks', 'Playbooks'], ['tags', 'Tags'], ['analytics', 'Analytics']];
+  var PALETTE = ['#E8A33D', '#3FD1A0', '#5B9BD5', '#B285E0', '#E07BA6', '#E0913D', '#F0616D', '#4FC3D9', '#8FCB4A', '#9AA3B2'];
+  var view = document.getElementById('view');
+
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function uid() { return Math.random().toString(36).slice(2, 10); }
+  function money(n, signed) { if (n == null) return '--'; var a = Math.abs(n), s = '$' + a.toLocaleString(undefined, { maximumFractionDigits: 2, minimumFractionDigits: a % 1 ? 2 : 0 }); return n < 0 ? '-' + s : (signed && n > 0 ? '+' + s : s); }
+  function api(method, url, body) {
+    return fetch(url, { method: method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }).then(function (r) { return r.json(); });
+  }
+  function load() {
+    return fetch('/api/journal').then(function (r) { return r.json(); }).then(function (d) { S.settings = d.settings; S.trades = d.trades; S.stats = d.stats; render(); });
+  }
+  var saveTimer = null;
+  function saveSettings() { clearTimeout(saveTimer); saveTimer = setTimeout(function () { api('PUT', '/api/journal/settings', S.settings); }, 450); }
+  function tagMap() { var m = {}; S.settings.tagGroups.forEach(function (g) { g.items.forEach(function (i) { m[i.id] = { name: i.name, color: i.color, group: g.name }; }); }); return m; }
+  function playbookById(id) { return S.settings.playbooks.filter(function (p) { return p.id === id; })[0]; }
+
+  function renderTabs() {
+    var box = document.getElementById('tabs'); box.textContent = '';
+    TABS.forEach(function (t) { var b = el('button', 'j-tab' + (S.tab === t[0] ? ' active' : ''), t[1]); b.type = 'button'; b.addEventListener('click', function () { S.tab = t[0]; render(); }); box.appendChild(b); });
+  }
+
+  /* ---------- KPI cards (clickable metrics) ---------- */
+  function kpi(label, value, sub, metric, cls, values) {
+    var k = el('div', 'kpi'); var l = el('div', 'lab', label); k.appendChild(l);
+    var v = el('div', 'v ' + (cls || ''), value);
+    if (metric) { v.setAttribute('data-metric', metric); v.setAttribute('data-metric-value', value); v.setAttribute('role', 'button'); v.setAttribute('tabindex', '0'); if (values) v.setAttribute('data-metric-values', JSON.stringify(values)); }
+    k.appendChild(v); if (sub) k.appendChild(el('div', 's', sub)); return k;
+  }
+  function kpis() {
+    var s = S.stats, wrap = el('div', 'kpis');
+    wrap.appendChild(kpi('Total P&L', money(s.total_pnl, true), s.trades + ' trades logged', 'net_profit', s.total_pnl >= 0 ? 'pos' : 'neg', { 'Sum of every trade P&L': money(s.total_pnl), 'Trades': s.trades }));
+    wrap.appendChild(kpi('Win rate', s.win_rate + '%', s.wins + 'W / ' + s.losses + 'L / ' + s.breakeven + 'BE', 'win_rate', '', { 'Winning trades': s.wins, 'All trades': s.trades }));
+    var pf = s.profit_factor_infinite ? '∞' : (s.profit_factor == null ? '--' : s.profit_factor.toFixed(2));
+    wrap.appendChild(kpi('Profit factor', pf, null, 'profit_factor', '', { 'Gross profit': money(s.gross_profit), 'Gross loss': money(s.gross_loss) }));
+    wrap.appendChild(kpi('Avg realized R', s.avg_r == null ? '--' : s.avg_r.toFixed(2) + 'R', s.r_trades + ' trades with risk set', 'expectancy', '', { 'Trades with risk amount': s.r_trades, 'Average of P&L ÷ risk': s.avg_r == null ? '--' : s.avg_r.toFixed(2) + 'R' }));
+    wrap.appendChild(kpi('Avg win', money(s.avg_win), null, 'avg_win', 'pos', { 'Gross profit': money(s.gross_profit), 'Winning trades': s.wins }));
+    wrap.appendChild(kpi('Avg loss', money(s.avg_loss), null, 'avg_loss', 'neg', { 'Gross loss': money(s.gross_loss), 'Losing trades': s.losses }));
+    wrap.appendChild(kpi('Max drawdown', money(-s.max_drawdown), s.max_drawdown_pct + '% of peak equity', 'max_drawdown', 'neg', { 'Starting balance': money(s.starting_balance), 'Deepest peak-to-trough': money(s.max_drawdown), 'As % of peak': s.max_drawdown_pct + '%' }));
+    if (s.avg_compliance != null) wrap.appendChild(kpi('Playbook compliance', s.avg_compliance + '%', 'avg checklist completion', null, ''));
+    return wrap;
+  }
+
+  /* ---------- charts ---------- */
+  function lineChart(curve) {
+    var ns = 'http://www.w3.org/2000/svg', w = 640, h = 220, p = 28;
+    var svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h); svg.setAttribute('width', '100%');
+    if (!curve.length) { var t = document.createElementNS(ns, 'text'); t.setAttribute('x', 20); t.setAttribute('y', 40); t.setAttribute('fill', '#8a93a6'); t.textContent = 'Log trades to see your equity curve.'; svg.appendChild(t); return svg; }
+    var vals = [0].concat(curve.map(function (c) { return c.cum_pnl; })), mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals), rg = (mx - mn) || 1;
+    var pts = vals.map(function (v, i) { return (p + i / Math.max(1, vals.length - 1) * (w - 2 * p)).toFixed(1) + ',' + (h - p - (v - mn) / rg * (h - 2 * p)).toFixed(1); }).join(' ');
+    var zero = h - p - (0 - mn) / rg * (h - 2 * p);
+    var z = document.createElementNS(ns, 'line'); z.setAttribute('x1', p); z.setAttribute('x2', w - p); z.setAttribute('y1', zero); z.setAttribute('y2', zero); z.setAttribute('stroke', '#2a3242'); z.setAttribute('stroke-dasharray', '4 4'); svg.appendChild(z);
+    var pl = document.createElementNS(ns, 'polyline'); pl.setAttribute('points', pts); pl.setAttribute('fill', 'none'); pl.setAttribute('stroke', '#E8A33D'); pl.setAttribute('stroke-width', '2.5'); pl.setAttribute('stroke-linejoin', 'round'); svg.appendChild(pl);
+    [[mx, p + 4], [mn, h - p]].forEach(function (a) { var t2 = document.createElementNS(ns, 'text'); t2.setAttribute('x', 2); t2.setAttribute('y', a[1] + 4); t2.setAttribute('fill', '#8a93a6'); t2.setAttribute('font-size', '10'); t2.textContent = money(a[0]); svg.appendChild(t2); });
+    return svg;
+  }
+  function donut(s) {
+    var ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', '0 0 120 120'); svg.setAttribute('width', '170');
+    var tot = s.trades || 1, parts = [[s.wins, '#3FD1A0'], [s.losses, '#F0616D'], [s.breakeven, '#9AA3B2']], off = 0, r = 44, C = 2 * Math.PI * r;
+    parts.forEach(function (pt) { var len = pt[0] / tot * C, c = document.createElementNS(ns, 'circle'); c.setAttribute('cx', 60); c.setAttribute('cy', 60); c.setAttribute('r', r); c.setAttribute('fill', 'none'); c.setAttribute('stroke', pt[1]); c.setAttribute('stroke-width', 16); c.setAttribute('stroke-dasharray', len + ' ' + (C - len)); c.setAttribute('stroke-dashoffset', -off); c.setAttribute('transform', 'rotate(-90 60 60)'); svg.appendChild(c); off += len; });
+    return svg;
+  }
+  function tagBars(rows) {
+    var box = el('div'); if (!rows.length) { box.appendChild(el('div', 'empty', 'Tag your trades to see P&L by tag.')); return box; }
+    var mx = Math.max.apply(null, rows.map(function (r) { return Math.abs(r.pnl); })) || 1;
+    rows.forEach(function (r) {
+      var row = el('div', 'bar-row'); row.appendChild(el('div', null, r.tag + ' (' + r.trades + ')'));
+      var tr = el('div', 'bar-track'), f = el('div', 'bar-fill'); var w = Math.abs(r.pnl) / mx * 50; f.style.width = w + '%'; f.style.background = r.pnl >= 0 ? '#3FD1A0' : '#F0616D'; f.style[r.pnl >= 0 ? 'left' : 'right'] = '50%'; tr.appendChild(f); row.appendChild(tr);
+      row.appendChild(el('div', r.pnl >= 0 ? 'pos' : 'neg', money(r.pnl, true))); box.appendChild(row);
+    });
+    return box;
+  }
+
+  /* ---------- views ---------- */
+  function viewOverview() {
+    view.appendChild(kpis());
+    var g = el('div', 'grid2'), c1 = el('div', 'j-card'), c2 = el('div', 'j-card');
+    c1.appendChild(el('h2', null, 'Profitability over time')); c1.appendChild(lineChart(S.stats.curve));
+    c2.appendChild(el('h2', null, 'Win / loss split')); c2.appendChild(donut(S.stats)); g.appendChild(c1); g.appendChild(c2); view.appendChild(g);
+    var b = el('button', 'j-btn primary', '+ Log a trade'); b.type = 'button'; b.addEventListener('click', function () { openTrade(null); }); view.appendChild(b);
+  }
+  function viewAnalytics() {
+    view.appendChild(kpis());
+    var g = el('div', 'grid2'), c1 = el('div', 'j-card'), c2 = el('div', 'j-card');
+    c1.appendChild(el('h2', null, 'Profitability over time')); c1.appendChild(lineChart(S.stats.curve));
+    c2.appendChild(el('h2', null, 'Win / loss split')); c2.appendChild(donut(S.stats));
+    var lg = el('div'); lg.style.fontSize = '12px'; lg.textContent = S.stats.wins + ' wins · ' + S.stats.losses + ' losses · ' + S.stats.breakeven + ' breakeven'; c2.appendChild(lg);
+    g.appendChild(c1); g.appendChild(c2); view.appendChild(g);
+    var c3 = el('div', 'j-card'); c3.appendChild(el('h2', null, 'P&L by tag')); c3.appendChild(tagBars(S.stats.pnl_by_tag)); view.appendChild(c3);
+  }
+  function viewLog() {
+    var top = el('div'); top.style.marginBottom = '12px';
+    var b = el('button', 'j-btn primary', '+ New trade'); b.type = 'button'; b.addEventListener('click', function () { openTrade(null); }); top.appendChild(b); view.appendChild(top);
+    var card = el('div', 'j-card');
+    if (!S.trades.length) { card.appendChild(el('div', 'empty', 'No trades yet. Click "New trade" to log your first one against the playbook.')); view.appendChild(card); return; }
+    var tm = tagMap(), t = el('table', 'tl'), hd = el('tr');
+    ['Date', 'Instrument', 'Dir', 'Playbook / tags', 'Risk', 'P&L', 'R', 'Check', ''].forEach(function (h) { hd.appendChild(el('th', null, h)); }); t.appendChild(hd);
+    S.trades.slice().reverse().forEach(function (tr) {
+      var row = el('tr'); row.appendChild(el('td', null, tr.date)); row.appendChild(el('td', null, tr.instrument || '--')); row.appendChild(el('td', null, tr.direction));
+      var td = el('td'); var pb = playbookById(tr.playbookId); if (pb) td.appendChild(el('div', null, pb.title));
+      (tr.tags || []).forEach(function (id) { var m = tm[id]; if (!m) return; var c = el('span', 'chip'); var i = el('i'); i.style.background = m.color; c.appendChild(i); c.appendChild(document.createTextNode(m.name)); td.appendChild(c); });
+      row.appendChild(td); row.appendChild(el('td', null, tr.riskAmount ? money(tr.riskAmount) : '--'));
+      row.appendChild(el('td', tr.pnl >= 0 ? 'pos' : 'neg', money(tr.pnl, true))); row.appendChild(el('td', null, tr.riskAmount > 0 ? (tr.pnl / tr.riskAmount).toFixed(2) + 'R' : '--'));
+      row.appendChild(el('td', null, tr.compliancePct == null ? '--' : tr.compliancePct + '%'));
+      var act = el('td', 'row-actions'); var e = el('button', 'j-btn sm', 'Edit'); e.type = 'button'; e.addEventListener('click', function () { openTrade(tr); });
+      var d = el('button', 'j-btn sm danger', 'Delete'); d.type = 'button'; d.addEventListener('click', function () { if (confirm('Delete this trade?')) api('DELETE', '/api/journal/trades/' + tr.id).then(load); });
+      act.appendChild(e); act.appendChild(document.createTextNode(' ')); act.appendChild(d); row.appendChild(act); t.appendChild(row);
+    });
+    card.appendChild(t); view.appendChild(card);
+  }
+
+  function viewPlaybooks() {
+    var note = el('div', 'preload-note', 'Define the exact criteria for a valid setup. These become your trade-log checklists.'); view.appendChild(note);
+    var add = el('button', 'j-btn primary', '+ New playbook'); add.type = 'button'; add.addEventListener('click', function () { S.settings.playbooks.push({ id: uid(), title: 'New playbook', sections: [{ id: uid(), title: 'ENTRY CRITERIA', items: [] }] }); saveSettings(); render(); });
+    view.appendChild(add);
+    S.settings.playbooks.forEach(function (pb) {
+      var card = el('div', 'j-card'), title = el('input', 'j-input'); title.value = pb.title; title.style.fontWeight = '700'; title.addEventListener('input', function () { pb.title = title.value; saveSettings(); }); card.appendChild(title);
+      pb.sections.forEach(function (sec) {
+        var box = el('div', 'pb-sec'), st = el('input', 'j-input'); st.value = sec.title; st.style.fontWeight = '700'; st.style.letterSpacing = '.05em'; st.addEventListener('input', function () { sec.title = st.value; saveSettings(); }); box.appendChild(st);
+        sec.items.forEach(function (it) {
+          var r = el('div', 'rule-row'), inp = el('input', 'j-input'); inp.value = it.text; inp.addEventListener('input', function () { it.text = inp.value; saveSettings(); });
+          var x = el('button', 'j-btn sm', '×'); x.type = 'button'; x.addEventListener('click', function () { sec.items = sec.items.filter(function (z) { return z !== it; }); saveSettings(); render(); });
+          r.appendChild(inp); r.appendChild(x); box.appendChild(r);
+        });
+        var ar = el('button', 'j-btn sm', '+ Add rule'); ar.type = 'button'; ar.addEventListener('click', function () { sec.items.push({ id: uid(), text: '' }); saveSettings(); render(); });
+        var ds = el('button', 'j-btn sm danger', 'Delete section'); ds.type = 'button'; ds.style.marginLeft = '8px'; ds.addEventListener('click', function () { pb.sections = pb.sections.filter(function (z) { return z !== sec; }); saveSettings(); render(); });
+        box.appendChild(ar); box.appendChild(ds); card.appendChild(box);
+      });
+      var as = el('button', 'j-btn sm', '+ Add section'); as.type = 'button'; as.addEventListener('click', function () { pb.sections.push({ id: uid(), title: 'NEW SECTION', items: [] }); saveSettings(); render(); });
+      var dp = el('button', 'j-btn sm danger', 'Delete playbook'); dp.type = 'button'; dp.style.marginLeft = '8px'; dp.addEventListener('click', function () { if (confirm('Delete this playbook?')) { S.settings.playbooks = S.settings.playbooks.filter(function (z) { return z !== pb; }); saveSettings(); render(); } });
+      card.appendChild(as); card.appendChild(dp); view.appendChild(card);
+    });
+  }
+
+  function viewTags() {
+    var top = el('div'); top.style.marginBottom = '12px';
+    var n = el('button', 'j-btn primary', '+ New group'); n.type = 'button'; n.addEventListener('click', function () { S.settings.tagGroups.push({ id: uid(), name: 'New group', items: [] }); saveSettings(); render(); });
+    var rs = el('button', 'j-btn', 'Restore preloaded playbook + tags'); rs.type = 'button'; rs.style.marginLeft = '8px';
+    rs.addEventListener('click', function () { if (confirm('Replace your playbooks and tags with the preloaded set? Your trades are kept, but their tag links may no longer match.')) api('POST', '/api/journal/reset').then(load); });
+    top.appendChild(n); top.appendChild(rs); view.appendChild(top);
+    var grid = el('div', 'tag-grid');
+    S.settings.tagGroups.forEach(function (g) {
+      var card = el('div', 'j-card'), nm = el('input', 'j-input'); nm.value = g.name; nm.style.fontWeight = '700'; nm.addEventListener('input', function () { g.name = nm.value; saveSettings(); }); card.appendChild(nm); card.appendChild(el('div')).style.height = '8px';
+      g.items.forEach(function (it) {
+        var r = el('div', 'tagrow'), c = el('input'); c.type = 'color'; c.value = it.color; c.addEventListener('input', function () { it.color = c.value; saveSettings(); });
+        var inp = el('input', 'j-input'); inp.value = it.name; inp.addEventListener('input', function () { it.name = inp.value; saveSettings(); });
+        var x = el('button', 'j-btn sm', '×'); x.type = 'button'; x.addEventListener('click', function () { g.items = g.items.filter(function (z) { return z !== it; }); saveSettings(); render(); });
+        r.appendChild(c); r.appendChild(inp); r.appendChild(x); card.appendChild(r);
+      });
+      var at = el('button', 'j-btn sm', '+ Add tag'); at.type = 'button'; at.addEventListener('click', function () { g.items.push({ id: uid(), name: '', color: PALETTE[g.items.length % PALETTE.length] }); saveSettings(); render(); });
+      var dg = el('button', 'j-btn sm danger', 'Delete group'); dg.type = 'button'; dg.style.marginLeft = '8px'; dg.addEventListener('click', function () { if (confirm('Delete this group?')) { S.settings.tagGroups = S.settings.tagGroups.filter(function (z) { return z !== g; }); saveSettings(); render(); } });
+      card.appendChild(at); card.appendChild(dg); grid.appendChild(card);
+    });
+    view.appendChild(grid);
+  }
+
+  /* ---------- trade modal ---------- */
+  function openTrade(trade) {
+    var t = trade ? JSON.parse(JSON.stringify(trade)) : { id: null, date: new Date().toISOString().slice(0, 10), instrument: '', direction: 'long', playbookId: (S.settings.playbooks[0] || {}).id || null, checklist: {}, tags: [], entry: 0, stop: 0, tp: 0, riskAmount: 0, pnl: 0, notes: '' };
+    var back = document.getElementById('modal-back'), m = document.getElementById('modal'); m.textContent = ''; back.classList.add('show');
+    m.appendChild(el('h2', null, trade ? 'Edit trade' : 'New trade')).style.marginTop = '0';
+    function field(label, key, type, opts) {
+      var w = el('div'); w.appendChild(el('label', null, label)); var i;
+      if (type === 'select') { i = el('select', 'j-sel'); opts.forEach(function (o) { var op = el('option', null, o[1]); op.value = o[0]; i.appendChild(op); }); i.value = t[key] || ''; }
+      else { i = el('input', 'j-input'); i.type = type; i.value = t[key] == null ? '' : t[key]; if (type === 'number') i.step = 'any'; }
+      i.addEventListener('input', function () { t[key] = type === 'number' ? parseFloat(i.value) || 0 : i.value; if (key === 'playbookId') renderChecklist(); }); w.appendChild(i); return w;
+    }
+    var fr = el('div', 'frow');
+    fr.appendChild(field('Date', 'date', 'date')); fr.appendChild(field('Instrument', 'instrument', 'text'));
+    fr.appendChild(field('Direction', 'direction', 'select', [['long', 'Long'], ['short', 'Short']]));
+    fr.appendChild(field('Playbook', 'playbookId', 'select', [['', '— none —']].concat(S.settings.playbooks.map(function (p) { return [p.id, p.title]; }))));
+    fr.appendChild(field('Entry', 'entry', 'number')); fr.appendChild(field('Stop', 'stop', 'number')); fr.appendChild(field('Take profit', 'tp', 'number'));
+    fr.appendChild(field('Risk ($)', 'riskAmount', 'number')); fr.appendChild(field('P&L ($)', 'pnl', 'number')); m.appendChild(fr);
+    var chk = el('div'); m.appendChild(el('h3', null, 'Playbook checklist')); m.appendChild(chk);
+    function renderChecklist() {
+      chk.textContent = ''; var pb = playbookById(t.playbookId); if (!pb) { chk.appendChild(el('div', 'empty', 'Pick a playbook to get its checklist.')); return; }
+      pb.sections.forEach(function (sec) { chk.appendChild(el('h4', null, sec.title)).style.margin = '8px 0 2px'; sec.items.forEach(function (it) {
+        var r = el('label', 'check-row'), cb = el('input'); cb.type = 'checkbox'; cb.checked = !!t.checklist[it.id]; cb.addEventListener('change', function () { t.checklist[it.id] = cb.checked; }); r.appendChild(cb); r.appendChild(el('span', null, it.text)); chk.appendChild(r); }); });
+    }
+    renderChecklist();
+    m.appendChild(el('h3', null, 'Tags'));
+    S.settings.tagGroups.forEach(function (g) {
+      m.appendChild(el('div', 'preload-note', g.name)); var row = el('div');
+      g.items.forEach(function (it) { var c = el('span', 'chip' + (t.tags.indexOf(it.id) >= 0 ? ' on' : '')), i = el('i'); i.style.background = it.color; c.appendChild(i); c.appendChild(document.createTextNode(it.name));
+        c.addEventListener('click', function () { var ix = t.tags.indexOf(it.id); if (ix >= 0) t.tags.splice(ix, 1); else t.tags.push(it.id); c.classList.toggle('on'); }); row.appendChild(c); });
+      m.appendChild(row);
+    });
+    m.appendChild(el('h3', null, 'Notes')); var na = el('textarea', 'j-area'); na.value = t.notes || ''; na.addEventListener('input', function () { t.notes = na.value; }); m.appendChild(na);
+    var bar = el('div'); bar.style.marginTop = '14px';
+    var sv = el('button', 'j-btn primary', 'Save trade'); sv.type = 'button'; sv.addEventListener('click', function () { api('POST', '/api/journal/trades', t).then(function (d) { if (d.ok) { back.classList.remove('show'); load(); } else alert(d.error || 'Could not save'); }); });
+    var cx = el('button', 'j-btn', 'Cancel'); cx.type = 'button'; cx.style.marginLeft = '8px'; cx.addEventListener('click', function () { back.classList.remove('show'); });
+    bar.appendChild(sv); bar.appendChild(cx); m.appendChild(bar);
+  }
+  document.getElementById('modal-back').addEventListener('click', function (e) { if (e.target.id === 'modal-back') e.target.classList.remove('show'); });
+
+  function render() {
+    renderTabs(); view.textContent = '';
+    if (!S.settings) return;
+    ({ overview: viewOverview, log: viewLog, playbooks: viewPlaybooks, tags: viewTags, analytics: viewAnalytics })[S.tab]();
+  }
+  load();
+})();
+</script>
+</body>
+</html>

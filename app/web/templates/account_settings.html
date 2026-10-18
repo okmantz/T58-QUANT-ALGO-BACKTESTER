@@ -124,8 +124,14 @@
         confirms your key LOOKS correctly formatted.
       </p>
 
-      <label for="plan">Plan</label>
-      <input type="text" id="plan" name="plan" value="{{ subscription.plan }}" placeholder="e.g. T58 Trading Pro">
+      <label for="plan">Plan
+        {% if subscription.license_status == 'active' %}<span class="status-pill active" id="plan-active-pill">Active</span>{% endif %}
+      </label>
+      <select id="plan" name="plan" data-testid="subscription-plan">
+        {% for choice in plan_choices %}
+        <option value="{{ choice }}" {{ 'selected' if subscription.plan == choice else '' }}>{{ choice }}</option>
+        {% endfor %}
+      </select>
 
       <label for="license_key">License key</label>
       <input type="text" id="license_key" name="license_key" value="{{ subscription.license_key }}" placeholder="XXXX-XXXX-XXXX-XXXX">

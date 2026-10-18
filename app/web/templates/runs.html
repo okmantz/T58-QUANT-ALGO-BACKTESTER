@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Runs — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<style>
+  * { box-sizing: border-box; }
+  .runs-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .runs-card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin: 0 0 10px; }
+  .run-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 10px; border-radius: 10px; border: 1px solid var(--border);
+             background: var(--panel-3, var(--panel)); text-decoration: none; color: var(--text); margin-bottom: 8px; }
+  .run-row:hover { border-color: var(--teal); }
+  .run-main { min-width: 0; }
+  .run-tool { font-weight: 700; font-size: 14px; }
+  .run-sub { color: var(--text-muted); font-size: 12px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .run-state { white-space: nowrap; font-size: 12.5px; text-align: right; }
+  .run-state.live { color: var(--teal); } .run-state.err { color: var(--coral); } .run-state.done { color: var(--text-muted); }
+  .bar { height: 4px; background: var(--border); border-radius: 4px; margin-top: 6px; overflow: hidden; width: 120px; margin-left: auto; }
+  .bar > i { display: block; height: 100%; background: var(--teal); }
+  .empty { color: var(--text-muted); font-size: 13px; padding: 14px 4px; }
+</style>
+</head>
+<body>
+{% set active_page = 'runs' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Runs</h1>
+  <p>Every run &mdash; running or recently finished &mdash; in one place. Leaving a run's page never stops it; tap a row to jump back in.</p>
+</div>
+
+<div class="runs-card">
+  <h2>Running now <span id="n-running"></span></h2>
+  <div id="running"><div class="empty">Loading&hellip;</div></div>
+</div>
+<div class="runs-card">
+  <h2>Finished in the last 6 hours</h2>
+  <div id="recent"><div class="empty">Loading&hellip;</div></div>
+</div>
+</div>
+</div>
+<script>
+(function () {
+  function fmt(sec) { if (sec == null) return ''; sec = Math.floor(sec); if (sec < 60) return sec + 's'; if (sec < 3600) return Math.floor(sec/60) + 'm ' + (sec%60) + 's'; return Math.floor(sec/3600) + 'h ' + Math.floor((sec%3600)/60) + 'm'; }
+  function row(j) {
+    var a = document.createElement('a'); a.className = 'run-row'; a.href = j.page_url; a.setAttribute('data-job', j.job_id);
+    var m = document.createElement('div'); m.className = 'run-main';
+    var t = document.createElement('div'); t.className = 'run-tool'; t.textContent = j.tool; m.appendChild(t);
+    var s = document.createElement('div'); s.className = 'run-sub'; s.textContent = (j.instrument || 'no instrument') + (j.error ? ' — ' + j.error : ''); m.appendChild(s);
+    var st = document.createElement('div'); st.className = 'run-state ' + (j.done ? (j.error ? 'err' : 'done') : 'live');
+    st.textContent = j.done ? ((j.error ? 'Failed' : 'Finished') + ' · ' + fmt(j.elapsed_seconds)) : '● Running · ' + fmt(j.elapsed_seconds);
+    if (!j.done && j.progress != null) { var b = document.createElement('div'); b.className = 'bar'; var i = document.createElement('i'); i.style.width = Math.max(2, Math.min(100, j.progress)) + '%'; b.appendChild(i); st.appendChild(b); }
+    a.appendChild(m); a.appendChild(st); return a;
+  }
+  function fill(id, list, emptyText) {
+    var box = document.getElementById(id); box.textContent = '';
+    if (!list.length) { var e = document.createElement('div'); e.className = 'empty'; e.textContent = emptyText; box.appendChild(e); return; }
+    list.forEach(function (j) { box.appendChild(row(j)); });
+  }
+  function load() {
+    fetch('/api/running-jobs.json').then(function (r) { return r.json(); }).then(function (d) {
+      fill('running', d.running || [], 'Nothing is running. Start a run from Create, Optimize, Validate or the Evolution Lab.');
+      fill('recent', d.recent || [], 'No finished runs yet in this session.');
+      document.getElementById('n-running').textContent = (d.running || []).length ? '(' + d.running.length + ')' : '';
+    }).catch(function () {});
+  }
+  load(); setInterval(function () { if (!document.hidden) load(); }, 4000);
+  window.addEventListener('pageshow', function (e) { if (e.persisted) load(); });
+})();
+</script>
+</body>
+</html>

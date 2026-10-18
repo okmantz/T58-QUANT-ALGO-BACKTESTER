@@ -111,6 +111,40 @@ class JobManager:
         Must be idempotent; an exception in one is ignored."""
         self._reapers.append(fn)
 
+    def remove_reaper(self, fn: Callable[[], None]) -> None:
+        try:
+            self._reapers.remove(fn)
+        except ValueError:
+            pass
+
+    def track_external(self, *, tool: str, page_url: str, is_running: Callable[[], bool],
+                       instrument: str = "", **fields: Any) -> str:
+        """Mirrors a run that owns its own thread/state (Research Loop, Multi-Instrument
+        Evolution Lab, ...) into this manager, so it shows up in the "Running now" list,
+        the Runs page and the Activity feed exactly like every manager-native job -- and
+        so a person who clicked Back mid-run can always click straight back in.
+
+        ``is_running`` is polled whenever the feed is read (a reaper); the entry is closed
+        the first time it returns False or raises, and its reaper removes itself. Returns
+        the manager's own job id for the entry."""
+        job_id = self.create(tool=tool, instrument=instrument, page_url=page_url, external=True, **fields)
+
+        def _reap() -> None:
+            job = self.get(job_id)
+            if job is None or job.get("done"):
+                self.remove_reaper(_reap)
+                return
+            try:
+                alive = bool(is_running())
+            except Exception:  # noqa: BLE001 -- a broken probe must never keep a dead run "running"
+                alive = False
+            if not alive:
+                self.finish(job_id)
+                self.remove_reaper(_reap)
+
+        self.add_reaper(_reap)
+        return job_id
+
     def _run_reapers(self) -> None:
         for fn in list(self._reapers):
             try:

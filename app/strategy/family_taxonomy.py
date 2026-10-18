@@ -63,6 +63,7 @@ FAMILY_GROUPS: dict[str, str] = {
     "pullback": "A temporary counter-trend move inside a larger trend.",
     "statistical_arbitrage": "A relationship between two or more instruments.",
     "relative_strength": "One instrument is expected to outperform another.",
+    "gamma_exposure": "Options dealer hedging (gamma walls, the gamma flip, positive/negative gamma regimes) drives price.",
     "order_flow": "Real size (participation/imbalance) is actively pushing price, not just a price pattern.",
     # Not a single-strategy hypothesis like the others -- populated by
     # COMPOSING several families behind a live regime classifier (see
@@ -198,6 +199,15 @@ _SKELETON_TO_GROUP: dict[str, str] = {
     "efficiency_ratio_trend_pullback": "pullback",
     "donchian_channel_position_reversion": "mean_reversion",
     "fractal_strength_exhaustion_fade": "mean_reversion",
+    # -- v9 (2026-10-17): gamma-exposure families from app/search/families_v9.py --
+    "gex_wall_fade": "gamma_exposure",
+    "gex_flip_trend": "gamma_exposure",
+    "gex_flip_reclaim": "gamma_exposure",
+    "negative_gamma_breakout": "gamma_exposure",
+    "positive_gamma_pin_fade": "gamma_exposure",
+    "gamma_convexity_momentum": "gamma_exposure",
+    "ema_stack_bull_flag_volume": "trend_following",
+    "call_wall_breakout": "gamma_exposure",
 }
 
 # Path 2a: app.strategy.dna active_tags() -> canonical group. Checked in

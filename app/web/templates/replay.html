@@ -41,6 +41,14 @@
 <div class="error">{{ error }}</div>
 {% endif %}
 
+<div class="card" id="propsim-card">
+  <h2>Prop-firm evaluation simulator <span style="text-transform:none;letter-spacing:0;font-weight:400;">&mdash; a second, visual replay</span></h2>
+  <p style="font-size:13px;color:var(--text-muted);margin:0 0 10px;">Pick a firm's rules and a strategy's edge, then drag <b>risk per trade</b>. The profit-target bar, daily-loss and trailing-drawdown gauges, drawdown floor, remaining loss allowance, trading days, consistency progress and the pass / fail / payout odds all change instantly. Press Play to watch one attempt unfold day by day.</p>
+  <div id="propsim-host"></div>
+</div>
+<script src="/static/t58-propsim.js"></script>
+<script>window.addEventListener('DOMContentLoaded', function () { if (window.T58PropSim) T58PropSim.mount(document.getElementById('propsim-host')); });</script>
+
 <form method="post" action="/replay/prepare" enctype="multipart/form-data">
   <div class="card">
     <h2>1. Market Data</h2>
