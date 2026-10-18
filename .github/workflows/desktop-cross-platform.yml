@@ -38,7 +38,7 @@ jobs:
         include:
           - { os: windows-latest, label: Windows, platform: windows, exe: ".exe", symlinks: "" }
           - { os: macos-latest,   label: macOS,   platform: macos,   exe: "",     symlinks: "--follow-symlinks" }
-          - { os: ubuntu-latest,  label: Linux,   platform: linux,   exe: "",     symlinks: "--follow-symlinks" }
+          - { os: ubuntu-24.04,  label: Linux,   platform: linux,   exe: "",     symlinks: "--follow-symlinks" }
     defaults:
       run:
         shell: bash
@@ -97,7 +97,7 @@ jobs:
       - name: Create the zip + checksum
         run: python build_tools/package_release.py app --dist dist/T58-Quant-Algo-Backtester --out "$PACKAGE" --platform ${{ matrix.platform }} ${{ matrix.symlinks }}
       - name: Upload package
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: T58-Quant-Algo-Backtester-${{ matrix.label }}
           path: |

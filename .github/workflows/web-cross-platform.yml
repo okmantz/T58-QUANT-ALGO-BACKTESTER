@@ -38,7 +38,7 @@ permissions:
 jobs:
   test:
     name: full test suite (Linux)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
@@ -65,7 +65,7 @@ jobs:
         include:
           - { os: windows-latest, label: Windows, platform: windows, exe: ".exe", symlinks: "" }
           - { os: macos-latest,   label: macOS,   platform: macos,   exe: "",     symlinks: "--follow-symlinks" }
-          - { os: ubuntu-latest,  label: Linux,   platform: linux,   exe: "",     symlinks: "--follow-symlinks" }
+          - { os: ubuntu-24.04,  label: Linux,   platform: linux,   exe: "",     symlinks: "--follow-symlinks" }
     defaults:
       run:
         shell: bash
@@ -144,7 +144,7 @@ jobs:
         run: python build_tools/package_release.py app --dist dist/T58-Web-App --out "$PACKAGE" --platform ${{ matrix.platform }} ${{ matrix.symlinks }}
       - name: Upload package
         if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: T58-Web-App-${{ matrix.label }}
           path: |
