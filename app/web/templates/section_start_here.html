@@ -24,6 +24,11 @@
     color: var(--text); background: var(--panel-3); transition: border-color .15s;
   }
   .tool-card:hover { border-color: var(--accent, var(--teal)); }
+  .more-tools summary { cursor: pointer; list-style: none; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); font-weight: 700; margin: 0 0 10px; }
+  .more-tools summary::-webkit-details-marker { display: none; }
+  .more-tools summary::after { content: "\25BE"; margin-left: 8px; color: var(--accent, var(--teal)); }
+  .more-tools:not([open]) summary::after { content: "\25B8"; }
+  .more-tools .more-tools-sub { margin: 0 0 12px; font-size: 12.5px; color: var(--text-muted); }
   .tool-card .name { font-weight: 700; font-size: 13.5px; margin-bottom: 3px; }
   .tool-card .desc { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
 </style>
@@ -223,6 +228,21 @@
     {% endfor %}
   </div>
 </div>
+
+{% if more_tools %}
+<details class="card more-tools" style="max-width: none;"{% if section == 'create' %} open{% endif %}>
+  <summary><span>More tools</span></summary>
+  <p class="more-tools-sub">Power tools that also create strategies. They live here as well as under Optimize.</p>
+  <div class="tool-grid">
+    {% for t in more_tools %}
+    <a class="tool-card" href="{{ t.href }}">
+      <div class="name">{{ t.name }}</div>
+      <div class="desc">{{ t.desc }}</div>
+    </a>
+    {% endfor %}
+  </div>
+</details>
+{% endif %}
 
 </div>
 </div>

@@ -54,6 +54,9 @@
   <h2>Import folder</h2>
   <p style="color:var(--text-muted);font-size:12px;margin-top:-6px;">
     Drop a folder (or pick one) to import every dataset inside it -- subfolders included.
+    Instrument folders are kept: everything for one instrument (every timeframe) is filed together
+    under <b>data/raw/&lt;instrument&gt;/</b> and shows up under one header in every dataset dropdown.
+    Importing the <b>T58 Market Data</b> pack? Extract the zip, then drop the extracted folder (or its <b>data/raw</b> folder) here.
     Recognized types: <b>.csv, .tsv, .txt, .parquet</b> (anything else is skipped, never imported).
     Files upload <b>one at a time</b>, each under the <b>256MB per-file limit</b> -- there is no total size cap for the folder.
   </p>
