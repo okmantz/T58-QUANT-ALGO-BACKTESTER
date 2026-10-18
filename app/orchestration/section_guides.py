@@ -30,7 +30,8 @@ SECTION_GUIDES = {
             "Have a specific idea already? Build or edit it directly in the Strategy Library.",
             "Want an LLM to reason about market structure and propose ideas? Try Research Agent, Research "
             "Director, or the background Research Loop.",
-            "Once you have a survivor you like, send it to Search Lab or Evolution Lab (under Optimize) to "
+            "Want to breed new parameter sets instead of sampling a grid? Evolution Lab is under More tools "
+            "below (it is also under Optimize). Once you have a survivor you like, send it to Search Lab or Evolution Lab to "
             "sharpen its parameters, or straight to Full Pipeline for a validated verdict.",
         ],
         "primary_buttons": [{"label": "Forge Strategy", "href": "/forge"}, {"label": "Strategy Library", "href": "/library"}],
@@ -43,6 +44,17 @@ SECTION_GUIDES = {
             {"name": "Speed Run", "href": "/speed-run", "desc": "Faster, narrower single-pass version of Forge."},
             {"name": "Multi-Instrument Speed Run", "href": "/speed-run/multi-instrument", "desc": "Speed Run across several datasets at once."},
             {"name": "Strategy Library", "href": "/library", "desc": "Build, edit, or browse strategies directly."},
+        ],
+        # "More tools" (Oct 2026): power tools that also create strategies -- shown in a collapsible
+        # "More tools" block on the Create page (web) and Start Here card (desktop). Evolution Lab
+        # breeds brand-new parameter sets, so it belongs at the point where strategies are made as
+        # well as under Optimize, where it can sharpen an existing one. Kept OUT of "tools" on purpose
+        # so the main grid stays the eight everyday tools.
+        "more_tools": [
+            {"name": "Evolution Lab (GA)", "href": "/evolution",
+             "desc": "Genetic algorithm that evolves strategy parameter sets across generations."},
+            {"name": "Multi-Instrument Evolution Lab", "href": "/evolution/multi-instrument",
+             "desc": "Evolution Lab run across several instruments and timeframes at once."},
         ],
     },
     "test": {
@@ -186,6 +198,7 @@ DESKTOP_NAV_FOR_HREF = {
     "/forge": "forge", "/generate-strategies": "genstrat", "/research-agent": "researchagent",
     "/research": "researchdirector", "/research-loop": "researchloop", "/speed-run": "speedrun",
     "/speed-run/multi-instrument": "speedrunmulti", "/library": "stratlibrary",
+    "/evolution": "evolution", "/evolution/multi-instrument": "evolutionmulti",
     "/": "run", "/payout-probability": "payout", "/prop-firm-recommender": "propfirmrec",
     "/family-diversity": "familydiversity", "/portfolio": "portfolio", "/ensemble": "ensemble",
     "/overnight-autopilot": "autopilot_pointer", "/compare": "compare",
