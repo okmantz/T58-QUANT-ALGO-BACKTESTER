@@ -45,7 +45,7 @@ LAZY_THIRD_PARTY = [
     "sklearn", "sklearn.ensemble", "sklearn.linear_model", "sklearn.preprocessing",
     "sklearn.utils._typedefs", "sklearn.neighbors._partition_nodes",
     "scipy", "scipy.optimize", "scipy.stats", "scipy.special", "scipy.sparse",
-    "lightgbm", "optuna", "cma", "reportlab", "pypdf", "alpaca", "keyring",
+    "lightgbm", "optuna", "cma", "reportlab", "pypdf", "alpaca", "keyring", "psutil", "pynescript", "antlr4",
 ]
 
 # Packages with data files / native pieces / plugin loading that need the
