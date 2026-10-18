@@ -79,6 +79,8 @@ jobs:
           test -d dist/T58-Quant-Algo-Backtester/_internal || { echo "_internal missing"; exit 1; }
           du -sh dist/T58-Quant-Algo-Backtester
       - name: Smoke-test the FROZEN app (loads app.main from the bundle)
+        env:
+          PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
         run: python build_tools/frozen_smoke.py desktop "dist/T58-Quant-Algo-Backtester/T58-Quant-Algo-Backtester${{ matrix.exe }}" 240
       - name: Code-sign (Windows, optional)
         if: matrix.platform == 'windows'

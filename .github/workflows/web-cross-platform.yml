@@ -107,7 +107,13 @@ jobs:
           tests/web/test_validate_hub_links.py tests/ui/test_startup_speed_and_desktop_parity.py
           tests/web/test_cross_platform_web.py tests/web/test_start_here_sections.py
       - name: Start the real server from source and request every main page
-        run: python scripts/web_smoke_test.py
+        # No unlocked OS keychain on a CI runner (macOS especially): use the no-op keyring so nothing can block on a prompt.
+        # PYTHONFAULTHANDLER + the script's own timeout dump make any hang show WHERE it hung instead of "exit code 1".
+        env:
+          PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
+          PYTHONFAULTHANDLER: "1"
+          T58_DISABLE_MEMORY_WATCHDOG: "1"
+        run: python -X faulthandler scripts/web_smoke_test.py
 
       # ---- packaging (not on pull requests) ----
       - name: Bake license build config
@@ -124,6 +130,8 @@ jobs:
           du -sh dist/T58-Web-App
       - name: Smoke-test the FROZEN app (start it, request its pages)
         if: github.event_name != 'pull_request'
+        env:
+          PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
         run: python build_tools/frozen_smoke.py web "dist/T58-Web-App/T58-Web-App${{ matrix.exe }}" 240
       - name: Code-sign (Windows, optional)
         if: github.event_name != 'pull_request' && matrix.platform == 'windows'
