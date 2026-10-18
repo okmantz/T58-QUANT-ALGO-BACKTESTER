@@ -20,7 +20,7 @@ def _err(msg: str, code: int = 400):
 # ----------------------------------------------------------------- Gamma Center
 @v9_bp.route("/gamma")
 def gamma_page():
-    return render_template("gamma.html", active_page="gamma", instruments=gd.INSTRUMENT_MAP)
+    return render_template("gamma.html", active_page="quant_lab", instruments=gd.INSTRUMENT_MAP)
 
 
 @v9_bp.route("/api/gamma/status")

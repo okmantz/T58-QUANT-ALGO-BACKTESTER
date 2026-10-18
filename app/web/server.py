@@ -88,7 +88,7 @@ from app.web.accuracy_form import (
 def RiskConfig(*args, **kwargs):  # noqa: N802 -- request-aware drop-in: picks up sizing_mode etc. from the submitted form
     return _risk_from_request(_BaseRiskConfig, *args, **kwargs)
 
-from app.data import alpaca_credentials
+from app.data import alpaca_credentials, api_sources
 from app.data.alpaca_source import (
     ASSET_CLASSES, ADJUSTMENT_CHOICES, FEED_CHOICES, TIMEFRAME_LABELS,
     AlpacaFetchError, AlpacaImportError, fetch_bars, save_bars_as_csv,
@@ -521,24 +521,57 @@ _COMPRESSIBLE_MIMETYPES = frozenset({
     "application/json", "image/svg+xml", "application/manifest+json",
 })
 _COMPRESS_MIN_BYTES = 1024
+_STATIC_GZ: dict = {}
+_LONG_CACHE_EXT = (".png", ".ico", ".woff", ".woff2", ".jpg", ".jpeg", ".svg", ".webp")
 
 
 @app.after_request
 def _compress_response(resp):
     try:
-        if (resp.status_code != 200 or resp.direct_passthrough or resp.is_streamed
-                or "Content-Encoding" in resp.headers
+        if (resp.status_code != 200 or "Content-Encoding" in resp.headers
                 or resp.mimetype not in _COMPRESSIBLE_MIMETYPES
                 or "gzip" not in (request.headers.get("Accept-Encoding") or "").lower()):
+            return resp
+        if resp.direct_passthrough:
+            # Static files are streamed from disk (never compressed before). Small text assets are read once and cached.
+            if not (request.path or "").startswith("/static/") or resp.content_length is None or resp.content_length > 2_000_000:
+                return resp
+            resp.direct_passthrough = False
+        elif resp.is_streamed:
             return resp
         data = resp.get_data()
         if len(data) < _COMPRESS_MIN_BYTES:
             return resp
-        resp.set_data(_gzip.compress(data, compresslevel=5))
+        # 2026-10-18 (perf): static JS/CSS never changes between deploys, so compress each file once and reuse the bytes
+        # (keyed by path + ETag/size/mtime) instead of re-gzipping a 100-300 KB script on every page load.
+        sk = None
+        if (request.path or "").startswith("/static/"):
+            sk = (request.path, resp.headers.get("ETag") or resp.headers.get("Last-Modified") or len(data))
+            packed = _STATIC_GZ.get(sk)
+            if packed is None:
+                packed = _gzip.compress(data, compresslevel=6)
+                if len(_STATIC_GZ) >= 96:
+                    _STATIC_GZ.pop(next(iter(_STATIC_GZ)))
+                _STATIC_GZ[sk] = packed
+            resp.set_data(packed)
+        else:
+            resp.set_data(_gzip.compress(data, compresslevel=5))
         resp.headers["Content-Encoding"] = "gzip"
         resp.headers["Content-Length"] = str(len(resp.get_data()))
         resp.vary.add("Accept-Encoding")
     except Exception:  # noqa: BLE001 -- never break a page over an optimisation
+        pass
+    return resp
+
+
+@app.after_request
+def _static_cache_headers(resp):
+    """Icons / fonts / images under /static change essentially never: let the browser keep them for a day (JS/CSS keep
+    revalidating via ETag so a deploy is picked up immediately)."""
+    try:
+        if (request.path or "").startswith("/static/") and resp.status_code in (200, 304) and request.path.lower().endswith(_LONG_CACHE_EXT):
+            resp.headers["Cache-Control"] = "public, max-age=86400"
+    except Exception:  # noqa: BLE001
         pass
     return resp
 
@@ -585,6 +618,37 @@ def _csrf_check():
     # No Origin/Referer header at all: not a browser, can't be a forged
     # cross-site request -- allow (covers curl/scripts/API clients).
     return None
+
+@app.before_request
+def _resolve_provider_picks():
+    """"Use data from a provider" picks (value ``__api__:<provider>|<symbol>|<bar size>|<from>|<to>``) arrive in any
+    dataset field of any test, optimize or validation form. The page script normally swaps in the downloaded file's name
+    before submitting; this is the safety net for every other path (Detect-pip-size, AJAX job starts, API clients): the
+    data is downloaded (or a recent download reused) once, and every route below sees the saved file's name, exactly as
+    if it had been picked from the stored list. A pick that cannot be resolved is left as-is so the route can report why."""
+    if request.method != "POST" or request.mimetype not in ("application/x-www-form-urlencoded", "multipart/form-data"):
+        return None
+    try:
+        form = request.form
+        if not any(v.startswith("__api__:") for vs in form.listvalues() for v in vs):
+            return None
+        from werkzeug.datastructures import ImmutableMultiDict
+
+        done: dict[str, str] = {}
+        items = []
+        for key, values in form.lists():
+            for v in values:
+                if v.startswith("__api__:") and v not in done:
+                    try:
+                        done[v] = api_sources.resolve_token(v)["full_name"]
+                    except Exception:  # noqa: BLE001 -- leave the pick in place; _resolve_dataset reports the reason
+                        done[v] = v
+                items.append((key, done.get(v, v)))
+        request.__dict__["form"] = ImmutableMultiDict(items)
+    except Exception:  # noqa: BLE001 -- never break a request over a convenience
+        return None
+    return None
+
 
 # UPGRADE (licensing, web app): the desktop build has always gated behind
 # app.licensing.gate.ensure_licensed() (see app/main.py) -- this build,
@@ -1040,6 +1104,13 @@ def _resolve_dataset(form, files):
         active_label = f.filename
 
     if active_df is None and existing_choice:
+        # "Use data from a provider" (Alpaca, London Strategic Edge, ...): fetch it now (or reuse a recent download) and
+        # carry on exactly as if that saved file had been picked -- so every test, optimize and validation run can use it.
+        if api_sources.is_token(existing_choice):
+            try:
+                existing_choice = api_sources.resolve_token(existing_choice)["full_name"]
+            except Exception as exc:  # noqa: BLE001 -- provider/network/key problems become a readable message
+                return None, None, None, f"Could not get the data from the data provider: {exc}"
         # Read-side path-traversal fix (P0-7): resolve_stored_dataset
         # sanitizes + resolve-and-contains; a traversal payload yields
         # None ("no such dataset") instead of a read outside data/raw/.
@@ -1544,8 +1615,8 @@ def education():
 
 @app.route("/education/knowledge-check")
 def education_knowledge_check():
-    """The six-question knowledge check, on its own page (it used to be the last card of the Interactive labs tab)."""
-    return render_template("education_quiz.html", active_page="education_quiz")
+    """The knowledge check is the last module of the Education course, not a page of its own -- keep old bookmarks working."""
+    return redirect("/education#knowledge-check", code=301)
 
 
 @app.route("/user-manual")
@@ -1651,7 +1722,6 @@ def dashboard():
     return render_template(
         "dashboard.html",
         data=dashboard_stats,
-        dataset_groups=list_datasets_by_instrument(),
         current_strategy=current,
         current_metrics=current_metrics,
         checklist=checklist,
@@ -1714,7 +1784,7 @@ def _job_row(job: dict, now: float) -> dict:
 
 @app.route("/api/running-jobs.json")
 def api_running_jobs():
-    """Jobs still running, for the sidebar's "Running now" list and the floating runs pill -- so a user who clicked Back
+    """Jobs still running, for the Runs page -- so a user who clicked Back
     (or switched pages) mid-run can get straight back into a live job page instead of wondering whether it's gone.
     Only jobs that recorded a page_url at create() time are listed. ``recent`` carries the last few finished runs (last 6 h,
     the same window the job feed is pruned on) so a run that just finished can still be opened."""
@@ -7140,6 +7210,11 @@ def _resolve_leg_dataset(form, files, prefix: str):
         raise StrategyError(f"'{uploaded.filename}': {'; '.join(result.errors)}")
     existing_choice = (form.get(f"{prefix}_existing_dataset") or "").strip()
     if existing_choice:
+        if api_sources.is_token(existing_choice):
+            try:
+                existing_choice = api_sources.resolve_token(existing_choice)["full_name"]
+            except Exception as exc:  # noqa: BLE001
+                raise StrategyError(f"Leg '{prefix}': could not get the data from the data provider: {exc}") from exc
         # Read-side path-traversal fix (P0-7): see _resolve_dataset --
         # sanitize + resolve-and-contain; traversal yields None.
         candidate = resolve_stored_dataset(existing_choice)

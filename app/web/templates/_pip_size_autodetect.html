@@ -49,7 +49,8 @@
       return checked ? { kind: "dataset", value: checked.value } : null;
     }
     var sel = document.querySelector('select[name="existing_dataset"]');
-    if (sel && sel.value) return { kind: "dataset", value: sel.value };
+    // a data-provider pick with no instrument typed yet (value "__api__:alpaca") has nothing to detect from -- wait for it
+    if (sel && sel.value && !(sel.value.indexOf("__api__:") === 0 && sel.value.indexOf("|") < 0)) return { kind: "dataset", value: sel.value };
     var fi = document.querySelector('input[name="csv_file"]');
     if (fi && fi.files && fi.files.length) return { kind: "file" };
     return null;
@@ -133,8 +134,8 @@
 
   function bind() {
     if (MODE === "multi") {
-      var boxes = document.querySelectorAll('input[name="datasets"]');
-      for (var i = 0; i < boxes.length; i++) boxes[i].addEventListener("change", runAutoDetect);
+      // delegated, so checklist rows added later from a data provider also trigger detection
+      document.addEventListener("change", function (e) { if (e.target && e.target.name === "datasets") runAutoDetect(); });
     } else {
       var sel = document.querySelector('select[name="existing_dataset"]');
       if (sel) sel.addEventListener("change", runAutoDetect);

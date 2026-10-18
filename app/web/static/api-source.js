@@ -1,137 +1,383 @@
-/* Market-data dropdown + data providers.
+/* Market data from a data provider -- on every page that picks market data.
  *
- * Adds a "Download from a data provider" group to every <select name="existing_dataset">.
- * Pick a provider -> one compact row appears (instrument, bar size, dates, Download).
- * Download saves the bars into the data library using the key already saved on
- * Settings > API Keys, then selects the new file -- so the rest of the page just sees
- * an ordinary stored file. Pages without a provider pick cost no extra space.
+ * Every test, optimize and validation page lists the files in the data library. This adds the other way in: use data
+ * straight from a provider whose key is saved under Settings > API Keys (Alpaca, London Strategic Edge, Twelve Data,
+ * Polygon, Tiingo, Alpha Vantage, Databento) or one that needs no key (Dukascopy).
+ *
+ *  - Single pickers (<select name="existing_dataset">, "..._existing_dataset", "dataset_label", a one-market
+ *    <select name="datasets">): a "Data from a provider" group appears at the top of the list. Pick a provider, type the
+ *    instrument, bar size and dates, and press Run -- the bars are downloaded first (a recent identical download is
+ *    reused, so your API quota is not spent twice) and the run then uses that data. "Download now" previews it.
+ *  - Multi pickers (checkbox lists named "datasets", multi-selects "datasets" / "ds_datasets"): an "Add data from a
+ *    provider" panel takes one or more instruments (comma separated), downloads each and adds it, ticked, to the run.
+ *
+ * Downloads are saved into the data library like any imported file, so nothing downstream needs to know an API was
+ * involved -- and the server also understands the pick itself (value "__api__:provider|SYMBOL|bar|from|to"), which is
+ * the safety net for flows that never fire a normal submit.  Keys never reach the browser: the page only learns
+ * whether one is saved.
  */
 (function () {
   'use strict';
+  if (window.T58ApiSource) return;
+
   var PREFIX = '__api__:';
-  var cache = null;
+  var MEM_KEY = 't58-api-source-v2';
+  var providersPromise = null;
 
-  function getProviders() {
-    if (cache) return cache;
-    cache = fetch('/data/api/providers', { credentials: 'same-origin' })
-      .then(function (r) { return r.ok ? r.json() : { providers: [], timeframes: [] }; })
-      .catch(function () { return { providers: [], timeframes: [] }; });
-    return cache;
-  }
-
+  // ---------------------------------------------------------------- helpers
   function el(tag, attrs, text) {
     var e = document.createElement(tag);
-    Object.keys(attrs || {}).forEach(function (k) { e.setAttribute(k, attrs[k]); });
-    if (text) e.textContent = text;
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      if (k === 'style') e.style.cssText = attrs[k]; else e.setAttribute(k, attrs[k]);
+    });
+    if (text != null) e.textContent = text;
     return e;
   }
+  function makeToken(provider, symbol, tf, start, end) {
+    return PREFIX + [provider, (symbol || '').trim(), tf || '', start || '', end || ''].join('|');
+  }
+  function parseToken(v) {
+    v = v || '';
+    if (v.indexOf(PREFIX) !== 0) return null;
+    var p = v.slice(PREFIX.length).split('|');
+    return { provider: p[0] || '', symbol: (p[1] || '').trim(), tf: p[2] || '', start: p[3] || '', end: p[4] || '' };
+  }
+  function splitSymbols(text) {
+    return (text || '').split(/[\s,;]+/).map(function (s) { return s.trim(); }).filter(Boolean)
+      .filter(function (s, i, a) { return a.indexOf(s) === i; });
+  }
+  function mem() { try { return JSON.parse(localStorage.getItem(MEM_KEY) || '{}') || {}; } catch (e) { return {}; } }
+  function remember(patch) {
+    try { var m = mem(); Object.keys(patch).forEach(function (k) { m[k] = patch[k]; }); localStorage.setItem(MEM_KEY, JSON.stringify(m)); } catch (e) { /* private mode */ }
+  }
+  function getProviders() {
+    if (providersPromise) return providersPromise;
+    providersPromise = fetch('/data/api/providers', { credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : { providers: [] }; })
+      .catch(function () { return { providers: [] }; });
+    return providersPromise;
+  }
+  function fmtRange(res) {
+    return (res.rows || 0).toLocaleString() + ' bars, ' + String(res.first || '').slice(0, 10) + ' → ' + String(res.last || '').slice(0, 10) +
+      (res.cached ? ' (reused a recent download)' : '');
+  }
+  function fetchOne(provider, symbol, tf, start, end) {
+    return fetch('/data/api/fetch', {
+      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: provider, symbol: symbol, timeframe: tf, start: start || '', end: end || '' })
+    }).then(function (r) { return r.json().catch(function () { return { ok: false, error: 'Unexpected response from the server.' }; }); })
+      .then(function (res) { if (!res.ok) throw new Error(res.error || 'Download failed.'); return res; });
+  }
+  function injectStyle() {
+    if (document.getElementById('t58-api-style')) return;
+    var s = el('style', { id: 't58-api-style' });
+    s.textContent = [
+      '.t58-api-row{margin:8px 0 4px;padding:10px;border:1px solid var(--border-light,#2a3242);border-radius:10px;background:var(--panel-3,#161b22);',
+      '  display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;font-size:13px}',
+      '.t58-api-row[hidden]{display:none}',
+      '.t58-api-f{display:flex;flex-direction:column;gap:3px;min-width:0}',
+      '.t58-api-f>span{font-size:11px;color:var(--text-muted,#9aa4b2);text-transform:uppercase;letter-spacing:.04em}',
+      '.t58-api-row input,.t58-api-row select{margin:0!important;width:auto!important;min-width:0;padding:8px 9px!important;font-size:13px!important}',
+      '.t58-api-sym{width:190px!important}.t58-api-sym.wide{width:300px!important}',
+      '.t58-api-go{padding:9px 14px;border-radius:8px;border:1px solid var(--teal,#35e0b0);background:var(--teal,#35e0b0);color:var(--on-teal,#04120e);',
+      '  font-weight:700;font-size:13px;cursor:pointer;margin:0}',
+      '.t58-api-go:disabled{opacity:.55;cursor:progress}',
+      '.t58-api-go.ghost{background:none;color:var(--teal,#35e0b0)}',
+      '.t58-api-msg{flex:1 1 100%;font-size:12px;color:var(--text-muted,#9aa4b2);line-height:1.5}',
+      '.t58-api-msg.err{color:var(--coral,#ff7a7a)}.t58-api-msg.ok{color:var(--teal,#35e0b0)}',
+      '.t58-api-msg a{color:var(--teal,#35e0b0)}',
+      '.t58-api-note{margin:6px 0 2px;font-size:12px;color:var(--text-muted,#9aa4b2)}',
+      '.t58-api-note a{color:var(--teal,#35e0b0)}',
+      '.t58-api-multi{margin:10px 0 4px;border:1px dashed var(--border-light,#2a3242);border-radius:10px;padding:2px 10px 10px}',
+      '.t58-api-multi>summary{cursor:pointer;padding:8px 0;font-size:13px;font-weight:600;color:var(--teal,#35e0b0)}',
+      '.t58-api-added{margin:6px 0 0}',
+      '.t58-api-added .dataset-row{display:flex;gap:9px;align-items:flex-start;margin:0 0 4px;cursor:pointer}',
+      '.t58-api-added .dataset-row input{margin-top:3px}',
+      '.t58-api-added-h{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted,#9aa4b2);margin:8px 0 4px}'
+    ].join('\n');
+    document.head.appendChild(s);
+  }
 
-  function enhance(sel, info) {
-    if (sel.dataset.apiSource || !info.providers.length) return;
-    sel.dataset.apiSource = '1';
+  // ---------------------------------------------------------------- shared field row
+  function buildFields(info, opts) {
+    opts = opts || {};
+    var m = mem();
+    var f = {};
+    f.root = el('div', { 'class': 't58-api-row' });
+    function field(label, node) { var w = el('label', { 'class': 't58-api-f' }); w.appendChild(el('span', null, label)); w.appendChild(node); f.root.appendChild(w); return w; }
 
-    var group = el('optgroup', { label: 'Download from a data provider' });
-    var ready = info.providers.filter(function (p) { return p.ready; });
-    ready.forEach(function (p) { group.appendChild(el('option', { value: PREFIX + p.id }, '⬇ ' + p.label)); });
-    if (!ready.length) group.appendChild(el('option', { value: PREFIX + '_none' }, '⬇ Add a data-provider key in Settings › API Keys'));
-    sel.appendChild(group);
+    if (opts.pickProvider) {
+      f.provider = el('select', { 'aria-label': 'Data provider' });
+      info.providers.forEach(function (p) {
+        var o = el('option', { value: p.id }, p.label + (p.ready ? '' : ' — no key saved'));
+        if (!p.ready) o.disabled = true;
+        f.provider.appendChild(o);
+      });
+      var firstReady = info.providers.filter(function (p) { return p.ready; })[0];
+      var want = info.providers.filter(function (p) { return p.id === m.provider && p.ready; })[0] || firstReady;
+      if (want) f.provider.value = want.id;
+      field('Provider', f.provider);
+    }
+    f.symbol = el('input', { type: 'text', autocomplete: 'off', spellcheck: 'false', 'aria-label': opts.multi ? 'Instruments' : 'Instrument',
+                             'class': 't58-api-sym' + (opts.multi ? ' wide' : '') });
+    field(opts.multi ? 'Instruments (comma separated)' : 'Instrument', f.symbol);
+    f.tf = el('select', { 'aria-label': 'Bar size' });
+    field('Bar size', f.tf);
+    f.start = el('input', { type: 'date', 'aria-label': 'From (optional)', title: 'From (leave empty for the default recent window)' });
+    field('From', f.start);
+    f.end = el('input', { type: 'date', 'aria-label': 'To (optional)', title: 'To (leave empty for today)' });
+    field('To', f.end);
+    f.go = el('button', { type: 'button', 'class': 't58-api-go' + (opts.multi ? '' : ' ghost') }, opts.multi ? 'Download & add' : 'Download now');
+    f.root.appendChild(f.go);
+    f.msg = el('div', { 'class': 't58-api-msg', role: 'status', 'aria-live': 'polite' });
+    f.root.appendChild(f.msg);
+    f.start.value = m.start || '';
+    f.end.value = m.end || '';
 
-    var box = el('div', { 'class': 'api-src-row', hidden: '' });
-    box.style.cssText = 'margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:13px;';
-    var sym = el('input', { type: 'text', placeholder: 'Instrument', autocomplete: 'off', 'aria-label': 'Instrument' });
-    sym.style.cssText = 'width:150px;';
-    var tf = el('select', { 'aria-label': 'Bar size' });
-    var start = el('input', { type: 'date', 'aria-label': 'From (optional)', title: 'From (optional)' });
-    var end = el('input', { type: 'date', 'aria-label': 'To (optional)', title: 'To (optional)' });
-    var go = el('button', { type: 'button', 'class': 'lc-btn small' }, 'Download');
-    var msg = el('span', { 'class': 'lc-hint', role: 'status' });
-    var link = el('a', { href: '/settings/api-keys', target: '_blank', rel: 'noopener' }, 'Settings › API Keys');
-    [sym, tf, start, end, go, msg].forEach(function (n) { box.appendChild(n); });
-    sel.insertAdjacentElement('afterend', box);
+    f.currentProvider = function () {
+      var id = opts.pickProvider ? f.provider.value : (opts.fixedProvider || '');
+      return info.providers.filter(function (p) { return p.id === id; })[0] || null;
+    };
+    f.refreshProvider = function () {
+      var p = f.currentProvider();
+      var keep = f.tf.value || m.tf || '5m';
+      f.tf.innerHTML = '';
+      ((p && p.timeframes) || ['1m', '5m', '15m', '30m', '1h', '4h', '1d']).forEach(function (t) { f.tf.appendChild(el('option', { value: t }, t)); });
+      f.tf.value = Array.prototype.some.call(f.tf.options, function (o) { return o.value === keep; }) ? keep : (Array.prototype.some.call(f.tf.options, function (o) { return o.value === '5m'; }) ? '5m' : f.tf.options[0].value);
+      f.symbol.placeholder = p ? (opts.multi ? 'e.g. ' + p.hint : 'e.g. ' + p.hint) : '';
+      var last = (mem()['sym_' + (p ? p.id : '')] || '');
+      if (!f.symbol.value && last) f.symbol.value = last;
+      f.setMsg(p && p.note ? p.note : '', '');
+    };
+    f.setMsg = function (text, kind) { f.msg.textContent = text || ''; f.msg.className = 't58-api-msg' + (kind ? ' ' + kind : ''); };
+    f.save = function () {
+      var p = f.currentProvider(), patch = { tf: f.tf.value, start: f.start.value, end: f.end.value };
+      if (p) { patch.provider = p.id; patch['sym_' + p.id] = f.symbol.value; }
+      remember(patch);
+    };
+    if (opts.pickProvider) f.provider.addEventListener('change', function () { f.symbol.value = ''; f.refreshProvider(); });
+    f.refreshProvider();
+    return f;
+  }
 
-    var lastValid = sel.value && sel.value.indexOf(PREFIX) !== 0 ? sel.value : '';
+  // ---------------------------------------------------------------- form submit hook (download first, then run)
+  function hookForm(form, handler) {
+    if (!form) return;
+    if (!form.__t58api) {
+      form.__t58api = [];
+      form.addEventListener('submit', function (ev) {
+        if (form.__t58apiBusy) { ev.preventDefault(); ev.stopImmediatePropagation(); return; }
+        var need = form.__t58api.filter(function (h) { return h.needs(); });
+        if (!need.length) return;
+        ev.preventDefault(); ev.stopImmediatePropagation();
+        var submitter = ev.submitter || null;
+        form.__t58apiBusy = true;
+        need.reduce(function (p, h) { return p.then(function () { return h.run(); }); }, Promise.resolve())
+          .then(function () {
+            form.__t58apiBusy = false;
+            try { if (form.requestSubmit) { form.requestSubmit(submitter || undefined); return; } } catch (e) { /* fall through */ }
+            form.submit();
+          }).catch(function () { form.__t58apiBusy = false; });
+      }, true);
+    }
+    form.__t58api.push(handler);
+  }
 
-    function providerId() { return sel.value.indexOf(PREFIX) === 0 ? sel.value.slice(PREFIX.length) : ''; }
-    function provider(id) { return info.providers.filter(function (p) { return p.id === id; })[0]; }
+  // ---------------------------------------------------------------- single pickers
+  function enhanceSingle(sel, info) {
+    if (sel.dataset.t58Api || !info.providers.length) return;
+    sel.dataset.t58Api = '1';
+    var isSelect1 = !sel.multiple;
+    if (!isSelect1) return;
 
+    var group = el('optgroup', { label: '☁ Data from a provider (your saved API keys)' });
+    info.providers.forEach(function (p) {
+      var o = el('option', { value: PREFIX + p.id }, p.label + (p.ready ? '' : ' — add a key in Settings › API Keys'));
+      if (!p.ready) o.disabled = true;
+      group.appendChild(o);
+    });
+    var firstGroup = sel.querySelector('optgroup');
+    if (firstGroup) sel.insertBefore(group, firstGroup); else sel.appendChild(group);
+
+    var f = buildFields(info, { fixedProvider: '' });
+    f.root.hidden = true;
+    // when the user switches providers the dropdown itself is the provider switch
+    var dl = el('div', { 'class': 't58-api-note' });
+    sel.insertAdjacentElement('afterend', f.root);
+    f.root.insertAdjacentElement('afterend', dl);
+
+    var lastValid = (sel.value && sel.value.indexOf(PREFIX) !== 0) ? sel.value : '';
+    function providerId() { var t = parseToken(sel.value); return t ? t.provider : ''; }
+    function providerOpt() { return sel.options[sel.selectedIndex] && sel.options[sel.selectedIndex].value.indexOf(PREFIX) === 0 ? sel.options[sel.selectedIndex] : null; }
+    function currentP() { var id = providerId(); return info.providers.filter(function (p) { return p.id === id; })[0] || null; }
+    f.currentProvider = currentP;
+
+    function syncToken() {
+      var o = providerOpt(); if (!o) return;
+      var id = providerId();
+      o.value = f.symbol.value.trim() ? makeToken(id, f.symbol.value, f.tf.value, f.start.value, f.end.value) : PREFIX + id;
+    }
+    var shown = '';
     function show() {
       var id = providerId();
-      if (!id) { box.hidden = true; return; }
-      var p = provider(id);
-      box.hidden = false;
-      msg.textContent = '';
-      if (!p) {  // "add a key" placeholder
-        [sym, tf, start, end, go].forEach(function (n) { n.style.display = 'none'; });
-        msg.textContent = 'No provider keys saved yet: add one in ';
-        msg.appendChild(link);
-        return;
-      }
-      [sym, tf, start, end, go].forEach(function (n) { n.style.display = ''; });
-      sym.placeholder = 'Instrument, e.g. ' + p.hint;
-      var keep = tf.value;
-      tf.innerHTML = '';
-      p.timeframes.forEach(function (t) { tf.appendChild(el('option', { value: t }, t)); });
-      tf.value = p.timeframes.indexOf(keep) >= 0 ? keep : (p.timeframes.indexOf('5m') >= 0 ? '5m' : p.timeframes[0]);
+      if (!id) { f.root.hidden = true; shown = ''; return; }
+      f.root.hidden = false; dl.textContent = '';
+      if (shown !== id) { f.symbol.value = ''; shown = id; }   // each provider names instruments its own way
+      f.refreshProvider();
+      syncToken();
     }
+    ['input', 'change'].forEach(function (evn) {
+      [f.symbol, f.tf, f.start, f.end].forEach(function (n) { n.addEventListener(evn, function () { syncToken(); f.save(); }); });
+    });
 
     function addFile(res) {
       var opt = Array.prototype.filter.call(sel.querySelectorAll('option'), function (o) { return o.value === res.full_name; })[0];
       if (!opt) {
         var g = Array.prototype.filter.call(sel.querySelectorAll('optgroup'), function (o) { return o.label === res.instrument; })[0];
-        if (!g) { g = el('optgroup', { label: res.instrument }); sel.insertBefore(g, group); }
+        if (!g) { g = el('optgroup', { label: res.instrument }); sel.insertBefore(g, group.nextSibling); }
         opt = el('option', { value: res.full_name }, res.name);
         g.appendChild(opt);
       }
       sel.value = res.full_name;
     }
-
-    go.addEventListener('click', function () {
-      var id = providerId();
-      if (!id) return;
-      if (!sym.value.trim()) { msg.textContent = 'Enter an instrument.'; sym.focus(); return; }
-      go.disabled = true;
-      msg.textContent = 'Downloading…';
-      fetch('/data/api/fetch', {
-        method: 'POST', credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: id, symbol: sym.value.trim(), timeframe: tf.value, start: start.value, end: end.value })
-      }).then(function (r) { return r.json().catch(function () { return { ok: false, error: 'Unexpected response.' }; }); })
-        .then(function (res) {
-          go.disabled = false;
-          if (!res.ok) { msg.textContent = res.error || 'Download failed.'; return; }
-          addFile(res);
-          lastValid = res.full_name;
-          box.hidden = true;
-          sel.dispatchEvent(new Event('change', { bubbles: true }));
-          var note = sel.parentNode.querySelector('.api-src-done') || sel.insertAdjacentElement('afterend', el('div', { 'class': 'lc-hint api-src-done' }));
-          note.textContent = 'Saved ' + res.rows.toLocaleString() + ' bars (' + res.first.slice(0, 10) + ' → ' + res.last.slice(0, 10) + ') as ' + res.name + '.';
-        }).catch(function (e) { go.disabled = false; msg.textContent = 'Download failed: ' + e; });
-    });
-
-    sel.addEventListener('change', function () {
-      var done = sel.parentNode.querySelector('.api-src-done');
-      if (done && providerId()) done.textContent = '';
-      show();
-    });
-
-    if (sel.form) {
-      sel.form.addEventListener('submit', function (ev) {
-        if (providerId()) {
-          ev.preventDefault();
-          ev.stopImmediatePropagation();
-          box.hidden = false;
-          if (provider(providerId())) msg.textContent = 'Click Download first, then run.';
-        }
-      }, true);
+    function run() {
+      var p = currentP();
+      if (!p) return Promise.resolve();
+      if (!f.symbol.value.trim()) { f.setMsg('Type the instrument to download (e.g. ' + p.hint + ').', 'err'); f.symbol.focus(); return Promise.reject(new Error('no instrument')); }
+      f.go.disabled = true; f.setMsg('Downloading ' + f.symbol.value.trim() + ' from ' + p.label + '…', '');
+      f.save();
+      return fetchOne(p.id, f.symbol.value.trim(), f.tf.value, f.start.value, f.end.value).then(function (res) {
+        f.go.disabled = false;
+        addFile(res); lastValid = res.full_name;
+        f.root.hidden = true;
+        dl.innerHTML = '';
+        dl.appendChild(document.createTextNode('☁ ' + p.label + ': ' + res.name + ' — ' + fmtRange(res) + '. '));
+        var again = el('a', { href: '#' }, 'Use a different instrument or range');
+        again.addEventListener('click', function (e) {
+          e.preventDefault();
+          var o = Array.prototype.filter.call(sel.options, function (x) { return x.value.indexOf(PREFIX) === 0 && x.value.slice(PREFIX.length).split('|')[0] === p.id; })[0];
+          if (o) { sel.value = o.value; sel.dispatchEvent(new Event('change', { bubbles: true })); }
+        });
+        dl.appendChild(again);
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        return res;
+      }).catch(function (e) { f.go.disabled = false; f.setMsg(e.message || String(e), 'err'); throw e; });
     }
+    f.go.addEventListener('click', function () { run().catch(function () {}); });
+    sel.addEventListener('change', show);
+    if (sel.form) hookForm(sel.form, { needs: function () { return !!providerId() && !sel.disabled; }, run: run });
+    show();
   }
+
+  // ---------------------------------------------------------------- multi pickers
+  function addCheckboxRow(host, res, p) {
+    var existing = Array.prototype.filter.call(document.querySelectorAll('input[name="datasets"]'), function (c) { return c.value === res.full_name; })[0];
+    if (existing) { if (!existing.checked) { existing.checked = true; existing.dispatchEvent(new Event('change', { bubbles: true })); } return; }
+    var row = el('label', { 'class': 'dataset-row' });
+    var cb = el('input', { type: 'checkbox', name: 'datasets', value: res.full_name });
+    cb.checked = true;
+    row.appendChild(cb);
+    row.appendChild(el('span', { 'class': 'dataset-name' }, res.name));
+    row.appendChild(el('span', { 'class': 'dataset-size' }, (p ? p.label + ' · ' : '') + (res.rows || 0).toLocaleString() + ' bars'));
+    host.appendChild(row);
+    cb.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  function addSelectOption(sel, res) {
+    var opt = Array.prototype.filter.call(sel.querySelectorAll('option'), function (o) { return o.value === res.full_name; })[0];
+    if (!opt) {
+      var g = Array.prototype.filter.call(sel.querySelectorAll('optgroup'), function (o) { return o.label === '☁ From data providers'; })[0];
+      if (!g) { g = el('optgroup', { label: '☁ From data providers' }); sel.insertBefore(g, sel.firstChild); }
+      opt = el('option', { value: res.full_name }, res.name);
+      g.appendChild(opt);
+    }
+    opt.selected = true;
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function buildMultiPanel(info, anchor, mode, sel) {
+    var det = el('details', { 'class': 't58-api-multi' });
+    det.appendChild(el('summary', null, '☁ Add data from a provider (Alpaca, London Strategic Edge, …)'));
+    var f = buildFields(info, { pickProvider: true, multi: true });
+    det.appendChild(f.root);
+    var addedHead = el('div', { 'class': 't58-api-added-h' }, 'Added from providers (ticked = included in the run)');
+    var added = el('div', { 'class': 't58-api-added' });
+    added.hidden = true; addedHead.hidden = true;
+    det.appendChild(addedHead); det.appendChild(added);
+    anchor.insertAdjacentElement('afterend', det);
+    if (!info.providers.some(function (p) { return p.ready; })) {
+      f.setMsg('No provider keys are saved yet. Add one under Settings › API Keys (Dukascopy needs none).', 'err');
+    }
+
+    function run() {
+      var syms = splitSymbols(f.symbol.value);
+      var p = f.currentProvider();
+      if (!p) { f.setMsg('Choose a provider with a saved key.', 'err'); return Promise.reject(new Error('no provider')); }
+      if (!syms.length) { f.setMsg('Type at least one instrument (e.g. ' + p.hint + ').', 'err'); f.symbol.focus(); return Promise.reject(new Error('no instrument')); }
+      f.go.disabled = true; f.save();
+      var done = 0, failed = [];
+      return syms.reduce(function (chain, s) {
+        return chain.then(function () {
+          f.setMsg('Downloading ' + s + ' (' + (done + failed.length + 1) + ' of ' + syms.length + ')…', '');
+          return fetchOne(p.id, s, f.tf.value, f.start.value, f.end.value).then(function (res) {
+            done++;
+            if (mode === 'select') addSelectOption(sel, res); else { added.hidden = false; addedHead.hidden = false; addCheckboxRow(added, res, p); }
+          }).catch(function (e) { failed.push(s + ': ' + (e.message || e)); });
+        });
+      }, Promise.resolve()).then(function () {
+        f.go.disabled = false;
+        if (failed.length) f.setMsg((done ? 'Added ' + done + '. ' : '') + 'Failed — ' + failed.join(' | '), 'err');
+        else { f.setMsg('Added ' + done + ' dataset' + (done === 1 ? '' : 's') + '. They are ticked and will be used in the run.', 'ok'); f.symbol.value = ''; }
+        if (failed.length) throw new Error(failed.join(' | '));
+      }).catch(function (e) { f.go.disabled = false; throw e; });
+    }
+    f.go.addEventListener('click', function () { run().catch(function () {}); });
+    var form = (sel && sel.form) || anchor.closest('form');
+    // typed but not added yet -> add it when the form is submitted, so "type it and press Run" just works
+    if (form) hookForm(form, { needs: function () { return splitSymbols(f.symbol.value).length > 0 && f.currentProvider(); }, run: run });
+    return det;
+  }
+
+  // ---------------------------------------------------------------- discovery
+  function enhanceMulti(info) {
+    // checkbox lists (multi-market, multi-instrument search / evolution / speed run, cross-instrument)
+    var boxes = document.querySelectorAll('input[type="checkbox"][name="datasets"]');
+    var done = new Set();
+    Array.prototype.forEach.call(boxes, function (b) {
+      var form = b.form || b.closest('form');
+      if (!form || done.has(form) || form.dataset.t58ApiMulti) return;
+      done.add(form); form.dataset.t58ApiMulti = '1';
+      var list = b.closest('.dataset-list') || b.closest('.t58-ms') || b.parentNode;
+      var anchor = list.closest('.t58-ms') || list;
+      buildMultiPanel(info, anchor, 'checkbox', null);
+    });
+    // pages with NO stored datasets show an empty-note instead of a list; give them the panel too
+    Array.prototype.forEach.call(document.querySelectorAll('form .empty-note'), function (note) {
+      var form = note.closest('form');
+      if (!form || form.dataset.t58ApiMulti) return;
+      if (!/dataset/i.test(note.textContent) || !/(at least two|2 or more|pick 2)/i.test(note.textContent + (note.parentNode.textContent || ''))) return;
+      form.dataset.t58ApiMulti = '1';
+      buildMultiPanel(info, note, 'checkbox', null);
+    });
+    // multi-selects
+    Array.prototype.forEach.call(document.querySelectorAll('select[multiple][name="datasets"], select[multiple][name="ds_datasets"]'), function (s) {
+      if (s.dataset.t58ApiMulti) return;
+      s.dataset.t58ApiMulti = '1';
+      buildMultiPanel(info, s, 'select', s);
+    });
+  }
+
+  var SINGLE = 'select[name$="existing_dataset"], select[name="dataset_label"], select[name="datasets"]:not([multiple])';
 
   function init() {
-    var sels = document.querySelectorAll('select[name$="existing_dataset"]');
-    if (!sels.length) return;
+    if (!document.querySelector(SINGLE + ', input[type="checkbox"][name="datasets"], select[multiple][name="datasets"], select[multiple][name="ds_datasets"], form .empty-note')) return;
     getProviders().then(function (info) {
-      Array.prototype.forEach.call(document.querySelectorAll('select[name$="existing_dataset"]'), function (s) { enhance(s, info); });
+      if (!info || !info.providers || !info.providers.length) return;
+      injectStyle();
+      Array.prototype.forEach.call(document.querySelectorAll(SINGLE), function (s) { enhanceSingle(s, info); });
+      enhanceMulti(info);
     });
   }
+
+  window.T58ApiSource = { PREFIX: PREFIX, makeToken: makeToken, parseToken: parseToken, splitSymbols: splitSymbols, init: init };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();

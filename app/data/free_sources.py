@@ -52,15 +52,19 @@ def fetch_fred_series(series_id: str, api_key: str, http_get: HttpGet | None = N
 
 
 def fetch_twelve_data_ohlcv(symbol: str, interval: str, api_key: str,
-                            outputsize: int = 5000, http_get: HttpGet | None = None) -> pd.DataFrame:
-    """Twelve Data /time_series (interval like '1min','5min','1h','1day'). Requested in UTC."""
+                            outputsize: int = 5000, http_get: HttpGet | None = None,
+                            start: str = "", end: str = "") -> pd.DataFrame:
+    """Twelve Data /time_series (interval like '1min','5min','1h','1day'). Requested in UTC. ``start``/``end``
+    (YYYY-MM-DD) ask the service for that window directly instead of "the newest N bars", so an older range works."""
     if not api_key:
         raise DataSourceError("No Twelve Data API key saved (Settings > API Keys).")
-    data = (http_get or _default_get)(
-        "https://api.twelvedata.com/time_series",
-        {"symbol": symbol, "interval": interval, "apikey": api_key, "outputsize": outputsize,
-         "timezone": "UTC", "order": "ASC", "format": "JSON"},
-    )
+    params = {"symbol": symbol, "interval": interval, "apikey": api_key, "outputsize": outputsize,
+              "timezone": "UTC", "order": "ASC", "format": "JSON"}
+    if start:
+        params["start_date"] = start
+    if end:
+        params["end_date"] = end
+    data = (http_get or _default_get)("https://api.twelvedata.com/time_series", params)
     if data.get("status") == "error" or "values" not in data:
         raise DataSourceError(f"Twelve Data error: {data.get('message', str(data)[:120])}")
     df = pd.DataFrame(data["values"])

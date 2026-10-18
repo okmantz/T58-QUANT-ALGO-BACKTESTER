@@ -16,6 +16,8 @@ each provider's documented REST schema and mock-tested only.
 from __future__ import annotations
 
 import io
+import re
+import time
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Callable
@@ -38,20 +40,25 @@ class Provider:
     needs_key: bool = True
     key_field: str = ""           # attribute on ApiKeysSettings (or "alpaca")
     timeframes: tuple[str, ...] = tuple(STANDARD_TIMEFRAMES)
+    note: str = ""                # one line of provider-specific advice shown next to the picker
 
 
 PROVIDERS: dict[str, Provider] = {p.id: p for p in [
     Provider("alpaca", "Alpaca", "AAPL or BTC/USD", key_field="alpaca",
              timeframes=("1m", "5m", "15m", "30m", "1h", "4h", "1d")),
     Provider("lse", "London Strategic Edge", "EUR/USD, GC, AAPL", key_field="london_strategic_edge_key"),
-    Provider("twelve_data", "Twelve Data", "EUR/USD, AAPL", key_field="twelve_data_api_key"),
+    Provider("twelve_data", "Twelve Data", "EUR/USD, AAPL", key_field="twelve_data_api_key",
+             note="Twelve Data returns at most the 5,000 newest bars in the range you ask for."),
     Provider("polygon", "Polygon", "AAPL, C:EURUSD, X:BTCUSD", key_field="polygon_api_key"),
     Provider("tiingo", "Tiingo", "AAPL, eurusd, btcusd", key_field="tiingo_api_key"),
     Provider("alpha_vantage", "Alpha Vantage", "IBM, EURUSD", key_field="alpha_vantage_api_key",
-             timeframes=("1m", "5m", "15m", "30m", "1h", "1d")),
-    Provider("databento", "Databento", "ES.c.0, NQ.c.0", key_field="databento_api_key"),
+             timeframes=("1m", "5m", "15m", "30m", "1h", "1d"),
+             note="Alpha Vantage's free tier is rate-limited; a large pull may need a paid key."),
+    Provider("databento", "Databento", "ES.c.0, NQ.c.0", key_field="databento_api_key",
+             note="Databento bills per request -- keep the date range short."),
     Provider("dukascopy", "Dukascopy (no key)", "EURUSD, XAUUSD", needs_key=False,
-             timeframes=("1m", "5m", "15m", "30m", "1h", "4h", "1d")),
+             timeframes=("1m", "5m", "15m", "30m", "1h", "4h", "1d"),
+             note="Dukascopy builds bars from tick files, so long ranges take a while."),
 ]}
 
 
@@ -75,7 +82,7 @@ def provider_list() -> list[dict]:
     for p in PROVIDERS.values():
         ready = (not p.needs_key) or bool(_key_for(p))
         out.append({"id": p.id, "label": p.label, "hint": p.hint, "ready": ready,
-                    "timeframes": list(p.timeframes)})
+                    "timeframes": list(p.timeframes), "note": p.note})
     return out
 
 
@@ -212,7 +219,7 @@ def fetch(provider_id: str, symbol: str, timeframe: str, start: str = "", end: s
         return _clean(fetch_candles(key, symbol, timeframe, start, end))
     if provider_id == "twelve_data":
         interval = {"1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min", "1h": "1h", "4h": "4h", "1d": "1day"}[timeframe]
-        return _slice(_clean(free_sources.fetch_twelve_data_ohlcv(symbol, interval, key, outputsize=5000, http_get=http_get)), start, end)
+        return _slice(_clean(free_sources.fetch_twelve_data_ohlcv(symbol, interval, key, outputsize=5000, http_get=http_get, start=start, end=end)), start, end)
     if provider_id == "polygon":
         mult, span = {"1m": (1, "minute"), "5m": (5, "minute"), "15m": (15, "minute"), "30m": (30, "minute"),
                       "1h": (1, "hour"), "4h": (4, "hour"), "1d": (1, "day")}[timeframe]
@@ -234,20 +241,92 @@ def fetch(provider_id: str, symbol: str, timeframe: str, start: str = "", end: s
     raise DataSourceError(f"Provider '{provider_id}' is not implemented.")
 
 
+_SAFE = re.compile(r"[^A-Za-z0-9_\-]")
+
+
+def _safe_symbol(symbol: str) -> str:
+    return _SAFE.sub("", (symbol or "").upper()) or "SYMBOL"
+
+
+# A re-run on the same instrument / bar size / dates within this window reuses the file already on disk instead of
+# downloading again (providers rate-limit and bill per request; every test page may ask for the same data back to back).
+REUSE_SECONDS = 30 * 60
+
+
 def fetch_to_library(provider_id: str, symbol: str, timeframe: str, start: str = "", end: str = "",
-                     http_get: HttpGet | None = None) -> dict:
-    """Fetch and save into data/raw/<SYMBOL>/. Returns {"full_name", "rows", "first", "last"}
-    where full_name is the value the Market-data dropdown uses for that file."""
+                     http_get: HttpGet | None = None, reuse_seconds: float | None = None) -> dict:
+    """Fetch and save into data/raw/<SYMBOL>/. Returns {"full_name", "rows", "first", "last", "name", "instrument",
+    "cached"} where full_name is the value the Market-data dropdown uses for that file.
+
+    The file name carries the requested date range, so two pulls of the same instrument over different dates never
+    overwrite each other (a saved result can always be re-run on exactly the data it was produced from)."""
     from app.data.storage import get_raw_data_dir
+
+    if timeframe not in STANDARD_TIMEFRAMES:
+        raise DataSourceError(f"Unknown timeframe '{timeframe}'.")
+    start, end = _default_dates((start or "").strip(), (end or "").strip(), timeframe)
+    reuse = REUSE_SECONDS if reuse_seconds is None else reuse_seconds
+    safe = _safe_symbol(symbol)
+    folder = get_raw_data_dir() / safe
+    dest = folder / f"{safe}_{timeframe}_{provider_id}_{start}_{end}.csv"
+    if reuse and dest.is_file() and (time.time() - dest.stat().st_mtime) < reuse and dest.stat().st_size > 64:
+        try:
+            cached = pd.read_csv(dest, usecols=["timestamp"])
+            if len(cached):
+                return {"full_name": dest.relative_to(get_raw_data_dir()).as_posix(), "rows": int(len(cached)),
+                        "first": str(cached["timestamp"].iloc[0]), "last": str(cached["timestamp"].iloc[-1]),
+                        "name": dest.name, "instrument": safe, "cached": True}
+        except Exception:  # noqa: BLE001 -- unreadable cache file: just download again
+            pass
 
     df = fetch(provider_id, symbol, timeframe, start, end, http_get)
     if df.empty:
         raise DataSourceError("The provider returned no bars for that instrument and date range.")
-    safe = "".join(c for c in symbol.upper() if c.isalnum() or c in ("-", "_")) or "SYMBOL"
-    folder = get_raw_data_dir() / safe
     folder.mkdir(parents=True, exist_ok=True)
-    dest = folder / f"{safe}_{timeframe}_{provider_id}.csv"
-    df.to_csv(dest, index=False)
+    tmp = dest.with_suffix(".csv.part")
+    df.to_csv(tmp, index=False)
+    tmp.replace(dest)
     return {"full_name": dest.relative_to(get_raw_data_dir()).as_posix(), "rows": int(len(df)),
             "first": str(df["timestamp"].iloc[0]), "last": str(df["timestamp"].iloc[-1]),
-            "name": dest.name, "instrument": safe}
+            "name": dest.name, "instrument": safe, "cached": False}
+
+
+# ----------------------------------------------------------------- "use this provider's data" tokens
+#
+# A dataset <select> can hold a provider pick instead of a stored file:
+#     __api__:<provider>|<SYMBOL>|<timeframe>|<start>|<end>
+# The page script downloads it before the form is submitted and swaps in the real file name; the server resolves the same
+# token itself (``resolve_token``) wherever a dataset name is looked up, so a flow that bypasses the script -- the
+# "Detect pip size" button, an AJAX job start -- still runs on the provider's data rather than failing.
+
+TOKEN_PREFIX = "__api__:"
+
+
+def make_token(provider_id: str, symbol: str, timeframe: str, start: str = "", end: str = "") -> str:
+    return TOKEN_PREFIX + "|".join([provider_id, (symbol or "").strip(), timeframe, start or "", end or ""])
+
+
+def parse_token(value: str) -> dict | None:
+    """``{"provider", "symbol", "timeframe", "start", "end"}`` for a full token, else None (also None for the bare
+    ``__api__:<provider>`` placeholder, which has no instrument yet)."""
+    v = (value or "").strip()
+    if not v.startswith(TOKEN_PREFIX):
+        return None
+    parts = v[len(TOKEN_PREFIX):].split("|")
+    if len(parts) < 3 or not parts[0] or not parts[1].strip():
+        return None
+    parts += [""] * (5 - len(parts))
+    return {"provider": parts[0], "symbol": parts[1].strip(), "timeframe": parts[2], "start": parts[3], "end": parts[4]}
+
+
+def is_token(value: str) -> bool:
+    return (value or "").strip().startswith(TOKEN_PREFIX)
+
+
+def resolve_token(value: str, http_get: HttpGet | None = None) -> dict:
+    """Download (or reuse) the data a token names and return ``fetch_to_library``'s dict. Raises DataSourceError with a
+    message that is safe to show verbatim."""
+    t = parse_token(value)
+    if t is None:
+        raise DataSourceError("Pick an instrument for the data provider first (instrument box next to the dropdown).")
+    return fetch_to_library(t["provider"], t["symbol"], t["timeframe"], t["start"], t["end"], http_get)

@@ -131,8 +131,15 @@ def _load_ohlcv_from_form(file_key: str, dataset_field: str = "dataset_label"):
         return _load_ohlcv_upload(file_key)
     label = (request.form.get(dataset_field) or "").strip()
     if label:
+        from app.data import api_sources
         from app.data.importer import import_csv
         from app.data.storage import get_raw_data_dir
+
+        if api_sources.is_token(label):   # "use data from a provider" pick: download (or reuse) it, then load the saved file
+            try:
+                label = api_sources.resolve_token(label)["full_name"]
+            except Exception as exc:  # noqa: BLE001 -- provider / key / network problems become a plain message
+                raise ValueError(f"Could not get the data from the data provider: {exc}") from exc
 
         raw_dir = get_raw_data_dir().resolve()
         path = (raw_dir / label).resolve()
@@ -158,8 +165,10 @@ def _pre(text: str) -> str:
 _TOOLS = [
     {"url": "/gamma", "badge": "Options", "title": "Gamma Center",
      "description": "Dealer gamma exposure: flip level, call/put walls and regime, with the proxy-vs-real data labelling every gamma-aware strategy uses."},
-    {"url": "/research-labs", "badge": "Research", "title": "Research Labs (7 engines)",
-     "description": "Volume/Market Profile, Order-Flow, Order-Book, Cross-Asset Lead-Lag, Stat-Arb Spreads, Economic Event Study and the Hypothesis Lab: reproducible, out-of-sample-tested research that feeds every strategy engine."},
+    {"url": "/research-labs", "badge": "Research", "title": "Research Labs (8 engines)",
+     "description": "Volume/Market Profile, Order-Flow, Order-Book, Cross-Asset Lead-Lag, Stat-Arb Spreads, Economic Event Study, Market Seasonality and the Hypothesis Lab: reproducible, out-of-sample-tested research that feeds every strategy engine."},
+    {"url": "/research-labs/seasonality", "badge": "Research", "title": "Market Seasonality Lab",
+     "description": "Time-of-day, weekday, month, holiday, expiry and event-day patterns vs honest baselines, with a shuffled-label null and a later-data persistence check."},
     {"url": "/quant-lab/translator", "badge": "Deploy", "title": "Universal Strategy Translator",
      "description": "Manual Strategy Builder config -> clean PineScript v5 / MQL5, ready for TradingView or a live MT5 account."},
     {"url": "/quant-lab/regime-selector", "badge": "Auto", "title": "Auto Regime Selector",

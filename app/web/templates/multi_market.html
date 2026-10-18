@@ -178,7 +178,8 @@
     const el = document.getElementById('selected-count');
     if (el) el.textContent = n + ' selected';
   }
-  checkboxes.forEach(cb => cb.addEventListener('change', updateCount));
+  // delegated: rows added later from a data provider (api-source.js) are counted too
+  document.addEventListener('change', e => { if (e.target && e.target.name === 'datasets') updateCount(); });
   updateCount();
 </script>
 </body>

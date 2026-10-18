@@ -1,4 +1,4 @@
-"""Research Labs web routes (``/research-labs``): the seven research engines.
+"""Research Labs web routes (``/research-labs``): the eight research engines.
 
 Thin wrappers: parse the form, load data, call ``app.research_labs.<lab>.run``, return the experiment record as JSON.
 The page (templates/research_lab.html) renders the record generically -- headline, warnings, every table, assumptions,
@@ -68,6 +68,14 @@ LABS: dict[str, dict] = {
         "data": "Bars plus an events CSV with a 'timestamp' column (and optional 'event'), in the SAME timezone as the bars. Or generate the NFP schedule.",
         "fields": [("pre_bars", "Pre-event bars", "number", 12), ("post_bars", "Post-event bars", "number", 12), ("reaction_bars", "Initial-reaction bars", "number", 3),
                    ("cont_bars", "Continuation bars", "number", 12), ("controls_per_event", "Controls per event", "number", 3), ("nfp", "Generate NFP schedule (first Fridays 08:30) instead of uploading", "checkbox", False)],
+    },
+    "seasonality": {
+        "title": "Market Seasonality Lab", "badge": "Seasonality", "module": "seasonality", "markets": 1, "events_upload": True,
+        "summary": "Time-of-day, weekday, month, holiday, expiry / month-end and event-day patterns, each compared with baselines (rest of sample, weekday-matched, shuffled-label null) and re-tested on later data.",
+        "why": "Most calendar effects are noise or already arbitraged; this tells you which ones, if any, persist before you build on them.",
+        "data": "Intraday bars spanning months (a year or more for month effects). Optional events CSV (FOMC, CPI, auctions) in the same timezone as the bars.",
+        "fields": [("tod_minutes", "Time-of-day bucket (minutes)", "number", 60), ("min_n", "Min observations per slice", "number", 20),
+                   ("oos_fraction", "Out-of-sample fraction", "number", 0.3)],
     },
     "hypothesis": {
         "title": "Alpha Discovery & Hypothesis Lab", "badge": "Hypothesis", "module": "hypothesis_lab", "markets": 1, "spec_editor": True,
@@ -215,6 +223,9 @@ def run_lab(slug: str):
                 rec = mod.run(first, events, label=first_name, pre_bars=_num(form, "pre_bars", 12, int), post_bars=_num(form, "post_bars", 12, int),
                               reaction_bars=_num(form, "reaction_bars", 3, int), cont_bars=_num(form, "cont_bars", 12, int),
                               controls_per_event=_num(form, "controls_per_event", 3, int), seed=seed)
+            elif slug == "seasonality":
+                rec = mod.run(first, _read_table("events"), label=first_name, tod_minutes=_num(form, "tod_minutes", 60, int),
+                              min_n=_num(form, "min_n", 20, int), oos_fraction=_num(form, "oos_fraction", 0.3), seed=seed)
             else:  # hypothesis
                 try:
                     spec = json.loads(form.get("spec") or "")

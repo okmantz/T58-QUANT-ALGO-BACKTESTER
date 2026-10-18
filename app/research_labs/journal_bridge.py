@@ -9,7 +9,7 @@ from typing import Any
 
 GROUP_NAME = "Research findings"
 LAB_LABEL = {"volume_profile": "VP", "order_flow": "Flow", "order_book": "Book", "lead_lag": "Lead-lag", "stat_arb": "Spread",
-             "event_study": "Event", "hypothesis_lab": "Hypothesis"}
+             "event_study": "Event", "seasonality": "Season", "hypothesis_lab": "Hypothesis"}
 
 
 def _walk(obj: Any):

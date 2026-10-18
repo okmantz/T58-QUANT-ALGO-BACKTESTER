@@ -68,7 +68,7 @@
   <h1>🎓 Education</h1>
   <p>What the numbers and tabs in this app actually mean, and how to think quantitatively about strategy
   research -- not a generic trading course. Work through the modules below in order, or jump straight to
-  the one you need -- if you only read one, make it Validation Lab. Hands-on labs are built into the lessons they belong to, all five also live together on the <a href="#labs" style="color:var(--teal)">interactive labs</a> tab, and the <a href="/education/knowledge-check" style="color:var(--teal)">knowledge check</a> has its own page.</p>
+  the one you need -- if you only read one, make it Validation Lab. Hands-on labs are built into the lessons they belong to, all five also live together on the <a href="#labs" style="color:var(--teal)">interactive labs</a> tab, and the <a href="#knowledge-check" style="color:var(--teal)">knowledge check</a> is the last module.</p>
 </div>
 
 <div class="edu-toc" id="edu-module-tabs">
@@ -76,7 +76,7 @@
   <a href="#{{ section.id }}" data-module="{{ section.id }}">{{ section.icon }} {{ loop.index }}. {{ section.title }}</a>
   {% endfor %}
   <a href="#labs" data-module="labs">🧪 Interactive labs</a>
-  <a href="/education/knowledge-check" class="edu-quiz-link">✅ Knowledge check</a>
+  <a href="#knowledge-check" data-module="knowledge-check">✅ Knowledge check</a>
 </div>
 
 {% for section in sections %}
@@ -132,7 +132,19 @@
   <div class="edu-nav">
     <button type="button" class="edu-prev">&larr; Previous module</button>
     <span class="edu-progress">Interactive labs</span>
-    <a class="edu-next-link" href="/education/knowledge-check"><button type="button" class="primary">Knowledge check &rarr;</button></a>
+    <button type="button" class="edu-next primary">Knowledge check &rarr;</button>
+  </div>
+</div>
+
+<div class="edu-section" id="knowledge-check" data-module="knowledge-check">
+  <div class="eyebrow">Check yourself</div>
+  <h2>✅ Knowledge check</h2>
+  <p class="subtitle">Six quick questions on what the course covered, with an explanation after every answer. Wrong answers teach more than right ones &mdash; read the explanation either way.</p>
+  <div id="quiz-host"></div>
+  <div class="edu-nav">
+    <button type="button" class="edu-prev">&larr; Previous module</button>
+    <span class="edu-progress">Knowledge check</span>
+    <span></span>
   </div>
 </div>
 
@@ -141,7 +153,7 @@
 <script src="/static/t58-edu-labs.js"></script>
 <script>
   (function () {
-    var labsMounted = false;
+    var labsMounted = false, quizMounted = false;
     var moduleIds = Array.prototype.map.call(document.querySelectorAll('.edu-section'), function (el) {
       return el.getAttribute('data-module');
     });
@@ -151,6 +163,7 @@
     function showModule(id) {
       if (moduleIds.indexOf(id) === -1) id = moduleIds[0];
       if (id === 'labs' && !labsMounted && window.T58EduLabs) { labsMounted = true; T58EduLabs.mount(document.getElementById('labs-host')); }
+      if (id === 'knowledge-check' && !quizMounted && window.T58EduLabs) { quizMounted = true; T58EduLabs.mountQuiz(document.getElementById('quiz-host')); }
       // inline labs: mount the ones inside the module being opened (lazily, so a closed module costs nothing)
       var target = document.getElementById(id);
       if (target && window.T58EduLabs) {

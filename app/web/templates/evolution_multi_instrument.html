@@ -250,7 +250,9 @@
     const n = document.querySelectorAll('input[name="datasets"]:checked').length;
     counter.textContent = n + ' selected';
   }
-  checkboxes.forEach(cb => cb.addEventListener('change', updateCount));
+  // delegated: rows added later from a data provider (api-source.js) are counted too
+  document.addEventListener('change', e => { if (e.target && e.target.name === 'datasets') updateCount(); });
+  updateCount();
 
   function evmDetectPipSize() {
     const checked = document.querySelector('input[name="datasets"]:checked');

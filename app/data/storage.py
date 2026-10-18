@@ -527,6 +527,14 @@ def resolve_stored_dataset(name: str) -> Path | None:
     selected in the web app. Introduced in d1a7228, wired into
     _resolve_dataset/_resolve_leg_dataset by ce0ef2f.)"""
     raw = (name or "").strip().replace("\\", "/")
+    if raw.startswith("__api__:"):
+        # "Use data from a provider" pick (see app.data.api_sources): download/reuse it, then continue as a normal file.
+        try:
+            from app.data import api_sources
+
+            raw = api_sources.resolve_token(raw)["full_name"]
+        except Exception:  # noqa: BLE001 -- callers treat None as "no such dataset"; _resolve_dataset reports the reason
+            return None
     # Absolute POSIX paths and Windows drive-letter paths can never live
     # inside data/raw/ -- reject before splitting into segments.
     if raw.startswith("/") or (len(raw) > 1 and raw[1] == ":" and raw[0].isalpha()):

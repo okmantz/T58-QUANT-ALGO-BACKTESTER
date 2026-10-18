@@ -1,7 +1,7 @@
 /* T58 Education -- interactive labs (2026-10-17). Learn by playing with the numbers instead of only reading about them.
  * Pure DOM + SVG, no dependencies; every lab is self-contained and seeded so results are reproducible.
  * Labs: 1 Edge calculator, 2 Risk-per-trade fan, 3 Trailing-drawdown game, 4 Overfit-your-own-strategy,
- *       5 Gamma regime explorer.   (The 6-question knowledge check is its own page: see mountQuiz.)
+ *       5 Gamma regime explorer.   (The 6-question knowledge check is the last module of the Education course: see mountQuiz.)
  *
  * Every lab can be mounted two ways: ALL of them together on the Interactive labs tab (mount), or ONE at a time
  * inside the lesson it belongs to (mountOne) so a module reads in chunks instead of one long wall of text.
