@@ -53,3 +53,31 @@ That's it — no accounts, no re-scanning the QR code, no reinstalling.
   connections, since your phone needs to actually reach your PC.
 - Reports you generate are saved next to `T58-Web-App.exe` in a
   `reports` folder on your PC, exactly like the desktop app.
+
+## "This app cannot be installed" / no Install button in Chrome
+
+Chrome only offers **Install app** on a **secure (https)** page. A plain
+`http://192.168.x.x:5000` or `http://100.x.x.x:5000` address is not
+secure, so Chrome falls back to a plain bookmark (or says the app
+cannot be installed). Fix it once:
+
+1. Install **Tailscale** on the PC and on the phone and sign in with the
+   same account (free for personal use). Turn on **HTTPS Certificates**
+   in the Tailscale admin console (DNS page) if it isn't already.
+2. On the PC open the backtester, go to **Mobile Access** and press
+   **Enable HTTPS (Tailscale)**. (The same thing from a terminal:
+   `tailscale serve --bg 5000`.)
+3. On the phone open the new `https://<your-pc>.<tailnet>.ts.net` address
+   shown on that page, then **Install app** (Chrome menu or the
+   **Install app** item in the sidebar).
+
+Why this works: the address now has a real certificate, the service
+worker is served from the site root (`/sw.js`) so it controls the whole
+app, and the manifest has proper maskable icons.
+
+## Running jobs never get lost
+
+Leaving a run's page (Back button, another tab) never stops it. Every
+run -- Evolution Lab, Search Lab, Full Pipeline, Research Loop, Cross
+Instrument and the rest -- stays in **Running now** in the sidebar, on
+the floating run pill, and on the **Runs** page. Tap it to jump back in.
