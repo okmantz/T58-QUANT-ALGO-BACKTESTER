@@ -98,7 +98,8 @@ def test_grouped_picker_sorts_groups_and_files(monkeypatch):
     groups = storage.list_datasets_grouped_for_picker()
     assert [g["instrument"] for g in groups] == ["ES1!", "EURUSD", "NQ1!"]
     by_label = {g["instrument"]: [f["name"] for f in g["files"]] for g in groups}
-    assert by_label["ES1!"] == ["ES1!_15m.csv", "ES1!_5m.csv"]
+    # Files inside one instrument are listed by bar size (5m before 15m), not alphabetically.
+    assert by_label["ES1!"] == ["ES1!_5m.csv", "ES1!_15m.csv"]
     assert by_label["NQ1!"] == ["NQ1!_5m.csv"]
     assert by_label["EURUSD"] == ["EURUSD5.csv"]
 
