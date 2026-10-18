@@ -90,8 +90,9 @@ def test_folder_import_accepts_file_just_under_cap(client):
     data = resp.get_json()
     assert data["ok"] is True, data
     assert data["status"] == "imported", data
-    # And it actually landed in data/raw/.
-    assert (storage.get_raw_data_dir() / "under_cap.csv").exists()
+    # And it actually landed in data/raw/ -- inside the folder it was imported from (folder imports keep
+    # their structure now instead of flattening every file into data/raw/ itself).
+    assert (storage.get_raw_data_dir() / "fx" / "under_cap.csv").exists()
 
 
 # ---------------------------------------------------------------------------
