@@ -227,3 +227,20 @@ def test_qr_image_path_with_the_real_installed_qrcode_library(tmp_path, monkeypa
     assert out_path.suffix == ".png"
     with open(out_path, "rb") as f:
         assert f.read(8) == _PNG_SIGNATURE
+
+
+def test_print_startup_banner_survives_a_cp1252_console(monkeypatch):
+    """Regression: on Windows the console encoding is cp1252, which cannot encode
+    the phone emoji in the banner -- the frozen app crashed on startup with
+    UnicodeEncodeError. Printing the banner must never raise, whatever the
+    stdout encoding is."""
+    import io
+
+    from app.web.network_info import print_startup_banner
+
+    raw = io.BytesIO()
+    stream = io.TextIOWrapper(raw, encoding="cp1252", errors="strict", write_through=True)
+    monkeypatch.setattr(sys, "stdout", stream)
+    print_startup_banner("http://192.168.1.23:5000", qr_path=None)
+    stream.flush()
+    assert b"http://192.168.1.23:5000" in raw.getvalue()
