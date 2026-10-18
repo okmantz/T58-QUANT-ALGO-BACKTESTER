@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Research Labs — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<style>
+  * { box-sizing: border-box; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 16px; text-decoration: none; color: var(--text); display: block; }
+  a.card:hover { border-color: var(--teal); }
+  .card h3 { margin: 0 0 6px; font-size: 14px; color: var(--teal); }
+  .card p { margin: 0 0 6px; font-size: 12.5px; color: var(--text-muted); line-height: 1.5; }
+  .badge { display: inline-block; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); border: 1px solid var(--border-light); border-radius: 4px; padding: 1px 6px; margin-bottom: 8px; }
+  h1 { font-size: 18px; margin: 0 0 4px; } h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 22px 0 10px; }
+  p.lede { color: var(--text-muted); font-size: 13px; margin: 0 0 18px; line-height: 1.55; }
+  .small { font-size: 12px; color: var(--text-muted); }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; } td, th { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+</style>
+</head>
+<body>
+{% set active_page = 'research_labs' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+  <a class="small" href="/quant-lab">&larr; Quant Lab</a>
+  <h1>Research Labs</h1>
+  <p class="lede">Seven research engines that feed the backtester, the Search/Evolution labs, the Manual builder and the Gamma analyzer. Every run is <b>reproducible</b> (seeded, spec-hashed),
+    <b>keeps its assumptions</b> next to the answer, labels proxy data as proxy, and reports <b>out-of-sample</b> results. The features they validate are available as indicators in every strategy-creation engine
+    (<code>vp_*</code>, <code>flow_*</code>, <code>spread_zscore</code>, <code>leader_return</code>, <code>event_window</code>).</p>
+  <div class="grid">
+    {% for lab in labs %}
+    <a class="card" href="/research-labs/{{ lab.slug }}">
+      <div class="badge">{{ lab.badge }}</div>
+      <h3>{{ lab.title }}</h3>
+      <p>{{ lab.summary }}</p>
+      <p class="small"><b>Data:</b> {{ lab.data }}</p>
+    </a>
+    {% endfor %}
+  </div>
+  <h2>Recent experiments</h2>
+  {% if recent %}
+  <div class="card"><table><tr><th>Lab</th><th>Result</th><th>Spec hash</th></tr>
+    {% for r in recent %}<tr><td>{{ r.title }}</td><td>{{ r.headline or r.status }}</td><td><code>{{ r.spec_hash }}</code></td></tr>{% endfor %}
+  </table></div>
+  {% else %}<p class="small">No experiments yet — open a lab and run one.</p>{% endif %}
+</div>
+</div>
+<script src="/static/t58-chrome.js" defer></script>
+</body>
+</html>

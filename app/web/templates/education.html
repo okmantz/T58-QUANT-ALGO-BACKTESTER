@@ -52,6 +52,10 @@
   .edu-nav button:disabled { opacity: .35; cursor: default; }
   .edu-nav button.primary { background: var(--teal); color: var(--on-teal); border-color: var(--teal); font-weight: 700; }
   .edu-progress { font-size: 12px; color: var(--text-dim); }
+  .edu-inline-lab { margin: 14px 0 6px; border-left: 3px solid var(--teal); padding-left: 12px; }
+  .edu-inline-lab .edu-lab-tag { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--teal); font-weight: 700; margin-bottom: 6px; }
+  .edu-inline-lab .edu-lab-more { font-size: 11px; color: var(--text-dim); margin-top: -6px; }
+  .edu-inline-lab .edu-lab-more a { color: var(--teal); }
 </style>
 </head>
 <body>
@@ -64,7 +68,7 @@
   <h1>🎓 Education</h1>
   <p>What the numbers and tabs in this app actually mean, and how to think quantitatively about strategy
   research -- not a generic trading course. Work through the modules below in order, or jump straight to
-  the one you need -- if you only read one, make it Validation Lab. New: <a href="#labs" style="color:var(--teal)">interactive labs</a> let you play with the numbers instead of just reading about them.</p>
+  the one you need -- if you only read one, make it Validation Lab. Hands-on labs are built into the lessons they belong to, all five also live together on the <a href="#labs" style="color:var(--teal)">interactive labs</a> tab, and the <a href="/education/knowledge-check" style="color:var(--teal)">knowledge check</a> has its own page.</p>
 </div>
 
 <div class="edu-toc" id="edu-module-tabs">
@@ -72,6 +76,7 @@
   <a href="#{{ section.id }}" data-module="{{ section.id }}">{{ section.icon }} {{ loop.index }}. {{ section.title }}</a>
   {% endfor %}
   <a href="#labs" data-module="labs">🧪 Interactive labs</a>
+  <a href="/education/knowledge-check" class="edu-quiz-link">✅ Knowledge check</a>
 </div>
 
 {% for section in sections %}
@@ -101,6 +106,13 @@
     {% if lesson.see_also %}
     <div class="edu-see-also"><b>See also:</b> {{ lesson.see_also|join(' · ') }}</div>
     {% endif %}
+    {% if lab_slots.get(lesson.id) %}
+    <div class="edu-inline-lab">
+      <div class="edu-lab-tag">🧪 Try it</div>
+      <div class="edu-inline-lab-host" data-lab="{{ lab_slots[lesson.id] }}"></div>
+      <div class="edu-lab-more">All labs together: <a href="#labs" data-module-link="labs">Interactive labs</a></div>
+    </div>
+    {% endif %}
   </div>
   {% endfor %}
 
@@ -120,7 +132,7 @@
   <div class="edu-nav">
     <button type="button" class="edu-prev">&larr; Previous module</button>
     <span class="edu-progress">Interactive labs</span>
-    <span></span>
+    <a class="edu-next-link" href="/education/knowledge-check"><button type="button" class="primary">Knowledge check &rarr;</button></a>
   </div>
 </div>
 
@@ -133,12 +145,19 @@
     var moduleIds = Array.prototype.map.call(document.querySelectorAll('.edu-section'), function (el) {
       return el.getAttribute('data-module');
     });
-    var tabs = document.querySelectorAll('#edu-module-tabs a');
+    var tabs = document.querySelectorAll('#edu-module-tabs a[data-module]');
     var sections = document.querySelectorAll('.edu-section');
 
     function showModule(id) {
       if (moduleIds.indexOf(id) === -1) id = moduleIds[0];
       if (id === 'labs' && !labsMounted && window.T58EduLabs) { labsMounted = true; T58EduLabs.mount(document.getElementById('labs-host')); }
+      // inline labs: mount the ones inside the module being opened (lazily, so a closed module costs nothing)
+      var target = document.getElementById(id);
+      if (target && window.T58EduLabs) {
+        Array.prototype.forEach.call(target.querySelectorAll('.edu-inline-lab-host'), function (h) {
+          if (!h.getAttribute('data-mounted')) { h.setAttribute('data-mounted', '1'); T58EduLabs.mountOne(h, h.getAttribute('data-lab')); }
+        });
+      }
       sections.forEach(function (el) {
         el.classList.toggle('current', el.getAttribute('data-module') === id);
       });
@@ -157,6 +176,9 @@
       });
     });
 
+    document.querySelectorAll('[data-module-link]').forEach(function (a) {
+      a.addEventListener('click', function (e) { e.preventDefault(); var id = a.getAttribute('data-module-link'); window.location.hash = id; showModule(id); });
+    });
     document.querySelectorAll('.edu-next').forEach(function (btn, i) {
       btn.addEventListener('click', function () {
         var next = moduleIds[i + 1];

@@ -38,8 +38,43 @@
   <h2>Finished in the last 6 hours</h2>
   <div id="recent"><div class="empty">Loading&hellip;</div></div>
 </div>
+<div class="runs-card" id="mem-card" data-csrf="{{ csrf_token() }}">
+  <h2>Memory</h2>
+  <div id="mem-line" class="empty">Checking&hellip;</div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:8px;">
+    <button type="button" id="mem-free" style="padding:9px 16px;border-radius:9px;border:1px solid var(--teal);background:none;color:var(--teal);font-weight:700;cursor:pointer;">Free memory now</button>
+    <label style="font-size:12.5px;color:var(--text-muted);"><input type="checkbox" id="mem-ollama" checked> also unload the local Ollama model</label>
+    <span id="mem-msg" style="font-size:12.5px;color:var(--text-muted);"></span>
+  </div>
+  <p class="empty" style="padding:8px 0 0;">Closes idle worker processes, clears caches and finished-job logs, and returns freed memory to the OS. It is refused while a heavy job is running.
+    If &ldquo;app memory&rdquo; keeps climbing while nothing is running, the page flags a possible leak.</p>
 </div>
 </div>
+</div>
+<script>
+(function () {
+  var line = document.getElementById('mem-line'), msg = document.getElementById('mem-msg'), card = document.getElementById('mem-card');
+  function mb(b) { return b == null ? '–' : (b / 1048576 >= 1024 ? (b / 1073741824).toFixed(1) + ' GB' : Math.round(b / 1048576) + ' MB'); }
+  function refresh() {
+    fetch('/api/memory').then(function (r) { return r.json(); }).then(function (d) {
+      if (!d.psutil) { line.textContent = 'Install psutil (pip install psutil) to see memory use here.'; return; }
+      var t = 'App memory ' + mb(d.rss_bytes) + ' (+ workers: ' + mb(d.rss_with_children_bytes) + ') · free RAM ' + mb(d.available_bytes) + ' of ' + mb(d.total_bytes) +
+              ' · swap in use ' + mb(d.swap_used_bytes) + ' of ' + mb(d.swap_total_bytes);
+      if (d.ollama_models && d.ollama_models.length) t += ' · Ollama holds ' + d.ollama_models.map(function (m) { return m.name + ' (' + mb(m.size_bytes) + ')'; }).join(', ');
+      if (d.pressure) t += ' · ⚠ memory pressure';
+      if (d.possible_leak) t += ' · ⚠ app memory is growing while idle (' + d.idle_growth_mb_per_min + ' MB/min): possible leak';
+      line.textContent = t;
+    }).catch(function () { line.textContent = 'Could not read memory status.'; });
+  }
+  document.getElementById('mem-free').addEventListener('click', function () {
+    var tok = card.getAttribute('data-csrf'); msg.textContent = 'Working…';
+    fetch('/api/memory/free', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': tok },
+      body: JSON.stringify({ unload_ollama: document.getElementById('mem-ollama').checked, _csrf_token: tok }) })
+      .then(function (r) { return r.json(); }).then(function (d) { msg.textContent = d.ok ? 'Done.' : d.error; refresh(); });
+  });
+  refresh(); setInterval(refresh, 15000);
+})();
+</script>
 <script>
 (function () {
   function fmt(sec) { if (sec == null) return ''; sec = Math.floor(sec); if (sec < 60) return sec + 's'; if (sec < 3600) return Math.floor(sec/60) + 'm ' + (sec%60) + 's'; return Math.floor(sec/3600) + 'h ' + Math.floor((sec%3600)/60) + 'm'; }

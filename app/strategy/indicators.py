@@ -1330,6 +1330,11 @@ def _build_indicator_series_uncached(frame: pd.DataFrame, kind: str, period: int
     _v9_builder = _indicators_v9.V9_INDICATOR_BUILDERS.get(kind)
     if _v9_builder is not None:
         return _v9_builder(frame, p, column, lookback)
+    # --- v10: research-lab features (volume profile, order flow, spread, lead-lag, events). ---
+    from app.strategy import indicators_v10 as _indicators_v10
+    _v10_builder = _indicators_v10.V10_INDICATOR_BUILDERS.get(kind)
+    if _v10_builder is not None:
+        return _v10_builder(frame, p, column, lookback)
     raise KeyError(kind)
 
 

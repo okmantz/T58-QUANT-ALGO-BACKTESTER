@@ -31,7 +31,7 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-IDLE_SECONDS = 600.0
+IDLE_SECONDS = 120.0
 
 _lock = threading.RLock()
 _pool: Optional[ProcessPoolExecutor] = None

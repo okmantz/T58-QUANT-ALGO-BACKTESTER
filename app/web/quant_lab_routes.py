@@ -156,6 +156,10 @@ def _pre(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 _TOOLS = [
+    {"url": "/gamma", "badge": "Options", "title": "Gamma Center",
+     "description": "Dealer gamma exposure: flip level, call/put walls and regime, with the proxy-vs-real data labelling every gamma-aware strategy uses."},
+    {"url": "/research-labs", "badge": "Research", "title": "Research Labs (7 engines)",
+     "description": "Volume/Market Profile, Order-Flow, Order-Book, Cross-Asset Lead-Lag, Stat-Arb Spreads, Economic Event Study and the Hypothesis Lab: reproducible, out-of-sample-tested research that feeds every strategy engine."},
     {"url": "/quant-lab/translator", "badge": "Deploy", "title": "Universal Strategy Translator",
      "description": "Manual Strategy Builder config -> clean PineScript v5 / MQL5, ready for TradingView or a live MT5 account."},
     {"url": "/quant-lab/regime-selector", "badge": "Auto", "title": "Auto Regime Selector",

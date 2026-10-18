@@ -185,16 +185,23 @@ def _total_memory_bytes() -> int:
 
 def memory_pressure_ok(min_free_fraction: float = _MIN_FREE_MEMORY_FRACTION) -> bool:
     """Low-memory watchdog check: True while free RAM is at or above
-    `min_free_fraction` of total RAM. Returns True (assume fine) when psutil
-    is unavailable, because with no way to measure there is nothing to act on.
-    Callers that loop over heavy work (worker-pool dispatch, null-model seeds,
-    GA generations) should call this between units of work and stop
-    submitting new work -- or shrink their pool -- when it returns False,
-    instead of letting the OS freeze the desktop."""
+    `min_free_fraction` of total RAM AND the machine is not leaning on swap
+    (heavy swap use is what freezes a desktop long before free RAM hits zero).
+    Returns True (assume fine) when psutil is unavailable. Callers that loop
+    over heavy work should call this between units of work and stop
+    submitting new work -- or shrink their pool -- when it returns False."""
     total = _total_memory_bytes()
     if total <= 0:
         return True
-    return _available_memory_bytes() >= total * float(min_free_fraction)
+    if _available_memory_bytes() < total * float(min_free_fraction):
+        return False
+    try:
+        sw = psutil.swap_memory()
+        if sw.total > 0 and sw.used > sw.total * 0.5 and sw.used > 1024 ** 3:
+            return False
+    except Exception:
+        pass
+    return True
 
 
 def shrink_pool_for_memory_pressure(current_workers: int, min_free_fraction: float = _MIN_FREE_MEMORY_FRACTION) -> int:
@@ -251,9 +258,23 @@ class HeavyJobGuard:
             return True
 
     def release(self, name: str) -> None:
+        released = False
         with self._lock:
             if self._active_name == name:
                 self._active_name = None
+                released = True
+        if released:
+            # A heavy job just finished: hand its memory back (gc + heap trim) on a side thread so the caller isn't
+            # delayed. This single hook covers Full Pipeline, Search Lab, Evolution Lab, WFO, Speed Run, etc.
+            def _cleanup() -> None:
+                try:
+                    from app.orchestration.memory_hygiene import release_memory
+
+                    release_memory(f"after:{name}")
+                except Exception:  # noqa: BLE001
+                    pass
+
+            threading.Thread(target=_cleanup, name="t58-post-job-cleanup", daemon=True).start()
 
     @property
     def active_name(self) -> Optional[str]:

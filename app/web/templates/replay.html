@@ -25,6 +25,10 @@
     color: var(--t-soft); font-size: 13px; font-weight: 600; cursor: pointer;
   }
   .strategy-tab-btn.active { background: var(--teal); color: var(--on-teal); border-color: var(--teal); }
+  .rp-tabs { display: flex; gap: 8px; margin: 0 0 14px; flex-wrap: wrap; }
+  .rp-tab { padding: 9px 16px; border-radius: 9px; border: 1px solid var(--border-light); background: none; color: var(--text); cursor: pointer; font-size: 13.5px; }
+  .rp-tab.on { border-color: var(--teal); color: var(--teal); font-weight: 700; }
+  .rp-panel[hidden] { display: none; }
 </style>
 </head>
 <body>
@@ -41,14 +45,21 @@
 <div class="error">{{ error }}</div>
 {% endif %}
 
+<div class="rp-tabs" role="tablist">
+  <button type="button" class="rp-tab on" role="tab" id="rp-tab-replay" data-tab="replay">Interactive replay</button>
+  <button type="button" class="rp-tab" role="tab" id="rp-tab-propsim" data-tab="propsim">Prop-firm evaluation simulator</button>
+</div>
+
+<div class="rp-panel" id="rp-panel-propsim" role="tabpanel" hidden>
 <div class="card" id="propsim-card">
   <h2>Prop-firm evaluation simulator <span style="text-transform:none;letter-spacing:0;font-weight:400;">&mdash; a second, visual replay</span></h2>
   <p style="font-size:13px;color:var(--text-muted);margin:0 0 10px;">Pick a firm's rules and a strategy's edge, then drag <b>risk per trade</b>. The profit-target bar, daily-loss and trailing-drawdown gauges, drawdown floor, remaining loss allowance, trading days, consistency progress and the pass / fail / payout odds all change instantly. Press Play to watch one attempt unfold day by day.</p>
   <div id="propsim-host"></div>
 </div>
+</div><!-- /rp-panel-propsim -->
 <script src="/static/t58-propsim.js"></script>
-<script>window.addEventListener('DOMContentLoaded', function () { if (window.T58PropSim) T58PropSim.mount(document.getElementById('propsim-host')); });</script>
 
+<div class="rp-panel" id="rp-panel-replay" role="tabpanel">
 <form method="post" action="/replay/prepare" enctype="multipart/form-data">
   <div class="card">
     <h2>1. Market Data</h2>
@@ -139,6 +150,23 @@
 
   <button class="submit-btn" type="submit">Prepare Replay</button>
 </form>
+</div><!-- /rp-panel-replay -->
+<script>
+  (function () {
+    var mounted = false;
+    function show(name) {
+      document.getElementById('rp-panel-replay').hidden = (name !== 'replay');
+      document.getElementById('rp-panel-propsim').hidden = (name !== 'propsim');
+      document.getElementById('rp-tab-replay').classList.toggle('on', name === 'replay');
+      document.getElementById('rp-tab-propsim').classList.toggle('on', name === 'propsim');
+      if (name === 'propsim' && !mounted && window.T58PropSim) { mounted = true; T58PropSim.mount(document.getElementById('propsim-host')); }
+      try { history.replaceState(null, '', name === 'propsim' ? '#propsim' : location.pathname); } catch (e) {}
+    }
+    document.getElementById('rp-tab-replay').addEventListener('click', function () { show('replay'); });
+    document.getElementById('rp-tab-propsim').addEventListener('click', function () { show('propsim'); });
+    window.addEventListener('DOMContentLoaded', function () { if (location.hash === '#propsim') show('propsim'); });
+  })();
+</script>
 
 </div>
 </div>

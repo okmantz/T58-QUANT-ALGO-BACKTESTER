@@ -1748,8 +1748,11 @@ def run_full_pipeline(
     # Only overrides when the caller hasn't already pinned an explicit
     # value (batch mode already computes its own per-item split; this
     # additionally caps that against available memory).
-    _safe_fp_workers = safe_worker_count(dev_df, requested=cfg.parallel_search_max_workers)
-    if _safe_fp_workers != (cfg.parallel_search_max_workers or _safe_fp_workers):
+    # Default to HALF the cores (not all of them): the GA is memory-bandwidth-bound well before it is core-bound, and
+    # leaving cores free keeps the desktop (and Ollama) responsive instead of swapping.
+    _default_workers = max(1, (os.cpu_count() or 2) // 2)
+    _safe_fp_workers = safe_worker_count(dev_df, requested=cfg.parallel_search_max_workers or _default_workers)
+    if _safe_fp_workers != (cfg.parallel_search_max_workers or _default_workers):
         log(
             f"Reducing Full Pipeline GA worker processes from {cfg.parallel_search_max_workers} to "
             f"{_safe_fp_workers} -- {len(dev_df):,} bars is large enough that more full copies of it "
@@ -2090,6 +2093,7 @@ def run_full_pipeline(
 
     # -- Step 2: robust (walk-forward-aware) optimization ----------------
     _check_cancel()
+    _step_boundary_cleanup()  # free the previous step's temporaries before the next heavy step
     log("Step 2/7: Searching for a more robust configuration (walk-forward-aware GA)...")
     _progress(2, 0.0, "Walk-forward-aware GA search")
     refinement_ran = False
@@ -2358,10 +2362,12 @@ def run_full_pipeline(
         _check_cancel()
         _progress(3, 0.0, "Final validation")
         if _final_is_baseline:
+            _step_boundary_cleanup()  # free the previous step's temporaries before the next heavy step
             log("Step 3/7: Final validation -- the winning configuration is identical to the "
                 "baseline, reusing the Step 1 backtest instead of re-running it...")
             final_bt = baseline_bt
         else:
+            _step_boundary_cleanup()  # free the previous step's temporaries before the next heavy step
             log("Step 3/7: Final validation (full backtest, prop simulation, Monte Carlo)...")
             final_bt = run_backtest(dev_df, final_strategy, risk, adaptive_risk=adaptive_risk)
             for w in final_bt.warnings:
@@ -2456,6 +2462,7 @@ def run_full_pipeline(
 
         # -- Step 4: out-of-sample fold check (no re-tuning) --------------
         _check_cancel()
+        _step_boundary_cleanup()  # free the previous step's temporaries before the next heavy step
         log("Step 4/7: Out-of-sample fold check (same configuration, no further tuning)...")
         _progress(4, 0.0, "Out-of-sample fold check")
         oos_validation = None
@@ -2513,6 +2520,7 @@ def run_full_pipeline(
         # FullPipelineConfig.reserve_true_holdout).
         _progress(4, 1.0, "Out-of-sample fold check done")
         _check_cancel()
+        _step_boundary_cleanup()  # free the previous step's temporaries before the next heavy step
         log("Step 5/7: Out-of-sample holdout check...")
         _progress(5, 0.0, "Holdout check")
         try:
@@ -2536,6 +2544,7 @@ def run_full_pipeline(
         # it's simply re-deriving its own in-sample/holdout split.
         _progress(5, 1.0, "Holdout check done")
         _check_cancel()
+        _step_boundary_cleanup()  # free the previous step's temporaries before the next heavy step
         log("Step 6/7: ICIR / signal-decay / Bonferroni-corrected significance gate...")
         _progress(6, 0.0, "Significance gates")
         icir_gate = None
@@ -2817,6 +2826,7 @@ def run_full_pipeline(
 
         # -- Step 7: report + save -----------------------------------------
         _check_cancel()
+        _step_boundary_cleanup()  # free the previous step's temporaries before the next heavy step
         log("Step 7/7: Generating final report...")
         _progress(7, 0.0, "Attempt replay + random-entry null")
 
@@ -3541,6 +3551,22 @@ class FullPipelineBatchItem:
     library_ref: tuple[str, str] | None = None     # (strategy_type, filename) -- library-sourced items only
 
 
+
+def _step_boundary_cleanup() -> None:
+    """Between pipeline steps: collect garbage, trim the heap, and (if the machine is swapping) close idle worker pools
+    so the next step starts from a small footprint. Never raises."""
+    try:
+        from app.orchestration.memory_hygiene import memory_pressure, release_memory, unload_ollama
+        release_memory("full-pipeline-step")
+        if memory_pressure():
+            from app.orchestration import stage_pool
+            stage_pool.shutdown_stage_pool(wait=False)
+            # Only Step 2 asks the local model for ideas; once past it, a multi-GB model sitting in RAM/swap is pure cost.
+            unload_ollama()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 @dataclass
 class FullPipelineBatchOutcome:
     label: str
@@ -3551,7 +3577,7 @@ class FullPipelineBatchOutcome:
     net_profit: float = 0.0
     eval_pass_probability: float = 0.0
     report_html: Path | None = None
-    result: "FullPipelineResult | None" = None
+    result: "FullPipelineResult | None" = None     # only populated when the batch is run with keep_results=True
 
 
 @dataclass
@@ -3718,6 +3744,7 @@ def run_full_pipeline_batch(
     progress_cb: ProgressCallback | None = None,
     max_parallel_strategies: int = 1,
     cancel_event: threading.Event | None = None,
+    keep_results: bool = False,
 ) -> FullPipelineBatchSummary:
     """Runs app.orchestration.full_pipeline.run_full_pipeline (the full
     baseline -> walk-forward-aware GA -> final validation -> OOS check ->
@@ -3763,6 +3790,20 @@ def run_full_pipeline_batch(
 
     cfg = cfg or FullPipelineConfig()
     t0 = time.time()
+    if max_parallel_strategies > 1:
+        # Every parallel strategy holds its OWN copy of the data plus a full result; on a low-RAM or swapping machine
+        # that is exactly what ends in "memory killed it". Keep parallelism only while there is real headroom.
+        try:
+            from app.orchestration.memory_hygiene import memory_pressure as _mp
+            from app.orchestration.resource_guard import safe_worker_count as _swc
+            _cap = _swc(df, requested=max_parallel_strategies)
+            if _mp():
+                _cap = 1
+            if _cap < max_parallel_strategies:
+                log(f"Memory guard: running {_cap} strategy(ies) at a time instead of {max_parallel_strategies} to avoid swapping.")
+                max_parallel_strategies = _cap
+        except Exception:  # noqa: BLE001
+            pass
     outcomes_by_index: dict[int, FullPipelineBatchOutcome] = {}
 
     # Every full 7-step pipeline in this batch can easily run for tens of
@@ -3862,9 +3903,17 @@ def run_full_pipeline_batch(
             trades=len(result.final_bt.trades),
             net_profit=result.final_bt.statistics.net_profit,
             eval_pass_probability=result.final_mc.headline_evaluation_pass_probability,
-            report_html=result.report_paths["html"], result=result,
+            report_html=result.report_paths["html"], result=result if keep_results else None,
         )
         _write_progress(len(outcomes_by_index))
+        # Memory hygiene: a finished item's trades/equity curves/Monte Carlo arrays are already in its report on disk.
+        # Dropping them (and trimming the heap) after EVERY item is what keeps a long batch from growing item by item.
+        del result
+        try:
+            from app.orchestration.memory_hygiene import release_memory as _release
+            _release("full-pipeline-batch-item")
+        except Exception:  # noqa: BLE001
+            pass
 
     item_library_refs = {i: item.library_ref for i, item in enumerate(items, start=1)}
     safe_names = {}
@@ -3902,6 +3951,7 @@ def run_full_pipeline_batch(
                 _record(i, item.label, False, None, str(exc))
                 continue
             _record(i, item.label, True, result, None)
+            del result      # the caller's reference too -- otherwise the finished result stays alive during the NEXT item
     else:
         per_item_workers = max(1, (os.cpu_count() or 4) // max_parallel_strategies)
         item_cfg = cfg if cfg.parallel_search_max_workers is not None else replace(

@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Pine Indicator Creator — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<style>
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  textarea { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .tab { padding: 8px 14px; border-radius: 9px; border: 1px solid var(--border-light); background: none; color: var(--text); cursor: pointer; font-size: 13px; }
+  .tab.on { border-color: var(--teal); color: var(--teal); font-weight: 700; }
+  .btn { padding: 11px 18px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: var(--on-teal); font-weight: 700; font-size: 14px; cursor: pointer; }
+  .btn.alt { background: none; color: var(--teal); }
+  h1 { font-size: 18px; margin: 0 0 4px; } .lede { color: var(--text-muted); font-size: 13px; line-height: 1.55; margin: 0 0 14px; }
+  .small { font-size: 12px; color: var(--text-muted); line-height: 1.55; }
+  .issue { border-left: 3px solid var(--border-light); padding: 4px 10px; margin: 4px 0; font-size: 12.5px; background: var(--panel-3); }
+  .issue.error { border-color: var(--coral); } .issue.warning { border-color: var(--amber, #e0a030); }
+  .pill { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--border-light); margin: 2px 4px 2px 0; }
+  .pill.ok { border-color: var(--teal); color: var(--teal); } .pill.bad { border-color: var(--coral); color: var(--coral); }
+  pre.code { margin: 0; white-space: pre; overflow: auto; max-height: 520px; background: var(--panel-3); border: 1px solid var(--border-light); border-radius: 8px; padding: 12px; font-size: 12.5px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+</style>
+</head>
+<body>
+{% set active_page = 'pine_indicator' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main" id="pine" data-csrf="{{ csrf_token() }}">
+  <a class="small" href="/start-here/create" style="text-decoration:none">&larr; Create</a>
+  <h1>Pine Indicator Creator</h1>
+  <p class="lede">Make a <b>TradingView indicator</b> (Pine Script v5) either from a plain-English idea or by pasting code you already have. Every script is checked before you see it.</p>
+
+  <div class="card">
+    <div class="tabs">
+      <button type="button" class="tab on" data-mode="idea">Describe an idea</button>
+      <button type="button" class="tab" data-mode="code">Paste code</button>
+    </div>
+    <div id="pane-idea">
+      <textarea id="idea" rows="5" placeholder="e.g. EMA 21/50/200 ribbon with Bollinger bands, mark liquidity sweeps and fair value gaps, plus RSI 14"></textarea>
+      <p class="small">Recognises: {% for c in catalog %}{{ c.title }}{% if not loop.last %}, {% endif %}{% endfor %}. Numbers after a name set its length (e.g. "EMA 21 50 200", "RSI 7", "MACD 12 26 9").</p>
+    </div>
+    <div id="pane-code" style="display:none">
+      <textarea id="code" rows="14" placeholder="Paste your Pine Script here. Old v4 code is upgraded to v5 automatically."></textarea>
+    </div>
+    <div class="row">
+      <label class="small"><input type="checkbox" id="useai" {% if ai_state == 'on' %}checked{% endif %}> Use the AI model (drafts any idea, then self-repairs; falls back to the built-in library){% if ai_state != 'on' %} — no AI model is configured, so the built-in library will be used{% endif %}</label>
+    </div>
+    <div class="row"><button class="btn" id="go" type="button">Create indicator</button><span class="small" id="status"></span></div>
+  </div>
+
+  <div id="result"></div>
+</div>
+</div>
+<script>
+(function () {
+  var root = document.getElementById('pine'), mode = 'idea';
+  function esc(t) { var d = document.createElement('div'); d.textContent = String(t == null ? '' : t); return d.innerHTML; }
+  Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (b) {
+    b.addEventListener('click', function () {
+      mode = b.getAttribute('data-mode');
+      Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (x) { x.classList.toggle('on', x === b); });
+      document.getElementById('pane-idea').style.display = mode === 'idea' ? '' : 'none';
+      document.getElementById('pane-code').style.display = mode === 'code' ? '' : 'none';
+    });
+  });
+  function scriptCard(title, code, ok, issues, idx) {
+    var h = '<div class="card"><h2>' + esc(title) + ' <span class="pill ' + (ok ? 'ok' : 'bad') + '">' + (ok ? 'passes checks' : 'has problems') + '</span></h2>' +
+      '<pre class="code" id="code-' + idx + '">' + esc(code) + '</pre>' +
+      '<div class="row"><button class="btn" type="button" data-copy="' + idx + '">Copy code</button>' +
+      '<button class="btn alt" type="button" data-dl="' + idx + '">Download .pine</button></div>';
+    (issues || []).forEach(function (i) { h += '<div class="issue ' + esc(i.level) + '">' + (i.line ? 'line ' + i.line + ': ' : '') + esc(i.message) + (i.fix ? ' — <i>' + esc(i.fix) + '</i>' : '') + '</div>'; });
+    return h + '</div>';
+  }
+  document.getElementById('go').addEventListener('click', function () {
+    var text = document.getElementById(mode === 'idea' ? 'idea' : 'code').value, st = document.getElementById('status'), out = document.getElementById('result');
+    st.textContent = 'Working…'; out.innerHTML = '';
+    var tok = root.getAttribute('data-csrf');
+    fetch('/pine-indicator/api/create', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': tok },
+      body: JSON.stringify({ mode: mode, text: text, use_ai: document.getElementById('useai').checked, _csrf_token: tok }) })
+      .then(function (r) { return r.json(); }).then(function (d) {
+        st.textContent = '';
+        if (!d.ok) { out.innerHTML = '<div class="card issue error">' + esc(d.error) + '</div>'; return; }
+        var r = d.result, scripts = [{ title: r.title, code: r.code, ok: r.ok, issues: r.issues }];
+        (r.extra_scripts || []).forEach(function (e) { scripts.push({ title: e.title, code: e.code, ok: e.ok, issues: e.issues }); });
+        var h = '<div class="card"><h2>How it was made</h2><span class="pill">' + esc({ builder: 'built-in component library', llm: 'AI draft, checked & repaired', 'user-code': 'your code, auto-fixed' }[r.source] || r.source) + '</span>';
+        (r.verified_by || []).forEach(function (v) { h += '<span class="pill ok">checked: ' + esc(v) + '</span>'; });
+        (r.changes || []).slice(0, 8).forEach(function (c) { h += '<div class="small">• ' + esc(c) + '</div>'; });
+        (r.notes || []).forEach(function (n) { h += '<div class="small" style="margin-top:6px">' + esc(n) + '</div>'; });
+        h += '</div>';
+        window.__pineScripts = scripts;
+        scripts.forEach(function (s, i) { h += scriptCard(s.title, s.code, s.ok, s.issues, i); });
+        h += '<div class="card"><h2>Add it to TradingView</h2><ol class="small"><li>Open a chart on tradingview.com and click <b>Pine Editor</b> (bottom panel).</li><li>Paste the code, replacing what is there.</li><li>Click <b>Add to chart</b>. If TradingView shows any red error, copy that message back here under “Paste code” and it will be fixed.</li></ol></div>';
+        out.innerHTML = h;
+        Array.prototype.forEach.call(out.querySelectorAll('[data-copy]'), function (b) {
+          b.addEventListener('click', function () {
+            var code = window.__pineScripts[+b.getAttribute('data-copy')].code;
+            (navigator.clipboard ? navigator.clipboard.writeText(code) : Promise.reject()).then(function () { b.textContent = 'Copied'; }).catch(function () {
+              var ta = document.createElement('textarea'); ta.value = code; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); b.textContent = 'Copied'; } catch (e) {} ta.remove(); });
+          });
+        });
+        Array.prototype.forEach.call(out.querySelectorAll('[data-dl]'), function (b) {
+          b.addEventListener('click', function () {
+            var s = window.__pineScripts[+b.getAttribute('data-dl')], blob = new Blob([s.code], { type: 'text/plain' }), a = document.createElement('a');
+            a.href = URL.createObjectURL(blob); a.download = (s.title || 'indicator').replace(/[^A-Za-z0-9_-]+/g, '_') + '.pine'; document.body.appendChild(a); a.click(); a.remove();
+          });
+        });
+      }).catch(function (e) { st.textContent = ''; out.innerHTML = '<div class="card issue error">Request failed: ' + esc(e) + '</div>'; });
+  });
+})();
+</script>
+<script src="/static/t58-chrome.js" defer></script>
+</body>
+</html>

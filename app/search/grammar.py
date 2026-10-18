@@ -120,6 +120,8 @@ INDICATOR_KINDS = (
     "gex_regime", "gex_flip_distance", "gex_call_wall_distance",
     "gex_put_wall_distance", "theta_clock", "gamma_convexity",
     "ema_stack_score", "bull_flag_score", "volume_expansion",
+    # v10: self-contained research-lab features (app.strategy.indicators_v10)
+    "vp_dist_poc", "vp_location", "vp_in_lvn", "flow_delta_z", "flow_cvd_slope", "flow_absorption",
     # w10-astra terminals (Oct-4 analysis, Part A ports #2/#3) -- regime-
     # adaptive RSI zones + session VWAP profile levels. NOT
     # build_indicator_series kinds: they need operand-level parameters
@@ -208,6 +210,9 @@ THRESHOLD_BOUNDS: dict[str, tuple[float, float]] = {
     # v9: bounded gamma/structure terminals -- see V9_BOUNDED_RANGES.
     "gex_regime": (-1.0, 1.0),
     "ema_stack_score": (-1.0, 1.0),
+    # v10 research-lab features (app.strategy.indicators_v10)
+    "vp_location": (-1.0, 1.0), "vp_in_lvn": (0.0, 1.0), "flow_absorption": (-1.0, 1.0),
+    "vp_dist_poc": (-3.0, 3.0), "flow_delta_z": (-3.0, 3.0), "flow_cvd_slope": (-0.5, 0.5),
     "theta_clock": (0.0, 1.0),
 }
 

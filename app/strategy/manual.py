@@ -343,7 +343,10 @@ class ManualStrategy(Strategy):
                     # (app.strategy.indicators_v9).
                     "gex_regime", "gex_flip_distance", "gex_call_wall_distance",
                     "gex_put_wall_distance", "theta_clock", "gamma_convexity",
-                    "ema_stack_score", "bull_flag_score", "volume_expansion"}:
+                    "ema_stack_score", "bull_flag_score", "volume_expansion",
+                    # v10: research-lab features (app.strategy.indicators_v10)
+                    "vp_dist_poc", "vp_location", "vp_in_lvn", "flow_delta_z", "flow_cvd_slope",
+                    "flow_absorption", "spread_zscore", "leader_return", "event_window"}:
             return build_indicator_series(work, kind, period=period, column=field, lookback=lookback)
 
         # --- w10-astra: regime-oscillator + VWAP-profile operand kinds ---

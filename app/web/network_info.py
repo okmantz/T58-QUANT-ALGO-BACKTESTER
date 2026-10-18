@@ -198,23 +198,81 @@ def get_tailscale_ip() -> str | None:
                     pass
         except Exception:
             pass
-    # Fallback if the CLI isn't found/reachable but the Tailscale network
-    # interface might still be up: scan this host's own resolved
-    # addresses for one already in Tailscale's CGNAT range, rather than
-    # shelling out to OS-specific tools like ipconfig/ifconfig.
+    # Fallback if the CLI isn't found/reachable but the Tailscale network interface might still be up: look for an
+    # address already in Tailscale's CGNAT range on this host's own interfaces. Interfaces are read directly (psutil /
+    # getifaddrs) -- NOT by resolving the machine's hostname, which can block for 30+ seconds on a macOS machine whose
+    # hostname does not resolve (the GitHub macOS runners are exactly that), freezing the Mobile Access page.
+    return _cached("tailscale_iface_ip", 20.0, _scan_interfaces_for_tailscale)
+
+
+_CACHE: dict[str, tuple[float, object]] = {}
+
+
+def _cached(key: str, ttl: float, fn):
+    """Tiny TTL cache so a page that asks for the same slow-ish answer several times pays for it once."""
+    import time as _t
+
+    now = _t.monotonic()
+    hit = _CACHE.get(key)
+    if hit is not None and now - hit[0] < ttl:
+        return hit[1]
+    value = fn()
+    _CACHE[key] = (now, value)
+    return value
+
+
+def _call_with_timeout(fn, seconds: float, default=None):
+    """Run ``fn`` on a daemon thread and give up after ``seconds`` (the thread is abandoned, never joined)."""
+    import threading
+
+    box: list = []
+
+    def run():
+        try:
+            box.append(fn())
+        except Exception:  # noqa: BLE001
+            pass
+
+    t = threading.Thread(target=run, daemon=True, name="t58-net-probe")
+    t.start()
+    t.join(seconds)
+    return box[0] if box else default
+
+
+def _scan_interfaces_for_tailscale() -> str | None:
+    def via_psutil():
+        import psutil
+
+        for addrs in psutil.net_if_addrs().values():
+            for a in addrs:
+                if a.family == socket.AF_INET:
+                    try:
+                        if ipaddress.ip_address(a.address) in TAILSCALE_CGNAT_RANGE:
+                            return a.address
+                    except ValueError:
+                        continue
+        return None
+
     try:
+        found = _call_with_timeout(via_psutil, 2.0, None)
+        if found:
+            return found
+    except Exception:  # noqa: BLE001
+        pass
+
+    def via_hostname():
         for family, _, _, _, sockaddr in socket.getaddrinfo(socket.gethostname(), None):
             if family != socket.AF_INET:
                 continue
-            addr = sockaddr[0]
             try:
-                if ipaddress.ip_address(addr) in TAILSCALE_CGNAT_RANGE:
-                    return addr
+                if ipaddress.ip_address(sockaddr[0]) in TAILSCALE_CGNAT_RANGE:
+                    return sockaddr[0]
             except ValueError:
                 continue
-    except Exception:
-        pass
-    return None
+        return None
+
+    # Last resort, bounded: a hostname lookup that does not answer within 1.5 s is treated as "no Tailscale address".
+    return _call_with_timeout(via_hostname, 1.5, None)
 
 
 def tailscale_url(port: int | None = None) -> str | None:

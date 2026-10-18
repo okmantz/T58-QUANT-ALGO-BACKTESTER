@@ -55,6 +55,9 @@ CONDITION_SOURCES = [
     # v9 (2026-10-17): gamma-exposure + structure indicators (app.strategy.indicators_v9)
     "GEX Regime", "GEX Flip Distance", "GEX Call Wall Distance", "GEX Put Wall Distance", "Theta Clock",
     "Gamma Convexity", "EMA Stack Score", "Bull Flag Score", "Volume Expansion",
+    # v10: research-lab features (app.strategy.indicators_v10)
+    "VP Distance To POC", "VP Value Area Location", "VP At Low-Volume Node", "Flow Delta Z", "Flow CVD Slope",
+    "Flow Absorption", "Spread Z-Score", "Leader Return", "Event Window",
 ]
 RIGHT_SOURCES = ["Value"] + CONDITION_SOURCES
 
@@ -76,6 +79,9 @@ SOURCE_KIND = {
     "GEX Call Wall Distance": "gex_call_wall_distance", "GEX Put Wall Distance": "gex_put_wall_distance",
     "Theta Clock": "theta_clock", "Gamma Convexity": "gamma_convexity", "EMA Stack Score": "ema_stack_score",
     "Bull Flag Score": "bull_flag_score", "Volume Expansion": "volume_expansion",
+    "VP Distance To POC": "vp_dist_poc", "VP Value Area Location": "vp_location", "VP At Low-Volume Node": "vp_in_lvn",
+    "Flow Delta Z": "flow_delta_z", "Flow CVD Slope": "flow_cvd_slope", "Flow Absorption": "flow_absorption",
+    "Spread Z-Score": "spread_zscore", "Leader Return": "leader_return", "Event Window": "event_window",
 }
 
 OPERATORS = [
@@ -104,6 +110,8 @@ PERIOD_KINDS = {
     "atr_regime", "volatility_regime", "ib_contraction_ratio",
     "gex_regime", "gex_flip_distance", "gex_call_wall_distance", "gex_put_wall_distance", "theta_clock",
     "gamma_convexity", "ema_stack_score", "bull_flag_score", "volume_expansion",
+    "vp_dist_poc", "vp_location", "vp_in_lvn", "flow_delta_z", "flow_cvd_slope", "flow_absorption",
+    "spread_zscore", "leader_return", "event_window",
 }
 DEFAULT_PERIOD = {
     "rsi": 14, "atr": 14, "atr_regime": 14, "volatility_regime": 14, "average_volume": 20,
@@ -111,6 +119,8 @@ DEFAULT_PERIOD = {
     "liquidity_sweep": 20, "break_of_structure": 20, "change_of_character": 10, "fair_value_gap": 2,
     "gex_regime": 14, "gex_flip_distance": 14, "gex_call_wall_distance": 14, "gex_put_wall_distance": 14,
     "theta_clock": 14, "gamma_convexity": 14, "ema_stack_score": 9, "bull_flag_score": 6, "volume_expansion": 20,
+    "vp_dist_poc": 14, "vp_location": 14, "vp_in_lvn": 14, "flow_delta_z": 20, "flow_cvd_slope": 20, "flow_absorption": 20,
+    "spread_zscore": 60, "leader_return": 4, "event_window": 6,
     "order_block": 20, "bollinger_mid": 20, "bollinger_upper": 20, "bollinger_lower": 20,
     # Trailing days of prior Initial Balance ranges averaged for the contraction
     # ratio's denominator -- this field doubles as `lookback` (see manual.py's

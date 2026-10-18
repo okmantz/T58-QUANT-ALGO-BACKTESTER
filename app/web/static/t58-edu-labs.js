@@ -1,7 +1,10 @@
 /* T58 Education -- interactive labs (2026-10-17). Learn by playing with the numbers instead of only reading about them.
  * Pure DOM + SVG, no dependencies; every lab is self-contained and seeded so results are reproducible.
  * Labs: 1 Edge calculator, 2 Risk-per-trade fan, 3 Trailing-drawdown game, 4 Overfit-your-own-strategy,
- *       5 Gamma regime explorer, 6 Knowledge check.
+ *       5 Gamma regime explorer.   (The 6-question knowledge check is its own page: see mountQuiz.)
+ *
+ * Every lab can be mounted two ways: ALL of them together on the Interactive labs tab (mount), or ONE at a time
+ * inside the lesson it belongs to (mountOne) so a module reads in chunks instead of one long wall of text.
  */
 (function (root) {
   'use strict';
@@ -149,7 +152,6 @@
     ['3. Trailing-drawdown game', 'Win and lose trades by hand and see exactly how the prop-firm floor trails your peak.', lab3],
     ['4. Overfit a strategy on noise', 'Optimize a moving-average pair on random prices and watch it fail on unseen data.', lab4],
     ['5. Gamma regime explorer', 'Move price around the gamma flip and walls to see how dealer hedging changes the market.', lab5],
-    ['6. Knowledge check', 'Six quick questions with instant explanations.', lab6],
   ];
   function css() {
     var s = document.createElement('style');
@@ -161,9 +163,22 @@
       '.lab-q{margin:0 0 12px}.lab-opt{display:block;width:100%;text-align:left;margin:5px 0;padding:9px 12px;border-radius:8px;border:1px solid var(--border-light);background:var(--panel-2);color:var(--text);font-size:13px;cursor:pointer}.lab-opt.right{border-color:var(--teal);background:rgba(53,224,176,.14)}.lab-opt.wrong{border-color:var(--coral);background:rgba(255,111,111,.12)}.lab-fb{font-size:12.5px;color:var(--text-muted);margin-top:4px}';
     document.head.appendChild(s);
   }
-  root.T58EduLabs = { labs: LABS, rng: rng, backtest: backtest, sma: sma, mount: function (host) {
-    css(); host.textContent = '';
-    LABS.forEach(function (l) { var box = el('div', 'lab'); box.appendChild(el('h3', null, l[0])); box.appendChild(el('p', 'desc', l[1])); var body = el('div'); box.appendChild(body); host.appendChild(box); l[2](body); });
-  } };
+  function labBox(l) {
+    var box = el('div', 'lab'); box.appendChild(el('h3', null, l[0])); box.appendChild(el('p', 'desc', l[1])); var body = el('div'); box.appendChild(body); l[2](body); return box;
+  }
+  root.T58EduLabs = { labs: LABS, quiz: QUIZ, rng: rng, backtest: backtest, sma: sma,
+    /* every lab, stacked: the Interactive labs tab */
+    mount: function (host) {
+      css(); host.textContent = '';
+      LABS.forEach(function (l) { host.appendChild(labBox(l)); });
+    },
+    /* one lab (1-based number) inside the lesson it belongs to */
+    mountOne: function (host, n) {
+      var l = LABS[(parseInt(n, 10) || 0) - 1]; if (!l) return false;
+      css(); host.textContent = ''; host.appendChild(labBox(l)); return true;
+    },
+    /* the knowledge check, on its own page */
+    mountQuiz: function (host) { css(); host.textContent = ''; var box = el('div', 'lab'); lab6(box); host.appendChild(box); }
+  };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.T58EduLabs;
 })(typeof window !== 'undefined' ? window : globalThis);

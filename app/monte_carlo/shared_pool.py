@@ -25,7 +25,7 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 from typing import Optional
 
-IDLE_SECONDS = 600.0
+IDLE_SECONDS = 120.0
 
 _lock = threading.RLock()
 _pool: Optional[ProcessPoolExecutor] = None

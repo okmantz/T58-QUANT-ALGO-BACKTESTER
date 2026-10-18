@@ -83,6 +83,29 @@ def default_tag_groups() -> list[dict]:
     ]
 
 
+def add_tags(group_name: str, names: list[str]) -> list[str]:
+    """Add tag names to a journal tag group (created if missing); existing names are skipped. Returns the names actually added."""
+    names = [str(n).strip()[:80] for n in names if str(n).strip()]
+    if not names:
+        return []
+    with _LOCK:
+        data = load()
+        groups = data["settings"].setdefault("tagGroups", [])
+        grp = next((g for g in groups if g.get("name") == group_name), None)
+        if grp is None:
+            grp = {"id": _uid(), "name": group_name, "items": []}
+            groups.append(grp)
+        have = {i.get("name") for i in grp["items"]}
+        added = []
+        for n in names:
+            if n not in have:
+                grp["items"].append({"id": _uid(), "name": n, "color": TAG_COLORS[len(grp["items"]) % len(TAG_COLORS)]})
+                have.add(n)
+                added.append(n)
+        _write(data)
+        return added
+
+
 def default_settings() -> dict:
     return {"displayName": "Owen Mantz", "accountBalance": 10000,
             "playbooks": default_playbooks(), "tagGroups": default_tag_groups()}

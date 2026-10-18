@@ -44,6 +44,8 @@ SECTION_GUIDES = {
             {"name": "Speed Run", "href": "/speed-run", "desc": "Faster, narrower single-pass version of Forge."},
             {"name": "Multi-Instrument Speed Run", "href": "/speed-run/multi-instrument", "desc": "Speed Run across several datasets at once."},
             {"name": "Strategy Library", "href": "/library", "desc": "Build, edit, or browse strategies directly."},
+            {"name": "Pine Indicator Creator", "href": "/pine-indicator",
+             "desc": "TradingView (Pine v5) indicators from an idea or pasted code, checked before you copy them."},
         ],
         # "More tools" (Oct 2026): power tools that also create strategies -- shown in a collapsible
         # "More tools" block on the Create page (web) and Start Here card (desktop). Evolution Lab
@@ -208,6 +210,9 @@ DESKTOP_NAV_FOR_HREF = {
     "/hedge-fund": "hedgefund", "/settings/api-keys": "apikeys", "/settings/account": "account",
     "/settings/notifications": "account", "/support": "support",
 }
+
+# Tools that exist only in the web app (no desktop tab); the desktop Start Here page skips them.
+WEB_ONLY_HREFS = frozenset({"/pine-indicator"})
 
 # Sections that get a desktop Start Here page. (Optimize and Validate already
 # have their own overview pages on both builds.)

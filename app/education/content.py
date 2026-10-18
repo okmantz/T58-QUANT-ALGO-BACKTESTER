@@ -1068,6 +1068,17 @@ EDUCATION_SECTIONS: tuple[EducationSection, ...] = (
 _BY_ID: dict[str, EducationSection] = {s.id: s for s in EDUCATION_SECTIONS}
 
 
+# Interactive labs placed inside the lesson they belong to (lesson id -> lab number in static/t58-edu-labs.js LABS).
+# The Interactive labs tab still shows all five together; these slots just break up the reading.
+LESSON_LAB_SLOTS: dict[str, int] = {
+    "stops-targets-position-sizing": 2,      # risk-per-trade fan
+    "regime-filters": 5,                     # gamma regime explorer
+    "profit-factor-expectancy": 1,           # edge calculator
+    "in-sample-out-of-sample": 4,            # overfit a strategy on noise
+    "trailing-vs-static-drawdown": 3,        # trailing-drawdown game
+}
+
+
 def list_sections() -> list[EducationSection]:
     return list(EDUCATION_SECTIONS)
 

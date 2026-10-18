@@ -60,6 +60,8 @@ from app.web.notifications import (
 )
 from app.web import onboarding
 from app.web.quant_lab_routes import quant_lab_bp
+from app.web.research_lab_routes import research_lab_bp
+from app.web.pine_indicator_routes import pine_indicator_bp
 from app.web.webhook_relay_routes import webhook_relay_bp
 from app.web.extra_routes import extra_bp
 from app.web.v9_routes import v9_bp
@@ -773,6 +775,8 @@ def account_lock_unlock():
 # composer, and the app/quant_lab/ toolkit) lives in its own Blueprint --
 # see app/web/quant_lab_routes.py's module docstring for why.
 app.register_blueprint(quant_lab_bp)
+app.register_blueprint(research_lab_bp)
+app.register_blueprint(pine_indicator_bp)
 # T58 AI Assistant (chat + chart/trade screenshot analysis) -- was defined
 # in app/web/ai_assistant_routes.py but never actually registered here, so
 # /assistant was unreachable from the web app; wiring it in now, alongside
@@ -1534,7 +1538,14 @@ def education():
     the desktop Education tab (app.ui.main_window._build_education_tab)
     render from, so the two can never drift apart. No form, no job, no
     report; just a reading page, same as Resources and User Manual."""
-    return render_template("education.html", active_page="education", sections=education_content.list_sections())
+    return render_template("education.html", active_page="education", sections=education_content.list_sections(),
+                           lab_slots=education_content.LESSON_LAB_SLOTS)
+
+
+@app.route("/education/knowledge-check")
+def education_knowledge_check():
+    """The six-question knowledge check, on its own page (it used to be the last card of the Interactive labs tab)."""
+    return render_template("education_quiz.html", active_page="education_quiz")
 
 
 @app.route("/user-manual")
@@ -1717,6 +1728,38 @@ def api_running_jobs():
         row = _job_row(job, now)
         (recent if row["done"] else running).append(row)
     return jsonify({"running": running, "recent": recent[:12], "server_time": now})
+
+
+@app.route("/api/memory")
+def api_memory_status():
+    """Live memory picture for diagnosing slowness / leaks: this process's RSS (and its workers'), free RAM, swap use,
+    Ollama's resident models, and an RSS history with an idle-growth estimate (``possible_leak`` is true only when RSS keeps
+    climbing while no heavy job is running)."""
+    from app.orchestration.memory_hygiene import memory_status
+
+    return jsonify(memory_status())
+
+
+@app.route("/api/memory/free", methods=["POST"])
+def api_memory_free():
+    """One-click 'free memory now': refuses while a heavy job is running (closing its worker pool would break it),
+    otherwise closes idle worker pools, prunes finished jobs, trims the heap and (optionally) unloads Ollama's models."""
+    from app.orchestration.memory_hygiene import idle_cleanup, memory_status
+
+    if HEAVY_JOB_GUARD.active_name is not None:
+        return jsonify({"ok": False, "error": f"'{HEAVY_JOB_GUARD.active_name}' is running; wait for it to finish or stop it first."}), 409
+    body = request.get_json(silent=True) or {}
+    done = idle_cleanup(idle_unload_ollama=bool(body.get("unload_ollama", True)))
+    return jsonify({"ok": True, "done": done, "status": memory_status()})
+
+
+try:  # keeps an idle app small and records an RSS history so a real leak is visible, not guessed at
+    from app.orchestration.memory_hygiene import start_idle_watchdog as _start_mem_watchdog
+
+    if os.environ.get("T58_DISABLE_MEMORY_WATCHDOG", "") != "1":
+        _start_mem_watchdog()
+except Exception:  # noqa: BLE001
+    pass
 
 
 @app.route("/runs")

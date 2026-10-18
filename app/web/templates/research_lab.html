@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>{{ lab.title }} — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<style>
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  label { display: block; font-size: 13px; color: var(--t-soft); margin: 10px 0 4px; }
+  input[type=text], input[type=number], select, textarea, input[type=file] { width: 100%; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 14px; }
+  textarea { min-height: 280px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; } .row > div { flex: 1; min-width: 150px; }
+  .cb { display: flex; align-items: center; gap: 8px; margin: 12px 0 4px; } .cb input { width: auto; }
+  .btn { padding: 12px 18px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: var(--on-teal); font-weight: 700; font-size: 14px; margin-top: 14px; cursor: pointer; }
+  .btn.alt { background: none; color: var(--teal); }
+  h1 { font-size: 18px; margin: 0 0 4px; } .lede { color: var(--text-muted); font-size: 13px; line-height: 1.55; margin: 0 0 14px; }
+  .small { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+  .headline { font-size: 15px; font-weight: 600; margin: 0 0 8px; }
+  .warn { border-left: 3px solid var(--amber, #e0a030); padding: 6px 10px; margin: 6px 0; font-size: 12.5px; background: var(--panel-3); }
+  .err { border-left: 3px solid var(--coral); color: var(--coral); white-space: pre-wrap; font-size: 13px; }
+  table.r { border-collapse: collapse; font-size: 12px; width: 100%; margin: 6px 0 12px; display: block; overflow-x: auto; }
+  table.r td, table.r th { padding: 4px 8px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+  details.sec { margin: 8px 0; } details.sec > summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+  .kv { font-size: 12.5px; line-height: 1.7; } .kv b { color: var(--t-soft); }
+  a.back { color: var(--text-muted); font-size: 12.5px; text-decoration: none; }
+</style>
+</head>
+<body>
+{% set active_page = 'research_labs' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+  <a class="back" href="/research-labs">&larr; Research Labs</a>
+  <h1>{{ lab.title }}</h1>
+  <p class="lede">{{ lab.summary }}</p>
+  <div class="card">
+    <p class="small"><b>Why it matters:</b> {{ lab.why }}</p>
+    <p class="small"><b>Data needed:</b> {{ lab.data }}</p>
+  </div>
+
+  <form id="labform" data-csrf="{{ csrf_token() }}" enctype="multipart/form-data">
+    <div class="card">
+      <h2>Inputs</h2>
+      {% if lab.markets %}
+      <label>Market data already in the app{% if lab.markets > 1 %} (choose {{ 'exactly 2' if lab.exact_markets else '2 or more' }} — hold Ctrl/Cmd){% endif %}</label>
+      <select name="datasets" {% if lab.markets > 1 %}multiple size="6"{% endif %}>
+        {% if lab.markets == 1 %}<option value="">-- upload a file instead --</option>{% endif %}
+        {% for d in datasets %}<option value="{{ d }}">{{ d }}</option>{% endfor %}
+      </select>
+      <label>…or upload CSV file(s){% if lab.markets > 1 %} (one per market){% endif %}</label>
+      <input type="file" name="uploads" accept=".csv,.txt" {% if lab.markets > 1 %}multiple{% endif %}>
+      {% endif %}
+      {% if lab.trades_upload %}<label>Optional: trade-level CSV (timestamp, price, size, side) for TRUE footprint data</label><input type="file" name="trades" accept=".csv">{% endif %}
+      {% if lab.book_upload %}<label>Level 2 book snapshots CSV (timestamp, bid_px_1.., bid_sz_1.., ask_px_1.., ask_sz_1..)</label><input type="file" name="book" accept=".csv">
+        <label>Optional: trades CSV (timestamp, price, size, side)</label><input type="file" name="trades" accept=".csv">{% endif %}
+      {% if lab.events_upload %}<label>Events CSV (column <code>timestamp</code>, optional <code>event</code>) — same timezone as the bars</label><input type="file" name="events" accept=".csv">{% endif %}
+      {% if lab.fields %}<div class="row">
+        {% for f in lab.fields %}{% if f[2] == 'checkbox' %}</div><div class="cb"><input type="checkbox" id="{{ f[0] }}" name="{{ f[0] }}"><label for="{{ f[0] }}" style="margin:0">{{ f[1] }}</label></div><div class="row">
+        {% else %}<div><label for="{{ f[0] }}">{{ f[1] }}</label><input id="{{ f[0] }}" name="{{ f[0] }}" type="{{ 'number' if f[2]=='number' else 'text' }}" step="any" value="{{ f[3] }}"></div>{% endif %}{% endfor %}
+      </div>{% endif %}
+      {% if lab.spec_editor %}
+      <label>Experiment spec (JSON) — fix this BEFORE running. Features: none, htf_confirm, trend_ema, volume_spike, range_expansion, session_hours, indicator (e.g. <code>{"type":"indicator","kind":"gex_regime","op":">","value":0}</code>)</label>
+      <textarea name="spec" id="spec">{{ default_spec }}</textarea>{% endif %}
+      <label>Random seed (same seed + same data + same settings = same answer)</label>
+      <input type="number" name="seed" value="58">
+      <button class="btn" type="submit" id="runbtn">Run experiment</button>
+    </div>
+  </form>
+
+  <div id="out"></div>
+
+  {% if recent %}<div class="card"><h2>Recent runs of this lab</h2>
+    {% for r in recent %}<div class="small"><a href="/research-labs/api/experiment/{{ r.lab }}/{{ r.id }}" target="_blank" rel="noopener">{{ r.headline or r.title }}</a></div>{% endfor %}</div>{% endif %}
+</div>
+</div>
+<script>
+(function () {
+  var form = document.getElementById('labform'), out = document.getElementById('out'), btn = document.getElementById('runbtn');
+  function esc(t) { var d = document.createElement('div'); d.textContent = String(t == null ? '' : t); return d.innerHTML; }
+  function fmt(v) { if (v === null || v === undefined) return '–'; if (typeof v === 'number') return Math.abs(v) >= 1000 ? v.toFixed(0) : (Math.abs(v) < 0.0001 && v !== 0 ? v.toExponential(2) : (+v.toFixed(4)).toString()); if (typeof v === 'boolean') return v ? 'yes' : 'no'; return esc(v); }
+  function table(rows) {
+    var keys = []; rows.slice(0, 60).forEach(function (r) { Object.keys(r).forEach(function (k) { if (keys.indexOf(k) < 0 && (typeof r[k] !== 'object' || r[k] === null)) keys.push(k); }); });
+    var h = '<table class="r"><tr>' + keys.map(function (k) { return '<th>' + esc(k) + '</th>'; }).join('') + '</tr>';
+    rows.slice(0, 200).forEach(function (r) { h += '<tr>' + keys.map(function (k) { return '<td>' + fmt(r[k]) + '</td>'; }).join('') + '</tr>'; });
+    return h + '</table>' + (rows.length > 200 ? '<div class="small">showing first 200 of ' + rows.length + '</div>' : '');
+  }
+  function render(v, depth) {
+    if (Array.isArray(v)) {
+      if (!v.length) return '<div class="small">(none)</div>';
+      if (typeof v[0] === 'object' && v[0] !== null && !Array.isArray(v[0])) return table(v);
+      return '<div class="small">' + v.slice(0, 40).map(fmt).join(', ') + '</div>';
+    }
+    if (v && typeof v === 'object') {
+      var h = '', kv = '';
+      Object.keys(v).forEach(function (k) {
+        var x = v[k];
+        if (x && typeof x === 'object') h += '<details class="sec"' + (depth < 1 ? ' open' : '') + '><summary>' + esc(k.replace(/_/g, ' ')) + '</summary>' + render(x, depth + 1) + '</details>';
+        else kv += '<div><b>' + esc(k.replace(/_/g, ' ')) + ':</b> ' + fmt(x) + '</div>';
+      });
+      return (kv ? '<div class="kv">' + kv + '</div>' : '') + h;
+    }
+    return fmt(v);
+  }
+  form.addEventListener('submit', function (e) {
+    e.preventDefault(); btn.disabled = true; btn.textContent = 'Running…'; out.innerHTML = '';
+    var fd = new FormData(form), tok = form.getAttribute('data-csrf');
+    fd.append('_csrf_token', tok);
+    fetch('/research-labs/{{ slug }}/run', { method: 'POST', body: fd, headers: { 'X-CSRF-Token': tok } })
+      .then(function (r) { return r.json(); }).then(function (d) {
+        btn.disabled = false; btn.textContent = 'Run experiment';
+        if (!d.ok) { out.innerHTML = '<div class="card err">' + esc(d.error) + '</div>'; return; }
+        var rec = d.record, res = rec.results || {}, h = '<div class="card"><h2>Result</h2><div class="headline">' + esc(res.headline || rec.title) + '</div>';
+        (rec.warnings || []).forEach(function (w) { h += '<div class="warn">' + esc(w) + '</div>'; });
+        h += '<div class="small">Experiment <code>' + esc(rec.id) + '</code> · spec hash <code>' + esc(rec.spec_hash) + '</code> · seed ' + esc(rec.seed) + ' · engine ' + esc(rec.engine_version) + '</div></div>';
+        var body = {}; Object.keys(res).forEach(function (k) { if (k !== 'headline') body[k] = res[k]; });
+        h += '<div class="card"><h2>Details</h2>' + render(body, 0) + '</div>';
+        h += '<div class="card"><h2>Assumptions (travel with this result)</h2><ul class="small">' + (rec.assumptions || []).map(function (a) { return '<li>' + esc(a) + '</li>'; }).join('') + '</ul>' +
+             '<details class="sec"><summary>Data fingerprint</summary>' + render(rec.data || {}, 1) + '</details>' +
+             '<div class="row"><a class="btn alt" style="text-decoration:none" target="_blank" rel="noopener" href="/research-labs/api/experiment/' + encodeURIComponent(rec.lab) + '/' + encodeURIComponent(rec.id) + '">Download full JSON</a>' +
+             '<button type="button" class="btn alt" id="tagbtn">Send surviving findings to the Journal as tags</button><span class="small" id="tagmsg"></span></div></div>';
+        out.innerHTML = h; out.scrollIntoView({ behavior: 'smooth' });
+        document.getElementById('tagbtn').addEventListener('click', function () {
+          fetch('/research-labs/api/journal-tags', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': tok }, body: JSON.stringify({ lab: rec.lab, id: rec.id, _csrf_token: tok }) })
+            .then(function (r) { return r.json(); }).then(function (d) { document.getElementById('tagmsg').textContent = d.ok ? (d.message || ('Added ' + (d.added || []).length + ' tag(s) to the Journal (' + d.group + ').')) : d.error; });
+        });
+      }).catch(function (err) { btn.disabled = false; btn.textContent = 'Run experiment'; out.innerHTML = '<div class="card err">Request failed: ' + esc(err) + '</div>'; });
+  });
+})();
+</script>
+<script src="/static/t58-chrome.js" defer></script>
+</body>
+</html>

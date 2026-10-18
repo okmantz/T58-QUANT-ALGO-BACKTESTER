@@ -1,7 +1,7 @@
-/* T58 install-as-app helper (2026-10-17).
+/* T58 install-as-app helper (2026-10-17; moved to the Mobile Access "Install app" tab 2026-10-18).
  *
  * - Registers the ROOT-scope service worker (/sw.js) on every page.
- * - Captures Chrome's `beforeinstallprompt` and shows an "Install app" button in the sidebar when the browser allows it.
+ * - Captures Chrome's `beforeinstallprompt` and shows an "Install app" button inside the Mobile Access page's Install tab (#t58-install-slot) when the browser allows it.
  * - When the browser does NOT allow it (the usual reason on a phone: the page is on plain http:// -- Chrome only installs
  *   apps from HTTPS or localhost), the same button explains exactly why and how to fix it, instead of leaving you with
  *   Chrome's "This app cannot be installed."
@@ -53,7 +53,7 @@
     if (!r.ok && !secure) {
       steps =
         '<ol style="padding-left:20px;line-height:1.6;margin:10px 0">' +
-        '<li><b>Best (free, 2 minutes):</b> on the PC open <a href="/mobile-access" style="color:var(--teal,#35e0b0)">Mobile Access</a> and press ' +
+        '<li><b>Best (free, 2 minutes):</b> on the PC open <a href="/mobile-access#install" style="color:var(--teal,#35e0b0)">Mobile Access &rarr; Install app</a> and press ' +
         '<b>Enable HTTPS (Tailscale)</b>. Then open the <code>https://…ts.net</code> address it shows on your phone and tap Install.</li>' +
         '<li><b>No Tailscale?</b> Run <code>cloudflared tunnel --url http://localhost:' + esc(location.port || "5000") + '</code> on the PC and open the https address it prints.</li>' +
         '<li><b>Quick workaround (this phone only):</b> in Chrome open <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>, ' +
@@ -83,16 +83,15 @@
 
   function paint() {
     var host = document.getElementById("t58-install-slot");
-    if (!host) return;
-    if (standalone) { host.innerHTML = ""; return; }
-    var ok = !!deferred;
-    host.innerHTML = '<button type="button" id="t58-install-btn" class="t58-nav-item top-level" style="width:100%;text-align:left;background:none;border:0;cursor:pointer;font:inherit;color:inherit">' +
-      '<span class="t58-nav-icon">⬇</span><span class="label">Install app' + (ok ? "" : " (how?)") + '</span></button>';
-    host.querySelector("button").addEventListener("click", function () {
-      if (deferred) { dialog(); } else { dialog(); }
-    });
+    if (!host) return;                      // only the Mobile Access page has the slot now
+    var note = document.getElementById("install-reason");
+    if (note) { var r = reason(); note.textContent = r.text; note.style.color = r.ok ? "var(--teal,#35e0b0)" : ""; }
+    if (standalone) { host.innerHTML = '<span class="note">Already running as an installed app.</span>'; return; }
+    host.innerHTML = '<button type="button" id="t58-install-btn" class="install-btn' + (deferred ? "" : " alt") + '">' +
+      (deferred ? "Install app" : "Install app (how?)") + "</button>";
+    host.querySelector("button").addEventListener("click", dialog);
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", paint); else paint();
-  window.t58Pwa = { reason: reason, open: dialog };
+  window.t58Pwa = { reason: reason, open: dialog, paint: paint };
 })();

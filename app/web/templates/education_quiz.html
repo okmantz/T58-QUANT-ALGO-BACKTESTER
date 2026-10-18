@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Knowledge Check — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<style>
+  .quiz-wrap { background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-lg, 14px); padding: 22px; max-width: 760px; }
+  .quiz-links { display: flex; gap: 14px; flex-wrap: wrap; margin: 0 0 16px; font-size: 13px; }
+  .quiz-links a { color: var(--teal); text-decoration: none; }
+</style>
+</head>
+<body>
+{% set active_page = 'education_quiz' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>✅ Knowledge check</h1>
+  <p>Six quick questions on what the course covered, with an explanation after every answer. Wrong answers teach more than right ones &mdash; read the explanation either way.</p>
+</div>
+<div class="quiz-links"><a href="/education">&larr; Back to the course</a><a href="/education#labs">Interactive labs</a></div>
+<div class="quiz-wrap"><div id="quiz-host"></div></div>
+</div>
+</div>
+<script src="/static/t58-edu-labs.js"></script>
+<script>
+  (function () { if (window.T58EduLabs) T58EduLabs.mountQuiz(document.getElementById('quiz-host')); })();
+</script>
+<script src="/static/t58-chrome.js" defer></script>
+</body>
+</html>
