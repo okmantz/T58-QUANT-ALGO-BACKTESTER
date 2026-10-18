@@ -76,6 +76,13 @@ def build_start_here_tabs(win) -> None:
         ]
         win._link_card_grid(grid_card, cards)
 
+        more = [
+            (t["name"], t["desc"], DESKTOP_NAV_FOR_HREF[t["href"]])
+            for t in guide.get("more_tools", []) if t["href"] in DESKTOP_NAV_FOR_HREF
+        ]
+        if more:
+            win._link_card_grid(win._section(f, "More tools"), more)
+
 
 # ======================================================================
 # Strategy Library
