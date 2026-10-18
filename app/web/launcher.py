@@ -30,7 +30,8 @@ import webbrowser
 from pathlib import Path
 
 from app.web.network_info import (
-    PORT, find_free_port, get_lan_ip, is_running_under_wine, print_startup_banner, qr_code_file, set_active_port,
+    PORT, ensure_utf8_console, find_free_port, get_lan_ip, is_running_under_wine, print_startup_banner, qr_code_file,
+    set_active_port,
 )
 
 
@@ -105,6 +106,7 @@ def main() -> None:
     # indistinguishable from "nothing is happening" (the exact complaint
     # this fixes) -- a person has no way to tell "it's loading" apart from
     # "it silently died."
+    ensure_utf8_console()
     print("Starting T58 Quant Algo Backtester (web/phone edition)...", flush=True)
     print("(First launch can take a little while to unpack -- please wait.)", flush=True)
 

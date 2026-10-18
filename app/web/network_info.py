@@ -361,6 +361,34 @@ def startup_banner_lines(url: str, qr_path: Path | None) -> list[str]:
     return lines
 
 
+def ensure_utf8_console() -> None:
+    """Best effort: switch stdout/stderr to UTF-8 so emoji and arrows in
+    console output work on Windows (legacy cp1252 consoles). Never raises;
+    `_safe_console_line` below is the backstop if this isn't possible."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+        except Exception:
+            pass
+
+
+def _safe_console_line(line: str) -> str:
+    """Return `line` in a form the current stdout can always encode.
+
+    Windows consoles (and any redirected stdout on Windows) default to a legacy
+    code page such as cp1252, which cannot encode emoji like the phone icon in
+    the banner. An unencodable character must never be able to crash startup,
+    so anything the stream can't represent is replaced rather than raised."""
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        line.encode(encoding)
+        return line
+    except UnicodeEncodeError:
+        return line.encode(encoding, errors="replace").decode(encoding, errors="replace")
+    except LookupError:  # unknown codec name -- fall back to plain ASCII
+        return line.encode("ascii", errors="replace").decode("ascii")
+
+
 def print_startup_banner(url: str, qr_path: Path | None) -> None:
     for line in startup_banner_lines(url, qr_path):
-        print(line)
+        print(_safe_console_line(line), flush=True)
