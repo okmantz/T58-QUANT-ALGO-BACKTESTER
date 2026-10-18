@@ -83,3 +83,12 @@ reportlab>=4.0.0
 # package installed raises a clear, actionable error before the run starts.
 optuna>=3.0.0
 cma>=3.0.0
+
+# Memory hygiene (app/orchestration/memory_hygiene.py, resource_guard.py): reads RAM / swap / per-process RSS so long jobs
+# (Full Pipeline, batch runs) shrink their worker pools BEFORE the machine starts swapping. Optional in spirit: without it
+# the guards fall back to a conservative fixed assumption.
+psutil>=5.9.0
+
+# Pine Indicator Creator (app/strategy/pine_indicator.py): a real Pine v5 grammar used as an extra syntax check on generated
+# scripts. Optional in spirit: without it only the built-in linter runs (and the result says so).
+pynescript>=0.3.0
