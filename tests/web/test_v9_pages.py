@@ -158,6 +158,18 @@ def test_replay_page_has_propsim(client):
     assert client.get("/static/t58-propsim.js").status_code == 200
 
 
+def test_replay_page_splits_replay_and_propsim_into_two_tabs(client):
+    html = client.get("/replay").get_data(as_text=True)
+    assert 'id="rp-tab-replay"' in html and 'id="rp-tab-propsim"' in html
+    assert 'id="rp-panel-replay"' in html and 'id="rp-panel-propsim"' in html
+    # the simulator lives only in its own panel; the replay form lives only in the other
+    replay_panel = html.split('id="rp-panel-replay"', 1)[1]
+    propsim_panel = html.split('id="rp-panel-propsim"', 1)[1].split('id="rp-panel-replay"', 1)[0]
+    assert "propsim-host" in propsim_panel and "/replay/prepare" not in propsim_panel
+    assert "/replay/prepare" in replay_panel and 'id="propsim-host"' not in replay_panel
+    assert html.count("<div") == html.count("</div>")
+
+
 def test_propsim_engine_under_node(tmp_path):
     import shutil
     import subprocess
@@ -188,6 +200,26 @@ def test_education_has_interactive_labs(client):
     assert client.get("/static/t58-edu-labs.js").status_code == 200
 
 
+def test_education_labs_are_sprinkled_through_the_modules(client):
+    from app.education import content
+
+    html = client.get("/education").get_data(as_text=True)
+    # every slot references a real lesson, and every lab (1..5) is placed in some lesson
+    lesson_ids = {l.id for s in content.list_sections() for l in s.lessons}
+    assert set(content.LESSON_LAB_SLOTS) <= lesson_ids
+    assert sorted(content.LESSON_LAB_SLOTS.values()) == [1, 2, 3, 4, 5]
+    assert html.count('class="edu-inline-lab-host"') == len(content.LESSON_LAB_SLOTS)
+
+
+def test_knowledge_check_is_its_own_page_not_in_the_labs_tab(client):
+    page = client.get("/education/knowledge-check")
+    assert page.status_code == 200
+    body = page.get_data(as_text=True)
+    assert "quiz-host" in body and "mountQuiz" in body
+    assert "labs-host" not in body
+    assert 'href="/education/knowledge-check"' in client.get("/education").get_data(as_text=True)
+
+
 def test_edu_labs_logic_under_node():
     import shutil
     import subprocess
@@ -200,7 +232,7 @@ def test_edu_labs_logic_under_node():
     p = subprocess.run(["node", "-e", prog, str(js)], capture_output=True, text=True, timeout=60)
     assert p.returncode == 0, p.stderr
     import json as _j
-    assert _j.loads(p.stdout.strip().splitlines()[-1]) == {"labs": 6, "finite": True}
+    assert _j.loads(p.stdout.strip().splitlines()[-1]) == {"labs": 5, "finite": True}
 
 
 def test_squeezemetrics_history_merge_is_lagged(client, monkeypatch):

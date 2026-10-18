@@ -53,6 +53,12 @@ changes no production behavior.
 """
 from __future__ import annotations
 
+import os
+
+# The idle memory watchdog (app.orchestration.memory_hygiene) closes worker pools and trims the heap while the app is idle --
+# right for a running app, never wanted mid-test-suite. Must be set BEFORE app.web.server is imported.
+os.environ.setdefault("T58_DISABLE_MEMORY_WATCHDOG", "1")
+
 import pytest
 
 from app.orchestration.resource_guard import HEAVY_JOB_GUARD
@@ -102,6 +108,16 @@ def _license_activated_by_default(monkeypatch, tmp_path_factory):
     web_server_module._license_ok_cached = None
     _lic._session_state = None
     _lic._session_only_active = False
+
+
+@pytest.fixture(autouse=True)
+def _isolate_research_lab_store(monkeypatch, tmp_path_factory):
+    """Research-lab experiments and the hypothesis ledger are saved under the app base dir; keep tests out of the real one."""
+    from app.research_labs import common as _rl
+
+    home = tmp_path_factory.mktemp("t58-research-labs")
+    monkeypatch.setattr(_rl, "_base_dir", lambda: home)
+    yield
 
 
 _SETTINGS_MODULES = (

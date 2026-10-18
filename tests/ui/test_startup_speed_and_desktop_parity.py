@@ -118,11 +118,11 @@ def test_main_checks_the_license_exactly_once():
 
 # ------------------------------------------------------------------ shared Start Here content
 def test_every_start_here_tool_has_a_desktop_page():
-    from app.orchestration.section_guides import DESKTOP_NAV_FOR_HREF, DESKTOP_SECTIONS, SECTION_GUIDES
+    from app.orchestration.section_guides import DESKTOP_NAV_FOR_HREF, DESKTOP_SECTIONS, SECTION_GUIDES, WEB_ONLY_HREFS
     for section in DESKTOP_SECTIONS:
         assert section in SECTION_GUIDES
         for tool in SECTION_GUIDES[section]["tools"]:
-            assert tool["href"] in DESKTOP_NAV_FOR_HREF, (section, tool)
+            assert tool["href"] in DESKTOP_NAV_FOR_HREF or tool["href"] in WEB_ONLY_HREFS, (section, tool)
 
 
 def test_web_and_desktop_share_one_source_of_start_here_text():
