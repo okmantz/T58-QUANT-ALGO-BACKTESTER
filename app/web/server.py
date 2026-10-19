@@ -5810,6 +5810,8 @@ def _run_fullpipeline_sweep_job(
             table[label] = {
                 "verdict": r.verdict,
                 "t58_score": getattr(getattr(r, "scorecard", None), "score", None),
+                "weight_coverage": getattr(getattr(r, "scorecard", None), "weight_coverage", None),
+                "ev_verdict": (r.ev_verdict or {}).get("label") if getattr(r, "ev_verdict", None) else None,
                 "eval_pass_probability": r.final_mc.headline_evaluation_pass_probability,
                 "risk_of_ruin_pct": r.final_mc.risk_of_ruin_pct,
                 "trades": len(r.final_bt.trades),
@@ -11310,58 +11312,102 @@ def research_run():
         ))
         risk = harden_risk_config(risk, prop_rules=rules, form=form)
         window_trading_days = int(form.get("window_trading_days", 30) or 30)
+        # S3 (2026-10-19): run the heavy research analyses as a background JobManager
+        # job so the browser isn't blocked on a multi-minute synchronous request.
+        flags = {k: (form.get(k) == "on") for k in (
+            "run_decomposition", "run_ablation", "run_null", "run_degradation",
+            "run_contribution", "run_conditional", "run_regime")}
+        job_id = JOB_MANAGER.create(
+            tool="Research Director", page_template="/research/job/{job_id}",
+            log=[f"Loaded {len(df)} bars from {active_label}."], instrument=active_label,
+            strategy_file=strategy_file, cancelled=False,
+        )
+        JOB_MANAGER.prune(max_age_seconds=6 * 3600)
+        thread = threading.Thread(
+            target=_run_research_job,
+            args=(job_id, df, spec, risk, rules, window_trading_days, flags, strategy_file, active_label),
+            daemon=True,
+        )
+        thread.start()
+        return redirect(url_for("research_job", job_id=job_id))
+    except Exception as exc:  # noqa: BLE001
+        log_crash("Research Director (web, start)", exc=exc)
+        return _rerender(f"Unexpected error: {exc}", status=500)
 
+
+def _run_research_job(job_id, df, spec, risk, rules, window_trading_days, flags, strategy_file, active_label):
+    """Background worker for /research/run -- runs the selected research analyses."""
+    from app.ai import research_director
+    try:
+        JOB_MANAGER.log(job_id, "Running backtest...")
         full_bt = research_director._run_spec(spec, df, risk)
         if full_bt is None or not full_bt.trades:
-            return _rerender(
-                "This strategy produced zero trades on the selected dataset with the current risk/prop "
-                "settings -- nothing to analyze. Check the strategy's conditions and the pip size above."
-            )
+            JOB_MANAGER.fail(job_id, "This strategy produced zero trades on the selected dataset with the current risk/prop settings -- nothing to analyze.")
+            return
         target_row = research_director._row(strategy_file, full_bt, rules, window_trading_days)
-
         results = {}
-        if form.get("run_decomposition") == "on":
+        if flags.get("run_decomposition"):
+            JOB_MANAGER.log(job_id, "Running edge decomposition...")
             try:
                 results["decomposition"] = research_director.edge_decomposition(spec, df, risk, rules, window_trading_days)
             except Exception as exc:
                 results["decomposition"] = {"steps": [], "verdict": f"Couldn't run: {exc}"}
-        if form.get("run_ablation") == "on":
+        if flags.get("run_ablation"):
+            JOB_MANAGER.log(job_id, "Running ablation test...")
             try:
                 results["ablation"] = research_director.ablation_test(spec, df, risk, rules, window_trading_days)
             except Exception as exc:
                 results["ablation"] = {"rows": [], "verdict": f"Couldn't run: {exc}"}
-        if form.get("run_null") == "on":
+        if flags.get("run_null"):
+            JOB_MANAGER.log(job_id, "Running null baselines...")
             try:
                 results["null_baselines"] = research_director.null_baselines(df, risk, rules, target_row, window_trading_days)
             except Exception as exc:
                 results["null_baselines"] = {"baselines": [], "target": target_row, "verdict": f"Couldn't run: {exc}"}
-        if form.get("run_degradation") == "on":
+        if flags.get("run_degradation"):
+            JOB_MANAGER.log(job_id, "Running signal degradation...")
             try:
                 results["degradation"] = research_director.signal_degradation(spec, df, risk, rules, window_trading_days)
             except Exception as exc:
                 results["degradation"] = {"baseline": target_row, "stress_tests": [], "verdict": f"Couldn't run: {exc}"}
-        if form.get("run_contribution") == "on":
+        if flags.get("run_contribution"):
+            JOB_MANAGER.log(job_id, "Running trade contribution...")
             results["contribution"] = research_director.trade_contribution(full_bt.trades, risk.initial_balance)
-        if form.get("run_conditional") == "on":
+        if flags.get("run_conditional"):
+            JOB_MANAGER.log(job_id, "Running conditional expectancy...")
             results["conditional"] = research_director.conditional_expectancy(full_bt.trades, df)
-        if form.get("run_regime") == "on":
+        if flags.get("run_regime"):
+            JOB_MANAGER.log(job_id, "Running regime discovery...")
             n = len(df)
             holdout_df = df.iloc[int(n * 0.85):].reset_index(drop=True)
             try:
                 results["regime"] = research_director.regime_discovery(full_bt.trades, df, risk, rules, spec, holdout_df, window_trading_days)
             except Exception as exc:
                 results["regime"] = {"hypothesis": None, "next_step": f"Couldn't run: {exc}"}
-
-        return render_template(
-            "research.html", results=results,
-            stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-            manual_strategies=list_saved_strategies("manual"),
-            selected_dataset=(form.get("existing_dataset") or ""),
-            selected_strategy=strategy_file,
-            active_page="research", **_alpaca_template_context())
+        JOB_MANAGER.finish(job_id, results=results, strategy_file=strategy_file)
+        JOB_MANAGER.log(job_id, "Research complete.")
     except Exception as exc:  # noqa: BLE001
-        log_crash("Research Director (web)", exc=exc)
-        return _rerender(f"Unexpected error: {exc}", status=500)
+        log_crash("Research Director (web, job)", exc=exc)
+        JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
+
+
+@app.route("/research/job/<job_id>")
+def research_job(job_id):
+    job = JOB_MANAGER.get(job_id)
+    if job is None:
+        return render_template("research_job.html", job_id=job_id, not_found=True), 404
+    return render_template("research_job.html", job_id=job_id, not_found=False)
+
+
+# Legacy synchronous implementation (pre-S3) preserved below for reference.
+# Legacy synchronous implementation (pre-S3) preserved below for reference.
+def _research_run_legacy_sync():
+    """The pre-S3 synchronous /research/run implementation, kept for reference.
+
+    The live route now creates a JobManager job and runs _run_research_job in a
+    background thread. This stub documents the old flow; do not call it.
+    """
+    raise NotImplementedError("Legacy sync path retired in S3 (2026-10-19); see _run_research_job.")
 
 
 @app.route("/forge")
