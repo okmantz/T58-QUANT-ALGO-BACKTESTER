@@ -1,0 +1,33 @@
+# gitleaks configuration for .github/workflows/secrets-scan.yml
+#
+# Every finding the scanner raised on this repository (12, across the full history) was
+# reviewed on 2026-10-19 and is NOT a credential:
+#   * test fixtures      -- fake Alpaca key/secret ("AKMYKEY123" / "myS3cret/..."), "T58-FIXTURE-KEY"
+#   * prop-firm presets  -- `key="apex_..."` preset identifiers (high-entropy-looking, public strings)
+#   * licence constants  -- SHA-256 hash digests in app/licensing/client.py from earlier commits (a hash is
+#                           not a usable secret, and the hardcoded default has since been removed)
+# They are allow-listed by exact commit / exact string, NOT by directory, so a real key committed
+# anywhere (including in these same files, in a later commit) is still caught.
+title = "T58 gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Reviewed false positives (see header)"
+commits = [
+    "07f03a0c825e8a387e604d2f0acec1daed617a72",  # tests/test_alpaca_credentials.py
+    "2a65c175d2a802d9b1e15a94d8663a2a91182cf0",  # app/licensing/client.py
+    "474acccaf2f6b769adfdb51a1abfaaff0a8130d2",  # app/licensing/client.py
+    "5509083e0844674cadfcfb1f844ea7b7dfe0918a",  # tests/data/test_alpaca_credentials.py
+    "6f2063c42fcac2b54b02e5b62fb36e561d398131",  # tests/conftest.py
+    "9bdb189cd144ce9b1d561a5932edf19a39bb910d",  # app/prop/presets.py
+    "c82a59fec6164822beac91fe48fa9863407a5040",  # app/licensing/client.py
+    "d4260981f683fc4de96788e2d7f827dd8c421adf",  # tests/conftest.py
+    "d70edfdb45d07799b5d0a083b47d34d6c6ebc37b",  # app/licensing/client.py
+]
+regexes = [
+    '''AKMYKEY123''',
+    '''myS3cret/withslash\+chars=''',
+    '''T58-FIXTURE-KEY''',
+]
