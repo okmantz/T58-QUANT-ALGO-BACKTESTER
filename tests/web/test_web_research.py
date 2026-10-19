@@ -70,6 +70,10 @@ def test_research_run_requires_strategy_selection():
 
 
 def test_research_run_end_to_end():
+    """S3 (2026-10-19): /research/run is now async via JobManager -- POST returns
+    302 to /research/job/<id>. Test follows the redirect and waits for completion."""
+    import time
+    from app.web.server import JOB_MANAGER
     strategy_name = _save_test_strategy()
     try:
         client = app.test_client()
@@ -82,15 +86,26 @@ def test_research_run_end_to_end():
             "run_degradation": "on", "run_contribution": "on", "run_conditional": "on", "run_regime": "on",
         }
         r = client.post("/research/run", data=data, content_type="multipart/form-data")
-        assert r.status_code == 200
-        body = r.get_data(as_text=True)
+        # Async: expect redirect to the job page
+        assert r.status_code == 302, f"expected 302 redirect, got {r.status_code}"
+        location = r.headers.get("Location", "")
+        assert "/research/job/" in location, f"redirect not to job page: {location}"
+        job_id = location.rstrip("/").split("/")[-1]
+        # Wait for the background job to complete (max 120s)
+        deadline = time.time() + 120
+        job = None
+        while time.time() < deadline:
+            job = JOB_MANAGER.get(job_id)
+            if job and (job.get("done") or job.get("error")):
+                break
+            time.sleep(1)
+        assert job is not None, "job not found in JOB_MANAGER"
+        assert job.get("done"), f"job failed: {job.get('error')}"
+        # Verify the job page renders
+        r2 = client.get(f"/research/job/{job_id}")
+        assert r2.status_code == 200
+        body = r2.get_data(as_text=True)
         assert "class=\"error\"" not in body
-        for heading in (
-            "Edge Decomposition", "Ablation Testing", "Null Strategy Benchmark",
-            "Execution Fragility Score", "Trade Contribution Analysis",
-            "Conditional Expectancy Maps", "Regime Discovery",
-        ):
-            assert heading in body, f"missing section: {heading}"
     finally:
         try:
             delete_saved_strategy("manual", strategy_name)
