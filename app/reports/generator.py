@@ -307,6 +307,15 @@ def build_report(
         "cost_ladder": compute_cost_ladder(backtest_result.trades),
         "holdout_comparison": holdout_comparison,
         "prop_firm_rules": asdict(prop_rules),
+        # A3 (2026-10-19): floating-equity badge data -- records whether the
+        # prop-firm checks ran on realized-only or floating equity, so the
+        # report artifact itself carries the caveat (not just the live console).
+        "floating_equity_check": {
+            "dd_basis": getattr(prop_rules, "dd_basis", "legacy"),
+            "daily_loss_basis": getattr(prop_rules, "daily_loss_basis", "realized"),
+            "realized_only": (getattr(prop_rules, "dd_basis", "legacy") in ("legacy", "realized"))
+            or (getattr(prop_rules, "daily_loss_basis", "realized") == "realized"),
+        },
         "prop_firm_single_run": summarize_single_run(prop_single_run),
         # Account-by-account ledger of the deterministic single run
         # (Owen's accounting): each attempt's eval outcome, funded
@@ -530,6 +539,7 @@ _HTML_TEMPLATE = '''<!DOCTYPE html>
 
 <section class="sec" id="prop">
 <h2>Prop-firm result (historical sequence)</h2>
+{floating_equity_badge}
 <p class="muted intro">Same trades as above, but the account stops the instant a prop-firm rule is breached (this run may therefore reflect fewer effective trading days than the historical stats above).</p>
 {single_run_table}
 {account_attempts_section}
@@ -628,6 +638,63 @@ def _cost_ladder_table(ladder: list[dict]) -> str:
             f"<td>{rung['win_rate']:.1f}%</td></tr>"
         )
     return f"<table>{header}{''.join(rows)}</table>"
+
+
+def _floating_equity_badge(prop_rules) -> str:
+    """Prominent badge when drawdown/daily-loss were checked on realized (closed-trade)
+    P&L only, not floating intraday equity. A real prop firm liquidates the instant
+    floating equity touches the floor -- accounts this sim passes on realized-only
+    checks can fail on a live firm. Empty string when both checks already run on
+    floating equity (nothing to warn about)."""
+    if prop_rules is None:
+        return ""
+    dd_basis = getattr(prop_rules, "dd_basis", "legacy") or "legacy"
+    dl_basis = getattr(prop_rules, "daily_loss_basis", "realized") or "realized"
+    realized_dd = dd_basis in ("legacy", "realized")
+    realized_dl = dl_basis == "realized"
+    if not realized_dd and not realized_dl:
+        return ""
+    bits = []
+    if realized_dd:
+        bits.append("drawdown")
+    if realized_dl:
+        bits.append("daily loss")
+    what = " and ".join(bits)
+    return (
+        '<div class="floating-equity-badge">'
+        '<div class="verdict-title">⚠ REALIZED-ONLY CHECK</div>'
+        f"<p>Prop-firm {what} was checked on <b>closed-trade P&amp;L only</b> "
+        "(dd_basis=%r, daily_loss_basis=%r). Intraday floating equity was invisible to "
+        "this check -- a real firm liquidates the instant floating equity touches the "
+        "floor, so accounts this simulation passes could fail on a live account. "
+        "Set <b>dd_basis='floating'</b> and <b>daily_loss_basis='floating'</b> for the strict check.</p>"
+        "</div>" % (dd_basis, dl_basis)
+    )
+
+
+def _floating_equity_badge_from_check(check: dict | None) -> str:
+    """Badge from the serialized floating_equity_check dict (for export_html,
+    which only has the report dict, not the live PropRules object)."""
+    if not check or not check.get("realized_only"):
+        return ""
+    dd_basis = check.get("dd_basis", "legacy")
+    dl_basis = check.get("daily_loss_basis", "realized")
+    bits = []
+    if dd_basis in ("legacy", "realized"):
+        bits.append("drawdown")
+    if dl_basis == "realized":
+        bits.append("daily loss")
+    what = " and ".join(bits)
+    return (
+        '<div class="floating-equity-badge">'
+        '<div class="verdict-title">⚠ REALIZED-ONLY CHECK</div>'
+        f"<p>Prop-firm {what} was checked on <b>closed-trade P&amp;L only</b> "
+        "(dd_basis=%r, daily_loss_basis=%r). Intraday floating equity was invisible to "
+        "this check -- a real firm liquidates the instant floating equity touches the "
+        "floor, so accounts this simulation passes could fail on a live account. "
+        "Set <b>dd_basis='floating'</b> and <b>daily_loss_basis='floating'</b> for the strict check.</p>"
+        "</div>" % (dd_basis, dl_basis)
+    )
 
 
 def _verdict_section(verdict: str | None, verdict_reasons: list[str] | None) -> str:
@@ -1284,6 +1351,7 @@ def export_html(
         holdout_section=_holdout_section(report.get("holdout_comparison")),
         rules_table=_dict_to_table(report["prop_firm_rules"]),
         single_run_table=_dict_to_table(single),
+        floating_equity_badge=_floating_equity_badge_from_check(report.get("floating_equity_check")),
         account_attempts_section=_account_attempts_section(report.get("account_attempts")),
         monte_carlo_table=_dict_to_table({
             k: v for k, v in mc.items()

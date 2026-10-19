@@ -464,6 +464,9 @@ span.pass:not(.pill),td.pass,span.ok,td.ok{color:var(--good);font-weight:650} sp
 .risk-flags-banner{border-radius:var(--radius);padding:13px 16px;margin:14px 0;border:1px solid #fecdca;border-left:5px solid var(--bad);background:var(--bad-bg)}
 .risk-flags-banner .verdict-title{font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#b42318;margin-bottom:6px}
 .risk-flags-banner ul{margin:0;padding-left:18px}
+.floating-equity-badge{border-radius:var(--radius);padding:13px 16px;margin:14px 0;border:1px solid #fedf89;border-left:5px solid #dc6803;background:#fffaeb}
+.floating-equity-badge .verdict-title{font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#93370d;margin-bottom:6px}
+.floating-equity-badge p{margin:0;font-size:13px;color:#53390f}
 .sizing-halt-banner{border-radius:var(--radius);padding:16px 18px;margin:14px 0;border:2px solid var(--bad);background:var(--bad-bg)}
 .sizing-halt-banner .halt-title{font-weight:800;font-size:15px;text-transform:uppercase;letter-spacing:.04em;color:#b42318;margin-bottom:6px}
 .sizing-halt-banner p{margin:0;color:#7a271a}

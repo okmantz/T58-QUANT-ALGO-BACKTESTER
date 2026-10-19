@@ -118,6 +118,11 @@ def _lookup_tags(strategy_name: str, source_type: str) -> list[str]:
 # and the next call re-parses. Callers get fresh top-level dicts so an
 # in-place tweak by one reader can't poison the cache for the next.
 _RUNS_CACHE: tuple[tuple[int, int], list[dict[str, Any]]] | None = None
+# S2 (2026-10-19): dashboard_data() aggregation cache -- the dashboard polls
+# /api/dashboard-data frequently; re-aggregating hundreds of runs on every
+# poll is 10-100x slower than serving a cached result. Invalidated by the
+# same file-mtime key as _RUNS_CACHE.
+_DASHBOARD_CACHE: tuple[tuple[int, int], dict] | None = None
 
 
 def load_runs() -> list[dict[str, Any]]:
@@ -225,6 +230,9 @@ def record_run(report: dict, paths: dict, backtest_result=None) -> None:
         runs = load_runs()
         runs.append(entry)
         _save_runs(runs)
+        # S2 (2026-10-19): a new run invalidates the cached dashboard aggregation
+        global _DASHBOARD_CACHE
+        _DASHBOARD_CACHE = None
 
         # Per-strategy consolidated report folder (item 4): mirrors this
         # run's report into reports/by_strategy/<strategy>/ alongside
@@ -323,6 +331,31 @@ def build_graph(latest_rows: list[dict]) -> dict:
 
 
 def dashboard_data() -> dict:
+    """Aggregates run_history.json into everything the Dashboard needs.
+
+    S2 (2026-10-19): the aggregation result is cached keyed on the history
+    file's (size, mtime) -- the dashboard polls this endpoint, and serving
+    the cached aggregation is 10-100x faster than re-aggregating on every poll.
+    """
+    global _DASHBOARD_CACHE
+    path = history_path()
+    key = None
+    if path.exists():
+        try:
+            st = path.stat()
+            key = (st.st_size, st.st_mtime_ns)
+        except OSError:
+            pass
+    if key is not None and _DASHBOARD_CACHE is not None and _DASHBOARD_CACHE[0] == key:
+        import copy
+        return copy.deepcopy(_DASHBOARD_CACHE[1])
+    result = _dashboard_data_uncached()
+    if key is not None:
+        _DASHBOARD_CACHE = (key, result)
+    return result
+
+
+def _dashboard_data_uncached() -> dict:
     """Aggregates run_history.json into everything the Dashboard needs."""
     runs = load_runs()
     if not runs:
