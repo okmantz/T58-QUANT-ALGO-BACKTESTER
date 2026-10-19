@@ -172,8 +172,8 @@ def test_vectorized_path_is_actually_used(monkeypatch):
 
 
 def test_reset_on_breach_falls_back_to_the_loop(monkeypatch):
-    # S1 (2026-10-19): reset_on_breach is now supported by the vectorized kernel
-    assert supports_vectorized(PropRules(), True, have_excursions=True)
+    # 2026-10-19 audit: the S1 in-kernel chain reset diverged from simulate_account, so chains stay on the loop.
+    assert not supports_vectorized(PropRules(), True, have_excursions=True)
     assert not supports_vectorized(PropRules(dd_basis="floating"), False, have_excursions=False)
 
 
