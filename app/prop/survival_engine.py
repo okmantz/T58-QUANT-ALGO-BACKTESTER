@@ -121,7 +121,7 @@ class PropSurvivalConfig:
     n_simulations: int = 5_000
     method: str = "bootstrap"          # "shuffle" | "bootstrap" | "block_bootstrap" -- see app.monte_carlo.engine
     block_size: int = 5
-    slippage_stress_pct: float = 0.0
+    slippage_stress_pct: float = 1.0  # non-zero default since 2026-10-19 (see MonteCarloConfig)
     random_seed: int | None = 42
     reset_economics: ResetEconomics = field(default_factory=ResetEconomics)
     # The reset-chain analysis (simulate_reset_chain) runs up to

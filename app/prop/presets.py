@@ -98,7 +98,7 @@ class PropFirmPreset:
     # trailing_distance_basis "account" = fixed dollar distance (account_size x pct),
     # how futures firms state a trailing MLL; "peak" = % of peak (legacy).
     trailing_distance_basis: str = "peak"
-    funded_starts_fresh: bool = False   # see PropRules.funded_starts_fresh
+    funded_starts_fresh: bool = True    # see PropRules.funded_starts_fresh (default True since 2026-10-19)
     max_eval_calendar_days: int | None = None   # eval time limit in calendar days (None = no limit)
     # Futures session flatten: positions must be flat by this America/Chicago
     # wall-clock time ("15:45" = 4:45 pm ET). None = rule not modeled.

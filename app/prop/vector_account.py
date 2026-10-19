@@ -39,7 +39,8 @@ def vectorize_enabled() -> bool:
 def supports_vectorized(rules: Any, reset_on_breach: bool, *, have_excursions: bool,
                         caps_active: bool = False) -> bool:
     """True when the kernel reproduces PropAccount exactly for these rules."""
-    if reset_on_breach or caps_active:
+    # S1 (2026-10-19): reset_on_breach is now supported by the kernel (chain reset in-loop)
+    if caps_active:
         return False
     dd_basis = getattr(rules, "dd_basis", "legacy") or "legacy"
     dl_basis = getattr(rules, "daily_loss_basis", "realized") or "realized"
@@ -86,6 +87,13 @@ class VecResult(NamedTuple):
     max_dd_pct: np.ndarray
     last_slot: np.ndarray
     max_losing_streak: np.ndarray
+    # S1 (2026-10-19): reset-on-breach chain fields. All zeros/False when
+    # reset_on_breach=False (single attempt per path).
+    total_attempts: np.ndarray      # per-path attempt count
+    attempts_passed: np.ndarray    # per-path attempts that passed evaluation
+    attempts_failed: np.ndarray     # per-path attempts that failed
+    attempts_reached_payout: np.ndarray  # per-path attempts reaching first payout
+    first_attempt_bust: np.ndarray  # per-path bool: attempt #1 failed without passing
 
 
 def simulate_paths(
@@ -94,6 +102,7 @@ def simulate_paths(
     get_step,
     n_steps: int,
     tables: DayTables,
+    reset_on_breach: bool = False,
 ) -> VecResult:
     """Run P paths in lock-step.
 
@@ -163,6 +172,12 @@ def simulate_paths(
     max_close_prior = np.full(P, acct, dtype=f64)      # max([account_size] + closes of earlier days)
     streak_run = np.zeros(P, dtype=np.int64)
     streak_best = np.zeros(P, dtype=np.int64)
+    # S1 (2026-10-19): reset-on-breach chain tracking
+    n_attempts = np.ones(P, dtype=np.int64)      # every path starts on attempt #1
+    n_att_passed = np.zeros(P, dtype=np.int64)
+    n_att_failed = np.zeros(P, dtype=np.int64)
+    n_att_payout = np.zeros(P, dtype=np.int64)
+    first_bust = np.zeros(P, dtype=bool)
 
     cal0, gap = tables.cal0, tables.gap
 
@@ -192,6 +207,8 @@ def simulate_paths(
 
     for t in range(n_steps):
         valid = path_len > t
+        # S1: snapshot failed flags to detect newly-breached paths at the end of this step
+        was_failed = failed.copy() if reset_on_breach else None
         pnl, mae, mfe, risk, slot, is_last = get_step(t)
         # max losing streak runs over EVERY resampled trade (as _max_losing_streak does)
         loss = (pnl <= 0) & valid
@@ -361,8 +378,59 @@ def simulate_paths(
                     last_payout = np.where(pay, sl, last_payout)
                     best_since = np.where(pay, 0.0, best_since)
                     peak = np.where(pay, np.maximum(peak - w, bal), peak)
+        # S1 (2026-10-19): reset-on-breach -- paths that breached this step start a fresh
+        # attempt on the next trade (same semantics as simulate_account's reset loop).
+        if reset_on_breach:
+            newly_failed = failed & ~was_failed & valid
+            # Only reset if there are more trades ahead for the new attempt
+            has_more = (t + 1) < path_len
+            do_reset = newly_failed & has_more
+            if do_reset.any():
+                # Record the completed attempt's outcome
+                n_attempts[do_reset] += 1
+                n_att_failed[do_reset] += 1
+                # Attempt #1 bust without ever passing -> first_attempt_bust
+                first_try = (n_attempts[do_reset] == 2)  # just finished attempt #1
+                first_bust[do_reset] = first_bust[do_reset] | (first_try & ~passed[do_reset])
+                # If the failed attempt had passed evaluation, count it
+                n_att_passed[do_reset] += passed[do_reset].astype(np.int64)
+                # If it reached payout, count it
+                n_att_payout[do_reset] += (first_pay[do_reset] >= 0).astype(np.int64)
+                # Reset all account state to initial values for the new attempt
+                bal[do_reset] = acct
+                peak[do_reset] = acct
+                failed[do_reset] = False
+                funded[do_reset] = False
+                passed[do_reset] = False
+                days_to_pass[do_reset] = -1
+                locked[do_reset] = -1
+                cur_slot[do_reset] = -1
+                # last_slot keeps the position (used for calendar mapping)
+                day_pnl[do_reset] = 0.0
+                day_start[do_reset] = acct
+                best_day[do_reset] = 0.0
+                total_profit[do_reset] = 0.0
+                wd_total[do_reset] = 0
+                wd_before[do_reset] = 0
+                best_since[do_reset] = 0.0
+                baseline[do_reset] = acct
+                last_payout[do_reset] = -10 ** 9
+                n_pay[do_reset] = 0
+                first_pay[do_reset] = -1
+                total_pay[do_reset] = 0.0
+                # max_dd keeps the running maximum (drawdown is path-level, not per-attempt)
+                day_peak_cur[do_reset] = _NEG_INF
+                day_peak_set[do_reset] = False
+                day_close_cur[do_reset] = 0.0
+                day_close_set[do_reset] = False
+                prev_day_peak_base[do_reset] = acct
+                max_close_prior[do_reset] = acct
+                streak_run[do_reset] = 0
+                # streak_best keeps the running maximum (path-level)
     return VecResult(
         passed=passed, failed=failed, days_to_pass=days_to_pass, first_payout_day=first_pay,
         n_payouts=n_pay, total_payout=total_pay, final_balance=bal, max_dd_pct=max_dd,
         last_slot=last_slot, max_losing_streak=streak_best,
+        total_attempts=n_attempts, attempts_passed=n_att_passed, attempts_failed=n_att_failed,
+        attempts_reached_payout=n_att_payout, first_attempt_bust=first_bust,
     )
