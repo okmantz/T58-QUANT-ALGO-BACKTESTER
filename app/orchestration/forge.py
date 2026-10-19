@@ -594,6 +594,7 @@ def run_forge(
         mc_result = run_monte_carlo(
             bt.trades, prop_rules,
             MonteCarloConfig(n_simulations=config.final_mc_sims, reset_on_breach=config.reset_on_breach),
+            max_workers=config.workers,  # S4 (2026-10-19): wire parallelism into the final-MC tail
         )
         mc_pool.append({**rec, "trades": bt.trades, "statistics": bt.statistics.to_dict(), "final_mc": mc_result.to_dict()})
     # B1-2 (w4-forge): rank on PER-ATTEMPT (single-account) pass
