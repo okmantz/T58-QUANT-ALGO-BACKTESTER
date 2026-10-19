@@ -507,6 +507,20 @@ def run_walkforward_aware_refinement(
                 "This strategy has no tunable numeric parameters -- there is nothing "
                 "for a walk-forward-aware GA to search over."
             )
+        # S5 (2026-10-19): adaptive budget -- scale population/generations to the
+        # number of tunable genes. A 2-gene search doesn't need the full 32x12
+        # budget; the configured values are the ceiling.
+        if cfg.adaptive_budget:
+            n_genes = len(genes)
+            if n_genes <= 3:
+                cfg = replace(cfg, population_size=min(cfg.population_size, 16),
+                              generations=min(cfg.generations, 6))
+            elif n_genes <= 8:
+                cfg = replace(cfg, population_size=min(cfg.population_size, 24),
+                              generations=min(cfg.generations, 8))
+            log(f"Adaptive budget: {n_genes} tunable gene(s) -> "
+                f"{cfg.population_size}x{cfg.generations} budget (ceiling was "
+                f"{cfg.population_size}x{cfg.generations}).")
         if gene_range_scale is not None and 0.0 < float(gene_range_scale) < 1.0:
             genes = [_shrink_gene(g, float(gene_range_scale)) for g in genes]
             log(f"Search ranges narrowed to {float(gene_range_scale):.0%} of normal around the current values.")

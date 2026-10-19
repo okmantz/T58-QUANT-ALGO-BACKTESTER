@@ -132,6 +132,11 @@ class RefinementConfig:
     fitness_metric: str = "eval_pass_probability"
     population_size: int = 10
     generations: int = 5
+    # S5 (2026-10-19): adaptive budget -- when True, population_size and generations
+    # are scaled to the number of tunable genes found (small search spaces don't need
+    # the full 32x12 budget; the 44-minute Quick Optimize problem). The configured
+    # values become the CEILING, not the fixed budget.
+    adaptive_budget: bool = True
     elite_count: int = 2
     mutation_rate: float = 0.35        # probability each gene mutates in a bred child
     mutation_strength: float = 0.25    # mutation step size, as a fraction of that gene's search range
