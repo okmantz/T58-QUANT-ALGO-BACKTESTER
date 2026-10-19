@@ -166,6 +166,19 @@ class StoredDataset:
     mtime_ns: int = 0  # captured by the same directory scan, so callers never need a second stat()
 
 
+# S2 (2026-10-19): dataset-scan cache -- list_stored_datasets() walks the
+# whole data/raw/ tree; dataset pickers call it on every page render.
+# Cached keyed on the raw dir's mtime so new uploads invalidate it.
+_SCAN_CACHE: tuple[int, list["StoredDataset"]] | None = None
+
+
+def _raw_dir_mtime_ns(raw_dir: Path) -> int:
+    try:
+        return raw_dir.stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
 def list_stored_datasets() -> list[StoredDataset]:
     """
     Return every importable market-data file under data/raw/ (.csv, .tsv,
@@ -177,12 +190,27 @@ def list_stored_datasets() -> list[StoredDataset]:
     back as the selection value -- `get_raw_data_dir() / name` resolves a
     subfolder entry correctly either way, since Path() accepts "/"
     separators on every platform including Windows.
+
+    S2 (2026-10-19): the tree scan is cached keyed on the raw dir's mtime --
+    dataset pickers call this on every page render, and a full os.scandir
+    walk on each render is pure overhead when nothing changed.
     """
+    global _SCAN_CACHE
     raw_dir = get_raw_data_dir()
+    mtime = _raw_dir_mtime_ns(raw_dir)
+    if _SCAN_CACHE is not None and _SCAN_CACHE[0] == mtime:
+        return list(_SCAN_CACHE[1])
     found: list[StoredDataset] = []
     _scan_raw_tree(raw_dir, raw_dir, "", found)
     found.sort(key=lambda d: d.mtime_ns, reverse=True)
-    return found
+    _SCAN_CACHE = (mtime, found)
+    return list(found)
+
+
+def invalidate_dataset_scan_cache() -> None:
+    """Clear the list_stored_datasets() cache (call after uploads/deletes)."""
+    global _SCAN_CACHE
+    _SCAN_CACHE = None
 
 
 def _scan_raw_tree(raw_dir: Path, directory: Path, prefix: str, out: list) -> None:
