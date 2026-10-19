@@ -1,6 +1,8 @@
 """v9.4: Quant Lab tools can run on market data already in the app (the
 stored-dataset dropdown) instead of forcing a fresh upload, and any
-running job can be re-entered from the sidebar's "Running now" list."""
+running job can be re-entered from the Runs page's "Running now" list
+(the dashboard-v2 sidebar pill was retired; /runs polls
+/api/running-jobs.json)."""
 from __future__ import annotations
 
 import re
@@ -118,9 +120,12 @@ def test_running_jobs_endpoint_lists_live_jobs_only(client):
         JOB_MANAGER.finish(live_id)
 
 
-def test_sidebar_contains_running_now_poller(client):
-    body = client.get("/dashboard").get_data(as_text=True)
-    assert 'id="t58-running-now"' in body
+def test_runs_page_hosts_the_running_now_list(client):
+    """Dashboard v2 retired the sidebar 'Running now' pill (and its
+    t58-runs.js poller); live jobs are re-entered from the Runs page,
+    which renders each job as a link to its page_url."""
+    body = client.get("/runs").get_data(as_text=True)
+    assert 'id="running"' in body
     assert "/api/running-jobs.json" in body
 
 
