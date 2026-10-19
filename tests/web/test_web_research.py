@@ -105,7 +105,9 @@ def test_research_run_end_to_end():
         r2 = client.get(f"/research/job/{job_id}")
         assert r2.status_code == 200
         body = r2.get_data(as_text=True)
-        assert "class=\"error\"" not in body
+        # The template's JavaScript contains a literal 'class="error"' in a
+        # template string; check for a server-rendered error banner instead.
+        assert '<div class="error"' not in body.split("<script")[0]
     finally:
         try:
             delete_saved_strategy("manual", strategy_name)
