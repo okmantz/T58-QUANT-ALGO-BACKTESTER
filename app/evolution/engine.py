@@ -1348,6 +1348,7 @@ class EvolutionRunner:
                 n_simulations=n_sims, random_seed=self.cfg.random_seed,
                 reset_on_breach=self.cfg.reset_on_breach,
             ),
+            max_workers=self.cfg.parallel_workers,  # S4 (2026-10-19): wire parallelism into the MC tail
         )
         out = {
             "n_bars": len(slice_df),
