@@ -59,7 +59,7 @@ class MonteCarloConfig:
     # draw as the P&Ls. Trades without measured excursions use the closed-P&L proxy and the
     # count is disclosed in MonteCarloResult.warnings-style notes (see excursion_note).
     use_excursions: bool = True
-    slippage_stress_pct: float = 0.0  # extra % cost applied to every trade
+    slippage_stress_pct: float = 1.0  # extra % cost applied to every trade (non-zero default since 2026-10-19: the baseline MC run should not assume the cheapest possible execution)
     # Session/volatility-aware slippage (app.monte_carlo.slippage_model) -- applied ONCE to the
     # historical trade pool before resampling, independent of and in addition to
     # slippage_stress_pct above. Disabled by default (opt-in): every existing caller of
@@ -884,17 +884,29 @@ def _vec_rows_from_result(res, rules, tables) -> list:
     mdd = res.max_dd_pct.tolist()
     streak = res.max_losing_streak.tolist()
     cal_used = (tables.cal0[np.clip(res.last_slot, 0, len(tables.cal0) - 1)] + 1).tolist()
+    # S1: chain fields (all single-attempt values when reset_on_breach=False)
+    n_att = res.total_attempts.tolist()
+    n_att_p = res.attempts_passed.tolist()
+    n_att_f = res.attempts_failed.tolist()
+    n_att_pay = res.attempts_reached_payout.tolist()
+    first_bust = res.first_attempt_bust.tolist()
     rows = []
     for k in range(len(passed)):
         p, f = passed[k], failed[k]
         reached = fpd[k] >= 0
+        # S1: when reset_on_breach=False the kernel tracks a single attempt; derive the
+        # chain fields from the final per-path outcome (matches the old hardcoded values).
+        if n_att[k] == 1 and n_att_f[k] == 0 and n_att_p[k] == 0 and n_att_pay[k] == 0:
+            _n_att, _n_p, _n_f, _n_pay, _fb = 1, (1 if p else 0), (1 if f else 0), (1 if reached else 0), (f and not p)
+        else:
+            _n_att, _n_p, _n_f, _n_pay, _fb = n_att[k], n_att_p[k], n_att_f[k], n_att_pay[k], first_bust[k]
         rows.append(_SimRow(
             passed=p, reached_first_payout=reached,
             failed_before_payout=f and not reached,
             multiple_payouts=npay[k] > 1,
-            total_attempts=1, attempts_passed=1 if p else 0, attempts_reached_payout=1 if reached else 0,
-            any_attempt_failed=f, first_attempt_bust=f and not p,
-            attempts_failed=1 if f else 0,
+            total_attempts=_n_att, attempts_passed=_n_p, attempts_reached_payout=_n_pay,
+            any_attempt_failed=_n_f > 0, first_attempt_bust=_fb,
+            attempts_failed=_n_f,
             days_to_pass=dtp[k] if dtp[k] >= 0 else None,
             first_payout_day_index=fpd[k] if reached else None,
             return_pct=ret[k], total_payout_amount=tpay[k], max_drawdown_pct=mdd[k],
@@ -963,7 +975,7 @@ def _mc_rows_vectorized(*, n_sims, rng, cfg, rules, base_pnls, base_risks, has_r
                 risk = base_risks[ix] if has_risks else None
                 return pn, mae, mfe, risk, slot2[t], last2[t]
 
-            res = simulate_paths(rules, path_len, get_step, L, day_tables)
+            res = simulate_paths(rules, path_len, get_step, L, day_tables, reset_on_breach=cfg.reset_on_breach)
             rows.extend(_vec_rows_from_result(res, rules, day_tables))
             done += P
             _report()
@@ -1014,7 +1026,7 @@ def _mc_rows_vectorized(*, n_sims, rng, cfg, rules, base_pnls, base_risks, has_r
             return (pnl2[t], None if mae2 is None else mae2[t], None if mfe2 is None else mfe2[t],
                     None if risk2 is None else risk2[t], slot2[t], last2[t])
 
-        res = simulate_paths(rules, lens, get_step, L, day_tables)
+        res = simulate_paths(rules, lens, get_step, L, day_tables, reset_on_breach=cfg.reset_on_breach)
         rows.extend(_vec_rows_from_result(res, rules, day_tables))
         done += P
         _report()

@@ -70,7 +70,7 @@ class BankrollConfig:
     # continuous rough patch.
     method: str = "block_bootstrap"          # "shuffle" | "bootstrap" | "block_bootstrap"
     block_size: int = 5
-    slippage_stress_pct: float = 0.0
+    slippage_stress_pct: float = 1.0  # non-zero default since 2026-10-19 (see MonteCarloConfig)
     random_seed: int | None = 42
     # If True, a life's chain stops the instant it reaches its first
     # payout (the trader "cashed out" of this analysis rather than being
