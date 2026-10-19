@@ -1,4 +1,0 @@
-data/raw/SOLANA/SOL_USD_1m.parquet filter=lfs diff=lfs merge=lfs -text
-data/raw/BITCOIN/BTC_USD_1m.parquet filter=lfs diff=lfs merge=lfs -text
-data/raw/ETHEREUM/ETH_USD_1m.parquet filter=lfs diff=lfs merge=lfs -text
-data/raw/DOGECOIN/DOGE_USD_1m.parquet filter=lfs diff=lfs merge=lfs -text
