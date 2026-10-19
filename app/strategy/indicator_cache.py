@@ -72,6 +72,13 @@ _CACHE_BYTES = 0
 _LOCK = threading.Lock()
 _HITS = 0
 _MISSES = 0
+# S6 (2026-10-19): slice-aware lookup index. Maps (kind, period, column, lookback)
+# -> list of (cache_key, timestamp_index). When get_or_compute misses on a frame,
+# we check if the frame's timestamps are a contiguous subset of a cached parent's
+# timestamps; if so, we slice the parent's cached Series instead of recomputing.
+# This covers walk-forward folds, train/test splits, and in-sample/out-of-sample
+# slices that all derive from the same parent dataset.
+_SLICE_INDEX: dict[tuple, list[tuple[tuple, pd.Index]]] = {}
 
 
 def _series_nbytes(s: pd.Series) -> int:
@@ -131,10 +138,19 @@ def get_or_compute(
     (frame, kind, period, column, lookback) combination was already
     computed once by this process. Always returns a fresh `.copy()` so a
     caller mutating the returned Series in place can never corrupt what
-    other candidates read from the cache."""
-    key = (_frame_fingerprint(frame), kind, int(period), column, lookback)
+    other candidates read from the cache.
 
-    global _HITS, _MISSES
+    S6 (2026-10-19): on a miss, also checks whether `frame` is a slice of a
+    previously-cached parent frame (same kind/period/column/lookback, and the
+    frame's timestamps form a contiguous subset of the parent's). If so, the
+    parent's cached Series is sliced by position -- indicator values at bar i
+    depend only on bars up to i, so a slice's values are identical to the
+    parent's values at those positions.
+    """
+    key = (_frame_fingerprint(frame), kind, int(period), column, lookback)
+    slice_key = (kind, int(period), column, lookback)
+
+    global _HITS, _MISSES, _CACHE_BYTES
     with _LOCK:
         cached = _CACHE.get(key)
     if cached is not None:
@@ -142,27 +158,89 @@ def get_or_compute(
             _HITS += 1
         return cached.copy()
 
+    # S6: slice-aware lookup -- is this frame a slice of a cached parent?
+    sliced = _try_slice_from_parent(frame, slice_key)
+    if sliced is not None:
+        with _LOCK:
+            _HITS += 1
+        # Store under this frame's key too, so the next identical slice hits directly
+        with _LOCK:
+            _CACHE[key] = sliced
+            _CACHE_BYTES += _series_nbytes(sliced)
+        return sliced.copy()
+
     result = compute_fn()
     result_bytes = _series_nbytes(result)
 
     with _LOCK:
-        global _CACHE_BYTES
         _MISSES += 1
         if len(_CACHE) >= _MAX_ENTRIES or (_CACHE_BYTES + result_bytes) > _MAX_BYTES:
             _CACHE.clear()
             _CACHE_BYTES = 0
+            _SLICE_INDEX.clear()
         _CACHE[key] = result
         _CACHE_BYTES += result_bytes
+        # Index by (kind, period, column, lookback) for slice lookups
+        ts_idx = _frame_timestamp_index(frame)
+        if ts_idx is not None:
+            _SLICE_INDEX.setdefault(slice_key, []).append((key, ts_idx))
     return result.copy()
+
+
+def _frame_timestamp_index(frame: pd.DataFrame) -> pd.Index | None:
+    """Returns the frame's timestamp index, or None if unavailable."""
+    try:
+        if "timestamp" in frame.columns:
+            return pd.Index(frame["timestamp"].values)
+        return frame.index
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _try_slice_from_parent(frame: pd.DataFrame, slice_key: tuple) -> pd.Series | None:
+    """Checks if frame's timestamps are a contiguous subset of a cached parent's.
+
+    Returns the sliced Series, or None if no parent matches.
+    """
+    ts_idx = _frame_timestamp_index(frame)
+    if ts_idx is None or len(ts_idx) == 0:
+        return None
+    with _LOCK:
+        candidates = list(_SLICE_INDEX.get(slice_key, []))
+    for parent_key, parent_ts in candidates:
+        if len(parent_ts) < len(ts_idx):
+            continue
+        try:
+            # Find where the slice's first timestamp appears in the parent
+            first_pos = parent_ts.get_loc(ts_idx[0])
+            if isinstance(first_pos, slice):
+                first_pos = first_pos.start
+            # Verify contiguity: slice timestamps must match parent timestamps
+            # at consecutive positions
+            if first_pos + len(ts_idx) > len(parent_ts):
+                continue
+            parent_slice = parent_ts[first_pos:first_pos + len(ts_idx)]
+            if not (parent_slice == ts_idx).all():
+                continue
+            # Match! Slice the parent's cached Series by position
+            with _LOCK:
+                parent_series = _CACHE.get(parent_key)
+            if parent_series is None:
+                continue
+            return parent_series.iloc[first_pos:first_pos + len(ts_idx)].reset_index(drop=True)
+        except (KeyError, IndexError, TypeError):
+            continue
+    return None
 
 
 def clear() -> None:
     """Drops every cached series. Call when switching to a genuinely new
     dataset within the same long-lived process (e.g. multi-instrument
     search re-using a worker pool across instruments)."""
-    global _HITS, _MISSES, _CACHE_BYTES
+    global _CACHE_BYTES, _HITS, _MISSES
     with _LOCK:
         _CACHE.clear()
+        _SLICE_INDEX.clear()
         _CACHE_BYTES = 0
         _HITS = 0
         _MISSES = 0
