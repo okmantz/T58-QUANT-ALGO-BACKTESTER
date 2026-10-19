@@ -39,8 +39,16 @@ def vectorize_enabled() -> bool:
 def supports_vectorized(rules: Any, reset_on_breach: bool, *, have_excursions: bool,
                         caps_active: bool = False) -> bool:
     """True when the kernel reproduces PropAccount exactly for these rules."""
-    # S1 (2026-10-19): reset_on_breach is now supported by the kernel (chain reset in-loop)
-    if caps_active:
+    # 2026-10-19 audit: reset_on_breach chains are NOT vectorized. The S1 in-kernel chain reset
+    # (simulate_paths(reset_on_breach=True)) did not reproduce simulate_account's chain semantics:
+    # it cleared `passed` / first-payout / payout totals on every rebuy (so chain-level pass
+    # probability collapsed: 100% -> 81.75% on the divergence test), skipped resets on steps that
+    # hit an early `continue`, counted trading days / eval calendar days from the first trade of the
+    # path instead of the current attempt, and never folded the final attempt into the attempt
+    # counters. The scalar loop is the reference, so chains run there until a bit-identical
+    # differential test (like test_vectorized_monte_carlo_is_bit_identical_to_the_per_path_loop,
+    # but with reset_on_breach=True) exists for the kernel.
+    if reset_on_breach or caps_active:
         return False
     dd_basis = getattr(rules, "dd_basis", "legacy") or "legacy"
     dl_basis = getattr(rules, "daily_loss_basis", "realized") or "realized"

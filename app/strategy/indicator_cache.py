@@ -36,7 +36,9 @@ another dataset's indicator values.
 """
 from __future__ import annotations
 
+import os
 import threading
+import weakref
 from typing import Callable
 
 import pandas as pd
@@ -72,13 +74,31 @@ _CACHE_BYTES = 0
 _LOCK = threading.Lock()
 _HITS = 0
 _MISSES = 0
-# S6 (2026-10-19): slice-aware lookup index. Maps (kind, period, column, lookback)
-# -> list of (cache_key, timestamp_index). When get_or_compute misses on a frame,
-# we check if the frame's timestamps are a contiguous subset of a cached parent's
-# timestamps; if so, we slice the parent's cached Series instead of recomputing.
-# This covers walk-forward folds, train/test splits, and in-sample/out-of-sample
-# slices that all derive from the same parent dataset.
-_SLICE_INDEX: dict[tuple, list[tuple[tuple, pd.Index]]] = {}
+
+# S6 (2026-10-19) slice reuse -- OPT-IN, OFF by default (2026-10-19 audit fix).
+#
+# The idea: when a frame is a prefix of a frame whose indicator Series is already
+# cached (walk-forward train folds, in-sample slices), return that cached Series
+# sliced instead of recomputing. It shipped ON and keyed only on TIMESTAMPS, which
+# is unsound in two ways, both of which turned the CI test suite red:
+#   1. Different datasets that share a timestamp grid (every synthetic test frame,
+#      and e.g. two instruments on the same session) silently received another
+#      dataset's indicator values.
+#   2. app.strategy.lookahead_check.check_for_lookahead feeds `df.iloc[:cut]`
+#      prefixes of a cached full frame through this cache. Slicing hands back the
+#      FULL frame's values for the prefix, so an indicator that peeks at future
+#      bars would look perfectly causal and the detector could never fire.
+# It is therefore disabled unless T58_INDICATOR_CACHE_SLICING=1 is set explicitly.
+# When enabled it is now conservative: PREFIX slices only (position 0, where the
+# values are exactly what a cold computation yields for a causal indicator), and
+# only after the actual price/volume data is verified identical to the still-alive
+# parent frame (held via weakref, so no extra memory is retained).
+_SLICE_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
+_SLICE_INDEX: dict[tuple, list[tuple[tuple, "weakref.ReferenceType"]]] = {}
+
+
+def slicing_enabled() -> bool:
+    return os.environ.get("T58_INDICATOR_CACHE_SLICING", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _series_nbytes(s: pd.Series) -> int:
@@ -140,12 +160,8 @@ def get_or_compute(
     caller mutating the returned Series in place can never corrupt what
     other candidates read from the cache.
 
-    S6 (2026-10-19): on a miss, also checks whether `frame` is a slice of a
-    previously-cached parent frame (same kind/period/column/lookback, and the
-    frame's timestamps form a contiguous subset of the parent's). If so, the
-    parent's cached Series is sliced by position -- indicator values at bar i
-    depend only on bars up to i, so a slice's values are identical to the
-    parent's values at those positions.
+    Optional prefix-slice reuse (T58_INDICATOR_CACHE_SLICING=1, default OFF):
+    see the comment above ``_SLICE_INDEX`` for why it is opt-in.
     """
     key = (_frame_fingerprint(frame), kind, int(period), column, lookback)
     slice_key = (kind, int(period), column, lookback)
@@ -158,16 +174,20 @@ def get_or_compute(
             _HITS += 1
         return cached.copy()
 
-    # S6: slice-aware lookup -- is this frame a slice of a cached parent?
-    sliced = _try_slice_from_parent(frame, slice_key)
-    if sliced is not None:
-        with _LOCK:
-            _HITS += 1
-        # Store under this frame's key too, so the next identical slice hits directly
-        with _LOCK:
-            _CACHE[key] = sliced
-            _CACHE_BYTES += _series_nbytes(sliced)
-        return sliced.copy()
+    use_slicing = slicing_enabled()
+    if use_slicing:
+        sliced = _try_slice_from_parent(frame, slice_key, column)
+        if sliced is not None:
+            sliced_bytes = _series_nbytes(sliced)
+            with _LOCK:
+                _HITS += 1
+                if len(_CACHE) >= _MAX_ENTRIES or (_CACHE_BYTES + sliced_bytes) > _MAX_BYTES:
+                    _CACHE.clear()
+                    _CACHE_BYTES = 0
+                    _SLICE_INDEX.clear()
+                _CACHE[key] = sliced
+                _CACHE_BYTES += sliced_bytes
+            return sliced.copy()
 
     result = compute_fn()
     result_bytes = _series_nbytes(result)
@@ -180,55 +200,56 @@ def get_or_compute(
             _SLICE_INDEX.clear()
         _CACHE[key] = result
         _CACHE_BYTES += result_bytes
-        # Index by (kind, period, column, lookback) for slice lookups
-        ts_idx = _frame_timestamp_index(frame)
-        if ts_idx is not None:
-            _SLICE_INDEX.setdefault(slice_key, []).append((key, ts_idx))
+        if use_slicing:
+            try:
+                _SLICE_INDEX.setdefault(slice_key, []).append((key, weakref.ref(frame)))
+            except TypeError:  # object not weak-referenceable -> simply never a slice parent
+                pass
     return result.copy()
 
 
-def _frame_timestamp_index(frame: pd.DataFrame) -> pd.Index | None:
-    """Returns the frame's timestamp index, or None if unavailable."""
+def _same_values(a, b) -> bool:
+    import numpy as np
     try:
-        if "timestamp" in frame.columns:
-            return pd.Index(frame["timestamp"].values)
-        return frame.index
-    except Exception:  # noqa: BLE001
-        return None
+        a_arr, b_arr = a.to_numpy(), b.to_numpy()
+        if a_arr.shape != b_arr.shape:
+            return False
+        if a_arr.dtype.kind == "f" or b_arr.dtype.kind == "f":
+            return bool(np.array_equal(a_arr.astype("float64"), b_arr.astype("float64"), equal_nan=True))
+        return bool(np.array_equal(a_arr, b_arr))
+    except Exception:  # noqa: BLE001 -- any doubt means "not identical"
+        return False
 
 
-def _try_slice_from_parent(frame: pd.DataFrame, slice_key: tuple) -> pd.Series | None:
-    """Checks if frame's timestamps are a contiguous subset of a cached parent's.
-
-    Returns the sliced Series, or None if no parent matches.
-    """
-    ts_idx = _frame_timestamp_index(frame)
-    if ts_idx is None or len(ts_idx) == 0:
+def _try_slice_from_parent(frame: pd.DataFrame, slice_key: tuple, column: str) -> pd.Series | None:
+    """Returns the cached Series of a still-alive parent frame sliced to ``frame``'s
+    length IF ``frame`` is verifiably a PREFIX of that parent (identical timestamps,
+    OHLCV and indicator source column over the first len(frame) rows); else None."""
+    n = len(frame)
+    if n == 0:
         return None
     with _LOCK:
         candidates = list(_SLICE_INDEX.get(slice_key, []))
-    for parent_key, parent_ts in candidates:
-        if len(parent_ts) < len(ts_idx):
+    cols = [c for c in dict.fromkeys((*_SLICE_COLUMNS, column)) if c in frame.columns]
+    if not cols:
+        return None
+    for parent_key, parent_ref in candidates:
+        parent = parent_ref()
+        if parent is None or len(parent) < n:
             continue
         try:
-            # Find where the slice's first timestamp appears in the parent
-            first_pos = parent_ts.get_loc(ts_idx[0])
-            if isinstance(first_pos, slice):
-                first_pos = first_pos.start
-            # Verify contiguity: slice timestamps must match parent timestamps
-            # at consecutive positions
-            if first_pos + len(ts_idx) > len(parent_ts):
+            if any(c not in parent.columns for c in cols):
                 continue
-            parent_slice = parent_ts[first_pos:first_pos + len(ts_idx)]
-            if not (parent_slice == ts_idx).all():
+            if not all(_same_values(parent[c].iloc[:n], frame[c]) for c in cols):
                 continue
-            # Match! Slice the parent's cached Series by position
             with _LOCK:
                 parent_series = _CACHE.get(parent_key)
-            if parent_series is None:
+            if parent_series is None or len(parent_series) < n:
                 continue
-            return parent_series.iloc[first_pos:first_pos + len(ts_idx)].reset_index(drop=True)
-        except (KeyError, IndexError, TypeError):
+            out = parent_series.iloc[:n].copy()
+            out.index = frame.index          # same labels a cold computation on `frame` would carry
+            return out
+        except (KeyError, IndexError, TypeError, ValueError):
             continue
     return None
 
