@@ -11337,7 +11337,7 @@ def research_run():
 
 def _run_research_job(job_id, df, spec, risk, rules, window_trading_days, flags, strategy_file, active_label):
     """Background worker for /research/run -- runs the selected research analyses."""
-    from app.ai import research_director
+    # research_director is imported at module top: from app.research import director as research_director
     try:
         JOB_MANAGER.log(job_id, "Running backtest...")
         full_bt = research_director._run_spec(spec, df, risk)
