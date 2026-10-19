@@ -42,6 +42,8 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
+        with:
+          lfs: true
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -75,6 +77,8 @@ jobs:
       T58_MASTER_LICENSE_KEY_HASH: ${{ secrets.T58_MASTER_LICENSE_KEY_HASH }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          lfs: true
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
