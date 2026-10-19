@@ -166,7 +166,9 @@ def test_per_attempt_diverges_from_chain_when_reset_on_breach():
     the per-attempt number is ~50% -- the honest 'will ONE account
     succeed' answer."""
     trades = _trades([1600, -2100] * 30)
-    cfg = MonteCarloConfig(n_simulations=400, method="bootstrap", random_seed=11, reset_on_breach=True)  # 2026-10: default is now False
+    # 2026-10-19 (A2): pin slippage_stress=0.0 to isolate the reset_on_breach
+    # divergence; the new default (1.0) is honest but shifts the chain number.
+    cfg = MonteCarloConfig(n_simulations=400, method="bootstrap", random_seed=11, reset_on_breach=True, slippage_stress=0.0)  # 2026-10: default is now False
     result = run_monte_carlo(trades, _divergence_rules(), cfg)
     assert result.mean_attempts_per_path > 5  # genuinely a multi-attempt regime
     assert result.evaluation_pass_probability > 95.0  # chain-level: inflated
