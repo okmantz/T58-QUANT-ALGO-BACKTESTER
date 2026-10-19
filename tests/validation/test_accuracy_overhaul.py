@@ -88,6 +88,9 @@ def _case(rng: random.Random):
         winning_days_for_payout=rng.choice([1, 3]), max_inactive_days=rng.choice([None, 10]),
         daily_loss_action=rng.choice(["fail", "lock_day"]), daily_loss_base=rng.choice(["initial", "prior_day_high", "ratchet_up"]),
         max_eval_calendar_days=rng.choice([None, 20]),
+        # 2026-10-19 (A1): pin funded_starts_fresh=True to match the frozen
+        # legacy reference; the new default (False) is intentional.
+        funded_starts_fresh=True,
     )
     n = rng.randint(1, 80)
     t = pd.Timestamp("2024-01-02 14:00", tz="UTC")
