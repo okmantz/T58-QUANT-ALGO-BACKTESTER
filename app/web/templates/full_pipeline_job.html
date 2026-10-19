@@ -85,7 +85,7 @@
   <h2 style="margin:0 0 10px; font-size:16px;">Timeframe sweep</h2>
   <p class="note" id="sweep-note"></p>
   <div style="overflow-x:auto;"><table style="width:100%;font-size:13px;">
-    <thead><tr><th align="left">Timeframe</th><th>Verdict</th><th>T58 score</th><th>Eval pass</th><th>Ruin</th><th>Trades</th><th>Net profit</th><th>Report</th></tr></thead>
+    <thead><tr><th align="left">Timeframe</th><th>Verdict</th><th>T58 score</th><th>EV verdict</th><th>Eval pass</th><th>Ruin</th><th>Trades</th><th>Net profit</th><th>Report</th></tr></thead>
     <tbody id="sweep-tbody"></tbody>
   </table></div>
 </div>
@@ -288,7 +288,9 @@
                 tr.innerHTML = `<td align="left">${label}</td><td colspan="7">failed: ${r.error}</td>`;
               } else {
                 tr.innerHTML = `<td align="left">${label}${r.is_best ? ' \u2605' : ''}</td><td>${r.verdict}</td>` +
-                  `<td>${fmt(r.t58_score, 1)}</td><td>${fmt(r.eval_pass_probability, 1)}%</td><td>${fmt(r.risk_of_ruin_pct, 1)}%</td>` +
+                  `<td>${fmt(r.t58_score, 1)}${r.weight_coverage != null ? ` <span class="muted" title="Share of scorecard weight actually measured">(${(r.weight_coverage*100).toFixed(0)}% measured)</span>` : ''}</td>` +
+                  `<td>${r.ev_verdict || '<span class="muted">--</span>'}</td>` +
+                  `<td>${fmt(r.eval_pass_probability, 1)}%</td><td>${fmt(r.risk_of_ruin_pct, 1)}%</td>` +
                   `<td>${r.trades}</td><td>${money(r.net_profit)}</td><td><a href="${r.report_html}" target="_blank">open</a></td>`;
               }
               tb.appendChild(tr);
