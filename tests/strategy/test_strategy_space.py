@@ -219,6 +219,28 @@ def test_family_all_without_calendar_data_skips_calendar_families():
     assert "economic_calendar_pre_release_compression" not in seen_families
 
 
+def _session_df(days=420, seed=3) -> pd.DataFrame:
+    """15m ET-wall-clock futures-style frame (overnight + RTH, ~1.7 years) for the v11 session/calendar/event families."""
+    rng = np.random.default_rng(seed)
+    idx = []
+    for day in pd.bdate_range("2023-01-02", periods=days):
+        idx.extend(pd.date_range(day + pd.Timedelta(hours=3), day + pd.Timedelta(hours=17, minutes=45), freq="15min"))
+    idx = pd.DatetimeIndex(idx)
+    m = idx.hour * 60 + idx.minute
+    vol = np.where((m >= 570) & (m < 960), 0.0011, 0.0005)
+    close = 15000 * np.exp(np.cumsum(rng.normal(0, 1, len(idx)) * vol))
+    openp = np.concatenate([[close[0]], close[:-1]])
+    high = np.maximum(openp, close) * (1 + np.abs(rng.normal(0, vol / 2)))
+    low = np.minimum(openp, close) * (1 - np.abs(rng.normal(0, vol / 2)))
+    return pd.DataFrame({"timestamp": idx, "open": openp, "high": high, "low": low, "close": close,
+                         "volume": rng.integers(100, 5000, len(idx))})
+
+
+# v11 families that need external data (VIX/VIX3M files, a leader instrument): their runnable-config check is
+# build-and-run without the trades assertion, because on a bare frame they correctly stay flat.
+V11_NEEDS_EXTERNAL_DATA = {"vix_backwardation_dip", "leader_follow"}
+
+
 @pytest.mark.parametrize("family_name", list(FAMILIES))
 def test_every_family_produces_valid_runnable_configs(family_name):
     """
@@ -228,7 +250,10 @@ def test_every_family_produces_valid_runnable_configs(family_name):
     which is structurally always-false and would otherwise show up as
     "zero trades" silently rather than as an explicit test failure.
     """
+    from app.search.families_v11 import V11_FAMILIES as _V11
     df = _vol_regime_df() if family_name in FAMILIES_NEEDING_VOL_REGIMES else _synthetic_df()
+    if family_name in _V11:
+        df = _session_df()
     risk = RiskConfig()
     has_pair_data = family_name in FAMILIES_REQUIRING_PAIR_DATA
     if has_pair_data:
@@ -256,6 +281,8 @@ def test_every_family_produces_valid_runnable_configs(family_name):
         assert result.statistics is not None
         if result.trades:
             any_trades = True
+    if family_name in V11_NEEDS_EXTERNAL_DATA:
+        return
     assert any_trades, f"family '{family_name}' produced zero trades across every sampled candidate"
 
 
