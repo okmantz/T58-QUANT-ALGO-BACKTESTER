@@ -150,6 +150,46 @@ def library_control():
 
 
 # --------------------------------------------------------- prop simulator data
+@v9_bp.route("/api/prop-sim/datasets")
+def prop_sim_datasets():
+    """Stored datasets the prop-sim can measure a strategy on (plus the auto-pick for each library row)."""
+    from app.data.storage import list_datasets_by_instrument
+    from app.prop.edge_probe import suggest_dataset
+    from app.strategy.library import STRATEGY_TYPES, list_saved_strategies
+
+    groups = [{"instrument": g.get("instrument"),
+               "files": [{"full_name": f.get("full_name"), "name": f.get("name")} for f in g.get("files", []) if not f.get("empty")]}
+              for g in list_datasets_by_instrument(count_rows=False)]
+    suggested = {}
+    for t in STRATEGY_TYPES:
+        for s in list_saved_strategies(t):
+            try:
+                suggested[f"{t}::{s.name}"] = suggest_dataset(t, s.name, s.metadata)
+            except Exception:  # noqa: BLE001
+                continue
+    return jsonify({"ok": True, "groups": groups, "suggested": suggested})
+
+
+@v9_bp.route("/api/prop-sim/strategy-edge", methods=["POST"])
+def prop_sim_strategy_edge():
+    """Backtest ONE saved strategy (any language) and return the simulator's edge inputs. Runs the same
+    run_backtest every other tool uses, so the numbers match what a normal run would report."""
+    from app.prop.edge_probe import measure_edge
+
+    body = request.get_json(silent=True) or request.form
+    stype = (body.get("type") or "").strip()
+    name = (body.get("name") or "").strip()
+    if not stype or not name:
+        return _err("Pick a saved strategy first.")
+    try:
+        return jsonify(measure_edge(stype, name, (body.get("dataset") or "").strip() or None,
+                                    use_cache=str(body.get("refresh", "")).lower() not in ("1", "true", "yes")))
+    except ValueError as exc:
+        return _err(str(exc))
+    except Exception as exc:  # noqa: BLE001 -- surface a readable message instead of a 500 page
+        return _err(f"Could not measure this strategy: {type(exc).__name__}: {exc}", 500)
+
+
 @v9_bp.route("/api/prop-sim/presets")
 def prop_sim_presets():
     from app.prop.presets import list_presets

@@ -508,7 +508,7 @@ class ChromeMixin:
             (None, "SUPERHEADER", "Quant Lab", None, None),
             (None, None, "\u2460 QUANT LAB", None, NEON_CYAN),
             ("starthere_quantlab", "", "Start Here", self._starthere_frames["quantlab"], NEON_CYAN),
-            ("quantlab", "", "Quant Lab (translator, stat arb, options, more)", self.tab_quantlab, METAL_BRIGHT),
+            ("quantlab", "", "Quant Lab", self.tab_quantlab, METAL_BRIGHT),
 
             (None, None, "\u2461 OPTIONS", None, NEON_LIME),
             ("optionsoutlook", "", "Options Outlook (calls & puts)", self.tab_options_outlook, NEON_LIME),

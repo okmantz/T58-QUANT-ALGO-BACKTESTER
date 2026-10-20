@@ -130,9 +130,58 @@
       var dl = el('label', null, 'Drawdown type'); var ds = el('select'); [['trailing', 'Trailing (floor rises with peak)'], ['static', 'Static (fixed floor)']].forEach(function (o) { var op = el('option', null, o[1]); op.value = o[0]; ds.appendChild(op); }); ds.value = P.ddType;
       ds.addEventListener('change', function () { P.ddType = ds.value; recompute(true); }); inputsBox.appendChild(dl); inputsBox.appendChild(ds);
       inputsBox.appendChild(el('h4', null, 'Strategy edge')).style.margin = '14px 0 0';
-      var stratSel = el('select'); stratSel.appendChild(Object.assign(el('option', null, 'Manual inputs'), { value: '' })); inputsBox.appendChild(el('label', null, 'Load edge from a saved strategy')); inputsBox.appendChild(stratSel);
-      stratSel.addEventListener('change', function () { var r = (API._rows || []).filter(function (x) { return x.id === stratSel.value; })[0]; if (!r) return; if (r.win_rate != null) P.winRate = r.win_rate / 100; if (r.profit_factor && r.win_rate) P.payoffR = Math.max(0.2, Math.round(r.profit_factor * (1 - P.winRate) / P.winRate * 100) / 100); buildInputs(); recompute(true); });
-      (API._rows || []).filter(function (r) { return r.win_rate != null && r.profit_factor != null; }).forEach(function (r) { var o = el('option', null, r.name + ' (' + r.win_rate + '% win, PF ' + r.profit_factor + ')'); o.value = r.id; stratSel.appendChild(o); });
+      /* Load edge from ANY saved strategy (manual JSON, Python, PineScript, MQL5). Rows with recorded results apply
+         instantly; everything else (e.g. the preloaded, never-backtested strategies) is measured on the fly on a
+         dataset the person can choose -- the server backtests it with the same engine every other tool uses. */
+      inputsBox.appendChild(el('label', null, 'Load edge from a saved strategy'));
+      var stratSel = el('select');
+      stratSel.appendChild(Object.assign(el('option', null, 'Manual inputs'), { value: '' }));
+      var typeNames = { python: 'Python', pinescript: 'PineScript', mql5: 'MQL5', manual: 'JSON / Manual' }, groups = {};
+      (API._rows || []).forEach(function (r) {
+        var g = groups[r.type]; if (!g) { g = groups[r.type] = el('optgroup'); g.label = typeNames[r.type] || r.type; stratSel.appendChild(g); }
+        var has = r.win_rate != null && r.profit_factor != null;
+        var o = el('option', null, r.name + (has ? ' (' + r.win_rate + '% win, PF ' + r.profit_factor + ')' : ' (not backtested yet — will measure)'));
+        o.value = r.id; g.appendChild(o);
+      });
+      stratSel.value = API._pick || '';
+      inputsBox.appendChild(stratSel);
+      var dsSel = el('select'); dsSel.appendChild(Object.assign(el('option', null, 'Measure on: best matching stored dataset'), { value: '' }));
+      ((API._ds && API._ds.groups) || []).forEach(function (g) {
+        if (!g.files.length) return; var og = el('optgroup'); og.label = g.instrument || 'Data';
+        g.files.forEach(function (f) { var o = el('option', null, f.name); o.value = f.full_name; og.appendChild(o); }); dsSel.appendChild(og);
+      });
+      dsSel.value = API._dsPick || '';
+      var dsLab = el('label', null, 'Dataset used to measure the strategy'); inputsBox.appendChild(dsLab); inputsBox.appendChild(dsSel);
+      var stat = el('div', 'muted'); stat.style.margin = '6px 0 0'; stat.textContent = API._status || ((API._rows || []).length ? (API._rows.length + ' saved strategies available.') : 'No saved strategies found — build one in the Strategy Library first.'); inputsBox.appendChild(stat);
+      function measure(row, refresh) {
+        stat.textContent = 'Backtesting ' + row.name + ' to measure its edge… (first run can take up to a minute)';
+        stratSel.disabled = true;
+        fetch('/api/prop-sim/strategy-edge', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: row.type, name: row.name, dataset: API._dsPick || (API._ds && API._ds.suggested && API._ds.suggested[row.id]) || '', refresh: !!refresh }) })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            stratSel.disabled = false;
+            if (!d.ok) { API._status = '⚠ ' + (d.error || 'Could not measure this strategy.'); buildInputs(); return; }
+            P.winRate = Math.min(0.99, Math.max(0.01, d.win_rate / 100)); P.payoffR = d.payoff_r; P.tradesPerDay = Math.max(1, Math.round(d.trades_per_day));
+            API._status = '✔ ' + d.strategy + ': ' + d.trades + ' trades on ' + d.dataset + ' (' + d.period + ') — ' + d.win_rate + '% win, avg win ' + d.payoff_r + 'R, ' + d.trades_per_day + ' trades/day, expectancy ' + d.expectancy_r + 'R' + (d.profit_factor ? ', PF ' + d.profit_factor : '') + (d.cached ? ' (saved result)' : '');
+            buildInputs(); recompute(true);
+          }).catch(function (e) { stratSel.disabled = false; API._status = '⚠ ' + e; buildInputs(); });
+      }
+      function pickedRow() { return (API._rows || []).filter(function (x) { return x.id === stratSel.value; })[0]; }
+      stratSel.addEventListener('change', function () {
+        API._pick = stratSel.value; var r = pickedRow(); if (!r) { API._status = ''; return; }
+        if (r.win_rate != null && r.profit_factor != null && r.win_rate > 0) {
+          P.winRate = r.win_rate / 100;
+          P.payoffR = Math.max(0.2, Math.round(r.profit_factor * (1 - P.winRate) / P.winRate * 100) / 100);
+          if (r.trades && r.curve && r.curve.length) { /* trades/day unknown from the recorded row -- keep current */ }
+          API._status = 'Using the recorded results for ' + r.name + ' (' + (r.trades != null ? r.trades + ' trades, ' : '') + 'PF ' + r.profit_factor + '). Use “Re-measure” for fresh numbers on a dataset of your choice.';
+          buildInputs(); recompute(true);
+        } else { measure(r, false); }
+      });
+      dsSel.addEventListener('change', function () { API._dsPick = dsSel.value; var r = pickedRow(); if (r) measure(r, false); });
+      var remeasure = el('button', null, 'Re-measure on this dataset'); remeasure.type = 'button'; remeasure.style.marginTop = '6px';
+      remeasure.addEventListener('click', function () { var r = pickedRow(); if (r) measure(r, true); else stat.textContent = 'Pick a saved strategy first.'; });
+      inputsBox.appendChild(remeasure);
       inputsBox.appendChild(num('Win rate (0–1)', 'winRate', 0.01, 0.01, 0.99)); inputsBox.appendChild(num('Avg win in R (loss = 1R)', 'payoffR', 0.1, 0.1, 20)); inputsBox.appendChild(num('Trades per day', 'tradesPerDay', 1, 1, 30));
       inputsBox.appendChild(num('Payout milestone: extra profit (%)', 'payoutPct', 0.5, 0.5, 50));
     }
@@ -183,6 +232,7 @@
     }
     fetch('/api/prop-sim/presets').then(function (r) { return r.json(); }).then(function (d) { presets = d.presets || []; presets.forEach(function (p) { var o = el('option', null, p.label); o.value = p.key; firmSel.appendChild(o); }); }).catch(function () {});
     fetch('/api/library/control').then(function (r) { return r.json(); }).then(function (d) { API._rows = d.rows || []; buildInputs(); }).catch(function () {});
+    fetch('/api/prop-sim/datasets').then(function (r) { return r.json(); }).then(function (d) { API._ds = d; buildInputs(); }).catch(function () {});
     recompute(false);
   };
 })(typeof window !== 'undefined' ? window : globalThis);

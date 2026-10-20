@@ -153,7 +153,6 @@
     {% for i in range(1, 5) %}
     <div class="leg-block">
       <h3>Leg {{ i }}{% if i > 2 %} (optional){% endif %}</h3>
-      {% if stored_datasets %}
       <label>Use a previously stored dataset</label>
       <select name="leg{{ i }}_existing_dataset">
         <option value="">— none —</option>
@@ -165,7 +164,6 @@
         </optgroup>
         {% endfor %}
       </select>
-      {% endif %}
       <label>Or upload a CSV for this instrument</label>
       <input type="file" name="leg{{ i }}_csv" accept=".csv,.tsv,.txt,.parquet,.zip,.7z">
       <label>Nominal weight</label>
@@ -196,6 +194,7 @@
   </div>
 
   <button class="submit-btn" type="submit">Run Portfolio Backtest</button>
+{% include "_timeframe_fields.html" %}
 </form>
 
 </div>

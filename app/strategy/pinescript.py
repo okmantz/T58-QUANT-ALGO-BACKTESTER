@@ -303,7 +303,40 @@ class PineScriptStrategy(Strategy):
         expr = _TA_STDEV_RE.sub(_sub_stdev, expr)
         return expr
 
+    # Constructs the vectorized line parser cannot follow faithfully (it would silently skip them), so a script that uses any
+    # of them goes straight to the bar-by-bar interpreter in app.strategy.pine_interp.
+    _NEEDS_INTERPRETER = re.compile(
+        r":=|\bfor\b|\bwhile\b|=>|\bvar\b|\bvarip\b|\barray\.|\bswitch\b|\belse\b|request\.security|\bsecurity\s*\(|"
+        r"strategy\.exit\s*\(|\bnz\s*\(|\bna\s*\(|strategy\.position_size|strategy\.close_all|ta\.(?:supertrend|pivot|barssince|"
+        r"valuewhen|cum|change|dmi|sar|kc|bb|cci|stoch|mfi|linreg|hma|rma|vwma)|\bmath\.|\w\s*\[\s*\d+\s*\]|\?|"
+        r"\bswitch\b|input\.(?:source|timeframe)|\btime\s*\(|\bhour\b|\bdayofweek\b")
+
     def generate(self, df: pd.DataFrame) -> StrategyResult:
+        """Fast vectorized parser first for simple scripts; the full interpreter for anything it cannot follow."""
+        from app.strategy.pine_interp import PineInterpreter
+        self.engine_used = "parser"
+        needs = bool(self._NEEDS_INTERPRETER.search(self.code))
+        if needs:
+            try:
+                res = PineInterpreter(self.code, overrides=getattr(self, "input_overrides", None)).run(df)
+                self.engine_used = "interpreter"
+                return res
+            except (StrategyError, TypeError, ValueError, KeyError, IndexError, AttributeError, ZeroDivisionError, RecursionError) as interp_err:
+                try:
+                    return self._generate_fast(df)
+                except StrategyError as fast_err:
+                    raise StrategyError(f"{interp_err}  (The simple parser also could not run it: {fast_err})") from fast_err
+        try:
+            return self._generate_fast(df)
+        except StrategyError as fast_err:
+            try:
+                res = PineInterpreter(self.code, overrides=getattr(self, "input_overrides", None)).run(df)
+                self.engine_used = "interpreter"
+                return res
+            except (StrategyError, TypeError, ValueError, KeyError, IndexError, AttributeError, ZeroDivisionError, RecursionError) as interp_err:
+                raise StrategyError(f"{fast_err}  (The full interpreter also could not run it: {interp_err})") from interp_err
+
+    def _generate_fast(self, df: pd.DataFrame) -> StrategyResult:
         work = df.copy()
         constants: dict[str, float] = {}
         stop_loss_pips: float | None = None

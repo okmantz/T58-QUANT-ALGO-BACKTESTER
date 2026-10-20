@@ -1719,8 +1719,15 @@ def dashboard():
     board_rows = champion_board.list_board()
     champion = champion_board.strongest_validated_candidate(board_rows)
     snapshot = champion_board.five_question_snapshot(current, board_rows)
+    try:
+        from app.accounts.settings import load_account_settings
+        _acct = load_account_settings()
+        _first = (_acct.display_name or _acct.username or "").strip().split(" ")[0]
+    except Exception:  # noqa: BLE001
+        _first = ""
     return render_template(
         "dashboard.html",
+        user_name=_first or "Trader",
         data=dashboard_stats,
         current_strategy=current,
         current_metrics=current_metrics,

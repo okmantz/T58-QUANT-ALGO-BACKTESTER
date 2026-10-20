@@ -402,6 +402,8 @@ def run_backtest(
     from app.backtest.behavior_rules import apply_strategy_behavior
     risk, adaptive_risk = apply_strategy_behavior(risk, adaptive_risk, strategy)
     _raw_native_df = df
+    from app.data.timeframe_resample import apply_timeframe_override
+    apply_timeframe_override(strategy, risk)     # RiskConfig.exec_timeframe -> this strategy object
     df, timeframe_warnings = prepare_timeframe_aligned_data(df, strategy)
 
     # v9.5: intrabar replay auto-derivation. When the strategy runs on a
@@ -419,6 +421,25 @@ def run_backtest(
         intrabar_df = _raw_native_df
 
     strat_result: StrategyResult = strategy.generate(df)
+
+    # 2026-10-19: macro (higher-timeframe) bias filter -- any strategy type, causal (closed HTF bars only).
+    if getattr(risk, "macro_timeframe", None) and getattr(risk, "macro_mode", "off") not in ("off", "", None):
+        from app.strategy.macro_filter import apply_macro_filter
+        try:
+            strat_result, _macro_note = apply_macro_filter(
+                strat_result, df, risk.macro_timeframe, risk.macro_mode, int(getattr(risk, "macro_length", 50) or 50),
+                bool(getattr(risk, "macro_strict", False)), bool(getattr(risk, "macro_exit_on_flip", False)))
+            timeframe_warnings = list(timeframe_warnings) + [_macro_note]
+        except ValueError as _macro_exc:
+            timeframe_warnings = list(timeframe_warnings) + [f"Macro filter not applied: {_macro_exc}"]
+
+    if getattr(risk, "regime_filter", "off") not in ("off", "", None):
+        from app.strategy.macro_filter import apply_regime_filter
+        try:
+            strat_result, _reg_note = apply_regime_filter(strat_result, df, risk.regime_filter)
+            timeframe_warnings = list(timeframe_warnings) + [_reg_note]
+        except ValueError as _reg_exc:
+            timeframe_warnings = list(timeframe_warnings) + [f"Regime filter not applied: {_reg_exc}"]
 
     # P2-4 (warmup bars): a strategy may declare WARMUP_BARS = N so its
     # first N signals are forced flat (0). Indicators are seeded on NaN

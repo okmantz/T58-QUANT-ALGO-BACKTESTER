@@ -1122,16 +1122,29 @@ _FIRM_FEE_ROWS = [
         "futures_desk_50k", 144.0, 75.0, 80.0, "https://blog.traderspost.io/article/the-futures-desk-pricing-evaluation-guide",
         notes="$50K: $144 EOD drawdown / $244 static; the $144 EOD row is used. Reset $75, activation $0 (all fees one-time). 80% split mentioned only in the "
               "article's conclusion. Article dated 2026-02-10; The Futures Desk runs frequent promotions."),
+    # 2026-10-19: FTMO fee rows added (they were None, so the EV verdict could only ever say INSUFFICIENT EVIDENCE for FTMO).
+    # FTMO prices its CFD Challenges in EUR. Two independent secondary sources (proptradingvibes.com, FTMO prices displayed on
+    # 2026-08-12 / page updated 2026-09-01; passproptradingfirms.com, published 2026-06-08) agree on the 2-Step base fees:
+    # 10K EUR 89, 100K EUR 540, 200K EUR 1,080. (A EUR 439 100K figure is a conditional first-purchase promo, not the base fee; the
+    # higher base is used.) Converted at the last EUR/USD close in this repo's own data (1.15682, 2026-08-14); refresh this when the
+    # rate moves. FTMO publishes NO reset/retry price: a failed attempt is re-bought at the full standard fee ("failed challenge
+    # fees are not recoverable"), so reset_price == challenge_price. The 2-Step fee is refunded with the first Reward after BOTH
+    # phases are passed -- not modelled (conservative). Sources are secondary: confirm at FTMO checkout before trusting EV.
     _secondary_fee(
-        "ftmo_10k", None, None, 80.0, "https://tradingfunder.com/ftmo-rules/",
-        notes="Only a promotional '10K evaluation for EUR 89' (affiliate link) was found, in EUR and undated -> price left None (EUR/USD and "
-              "promo unknown). 2-Step split starts at 80% (90% with scaling/premium; 1-Step 90%). Fee refund with first reward not modelled."),
+        "ftmo_10k", round(89 * 1.15682, 2), round(89 * 1.15682, 2), 80.0, "https://proptradingvibes.com/blog/ftmo-account-sizes-pricing",
+        notes="2-Step Challenge EUR 89 (= $102.96 at 1.15682 EUR/USD, 2026-08-14). Reset = full price again (FTMO publishes no retry discount). "
+              "Split starts at 80% (90% with scaling/premium). Fee refund with first Reward not modelled. Cross-checked: "
+              "https://www.passproptradingfirms.com/best-prop-firms/ftmo-review/ftmo-account-prices/"),
     _secondary_fee(
-        "ftmo_100k", None, None, 80.0, "https://ftmo.com/en/",
-        notes="FTMO's pricing section is not readable by the tools used; no 100K price found -> None. Split starts at 80% (2-Step)."),
+        "ftmo_100k", round(540 * 1.15682, 2), round(540 * 1.15682, 2), 80.0, "https://proptradingvibes.com/blog/ftmo-account-sizes-pricing",
+        notes="2-Step Challenge EUR 540 (= $624.68 at 1.15682 EUR/USD, 2026-08-14); EUR 439 is a conditional first-purchase offer, not used. "
+              "Reset = full price again (no published retry discount). Split starts at 80%. Fee refund with first Reward not modelled. "
+              "Cross-checked: https://www.passproptradingfirms.com/best-prop-firms/ftmo-review/ftmo-account-prices/"),
     _secondary_fee(
-        "ftmo_200k", None, None, 80.0, "https://ftmo.com/en/",
-        notes="FTMO's pricing section is not readable by the tools used; no 200K price found -> None. Split starts at 80% (2-Step)."),
+        "ftmo_200k", round(1080 * 1.15682, 2), round(1080 * 1.15682, 2), 80.0, "https://proptradingvibes.com/blog/ftmo-account-sizes-pricing",
+        notes="2-Step Challenge EUR 1,080 (= $1,249.37 at 1.15682 EUR/USD, 2026-08-14). Reset = full price again (no published retry discount). "
+              "Split starts at 80%. Fee refund with first Reward not modelled. "
+              "Cross-checked: https://www.passproptradingfirms.com/best-prop-firms/ftmo-review/ftmo-account-prices/"),
 ]
 for _row in _FIRM_FEE_ROWS:
     FIRM_FEES.setdefault(_row.preset_key, _row)

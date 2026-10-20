@@ -59,7 +59,7 @@
       </div>
       <div class="lc-col" style="min-width:220px;">
         <label class="flabel">Market data</label>
-        {% if stored_datasets %}
+        
         <select name="existing_dataset" id="lc-dataset-pick">
           <option value="">— none, I'm uploading new file(s) below —</option>
           {% for g in dataset_groups %}
@@ -70,7 +70,7 @@
           </optgroup>
           {% endfor %}
         </select>
-        {% endif %}
+        
         <label class="flabel" style="margin-top:10px;">Or upload new CSV file(s)</label>
         <input type="file" name="csv_file" accept=".csv,.tsv,.txt,.parquet,.zip,.7z" multiple>
         <div class="lc-hint" style="margin-top:5px;">timestamp, open, high, low, close, volume</div>

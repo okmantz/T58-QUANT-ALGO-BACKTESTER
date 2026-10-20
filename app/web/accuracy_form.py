@@ -41,6 +41,23 @@ def accuracy_kwargs(form) -> dict:
         out["intrabar_replay"] = True
     if (form.get("account_model") or "") == "prop":
         out["account_model"] = "prop"
+    # timeframes: execution override + macro (higher-timeframe) bias filter
+    exec_tf = (form.get("exec_timeframe") or "").strip()
+    if exec_tf:
+        out["exec_timeframe"] = exec_tf
+    macro_tf = (form.get("macro_timeframe") or "").strip()
+    macro_mode = (form.get("macro_mode") or "").strip()
+    if macro_tf and macro_mode and macro_mode != "off":
+        out["macro_timeframe"] = macro_tf
+        out["macro_mode"] = macro_mode
+        ml = _num(form.get("macro_length"))
+        if ml:
+            out["macro_length"] = max(2, int(ml))
+        out["macro_strict"] = form.get("macro_strict") in ("on", "1", "true", "True")
+        out["macro_exit_on_flip"] = form.get("macro_exit_on_flip") in ("on", "1", "true", "True")
+    rf = (form.get("regime_filter") or "").strip()
+    if rf and rf != "off":
+        out["regime_filter"] = rf
     return out
 
 

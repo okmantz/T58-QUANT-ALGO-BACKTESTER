@@ -161,6 +161,12 @@ def _compute_ev(verdict, cfg, prop_rules, payout_ev, p_hold, hold_trades, eviden
     fp = float(hm.get("first_payout_pct", 0.0)) / 100.0
     gross = (float(hm.get("expected_payout", 0.0)) / fp) if fp > 0 else None
     payout_value = min(gross, target_usd) if gross else target_usd
+    # 2026-10-19: the 30-day window is a tracked metric, not the EV driver. A strategy that pays out in 45 days is
+    # still worth the fee, so EV uses the longer-horizon per-attempt paid probability (same holdout) when it is higher.
+    if fp > 0 and p_hold is not None:
+        _long = min(fp, float(p_hold))
+        evidence["ev_payout_basis"] = {"window_rate": r30, "long_horizon_rate": _long}
+        r30 = _long if r30 is None else max(float(r30), _long)
     ruin = None
     if fee is not None and hold_trades:
         try:

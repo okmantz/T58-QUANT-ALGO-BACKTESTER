@@ -145,7 +145,40 @@ class MQL5Strategy(Strategy):
             raise StrategyError("MQL5 source is empty.")
         self.code = _strip_block_comments(raw)
 
+    # Real-EA constructs the line parser cannot follow (it would silently skip them) -> bar-by-bar interpreter.
+    _NEEDS_INTERPRETER = re.compile(
+        r"\bCopyBuffer\b|\bCopy(?:Rates|Close|High|Low|Open|Time)\b|\bOnInit\b|\bfor\s*\(|\bwhile\s*\(|\bMql\w+|"
+        r"\bPosition(?:Select|sTotal|Get\w*)\b|\bSymbolInfo\w+|\bstruct\b|\bswitch\b|\bi(?:Time|Close|Open|High|Low|Volume)\s*\(|"
+        r"\bArray\w+\s*\(|\bCTrade\b|\bCPositionInfo\b|\bint\s+\w+\s*=\s*i(?:MA|RSI|ATR|MACD|Bands|Stochastic|ADX|CCI)\s*\(|"
+        r"^\s*(?:bool|int|double|void|string|long|datetime)\s+(?!OnTick\b|OnInit\b|OnDeinit\b)\w+\s*\([^;{]*\)\s*\{?\s*$",
+        re.M)
+
     def generate(self, df: pd.DataFrame) -> StrategyResult:
+        """Fast vectorized parser first for simple EAs; the full interpreter for anything it cannot follow."""
+        from app.strategy.mql5_interp import MQL5Interpreter
+        self.engine_used = "parser"
+        overrides = getattr(self, "input_overrides", None)
+        if self._NEEDS_INTERPRETER.search(self.code):
+            try:
+                res = MQL5Interpreter(self.code, overrides=overrides).run(df)
+                self.engine_used = "interpreter"
+                return res
+            except (StrategyError, TypeError, ValueError, KeyError, IndexError, AttributeError, ZeroDivisionError, RecursionError) as interp_err:
+                try:
+                    return self._generate_fast(df)
+                except StrategyError as fast_err:
+                    raise StrategyError(f"{interp_err}  (The simple parser also could not run it: {fast_err})") from fast_err
+        try:
+            return self._generate_fast(df)
+        except StrategyError as fast_err:
+            try:
+                res = MQL5Interpreter(self.code, overrides=overrides).run(df)
+                self.engine_used = "interpreter"
+                return res
+            except (StrategyError, TypeError, ValueError, KeyError, IndexError, AttributeError, ZeroDivisionError, RecursionError) as interp_err:
+                raise StrategyError(f"{fast_err}  (The full interpreter also could not run it: {interp_err})") from interp_err
+
+    def _generate_fast(self, df: pd.DataFrame) -> StrategyResult:
         work = df.copy()
         stop_loss_pips: float | None = None
         take_profit_pips: float | None = None

@@ -69,7 +69,11 @@ _MT5_ERROR_EXPLANATIONS = {
         "package cannot drive -- reinstall the 64-bit terminal from your broker."
     ),
     -10004: "MT5 terminal found but not responding in time -- it may still be starting up. Try again in a few seconds.",
-    -10005: "MT5 IPC timeout -- the terminal didn't respond in time. Make sure it isn't showing a blocking dialog (e.g. a Windows update prompt) and try again.",
+    -10005: ("MT5 IPC timeout -- the terminal opened but didn't answer in time. The app already waited up to 2 minutes and retried. "
+             "Check, in order: (1) MT5 is not showing a pop-up (login/'new account'/update/EULA) -- close it; (2) in MT5 open Tools > Options > "
+             "Expert Advisors and tick 'Allow algorithmic trading'; (3) the terminal is not running as Administrator while this app is not "
+             "(or the reverse) -- run both normally; (4) log into the account inside MT5 once so the server list is loaded; (5) only ONE MT5 "
+             "install should be open -- leave 'Terminal path' blank to auto-detect, or Browse to the exact terminal64.exe; then click Test again."),
     -2: "Invalid MT5 login/password/server combination -- double-check them against your broker's demo account details.",
     -6: "MT5 authorization failed -- the account number, password, or server name is wrong, or this account has been disabled.",
     -1: "MT5 returned a generic internal failure -- try restarting the MT5 terminal, then Save & Test Connection again.",
@@ -209,31 +213,13 @@ class MT5Connector:
         except ValueError:
             return ConnectionResult(ok=False, message=f"MT5 login must be numeric, got '{self.login}'.")
 
-        kwargs = {}
-        if self.terminal_path:
-            kwargs["path"] = self.terminal_path
-        ok = mt5.initialize(login=login_int, password=self.password, server=self.server, **kwargs)
-
+        # Why "terminal didn't respond in time" (-10005/-10004) happens: initialize(login=..., password=...) asks a COLD terminal to
+        # start, load its history and authorize in one call, and the package gives up after its timeout while the terminal is still
+        # opening. Fix: (1) start the terminal ourselves and wait for it, (2) attach WITHOUT credentials using a long timeout and
+        # retries, (3) only then log in on the already-running terminal (login() has its own timeout).
+        ok, code, desc = self._attach(login_int)
         if not ok:
-            code, desc = mt5.last_error()
-            # The one failure worth retrying automatically: "terminal not
-            # found" with no explicit path given. If a real terminal64.exe
-            # turns up in one of the common install locations, try it once
-            # before giving up -- this is exactly the fix for the
-            # -10003/"MetaTrader 5 x64 not found" case with an empty
-            # Terminal path field.
-            if code == -10003 and not self.terminal_path:
-                for candidate in find_terminal_candidates():
-                    retry_ok = mt5.initialize(
-                        login=login_int, password=self.password, server=self.server, path=candidate,
-                    )
-                    if retry_ok:
-                        ok = True
-                        self.terminal_path = candidate  # remembered so the caller can persist it
-                        break
-            if not ok:
-                code, desc = mt5.last_error()
-                return ConnectionResult(ok=False, message=describe_mt5_error(code, desc))
+            return ConnectionResult(ok=False, message=describe_mt5_error(code, desc))
 
         info = mt5.account_info()
         if info is None:
@@ -248,6 +234,97 @@ class MT5Connector:
             balance=info.balance, equity=info.equity, currency=info.currency,
             resolved_terminal_path=self.terminal_path or None,
         )
+
+    # ---- robust start-up -------------------------------------------------------------------------------------
+    INIT_TIMEOUT_MS = 120_000
+
+    def _terminal_running(self) -> bool:
+        import os
+        import subprocess
+        if os.name != "nt":
+            return False
+        try:
+            out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq terminal64.exe"], capture_output=True, text=True, timeout=10).stdout
+            return "terminal64.exe" in out.lower()
+        except Exception:
+            return False
+
+    def launch_terminal(self, wait_seconds: float = 45.0) -> str | None:
+        """Starts MT5 if it is not already running (path given or auto-detected) and waits for it to come up.
+        Returns the path used, or None when nothing could be started."""
+        import os
+        import subprocess
+        if os.name != "nt":
+            return None
+        path = self.terminal_path or (find_terminal_candidates() or [None])[0]
+        if not path or not os.path.exists(path):
+            return None
+        if not self._terminal_running():
+            try:
+                subprocess.Popen([path], cwd=os.path.dirname(path), close_fds=True)
+            except Exception:
+                return None
+            deadline = time.time() + wait_seconds
+            while time.time() < deadline and not self._terminal_running():
+                time.sleep(1.0)
+            time.sleep(min(8.0, wait_seconds / 4))     # let it finish loading before the first IPC call
+        self.terminal_path = self.terminal_path or path
+        return path
+
+    def _init_once(self, path: str | None):
+        kw = {"timeout": self.INIT_TIMEOUT_MS}
+        if path:
+            kw["path"] = path
+        ok = mt5.initialize(**kw)
+        return (True, 0, "") if ok else (False, *mt5.last_error())
+
+    def _attach(self, login_int: int, attempts: int = 4):
+        """Returns (ok, code, desc). Order: attach to the running/auto-launched terminal, then authorize."""
+        path = self.terminal_path
+        self.launch_terminal()
+        path = self.terminal_path
+        ok, code, desc = False, -10003, "not attempted"
+        for n in range(attempts):
+            ok, code, desc = self._init_once(path)
+            if not ok and code == -10003 and not path:
+                for cand in find_terminal_candidates():
+                    ok, code, desc = self._init_once(cand)
+                    if ok:
+                        self.terminal_path = path = cand
+                        break
+            if ok:
+                break
+            if code in (-10004, -10005, -10001, -1):     # terminal still starting / busy: wait and retry
+                try:
+                    mt5.shutdown()
+                except Exception:
+                    pass
+                time.sleep(4.0 + 3.0 * n)
+                continue
+            break
+        if not ok:
+            return False, code, desc
+        info = mt5.account_info()
+        if info is None or int(getattr(info, "login", 0) or 0) != login_int:
+            authorised = False
+            for n in range(3):
+                try:
+                    authorised = bool(mt5.login(login_int, password=self.password, server=self.server, timeout=60_000))
+                except TypeError:
+                    authorised = bool(mt5.login(login_int, password=self.password, server=self.server))
+                if authorised:
+                    break
+                code, desc = mt5.last_error()
+                if code not in (-10004, -10005, -1):
+                    break
+                time.sleep(3.0 + 2.0 * n)
+            if not authorised:
+                try:
+                    mt5.shutdown()
+                except Exception:
+                    pass
+                return False, code, desc
+        return True, 0, ""
 
     def disconnect(self) -> None:
         if is_available() and self._connected:

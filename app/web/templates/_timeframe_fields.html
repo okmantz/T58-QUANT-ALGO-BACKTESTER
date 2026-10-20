@@ -1,0 +1,41 @@
+{# Execution timeframe + macro (higher-timeframe) bias filter. Works for every strategy type. Posts exec_timeframe,
+   macro_timeframe, macro_mode, macro_length, macro_strict, macro_exit_on_flip (see accuracy_form.accuracy_kwargs). #}
+<fieldset class="tf-fields" style="border:1px solid var(--border,#ccc);padding:8px;margin:8px 0">
+  <legend>Timeframes (analyze high, execute low)</legend>
+  <div class="row" style="display:flex;flex-wrap:wrap;gap:10px;align-items:end">
+    <label>Execute on
+      <select name="exec_timeframe">
+        <option value="">Strategy default</option>
+        {% for v in ["1m","5m","15m","30m","1h","4h","1d"] %}<option value="{{ v }}">{{ v }}</option>{% endfor %}
+      </select></label>
+    <label>Macro timeframe
+      <select name="macro_timeframe">
+        <option value="">None</option>
+        {% for v in ["15m","30m","1h","4h","1d","1w"] %}<option value="{{ v }}">{{ v }}</option>{% endfor %}
+      </select></label>
+    <label>Macro filter
+      <select name="macro_mode">
+        <option value="off">Off</option>
+        <option value="ema">Price vs EMA</option>
+        <option value="ema_slope">EMA slope</option>
+        <option value="supertrend">SuperTrend direction</option>
+        <option value="donchian">Donchian breakout state</option>
+        <option value="adx_ema">EMA side, neutral when ADX&lt;20</option>
+        <option value="macd">MACD histogram</option>
+        <option value="rsi">RSI above/below 50</option>
+      </select></label>
+    <label>Length <input type="number" name="macro_length" value="50" min="2" max="500" style="width:70px"></label>
+    <label>Regime filter
+      <select name="regime_filter">
+        <option value="off">Off</option>
+        <option value="vol_normal_or_high">Skip dead / low-volatility periods</option>
+        <option value="vol_high">Only high volatility</option>
+        <option value="vol_low">Only calm / normal volatility</option>
+        <option value="trending">Only trending (ADX&ge;20)</option>
+        <option value="ranging">Only ranging (ADX&lt;20)</option>
+      </select></label>
+    <label><input type="checkbox" name="macro_strict"> Strict (bias must match)</label>
+    <label><input type="checkbox" name="macro_exit_on_flip"> Exit when bias flips</label>
+  </div>
+  <small>Example: execute on 15m, macro 1h EMA 50: the strategy only takes trades that agree with the closed 1-hour trend. Works for Python, Pine, MQL5 and JSON strategies.</small>
+</fieldset>

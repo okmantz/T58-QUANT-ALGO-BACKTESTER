@@ -60,7 +60,6 @@
 
   <div class="card">
     <h2>1. Market data</h2>
-    {% if stored_datasets %}
     <label>Use a previously stored dataset</label>
     <select name="existing_dataset" onchange="forgeDetectPipSize()">
       <option value="">— none, I'm uploading new file(s) below —</option>
@@ -72,7 +71,6 @@
       </optgroup>
       {% endfor %}
     </select>
-    {% endif %}
     <label>Or upload new CSV file(s) (timestamp, open, high, low, close, volume)</label>
     <input type="file" name="csv_file" accept=".csv,.tsv,.txt,.parquet,.zip,.7z" multiple onchange="forgeDetectPipSize()">
     <p style="font-size:12px;color:var(--t-faint);margin:6px 0 0;">Pip size is auto-detected from whichever dataset you pick or upload above (Step 2, "Pip size" field) -- confirm it looks right for this instrument before running.</p>

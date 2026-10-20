@@ -85,7 +85,6 @@
 
   <div class="card">
     <h2>1. Market Data (shared by every leg)</h2>
-    {% if stored_datasets %}
     <label>Use a previously stored dataset</label>
     <select name="existing_dataset">
       <option value="">— none, I'm uploading a new file below —</option>
@@ -97,7 +96,6 @@
       </optgroup>
       {% endfor %}
     </select>
-    {% endif %}
     <label>Or upload a new CSV</label>
     <input type="file" name="csv_file" accept=".csv,.tsv,.txt,.parquet,.zip,.7z">
   </div>

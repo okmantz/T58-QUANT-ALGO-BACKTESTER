@@ -62,7 +62,6 @@
 
   <div class="card">
     <h2>1. Market Data</h2>
-    {% if stored_datasets %}
     <label>Use a previously stored dataset</label>
     <select name="existing_dataset">
       <option value="">— none, I'm uploading new file(s) below —</option>
@@ -74,7 +73,6 @@
       </optgroup>
       {% endfor %}
     </select>
-    {% endif %}
     <label>Or upload new CSV file(s) (timestamp, open, high, low, close, volume)</label>
     <input type="file" name="csv_file" accept=".csv,.tsv,.txt,.parquet,.zip,.7z" multiple>
   </div>
@@ -209,6 +207,7 @@
   </div>
 
   <button class="submit-btn" type="submit">Run Multi-Objective Optimization</button>
+{% include "_timeframe_fields.html" %}
 </form>
 
 </div>

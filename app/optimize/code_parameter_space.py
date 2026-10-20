@@ -132,9 +132,9 @@ _PY_CONST_RE = re.compile(r"^([A-Z][A-Z0-9_]*)\s*=\s*(-?\d+(?:\.\d+)?)\s*(?:#.*)
 _PY_EXCLUDED_NAMES = {"STRATEGY_NAME"}  # (str-valued in practice; excluded defensively)
 
 _PINE_INPUT_RE = re.compile(
-    r"^\s*(?:var\s+)?[A-Za-z_]\w*\s*=\s*input\.(?:int|float)\s*\(\s*(-?\d+(?:\.\d+)?)"
+    r"^\s*(?:var\s+)?(?:(?:int|float)\s+)?[A-Za-z_]\w*\s*=\s*input(?:\.(?:int|float))?\s*\(\s*(?:defval\s*=\s*)?(-?\d+(?:\.\d+)?)"
 )
-_PINE_INPUT_NAME_RE = re.compile(r"^\s*(?:var\s+)?([A-Za-z_]\w*)\s*=")
+_PINE_INPUT_NAME_RE = re.compile(r"^\s*(?:var\s+)?(?:(?:int|float)\s+)?([A-Za-z_]\w*)\s*=")
 _SL_DIRECTIVE_RE = re.compile(r"T58_SL_PIPS\s*=\s*(-?\d+(?:\.\d+)?)")
 _TP_DIRECTIVE_RE = re.compile(r"T58_TP_PIPS\s*=\s*(-?\d+(?:\.\d+)?)")
 
@@ -191,7 +191,7 @@ def discover_pinescript_parameters(code: str) -> list[CodeGene]:
             name = name_match.group(1) if name_match else f"input_L{i + 1}"
             literal = input_match.group(1)
             value = float(literal)
-            is_int = ".int(" in line
+            is_int = ".int(" in line or (".float(" not in line and "." not in literal)
             lo, hi = _multiplicative_bounds(value, True) if is_int else _relative_bounds(value)
             genes.append(CodeGene(
                 name=name, kind="pine_input", is_int=is_int, lo=lo, hi=hi,
@@ -281,13 +281,145 @@ def discover_mql5_parameters(code: str) -> list[CodeGene]:
     return genes
 
 
+
+# ---------------------------------------------------------------------------
+# 2026-10-19: numeric literals inside indicator calls (Pine ta.*, MQL5 i*()) and MQL5 `input`/#define values.
+# The interpreters run these scripts, so the optimizer can tune them like any other parameter.
+# ---------------------------------------------------------------------------
+_NUM_LITERAL = re.compile(r"^-?\d+(?:\.\d+)?$")
+# function -> {positional arg index: "int" | "float"}   (Pine: ta.<fn>(source, length, ...))
+_PINE_TA_SPEC = {
+    "sma": {1: "int"}, "ema": {1: "int"}, "wma": {1: "int"}, "rma": {1: "int"}, "rsi": {1: "int"}, "hma": {1: "int"},
+    "vwma": {1: "int"}, "stdev": {1: "int"}, "highest": {1: "int"}, "lowest": {1: "int"}, "cci": {1: "int"},
+    "mfi": {1: "int"}, "cmo": {1: "int"}, "mom": {1: "int"}, "roc": {1: "int"}, "linreg": {1: "int"}, "median": {1: "int"},
+    "atr": {0: "int"}, "bb": {1: "int", 2: "float"}, "kc": {1: "int", 2: "float"}, "macd": {1: "int", 2: "int", 3: "int"},
+    "supertrend": {0: "float", 1: "int"}, "dmi": {0: "int", 1: "int"}, "stoch": {3: "int"}, "wpr": {0: "int"},
+}
+# MQL5 indicator -> {arg index counting symbol,timeframe as 0,1: kind}
+_MQL5_IND_SPEC = {
+    "iMA": {2: "int"}, "iRSI": {2: "int"}, "iATR": {2: "int"}, "iCCI": {2: "int"}, "iADX": {2: "int"},
+    "iMomentum": {2: "int"}, "iWPR": {2: "int"}, "iStdDev": {2: "int"}, "iMFI": {2: "int"},
+    "iBands": {2: "int", 4: "float"}, "iMACD": {2: "int", 3: "int", 4: "int"}, "iStochastic": {2: "int", 3: "int", 4: "int"},
+    "iSAR": {2: "float", 3: "float"},
+}
+_MQL5_INPUT_RE = re.compile(r"^\s*(?:input|sinput)\s+(int|uint|long|double|float)\s+([A-Za-z_]\w*)\s*=\s*(-?\d+(?:\.\d+)?)\s*;")
+_MQL5_DEFINE_RE = re.compile(r"^\s*#\s*define\s+([A-Za-z_]\w*)\s+(-?\d+(?:\.\d+)?)\s*$")
+_NOT_TUNABLE = re.compile(r"risk|magic|slippage|deviation|lots?\b|^lot|volume|\bid\b|ticket|digits|hour|minute|day|time|session|offset|seed|retry|timeout|max_?spread|spread",
+                          re.IGNORECASE)
+
+
+def _split_args(line: str, open_idx: int):
+    """(start, end, text) of each top-level argument of the call whose '(' is at open_idx; None if unbalanced."""
+    depth, start, out, q = 0, open_idx + 1, [], None
+    for j in range(open_idx, len(line)):
+        ch = line[j]
+        if q:
+            if ch == q:
+                q = None
+            continue
+        if ch in "\"'":
+            q = ch
+        elif ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+            if depth == 0:
+                out.append((start, j, line[start:j]))
+                return out
+        elif ch == "," and depth == 1:
+            out.append((start, j, line[start:j]))
+            start = j + 1
+    return None
+
+
+def _scan_calls(line: str, pattern: re.Pattern, spec: dict, name_prefix: str, kind: str, i: int, seen: set, label_fmt: str):
+    genes = []
+    for m in pattern.finditer(line):
+        fn = m.group(1)
+        pos_spec = spec.get(fn)
+        if not pos_spec:
+            continue
+        args = _split_args(line, m.end() - 1)
+        if not args:
+            continue
+        for ix, how in pos_spec.items():
+            if ix >= len(args):
+                continue
+            a0, a1, txt = args[ix]
+            lit = txt.strip()
+            if not _NUM_LITERAL.match(lit):
+                continue
+            lead = len(txt) - len(txt.lstrip())
+            span = (a0 + lead, a0 + lead + len(lit))
+            if (i, span) in seen:
+                continue
+            seen.add((i, span))
+            value = float(lit)
+            is_int = how == "int"
+            lo, hi = _multiplicative_bounds(value, is_int)
+            genes.append(CodeGene(name=f"{name_prefix}{fn}_L{i + 1}_a{ix}", kind=kind, is_int=is_int, lo=lo, hi=hi,
+                                  base_value=value, label=label_fmt.format(fn=fn, ix=ix, line=i + 1),
+                                  line_index=i, span=span))
+    return genes
+
+
+_PINE_TA_CALL = re.compile(r"\bta\.(\w+)\s*\(")
+_MQL5_IND_CALL = re.compile(r"\b(i(?:MA|RSI|ATR|CCI|ADX|Momentum|WPR|StdDev|MFI|Bands|MACD|Stochastic|SAR))\s*\(")
+
+
+def _extra_pine_genes(code: str, existing: list[CodeGene]) -> list[CodeGene]:
+    seen = {(g.line_index, g.span) for g in existing}
+    out = []
+    for i, line in enumerate(code.splitlines()):
+        if "input" in line.split("=")[-1] and "input." in line:
+            continue
+        out += _scan_calls(line, _PINE_TA_CALL, _PINE_TA_SPEC, "ta_", "pine_ta_arg", i, seen,
+                           "ta.{fn}(...) argument {ix} (line {line})")
+    return out
+
+
+def _extra_mql5_genes(code: str, existing: list[CodeGene]) -> list[CodeGene]:
+    seen = {(g.line_index, g.span) for g in existing}
+    out = []
+    for i, line in enumerate(code.splitlines()):
+        m = _MQL5_INPUT_RE.match(line)
+        if m and not _NOT_TUNABLE.search(m.group(2)):
+            typ, name, lit = m.groups()
+            span = (m.start(3), m.end(3))
+            if (i, span) not in seen:
+                seen.add((i, span))
+                value = float(lit)
+                is_int = typ in ("int", "uint", "long")
+                lo, hi = _multiplicative_bounds(value, is_int) if value > 0 else _relative_bounds(value)
+                out.append(CodeGene(name=name, kind="mql5_input", is_int=is_int, lo=lo, hi=hi, base_value=value,
+                                    label=f"input {typ} {name} (line {i + 1})", line_index=i, span=span))
+            continue
+        d = _MQL5_DEFINE_RE.match(line)
+        if d and not _NOT_TUNABLE.search(d.group(1)):
+            name, lit = d.groups()
+            span = (d.start(2), d.end(2))
+            if (i, span) not in seen:
+                seen.add((i, span))
+                value = float(lit)
+                is_int = "." not in lit
+                lo, hi = _multiplicative_bounds(value, is_int) if value > 0 else _relative_bounds(value)
+                out.append(CodeGene(name=name, kind="mql5_define", is_int=is_int, lo=lo, hi=hi, base_value=value,
+                                    label=f"#define {name} (line {i + 1})", line_index=i, span=span))
+            continue
+        out += _scan_calls(line, _MQL5_IND_CALL, _MQL5_IND_SPEC, "", "mql5_ind_arg", i, seen,
+                           "{fn}(...) argument {ix} (line {line})")
+    return out
+
+
 def discover_code_genes(strategy) -> list[CodeGene]:
     if strategy.source_type == "python":
         return discover_python_parameters(strategy.file_path)
     if strategy.source_type == "pinescript":
-        return discover_pinescript_parameters(strategy.code)
+        base = discover_pinescript_parameters(strategy.code)
+        return base + _extra_pine_genes(strategy.code, base)
     if strategy.source_type == "mql5":
-        return discover_mql5_parameters(strategy.code)
+        base = discover_mql5_parameters(strategy.code)
+        return base + _extra_mql5_genes(strategy.code, base)
     raise RefinementError(f"'{strategy.source_type}' is not a supported code strategy source type.")
 
 

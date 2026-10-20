@@ -489,7 +489,35 @@ def _resolve_directive_declaration(strategy) -> StrategyTimeframeDeclaration:
     return decl
 
 
+def apply_timeframe_override(strategy, risk) -> None:
+    """Pins the run's execution-timeframe override (RiskConfig.exec_timeframe) onto the strategy object so every later
+    resolve_strategy_declaration()/prepare_timeframe_aligned_data() call on that object -- including the ones in the
+    holdout/null-test code that only receive the strategy -- sees the same timeframe. Safe to call repeatedly."""
+    tf = getattr(risk, "exec_timeframe", None) if risk is not None else None
+    try:
+        strategy.timeframe_override = normalize_timeframe_label(tf) if tf else None
+    except (TimeframeError, AttributeError):
+        pass
+
+
+def _apply_override(strategy, decl: StrategyTimeframeDeclaration) -> StrategyTimeframeDeclaration:
+    ov = getattr(strategy, "timeframe_override", None)
+    if ov:
+        decl.execution_timeframe = ov
+        # context timeframes must stay coarser than the (new) execution timeframe
+        try:
+            em = parse_timeframe_label(ov)
+            decl.context_timeframes = {c for c in decl.context_timeframes if parse_timeframe_label(c) > em + 1e-6}
+        except TimeframeError:
+            pass
+    return decl
+
+
 def resolve_strategy_declaration(strategy) -> StrategyTimeframeDeclaration:
+    return _apply_override(strategy, _resolve_strategy_declaration_raw(strategy))
+
+
+def _resolve_strategy_declaration_raw(strategy) -> StrategyTimeframeDeclaration:
     """What timeframe(s), if any, `strategy` has declared it needs. See
     this module's docstring for exactly how each source type declares
     this. Returns an empty (declares_anything == False) declaration for

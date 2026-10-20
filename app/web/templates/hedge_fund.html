@@ -126,7 +126,6 @@
     {% for i in range(1, max_assets + 1) %}
     <div class="asset-block">
       <h3>Asset {{ i }}{% if i > 2 %} (optional){% endif %}</h3>
-      {% if stored_datasets %}
       <label>Use a previously stored dataset</label>
       <select name="asset{{ i }}_existing_dataset">
         <option value="">— none —</option>
@@ -138,7 +137,6 @@
         </optgroup>
         {% endfor %}
       </select>
-      {% endif %}
       <label>Or upload a CSV for this instrument</label>
       <input type="file" name="asset{{ i }}_csv" accept=".csv,.tsv,.txt,.parquet,.zip,.7z">
       <label>Label (optional -- defaults to the dataset/file name)</label>

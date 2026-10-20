@@ -115,7 +115,6 @@
 
   <div class="card">
     <h2>1. Market data</h2>
-    {% if stored_datasets %}
     <label>Use a previously stored dataset</label>
     <select name="existing_dataset">
       <option value="">— none —</option>
@@ -127,7 +126,6 @@
       </optgroup>
       {% endfor %}
     </select>
-    {% endif %}
     <label>Or upload CSV(s)</label>
     <input type="file" name="csv_file" accept=".csv,.tsv,.txt,.parquet,.zip,.7z" multiple>
   </div>
@@ -264,6 +262,7 @@
   </div>
 
   <button class="submit-btn" type="submit">Run Payout Probability Simulation</button>
+{% include "_timeframe_fields.html" %}
 </form>
 
 </div>

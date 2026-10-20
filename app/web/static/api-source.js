@@ -86,6 +86,11 @@
       '.t58-api-msg{flex:1 1 100%;font-size:12px;color:var(--text-muted,#9aa4b2);line-height:1.5}',
       '.t58-api-msg.err{color:var(--coral,#ff7a7a)}.t58-api-msg.ok{color:var(--teal,#35e0b0)}',
       '.t58-api-msg a{color:var(--teal,#35e0b0)}',
+      '.t58-api-chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:8px 0 2px;font-size:12px}',
+      '.t58-api-chips-l{color:var(--text-muted,#9aa4b2);margin-right:2px}',
+      '.t58-api-chip{padding:4px 10px;border-radius:99px;border:1px solid var(--border-light,#2a3242);background:var(--panel-3,#161b22);color:var(--text,#e7ebf2);font-size:12px;cursor:pointer;margin:0;width:auto}',
+      '.t58-api-chip:hover{border-color:var(--teal,#35e0b0)}',
+      '.t58-api-chip.off{opacity:.55;border-style:dashed}',
       '.t58-api-note{margin:6px 0 2px;font-size:12px;color:var(--text-muted,#9aa4b2)}',
       '.t58-api-note a{color:var(--teal,#35e0b0)}',
       '.t58-api-multi{margin:10px 0 4px;border:1px dashed var(--border-light,#2a3242);border-radius:10px;padding:2px 10px 10px}',
@@ -205,6 +210,21 @@
     var dl = el('div', { 'class': 't58-api-note' });
     sel.insertAdjacentElement('afterend', f.root);
     f.root.insertAdjacentElement('afterend', dl);
+
+    // Visible one-click chips (the dropdown group alone was easy to miss): "☁ Download from  [Alpaca] [London Strategic Edge] ..."
+    var chips = el('div', { 'class': 't58-api-chips' });
+    chips.appendChild(el('span', { 'class': 't58-api-chips-l' }, '☁ Download from a data provider:'));
+    info.providers.forEach(function (p) {
+      var b = el('button', { type: 'button', 'class': 't58-api-chip' + (p.ready ? '' : ' off'),
+                             title: p.ready ? 'Use ' + p.label + ' (key saved)' : 'No key saved — add one under Account › API Keys' }, p.label);
+      b.addEventListener('click', function () {
+        if (!p.ready) { window.location.href = '/settings/api-keys'; return; }
+        var o = Array.prototype.filter.call(sel.options, function (x) { return x.value.indexOf(PREFIX) === 0 && x.value.slice(PREFIX.length).split('|')[0] === p.id; })[0];
+        if (o) { sel.value = o.value; sel.dispatchEvent(new Event('change', { bubbles: true })); }
+      });
+      chips.appendChild(b);
+    });
+    sel.insertAdjacentElement('afterend', chips);
 
     var lastValid = (sel.value && sel.value.indexOf(PREFIX) !== 0) ? sel.value : '';
     function providerId() { var t = parseToken(sel.value); return t ? t.provider : ''; }
@@ -368,11 +388,29 @@
 
   var SINGLE = 'select[name$="existing_dataset"], select[name="dataset_label"], select[name="datasets"]:not([multiple])';
 
+  // A page whose data library is still empty used to render NO dataset dropdown at all (just the CSV upload), which left
+  // nothing for the provider picker to attach to -- so a saved Alpaca / London Strategic Edge key could not be used.
+  // Give every single-dataset form a real (initially empty) dropdown so the provider group always has a home.
+  function ensureDatasetSelects() {
+    Array.prototype.forEach.call(document.querySelectorAll('input[type="file"][name="csv_file"]'), function (fi) {
+      var form = fi.form || fi.closest('form');
+      if (!form) return;
+      if (form.querySelector(SINGLE + ', input[type="checkbox"][name="datasets"], select[multiple][name="datasets"]')) return;
+      var sel = el('select', { name: 'existing_dataset', 'class': 'inp', id: 't58-synth-dataset-pick' });
+      sel.appendChild(el('option', { value: '' }, '— none, I\'m uploading a file or using a data provider —'));
+      var anchor = fi.previousElementSibling && fi.previousElementSibling.tagName === 'LABEL' ? fi.previousElementSibling : fi;
+      var lab = el('label', { 'class': 'flabel', 'for': 't58-synth-dataset-pick' }, 'Market data');
+      anchor.parentNode.insertBefore(lab, anchor);
+      anchor.parentNode.insertBefore(sel, anchor);
+    });
+  }
+
   function init() {
-    if (!document.querySelector(SINGLE + ', input[type="checkbox"][name="datasets"], select[multiple][name="datasets"], select[multiple][name="ds_datasets"], form .empty-note')) return;
+    if (!document.querySelector('input[type="file"][name="csv_file"], ' + SINGLE + ', input[type="checkbox"][name="datasets"], select[multiple][name="datasets"], select[multiple][name="ds_datasets"], form .empty-note')) return;
     getProviders().then(function (info) {
       if (!info || !info.providers || !info.providers.length) return;
       injectStyle();
+      ensureDatasetSelects();
       Array.prototype.forEach.call(document.querySelectorAll(SINGLE), function (s) { enhanceSingle(s, info); });
       enhanceMulti(info);
     });

@@ -76,6 +76,16 @@ class SizingDecision:
 @dataclass
 class RiskConfig:
     initial_balance: float = 10_000.0
+    # 2026-10-19 timeframes: run ANY strategy on one execution timeframe while reading the market on a higher one.
+    # exec_timeframe overrides the strategy's own/native bar size ("15m"); macro_* adds a higher-timeframe bias gate
+    # (see app.strategy.macro_filter). All None/off = identical to every run before these existed.
+    exec_timeframe: str | None = None
+    macro_timeframe: str | None = None
+    macro_mode: str = "off"
+    macro_length: int = 50
+    macro_strict: bool = False
+    macro_exit_on_flip: bool = False
+    regime_filter: str = "off"          # see app.strategy.macro_filter.REGIME_MODES
     risk_mode: str = "percent"          # "percent" | "fixed"
     risk_value: float = 1.0             # % of equity, or fixed $ amount, per trade
     max_trades_per_day: int = 10

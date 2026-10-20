@@ -63,6 +63,17 @@
 </div>
 {% endif %}
 
+<details class="lc-card" id="mt5-guide" style="margin:10px 0;">
+  <summary style="cursor:pointer;font-weight:600;">First time? Set up MT5 in 5 steps (about 3 minutes)</summary>
+  <ol style="line-height:1.7;margin:10px 0 4px 18px;">
+    <li><b>Install MetaTrader 5</b> (64-bit) from your broker or the prop firm's site. Open it once and <b>log into your demo account</b> (File &rarr; Login to Trade Account). Confirm you can see live prices.</li>
+    <li>In MT5 open <b>Tools &rarr; Options &rarr; Expert Advisors</b> and tick <b>Allow algorithmic trading</b>. Click OK. The toolbar's <b>Algo Trading</b> button should be green.</li>
+    <li>In T58 open <b>Settings &rarr; MT5 accounts</b>, add the login number, password and server exactly as shown in MT5's login window. Leave <b>Terminal path</b> blank (auto-detect) or use Browse to pick <code>terminal64.exe</code>.</li>
+    <li>Come back here, pick the account, the symbol (exactly as MT5 names it, e.g. <code>XAUUSD</code> or <code>EURUSD.r</code>) and a saved strategy. Any Python, Pine Script, MQL5 or JSON strategy works.</li>
+    <li>Press <b>Start forward test</b>. T58 opens MT5 for you if it is closed, waits for it to finish loading, logs in and starts placing demo trades on each closed bar. You never need to build an Expert Advisor: T58 sends the orders itself.</li>
+  </ol>
+  <p class="lc-hint"><b>Seeing &ldquo;terminal didn&rsquo;t respond in time&rdquo;?</b> Close any pop-up inside MT5, make sure MT5 and T58 are both run as a normal user (not one as Administrator), keep only one MT5 install open, then press Start again. T58 already waits up to 2 minutes and retries four times.</p>
+</details>
 <div id="error-box"></div>
 
 <form id="ft-form">

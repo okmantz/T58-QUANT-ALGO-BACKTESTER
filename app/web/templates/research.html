@@ -57,7 +57,6 @@
 
   <div class="card">
     <h2>1. Market data</h2>
-    {% if stored_datasets %}
     <label>Use a previously stored dataset</label>
     <select name="existing_dataset" onchange="researchDetectPipSize()">
       <option value="">— none, I'm uploading new file(s) below —</option>
@@ -69,7 +68,6 @@
       </optgroup>
       {% endfor %}
     </select>
-    {% endif %}
     <label>Or upload new CSV file(s)</label>
     <input type="file" name="csv_file" accept=".csv,.tsv,.txt,.parquet,.zip,.7z" multiple onchange="researchDetectPipSize()">
   </div>
@@ -128,6 +126,7 @@
 
   <button class="run-btn" type="submit">RUN RESEARCH DIRECTOR</button>
   <p style="text-align:center;font-size:12px;color:var(--t-faint);margin-top:10px;">Runs synchronously -- typically seconds to low minutes, depending on dataset size and how many analyses are checked.</p>
+{% include "_timeframe_fields.html" %}
 </form>
 
 {% if results %}

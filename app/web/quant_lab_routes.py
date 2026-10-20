@@ -165,7 +165,7 @@ def _pre(text: str) -> str:
 _TOOLS = [
     {"url": "/gamma", "badge": "Options", "title": "Gamma Center",
      "description": "Dealer gamma exposure: flip level, call/put walls and regime, with the proxy-vs-real data labelling every gamma-aware strategy uses."},
-    {"url": "/research-labs", "badge": "Research", "title": "Research Labs (8 engines)",
+    {"url": "/research-labs", "badge": "Research", "title": "Research Lab",
      "description": "Volume/Market Profile, Order-Flow, Order-Book, Cross-Asset Lead-Lag, Stat-Arb Spreads, Economic Event Study, Market Seasonality and the Hypothesis Lab: reproducible, out-of-sample-tested research that feeds every strategy engine."},
     {"url": "/research-labs/seasonality", "badge": "Research", "title": "Market Seasonality Lab",
      "description": "Time-of-day, weekday, month, holiday, expiry and event-day patterns vs honest baselines, with a shuffled-label null and a later-data persistence check."},

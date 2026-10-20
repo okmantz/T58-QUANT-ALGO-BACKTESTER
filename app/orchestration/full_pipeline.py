@@ -138,6 +138,22 @@ if TYPE_CHECKING:
 ProgressCallback = Callable[[str], None]
 
 
+def _ledger_prior_trials(strategy) -> int:
+    """Variants of this strategy idea evaluated by EARLIER runs (persistent ledger) -- keeps the deflated-Sharpe trial count honest."""
+    try:
+        from app.validation import trial_ledger
+        return trial_ledger.total(getattr(strategy, "name", None) or type(strategy).__name__)
+    except Exception:
+        return 0
+
+
+def _ledger_record_trials(strategy, n) -> None:
+    try:
+        from app.validation import trial_ledger
+        trial_ledger.record(getattr(strategy, "name", None) or type(strategy).__name__, int(n or 1))
+    except Exception:
+        pass
+
 @dataclass
 class FullPipelineConfig:
     preflight_enforce: bool = field(default_factory=lambda: __import__('os').environ.get('T58_PREFLIGHT_ENFORCE', '1') != '0')          # stop at step 0 on a structurally bad configuration
@@ -152,7 +168,13 @@ class FullPipelineConfig:
     payout_horizon_days: int = 35
     payout_replay_starts_dev: int = 48
     payout_replay_starts_oos: int = 36
-    payout30_min_pct: float = 35.0        # READY needs >= this % of fresh accounts paid within the window
+    payout30_min_pct: float = 25.0        # target: % of fresh accounts paid within the window (tracked metric)
+    # 2026-10-19: the 30-day payout rate is a TRACKED metric, not a hard gate. "soft" = a below-target rate adds an
+    # advisory note and a small capped score penalty; only a rate under payout30_hard_floor_pct caps the verdict.
+    # "hard" restores the old behavior (below target = MARGINAL), "off" reports only.
+    payout30_mode: str = "soft"
+    payout30_max_score_penalty: float = 5.0
+    payout30_hard_floor_pct: float = 0.0
     # 2026-10-15: READY needs the Wilson lower bound of P(pass AND paid) per purchased attempt >= this %
     # (the README question). The conditional payout rate per funded account is reported but not gated on.
     min_per_attempt_paid_pct: float = 35.0
@@ -182,9 +204,9 @@ class FullPipelineConfig:
     # UPGRADE (optimizer core): see QuickOptimizeConfig.optimizer_mode's
     # identical field/docstring -- same default, same downstream effect.
     optimizer_mode: str = "genetic"
-    # 2026-10 audit: the real objective is "paid within 30 days", not "passed the evaluation". payout_30d scores the
+    # 2026-10 audit: 2026-10-19: default is the blended prop guide score (pass odds + first payout + ruin); the 30-day window is tracked, not the objective. payout_30d remains selectable and scores the
     # Monte Carlo first-payout-within-window rate (app.optimize.refinement._payout_window_fitness).
-    fitness_metric: str = "payout_30d"
+    fitness_metric: str = "prop_guide_score"
     final_mc_sims: int = 10_000
     # Step 1's baseline Monte Carlo run is diagnostic only -- it's logged
     # and reported alongside the final numbers, but never feeds the
@@ -1210,7 +1232,7 @@ _VERDICT_TO_LIBRARY_STATUS = {
     "NOT READY": "tested_failed",
 }
 
-def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 25.0, replay_min_gap_pts: float = 10.0, null_result=None, null_p_max: float = 0.10, cost_stress=None, cost_stress_min_retained: float = 0.25, mc_dispersion_pts=None, payout30=None, payout30_min_pct: float = 35.0, payout30_min_windows: float = 3.0, paid_min_pct: float = 35.0,
+def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 25.0, replay_min_gap_pts: float = 10.0, null_result=None, null_p_max: float = 0.10, cost_stress=None, cost_stress_min_retained: float = 0.25, mc_dispersion_pts=None, payout30=None, payout30_min_pct: float = 25.0, payout30_mode: str = 'soft', payout30_max_score_penalty: float = 5.0, payout30_hard_floor_pct: float = 0.0, payout30_min_windows: float = 3.0, paid_min_pct: float = 35.0,
                   evidence_required: bool = False, min_expectancy_lb_r: float = 0.0, min_trades_for_expectancy_gate: int = 30,
                   funded_breach_cap_pct: float = 50.0, **kwargs):
     """Accuracy-overhaul wrapper around the original verdict logic.
@@ -1366,14 +1388,24 @@ def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 2
     # accounts through the real engine. Demote-only like every other gate here.
     if payout30 and payout30.get("rate") is not None and float(payout30.get("n_effective", 0.0)) >= payout30_min_windows:
         _rate_pct = float(payout30["rate"]) * 100.0
-        if _rate_pct < payout30_min_pct:
-            reasons.append(
-                f"30-DAY PAYOUT: only {_rate_pct:.0f}% of {payout30.get('n', '?')} fresh accounts "
+        if _rate_pct < payout30_min_pct and payout30_mode != "off":
+            _detail = (
+                f"{_rate_pct:.0f}% of {payout30.get('n', '?')} fresh accounts "
                 f"({payout30.get('source', 'replay')}) reached a first payout within {payout30.get('window', 30)} calendar days "
-                f"(honest 95% CI {float(payout30['ci'][0]) * 100:.0f}-{float(payout30['ci'][1]) * 100:.0f}%; READY needs >= {payout30_min_pct:.0f}%) "
-                "-- capped at MARGINAL."
+                f"(honest 95% CI {float(payout30['ci'][0]) * 100:.0f}-{float(payout30['ci'][1]) * 100:.0f}%; target {payout30_min_pct:.0f}%)"
             )
-            return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
+            if payout30_mode == "hard" or _rate_pct < float(payout30_hard_floor_pct):
+                reasons.append(f"30-DAY PAYOUT: only {_detail} -- capped at MARGINAL.")
+                return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
+            _pen = float(payout30_max_score_penalty) * min(1.0, (payout30_min_pct - _rate_pct) / max(payout30_min_pct, 1e-9))
+            try:
+                scorecard.score = max(0.0, scorecard.score - _pen)
+                scorecard.tier = __import__("app.scoring.t58_scorecard", fromlist=["tier_for_score"]).tier_for_score(scorecard.score)
+            except Exception:  # noqa: BLE001
+                pass
+            reasons.append(f"30-DAY PAYOUT (advisory, -{_pen:.1f} score pts): {_detail}. Slower payouts are not a failed edge.")
+            if verdict == "READY" and getattr(scorecard, "tier", "") not in ("Elite", "Strong"):
+                verdict = "MARGINAL"
     if mc_dispersion_pts is not None and float(mc_dispersion_pts) > 10.0:
         reasons.append(
             f"SEED INSTABILITY: per-attempt pass probability swings with a standard deviation of "
@@ -2648,8 +2680,9 @@ def run_full_pipeline(
                     # D4(b): hand-tuned / externally-evaluated configs
                     # count too -- otherwise a hand-tuned strategy gets
                     # n_trials=1 and an optimistic deflated Sharpe.
-                    extra_trial_counts=(cfg.external_trial_count,),
+                    extra_trial_counts=(cfg.external_trial_count, _ledger_prior_trials(strategy)),
                 )
+                _ledger_record_trials(strategy, (ga_result.total_evaluations if (refinement_ran and ga_result is not None) else 1))
                 trial_sharpes: list[float] = []
                 if refinement_ran and ga_result is not None and ga_result.leaderboard:
                     # v9.15 (WS-F): the leaderboard re-backtests are
@@ -2911,6 +2944,7 @@ def run_full_pipeline(
             attempt_replay=_replay_ev, null_result=_null_ev, null_p_max=cfg.null_p_max,
             cost_stress=_cost_ev, cost_stress_min_retained=float(getattr(cfg, 'cost_stress_min_retained_pct', 25.0)) / 100.0, mc_dispersion_pts=_mc_disp,
             payout30=_payout_ev.get("gate"), payout30_min_pct=cfg.payout30_min_pct,
+            payout30_mode=getattr(cfg, 'payout30_mode', 'soft'), payout30_max_score_penalty=getattr(cfg, 'payout30_max_score_penalty', 5.0), payout30_hard_floor_pct=getattr(cfg, 'payout30_hard_floor_pct', 0.0),
             payout30_min_windows=cfg.payout30_min_effective_windows,
             evidence_required=bool(getattr(cfg, "extra_gates_enabled", True)),
             min_expectancy_lb_r=float(getattr(cfg, "min_expectancy_lb_r", 0.0)),

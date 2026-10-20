@@ -771,3 +771,73 @@ html[data-theme="light"] {
   --bd-x: #b9c5d3;
   --surface-x-bd: #c9d2db;
 }
+
+
+/* ==========================================================================
+   EMERALD MIDNIGHT (2026-10-19) -- the look of the dashboard mockup, applied app-wide (dark theme only).
+   Deep green-black base, emerald glow, faint mountain ridgeline top-right, cards that lift on hover.
+   Performance: everything here is static paint (gradients + one SVG) except hover, which only animates
+   transform/box-shadow on the single hovered card. No blur filters, no JS, no continuous animation.
+   ========================================================================== */
+html:not([data-theme="light"]) {
+  --bg: #030807;
+  --bg-1: #030807;
+  --panel: rgba(8, 20, 19, 0.82);
+  --panel-2: rgba(10, 26, 24, 0.88);
+  --panel-3: rgba(14, 34, 31, 0.92);
+  --panel-elevated: rgba(12, 30, 28, 0.94);
+  --border: rgba(53, 224, 176, 0.14);
+  --border-light: rgba(53, 224, 176, 0.26);
+  --glass-bg: rgba(8, 20, 19, 0.78);
+  --glass-border: rgba(53, 224, 176, 0.10);
+  --glow-teal: 0 0 0 1px rgba(53, 224, 176, 0.16), 0 0 26px rgba(53, 224, 176, 0.10);
+}
+html:not([data-theme="light"]) body {
+  background-color: #030807;
+  background-image:
+    radial-gradient(900px 420px at 88% -4%, rgba(53, 224, 176, 0.16), transparent 70%),
+    radial-gradient(700px 500px at 8% 96%, rgba(20, 150, 120, 0.10), transparent 70%),
+    linear-gradient(180deg, #04100e 0%, #030807 45%, #020605 100%);
+  background-attachment: fixed;
+}
+/* subtle mountain ridgeline, top right, fading out toward the left and bottom */
+html:not([data-theme="light"]) body::before {
+  content: "";
+  position: fixed; top: 0; right: 0; width: min(70vw, 1100px); height: 360px;
+  pointer-events: none; z-index: 0; opacity: .55;
+  background:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1100 360' preserveAspectRatio='none'><defs><linearGradient id='a' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='%2335e0b0' stop-opacity='.34'/><stop offset='1' stop-color='%2335e0b0' stop-opacity='0'/></linearGradient><linearGradient id='b' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='%231aa383' stop-opacity='.22'/><stop offset='1' stop-color='%231aa383' stop-opacity='0'/></linearGradient></defs><path d='M0 300 L120 250 L200 270 L330 190 L420 230 L540 130 L610 170 L700 90 L790 160 L880 110 L980 175 L1100 120 L1100 360 L0 360Z' fill='url(%23b)'/><path d='M0 330 L90 290 L210 320 L340 250 L470 300 L600 215 L720 280 L830 225 L960 290 L1100 240 L1100 360 L0 360Z' fill='url(%23a)'/><path d='M540 130 L610 170 L700 90 L790 160 L880 110' fill='none' stroke='%2335e0b0' stroke-opacity='.35' stroke-width='1.2'/></svg>") right top / 100% 100% no-repeat;
+  -webkit-mask-image: linear-gradient(to left, #000 35%, transparent 100%), linear-gradient(to bottom, #000 40%, transparent 100%);
+  -webkit-mask-composite: source-in; mask-composite: intersect;
+  mask-image: linear-gradient(to left, #000 35%, transparent 100%), linear-gradient(to bottom, #000 40%, transparent 100%);
+}
+html:not([data-theme="light"]) .t58-shell { position: relative; z-index: 1; }
+html:not([data-theme="light"]) .t58-sidebar {
+  background: linear-gradient(180deg, rgba(6, 18, 16, 0.94), rgba(4, 12, 11, 0.96));
+  border-right: 1px solid rgba(53, 224, 176, 0.12);
+}
+
+/* cards: glass panel with an emerald hairline; lift + glow on hover */
+html:not([data-theme="light"]) :is(.db-card, .db-kpi, .t58-card, .t58-champion, .lc-card, .lc-toolcard, .t58-metric-box, .db-tools a, .news-card) {
+  background: linear-gradient(180deg, rgba(12, 30, 28, 0.80), rgba(7, 19, 18, 0.86));
+  border: 1px solid rgba(53, 224, 176, 0.14);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 8px 24px rgba(0, 0, 0, 0.30);
+  transition: transform var(--dur-base, 200ms) var(--ease, ease), box-shadow var(--dur-base, 200ms) var(--ease, ease), border-color var(--dur-base, 200ms) var(--ease, ease);
+  will-change: auto;
+}
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  html:not([data-theme="light"]) :is(.db-card, .db-kpi, .t58-card, .t58-champion, .lc-card, .lc-toolcard, .t58-metric-box, .db-tools a, .news-card):hover {
+    transform: translateY(-3px);
+    border-color: rgba(53, 224, 176, 0.38);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 14px 34px rgba(0, 0, 0, 0.42), 0 0 28px rgba(53, 224, 176, 0.14);
+  }
+}
+html:not([data-theme="light"]) .t58-btn.primary, html:not([data-theme="light"]) .lc-btn {
+  box-shadow: 0 0 18px rgba(53, 224, 176, 0.22);
+}
+html:not([data-theme="light"]) input, html:not([data-theme="light"]) select, html:not([data-theme="light"]) textarea {
+  border-color: rgba(53, 224, 176, 0.18);
+}
+html:not([data-theme="light"]) input:focus, html:not([data-theme="light"]) select:focus, html:not([data-theme="light"]) textarea:focus {
+  outline: none; border-color: rgba(53, 224, 176, 0.55); box-shadow: 0 0 0 3px rgba(53, 224, 176, 0.12);
+}

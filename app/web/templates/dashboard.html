@@ -72,6 +72,20 @@
   @media (max-width: 1020px) { .db-row { grid-template-columns: 1fr; } .db-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .db-tools { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   @media (max-width: 560px) { .db-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .db-tools { grid-template-columns: 1fr; } .db-head h1 { font-size: 20px; } }
   @media (prefers-reduced-motion: reduce) { .db-tools a, .db-steps a { transition: none; } .db-tools a:hover { transform: none; } }
+
+  .db-welcome { border-color: rgba(var(--teal-rgb), .35); box-shadow: 0 0 30px rgba(var(--teal-rgb), .10); }
+  .db-market { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); }
+  .db-feed { max-height: 250px; overflow-y: auto; font-size: 12.5px; }
+  .db-feed .nr { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); }
+  .db-feed .nr:first-child { border-top: 0; }
+  .db-feed .nt { font-weight: 600; } .db-feed .nm { color: var(--text-dim); font-size: 11px; margin-top: 2px; }
+  .db-feed .hi { color: var(--coral); } .db-feed .med { color: var(--amber); } .db-feed .lo { color: var(--text-muted); }
+  .db-feed .up { color: var(--teal); } .db-feed .down { color: var(--coral); }
+  .db-head h1 { font-size: 30px; }
+  .db-kpi { position: relative; overflow: hidden; }
+  .db-kpi::after { content: ""; position: absolute; right: -20px; top: -20px; width: 90px; height: 90px; border-radius: 50%;
+                   background: radial-gradient(circle, rgba(var(--teal-rgb), .16), transparent 70%); pointer-events: none; }
+  @media (max-width: 1020px) { .db-market { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -84,7 +98,7 @@
 <!-- ---- Header ---- -->
 <div class="db-head">
   <div>
-    <h1 id="db-greeting">Welcome back</h1>
+    <h1><span id="db-greeting">Welcome</span>, <span id="db-user">{{ user_name|default("Trader") }}</span>!</h1>
     <p id="db-date">Your research, validation and deployment status at a glance.</p>
     <script>window.T58_TOUR_AUTOSTART = {{ 'true' if auto_tour else 'false' }};</script>
   </div>
@@ -95,8 +109,8 @@
 </div>
 
 {% if show_welcome %}
-<div class="db-card" style="border-color:var(--teal);">
-  <h2 style="font-size:15px;">&#128075; New here? Start here so you never have to guess.</h2>
+<div class="db-card db-welcome">
+  <h2 style="font-size:15px;">&#128161; New here? Start here so you never have to guess.</h2>
   <div style="white-space:pre-line;line-height:1.5;font-size:13px;">{{ welcome_message }}</div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
     <a class="t58-btn primary" href="/">1. Load data &amp; configure a strategy</a>
@@ -172,6 +186,18 @@
       <a class="t58-btn secondary sm" href="/generate-strategies">Generate a strategy (AI)</a>
     </div>
     {% endif %}
+  </div>
+</div>
+
+<!-- ---- Market data + news (also lives in AI Assistant) ---- -->
+<div class="db-row db-market">
+  <div class="db-card">
+    <h2>News &mdash; upcoming events <a href="/assistant/">AI Assistant &rarr;</a></h2>
+    <div id="db-news" class="db-feed"><div class="db-empty">Loading news&hellip;</div></div>
+  </div>
+  <div class="db-card">
+    <h2>Market data <a href="/assistant/">Full rankings &rarr;</a></h2>
+    <div id="db-rank" class="db-feed"><div class="db-empty">Loading markets&hellip;</div></div>
   </div>
 </div>
 
@@ -369,9 +395,46 @@
   (function () {
     var h = new Date().getHours();
     var g = document.getElementById('db-greeting'), d = document.getElementById('db-date');
-    if (g) g.textContent = (h < 5 ? 'Working late' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening');
+    
     if (d) try { d.textContent = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }) + ' — your research, validation and deployment status at a glance.'; } catch (e) {}
   })();
+
+  // Greeting: time of day + the account's name (server-provided, "Trader" when none is set)
+  (function () {
+    var h = new Date().getHours(), g = document.getElementById('db-greeting');
+    if (g) g.textContent = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+  })();
+  function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  function loadNews() {
+    var el = document.getElementById('db-news');
+    fetch('/assistant/api/news').then(function (r) { return r.json(); }).then(function (d) {
+      if (d.error) { el.innerHTML = '<div class="db-empty">' + esc(d.error) + '</div>'; return; }
+      var ev = (d.events || []).slice(0, 8);
+      if (!ev.length) { el.innerHTML = '<div class="db-empty">No upcoming events this week.</div>'; return; }
+      el.innerHTML = ev.map(function (e) {
+        var cls = /high|red/i.test(e.impact) ? 'hi' : /med|orange|yellow/i.test(e.impact) ? 'med' : 'lo';
+        var mins = e.minutes_until;
+        var cd = mins == null ? '' : (mins < 0 ? 'released' : (mins >= 60 ? Math.floor(mins / 60) + 'h ' + Math.round(mins % 60) + 'm' : Math.round(mins) + 'm'));
+        return '<div class="nr"><div><div class="nt">' + esc(e.currency) + ' &mdash; ' + esc(e.title) + '</div><div class="nm">' +
+          (e.when ? new Date(e.when).toLocaleString() : 'TBD') + (cd ? ' &middot; ' + cd : '') + '</div></div><span class="' + cls + '">' + esc(e.impact) + '</span></div>';
+      }).join('');
+    }).catch(function () { el.innerHTML = '<div class="db-empty">News unavailable right now.</div>'; });
+  }
+  function loadRank() {
+    var el = document.getElementById('db-rank');
+    fetch('/assistant/api/rankings').then(function (r) { return r.json(); }).then(function (d) {
+      var rk = (d.rankings || []).slice(0, 8);
+      if (!rk.length) { el.innerHTML = '<div class="db-empty">No market data loaded yet. Add a dataset under Market Data or connect a data key.</div>'; return; }
+      el.innerHTML = rk.map(function (r) {
+        var up = r.momentum_pct >= 0;
+        return '<div class="nr"><div><div class="nt">' + esc(r.symbol) + ' <span class="nm">' + esc(r.asset_class) + '</span></div><div class="nm">' + esc(r.zone || '') +
+          '</div></div><span class="' + (up ? 'up' : 'down') + '">' + (up ? '+' : '') + r.momentum_pct + '%</span></div>';
+      }).join('');
+    }).catch(function () { el.innerHTML = '<div class="db-empty">Market data unavailable right now.</div>'; });
+  }
+  // Fetched after first paint so the page itself never waits on the network.
+  setTimeout(function () { loadNews(); loadRank(); }, 300);
+  setInterval(function () { if (!document.hidden) { loadNews(); loadRank(); } }, 300000);
 
   const DATA = {{ data | tojson | safe }};
   var lastSig = '';
