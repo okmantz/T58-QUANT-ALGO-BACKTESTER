@@ -197,16 +197,13 @@ def test_cpcv_supporting_fail_does_not_reject():
     assert _hard_gate_reasons(reasons) == []
 
 
-def test_icir_fail_rejects():
+def test_icir_fail_is_advisory_not_rejecting():
+    # 2026-10-20 report: the ICIR/half-life gate is advisory; the pooled signed-R edge gate decides.
     verdict, reasons, _scorecard, _ruin_fail, _lh_fail = _make_verdict(
         _mc(), _wf(is_stable=True), _icir(ok=False),
     )
-    assert verdict == "NOT READY"
-    fails = _hard_gate_reasons(reasons)
-    assert len(fails) == 1
-    assert "icir" in fails[0].lower()
-    # The old "Supporting diagnostic" note must not double-report the same failure.
-    assert not any(r.startswith("Supporting diagnostic: did NOT pass the ICIR") for r in reasons)
+    assert _hard_gate_reasons(reasons) == []
+    assert any("ICIR" in r for r in reasons)  # still on the record
 
 
 def test_icir_unmeasurable_does_not_reject():
@@ -227,7 +224,7 @@ def test_multiple_gate_failures_all_recorded():
         primary_robustness_method="cpcv",
     )
     assert verdict == "NOT READY"
-    assert len(_hard_gate_reasons(reasons)) == 3
+    assert len(_hard_gate_reasons(reasons)) == 2   # walk-forward + CPCV; ICIR is advisory now
 
 
 def test_gates_advisory_only_does_not_reject():
@@ -239,8 +236,8 @@ def test_gates_advisory_only_does_not_reject():
     )
     # No hard-gate rejection recorded...
     assert _hard_gate_reasons(reasons) == []
-    # ...but every failure is still on the record as ADVISORY (3 gates failed).
-    assert sum(1 for r in reasons if "ADVISORY ONLY" in r) == 3
+    # ...but every hard-gate failure is still on the record as ADVISORY (walk-forward + CPCV; ICIR is advisory by design).
+    assert sum(1 for r in reasons if "ADVISORY ONLY" in r) == 2
 
 
 # ---------------------------------------------------------------------------
