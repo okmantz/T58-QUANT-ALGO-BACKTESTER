@@ -97,6 +97,10 @@ FITNESS_METRICS: dict[str, str] = {
     # windows over the candidate's own (out-of-sample) trades, blended with
     # the Monte Carlo per-attempt pass probability as a smooth tie-breaker.
     "payout_30d": "Payout-in-30-Days -- rolling fresh-account windows reaching a payout within 30 days (recommended for fast payouts)",
+    # 2026-10-20 (report section 4, two-stage optimizer): Stage A ranks on EDGE, not on prop outcomes. Fitness = lower confidence
+    # bound of mean R per trade (day-block bootstrap), scaled by the share of calendar years with a positive mean R. Run it on a
+    # risk config whose costs are already stressed (spread/slippage x2) to get "after 2x costs"; sizing is chosen later in Stage B.
+    "edge_lb_r": "Edge lower bound (mean R per trade, day-block bootstrap, year-stability weighted) -- Stage A of the two-stage optimizer",
     "net_profit": "Long-Term Net Profit ($) -- for long-term trading, no prop firm",
     "profit_factor": "Profit Factor",
     "sharpe_ratio": "Sharpe Ratio",
@@ -661,7 +665,10 @@ def compute_fitness(
     hardcoded 6-10% stand-in. None (the default) keeps the old band --
     byte-identical for every caller that doesn't thread PropRules
     through."""
-    if metric == "net_profit":
+    if metric == "edge_lb_r":
+        from app.optimize.two_stage import edge_fitness_from_trades
+        fitness = edge_fitness_from_trades(trades)
+    elif metric == "net_profit":
         fitness = float(stats.get("net_profit", 0.0))
     elif metric == "profit_factor":
         pf = stats.get("profit_factor", 0.0)
@@ -1660,7 +1667,7 @@ def run_iterative_refinement(
 # ---------------------------------------------------------------------------
 GA_TRADE_FLOOR = 100          # below this many chained OOS trades fitness is scaled down
 GA_HARD_FLOOR = 15            # below this the candidate cannot be ranked at all (-inf)
-GA_MAX_SKIP_RATIO = 0.20      # share of signals skipped for sizing tolerated before penalty
+GA_MAX_SKIP_RATIO = 0.25      # share of signals skipped for sizing tolerated before penalty
 
 
 def apply_ga_reliability_adjustments(fitness: float, n_trades: int, skipped_for_sizing: int = 0) -> float:
