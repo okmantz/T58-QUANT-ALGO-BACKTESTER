@@ -189,6 +189,11 @@ class WalkForwardFold:
     test_net_profit: float = 0.0
     test_trades: int = 0
     test_profit_factor: float | None = None
+    # 2026-10-20: the out-of-sample trades' R multiples and exit dates, so the pooled gate (day-block bootstrap on
+    # mean R) can be computed from the folds instead of from a ratio of two noisy pass probabilities.
+    test_r: list = field(default_factory=list)
+    test_days: list = field(default_factory=list)
+    train_trades: int = 0
 
 
 @dataclass
@@ -215,6 +220,35 @@ class WalkForwardResult:
     total_test_net_profit: float | None = None
     total_test_trades: int = 0
     mean_test_profit_factor: float | None = None
+    # 2026-10-20 (report section 4): the walk-forward gate now judges POOLED out-of-sample mean R, not the ratio of two
+    # noisy eval-pass probabilities. ``pooled_status`` is PASS / NOT_PROVEN / FAIL / UNPROVEN (see
+    # app.validation.edge_stats.PooledEdge); None for the legacy metrics, which keep their old stability rule.
+    pooled_status: str | None = None
+    pooled_mean_r: float | None = None
+    pooled_lb_r: float | None = None
+    pooled_ub_r: float | None = None
+    pooled_sd_r: float | None = None
+    pooled_trades: int = 0
+    fraction_folds_positive: float | None = None
+    folds_after_merge: int = 0
+    trades_needed_more: int | None = None
+    edge_note: str = ""
+    generalization_score: float | None = None      # 0-100, feeds the scorecard's generalization slot when set
+    efficiency_defined: bool = True                # False when the train mean was <= 0 (efficiency is only a diagnostic)
+    purge_bars: int = 0
+    embargo_bars_per_fold: int = 0
+
+    @property
+    def hard_failed(self) -> bool:
+        """True when this result should REJECT a strategy. Legacy metrics: the old not-stable rule. mean_r: the pooled
+        gate returned FAIL (a positive-but-unproven edge is NOT_PROVEN and only caps the verdict)."""
+        if self.pooled_status is not None:
+            return self.pooled_status == "FAIL"
+        return not self.is_stable
+
+    @property
+    def not_proven(self) -> bool:
+        return self.pooled_status == "NOT_PROVEN"
 
 
 # Minimum pooled out-of-sample trades before the "did it make money OOS" check can convict.
@@ -230,6 +264,22 @@ def _finite_or(v, default, inf_value: float | None = None):
     return float(v)
 
 
+def _r_and_days(trades) -> tuple[list, list]:
+    """(R multiples, exit timestamps) aligned per trade, for trades that carry a planned risk -- the same definition as
+    app.scoring.edge_bounds.r_multiples (pnl / (initial_risk x size))."""
+    rs: list = []
+    days: list = []
+    for t in trades or []:
+        ir = getattr(t, "initial_risk", None)
+        size = getattr(t, "size", None)
+        pnl = getattr(t, "pnl", None)
+        if pnl is None or not ir or ir <= 0 or not size:
+            continue
+        rs.append(float(pnl) / (float(ir) * float(size)))
+        days.append(getattr(t, "exit_time", None) or getattr(t, "entry_time", None))
+    return rs, days
+
+
 def _metric_value(stats: dict, metric: str, trades: list | None = None, prop_rules=None, mc_cfg=None) -> float:
     """Reads a fold's score off its backtest stats dict, EXCEPT for
     "eval_pass_probability": that one isn't in the stats dict at all (it
@@ -241,6 +291,14 @@ def _metric_value(stats: dict, metric: str, trades: list | None = None, prop_rul
     if metric == "eval_pass_probability" and prop_rules is not None:
         from app.monte_carlo.engine import eval_pass_probability_for_trades
         return eval_pass_probability_for_trades(trades or [], prop_rules, mc_cfg)
+    if metric == "mean_r":
+        # 2026-10-20: the quantity that defines an edge. Mean R per trade from the fold's own trades; falls back to
+        # the backtest statistics' average_r when no trade carries a planned risk.
+        _rs, _ = _r_and_days(trades or [])
+        if _rs:
+            return float(np.mean(_rs))
+        v = stats.get("average_r", 0.0)
+        return float(v) if isinstance(v, (int, float)) and math.isfinite(v) else 0.0
     v = stats.get(metric, 0.0)
     if v == float("inf"):
         return 10.0
@@ -282,6 +340,7 @@ def _wf_one_fold(fold_idx, train_df, test_df, strategy_builder, risk, metric, pr
     test_stats = test_result.statistics.to_dict()
     train_val = _metric_value(train_stats, metric, train_result.trades, prop_rules, mc_cfg)
     test_val = _metric_value(test_stats, metric, test_result.trades, prop_rules, mc_cfg)
+    _test_r, _test_days = _r_and_days(test_result.trades)
     fold = WalkForwardFold(
         fold_index=fold_idx,
         train_period=(str(train_df["timestamp"].iloc[0]), str(train_df["timestamp"].iloc[-1])),
@@ -291,16 +350,17 @@ def _wf_one_fold(fold_idx, train_df, test_df, strategy_builder, risk, metric, pr
         test_net_profit=_finite_or(test_stats.get("net_profit"), 0.0),
         test_trades=int(_finite_or(test_stats.get("total_trades"), 0.0)),
         test_profit_factor=_finite_or(test_stats.get("profit_factor"), None, inf_value=10.0),
+        test_r=_test_r, test_days=_test_days, train_trades=len(train_result.trades),
     )
     return fold, train_val, test_val
 
 
 def _wf_worker_task(task):
-    fold_idx, train_end, test_end = task
+    fold_idx, train_end, test_start, test_end = task
     w = _WF_WORKER
     df = w["df"]
     train_df = df.iloc[:train_end].reset_index(drop=True)
-    test_df = df.iloc[train_end:test_end].reset_index(drop=True)
+    test_df = df.iloc[test_start:test_end].reset_index(drop=True)
     return fold_idx, _wf_one_fold(
         fold_idx, train_df, test_df,
         lambda: _build_spec_strategy(w["spec"], w["tmp_dir"]),
@@ -327,8 +387,20 @@ def run_walk_forward(
     max_workers: int | None = None,
     strategy_spec=None,
     tmp_dir=None,
+    purge_bars: int = 0,
+    embargo_bars: int = 0,
+    min_fold_trades: int = 30,
 ):
     """
+    2026-10-20 (report section 4): ``metric="mean_r"`` is the edge-based mode the full pipeline now uses. Folds are
+    scored on mean R per trade; every fold's out-of-sample test window has the SAME length (``fold_size`` less
+    ``embargo_bars``); ``purge_bars`` trims the tail of each training window so a position opened there cannot resolve
+    inside the test window; folds with fewer than ``min_fold_trades`` out-of-sample trades are merged into their
+    neighbours; and the gate is the POOLED out-of-sample mean R with a day-block bootstrap lower bound above zero plus
+    at least half of the merged folds positive (see app.validation.edge_stats.pooled_oos_edge). Walk-forward efficiency
+    (test mean / train mean) is still reported, as a diagnostic only: it is no longer forced to 0.00 when the train
+    mean is not positive. Every other metric keeps its previous behaviour exactly.
+
     strategy_builder: a zero-argument callable returning a FRESH Strategy
     instance each call (cheap for ManualStrategy -- always build fresh per
     fold rather than reusing one instance, since some strategy sources
@@ -408,8 +480,16 @@ def run_walk_forward(
     # metric lists end up in fold order either way, so the returned
     # WalkForwardResult is identical; any pool failure falls back to
     # the serial builder loop for every fold.
+    purge_bars = max(int(purge_bars or 0), 0)
+    embargo_bars = max(int(embargo_bars or 0), 0)
+    if embargo_bars >= fold_size - 5:
+        embargo_bars = max(fold_size // 4, 0)   # never let the embargo swallow the whole test window
+    # (fold index, train end, test start, test end): the training window loses its last ``purge_bars`` bars and the
+    # test window loses its first ``embargo_bars`` bars, so no position opened in training can resolve inside the test
+    # window and every test window has the same length.
     fold_spans = [
-        (i, fold_size * (i + 1), min(fold_size * (i + 2), n)) for i in range(n_folds)
+        (i, max(fold_size * (i + 1) - purge_bars, 10), fold_size * (i + 1) + embargo_bars, min(fold_size * (i + 2), n))
+        for i in range(n_folds)
     ]
     fold_results: list = [None] * len(fold_spans)
     _want_wf_parallel = (
@@ -444,11 +524,11 @@ def run_walk_forward(
 
     folds: list[WalkForwardFold] = []
     train_metrics, test_metrics = [], []
-    for i, train_end, test_end in fold_spans:
+    for i, train_end, test_start, test_end in fold_spans:
         _one = fold_results[i]
         if _one is None:
             train_df = df.iloc[:train_end].reset_index(drop=True)
-            test_df = df.iloc[train_end:test_end].reset_index(drop=True)
+            test_df = df.iloc[test_start:test_end].reset_index(drop=True)
             _one = _wf_one_fold(i, train_df, test_df, strategy_builder, risk, metric, prop_rules, mc_cfg)
         if _one is None:
             continue
@@ -462,11 +542,13 @@ def run_walk_forward(
 
     mean_train = float(np.mean(train_metrics))
     mean_test = float(np.mean(test_metrics))
+    efficiency_defined = True
     if mean_train <= 0:
-        # 2026-10-15 (audit item 10): there is no in-sample edge to retain. The old code divided
-        # test by train for any non-zero train, so a strategy that LOST equally in and out of
-        # sample (negative / negative = +1.0) scored as perfectly "efficient".
+        # 2026-10-15 (audit item 10): there is no in-sample edge to retain. The old code divided test by train for any
+        # non-zero train, so a strategy that LOST equally in and out of sample (negative / negative = +1.0) scored as
+        # perfectly "efficient".
         wfe = 0.0
+        efficiency_defined = False
     else:
         wfe = max(min(mean_test / mean_train, 5.0), -5.0)
 
@@ -485,6 +567,47 @@ def run_walk_forward(
                 + "): a strategy that loses equally in and out of sample is not 'stable', it has no edge to retain."
             ]
 
+    # -- pooled out-of-sample edge (always computed; it is the gate only for metric == "mean_r") ----------------------
+    from app.validation.edge_stats import pooled_oos_edge
+    pooled = pooled_oos_edge([f.test_r for f in folds], [f.test_days for f in folds], min_fold_trades=int(min_fold_trades))
+    pooled_fields = dict(
+        pooled_mean_r=pooled.mean_r, pooled_lb_r=pooled.lb_r, pooled_ub_r=pooled.ub_r, pooled_sd_r=pooled.sd_r,
+        pooled_trades=pooled.n_trades, fraction_folds_positive=pooled.fraction_groups_positive,
+        folds_after_merge=pooled.n_groups, trades_needed_more=pooled.trades_needed_more, edge_note=pooled.note,
+        efficiency_defined=efficiency_defined, purge_bars=purge_bars, embargo_bars_per_fold=embargo_bars,
+    )
+    if metric == "mean_r":
+        status = pooled.status
+        if status == "UNPROVEN":
+            gen_score = None
+        elif status == "FAIL":
+            gen_score = 0.0
+        else:
+            retention = (max(0.0, min(1.0, mean_test / mean_train)) if mean_train > 0 else (1.0 if (pooled.mean_r or 0) > 0 else 0.0))
+            gen_score = 100.0 * max(0.0, min(1.0, 0.5 * (pooled.fraction_groups_positive or 0.0) + 0.5 * retention))
+            if status == "NOT_PROVEN":
+                gen_score = min(gen_score, 55.0)
+        if status == "FAIL":
+            oos_profitable = False if pooled.n_trades >= MIN_OOS_TRADES_FOR_PROFIT_CHECK and (pooled.mean_r or 0) <= 0 else oos_profitable
+        elif status in ("PASS", "NOT_PROVEN") and pooled.n_trades >= MIN_OOS_TRADES_FOR_PROFIT_CHECK:
+            oos_profitable = (pooled.mean_r or 0) > 0
+        if pooled.note:
+            warnings = list(warnings) + [f"Walk-forward (pooled out-of-sample mean R): {pooled.note}."]
+        return WalkForwardResult(
+            folds=folds, n_folds=len(folds), metric=metric,
+            mean_train_metric=mean_train, mean_test_metric=mean_test,
+            walk_forward_efficiency=wfe,
+            is_stable=(status == "PASS"),
+            stability_threshold=stability_threshold,
+            embargo_applied_bars=embargo_applied_bars,
+            warnings=warnings,
+            oos_profitable=oos_profitable,
+            total_test_net_profit=total_test_net if total_test_trades else None,
+            total_test_trades=total_test_trades,
+            mean_test_profit_factor=mean_test_pf,
+            pooled_status=status, generalization_score=gen_score, **pooled_fields,
+        )
+
     return WalkForwardResult(
         folds=folds, n_folds=len(folds), metric=metric,
         mean_train_metric=mean_train, mean_test_metric=mean_test,
@@ -497,6 +620,7 @@ def run_walk_forward(
         total_test_net_profit=total_test_net if total_test_trades else None,
         total_test_trades=total_test_trades,
         mean_test_profit_factor=mean_test_pf,
+        **pooled_fields,
     )
 
 

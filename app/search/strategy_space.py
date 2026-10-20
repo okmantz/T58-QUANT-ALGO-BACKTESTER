@@ -5229,3 +5229,11 @@ try:
     HYPOTHESIS_QUESTIONS.update(V9_HYPOTHESIS_QUESTIONS)
 except ImportError:
     pass
+
+# v11 (2026-10-20): structural / event / calendar / regime families (app.search.families_v11).
+try:
+    from app.search.families_v11 import V11_FAMILIES, V11_HYPOTHESIS_QUESTIONS
+    FAMILIES.update(V11_FAMILIES)
+    HYPOTHESIS_QUESTIONS.update(V11_HYPOTHESIS_QUESTIONS)
+except ImportError:
+    pass

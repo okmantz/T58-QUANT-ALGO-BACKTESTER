@@ -709,6 +709,17 @@ def _synthetic_ohlcv(n: int = 500, seed: int = 7) -> pd.DataFrame:
     })
 
 
+def _v11_kind_names() -> frozenset:
+    # v11 session/calendar/event/macro terminals (hand-built via families_v11; not randomly drawn).
+    try:
+        from app.strategy.indicators_v11 import V11_INDICATOR_BUILDERS, V11_SELF_CONTAINED
+        from app.strategy import indicators_v10 as _v10
+        extra = frozenset(getattr(_v10, "V10_INDICATOR_BUILDERS", {}) or {}) if hasattr(_v10, "V10_INDICATOR_BUILDERS") else frozenset()
+        return frozenset(V11_INDICATOR_BUILDERS) | frozenset(V11_SELF_CONTAINED) | extra
+    except Exception:
+        return frozenset()
+
+
 def _validate_operand(operand: Any, where: str, errors: list[str]) -> None:
     if isinstance(operand, (int, float, np.number)):
         return
@@ -716,11 +727,11 @@ def _validate_operand(operand: Any, where: str, errors: list[str]) -> None:
         errors.append(f"{where}: operand must be a dict or number, got {type(operand).__name__}")
         return
     kind = str(operand.get("type", operand.get("source", ""))).lower().strip()
-    if kind not in ALL_OPERAND_KINDS and kind not in OPERAND_BUILDERS:
+    if kind not in ALL_OPERAND_KINDS and kind not in OPERAND_BUILDERS and kind not in _v11_kind_names():
         errors.append(f"{where}: unknown operand kind '{kind}'")
         return
     period = operand.get("period")
-    if period is not None:
+    if period is not None and kind not in _v11_kind_names():
         try:
             if int(period) < 1:
                 errors.append(f"{where}: period must be >= 1, got {period!r}")
