@@ -146,6 +146,20 @@ def apply_audit_layers(
     # 6. EV verdict beside READY
     ev = _compute_ev(verdict, cfg, prop_rules, payout_ev, p_hold, hold_trades, evidence, int(n_trials), n_eff,
                      lookahead_ok=not lookahead_check_crashed, ok_rules=ok, log=log)
+    # 7. EV hard bar (2026-10-20): the fixed per-attempt 70% bar is a HIGH CONFIDENCE label, not the rejecting test. What rejects
+    #    is a computable economics failure: EV <= 0 or below margin with every input present -> NOT READY; missing inputs cap at MARGINAL.
+    if getattr(cfg, "ev_hard_bar", True):
+        if ev.label == "NOT WORTH A FEE" and not ev.inputs_missing:
+            demote("NOT READY", "EV TEST FAILED: " + " ".join(ev.reasons[-2:]) + " The strategy does not earn back the fee at its measured, "
+                                "deflated pass rate -- no pass-rate bar is needed to see that.")
+        elif ev.label == "INSUFFICIENT EVIDENCE":
+            demote("MARGINAL", "EV EVIDENCE INCOMPLETE: " + " ".join(ev.reasons[:1]) + " READY needs an economic verdict.")
+    # 8. ladder stage printed next to the verdict everywhere
+    from app.orchestration.verdict_ladder import ladder_stage
+    _lad = ladder_stage(verdict, ev.label, pooled_status=evidence.get("pooled_status"),
+                        hard_failed=(verdict == "NOT READY" and ev.label == "NOT WORTH A FEE"),
+                        per_attempt_pass_lb_pct=None, high_confidence_pct=min_pct)
+    evidence["ladder"] = _lad.to_dict()
     return verdict, reasons, ev, evidence
 
 

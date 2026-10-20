@@ -237,7 +237,7 @@ class FullPipelineConfig:
     # comparing against a report generated before this fix.
     reserve_true_holdout: bool = True
     oos_check_folds: int = 4               # for the post-hoc run_walk_forward check
-    oos_check_metric: str = "eval_pass_probability"
+    oos_check_metric: str = "mean_r"  # 2026-10-20: pooled purged mean R per trade, not noisy eval-pass probability
     random_seed: int | None = 42
     # Adaptive, limit-aware position sizing (see app.backtest.adaptive_risk):
     # when enabled, every backtest this pipeline runs -- the baseline, the
@@ -408,6 +408,14 @@ class FullPipelineConfig:
     # v6 MC fields) -- a gate that can't measure can't convict, the
     # same couldn't-run/UNPROVEN distinction the ICIR gate makes.
     min_per_attempt_pass_pct: float = 70.0
+    # 2026-10-20 (report section 4): "cap" = per-attempt pass odds below the bar CAP the verdict at MARGINAL (70% stays the
+    # HIGH CONFIDENCE label); the rejecting bar is the EV test in apply_audit_layers. "hard" restores the legacy rejection.
+    per_attempt_pass_mode: str = "cap"
+    # EV test rejects (NOT WORTH A FEE with all inputs present) / caps (INSUFFICIENT EVIDENCE) in apply_audit_layers.
+    ev_hard_bar: bool = True
+    # DSR keeps its 0.95 bar; the trial count it deflates by is the number of DISTINCT return streams (daily-P&L correlation clusters).
+    dsr_use_effective_trials: bool = True
+    dsr_cluster_corr: float = 0.90
     # Regime performance stays purely informational (pipeline reorg plan
     # section 13/14) -- attached to the report/result for a human to
     # read, never scored or gated. Reuses the SAME trades final_bt
@@ -812,6 +820,8 @@ def _make_verdict_core(
     # B2(d): minimum per-attempt pass odds for the acceptance verdict
     # (see FullPipelineConfig.min_per_attempt_pass_pct).
     min_per_attempt_pass_pct: float = 70.0,
+    per_attempt_pass_mode: str = "cap",
+    decay_flag: "str | None" = None,  # edge-by-year / rolling-slope decay warning text (replaces the autocorrelation half-life gate)
     # -- v5 validation hard gates -----------------------------------------
     # dsr_gate_result / pbo_gate_result: pass the computed gate results
     # (see run_full_pipeline Steps 6c/6d) -- a FAILED gate rejects the
@@ -962,6 +972,9 @@ def _make_verdict_core(
     # generalization test that never ran).
     validation_gate_failures: list[str] = []
     icir_hard_failed = False
+    _wf_not_proven = False       # pooled OOS edge not proven -> cap at MARGINAL
+    _pass_bar_cap = False        # per-attempt pass odds below the HIGH CONFIDENCE bar -> cap at MARGINAL
+    _decay_flag = None           # edge-by-year / rolling-slope decay warning -> cap at MARGINAL
 
     def _record_gate_failure(reason: str) -> None:
         validation_gate_failures.append(reason)
@@ -977,14 +990,33 @@ def _make_verdict_core(
             f"{tag}: {reason}"
         )
 
-    if oos_validation is not None and not oos_validation.is_stable and getattr(oos_validation, "oos_profitable", None) is False:
+    _pooled_status = getattr(oos_validation, "pooled_status", None) if oos_validation is not None else None
+    if _pooled_status is not None:
+        # 2026-10-20: pooled purged OOS mean-R gate replaces walk-forward efficiency / fixed-threshold stability.
+        _pm, _plb = getattr(oos_validation, "pooled_mean_r", None), getattr(oos_validation, "pooled_lb_r", None)
+        _pn = int(getattr(oos_validation, "pooled_trades", 0) or 0)
+        _pf = getattr(oos_validation, "fraction_folds_positive", None)
+        _pool_txt = (f"pooled OOS mean R {_pm:+.3f} (95% day-block bootstrap lower bound {_plb:+.3f}) over {_pn} trades"
+                     + (f", {_pf * 100:.0f}% of merged folds positive" if _pf is not None else "")) if _pm is not None and _plb is not None else "pooled OOS edge not measurable"
+        if _pooled_status == "FAIL":
+            _record_gate_failure(
+                f"the pooled purged out-of-sample test FAILED: {_pool_txt}. The lower bound of the OOS mean R is not above zero "
+                f"or fewer than half of the folds were positive, so the edge did not carry to unseen data."
+            )
+        elif _pooled_status == "NOT_PROVEN":
+            _wf_not_proven = True
+            reasons.append(
+                f"UNPROVEN (caps at MARGINAL): {_pool_txt}. Positive but the lower bound has not cleared zero yet -- more trades "
+                f"are needed (see the trades-still-needed line in the edge evidence). Not a rejection."
+            )
+    elif oos_validation is not None and not oos_validation.is_stable and getattr(oos_validation, "oos_profitable", None) is False:
         _record_gate_failure(
             f"the walk-forward out-of-sample folds LOST money (net ${float(getattr(oos_validation, 'total_test_net_profit', 0.0) or 0.0):,.2f} over "
             f"{int(getattr(oos_validation, 'total_test_trades', 0) or 0)} trades"
             + (f", mean fold profit factor {oos_validation.mean_test_profit_factor:.2f}" if getattr(oos_validation, "mean_test_profit_factor", None) is not None else "")
             + ") -- a strategy that loses equally in and out of sample has no edge to retain, so this is not a pass."
         )
-    elif oos_validation is not None and not oos_validation.is_stable:
+    elif oos_validation is not None and not oos_validation.is_stable and _pooled_status is None:
         _record_gate_failure(
             f"the walk-forward check is NOT stable: walk-forward efficiency "
             f"{oos_validation.walk_forward_efficiency:.2f} is below the "
@@ -1028,11 +1060,9 @@ def _make_verdict_core(
             # In advisory mode the failure is recorded above as ADVISORY but the
             # old informational note still applies (the gate didn't reject) --
             # only suppress the duplicate note when the gate actually rejected.
-            icir_hard_failed = not gates_advisory_only
-            _record_gate_failure(
-                "the ICIR / signal-decay / Bonferroni-corrected significance gate DID NOT PASS "
-                "(" + " ".join(icir_gate.reasons) + ")."
-            )
+            # 2026-10-20 (report section 4): ICIR is a rank-correlation diagnostic on a binary trade signal and no longer
+            # rejects. Its job is replaced by the pooled OOS mean-R gate; it stays visible as a diagnostic note below.
+            icir_hard_failed = False
         # not measurable -> UNPROVEN: no rejection; the supporting-diagnostic
         # note below still records what the gate found.
     if dsr_gate_result is not None and not dsr_gate_result.passed:
@@ -1061,12 +1091,17 @@ def _make_verdict_core(
             if _pass_ci is not None
             else " (per-attempt point estimate; no CI recorded)"
         )
-        _record_gate_failure(
+        _msg = (
             f"per-attempt eval pass odds too low: the per-attempt pass lower bound is "
-            f"{_pass_lo:.1f}%{_ci_txt} -- below the {min_per_attempt_pass_pct:.0f}% bar "
+            f"{_pass_lo:.1f}%{_ci_txt} -- below the {min_per_attempt_pass_pct:.0f}% HIGH CONFIDENCE bar "
             f"(the chain-level number is inflated by counting multiple attempts per "
             f"simulation). See FullPipelineConfig.min_per_attempt_pass_pct."
         )
+        if str(per_attempt_pass_mode).lower() == "hard":
+            _record_gate_failure(_msg)
+        else:
+            _pass_bar_cap = True
+            reasons.append("NOT HIGH CONFIDENCE (caps at MARGINAL; the EV test decides rejection): " + _msg)
 
     if validation_gate_failures and not gates_advisory_only:
         reasons.append(f"For reference, {scorecard.render_line()} (not the reason for this verdict).")
@@ -1087,9 +1122,8 @@ def _make_verdict_core(
     elif not icir_gate.ok and not icir_hard_failed:
         reasons.append(
             "Supporting diagnostic: did NOT pass the ICIR / signal-decay / Bonferroni-corrected "
-            "significance gate (" + " ".join(icir_gate.reasons) + "). Not scored into the T58 Score "
-            "or gated on -- section 14 of the pipeline reorg plan treats this as informational once "
-            "a primary generalization test already ran."
+            "significance gate (" + " ".join(icir_gate.reasons) + "). Advisory only since 2026-10-20: ICIR on a binary "
+            "trade signal is not a verdict input; the pooled OOS mean-R test is the gate."
         )
 
     # UPGRADE (buried-position-sizing-deviation): informational, not
@@ -1185,6 +1219,16 @@ def _make_verdict_core(
             "(CPCV, Walk-Forward, Sensitivity, Regime Matrix) to see where it is weak."
         )
         return "NOT READY", reasons, scorecard, False, False
+
+    # -- 2026-10-20 caps (pooled OOS not proven / pass-odds below HIGH CONFIDENCE / edge decay) -------------------
+    for _flag, _txt in (
+        (_wf_not_proven, "the pooled purged out-of-sample edge is positive but not yet proven (lower bound not above zero)"),
+        (_pass_bar_cap, "per-attempt pass odds are below the HIGH CONFIDENCE bar"),
+        (bool(_decay_flag), str(_decay_flag)),
+    ):
+        if _flag and verdict == "READY":
+            verdict = "MARGINAL"
+            reasons.append(f"CAPPED AT MARGINAL: {_txt}.")
 
     # -- D5: WF-starved cap -----------------------------------------------
     # When BOTH the primary generalization test (walk-forward or CPCV)
@@ -2721,6 +2765,18 @@ def run_full_pipeline(
                 # was paired with T = trade count, overstating z by about sqrt(trades per year).
                 _skew = float(final_bt.statistics.pnl_skew)
                 _kurt = float(final_bt.statistics.pnl_kurtosis)
+                # 2026-10-20: effective-trial clustering. Hundreds of near-identical genomes are one idea; deflate by the number
+                # of distinct return streams, estimated from the leaderboard's daily-P&L correlation and scaled to the full count.
+                if getattr(cfg, "dsr_use_effective_trials", True) and len(leaderboard_trades) >= 3:
+                    try:
+                        from app.validation.effective_trials import daily_pnl_series, scale_trial_count
+                        _streams = [daily_pnl_series(_tr) for _tr in leaderboard_trades.values()]
+                        _eff = scale_trial_count(n_trials, _streams, corr_threshold=cfg.dsr_cluster_corr)
+                        log(f"  Effective trials: {_eff['n_clusters']} distinct return stream(s) among {_eff['n_streams']} leaderboard "
+                            f"candidates -> deflating for {_eff['effective_trials']} instead of {n_trials} raw evaluations.")
+                        n_trials = _eff["effective_trials"]
+                    except Exception as exc:  # noqa: BLE001 -- keep the raw count
+                        log(f"  Effective-trial clustering skipped ({exc}); using the raw count.")
                 dsr_gate_result = deflated_sharpe_gate(
                     float(final_bt.statistics.sharpe_per_trade),
                     trial_sharpes,
@@ -2863,6 +2919,25 @@ def run_full_pipeline(
         log("Step 7/7: Generating final report...")
         _progress(7, 0.0, "Attempt replay + random-entry null")
 
+        # 2026-10-20: edge-decay check = mean R by calendar year + bootstrap slope of R over time. It replaces the
+        # autocorrelation half-life gate (which measured the wrong thing for a binary, sparse signal).
+        edge_decay = None
+        _decay_text = None
+        try:
+            from app.search.robustness import _r_and_days
+            from app.validation.edge_stats import edge_by_year, rolling_mean_r_slope
+            _dr, _dt = _r_and_days(getattr(final_bt, "trades", None))
+            _slope = rolling_mean_r_slope(_dr, _dt)
+            edge_decay = {"by_year": edge_by_year(_dr, _dt), "slope": _slope}
+            if _slope.get("flag"):
+                _decay_text = (
+                    f"the edge is decaying: mean R is falling {_slope['slope_per_year']:+.3f}R per year "
+                    f"(95% interval {_slope['lb']:+.3f} to {_slope['ub']:+.3f}, entirely below zero)"
+                )
+                log(f"  Edge decay flag: {_decay_text}")
+        except Exception as exc:  # noqa: BLE001 -- diagnostic only
+            log(f"  Edge-decay diagnostic skipped: {exc}")
+
         def _vc(**evidence):
             return _make_verdict(
                 final_mc, oos_validation, icir_gate,
@@ -2874,6 +2949,7 @@ def run_full_pipeline(
                 holdout=final_holdout,
                 min_holdout_trades_for_gate=cfg.min_holdout_trades_for_gate,
                 min_per_attempt_pass_pct=cfg.min_per_attempt_pass_pct,
+                per_attempt_pass_mode=cfg.per_attempt_pass_mode, decay_flag=_decay_text,
                 paid_min_pct=getattr(cfg, "min_per_attempt_paid_pct", 35.0),
                 dsr_gate_result=dsr_gate_result, pbo_gate_result=pbo_gate_result,
                 primary_robustness_method=cfg.primary_robustness_method,
@@ -2989,6 +3065,13 @@ def run_full_pipeline(
             final_strategy=final_strategy, risk=risk, adaptive_risk=adaptive_risk, final_mc=final_mc, final_holdout=final_holdout,
             payout_ev=_payout_ev, lookahead_check_crashed=lookahead_check_crashed, n_trials=_n_trials, log=log,
         )
+        if isinstance(_audit_ev, dict):
+            _audit_ev["pooled_status"] = getattr(oos_validation, "pooled_status", None) if oos_validation is not None else None
+            _audit_ev["edge_decay"] = edge_decay
+            from app.orchestration.verdict_ladder import ladder_stage as _ls
+            _audit_ev["ladder"] = _ls(verdict, _ev.label, pooled_status=_audit_ev["pooled_status"],
+                                      hard_failed=(verdict == "NOT READY" and _ev.label == "NOT WORTH A FEE")).to_dict()
+            verdict_reasons = list(verdict_reasons) + ["LADDER: " + _audit_ev["ladder"]["stage"] + " | EV: " + str(_ev.label)]
         verdict_reasons = list(verdict_reasons) + [_ev.render().replace("\n", " | ")]
         log("  " + _ev.render().replace("\n", "\n  "))
         log(f"  Final verdict after audit layers: {verdict}  |  EV verdict: {_ev.label}")
@@ -3172,6 +3255,8 @@ def _finish(
         price_df=df,
         verdict=verdict,
         verdict_reasons=verdict_reasons,
+        ev_verdict=ev_verdict,
+        ladder=(audit_evidence or {}).get("ladder") if isinstance(audit_evidence, dict) else None,
         final_parameters=final_parameters,
         baseline_parameters=baseline_parameters,
         test_label="Full Pipeline",
