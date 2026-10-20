@@ -148,3 +148,31 @@ def _norm_ppf(p: float) -> float:
     q = p - 0.5
     r_ = q * q
     return (((((a[0]*r_+a[1])*r_+a[2])*r_+a[3])*r_+a[4])*r_+a[5])*q / (((((b[0]*r_+b[1])*r_+b[2])*r_+b[3])*r_+b[4])*r_+1)
+
+
+# ---------------------------------------------------------------------------------------------------------
+# 2026-10-20: empirical-Bayes shrinkage toward the strategy's FAMILY (report section 4). A 100-trade +0.4R winner from a family whose
+# strategies usually deliver ~0R is mostly luck; shrink it, then size from the shrunk LOWER bound, never the point estimate.
+# ---------------------------------------------------------------------------------------------------------
+DEFAULT_FAMILY_PRIOR = (0.0, 0.15)   # skeptical: the typical strategy earns 0R, true means spread ~0.15R
+
+
+def family_prior_from_results(means: list, sds: list, ns: list) -> tuple[float, float]:
+    """(mu0, tau) from the family's recorded strategies (method of moments); the skeptical default when there is nothing to learn from."""
+    from app.validation.edge_stats import estimate_family_prior
+    if not means or len(means) < 2:
+        return DEFAULT_FAMILY_PRIOR
+    return estimate_family_prior(means, sds, ns)
+
+
+def shrunk_expectancy_bound(r, mu0: float | None = None, tau: float | None = None, conf: float = 0.95) -> dict:
+    """Expectancy bound AFTER shrinkage toward (mu0, tau). Returns the raw bound fields plus shrunk_mean / shrunk_lb / prior."""
+    from app.validation.edge_stats import empirical_bayes_shrink, shrunk_lower_bound
+    base = expectancy_bound(r, conf=conf)
+    if base.get("n", 0) < 5 or base.get("std") in (None, 0):
+        return {**base, "shrunk_mean": None, "shrunk_lb": None, "prior": None}
+    if mu0 is None or tau is None:
+        mu0, tau = DEFAULT_FAMILY_PRIOR
+    z = _Z90_ONE_SIDED if abs(conf - 0.95) < 1e-9 else float(_norm_ppf(conf))
+    return {**base, "shrunk_mean": empirical_bayes_shrink(base["n"], base["mean"], base["std"], mu0, tau),
+            "shrunk_lb": shrunk_lower_bound(base["n"], base["mean"], base["std"], mu0, tau, z=z), "prior": {"mu0": mu0, "tau": tau}}

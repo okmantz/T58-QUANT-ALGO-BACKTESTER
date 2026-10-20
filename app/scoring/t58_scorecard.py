@@ -802,7 +802,9 @@ def score_from_results(
 
     walk_forward_stability = None
     if walk_forward_result is not None:
-        walk_forward_stability = _walk_forward_score(walk_forward_result.walk_forward_efficiency)
+        _gen = getattr(walk_forward_result, "generalization_score", None)
+        # 2026-10-20: efficiency (test/train metric ratio) is diagnostic only; the pooled OOS mean-R score feeds the slot when present.
+        walk_forward_stability = float(_gen) if _gen is not None else _walk_forward_score(walk_forward_result.walk_forward_efficiency)
         if getattr(walk_forward_result, "oos_profitable", None) is False:
             walk_forward_stability = 0.0   # lost money out of sample: nothing generalized
 
