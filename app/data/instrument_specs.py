@@ -145,7 +145,10 @@ _SPECS: tuple[InstrumentSpec, ...] = (
 
 # dataset-folder / vendor labels that do not contain the root symbol itself
 _ALIASES: dict[str, str] = {"NASDAQ 100": "NAS100", "USATECHIDXUSD": "NAS100", "NAS100_USD": "NAS100",
-                            "BITCOIN": "BTCUSD", "XAUUSD (GOLD)": "XAUUSD", "GOLD SPOT": "XAUUSD"}
+                            "BITCOIN": "BTCUSD", "XAUUSD (GOLD)": "XAUUSD", "GOLD SPOT": "XAUUSD",
+                            "SILVER SPOT": "XAGUSD", "COPPER SPOT": "XCUUSD", "PLATINUM SPOT": "XPTUSD", "UKOIL": "BRENT",
+                            "BRENT CRUDE": "BRENT", "ETHEREUM": "ETHUSD", "DOW JONES": "US30", "DJ30": "US30", "WS30": "US30",
+                            "SPX": "SPX500", "SP500": "SPX500", "S&P 500 CFD": "SPX500", "RUSSELL 2000 CFD": "US2000"}
 
 KNOWN_INSTRUMENTS: dict[str, InstrumentSpec] = {spec.symbol: spec for spec in _SPECS}
 
@@ -167,6 +170,40 @@ _CROSS_MARKET_SPECS: tuple[InstrumentSpec, ...] = (
                    default_commission_round_turn=0.0, default_spread_ticks=10.0, default_slippage_ticks=5.0),
     InstrumentSpec("BTCUSD", "Bitcoin / US dollar spot (0.1 coin contract)", "CRYPTO", pip_size=1.0, contract_size=0.1, tick_size=1.0, tick_value=0.10,
                    default_commission_round_turn=0.0, default_spread_ticks=15.0, default_slippage_ticks=10.0),
+    # ---- 2026-10-20 additions (report section 6: more instruments for cross-instrument replication) -------------------
+    # Same honesty standard: typical retail-ECN figures, not any broker's quotes. JPY pairs are converted at ~150 JPY/USD so
+    # the engine's "P&L in account currency" convention holds (contract_size = 10,000 units / 150).
+    InstrumentSpec("AUDUSD", "Australian dollar / US dollar spot", "FX", pip_size=0.0001, contract_size=10_000.0, tick_size=0.00001, tick_value=0.10,
+                   default_commission_round_turn=0.70, default_spread_ticks=8.0, default_slippage_ticks=2.0),
+    InstrumentSpec("NZDUSD", "New Zealand dollar / US dollar spot", "FX", pip_size=0.0001, contract_size=10_000.0, tick_size=0.00001, tick_value=0.10,
+                   default_commission_round_turn=0.70, default_spread_ticks=10.0, default_slippage_ticks=3.0),
+    InstrumentSpec("USDJPY", "US dollar / Japanese yen spot (yen at ~150)", "FX", pip_size=0.01, contract_size=10_000.0 / 150.0, tick_size=0.001,
+                   tick_value=0.001 * 10_000.0 / 150.0, default_commission_round_turn=0.70, default_spread_ticks=8.0, default_slippage_ticks=3.0),
+    InstrumentSpec("USDCAD", "US dollar / Canadian dollar spot (CAD at ~1.37)", "FX", pip_size=0.0001, contract_size=10_000.0 / 1.37, tick_size=0.00001,
+                   tick_value=0.00001 * 10_000.0 / 1.37, default_commission_round_turn=0.70, default_spread_ticks=12.0, default_slippage_ticks=3.0),
+    InstrumentSpec("USDCHF", "US dollar / Swiss franc spot (CHF at ~0.90)", "FX", pip_size=0.0001, contract_size=10_000.0 / 0.90, tick_size=0.00001,
+                   tick_value=0.00001 * 10_000.0 / 0.90, default_commission_round_turn=0.70, default_spread_ticks=12.0, default_slippage_ticks=3.0),
+    InstrumentSpec("XAGUSD", "Silver spot (50 oz contract)", "OTC", pip_size=0.01, contract_size=50.0, tick_size=0.001, tick_value=0.05,
+                   default_commission_round_turn=0.70, default_spread_ticks=30.0, default_slippage_ticks=15.0),
+    InstrumentSpec("XPTUSD", "Platinum spot (1 oz contract)", "OTC", pip_size=0.10, contract_size=1.0, tick_size=0.01, tick_value=0.01,
+                   default_commission_round_turn=0.70, default_spread_ticks=100.0, default_slippage_ticks=50.0),
+    InstrumentSpec("XCUUSD", "Copper spot (250 lb contract)", "OTC", pip_size=0.0001, contract_size=250.0, tick_size=0.0001, tick_value=0.025,
+                   default_commission_round_turn=0.70, default_spread_ticks=30.0, default_slippage_ticks=15.0),
+    InstrumentSpec("BRENT", "Brent crude oil CFD (10 barrel contract)", "OTC", pip_size=0.01, contract_size=10.0, tick_size=0.01, tick_value=0.10,
+                   default_commission_round_turn=0.70, default_spread_ticks=4.0, default_slippage_ticks=3.0),
+    InstrumentSpec("ETHUSD", "Ether / US dollar spot (1 coin contract)", "CRYPTO", pip_size=0.1, contract_size=1.0, tick_size=0.01, tick_value=0.01,
+                   default_commission_round_turn=0.0, default_spread_ticks=50.0, default_slippage_ticks=30.0),
+    InstrumentSpec("US30", "Dow Jones cash index CFD (1 unit)", "OTC", pip_size=1.0, contract_size=1.0, tick_size=1.0, tick_value=1.0,
+                   default_commission_round_turn=0.0, default_spread_ticks=3.0, default_slippage_ticks=2.0),
+    InstrumentSpec("SPX500", "S&P 500 cash index CFD (1 unit)", "OTC", pip_size=1.0, contract_size=1.0, tick_size=0.10, tick_value=0.10,
+                   default_commission_round_turn=0.0, default_spread_ticks=5.0, default_slippage_ticks=3.0),
+    InstrumentSpec("US2000", "Russell 2000 cash index CFD (1 unit)", "OTC", pip_size=1.0, contract_size=1.0, tick_size=0.10, tick_value=0.10,
+                   default_commission_round_turn=0.0, default_spread_ticks=15.0, default_slippage_ticks=10.0),
+    # COMEX silver futures: kept here (not in KNOWN_INSTRUMENTS) so the two-letter root "SI" cannot false-match dataset labels.
+    InstrumentSpec("SI", "Silver futures (5,000 oz)", "COMEX", pip_size=1.0, contract_size=5000.0, tick_size=0.005, tick_value=25.0,
+                   default_commission_round_turn=5.10),
+    InstrumentSpec("SIL", "Micro silver futures (1,000 oz)", "COMEX", pip_size=1.0, contract_size=1000.0, tick_size=0.005, tick_value=5.0,
+                   default_commission_round_turn=1.60),
 )
 CROSS_MARKET_INSTRUMENTS: dict[str, InstrumentSpec] = {spec.symbol: spec for spec in _CROSS_MARKET_SPECS}
 
@@ -177,6 +214,8 @@ CROSS_MARKET_INSTRUMENTS: dict[str, InstrumentSpec] = {spec.symbol: spec for spe
 MICRO_EQUIVALENT: dict[str, str] = {
     "ES": "MES", "NQ": "MNQ", "YM": "MYM", "RTY": "M2K", "GC": "MGC",
 }
+# 2026-10-20: micro equivalents that live in CROSS_MARKET_INSTRUMENTS (see micro_equivalent's fallback lookup).
+MICRO_EQUIVALENT_CROSS: dict[str, str] = {"SI": "SIL"}
 
 
 def micro_equivalent(symbol: str | None) -> "InstrumentSpec | None":
@@ -184,8 +223,12 @@ def micro_equivalent(symbol: str | None) -> "InstrumentSpec | None":
     symbol has no micro in this registry (or is already a micro)."""
     if not symbol:
         return None
-    micro = MICRO_EQUIVALENT.get(str(symbol).strip().upper())
-    return KNOWN_INSTRUMENTS.get(micro) if micro else None
+    key = str(symbol).strip().upper()
+    micro = MICRO_EQUIVALENT.get(key)
+    if micro:
+        return KNOWN_INSTRUMENTS.get(micro)
+    micro = MICRO_EQUIVALENT_CROSS.get(key)
+    return CROSS_MARKET_INSTRUMENTS.get(micro) if micro else None
 
 
 def known_instrument_symbols() -> list[str]:
