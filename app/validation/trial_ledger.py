@@ -3,16 +3,23 @@
 Deflated Sharpe / Bonferroni gates are only fair if they know how many things you tried. Hand-tuning, optimizer runs and prior
 pipeline runs all add trials; forgetting them flatters the verdict. Each pipeline run records its own evaluations here and the
 next run for the same strategy name automatically adds them to external_trial_count.
+
+2026-10-20 (report section 4, "ledger aging"): entries are now timestamped and old trials count less. A search run three years ago
+on different data is weak evidence that today's idea was overfit to it, while counting it forever makes a long-lived idea
+undeployable. ``total(label)`` weights each entry by 0.5 ** (age / half_life_days); legacy integer entries (no timestamp) keep full
+weight. ``raw_total`` ignores aging. Family-level ledgers use the same functions with a label such as ``family:event_day``.
 """
 from __future__ import annotations
 
 import json
 import re
 import threading
+import time
 from pathlib import Path
 
 _LOCK = threading.Lock()
 _PATH = Path(__file__).resolve().parents[2] / "reports" / "trial_ledger.json"
+DEFAULT_HALF_LIFE_DAYS = 730.0
 
 
 def _key(label) -> str:
@@ -26,19 +33,55 @@ def _load() -> dict:
         return {}
 
 
-def total(label) -> int:
-    return int(_load().get(_key(label), 0))
+def _entries(value) -> list[dict]:
+    """Normalise a stored value (legacy int or list of {t, n}) into entries; legacy ints have t = None."""
+    if isinstance(value, list):
+        return [e for e in value if isinstance(e, dict) and "n" in e]
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return []
+    return [{"t": None, "n": n}] if n else []
 
 
-def record(label, n: int) -> int:
+def raw_total(label) -> int:
+    return int(sum(int(e.get("n", 0)) for e in _entries(_load().get(_key(label), 0))))
+
+
+def total(label, half_life_days: float | None = DEFAULT_HALF_LIFE_DAYS, now: float | None = None) -> int:
+    """Aged trial count (rounded up so one real trial never rounds to zero). ``half_life_days=None`` disables aging."""
+    ents = _entries(_load().get(_key(label), 0))
+    if half_life_days is None:
+        return int(sum(int(e["n"]) for e in ents))
+    now = time.time() if now is None else now
+    acc = 0.0
+    for e in ents:
+        n = int(e.get("n", 0))
+        t = e.get("t")
+        w = 1.0 if t is None else 0.5 ** (max(0.0, now - float(t)) / 86400.0 / float(half_life_days))
+        acc += n * w
+    return int(-(-acc // 1)) if acc > 0 else 0
+
+
+def record(label, n: int, now: float | None = None) -> int:
     n = max(0, int(n))
     with _LOCK:
         data = _load()
         k = _key(label)
-        data[k] = int(data.get(k, 0)) + n
+        ents = _entries(data.get(k, 0))
+        ents.append({"t": time.time() if now is None else float(now), "n": n})
+        # compact: merge entries within the same UTC day so the file does not grow with every run
+        merged: dict = {}
+        for e in ents:
+            day = None if e.get("t") is None else int(float(e["t"]) // 86400)
+            m = merged.setdefault(day, {"t": e.get("t"), "n": 0})
+            m["n"] += int(e["n"])
+            if e.get("t") is not None:
+                m["t"] = max(float(m["t"] or 0), float(e["t"]))
+        data[k] = list(merged.values())
         try:
             _PATH.parent.mkdir(parents=True, exist_ok=True)
             _PATH.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")
         except Exception:
             pass
-        return data[k]
+        return int(sum(int(e["n"]) for e in data[k]))

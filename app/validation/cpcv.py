@@ -73,6 +73,15 @@ def _metric_value(stats: dict, metric: str, trades: list | None = None, prop_rul
     if metric == "eval_pass_probability" and prop_rules is not None:
         from app.monte_carlo.engine import eval_pass_probability_for_trades
         return eval_pass_probability_for_trades(trades or [], prop_rules, mc_cfg)
+    if metric == "mean_r":
+        # 2026-10-20 (report section 4): path metric = mean R per trade, not a Monte Carlo pass probability that
+        # depends on sizing, rule geometry and window length. Same definition as app.search.robustness._metric_value.
+        from app.search.robustness import _r_and_days
+        _rs, _ = _r_and_days(trades or [])
+        if _rs:
+            return float(np.mean(_rs))
+        v = stats.get("average_r", 0.0)
+        return float(v) if isinstance(v, (int, float)) and math.isfinite(v) else 0.0
     v = stats.get(metric, 0.0)
     if v == float("inf"):
         return 10.0
@@ -336,6 +345,8 @@ def run_cpcv(
     # money in and out of sample. Robust now also requires the out-of-sample paths to have MADE money
     # whenever there are enough trades to tell.
     _robust = (mean_oos >= robustness_threshold * mean_is) if mean_is > 0 else (mean_oos >= 0)
+    if metric == "mean_r":
+        _robust = mean_oos > 0 and ((mean_oos >= robustness_threshold * mean_is) if mean_is > 0 else True)
     if _oos_profitable is False:
         _robust = False
 
@@ -595,7 +606,7 @@ def compute_pbo(
     use_trade_lists = (
         precomputed_trades is not None and len(precomputed_trades) == n_candidates
         and all(t is not None for t in precomputed_trades)
-        and metric == "eval_pass_probability" and prop_rules is not None
+        and ((metric == "eval_pass_probability" and prop_rules is not None) or metric == "mean_r")
     )
     if use_trade_lists:
         ts_ns = pd.DatetimeIndex(df["timestamp"]).asi8

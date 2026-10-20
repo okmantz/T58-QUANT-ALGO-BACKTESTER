@@ -173,7 +173,7 @@ def baseline_preflight(
     symbol: str | None = None,
     stop_loss_pips: float | None = None,
     min_trades: int = 100,
-    max_skip_ratio: float = 0.20,
+    max_skip_ratio: float = 0.25,
     min_per_direction: int = 30,
 ) -> PreflightReport:
     """Preflight that also looks at the strategy's own baseline run: the
@@ -272,7 +272,7 @@ def baseline_preflight(
                 micro_txt = "a micro contract (for example MES for ES, MNQ for NQ, or MGC for GC)"
             one_contract_txt = f" One contract at the strategy's stop risks about ${needed:,.0f}." if needed is not None else ""
             msg = (
-                f"{ratio:.0%} of signals ({halt.get('skipped', 0)}) were skipped because the risk budget "
+                f"SIZING ERROR: {ratio:.0%} of signals ({halt.get('skipped', 0)}) were skipped because the risk budget "
                 f"cannot buy one contract at the strategy's stop (limit {max_skip_ratio:.0%}). The {budget_txt}.{one_contract_txt} "
                 f"Fixes, in dollars: raise the risk budget per trade; switch to {micro_txt} with sizing_mode='micro_fallback'; "
                 f"use sizing_mode='fit_stop' and consider lowering the don't-shrink-below lever "

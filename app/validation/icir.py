@@ -32,6 +32,17 @@ factor-model quant book -- every trade already IS one directional bet):
   - ICIR = mean(IC) / stdev(IC) across periods. Undefined (None) with fewer
     than 2 usable periods.
 
+2026-10-20 STATUS CHANGE (report "Why Nothing Reaches READY"):
+  The gate below is a DIAGNOSTIC now, not part of the verdict. Two of its measurements were mis-specified:
+    * IC correlated trade DIRECTION with a direction-SIGNED R-multiple. A strategy that wins equally on longs and shorts
+      scores an IC of zero, so the gate responded to long/short imbalance, not profitability (a losing strategy passed
+      27.5% of the time in the report's synthetic test, a symmetric +0.40R winner only 3.0%).
+    * The signal half-life check fits autocorrelation decay across trade returns. A system of independent trades has
+      near-zero autocorrelation by design, so it read "already decayed" about 75% of the time whatever the edge.
+  `edge_ic_gate()` at the bottom of this module is the corrected diagnostic (direction vs RAW forward return in stop /
+  ATR units, one pooled significance test). The decay question is answered by app.validation.edge_stats
+  (edge_by_year, rolling_mean_r_slope), which is what the verdict uses.
+
 None of this calls the optional local-Ollama assistant -- it is pure
 arithmetic over numbers the backtest engine already produced, deliberately
 kept deterministic so it costs nothing to run on every backtest and never
@@ -499,3 +510,67 @@ def run_icir_gate(
         in_sample_half_life=in_hl, out_sample_half_life=out_hl, significance=significance,
         ok=ok, reasons=reasons,
     )
+
+
+
+# ---------------------------------------------------------------------------------------------------------
+# 2026-10-20: corrected IC diagnostic (direction vs RAW forward return) -- diagnostic only, never a verdict gate
+# ---------------------------------------------------------------------------------------------------------
+
+def _trade_raw_forward_return(t) -> float | None:
+    """The raw (NOT direction-adjusted) price move of one trade in stop-distance units: (exit - entry) / initial_risk,
+    which is direction x R. Stops in this app are ATR-based, so this is the move in ATR-like units. Falls back to the
+    raw percentage move when the trade carries no planned risk. None for a degenerate trade."""
+    try:
+        entry = float(getattr(t, "entry_price", None))
+        exit_ = float(getattr(t, "exit_price", None))
+    except (TypeError, ValueError):
+        entry = exit_ = float("nan")
+    risk = getattr(t, "initial_risk", None)
+    if math.isfinite(entry) and math.isfinite(exit_) and risk and risk > 0:
+        return (exit_ - entry) / float(risk)
+    d = getattr(t, "direction", None)
+    r = _trade_return(t)
+    if r is not None and d in (1, -1):
+        return float(d) * r        # direction x signed return recovers the raw move
+    return None
+
+
+@dataclass
+class EdgeICResult:
+    ic: float | None
+    n: int
+    t_stat: float | None
+    p_value: float | None
+    ok: bool
+    note: str = ""
+
+
+def edge_ic_gate(trades: list, alpha: float = DEFAULT_ALPHA, n_tests: int = 1) -> EdgeICResult:
+    """Pooled information coefficient of trade DIRECTION against the RAW forward return, with a one-sided t-test.
+
+    Unlike the old per-period ICIR this is positive for any strategy that is right more often than wrong in either
+    direction: a symmetric +0.30R strategy scores a clearly positive IC, a long-only winner scores positive, and a
+    strategy that loses on its shorts scores NEGATIVE. Significance is Bonferroni-corrected for ``n_tests``."""
+    xs, ys = [], []
+    for t in trades or []:
+        d = getattr(t, "direction", None)
+        raw = _trade_raw_forward_return(t)
+        if d in (1, -1) and raw is not None and math.isfinite(raw):
+            xs.append(float(d))
+            ys.append(float(raw))
+    n = len(xs)
+    if n < 20:
+        return EdgeICResult(None, n, None, None, False, f"only {n} usable trade(s) (< 20): IC not measurable (UNPROVEN)")
+    ic = _pearson(xs, ys)
+    if ic is None:
+        return EdgeICResult(None, n, None, None, False, "direction or return has zero variance: IC undefined")
+    ic = max(min(ic, 0.999999), -0.999999)
+    t_stat = ic * math.sqrt((n - 2) / max(1.0 - ic * ic, 1e-12))
+    # one-sided p-value from the normal approximation (n is large enough that t ~ z for the sizes used here)
+    p = 0.5 * math.erfc(t_stat / math.sqrt(2.0))
+    adj = bonferroni_adjusted_alpha(alpha, n_tests)
+    ok = ic > 0 and p < adj
+    return EdgeICResult(ic, n, t_stat, p, ok, (
+        f"IC {ic:+.3f} over {n} trades (one-sided p {p:.4f} vs Bonferroni alpha {adj:.4f}); "
+        + ("direction predicts the raw forward return." if ok else "not significantly positive.")))
