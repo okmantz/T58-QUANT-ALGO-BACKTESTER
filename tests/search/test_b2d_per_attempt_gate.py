@@ -47,7 +47,7 @@ def _gate_reason(reasons):
 def test_low_per_attempt_ci_lower_bound_rejects():
     # Chain-level 96% but per-attempt CI lower bound only 20% -> NOT READY.
     mc = _mc(per_attempt_pass_ci95=(20.0, 45.0), per_attempt_pass_probability=33.0)
-    verdict, reasons, scorecard, hard_fail, lookahead = _make_verdict(mc, None)
+    verdict, reasons, scorecard, hard_fail, lookahead = _make_verdict(mc, None, per_attempt_pass_mode="hard")
     assert verdict == "NOT READY"
     assert _gate_reason(reasons), "expected the B2(d) gate reason"
     assert "20.0%" in _gate_reason(reasons)[0]
@@ -56,14 +56,14 @@ def test_low_per_attempt_ci_lower_bound_rejects():
 
 def test_high_per_attempt_ci_lower_bound_does_not_fire_gate():
     mc = _mc(per_attempt_pass_ci95=(75.0, 92.0), per_attempt_pass_probability=85.0)
-    verdict, reasons, *_ = _make_verdict(mc, None)
+    verdict, reasons, *_ = _make_verdict(mc, None, per_attempt_pass_mode="hard")
     assert not _gate_reason(reasons)
 
 
 def test_point_estimate_fallback_used_when_ci_unknown():
     # CI unknown (0,0) but per-attempt point estimate present -> gates on it.
     mc = _mc(per_attempt_pass_ci95=(0.0, 0.0), per_attempt_pass_probability=40.0)
-    verdict, reasons, *_ = _make_verdict(mc, None)
+    verdict, reasons, *_ = _make_verdict(mc, None, per_attempt_pass_mode="hard")
     assert verdict == "NOT READY"
     assert _gate_reason(reasons)
 
@@ -89,7 +89,7 @@ def test_legacy_result_without_per_attempt_fields_skips_gate():
 
 def test_gate_respects_advisory_mode():
     mc = _mc(per_attempt_pass_ci95=(20.0, 45.0), per_attempt_pass_probability=33.0)
-    verdict, reasons, *_ = _make_verdict(mc, None, gates_advisory_only=True)
+    verdict, reasons, *_ = _make_verdict(mc, None, gates_advisory_only=True, per_attempt_pass_mode="hard")
     # Advisory mode records the failure but never rejects on it: no HARD
     # gate tag for the per-attempt reason (the verdict itself may still be
     # NOT READY from the scorecard tier -- that is the score, not the gate).
@@ -101,7 +101,15 @@ def test_threshold_configurable_via_config():
     assert FullPipelineConfig().min_per_attempt_pass_pct == 70.0
     assert FullPipelineConfig(min_per_attempt_pass_pct=50.0).min_per_attempt_pass_pct == 50.0
     mc = _mc(per_attempt_pass_ci95=(55.0, 70.0), per_attempt_pass_probability=62.0)
-    verdict_default, *_ = _make_verdict(mc, None)
+    verdict_default, *_ = _make_verdict(mc, None, per_attempt_pass_mode="hard")
     assert verdict_default == "NOT READY"
-    verdict_loose, reasons_loose, *_ = _make_verdict(mc, None, min_per_attempt_pass_pct=50.0)
+    verdict_loose, reasons_loose, *_ = _make_verdict(mc, None, min_per_attempt_pass_pct=50.0, per_attempt_pass_mode="hard")
     assert not _gate_reason(reasons_loose)
+
+
+def test_default_mode_caps_instead_of_rejecting():
+    # 2026-10-20: the 70% per-attempt bar is the HIGH CONFIDENCE label; the default mode caps at MARGINAL (EV test rejects).
+    mc = _mc(per_attempt_pass_ci95=(20.0, 45.0), per_attempt_pass_probability=33.0)
+    verdict, reasons, *_ = _make_verdict(mc, None)
+    assert verdict != "READY"
+    assert not any("HARD VALIDATION GATE FAILED" in r and "per-attempt eval pass odds" in r for r in reasons)
