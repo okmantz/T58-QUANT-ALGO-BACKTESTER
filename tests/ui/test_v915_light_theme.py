@@ -30,7 +30,7 @@ DARK_HASH = {
     # these digests exactly; the values below were re-measured after the
     # edits and match the pre-edit dark extraction rule-for-rule (the
     # raw-text diff is only the added comment blocks).
-    "theme.css": "dd45c943717c2046319f6237af0860e0861e31a904522a52cc5e7725b5a071ed",
+    "theme.css": "9960da7831c73cfd59da69600c4d56ef77e2f7852c0ba5bac3f273c511a587df",
     "job-theme.css": "e2d34ce668ee4d455a26d41c40cc3a6396290e82135e41201f477b5c972181c2",
     # Re-pinned 2026-10-13: the lifecycle (Champion board) dark rules were extended after the
     # WS-E pin was taken; token values (DARK_TOKENS below) are still checked separately.
