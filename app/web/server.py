@@ -3762,10 +3762,11 @@ def batch_test_saved_strategies_route():
         risk_value=float(form.get("risk_value", 1.0)),
         max_trades_per_day=int(form.get("max_trades_day", 10)),
         commission_per_trade=float(form.get("commission", 0)),
-        slippage_pips=float(form.get("slippage_pips", 0.5)),
-        spread_pips=float(form.get("spread_pips", 1.0)),
+        slippage_pips=_posted_cost(form, "slippage_pips"),
+        spread_pips=_posted_cost(form, "spread_pips"),
         pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
     )
+    risk = _fill_unposted_costs(form, risk, _instrument_label_from_form(form))
     payout_cap = form.get("payout_cap", "").strip()
     rules = _apply_posted_preset(form, PropRules(
         account_size=float(form.get("account_size", 100000)),
@@ -3970,12 +3971,13 @@ def run_pipeline():
             risk_value=float(form.get("risk_value", 1.0)),
             max_trades_per_day=int(form.get("max_trades_day", 10)),
             commission_per_trade=float(form.get("commission", 0)),
-            slippage_pips=float(form.get("slippage_pips", 0.5)),
-            spread_pips=float(form.get("spread_pips", 1.0)),
+            slippage_pips=_posted_cost(form, "slippage_pips"),
+            spread_pips=_posted_cost(form, "spread_pips"),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
             reset_on_breach=reset_on_breach,
             reset_on_target=reset_on_target, profit_target_pct=profit_target_pct_for_reset,
         )
+        risk = _fill_unposted_costs(form, risk, _instrument_label_from_form(form))
 
         payout_cap = form.get("payout_cap", "").strip()
         rules = _apply_posted_preset(form, PropRules(
@@ -5353,10 +5355,11 @@ def refine_start():
             risk_value=float(form.get("risk_value", 1.0)),
             max_trades_per_day=int(form.get("max_trades_day", 10)),
             commission_per_trade=float(form.get("commission", 0)),
-            slippage_pips=float(form.get("slippage_pips", 0.5)),
-            spread_pips=float(form.get("spread_pips", 1.0)),
+            slippage_pips=_posted_cost(form, "slippage_pips"),
+            spread_pips=_posted_cost(form, "spread_pips"),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
+        risk = _fill_unposted_costs(form, risk, _instrument_label_from_form(form))
         rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000)),
             evaluation_profit_target_pct=float(form.get("profit_target", 8)),
@@ -6744,10 +6747,11 @@ def wfo_start():
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0)),
             commission_per_trade=float(form.get("commission", 0)),
-            slippage_pips=float(form.get("slippage_pips", 0.5)),
-            spread_pips=float(form.get("spread_pips", 1.0)),
+            slippage_pips=_posted_cost(form, "slippage_pips"),
+            spread_pips=_posted_cost(form, "spread_pips"),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
+        risk = _fill_unposted_costs(form, risk, _instrument_label_from_form(form))
         rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000)),
             evaluation_profit_target_pct=float(form.get("profit_target", 8)),
@@ -6941,10 +6945,11 @@ def mo_start():
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0)),
             commission_per_trade=float(form.get("commission", 0)),
-            slippage_pips=float(form.get("slippage_pips", 0.5)),
-            spread_pips=float(form.get("spread_pips", 1.0)),
+            slippage_pips=_posted_cost(form, "slippage_pips"),
+            spread_pips=_posted_cost(form, "spread_pips"),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
+        risk = _fill_unposted_costs(form, risk, _instrument_label_from_form(form))
         rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000)),
             evaluation_profit_target_pct=float(form.get("profit_target", 8)),
@@ -7102,10 +7107,11 @@ def wfga_start():
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0)),
             commission_per_trade=float(form.get("commission", 0)),
-            slippage_pips=float(form.get("slippage_pips", 0.5)),
-            spread_pips=float(form.get("spread_pips", 1.0)),
+            slippage_pips=_posted_cost(form, "slippage_pips"),
+            spread_pips=_posted_cost(form, "spread_pips"),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
+        risk = _fill_unposted_costs(form, risk, _instrument_label_from_form(form))
         rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000)),
             evaluation_profit_target_pct=float(form.get("profit_target", 8)),
@@ -9093,10 +9099,11 @@ def evolution_start():
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
             max_trades_per_day=int(form.get("max_trades_day", 10) or 10),
             commission_per_trade=float(form.get("commission", 0) or 0),
-            slippage_pips=float(form.get("slippage_pips", 0.5) or 0.5),
-            spread_pips=float(form.get("spread_pips", 1.0) or 1.0),
+            slippage_pips=_posted_cost(form, "slippage_pips"),
+            spread_pips=_posted_cost(form, "spread_pips"),
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
+        risk = _fill_unposted_costs(form, risk, _instrument_label_from_form(form))
         rules = _prop_rules_from_search_evo_form(form)
 
         # T58 BACKTEST INTEGRITY CHECK -- same pre-flight gate as Run &
@@ -9601,10 +9608,11 @@ def evolution_multi_instrument_start():
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
             max_trades_per_day=int(form.get("max_trades_day", 10) or 10),
             commission_per_trade=float(form.get("commission", 0) or 0),
-            slippage_pips=float(form.get("slippage_pips", 0.5) or 0.5),
-            spread_pips=float(form.get("spread_pips", 1.0) or 1.0),
+            slippage_pips=_posted_cost(form, "slippage_pips"),
+            spread_pips=_posted_cost(form, "spread_pips"),
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
         )
+        risk = _fill_unposted_costs(form, risk, _instrument_label_from_form(form))
         rules = _prop_rules_from_search_evo_form(form)
         families_selected = form.getlist("families") or None
         base_cfg = EvolutionConfig(
