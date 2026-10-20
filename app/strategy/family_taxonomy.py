@@ -71,6 +71,11 @@ FAMILY_GROUPS: dict[str, str] = {
     # regime is active so a different family can be allowed to trade in
     # each one), never by a single app.search.strategy_space grid family.
     "regime_switching": "A different strategy/family trades depending on the active market regime.",
+    # v11 (2026-10-20): structural groups from the report's section 6
+    "event_driven": "A scheduled macro release (FOMC/NFP/CPI) changes behaviour in a defined window around it.",
+    "overnight_session": "The overnight session's range/position carries information for the cash session.",
+    "calendar_seasonality": "A calendar effect (turn of month, expiry week, pre-holiday) drives flows.",
+    "macro_regime": "A macro/volatility regime input (VIX level or term structure, rates, dollar) gates the trade.",
     "uncategorized": "Doesn't clearly match any of the above.",
 }
 
@@ -209,6 +214,12 @@ _SKELETON_TO_GROUP: dict[str, str] = {
     "ema_stack_bull_flag_volume": "trend_following",
     "call_wall_breakout": "gamma_exposure",
 }
+# -- v11 (2026-10-20) families from app/search/families_v11.py --
+try:
+    from app.search.families_v11 import V11_FAMILY_GROUPS as _V11_GROUPS
+    _SKELETON_TO_GROUP.update(_V11_GROUPS)
+except ImportError:
+    pass
 
 # Path 2a: app.strategy.dna active_tags() -> canonical group. Checked in
 # THIS priority order (first match wins) when more than one gene is on --

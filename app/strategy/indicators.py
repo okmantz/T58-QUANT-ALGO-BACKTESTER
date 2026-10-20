@@ -27,6 +27,11 @@ BOUNDED_OSCILLATOR_RANGES: dict[str, tuple[float, float]] = {
     "choppiness_index": (0.0, 100.0),
     "williams_r": (-100.0, 0.0),
 }
+# v11 (2026-10-20): bounded non-flag primitives (0/1 flags are covered by manual.BOOLEAN_OPERAND_KINDS).
+BOUNDED_OSCILLATOR_RANGES.update({
+    "session_phase": (0.0, 3.0), "daily_trend_state": (-1.0, 1.0), "overnight_position": (0.0, 1.0),
+    "vix_percentile": (0.0, 100.0), "weekday_number": (0.0, 6.0),
+})
 
 
 def _period(period: int) -> int:
@@ -1335,6 +1340,11 @@ def _build_indicator_series_uncached(frame: pd.DataFrame, kind: str, period: int
     _v10_builder = _indicators_v10.V10_INDICATOR_BUILDERS.get(kind)
     if _v10_builder is not None:
         return _v10_builder(frame, p, column, lookback)
+    # --- v11 (2026-10-20): session / calendar / event / regime primitives (report sections 5-6). ---
+    from app.strategy import indicators_v11 as _indicators_v11
+    _v11_builder = _indicators_v11.V11_INDICATOR_BUILDERS.get(kind)
+    if _v11_builder is not None:
+        return _v11_builder(frame, p, column, lookback)
     raise KeyError(kind)
 
 

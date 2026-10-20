@@ -64,7 +64,15 @@ IMPOSSIBLE_CONDITION_MARKER = "can never be true"
 # Comparing one to a constant outside [0, 1] -- e.g. "time_of_day == 7.3", which a GA that perturbs
 # every numeric `value` will happily produce -- is as dead as "RSI > 102" and was previously
 # undetected, so those candidates silently traded zero bars while still burning GA budget.
-BOOLEAN_OPERAND_KINDS = frozenset({"time_of_day"})
+BOOLEAN_OPERAND_KINDS = frozenset({"time_of_day", "rth_flag", "month_end_window", "turn_of_month", "first_trading_day", "opex_week",
+                                   "triple_witching", "quarter_end_week", "pre_holiday", "event_day_any", "event_day_fomc",
+                                   "event_day_nfp", "event_day_cpi", "event_day_pce"})
+
+
+def _v11_kinds():
+    """v11 session/calendar/event/regime kinds (lazy so importing manual stays light)."""
+    from app.strategy.indicators_v11 import V11_INDICATOR_KINDS
+    return V11_INDICATOR_KINDS
 
 
 def validate_bounded_conditions(config: dict) -> list[str]:
@@ -153,8 +161,39 @@ def validate_bounded_conditions(config: dict) -> list[str]:
                         f"can never be satisfied (or is always true) and breaks this branch of the logic."
                     )
 
+    def scan_float_equality(conditions, branch_label: str):
+        """2026-10-20: equality of a continuous float series to a hand-typed / GA-mutated constant (e.g. close == 18432.37 or
+        time_of_day == 0.627) is true only by accident. Flag any ==/!= against a non-integer constant for non-flag kinds."""
+        for cond in conditions or []:
+            if not isinstance(cond, dict):
+                continue
+            if str(cond.get("operator", "")).strip().lower() not in ("==", "=", "equals"):
+                continue
+            left, right = cond.get("left"), cond.get("right")
+            for series_node, val_node in ((left, right), (right, left)):
+                if not isinstance(series_node, dict) or not isinstance(val_node, dict):
+                    continue
+                if str(val_node.get("type", "")).lower().strip() not in ("value", "constant", "number"):
+                    continue
+                if _side_kind(series_node) in ("value", "constant", "number"):
+                    continue
+                try:
+                    threshold = float(val_node.get("value", 0))
+                except (TypeError, ValueError):
+                    continue
+                if abs(threshold - round(threshold)) > 1e-9:
+                    warnings.append(
+                        f"Impossible condition in {branch_label}: {_side_label(left)} "
+                        f"{cond.get('operator', '?')} {_side_label(right)} {IMPOSSIBLE_CONDITION_MARKER} "
+                        f"-- equality of a continuous series to the non-integer constant {threshold:g} is essentially never true; "
+                        f"use a comparison (>, <) or a window instead."
+                    )
+
     entries = config.get("entry_conditions", {}) or {}
     exits = config.get("exit_conditions", {}) or {}
+    for _lbl, _conds in (("long entry conditions", entries.get("long")), ("short entry conditions", entries.get("short")),
+                         ("long exit conditions", exits.get("long")), ("short exit conditions", exits.get("short"))):
+        scan_float_equality(_conds, _lbl)
     for _lbl, _conds in (("long entry conditions", entries.get("long")), ("short entry conditions", entries.get("short")),
                          ("long exit conditions", exits.get("long")), ("short exit conditions", exits.get("short"))):
         scan_boolean_operands(_conds, _lbl)
@@ -346,7 +385,7 @@ class ManualStrategy(Strategy):
                     "ema_stack_score", "bull_flag_score", "volume_expansion",
                     # v10: research-lab features (app.strategy.indicators_v10)
                     "vp_dist_poc", "vp_location", "vp_in_lvn", "flow_delta_z", "flow_cvd_slope",
-                    "flow_absorption", "spread_zscore", "leader_return", "event_window"}:
+                    "flow_absorption", "spread_zscore", "leader_return", "event_window"} or kind in _v11_kinds():
             return build_indicator_series(work, kind, period=period, column=field, lookback=lookback)
 
         # --- w10-astra: regime-oscillator + VWAP-profile operand kinds ---
