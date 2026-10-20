@@ -246,6 +246,8 @@ def build_report(
     verdict_reasons: list[str] | None = None,
     final_parameters: dict[str, str] | None = None,
     baseline_parameters: dict[str, str] | None = None,
+    ev_verdict: dict | None = None,
+    ladder: dict | None = None,
 ) -> dict[str, Any]:
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -266,6 +268,8 @@ def build_report(
         # way to tell whether "this" was the strategy that passed.
         "verdict": verdict,
         "verdict_reasons": list(verdict_reasons) if verdict_reasons else None,
+        "ev_verdict": ev_verdict,
+        "ladder": ladder,
         "final_parameters": dict(final_parameters) if final_parameters else None,
         # PARAMETER-FIDELITY FIX (2026-09-24): the pre-GA values for the
         # same gene set as final_parameters, so a reader can see exactly
@@ -697,7 +701,7 @@ def _floating_equity_badge_from_check(check: dict | None) -> str:
     )
 
 
-def _verdict_section(verdict: str | None, verdict_reasons: list[str] | None) -> str:
+def _verdict_section(verdict: str | None, verdict_reasons: list[str] | None, ev_verdict: dict | None = None, ladder: dict | None = None) -> str:
     """Renders the Full Pipeline's READY/MARGINAL/NOT READY verdict (and
     the reasons behind it) prominently in the saved report -- this used to
     only ever reach the live run console and the return value handed back
@@ -708,8 +712,20 @@ def _verdict_section(verdict: str | None, verdict_reasons: list[str] | None) -> 
     if not verdict:
         return ""
     css_class = {"READY": "verdict-ready", "MARGINAL": "verdict-marginal"}.get(verdict, "verdict-not-ready")
+    _ev_label = (ev_verdict or {}).get("label")
+    _stage = (ladder or {}).get("stage")
+    _strip = ""
+    if _ev_label or _stage:
+        import html as _h
+        _strip = (
+            '<div class="verdict-strip"><strong>' + _h.escape(str(verdict)) + "</strong>"
+            + (" &nbsp;|&nbsp; EV verdict: <strong>" + _h.escape(str(_ev_label)) + "</strong>" if _ev_label else "")
+            + (" &nbsp;|&nbsp; Ladder: <strong>" + _h.escape(str(_stage)) + "</strong>" if _stage else "")
+            + "</div>"
+        )
     return (
         f'<div class="verdict-banner {css_class}">'
+        + _strip
         + theme.verdict_hero(verdict, verdict_reasons)
         + "</div>"
     )
@@ -1315,7 +1331,7 @@ def export_html(
         period_end=report["strategy"]["backtest_period_end"],
         generated_at=report["generated_at"],
         warnings_section=_warnings_section(report.get("execution_warnings")),
-        verdict_section=_verdict_section(report.get("verdict"), report.get("verdict_reasons")),
+        verdict_section=_verdict_section(report.get("verdict"), report.get("verdict_reasons"), report.get("ev_verdict"), report.get("ladder")),
         headline_warnings_section=_reliability_header(report) + _headline_warnings_banner(report.get("headline_warnings") or []),
         sizing_halt_banner=_sizing_halt_banner(
             report.get("sizing_halt"), report["strategy"]["instrument"]
@@ -1414,6 +1430,8 @@ def generate_full_report(
     baseline_parameters: dict[str, str] | None = None,
     test_label: str = "",
     tested_strategy_name: str = "",
+    ev_verdict: dict | None = None,
+    ladder: dict | None = None,
 ) -> dict[str, Path]:
     """Builds the report dict and writes JSON + summary CSV + trades CSV + HTML to output_dir.
 
@@ -1433,7 +1451,7 @@ def generate_full_report(
         backtest_result, prop_rules, prop_single_run, monte_carlo_result,
         holdout_comparison=holdout_comparison, risk_config=risk_config,
         verdict=verdict, verdict_reasons=verdict_reasons, final_parameters=final_parameters,
-        baseline_parameters=baseline_parameters,
+        baseline_parameters=baseline_parameters, ev_verdict=ev_verdict, ladder=ladder,
     )
     # Which strategy and which test this report is for (shown in a banner at the top of the HTML and kept
     # in the JSON). ``tested_strategy`` is the plain name of the strategy the person picked; ``strategy.name``
