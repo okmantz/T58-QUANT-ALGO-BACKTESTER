@@ -59,6 +59,10 @@ CONDITION_SOURCES = [
     "VP Distance To POC", "VP Value Area Location", "VP At Low-Volume Node", "Flow Delta Z", "Flow CVD Slope",
     "Flow Absorption", "Spread Z-Score", "Leader Return", "Event Window",
 ]
+# v11 (2026-10-20): session / calendar / event / regime primitives (app.strategy.indicators_v11)
+from app.strategy.indicators_v11 import V11_INDICATOR_KINDS as _V11_KINDS
+_V11_LABELS = {k: k.replace("_", " ").title().replace("Vix", "VIX").replace("Fomc", "FOMC").replace("Nfp", "NFP").replace("Cpi", "CPI").replace("Pce", "PCE") for k in _V11_KINDS}
+CONDITION_SOURCES = CONDITION_SOURCES + [lbl for lbl in _V11_LABELS.values() if lbl not in CONDITION_SOURCES]
 RIGHT_SOURCES = ["Value"] + CONDITION_SOURCES
 
 SOURCE_KIND = {
@@ -83,6 +87,7 @@ SOURCE_KIND = {
     "Flow Delta Z": "flow_delta_z", "Flow CVD Slope": "flow_cvd_slope", "Flow Absorption": "flow_absorption",
     "Spread Z-Score": "spread_zscore", "Leader Return": "leader_return", "Event Window": "event_window",
 }
+SOURCE_KIND.update({lbl: k for k, lbl in _V11_LABELS.items()})
 
 OPERATORS = [
     "Greater Than", "Greater Than or Equal", "Less Than", "Less Than or Equal",
