@@ -986,6 +986,9 @@ _TP_ATR = re.compile(r"T58_TP_ATR_MULT\s*=\s*([\d.]+)")
 _ATR_P = re.compile(r"T58_ATR_PERIOD\s*=\s*(\d+)")
 _SL_PIPS = re.compile(r"T58_SL_PIPS\s*=\s*([\d.]+)")
 _TP_PIPS = re.compile(r"T58_TP_PIPS\s*=\s*([\d.]+)")
+# Any call that can open a position (CTrade methods or a raw OrderSend). An EA with none of these can never trade, so
+# running it would silently return all-zero signals instead of telling the user the EA has no entry logic.
+_ENTRY_CALL = re.compile(r"\b(?:Buy|Sell|BuyLimit|BuyStop|SellLimit|SellStop|PositionOpen|OrderOpen|OrderSend|OrderSendAsync)\s*\(")
 
 
 class MQL5Interpreter:
@@ -1003,6 +1006,7 @@ class MQL5Interpreter:
         self.funcs, self.global_inits = comp.compile_all()
         self.warnings: list[str] = []
         self.inputs = [name for (name, is_input, typ, mk) in self.global_inits if is_input]
+        self._has_entry_call = bool(_ENTRY_CALL.search(clean))
 
     def input_defaults(self) -> dict:
         """Name -> default for every `input` parameter (the optimizer uses this to find tunable genes)."""
@@ -1051,6 +1055,12 @@ class MQL5Interpreter:
             raise StrategyError("MQL5: the EA recursed too deeply.")
         except (TypeError, ValueError, KeyError, AttributeError, IndexError, ZeroDivisionError) as exc:
             raise StrategyError(f"MQL5: runtime error while interpreting the EA at bar {rt.i}: {type(exc).__name__}: {exc}") from exc
+        # Checked after the run so a more specific runtime error (unsupported function etc.) always wins.
+        if not self._has_entry_call:
+            raise StrategyError(
+                "MQL5: no Buy/Sell (trade.Buy/trade.Sell/OrderSend) call was found, so this EA can never open a "
+                "trade. Add an entry call inside OnTick()."
+            )
         self.warnings = list(rt.warnings)
         sig = pd.Series(rt.broker.signal, index=df.index)
         sl, tp = rt.broker.distances(df.index)

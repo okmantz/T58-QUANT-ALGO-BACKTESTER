@@ -1534,6 +1534,10 @@ _TP_ATR = re.compile(r"T58_TP_ATR_MULT\s*=\s*([\d.]+)")
 _ATR_P = re.compile(r"T58_ATR_PERIOD\s*=\s*(\d+)")
 _SL_PIPS = re.compile(r"T58_SL_PIPS\s*=\s*([\d.]+)")
 _TP_PIPS = re.compile(r"T58_TP_PIPS\s*=\s*([\d.]+)")
+# Any call that can open a position. A script with none of these can never trade, so running it would silently return
+# all-zero signals instead of telling the user the script has no entry logic.
+_ENTRY_CALL = re.compile(r"\bstrategy\s*\.\s*(?:entry|order)\s*\(")
+_LINE_COMMENT = re.compile(r"//[^\n]*")
 
 
 class PineInterpreter:
@@ -1551,6 +1555,7 @@ class PineInterpreter:
         self.prog = _compile_block(self.ast, self.ctx)
         self.header = self._header()
         self.warnings: list[str] = []
+        self._has_entry_call = bool(_ENTRY_CALL.search(_LINE_COMMENT.sub("", code)))
 
     def _header(self) -> dict:
         for n in self.ast:
@@ -1589,6 +1594,12 @@ class PineInterpreter:
                 pass
             rt.end_bar()
             rt.broker.end_bar(i, rt.mintick)
+        # Checked after the run so a more specific runtime error (unsupported function etc.) always wins.
+        if not self._has_entry_call:
+            raise StrategyError(
+                "PineScript: no strategy.entry(...) or strategy.order(...) call was found, so this script can never "
+                "open a trade. Add an entry call (inline `when=` or inside an `if` block)."
+            )
         self.warnings = list(rt.warnings)
         sig = pd.Series(rt.broker.signal, index=df.index)
         sl, tp = rt.broker.distances(df.index)
