@@ -534,6 +534,32 @@ def _csrf_issue_token():
 app.jinja_env.globals["csrf_token"] = lambda: session.get("csrf_token", "")
 
 
+@app.context_processor
+def _inject_profile_avatar():
+    """Every page's sidebar include draws the small always-visible profile circle (top right). It needs the person's
+    name (for the initials) and whether a picture is saved. Read from the same account settings the Account page
+    edits; any failure just falls back to a plain "T" circle -- the avatar must never break a page."""
+    profile = {"name": "Trader", "initials": "T", "has_picture": False, "version": ""}
+    try:
+        from app.accounts.settings import load_account_settings
+
+        acct = load_account_settings()
+        name = (acct.display_name or acct.username or "").strip()
+        if name:
+            parts = [p for p in name.replace("_", " ").split() if p]
+            profile["name"] = name
+            profile["initials"] = ("".join(p[0] for p in parts[:2]) or name[:1]).upper()
+        pic = (acct.profile_picture_filename or "").strip()
+        if pic:
+            pic_path = get_app_base_dir() / "data" / "config" / pic
+            if pic_path.exists():
+                profile["has_picture"] = True
+                profile["version"] = str(int(pic_path.stat().st_mtime))
+    except Exception:  # noqa: BLE001
+        pass
+    return {"t58_profile": profile}
+
+
 # 2026-10-15 (audit): every HTML page gets the polling governor (/static/t58-poll.js) injected as the first script in
 # <head>, so background tabs stop polling and long-running poll loops back off -- without editing ~100 templates.
 import re as _re_poll

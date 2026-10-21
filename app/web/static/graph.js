@@ -4,12 +4,13 @@
 const T58_COLORS = {
   teal: "#35e0b0",
   violet: "#8b7cff",
-  coral: "#ff6f6f",
+  coral: "#ff7b7b",
   amber: "#f0b429",
-  grid: "#1c2230",
+  grid: "rgba(130, 235, 220, 0.14)",
 };
 
-const CLUSTER_PALETTE = ["#35e0b0", "#8b7cff", "#ff6f6f", "#f0b429", "#4fb0ff", "#e07be0", "#7bd4e0"];
+// One cool ramp (teal / violet / cyan / blue) plus gold, coral and a soft green: same family as theme.css.
+const CLUSTER_PALETTE = ["#35e0b0", "#8b7cff", "#4cc9f0", "#f0b429", "#ff7b7b", "#7ee0a0", "#6aa8ff"];
 
 function svgEl(tag, attrs) {
   const el = document.createElementNS("http://www.w3.org/2000/svg", tag);

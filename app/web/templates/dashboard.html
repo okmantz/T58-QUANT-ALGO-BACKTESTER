@@ -4,92 +4,172 @@
 <title>Dashboard — T58 Quant Algo Backtester</title>
 {% include '_head_common.html' %}
 <style>
-  /* Dashboard v2 -- one calm column of cards: header, KPIs, focus + performance, current strategy, recent runs, tools. */
-  .db { display: flex; flex-direction: column; gap: 16px; max-width: 1280px; }
-  .db-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-  .db-head h1 { font-size: 24px; font-weight: 650; margin: 0; letter-spacing: -.01em; }
-  .db-head p { margin: 4px 0 0; font-size: 13px; color: var(--text-muted); }
-  .db-head .acts { display: flex; gap: 8px; flex-wrap: wrap; }
+  /* Dashboard v3 -- "Deep Teal Glass". One calm column of frosted-glass cards over a misty mountain backdrop:
+     header, a short welcome (first run only), four KPIs, equity + focus, news/markets, current strategy, recent runs,
+     Champion Board, and a single collapsed "insights" card. Colours come from theme.css's unified palette:
+     teal = primary, cyan/violet = supporting, gold = the one warm accent. */
+  .db { --gap: 18px; display: flex; flex-direction: column; gap: var(--gap); max-width: 1240px; position: relative; }
+  .db-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding-top: 6px; }
+  .db-head h1 { font-size: 30px; font-weight: 650; margin: 0; letter-spacing: -.015em; }
+  .db-head p { margin: 5px 0 0; font-size: 13px; color: var(--text-muted); }
+  .db-head .acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  html:not([data-theme="light"]) .db-head .t58-btn.ghost { color: var(--text); background: rgba(6, 18, 22, .50); border-color: rgba(130, 235, 220, .20);
+                                                           -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+  html:not([data-theme="light"]) .db-head .t58-btn.ghost:hover { background: rgba(var(--teal-rgb), .12); border-color: rgba(var(--teal-rgb), .40); }
 
-  .db-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-  .db-kpi { background: linear-gradient(180deg, var(--panel-2), var(--panel)); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; }
-  .db-kpi .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-dim); font-weight: 600; }
-  .db-kpi .val { font-size: 26px; font-weight: 650; margin-top: 6px; letter-spacing: -.01em; line-height: 1.1; }
-  .db-kpi .sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .db-kpi .val.up { color: var(--teal); } .db-kpi .val.down { color: var(--coral); }
-
-  .db-row { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 16px; align-items: stretch; }
-  .db-card { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 18px 20px; min-width: 0; }
-  .db-card > h2 { font-size: 13px; font-weight: 650; margin: 0 0 12px; color: var(--text); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  /* ---- glass surface (dark theme). Light theme falls back to the plain panel look below. ---- */
+  .db-card, .db-kpi { position: relative; min-width: 0; border-radius: 18px; background: var(--panel); border: 1px solid var(--border); }
+  .db-card { padding: 20px 22px; }
+  html:not([data-theme="light"]) .db-card,
+  html:not([data-theme="light"]) .db-kpi {
+    background:
+      linear-gradient(155deg, rgba(255, 255, 255, .065) 0%, rgba(255, 255, 255, .018) 34%, rgba(5, 14, 18, .30) 100%),
+      rgba(8, 21, 26, .46);
+    border-color: transparent;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08), 0 18px 40px -14px rgba(0, 0, 0, .60);
+    -webkit-backdrop-filter: blur(16px) saturate(1.25); backdrop-filter: blur(16px) saturate(1.25);
+  }
+  /* gradient hairline: bright teal at the top-left, cooling to cyan and a trace of violet */
+  html:not([data-theme="light"]) .db-card::before,
+  html:not([data-theme="light"]) .db-kpi::before {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px; pointer-events: none;
+    background: linear-gradient(140deg, rgba(120, 245, 220, .40), rgba(120, 245, 220, .07) 38%, rgba(76, 201, 240, .10) 70%, rgba(139, 124, 255, .22));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  }
+  .db-card > h2 { font-size: 13px; font-weight: 650; margin: 0 0 14px; color: var(--text); letter-spacing: .01em; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .db-card > h2 a, .db-more { font-size: 12px; font-weight: 500; color: var(--teal); text-decoration: none; }
   .db-card > h2 a:hover, .db-more:hover { text-decoration: underline; }
+  .db-sub { color: var(--text-muted); font-size: 12px; margin: -6px 0 14px; line-height: 1.5; }
 
-  .db-focus .name { font-size: 18px; font-weight: 650; line-height: 1.25; margin: 2px 0 10px; }
-  .db-focus .bar { height: 6px; background: var(--panel-3); border-radius: 99px; overflow: hidden; }
-  .db-focus .bar > i { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--teal), var(--blue)); }
-  .db-focus .meta { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted); margin: 6px 0 14px; gap: 8px; }
-  .db-focus dl { margin: 0 0 14px; display: grid; gap: 10px; }
-  .db-focus dt { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--text-dim); font-weight: 600; }
-  .db-focus dd { margin: 2px 0 0; font-size: 13px; line-height: 1.45; }
-  .db-focus .acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; }
+  /* ---- welcome (first run): icon left, three short bullets, one button ---- */
+  .db-welcome { display: flex; align-items: center; gap: 22px; padding: 20px 24px; }
+  .db-welcome .wl-ico { flex: none; width: 72px; height: 72px; border-radius: 50%; display: grid; place-items: center; color: var(--teal);
+                        background: radial-gradient(circle at 50% 40%, rgba(var(--teal-rgb), .22), rgba(var(--teal-rgb), .04) 70%);
+                        border: 1px solid rgba(var(--teal-rgb), .30); box-shadow: 0 0 34px rgba(var(--teal-rgb), .18); }
+  .db-welcome .wl-ico svg { width: 34px; height: 34px; }
+  .db-welcome .wl-body { flex: 1; min-width: 0; }
+  .db-welcome h2 { margin: 0 0 8px; font-size: 16px; font-weight: 650; }
+  .db-welcome ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; font-size: 13px; color: var(--text); }
+  .db-welcome li { position: relative; padding-left: 16px; line-height: 1.45; }
+  .db-welcome li::before { content: ""; position: absolute; left: 0; top: .62em; width: 5px; height: 5px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 8px rgba(var(--teal-rgb), .7); }
+  .db-welcome li b { font-weight: 650; }
+  .db-welcome .hint { margin: 8px 0 0; font-size: 12px; color: var(--text-muted); }
+  .db-welcome .hint a { color: var(--neon-cyan); text-decoration: none; }
+  .db-welcome .hint a:hover { text-decoration: underline; }
+  .db-welcome .wl-acts { flex: none; display: flex; flex-direction: column; gap: 8px; align-items: stretch; min-width: 150px; }
+
+  /* ---- KPIs: icon chip on the left, number on the right ---- */
+  .db-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+  .db-kpi { display: flex; align-items: center; gap: 14px; padding: 16px 18px; overflow: hidden; --k: var(--teal-rgb); }
+  html:not([data-theme="light"]) .db-kpi::after { content: ""; position: absolute; right: -30px; top: -34px; width: 120px; height: 120px; border-radius: 50%;
+                                                  background: radial-gradient(circle, rgba(var(--k), .16), transparent 70%); pointer-events: none; }
+  .db-kpi .ico { flex: none; width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center; color: rgb(var(--k));
+                 background: rgba(var(--k), .10); border: 1px solid rgba(var(--k), .28); box-shadow: 0 0 22px rgba(var(--k), .14); }
+  .db-kpi .ico svg { width: 22px; height: 22px; }
+  .db-kpi .txt { min-width: 0; position: relative; z-index: 1; }
+  .db-kpi .lbl { font-size: 10.5px; text-transform: uppercase; letter-spacing: .09em; color: var(--text-dim); font-weight: 650; }
+  .db-kpi .val { font-size: 28px; font-weight: 650; margin-top: 3px; letter-spacing: -.01em; line-height: 1.05; font-variant-numeric: tabular-nums; }
+  .db-kpi .sub { font-size: 11.5px; color: var(--text-muted); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .db-kpi .val.up { color: var(--teal); } .db-kpi .val.down { color: var(--coral); }
+  @media (hover: hover) and (prefers-reduced-motion: no-preference) {
+    .db-kpi { transition: transform var(--dur-base) var(--ease), box-shadow var(--dur-base) var(--ease); }
+    .db-kpi:hover { transform: translateY(-2px); }
+  }
+
+  .db-row { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); gap: var(--gap); align-items: stretch; }
+  .db-market { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); }
+  #equity-chart { min-height: 236px; }
+  .db-chart-empty { min-height: 236px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; color: var(--text-muted); font-size: 13px; }
+  .db-chart-empty svg { width: 38px; height: 38px; color: var(--teal); opacity: .8; }
+  .db-chart-empty .t58-btn { margin-top: 4px; }
+
+  /* ---- Your focus: progress ring on the left ---- */
   .db-focus { display: flex; flex-direction: column; }
-
-  .db-steps { display: flex; gap: 6px; flex-wrap: wrap; }
-  .db-steps a { display: inline-flex; align-items: center; gap: 7px; padding: 7px 12px; border-radius: 99px; background: var(--panel-2); border: 1px solid var(--border);
-                font-size: 12.5px; color: var(--text); text-decoration: none; transition: border-color .15s, background .15s; }
-  .db-steps a:hover { border-color: var(--teal); background: var(--panel-3); }
-  .db-steps .n { font-size: 10px; color: var(--teal); font-weight: 700; }
+  .db-focus-top { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
+  .db-ring { position: relative; flex: none; width: 84px; height: 84px; }
+  .db-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); overflow: visible; }
+  .db-ring .track { fill: none; stroke: rgba(255, 255, 255, .08); stroke-width: 6; }
+  .db-ring .arc { fill: none; stroke: url(#db-ring-grad); stroke-width: 6; stroke-linecap: round; filter: drop-shadow(0 0 5px rgba(var(--teal-rgb), .55)); transition: stroke-dasharray .7s var(--ease); }
+  .db-ring.muted .arc { stroke: var(--text-dim); filter: none; }
+  html[data-theme="light"] .db-ring .track { stroke: rgba(16, 24, 32, .12); }
+  html[data-theme="light"] .db-ring .arc { filter: none; }
+  .db-ring .pct { position: absolute; inset: 0; display: grid; place-items: center; font-size: 17px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .db-focus-id { min-width: 0; }
+  .db-focus-id .name { font-size: 17px; font-weight: 650; line-height: 1.25; overflow-wrap: anywhere; }
+  .db-focus-id .stage { margin-top: 4px; font-size: 12px; color: var(--text-muted); }
+  .db-focus dl { margin: 0 0 16px; display: grid; gap: 12px; }
+  .db-focus dt { font-size: 10.5px; text-transform: uppercase; letter-spacing: .09em; color: var(--text-dim); font-weight: 650; }
+  .db-focus dd { margin: 4px 0 0; font-size: 13px; line-height: 1.5; color: var(--text); }
+  .db-focus dd .why { color: var(--text-muted); }
+  .db-focus .next { display: flex; gap: 8px; color: var(--text-muted); }
+  .db-focus .next::before { content: "\2192"; color: var(--teal); flex: none; }
+  .db-focus .acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; align-items: center; }
 
   .db-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
-  .db-metrics div { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; }
+  .db-metrics > div { background: rgba(255, 255, 255, .03); border: 1px solid var(--border); border-radius: 12px; padding: 11px 13px; }
   .db-metrics .lbl { font-size: 11px; color: var(--text-muted); }
-  .db-metrics .val { font-size: 18px; font-weight: 650; margin-top: 3px; }
+  .db-metrics .val { font-size: 18px; font-weight: 650; margin-top: 3px; font-variant-numeric: tabular-nums; }
   .db-chips { display: flex; gap: 6px; flex-wrap: wrap; }
   .db-cur-top { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
   .db-cur-top .n { font-size: 15px; font-weight: 650; }
   .db-cur-top .c { font-size: 12px; color: var(--text-muted); }
   .db-empty { color: var(--text-dim); font-size: 13px; line-height: 1.5; }
 
-  .db-tools { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-  .db-tools a { display: flex; gap: 12px; align-items: center; padding: 12px 14px; border-radius: 12px; background: var(--panel-2); border: 1px solid var(--border);
-                color: var(--text); text-decoration: none; transition: border-color .15s, transform .15s; }
-  .db-tools a:hover { border-color: var(--teal); transform: translateY(-1px); }
-  .db-tools .ic { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; font-size: 16px; background: rgba(var(--teal-rgb), .12); color: var(--teal); flex: none; }
-  .db-tools .t { font-size: 13px; font-weight: 600; } .db-tools .d { font-size: 11.5px; color: var(--text-muted); margin-top: 1px; }
-
   .db table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  .db th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); font-weight: 600; padding: 0 10px 8px; white-space: nowrap; }
-  .db td { padding: 10px; border-top: 1px solid var(--border); white-space: nowrap; }
+  .db th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--text-dim); font-weight: 650; padding: 0 10px 9px; white-space: nowrap; }
+  .db td { padding: 11px 10px; border-top: 1px solid var(--border); white-space: nowrap; }
   .db td:first-child, .db th:first-child { padding-left: 0; }
   .db .tbl-wrap { overflow-x: auto; }
   .db .pos { color: var(--teal); } .db .neg { color: var(--coral); }
-  .db details > summary { cursor: pointer; list-style: none; font-size: 13px; font-weight: 650; display: flex; justify-content: space-between; align-items: center; }
-  .db details > summary::-webkit-details-marker { display: none; }
-  .db details > summary::after { content: "Show"; font-size: 12px; font-weight: 500; color: var(--teal); }
-  .db details[open] > summary::after { content: "Hide"; }
-  .db details[open] > summary { margin-bottom: 12px; }
 
-  @media (max-width: 1020px) { .db-row { grid-template-columns: 1fr; } .db-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .db-tools { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-  @media (max-width: 560px) { .db-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .db-tools { grid-template-columns: 1fr; } .db-head h1 { font-size: 20px; } }
-  @media (prefers-reduced-motion: reduce) { .db-tools a, .db-steps a { transition: none; } .db-tools a:hover { transform: none; } }
-
-  .db-welcome { border-color: rgba(var(--teal-rgb), .35); box-shadow: 0 0 30px rgba(var(--teal-rgb), .10); }
-  .db-market { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); }
-  .db-feed { max-height: 250px; overflow-y: auto; font-size: 12.5px; }
-  .db-feed .nr { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); }
-  .db-feed .nr:first-child { border-top: 0; }
+  .db-feed { max-height: 232px; overflow-y: auto; font-size: 12.5px; }
+  .db-feed .nr { display: flex; justify-content: space-between; gap: 10px; padding: 9px 0; border-top: 1px solid var(--border); }
+  .db-feed .nr:first-child { border-top: 0; padding-top: 0; }
   .db-feed .nt { font-weight: 600; } .db-feed .nm { color: var(--text-dim); font-size: 11px; margin-top: 2px; }
   .db-feed .hi { color: var(--coral); } .db-feed .med { color: var(--amber); } .db-feed .lo { color: var(--text-muted); }
   .db-feed .up { color: var(--teal); } .db-feed .down { color: var(--coral); }
-  .db-head h1 { font-size: 30px; }
-  .db-kpi { position: relative; overflow: hidden; }
-  .db-kpi::after { content: ""; position: absolute; right: -20px; top: -20px; width: 90px; height: 90px; border-radius: 50%;
-                   background: radial-gradient(circle, rgba(var(--teal-rgb), .16), transparent 70%); pointer-events: none; }
-  @media (max-width: 1020px) { .db-market { grid-template-columns: 1fr; } }
+
+  /* ---- insights: one card, three quiet disclosure rows ---- */
+  .db-insights details { border-top: 1px solid var(--border); padding: 13px 0; }
+  .db-insights details:first-of-type { border-top: 0; padding-top: 2px; }
+  .db-insights details:last-of-type { padding-bottom: 2px; }
+  .db details > summary { cursor: pointer; list-style: none; font-size: 13px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .db details > summary::-webkit-details-marker { display: none; }
+  .db details > summary::after { content: "Show"; font-size: 12px; font-weight: 500; color: var(--teal); }
+  .db details[open] > summary::after { content: "Hide"; }
+  .db details[open] > summary { margin-bottom: 14px; }
+
+  @media (max-width: 1020px) {
+    .db-row, .db-market { grid-template-columns: 1fr; }
+    .db-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .db-welcome { flex-wrap: wrap; }
+    .db-welcome .wl-acts { flex-direction: row; min-width: 0; width: 100%; }
+  }
+  @media (max-width: 560px) {
+    .db-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .db-kpis { grid-template-columns: 1fr; }
+    .db-head h1 { font-size: 22px; }
+    .db-welcome .wl-ico { width: 56px; height: 56px; }
+  }
 </style>
 </head>
-<body>
+<body class="db-page">
 {% set active_page = 'dashboard' %}
+
+{# One shared gradient for every progress ring on the page #}
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs><linearGradient id="db-ring-grad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#46e8bd"/><stop offset="1" stop-color="#4cc9f0"/></linearGradient></defs>
+</svg>
+
+{% macro ring(pct, muted=false) %}
+{% set p = [0, [(pct or 0)|float, 100]|min]|max %}
+<div class="db-ring{{ ' muted' if muted else '' }}" role="progressbar" aria-label="Progress" aria-valuenow="{{ '%.0f'|format(p) }}" aria-valuemin="0" aria-valuemax="100" title="{{ '%.1f'|format(p) }}% of the way through the pipeline">
+  <svg viewBox="0 0 84 84"><circle class="track" cx="42" cy="42" r="36"/><circle class="arc" cx="42" cy="42" r="36" stroke-dasharray="{{ '%.1f'|format(p * 2.2619) }} 226.2"/></svg>
+  <div class="pct">{{ '%.0f'|format(p) }}%</div>
+</div>
+{% endmacro %}
+
 <div class="t58-shell">
 {% include '_sidebar.html' %}
 <div class="t58-main">
@@ -109,31 +189,53 @@
 </div>
 
 {% if show_welcome %}
+<!-- ---- First run: condensed welcome ---- -->
 <div class="db-card db-welcome">
-  <h2 style="font-size:15px;">&#128161; New here? Start here so you never have to guess.</h2>
-  <div style="white-space:pre-line;line-height:1.5;font-size:13px;">{{ welcome_message }}</div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
-    <a class="t58-btn primary" href="/">1. Load data &amp; configure a strategy</a>
-    <a class="t58-btn secondary" href="/search">Or try Search Lab</a>
-    <a class="t58-btn ghost" href="/user-manual">Read the full walkthrough</a>
+  <div class="wl-ico" aria-hidden="true">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.7.6 1.1 1.3 1.1 2.2h5c0-.9.4-1.6 1.1-2.2A6 6 0 0 0 12 3z"/></svg>
+  </div>
+  <div class="wl-body">
+    <h2>New here? Start here so you never have to guess.</h2>
+    <ul>
+      <li>Load market data on <b>2 Market Data</b>.</li>
+      <li>Build or pick a strategy on <b>1 Strategy Configuration</b>.</li>
+      <li>Click <b>RUN</b> on <b>5 Run &amp; Report</b>.</li>
+    </ul>
+    <p class="hint">No idea for a strategy yet? <a href="/search">Search Lab</a> loads its own data and hands you a leaderboard to start from.</p>
+  </div>
+  <div class="wl-acts">
+    <a class="t58-btn primary sm" href="/search">Go to Search Lab</a>
+    <a class="t58-btn ghost sm" href="/user-manual">Full walkthrough</a>
   </div>
 </div>
 {% endif %}
 
 {% if request.args.get('promote_notice') %}
-<div class="db-card" style="border-color:{{ 'var(--teal)' if request.args.get('promote_ok') == '1' else 'var(--coral)' }};font-size:13px;">
+<div class="db-card" style="padding:14px 18px;font-size:13px;{{ 'color:var(--teal);' if request.args.get('promote_ok') == '1' else 'color:var(--coral);' }}">
   {{ request.args.get('promote_notice') }}
 </div>
 {% endif %}
 
 <!-- ---- KPIs ---- -->
 <div class="db-kpis">
-  <div class="db-kpi"><div class="lbl">Strategies tracked</div><div class="val">{{ data.total_strategies }}</div><div class="sub">{{ board_rows|length }} on the Champion Board</div></div>
-  <div class="db-kpi"><div class="lbl">Total runs</div><div class="val">{{ data.total_runs }}</div><div class="sub">desktop + web + Search Lab</div></div>
-  <div class="db-kpi"><div class="lbl">Single-run pass rate</div><div class="val {{ 'up' if data.pass_rate >= 50 else '' }}">{{ "%.0f"|format(data.pass_rate) }}%</div><div class="sub">of latest run per strategy</div></div>
-  <div class="db-kpi"><div class="lbl">Best Sharpe</div>
-    <div class="val">{% if data.best %}{{ "%.2f"|format(data.best.sharpe_ratio) }}{% else %}&ndash;{% endif %}</div>
-    <div class="sub">{% if data.best %}{{ data.best.strategy_name }}{% else %}run a backtest to see this{% endif %}</div></div>
+  <div class="db-kpi" style="--k: var(--teal-rgb)">
+    <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 20v-6M11 20V6M17 20v-9M3 20h18"/></svg></span>
+    <div class="txt"><div class="lbl">Strategies tracked</div><div class="val">{{ data.total_strategies }}</div><div class="sub">{{ board_rows|length }} on the Champion Board</div></div>
+  </div>
+  <div class="db-kpi" style="--k: var(--neon-cyan-rgb)">
+    <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M10 8.5l5.5 3.5-5.5 3.5z"/></svg></span>
+    <div class="txt"><div class="lbl">Total runs</div><div class="val">{{ data.total_runs }}</div><div class="sub">desktop + web + Search Lab</div></div>
+  </div>
+  <div class="db-kpi" style="--k: var(--violet-rgb)">
+    <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17a8 8 0 1 1 16 0"/><path d="M12 17l4-5"/><circle cx="12" cy="17" r="1.1"/></svg></span>
+    <div class="txt"><div class="lbl">Single-run pass rate</div><div class="val {{ 'up' if data.pass_rate >= 50 else '' }}">{{ "%.0f"|format(data.pass_rate) }}%</div><div class="sub">of latest run per strategy</div></div>
+  </div>
+  <div class="db-kpi" style="--k: var(--amber-rgb)">
+    <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.6l2.6 5.4 5.9.8-4.3 4.1 1 5.9L12 17l-5.2 2.8 1-5.9L3.5 9.8l5.9-.8z"/></svg></span>
+    <div class="txt"><div class="lbl">Best Sharpe</div>
+      <div class="val">{% if data.best %}{{ "%.2f"|format(data.best.sharpe_ratio) }}{% else %}&ndash;{% endif %}</div>
+      <div class="sub">{% if data.best %}{{ data.best.strategy_name }}{% else %}run a backtest to see this{% endif %}</div></div>
+  </div>
 </div>
 
 <!-- ---- Performance + focus ---- -->
@@ -146,14 +248,18 @@
   <div class="db-card db-focus">
     <h2>Your focus</h2>
     {% if snapshot %}
-    <div class="name">{{ snapshot.what }}</div>
-    <div class="bar" role="progressbar" aria-valuenow="{{ snapshot.where_pct }}" aria-valuemin="0" aria-valuemax="100"><i style="width:{{ snapshot.where_pct }}%"></i></div>
-    <div class="meta"><span>{{ snapshot.where }}</span><span>{{ snapshot.where_pct }}%</span></div>
+    <div class="db-focus-top">
+      {{ ring(snapshot.where_pct) }}
+      <div class="db-focus-id">
+        <div class="name">{{ snapshot.what }}</div>
+        <div class="stage">{{ snapshot.where }}</div>
+      </div>
+    </div>
     <dl>
       <div><dt>Is it working?</dt>
         <dd><span class="t58-status {{ 'validated' if snapshot.is_it_working in ('READY',) else ('rejected' if snapshot.is_it_working in ('NOT READY',) else 'optimized') }}" data-ve='{{ snapshot.verdict_explain|tojson }}' tabindex="0" role="button" title="Click to see why">{{ snapshot.is_it_working|ladder }}</span>
-        <span style="color:var(--text-muted);"> {{ snapshot.why }}</span></dd></div>
-      <div><dt>Next step</dt><dd class="t58-glow-teal">{{ snapshot.next_action }}</dd></div>
+        <span class="why"> {{ snapshot.why }}</span></dd></div>
+      <div><dt>Next step</dt><dd class="next"><span>{{ snapshot.next_action }}</span></dd></div>
     </dl>
     <div class="acts">
       {% if snapshot.row.promotion.can_promote %}
@@ -168,8 +274,11 @@
       <a class="t58-btn ghost sm" href="/forward-test">Forward test</a>
     </div>
     {% elif current_strategy %}
-    <div class="name" style="color:var(--text-muted);">{{ current_strategy.strategy_name }}</div>
-    <div class="db-empty">Tracked as your current strategy, but not on the Champion Board yet &mdash; save it to the Strategy Library (Run &amp; Report's "Save to library", or Full Pipeline's) to get a stage, verdict and next action here.</div>
+    <div class="db-focus-top">
+      {{ ring(0, true) }}
+      <div class="db-focus-id"><div class="name">{{ current_strategy.strategy_name }}</div><div class="stage">Tracked &middot; not on the Champion Board yet</div></div>
+    </div>
+    <div class="db-empty">Save it to the Strategy Library (Run &amp; Report's "Save to library", or Full Pipeline's) to get a stage, verdict and next action here.</div>
     <div class="acts" style="margin-top:14px;">
       {% if current_metrics %}
       <a class="t58-btn secondary sm" href="/validate-simple">Open Validate (pick checks) &rarr;</a>
@@ -179,11 +288,14 @@
       <a class="t58-btn ghost sm" href="/library">Strategy Library &rarr;</a>
     </div>
     {% else %}
-    <div class="name" style="color:var(--text-muted);">No strategy tested yet</div>
+    <div class="db-focus-top">
+      {{ ring(0, true) }}
+      <div class="db-focus-id"><div class="name" style="color:var(--text-muted);">No strategy tested yet</div><div class="stage">Nothing in progress</div></div>
+    </div>
     <div class="db-empty">Run your first backtest and T58 will tell you what's working, why, and what to do next.</div>
     <div class="acts" style="margin-top:14px;">
       <a class="t58-btn primary sm" href="/">Run a backtest</a>
-      <a class="t58-btn secondary sm" href="/generate-strategies">Generate a strategy (AI)</a>
+      <a class="t58-btn ghost sm" href="/generate-strategies">Generate a strategy (AI)</a>
     </div>
     {% endif %}
   </div>
@@ -199,17 +311,6 @@
     <h2>Market data <a href="/assistant/">Full rankings &rarr;</a></h2>
     <div id="db-rank" class="db-feed"><div class="db-empty">Loading markets&hellip;</div></div>
   </div>
-</div>
-
-<!-- ---- Workflow ---- -->
-<div class="db-steps" aria-label="Your workflow">
-  <a class="step" href="/start-here/create"><span class="n">01</span><span class="t">Create</span></a>
-  <a class="step" href="/full-pipeline"><span class="n">02</span><span class="t">Test</span></a>
-  <a class="step" href="/optimize-simple"><span class="n">03</span><span class="t">Optimize</span></a>
-  <a class="step" href="/validate-simple"><span class="n">04</span><span class="t">Validate</span></a>
-  <a class="step" href="/champion-simple"><span class="n">05</span><span class="t">Champion</span></a>
-  <a class="step" href="/forward-test"><span class="n">06</span><span class="t">Forward test</span></a>
-  <a class="step" href="/deploy-live"><span class="n">07</span><span class="t">Deploy live</span></a>
 </div>
 
 <!-- ---- Current strategy ---- -->
@@ -304,58 +405,10 @@
   {% endif %}
 </div>
 
-<!-- ---- Quick tools ---- -->
-<div class="db-card">
-  <h2>Quick tools</h2>
-  <div class="db-tools">
-    <a href="/full-pipeline"><span class="ic">&#9654;</span><span><div class="t">Full Pipeline</div><div class="d">Backtest, validate, report</div></span></a>
-    <a href="/optimize-simple"><span class="ic">&#9881;</span><span><div class="t">Optimize</div><div class="d">Tune parameters safely</div></span></a>
-    <a href="/validate-simple"><span class="ic">&#10003;</span><span><div class="t">Validate</div><div class="d">Stress-test a strategy</div></span></a>
-    <a href="/quant-lab"><span class="ic">&#9878;</span><span><div class="t">Quant Lab</div><div class="d">Gamma, research &amp; seasonality</div></span></a>
-    <a href="/journal"><span class="ic">&#9998;</span><span><div class="t">Trading Journal</div><div class="d">Log and review trades</div></span></a>
-    <a href="/education"><span class="ic">&#127891;</span><span><div class="t">Education</div><div class="d">Courses &amp; knowledge check</div></span></a>
-  </div>
-</div>
-
-<!-- ---- Insights (heavier visuals: drawn only when opened) ---- -->
-<div class="db-card">
-  <details id="db-heat-d">
-    <summary>Weekday &times; hour P&amp;L (all runs combined)</summary>
-    <div id="heatmap"></div>
-  </details>
-</div>
-
-{% include '_survivors_strip.html' %}
-
-<div class="db-card">
-  <details id="db-uni-d">
-    <summary>Strategy universe</summary>
-    <div id="universe-graph"></div>
-    <p style="margin:10px 0 0;"><a class="db-more" href="/universe">Open the full Universe Map &rarr;</a></p>
-  </details>
-</div>
-
-<!-- ---- Pipeline controls (positive + negative) ---- -->
-{% if pipeline_controls %}
-<div class="db-card">
-  <h2>Pipeline controls <span class="t58-pill {{ 'pass' if pipeline_controls.ok else 'fail' }}">{{ 'HEALTHY' if pipeline_controls.ok else 'CHECK PIPELINE' }}</span></h2>
-  <p style="color:var(--text-muted);font-size:12px;margin:-6px 0 12px;">A pipeline that rejects everything looks the same as a broken one. These controls test the edge-test layer itself: a zero-edge stream must almost never pass (false positives), and a planted edge must usually be found (power). Pooling markets is what makes a real +0.20R edge detectable.</p>
-  <table class="t58-table" style="width:100%;font-size:13px;">
-    <thead><tr><th align="left">Planted edge</th><th align="right">Detected, one market</th><th align="right">Detected, pooled over {{ pipeline_controls.positive.n_markets }} markets</th></tr></thead>
-    <tbody>
-    <tr><td>0R (negative control)</td><td align="right" colspan="2">false-positive rate {{ '%.1f'|format(pipeline_controls.negative.false_positive_rate * 100) }}% (limit {{ '%.0f'|format(pipeline_controls.negative.target_max * 100) }}%)</td></tr>
-    {% for row in pipeline_controls.positive.rows %}
-    <tr><td>+{{ '%.2f'|format(row.edge_r) }}R</td><td align="right">{{ '%.0f'|format(row.single_market * 100) }}%</td><td align="right">{{ '%.0f'|format(row.pooled * 100) }}%</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
-</div>
-{% endif %}
-
 <!-- ---- Champion Board ---- -->
 <div class="db-card">
   <h2>Champion Board <a href="/champion-simple">Open &rarr;</a></h2>
-  <p style="color:var(--text-muted);font-size:12px;margin:-6px 0 12px;">Every saved strategy's standing: Eval / Payout / OOS and how far it's been promoted. Promotion is manual &mdash; a high raw metric alone never advances a strategy.</p>
+  <p class="db-sub">Every saved strategy's standing: Eval / Payout / OOS and how far it's been promoted. Promotion is manual &mdash; a high raw metric alone never advances a strategy.</p>
   {% if board_rows %}
   <div class="tbl-wrap">
   <table>
@@ -388,7 +441,7 @@
           <a href="/validate-simple" style="font-size:11px;">Open Validate (pick checks) &rarr;</a>
           {% endif %}
           {% else %}
-          <span style="font-size:11px;color:var(--teal);">&#9733; Final stage</span>
+          <span style="font-size:11px;color:var(--amber);">&#9733; Final stage</span>
           {% endif %}
         </td>
       </tr>
@@ -402,6 +455,37 @@
   {% endif %}
 </div>
 
+<!-- ---- Insights: heavier visuals, drawn only when a row is opened ---- -->
+<div class="db-card db-insights">
+  <h2>Deeper insights</h2>
+  <details id="db-heat-d">
+    <summary>Weekday &times; hour P&amp;L (all runs combined)</summary>
+    <div id="heatmap"></div>
+  </details>
+  <details id="db-uni-d">
+    <summary>Strategy universe</summary>
+    <div id="universe-graph"></div>
+    <p style="margin:10px 0 0;"><a class="db-more" href="/universe">Open the full Universe Map &rarr;</a></p>
+  </details>
+  {% if pipeline_controls %}
+  <details id="db-ctl-d">
+    <summary><span>Pipeline controls <span class="t58-pill {{ 'pass' if pipeline_controls.ok else 'fail' }}" style="margin-left:6px;">{{ 'HEALTHY' if pipeline_controls.ok else 'CHECK PIPELINE' }}</span></span></summary>
+    <p class="db-sub" style="margin-top:0;">A pipeline that rejects everything looks the same as a broken one. These controls test the edge-test layer itself: a zero-edge stream must almost never pass (false positives), and a planted edge must usually be found (power). Pooling markets is what makes a real +0.20R edge detectable.</p>
+    <div class="tbl-wrap">
+    <table class="t58-table" style="width:100%;font-size:13px;">
+      <thead><tr><th align="left">Planted edge</th><th align="right">Detected, one market</th><th align="right">Detected, pooled over {{ pipeline_controls.positive.n_markets }} markets</th></tr></thead>
+      <tbody>
+      <tr><td>0R (negative control)</td><td align="right" colspan="2">false-positive rate {{ '%.1f'|format(pipeline_controls.negative.false_positive_rate * 100) }}% (limit {{ '%.0f'|format(pipeline_controls.negative.target_max * 100) }}%)</td></tr>
+      {% for row in pipeline_controls.positive.rows %}
+      <tr><td>+{{ '%.2f'|format(row.edge_r) }}R</td><td align="right">{{ '%.0f'|format(row.single_market * 100) }}%</td><td align="right">{{ '%.0f'|format(row.pooled * 100) }}%</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </details>
+  {% endif %}
+</div>
+
 </div>
 </div>
 </div>
@@ -410,9 +494,7 @@
 <script src="/static/t58-tour.js" defer></script>
 <script>
   (function () {
-    var h = new Date().getHours();
-    var g = document.getElementById('db-greeting'), d = document.getElementById('db-date');
-    
+    var d = document.getElementById('db-date');
     if (d) try { d.textContent = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }) + ' — your research, validation and deployment status at a glance.'; } catch (e) {}
   })();
 
@@ -426,7 +508,7 @@
     var el = document.getElementById('db-news');
     fetch('/assistant/api/news').then(function (r) { return r.json(); }).then(function (d) {
       if (d.error) { el.innerHTML = '<div class="db-empty">' + esc(d.error) + '</div>'; return; }
-      var ev = (d.events || []).slice(0, 8);
+      var ev = (d.events || []).slice(0, 6);
       if (!ev.length) { el.innerHTML = '<div class="db-empty">No upcoming events this week.</div>'; return; }
       el.innerHTML = ev.map(function (e) {
         var cls = /high|red/i.test(e.impact) ? 'hi' : /med|orange|yellow/i.test(e.impact) ? 'med' : 'lo';
@@ -440,7 +522,7 @@
   function loadRank() {
     var el = document.getElementById('db-rank');
     fetch('/assistant/api/rankings').then(function (r) { return r.json(); }).then(function (d) {
-      var rk = (d.rankings || []).slice(0, 8);
+      var rk = (d.rankings || []).slice(0, 6);
       if (!rk.length) { el.innerHTML = '<div class="db-empty">No market data loaded yet. Add a dataset under Market Data or connect a data key.</div>'; return; }
       el.innerHTML = rk.map(function (r) {
         var up = r.momentum_pct >= 0;
@@ -459,11 +541,19 @@
   // Only the equity chart is drawn up front; the heatmap and universe graph are drawn the first time their section is opened
   // (and refreshed only while open), so the page does no hidden work.
   function open_(id) { var e = document.getElementById(id); return !!(e && e.open); }
+  function emptyChart(el) {
+    el.innerHTML = '<div class="db-chart-empty">' +
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l5-5 4 4 8-8"/><path d="M15 8h5v5"/></svg>' +
+      '<div>No completed runs yet &mdash; run a strategy to populate this chart.</div>' +
+      '<a class="t58-btn secondary sm" href="/">Run a Backtest &rarr;</a></div>';
+  }
   function paint(data) {
     var sig = JSON.stringify([data.equity_series, data.heatmap, data.graph]);
     if (sig === lastSig) return;                      // nothing changed since the last repaint -> no DOM churn
     lastSig = sig;
-    T58Dashboard.renderEquityChart(document.getElementById('equity-chart'), data.equity_series);
+    var chart = document.getElementById('equity-chart');
+    if (data.equity_series && data.equity_series.length) T58Dashboard.renderEquityChart(chart, data.equity_series);
+    else emptyChart(chart);
     if (open_('db-heat-d')) T58Dashboard.renderHeatmap(document.getElementById('heatmap'), data.heatmap);
     if (open_('db-uni-d')) T58Dashboard.renderUniverseGraph(document.getElementById('universe-graph'), data.graph);
   }

@@ -48,6 +48,76 @@
     });
   }
 
+
+  /* Profile avatar (top right, every page). Click opens a small menu: Account settings / Change photo / Remove photo.
+     Photo upload and removal reuse the Account page's existing routes (same-origin POSTs carrying the CSRF header),
+     so the picture saved here is the same one the Account page shows. */
+  function initProfileAvatar() {
+    var root = document.getElementById("t58-profile");
+    var btn = document.getElementById("t58-avatar-btn");
+    var menu = document.getElementById("t58-profile-menu");
+    if (!root || !btn || !menu) return;
+    var csrf = root.getAttribute("data-csrf") || "";
+    var fileInput = document.getElementById("t58-avatar-file");
+    var removeBtn = document.getElementById("t58-avatar-remove");
+
+    function setOpen(open) {
+      menu.hidden = !open;
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+    btn.addEventListener("click", function (e) { e.stopPropagation(); setOpen(menu.hidden); });
+    document.addEventListener("click", function (e) { if (!root.contains(e.target)) setOpen(false); });
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape") { setOpen(false); btn.blur(); } });
+
+    function showPicture(url) {
+      btn.innerHTML = "";
+      if (url) {
+        var img = document.createElement("img");
+        img.id = "t58-avatar-img";
+        img.alt = btn.getAttribute("title") || "Profile";
+        img.src = url;
+        btn.appendChild(img);
+      }
+      if (removeBtn) removeBtn.hidden = !url;
+    }
+    function post(url, body) {
+      var opts = { method: "POST", headers: { "X-CSRF-Token": csrf }, credentials: "same-origin" };
+      if (body) opts.body = body;
+      return fetch(url, opts);
+    }
+
+    if (fileInput) {
+      fileInput.addEventListener("change", function () {
+        var f = fileInput.files && fileInput.files[0];
+        if (!f) return;
+        var fd = new FormData();
+        fd.append("profile_picture", f);
+        post("/settings/account/profile-picture", fd).then(function (r) {
+          if (!r.ok) throw new Error("upload failed");
+          showPicture("/settings/account/profile-picture/file?v=" + Date.now());
+          setOpen(false);
+        }).catch(function () { alert("That image could not be saved. Use a PNG, JPG, GIF or WEBP file."); });
+        fileInput.value = "";
+      });
+    }
+    var label = fileInput && fileInput.parentElement;
+    if (label) label.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); } });
+    if (removeBtn) {
+      removeBtn.addEventListener("click", function () {
+        post("/settings/account/profile-picture/remove").then(function () {
+          var initials = (btn.getAttribute("data-initials") || "");
+          btn.innerHTML = "";
+          var span = document.createElement("span");
+          span.id = "t58-avatar-initials";
+          span.textContent = initials || (btn.getAttribute("title") || "T").slice(0, 1).toUpperCase();
+          btn.appendChild(span);
+          removeBtn.hidden = true;
+          setOpen(false);
+        });
+      });
+    }
+  }
+
   function restoreNavGroups() {
     document.querySelectorAll(".t58-nav-group").forEach(function (group, idx) {
       var summary = group.querySelector("summary");
@@ -216,6 +286,7 @@
     restoreNavGroups();
     animateNumbers();
     initThemeToggle();
+    initProfileAvatar();
     initGlobalSearch();
     initMobileMenu();
     initInstantNav();

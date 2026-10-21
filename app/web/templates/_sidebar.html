@@ -22,6 +22,20 @@
 </div>
 <div id="t58-sidebar-backdrop" class="t58-sidebar-backdrop"></div>
 
+<!-- Always-visible profile circle (top right). Server-rendered so there is no flash; the small menu is wired in t58-chrome.js. -->
+<div class="t58-profile" id="t58-profile" data-csrf="{{ csrf_token() }}">
+  <button type="button" class="t58-avatar" id="t58-avatar-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="t58-profile-menu" title="{{ t58_profile.name }}" data-initials="{{ t58_profile.initials }}">
+    {% if t58_profile.has_picture %}<img id="t58-avatar-img" src="/settings/account/profile-picture/file?v={{ t58_profile.version }}" alt="{{ t58_profile.name }}">{% else %}<span id="t58-avatar-initials">{{ t58_profile.initials }}</span>{% endif %}
+  </button>
+  <div class="t58-profile-menu" id="t58-profile-menu" role="menu" hidden>
+    <div class="who"><b>{{ t58_profile.name }}</b>Signed in on this computer</div>
+    <a role="menuitem" href="/settings/account">Account settings</a>
+    <label role="menuitem" tabindex="0">Change photo<input type="file" id="t58-avatar-file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></label>
+    <button type="button" role="menuitem" class="danger" id="t58-avatar-remove"{% if not t58_profile.has_picture %} hidden{% endif %}>Remove photo</button>
+  </div>
+</div>
+
+
 <div class="t58-sidebar" id="t58-sidebar">
   <div class="t58-brand">
     <img class="mark-img" src="/static/t58-logo.png" alt="T58" width="34" height="34">
@@ -81,7 +95,7 @@
 
   <!-- (1) Create -- v9.8: single link to the consolidated section page;
        its individual tools live on that page (tools grid), not in the sidebar. -->
-  <a href="/start-here/create" data-accent="violet" class="t58-nav-item top-level {{ 'active' if active_page in create_pages else '' }}">
+  <a href="/start-here/create" data-accent="teal" class="t58-nav-item top-level {{ 'active' if active_page in create_pages else '' }}">
     <span class="t58-num">&#9312;</span> Create
   </a>
 
@@ -99,19 +113,19 @@
 
   <!-- (4) Validate -- v9.8: single link to the consolidated section page;
        its individual tools live on that page (tools grid), not in the sidebar. -->
-  <a href="/validate-simple" data-accent="amber" class="t58-nav-item top-level {{ 'active' if active_page in validate_pages else '' }}">
+  <a href="/validate-simple" data-accent="violet" class="t58-nav-item top-level {{ 'active' if active_page in validate_pages else '' }}">
     <span class="t58-num">&#9315;</span> Validate
   </a>
 
   <!-- (5) Champion -- v9.8: single link to the consolidated section page;
        its individual tools live on that page (tools grid), not in the sidebar. -->
-  <a href="/champion-simple" data-accent="magenta" class="t58-nav-item top-level {{ 'active' if active_page in champion_pages else '' }}">
+  <a href="/champion-simple" data-accent="gold" class="t58-nav-item top-level {{ 'active' if active_page in champion_pages else '' }}">
     <span class="t58-num">&#9316;</span> Champion
   </a>
 
   <!-- (6) Deployment -- v9.8: single link to the consolidated section page;
        its individual tools live on that page (tools grid), not in the sidebar. -->
-  <a href="/forward-test" data-accent="lime" class="t58-nav-item top-level {{ 'active' if active_page in ['forward_test', 'deploy_live', 'live_market', 'replay', 'webhook_relay', 'start_here_deployment'] else '' }}">
+  <a href="/forward-test" data-accent="green" class="t58-nav-item top-level {{ 'active' if active_page in ['forward_test', 'deploy_live', 'live_market', 'replay', 'webhook_relay', 'start_here_deployment'] else '' }}">
     <span class="t58-num">&#9317;</span> Deploy
   </a>
 

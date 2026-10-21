@@ -32,9 +32,9 @@
   --teal: #35e0b0;
   --teal-dim: #0f6e56;
   --teal-rgb: 53, 224, 176;
-  --violet: #7b3dff;
-  --violet-dim: #351a89;
-  --violet-rgb: 123, 61, 255;
+  --violet: #8b7cff;
+  --violet-dim: #3a3290;
+  --violet-rgb: 139, 124, 255;
   --coral: #ff6f6f;
   --coral-dim: #712b13;
   --coral-rgb: 255, 111, 111;
@@ -46,18 +46,27 @@
      palette exactly (see app/ui/main_window.py THEMES["dark"]), used
      for the sidebar's per-section color-coding so the two builds read
      as the same product rather than two different-looking apps. ---- */
-  --blue: #6fa8ff;
-  --blue-rgb: 111, 168, 255;
-  --neon-cyan: #00d4ff;
-  --neon-cyan-rgb: 0, 212, 255;
-  --neon-magenta: #ff2bd6;
-  --neon-magenta-rgb: 255, 43, 214;
-  --neon-lime: #b6ff3c;
-  --neon-lime-rgb: 182, 255, 60;
-  --neon-violet: #8a5cff;
-  --neon-violet-rgb: 138, 92, 255;
-  --neon-amber: #ffb547;
-  --neon-amber-rgb: 255, 181, 71;
+  --blue: #6aa8ff;
+  --blue-rgb: 106, 168, 255;
+  /* UNIFIED PALETTE (Oct 2026). The old accent set mixed electric cyan, hot magenta, acid lime and a
+     saturated violet -- four unrelated hues fighting each other. They now share one lightness/saturation
+     band and walk around the wheel in order: teal 165 -> cyan 195 -> blue 215 -> violet 250, with gold
+     (amber, 42) as the single warm complement and a soft green for "go". The --neon-* names are kept so
+     no template needs editing; magenta is now a muted orchid, lime a soft green. */
+  --neon-cyan: #4cc9f0;
+  --neon-cyan-rgb: 76, 201, 240;
+  --neon-magenta: #c792ea;
+  --neon-magenta-rgb: 199, 146, 234;
+  --neon-lime: #7ee0a0;
+  --neon-lime-rgb: 126, 224, 160;
+  --neon-violet: #8b7cff;
+  --neon-violet-rgb: 139, 124, 255;
+  --neon-amber: #f2b84b;
+  --neon-amber-rgb: 242, 184, 75;
+  --gold: var(--amber);
+  --gold-rgb: var(--amber-rgb);
+  --green: #7ee0a0;
+  --green-rgb: 126, 224, 160;
 
   --success: var(--teal);
   --warning: var(--amber);
@@ -113,9 +122,9 @@ html[data-theme="light"] {
   --teal: #0a6f54;
   --teal-dim: #0a5c46;
   --teal-rgb: 10, 111, 84;
-  --violet: #5b21e8;
-  --violet-dim: #421dc4;
-  --violet-rgb: 91, 33, 232;
+  --violet: #5a4bd1;
+  --violet-dim: #4437ad;
+  --violet-rgb: 90, 75, 209;
   --coral: #c9332e;
   --coral-dim: #a52a26;
   --coral-rgb: 201, 51, 46;
@@ -130,14 +139,18 @@ html[data-theme="light"] {
   --blue-rgb: 31, 86, 196;
   --neon-cyan: #00688a;
   --neon-cyan-rgb: 0, 104, 138;
-  --neon-magenta: #9c1478;
-  --neon-magenta-rgb: 156, 20, 120;
-  --neon-lime: #4c720e;
-  --neon-lime-rgb: 76, 114, 14;
-  --neon-violet: #5730b8;
-  --neon-violet-rgb: 87, 48, 184;
+  --neon-magenta: #8a4fb0;
+  --neon-magenta-rgb: 138, 79, 176;
+  --neon-lime: #2f7d4f;
+  --neon-lime-rgb: 47, 125, 79;
+  --neon-violet: #5a4bd1;
+  --neon-violet-rgb: 90, 75, 209;
   --neon-amber: #8f5c0e;
   --neon-amber-rgb: 143, 92, 14;
+  --gold: var(--amber);
+  --gold-rgb: var(--amber-rgb);
+  --green: #2f7d4f;
+  --green-rgb: 47, 125, 79;
 
   --shadow-sm: 0 1px 2px rgba(16, 24, 32, 0.08);
   --shadow-md: 0 6px 20px rgba(16, 24, 32, 0.10);
@@ -223,6 +236,9 @@ a { color: var(--teal); }
   --item-accent: var(--teal);
   --item-accent-rgb: var(--teal-rgb);
 }
+.t58-nav-item[data-accent="teal"]    { --item-accent: var(--teal);         --item-accent-rgb: var(--teal-rgb); }
+.t58-nav-item[data-accent="gold"]    { --item-accent: var(--gold);         --item-accent-rgb: var(--gold-rgb); }
+.t58-nav-item[data-accent="green"]   { --item-accent: var(--green);        --item-accent-rgb: var(--green-rgb); }
 .t58-nav-item[data-accent="violet"]  { --item-accent: var(--neon-violet);   --item-accent-rgb: var(--neon-violet-rgb); }
 .t58-nav-item[data-accent="cyan"]    { --item-accent: var(--neon-cyan);     --item-accent-rgb: var(--neon-cyan-rgb); }
 .t58-nav-item[data-accent="blue"]    { --item-accent: var(--blue);         --item-accent-rgb: var(--blue-rgb); }
@@ -774,70 +790,144 @@ html[data-theme="light"] {
 
 
 /* ==========================================================================
-   EMERALD MIDNIGHT (2026-10-19) -- the look of the dashboard mockup, applied app-wide (dark theme only).
-   Deep green-black base, emerald glow, faint mountain ridgeline top-right, cards that lift on hover.
-   Performance: everything here is static paint (gradients + one SVG) except hover, which only animates
-   transform/box-shadow on the single hovered card. No blur filters, no JS, no continuous animation.
+   DEEP TEAL GLASS (2026-10-20) -- the dashboard reference look, applied app-wide (dark theme only).
+
+   Colour logic: a near-black blue-green base (so teal reads as LIGHT, not as the whole interface),
+   one primary (teal), two cool supporting hues (cyan, violet) used only as faint ambient glows and
+   status chips, and gold as the single warm accent. Panels are translucent glass over that base.
+
+   Performance: everything here is static paint. backdrop-filter is NOT used in this file (only the
+   ~10 dashboard cards use it, in dashboard.html); hover animates transform/box-shadow only.
    ========================================================================== */
 html:not([data-theme="light"]) {
-  --bg: #030807;
-  --bg-1: #030807;
-  --panel: rgba(8, 20, 19, 0.82);
-  --panel-2: rgba(10, 26, 24, 0.88);
-  --panel-3: rgba(14, 34, 31, 0.92);
-  --panel-elevated: rgba(12, 30, 28, 0.94);
-  --border: rgba(53, 224, 176, 0.14);
-  --border-light: rgba(53, 224, 176, 0.26);
-  --glass-bg: rgba(8, 20, 19, 0.78);
-  --glass-border: rgba(53, 224, 176, 0.10);
-  --glow-teal: 0 0 0 1px rgba(53, 224, 176, 0.16), 0 0 26px rgba(53, 224, 176, 0.10);
+  --bg: #03080a;
+  --bg-1: #03080a;
+  --panel: rgba(9, 22, 26, 0.68);
+  --panel-2: rgba(11, 27, 32, 0.70);
+  --panel-3: rgba(15, 36, 42, 0.78);
+  --panel-elevated: rgba(13, 32, 38, 0.86);
+  --border: rgba(130, 235, 220, 0.10);
+  --border-light: rgba(130, 235, 220, 0.20);
+  --glass-bg: rgba(9, 22, 26, 0.72);
+  --glass-border: rgba(130, 235, 220, 0.10);
+  --glass-hi: rgba(255, 255, 255, 0.07);
+  --glow-teal: 0 0 0 1px rgba(53, 224, 176, 0.14), 0 0 26px rgba(53, 224, 176, 0.08);
+  scrollbar-color: rgba(130, 235, 220, 0.22) transparent;
+  scrollbar-width: thin;
 }
+html:not([data-theme="light"]) * { scrollbar-color: rgba(130, 235, 220, 0.22) transparent; scrollbar-width: thin; }
+html:not([data-theme="light"]) ::-webkit-scrollbar { width: 9px; height: 9px; }
+html:not([data-theme="light"]) ::-webkit-scrollbar-track { background: transparent; }
+html:not([data-theme="light"]) ::-webkit-scrollbar-thumb { background: rgba(130, 235, 220, 0.20); border-radius: 99px; border: 2px solid transparent; background-clip: padding-box; }
+html:not([data-theme="light"]) ::-webkit-scrollbar-thumb:hover { background: rgba(130, 235, 220, 0.36); background-clip: padding-box; border: 2px solid transparent; }
+
 html:not([data-theme="light"]) body {
-  background-color: #030807;
+  background-color: #03080a;
   background-image:
-    radial-gradient(900px 420px at 88% -4%, rgba(53, 224, 176, 0.16), transparent 70%),
-    radial-gradient(700px 500px at 8% 96%, rgba(20, 150, 120, 0.10), transparent 70%),
-    linear-gradient(180deg, #04100e 0%, #030807 45%, #020605 100%);
+    radial-gradient(1100px 520px at 86% -6%, rgba(46, 196, 170, 0.20), transparent 68%),     /* teal sky glow behind the peaks */
+    radial-gradient(760px 460px at 99% 34%, rgba(76, 201, 240, 0.07), transparent 70%),      /* cool cyan haze on the right edge */
+    radial-gradient(900px 560px at 2% 104%, rgba(139, 124, 255, 0.08), transparent 70%),     /* violet pool bottom-left */
+    linear-gradient(180deg, #04100f 0%, #03080a 40%, #020608 100%);
   background-attachment: fixed;
-}
-/* subtle mountain ridgeline, top right, fading out toward the left and bottom */
-html:not([data-theme="light"]) body::before {
-  content: "";
-  position: fixed; top: 0; right: 0; width: min(70vw, 1100px); height: 360px;
-  pointer-events: none; z-index: 0; opacity: .55;
-  background:
-    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1100 360' preserveAspectRatio='none'><defs><linearGradient id='a' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='%2335e0b0' stop-opacity='.34'/><stop offset='1' stop-color='%2335e0b0' stop-opacity='0'/></linearGradient><linearGradient id='b' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='%231aa383' stop-opacity='.22'/><stop offset='1' stop-color='%231aa383' stop-opacity='0'/></linearGradient></defs><path d='M0 300 L120 250 L200 270 L330 190 L420 230 L540 130 L610 170 L700 90 L790 160 L880 110 L980 175 L1100 120 L1100 360 L0 360Z' fill='url(%23b)'/><path d='M0 330 L90 290 L210 320 L340 250 L470 300 L600 215 L720 280 L830 225 L960 290 L1100 240 L1100 360 L0 360Z' fill='url(%23a)'/><path d='M540 130 L610 170 L700 90 L790 160 L880 110' fill='none' stroke='%2335e0b0' stroke-opacity='.35' stroke-width='1.2'/></svg>") right top / 100% 100% no-repeat;
-  -webkit-mask-image: linear-gradient(to left, #000 35%, transparent 100%), linear-gradient(to bottom, #000 40%, transparent 100%);
-  -webkit-mask-composite: source-in; mask-composite: intersect;
-  mask-image: linear-gradient(to left, #000 35%, transparent 100%), linear-gradient(to bottom, #000 40%, transparent 100%);
-}
-html:not([data-theme="light"]) .t58-shell { position: relative; z-index: 1; }
-html:not([data-theme="light"]) .t58-sidebar {
-  background: linear-gradient(180deg, rgba(6, 18, 16, 0.94), rgba(4, 12, 11, 0.96));
-  border-right: 1px solid rgba(53, 224, 176, 0.12);
+  position: relative;
 }
 
-/* cards: glass panel with an emerald hairline; lift + glow on hover */
-html:not([data-theme="light"]) :is(.db-card, .db-kpi, .t58-card, .t58-champion, .lc-card, .lc-toolcard, .t58-metric-box, .db-tools a, .news-card) {
-  background: linear-gradient(180deg, rgba(12, 30, 28, 0.80), rgba(7, 19, 18, 0.86));
-  border: 1px solid rgba(53, 224, 176, 0.14);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 8px 24px rgba(0, 0, 0, 0.30);
-  transition: transform var(--dur-base, 200ms) var(--ease, ease), box-shadow var(--dur-base, 200ms) var(--ease, ease), border-color var(--dur-base, 200ms) var(--ease, ease);
-  will-change: auto;
+/* Mountain backdrop: a real raster range (scripts/generate_dashboard_mountains.py), top right, dissolving
+   into the page. Quiet on ordinary pages, full strength on the dashboard (body.db-page). */
+html:not([data-theme="light"]) body::before {
+  content: "";
+  position: absolute; top: 0; right: 0; z-index: 0; pointer-events: none;
+  width: min(74vw, 1320px); aspect-ratio: 2200 / 640;
+  background: url("/static/dashboard-mountains.webp") right top / 100% 100% no-repeat;
+  opacity: .42;
 }
-@media (hover: hover) and (prefers-reduced-motion: no-preference) {
-  html:not([data-theme="light"]) :is(.db-card, .db-kpi, .t58-card, .t58-champion, .lc-card, .lc-toolcard, .t58-metric-box, .db-tools a, .news-card):hover {
-    transform: translateY(-3px);
-    border-color: rgba(53, 224, 176, 0.38);
-    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 14px 34px rgba(0, 0, 0, 0.42), 0 0 28px rgba(53, 224, 176, 0.14);
+html:not([data-theme="light"]) body.db-page::before { opacity: .95; }
+html:not([data-theme="light"]) .t58-shell { position: relative; z-index: 1; }
+html:not([data-theme="light"]) .t58-sidebar {
+  background: linear-gradient(180deg, rgba(5, 16, 18, 0.92), rgba(3, 10, 12, 0.95));
+  border-right: 1px solid rgba(130, 235, 220, 0.09);
+}
+
+/* ---- Generic cards: frosted-glass look without blur (cheap enough for every page) ---- */
+html:not([data-theme="light"]) :is(.t58-card, .t58-champion, .lc-card, .lc-toolcard, .t58-metric-box, .news-card, .t58-method-card, .t58-hero-stat) {
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.050) 0%, rgba(255, 255, 255, 0.012) 36%, rgba(6, 16, 20, 0.20) 100%),
+    rgba(9, 22, 26, 0.62);
+  border: 1px solid rgba(130, 235, 220, 0.12);
+  box-shadow: inset 0 1px 0 var(--glass-hi), 0 10px 28px rgba(0, 0, 0, 0.32);
+  transition: border-color var(--dur-base, 200ms) var(--ease, ease), box-shadow var(--dur-base, 200ms) var(--ease, ease);
+}
+@media (hover: hover) {
+  html:not([data-theme="light"]) :is(.t58-card.interactive, .lc-toolcard, .t58-method-card):hover {
+    border-color: rgba(53, 224, 176, 0.34);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09), 0 14px 34px rgba(0, 0, 0, 0.40), 0 0 26px rgba(53, 224, 176, 0.10);
   }
 }
-html:not([data-theme="light"]) .t58-btn.primary, html:not([data-theme="light"]) .lc-btn {
-  box-shadow: 0 0 18px rgba(53, 224, 176, 0.22);
+
+/* ---- Buttons: primary gets a gentle teal -> cyan sheen instead of a flat neon fill ---- */
+html:not([data-theme="light"]) .t58-btn.primary,
+html:not([data-theme="light"]) .lc-btn {
+  background: linear-gradient(135deg, #46e8bd 0%, #35d4c6 100%);
+  border-color: rgba(120, 245, 220, 0.55);
+  color: #03130f;
+  box-shadow: 0 0 20px rgba(53, 224, 176, 0.20), inset 0 1px 0 rgba(255, 255, 255, 0.30);
 }
+html:not([data-theme="light"]) .t58-btn.secondary { background: rgba(255, 255, 255, 0.03); }
+html:not([data-theme="light"]) .t58-btn.live { background: linear-gradient(135deg, #9a8cff, #7f74f0); border-color: rgba(170, 160, 255, 0.5); color: #0b0820; }
+
 html:not([data-theme="light"]) input, html:not([data-theme="light"]) select, html:not([data-theme="light"]) textarea {
-  border-color: rgba(53, 224, 176, 0.18);
+  border-color: rgba(130, 235, 220, 0.16);
 }
 html:not([data-theme="light"]) input:focus, html:not([data-theme="light"]) select:focus, html:not([data-theme="light"]) textarea:focus {
   outline: none; border-color: rgba(53, 224, 176, 0.55); box-shadow: 0 0 0 3px rgba(53, 224, 176, 0.12);
 }
+
+/* ---- Sidebar: active item is a soft glass pill; section ramp colours come from --item-accent ---- */
+html:not([data-theme="light"]) .t58-nav-item.active {
+  background: linear-gradient(90deg, rgba(var(--item-accent-rgb), 0.16), rgba(var(--item-accent-rgb), 0.05));
+  border-color: rgba(var(--item-accent-rgb), 0.30);
+  text-shadow: none;
+}
+html:not([data-theme="light"]) .t58-nav-item:hover { background: rgba(255, 255, 255, 0.04); }
+
+/* ---- Stage stepper (top of every page): clean text trail, current stage as a glass pill ---- */
+.t58-stepper { gap: 4px; padding-right: 64px; border-bottom-color: rgba(130, 235, 220, 0.08); }
+.t58-stepper .sep { display: none; }
+.t58-stepper a { font-weight: 600; letter-spacing: .06em; padding: 5px 12px; color: var(--text-muted); }
+html:not([data-theme="light"]) .t58-stepper a:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); }
+html:not([data-theme="light"]) .t58-stepper a.current {
+  color: var(--teal); text-shadow: none;
+  background: rgba(var(--teal-rgb), 0.10); box-shadow: inset 0 0 0 1px rgba(var(--teal-rgb), 0.26);
+}
+
+/* ---- Profile avatar: small, always visible, top right on every page ---- */
+.t58-profile { position: fixed; top: 12px; right: 22px; z-index: 75; }
+.t58-avatar {
+  width: 34px; height: 34px; padding: 0; border-radius: 50%; cursor: pointer; overflow: hidden;
+  display: grid; place-items: center; font-family: inherit; font-weight: 700; font-size: 12px; line-height: 1; letter-spacing: .02em;
+  color: var(--text); background: linear-gradient(145deg, rgba(var(--teal-rgb), .30), rgba(var(--neon-cyan-rgb), .16));
+  border: 1px solid rgba(var(--teal-rgb), .55);
+  box-shadow: 0 0 0 3px rgba(var(--teal-rgb), .07), 0 4px 14px rgba(0, 0, 0, .35);
+  transition: box-shadow var(--dur-base) var(--ease), transform var(--dur-fast) var(--ease);
+}
+.t58-avatar:hover, .t58-avatar[aria-expanded="true"] { box-shadow: 0 0 0 3px rgba(var(--teal-rgb), .16), 0 0 18px rgba(var(--teal-rgb), .28); }
+.t58-avatar:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.t58-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.t58-profile-menu {
+  position: absolute; top: 44px; right: 0; min-width: 190px; padding: 6px; border-radius: 12px;
+  background: rgba(8, 20, 24, 0.94); border: 1px solid rgba(130, 235, 220, 0.18);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+}
+.t58-profile-menu[hidden], .t58-profile-menu [hidden] { display: none !important; }
+.t58-profile-menu .who { padding: 8px 10px 8px; font-size: 12px; color: var(--text-muted); border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.t58-profile-menu .who b { display: block; color: var(--text); font-size: 13px; font-weight: 650; }
+.t58-profile-menu a, .t58-profile-menu button, .t58-profile-menu label {
+  display: block; width: 100%; text-align: left; padding: 8px 10px; border-radius: 8px; border: 0; background: none;
+  color: var(--text); font-family: inherit; font-weight: 500; font-size: 13px; line-height: 1.2; cursor: pointer; text-decoration: none;
+}
+.t58-profile-menu a:hover, .t58-profile-menu button:hover, .t58-profile-menu label:hover { background: rgba(var(--teal-rgb), 0.10); }
+.t58-profile-menu .danger { color: var(--coral); }
+@media (max-width: 760px) { .t58-profile { top: 9px; right: 12px; } .t58-stepper { padding-right: 56px; } }
+html[data-theme="light"] .t58-avatar { color: var(--text); background: var(--panel-3); border-color: var(--border-light); box-shadow: none; }
+html[data-theme="light"] .t58-profile-menu { background: #ffffff; border-color: var(--border-light); box-shadow: 0 12px 30px rgba(16, 24, 32, .18); }
