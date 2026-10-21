@@ -257,7 +257,14 @@ MANUAL_DIR = REPO / "strategies" / "manual"
 SAMPLE_CSV = REPO / "data" / "raw" / "EURUSD" / "EURUSD_5M_sample.csv"
 
 
-STRATEGY_FILES = sorted(p for p in MANUAL_DIR.glob("*.json") if p.name != "v9_champion_params.json")
+# Only shipped strategy configs: skip sidecar metadata and files other tests drop into the working tree
+# (generated lab strategies, stubs, optimizer outputs), which are not translator inputs.
+_EXCLUDED = ("v9_champion_params.json",)
+STRATEGY_FILES = sorted(
+    p for p in MANUAL_DIR.glob("*.json")
+    if p.name not in _EXCLUDED and not p.name.endswith(".meta.json")
+    and not p.name.startswith(("searchlab_", "evolab_", "stub")) and "OPTIMIZED" not in p.name
+)
 
 
 TARGETS = ["pinescript", "mql5", "python"]
