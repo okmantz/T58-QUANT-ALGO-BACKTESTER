@@ -258,6 +258,46 @@ this backtest?" questions:
   trades to whichever regime was active, surfacing where its losers
   concentrate.
 
+## The verdict ladder (the headline everywhere)
+
+READY used to read as "buy the evaluation". It no longer does. Every page headlines one of five stages and shows the legacy
+READY / MARGINAL / NOT READY label only as detail:
+
+| Stage | Meaning | Reached by |
+|---|---|---|
+| REJECT | A hard gate failed, the pooled edge test FAILED, or the EV test says the fee is not worth it | backtest |
+| LEAD | No hard failure, but the edge is not proven (thin trades, lower bound not above zero) | backtest |
+| FORWARD-TEST CANDIDATE | Cleared the backtest gates and the EV test: permission to paper-trade under the SPRT monitor, nothing more | backtest |
+| EVALUATE | The forward test accepted H1 (SPRT): buy the cheapest evaluation | recorded forward-test result only |
+| FUNDED | Evaluation passed and a payout was received | recorded live facts only |
+
+FORWARD-TEST CANDIDATE is the realistic output of a search. A backtest alone can never produce EVALUATE or FUNDED.
+
+## Is there an edge? The pooled cross-market test
+
+One strategy on one market at about 7 trades a month cannot prove a +0.10R edge in six years; that is a power problem, not strictness.
+The primary edge question is therefore asked **pooled**: the same fixed parameters on 8-12 markets, R measured after 2x costs, one
+day-block bootstrap over trading days across all markets (same-day moves in correlated markets stay in one block). Code:
+`app/validation/pooled_edge.py` (`pooled_edge_test`, `pooled_family_test`, `cluster_t_stat`). Three questions stay separate: edge (this
+test), survival (cost stress, regimes, holdout, ruin), and only then sizing / EV for the prop rules.
+
+`app/validation/pipeline_controls.py` publishes positive and negative controls on the Dashboard: a zero-edge stream must almost never pass,
+a planted +0.20-0.30R edge must usually be found, and pooling must beat a single market. If it does not, the pipeline is the problem.
+
+Search Lab ranks on the lower bound of mean R after 2x costs (`edge_lb_r`), requires 100+ Stage-1 trades and a mean-R t-stat, skips
+candidates whose round-trip cost exceeds 0.15R, and prints a random-entry control for every run (`app/search/run_controls.py`):
+the share of RANDOM candidates that pass the same Stage-1 rule. Near-duplicate families are retired from "all" searches
+(`RETIRED_FAMILIES` in `app/search/strategy_space.py`; an explicit single-family request still runs them).
+
+## Data bootstrap
+
+    python scripts/bootstrap_data.py
+
+Rebuilds `data/data_manifest.json`, writes the FOMC/NFP calendar (2010 onward) and prints a loud banner for anything that weakens
+results: files without an instrument spec (unmeasured costs), unreadable files, session-clock problems, and missing markets for the pooled
+test (ES, NQ, YM, RTY, GC, CL, ZN, ZB, 6E, EURUSD, GBPUSD, USDJPY). Bar timestamps are stamped with `exchange_time` and `trading_day`
+columns at import (`app/data/session_clock.py`); the bundled files are naive UTC and operands now read them as exchange time.
+
 ## How READY and the T58 score work
 
 A strategy is **READY** when it clears **every hard gate** *and* its **T58 score is 75 or more**. READY means
@@ -268,20 +308,24 @@ label. The gates are demote-only (a gate can lower a verdict, never raise it). E
 Click any verdict pill (READY / MARGINAL / NOT READY) on the **Dashboard** or the **Champion** page to see, in plain
 English, why that strategy got it.
 
-### The T58 score (weights sum to 120)
+### The T58 score (weights sum to 100)
 
-| Score component | Weight | Share | Measures |
-|---|---:|---:|---|
-| Pass probability | 25 | 20.8% | Per-attempt Monte Carlo pass rate, Wilson 95% lower bound |
-| First payout (pass AND paid) | 20 | 16.7% | P(pass) × P(paid given pass), lower bound |
-| Risk of ruin (inverted) | 20 | 16.7% | Share of purchased accounts that breach within 90 days |
-| Walk-forward stability | 15 | 12.5% | Test metric ÷ train metric, capped at 1.0 |
-| Monte Carlo robustness | 10 | 8.3% | Seed-to-seed spread of the pass rate |
-| Drawdown | 10 | 8.3% | Max drawdown as a share of the firm's drawdown limit |
-| Parameter stability | 5 | 4.2% | Neighbour-parameter robustness |
-| Expectancy | 5 | 4.2% | Average R: 0R scores 0, 0.6R scores 100 |
-| Parsimony | 5 | 4.2% | Fewer degrees of freedom scores higher |
-| CPCV / PBO (supporting) | 5 | 4.2% | Out-of-sample retention across CPCV paths |
+| Score component | Weight | Measures |
+|---|---:|---|
+| Pass probability | 10 | Per-attempt Monte Carlo pass rate, trade-sample-aware lower bound |
+| First payout (pass AND paid) | 8 | Same Monte Carlo, lower bound |
+| Risk of ruin (inverted) | 6 | Evaluation-stage breach only |
+| Funded survival (inverted) | 6 | Funded-stage breach only |
+| Attempt replay pass | 15 | The real engine re-run from many real start dates (independent of the Monte Carlo) |
+| Expectancy lower bound | 15 | Lower bound of average R per trade after 2x costs: 0R scores 0, 0.15R scores 100 |
+| Walk-forward stability | 15 | Test metric / train metric, capped at 1.0 |
+| Drawdown | 8 | Max drawdown as a share of the firm's drawdown limit |
+| Monte Carlo robustness | 5 | Seed-to-seed spread of the pass rate |
+| Parameter stability | 5 | Neighbour-parameter robustness |
+| Parsimony | 4 | Fewer degrees of freedom scores higher |
+| CPCV / PBO (supporting) | 3 | Out-of-sample retention across CPCV paths |
+
+A component's share of the score is its weight / 100. (Older text said 120; that was the pre-audit card.)
 
 The score is the weighted average over the components that were **measured** (a missing check is never scored as a
 zero, and thin coverage caps the verdict instead). Tiers: **85+ Elite, 75+ Strong, 65+ Promising,
@@ -291,8 +335,9 @@ below 65 Reject.** Elite and Strong are READY (if every gate also passes), Promi
 Structure / Liquidity / Supply & Demand terms. That is a *style*, not survival, and prop firms do not score
 vocabulary, so it is shown beside the score and **never** affects the score, the weight coverage or READY.
 
-Pass, paid and ruin are 65 of the 120 points (54%) and come from one simulation; the independent robustness
-evidence (walk-forward, CPCV, parameter stability, seed stability) is 35 points.
+The four Monte Carlo components (pass, paid, ruin, funded survival) are capped at 30 of the 100 points because they come
+from one resampled trade list; the other 70 points are evidence independent of it (replay, expectancy lower bound,
+walk-forward, drawdown, robustness, parameter stability, parsimony, CPCV).
 
 ### The gates (defaults)
 
@@ -304,7 +349,7 @@ evidence (walk-forward, CPCV, parameter stability, seed stability) is 35 points.
 | Per-attempt pass lower bound below 70% | NOT READY |
 | Holdout (needs **30+ trades**) loses money **and** the upper 95% bound on per-trade expectancy is still below zero | NOT READY |
 | Holdout loses money but the loss is not statistically convincing | Capped at MARGINAL |
-| Fewer than 100 trades; scorecard coverage below 70%; a core component missing | Capped at MARGINAL |
+| Fewer than **300** trades (`min_trades_for_ready`; the 100-trade preflight floor only decides whether the run is analysed at all); scorecard coverage below 70%; a core component missing | Capped at MARGINAL |
 | Pass-and-paid lower bound below 35%; 30-day payout rate below 35% | Capped at MARGINAL |
 | Random-entry null p above 0.10 | Capped at MARGINAL |
 | **2× costs keep less than 25% of base net profit** (was: net profit of $1 passed) | Capped at MARGINAL |
