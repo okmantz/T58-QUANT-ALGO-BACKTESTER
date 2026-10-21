@@ -12,7 +12,7 @@ def test_import_valid_csv():
     result = import_csv(io.StringIO(csv_text))
     assert result.is_valid
     assert len(result.dataframe) == 2
-    assert list(result.dataframe.columns) == ["timestamp", "open", "high", "low", "close", "volume"]
+    assert list(result.dataframe.columns)[:6] == ["timestamp", "open", "high", "low", "close", "volume"]  # + exchange_time, trading_day (session clock)
 
 
 def test_import_missing_required_column():

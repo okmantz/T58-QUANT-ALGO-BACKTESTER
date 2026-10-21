@@ -10,6 +10,7 @@ from app.backtest.risk import RiskConfig
 from app.data.economic_calendar import merge_news_features
 from app.data.pairs import merge_pair_series
 from app.search.strategy_space import (
+    active_family_names,
     FAMILIES, FAMILIES_REQUIRING_CALENDAR_DATA, FAMILIES_REQUIRING_PAIR_DATA, StrategySpaceError,
     build_strategy_from_spec, family_description, family_grid_size, generate_search_space, list_families,
     spec_from_strategy,
@@ -176,7 +177,7 @@ def test_family_all_combines_every_family():
     # FAMILIES_REQUIRING_PAIR_DATA / FAMILIES_REQUIRING_CALENDAR_DATA) --
     # every other family still contributes its full grid.
     special_data_families = FAMILIES_REQUIRING_PAIR_DATA | FAMILIES_REQUIRING_CALENDAR_DATA
-    plain_families = [name for name in FAMILIES if name not in special_data_families]
+    plain_families = [name for name in active_family_names() if name not in special_data_families]
     expected_total = sum(family_grid_size(name) for name in plain_families)
     assert space.total_generated == expected_total
     seen_families = {meta["family"] for meta in space.meta.values()}
@@ -191,10 +192,10 @@ def test_family_all_with_pair_data_includes_pair_families():
         "family", family="all", max_candidates=100_000, seed=1,
         has_pair_data=True, has_calendar_data=True,
     )
-    expected_total = sum(family_grid_size(name) for name in FAMILIES)
+    expected_total = sum(family_grid_size(name) for name in active_family_names())
     assert space.total_generated == expected_total
     seen_families = {meta["family"] for meta in space.meta.values()}
-    assert seen_families == set(FAMILIES)
+    assert seen_families == set(active_family_names())   # retired near-duplicates are excluded from "all"
     # spot-check one stat_pairs candidate actually runs on data with pair_close merged in
     pair_cid = next(cid for cid, meta in space.meta.items() if meta["family"] == "stat_pairs")
     strategy = build_strategy_from_spec(space.candidates[pair_cid])

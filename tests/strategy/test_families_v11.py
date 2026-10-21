@@ -85,5 +85,5 @@ def test_preregistration_is_fingerprinted_and_books_one_trial():
 
 
 def test_all_v11_families_registered():
-    assert len(V11_FAMILIES) == 11
+    assert len(V11_FAMILIES) == 15   # 11 original + 4 structural families added 2026-10-20
     assert set(V11_FAMILIES) <= set(_sps.FAMILIES)

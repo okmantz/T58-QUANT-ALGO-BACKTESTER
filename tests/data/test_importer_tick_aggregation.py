@@ -40,7 +40,7 @@ def test_tick_stream_with_trade_marker_aggregates_to_ohlcv(tmp_path):
     assert result.is_valid, result.errors
     assert result.dataframe is not None
     df = result.dataframe
-    assert list(df.columns) == ["timestamp", "open", "high", "low", "close", "volume"]
+    assert list(df.columns)[:6] == ["timestamp", "open", "high", "low", "close", "volume"]  # + session-clock columns
     assert len(df) > 0
     # High >= low, high >= open/close, low <= open/close for every bar.
     assert (df["high"] >= df["low"]).all()

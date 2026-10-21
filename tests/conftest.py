@@ -55,6 +55,8 @@ from __future__ import annotations
 
 import os
 
+os.environ.setdefault("T58_SKIP_CLOCK_EPOCH", "1")   # the one-time clock-epoch archive must not touch the repo during tests
+
 # The idle memory watchdog (app.orchestration.memory_hygiene) closes worker pools and trims the heap while the app is idle --
 # right for a running app, never wanted mid-test-suite. Must be set BEFORE app.web.server is imported.
 os.environ.setdefault("T58_DISABLE_MEMORY_WATCHDOG", "1")
