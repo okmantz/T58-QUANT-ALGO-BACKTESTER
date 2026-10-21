@@ -31,3 +31,16 @@ LICENSE_SERVER_URL = ""
 # stripped of surrounding whitespace, then sha256 hex:
 #   python -c "import hashlib; print(hashlib.sha256('T58-YOUR-KEY'.strip().upper().encode()).hexdigest())"
 MASTER_LICENSE_KEY_HASH = ""
+
+# Serverless licensing (see client.py "Allowlist mode"): the RAW URL of a public
+# text file listing the SHA-256 hash of every valid key, e.g.
+# "https://raw.githubusercontent.com/okmantz/t58-licenses/main/allowlist.txt".
+# When set it takes precedence over LICENSE_SERVER_URL. Revoke a key by deleting
+# its line from that file. Generate keys + the file with
+# build_tools/license_keys.py.
+LICENSE_ALLOWLIST_URL = ""
+
+# Google Sheet licensing (license_sheet/): the "/exec" URL of the Apps Script web
+# app bound to your private license sheet. Takes precedence over
+# LICENSE_SERVER_URL (but not over LICENSE_ALLOWLIST_URL).
+LICENSE_SHEET_URL = ""

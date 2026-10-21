@@ -20,12 +20,14 @@ import hashlib
 import json
 import os
 import platform
+import re
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib import request as urllib_request
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 
 from app.data.storage import get_app_base_dir
 
@@ -88,11 +90,176 @@ def check_license_server_configured() -> tuple[bool, str]:
     Called from app/licensing/gate.py's ensure_licensed() BEFORE the
     activation window is shown: a licensed build with no URL can never
     activate anyone, so the startup must say so plainly instead of letting
-    the person type a key into a form that is guaranteed to fail."""
-    url = resolve_license_server_url()
+    the person type a key into a form that is guaranteed to fail.
+
+    A configured allowlist URL (see the allowlist section below) counts as
+    configured too -- that mode needs no license server at all."""
+    url = resolve_allowlist_url() or resolve_sheet_url() or resolve_license_server_url()
     if url:
         return True, url
     return False, _NO_LICENSE_SERVER_URL_MESSAGE
+
+
+# --- Google Sheet mode (license_sheet/Code.gs) -----------------------------------
+# The license list lives in a PRIVATE Google Sheet that you manage by hand
+# (key / customer / email / status / expiry / bound device). A small Apps Script
+# bound to that sheet is deployed as a web app; this client asks it
+# "activate / validate / deactivate" over a GET request and it answers with the
+# same JSON the old license server used ({"ok": ..., "error": ..., "status": ...,
+# "expires_at": ...}). The sheet itself is never exposed -- the script only ever
+# answers about the one key it is asked about. See license_sheet/SETUP.md.
+# Resolution order for the URL, highest first:
+#   1. T58_LICENSE_SHEET_URL environment variable
+#   2. app/licensing/build_config.py LICENSE_SHEET_URL (baked at build time)
+# Precedence between modes: allowlist URL > sheet URL > license-server URL.
+def _baked_sheet_url() -> str:
+    try:
+        from app.licensing import build_config
+    except ImportError:
+        return ""
+    return str(getattr(build_config, "LICENSE_SHEET_URL", "") or "").strip()
+
+
+def resolve_sheet_url() -> str | None:
+    """The effective Google Sheet web-app URL, or None when sheet mode is off."""
+    env_value = os.environ.get("T58_LICENSE_SHEET_URL", "").strip()
+    if env_value:
+        return env_value
+    return _baked_sheet_url() or None
+
+
+def _sheet_get(path: str, payload: dict, timeout: float) -> tuple[bool, dict, str | None]:
+    """Same contract as _post(): (network_ok, response_json, error_detail).
+    Apps Script web apps answer GETs reliably (and redirect to a googleusercontent
+    URL, which urllib follows), so each request is a GET with query parameters.
+    Anything that is not a clean JSON answer -- offline, an HTTP error, a Google
+    sign-in/error page because the web app was deployed with the wrong access
+    setting, a transient "busy" -- counts as UNREACHABLE (offline grace applies),
+    never as "revoked", so a deployment mistake can't lock paying customers out."""
+    base = resolve_sheet_url()
+    params = {"action": path.strip("/")}
+    params.update({k: v for k, v in payload.items() if v is not None})
+    url = base + ("&" if "?" in base else "?") + urlencode(params)
+    req = urllib_request.Request(url, headers={"User-Agent": "T58-License/1"})
+    try:
+        with urllib_request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+    except HTTPError as exc:
+        return False, {}, f"license sheet returned HTTP {exc.code}"
+    except (URLError, TimeoutError, OSError) as exc:
+        return False, {}, str(exc)
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        body = None
+    if not isinstance(body, dict) or "ok" not in body:
+        return False, {}, ("unexpected reply from the license sheet -- check the Apps Script web app is "
+                           "deployed with \"Who has access: Anyone\"")
+    if body.get("error") in ("busy", "not_configured"):
+        # Transient / setup problems on YOUR side are never a verdict on the customer.
+        return False, {}, "the license sheet is busy or not set up -- try again in a moment"
+    return True, body, None
+
+
+# --- Allowlist mode (no license server, no hosting) ------------------------------
+# Serverless licensing: you keep a list of license keys; the app is built with
+# the URL of a small PUBLIC text file that holds only the SHA-256 HASH of every
+# currently-valid key (one per line). At activation and on every launch the app
+# downloads that file and checks that the hash of the entered key is in it.
+# Revoking a key = deleting its line from the file (commit it); every install
+# that can reach the file stops working the next time it checks. No server to
+# run, nothing to pay for -- GitHub (or any static host) just serves a text file.
+#
+# Why hashes and a PUBLIC file: a private repo can't be read by shipped software
+# without embedding an access token, and that token would expose your source.
+# A hash of a high-entropy random key (build_tools/license_keys.py makes
+# ~100-bit keys) can't be reversed, so publishing the hashes leaks nothing.
+#
+# What this mode does NOT do (needs a server): bind a key to one machine, or
+# stop a customer from handing their key to a friend until you notice and
+# revoke it. Resolution order for the URL, highest first:
+#   1. T58_LICENSE_ALLOWLIST_URL environment variable
+#   2. app/licensing/build_config.py LICENSE_ALLOWLIST_URL (baked at build time)
+#   3. None -> the app falls back to the license-server mode above.
+# When an allowlist URL is set it takes precedence over the license server.
+ALLOWLIST_TIMEOUT_S = 8.0
+
+
+def _baked_allowlist_url() -> str:
+    try:
+        from app.licensing import build_config
+    except ImportError:
+        return ""
+    return str(getattr(build_config, "LICENSE_ALLOWLIST_URL", "") or "").strip()
+
+
+def resolve_allowlist_url() -> str | None:
+    """The effective allowlist URL, or None when allowlist mode is off."""
+    env_value = os.environ.get("T58_LICENSE_ALLOWLIST_URL", "").strip()
+    if env_value:
+        return env_value
+    return _baked_allowlist_url() or None
+
+
+def key_hash(license_key: str) -> str:
+    """SHA-256 hex of the key, uppercased and stripped -- the same
+    normalization the master-key check uses."""
+    return hashlib.sha256(license_key.strip().upper().encode("utf-8")).hexdigest()
+
+
+_HASH_RE = re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{64}(?![0-9a-fA-F])")
+
+
+def _parse_allowlist(text: str) -> set[str]:
+    """Accepts a plain text file (one hash per line, '#' comments) OR a CSV /
+    published Google Sheet export (hash in any column, extra columns such as
+    "issued_to" are ignored). A row containing the word "revoked" is skipped,
+    so a key can be revoked by marking its row instead of deleting it."""
+    hashes: set[str] = set()
+    for line in text.splitlines():
+        line = line.split("#", 1)[0]
+        if "revoked" in line.lower():
+            continue
+        match = _HASH_RE.search(line)
+        if match:
+            hashes.add(match.group(0).lower())
+    return hashes
+
+
+def _fetch_allowlist(timeout: float = ALLOWLIST_TIMEOUT_S) -> tuple[bool, set[str], str | None]:
+    """Returns (reached, hashes, error). reached=False covers everything that
+    is not an authoritative answer -- offline, DNS failure, HTTP error (404,
+    5xx), or a file with no valid hashes in it (e.g. an accidental empty
+    commit) -- so a bad publish can never lock out every paying customer; it
+    just triggers the offline grace period instead of a mass revocation."""
+    url = resolve_allowlist_url()
+    if not url:
+        return False, set(), "no allowlist URL configured"
+    req = urllib_request.Request(url, headers={"User-Agent": "T58-License/1", "Cache-Control": "no-cache"})
+    try:
+        with urllib_request.urlopen(req, timeout=timeout) as resp:
+            text = resp.read().decode("utf-8", errors="replace")
+    except (HTTPError, URLError, TimeoutError, OSError) as exc:
+        return False, set(), str(exc)
+    hashes = _parse_allowlist(text)
+    if not hashes:
+        return False, set(), "the license list was empty or unreadable"
+    return True, hashes, None
+
+
+def _offline_grace_result(state: "LicenseState", err: str | None, what: str = "license server") -> tuple[bool, str]:
+    """The shared offline-grace decision: ok only if the last successful
+    ONLINE check was recent enough AND was itself "active"."""
+    if state.last_validated_at and state.status == "active":
+        try:
+            last = datetime.fromisoformat(state.last_validated_at)
+            age_days = (datetime.now(timezone.utc) - last).total_seconds() / 86400.0
+            if age_days <= OFFLINE_GRACE_DAYS:
+                remaining = max(OFFLINE_GRACE_DAYS - age_days, 0.0)
+                return True, f"Offline -- last verified {age_days:.1f} day(s) ago ({remaining:.1f} day(s) of offline use left before this needs to reconnect)."
+        except ValueError:
+            pass
+    return False, f"Couldn't reach the {what}, and the offline grace period has run out. Reconnect to the internet and try again. ({err})"
 
 # How long the app keeps working after the LAST successful ONLINE
 # validation if the license server can't be reached at all (as opposed
@@ -391,6 +558,8 @@ def _post(path: str, payload: dict, timeout: float = 10.0) -> tuple[bool, dict, 
     The offline grace period still applies to a genuinely unreachable
     CONFIGURED server; a build with NO server configured fails loudly
     earlier, at ensure_licensed()."""
+    if resolve_sheet_url():
+        return _sheet_get(path, payload, timeout)
     base = _server_url()
     if not base:
         return False, {}, _NO_LICENSE_SERVER_URL_MESSAGE
@@ -417,6 +586,9 @@ _ERROR_MESSAGES = {
     "expired": "This license has expired. Renew your subscription to keep using T58.",
     "revoked": "This license has been revoked.",
     "suspended": "This license is temporarily suspended. Contact support if you believe this is a mistake.",
+    "bad_request": "The license check couldn't read this device's details. Restart the app and try again.",
+    "inactive": "This license isn't activated on this device. Enter your key again to activate it.",
+    "not_configured": "The license sheet hasn't been set up yet. Contact support.",
 }
 
 
@@ -457,6 +629,21 @@ def activate(email: str, license_key: str, remember: bool = True) -> tuple[bool,
         return True, "Activated (master key -- no license server required)."
 
     did = device_id()
+
+    if resolve_allowlist_url():
+        # Allowlist mode: no server. The key is valid iff its hash is on the
+        # published list right now. The email is just a label here.
+        reached, hashes, err = _fetch_allowlist()
+        if not reached:
+            return False, f"Couldn't check the license list: {err}. Check your internet connection and try again."
+        if key_hash(license_key) not in hashes:
+            return False, "That license key wasn't recognized, or it has been revoked."
+        persist(LicenseState(
+            email=email, license_key=license_key, device_id=did, status="active",
+            expires_at=None, last_validated_at=datetime.now(timezone.utc).isoformat(),
+        ))
+        return True, "Activated."
+
     ok, body, err = _post("/activate", {"email": email, "license_key": license_key, "device_id": did})
     if not ok:
         return False, f"Couldn't reach the license server: {err}{'' if master_key_configured() else ' ' + _MASTER_KEY_UNSET_HINT}"
@@ -500,6 +687,19 @@ def validate() -> tuple[bool, str]:
         # offline grace period -- see _master_key_hash's comment.
         return True, "Active (master key)."
 
+    if resolve_allowlist_url():
+        reached, hashes, err = _fetch_allowlist(timeout=VALIDATE_TIMEOUT_S)
+        if reached:
+            if key_hash(state.license_key) in hashes:
+                state.status = "active"
+                state.last_validated_at = datetime.now(timezone.utc).isoformat()
+                save_state(state)
+                return True, "Active."
+            state.status = "revoked"
+            save_state(state)
+            return False, _error_message("revoked")
+        return _offline_grace_result(state, err, what="license list")
+
     ok, body, err = _post("/validate", {
         "email": state.email, "license_key": state.license_key, "device_id": state.device_id or device_id(),
     }, timeout=VALIDATE_TIMEOUT_S)
@@ -514,16 +714,7 @@ def validate() -> tuple[bool, str]:
         save_state(state)
         return False, _error_message(body.get("error", "unknown_error"))
 
-    if state.last_validated_at and state.status == "active":
-        try:
-            last = datetime.fromisoformat(state.last_validated_at)
-            age_days = (datetime.now(timezone.utc) - last).total_seconds() / 86400.0
-            if age_days <= OFFLINE_GRACE_DAYS:
-                remaining = max(OFFLINE_GRACE_DAYS - age_days, 0.0)
-                return True, f"Offline -- last verified {age_days:.1f} day(s) ago ({remaining:.1f} day(s) of offline use left before this needs to reconnect)."
-        except ValueError:
-            pass
-    return False, f"Couldn't reach the license server, and the offline grace period has run out. Reconnect to the internet and try again. ({err})"
+    return _offline_grace_result(state, err)
 
 
 def validate_fast_start() -> tuple[bool, str]:
@@ -558,6 +749,9 @@ def deactivate() -> tuple[bool, str]:
     if _is_master_key(state.license_key):
         clear_state()
         return True, "Deactivated (master key -- nothing to free on a server)."
+    if resolve_allowlist_url():
+        clear_state()  # allowlist mode has no server-side device slot to free
+        return True, "Deactivated."
     ok, body, err = _post("/deactivate", {"license_key": state.license_key, "device_id": state.device_id or device_id()})
     clear_state()
     if not ok:
