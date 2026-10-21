@@ -1,8 +1,9 @@
 name: desktop-cross-platform
 
 # THE desktop-app build (Tk window): one workflow, one zip per OS.
-# Same shape as web-cross-platform.yml. The full test suite runs there, so this
-# workflow only runs the desktop/packaging tests before building.
+# Same shape as web-cross-platform.yml. The fast suite runs there and the full suite in full-tests.yml, so this
+# workflow only runs a short desktop/packaging check (in parallel) before building; the frozen-app smoke test
+# below is the real gate.
 #
 # Pushes to main, version tags (v*) and manual runs build the packages.
 # A tag (v*) attaches the three zips + checksums to the GitHub release.
@@ -51,7 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          lfs: true
+          lfs: false   # market data (LFS) is not part of the app build
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -66,11 +67,11 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r config/requirements.txt pyinstaller pytest
+          pip install -r config/requirements.txt pyinstaller pytest pytest-xdist
       - name: Verify critical dependencies import
         run: python -c "import tkinter, pandas, numpy, flask, alpaca, keyring, requests, pyarrow, py7zr, scipy, sklearn, lightgbm; print('All critical dependencies import OK')"
       - name: Desktop and packaging tests
-        run: pytest -q -p no:cacheprovider tests/packaging tests/ui
+        run: pytest -q -p no:cacheprovider tests/packaging tests/ui -m "not slow" -n auto
       - name: Bake license build config
         run: python build_tools/bake_license_config.py
       - name: Build the desktop app (PyInstaller)

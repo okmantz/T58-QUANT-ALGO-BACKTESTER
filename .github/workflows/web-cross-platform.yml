@@ -2,7 +2,8 @@ name: web-cross-platform
 
 # THE web-app build: one workflow, one zip per OS.
 #
-#   test   full pytest suite on Linux (gates everything below)
+#   test   FAST pytest tier on Linux, in parallel (pytest-xdist) -- runs beside the build, it does NOT gate it.
+#          The slow tests (tests/slow_tests.txt) and a full-suite run live in full-tests.yml (nightly / manual / tags).
 #   build  Windows + macOS + Linux, each: install -> web tests -> start the real
 #          server from source and request every page -> PyInstaller one-folder
 #          build (build_tools/t58_web.spec) -> start the FROZEN app and request
@@ -37,13 +38,13 @@ permissions:
 
 jobs:
   test:
-    name: full test suite (Linux)
+    name: fast tests (Linux, parallel)
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
         with:
-          lfs: true
+          lfs: false   # the 4 LFS parquet files (~210 MB) are market data; no test or build reads them
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -52,13 +53,12 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r config/requirements.txt pytest
-      - name: Run the test suite
-        run: pytest -q -p no:cacheprovider tests --durations=15
+          pip install -r config/requirements.txt pytest pytest-xdist
+      - name: Run the fast tests
+        run: pytest -q -p no:cacheprovider tests -m "not slow" -n auto --durations=15
 
   build:
     name: ${{ matrix.label }}
-    needs: test
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
     strategy:
@@ -78,7 +78,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          lfs: true
+          lfs: false
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
