@@ -35,13 +35,27 @@ def _scan_file(p: Path, raw: Path) -> dict:
         flags.append("SYNTHETIC")
         row["synthetic"] = True
     try:
+        if p.stat().st_size < 1024 and p.read_bytes()[:40].startswith(b"version https://git-lfs"):
+            flags.append("GIT-LFS POINTER (run `git lfs pull`; file content not downloaded)")
+            row["error"] = "git-lfs pointer"
+            row["flags"] = ", ".join(flags)
+            return row
         if p.suffix.lower() == ".parquet":
             df = pd.read_parquet(p)
         else:
             df = pd.read_csv(p)
+            # Header-less exports (TradingView/MT "2025-09-06 08:50<TAB>o<TAB>h<TAB>l<TAB>c<TAB>v"): the first "column name" is a timestamp.
+            first = str(df.columns[0])
+            if str(first)[:2] in ("19", "20") and pd.notna(pd.to_datetime(first.replace("\t", " ").split(" ")[0], errors="coerce")):
+                df = pd.read_csv(p, header=None, sep=r"[\t,;]", engine="python")
+                df = df.iloc[:, :6]
+                df.columns = ["timestamp", "open", "high", "low", "close", "volume"][: df.shape[1]]
         cols = {c.lower(): c for c in df.columns}
         tcol = cols.get("timestamp") or cols.get("time") or cols.get("datetime") or cols.get("date") or df.columns[0]
-        ts = pd.to_datetime(df[tcol], errors="coerce", utc=True).dropna()
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ts = pd.to_datetime(df[tcol], errors="coerce", utc=True).dropna()
         row["bars"] = int(len(ts))
         row["start"], row["end"] = str(ts.min().date()), str(ts.max().date())
         row["years"] = round(float((ts.max() - ts.min()).total_seconds() / (365.25 * 86400)), 2)
@@ -63,6 +77,25 @@ def _scan_file(p: Path, raw: Path) -> dict:
     except Exception as exc:  # noqa: BLE001
         flags.append("UNREADABLE")
         row["error"] = f"{type(exc).__name__}: {exc}"[:200]
+    # 2026-10-20 (report section 5): every file must resolve to an instrument spec with MEASURED costs, otherwise the backtest silently
+    # runs with zero costs. Unresolved files are flagged loudly and listed by scripts/bootstrap_data.py.
+    try:
+        from app.data.cost_model import resolve_cost
+        from app.data.session_clock import infer_symbol
+        sym = infer_symbol(rel) or infer_symbol(p.parent.name)
+        line = resolve_cost(sym or rel) or resolve_cost(p.parent.name)
+        row["symbol"] = row["symbol"] or (line.symbol if line else (sym or None))
+        row["spec_resolved"] = bool(line)
+        if line:
+            row["round_trip_cost_usd"] = round(line.round_trip_dollars(), 2)
+            row["cost_source"] = line.source
+        else:
+            flags.append("NO INSTRUMENT SPEC (costs unmeasured)")
+    except Exception as exc:  # noqa: BLE001
+        row["spec_resolved"] = False
+        flags.append(f"spec check failed: {type(exc).__name__}")
+    if row.get("bars") == 0 and "UNREADABLE" not in flags:
+        flags.append("NO PARSEABLE TIMESTAMPS (0 bars)")
     row["flags"] = ", ".join(flags) if flags else "ok"
     return row
 
