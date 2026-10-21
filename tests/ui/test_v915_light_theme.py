@@ -30,7 +30,9 @@ DARK_HASH = {
     # these digests exactly; the values below were re-measured after the
     # edits and match the pre-edit dark extraction rule-for-rule (the
     # raw-text diff is only the added comment blocks).
-    "theme.css": "9960da7831c73cfd59da69600c4d56ef77e2f7852c0ba5bac3f273c511a587df",
+    # Re-pinned (dashboard redesign): the dark palette was deliberately retuned ("Deep Teal Glass": violet/cyan/gold
+    # accents, glass panels, mountain backdrop). Light-scoped rules are untouched.
+    "theme.css": "7edda5eaf70ca8c7adf4220d5a5084480558c8f58abab92844e237dc6f068d5d",
     "job-theme.css": "e2d34ce668ee4d455a26d41c40cc3a6396290e82135e41201f477b5c972181c2",
     # Re-pinned 2026-10-13: the lifecycle (Champion board) dark rules were extended after the
     # WS-E pin was taken; token values (DARK_TOKENS below) are still checked separately.
@@ -45,7 +47,7 @@ DARK_TOKENS = {  # :root values as found at task start -- do not move
     "--panel-3": "#151a24", "--border": "#1c2230",
     "--border-light": "#2a3242", "--text": "#e7ebf2",
     "--text-muted": "#8a93a6", "--text-dim": "#5b6478",
-    "--teal": "#35e0b0", "--violet": "#7b3dff", "--coral": "#ff6f6f",
+    "--teal": "#35e0b0", "--violet": "#8b7cff", "--coral": "#ff6f6f",
     "--amber": "#f0b429",
 }
 LC_DARK_TOKENS = {  # .lc-scope values as found at task start

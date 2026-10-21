@@ -71,20 +71,16 @@ def test_tour_autostarts_on_first_dashboard_visit_then_never_again():
 
 
 def test_workflow_cards_link_to_their_real_pages():
+    # The seven-step strip now lives only in the page chrome (the dashboard's duplicate bottom strip was removed).
     server_module._license_ok_cached = True
     body = app.test_client().get("/dashboard").get_data(as_text=True)
-    cards = re.findall(r'<a class="step" href="([^"]+)"><span class="n">(\d\d)</span><span class="t">([^<]+)</span>', body)
-    assert [(n, t, h) for h, n, t in cards] == [
-        ("01", "Create", "/start-here/create"),
-        ("02", "Test", "/full-pipeline"),
-        ("03", "Optimize", "/optimize-simple"),
-        ("04", "Validate", "/validate-simple"),
-        ("05", "Champion", "/champion-simple"),
-        ("06", "Forward test", "/forward-test"),
-        ("07", "Deploy live", "/deploy-live"),
-    ]
+    assert 'class="db-steps"' not in body
+    hrefs = ["/start-here/create", "/full-pipeline", "/optimize-simple", "/validate-simple",
+             "/champion-simple", "/forward-test", "/deploy-live"]
     c = app.test_client()
-    for href, _n, _t in cards:
+    for href in hrefs:
+        if href != "/deploy-live":  # Deploy lives under the Forward-test nav group
+            assert f'href="{href}"' in body, href
         # /deploy-live answers 403 with its "turn on web live deploy" page
         # by design until live deployment is enabled -- still a real page.
         assert c.get(href).status_code in (200, 302, 403), href

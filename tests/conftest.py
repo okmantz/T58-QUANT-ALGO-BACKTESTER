@@ -253,3 +253,22 @@ def _stub_ollama_readiness(request, monkeypatch):
     except Exception:  # noqa: BLE001
         return
     monkeypatch.setattr(_t, "ensure_ready", lambda settings, model=None, **kw: model or getattr(settings, "model", ""))
+
+
+# ---------------------------------------------------------------------------
+# Fast tier / slow tier. The few tests that dominate the run time are listed (one node id per line) in
+# tests/slow_tests.txt and tagged `slow` here, so `pytest -m "not slow"` is the quick check used before every build and
+# plain `pytest` (or the full-tests workflow) still runs everything. Refresh the list with
+# `python scripts/run_tests.py --refresh-slow` after adding heavy tests.
+# ---------------------------------------------------------------------------
+def pytest_collection_modifyitems(config, items):
+    from pathlib import Path
+
+    listing = Path(__file__).with_name("slow_tests.txt")
+    if not listing.exists():
+        return
+    slow = {ln.strip() for ln in listing.read_text(encoding="utf-8").splitlines() if ln.strip() and not ln.startswith("#")}
+    marker = pytest.mark.slow
+    for item in items:
+        if item.nodeid.split("[", 1)[0] in slow or item.nodeid in slow:
+            item.add_marker(marker)

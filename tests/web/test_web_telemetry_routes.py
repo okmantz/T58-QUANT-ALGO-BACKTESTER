@@ -187,10 +187,11 @@ def test_evolution_page_has_banner_and_swarm(real_client):
     assert "/api/telemetry/swarm/evolution" in html
 
 
-def test_dashboard_has_the_survivors_strip_and_universe_link(real_client):
+def test_dashboard_dropped_the_survivors_strip_but_keeps_the_universe_link(real_client):
+    """The survivors funnel now lives only on the Universe page; the dashboard keeps the universe graph + link."""
     html = real_client.get("/dashboard").get_data(as_text=True)
-    assert "data-t58-survivors" in html and 'href="/universe"' in html
-    assert 'id="universe-graph"' in html                                 # the existing card is untouched
+    assert "data-t58-survivors" not in html and 'href="/universe"' in html
+    assert 'id="universe-graph"' in html
 
 
 def test_every_page_that_can_show_a_job_has_the_chat_widget():

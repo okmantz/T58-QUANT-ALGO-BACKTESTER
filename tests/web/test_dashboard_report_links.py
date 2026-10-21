@@ -72,7 +72,7 @@ def test_dashboard_route_rewrites_full_pipeline_report_links(monkeypatch):
 
 
 def test_dashboard_v2_layout_and_lazy_visuals(monkeypatch):
-    """Redesigned dashboard: KPI strip, focus card, recent runs, quick tools; heavy visuals live in <details> and are drawn on open;
+    """Redesigned dashboard: KPI strip, focus card with progress ring, recent runs; heavy visuals live in <details> and are drawn on open;
     no running-jobs pill or Gamma/Knowledge-check nav entries."""
     import os
 
@@ -85,8 +85,12 @@ def test_dashboard_v2_layout_and_lazy_visuals(monkeypatch):
             "equity_series": [{"name": "S0", "passed": True, "values": [0, 1, 3, 2, 5]}]}
     monkeypatch.setattr("app.web.server.run_history.dashboard_data", lambda: fake)
     body = app.test_client().get("/dashboard").get_data(as_text=True)
-    for needle in ('class="db-kpis"', 'id="equity-chart"', 'id="db-heat-d"', 'id="universe-graph"', "data-t58-tour-start", "Recent runs", "Quick tools"):
+    for needle in ('class="db-kpis"', 'id="equity-chart"', 'id="db-heat-d"', 'id="universe-graph"', "data-t58-tour-start", "Recent runs", "db-ring"):
         assert needle in body, needle
+    # removed sections: Quick tools, Proof of the survivors, and the duplicate workflow strip (the stage trail is already at the top)
+    for gone in ("Quick tools", "data-t58-survivors", "Proof of the survivors", 'class="db-steps"'):
+        assert gone not in body, gone
+    assert 'id="t58-avatar-btn"' in body          # always-visible profile circle
     assert "10 strategies" not in body and "2 more strategies in Runs" in body        # only the 8 latest rows are listed
     assert "t58-runs.js" not in body and 'href="/gamma"' not in body and "/education/knowledge-check" not in body
     if os.environ.get("T58_DUMP_DASH"):

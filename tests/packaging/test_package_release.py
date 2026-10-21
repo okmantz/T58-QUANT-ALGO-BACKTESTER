@@ -313,7 +313,7 @@ def test_workflow_yaml_is_valid():
 
 def test_exactly_one_web_and_one_desktop_workflow_each_covering_three_oses():
     names = sorted(p.name for p in (REPO_ROOT / ".github" / "workflows").glob("*.yml"))
-    assert names == ["build-data-pack.yml", "desktop-cross-platform.yml", "secrets-scan.yml", "web-cross-platform.yml"]
+    assert names == ["build-data-pack.yml", "desktop-cross-platform.yml", "full-tests.yml", "secrets-scan.yml", "web-cross-platform.yml"]
     for rel in APP_WORKFLOWS:
         text = (REPO_ROOT / rel).read_text(encoding="utf-8")
         # Linux runners are pinned to ubuntu-24.04 in the workflows (ubuntu-latest is also accepted).

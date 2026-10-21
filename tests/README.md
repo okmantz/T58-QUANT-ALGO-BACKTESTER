@@ -1,5 +1,9 @@
 # Test layout
 
+**Fast by default:** `python scripts/run_tests.py` runs the quick tier in parallel (minutes). `--full` runs everything,
+including the tests listed in `tests/slow_tests.txt` (tagged `slow`). CI builds never wait on the full suite -- it runs
+in its own `full-tests` workflow (nightly, on tags, on PRs, or on demand).
+
 Run everything with `pytest -q tests` (desktop GUI tests need a display: `xvfb-run -a pytest tests/ui` on Linux).
 
 | Folder | Covers |
