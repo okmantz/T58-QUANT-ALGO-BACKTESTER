@@ -1,4 +1,8 @@
 # --- Secrets / credentials -------------------------------------------------
+# Plaintext license keys (build_tools/license_keys.py). Keep this file OFF the
+# public internet; only the derived licenses/allowlist.txt (hashes) is meant to
+# be published, from a separate public repo.
+licenses/keys_PRIVATE.csv
 # app.data.alpaca_credentials / app.ai.ollama_settings / app.forward_test.mt5_settings
 # all prefer the OS keyring, but every one of them falls back to a local file
 # under data/config/ if keyring isn't available (headless env, minimal Linux
