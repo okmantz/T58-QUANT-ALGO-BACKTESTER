@@ -290,14 +290,32 @@ def clear_resample_cache() -> None:
         _RESAMPLE_CACHE.clear()
 
 
+def _carry_session_clock(src: pd.DataFrame, out: pd.DataFrame) -> pd.DataFrame:
+    """P0 (report 2026-10-20): resampling keeps only OHLCV, which used to drop the clock provenance (and any exchange_time /
+    trading_day columns) so every coarser-timeframe backtest silently went back to reading UTC as exchange time. Re-stamp the
+    resampled bars from the source frame's provenance. Hand-built frames with no provenance stay untouched (legacy reading)."""
+    try:
+        from app.data import session_clock as sc
+        attrs = getattr(src, "attrs", {}) or {}
+        if sc.EXCHANGE_TIME_COL in src.columns or "source_timezone" in attrs:
+            if "timestamp" in out.columns and len(out):
+                sc.stamp_session_columns(out, symbol=attrs.get("instrument"), source_tz=attrs.get("source_timezone") or "UTC")
+        for k in ("source_timezone", "exchange_timezone", "session_kind", "instrument", "proxy_history"):
+            if k in attrs:
+                out.attrs[k] = attrs[k]
+    except Exception:  # noqa: BLE001 - never let clock bookkeeping break a resample
+        pass
+    return out
+
+
 def resample_ohlcv(df: pd.DataFrame, timeframe_label: str, anchor: str = "auto") -> pd.DataFrame:
     """Cached front door for the resampler -- see _resample_ohlcv_uncached for
-    the full behavior/arguments. Identical output to the uncached function."""
+    the full behavior/arguments. Identical output to the uncached function (plus the session-clock stamp)."""
     if os.environ.get("T58_DISABLE_RESAMPLE_CACHE") == "1":
-        return _resample_ohlcv_uncached(df, timeframe_label, anchor)
+        return _carry_session_clock(df, _resample_ohlcv_uncached(df, timeframe_label, anchor))
     fp = _frame_fingerprint(df)
     if fp is None:
-        return _resample_ohlcv_uncached(df, timeframe_label, anchor)
+        return _carry_session_clock(df, _resample_ohlcv_uncached(df, timeframe_label, anchor))
     key = (fp, str(timeframe_label), str(anchor))
     with _RESAMPLE_CACHE_LOCK:
         hit = _RESAMPLE_CACHE.get(key)
@@ -305,7 +323,7 @@ def resample_ohlcv(df: pd.DataFrame, timeframe_label: str, anchor: str = "auto")
             _RESAMPLE_CACHE.move_to_end(key)
     if hit is not None:
         return hit.copy()
-    out = _resample_ohlcv_uncached(df, timeframe_label, anchor)
+    out = _carry_session_clock(df, _resample_ohlcv_uncached(df, timeframe_label, anchor))
     with _RESAMPLE_CACHE_LOCK:
         _RESAMPLE_CACHE[key] = out
         _RESAMPLE_CACHE.move_to_end(key)

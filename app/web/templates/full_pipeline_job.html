@@ -303,7 +303,7 @@
             const banner = document.getElementById('verdict-banner');
             const cls = 'verdict-' + s.verdict.replace(' ', '_');
             banner.className = 'verdict-banner ' + cls;
-            banner.textContent = s.verdict;
+            banner.textContent = (s.ladder_stage || s.verdict) + (s.ladder_stage && s.ladder_stage !== s.verdict ? '  (' + s.verdict + ')' : '');
 
             document.getElementById('summary-card').style.display = 'block';
             document.getElementById('s-trades').textContent = `${s.baseline_trades} \u2192 ${s.final_trades}`;

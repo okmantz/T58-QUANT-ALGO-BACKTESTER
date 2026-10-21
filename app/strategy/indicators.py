@@ -83,8 +83,8 @@ def atr(frame: pd.DataFrame, period: int = 14) -> pd.Series:
 def vwap(frame: pd.DataFrame) -> pd.Series:
     typical = (frame["high"] + frame["low"] + frame["close"]) / 3.0
     volume = frame["volume"] if "volume" in frame.columns else pd.Series(1.0, index=frame.index)
-    ts = pd.to_datetime(frame["timestamp"])
-    day = ts.dt.normalize()
+    from app.data.session_clock import session_day_key
+    day = session_day_key(frame)      # P0: session (trading-day) VWAP, not a UTC calendar day that rolls mid-Globex
     pv = typical * volume
     return pv.groupby(day).cumsum() / volume.groupby(day).cumsum().replace(0, np.nan)
 
@@ -517,8 +517,8 @@ def pivot_points(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series, 
     bar's pivot levels are always knowable before that bar prints."""
     if "timestamp" not in frame.columns:
         raise KeyError("pivot_points requires a 'timestamp' column")
-    ts = pd.to_datetime(frame["timestamp"])
-    day = ts.dt.normalize()
+    from app.data.session_clock import session_day_key
+    day = session_day_key(frame)
     daily = frame.groupby(day)
     prev_high = daily["high"].max().shift(1)
     prev_low = daily["low"].min().shift(1)
@@ -1016,8 +1016,8 @@ def average_daily_range(frame: pd.DataFrame, period: int = 14) -> pd.Series:
     ADR has already printed" checks. Forward-filled across every intraday
     bar of a day so it lines up with an intraday index like every other
     indicator here, rather than being its own daily-only series."""
-    ts = pd.to_datetime(frame["timestamp"])
-    day = ts.dt.normalize()
+    from app.data.session_clock import session_day_key
+    day = session_day_key(frame)
     daily_high = frame["high"].groupby(day).transform("max")
     daily_low = frame["low"].groupby(day).transform("min")
     daily_range = (daily_high - daily_low)

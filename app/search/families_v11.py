@@ -34,7 +34,11 @@ def _g(kind: str, period: int = 0) -> dict:
     return {"type": kind, "period": period, "field": "close"}
 
 
-_RISK_GRID = {"stop_atr_mult": [1.0, 1.5], "target_atr_mult": [1.5, 2.5], "max_bars": [12, 36]}
+# 2026-10-20 (report section 3, "widen exits"): ATR stops of 1-1.5 and targets of 1.5-2.5 are inside the noise floor of 1m/5m bars, so
+# costs dominate (a 0.15R round-trip cost is an edge killer). Wider stops/targets and longer holds shrink cost-in-R and let a real
+# structural edge show. Position size stays constant-RISK: size_for_stop() divides the risk budget by the stop distance, so a wider
+# ATR stop automatically trades fewer contracts - that IS the volatility-scaled sizing, with no extra gene needed.
+_RISK_GRID = {"stop_atr_mult": [1.0, 2.0, 3.0], "target_atr_mult": [2.0, 4.0, 6.0], "max_bars": [36, 96]}
 _GOOD = lambda p: p["target_atr_mult"] >= p["stop_atr_mult"]  # noqa: E731
 
 
@@ -271,8 +275,109 @@ _LEADER = SkeletonSpec(
 )
 
 
+# 12 -- time-series trend, held: the pure multi-market trend hypothesis (pool over 8-12 markets)
+def _build_ts_trend(p: dict) -> dict:
+    rth = [_cond(_g("minutes_since_open"), ">=", _val(5)), _cond(_g("minutes_since_open"), "<=", _val(p["window_min"]))]
+    return {
+        "name": f"Time-series trend hold (daily stack, EMA{p['ema']} dist > {p['dist']})",
+        "entry_conditions": _sides(
+            rth + [_cond(_g("daily_trend_state"), ">", _val(0.5)), _cond(_g("daily_ema_distance", p["ema"]), ">", _val(p["dist"]))],
+            rth + [_cond(_g("daily_trend_state"), "<", _val(-0.5)), _cond(_g("daily_ema_distance", p["ema"]), "<", _val(-p["dist"]))]),
+        "exit_conditions": _exits([_cond(_g("daily_trend_state"), "<", _val(0.5))], [_cond(_g("daily_trend_state"), ">", _val(-0.5))]),
+        "risk_management": _rm(p),
+    }
+
+
+_TS_TREND = SkeletonSpec(
+    name="ts_daily_trend_hold", label="Time-series trend (daily stack, multi-day hold)",
+    description="Enters in the direction of the prior-day EMA50/200 stack when price is already extended from its daily EMA, early in "
+                "the session, and holds until the stack flips. The classic managed-futures trend hypothesis; meant to be judged "
+                "POOLED across 8-12 markets, never on one instrument.",
+    param_grid={"ema": [20, 50], "dist": [0.0, 0.5], "window_min": [60], "stop_atr_mult": [2.0, 3.0, 4.0],
+                "target_atr_mult": [6.0, 10.0], "max_bars": [288, 1440]},
+    build=_build_ts_trend, valid=_GOOD,
+)
+
+
+# 13 -- intraday momentum: how the day has gone so far predicts the last hour
+def _build_close_momentum(p: dict) -> dict:
+    win = [_cond(_g("minutes_to_close"), "<=", _val(p["start_before_close"])), _cond(_g("minutes_to_close"), ">=", _val(5))]
+    pdc = {"type": "previous_day_close"}
+    return {
+        "name": f"Intraday momentum into the close (day return > {p['min_atr_move']} ATR, last {p['start_before_close']} min)",
+        "entry_conditions": _sides(
+            win + [_cond(_ind("close", 1), ">", pdc), _cond(_ind("roc", p["roc"]), ">", _val(0))],
+            win + [_cond(_ind("close", 1), "<", pdc), _cond(_ind("roc", p["roc"]), "<", _val(0))]),
+        "exit_conditions": _exits([_cond(_g("minutes_to_close"), "<", _val(2)), _cond(_g("minutes_to_close"), ">", _val(p["start_before_close"] + 600))]),
+        "risk_management": _rm(p),
+    }
+
+
+_CLOSE_MOM = SkeletonSpec(
+    name="intraday_momentum_close", label="Intraday momentum into the close",
+    description="Documented intraday-momentum effect: the session's direction so far (price vs prior close) continues through the "
+                "final 60-90 minutes as hedging and rebalancing flows arrive. Flat before the cash close.",
+    param_grid={"start_before_close": [60, 90], "roc": [6, 12], "min_atr_move": [0.0], **_RISK_GRID},
+    build=_build_close_momentum, valid=_GOOD,
+)
+
+
+# 14 -- overnight vs intraday decomposition: the same asset, only one half of the day
+def _build_overnight_intraday(p: dict) -> dict:
+    mode = p["mode"]
+    if mode == "overnight":
+        # Windows are 15 minutes wide so they contain a bar on 1m, 5m and 15m data alike.
+        enter = [_cond(_g("minutes_to_close"), "<=", _val(15)), _cond(_g("minutes_to_close"), ">=", _val(1))]
+        exit_ = [_cond(_g("minutes_since_open"), ">=", _val(5)), _cond(_g("minutes_since_open"), "<=", _val(120))]
+    else:
+        enter = [_cond(_g("minutes_since_open"), ">=", _val(0)), _cond(_g("minutes_since_open"), "<=", _val(14))]
+        exit_ = [_cond(_g("minutes_to_close"), "<=", _val(5)), _cond(_g("minutes_to_close"), ">=", _val(0))]
+    return {
+        "name": f"{mode.title()} drift ({'long' if p['direction'] > 0 else 'short'})",
+        "entry_conditions": _sides(enter if p["direction"] > 0 else [], enter if p["direction"] < 0 else []),
+        "exit_conditions": _exits(exit_, exit_),
+        "risk_management": _rm(p),
+    }
+
+
+_OVN_INTRA = SkeletonSpec(
+    name="overnight_vs_intraday_drift", label="Overnight vs intraday drift",
+    description="Holds ONLY the overnight session (buy the close, sell the next open) or ONLY the cash session (buy the open, sell the "
+                "close). Equity-index drift is known to be concentrated in one half of the day; this family measures which half, per "
+                "market, instead of assuming it. Long and short both in the grid so the sign is tested, not presumed.",
+    param_grid={"mode": ["overnight", "intraday"], "direction": [1, -1], "stop_atr_mult": [2.0, 3.0, 4.0],
+                "target_atr_mult": [6.0, 10.0], "max_bars": [288, 600]},
+    build=_build_overnight_intraday, valid=_GOOD,
+)
+
+
+# 15 -- volatility-regime gated breakout (self-contained: ATR percentile instead of VIX)
+def _build_vol_regime_breakout(p: dict) -> dict:
+    # Regime = the PRIOR completed day's range in daily ATR (calm yesterday). A rolling intraday ATR percentile cannot be used here:
+    # RTH-open volatility ranks high against the quiet overnight bars, so that gate is almost never true at the open (measured: 28 of
+    # 5,339 opening-window bars on NQ).
+    gate = [_cond(_g("prior_day_range_atr", 14), "<=", _val(p["max_prior_range"])),
+            _cond(_g("minutes_since_open"), ">=", _val(0)), _cond(_g("minutes_since_open"), "<=", _val(p["window_min"]))]
+    return {
+        "name": f"Vol-regime breakout (prior-day range <= {p['max_prior_range']} ATR, {p['lookback']}-bar break)",
+        "entry_conditions": _sides(gate + [{"left": {"type": "bos", "lookback": p["lookback"], "direction": "bullish"}, "operator": "is true", "right": _val(1)}],
+                                   gate + [{"left": {"type": "bos", "lookback": p["lookback"], "direction": "bearish"}, "operator": "is true", "right": _val(1)}]),
+        "exit_conditions": _exits(_after_clock(p["window_min"])), "risk_management": _rm(p),
+    }
+
+
+_VOL_REGIME = SkeletonSpec(
+    name="vol_regime_gated_breakout", label="Volatility-regime gated breakout",
+    description="Takes an N-bar breakout in the opening window only after a CALM prior day (range below a threshold in daily ATR), "
+                "where range expansion is least priced in; flat when the window ends. Needs no VIX feed.",
+    param_grid={"max_prior_range": [0.8, 1.1], "lookback": [20, 40], "window_min": [90], **_RISK_GRID},
+    build=_build_vol_regime_breakout, valid=_GOOD,
+)
+
+
 V11_FAMILIES: dict[str, SkeletonSpec] = {s.name: s for s in (
-    _EVENT_DRIFT, _EVENT_FADE, _OVERNIGHT_FADE, _OVERNIGHT_TREND, _DAILY_PULLBACK, _DAILY_MOM, _TOM, _OPEX, _PREHOLIDAY, _VIX_DIP, _LEADER)}
+    _EVENT_DRIFT, _EVENT_FADE, _OVERNIGHT_FADE, _OVERNIGHT_TREND, _DAILY_PULLBACK, _DAILY_MOM, _TOM, _OPEX, _PREHOLIDAY, _VIX_DIP, _LEADER,
+    _TS_TREND, _CLOSE_MOM, _OVN_INTRA, _VOL_REGIME)}
 V11_FAMILY_NAMES: list[str] = list(V11_FAMILIES)
 V11_HYPOTHESIS_QUESTIONS: dict[str, str] = {n: s.description for n, s in V11_FAMILIES.items()}
 V11_FAMILY_GROUPS: dict[str, str] = {
@@ -281,6 +386,8 @@ V11_FAMILY_GROUPS: dict[str, str] = {
     "daily_trend_pullback_rth": "trend_following", "daily_momentum_open_drive": "momentum",
     "turn_of_month_flow_long": "calendar_seasonality", "opex_pin_fade": "calendar_seasonality", "pre_holiday_drift_long": "calendar_seasonality",
     "vix_backwardation_dip": "macro_regime", "leader_follow": "relative_strength",
+    "ts_daily_trend_hold": "trend_following", "intraday_momentum_close": "momentum",
+    "overnight_vs_intraday_drift": "overnight_session", "vol_regime_gated_breakout": "volatility_contraction",
 }
 # Families whose inputs live OUTSIDE the OHLCV frame: they trade nothing when the input is absent (by construction).
 V11_REQUIRES_AUX: dict[str, str] = {"vix_backwardation_dip": "data/macro VIX + VIX3M", "leader_follow": "frame.attrs['leader']"}

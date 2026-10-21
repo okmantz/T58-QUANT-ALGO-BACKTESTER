@@ -35,10 +35,11 @@ from app.strategy.indicators import _period, atr, ema
 
 
 def _ts(frame: pd.DataFrame) -> pd.Series | None:
-    if "timestamp" in frame.columns:
-        return pd.to_datetime(frame["timestamp"])
-    if isinstance(frame.index, pd.DatetimeIndex):
-        return pd.Series(frame.index, index=frame.index)
+    """Exchange-clock timestamps (P0, report 2026-10-20): stamped ``exchange_time`` / source_timezone conversion when the
+    frame has clock provenance, else the raw stamps (legacy)."""
+    if "timestamp" in frame.columns or isinstance(frame.index, pd.DatetimeIndex):
+        from app.data.session_clock import frame_exchange_time
+        return frame_exchange_time(frame)
     return None
 
 
@@ -50,7 +51,8 @@ def prior_day_levels(frame: pd.DataFrame) -> pd.DataFrame:
         lo = frame["low"].rolling(288, min_periods=48).min().shift(1)
         cl = frame["close"].shift(1)
         return pd.DataFrame({"pd_high": hi, "pd_low": lo, "pd_typ": (hi + lo + cl) / 3.0}, index=frame.index)
-    day = ts.dt.tz_localize(None).dt.normalize() if ts.dt.tz is not None else ts.dt.normalize()
+    from app.data.session_clock import session_day_key
+    day = session_day_key(frame) if "timestamp" in frame.columns else (ts.dt.tz_localize(None).dt.normalize() if ts.dt.tz is not None else ts.dt.normalize())
     g = pd.DataFrame({"day": day.values, "high": frame["high"].values, "low": frame["low"].values,
                       "close": frame["close"].values})
     daily = g.groupby("day").agg(high=("high", "max"), low=("low", "min"), close=("close", "last"))
@@ -127,7 +129,10 @@ def theta_clock(frame: pd.DataFrame, period: int = 14) -> pd.Series:
     if ts is None:
         return pd.Series(0.0, index=frame.index)
     minutes = ts.dt.hour * 60 + ts.dt.minute
-    return ((minutes - 510) / 390.0).clip(0.0, 1.0).astype(float).set_axis(frame.index)
+    from app.data.session_clock import has_clock_provenance
+    # 08:30 CT == 09:30 ET: exchange-clock frames (stamped) are on the New York clock, legacy frames on the old CT reading.
+    open_min = 570 if has_clock_provenance(frame) else 510
+    return ((minutes - open_min) / 390.0).clip(0.0, 1.0).astype(float).set_axis(frame.index)
 
 
 def gamma_convexity(frame: pd.DataFrame, period: int = 14) -> pd.Series:

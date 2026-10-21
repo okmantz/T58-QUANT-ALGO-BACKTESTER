@@ -420,7 +420,8 @@ def _null_signals_buy_and_hold(df: pd.DataFrame) -> pd.Series:
 
 
 def _null_signals_session_only(df: pd.DataFrame, start: str = "08:30", end: str = "09:00") -> pd.Series:
-    ts = pd.to_datetime(df["timestamp"]) if "timestamp" in df.columns else pd.to_datetime(df.index)
+    from app.data.session_clock import frame_exchange_time
+    ts = frame_exchange_time(df) if "timestamp" in df.columns else pd.Series(pd.to_datetime(df.index), index=df.index)   # exchange clock (P0)
     t = ts.dt.time
     start_t, end_t = pd.to_datetime(start).time(), pd.to_datetime(end).time()
     mask = (t >= start_t) & (t <= end_t)

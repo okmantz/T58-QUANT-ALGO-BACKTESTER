@@ -96,6 +96,8 @@ def merge_multi_timeframe(
         htf = htf_df.copy()
         htf["timestamp"] = pd.to_datetime(htf["timestamp"])
         htf = htf.sort_values("timestamp").reset_index(drop=True)
+        # session-clock columns belong to the base frame only (P0, report 2026-10-20)
+        htf = htf.drop(columns=[c for c in ("exchange_time", "trading_day") if c in htf.columns])
         htf = htf.rename(columns={c: f"{prefix}_{c}" for c in htf.columns if c != "timestamp"})
         # FIX (MTF-LOOKAHEAD-001): shift the merge key forward by this
         # timeframe's own bar length so `merge_asof(..., direction=
@@ -112,4 +114,9 @@ def merge_multi_timeframe(
         )
         labels.append(f"{prefix} ({minutes:.0f}m)")
 
-    return merged.reset_index(drop=True), labels
+    merged = merged.reset_index(drop=True)
+    try:
+        merged.attrs.update(getattr(ranked[0], "attrs", {}) or {})
+    except Exception:  # noqa: BLE001
+        pass
+    return merged, labels

@@ -427,7 +427,7 @@
     <details>
       <summary>4. Stage 1 — cheap filter</summary>
       <div class="row">
-        <div><label>Minimum trades to survive</label><input type="number" name="min_trades" value="20"></div>
+        <div><label>Minimum trades to survive</label><input type="number" name="min_trades" value="100"></div>
         <div><label>Minimum profit factor</label><input type="number" step="0.01" name="min_profit_factor" value="1.05"></div>
       </div>
       <label>Survivors that advance to Stage 2 (GA)</label>
@@ -463,7 +463,8 @@
       <input type="number" name="robustness_neighbors" value="6">
       <label>Fitness metric</label>
       <select name="fitness_metric">
-        <option value="eval_pass_probability">Eval pass probability -- reach target before hitting a limit (recommended for prop firms)</option>
+        <option value="edge_lb_r" selected>Edge lower bound -- mean R per trade after 2x costs, day-block bootstrap (recommended: ranks on edge, not on prop outcomes)</option>
+        <option value="eval_pass_probability">Eval pass probability -- reach target before hitting a limit (noisy; use only on survivors)</option>
         <option value="composite_prop_score">Composite prop score</option>
         <option value="first_payout_probability">First payout probability</option>
         <option value="net_profit">Long-term net profit ($) -- for long-term trading with no prop firm</option>

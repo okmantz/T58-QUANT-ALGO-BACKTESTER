@@ -104,7 +104,7 @@
   <div class="card">
     <h2>3. Search settings (applied identically to every instrument)</h2>
     <div class="row">
-      <div><label>Min trades (Stage 1)</label><input type="number" name="min_trades" value="20"></div>
+      <div><label>Min trades (Stage 1)</label><input type="number" name="min_trades" value="100"></div>
       <div><label>Min profit factor (Stage 1)</label><input type="number" step="0.01" name="min_profit_factor" value="1.05"></div>
     </div>
     <div class="row">
@@ -124,6 +124,7 @@
       <div>
         <label>Fitness metric</label>
         <select name="fitness_metric">
+          <option value="edge_lb_r" selected>Edge lower bound (mean R after 2x costs)</option>
           <option value="eval_pass_probability">Eval pass probability</option>
           <option value="composite_prop_score">Composite prop score</option>
           <option value="first_payout_probability">First payout probability</option>

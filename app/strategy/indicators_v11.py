@@ -52,20 +52,16 @@ def _bday(start, end) -> CustomBusinessDay:
 
 
 def _ts(frame: pd.DataFrame) -> pd.Series:
-    """Eastern wall-clock timestamps aligned to frame.index (NaT-safe)."""
-    if "timestamp" in frame.columns:
-        t = pd.to_datetime(frame["timestamp"])
-    elif isinstance(frame.index, pd.DatetimeIndex):
-        t = pd.Series(frame.index, index=frame.index)
-    else:
+    """Exchange wall-clock timestamps (tz-naive, DST-aware) aligned to frame.index (NaT-safe).
+
+    P0 (report 2026-10-20): vendor bars are UTC. This reads the importer-stamped ``exchange_time`` column, else converts
+    from ``attrs['source_timezone']`` to the instrument's exchange zone (America/New_York for US futures / metals),
+    else (hand-built frames with no provenance) keeps the legacy "naive == exchange wall-clock" reading.
+    ``attrs['tz_offset_hours']`` still works for legacy files (hours ADDED to the stamp)."""
+    from app.data.session_clock import frame_exchange_time
+    if "timestamp" not in frame.columns and not isinstance(frame.index, pd.DatetimeIndex):
         return pd.Series(pd.NaT, index=frame.index)
-    if getattr(t.dt, "tz", None) is not None:
-        t = t.dt.tz_localize(None)
-    off = float(getattr(frame, "attrs", {}).get("tz_offset_hours", 0.0) or 0.0)
-    if off:
-        t = t + pd.Timedelta(hours=off)
-    t.index = frame.index
-    return t
+    return frame_exchange_time(frame)
 
 
 def _nan(frame: pd.DataFrame) -> pd.Series:
@@ -106,9 +102,16 @@ def _trading_day(t: pd.Series) -> pd.Series:
     return (t + pd.Timedelta(hours=6)).dt.normalize()
 
 
+def _frame_day(f: pd.DataFrame) -> pd.Series:
+    """Trading-day label per bar: the importer-stamped ``trading_day`` column (17:00 CT roll), else derived from the clock."""
+    if "trading_day" in f.columns:
+        return pd.to_datetime(f["trading_day"])
+    return _trading_day(_ts(f))
+
+
 def _daily_table(f: pd.DataFrame) -> pd.DataFrame:
     t = _ts(f)
-    d = pd.DataFrame({"day": _trading_day(t), "h": f["high"].astype(float), "l": f["low"].astype(float), "c": f["close"].astype(float)})
+    d = pd.DataFrame({"day": _frame_day(f), "h": f["high"].astype(float), "l": f["low"].astype(float), "c": f["close"].astype(float)})
     g = d.groupby("day", sort=True)
     daily = pd.DataFrame({"high": g["h"].max(), "low": g["l"].min(), "close": g["c"].last()})
     prev_close = daily["close"].shift(1)
@@ -119,7 +122,7 @@ def _daily_table(f: pd.DataFrame) -> pd.DataFrame:
 
 def _prior_day_map(f: pd.DataFrame, values: pd.Series) -> pd.Series:
     """Map a per-trading-day series to bars using the PREVIOUS trading day's value (shift(1) on the daily table)."""
-    day = _trading_day(_ts(f))
+    day = _frame_day(f)
     return pd.Series(day.map(values.shift(1)).to_numpy(dtype=float), index=f.index)
 
 
@@ -158,7 +161,7 @@ def prior_day_range_atr(f, p, c, l):
 def _overnight_frame(f: pd.DataFrame) -> pd.DataFrame:
     t = _ts(f)
     m = _minute_of_day(t)
-    day = _trading_day(t)
+    day = _frame_day(f)
     ovn = (m < RTH_OPEN_MIN) | (m >= 18 * 60)
     h = f["high"].astype(float).where(ovn)
     lo = f["low"].astype(float).where(ovn)

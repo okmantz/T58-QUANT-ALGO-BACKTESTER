@@ -29,6 +29,7 @@ _FOLDER_ALIASES: dict[str, tuple[str, ...]] = {
     "BRENT CRUDE OIL": ("BRENTCMDUSD", "BCOUSD", "BRENT", "BRENTCRUDEOIL", "UKOIL"),
     "DOGECOIN": ("DOGEUSD", "DOGE", "DOGECOIN"),
     "DOW JONES 30": ("USA30IDXUSD", "US30USD", "US30", "DJ30", "DJI", "DOWJONES30", "DOWJONES"),
+    "CL1!": ("CL", "CL1", "CLF"),
     "ES1!": ("ES", "ES1", "ESF"),
     "ETHEREUM": ("ETHUSD", "ETH", "ETHEREUM"),
     "EURUSD": ("EURUSD",),
@@ -53,6 +54,11 @@ _FOLDER_ALIASES: dict[str, tuple[str, ...]] = {
     "XCUUSD (COPPER)": ("XCUUSD", "XCU", "COPPER"),
     "XPTUSD (PLATINUM)": ("XPTUSD", "XPT", "PLATINUM"),
     "YAHOO": ("YHOO", "YAHOO"),
+    "YM1!": ("YM", "YM1", "YMF"),
+    "RTY1!": ("RTY", "RTY1", "RTYF"),
+    "ZN1!": ("ZN", "ZN1", "ZNF"),
+    "ZB1!": ("ZB", "ZB1", "ZBF"),
+    "6E1!": ("6E", "6E1", "6EF"),
 }
 
 # Words a data vendor / exporter puts in FRONT of the symbol ("futures_ES.F_1m", "fx_EUR_USD_1m").

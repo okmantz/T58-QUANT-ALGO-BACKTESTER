@@ -406,7 +406,7 @@ class ManualStrategy(Strategy):
             return self._vwap_profile_series(work, kind, operand)
 
         if kind == "time_of_day":
-            ts = self._operand_local_ts(work["timestamp"], operand)
+            ts = self._operand_local_ts(work["timestamp"], operand, work)
             session_start = operand.get("session_start", "00:00")
             session_end = operand.get("session_end", "23:59")
             return self._session_mask(ts, session_start, session_end).astype(int)
@@ -415,7 +415,7 @@ class ManualStrategy(Strategy):
             # 0=Monday..6=Sunday, matching pandas' own dt.dayofweek -- lets
             # a family bet on a specific calendar-effect day rather than an
             # intraday clock window (see `time_of_day` above for that case).
-            ts = pd.to_datetime(work["timestamp"])
+            ts = self._operand_local_ts(work["timestamp"], operand, work)
             days = operand.get("days")
             if days is None:
                 target = operand.get("day", 0)
@@ -518,21 +518,39 @@ class ManualStrategy(Strategy):
         return (bull_ob | bear_ob).fillna(False)
 
     @staticmethod
-    def _operand_local_ts(timestamps: pd.Series, operand: dict[str, Any]) -> pd.Series:
-        """Timestamps as seen on the clock of ``operand['timezone']``.
+    def _operand_local_ts(timestamps: pd.Series, operand: dict[str, Any], work: "pd.DataFrame | None" = None) -> pd.Series:
+        """Timestamps as seen on the clock the operand means.
 
-        Vendor data is UTC, so an unqualified "09:45" window is 09:45 UTC
-        (04:45 ET).  Strategies that mean exchange time set
-        ``"timezone": "America/New_York"`` (DST handled by zoneinfo).  The
-        default stays UTC so existing configs keep their exact behaviour.
+        P0 (report 2026-10-20): vendor data is UTC, but a session / opening-range / event window means EXCHANGE time. The
+        default is therefore the instrument's exchange zone (America/New_York for US futures and metals; DST-aware),
+        read from the importer-stamped ``exchange_time`` column or converted from ``attrs['source_timezone']``.
+        An explicit ``"timezone"`` on the operand still wins (``"UTC"`` gets the old literal-UTC reading). Frames with no
+        clock provenance at all (hand-built / pasted data) keep the legacy reading: the stamps ARE the clock.
         """
+        from app.data import session_clock as sc
         ts = pd.to_datetime(timestamps)
         tzname = operand.get("timezone")
+        attrs = (getattr(work, "attrs", {}) or {}) if work is not None else {}
         if not tzname:
+            if work is not None and sc.has_clock_provenance(work):
+                return sc.frame_exchange_time(work)
             return ts
+        src = str(attrs.get("source_timezone") or "UTC")
         if ts.dt.tz is None:
-            ts = ts.dt.tz_localize("UTC")
+            if src.upper() == "UTC":
+                ts = ts.dt.tz_localize("UTC")
+            else:
+                ts = ts.dt.tz_localize(src, ambiguous="NaT", nonexistent="shift_forward")
         return ts.dt.tz_convert(tzname)
+
+    @staticmethod
+    def _session_day_key(work: pd.DataFrame, ts: pd.Series) -> pd.Series:
+        """Day label for 'previous day' style levels: the instrument's trading day (CME rolls 17:00 CT) when the frame has
+        clock provenance, else the calendar day of ``ts`` (legacy)."""
+        from app.data import session_clock as sc
+        if sc.has_clock_provenance(work):
+            return sc.frame_trading_day(work)
+        return ts.dt.normalize()
 
     def _session_mask(self, index: pd.Series, start: str, end: str) -> pd.Series:
         t = pd.to_datetime(index)
@@ -544,7 +562,7 @@ class ManualStrategy(Strategy):
         return (times >= start_t) | (times <= end_t)
 
     def _session_series(self, work: pd.DataFrame, kind: str, operand: dict[str, Any]) -> pd.Series:
-        ts = self._operand_local_ts(work["timestamp"], operand)
+        ts = self._operand_local_ts(work["timestamp"], operand, work)
         day = ts.dt.normalize()
         session_start = operand.get("session_start", "08:30")
         session_end = operand.get("session_end", "15:00")
@@ -557,16 +575,17 @@ class ManualStrategy(Strategy):
             result = grouped.cummax() if kind == "session_high" else grouped.cummin()
             return result.ffill()
 
-        daily = work.groupby(day)
-        if kind == "previous_day_high":
-            daily_val = daily["high"].max().shift(1)
-            return day.map(daily_val)
-        if kind == "previous_day_low":
-            daily_val = daily["low"].min().shift(1)
-            return day.map(daily_val)
-        if kind == "previous_day_close":
-            daily_val = daily["close"].last().shift(1)
-            return day.map(daily_val)
+        if kind in {"previous_day_high", "previous_day_low", "previous_day_close"}:
+            # P0: the "day" is the trading session (17:00 CT roll), not a UTC calendar day that rolls mid-Globex.
+            pday = self._session_day_key(work, ts)
+            daily = work.groupby(pday)
+            if kind == "previous_day_high":
+                daily_val = daily["high"].max().shift(1)
+            elif kind == "previous_day_low":
+                daily_val = daily["low"].min().shift(1)
+            else:
+                daily_val = daily["close"].last().shift(1)
+            return pday.map(daily_val)
 
         # Opening-range levels become available only after the opening window
         # has completed, preventing look-ahead bias inside the opening range.
@@ -605,7 +624,7 @@ class ManualStrategy(Strategy):
         NaN -- makes any condition referencing it fail closed (no trade)
         rather than firing on a fabricated baseline.
         """
-        ts = pd.to_datetime(work["timestamp"])
+        ts = self._operand_local_ts(work["timestamp"], operand, work)
         day = ts.dt.normalize()
         session_start = operand.get("session_start", "09:30")
         session_end = operand.get("session_end", "09:45")
@@ -698,12 +717,21 @@ class ManualStrategy(Strategy):
         value_area_sigma = float(operand.get("value_area_sigma", 1.0) or 1.0)
         extreme_sigma = float(operand.get("extreme_sigma", 2.0) or 2.0)
         poc_buckets = max(int(operand.get("poc_buckets", 30) or 30), 1)
+        # P0: anchor the session to the instrument's own roll (CME 17:00 CT, FX 17:00 NY, crypto 00:00 UTC) and read the
+        # frame's real source timezone instead of assuming UTC.
+        from app.data import session_clock as sc
+        _attrs = getattr(work, "attrs", {}) or {}
+        _prof = sc.session_profile(_attrs.get("instrument"))
+        _src_tz = str(_attrs.get("source_timezone") or vp.DEFAULT_SOURCE_TZ)
+        _ex_tz = str(operand.get("exchange_tz") or _prof.roll_tz or vp.DEFAULT_EXCHANGE_TZ)
+        if "roll_hour" not in operand:
+            roll_hour = int(_prof.roll_hour) if _prof.kind != "unknown" else vp.DEFAULT_ROLL_HOUR
         cache = self._quant_lab_cache()
-        key = ("vwap", roll_hour, value_area_sigma, extreme_sigma, poc_buckets)
+        key = ("vwap", roll_hour, value_area_sigma, extreme_sigma, poc_buckets, _src_tz, _ex_tz)
         profile = cache.get(key)
         if profile is None:
             profile = vp.session_vwap_profile(
-                work, roll_hour=roll_hour, value_area_sigma=value_area_sigma,
+                work, roll_hour=roll_hour, exchange_tz=_ex_tz, source_tz=_src_tz, value_area_sigma=value_area_sigma,
                 extreme_sigma=extreme_sigma, poc_buckets=poc_buckets,
             )
             cache[key] = profile
@@ -814,7 +842,7 @@ class ManualStrategy(Strategy):
         if time_cfg.get("enabled") and time_cfg.get("time"):
             try:
                 exit_time = pd.to_datetime(str(time_cfg["time"])).time()
-                ts = pd.to_datetime(work["timestamp"])
+                ts = self._operand_local_ts(work["timestamp"], time_cfg, work)
                 day = ts.dt.normalize()
                 flattened = out.copy()
                 for d in day.drop_duplicates():

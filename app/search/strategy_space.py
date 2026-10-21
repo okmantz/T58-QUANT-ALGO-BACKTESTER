@@ -499,9 +499,9 @@ _SESSION_TIME_EFFECT = SkeletonSpec(
         "price or volatility is doing."
     ),
     param_grid={
-        "session_start": ["08:30", "13:30"],
+        "session_start": ["09:30", "14:00"],
         "session_end": ["10:30", "15:30"],
-        "flat_time": ["16:00"],
+        "flat_time": ["15:55"],
         "stop_atr_mult": [1.0, 1.5],
         "target_atr_mult": [1.5, 2.5],
         "max_bars": [12, 24],
@@ -1162,9 +1162,9 @@ _OVERNIGHT_GAP_FADE = SkeletonSpec(
         "opening-range BREAKOUT at the same kind of session anchor -- opposite direction bet."
     ),
     param_grid={
-        "session_start": ["08:30", "13:30"],
-        "session_end": ["09:00", "14:00"],
-        "flat_time": ["16:00"],
+        "session_start": ["09:30", "14:00"],
+        "session_end": ["10:00", "14:30"],
+        "flat_time": ["15:55"],
         "stop_atr_mult": [1.0, 1.5],
         "target_atr_mult": [1.5, 2.0],
         "max_bars": [12, 24],
@@ -1486,9 +1486,9 @@ _OPENING_RANGE_RETEST_CONFIRMATION = SkeletonSpec(
         "a large post-breakout move the way Family E does."
     ),
     param_grid={
-        "session_start": ["08:30", "13:30"],
+        "session_start": ["09:30", "14:00"],
         "session_end": ["10:30", "15:30"],
-        "flat_time": ["16:00"],
+        "flat_time": ["15:55"],
         "stop_atr_mult": [1.0, 1.5],
         "target_atr_mult": [0.75, 1.0],
         "max_bars": [6, 12],
@@ -1885,9 +1885,9 @@ _GAP_AND_GO_CONTINUATION = SkeletonSpec(
         "Force-flattens by clock time, same discipline as Family E."
     ),
     param_grid={
-        "session_start": ["08:30", "13:30"],
-        "session_end": ["09:30", "14:30"],
-        "flat_time": ["16:00"],
+        "session_start": ["09:30", "14:00"],
+        "session_end": ["10:00", "14:30"],
+        "flat_time": ["15:55"],
         "stop_atr_mult": [1.0, 1.5],
         "target_atr_mult": [1.5, 2.5],
         "max_bars": [12, 24],
@@ -2261,9 +2261,9 @@ _SESSION_GATED_LIQUIDITY_SWEEP = SkeletonSpec(
     ),
     param_grid={
         "lookback": [5, 10, 20],
-        "session_start": ["07:00", "08:30", "13:30"],
-        "session_end": ["09:00", "10:30", "15:00"],
-        "flat_time": ["16:00"],
+        "session_start": ["08:00", "09:30", "14:00"],
+        "session_end": ["09:30", "10:30", "15:00"],
+        "flat_time": ["15:55"],
         "stop_atr_mult": [1.0, 1.5],
         "target_atr_mult": [1.5, 2.5],
         "max_bars": [12, 24],
@@ -2431,7 +2431,7 @@ _SESSION_EXTREME_FADE = SkeletonSpec(
         "bars that is."
     ),
     param_grid={
-        "session_start": ["00:00", "08:30"],
+        "session_start": ["00:00", "09:30"],
         "session_end": ["23:59", "16:00"],
         "stop_atr_mult": [1.0, 1.5, 2.0],
         "target_atr_mult": [1.5, 2.5, 3.5],
@@ -4891,6 +4891,37 @@ def _apply_v8_search_overrides(
             entries[f"{side}_connectors"] = conns + ["AND"]
 
 
+# 2026-10-20 (report section 3, "cut breadth"): 121 families x ~6 parameters meant thousands of trials per instrument, mostly
+# re-parametrisations of ~25 ideas, so the multiple-testing penalty buried any real signal. Near-duplicates below are RETIRED from
+# every "all families" search (an explicit single-family request still runs them, so history and tests keep working). Value = the
+# surviving family that carries the same hypothesis.
+RETIRED_FAMILIES: dict[str, str] = {
+    # SMC / liquidity near-duplicates
+    "order_block_trend_continuation": "order_block_reaction", "volume_confirmed_order_block_reaction": "order_block_reaction",
+    "volume_confirmed_fvg_continuation": "fvg_imbalance_continuation", "fvg_quick_fill_fade": "fvg_imbalance_continuation",
+    "liquidity_sweep_quick_reclaim": "liquidity_sweep_reversal", "session_gated_liquidity_sweep": "liquidity_sweep_reversal",
+    "turtle_soup_displacement_fade": "liquidity_sweep_reversal",
+    # oscillator-threshold reversion (one RSI-extreme family represents the idea)
+    "stochastic_extreme_reversion": "rsi_extreme_reversion", "cci_extreme_reversion": "rsi_extreme_reversion",
+    "williams_r_extreme_reversion": "rsi_extreme_reversion", "mfi_extreme_reversion": "rsi_extreme_reversion",
+    "fisher_transform_extreme_reversion": "rsi_extreme_reversion", "connors_rsi_extreme_reversion": "rsi_extreme_reversion",
+    "rsi2_volume_confirmed_reversion": "rsi_extreme_reversion",
+    # moving-average / indicator-flavoured trend variants
+    "macd_histogram_zero_cross_trend": "macd_cross_trend", "heikin_ashi_trend_continuation": "wma_ribbon_trend",
+    "hma_trend_following": "wma_ribbon_trend", "wma_sma_divergence_trend": "wma_ribbon_trend",
+    "parabolic_sar_trend_following": "supertrend_trend_following", "chandelier_exit_trend_following": "supertrend_trend_following",
+    # breakout re-skins
+    "volume_trend_breakout_confirmation": "trend_breakout", "volume_confirmed_breakout": "trend_breakout",
+    "aroon_trend_strength_breakout": "trend_breakout", "vortex_trend_strength_breakout": "trend_breakout",
+    "adx_trend_strength_breakout": "trend_breakout",
+}
+
+
+def active_family_names() -> list[str]:
+    """Families an "all" search runs: everything except RETIRED_FAMILIES."""
+    return [n for n in FAMILIES if n not in RETIRED_FAMILIES]
+
+
 def generate_search_space(
     mode: str,
     family: str | None = None,
@@ -5001,7 +5032,7 @@ def generate_search_space(
     if strategy is not None:
         return _grid_space_around_strategy(strategy, grid_points_per_gene, max_candidates, seed)
 
-    families_to_run = list(FAMILIES.keys()) if family in (None, "all") else [family]
+    families_to_run = active_family_names() if family in (None, "all") else [family]
     for fam in families_to_run:
         if fam not in FAMILIES:
             raise StrategySpaceError(f"Unknown strategy family '{fam}'. Known families: {list(FAMILIES)}")

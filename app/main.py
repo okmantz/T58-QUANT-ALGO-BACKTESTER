@@ -1149,6 +1149,12 @@ def main():
     except Exception:
         pass  # telemetry must never break startup
 
+    try:
+        from app.data.clock_epoch import ensure_clock_epoch
+        ensure_clock_epoch()      # P0 (report 2026-10-20): archive memory built under the misaligned session clock
+    except Exception:
+        pass  # never block startup
+
     parser = argparse.ArgumentParser(description="T58 Trading — Quant Algo Backtester")
     parser.add_argument("--cli", action="store_true", help="run headlessly instead of launching the GUI")
     parser.add_argument("--csv", default=None, help="path to a market data CSV (--cli mode); if omitted, uses the "

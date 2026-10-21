@@ -1565,6 +1565,23 @@ def import_csv(
             )
         )
 
+    # P0 (report 2026-10-20) -- canonical exchange clock. Vendor bars are UTC; every session / day / VWAP / event
+    # operand means EXCHANGE time. Stamp one DST-aware ``exchange_time`` column and one ``trading_day`` column
+    # (17:00 CT roll for CME futures) here, once, so nothing downstream re-guesses the clock.
+    try:
+        from app.data import session_clock as _sc
+        _sym = _sc.infer_symbol(_src_name) if "_src_name" in locals() else ""
+        _sc.stamp_session_columns(df, symbol=_sym)
+        for _sev, _msg in _sc.clock_quality_issues(df, _sym):
+            issues.append(ValidationIssue(_sev, _msg))
+    except Exception as _clock_exc:  # never let the clock stamp break an import
+        issues.append(
+            ValidationIssue(
+                "warning",
+                f"Exchange-clock stamp skipped ({_clock_exc}); session operands will read timestamps as exchange wall-clock.",
+            )
+        )
+
     return ImportResult(
         dataframe=df,
         issues=issues,

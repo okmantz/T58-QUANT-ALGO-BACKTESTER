@@ -390,6 +390,37 @@ SPEEDRUN_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
+
+# 2026-10-20 (report section 4): the headline everywhere is the verdict LADDER, not READY. READY/MARGINAL/NOT READY stay as the
+# legacy detail in tooltips. A stored ladder stage always wins; otherwise the legacy verdict maps conservatively (READY can never
+# imply more than FORWARD-TEST CANDIDATE -- EVALUATE / FUNDED come only from recorded forward-test facts).
+@app.template_filter("ladder")
+def _ladder_filter(verdict, stored=None):
+    from app.orchestration.verdict_ladder import STAGES
+    if stored and str(stored).upper() in STAGES:
+        return str(stored).upper()
+    v = str(verdict or "").upper()
+    if v == "READY":
+        return "FORWARD-TEST CANDIDATE"
+    if v in ("MARGINAL", "NOT READY"):
+        return "LEAD"
+    if v in STAGES:
+        return v
+    return v or "UNTESTED"
+
+
+@app.template_filter("ladder_class")
+def _ladder_class_filter(stage):
+    return {"REJECT": "red", "LEAD": "amber", "FORWARD-TEST CANDIDATE": "green", "EVALUATE": "green", "FUNDED": "green"}.get(str(stage), "grey")
+
+# P0 (report 2026-10-20): archive search memory (family health, graveyard, pre-registered results) that was built under the
+# misaligned session clock. Idempotent; a marker in reports/clock_epoch.json records that it ran.
+try:
+    from app.data.clock_epoch import ensure_clock_epoch as _ensure_clock_epoch
+    _ensure_clock_epoch()
+except Exception:  # noqa: BLE001 - never block startup
+    pass
+
 # P0-7 (Oct 2026) -- upload size cap: the web edition had NO request-size
 # limit at all; a single oversized POST (CSV/zip upload) was fully loaded
 # into RAM. 256 MB gives real market-data uploads (a 1-minute ES CSV for
@@ -1725,8 +1756,14 @@ def dashboard():
         _first = (_acct.display_name or _acct.username or "").strip().split(" ")[0]
     except Exception:  # noqa: BLE001
         _first = ""
+    try:
+        from app.validation.pipeline_controls import load_controls
+        _controls = load_controls()
+    except Exception:  # noqa: BLE001 - the card is informational; never break the dashboard
+        _controls = None
     return render_template(
         "dashboard.html",
+        pipeline_controls=_controls,
         user_name=_first or "Trader",
         data=dashboard_stats,
         current_strategy=current,
@@ -6555,8 +6592,10 @@ def full_pipeline_job_status(job_id):
     summary = None
     if result is not None:
         _mch = monte_carlo_headline(result.final_mc.to_dict())
+        _lad = ((getattr(result, "audit_evidence", None) or {}).get("ladder") or {}).get("stage")
         summary = {
             "verdict": result.verdict,
+            "ladder_stage": _lad or _ladder_filter(result.verdict),
             "verdict_reasons": result.verdict_reasons,
             "baseline_trades": len(result.baseline_bt.trades),
             "baseline_net_profit": result.baseline_bt.statistics.net_profit,
@@ -10622,7 +10661,7 @@ def search_start():
         )
         stage_cfg = SearchStageConfig(
             candidate_source=candidate_source,
-            min_trades=int(form.get("min_trades", 20) or 20),
+            min_trades=int(form.get("min_trades", 100) or 100),
             min_profit_factor=float(form.get("min_profit_factor", 1.05) or 1.05),
             stage1_top_n=int(form.get("stage1_top_n", 40) or 40),
             # v7 (2026-10-05, worker B, fix #9): 10x4 -> 40x15 default budget.
@@ -10633,7 +10672,7 @@ def search_start():
             full_mc_sims=int(form.get("full_mc_sims", 3000) or 3000),
             walk_forward_folds=int(form.get("walk_forward_folds", 4) or 4),
             robustness_neighbors=int(form.get("robustness_neighbors", 6) or 6),
-            fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
+            fitness_metric=form.get("fitness_metric", "edge_lb_r") or "edge_lb_r",
             # B1-2 (w4-forge): Stage 3 payout acceptance floor, 0-100 scale
             min_first_payout_probability=float(form.get("min_first_payout_probability", 50.0) or 50.0),
             min_eval_pass_probability=float(form.get("min_eval_pass_probability", 70.0) or 70.0),
@@ -11984,7 +12023,7 @@ def search_multi_instrument_start():
             exclude_families=exclude_families,
         )
         stage_cfg = SearchStageConfig(
-            min_trades=int(form.get("min_trades", 20) or 20),
+            min_trades=int(form.get("min_trades", 100) or 100),
             min_profit_factor=float(form.get("min_profit_factor", 1.05) or 1.05),
             stage1_top_n=int(form.get("stage1_top_n", 40) or 40),
             # v7 (2026-10-05, worker B, fix #9): 10x4 -> 40x15 default budget.
@@ -11994,7 +12033,7 @@ def search_multi_instrument_start():
             full_mc_sims=int(form.get("full_mc_sims", 3000) or 3000),
             walk_forward_folds=int(form.get("walk_forward_folds", 4) or 4),
             robustness_neighbors=int(form.get("robustness_neighbors", 6) or 6),
-            fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
+            fitness_metric=form.get("fitness_metric", "edge_lb_r") or "edge_lb_r",
             min_eval_pass_probability=float(form.get("min_eval_pass_probability", 70.0) or 70.0),
             min_first_payout_probability=float(form.get("min_first_payout_probability", 50.0) or 50.0),
             workers=None, random_seed=int(form.get("seed", 42) or 42),

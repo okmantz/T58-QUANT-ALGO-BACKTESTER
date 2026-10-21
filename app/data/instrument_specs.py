@@ -141,6 +141,13 @@ _SPECS: tuple[InstrumentSpec, ...] = (
     InstrumentSpec("M2K", "Micro E-mini Russell 2000", "CME", pip_size=1.0, contract_size=5.0, tick_size=0.10, tick_value=0.50, default_commission_round_turn=1.42),
     InstrumentSpec("GC", "Gold futures", "COMEX", pip_size=1.0, contract_size=100.0, tick_size=0.10, tick_value=10.00, default_commission_round_turn=5.10),
     InstrumentSpec("MGC", "Micro Gold futures", "COMEX", pip_size=1.0, contract_size=10.0, tick_size=0.10, tick_value=1.00, default_commission_round_turn=1.60),
+    # 2026-10-20 (report section 5): the cross-market edge test needs 8-12 liquid, non-equity-index markets. $/point = contract_size.
+    InstrumentSpec("CL", "WTI crude oil futures", "NYMEX", pip_size=1.0, contract_size=1000.0, tick_size=0.01, tick_value=10.00, default_commission_round_turn=4.50),
+    InstrumentSpec("MCL", "Micro WTI crude oil futures", "NYMEX", pip_size=1.0, contract_size=100.0, tick_size=0.01, tick_value=1.00, default_commission_round_turn=1.60),
+    InstrumentSpec("ZN", "10-Year T-Note futures", "CBOT", pip_size=1.0, contract_size=1000.0, tick_size=0.015625, tick_value=15.625, default_commission_round_turn=3.80),
+    InstrumentSpec("ZB", "30-Year T-Bond futures", "CBOT", pip_size=1.0, contract_size=1000.0, tick_size=0.03125, tick_value=31.25, default_commission_round_turn=3.80),
+    # 6E: price is USD per EUR, 125,000 EUR per contract -> $12.50 per 0.0001 (one "pip"), tick 0.00005 = $6.25.
+    InstrumentSpec("6E", "Euro FX futures", "CME", pip_size=0.0001, contract_size=12.5, tick_size=0.00005, tick_value=6.25, default_commission_round_turn=4.50),
 )
 
 # dataset-folder / vendor labels that do not contain the root symbol itself

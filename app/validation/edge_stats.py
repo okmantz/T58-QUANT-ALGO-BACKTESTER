@@ -93,12 +93,27 @@ def trades_still_needed(mean_r: float | None, sd_r: float | None, n_have: int, a
 # ---------------------------------------------------------------------------------------------------------
 
 def _day_codes(days) -> tuple[np.ndarray, int]:
-    """Integer code per trade for its calendar day (any hashable / datetime-like), plus the number of distinct days."""
+    """Integer code per trade for its TRADING day (any hashable / datetime-like), plus the number of distinct days.
+
+    P0 (report 2026-10-20): trade stamps are UTC, and a UTC calendar day rolls in the middle of the Globex session. Blocks are
+    therefore the instrument's trading day (17:00 CT roll, ``app.data.trading_day``) so two trades of the same session always share
+    a block. Unparseable stamps each get their own block (never silently merged)."""
     arr = np.asarray(list(days), dtype=object)
     try:
         import pandas as pd
-        arr = pd.to_datetime(pd.Series(arr), utc=True, errors="coerce").dt.tz_localize(None).dt.normalize().to_numpy()
-        codes = np.unique(arr.astype("datetime64[D]"), return_inverse=True)[1]
+        from app.data.trading_day import trading_days
+        ser = pd.to_datetime(pd.Series(arr), utc=True, errors="coerce")
+        ok = ser.notna().to_numpy()
+        labels = np.empty(len(ser), dtype="datetime64[D]")
+        if ok.any():
+            td = trading_days(pd.DatetimeIndex(ser[ok].dt.tz_localize(None)))
+            labels[ok] = np.asarray(pd.to_datetime(td).to_numpy(), dtype="datetime64[D]")
+        codes = np.zeros(len(ser), dtype=int)
+        if ok.any():
+            codes[ok] = np.unique(labels[ok], return_inverse=True)[1]
+        n_ok = int(codes[ok].max()) + 1 if ok.any() else 0
+        codes[~ok] = n_ok + np.arange(int((~ok).sum()))
+        return codes, n_ok + int((~ok).sum())
     except Exception:  # noqa: BLE001 -- fall back to raw equality
         codes = np.unique(arr.astype(str), return_inverse=True)[1]
     return np.asarray(codes, dtype=int), int(codes.max()) + 1 if len(codes) else 0

@@ -63,6 +63,33 @@ def total(label, half_life_days: float | None = DEFAULT_HALF_LIFE_DAYS, now: flo
     return int(-(-acc // 1)) if acc > 0 else 0
 
 
+CLOCK_EPOCHS_KEY = "_clock_epochs"
+
+
+def mark_clock_epoch(epoch_id: str, note: str, now: float | None = None) -> None:
+    """Annotate (never delete) the ledger: every trial recorded before ``now`` ran on the misaligned session clock.
+
+    Stored under a reserved key that ``total`` / ``raw_total`` never read, so trial counts -- and the deflated-Sharpe penalty
+    that depends on them -- are unchanged. ``clock_epochs()`` returns the annotations for reports."""
+    with _LOCK:
+        data = _load()
+        eps = data.get(CLOCK_EPOCHS_KEY) if isinstance(data.get(CLOCK_EPOCHS_KEY), list) else []
+        if any(isinstance(e, dict) and e.get("epoch") == epoch_id for e in eps):
+            return
+        eps.append({"epoch": str(epoch_id), "t": time.time() if now is None else float(now), "note": str(note)})
+        data[CLOCK_EPOCHS_KEY] = eps
+        try:
+            _PATH.parent.mkdir(parents=True, exist_ok=True)
+            _PATH.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")
+        except Exception:
+            pass
+
+
+def clock_epochs() -> list[dict]:
+    v = _load().get(CLOCK_EPOCHS_KEY)
+    return [e for e in v if isinstance(e, dict)] if isinstance(v, list) else []
+
+
 def record(label, n: int, now: float | None = None) -> int:
     n = max(0, int(n))
     with _LOCK:

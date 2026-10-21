@@ -63,7 +63,8 @@ class BrokerProfile:
 # Deliberately conservative placeholders until the forward-test fill ledger supplies measured numbers.
 PROFILES: dict[str, BrokerProfile] = {
     "registry": BrokerProfile("registry"),
-    "conservative": BrokerProfile("conservative", slippage_ticks={"NQ": 2.0, "MNQ": 2.0, "ES": 1.5, "MES": 1.5, "GC": 2.0, "MGC": 2.0}),
+    "conservative": BrokerProfile("conservative", slippage_ticks={"NQ": 2.0, "MNQ": 2.0, "ES": 1.5, "MES": 1.5, "GC": 2.0, "MGC": 2.0,
+                                                                         "CL": 2.0, "MCL": 2.0, "ZN": 1.0, "ZB": 1.0, "6E": 1.5, "RTY": 1.5, "YM": 1.5}),
 }
 
 

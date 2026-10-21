@@ -220,8 +220,16 @@ def _spec_from_record(record: dict) -> dict:
 @dataclass
 class SearchStageConfig:
     # Stage 1 -- cheap filter
-    min_trades: int = 20
+    # 2026-10-20 (report section 3): Stage 1 used to keep anything with >=20 trades and PF>=1.05 -- statistically noise (20 trades at
+    # sd 1.3R cannot distinguish +0.3R from zero). The floor is now 100 trades AND a mean-R t-stat (average_r * sqrt(n) / sd, sd =
+    # DEFAULT_TRADE_SD_R) of at least ``stage1_min_t_stat``. This is a single-market SCREEN (1x costs, t>=1); the primary edge test is the
+    # pooled cross-market day-block bootstrap at 2x costs (app.validation.pooled_edge). Set min_trades back to 20 to reproduce old runs.
+    min_trades: int = 100
     min_profit_factor: float = 1.05
+    stage1_min_t_stat: float = 1.0
+    # A strategy whose round-trip cost exceeds this fraction of its stop distance (in R) cannot be rescued by any signal; it is skipped
+    # before a backtest is spent on it (0 disables).
+    stage1_max_cost_in_r: float = 0.15
     max_drawdown_buffer_mult: float = 1.5     # candidate's own DD must be <= prop max_drawdown_pct * this
     stage1_top_n: int = 40                    # survivors that advance to Stage 2
 
@@ -254,7 +262,9 @@ class SearchStageConfig:
     # default cost assumptions.
     cost_stress_enabled: bool = True
     cost_stress_multiplier: float = 2.0
-    cost_stress_penalty_weight: float = 0.35
+    # 2026-10-20: with the default edge_lb_r fitness a weight of 1.0 makes the GA select on the lower bound AFTER 2x costs (the
+    # penalty formula collapses to the stressed value), which is the report's "mean-R lower bound after costs" objective.
+    cost_stress_penalty_weight: float = 1.0
 
     # Stage 3 -- validation gate
     #
@@ -312,7 +322,10 @@ class SearchStageConfig:
     robustness_perturbation_frac: float = 0.15
     robustness_min_stability: float = 0.4
 
-    fitness_metric: str = "eval_pass_probability"
+    # 2026-10-20 (report section 3): the search used to optimise prop-eval pass probability directly - the noisiest, most overfittable
+    # objective available. It now ranks on EDGE (day-block-bootstrap lower bound of mean R, after 2x costs, year-stability weighted);
+    # prop pass probability is evaluated last, only on survivors (Stage 3 gates). Pass "eval_pass_probability" to restore the old behaviour.
+    fitness_metric: str = "edge_lb_r"
     workers: int | None = None                # None = os.cpu_count()
     random_seed: int = 42
 
@@ -428,6 +441,8 @@ class SearchSummary:
     # "too slow for this box" from "genuinely weak candidates".
     stage2_stalled_skipped: int = 0
     stage3_stalled_skipped: int = 0
+    # 2026-10-20: random-entry control (app.search.run_controls) - the false-pass rate of this run's own Stage-1 rule.
+    controls: dict | None = None
     # P1-4: how the input df was split for this run -- Stages 0-3 ran on
     # the first (1 - locked_holdout_frac) of bars; the last
     # locked_holdout_frac was locked for promote_champion. Recorded so a
@@ -487,6 +502,38 @@ def _passes_stage1_filters(stats: dict, min_trades: int, min_profit_factor: floa
     return bool(n_trades >= min_trades and pf_val >= min_profit_factor and max_dd <= max_dd_limit and net_ok)
 
 
+def _mean_r_t_stat(stats: dict) -> float:
+    """Approximate t-stat of mean R from summary statistics: average_r * sqrt(n) / sd_r (sd assumed = the report's 1.3R)."""
+    try:
+        from app.validation.edge_stats import DEFAULT_TRADE_SD_R
+        n = float(stats.get("total_trades", 0) or 0)
+        ar = float(stats.get("average_r", 0.0) or 0.0)
+        if n < 2 or not math.isfinite(ar):
+            return float("-inf")
+        return ar * math.sqrt(n) / DEFAULT_TRADE_SD_R
+    except Exception:  # noqa: BLE001
+        return float("inf")   # never reject on a stats-shape surprise
+
+
+def _prescreen_cost_in_r(base: dict, spec: dict, risk: RiskConfig, df, max_cost_r: float) -> dict | None:
+    """Skip a candidate whose round-trip cost at its own median stop exceeds ``max_cost_r`` R (report section 3)."""
+    if not max_cost_r or max_cost_r <= 0:
+        return None
+    try:
+        from app.validation.pooled_edge import estimated_cost_in_r
+        stop_pips = _candidate_median_stop_pips(spec, risk, df)
+        if stop_pips is None or not math.isfinite(stop_pips) or stop_pips <= 0:
+            return None
+        c = estimated_cost_in_r(risk, stop_pips * risk.pip_size)
+        if not math.isfinite(c) or c <= max_cost_r:
+            return None
+        detail = f"round-trip cost is {c:.2f}R at this candidate's median stop of {stop_pips:.1f} pips (limit {max_cost_r:.2f}R)"
+        return {**base, "passed_stage1": False, "prescreen_skipped": True, "prescreen_skip_reason": "cost_in_r",
+                "error": f"pre-screen: cost too high ({detail})", "prescreen_detail": detail}
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _stage1_score(
     base: dict, stats: dict, has_trades: bool, filters: dict, prop_rules: PropRules,
     scale_mismatch: bool = False,
@@ -514,6 +561,7 @@ def _stage1_score(
         and pf_val >= filters["min_profit_factor"]
         and max_dd <= prop_rules.max_drawdown_pct * filters["max_drawdown_buffer_mult"]
         and stats.get("net_profit", 0.0) > 0
+        and _mean_r_t_stat(stats) >= float(filters.get("min_t_stat", 0.0) or 0.0)
     )
     # Rewards edge (profit factor) AND sample size together, so a 3-trade
     # profit-factor-of-8 fluke doesn't outrank a 200-trade profit-factor-of-1.3
@@ -641,6 +689,8 @@ def _stage1_task(candidate_id: str, spec: dict, filters: dict) -> dict:
     # w10-astra B3 hook: skip candidates that can't afford 1 contract at
     # their median stop before spending a backtest on them.
     prescreen = _prescreen_funding(base, spec, risk, df)
+    if prescreen is None:
+        prescreen = _prescreen_cost_in_r(base, spec, risk, df, float((filters or {}).get("max_cost_in_r", 0.0) or 0.0))
     if prescreen is not None:
         return prescreen
     try:
@@ -695,6 +745,8 @@ def _stage1_task_batch(items: list[tuple[str, dict]], filters: dict) -> list[dic
         # strategy is even built (vectorized or not, an unfundable candidate
         # is an unfundable candidate).
         prescreen = _prescreen_funding(base, spec, risk, df)
+        if prescreen is None:
+            prescreen = _prescreen_cost_in_r(base, spec, risk, df, float((filters or {}).get("max_cost_in_r", 0.0) or 0.0))
         if prescreen is not None:
             results.append(prescreen)
             continue
@@ -792,7 +844,7 @@ def _stage2_task(
         single_run = simulate_account(pnls, dates, prop_rules, reset_on_breach=reset_on_breach)
         mc = run_monte_carlo(bt.trades, prop_rules, mc_cfg)
         prop_summary = summarize_single_run(single_run)
-        fitness = compute_fitness(stats, prop_summary, mc, fitness_metric)
+        fitness = compute_fitness(stats, prop_summary, mc, fitness_metric, trades=bt.trades)
         return {
             **base, "statistics": stats,
             "prop_summary": prop_summary, "fitness": fitness,
@@ -892,7 +944,7 @@ def _stage3_task(candidate_id: str, spec: dict, cfg: dict) -> dict:
         "median_drawdown_pct": mc_result.median_drawdown_pct,
         "n_simulations": mc_result.n_simulations,
     }
-    fitness = compute_fitness(stats, prop_summary, mc_result, cfg["fitness_metric"])
+    fitness = compute_fitness(stats, prop_summary, mc_result, cfg["fitness_metric"], trades=bt.trades)
 
     cost_ladder = compute_cost_ladder(bt.trades)
 
@@ -1318,6 +1370,8 @@ def run_search(
         "min_trades": stage_cfg.min_trades,
         "min_profit_factor": stage_cfg.min_profit_factor,
         "max_drawdown_buffer_mult": stage_cfg.max_drawdown_buffer_mult,
+        "min_t_stat": stage_cfg.stage1_min_t_stat,
+        "max_cost_in_r": stage_cfg.stage1_max_cost_in_r,
     }
 
     log(
@@ -1780,6 +1834,18 @@ def run_search(
             rec["composite_score"] = -1.0
         db.insert_candidate(run_id, rec["candidate_id"], "stage3", rec)
 
+    # 2026-10-20 (report section 3): a random-entry control accompanies EVERY run. Never blocks or alters candidate selection.
+    _controls = None
+    if os.environ.get("T58_SEARCH_CONTROLS", "1") != "0":
+        try:
+            from app.search.run_controls import control_log_lines, search_controls
+            _controls = search_controls(dev_df, risk, prop_rules, stage1_records, dict(space.candidates), filters,
+                                        finalists=[r for r in stage3_records if r.get("passed_stage3_gate")][:5], log=log)
+            for _line in control_log_lines(_controls):
+                log(_line)
+        except Exception as _exc:  # noqa: BLE001
+            log(f"Random-entry control skipped: {_exc}")
+
     leaderboard = db.leaderboard(run_id, stage="stage3", top_n=25, only_passed=False)
     champion = next((r for r in leaderboard if r.get("passed_stage3_gate")), None)
     db.finish_run(run_id, status="completed")
@@ -1815,7 +1881,7 @@ def run_search(
         graveyard_path=str(graveyard_path) if graveyard_path else None,
         locked_holdout_frac=stage_cfg.locked_holdout_frac,
         dev_bars=len(dev_df), locked_bars=len(locked_df),
-        stage2_stalled_skipped=stage2_stalled, stage3_stalled_skipped=stage3_stalled,
+        stage2_stalled_skipped=stage2_stalled, stage3_stalled_skipped=stage3_stalled, controls=_controls,
     )
 
 

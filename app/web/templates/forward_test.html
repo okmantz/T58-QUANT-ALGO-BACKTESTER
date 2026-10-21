@@ -31,7 +31,7 @@
     <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
       <div><b>{{ deploy_champion.display_name or deploy_champion.filename }}</b>
         <div class="lc-hint">{{ deploy_champion.strategy_type }} · stage: {{ deploy_champion.promotion.stage_title }}</div></div>
-      <span class="lc-pill {{ 'green' if deploy_champion.verdict == 'READY' else ('red' if deploy_champion.verdict == 'NOT READY' else 'amber') }}">{{ deploy_champion.verdict or deploy_champion.status }}</span>
+      {% set _lad = (deploy_champion.verdict or deploy_champion.status or '')|ladder %}<span class="lc-pill {{ _lad|ladder_class }}" title="legacy verdict: {{ deploy_champion.verdict or deploy_champion.status }}">{{ _lad }}</span>
     </div>
     <p class="lc-hint" style="margin-top:8px;">This is the strategy warm-up is for — it's preselected in the Strategy dropdown in the form below, so the forward test runs the champion itself, not a placeholder.</p>
   </div>
@@ -164,7 +164,7 @@
     {% if deploy_champion %}
     <div class="lc-kv"><span class="k">Strategy</span><span class="v">{{ deploy_champion.display_name or deploy_champion.filename }}</span></div>
     <div class="lc-kv"><span class="k">Stage</span><span class="v">{{ deploy_champion.promotion.stage_title }}</span></div>
-    <div class="lc-kv"><span class="k">Verdict</span><span class="v">{{ deploy_champion.verdict or deploy_champion.status }}</span></div>
+    <div class="lc-kv"><span class="k">Verdict ladder</span><span class="v">{{ (deploy_champion.verdict or deploy_champion.status or '')|ladder }} <small>(legacy: {{ deploy_champion.verdict or deploy_champion.status }})</small></span></div>
     {% else %}
     <div class="lc-kv"><span class="k">Strategy</span><span class="v">none — nothing Validated yet</span></div>
     {% endif %}

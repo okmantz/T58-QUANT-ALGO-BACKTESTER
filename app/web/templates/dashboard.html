@@ -151,7 +151,7 @@
     <div class="meta"><span>{{ snapshot.where }}</span><span>{{ snapshot.where_pct }}%</span></div>
     <dl>
       <div><dt>Is it working?</dt>
-        <dd><span class="t58-status {{ 'validated' if snapshot.is_it_working == 'READY' else ('rejected' if snapshot.is_it_working in ('NOT READY',) else 'optimized') }}" data-ve='{{ snapshot.verdict_explain|tojson }}' tabindex="0" role="button" title="Click to see why">{{ snapshot.is_it_working }}</span>
+        <dd><span class="t58-status {{ 'validated' if snapshot.is_it_working in ('READY',) else ('rejected' if snapshot.is_it_working in ('NOT READY',) else 'optimized') }}" data-ve='{{ snapshot.verdict_explain|tojson }}' tabindex="0" role="button" title="Click to see why">{{ snapshot.is_it_working|ladder }}</span>
         <span style="color:var(--text-muted);"> {{ snapshot.why }}</span></dd></div>
       <div><dt>Next step</dt><dd class="t58-glow-teal">{{ snapshot.next_action }}</dd></div>
     </dl>
@@ -335,6 +335,23 @@
   </details>
 </div>
 
+<!-- ---- Pipeline controls (positive + negative) ---- -->
+{% if pipeline_controls %}
+<div class="db-card">
+  <h2>Pipeline controls <span class="t58-pill {{ 'pass' if pipeline_controls.ok else 'fail' }}">{{ 'HEALTHY' if pipeline_controls.ok else 'CHECK PIPELINE' }}</span></h2>
+  <p style="color:var(--text-muted);font-size:12px;margin:-6px 0 12px;">A pipeline that rejects everything looks the same as a broken one. These controls test the edge-test layer itself: a zero-edge stream must almost never pass (false positives), and a planted edge must usually be found (power). Pooling markets is what makes a real +0.20R edge detectable.</p>
+  <table class="t58-table" style="width:100%;font-size:13px;">
+    <thead><tr><th align="left">Planted edge</th><th align="right">Detected, one market</th><th align="right">Detected, pooled over {{ pipeline_controls.positive.n_markets }} markets</th></tr></thead>
+    <tbody>
+    <tr><td>0R (negative control)</td><td align="right" colspan="2">false-positive rate {{ '%.1f'|format(pipeline_controls.negative.false_positive_rate * 100) }}% (limit {{ '%.0f'|format(pipeline_controls.negative.target_max * 100) }}%)</td></tr>
+    {% for row in pipeline_controls.positive.rows %}
+    <tr><td>+{{ '%.2f'|format(row.edge_r) }}R</td><td align="right">{{ '%.0f'|format(row.single_market * 100) }}%</td><td align="right">{{ '%.0f'|format(row.pooled * 100) }}%</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
 <!-- ---- Champion Board ---- -->
 <div class="db-card">
   <h2>Champion Board <a href="/champion-simple">Open &rarr;</a></h2>
@@ -347,7 +364,7 @@
       {% for r in board_rows[:10] %}
       <tr>
         <td>{{ r.display_name }}</td>
-        <td><span class="t58-pill {{ 'pass' if r.status == 'READY' else ('fail' if r.status == 'NOT READY' else '') }}" data-ve='{{ r.verdict_explain|tojson }}' tabindex="0" role="button" title="Click to see why">{{ r.status }}</span></td>
+        <td><span class="t58-pill {{ 'pass' if r.status == 'READY' else ('fail' if r.status == 'NOT READY' else '') }}" data-ve='{{ r.verdict_explain|tojson }}' tabindex="0" role="button" title="Click to see why (legacy verdict: {{ r.status }})">{{ r.status|ladder }}</span></td>
         <td>{{ "%.0f%%"|format(r.eval_pct) if r.eval_pct is not none else "--" }}</td>
         <td>{{ "%.0f%%"|format(r.payout_pct) if r.payout_pct is not none else "--" }}</td>
         <td>{{ "%.0f%%"|format(r.oos_pct) if r.oos_pct is not none else "--" }}</td>

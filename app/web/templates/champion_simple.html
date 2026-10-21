@@ -64,7 +64,7 @@
         <div class="ch-bar"><div style="width:{{ r.promotion.stage_pct or 0 }}%"></div></div>
       </div>
       <div>
-        <span class="lc-pill {{ 'green' if r.verdict == 'READY' else ('red' if r.verdict == 'NOT READY' else ('amber' if r.verdict == 'MARGINAL' else 'grey')) }}" data-ve='{{ r.verdict_explain|tojson }}' tabindex="0" role="button" title="Click to see why">{{ r.verdict or 'UNTESTED' }}</span>
+        {% set _lad = (r.verdict or '')|ladder(r.ladder_stage) %}<span class="lc-pill {{ _lad|ladder_class }}" data-ve='{{ r.verdict_explain|tojson }}' tabindex="0" role="button" title="Click to see why (legacy verdict: {{ r.verdict or 'UNTESTED' }})">{{ _lad }}</span>
         {% if r.validation %}<div class="ch-meta" style="margin-top:5px;">Checks {{ r.validation.ran }}/{{ r.validation.total }}{% if r.validation.has_stale %} · <span style="color:var(--lc-amber);">outdated</span>{% endif %}</div>{% endif %}
       </div>
       <div class="ch-next">
