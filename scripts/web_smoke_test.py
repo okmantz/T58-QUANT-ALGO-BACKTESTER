@@ -40,6 +40,8 @@ PAGES = [
     "/research-labs", "/research-labs/volume-profile", "/research-labs/order-flow", "/research-labs/order-book", "/research-labs/lead-lag",
     "/research-labs/stat-arb", "/research-labs/event-study", "/research-labs/hypothesis", "/pine-indicator/", "/education/knowledge-check",
     "/quant-lab/", "/api/memory",
+    # 2026-10-21 release: Global Events (store-only endpoints; must answer instantly even with no internet)
+    "/events/", "/events/api/bootstrap", "/events/api/health", "/static/global-events/global-events.js", "/static/global-events/land.json",
 ]
 
 # v9.15 (Owen): the Quant Lab and Account Start Here pages were
