@@ -195,6 +195,19 @@
   </div>
 </div>
 </div>
+<script>
+  /* Deep link from Global Events ("Ask AI"): prefill the chat box, never auto-send. */
+  (function () {
+    try {
+      var q = new URLSearchParams(location.search).get('ask');
+      if (!q) return;
+      window.addEventListener('DOMContentLoaded', function () {
+        var box = document.getElementById('chat-input');
+        if (box) { box.value = q.slice(0, 600); box.focus(); box.scrollIntoView({ block: 'center' }); }
+      });
+    } catch (e) { /* ignore */ }
+  })();
+</script>
 <script src="/static/t58-chrome.js" defer></script>
 <script>
 let mode = 'personal';

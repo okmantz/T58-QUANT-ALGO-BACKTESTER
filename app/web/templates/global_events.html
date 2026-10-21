@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Global Events — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<link rel="stylesheet" href="/static/global-events/global-events.css">
+</head>
+<body>
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<main class="t58-main">
+<div class="gx" id="gx" data-state="loading">
+
+  <header class="gx-head">
+    <div>
+      <h1>Global Events</h1>
+      <p>What is moving your instruments &mdash; and what is next.</p>
+    </div>
+    <div class="gx-controls">
+      <div class="gx-seg" id="gx-range" role="group" aria-label="Time range">
+        <button type="button" data-range="24h" class="on">24h</button>
+        <button type="button" data-range="3d">3d</button>
+        <button type="button" data-range="7d">7d</button>
+        <button type="button" data-range="30d">30d</button>
+      </div>
+      <span class="gx-pill" id="gx-fresh" title="Freshness of the local data store"><i></i><span>Loading&hellip;</span></span>
+      <button type="button" class="gx-icon-btn" id="gx-refresh" title="Refresh now" aria-label="Refresh now">&#8635;</button>
+    </div>
+  </header>
+
+  <section class="gx-strip" id="gx-strip" aria-label="Market strip"></section>
+
+  <div class="gx-grid">
+    <div class="gx-left">
+    <section class="gx-card gx-map-card" aria-label="Events map">
+      <div class="gx-map-tools" id="gx-layers">
+        <button type="button" data-layer="quake" class="on"><i style="--c:var(--teal)"></i>Quakes</button>
+        <button type="button" data-layer="hazard" class="on"><i style="--c:var(--amber)"></i>Storms &amp; fire</button>
+        <button type="button" data-layer="theater" class="on"><i style="--c:var(--neon-cyan)"></i>Theaters</button>
+      </div>
+      <div class="gx-map-wrap" id="gx-map-wrap">
+        <canvas id="gx-map" role="img" aria-label="World map of recent earthquakes, hazards and theater heat"></canvas>
+        <div class="gx-tip" id="gx-tip" hidden></div>
+        <div class="gx-map-empty" id="gx-map-empty" hidden>No mapped events yet &mdash; the first refresh is running.</div>
+      </div>
+    </section>
+
+    <section class="gx-card gx-news" aria-label="Headlines">
+      <h2>Headlines
+        <span class="gx-chips" id="gx-news-filter">
+          <button type="button" data-min="0" class="on">All</button>
+          <button type="button" data-min="1">Impact 1+</button>
+          <button type="button" data-min="2">Impact 2+</button>
+        </span>
+      </h2>
+      <div class="gx-filter-note" id="gx-filter-note" hidden></div>
+      <ul class="gx-headlines" id="gx-headlines"></ul>
+      <button type="button" class="gx-more" id="gx-more" hidden>Show more</button>
+    </section>
+    </div>
+
+    <aside class="gx-rail">
+      <section class="gx-card" aria-label="Next events">
+        <h2>Next events <span class="gx-sub" id="gx-events-sub"></span></h2>
+        <ul class="gx-events" id="gx-events"></ul>
+      </section>
+      <section class="gx-card" aria-label="Theater heat">
+        <h2>Theater heat <span class="gx-tag" title="Activity score from headlines and hazards. Uncalibrated v1 &mdash; context, not a signal.">experimental</span></h2>
+        <ul class="gx-theaters" id="gx-theaters"></ul>
+      </section>
+    </aside>
+  </div>
+
+  <div class="gx-two">
+    <section class="gx-card" aria-label="Session brief">
+      <h2>Session brief <span class="gx-sub">summary of the listed headlines</span></h2>
+      <div class="gx-brief" id="gx-brief">Generate a short brief from the data above. Figures come from the local store; the AI only words them.</div>
+      <div class="gx-actions"><button type="button" class="t58-btn primary" id="gx-brief-btn">Generate brief</button></div>
+    </section>
+    <section class="gx-card" aria-label="Source health">
+      <h2>Source health <span class="gx-sub" id="gx-health-sub"></span></h2>
+      <details class="gx-health"><summary>Show sources</summary><ul id="gx-health"></ul></details>
+    </section>
+  </div>
+
+  <p class="gx-foot">Informational context only &mdash; not trading advice, not tick-level, data may be delayed. Sources: publisher RSS feeds (headline, source and link only), USGS, NASA EONET, GDACS, Stooq, ForexFactory calendar.</p>
+</div>
+</main>
+</div>
+<script src="/static/global-events/global-events.js" defer></script>
+</body>
+</html>
