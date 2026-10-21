@@ -74,6 +74,8 @@ jobs:
     env:
       PACKAGE: T58-Web-App-${{ matrix.label }}.zip
       T58_LICENSE_SERVER_URL: ${{ secrets.T58_LICENSE_SERVER_URL }}
+      T58_LICENSE_SHEET_URL: ${{ secrets.T58_LICENSE_SHEET_URL }}
+      T58_LICENSE_ALLOWLIST_URL: ${{ secrets.T58_LICENSE_ALLOWLIST_URL }}
       T58_MASTER_LICENSE_KEY_HASH: ${{ secrets.T58_MASTER_LICENSE_KEY_HASH }}
     steps:
       - uses: actions/checkout@v5
