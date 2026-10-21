@@ -66,6 +66,7 @@ from app.web.webhook_relay_routes import webhook_relay_bp
 from app.web.extra_routes import extra_bp
 from app.web.v9_routes import v9_bp
 from app.web.ai_assistant_routes import ai_assistant_bp
+from app.global_events.routes import global_events_bp
 from app.web.options_outlook_routes import options_outlook_bp
 from app.web.hedge_fund_routes import hedge_fund_bp
 from app.web.risk_sweep_routes import risk_sweep_bp
@@ -903,6 +904,7 @@ app.register_blueprint(pine_indicator_bp)
 # /assistant was unreachable from the web app; wiring it in now, alongside
 # the sidebar link added in _sidebar.html.
 app.register_blueprint(ai_assistant_bp)
+app.register_blueprint(global_events_bp)
 # Options Outlook (daily/weekly calls & puts, Black-Scholes-computed) --
 # see app/web/options_outlook_routes.py.
 app.register_blueprint(options_outlook_bp)
