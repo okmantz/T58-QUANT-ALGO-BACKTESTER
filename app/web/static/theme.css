@@ -824,7 +824,7 @@ html:not([data-theme="light"]) ::-webkit-scrollbar-thumb:hover { background: rgb
 html:not([data-theme="light"]) body {
   background-color: #03080a;
   background-image:
-    radial-gradient(1100px 520px at 86% -6%, rgba(46, 196, 170, 0.20), transparent 68%),     /* teal sky glow behind the peaks */
+    radial-gradient(1200px 520px at 70% 6%, rgba(24, 214, 190, 0.10), transparent 70%),      /* teal horizon glow behind the peaks */
     radial-gradient(760px 460px at 99% 34%, rgba(76, 201, 240, 0.07), transparent 70%),      /* cool cyan haze on the right edge */
     radial-gradient(900px 560px at 2% 104%, rgba(139, 124, 255, 0.08), transparent 70%),     /* violet pool bottom-left */
     linear-gradient(180deg, #04100f 0%, #03080a 40%, #020608 100%);
@@ -832,16 +832,17 @@ html:not([data-theme="light"]) body {
   position: relative;
 }
 
-/* Mountain backdrop: a real raster range (scripts/generate_dashboard_mountains.py), top right, dissolving
-   into the page. Quiet on ordinary pages, full strength on the dashboard (body.db-page). */
+/* Mountain backdrop: the teal night range (scripts/generate_dashboard_mountains.py) -- starfield, dark peaks, teal
+   rim-glow on the ridgeline -- spanning the top of the page and dissolving into the background. Quiet on ordinary
+   pages, full strength on the dashboard (body.db-page). Static image: no filters, no animation. */
 html:not([data-theme="light"]) body::before {
   content: "";
-  position: absolute; top: 0; right: 0; z-index: 0; pointer-events: none;
-  width: min(74vw, 1320px); aspect-ratio: 2200 / 640;
-  background: url("/static/dashboard-mountains.webp") right top / 100% 100% no-repeat;
-  opacity: .42;
+  position: absolute; top: calc(min(8vw, 120px) * -1); left: 0; right: 0; z-index: 0; pointer-events: none;
+  height: max(37.5vw, 340px);                       /* the artwork's own 2048:768 ratio, so the range is never cropped */
+  background: url("/static/dashboard-mountains.webp") center bottom / cover no-repeat;
+  opacity: .34;
 }
-html:not([data-theme="light"]) body.db-page::before { opacity: .95; }
+html:not([data-theme="light"]) body.db-page::before { opacity: 1; }
 html:not([data-theme="light"]) .t58-shell { position: relative; z-index: 1; }
 html:not([data-theme="light"]) .t58-sidebar {
   background: linear-gradient(180deg, rgba(5, 16, 18, 0.92), rgba(3, 10, 12, 0.95));
@@ -863,6 +864,23 @@ html:not([data-theme="light"]) :is(.t58-card, .t58-champion, .lc-card, .lc-toolc
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09), 0 14px 34px rgba(0, 0, 0, 0.40), 0 0 26px rgba(53, 224, 176, 0.10);
   }
 }
+
+/* ---- One surface for every page: the per-page card classes (each template used to paint its own flat panel) share the
+   dashboard's glass look, and every card heading reads the same way -- sentence-case, bright, quiet accent link. ---- */
+html:not([data-theme="light"]) :is(.card, .runs-card, .j-card, .inst-card, .g-card, .elab-card, .diag-card, .dc-card, .cc-card, .oai-panel, .gx-card) {
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.050) 0%, rgba(255, 255, 255, 0.012) 36%, rgba(6, 16, 20, 0.20) 100%),
+    rgba(7, 19, 24, 0.58);
+  border: 1px solid rgba(130, 235, 220, 0.12);
+  border-radius: 14px;
+  box-shadow: inset 0 1px 0 var(--glass-hi), 0 10px 28px rgba(0, 0, 0, 0.32);
+}
+html:not([data-theme="light"]) :is(.card, .oai-panel, .runs-card) > h2,
+html:not([data-theme="light"]) .oai-panel h2 {
+  font-size: 13px; font-weight: 650; letter-spacing: .01em; text-transform: none; color: var(--text);
+}
+html:not([data-theme="light"]) .oai-panel table.rank-table th { background: rgba(7, 19, 24, 0.92); }
+html:not([data-theme="light"]) .oai-panel .refresh { font-weight: 500; text-transform: none; letter-spacing: 0; }
 
 /* ---- Buttons: primary gets a gentle teal -> cyan sheen instead of a flat neon fill ---- */
 html:not([data-theme="light"]) .t58-btn.primary,
