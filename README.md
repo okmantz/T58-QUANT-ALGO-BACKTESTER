@@ -109,7 +109,7 @@ Wi-Fi). From source instead: `python launchers/run_web.py`, which prints your LA
 address and a QR code. Away from home, [Tailscale](https://tailscale.com)
 (free) lets your phone reach it from anywhere with no port forwarding —
 details on the app's own **Phone access** page. Full walkthrough:
-[`HOW_TO_OPEN_ON_YOUR_PHONE.md`](HOW_TO_OPEN_ON_YOUR_PHONE.md).
+[`HOW TO OPEN ON YOUR PHONE.md`](HOW%20TO%20OPEN%20ON%20YOUR%20PHONE.md).
 
 **Web app on any operating system (Windows, macOS, Linux):** the web app is
 plain Python + Flask + a browser, so it runs anywhere Python 3.10+ does —
@@ -441,12 +441,13 @@ target) apply across every optimizer above.
   outside its predicted band, this re-runs Quick Optimize against it
   automatically and shows you the before/after, instead of you needing to
   notice the drift flag and start the re-tune by hand yourself.
-- **Deploy Live** — connection management for a real, funded prop-firm
-  account. **Actual live order placement is a deliberate stub** — this is
-  connection/credential plumbing only, desktop-only, pending a proper
-  authentication layer before going further.
-- **Live Market monitor** — a read-only view of live bars/trades over your
-  MT5/Alpaca connection.
+- **Deploy Live** — connect a funded prop-firm account (MT5, cTrader, DXtrade, TradeLocker, Tradovate) and run a strategy
+  live through the execution engine. Every web-launched session has enforced prop guardrails (news blackout, no weekend
+  holds, no hedging, per-order size cap, daily-loss and max-drawdown halts). Start on a demo account.
+- **Live PnL tracker** — a small floating pill (all pages) showing the floating PnL of your running live / forward-test
+  strategies; click it for the per-strategy breakdown. Hidden when nothing is running. Data: `/api/live-pnl`.
+- **Live Market monitor** — read-only live bars over your MT5/Alpaca connection, with a **Layout** selector for a
+  multi-chart grid (several symbols/timeframes side by side).
 
 ## Quant Lab
 
@@ -476,20 +477,52 @@ start before backtesting their first strategy.
 10 minutes). The buyer pack also includes the EULA, refund policy, and
 privacy policy templates plus the crash-reporting (Sentry) setup guide.
 
-## AI Assist (optional, local Ollama)
+## AI Assist (Ollama by default; Claude / OpenAI with your key)
 
-Several tools above can optionally call a local [Ollama](https://ollama.com)
-model — Full Pipeline's GA search, the Research Agent, Generate
-Strategies, and Options Outlook/AI Assistant's narrative layer. Every
-GA-relevant suggestion still passes through the same backtest → prop-sim →
-Monte Carlo pipeline as any other candidate: the model proposes numbers
-for already-discovered tunable parameters, never writes strategy code, and
-can never displace a genuinely better candidate the GA already found.
+Several tools above can optionally call an AI model — Full Pipeline's GA search, the Research Agent, Generate Strategies,
+and Options Outlook / AI Assistant's narrative layer. Every GA-relevant suggestion still passes through the same
+backtest → prop-sim → Monte Carlo pipeline as any other candidate: the model proposes numbers for already-discovered
+tunable parameters, never writes strategy code, and can never displace a genuinely better candidate the GA already found.
 
-**Setup:** install Ollama and pull a model (`ollama pull llama3.1`), then
-check **Enable** and hit **Test Connection** wherever a page has an **AI
-Assist** section. Off by default everywhere; an unreachable Ollama
-degrades quietly rather than breaking the feature.
+**Provider:** [Ollama](https://ollama.com) (local, free) is the default. In **API Keys → AI provider** you can switch to
+**Claude** or **OpenAI** using the key saved on that page; every AI feature then follows that one choice. If a hosted
+provider is selected but no key is saved, the app falls back to Ollama.
+
+**Ollama setup:** install Ollama and pull a model (`ollama pull llama3.1`), then check **Enable** and hit **Test Connection**
+wherever a page has an **AI Assist** section. Off by default everywhere; an unreachable provider degrades quietly rather than
+breaking the feature.
+
+## Personalize, Bible verse bar
+
+**Account Settings → Personalize** (web app): pick a background — the original mountains (default) or one of four seasonal
+scenes (spring, summer, autumn, winter), each with a light and a dark variant that follow your theme. Optional **Bible verse
+bar** (off by default): a slim static quote with its reference at the top of every page, rotating every 30 minutes.
+Both settings are stored in the browser only.
+
+## Global Events: X (Twitter) feed
+
+Global Events has an **X** section: add usernames and see their most recent posts. Add your X **Bearer token** under
+**API Keys → X**. Note: X's API requires a paid plan for reading posts; without a valid token the section shows a clear
+message and nothing else is affected. See [docs/GLOBAL_EVENTS.md](docs/GLOBAL_EVENTS.md).
+
+## Licensing
+
+Three activation modes — master key (offline, owner), Google Sheet license keys (customers), optional license server.
+Details, env vars and troubleshooting: [docs/LICENSING.md](docs/LICENSING.md).
+
+## Defaults you should know about
+
+- **Costs are never zero by default.** Backtests start with a realistic spread/slippage and **$3 per trade** commission
+  (`app/backtest/risk.py`). You can still set any cost to 0 explicitly.
+- **One account size.** RiskConfig and prop rules both default to the same account size ($100,000), so a plain run and a prop
+  simulation agree.
+- **Prop presets carry a "verified" date.** Each prop-firm preset shows when its rules were last checked against the firm's
+  public page (`app/prop/presets.py` `_VERIFIED_STAMPS`). Presets with no stamp are labelled unverified and cannot reach READY.
+  Firms change rules often — re-check before trading real money.
+- **Strategy Graveyard starter seed.** New installs ship with 500+ real, measured failed strategy variants (bundled data, real
+  costs, in-sample + held-out) so Search/Forge skip known-dead neighbourhoods from day one. They are scoped to the dataset they were
+  measured on. Rebuild with `scripts/build_graveyard_seed.py`; fold in your own graveyard with
+  `scripts/export_graveyard_seed.py`.
 
 ## Strategy format support
 
