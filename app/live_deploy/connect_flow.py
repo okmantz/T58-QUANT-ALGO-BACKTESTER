@@ -208,10 +208,11 @@ def _explain_connection_failure(platform: str, message: str) -> list[str]:
     steps: list[str] = []
     if "not installed" in m or "no module" in m or "pip install" in m or "importerror" in m:
         steps.append("A Python package this platform needs is not installed on this computer -- run the pip install command quoted in the message, then retry.")
-    if plat == "MT4/MT5" and ("terminal" in m or "initialize" in m or "metatrader" in m or "not available" in m or "windows" in m):
-        steps += ["MetaTrader 5 connections need the MT5 desktop terminal installed and a Windows computer (the MetaTrader5 Python package is Windows-only).",
+    if plat == "MT4/MT5" and ("terminal" in m or "initialize" in m or "metatrader" in m or "not available" in m or "windows" in m or "bridge" in m or "mt5linux" in m):
+        steps += ["MetaTrader 5 connections need the MT5 desktop terminal. On Windows the app talks to it directly; on Linux/macOS the terminal runs under Wine and the app connects through the mt5linux bridge (run `python scripts/mt5_bridge_server.py` for the exact steps, or see docs/MT5_CROSS_PLATFORM.md).",
                   "Open the MT5 terminal once, log in manually to confirm the server name works, then keep it running and retry.",
-                  "If auto-detect cannot find terminal64.exe, paste its full path into 'Terminal path'."]
+                  "If auto-detect cannot find terminal64.exe (Windows install folders, or your Wine/CrossOver prefix on Linux/macOS), paste its full path into 'Terminal path'.",
+                  "On Linux/macOS also check that the bridge server is running and reachable (T58_MT5_BRIDGE_HOST / T58_MT5_BRIDGE_PORT, default localhost:18812)."]
     if any(k in m for k in ("401", "unauthor", "invalid", "incorrect", "denied", "credential", "password", "login failed", "authorization")):
         steps += ["Check the username/login and password for typos (paste them rather than typing).",
                   "Confirm you are using the right environment (demo vs live) -- evaluation accounts and funded accounts use different logins.",
