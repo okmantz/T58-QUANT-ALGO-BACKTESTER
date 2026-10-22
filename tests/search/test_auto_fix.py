@@ -42,7 +42,8 @@ _CFG = {"name": "ema cross",
                        {"type": "ema", "period": 30, "column": "close", "as": "ema_slow"}],
         "long_entry": "ema_fast > ema_slow", "short_entry": "ema_fast < ema_slow",
         "stop_loss_pips": 60, "take_profit_pips": 120}
-_RISK = RiskConfig(initial_balance=100000, risk_mode="percent", risk_value=1.0, pip_size=0.1)
+_RISK = RiskConfig(initial_balance=100000, risk_mode="percent", risk_value=1.0, pip_size=0.1,
+              spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0)  # synthetic hand-built data: zero friction on purpose
 _NO_BUILD = lambda mode, code: (_ for _ in ()).throw(AssertionError("manual strategies never need the code builder"))
 
 

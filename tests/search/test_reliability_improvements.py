@@ -117,7 +117,7 @@ def test_daily_loss_limit_force_closes_on_intrabar_floating_loss():
     df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
     signals = pd.Series([1, 1, 1, 1])
 
-    risk = RiskConfig(
+    risk = RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, 
         initial_balance=10_000.0, risk_mode="percent", risk_value=1.0,
         pip_size=1.0, daily_loss_limit_pct=5.0,  # 5% of 10,000 = $500 floor
     )
