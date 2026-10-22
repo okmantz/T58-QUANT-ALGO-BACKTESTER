@@ -48,6 +48,9 @@ pywebview>=5.0; platform_system == "Windows"
 # other platforms: pip simply skips it there, and the Forward Test tab
 # detects its absence and explains why instead of erroring.
 MetaTrader5>=5.0.45; platform_system == "Windows"
+# Linux / macOS: MetaQuotes ships no native package, so the app drives a Wine-hosted terminal through this RPyC
+# bridge client (see docs/MT5_CROSS_PLATFORM.md). Windows uses the native package above.
+mt5linux>=0.1.9; platform_system != "Windows"
 # London Strategic Edge market-data source (app.data.london_strategic_edge_source),
 # an Alpaca-style alternative covering stocks, forex, crypto, commodities,
 # indices, ETFs and futures through one API key. Optional in spirit exactly
