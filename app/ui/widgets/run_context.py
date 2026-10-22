@@ -226,7 +226,7 @@ class RunContextPanel:
         self.r_risk_mode = LabeledEntry(section, "Risk mode (percent/fixed)", "percent")
         self.r_risk_value = LabeledEntry(section, "Risk per trade (% or $)", 1.0)
         self.r_max_trades_day = LabeledEntry(section, "Max trades/day", 10)
-        self.r_commission = LabeledEntry(section, "Commission per trade ($)", 0)
+        self.r_commission = LabeledEntry(section, "Commission per trade ($)", 3)
         self.r_slippage = LabeledEntry(section, "Slippage (pips)", 0.5)
         self.r_spread = LabeledEntry(section, "Spread (pips)", 1.0)
         self.r_pip_size = LabeledEntry(section, "Pip size (e.g. 0.0001 FX)", 0.0001)
@@ -581,7 +581,7 @@ class RunContextPanel:
         # backend path, so a strategy picked from this dropdown can no
         # longer end up silently backtested at $0 commission.
         commission_note = ""
-        if self.r_commission.get_float(0) == 0.0:
+        if self.r_commission.get_float(0) in (0.0, 3.0):
             self.r_commission.var.set(str(spec.default_commission_round_turn))
             commission_note = f", commission=${spec.default_commission_round_turn:g}/trade"
         self.pip_detect_status.config(
