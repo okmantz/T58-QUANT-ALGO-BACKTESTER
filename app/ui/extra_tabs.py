@@ -497,7 +497,7 @@ def build_replay_tab(win) -> None:
     win._rp_strategy = StringVar()
     fields = {
         "account": StringVar(value="50000"), "risk_mode": StringVar(value="percent"), "risk": StringVar(value="1.0"),
-        "pip": StringVar(value="auto"), "commission": StringVar(value="0"), "max_bars": StringVar(value="2000"),
+        "pip": StringVar(value="auto"), "commission": StringVar(value="3"), "max_bars": StringVar(value="2000"),
         "target": StringVar(value="10"), "daily": StringVar(value="5"), "dd": StringVar(value="10"),
     }
     win._rp_fields = fields
