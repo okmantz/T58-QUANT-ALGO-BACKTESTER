@@ -90,7 +90,13 @@ function renderPropPresetOptions(select, presets, valueFn) {
     const opt = document.createElement("option");
     opt.value = valueOf(p, i);
     const badge = p.algo_trading_allowed ? "\u2705 algo trading allowed" : "\u26a0\ufe0f algo trading NOT allowed";
-    opt.textContent = `${p.label} \u2014 ${badge}`;
+    // Verification status straight from the preset record: the date its rules were last checked against the firm's own page,
+    // or an explicit "unverified" so nobody treats an unchecked row as current.
+    const ver = (p.verified_on && p.verification_tier === "primary")
+      ? ` \u00b7 \u2713 rules verified ${p.verified_on}`
+      : (p.verified_on ? ` \u00b7 rules checked ${p.verified_on} (${p.verification_tier || "secondary"})` : " \u00b7 rules unverified");
+    opt.textContent = `${p.label} \u2014 ${badge}${ver}`;
+    opt.title = p.verified_on ? `Rules last checked ${p.verified_on}${p.source_url ? " against " + p.source_url : ""}. Always confirm at the firm's site before paying for a challenge.` : "These rules have not been confirmed against the firm's own page recently -- check the firm's site before relying on them.";
     opt.dataset.algoAllowed = p.algo_trading_allowed ? "1" : "0";
     select.appendChild(opt);
   });

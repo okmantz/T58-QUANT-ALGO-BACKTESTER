@@ -558,7 +558,7 @@ function t58ApplyInstrumentSpec(opts) {
     if (pipField) pipField.value = spec.pip_size;
     if (contractField) contractField.value = spec.contract_size;
     var commissionNote = '';
-    if (commissionField && (parseFloat(commissionField.value) || 0) === 0) {
+    if (commissionField && [0, 3].indexOf(parseFloat(commissionField.value) || 0) >= 0) {
       commissionField.value = spec.default_commission_round_turn;
       commissionNote = ', commission=$' + spec.default_commission_round_turn + '/trade';
     }

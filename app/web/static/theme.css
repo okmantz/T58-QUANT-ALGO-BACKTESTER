@@ -1037,3 +1037,58 @@ html[data-theme="light"] .t58-stepper { border-bottom-color: rgba(60, 100, 125, 
 html[data-theme="light"] .t58-stepper a:hover { color: var(--text); background: rgba(60, 100, 125, 0.07); }
 html[data-theme="light"] .t58-stepper a.current { color: var(--teal); background: rgba(var(--teal-rgb), 0.10); box-shadow: inset 0 0 0 1px rgba(var(--teal-rgb), 0.30); }
 html[data-theme="light"] .t58-avatar { background: rgba(255, 255, 255, 0.85); border-color: rgba(10, 111, 84, 0.45); box-shadow: 0 4px 12px -4px rgba(36, 68, 90, 0.35); }
+
+/* ---- Personalize: seasonal backdrops (Account settings -> Personalize). Default = the mountains above. Each season
+   has a night scene for the dark theme and a day scene for the light theme (scripts/generate_season_backdrops.py). ---- */
+html[data-bg="spring"]:not([data-theme="light"]) body::before { background-image: url("/static/backgrounds/spring-dark.webp"); opacity: .42; }
+html[data-bg="summer"]:not([data-theme="light"]) body::before { background-image: url("/static/backgrounds/summer-dark.webp"); opacity: .42; }
+html[data-bg="autumn"]:not([data-theme="light"]) body::before { background-image: url("/static/backgrounds/autumn-dark.webp"); opacity: .42; }
+html[data-bg="winter"]:not([data-theme="light"]) body::before { background-image: url("/static/backgrounds/winter-dark.webp"); opacity: .42; }
+html[data-bg="spring"][data-theme="light"] body::before { background-image: url("/static/backgrounds/spring-light.webp"); opacity: .45; }
+html[data-bg="summer"][data-theme="light"] body::before { background-image: url("/static/backgrounds/summer-light.webp"); opacity: .45; }
+html[data-bg="autumn"][data-theme="light"] body::before { background-image: url("/static/backgrounds/autumn-light.webp"); opacity: .45; }
+html[data-bg="winter"][data-theme="light"] body::before { background-image: url("/static/backgrounds/winter-light.webp"); opacity: .45; }
+html[data-bg]:not([data-bg="mountains"]):not([data-theme="light"]) body.db-page::before { opacity: 1; }
+html[data-bg]:not([data-bg="mountains"])[data-theme="light"] body.db-page::before { opacity: .9; }
+
+/* ---- Personalize: Bible verse bar (static line at the top of the page; text rotates every 30 minutes) ---- */
+.t58-verse {
+  margin: 0 0 14px; padding: 8px 16px; text-align: center; line-height: 1.5;
+  font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif; font-size: 13.5px; color: var(--text-muted);
+  border-bottom: 1px solid var(--border-light, rgba(128, 160, 170, 0.25));
+  background: linear-gradient(180deg, rgba(128, 190, 190, 0.07), transparent);
+}
+.t58-verse-text { font-style: italic; color: var(--text); }
+.t58-verse-ref { margin-left: 8px; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+
+/* ---- Floating Live P&L tracker (static/t58-livepnl.js): small pill bottom-right, left of the chat bubble ---- */
+.t58-pnl { position: fixed; right: 84px; bottom: 20px; z-index: 900; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; font-variant-numeric: tabular-nums; }
+.t58-pnl[hidden] { display: none; }
+.pnl-pill { display: flex; align-items: center; border-radius: 999px; border: 1px solid rgba(130, 235, 220, 0.28);
+  background: rgba(6, 18, 22, 0.92); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+.pnl-pill.bad { border-color: rgba(240, 180, 41, 0.6); }
+.pnl-main { display: flex; align-items: center; gap: 8px; padding: 8px 6px 8px 14px; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
+.pnl-x { border: 0; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 15px; padding: 6px 12px 6px 4px; line-height: 1; }
+.pnl-x:hover { color: var(--text); }
+.pnl-dot { width: 8px; height: 8px; border-radius: 50%; background: #3ed685; animation: pnl-pulse 1.8s infinite; }
+.pnl-pill.bad .pnl-dot { background: #f0b429; animation: none; }
+@keyframes pnl-pulse { 0% { box-shadow: 0 0 0 0 rgba(62, 214, 133, .5); } 70% { box-shadow: 0 0 0 7px rgba(62, 214, 133, 0); } 100% { box-shadow: 0 0 0 0 rgba(62, 214, 133, 0); } }
+.pnl-tag { font-size: 10.5px; font-weight: 800; letter-spacing: .08em; color: var(--text-muted); }
+.pnl-sum { font-weight: 700; font-size: 14px; }
+.up { color: #3ed685; } .down { color: #f0596a; }
+.pnl-panel { width: 290px; max-height: 70vh; overflow: auto; padding: 10px; border-radius: 14px; border: 1px solid rgba(130, 235, 220, 0.22);
+  background: rgba(6, 18, 22, 0.96); box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5); color: var(--text); }
+.pnl-card { padding: 8px 4px 10px; border-bottom: 1px solid rgba(130, 235, 220, 0.10); }
+.pnl-card.warn { background: rgba(240, 180, 41, 0.07); }
+.pnl-head { display: flex; justify-content: space-between; align-items: center; font-size: 12.5px; }
+.pnl-state { font-size: 10px; font-weight: 800; letter-spacing: .08em; color: var(--text-muted); }
+.pnl-big { font-size: 24px; font-weight: 700; margin: 2px 0 0; }
+.pnl-spark { width: 100%; height: 28px; display: block; margin: 2px 0 6px; }
+.pnl-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 8px; }
+.pnl-grid .k { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); }
+.pnl-grid .v { font-size: 12.5px; font-weight: 600; }
+.pnl-note { margin-top: 8px; font-size: 12px; color: #f0b429; line-height: 1.4; }
+.pnl-link { display: block; text-align: right; padding: 8px 4px 2px; font-size: 12px; color: var(--teal); text-decoration: none; }
+html[data-theme="light"] .pnl-pill, html[data-theme="light"] .pnl-panel { background: rgba(255, 255, 255, 0.95); border-color: rgba(60, 100, 125, 0.25); box-shadow: 0 8px 24px rgba(36, 68, 90, 0.2); }
+html[data-theme="light"] .up { color: #0e9b5e; } html[data-theme="light"] .down { color: #d23b52; }
+@media (max-width: 700px) { .t58-pnl { right: 76px; bottom: 16px; } .pnl-panel { width: min(290px, calc(100vw - 40px)); } }
