@@ -30,6 +30,7 @@ COMMON_DATA = [
     ("config", "config"),                    # config/pyproject.toml -> version shown in the Account tab
     ("strategies", "strategies"),            # built-in Strategy Library (seeded on first run)
     ("app/ui/assets", "app/ui/assets"),      # logo/icons used by the desktop UI and activation window
+    ("app/search/seed_data", "app/search/seed_data"),  # starter Strategy Graveyard seed (merged on first use)
 ]
 WEB_DATA = [
     ("app/web/templates", "app/web/templates"),
