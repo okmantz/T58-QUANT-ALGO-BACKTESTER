@@ -802,6 +802,12 @@ def _post_activation_target(raw_next: str | None) -> str:
     return target
 
 
+
+def _commission_from_form(form) -> float:
+    from app.backtest.risk import commission_from_mapping
+    return commission_from_mapping(form)
+
+
 @app.route("/activate", methods=["GET"])
 def activate_form():
     from app.licensing import client as license_client
@@ -2153,7 +2159,7 @@ def _simple_base_risk(form, rules):
         risk_mode=form.get("risk_mode", "percent") or "percent",
         risk_value=float(form.get("risk_value", 1.0) or 1.0),
         max_trades_per_day=int(form.get("max_trades_day", 10) or 10),
-        commission_per_trade=float(form.get("commission", 0) or 0),
+        commission_per_trade=_commission_from_form(form),
         slippage_pips=_posted_cost(form, "slippage_pips"),
         spread_pips=_posted_cost(form, "spread_pips"),
         pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
@@ -3575,7 +3581,7 @@ def replay_prepare():
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
-            commission_per_trade=float(form.get("commission", 0) or 0),
+            commission_per_trade=_commission_from_form(form),
         )
         # UPGRADE (Interactive Replay: prop-firm presets): optional -- an
         # account-size/risk panel for the same right-hand running-balance
@@ -3827,7 +3833,7 @@ def batch_test_saved_strategies_route():
         risk_mode=form.get("risk_mode", "percent"),
         risk_value=float(form.get("risk_value", 1.0)),
         max_trades_per_day=int(form.get("max_trades_day", 10)),
-        commission_per_trade=float(form.get("commission", 0)),
+        commission_per_trade=_commission_from_form(form),
         slippage_pips=_posted_cost(form, "slippage_pips"),
         spread_pips=_posted_cost(form, "spread_pips"),
         pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
@@ -4036,7 +4042,7 @@ def run_pipeline():
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0)),
             max_trades_per_day=int(form.get("max_trades_day", 10)),
-            commission_per_trade=float(form.get("commission", 0)),
+            commission_per_trade=_commission_from_form(form),
             slippage_pips=_posted_cost(form, "slippage_pips"),
             spread_pips=_posted_cost(form, "spread_pips"),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
@@ -4475,6 +4481,13 @@ def account_settings_form():
     return render_template("account_settings.html", **_account_settings_page_context())
 
 
+def _ai_provider_ctx() -> dict:
+    from app.ai.ollama_settings import saved_provider, effective_provider, saved_remote_model
+    chosen = saved_provider()
+    return {"chosen": chosen, "effective": effective_provider(None),
+            "claude_model": saved_remote_model("claude"), "openai_model": saved_remote_model("openai")}
+
+
 @app.route("/settings/api-keys")
 def api_keys_settings_form():
     from app.ai.ollama_settings import load_settings as load_ollama_settings
@@ -4488,6 +4501,7 @@ def api_keys_settings_form():
         "api_keys_settings.html",
         active_page="api_keys_settings",
         ollama=load_ollama_settings(),
+        ai_provider=_ai_provider_ctx(),
         alpaca_api_key=(alpaca_creds.api_key if alpaca_creds else ""),
         alpaca_secret_key=(alpaca_creds.secret_key if alpaca_creds else ""),
         api_keys=load_api_keys_settings(),
@@ -4508,7 +4522,10 @@ def api_keys_save_ai():
         model=(form.get("ollama_model") or existing_ollama.model).strip(),
         api_key=(form.get("ollama_api_key") or existing_ollama.api_key),
         vision_model=(form.get("ollama_vision_model") or existing_ollama.vision_model).strip(),
+        provider=(form.get("ai_provider") or existing_ollama.provider or "ollama").strip().lower(),
     ))
+    from app.ai.ollama_settings import save_remote_models
+    save_remote_models(form.get("claude_model", ""), form.get("openai_model", ""))
     existing_keys = load_api_keys_settings()
     import dataclasses as _dc
     save_api_keys_settings(_dc.replace(
@@ -4538,7 +4555,7 @@ def api_keys_save_data():
     existing = load_api_keys_settings()
     import dataclasses as _dc
     _data_fields = ("fred_api_key", "london_strategic_edge_key", "twelve_data_api_key", "polygon_api_key",
-                    "tiingo_api_key", "alpha_vantage_api_key", "databento_api_key")
+                    "tiingo_api_key", "alpha_vantage_api_key", "databento_api_key", "x_bearer_token")
     save_api_keys_settings(_dc.replace(
         existing, **{f: (form.get(f) or getattr(existing, f)) for f in _data_fields},
     ))
@@ -4661,6 +4678,15 @@ def api_keys_test_connection():
                 return jsonify({"ok": True, "message": f"{service.title()} key is valid."})
         except Exception as exc:  # noqa: BLE001
             return jsonify({"ok": False, "error": f"{service.title()} rejected the key or is unreachable: {exc}"})
+
+    if service == "x":
+        from app.accounts.api_keys import load_settings as load_api_keys_settings
+        from app.global_events.x_feed import test_token as test_x_token
+        key = request.form.get("x_bearer_token", "").strip() or load_api_keys_settings().x_bearer_token
+        if not key:
+            return jsonify({"ok": False, "error": "No X bearer token saved yet."})
+        ok, message = test_x_token(key)
+        return jsonify({"ok": True, "message": message} if ok else {"ok": False, "error": message})
 
     if service == "london_strategic_edge":
         from app.accounts.api_keys import load_settings as load_api_keys_settings
@@ -5408,7 +5434,7 @@ def refine_start():
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0)),
             max_trades_per_day=int(form.get("max_trades_day", 10)),
-            commission_per_trade=float(form.get("commission", 0)),
+            commission_per_trade=_commission_from_form(form),
             slippage_pips=_posted_cost(form, "slippage_pips"),
             spread_pips=_posted_cost(form, "spread_pips"),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
@@ -5631,7 +5657,7 @@ def multi_market_start():
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
-            commission_per_trade=float(form.get("commission", 0) or 0),
+            commission_per_trade=_commission_from_form(form),
         )
         rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000) or 100000),
@@ -6021,7 +6047,7 @@ def full_pipeline_start_batch():
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0)),
             max_trades_per_day=int(form.get("max_trades_day", 10)),
-            commission_per_trade=float(form.get("commission", 0)),
+            commission_per_trade=_commission_from_form(form),
             slippage_pips=_posted_cost(form, "slippage_pips"),
             spread_pips=_posted_cost(form, "spread_pips"),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
@@ -6242,7 +6268,7 @@ def full_pipeline_schedule_batch():
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0)),
             max_trades_per_day=int(form.get("max_trades_day", 10)),
-            commission_per_trade=float(form.get("commission", 0)),
+            commission_per_trade=_commission_from_form(form),
             slippage_pips=_posted_cost(form, "slippage_pips"),
             spread_pips=_posted_cost(form, "spread_pips"),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
@@ -6455,7 +6481,7 @@ def full_pipeline_start():
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0)),
             max_trades_per_day=int(form.get("max_trades_day", 10)),
-            commission_per_trade=float(form.get("commission", 0)),
+            commission_per_trade=_commission_from_form(form),
             slippage_pips=_posted_cost(form, "slippage_pips"),
             spread_pips=_posted_cost(form, "spread_pips"),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
@@ -6802,7 +6828,7 @@ def wfo_start():
             initial_balance=float(form.get("initial_balance", 100000)),
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0)),
-            commission_per_trade=float(form.get("commission", 0)),
+            commission_per_trade=_commission_from_form(form),
             slippage_pips=_posted_cost(form, "slippage_pips"),
             spread_pips=_posted_cost(form, "spread_pips"),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
@@ -7000,7 +7026,7 @@ def mo_start():
             initial_balance=float(form.get("initial_balance", 100000)),
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0)),
-            commission_per_trade=float(form.get("commission", 0)),
+            commission_per_trade=_commission_from_form(form),
             slippage_pips=_posted_cost(form, "slippage_pips"),
             spread_pips=_posted_cost(form, "spread_pips"),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
@@ -7162,7 +7188,7 @@ def wfga_start():
             initial_balance=float(form.get("initial_balance", 100000)),
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0)),
-            commission_per_trade=float(form.get("commission", 0)),
+            commission_per_trade=_commission_from_form(form),
             slippage_pips=_posted_cost(form, "slippage_pips"),
             spread_pips=_posted_cost(form, "spread_pips"),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
@@ -7340,7 +7366,7 @@ def portfolio_run():
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0)),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
-            commission_per_trade=float(form.get("commission", 0) or 0),
+            commission_per_trade=_commission_from_form(form),
         )
         risk = harden_risk_config(risk, prop_rules=prop_rules_from_form(form), form=form)
 
@@ -7520,7 +7546,7 @@ def regime_matrix_run():
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0)),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
-            commission_per_trade=float(form.get("commission", 0) or 0),
+            commission_per_trade=_commission_from_form(form),
         )
         risk = harden_risk_config(risk, prop_rules=prop_rules_from_form(form), form=form)
 
@@ -7680,7 +7706,7 @@ def payout_probability_run():
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0)),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
-            commission_per_trade=float(form.get("commission", 0) or 0),
+            commission_per_trade=_commission_from_form(form),
         )
         rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000)),
@@ -7816,7 +7842,7 @@ def prop_firm_recommender_run():
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0)),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
-            commission_per_trade=float(form.get("commission", 0) or 0),
+            commission_per_trade=_commission_from_form(form),
         )
 
         risk = harden_risk_config(risk, prop_rules=prop_rules_from_form(form), form=form)
@@ -8030,7 +8056,7 @@ def cpcv_start():
             initial_balance=float(form.get("initial_balance", 100000)),
             risk_value=float(form.get("risk_value", 1.0)),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
-            commission_per_trade=float(form.get("commission", 0) or 0),
+            commission_per_trade=_commission_from_form(form),
         )
         prop_rules = prop_rules_from_form(form) or PropRules(account_size=float(form.get("account_size", form.get("initial_balance", 100000)) or 100000))
         risk = harden_risk_config(risk, prop_rules=prop_rules, form=form)
@@ -8207,7 +8233,7 @@ def pbo_start():
             initial_balance=float(form.get("initial_balance", 100000)),
             risk_value=float(form.get("risk_value", 1.0)),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
-            commission_per_trade=float(form.get("commission", 0) or 0),
+            commission_per_trade=_commission_from_form(form),
         )
         prop_rules = prop_rules_from_form(form) or PropRules(account_size=float(form.get("account_size", form.get("initial_balance", 100000)) or 100000))
         risk = harden_risk_config(risk, prop_rules=prop_rules, form=form)
@@ -8754,7 +8780,7 @@ def quickopt_start():
         if dataset_error:
             return render_template("quick_optimize.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context()), 400
         strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
-        risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000)), pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None), commission_per_trade=float(form.get("commission", 0) or 0))
+        risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000)), pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None), commission_per_trade=_commission_from_form(form))
         rules = PropRules(account_size=float(form.get("account_size", 100000)))
 
         # T58 BACKTEST INTEGRITY CHECK -- same pre-flight gate as Run &
@@ -9223,7 +9249,7 @@ def evolution_start():
             risk_mode=form.get("risk_mode", "percent") or "percent",
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
             max_trades_per_day=int(form.get("max_trades_day", 10) or 10),
-            commission_per_trade=float(form.get("commission", 0) or 0),
+            commission_per_trade=_commission_from_form(form),
             slippage_pips=_posted_cost(form, "slippage_pips"),
             spread_pips=_posted_cost(form, "spread_pips"),
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
@@ -9732,7 +9758,7 @@ def evolution_multi_instrument_start():
             risk_mode=form.get("risk_mode", "percent") or "percent",
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
             max_trades_per_day=int(form.get("max_trades_day", 10) or 10),
-            commission_per_trade=float(form.get("commission", 0) or 0),
+            commission_per_trade=_commission_from_form(form),
             slippage_pips=_posted_cost(form, "slippage_pips"),
             spread_pips=_posted_cost(form, "spread_pips"),
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
@@ -9917,7 +9943,7 @@ def research_agent_start():
             return render_template("research_agent.html", error=dataset_error, stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(), ai_enabled=False, ai_host="", ai_model="", **_alpaca_template_context()), 400
 
         strategy, _library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
-        risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000) or 100000), pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None), commission_per_trade=float(form.get("commission", 0) or 0))
+        risk = RiskConfig(initial_balance=float(form.get("initial_balance", 100000) or 100000), pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None), commission_per_trade=_commission_from_form(form))
         rules = PropRules(account_size=float(form.get("account_size", 100000) or 100000))
         risk = harden_risk_config(risk, prop_rules=rules, form=form)
         question = (form.get("question") or "").strip()
@@ -10052,7 +10078,7 @@ def research_loop_start():
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000) or 100000),
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
-            commission_per_trade=float(form.get("commission", 0) or 0),
+            commission_per_trade=_commission_from_form(form),
         )
         rules = PropRules(account_size=float(form.get("account_size", 100000) or 100000))
         risk = harden_risk_config(risk, prop_rules=rules, form=form)
@@ -10195,7 +10221,7 @@ def forward_test_start():
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
-            commission_per_trade=float(form.get("commission", 0) or 0),
+            commission_per_trade=_commission_from_form(form),
         )
         cfg = ForwardTestConfig(
             symbol=form.get("symbol", "").strip() or "EURUSD",
@@ -10503,7 +10529,7 @@ def deploy_live_start():
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
-            commission_per_trade=float(form.get("commission", 0) or 0),
+            commission_per_trade=_commission_from_form(form),
             # v7 P0-2: the live engine reads the daily-loss halt from
             # `risk`, not from prop_rules -- the old code set it only on
             # the rules object, so web-launched sessions had NO
@@ -10614,6 +10640,36 @@ def deploy_live_status():
             "win_rate": s.win_rate, "net_pnl": s.net_pnl, "halted_reason": s.halted_reason,
             "drift_flag": s.drift_flag, "alert": s.alert, "log": _LIVE_DEPLOY_SESSION["log"][-100:],
         })
+
+
+def _pnl_row(kind: str, label: str, s) -> dict:
+    bal, eq = s.balance, s.equity
+    floating = (eq - bal) if (bal is not None and eq is not None) else None
+    return {
+        "kind": kind, "label": label, "running": bool(s.running), "connected": bool(s.connected),
+        "balance": bal, "equity": eq, "floating": floating, "net_pnl": s.net_pnl,
+        "n_trades_closed": s.n_trades_closed, "win_rate": s.win_rate,
+        "halted_reason": s.halted_reason, "alert": getattr(s, "alert", None),
+        "drift_flag": s.drift_flag,
+    }
+
+
+@app.route("/api/live-pnl")
+def api_live_pnl():
+    """One small payload for the floating Live P&L widget (static/t58-livepnl.js): every RUNNING live-deploy or
+    forward-test (demo) session with balance / equity / floating / closed P&L. Read-only; a live-deploy session is
+    only included when the same access guard as /deploy-live/status.json lets this browser see it."""
+    rows = []
+    if _web_live_deploy_guard() is None:
+        with _LIVE_DEPLOY_LOCK:
+            sess = _LIVE_DEPLOY_SESSION["session"]
+            if sess is not None and (sess.status.running or sess.status.halted_reason or getattr(sess.status, "alert", None)):
+                rows.append(_pnl_row("live", f"Live \u00b7 {sess.status.platform or 'broker'}", sess.status))
+    with _FORWARD_TEST_LOCK:
+        sess = _FORWARD_TEST_SESSION["session"]
+        if sess is not None and (sess.status.running or sess.status.halted_reason):
+            rows.append(_pnl_row("demo", "Demo forward test", sess.status))
+    return jsonify({"sessions": rows})
 
 
 @app.route("/api/suggest-loop-config")
@@ -10772,7 +10828,7 @@ def search_start():
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
-            commission_per_trade=float(form.get("commission", 0) or 0),
+            commission_per_trade=_commission_from_form(form),
         )
         rules = _prop_rules_from_search_evo_form(form)
 
@@ -11442,7 +11498,7 @@ def research_run():
             initial_balance=float(form.get("account_size", 100000) or 100000),
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
-            commission_per_trade=float(form.get("commission", 0) or 0),
+            commission_per_trade=_commission_from_form(form),
         )
         rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000) or 100000),
@@ -11611,7 +11667,7 @@ def forge_start():
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
-            commission_per_trade=float(form.get("commission", 0) or 0),
+            commission_per_trade=_commission_from_form(form),
         )
         rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000) or 100000),
@@ -12128,7 +12184,7 @@ def search_multi_instrument_start():
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000) or 100000),
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
-            commission_per_trade=float(form.get("commission", 0) or 0),
+            commission_per_trade=_commission_from_form(form),
         )
         rules = PropRules(
             account_size=float(form.get("initial_balance", 100000) or 100000),
@@ -12395,7 +12451,7 @@ def speed_run_start():
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0)),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
-            commission_per_trade=float(form.get("commission", 0) or 0),
+            commission_per_trade=_commission_from_form(form),
         )
         rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000)),
@@ -12662,7 +12718,7 @@ def overnight_autopilot_start():
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0)),
             pip_size=float(form.get("pip_size", 0.0001)), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
-            commission_per_trade=float(form.get("commission", 0) or 0),
+            commission_per_trade=_commission_from_form(form),
         )
         rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000)),
@@ -12880,7 +12936,7 @@ def speed_run_multi_instrument_start():
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
-            commission_per_trade=float(form.get("commission", 0) or 0),
+            commission_per_trade=_commission_from_form(form),
         )
         rules = _apply_posted_preset(form, PropRules(
             account_size=float(form.get("account_size", 100000) or 100000),

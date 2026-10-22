@@ -27,6 +27,7 @@ not the hundreds-to-thousands of runs that justify a job/thread/log-poll
 page elsewhere in this app.
 """
 from __future__ import annotations
+from app.backtest.risk import commission_from_mapping as _cfm
 
 import json
 import tempfile
@@ -153,7 +154,7 @@ def risk_sweep_run():
             risk_mode="percent",  # sweeping risk LEVELS only makes sense in percent mode -- see run_risk_sweep's docstring
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
             max_trades_per_day=int(form.get("max_trades_day", 10) or 10),
-            commission_per_trade=float(form.get("commission", 0) or 0),
+            commission_per_trade=_cfm(form),
             slippage_pips=float(form.get("slippage_pips", 0.5) or 0.5),
             spread_pips=float(form.get("spread_pips", 1.0) or 1.0),
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001),

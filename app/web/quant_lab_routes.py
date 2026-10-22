@@ -21,6 +21,7 @@ instead of one per tool, since the 12 tools' pages are structurally
 identical (inputs in, one result panel out).
 """
 from __future__ import annotations
+from app.backtest.risk import commission_from_mapping as _cfm
 
 import json
 import tempfile
@@ -445,7 +446,7 @@ def strategy_health():
                     initial_balance=float(request.form.get("account_size", 100000) or 100000),
                     risk_value=float(request.form.get("risk_value", 1.0) or 1.0),
                     pip_size=float(request.form.get("pip_size", 0.0001) or 0.0001),
-                    commission_per_trade=float(request.form.get("commission", 0) or 0),
+                    commission_per_trade=_cfm(request.form),
                 )
                 rules = PropRules(
                     account_size=float(request.form.get("account_size", 100000) or 100000),
@@ -530,7 +531,7 @@ def portfolio_composer():
             df = _load_ohlcv_upload("data_csv")
             by_name = {s.name: s for s in candidates_list}
             leg_risk = harden_risk_config(
-                RiskConfig(commission_per_trade=float(request.form.get("commission", 0) or 0)))
+                RiskConfig(commission_per_trade=_cfm(request.form)))
 
             legs = [InstrumentLeg(name=n, df=df, strategy=load_strategy_object(by_name[n]), risk=leg_risk) for n in names]
             result = compose_portfolio(

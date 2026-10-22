@@ -14,6 +14,7 @@ is a single import + one `app.register_blueprint(extra_bp)` line (see
 INTEGRATION.md).
 """
 from __future__ import annotations
+from app.backtest.risk import commission_from_mapping as _cfm
 
 import io
 import json
@@ -138,7 +139,7 @@ def compare_run():
         initial_balance=float(form.get("account_size", 100000) or 100000),
         risk_value=float(form.get("risk_value", 1.0) or 1.0),
         pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
-        commission_per_trade=float(form.get("commission", 0) or 0),
+        commission_per_trade=_cfm(form),
     )
     prop_rules = _prop_rules_from_form(form)
     risk = harden_risk_config(risk, prop_rules=prop_rules, form=form)
@@ -334,7 +335,7 @@ def cross_instrument_detect():
     if not dfs:
         return jsonify({"error": "None of the ticked datasets could be read. " + " ".join(problems)}), 400
     try:
-        base_commission = float(request.form.get("commission", 0) or 0)
+        base_commission = _cfm(request.form)
     except ValueError:
         base_commission = 0.0
     _risks, report = resolve_risk_per_market(dfs, RiskConfig(commission_per_trade=base_commission), auto_detect=True)
@@ -383,7 +384,7 @@ def cross_instrument_start():
             risk_mode=form.get("risk_mode", "percent") or "percent",
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
             max_trades_per_day=int(form.get("max_trades_day", 10) or 10),
-            commission_per_trade=float(form.get("commission", 0) or 0),
+            commission_per_trade=_cfm(form),
             slippage_pips=float(form.get("slippage_pips", 0.5) or 0.5),
             spread_pips=float(form.get("spread_pips", 1.0) or 1.0),
             pip_size=float(form.get("pip_size", 0.0001) or 0.0001),
