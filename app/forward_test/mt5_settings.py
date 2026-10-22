@@ -34,6 +34,10 @@ class MT5Settings:
     symbol: str = DEFAULT_SYMBOL
     timeframe_minutes: int = DEFAULT_TIMEFRAME_MINUTES
     terminal_path: str = ""       # optional: path to terminal64.exe if MT5 can't auto-locate it
+    # Linux / macOS / remote-Windows only: where the mt5linux bridge server is listening (blank = env var or
+    # localhost:18812). Ignored on Windows with the native MetaTrader5 package.
+    bridge_host: str = ""
+    bridge_port: int = 0          # 0 = default
 
     @property
     def is_usable(self) -> bool:
@@ -85,6 +89,8 @@ def save_settings(settings: MT5Settings) -> None:
         "symbol": (settings.symbol or DEFAULT_SYMBOL).strip(),
         "timeframe_minutes": int(settings.timeframe_minutes or DEFAULT_TIMEFRAME_MINUTES),
         "terminal_path": (settings.terminal_path or "").strip(),
+        "bridge_host": (settings.bridge_host or "").strip(),
+        "bridge_port": int(settings.bridge_port or 0),
     }
     _settings_path().write_text(json.dumps(payload), encoding="utf-8")
 
@@ -111,6 +117,7 @@ def load_settings() -> MT5Settings:
     """Never raises -- returns blank/default settings if nothing is saved yet."""
     path = _settings_path()
     login, server, symbol, tf, terminal_path = "", DEFAULT_SERVER, DEFAULT_SYMBOL, DEFAULT_TIMEFRAME_MINUTES, ""
+    bridge_host, bridge_port = "", 0
     if path.exists():
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -119,6 +126,8 @@ def load_settings() -> MT5Settings:
             symbol = data.get("symbol") or DEFAULT_SYMBOL
             tf = int(data.get("timeframe_minutes") or DEFAULT_TIMEFRAME_MINUTES)
             terminal_path = data.get("terminal_path") or ""
+            bridge_host = data.get("bridge_host") or ""
+            bridge_port = int(data.get("bridge_port") or 0)
         except Exception:
             pass
 
@@ -140,4 +149,5 @@ def load_settings() -> MT5Settings:
     return MT5Settings(
         login=login, server=server, password=password,
         symbol=symbol, timeframe_minutes=tf, terminal_path=terminal_path,
+        bridge_host=bridge_host, bridge_port=bridge_port,
     )

@@ -1,12 +1,25 @@
 """
-Thin wrapper around the official `MetaTrader5` Python package.
+Thin wrapper around MetaTrader 5's Python API, on Windows, Linux and macOS.
 
 This is the ONLY file in the app that imports `MetaTrader5` directly, and
-the import is guarded: the package only works against a running MT5
-terminal on Windows, so everywhere else in the app (including this module's
-own class definitions) must load cleanly even when it's absent -- the
-Forward Test tab checks `is_available()` and shows a clear explanation
+every import is guarded: everywhere else in the app (including this module's
+own class definitions) must load cleanly even when no backend is present --
+the Forward Test tab checks `is_available()` and shows a clear explanation
 instead of a traceback if it's not.
+
+Backends (chosen automatically, see `_activate_backend`):
+
+  native   Windows. The official `MetaTrader5` package talks to the terminal
+           directly. (MetaQuotes only ships it for Windows.)
+  bridge   Linux, macOS -- and also a Windows terminal on another machine or
+           VPS. The MT5 terminal runs under Wine (or on that remote Windows
+           host) next to a small RPyC server (`mt5linux`); this process
+           connects to it over TCP and drives the SAME API (`initialize`,
+           `login`, `copy_rates_from_pos`, `order_send`, ...), so every
+           method below works unchanged. Host/port come from the saved
+           settings or T58_MT5_BRIDGE_HOST / T58_MT5_BRIDGE_PORT
+           (default localhost:18812). See docs/MT5_CROSS_PLATFORM.md and
+           scripts/mt5_bridge_server.py.
 
 Getting a free MT5 demo account: any MT5-supporting broker's own website
 ("open a demo account"), or the prop firm's own demo/trial account if they
@@ -16,11 +29,18 @@ app.forward_test package docstring for why).
 """
 from __future__ import annotations
 
+import importlib.util
+import os
+import shutil
+import sys
 import time
 from dataclasses import dataclass
 from typing import Optional
 
 import pandas as pd
+
+DEFAULT_BRIDGE_HOST = "localhost"
+DEFAULT_BRIDGE_PORT = 18812
 
 try:
     import MetaTrader5 as mt5  # type: ignore
@@ -29,24 +49,127 @@ except Exception as exc:  # noqa: BLE001 -- absence is expected on non-Windows/d
     mt5 = None  # type: ignore
     _MT5_IMPORT_ERROR = str(exc)
 
+_NATIVE_MT5 = mt5            # remembered so a bridge can be swapped out again
+_BRIDGE_ERROR: Optional[str] = None
+_BRIDGE_KEY: Optional[tuple] = None
+
+
+def platform_kind() -> str:
+    """'windows' | 'macos' | 'linux' | 'other' -- the OS this process runs on (not the terminal's)."""
+    p = sys.platform
+    if p.startswith("win") or os.name == "nt":
+        return "windows"
+    if p == "darwin":
+        return "macos"
+    if p.startswith("linux"):
+        return "linux"
+    return "other"
+
+
+def _bridge_package_available() -> bool:
+    try:
+        return importlib.util.find_spec("mt5linux") is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def bridge_endpoint(host: str | None = None, port: int | str | None = None) -> tuple[str, int]:
+    """Bridge address: explicit args, else T58_MT5_BRIDGE_HOST/PORT, else the saved MT5 settings, else
+    localhost:18812."""
+    saved_host, saved_port = "", 0
+    if not (host and port):
+        try:
+            from app.forward_test.mt5_settings import load_settings
+            st = load_settings()
+            saved_host, saved_port = st.bridge_host, st.bridge_port
+        except Exception:  # noqa: BLE001
+            pass
+    h = (host or os.environ.get("T58_MT5_BRIDGE_HOST") or saved_host or DEFAULT_BRIDGE_HOST).strip()
+    raw = port or os.environ.get("T58_MT5_BRIDGE_PORT") or saved_port or DEFAULT_BRIDGE_PORT
+    try:
+        pt = int(raw)
+    except (TypeError, ValueError):
+        pt = DEFAULT_BRIDGE_PORT
+    return h, pt
+
+
+def _activate_backend(host: str | None = None, port: int | str | None = None, force_bridge: bool = False) -> bool:
+    """Makes the module-level ``mt5`` usable. Native package if loaded (unless force_bridge), else an
+    RPyC bridge client. Returns True when ``mt5`` is ready; on failure stores the reason in _BRIDGE_ERROR."""
+    global mt5, _BRIDGE_ERROR, _BRIDGE_KEY
+    if mt5 is not None and not force_bridge and mt5 is _NATIVE_MT5:
+        return True
+    if mt5 is not None and mt5 is not _NATIVE_MT5 and not force_bridge:
+        # already a bridge client (or a test double): keep it unless the endpoint changed
+        if _BRIDGE_KEY is None or _BRIDGE_KEY == bridge_endpoint(host, port):
+            return True
+    if _NATIVE_MT5 is not None and not force_bridge:
+        mt5 = _NATIVE_MT5
+        return True
+    if not _bridge_package_available():
+        _BRIDGE_ERROR = "the 'mt5linux' package is not installed"
+        return False
+    h, pt = bridge_endpoint(host, port)
+    try:
+        from mt5linux import MetaTrader5 as _Bridge  # type: ignore
+        client = _Bridge(host=h, port=pt)
+    except Exception as exc:  # noqa: BLE001 -- connection refused, version mismatch, ...
+        _BRIDGE_ERROR = f"could not reach the MT5 bridge at {h}:{pt} ({type(exc).__name__}: {exc})"
+        return False
+    mt5 = client
+    _BRIDGE_KEY = (h, pt)
+    _BRIDGE_ERROR = None
+    return True
+
+
+def get_backend():
+    """The active MT5 API object (native module or bridge client), or None. Use this instead of importing
+    MetaTrader5 so the call works on every OS."""
+    return mt5
+
+
+def to_local(value):
+    """Bridge results (numpy rate arrays, tuples) arrive as RPyC proxies; copy them into this process so pandas
+    and numpy see real data. No-op for the native backend and for plain values."""
+    if backend_name() != "bridge" or value is None:
+        return value
+    try:
+        from rpyc.utils.classic import obtain  # type: ignore
+        return obtain(value)
+    except Exception:  # noqa: BLE001
+        return value
+
+
+def backend_name() -> str:
+    """'native' | 'bridge' | 'none' for the currently active backend."""
+    if mt5 is None:
+        return "none"
+    return "native" if mt5 is _NATIVE_MT5 else "bridge"
+
 
 def is_available() -> bool:
-    """True only if the MetaTrader5 package imported successfully. Does NOT
-    mean a terminal is actually running/logged in -- call connect() to find
-    that out."""
-    return mt5 is not None
+    """True if a MetaTrader5 API is usable here: the native Windows package, or the mt5linux bridge client
+    package (Linux/macOS/remote). Does NOT mean a terminal is actually running/logged in -- call connect()
+    to find that out."""
+    return mt5 is not None or _bridge_package_available()
 
 
 def unavailable_reason() -> str:
     if is_available():
         return ""
-    if _MT5_IMPORT_ERROR and "No module named" in _MT5_IMPORT_ERROR:
+    kind = platform_kind()
+    if kind == "windows":
         return (
-            "The MetaTrader5 package isn't installed, or this isn't running on Windows. "
-            "Forward Test requires: Windows, a running MT5 terminal, and `pip install "
-            "MetaTrader5` (already in config/requirements.txt on Windows)."
-        )
-    return f"MetaTrader5 package failed to load: {_MT5_IMPORT_ERROR}"
+            "The MetaTrader5 package isn't installed. Forward Test requires a running MT5 terminal and "
+            "`pip install MetaTrader5` (already in config/requirements.txt on Windows)."
+            + (f" Import error: {_MT5_IMPORT_ERROR}" if _MT5_IMPORT_ERROR and "No module named" not in _MT5_IMPORT_ERROR else ""))
+    where = "macOS" if kind == "macos" else "Linux" if kind == "linux" else "this operating system"
+    return (
+        f"MetaQuotes only ships the MetaTrader5 Python package for Windows, so on {where} the app talks to the terminal "
+        "through the MT5 bridge: run the MT5 terminal under Wine (or on a Windows PC/VPS), start the bridge server next "
+        "to it, and `pip install mt5linux` here. Step-by-step setup is in docs/MT5_CROSS_PLATFORM.md "
+        "(scripts/mt5_bridge_server.py prints the exact commands for this machine)."
+    )
 
 
 # Human-readable explanations for the MT5 error codes this app's users
@@ -91,34 +214,96 @@ def describe_mt5_error(code: int, desc: str) -> str:
     return f"MT5 connection failed ({code}): {desc}"
 
 
-def find_terminal_candidates() -> list[str]:
-    """Best-effort search of the handful of places a Windows MT5 install
-    actually lands, for when auto-detection inside the MetaTrader5 package
-    itself fails (the -10003 case). Returns existing terminal64.exe paths
-    only, most-recently-modified first so a freshly (re)installed terminal
-    sorts ahead of stale leftovers from an old broker. Silently returns an
-    empty list on any non-Windows platform or permission error -- this is
-    a convenience for the UI's 'Auto-detect' button, never something a
-    caller should treat as authoritative."""
-    import glob
-    import os
+def wine_prefix_candidates() -> list[str]:
+    """Wine prefixes that may hold an MT5 install on Linux/macOS (existing directories only)."""
+    home = os.path.expanduser("~")
+    raw = [
+        os.environ.get("WINEPREFIX"),
+        os.path.join(home, ".wine"),
+        os.path.join(home, ".mt5"),
+        os.path.join(home, ".wine-mt5"),
+        os.path.join(home, ".local", "share", "wineprefixes", "mt5"),
+        os.path.join(home, ".local", "share", "wineprefixes", "metatrader5"),
+        # MetaQuotes' own macOS app bundle keeps its prefix here
+        os.path.join(home, "Library", "Application Support", "net.metaquotes.wine.metatrader5"),
+        os.path.join(home, "Library", "Application Support", "MetaTrader 5"),
+        os.path.join(home, "Library", "Containers", "net.metaquotes.wine.metatrader5", "Data", "Library",
+                     "Application Support", "net.metaquotes.wine.metatrader5"),
+        # CrossOver bottles
+        *(_glob(os.path.join(home, "Library", "Application Support", "CrossOver", "Bottles", "*"))),
+        *(_glob(os.path.join(home, ".cxoffice", "*"))),
+        # Bottles (Flatpak) and Lutris
+        *(_glob(os.path.join(home, ".var", "app", "com.usebottles.bottles", "data", "bottles", "bottles", "*"))),
+        *(_glob(os.path.join(home, "Games", "*"))),
+    ]
+    seen, out = set(), []
+    for d in raw:
+        if d and d not in seen and os.path.isdir(d):
+            seen.add(d)
+            out.append(d)
+    return out
 
-    if os.name != "nt":
+
+def _glob(pattern: str) -> list[str]:
+    import glob
+    try:
+        return glob.glob(pattern)
+    except Exception:  # noqa: BLE001
         return []
 
+
+def to_wine_path(path: str) -> str:
+    """Translates a host path inside a Wine prefix (``<prefix>/drive_c/Program Files/X/terminal64.exe``) to the
+    Windows path the terminal-side Python needs (``C:\\Program Files\\X\\terminal64.exe``). Windows-style paths
+    and anything outside a prefix are returned unchanged."""
+    if not path:
+        return path
+    if len(path) > 1 and path[1] == ":":
+        return path
+    norm = path.replace("\\", "/")
+    marker = "/drive_c/"
+    idx = norm.lower().find(marker)
+    if idx < 0:
+        return path
+    rest = norm[idx + len(marker):]
+    return "C:\\" + rest.replace("/", "\\")
+
+
+def find_terminal_candidates() -> list[str]:
+    """Best-effort search of the places an MT5 install actually lands, for when auto-detection inside the
+    MetaTrader5 package itself fails (the -10003 case).
+
+      * Windows: Program Files and per-user AppData (the paths as Windows sees them).
+      * Linux/macOS: ``terminal64.exe`` inside Wine/CrossOver/MetaQuotes-app prefixes (host paths; they are
+        translated to ``C:\\...`` for the bridge by ``to_wine_path`` when initialising).
+
+    Existing paths only, most-recently-modified first so a freshly (re)installed terminal sorts ahead of stale
+    leftovers. Silently returns an empty list on any error -- a convenience for the UI's 'Auto-detect' button,
+    never something a caller should treat as authoritative."""
+    import glob
+
     patterns: list[str] = []
-    program_files = [os.environ.get("ProgramFiles", r"C:\Program Files"),
-                      os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")]
-    for pf in program_files:
-        if pf:
-            patterns.append(os.path.join(pf, "*", "terminal64.exe"))
-            patterns.append(os.path.join(pf, "*", "*", "terminal64.exe"))
-    # The far more common location in practice: MetaQuotes/brokers install
-    # per-user under AppData\Roaming\MetaQuotes\Terminal\<hash>\, not
-    # Program Files at all.
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        patterns.append(os.path.join(appdata, "MetaQuotes", "Terminal", "*", "terminal64.exe"))
+    if platform_kind() == "windows":
+        program_files = [os.environ.get("ProgramFiles", r"C:\Program Files"),
+                          os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")]
+        for pf in program_files:
+            if pf:
+                patterns.append(os.path.join(pf, "*", "terminal64.exe"))
+                patterns.append(os.path.join(pf, "*", "*", "terminal64.exe"))
+        # The far more common location in practice: MetaQuotes/brokers install
+        # per-user under AppData\Roaming\MetaQuotes\Terminal\<hash>\, not
+        # Program Files at all.
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            patterns.append(os.path.join(appdata, "MetaQuotes", "Terminal", "*", "terminal64.exe"))
+    else:
+        for prefix in wine_prefix_candidates():
+            for pf in ("Program Files", "Program Files (x86)"):
+                patterns.append(os.path.join(prefix, "drive_c", pf, "*", "terminal64.exe"))
+                patterns.append(os.path.join(prefix, "drive_c", pf, "*", "*", "terminal64.exe"))
+            patterns.append(os.path.join(prefix, "drive_c", "users", "*", "AppData", "Roaming", "MetaQuotes",
+                                         "Terminal", "*", "terminal64.exe"))
+            patterns.append(os.path.join(prefix, "drive_c", "MetaTrader*", "terminal64.exe"))
 
     found: list[str] = []
     for pattern in patterns:
@@ -198,16 +383,30 @@ class MT5Connector:
     the Forward Test tab only ever runs one session at a time for this
     reason."""
 
-    def __init__(self, login: str, password: str, server: str, terminal_path: str = ""):
+    def __init__(self, login: str, password: str, server: str, terminal_path: str = "",
+                 bridge_host: str | None = None, bridge_port: int | str | None = None):
         self.login = login
         self.password = password
         self.server = server
         self.terminal_path = terminal_path or None
+        self.bridge_host = bridge_host or None
+        self.bridge_port = bridge_port or None
         self._connected = False
+
+    def _bridge_is_local(self) -> bool:
+        return bridge_endpoint(self.bridge_host, self.bridge_port)[0].lower() in ("localhost", "127.0.0.1", "::1", "0.0.0.0")
 
     def connect(self) -> ConnectionResult:
         if not is_available():
             return ConnectionResult(ok=False, message=unavailable_reason())
+        if not _activate_backend(self.bridge_host, self.bridge_port):
+            h, pt = bridge_endpoint(self.bridge_host, self.bridge_port)
+            return ConnectionResult(ok=False, message=(
+                f"MT5 bridge unavailable: {_BRIDGE_ERROR}.\n\n"
+                f"Start the bridge server next to your MT5 terminal (it must listen on {h}:{pt}) -- "
+                "run `python scripts/mt5_bridge_server.py --help` for the exact commands, or see "
+                "docs/MT5_CROSS_PLATFORM.md. If the terminal is on another machine, set the bridge host/port "
+                "(T58_MT5_BRIDGE_HOST / T58_MT5_BRIDGE_PORT) and make sure that port is reachable."))
         try:
             login_int = int(self.login)
         except ValueError:
@@ -239,29 +438,54 @@ class MT5Connector:
     INIT_TIMEOUT_MS = 120_000
 
     def _terminal_running(self) -> bool:
-        import os
         import subprocess
-        if os.name != "nt":
-            return False
         try:
-            out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq terminal64.exe"], capture_output=True, text=True, timeout=10).stdout
-            return "terminal64.exe" in out.lower()
+            if platform_kind() == "windows":
+                out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq terminal64.exe"], capture_output=True, text=True, timeout=10).stdout
+                return "terminal64.exe" in out.lower()
+            if shutil.which("pgrep"):
+                # Under Wine the process shows up as terminal64.exe (Linux) or inside the Wine host process (macOS)
+                r = subprocess.run(["pgrep", "-fi", "terminal64"], capture_output=True, text=True, timeout=10)
+                return r.returncode == 0 and bool(r.stdout.strip())
+            out = subprocess.run(["ps", "ax"], capture_output=True, text=True, timeout=10).stdout
+            return "terminal64" in out.lower()
         except Exception:
             return False
 
     def launch_terminal(self, wait_seconds: float = 45.0) -> str | None:
         """Starts MT5 if it is not already running (path given or auto-detected) and waits for it to come up.
-        Returns the path used, or None when nothing could be started."""
-        import os
+        Returns the path used, or None when nothing could be started.
+
+        Windows: runs terminal64.exe. Linux/macOS: runs it under Wine in the prefix it was found in -- only when
+        the bridge is on THIS machine (a remote bridge host manages its own terminal; initialize() on the remote
+        Python starts it if needed)."""
         import subprocess
-        if os.name != "nt":
+        kind = platform_kind()
+        if kind != "windows" and not self._bridge_is_local():
             return None
         path = self.terminal_path or (find_terminal_candidates() or [None])[0]
-        if not path or not os.path.exists(path):
+        if not path:
+            return None
+        if len(path) > 1 and path[1] == ":" and kind != "windows":
+            return None          # a C:\ path from settings: only the Wine-side Python can see it; initialize() handles it
+        if not os.path.exists(path):
             return None
         if not self._terminal_running():
             try:
-                subprocess.Popen([path], cwd=os.path.dirname(path), close_fds=True)
+                if kind == "windows":
+                    subprocess.Popen([path], cwd=os.path.dirname(path), close_fds=True)
+                else:
+                    wine = shutil.which("wine64") or shutil.which("wine")
+                    if wine is None:
+                        return path       # nothing to launch with; the bridge-side initialize() may still start it
+                    env = dict(os.environ)
+                    low = path.replace("\\", "/")
+                    i = low.lower().find("/drive_c/")
+                    if i > 0:
+                        env.setdefault("WINEPREFIX", low[:i])
+                    env.setdefault("WINEDEBUG", "-all")
+                    subprocess.Popen([wine, path], cwd=os.path.dirname(path), env=env, close_fds=True,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except Exception:
                 return None
             deadline = time.time() + wait_seconds
@@ -274,7 +498,8 @@ class MT5Connector:
     def _init_once(self, path: str | None):
         kw = {"timeout": self.INIT_TIMEOUT_MS}
         if path:
-            kw["path"] = path
+            # the Python that owns the terminal is the one reading this path: under Wine/remote it must be C:\...
+            kw["path"] = to_wine_path(path) if backend_name() == "bridge" else path
         ok = mt5.initialize(**kw)
         return (True, 0, "") if ok else (False, *mt5.last_error())
 
@@ -415,7 +640,7 @@ class MT5Connector:
             raise RuntimeError(f"Could not select symbol '{symbol}' on this MT5 account.")
         # Pull one extra bar and drop the most recent -- MT5's rates array
         # includes the currently-forming bar at index -1.
-        rates = mt5.copy_rates_from_pos(symbol, tf, 0, count + 1)
+        rates = to_local(mt5.copy_rates_from_pos(symbol, tf, 0, count + 1))
         if rates is None or len(rates) < 2:
             code, desc = mt5.last_error()
             raise RuntimeError(f"Could not fetch rates for {symbol} ({code}): {desc}")
