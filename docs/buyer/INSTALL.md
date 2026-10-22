@@ -53,6 +53,7 @@ line, no Git required.
 2. When prompted, enter the **license key** from your purchase email and
    click **Activate**. Activation needs internet once; afterwards the app
    works offline for up to 3 days between checks.
+   (Owner/support: the master key also activates, fully offline — see [../LICENSING.md](../LICENSING.md).)
 3. If activation fails, check the troubleshooting section below before
    contacting support.
 
