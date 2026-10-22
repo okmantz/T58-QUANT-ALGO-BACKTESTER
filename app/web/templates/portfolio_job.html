@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Multi-Asset Portfolio — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<style>
+  * { box-sizing: border-box; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  .card p.help { font-size: 12px; color: var(--t-faint); margin: 0 0 10px; line-height: 1.5; }
+  label { display: block; font-size: 13px; color: var(--t-soft); margin: 10px 0 4px; }
+  input[type=text], input[type=number], select, textarea {
+    width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font-size: 15px;
+  }
+  input:focus, select:focus, textarea:focus {
+    outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(53,224,176,0.15);
+  }
+  textarea { min-height: 140px; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+  .row { display: flex; gap: 10px; }
+  .row > div { flex: 1; }
+  input[type=file] { width: 100%; color: var(--t-soft); }
+  .tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+  .tabs button {
+    flex: 1; min-width: 70px; padding: 10px 6px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--t-soft); font-size: 13px;
+  }
+  .tabs button.active { background: var(--teal); color: var(--on-teal); font-weight: 600; border-color: var(--teal); }
+  .submit-btn {
+    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: var(--on-teal);
+    font-size: 16px; font-weight: 700; margin-top: 6px;
+    box-shadow: 0 0 22px rgba(53,224,176,0.35);
+  }
+  .error { background: var(--err-bg); border: 1px solid var(--err-bd); color: var(--err-fg); padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .notice { background: var(--ok-bg); border: 1px solid var(--ok-bd); color: var(--ok-fg); padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .leg-block { border: 1px solid var(--border-light); border-radius: 10px; padding: 10px; margin-bottom: 10px; }
+  .leg-block h3 { font-size: 12px; text-transform: uppercase; color: var(--t-faint2); margin: 0 0 8px; }
+  .headline { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 10px; }
+  .stat { background: var(--panel-3); border: 1px solid var(--border-light); border-radius: 10px; padding: 10px; }
+  .stat .label { font-size: 10px; color: var(--t-faint); text-transform: uppercase; }
+  .stat .value { font-size: 16px; font-weight: 700; margin-top: 2px; }
+  .links a { display: block; color: var(--info-fg); font-size: 13px; margin-top: 6px; text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="container" style="max-width:900px;margin:0 auto;padding:14px;">
+<p><a href="/portfolio">&larr; Portfolio</a></p>
+{% if not_found %}<div class="error">This portfolio job no longer exists.</div>{% else %}
+<div class="card"><h2>Portfolio backtest</h2><div id="status" class="help">Running&hellip;</div><pre id="log" class="help" style="white-space:pre-wrap;"></pre></div>
+<div id="out"></div>
+<script>
+const jobId = {{ job_id|tojson }};
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const f = (x, d=0) => (x === null || x === undefined || isNaN(x)) ? 'n/a' : Number(x).toFixed(d);
+function render(r) {
+  let h = '<div class="card"><h2>Result (' + esc(r.engine) + ' engine)</h2><p class="help">Legs: ' + r.legs.map(esc).join(', ') + '</p><div class="headline">' +
+    '<div class="stat"><div class="label">Combined trades</div><div class="value">' + r.trades + '</div></div>' +
+    '<div class="stat"><div class="label">Net profit</div><div class="value">$' + f(r.net_profit) + '</div></div>' +
+    '<div class="stat"><div class="label">Max drawdown</div><div class="value">' + f(r.max_dd, 1) + '%</div></div>' +
+    '<div class="stat"><div class="label">Sharpe</div><div class="value">' + f(r.sharpe, 2) + '</div></div></div>';
+  h += '<p class="help">Diversification ratio: ' + f(r.diversification_ratio, 2) + '</p>';
+  if (r.floating) h += '<p class="help">Closed-trade drawdown $' + f(r.floating.closed_only_max_drawdown) + ' vs worst-case with open trades marked at their extremes $' + f(r.floating.worst_case_max_drawdown) + '; up to ' + r.floating.max_concurrent_trades + ' trades open at once.</p>';
+  if (r.portfolio_stats) h += '<p class="help">Peak concurrent positions: ' + r.portfolio_stats.max_concurrent_positions + ' &middot; time with 2+ positions: ' + f(r.portfolio_stats.pct_time_multiple_positions, 1) + '%</p>';
+  (r.warnings || []).forEach(w => { h += '<div class="notice">' + esc(w) + '</div>'; });
+  h += '<p><a href="' + r.report_html + '" target="_blank">Open full portfolio report &rarr;</a></p>';
+  if (r.saved_as) h += '<p class="help">Saved to the portfolio library as ' + esc(r.saved_as) + '.</p>';
+  return h + '</div>';
+}
+async function poll() {
+  const res = await fetch('/portfolio/job/' + jobId + '/status.json');
+  const j = await res.json();
+  document.getElementById('log').textContent = (j.log || []).join('\n');
+  if (j.error) { document.getElementById('status').textContent = 'Failed'; document.getElementById('out').innerHTML = '<div class="error">' + esc(j.error) + '</div>'; return; }
+  if (j.done && j.result) { document.getElementById('status').textContent = 'Done'; document.getElementById('out').innerHTML = render(j.result); return; }
+  setTimeout(poll, 1200);
+}
+poll();
+</script>
+{% endif %}
+</div>
+</body>
+</html>

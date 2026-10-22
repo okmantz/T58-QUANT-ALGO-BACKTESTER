@@ -182,6 +182,30 @@
   </div>
 
   <div class="card">
+    <h2>Portfolio engine</h2>
+    <label>Engine</label>
+    <select name="engine">
+      <option value="unified" selected>Unified account (recommended) &mdash; one account, overlapping positions, equity marked to market every bar, rules on combined equity</option>
+      <option value="legacy">Legacy &mdash; each leg on its own account, trades merged by close time</option>
+    </select>
+    <details style="margin-top:10px;">
+      <summary>Unified-engine limits</summary>
+      <div class="row">
+        <div><label>Max open positions</label><input type="number" min="1" name="max_open_positions" placeholder="unlimited"></div>
+        <div><label>Max total contracts</label><input type="number" step="0.5" min="0" name="max_total_contracts" placeholder="unlimited"></div>
+        <div><label>Max open risk (% of balance)</label><input type="number" step="0.1" min="0" name="max_open_risk_pct" placeholder="unlimited"></div>
+      </div>
+      <div class="row">
+        <div><label>When over a limit</label><select name="cap_policy"><option value="clip">Shrink the entry to fit</option><option value="skip">Skip the entry</option></select></div>
+        <div><label>Sizing balance</label><select name="size_basis"><option value="account">Shared account balance</option><option value="leg">Each leg's own balance</option></select></div>
+        <div><label>Clock window</label><select name="clock_window"><option value="union">All data (union)</option><option value="overlap">Only where every leg has data</option></select></div>
+      </div>
+    </details>
+    <label style="margin-top:10px;">Save to portfolio library as (optional)</label>
+    <input type="text" name="save_portfolio_name" placeholder="e.g. FX + Gold book">
+  </div>
+
+  <div class="card">
     <details>
       <summary>Advanced re-weighting settings</summary>
       <label>Correlation penalty strength (0 = ignore, 1 = full inverse-correlation re-weighting)</label>
