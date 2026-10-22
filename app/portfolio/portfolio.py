@@ -87,6 +87,12 @@ class PortfolioConfig:
     # entirely (old behavior, unchanged).
     prop_rules: PropRules | None = None
     mc_config: MonteCarloConfig | None = None
+    # "legacy": each leg runs on its own account and the trade lists are merged by close time (the original
+    # behaviour). "unified": ONE account, several open positions, equity marked to market every bar and the
+    # account rules enforced on combined equity (app.backtest.portfolio_engine).
+    engine: str = "legacy"
+    # Unified-engine options (capacity caps, sizing basis, window...). account is filled in from the legs.
+    engine_config: object | None = None      # PortfolioEngineConfig | None
 
 
 @dataclass
@@ -116,6 +122,11 @@ class PortfolioResult:
     # otherwise (Monte Carlo wasn't requested).
     mc_result: object | None = None          # MonteCarloResult | None
     single_run_summary: dict | None = None   # summarize_single_run() on the one real combined trade sequence
+    # Floating-equity overlay (app.portfolio.floating): worst-case drawdown of the COMBINED account using each
+    # trade's recorded intratrade excursions on a shared clock. Always populated when there are trades.
+    floating_overlay: object | None = None   # FloatingOverlay | None
+    engine: str = "legacy"                   # "legacy" (independent legs, merged) | "unified" (one account)
+    engine_result: object | None = None      # PortfolioEngineResult when engine == "unified"
 
     def to_summary_dict(self) -> dict:
         d = {
@@ -128,6 +139,12 @@ class PortfolioResult:
         if self.mc_result is not None:
             d["mc_result"] = self.mc_result.to_dict()
             d["single_run_summary"] = self.single_run_summary
+        d["engine"] = self.engine
+        if self.floating_overlay is not None:
+            d["floating_overlay"] = self.floating_overlay.to_dict()
+        if self.engine_result is not None:
+            d["portfolio_stats"] = self.engine_result.portfolio_stats
+            d["clock"] = self.engine_result.clock.report()
         return d
 
 
@@ -219,6 +236,11 @@ def run_portfolio_backtest(
     total_capped = sum(capped.values()) or 1.0
     final_weights = {name: w * (n / total_capped) for name, w in capped.items()}
 
+    if cfg.engine == "unified":
+        return _finish_unified(legs, cfg, names, avg_corr, final_weights, correlation_matrix, returns_by_leg, warnings)
+    if cfg.engine != "legacy":
+        raise PortfolioError("PortfolioConfig.engine must be 'legacy' or 'unified'.")
+
     # --- Pass 2: re-run each leg with its correlation-adjusted risk_value ---
     leg_results: list[LegResult] = []
     all_final_trades: list[Trade] = []
@@ -259,6 +281,13 @@ def run_portfolio_backtest(
     except Exception:
         diversification_ratio = None
 
+    overlay = _safe_overlay(all_final_trades, cfg.initial_balance)
+    if overlay is not None and overlay.worst_case_max_dd > overlay.closed_max_dd * 1.05 + 1e-9:
+        warnings.append(
+            f"Floating-equity overlay: closed-trade drawdown is ${overlay.closed_max_dd:,.0f} but the worst-case "
+            f"drawdown with open trades marked at their recorded extremes is ${overlay.worst_case_max_dd:,.0f} "
+            f"({overlay.max_concurrent} trades were open at once at peak). The independent-leg merge understates risk; "
+            "run the unified engine for an exact figure.")
     return PortfolioResult(
         legs=leg_results,
         correlation_matrix=correlation_matrix,
@@ -267,8 +296,68 @@ def run_portfolio_backtest(
         combined_statistics=combined_stats,
         diversification_ratio=diversification_ratio,
         warnings=warnings,
+        floating_overlay=overlay,
         **_combined_mc_fields(all_final_trades, cfg),
     )
+
+
+def _finish_unified(legs, cfg, names, avg_corr, final_weights, correlation_matrix, returns_by_leg, warnings):
+    """Pass 2 for engine="unified": the correlation-adjusted legs trade ONE account together."""
+    from app.backtest.portfolio_engine import (EngineLeg, PortfolioEngineConfig, PortfolioEngineError,
+                                               run_portfolio_engine)
+    ecfg = cfg.engine_config if cfg.engine_config is not None else PortfolioEngineConfig()
+    account = _dataclass_replace(legs[0].risk, initial_balance=cfg.initial_balance)
+    ecfg = _dataclass_replace(ecfg, account=account) if ecfg.account is None else ecfg
+    eng_legs = []
+    for leg in legs:
+        nominal = leg.weight
+        scale_factor = final_weights[leg.name] / nominal if nominal else final_weights[leg.name]
+        eng_legs.append(EngineLeg(name=leg.name, df=leg.df, strategy=leg.strategy, risk=leg.risk, weight=scale_factor))
+    try:
+        res = run_portfolio_engine(eng_legs, ecfg)
+    except PortfolioEngineError as exc:
+        raise PortfolioError(str(exc)) from exc
+    warnings.extend(res.warnings)
+    leg_results = []
+    for leg, summ in zip(legs, res.legs):
+        lt = res.trades_for(leg.name)
+        lstats = compute_statistics(lt, _rebuild_equity_curve(lt, cfg.initial_balance), initial_balance=cfg.initial_balance) \
+            if lt else None
+        leg_results.append(LegResult(
+            name=leg.name, nominal_weight=leg.weight, avg_correlation_with_others=avg_corr[leg.name],
+            final_weight=final_weights[leg.name],
+            risk_value_scale=final_weights[leg.name] / leg.weight if leg.weight else final_weights[leg.name],
+            trade_count=summ.trades, net_profit=summ.net_profit, statistics=lstats.to_dict() if lstats else {}))
+    trades = res.combined_trades
+    diversification_ratio = None
+    try:
+        port_vol = float(_daily_returns(res.equity_curve).std())
+        indiv = {n: float(returns_by_leg[n].std()) if len(returns_by_leg[n]) > 1 else 0.0 for n in names}
+        wavg = sum(final_weights[n] * indiv[n] for n in names) / max(sum(final_weights.values()), 1e-9)
+        if port_vol and math.isfinite(port_vol) and port_vol > 0:
+            diversification_ratio = float(wavg / port_vol)
+    except Exception:  # noqa: BLE001
+        diversification_ratio = None
+    overlay = _safe_overlay(trades, cfg.initial_balance)
+    return PortfolioResult(
+        legs=leg_results, correlation_matrix=correlation_matrix, combined_trades=trades,
+        combined_equity_curve=res.equity_curve, combined_statistics=res.statistics,
+        diversification_ratio=diversification_ratio, warnings=warnings, floating_overlay=overlay,
+        engine="unified", engine_result=res, **_combined_mc_fields(trades, cfg))
+
+
+def run_unified_portfolio(legs: list, config: PortfolioConfig | None = None) -> PortfolioResult:
+    """run_portfolio_backtest with engine="unified": one account, several open positions, combined-equity rules."""
+    cfg = _dataclass_replace(config or PortfolioConfig(), engine="unified")
+    return run_portfolio_backtest(legs, cfg)
+
+
+def _safe_overlay(trades, initial_balance):
+    try:
+        from app.portfolio.floating import floating_equity_overlay
+        return floating_equity_overlay(trades, initial_balance)
+    except Exception:  # noqa: BLE001 -- a diagnostic; never fail a run over it
+        return None
 
 
 def _combined_mc_fields(all_final_trades: list[Trade], cfg: PortfolioConfig) -> dict:

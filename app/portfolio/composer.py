@@ -67,6 +67,12 @@ class ComposerCandidateResult:
     score_metric: str          # "eval_pass_probability" | "profit_factor"
     net_profit: float
     diversification_ratio: float | None
+    # Final verification on the unified one-account engine (None = not verified)
+    verified_score: float | None = None
+    verified_net_profit: float | None = None
+    verified_max_dd_pct: float | None = None
+    verified_worst_case_dd: float | None = None
+    verified_max_concurrent: int | None = None
 
 
 @dataclass
@@ -89,6 +95,9 @@ class PortfolioComposerResult:
                 {
                     "combo_names": list(c.combo_names), "score": c.score, "score_metric": c.score_metric,
                     "net_profit": c.net_profit, "diversification_ratio": c.diversification_ratio,
+                    "verified_score": c.verified_score, "verified_net_profit": c.verified_net_profit,
+                    "verified_max_dd_pct": c.verified_max_dd_pct, "verified_worst_case_dd": c.verified_worst_case_dd,
+                    "verified_max_concurrent": c.verified_max_concurrent,
                 }
                 for c in self.leaderboard
             ],
@@ -103,7 +112,8 @@ class PortfolioComposerResult:
         lines.append(header)
         lines.append("-" * 70)
         for i, c in enumerate(self.leaderboard, start=1):
-            lines.append(f"{i:<6}{len(c.combo_names):>6}  {', '.join(c.combo_names)}  (score={c.score:.4f})")
+            ver = f"  verified={c.verified_score:.4f}" if c.verified_score is not None else ""
+            lines.append(f"{i:<6}{len(c.combo_names):>6}  {', '.join(c.combo_names)}  (score={c.score:.4f}{ver})")
         if self.best_combo_names:
             lines.append("")
             lines.append("Best combination: " + ", ".join(self.best_combo_names))
@@ -139,6 +149,7 @@ def compose_portfolio(
     max_evaluations: int = 60,
     portfolio_config: PortfolioConfig | None = None,
     top_k: int = 10,
+    verify_top_n: int = 3,
 ) -> PortfolioComposerResult:
     """
     candidates: every leg worth considering -- typically one InstrumentLeg
@@ -163,6 +174,11 @@ def compose_portfolio(
         Monte Carlo is run and the search falls back to scoring by profit
         factor (see module docstring).
     top_k: how many entries the returned leaderboard keeps.
+    verify_top_n: the search itself scores combinations with the fast independent-leg merge. The best
+        ``verify_top_n`` are then re-run on the UNIFIED engine (one account, overlapping positions, equity
+        marked to market, rules on combined equity) and re-ranked by that score, so the winner has survived
+        the real account rules rather than just a realised-P&L sum. 0 disables the stage; it is skipped
+        when the template config already uses the unified engine.
     """
     min_legs = max(int(min_legs), 2)
     max_legs = max(int(max_legs), min_legs)
@@ -271,6 +287,35 @@ def compose_portfolio(
         raise PortfolioComposerError("Every candidate combination failed to backtest -- nothing to compose.")
 
     leaderboard.sort(key=lambda c: c.score, reverse=True)
+    if verify_top_n and cfg.engine != "unified":
+        verify_cfg = _dataclass_replace(cfg, engine="unified")
+        for cand in leaderboard[:int(verify_top_n)]:
+            combo = tuple(by_name[n] for n in cand.combo_names)
+            v_result, v_score, _m, v_err = _evaluate_combo(combo, verify_cfg)
+            if v_err is not None:
+                warnings.append(f"Unified-engine verification of ({', '.join(cand.combo_names)}) failed: {v_err}")
+                continue
+            ov = v_result.floating_overlay
+            cand.verified_score = v_score
+            cand.verified_net_profit = float(v_result.combined_statistics.net_profit)
+            cand.verified_max_dd_pct = float(v_result.combined_statistics.max_drawdown_pct)
+            cand.verified_worst_case_dd = float(ov.worst_case_max_dd) if ov is not None else None
+            cand.verified_max_concurrent = (v_result.engine_result.portfolio_stats.get("max_concurrent_positions")
+                                            if v_result.engine_result is not None else None)
+            if cand.combo_names == best_combo:
+                best_result = v_result
+        verified = [c for c in leaderboard if c.verified_score is not None]
+        if verified:
+            verified.sort(key=lambda c: c.verified_score, reverse=True)
+            winner = verified[0]
+            if winner.combo_names != best_combo:
+                warnings.append(
+                    f"Unified-engine verification changed the winner: ({', '.join(best_combo)}) -> "
+                    f"({', '.join(winner.combo_names)}) once positions were allowed to overlap on one account.")
+                best_combo = winner.combo_names
+                _w_result, *_ = _evaluate_combo(tuple(by_name[n] for n in best_combo), verify_cfg)
+                best_result = _w_result
+            leaderboard = verified + [c for c in leaderboard if c.verified_score is None]
     return PortfolioComposerResult(
         best_combo_names=best_combo, best_result=best_result, score_metric=score_metric,
         search_mode=search_mode, leaderboard=leaderboard[:top_k],
