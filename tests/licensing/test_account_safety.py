@@ -186,7 +186,7 @@ def test_reset_on_breach_resumes_trading_after_a_blown_account():
     df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
     signals = pd.Series([1, 0, 1, 1, 1, 1])
 
-    risk = RiskConfig(
+    risk = RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, 
         initial_balance=10_000.0, risk_mode="percent", risk_value=50.0,
         pip_size=1.0, max_account_drawdown_pct=10.0, reset_on_breach=True,
     )
