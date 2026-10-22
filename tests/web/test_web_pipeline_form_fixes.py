@@ -44,7 +44,8 @@ def test_integrity_check_accepts_per_contract_commission():
     ts = pd.date_range("2024-01-02 14:30", periods=400, freq="5min", tz="UTC")
     px = 18000 + pd.Series(range(400)).astype(float)
     df = pd.DataFrame({"timestamp": ts, "open": px, "high": px + 1, "low": px - 1, "close": px, "volume": 1})
-    base = dict(initial_balance=50000.0, pip_size=1.0, contract_size=20.0, slippage_pips=0.25, spread_pips=0.25)
+    base = dict(initial_balance=50000.0, pip_size=1.0, contract_size=20.0, slippage_pips=0.25, spread_pips=0.25,
+                commission_per_trade=0.0)  # zero on purpose: the 'bad' case must be a missing commission
     strat = ManualStrategy({"indicators": [], "long_entry": "close > 0", "stop_loss_pips": 10, "take_profit_pips": 20})
     bad = run_integrity_check(df, strat, RiskConfig(**base), data_label="NQ1!")
     good = run_integrity_check(df, strat, RiskConfig(**base, commission_per_contract=4.2), data_label="NQ1!")
