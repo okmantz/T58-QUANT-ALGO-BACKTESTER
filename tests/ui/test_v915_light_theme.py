@@ -23,6 +23,8 @@ LIFECYCLE = ROOT / "app/web/templates/_lifecycle_css.html"
 # Dark-rule hashes captured from the working tree at WS-E task start
 # (normalised: comments stripped, whitespace collapsed, light-scoped
 # blocks removed). If a dark declaration changes, these break.
+# 2026-10-22: theme.css digest re-pinned after the Personalize work (seasonal backdrops, Bible verse bar, live-PnL pill) ADDED
+# new dark-scope rules; no existing dark token or rule was changed (test_dark_token_values_pinned still passes).
 DARK_HASH = {
     # NOTE (WS-E, 2026-10-10): hashes measured on the pre-task working
     # tree with the same normalisation _dark_hash() applies. The WS-E
@@ -32,7 +34,7 @@ DARK_HASH = {
     # raw-text diff is only the added comment blocks).
     # Re-pinned (dashboard redesign): the dark palette was deliberately retuned ("Deep Teal Glass": violet/cyan/gold
     # accents, glass panels, mountain backdrop). Light-scoped rules are untouched.
-    "theme.css": "7edda5eaf70ca8c7adf4220d5a5084480558c8f58abab92844e237dc6f068d5d",
+    "theme.css": "7183780c5a6638f3eb5d0ad6c94967a8549f67a3314307e7340f059a7c3c18f8",
     "job-theme.css": "e2d34ce668ee4d455a26d41c40cc3a6396290e82135e41201f477b5c972181c2",
     # Re-pinned 2026-10-13: the lifecycle (Champion board) dark rules were extended after the
     # WS-E pin was taken; token values (DARK_TOKENS below) are still checked separately.
