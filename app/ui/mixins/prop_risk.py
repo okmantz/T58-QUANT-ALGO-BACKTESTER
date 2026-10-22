@@ -346,7 +346,7 @@ class PropRiskMixin:
         # backend path, so a strategy picked from this dropdown can no
         # longer end up silently backtested at $0 commission.
         commission_note = ""
-        if self.r_commission.get_float(0) == 0.0:
+        if self.r_commission.get_float(0) in (0.0, 3.0):
             self.r_commission.var.set(str(spec.default_commission_round_turn))
             commission_note = f", commission=${spec.default_commission_round_turn:g}/trade"
         self.pip_detect_status.config(
