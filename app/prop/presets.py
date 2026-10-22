@@ -910,25 +910,31 @@ except NameError:
 # 2026-10 audit: verification stamps. Only rows whose own source_note records a direct check of the
 # firm's page are stamped; everything else stays unverified (verified_on == "") and is therefore NOT
 # READY-eligible until someone checks it and adds a row here.
+# 2026-10-22 full re-check (every stamped row re-read against the firm's own page that day):
+#   FTMO trading-objectives (10%/5%/10% static, 4 days), Topstep help centre (MLL $2k/$3k EOD-trailing and locking, target $3k/$6k,
+#   55% consistency, funded 40%), Apex EOD + Intraday evaluation pages (targets, drawdown, DLL, contracts, 30-day limit),
+#   Lucid help centre (target, max loss, daily loss, size), FundedNext Stellar 2-Step help article, E8 One product page.
+# NOT re-stamped (no primary page reachable/consistent today): The5%ers (its own marketing page says 5% daily loss, its FAQ 3% -- the
+#   stricter 3% is modelled and the row stays unverified), FunderPro (page confirms only the 3% daily drawdown), Atlas Funded, The Futures Desk.
 _VERIFIED_STAMPS = {
-    "ftmo_10k": ("2026-10-17", "https://ftmo.com/en/trading-objectives/", "primary"),
-    "ftmo_100k": ("2026-10-17", "https://ftmo.com/en/trading-objectives/", "primary"),
-    "ftmo_200k": ("2026-10-17", "https://ftmo.com/en/trading-objectives/", "primary"),
+    "ftmo_10k": ("2026-10-22", "https://ftmo.com/en/trading-objectives/", "primary"),
+    "ftmo_100k": ("2026-10-22", "https://ftmo.com/en/trading-objectives/", "primary"),
+    "ftmo_200k": ("2026-10-22", "https://ftmo.com/en/trading-objectives/", "primary"),
     # 2026-10-17: re-read against help.topstep.com (MLL, consistency, payout, DLL, parameters articles).
-    "topstep_50k": ("2026-10-17", "https://help.topstep.com/en/articles/8284204-what-is-the-maximum-loss-limit", "primary"),
-    "topstep_100k": ("2026-10-17", "https://help.topstep.com/en/articles/8284204-what-is-the-maximum-loss-limit", "primary"),
+    "topstep_50k": ("2026-10-22", "https://help.topstep.com/en/articles/8284204-what-is-the-maximum-loss-limit", "primary"),
+    "topstep_100k": ("2026-10-22", "https://help.topstep.com/en/articles/8284204-what-is-the-maximum-loss-limit", "primary"),
     # 2026-10-17: re-read against the Apex help centre (apextraderfunding.com/help-center). Automation is PROHIBITED by Apex.
-    "apex_50k_eod": ("2026-10-17", "https://apextraderfunding.com/help-center/eod-trailing-drawdown-accounts/eod-evaluations/", "primary"),
-    "apex_50k_intraday": ("2026-10-17", "https://apextraderfunding.com/help-center/evaluation-accounts-ea/intraday-trailing-drawdown-evaluations/", "primary"),
-    "apex_100k_eod": ("2026-10-17", "https://apextraderfunding.com/help-center/eod-trailing-drawdown-accounts/eod-evaluations/", "primary"),
-    "apex_100k_intraday": ("2026-10-17", "https://apextraderfunding.com/help-center/evaluation-accounts-ea/intraday-trailing-drawdown-evaluations/", "primary"),
+    "apex_50k_eod": ("2026-10-22", "https://apextraderfunding.com/help-center/eod-trailing-drawdown-accounts/eod-evaluations/", "primary"),
+    "apex_50k_intraday": ("2026-10-22", "https://apextraderfunding.com/help-center/evaluation-accounts-ea/intraday-trailing-drawdown-evaluations/", "primary"),
+    "apex_100k_eod": ("2026-10-22", "https://apextraderfunding.com/help-center/eod-trailing-drawdown-accounts/eod-evaluations/", "primary"),
+    "apex_100k_intraday": ("2026-10-22", "https://apextraderfunding.com/help-center/evaluation-accounts-ea/intraday-trailing-drawdown-evaluations/", "primary"),
     # 2026-10-17: Lucid's own help centre (support.lucidtrading.com) -- replaces the secondary tradetanto stamp and the owner-attested one.
-    "lucid_50k": ("2026-10-17", "https://support.lucidtrading.com/en/articles/12890029-lucidpro-evaluation-account", "primary"),
-    "lucid_100k": ("2026-10-17", "https://support.lucidtrading.com/en/articles/12890029-lucidpro-evaluation-account", "primary"),
+    "lucid_50k": ("2026-10-22", "https://support.lucidtrading.com/en/articles/12890029-lucidpro-evaluation-account", "primary"),
+    "lucid_100k": ("2026-10-22", "https://support.lucidtrading.com/en/articles/12890029-lucidpro-evaluation-account", "primary"),
     # 2026-10-17: FundedNext help centre + product page; E8 help centre + product page.
-    "fundednext_25k": ("2026-10-17", "https://help.fundednext.com/en/articles/17255124-stellar-2-step-challenge", "primary"),
-    "fundednext_100k": ("2026-10-17", "https://help.fundednext.com/en/articles/17255124-stellar-2-step-challenge", "primary"),
-    "e8_one_100k": ("2026-10-17", "https://e8markets.com/e8-one", "primary"),
+    "fundednext_25k": ("2026-10-22", "https://help.fundednext.com/en/articles/17255124-stellar-2-step-challenge", "primary"),
+    "fundednext_100k": ("2026-10-22", "https://help.fundednext.com/en/articles/17255124-stellar-2-step-challenge", "primary"),
+    "e8_one_100k": ("2026-10-22", "https://e8markets.com/e8-one", "primary"),
 }
 for _p in PROP_FIRM_PRESETS:
     _st = _VERIFIED_STAMPS.get(_p.key)
