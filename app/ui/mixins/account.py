@@ -12,7 +12,7 @@ from pathlib import Path
 from tkinter import Frame, Label, Text, Toplevel, filedialog, messagebox
 from app.ui.common import _safe_font
 from app.ui.theme import MONO
-from app.ui.widgets.basic import LabeledCheckbox, LabeledCombo, LabeledEntry
+from app.ui.widgets.basic import LabeledCheckbox, LabeledEntry
 from app.ui import theme
 
 # Palette names below are (re)bound by app.ui.theme on import and on every theme toggle.
@@ -56,11 +56,11 @@ class AccountMixin:
 
         from app.accounts.app_info import APP_VERSION
         from app.accounts.settings import load_account_settings
-        from app.accounts.subscription import LICENSE_STATUS_CHOICES, load_subscription
+        from app.accounts.subscription import effective_subscription
         from app.web.notifications import load_notification_settings
 
         acct_saved = load_account_settings()
-        sub_saved = load_subscription()
+        sub_saved = effective_subscription()
         saved = load_notification_settings()
 
         # ================= PROFILE =================
@@ -119,27 +119,29 @@ class AccountMixin:
         self.acct_profile_status = Label(profile_section, text="", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8))
         self.acct_profile_status.pack(anchor="w", padx=18, pady=(0, 8))
 
-        # ================= SUBSCRIPTION (legacy notes) =================
+        # ================= SUBSCRIPTION (read-only, set by the license key) =================
+        # Plan / key / status / renewal all come from the license saved on this device (the PLAN column of the
+        # license sheet for this key; the master key is Lifetime) -- see app.accounts.subscription. Nothing here is
+        # editable and there is nothing to save.
         subscription_section = self._section(
-            f, "Subscription notes",
-            "Free-form fields for your own reference -- not verified against anything. See the "
-            "License section below for this device's REAL, server-verified activation status.",
+            f, "Subscription",
+            "Your plan is set by your license key and can't be changed here. It updates "
+            "automatically when your license changes.",
             emphasize=True,
         )
-        self.acct_sub_plan = LabeledEntry(subscription_section, "Plan", sub_saved.plan, width=32)
-        self.acct_sub_license_key = LabeledEntry(subscription_section, "License key", sub_saved.license_key, width=32)
-        self.acct_sub_status = LabeledCombo(
-            subscription_section, "License status",
-            [c.capitalize() for c in LICENSE_STATUS_CHOICES],
-            sub_saved.license_status.capitalize() if sub_saved.license_status in LICENSE_STATUS_CHOICES else "Unset",
-        )
-        self.acct_sub_renewal = LabeledEntry(subscription_section, "Renewal / expiration date", sub_saved.renewal_date, width=32)
-        sub_btn_row = Frame(subscription_section, bg=PANEL)
-        sub_btn_row.pack(anchor="w", padx=18, pady=(4, 4))
-        self._button(sub_btn_row, "SAVE SUBSCRIPTION INFO", self._save_subscription_info, primary=True).pack(side="left")
-        self._button(sub_btn_row, "CHECK KEY FORMAT", self._check_license_key_format).pack(side="left", padx=8)
-        self.acct_sub_status_label = Label(subscription_section, text="", bg=PANEL, fg=TEXT_MUTED, font=_safe_font(8), wraplength=760, justify="left")
-        self.acct_sub_status_label.pack(anchor="w", padx=18, pady=(6, 8))
+        sub_rows = Frame(subscription_section, bg=PANEL)
+        sub_rows.pack(anchor="w", padx=18, pady=(4, 8), fill="x")
+        for label, value in (
+            ("Plan", sub_saved.plan or "No license activated"),
+            ("License key", sub_saved.license_key or "-"),
+            ("License status", (sub_saved.license_status if sub_saved.license_status != "unset" else "not activated").capitalize()),
+            ("Renewal / expiration", sub_saved.renewal_date or "-"),
+        ):
+            row = Frame(sub_rows, bg=PANEL)
+            row.pack(anchor="w", fill="x", pady=1)
+            Label(row, text=label, bg=PANEL, fg=TEXT_MUTED, font=_safe_font(9), width=18, anchor="w").pack(side="left")
+            Label(row, text=value, bg=PANEL, fg=(GREEN if label == "License status" and sub_saved.license_status == "active" else TEXT),
+                  font=_safe_font(9, "bold"), anchor="w").pack(side="left")
 
         # ================= LICENSE (real, server-verified) =================
         # UPGRADE (licensing): this is the actual activation this
@@ -284,26 +286,6 @@ class AccountMixin:
         settings.company = self.acct_company.get_str().strip()
         save_account_settings(settings)
         self.acct_profile_status.config(text="\u25cf  Saved.", fg=GREEN)
-
-    def _save_subscription_info(self):
-        from app.accounts.subscription import LICENSE_STATUS_CHOICES, SubscriptionInfo, save_subscription
-
-        status = self.acct_sub_status.get_str().strip().lower()
-        if status not in LICENSE_STATUS_CHOICES:
-            status = "unset"
-        save_subscription(SubscriptionInfo(
-            plan=self.acct_sub_plan.get_str().strip(),
-            license_key=self.acct_sub_license_key.get_str().strip(),
-            license_status=status,
-            renewal_date=self.acct_sub_renewal.get_str().strip(),
-        ))
-        self.acct_sub_status_label.config(text="\u25cf  Subscription info saved.", fg=GREEN)
-
-    def _check_license_key_format(self):
-        from app.accounts.subscription import check_license_key_format
-
-        looks_valid, message = check_license_key_format(self.acct_sub_license_key.get_str())
-        self.acct_sub_status_label.config(text=message, fg=(GREEN if looks_valid else AMBER))
 
     def _account_deactivate_license(self):
         from tkinter import messagebox
