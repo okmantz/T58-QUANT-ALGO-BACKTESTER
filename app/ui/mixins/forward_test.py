@@ -65,9 +65,10 @@ class ForwardTestMixin:
             ).pack(anchor="w", padx=18, pady=(2, 6))
             Label(
                 notice,
-                text="To use this tab: run the app on Windows with an MT5 terminal installed "
-                     "and logged into a demo account (any MT5 broker's site offers a free demo "
-                     "account signup), and make sure `pip install MetaTrader5` succeeded. The "
+                text="To use this tab: have an MT5 terminal installed and logged into a demo account "
+                     "(any MT5 broker's site offers a free demo account signup). On Windows make sure "
+                     "`pip install MetaTrader5` succeeded; on Linux/macOS run the terminal under Wine and "
+                     "start the mt5linux bridge (`python scripts/mt5_bridge_server.py` prints the steps). The "
                      "rest of this tab still works for entering settings -- Start Live Demo Test "
                      "will just fail with a clear message until MT5 is reachable.",
                 bg=PANEL, fg=TEXT_DIM, font=_safe_font(8), wraplength=820, justify="left",
@@ -249,7 +250,7 @@ class ForwardTestMixin:
 
     def _ft_browse_terminal(self):
         path = filedialog.askopenfilename(
-            title="Locate your MT5 terminal64.exe",
+            title="Locate your MT5 terminal64.exe (Windows, or inside your Wine prefix)",
             filetypes=[("MT5 terminal", "terminal64.exe"), ("All files", "*.*")],
         )
         if path:
