@@ -40,6 +40,8 @@ _FIELDS = (
     "fred_api_key", "openai_api_key", "claude_api_key", "london_strategic_edge_key",
     # AUDIT 2026-10-12: optional alternative market-data providers (see app.data.free_sources).
     "twelve_data_api_key", "polygon_api_key", "tiingo_api_key", "alpha_vantage_api_key", "databento_api_key",
+    # 2026-10: X (Twitter) API v2 bearer token -- powers the X section on Global Events.
+    "x_bearer_token",
 )
 
 
@@ -54,6 +56,7 @@ class ApiKeysSettings:
     tiingo_api_key: str = ""
     alpha_vantage_api_key: str = ""
     databento_api_key: str = ""
+    x_bearer_token: str = ""
 
 
 def _config_dir() -> Path:
