@@ -1,47 +1,39 @@
 """
-Subscription / license info -- locally stored fields for the Account tab's
-Subscription section (Plan, License Key, License Status, Renewal/Expiration
-Date).
+Subscription info for the Account tab -- Plan, License Key, License Status and
+Renewal/Expiration Date.
 
-This app has NO license server of its own today (see app.accounts.settings'
-own docstring on the same point for auth) -- there is nothing here to
-"activate" against over the network. What this module gives the Account
-tab is a place to RECORD those four fields locally (e.g. once T58 Trading
-stands up a real licensing backend, or for tracking a manually-issued key)
-and a best-effort, honest-about-its-limits FORMAT check on a pasted key --
-never a real verification, and the UI must not claim otherwise.
+Everything here is DERIVED from the license saved on this device (see
+app.licensing.client); none of it is typed in by the person and none of it is
+stored separately. That is the point: the plan a customer sees on the Account
+page is the PLAN column of your license sheet for the key they activated with
+(Pro Monthly / Pro Annual / Lifetime / Trial / Complimentary), delivered in the
+sheet's activate/validate answer and refreshed at every check-in. The master key
+is always Lifetime. A customer can't change any of it from the UI -- the plan
+dropdown is locked and the server never reads a plan from the form.
 
-Wiring this to a real license server later is a matter of replacing
-`check_license_key_format` with an actual HTTP call and leaving everything
-else (storage shape, the four fields, the template) unchanged.
+The older free-text subscription.json record this module used to read and write
+is gone; a leftover subscription.json on disk is simply ignored.
 """
 from __future__ import annotations
 
-import json
-import re
-from dataclasses import asdict, dataclass
-from pathlib import Path
+from dataclasses import dataclass
+from datetime import datetime
 
-from app.data.storage import get_app_base_dir
+# The five plans of the license sheet (license_sheet/Code.gs PLANS). Re-exported
+# from the licensing client so there is one list.
+from app.licensing.client import KNOWN_PLANS as PLAN_CHOICES
 
-SUBSCRIPTION_FILENAME = "subscription.json"
-
-# The plan every signed-in (licensed) user is on. The Account tab shows this
-# as a dropdown instead of a free-text box (2026-10-17), so nobody has to type
-# their plan name and it can never be mistyped or left blank.
+# Shown only when a license is active but carries no plan at all (allowlist mode,
+# or a sheet whose Apps Script has not been redeployed with plan support yet).
 PREMIUM_PLAN = "Premium Subscription"
-PLAN_CHOICES = (PREMIUM_PLAN,)
 
-LICENSE_STATUS_CHOICES = ("unset", "active", "trial", "expired", "cancelled")
-# Statuses a person (or a future license server) set on purpose -- these are
-# honoured as-is. Anything else ("unset", "trial", blank) reads as Active once
-# the person is signed in, because reaching the Account tab at all means the
-# license gate already let them in.
-_EXPLICIT_INACTIVE_STATUSES = ("expired", "cancelled")
+LICENSE_STATUS_CHOICES = ("unset", "active", "trial", "expired", "cancelled", "revoked", "suspended")
+# Statuses the license server/sheet reported on purpose -- shown as-is. Anything
+# else reads as Active, because reaching the Account tab means the license gate
+# already let this device in.
+_EXPLICIT_INACTIVE_STATUSES = ("expired", "cancelled", "revoked", "suspended")
 
-# XXXX-XXXX-XXXX-XXXX, letters/digits only -- a reasonable generic shape;
-# tighten this once a real key format exists.
-_KEY_FORMAT_RE = re.compile(r"^[A-Z0-9]{4}(-[A-Z0-9]{4}){3}$")
+NO_EXPIRY_TEXT = "No expiry"
 
 
 @dataclass
@@ -49,60 +41,33 @@ class SubscriptionInfo:
     plan: str = ""
     license_key: str = ""
     license_status: str = "unset"
-    renewal_date: str = ""  # free-text (e.g. "2027-01-15") -- no server to validate this against yet
+    renewal_date: str = ""  # YYYY-MM-DD, or NO_EXPIRY_TEXT when the license never expires
 
 
-def _subscription_path() -> Path:
-    return get_app_base_dir() / SUBSCRIPTION_FILENAME
-
-
-def load_subscription() -> SubscriptionInfo:
-    path = _subscription_path()
-    if not path.exists():
-        return SubscriptionInfo()
+def _date_only(iso: str | None) -> str:
+    """'2027-01-15T00:00:00.000Z' -> '2027-01-15'. Unparseable text is shown as-is."""
+    text = (iso or "").strip()
+    if not text:
+        return ""
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        status = str(data.get("license_status", "unset"))
-        if status not in LICENSE_STATUS_CHOICES:
-            status = "unset"
-        return SubscriptionInfo(
-            plan=str(data.get("plan", "")),
-            license_key=str(data.get("license_key", "")),
-            license_status=status,
-            renewal_date=str(data.get("renewal_date", "")),
-        )
-    except Exception:  # noqa: BLE001 -- a corrupt/unreadable file must never crash the Account tab
-        return SubscriptionInfo()
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        return text[:10]
 
 
-def effective_subscription(info: SubscriptionInfo | None = None) -> SubscriptionInfo:
-    """What the Account tab shows: the stored record with the plan normalised to
-    "Premium Subscription" and the status shown as "active" once the person is
-    signed in (unless an expired/cancelled status was recorded on purpose).
-    Pure -- never writes anything."""
-    info = info if info is not None else load_subscription()
-    status = info.license_status if info.license_status in _EXPLICIT_INACTIVE_STATUSES else "active"
-    return SubscriptionInfo(
-        plan=PREMIUM_PLAN,
-        license_key=info.license_key,
-        license_status=status,
-        renewal_date=info.renewal_date,
-    )
+def effective_subscription(state=None) -> SubscriptionInfo:
+    """What the Account tab shows, built from the saved license state (or the
+    `state` passed in -- anything with the LicenseState fields). Pure: never
+    writes anything and never touches the network."""
+    from app.licensing import client
 
-
-def save_subscription(info: SubscriptionInfo) -> None:
-    path = _subscription_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(asdict(info), indent=2), encoding="utf-8")
-
-
-def check_license_key_format(license_key: str) -> tuple[bool, str]:
-    """A SHAPE check only ("does this look like a key"), never a real
-    verification -- there is no license server to ask. Returns
-    (looks_valid, message)."""
-    key = (license_key or "").strip().upper()
+    state = state if state is not None else client.load_state()
+    key = (getattr(state, "license_key", "") or "").strip()
     if not key:
-        return False, "No license key entered."
-    if _KEY_FORMAT_RE.match(key):
-        return True, "Key format looks valid (format check only -- not verified against a license server)."
-    return False, "Key doesn't match the expected XXXX-XXXX-XXXX-XXXX format."
+        return SubscriptionInfo(plan="", license_key="", license_status="unset", renewal_date="")
+
+    plan = client.current_plan(state) or PREMIUM_PLAN
+    reported = (getattr(state, "status", "") or "").strip().lower()
+    status = reported if reported in _EXPLICIT_INACTIVE_STATUSES else "active"
+    renewal = _date_only(getattr(state, "expires_at", None)) or NO_EXPIRY_TEXT
+    return SubscriptionInfo(plan=plan, license_key=key, license_status=status, renewal_date=renewal)
