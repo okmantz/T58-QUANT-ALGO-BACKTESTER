@@ -313,5 +313,61 @@
     }).catch(function () { box.className = 'gx-brief muted'; box.textContent = 'Could not generate a brief right now.'; }).then(function () { btn.disabled = false; });
   });
 
+  /* ------------------------------------------------------------------ X posts (own endpoint, 5-min server cache) */
+  var X = { loaded: false };
+  function xNote(msg, isErr) {
+    var n = $('gx-x-note'); if (!msg) { n.hidden = true; n.textContent = ''; return; }
+    n.hidden = false; n.textContent = msg; n.className = 'gx-x-note' + (isErr ? ' err' : '');
+  }
+  function renderX(d) {
+    var chips = $('gx-x-chips'), list = $('gx-x-posts');
+    chips.textContent = ''; list.textContent = '';
+    (d.accounts || []).forEach(function (u) {
+      var c = el('span', 'gx-x-chip' + (d.errors && d.errors[u] ? ' bad' : ''));
+      c.appendChild(el('span', null, '@' + u));
+      var rm = el('button', null, '×'); rm.type = 'button'; rm.title = 'Remove @' + u; rm.setAttribute('aria-label', 'Remove @' + u);
+      rm.addEventListener('click', function () {
+        fetch(API + 'x/accounts/remove', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u }) })
+          .then(function () { loadX(true); });
+      });
+      c.appendChild(rm); chips.appendChild(c);
+    });
+    if (!d.configured) {
+      xNote('Add your X bearer token on the API Keys page to show posts here.', false);
+      var a = el('a', null, 'Open API Keys'); a.href = '/settings/api-keys'; a.style.marginLeft = '6px'; $('gx-x-note').appendChild(a);
+    } else if (!(d.accounts || []).length) {
+      xNote('Add one or more X usernames above to follow them here.', false);
+    } else {
+      var errs = Object.keys(d.errors || {}).map(function (u) { return '@' + u + ': ' + d.errors[u]; });
+      xNote(errs.length ? errs.join('  ·  ') : '', true);
+    }
+    (d.posts || []).forEach(function (p) {
+      var li = el('li', 'gx-x-post');
+      var head = el('div', 'gx-x-head');
+      head.appendChild(el('strong', null, p.name || p.username));
+      head.appendChild(el('span', 'gx-x-handle', '@' + p.username));
+      head.appendChild(el('span', 'gx-x-when', ago(p.created_at)));
+      li.appendChild(head);
+      li.appendChild(el('p', 'gx-x-text', p.text));
+      var url = safeUrl(p.url);
+      if (url) { var a2 = el('a', 'gx-x-link', 'View on X ↗'); a2.href = url; a2.target = '_blank'; a2.rel = 'noopener noreferrer'; li.appendChild(a2); }
+      list.appendChild(li);
+    });
+  }
+  function loadX(force) {
+    return fetch(API + 'x' + (force ? '?refresh=1' : ''), { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); }).then(renderX)
+      .catch(function () { xNote('Could not load X posts right now.', true); });
+  }
+  $('gx-x-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var inp = $('gx-x-input'), v = inp.value.trim(); if (!v) return;
+    fetch(API + 'x/accounts', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: v }) })
+      .then(function (r) { return r.json(); }).then(function (j) {
+        if (j.ok) { inp.value = ''; loadX(true); } else { xNote(j.message || 'Could not add that account.', true); }
+      });
+  });
+  loadX(false); setInterval(function () { if (!document.hidden) loadX(false); }, 300000);
+
   load().then(schedule, schedule);
 })();

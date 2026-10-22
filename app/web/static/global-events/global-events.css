@@ -142,3 +142,22 @@ html[data-theme="light"] .gx-map-wrap { background: var(--panel-3); }
 @media (max-width: 1080px) { .gx-grid { grid-template-columns: minmax(0, 1fr); } .gx-left { display: contents; } .gx-map-card { order: 1; } .gx-rail { order: 2; } .gx-news { order: 3; } .gx-two { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 640px) { .gx-head h1 { font-size: 24px; } .gx-map-wrap { aspect-ratio: 1.5 / 1; } .gx-hl { grid-template-columns: 4px minmax(0, 1fr); } .gx-hl .ask { display: none; } }
 @media (prefers-reduced-motion: reduce) { .gx-icon-btn.spin, .gx-ev.soon .t { animation: none; } }
+
+/* X posts section */
+.gx-x { margin-bottom: 14px; }
+.gx-x-add { display: flex; gap: 8px; margin-bottom: 10px; }
+.gx-x-add input { flex: 1; min-width: 0; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 13px; }
+.gx-x-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.gx-x-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 10px; border-radius: 999px; font-size: 12px; background: rgba(53,224,176,.10); border: 1px solid rgba(53,224,176,.30); color: var(--text); }
+.gx-x-chip.bad { background: rgba(255,138,138,.10); border-color: rgba(255,138,138,.35); }
+.gx-x-chip button { border: 0; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 6px; border-radius: 50%; }
+.gx-x-chip button:hover { color: var(--text); }
+.gx-x-note { font-size: 12px; color: var(--text-muted); margin-bottom: 8px; }
+.gx-x-note.err { color: #ff8a8a; }
+.gx-x-posts { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.gx-x-post { padding: 10px 12px; border: 1px solid var(--border-light); border-radius: 10px; background: var(--panel-3); }
+.gx-x-head { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; }
+.gx-x-handle, .gx-x-when { color: var(--text-muted); font-size: 12px; }
+.gx-x-when { margin-left: auto; }
+.gx-x-text { margin: 6px 0 4px; font-size: 13.5px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.gx-x-link { font-size: 12px; color: var(--teal); text-decoration: none; }
