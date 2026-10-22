@@ -73,9 +73,30 @@ class SizingDecision:
     above_budget: bool = False              # True only for fixed_contracts when the stop risk exceeds the budget
 
 
+# Defaults that match PropRules.account_size and charge REAL friction. A backtest with zero spread/slippage/commission
+# flatters every strategy (the first thing a prop-firm account pays for is the spread), so the out-of-the-box numbers are
+# deliberately a little conservative. They are starting assumptions: set your broker's actual spread/commission per run.
+DEFAULT_ACCOUNT_SIZE = 100_000.0
+DEFAULT_COMMISSION_PER_TRADE = 3.0   # $ per round-turn trade
+DEFAULT_SPREAD_PIPS = 1.0
+DEFAULT_SLIPPAGE_PIPS = 0.3
+
+
+def commission_from_mapping(form) -> float:
+    """Commission per trade from a posted form / mapping: blank or missing -> the realistic default (never a silent $0);
+    an explicit number, including 0, is honored exactly as typed."""
+    raw = form.get("commission") if hasattr(form, "get") else None
+    if raw is None or str(raw).strip() == "":
+        return float(DEFAULT_COMMISSION_PER_TRADE)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return float(DEFAULT_COMMISSION_PER_TRADE)
+
+
 @dataclass
 class RiskConfig:
-    initial_balance: float = 10_000.0
+    initial_balance: float = DEFAULT_ACCOUNT_SIZE
     # 2026-10-19 timeframes: run ANY strategy on one execution timeframe while reading the market on a higher one.
     # exec_timeframe overrides the strategy's own/native bar size ("15m"); macro_* adds a higher-timeframe bias gate
     # (see app.strategy.macro_filter). All None/off = identical to every run before these existed.
@@ -89,7 +110,7 @@ class RiskConfig:
     risk_mode: str = "percent"          # "percent" | "fixed"
     risk_value: float = 1.0             # % of equity, or fixed $ amount, per trade
     max_trades_per_day: int = 10
-    commission_per_trade: float = 0.0   # flat $ per round-turn trade
+    commission_per_trade: float = DEFAULT_COMMISSION_PER_TRADE   # flat $ per round-turn trade (non-zero: a $0 backtest overstates every edge)
     # B2-2 (fill honesty): market entries AND signal-driven exits fill at
     # open[i + entry_fill_lag_bars], not the signal bar's close -- 1 = next bar's open (0 = the
     # signal bar's own open; the old same-bar-close fill is gone by design).
@@ -105,8 +126,8 @@ class RiskConfig:
     # Part C fix 2 (opt-in): when True, the dead-lock rescue fires at ANY equity level, not just
     # equity < initial_balance; rescued trades are tagged sized_above_risk_target=True.
     allow_single_contract_minimum: bool = False
-    slippage_pips: float = 0.0
-    spread_pips: float = 0.0
+    slippage_pips: float = DEFAULT_SLIPPAGE_PIPS
+    spread_pips: float = DEFAULT_SPREAD_PIPS
     pip_size: float = 0.0001            # price move that equals "1 pip" (e.g. 0.0001 for EURUSD)
     max_position_size: float | None = None  # cap on units, None = unlimited
     # UPGRADE (Sep 2026 -- futures lot-size realism): every unit above is
