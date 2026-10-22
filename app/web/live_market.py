@@ -107,11 +107,13 @@ def fetch_mt5_bars(symbol: str, timeframe_minutes: int, count: int = 300) -> lis
     if not _ensure_mt5_connected():
         return []
     try:
-        import MetaTrader5 as mt5  # safe: _ensure_mt5_connected() already confirmed importability
+        mt5 = mt5_connector_module.get_backend()  # native package on Windows, bridge client elsewhere
+        if mt5 is None:
+            return []
 
         tf_name = MT5_TIMEFRAME_NAMES.get(timeframe_minutes, "M15")
         tf_const = getattr(mt5, f"TIMEFRAME_{tf_name}", mt5.TIMEFRAME_M15)
-        rates = mt5.copy_rates_from_pos(symbol, tf_const, 0, count)
+        rates = mt5_connector_module.to_local(mt5.copy_rates_from_pos(symbol, tf_const, 0, count))
         if rates is None:
             return []
         bars = []

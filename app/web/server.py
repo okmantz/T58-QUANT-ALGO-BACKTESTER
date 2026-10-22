@@ -156,6 +156,7 @@ from app.orchestration.speed_run import SpeedRunConfig, SpeedRunResult, run_spee
 from app.orchestration.speed_run import _rank_key as _speedrun_rank_key
 from app.orchestration.overnight_autopilot import AutopilotConfig, run_overnight_autopilot
 from app.portfolio.portfolio import InstrumentLeg, PortfolioConfig, PortfolioError, run_portfolio_backtest
+from app.portfolio import library as portfolio_library
 from app.prop.simulator import PropRules, simulate_account
 from app.prop.presets import get_preset as get_prop_firm_preset, list_presets as list_prop_firm_presets
 from app.prop.recommender import recommend_prop_firms
@@ -7378,33 +7379,102 @@ def portfolio_run():
         if len(legs) < 2:
             return render_template("portfolio.html", **ctx(error="A portfolio needs at least 2 instrument legs -- fill in a market data file/dataset for at least 2 of the leg slots below."), **_alpaca_template_context()), 400
 
+        engine = (form.get("engine") or "unified").strip().lower()
+        if engine not in ("unified", "legacy"):
+            engine = "unified"
+        engine_config = None
+        if engine == "unified":
+            from app.backtest.portfolio_engine import PortfolioEngineConfig
+            _opt_f = lambda k: (float(form.get(k)) if (form.get(k) or "").strip() else None)
+            _opt_i = lambda k: (int(float(form.get(k))) if (form.get(k) or "").strip() else None)
+            engine_config = PortfolioEngineConfig(
+                size_basis=form.get("size_basis", "account") if form.get("size_basis") in ("account", "leg") else "account",
+                max_open_positions=_opt_i("max_open_positions"),
+                max_total_contracts=_opt_f("max_total_contracts"),
+                max_open_risk_pct=_opt_f("max_open_risk_pct"),
+                cap_policy="skip" if form.get("cap_policy") == "skip" else "clip",
+                window="overlap" if form.get("clock_window") == "overlap" else "union",
+            )
         config = PortfolioConfig(
             initial_balance=risk.initial_balance,
             correlation_penalty_strength=float(form.get("correlation_penalty_strength", 0.6) or 0.6),
             max_instrument_weight_frac=float(form.get("max_instrument_weight_frac", 0.5) or 0.5),
             min_weight_frac=float(form.get("min_weight_frac", 0.15) or 0.15),
+            engine=engine, engine_config=engine_config,
         )
-        result = run_portfolio_backtest(legs, config)
-        run_id = uuid.uuid4().hex[:10]
-        paths = generate_portfolio_report(
-            PORTFOLIO_DIR, result,
-            basename=report_stem(" + ".join(leg_labels)[:60] or "Portfolio", "Portfolio", output_dir=PORTFOLIO_DIR))
+        save_name = (form.get("save_portfolio_name") or "").strip()
+        spec = {"engine": engine, "initial_balance": risk.initial_balance, "risk_mode": risk.risk_mode,
+                "risk_value": risk.risk_value, "legs": [{"name": l.name, "weight": l.weight} for l in legs],
+                "correlation_penalty_strength": config.correlation_penalty_strength}
+        job_id = JOB_MANAGER.create(tool="Portfolio backtest", page_template="/portfolio/job/{job_id}",
+                                    log=[f"Portfolio ({engine} engine): {len(legs)} legs"], instrument=" + ".join(leg_labels)[:60])
 
-        return render_template("portfolio.html", **ctx(result={
-            "legs": leg_labels,
-            "trades": result.combined_statistics.total_trades,
-            "net_profit": result.combined_statistics.net_profit,
-            "max_dd": result.combined_statistics.max_drawdown_pct,
-            "sharpe": result.combined_statistics.sharpe_ratio,
-            "diversification_ratio": result.diversification_ratio,
-            "warnings": result.warnings,
-            "report_html": f"/portfolio_reports/{Path(paths['html']).name}",
-            "report_json": f"/portfolio_reports/{Path(paths['json']).name}",
-        }), **_alpaca_template_context())
+        def _run_portfolio_job():
+            try:
+                JOB_MANAGER.log(job_id, "Measuring each leg and sizing for correlation...")
+                result = run_portfolio_backtest(legs, config)
+                JOB_MANAGER.log(job_id, f"Done: {result.combined_statistics.total_trades} trades. Writing report...")
+                paths = generate_portfolio_report(
+                    PORTFOLIO_DIR, result,
+                    basename=report_stem(" + ".join(leg_labels)[:60] or "Portfolio", "Portfolio", output_dir=PORTFOLIO_DIR))
+                ov = result.floating_overlay
+                summary = {
+                    "legs": leg_labels, "engine": result.engine,
+                    "trades": result.combined_statistics.total_trades,
+                    "net_profit": result.combined_statistics.net_profit,
+                    "max_dd": result.combined_statistics.max_drawdown_pct,
+                    "sharpe": result.combined_statistics.sharpe_ratio,
+                    "diversification_ratio": result.diversification_ratio,
+                    "warnings": result.warnings,
+                    "floating": ov.to_dict() if ov is not None else None,
+                    "portfolio_stats": (result.engine_result.portfolio_stats if result.engine_result is not None else None),
+                    "report_html": f"/portfolio_reports/{Path(paths['html']).name}",
+                    "report_json": f"/portfolio_reports/{Path(paths['json']).name}",
+                    "saved_as": None,
+                }
+                if save_name:
+                    try:
+                        summary["saved_as"] = portfolio_library.save_portfolio(save_name, spec, summary).name
+                    except Exception as exc:  # noqa: BLE001
+                        summary["warnings"] = list(summary["warnings"]) + [f"Could not save to the portfolio library: {exc}"]
+                JOB_MANAGER.finish(job_id, result=summary)
+            except Exception as exc:  # noqa: BLE001
+                JOB_MANAGER.fail(job_id, f"{type(exc).__name__}: {exc}")
+
+        threading.Thread(target=_run_portfolio_job, name=f"portfolio-{job_id}", daemon=True).start()
+        return redirect(f"/portfolio/job/{job_id}")
     except (StrategyError, PortfolioError) as exc:
         return render_template("portfolio.html", **ctx(error=str(exc)), **_alpaca_template_context()), 400
     except Exception as exc:  # noqa: BLE001
         return render_template("portfolio.html", **ctx(error=f"Unexpected error: {exc}"), **_alpaca_template_context()), 500
+
+
+@app.route("/portfolio/job/<job_id>")
+def portfolio_job_page(job_id):
+    job = JOB_MANAGER.get(job_id)
+    return render_template("portfolio_job.html", job_id=job_id, not_found=job is None), (404 if job is None else 200)
+
+
+@app.route("/portfolio/job/<job_id>/status.json")
+def portfolio_job_status(job_id):
+    job = JOB_MANAGER.get(job_id)
+    if job is None:
+        return jsonify({"found": False}), 404
+    return jsonify({"found": True, "done": bool(job.get("done")), "error": job.get("error"),
+                    "log": list(job.get("log") or [])[-30:], "result": job.get("result")})
+
+
+@app.route("/portfolio/saved")
+def portfolio_saved_list():
+    return jsonify({"portfolios": portfolio_library.list_portfolios()})
+
+
+@app.route("/portfolio/saved/<filename>")
+def portfolio_saved_get(filename):
+    try:
+        return jsonify(portfolio_library.load_portfolio(filename))
+    except FileNotFoundError:
+        return jsonify({"error": "not found"}), 404
 
 
 @app.route("/portfolio_reports/<path:filename>")
