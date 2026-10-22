@@ -65,3 +65,7 @@ the product description) or tell buyers their key comes from you, and send them 
   through the 3-day offline grace period instead of being locked out by your mistake.
 - A revoked, suspended or expired key is never forgiven by the grace period.
 - A released device can't quietly re-claim a key; only an explicit activation binds a device.
+
+
+## Plan in the app
+The app's Account page shows the PLAN column of this sheet for the activated key (Pro Monthly, Pro Annual, Lifetime, Trial, Complimentary) and users cannot change it. After editing `Code.gs`, redeploy: Deploy > Manage deployments > Edit > New version. The master key always shows Lifetime.

@@ -122,7 +122,9 @@ function evaluate_(rows, req, now) {
   patch[COL.SEEN] = now;
   if (!r[COL.ACTIVATED]) patch[COL.ACTIVATED] = now;
   if (!rowEmail && email) patch[COL.EMAIL] = email;
-  return { res: { ok: true, status: 'active', expires_at: expiresAt }, row: i, patch: patch };
+  // The PLAN column is what the customer sees (read-only) under Account > Subscription in the app.
+  var plan = String(r[COL.PLAN] == null ? '' : r[COL.PLAN]).trim();
+  return { res: { ok: true, status: 'active', expires_at: expiresAt, plan: plan }, row: i, patch: patch };
 }
 
 function makeKey_() {
@@ -477,6 +479,7 @@ function buildGuide_(sheet) {
 
   var items = [
     ['SELL', 'After a sale, pick an Unused key on the Licenses tab and copy it to the customer. Fill in CUSTOMER, EMAIL, PLAN and ISSUED. If EMAIL is filled in, only that email can activate the key; if you leave it blank, the first activation fills it in.'],
+    ['PLAN', 'The PLAN you pick (Pro Monthly, Pro Annual, Lifetime, Trial, Complimentary) is shown to the customer, read-only, under Account > Subscription in T58. They cannot change it; edit it here and the app updates the next time it checks in. The master key is always Lifetime.'],
     ['ACTIVATE', 'The customer enters their email and key in T58. The key locks to that computer (DEVICE ID) and the status turns Active. A second computer is refused until you release the device.'],
     ['EXPIRE', 'Put a date in EXPIRES for trials and monthly plans; the key works through the end of that day. Leave it blank for no expiry.'],
     ['REVOKE', 'Set STATUS to Revoked (or use the T58 License menu). The app locks the next time that customer opens it — and at the latest after the 3-day offline grace period.'],

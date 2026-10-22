@@ -106,7 +106,23 @@ test('missing device id / unknown action are bad requests', () => {
 });
 test('only the asked-about key is ever described (no row data leaks)', () => {
   const o = evaluate([row({ KEY, EMAIL: 'jane@example.com', CUSTOMER: 'Jane Secret' })], req(), NOW);
-  assert.deepStrictEqual(Object.keys(o.res).sort(), ['expires_at', 'ok', 'status']);
+  assert.deepStrictEqual(Object.keys(o.res).sort(), ['expires_at', 'ok', 'plan', 'status']);
+});
+test('the PLAN column is returned on activate and validate (what the app shows under Account > Subscription)', () => {
+  for (const plan of ['Pro Monthly', 'Pro Annual', 'Lifetime', 'Trial', 'Complimentary']) {
+    const a = evaluate([row({ KEY, PLAN: plan })], req(), NOW);
+    assert.strictEqual(a.res.plan, plan);
+    const v = evaluate([row({ KEY, PLAN: plan, STATUS: 'Active', DEVICE: 'dev1' })], req({ action: 'validate' }), NOW);
+    assert.strictEqual(v.res.plan, plan);
+  }
+});
+test('plan is trimmed, and blank when the sheet has none', () => {
+  assert.strictEqual(evaluate([row({ KEY, PLAN: '  Lifetime ' })], req(), NOW).res.plan, 'Lifetime');
+  assert.strictEqual(evaluate([row({ KEY })], req(), NOW).res.plan, '');
+});
+test('a failed check never reveals the plan', () => {
+  const o = evaluate([row({ KEY, PLAN: 'Lifetime', STATUS: 'Revoked' })], req(), NOW);
+  assert.deepStrictEqual(o.res, { ok: false, error: 'revoked' });
 });
 test('findRow_ handles empty list and blank key', () => {
   assert.strictEqual(findRow_([], KEY), -1);
