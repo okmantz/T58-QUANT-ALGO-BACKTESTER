@@ -5,7 +5,9 @@ Single-user JSON file at <app dir>/data/journal/journal.json:
     settings: displayName, accountBalance, playbooks[{id,title,sections[{id,title,items[{id,text}]}]}],
               tagGroups[{id,name,items[{id,name,color}]}]
     trades:   [{id,date,instrument,direction,playbookId,checklist{itemId:bool},tags[tagId],entry,stop,tp,riskAmount,
-                pnl,notes,compliancePct}]
+                pnl,notes,screenshot,compliancePct}]
+    screenshots: <app dir>/data/journal/screenshots/<name>.png|jpg|gif|webp -- one optional chart screenshot per trade;
+                the trade only stores the file name (`screenshot`, "" when there is none).
 
 The seed playbook and tag groups are the ones from the Edge Analytics screenshots (M15 Pro Trend Intraday Model;
 Setups / Area of Interest / Trend Phase / Structure Flow / Execution Window 0200-1200 + 1800-2200 / Instrument incl. ES1!).
@@ -14,8 +16,11 @@ clickable-metric popups can show a real calculation breakdown.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import os
+import re
 import threading
 import uuid
 from datetime import date
@@ -37,6 +42,75 @@ def journal_path() -> Path:
     d = get_app_base_dir() / "data" / "journal"
     d.mkdir(parents=True, exist_ok=True)
     return d / "journal.json"
+
+
+# ------------------------------------------------------------------ trade screenshots
+MAX_SCREENSHOT_BYTES = 12 * 1024 * 1024
+_SHOT_NAME_RE = re.compile(r"^[0-9a-f]{16}\.(png|jpg|gif|webp)$")
+_DATA_URL_RE = re.compile(r"^data:image/[a-z+.-]+;base64,", re.I)
+
+
+def screenshots_dir() -> Path:
+    d = journal_path().parent / "screenshots"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _sniff_image_ext(raw: bytes) -> str | None:
+    """File extension for the bytes' real image type (never trusts the name or the claimed MIME type)."""
+    if raw[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if raw[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    if raw[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def save_screenshot_bytes(raw: bytes) -> str:
+    """Stores a PNG/JPEG/GIF/WebP and returns its file name. Raises ValueError for anything else or anything too big."""
+    if not raw:
+        raise ValueError("The screenshot was empty.")
+    if len(raw) > MAX_SCREENSHOT_BYTES:
+        raise ValueError(f"That screenshot is larger than {MAX_SCREENSHOT_BYTES // (1024 * 1024)} MB.")
+    ext = _sniff_image_ext(raw)
+    if ext is None:
+        raise ValueError("Screenshots must be PNG, JPEG, GIF or WebP images.")
+    name = f"{uuid.uuid4().hex[:16]}.{ext}"
+    (screenshots_dir() / name).write_bytes(raw)
+    return name
+
+
+def save_screenshot_data_url(data_url: str) -> str:
+    """Same as save_screenshot_bytes, for a browser `data:image/...;base64,...` string."""
+    text = str(data_url or "").strip()
+    if not _DATA_URL_RE.match(text):
+        raise ValueError("The screenshot wasn't a valid image.")
+    try:
+        raw = base64.b64decode(text.split(",", 1)[1], validate=False)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("The screenshot wasn't a valid image.") from exc
+    return save_screenshot_bytes(raw)
+
+
+def screenshot_path(name: str) -> Path | None:
+    """The stored file for `name`, or None if the name is malformed (no path tricks) or the file is gone."""
+    name = str(name or "")
+    if not _SHOT_NAME_RE.match(name):
+        return None
+    p = screenshots_dir() / name
+    return p if p.is_file() else None
+
+
+def delete_screenshot(name: str) -> None:
+    p = screenshot_path(name)
+    if p is not None:
+        try:
+            p.unlink()
+        except OSError:
+            pass
 
 
 def default_playbooks() -> list[dict]:
@@ -160,10 +234,23 @@ def _num(v: Any, default: float = 0.0) -> float:
 
 
 def upsert_trade(trade: dict) -> dict:
+    """Creates or updates one trade. Screenshot handling: `screenshotData` (a data URL) stores a NEW image and replaces
+    any old one; otherwise `screenshot` (the stored file name the page got back earlier) is kept as-is, and an empty
+    `screenshot` removes it. The old file is deleted whenever it is replaced or removed."""
     if not isinstance(trade, dict):
         raise ValueError("trade must be an object")
+    trade_id = str(trade.get("id") or _uid())
+    with _LOCK:
+        previous = next((x for x in load()["trades"] if x.get("id") == trade_id), None)
+    old_shot = str((previous or {}).get("screenshot") or "")
+    if trade.get("screenshotData"):
+        shot = save_screenshot_data_url(trade["screenshotData"])
+    else:
+        asked = str(trade.get("screenshot") or "")
+        # a trade can only keep the screenshot it already has -- never a name made up by (or borrowed from) the request
+        shot = asked if (asked and asked == old_shot and screenshot_path(asked) is not None) else ""
     t = {
-        "id": str(trade.get("id") or _uid()),
+        "id": trade_id,
         "date": str(trade.get("date") or date.today().isoformat())[:10],
         "instrument": str(trade.get("instrument") or "").strip(),
         "direction": "short" if str(trade.get("direction", "long")).lower().startswith("s") else "long",
@@ -173,6 +260,7 @@ def upsert_trade(trade: dict) -> dict:
         "entry": _num(trade.get("entry")), "stop": _num(trade.get("stop")), "tp": _num(trade.get("tp")),
         "riskAmount": _num(trade.get("riskAmount")), "pnl": _num(trade.get("pnl")),
         "notes": str(trade.get("notes") or "")[:5000],
+        "screenshot": shot,
     }
     cl = t["checklist"]
     t["compliancePct"] = round(100.0 * sum(1 for v in cl.values() if v) / len(cl), 1) if cl else None
@@ -183,6 +271,8 @@ def upsert_trade(trade: dict) -> dict:
         trades.sort(key=lambda x: (x.get("date", ""), x.get("id", "")))
         data["trades"] = trades
         _write(data)
+    if old_shot and old_shot != shot:
+        delete_screenshot(old_shot)
     return t
 
 
@@ -190,9 +280,13 @@ def delete_trade(trade_id: str) -> bool:
     with _LOCK:
         data = load()
         n = len(data["trades"])
+        gone = [x for x in data["trades"] if x.get("id") == trade_id]
         data["trades"] = [x for x in data["trades"] if x.get("id") != trade_id]
         _write(data)
-        return len(data["trades"]) != n
+        removed = len(data["trades"]) != n
+    for x in gone:
+        delete_screenshot(str(x.get("screenshot") or ""))
+    return removed
 
 
 def journal_stats(trades: list[dict], settings: dict) -> dict:

@@ -4299,12 +4299,14 @@ def api_global_search():
 def _account_settings_page_context(**extra):
     from app.accounts.app_info import APP_VERSION
     from app.accounts.settings import load_account_settings
-    from app.accounts.subscription import LICENSE_STATUS_CHOICES, PLAN_CHOICES, effective_subscription
+    from app.accounts.subscription import effective_subscription
+    from app.licensing import client as license_client
+    # The plan on this page is whatever the license sheet says for this device's key. Opening the page quietly
+    # re-checks the sheet when the saved plan is missing or the last check-in is old (throttled, never raises).
+    license_client.refresh_license_info()
     ctx = dict(
         settings=load_account_settings(),
         subscription=effective_subscription(),
-        plan_choices=PLAN_CHOICES,
-        license_status_choices=LICENSE_STATUS_CHOICES,
         app_version=APP_VERSION,
         active_page="account_settings",
     )
@@ -4886,28 +4888,14 @@ def account_settings_delete():
     return render_template("account_settings.html", **_account_settings_page_context(saved="deleted"))
 
 
-@app.route("/settings/account/subscription/save", methods=["POST"])
-def account_settings_subscription_save():
-    from app.accounts.subscription import SubscriptionInfo, LICENSE_STATUS_CHOICES, PREMIUM_PLAN, save_subscription
-    form = request.form
-    status = (form.get("license_status") or "unset").strip()
-    if status not in LICENSE_STATUS_CHOICES:
-        status = "unset"
-    info = SubscriptionInfo(
-        plan=PREMIUM_PLAN,  # a dropdown with one plan now; never trust/free-type this field
-        license_key=(form.get("license_key") or "").strip(),
-        license_status=status,
-        renewal_date=(form.get("renewal_date") or "").strip(),
-    )
-    save_subscription(info)
+@app.route("/settings/account/subscription/refresh", methods=["POST"])
+def account_settings_subscription_refresh():
+    """The only subscription action on the Account page: re-check this device's license now so the plan, status and
+    renewal date match the license sheet. Nothing from the form is read -- the plan comes from the license key alone
+    and can't be set or changed from here."""
+    from app.licensing import client as license_client
+    license_client.refresh_license_info(force=True)
     return render_template("account_settings.html", **_account_settings_page_context(saved="subscription"))
-
-
-@app.route("/settings/account/subscription/check_key", methods=["POST"])
-def account_settings_check_license_key():
-    from app.accounts.subscription import check_license_key_format
-    looks_valid, message = check_license_key_format(request.form.get("license_key", ""))
-    return render_template("account_settings.html", **_account_settings_page_context(license_check_message=message, license_check_ok=looks_valid))
 
 
 @app.route("/settings/account/check_updates", methods=["POST"])

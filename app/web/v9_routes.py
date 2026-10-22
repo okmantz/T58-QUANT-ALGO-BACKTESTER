@@ -4,7 +4,7 @@ control-center feed and the prop-firm simulator presets. One Blueprint (`v9_bp`)
 """
 from __future__ import annotations
 
-from flask import Blueprint, jsonify, render_template, request
+from flask import Blueprint, abort, jsonify, render_template, request, send_file
 
 from app.data import gamma_data as gd
 from app.scoring import metric_defs
@@ -109,6 +109,19 @@ def journal_trade_save():
 @v9_bp.route("/api/journal/trades/<trade_id>", methods=["DELETE"])
 def journal_trade_delete(trade_id: str):
     return jsonify({"ok": journal_store.delete_trade(trade_id)})
+
+
+@v9_bp.route("/api/journal/screenshots/<name>")
+def journal_screenshot(name: str):
+    """Serves one trade's stored screenshot. Names are validated against the exact pattern the store generates, so
+    nothing outside the screenshots folder can ever be read through this route."""
+    path = journal_store.screenshot_path(name)
+    if path is None:
+        abort(404)
+    resp = send_file(path, conditional=True)
+    resp.headers["Cache-Control"] = "private, max-age=86400"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
 
 
 @v9_bp.route("/api/journal/reset", methods=["POST"])
