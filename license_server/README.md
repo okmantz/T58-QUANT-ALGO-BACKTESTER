@@ -1,5 +1,8 @@
 # T58 License Server
 
+> **Optional / legacy.** New installs use the Google Sheet license keys (`license_sheet/SETUP.md`). Run this server only if you need it. Overview: `docs/LICENSING.md`.
+
+
 A small, self-hosted Flask app that is the only thing standing between a
 copied ZIP of the T58 Quant Algo Backtester and someone actually being
 able to use it. You run this yourself — no third-party licensing

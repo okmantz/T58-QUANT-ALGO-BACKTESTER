@@ -1,5 +1,8 @@
 # Deploying the T58 License Server — exact steps for Owen
 
+> **Optional / legacy.** New installs use the Google Sheet license keys (`license_sheet/SETUP.md`). Run this server only if you need it. Overview: `docs/LICENSING.md`.
+
+
 This gets the license server (`license_server/`, the Flask app that
 activates/validates every customer copy of the backtester) running on
 Render in about 20 minutes, then wires Whop (payments) and email (key
