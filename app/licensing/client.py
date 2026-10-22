@@ -370,6 +370,34 @@ _MASTER_KEY_UNSET_HINT = (
 )
 
 
+# --- Plans -------------------------------------------------------------------
+# The plan a license key belongs to. The source of truth is the PLAN column of
+# the license sheet (license_sheet/Code.gs PLANS) -- or the license server's
+# `plan` field -- and it reaches the app in the activate/validate answer. The
+# Account page shows it read-only; nothing a customer types can change it.
+# The master key is always Lifetime.
+MASTER_PLAN = "Lifetime"
+KNOWN_PLANS = ("Pro Monthly", "Pro Annual", "Lifetime", "Trial", "Complimentary")
+_PLAN_ALIASES = {
+    "monthly": "Pro Monthly", "pro monthly": "Pro Monthly", "month": "Pro Monthly",
+    "annual": "Pro Annual", "yearly": "Pro Annual", "pro annual": "Pro Annual", "pro yearly": "Pro Annual",
+    "annually": "Pro Annual", "year": "Pro Annual",
+    "lifetime": "Lifetime", "life": "Lifetime", "master": "Lifetime",
+    "trial": "Trial", "complimentary": "Complimentary", "comp": "Complimentary",
+}
+
+
+def normalize_plan(raw: object) -> str:
+    """Map whatever the sheet/server sent to one of KNOWN_PLANS (case, spacing and
+    "monthly"/"annual" style aliases tolerated). An unrecognised non-empty value is
+    kept as typed, so the Account page always matches what the sheet says; blank
+    stays blank."""
+    text = " ".join(str(raw or "").replace("_", " ").replace("-", " ").split())
+    if not text:
+        return ""
+    return _PLAN_ALIASES.get(text.lower(), text)
+
+
 @dataclass
 class LicenseState:
     email: str = ""
@@ -378,6 +406,7 @@ class LicenseState:
     status: str = ""  # active | expired | revoked | suspended | "" (never activated)
     expires_at: str | None = None
     last_validated_at: str | None = None  # ISO timestamp of the last successful ONLINE check
+    plan: str = ""  # the plan this key belongs to (see normalize_plan); "" = the license carried none
 
 
 def _config_dir() -> Path:
@@ -513,7 +542,7 @@ def load_state() -> LicenseState:
     return LicenseState(
         email=data.get("email", ""), license_key=key, device_id=data.get("device_id", ""),
         status=data.get("status", ""), expires_at=data.get("expires_at"),
-        last_validated_at=data.get("last_validated_at"),
+        last_validated_at=data.get("last_validated_at"), plan=data.get("plan", "") or "",
     )
 
 
@@ -625,6 +654,7 @@ def activate(email: str, license_key: str, remember: bool = True) -> tuple[bool,
         persist(LicenseState(
             email=email, license_key=license_key, device_id=device_id(), status="active",
             expires_at=None, last_validated_at=datetime.now(timezone.utc).isoformat(),
+            plan=MASTER_PLAN,
         ))
         return True, "Activated (master key -- no license server required)."
 
@@ -660,6 +690,7 @@ def activate(email: str, license_key: str, remember: bool = True) -> tuple[bool,
     persist(LicenseState(
         email=email, license_key=license_key, device_id=did, status=body.get("status", "active"),
         expires_at=body.get("expires_at"), last_validated_at=datetime.now(timezone.utc).isoformat(),
+        plan=normalize_plan(body.get("plan")),
     ))
     return True, "Activated."
 
@@ -707,6 +738,8 @@ def validate() -> tuple[bool, str]:
         if body.get("ok"):
             state.status = body.get("status", "active")
             state.expires_at = body.get("expires_at")
+            if "plan" in body:  # an upgrade/downgrade made in the sheet shows up at the next check-in
+                state.plan = normalize_plan(body.get("plan"))
             state.last_validated_at = datetime.now(timezone.utc).isoformat()
             save_state(state)
             return True, "Active."
@@ -759,3 +792,52 @@ def deactivate() -> tuple[bool, str]:
     if not body.get("ok"):
         return True, f"Deactivated locally. Server said: {_error_message(body.get('error', 'unknown_error'))}"
     return True, "Deactivated."
+
+
+# --- Plan shown on the Account page -------------------------------------------
+REFRESH_MIN_INTERVAL_S = 600.0  # at most one background re-check per 10 minutes (unless forced)
+_last_refresh_monotonic = 0.0
+
+
+def current_plan(state: "LicenseState | None" = None) -> str:
+    """The plan of the license saved on this device: Lifetime for the master key,
+    otherwise whatever the sheet/server last reported ("" when it reported none)."""
+    state = state if state is not None else load_state()
+    if state.license_key and _is_master_key(state.license_key):
+        return MASTER_PLAN
+    return normalize_plan(state.plan)
+
+
+def refresh_license_info(force: bool = False) -> bool:
+    """Best-effort re-check so the Account page matches the license sheet. Called when
+    the Account page opens: it asks the sheet/server again only if the saved plan is
+    missing (a license activated before plans existed) or the last check-in is older
+    than REFRESH_MIN_INTERVAL_S, and never more than once per interval unless `force`.
+    Never raises and never touches the network for the master key or allowlist mode
+    (neither carries a plan). Returns True if a check was actually attempted."""
+    global _last_refresh_monotonic
+    import time
+
+    try:
+        state = load_state()
+        if not state.license_key or not state.email:
+            return False
+        if _is_master_key(state.license_key) or resolve_allowlist_url():
+            return False
+        now = time.monotonic()
+        if not force and _last_refresh_monotonic and now - _last_refresh_monotonic < REFRESH_MIN_INTERVAL_S:
+            return False
+        stale = True
+        if state.last_validated_at:
+            try:
+                age_s = (datetime.now(timezone.utc) - datetime.fromisoformat(state.last_validated_at)).total_seconds()
+                stale = age_s > REFRESH_MIN_INTERVAL_S
+            except ValueError:
+                stale = True
+        if not (force or not state.plan or stale):
+            return False
+        _last_refresh_monotonic = now
+        validate()
+        return True
+    except Exception:  # noqa: BLE001 -- the Account page must always render
+        return False
