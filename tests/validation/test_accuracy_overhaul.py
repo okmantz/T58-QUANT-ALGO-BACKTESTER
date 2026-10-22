@@ -238,7 +238,7 @@ def test_verdict_wrapper_caps_thin_evidence(monkeypatch):
 def test_preflight_flags_structural_problems():
     from app.validation.preflight import run_preflight
     df = _walk(300)
-    risk = RiskConfig(initial_balance=50_000, risk_mode="fixed", risk_value=200, pip_size=0.25, contract_size=50)
+    risk = RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, initial_balance=50_000, risk_mode="fixed", risk_value=200, pip_size=0.25, contract_size=50)
     rep = run_preflight(df, risk, PropRules(account_size=50_000, max_drawdown_pct=4, daily_loss_limit_pct=2),
                         stop_loss_pips=160, symbol="ES")
     codes = {i.code for i in rep.issues}
@@ -251,7 +251,7 @@ def test_resting_limit_requires_trade_through_and_books_target():
     d = pd.DataFrame(dict(timestamp=pd.date_range("2024-01-01", periods=6, freq="h"),
                           open=[100, 100, 99, 98, 100, 101], high=[101, 101, 100, 99, 102, 103],
                           low=[99, 99, 97, 97, 99, 100], close=[100, 100, 98, 98, 101, 102], volume=1))
-    r = RiskConfig(initial_balance=10_000, risk_mode="fixed", risk_value=100, pip_size=1, contract_size=1, sizing_mode="fit_stop")
+    r = RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, initial_balance=10_000, risk_mode="fixed", risk_value=100, pip_size=1, contract_size=1, sizing_mode="fit_stop")
     t = simulate_resting_orders(d, [LimitOrder(1, 98.5, 0, 5, 96.5, 102.0)], r)
     assert len(t) == 1 and t[0].entry_price == 98.5 and t[0].exit_reason == "take_profit" and t[0].pnl == pytest.approx(175.0)
     # price only touches 99.0 exactly -> a buy limit at 99.0 is NOT filled under trade-through
