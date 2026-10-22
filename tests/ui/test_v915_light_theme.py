@@ -189,3 +189,13 @@ def test_job_log_is_light_surface_in_light_mode():
     log_rule = next(b for s, b in rules.items()
                     if s.strip().endswith('html[data-theme="light"] #log'))
     assert "#ffffff" in log_rule and "var(--text)" in log_rule
+
+
+def test_light_theme_has_its_own_mountain_backdrop():
+    """Light theme gets a daytime mountain range (not the dark artwork), wired through a light-scoped rule."""
+    static = pathlib.Path(__file__).resolve().parents[2] / "app" / "web" / "static"
+    img = static / "dashboard-mountains-light.webp"
+    assert img.is_file() and img.stat().st_size > 5_000
+    css = (static / "theme.css").read_text()
+    assert 'html[data-theme="light"] body::before' in css
+    assert "dashboard-mountains-light.webp" in css
