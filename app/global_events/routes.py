@@ -111,6 +111,27 @@ def api_brief():
     return jsonify(brief_mod.make_brief())
 
 
+@global_events_bp.route("/api/x")
+def api_x():
+    from . import x_feed
+    return jsonify(x_feed.feed(force=request.args.get("refresh") == "1"))
+
+
+@global_events_bp.route("/api/x/accounts", methods=["POST"])
+def api_x_add():
+    from . import x_feed
+    body = request.get_json(silent=True) or {}
+    ok, message, accounts = x_feed.add_account(str(body.get("username", "")))
+    return jsonify({"ok": ok, "message": message, "accounts": accounts}), (200 if ok else 400)
+
+
+@global_events_bp.route("/api/x/accounts/remove", methods=["POST"])
+def api_x_remove():
+    from . import x_feed
+    body = request.get_json(silent=True) or {}
+    return jsonify({"ok": True, "accounts": x_feed.remove_account(str(body.get("username", "")))})
+
+
 @global_events_bp.route("/api/snapshot")
 def api_snapshot():
     return jsonify(store.context_snapshot())
