@@ -26,9 +26,9 @@ EMAIL = "jane@example.com"
 COLS = 11  # key,status,customer,email,plan,issued,expires,device,activated,seen,notes
 
 
-def _row(key, status="Unused", email="", expires="", device="", customer=""):
+def _row(key, status="Unused", email="", expires="", device="", customer="", plan=""):
     r = [""] * COLS
-    r[0], r[1], r[2], r[3], r[6], r[7] = key, status, customer, email, expires, device
+    r[0], r[1], r[2], r[3], r[4], r[6], r[7] = key, status, customer, email, plan, expires, device
     return r
 
 
@@ -196,3 +196,82 @@ def test_sheet_url_counts_as_configured(monkeypatch):
 def test_url_with_existing_query_string_still_works(sim, monkeypatch):
     monkeypatch.setenv("T58_LICENSE_SHEET_URL", sim.url + "?v=1")
     assert client.activate(EMAIL, KEY)[0]
+
+
+# --- plan: the Account page's subscription type comes from the sheet's PLAN column ---------------
+@pytest.mark.parametrize("plan", ["Pro Monthly", "Pro Annual", "Lifetime", "Trial", "Complimentary"])
+def test_plan_from_sheet_is_saved_with_the_license(sim, plan):
+    sim.admin(rows=[_row(KEY, plan=plan)])
+    assert client.activate(EMAIL, KEY)[0]
+    state = client.load_state()
+    assert state.plan == plan and client.current_plan(state) == plan
+
+
+def test_plan_change_in_sheet_shows_up_at_next_check_in(sim):
+    sim.admin(rows=[_row(KEY, plan="Pro Monthly")])
+    assert client.activate(EMAIL, KEY)[0]
+    rows = sim.rows()
+    rows[0][4] = "Lifetime"
+    sim.admin(rows=rows)
+    assert client.validate()[0]
+    assert client.load_state().plan == "Lifetime"
+
+
+def test_plan_spelling_is_normalised_but_unknown_plans_are_kept_as_typed(sim):
+    sim.admin(rows=[_row(KEY, plan="pro_monthly"), _row(KEY2, plan="Founders Edition")])
+    assert client.activate(EMAIL, KEY)[0]
+    assert client.load_state().plan == "Pro Monthly"
+    client.clear_state()
+    assert client.activate(EMAIL, KEY2)[0]
+    assert client.load_state().plan == "Founders Edition"
+
+
+def test_blank_plan_in_sheet_is_blank_in_state(sim):
+    assert client.activate(EMAIL, KEY)[0]
+    assert client.load_state().plan == "" and client.current_plan() == ""
+
+
+def test_refresh_license_info_pulls_a_missing_plan(sim, monkeypatch):
+    sim.admin(rows=[_row(KEY, plan="Pro Annual")])
+    assert client.activate(EMAIL, KEY)[0]
+    state = client.load_state()
+    state.plan = ""  # a license activated before plans existed
+    client.save_state(state)
+    monkeypatch.setattr(client, "_last_refresh_monotonic", 0.0)
+    assert client.refresh_license_info() is True
+    assert client.load_state().plan == "Pro Annual"
+
+
+def test_refresh_license_info_is_throttled_and_never_raises(sim, monkeypatch):
+    sim.admin(rows=[_row(KEY, plan="Pro Annual")])
+    assert client.activate(EMAIL, KEY)[0]
+    monkeypatch.setattr(client, "_last_refresh_monotonic", 0.0)
+    state = client.load_state()
+    state.plan = ""
+    client.save_state(state)
+    assert client.refresh_license_info() is True
+    state = client.load_state()
+    state.plan = ""
+    client.save_state(state)
+    assert client.refresh_license_info() is False  # inside the 10-minute window
+    sim.admin(mode="http500")
+    assert client.refresh_license_info(force=True) is True  # an unreachable sheet is swallowed, not raised
+
+
+def test_master_key_is_always_lifetime(monkeypatch):
+    import hashlib
+
+    monkeypatch.setenv("T58_MASTER_LICENSE_KEY_HASH", hashlib.sha256(b"T58-MASTER-KEY").hexdigest())
+    assert client.activate(EMAIL, "t58-master-key")[0]
+    state = client.load_state()
+    assert state.plan == "Lifetime" and client.current_plan(state) == "Lifetime"
+    state.plan = ""  # even an old master activation that never stored a plan reads as Lifetime
+    assert client.current_plan(state) == "Lifetime"
+    assert client.refresh_license_info(force=True) is False  # the master key never touches the network
+
+
+def test_normalize_plan_unit():
+    n = client.normalize_plan
+    assert n("Pro Monthly") == "Pro Monthly" and n("monthly") == "Pro Monthly" and n("PRO-ANNUAL") == "Pro Annual"
+    assert n("  lifetime ") == "Lifetime" and n("trial") == "Trial" and n("comp") == "Complimentary"
+    assert n("") == "" and n(None) == "" and n("Something New") == "Something New"
