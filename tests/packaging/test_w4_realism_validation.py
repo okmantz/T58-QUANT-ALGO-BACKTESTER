@@ -335,7 +335,7 @@ def test_spec_spread_slippage_defaults_applied():
     assert spec.default_spread_ticks == 1.0
     assert spec.default_slippage_ticks == 1.0
 
-    risk = RiskConfig()
+    risk = RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0)
     assert risk.spread_pips == 0.0 and risk.slippage_pips == 0.0
     applied = apply_instrument_spec(risk, "MGC")
     # 2026-10-07 cost-unit fix: the spec's defaults are TICKS; MGC's tick is
@@ -358,7 +358,7 @@ def test_spec_spread_defaults_all_specs():
     for symbol, spec in KNOWN_INSTRUMENTS.items():
         assert spec.default_spread_ticks > 0, symbol
         assert spec.default_slippage_ticks >= 0, symbol
-        applied = apply_instrument_spec(RiskConfig(), symbol)
+        applied = apply_instrument_spec(RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0), symbol)
         # ticks -> price via tick_size -> pips via pip_size (cost-unit fix)
         assert applied.spread_pips == pytest.approx(
             float(spec.default_spread_ticks) * spec.tick_size / spec.pip_size), symbol

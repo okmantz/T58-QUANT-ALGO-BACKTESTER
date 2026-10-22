@@ -409,7 +409,8 @@ def _spec_with_fixed_stop(stop_pips: float) -> dict:
 def _risk_for_prescreen(risk_value: float = 0.25) -> RiskConfig:
     # MGC-micro-like: pip_size=1.0 price point, contract_size=5 $/point.
     return RiskConfig(initial_balance=50_000.0, risk_value=risk_value,
-                      pip_size=1.0, contract_size=5.0)
+                      pip_size=1.0, contract_size=5.0,
+                      spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0)
 
 
 def test_prescreen_skips_unfundable_candidate_with_reason():
