@@ -126,6 +126,22 @@
   .lm-chip[data-series="vwap"].on   { background: var(--amber); border-color: var(--amber); }
   .lm-chip[data-series="volume"].on { background: #6f7684; border-color: #6f7684; color: #fff; }
 
+  /* Multi-chart layout: pane 1 is the full-featured chart above; panes 2-4 are
+     compact live charts with their own source / symbol / timeframe. */
+  .lm-grid { display: grid; grid-template-columns: minmax(0,1fr); gap: 12px; align-items: start; }
+  .lm-grid[data-layout="2"], .lm-grid[data-layout="4"] { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .lm-grid[data-layout="3"] { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .lm-grid[data-layout="3"] > .lm-pane-3 { grid-column: 1 / -1; }
+  .lm-grid:not([data-layout="1"]) #lm-chart { height: 400px; }
+  @media (max-width: 1000px) { .lm-grid[data-layout] { grid-template-columns: minmax(0,1fr) !important; } .lm-grid[data-layout] > .lm-pane-3 { grid-column: auto; } }
+  .lm-pane { display: none; background: var(--lm-panel); border: 1px solid var(--lm-border); border-radius: 12px; overflow: hidden; }
+  .lm-pane.show { display: block; }
+  .lm-pane-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 7px 10px; border-bottom: 1px solid var(--lm-border); background: var(--lm-panel-2); }
+  .lm-pane-bar select, .lm-pane-bar input { background: var(--lm-panel); color: var(--lm-text); border: 1px solid var(--lm-border); border-radius: 6px; padding: 4px 7px; font-size: 11.5px; font-weight: 600; max-width: 150px; }
+  .lm-pane-bar select option, .lm-pane-bar select optgroup { background: #fff; color: #14161b; }
+  .lm-pane-title { font-size: 12px; font-weight: 700; color: var(--lm-text); margin-right: auto; font-variant-numeric: tabular-nums; }
+  .lm-pane-title small { color: var(--lm-text-muted); font-weight: 600; margin-left: 6px; }
+  .lm-pane-chart { width: 100%; height: 400px; }
   .lm-below {
     display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px; margin-top: 12px;
   }
@@ -186,6 +202,15 @@
     </select>
   </label>
 
+  <label>Layout
+    <select id="lm-layout" title="Show 1-4 charts at once. Charts 2-4 each have their own source, symbol and timeframe.">
+      <option value="1">1 chart</option>
+      <option value="2">2 charts</option>
+      <option value="3">3 charts</option>
+      <option value="4">4 charts</option>
+    </select>
+  </label>
+
   <button class="lm-btn" id="lm-apply">APPLY</button>
   <button class="lm-btn" id="lm-fit">FIT CHART</button>
   <button class="lm-btn" id="lm-tradingview" title="Opens the real tradingview.com chart for this symbol in a new tab -- no local data source needed.">OPEN IN TRADINGVIEW</button>
@@ -194,7 +219,8 @@
   <span class="lm-status-badge lm-status-replay" id="lm-status-badge"><span class="lm-status-dot"></span><span id="lm-status-text">CONNECTING</span></span>
 </div>
 
-<div class="lm-chart-wrap">
+<div class="lm-grid" id="lm-grid" data-layout="1">
+<div class="lm-chart-wrap lm-pane-1">
   <div class="lm-hud" id="lm-hud">
     <div class="sym" id="lm-hud-symbol">{{ initial_symbol }}</div>
     <div class="row"><span id="lm-hud-ohlc">O -- H -- L -- C --</span></div>
@@ -209,6 +235,10 @@
   <div class="t58-draw-toolbar" id="lm-draw-toolbar" style="position:absolute;top:8px;right:8px;z-index:6;background:var(--lm-panel);border:1px solid var(--lm-border);border-radius:8px;padding:4px;"></div>
   <div id="lm-chart"></div>
   <img class="lm-watermark" src="/static/t58-mark-transparent.png" alt="">
+</div>
+<div class="lm-pane lm-pane-2" data-pane="2"></div>
+<div class="lm-pane lm-pane-3" data-pane="3"></div>
+<div class="lm-pane lm-pane-4" data-pane="4"></div>
 </div>
 
 <div class="lm-below">
@@ -499,6 +529,123 @@
 
   document.getElementById('lm-apply').addEventListener('click', restart);
   restart();
+})();
+</script>
+
+<script>
+/* Multi-chart panes 2-4. Each pane is an independent live chart (own source / symbol /
+ * timeframe) polling the same /api/live-market/bars endpoint as the main chart. Layout and
+ * per-pane choices persist in localStorage (best-effort). Panes only poll while visible. */
+(function () {
+  if (typeof LightweightCharts === 'undefined') return;
+  var KEY = 't58-live-market-panes-v1';
+  var grid = document.getElementById('lm-grid');
+  var layoutSel = document.getElementById('lm-layout');
+  var srcMain = document.getElementById('lm-source');
+  var dsMain = document.getElementById('lm-dataset');
+  var tfMain = document.getElementById('lm-timeframe');
+  var css = getComputedStyle(document.documentElement);
+  function cv(n) { return css.getPropertyValue(n).trim(); }
+  var C = { bg: cv('--lm-panel'), muted: cv('--lm-text-muted'), grid: cv('--lm-grid'), border: cv('--lm-border'), up: cv('--lm-up'), down: cv('--lm-down') };
+
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { saved = {}; }
+  function persist() { try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) {} }
+
+  function mk(tag, cls, text) { var n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; }
+  function cloneSelect(from, value) {
+    var s = document.createElement('select');
+    s.innerHTML = from.innerHTML;
+    [].forEach.call(s.querySelectorAll('option'), function (o) { o.removeAttribute('selected'); });
+    if (value != null) s.value = value;
+    return s;
+  }
+
+  function Pane(el, idx) {
+    var self = this, cfg = saved['p' + idx] || {};
+    this.el = el; this.idx = idx; this.history = []; this.seeded = false; this.timer = null;
+    var bar = mk('div', 'lm-pane-bar');
+    this.title = mk('div', 'lm-pane-title', 'Chart ' + idx);
+    this.src = cloneSelect(srcMain, cfg.source || 'replay');
+    this.sym = mk('input'); this.sym.type = 'text'; this.sym.size = 9; this.sym.placeholder = 'Symbol'; this.sym.value = cfg.symbol || '';
+    this.ds = cloneSelect(dsMain, cfg.dataset);
+    this.tf = cloneSelect(tfMain, cfg.timeframe || tfMain.value);
+    var go = mk('button', 'lm-btn', 'APPLY'); go.type = 'button';
+    [this.title, this.src, this.sym, this.ds, this.tf, go].forEach(function (n) { bar.appendChild(n); });
+    var box = mk('div', 'lm-pane-chart');
+    el.appendChild(bar); el.appendChild(box);
+    this.chart = LightweightCharts.createChart(box, {
+      layout: { background: { color: C.bg }, textColor: C.muted },
+      grid: { vertLines: { color: C.grid }, horzLines: { color: C.grid } },
+      rightPriceScale: { borderColor: C.border },
+      timeScale: { borderColor: C.border, timeVisible: true, secondsVisible: false },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal }, autoSize: true,
+    });
+    this.candles = this.chart.addCandlestickSeries({ upColor: C.up, downColor: C.down, borderVisible: false, wickUpColor: C.up, wickDownColor: C.down });
+    this.vol = this.chart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: 'v', color: C.muted });
+    this.chart.priceScale('v').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
+    function sync() {
+      var replay = self.src.value === 'replay';
+      self.sym.style.display = replay ? 'none' : ''; self.ds.style.display = replay ? '' : 'none'; self.tf.style.display = replay ? 'none' : '';
+    }
+    this.src.addEventListener('change', sync); sync();
+    go.addEventListener('click', function () { self.restart(); });
+  }
+  Pane.prototype.symbol = function () { return this.src.value === 'replay' ? this.ds.value : this.sym.value.trim(); };
+  Pane.prototype.setTitle = function (text, status) {
+    this.title.textContent = text; if (status) { var sm = mk('small', null, status); this.title.appendChild(sm); }
+  };
+  Pane.prototype.fetchBars = function () {
+    var self = this, symbol = this.symbol();
+    if (!symbol) { this.setTitle('Chart ' + this.idx + ' — pick a symbol or dataset', ''); return; }
+    var params = new URLSearchParams({ source: this.src.value, symbol: symbol, timeframe: this.tf.value, seed: this.seeded ? '0' : '1' });
+    fetch('/api/live-market/bars?' + params.toString()).then(function (r) { return r.json(); }).then(function (data) {
+      var label = symbol.split('/').pop().replace(/\.csv$/i, '');
+      if (!data.bars || !data.bars.length) { self.setTitle(label, (data.status || 'no data').toUpperCase()); return; }
+      self.seeded = true;
+      if (!self.history.length || data.bars.length > 30) {
+        self.history = data.bars; self.candles.setData(self.history);
+        self.vol.setData(self.history.map(function (b) { return { time: b.time, value: b.volume || 0, color: b.close >= b.open ? C.up : C.down }; }));
+        self.chart.timeScale().fitContent();
+      } else {
+        data.bars.forEach(function (b) {
+          var i = self.history.findIndex(function (x) { return x.time === b.time; });
+          if (i >= 0) self.history[i] = b; else self.history.push(b);
+          self.candles.update(b);
+          self.vol.update({ time: b.time, value: b.volume || 0, color: b.close >= b.open ? C.up : C.down });
+        });
+      }
+      var last = self.history[self.history.length - 1];
+      self.setTitle(label + '  ' + last.close, (data.status || '').toUpperCase());
+    }).catch(function () { self.setTitle('Chart ' + self.idx, 'UNAVAILABLE'); });
+  };
+  Pane.prototype.restart = function () {
+    this.stop(); this.seeded = false; this.history = [];
+    saved['p' + this.idx] = { source: this.src.value, symbol: this.sym.value.trim(), dataset: this.ds.value, timeframe: this.tf.value };
+    persist();
+    var self = this;
+    this.fetchBars();
+    this.timer = setInterval(function () { if (!document.hidden) self.fetchBars(); }, 2500 + this.idx * 250);
+  };
+  Pane.prototype.stop = function () { if (this.timer) { clearInterval(this.timer); this.timer = null; } };
+
+  var panes = {};
+  function applyLayout(n) {
+    n = Math.max(1, Math.min(4, parseInt(n, 10) || 1));
+    grid.dataset.layout = String(n);
+    for (var i = 2; i <= 4; i++) {
+      var el = grid.querySelector('.lm-pane-' + i), on = i <= n;
+      el.classList.toggle('show', on);
+      if (on) {
+        if (!panes[i]) { panes[i] = new Pane(el, i); panes[i].restart(); }
+        else if (!panes[i].timer) panes[i].restart();
+      } else if (panes[i]) { panes[i].stop(); }
+    }
+    saved.layout = n; persist();
+  }
+  layoutSel.value = String(saved.layout || 1);
+  layoutSel.addEventListener('change', function () { applyLayout(layoutSel.value); });
+  applyLayout(layoutSel.value);
 })();
 </script>
 </body>

@@ -59,6 +59,17 @@
 <div class="category-label"><span class="cat-icon">&#129504;</span> AI</div>
 <form method="POST" action="/settings/api-keys/save-ai">
   <div class="card">
+    <h2>Active AI provider</h2>
+    <p class="field-note" style="margin-bottom:8px;">Every AI feature in the app (assistant, research agent, strategy generator, Global Events brief, screenshot analysis...) uses this one choice. Ollama is the default. Claude / OpenAI are used only once their key below is saved; until then the app stays on Ollama.</p>
+    <select name="ai_provider">
+      <option value="ollama" {% if ai_provider.chosen == 'ollama' %}selected{% endif %}>Ollama (local, default)</option>
+      <option value="claude" {% if ai_provider.chosen == 'claude' %}selected{% endif %}>Claude (Anthropic)</option>
+      <option value="openai" {% if ai_provider.chosen == 'openai' %}selected{% endif %}>OpenAI (ChatGPT)</option>
+    </select>
+    <p class="status">Currently answering with: <strong>{{ {'ollama':'Ollama','claude':'Claude','openai':'OpenAI'}[ai_provider.effective] }}</strong>{% if ai_provider.chosen != ai_provider.effective %} (selected provider has no saved key, so Ollama is used){% endif %}</p>
+    <p class="field-note">Embeddings (semantic memory search) always use a local Ollama model.</p>
+  </div>
+  <div class="card">
     <h2>Ollama (local AI assistant)</h2>
     <label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" name="ollama_enabled" style="width:auto;" {% if ollama.enabled %}checked{% endif %}> Enabled</label>
     <div class="row">
@@ -75,6 +86,8 @@
     <h2>OpenAI (ChatGPT)</h2>
     <label>API key</label>
     <input type="password" name="openai_api_key" value="" placeholder="{% if api_keys.openai_api_key %}(unchanged -- leave blank to keep it){% else %}sk-...{% endif %}">
+    <label>Model</label>
+    <input type="text" name="openai_model" value="{{ ai_provider.openai_model }}">
     <p class="status">{{ status_icon(api_keys.openai_api_key) }}</p>
     <button type="button" class="test-btn" onclick="testService('openai', this)">Test Connection</button>
     <p class="test-result" id="test-result-openai"></p>
@@ -83,6 +96,8 @@
     <h2>Claude (Anthropic)</h2>
     <label>API key</label>
     <input type="password" name="claude_api_key" value="" placeholder="{% if api_keys.claude_api_key %}(unchanged -- leave blank to keep it){% else %}sk-ant-...{% endif %}">
+    <label>Model</label>
+    <input type="text" name="claude_model" value="{{ ai_provider.claude_model }}">
     <p class="status">{{ status_icon(api_keys.claude_api_key) }}</p>
     <button type="button" class="test-btn" onclick="testService('claude', this)">Test Connection</button>
     <p class="test-result" id="test-result-claude"></p>
@@ -123,6 +138,15 @@
     <label>API key</label>
     <input type="password" name="london_strategic_edge_key" value="" placeholder="{% if api_keys.london_strategic_edge_key %}(unchanged -- leave blank to keep it){% else %}API key{% endif %}">
     <p class="status">{{ status_icon(api_keys.london_strategic_edge_key) }}</p>
+  </div>
+  <div class="card">
+    <h2>X (Twitter)</h2>
+    <p class="field-note" style="margin-bottom:8px;">Powers the X section on Global Events: add usernames there and their latest posts appear. Needs an X API v2 <strong>bearer token</strong> from developer.x.com (reading posts requires a paid X API plan -- the page shows X's exact error if your plan can't read).</p>
+    <label>Bearer token</label>
+    <input type="password" name="x_bearer_token" value="" placeholder="{% if api_keys.x_bearer_token %}(unchanged -- leave blank to keep it){% else %}AAAA...{% endif %}">
+    <p class="status">{{ status_icon(api_keys.x_bearer_token) }}</p>
+    <button type="button" class="test-btn" onclick="testService('x', this)">Test Connection</button>
+    <p class="test-result" id="test-result-x"></p>
   </div>
   <div class="card">
     <h2>Twelve Data</h2>

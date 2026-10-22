@@ -46,6 +46,26 @@
   input[readonly]:focus { border-color: var(--border-light); box-shadow: none; }
   h1 { font-size: 18px; margin: 0 0 4px; }
   p.lede { color: var(--text-muted); font-size: 13px; margin: 0 0 16px; max-width: 560px; }
+  .pz-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-top: 6px; }
+  .pz-tile { position: relative; height: 84px; border-radius: 10px; border: 2px solid var(--border-light); cursor: pointer; overflow: hidden;
+    background-color: #03080a; background-size: cover; background-position: center bottom; background-repeat: no-repeat; padding: 0; }
+  html[data-theme="light"] .pz-tile { background-color: #e6edf3; }
+  .pz-tile span { position: absolute; left: 0; right: 0; bottom: 0; padding: 5px 8px; font-size: 12px; font-weight: 700; text-align: left;
+    color: #fff; background: linear-gradient(180deg, transparent, rgba(0,0,0,.62)); }
+  .pz-tile.on { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), 0.2); }
+  .pz-tile:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+  .pz-tile[data-bg="mountains"] { background-image: url("/static/dashboard-mountains.webp"); }
+  html[data-theme="light"] .pz-tile[data-bg="mountains"] { background-image: url("/static/dashboard-mountains-light.webp"); }
+  .pz-tile[data-bg="spring"] { background-image: url("/static/backgrounds/spring-dark.webp"); }
+  .pz-tile[data-bg="summer"] { background-image: url("/static/backgrounds/summer-dark.webp"); }
+  .pz-tile[data-bg="autumn"] { background-image: url("/static/backgrounds/autumn-dark.webp"); }
+  .pz-tile[data-bg="winter"] { background-image: url("/static/backgrounds/winter-dark.webp"); }
+  html[data-theme="light"] .pz-tile[data-bg="spring"] { background-image: url("/static/backgrounds/spring-light.webp"); }
+  html[data-theme="light"] .pz-tile[data-bg="summer"] { background-image: url("/static/backgrounds/summer-light.webp"); }
+  html[data-theme="light"] .pz-tile[data-bg="autumn"] { background-image: url("/static/backgrounds/autumn-light.webp"); }
+  html[data-theme="light"] .pz-tile[data-bg="winter"] { background-image: url("/static/backgrounds/winter-light.webp"); }
+  .pz-switch { display: flex; align-items: center; gap: 10px; margin-top: 4px; font-size: 14px; cursor: pointer; }
+  .pz-switch input { width: auto; }
   .divider { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 </style>
 </head>
@@ -70,6 +90,23 @@
   {% if saved == 'logout' %}<div class="card saved-banner">No lock password is set, so there's nothing to log out of.</div>{% endif %}
   {% if password_error %}<div class="card error-banner">{{ password_error }}</div>{% endif %}
   {% if error %}<div class="card error-banner">{{ error }}</div>{% endif %}
+
+  <!-- ================= PERSONALIZE ================= -->
+  <div class="card" id="personalize">
+    <h2>Personalize</h2>
+    <p class="help">Backdrop and verse are saved in this browser. Each season has a night scene (dark theme) and a day scene (light theme) -- switch the theme in the sidebar to see both.</p>
+    <label>Background</label>
+    <div class="pz-grid" id="pz-grid" role="radiogroup" aria-label="Background">
+      <button type="button" class="pz-tile" data-bg="mountains" role="radio"><span>Mountains (default)</span></button>
+      <button type="button" class="pz-tile" data-bg="spring" role="radio"><span>Spring</span></button>
+      <button type="button" class="pz-tile" data-bg="summer" role="radio"><span>Summer</span></button>
+      <button type="button" class="pz-tile" data-bg="autumn" role="radio"><span>Autumn</span></button>
+      <button type="button" class="pz-tile" data-bg="winter" role="radio"><span>Winter</span></button>
+    </div>
+    <hr class="divider">
+    <label class="pz-switch"><input type="checkbox" id="pz-verse"> Show a Bible verse at the top of every page</label>
+    <p class="field-note">A quiet single line (King James Version) that changes every 30 minutes. Off by default.</p>
+  </div>
 
   <!-- ================= PROFILE PICTURE ================= -->
   <div class="card">
@@ -229,5 +266,19 @@
 </div>
 </div>
 <script src="/static/t58-chrome.js" defer></script>
+<script>
+(function () {
+  function init() {
+    var P = window.T58Personalize; if (!P) return;
+    var tiles = [].slice.call(document.querySelectorAll('#pz-grid .pz-tile'));
+    function mark() { tiles.forEach(function (t) { var on = t.dataset.bg === P.bg(); t.classList.toggle('on', on); t.setAttribute('aria-checked', on ? 'true' : 'false'); }); }
+    tiles.forEach(function (t) { t.addEventListener('click', function () { P.setBg(t.dataset.bg); mark(); }); });
+    var cb = document.getElementById('pz-verse'); cb.checked = P.verse();
+    cb.addEventListener('change', function () { P.setVerse(cb.checked); });
+    mark();
+  }
+  if (window.T58Personalize) init(); else window.addEventListener('load', init);
+})();
+</script>
 </body>
 </html>
