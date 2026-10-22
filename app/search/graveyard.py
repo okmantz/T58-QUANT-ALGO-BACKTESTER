@@ -158,10 +158,75 @@ def param_signature(family: str, config: dict | None, keys: tuple[str, ...] = ()
         return family
 
 
+# ---------------------------------------------------------------------------
+# Starter seed: a few hundred REAL, measured failures shipped with the app (see scripts/build_graveyard_seed.py and
+# scripts/export_graveyard_seed.py). On first use they are merged -- idempotently, by candidate_id -- into the
+# per-instrument graveyard files, so a fresh download already has a populated Graveyard to browse and learn from.
+# ---------------------------------------------------------------------------
+SEED_PATH = Path(__file__).parent / "seed_data" / "graveyard_seed.jsonl"
+_SEED_CHECKED = False
+
+
+def _seed_marker() -> Path:
+    return get_app_base_dir() / "data" / "evolution" / ".graveyard_seed_installed"
+
+
+def ensure_seed_installed(force: bool = False) -> int:
+    """Merge the bundled seed into the persistent graveyard files. Returns how many rows were added (0 when already
+    installed). Idempotent (rows are keyed by candidate_id, and a marker stores the seed's content hash so a
+    rebuilt seed merges only its new rows), never raises, and never touches rows a user's own runs wrote."""
+    global _SEED_CHECKED
+    if _SEED_CHECKED and not force:
+        return 0
+    try:
+        import hashlib
+
+        if not SEED_PATH.exists():
+            _SEED_CHECKED = True
+            return 0
+        raw = SEED_PATH.read_bytes()
+        digest = hashlib.sha256(raw).hexdigest()
+        marker = _seed_marker()
+        if not force and marker.exists() and marker.read_text(encoding="utf-8").strip() == digest:
+            _SEED_CHECKED = True
+            return 0
+        grouped: dict[tuple[str, str], list[dict]] = {}
+        for line in raw.decode("utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            inst, tf = row.pop("_seed_instrument", None), row.pop("_seed_timeframe", None)
+            if inst and tf:
+                grouped.setdefault((inst, tf), []).append(row)
+        added = 0
+        for (inst, tf), rows in grouped.items():
+            path = graveyard_path_for(inst, tf)
+            have = {r.get("candidate_id") for r in load_graveyard(path, _install=False)}
+            new = [r for r in rows if r.get("candidate_id") not in have]
+            if new:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("a", encoding="utf-8") as f:
+                    for r in new:
+                        f.write(json.dumps(r, ensure_ascii=False) + "\n")
+                added += len(new)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(digest, encoding="utf-8")
+        _SEED_CHECKED = True
+        return added
+    except Exception:  # noqa: BLE001 -- the seed is a convenience; it must never break a run or the page
+        _SEED_CHECKED = True
+        return 0
+
+
 def list_graveyard_files() -> list[dict]:
     """Every persistent, instrument-scoped graveyard file on disk (see
     graveyard_path_for), newest-modified first, for a browsing UI to pick
     from. Each dict: {instrument, timeframe, path, n_rows, modified}."""
+    ensure_seed_installed()
     base = get_app_base_dir() / "data" / "evolution"
     if not base.exists():
         return []
@@ -200,7 +265,9 @@ def record_rejections(entries: list[GraveyardEntry], path: Path | str | None = N
             f.write(json.dumps(e.to_dict(), default=str) + "\n")
 
 
-def load_graveyard(path: Path | str | None = None, limit: int = 50_000) -> list[dict]:
+def load_graveyard(path: Path | str | None = None, limit: int = 50_000, _install: bool = True) -> list[dict]:
+    if _install:
+        ensure_seed_installed()
     path = Path(path) if path else default_graveyard_path()
     if not path.exists():
         return []
