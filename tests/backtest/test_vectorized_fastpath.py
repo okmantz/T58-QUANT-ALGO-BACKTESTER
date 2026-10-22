@@ -183,8 +183,8 @@ def test_pip_scale_mismatch_detected_in_fast_path():
 
 
 def test_risk_amount_and_position_size_vectorized_match_scalar():
-    risk_pct = RiskConfig(initial_balance=10_000.0, risk_mode="percent", risk_value=2.0, pip_size=0.01)
-    risk_fixed = RiskConfig(initial_balance=10_000.0, risk_mode="fixed", risk_value=150.0, pip_size=0.01,
+    risk_pct = RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, initial_balance=10_000.0, risk_mode="percent", risk_value=2.0, pip_size=0.01)
+    risk_fixed = RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, initial_balance=10_000.0, risk_mode="fixed", risk_value=150.0, pip_size=0.01,
                              max_position_size=500.0)
     equities = np.array([10_000.0, 5_000.0, -100.0, 0.0, 20_000.0])
     pips = np.array([10.0, 25.0, 0.0, 50.0, 5.0])
@@ -226,7 +226,7 @@ def test_position_size_parity_with_contract_size():
     equities = np.array([10_000.0, 50_000.0, 5_000.0, 20_000.0, 0.0])
     pips = np.array([10.0, 25.0, 5.0, 50.0, 10.0])
     for contract_size in (50.0, 5.0):
-        risk = RiskConfig(
+        risk = RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, 
             initial_balance=50_000.0, risk_mode="percent", risk_value=1.0,
             pip_size=1.0, contract_size=contract_size,
         )

@@ -31,7 +31,7 @@ def _hand_day(touch_low=101.8):
 
 def _risk():
     return RiskConfig(initial_balance=50_000.0, risk_mode="fixed", risk_value=1000.0, pip_size=0.01, contract_size=1.0,
-                      spread_pips=1.0, slippage_pips=1.0, commission_per_contract=0.0, max_trades_per_day=10)
+                      spread_pips=1.0, slippage_pips=1.0, commission_per_trade=0.0, commission_per_contract=0.0, max_trades_per_day=10)
 
 
 def test_fvg_zone_is_known_only_at_the_close_of_its_third_candle():

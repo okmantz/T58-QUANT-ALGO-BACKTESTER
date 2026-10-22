@@ -64,7 +64,7 @@ def test_apply_instrument_spec_fills_commission_when_still_at_zero_default():
     flat commission_per_trade fill -- the flat fill undercharged every
     multi-contract position. commission_per_trade is left exactly as the
     caller set it."""
-    risk = RiskConfig()  # commission_per_trade AND commission_per_contract default to 0.0
+    risk = RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0)  # commission_per_trade AND commission_per_contract default to 0.0
     out = apply_instrument_spec(risk, "ES")
     assert out.commission_per_contract == KNOWN_INSTRUMENTS["ES"].default_commission_round_turn
     assert out.commission_per_contract > 0.0

@@ -91,7 +91,7 @@ def test_halt_on_breach_true_is_the_opt_in_legacy_halt_and_explains_the_stall():
 def test_profit_target_is_wired_from_prop_rules_and_trading_continues():
     df = _walk_df(seed=3)
     rules = PropRules(account_size=10_000, evaluation_profit_target_pct=3.0, max_drawdown_pct=50.0, daily_loss_limit_pct=50.0)
-    risk = with_prop_safety_defaults(RiskConfig(initial_balance=10_000, risk_value=3.0, pip_size=1.0), rules)
+    risk = with_prop_safety_defaults(RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, initial_balance=10_000, risk_value=3.0, pip_size=1.0), rules)
     assert risk.profit_target_pct == 3.0 and risk.reset_on_target is True
     trades, eq, _ = _run(df, risk)
     payouts = eq.attrs["payout_events"]
@@ -108,7 +108,7 @@ def test_explicit_profit_target_is_never_overridden_by_prop_rules():
 
 def test_no_target_configured_means_no_payouts_and_no_halt():
     df = _walk_df(seed=3)
-    risk = RiskConfig(initial_balance=10_000, risk_value=3.0, pip_size=1.0)  # no rules, no target
+    risk = RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, initial_balance=10_000, risk_value=3.0, pip_size=1.0)  # no rules, no target
     trades, eq, _ = _run(df, risk)
     assert eq.attrs["payout_events"] == []
     assert df["timestamp"].iloc[-1] - trades[-1].entry_time < pd.Timedelta(days=5)
@@ -134,7 +134,7 @@ def test_one_contract_minimum_prevents_the_sizing_dead_lock():
     ]
     df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
     sig = pd.Series([1] * 9)
-    risk = RiskConfig(initial_balance=50_000.0, risk_mode="percent", risk_value=2.0, pip_size=1.0, contract_size=50.0)
+    risk = RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, initial_balance=50_000.0, risk_mode="percent", risk_value=2.0, pip_size=1.0, contract_size=50.0)
     trades, eq, msgs = _run(df, sig=sig, risk=risk, sl=20, tp=None)
     assert trades[0].pnl < 0                      # equity is now just under the 1-contract threshold
     assert len(trades) >= 2                       # ...and the run still keeps trading

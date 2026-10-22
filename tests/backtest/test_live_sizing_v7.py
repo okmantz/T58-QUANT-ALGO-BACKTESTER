@@ -382,7 +382,7 @@ def test_engine_converts_units_to_broker_qty_on_entry(tmp_path):
     journal = ForwardTestJournal(db_path=tmp_path / "j.db")
     cfg = LiveExecutionConfig(
         symbol="ES", timeframe_minutes=15,
-        risk=RiskConfig(initial_balance=50_000.0, risk_mode="percent", risk_value=1.0,
+        risk=RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, initial_balance=50_000.0, risk_mode="percent", risk_value=1.0,
                         pip_size=1.0, contract_size=50.0),
         prop_rules=PropRules(account_size=50_000.0, max_drawdown_pct=10.0),
         contract_size=50.0, units_per_lot=50.0,

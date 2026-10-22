@@ -32,7 +32,7 @@ def _run(intrabar: bool, target_first: bool):
     sig = pd.Series(np.zeros(len(df), dtype=int))
     sig.iloc[1:4] = 1
     risk = RiskConfig(initial_balance=50_000.0, risk_mode="fixed", risk_value=500.0, pip_size=1.0, contract_size=1.0,
-                      intrabar_replay=intrabar, max_trades_per_day=20)
+                      spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, intrabar_replay=intrabar, max_trades_per_day=20)
     tr, _ = run_execution(df, sig, risk, stop_loss_pips=2.0, take_profit_pips=2.0, intrabar_df=m if intrabar else None)
     return tr
 

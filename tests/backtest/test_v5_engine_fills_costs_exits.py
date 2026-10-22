@@ -80,7 +80,7 @@ def test_entry_fills_at_next_bar_open_by_default():
     ]
     df = _df(rows)
     signals = pd.Series([1, 1, 1, 1])
-    risk = RiskConfig(initial_balance=10_000.0, risk_value=1.0, pip_size=1.0)
+    risk = RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, initial_balance=10_000.0, risk_value=1.0, pip_size=1.0)
     trades, _ = run_execution(df, signals, risk,
                               stop_loss_pips=50, take_profit_pips=None)
     assert len(trades) == 1
@@ -98,7 +98,7 @@ def test_entry_fill_lag_zero_uses_signal_bar_open():
     ]
     df = _df(rows)
     signals = pd.Series([1, 1, 1])
-    risk = RiskConfig(initial_balance=10_000.0, risk_value=1.0, pip_size=1.0,
+    risk = RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, initial_balance=10_000.0, risk_value=1.0, pip_size=1.0,
                       entry_fill_lag_bars=0)
     trades, _ = run_execution(df, signals, risk,
                               stop_loss_pips=50, take_profit_pips=None)
@@ -117,7 +117,7 @@ def test_signal_exit_fills_at_next_bar_open():
     ]
     df = _df(rows)
     signals = pd.Series([1, 1, 1, 0, 0])
-    risk = RiskConfig(initial_balance=10_000.0, risk_value=1.0, pip_size=1.0)
+    risk = RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, initial_balance=10_000.0, risk_value=1.0, pip_size=1.0)
     trades, _ = run_execution(df, signals, risk,
                               stop_loss_pips=50, take_profit_pips=None)
     assert len(trades) == 1
@@ -180,7 +180,7 @@ def test_mgc_spec_fills_per_contract_commission_end_to_end():
     """apply_instrument_spec('MGC') -> $1.60/contract; a 2-contract trade
     is charged $3.20 at settle, not the old flat $1.60."""
     risk = apply_instrument_spec(
-        RiskConfig(initial_balance=50_000.0, risk_value=1.0), "MGC")
+        RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, initial_balance=50_000.0, risk_value=1.0), "MGC")
     assert risk.commission_per_contract == pytest.approx(1.60)
     assert risk.commission_per_trade == 0.0
     rows = [
@@ -208,7 +208,7 @@ def test_time_stop_closes_stagnant_position():
     rows = [(100.0, 100.05, 99.95, 100.0)] * 8
     df = _df(rows, freq="1h")
     signals = pd.Series([1, 1, 1, 1, 1, 0, 0, 0])
-    risk = RiskConfig(initial_balance=10_000.0, risk_value=1.0, pip_size=1.0,
+    risk = RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, initial_balance=10_000.0, risk_value=1.0, pip_size=1.0,
                       time_stop_hours=2.0, time_stop_atr_band=0.15)
     trades, _ = run_execution(df, signals, risk,
                               stop_loss_pips=500, take_profit_pips=None)
@@ -305,7 +305,7 @@ def test_exit_cause_breakeven():
     ]
     df = _df(rows)
     signals = pd.Series([1, 1, 0, 0, 0])
-    risk = RiskConfig(initial_balance=10_000.0, risk_value=1.0, pip_size=1.0,
+    risk = RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, initial_balance=10_000.0, risk_value=1.0, pip_size=1.0,
                       reentry_cooldown_bars=0)
     trades, _ = run_execution(df, signals, risk,
                               stop_loss_pips=1, take_profit_pips=None,
@@ -328,7 +328,7 @@ def test_exit_cause_trailing_stop():
     ]
     df = _df(rows)
     signals = pd.Series([1, 1, 0, 0, 0])
-    risk = RiskConfig(initial_balance=10_000.0, risk_value=1.0, pip_size=1.0,
+    risk = RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, initial_balance=10_000.0, risk_value=1.0, pip_size=1.0,
                       reentry_cooldown_bars=0)
     trades, _ = run_execution(
         df, signals, risk, stop_loss_pips=2, take_profit_pips=None,
@@ -351,7 +351,7 @@ def test_exit_cause_daily_loss_close():
     ]
     df = _df(rows)
     signals = pd.Series([1, 1, 1, 1])
-    risk = RiskConfig(initial_balance=10_000.0, risk_value=1.0, pip_size=1.0,
+    risk = RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, initial_balance=10_000.0, risk_value=1.0, pip_size=1.0,
                       daily_loss_limit_pct=2.0, reentry_cooldown_bars=0)
     trades, _ = run_execution(df, signals, risk,
                               stop_loss_pips=20, take_profit_pips=None)

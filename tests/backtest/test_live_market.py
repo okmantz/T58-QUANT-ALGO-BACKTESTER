@@ -149,3 +149,13 @@ def test_recent_trade_markers_short_trade_has_reversed_shapes(tmp_path, monkeypa
     assert "SELL" in entry["text"]
     assert exit_marker["shape"] == "arrowUp"
     assert "EXIT -50.00" in exit_marker["text"]
+
+
+def test_live_market_page_has_multi_chart_layout():
+    """The page ships a 1-4 chart layout selector and panes 2-4 containers."""
+    from pathlib import Path
+    html = (Path(__file__).resolve().parents[2] / "app" / "web" / "templates" / "live_market.html").read_text(encoding="utf-8")
+    assert 'id="lm-layout"' in html
+    for n in (2, 3, 4):
+        assert f'lm-pane-{n}' in html
+    assert "t58-live-market-panes-v1" in html
