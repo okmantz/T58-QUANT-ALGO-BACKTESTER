@@ -59,15 +59,63 @@ def test_head_links_manifest_on_every_page(client):
         assert 'rel="manifest"' in html and "t58-pwa.js" in html, url
 
 
-def test_subscription_is_premium_and_active_for_signed_in_user():
-    eff = sub.effective_subscription(sub.SubscriptionInfo(plan="free text", license_key="", license_status="", renewal_date=""))
-    assert eff.plan == "Premium Subscription" and eff.license_status == "active"
-    expired = sub.effective_subscription(sub.SubscriptionInfo(plan="x", license_key="", license_status="expired", renewal_date=""))
-    assert expired.license_status == "expired"
-    assert sub.PREMIUM_PLAN in sub.PLAN_CHOICES
+def _plan_select(html: str) -> str:
+    start = html.index('<select id="plan"')
+    return html[start:html.index("</select>", start)]
 
 
-def test_account_settings_shows_premium_dropdown(client):
+def _state(**over):
+    from app.licensing.client import LicenseState
+
+    base = dict(email="a@b.co", license_key="T58-AAAAA-BBBBB-CCCCC-DDDDD", status="active", plan="Pro Annual", expires_at=None)
+    base.update(over)
+    return LicenseState(**base)
+
+
+def test_subscription_comes_from_the_license_not_from_anything_typed():
+    eff = sub.effective_subscription(_state(plan="Pro Monthly", expires_at="2027-01-15T00:00:00.000Z"))
+    assert eff.plan == "Pro Monthly" and eff.license_status == "active"
+    assert eff.license_key == "T58-AAAAA-BBBBB-CCCCC-DDDDD" and eff.renewal_date == "2027-01-15"
+    assert sub.effective_subscription(_state(plan="Lifetime")).renewal_date == sub.NO_EXPIRY_TEXT
+    assert sub.effective_subscription(_state(status="revoked")).license_status == "revoked"
+    assert sub.effective_subscription(_state(status="expired")).license_status == "expired"
+    assert sub.effective_subscription(_state(status="trial")).license_status == "active"  # reaching Account means the gate passed
+    none = sub.effective_subscription(_state(license_key=""))
+    assert none.plan == "" and none.license_status == "unset"
+
+
+def test_license_without_a_plan_falls_back_to_the_generic_label():
+    assert sub.effective_subscription(_state(plan="")).plan == sub.PREMIUM_PLAN
+
+
+def test_master_key_reads_as_lifetime(monkeypatch):
+    import hashlib
+
+    from app.licensing import client as lic
+
+    monkeypatch.setenv("T58_MASTER_LICENSE_KEY_HASH", hashlib.sha256(b"T58-OWNER").hexdigest())
+    eff = sub.effective_subscription(_state(license_key="T58-OWNER", plan=""))
+    assert eff.plan == lic.MASTER_PLAN == "Lifetime"
+
+
+def test_plan_choices_are_the_license_sheet_plans():
+    assert sub.PLAN_CHOICES == ("Pro Monthly", "Pro Annual", "Lifetime", "Trial", "Complimentary")
+
+
+def test_account_settings_shows_a_locked_plan_dropdown(client):
+    # the suite's activation is the master key, which is always Lifetime
     html = client.get("/settings/account").get_data(as_text=True)
-    assert "<select" in html and "Premium Subscription" in html
-    assert 'name="plan"' in html
+    assert 'id="plan"' in html and 'name="plan"' in html
+    plan_tag = _plan_select(html)
+    assert " disabled" in plan_tag and "Lifetime" in plan_tag
+    assert 'id="license_key"' in html and "readonly" in html
+    assert "Save subscription info" not in html and "Check key format" not in html
+
+
+def test_plan_cannot_be_changed_from_the_form(client):
+    r = client.post("/settings/account/subscription/refresh", data={"plan": "Complimentary", "license_status": "cancelled"})
+    assert r.status_code == 200
+    html = r.get_data(as_text=True)
+    plan_tag = _plan_select(html)
+    assert "Lifetime" in plan_tag and "Complimentary" not in plan_tag
+    assert client.post("/settings/account/subscription/save", data={"plan": "Complimentary"}).status_code in (404, 405)

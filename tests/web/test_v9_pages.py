@@ -249,3 +249,93 @@ def test_squeezemetrics_history_merge_is_lagged(client, monkeypatch):
     assert out.loc[d == d[0], "gex_net"].isna().all()                 # Sep 1 bars: no prior day yet
     assert (out.loc[d == d[288], "gex_net"] == 2e9).all()             # Sep 2 bars see Sep 1's value
     assert (out.loc[d == d[576], "gex_net"] == -1e9).all()            # Sep 3 bars see Sep 2's value
+
+
+# ------------------------------------------------------------- trade screenshots (2026-10-21)
+import base64
+
+_PNG = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64).decode()
+_JPG = base64.b64encode(b"\xff\xd8\xff\xe0" + b"\x00" * 64).decode()
+
+
+def _png(data=_PNG):
+    return "data:image/png;base64," + data
+
+
+def _save(client, **over):
+    return client.post("/api/journal/trades", json={"instrument": "NAS100", "pnl": 50, **over})
+
+
+def test_trade_screenshot_is_optional(client):
+    t = _save(client).get_json()["trade"]
+    assert t["screenshot"] == ""
+    assert client.get("/api/journal").get_json()["trades"][0]["screenshot"] == ""
+
+
+def test_trade_screenshot_roundtrip(client, tmp_path):
+    t = _save(client, screenshotData=_png()).get_json()["trade"]
+    name = t["screenshot"]
+    assert name.endswith(".png") and (tmp_path / "screenshots" / name).is_file()
+    assert "screenshotData" not in t and "screenshotData" not in client.get("/api/journal").get_json()["trades"][0]
+    r = client.get(f"/api/journal/screenshots/{name}")
+    assert r.status_code == 200 and r.data.startswith(b"\x89PNG")
+    assert r.headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_editing_a_trade_keeps_its_screenshot(client):
+    t = _save(client, screenshotData=_png()).get_json()["trade"]
+    again = client.post("/api/journal/trades", json={**t, "pnl": 75}).get_json()["trade"]
+    assert again["screenshot"] == t["screenshot"] and again["pnl"] == 75
+
+
+def test_replacing_a_screenshot_deletes_the_old_file(client, tmp_path):
+    t = _save(client, screenshotData=_png()).get_json()["trade"]
+    new = client.post("/api/journal/trades", json={**t, "screenshotData": "data:image/jpeg;base64," + _JPG}).get_json()["trade"]
+    assert new["screenshot"].endswith(".jpg") and new["screenshot"] != t["screenshot"]
+    assert not (tmp_path / "screenshots" / t["screenshot"]).exists()
+    assert (tmp_path / "screenshots" / new["screenshot"]).is_file()
+
+
+def test_removing_a_screenshot_deletes_the_file(client, tmp_path):
+    t = _save(client, screenshotData=_png()).get_json()["trade"]
+    gone = client.post("/api/journal/trades", json={**t, "screenshot": ""}).get_json()["trade"]
+    assert gone["screenshot"] == "" and not (tmp_path / "screenshots" / t["screenshot"]).exists()
+
+
+def test_deleting_a_trade_deletes_its_screenshot(client, tmp_path):
+    t = _save(client, screenshotData=_png()).get_json()["trade"]
+    assert client.delete(f"/api/journal/trades/{t['id']}").get_json()["ok"]
+    assert not (tmp_path / "screenshots" / t["screenshot"]).exists()
+    assert client.get(f"/api/journal/screenshots/{t['screenshot']}").status_code == 404
+
+
+def test_screenshot_must_be_a_real_image(client, tmp_path):
+    bad = base64.b64encode(b"<script>alert(1)</script>").decode()
+    r = _save(client, screenshotData="data:image/png;base64," + bad)
+    assert r.status_code == 400 and "PNG, JPEG, GIF or WebP" in r.get_json()["error"]
+    assert _save(client, screenshotData="not a data url").status_code == 400
+    assert not list((tmp_path / "screenshots").glob("*")) if (tmp_path / "screenshots").exists() else True
+
+
+def test_screenshot_size_limit(client, monkeypatch):
+    monkeypatch.setattr(journal_store, "MAX_SCREENSHOT_BYTES", 40)
+    r = _save(client, screenshotData=_png())
+    assert r.status_code == 400 and "larger than" in r.get_json()["error"]
+
+
+def test_a_trade_cannot_claim_another_file_as_its_screenshot(client, tmp_path):
+    other = _save(client, screenshotData=_png()).get_json()["trade"]
+    t = _save(client, screenshot=other["screenshot"]).get_json()["trade"]
+    assert t["screenshot"] == ""
+    assert _save(client, screenshot="../journal.json").get_json()["trade"]["screenshot"] == ""
+
+
+@pytest.mark.parametrize("name", ["../journal.json", "..%2Fjournal.json", "abc.png", "0123456789abcdef.exe", "0123456789abcdef.png/../x"])
+def test_screenshot_route_rejects_bad_names(client, tmp_path, name):
+    (tmp_path / "journal.json").write_text("{}")
+    assert client.get(f"/api/journal/screenshots/{name}").status_code == 404
+
+
+def test_journal_page_has_the_screenshot_slot(client):
+    html = client.get("/journal").get_data(as_text=True)
+    assert "Trade screenshot" in html and "/api/journal/screenshots/" in html and 'id="lightbox"' in html
