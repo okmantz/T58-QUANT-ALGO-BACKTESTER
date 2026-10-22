@@ -297,13 +297,111 @@ def _stream_pieces(settings, path: str, payload: dict, *,
         raise OllamaError(f"Ollama at {host} closed the response without producing anything (empty reply from '{payload.get('model')}').")
 
 
+def _image_media_type(b64: str) -> str:
+    head = (b64 or "")[:12]
+    if head.startswith("/9j/"):
+        return "image/jpeg"
+    if head.startswith("R0lGOD"):
+        return "image/gif"
+    if head.startswith("UklGR"):
+        return "image/webp"
+    return "image/png"
+
+
+def _remote_complete(provider: str, messages: list[dict], *, system: str | None, format_json: bool,
+                     images: list[str] | None, total_timeout: float) -> str:
+    """One non-streaming completion on a hosted provider using the key saved
+    on the API Keys page. Same failure contract as the Ollama path: raises
+    OllamaError with a concrete reason."""
+    import requests
+
+    from app.ai.ollama_settings import remote_api_key, saved_remote_model
+
+    key = remote_api_key(provider)
+    model = saved_remote_model(provider)
+    if not key:
+        raise OllamaError(f"No {provider} API key saved.")
+    sys_text = system or ""
+    if format_json:
+        sys_text = (sys_text + "\n" if sys_text else "") + "Respond with valid JSON only -- no prose, no code fences."
+    timeout = (CONNECT_TIMEOUT_S, min(total_timeout, 600.0))
+    label = "Claude" if provider == "claude" else "OpenAI"
+    try:
+        if provider == "claude":
+            msgs = []
+            for i, m in enumerate(messages):
+                if m.get("role") == "system":
+                    sys_text = (sys_text + "\n" if sys_text else "") + str(m.get("content", ""))
+                    continue
+                content = str(m.get("content", ""))
+                if images and i == len(messages) - 1 and m.get("role") == "user":
+                    blocks = [{"type": "image", "source": {"type": "base64", "media_type": _image_media_type(b), "data": b}} for b in images]
+                    content = blocks + [{"type": "text", "text": content}]
+                msgs.append({"role": m.get("role", "user"), "content": content})
+            body = {"model": model, "max_tokens": 4096, "messages": msgs}
+            if sys_text:
+                body["system"] = sys_text
+            r = requests.post("https://api.anthropic.com/v1/messages", json=body, timeout=timeout,
+                              headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"})
+            r.raise_for_status()
+            text = "".join(b.get("text", "") for b in r.json().get("content", []) if b.get("type") == "text")
+        else:
+            msgs = ([{"role": "system", "content": sys_text}] if sys_text else [])
+            for i, m in enumerate(messages):
+                if m.get("role") == "system":
+                    msgs.append({"role": "system", "content": str(m.get("content", ""))})
+                    continue
+                content = str(m.get("content", ""))
+                if images and i == len(messages) - 1 and m.get("role") == "user":
+                    content = [{"type": "text", "text": content}] + [
+                        {"type": "image_url", "image_url": {"url": f"data:{_image_media_type(b)};base64,{b}"}} for b in images]
+                msgs.append({"role": m.get("role", "user"), "content": content})
+            body = {"model": model, "messages": msgs}
+            if format_json:
+                body["response_format"] = {"type": "json_object"}
+            r = requests.post("https://api.openai.com/v1/chat/completions", json=body, timeout=timeout,
+                              headers={"Authorization": f"Bearer {key}"})
+            r.raise_for_status()
+            text = str(r.json()["choices"][0]["message"]["content"] or "")
+    except requests.exceptions.Timeout:
+        raise OllamaError(f"{label} didn't answer within {total_timeout:.0f}s.") from None
+    except requests.exceptions.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.response.text[:200]
+        except Exception:  # noqa: BLE001
+            pass
+        code = exc.response.status_code if exc.response is not None else "?"
+        raise OllamaError(f"{label} returned HTTP {code}: {detail}".strip()) from None
+    except OllamaError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise OllamaError(f"{label} request failed: {exc}") from None
+    if not text.strip():
+        raise OllamaError(f"{label} returned an empty reply.")
+    return text
+
+
+def _provider(settings) -> str:
+    from app.ai.ollama_settings import effective_provider
+    return effective_provider(settings)
+
+
 def stream_generate(settings, prompt: str, *, model: str | None = None, system: str | None = None,
                     format_json: bool = False, images: list[str] | None = None,
                     options: dict | None = None, keep_alive: str | None = None,
                     total_timeout: float | None = None,
                     stall_timeout: float = DEFAULT_STALL_TIMEOUT_S,
                     first_token_timeout: float = DEFAULT_FIRST_TOKEN_TIMEOUT_S):
-    """Streaming POST /api/generate. Yields response text pieces."""
+    """Streaming POST /api/generate. Yields response text pieces. When a hosted
+    provider (Claude/OpenAI) is selected and keyed, the completion goes there
+    instead and is yielded as one piece."""
+    prov = _provider(settings)
+    if prov != "ollama":
+        yield _remote_complete(prov, [{"role": "user", "content": prompt}], system=system,
+                               format_json=format_json, images=images,
+                               total_timeout=resolve_total_timeout(settings, total_timeout))
+        return
     resolved = ensure_ready(settings, model)
     total = resolve_total_timeout(settings, total_timeout)
     payload: dict = {"model": resolved, "prompt": prompt, "stream": True}
@@ -335,7 +433,13 @@ def stream_chat(settings, messages: list[dict], *, model: str | None = None,
                 total_timeout: float | None = None,
                 stall_timeout: float = DEFAULT_STALL_TIMEOUT_S,
                 first_token_timeout: float = DEFAULT_FIRST_TOKEN_TIMEOUT_S):
-    """Streaming POST /api/chat. Yields message-content pieces."""
+    """Streaming POST /api/chat. Yields message-content pieces (one piece when a
+    hosted provider answers)."""
+    prov = _provider(settings)
+    if prov != "ollama":
+        yield _remote_complete(prov, messages, system=None, format_json=False, images=None,
+                               total_timeout=resolve_total_timeout(settings, total_timeout))
+        return
     resolved = ensure_ready(settings, model)
     total = resolve_total_timeout(settings, total_timeout)
     payload: dict = {"model": resolved, "messages": messages, "stream": True}

@@ -49,6 +49,13 @@ DEFAULT_VISION_MODEL = "llava"
 # exception, a single one-shot code-generation call).
 INTERACTIVE_KEEP_ALIVE = "30m"
 
+# Which engine answers every AI feature in the app. Ollama is the default;
+# "claude"/"openai" are used only when that provider is selected AND its key
+# is saved on the API Keys page -- otherwise routing silently stays on Ollama.
+PROVIDERS = ("ollama", "claude", "openai")
+DEFAULT_PROVIDER = "ollama"
+DEFAULT_REMOTE_MODELS = {"claude": "claude-sonnet-5-5", "openai": "gpt-4o-mini"}
+
 
 @dataclass
 class OllamaSettings:
@@ -63,10 +70,67 @@ class OllamaSettings:
     # model legitimately needs minutes for a long answer, which is
     # exactly what the old single 90s non-streaming timeouts killed.
     timeout_seconds: int = 0
+    # "" = follow the saved global choice (see saved_provider()); callers that
+    # build a fresh OllamaSettings from form fields therefore still honor it.
+    provider: str = ""
 
     @property
     def is_usable(self) -> bool:
+        if effective_provider(self) != "ollama":
+            return True
         return self.enabled and bool(self.host.strip())
+
+
+_JSON_CACHE: dict = {"t": 0.0, "path": None, "data": {}}
+_JSON_TTL_S = 2.0
+
+
+def _read_json() -> dict:
+    """Settings JSON with a tiny TTL cache: is_usable is checked on hot
+    paths, and a disk read per check is needless (writes invalidate it)."""
+    import time
+    now = time.monotonic()
+    if _JSON_CACHE["path"] is not None and now - _JSON_CACHE["t"] < _JSON_TTL_S:
+        return _JSON_CACHE["data"]
+    path = _settings_path()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        data = {}
+    _JSON_CACHE.update(t=now, path=str(path), data=data)
+    return data
+
+
+def _invalidate_cache() -> None:
+    _JSON_CACHE.update(t=0.0, path=None, data={})
+
+
+def saved_provider() -> str:
+    p = str(_read_json().get("provider") or DEFAULT_PROVIDER).lower()
+    return p if p in PROVIDERS else DEFAULT_PROVIDER
+
+
+def saved_remote_model(provider: str) -> str:
+    return str(_read_json().get(f"{provider}_model") or DEFAULT_REMOTE_MODELS.get(provider, ""))
+
+
+def remote_api_key(provider: str) -> str:
+    """Saved key for a hosted provider ("" if none / lookup fails)."""
+    try:
+        from app.accounts.api_keys import load_settings as _load_keys
+        k = _load_keys()
+        return (getattr(k, "claude_api_key" if provider == "claude" else "openai_api_key", "") or "").strip()
+    except Exception:
+        return ""
+
+
+def effective_provider(settings=None) -> str:
+    """The engine that will actually answer: the chosen provider if it's a
+    hosted one with a saved key, else Ollama (the default / fallback)."""
+    chosen = (getattr(settings, "provider", "") or "").lower() or saved_provider()
+    if chosen in ("claude", "openai") and remote_api_key(chosen):
+        return chosen
+    return "ollama"
 
 
 def _config_dir() -> Path:
@@ -115,7 +179,14 @@ def save_settings(settings: OllamaSettings) -> None:
         "vision_model": (settings.vision_model or DEFAULT_VISION_MODEL).strip(),
         "timeout_seconds": int(getattr(settings, "timeout_seconds", 0) or 0),
     }
+    prev = _read_json()
+    chosen = (getattr(settings, "provider", "") or prev.get("provider") or DEFAULT_PROVIDER).lower()
+    payload["provider"] = chosen if chosen in PROVIDERS else DEFAULT_PROVIDER
+    for pv in ("claude", "openai"):
+        if prev.get(f"{pv}_model"):
+            payload[f"{pv}_model"] = prev[f"{pv}_model"]
     _settings_path().write_text(json.dumps(payload), encoding="utf-8")
+    _invalidate_cache()
 
     api_key = (settings.api_key or "").strip()
     kr = _try_keyring()
@@ -147,6 +218,7 @@ def load_settings() -> OllamaSettings:
     path = _settings_path()
     enabled, host, model, vision_model = False, DEFAULT_HOST, DEFAULT_MODEL, DEFAULT_VISION_MODEL
     timeout_seconds = 0
+    provider = DEFAULT_PROVIDER
     if path.exists():
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -155,6 +227,9 @@ def load_settings() -> OllamaSettings:
             model = data.get("model") or DEFAULT_MODEL
             vision_model = data.get("vision_model") or DEFAULT_VISION_MODEL
             timeout_seconds = int(data.get("timeout_seconds") or 0)
+            provider = str(data.get("provider") or DEFAULT_PROVIDER).lower()
+            if provider not in PROVIDERS:
+                provider = DEFAULT_PROVIDER
         except Exception:
             pass
 
@@ -174,4 +249,15 @@ def load_settings() -> OllamaSettings:
                 api_key = ""
 
     return OllamaSettings(enabled=enabled, host=host, model=model, api_key=api_key, vision_model=vision_model,
-                          timeout_seconds=timeout_seconds)
+                          timeout_seconds=timeout_seconds, provider=provider)
+
+
+def save_remote_models(claude_model: str = "", openai_model: str = "") -> None:
+    """Optional per-provider model overrides (blank = keep / default)."""
+    data = _read_json()
+    if claude_model.strip():
+        data["claude_model"] = claude_model.strip()
+    if openai_model.strip():
+        data["openai_model"] = openai_model.strip()
+    _settings_path().write_text(json.dumps(data), encoding="utf-8")
+    _invalidate_cache()

@@ -224,7 +224,10 @@ class OllamaClient:
         real request pays the load cost as before -- nothing is broken by
         skipping this."""
         from app.ai import ollama_transport as transport
+        from app.ai.ollama_settings import effective_provider
 
+        if effective_provider(self.settings) != "ollama":
+            return True, "Hosted provider selected -- nothing to warm up."
         host = (self.settings.host or "").rstrip("/")
         if not host:
             return False, "No Ollama host configured."
