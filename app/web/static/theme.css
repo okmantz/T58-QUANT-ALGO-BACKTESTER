@@ -949,3 +949,91 @@ html:not([data-theme="light"]) .t58-stepper a.current {
 @media (max-width: 760px) { .t58-profile { top: 9px; right: 12px; } .t58-stepper { padding-right: 56px; } }
 html[data-theme="light"] .t58-avatar { color: var(--text); background: var(--panel-3); border-color: var(--border-light); box-shadow: none; }
 html[data-theme="light"] .t58-profile-menu { background: #ffffff; border-color: var(--border-light); box-shadow: 0 12px 30px rgba(16, 24, 32, .18); }
+
+/* ======================================================================================================
+   LIGHT THEME -- "Morning Range". The daytime counterpart of the dark Deep Teal Glass look: the same misty
+   mountain backdrop (scripts/generate_light_mountains.py), the same frosted-glass cards, the same teal accent,
+   on a pale cool-sky page. Every rule below is scoped to html[data-theme="light"]; colour TOKENS stay as the
+   contrast-audited hex values above, only surfaces/backdrop/shadows change.
+   ====================================================================================================== */
+html[data-theme="light"] body {
+  background-color: #e6edf3;
+  background-image:
+    radial-gradient(1100px 480px at 72% 4%, rgba(120, 220, 205, 0.22), transparent 70%),     /* dawn glow behind the peaks */
+    radial-gradient(800px 460px at 0% 0%, rgba(255, 255, 255, 0.70), transparent 70%),       /* bright sky, top-left */
+    radial-gradient(900px 520px at 100% 100%, rgba(150, 175, 215, 0.20), transparent 70%),   /* cool shade, bottom-right */
+    linear-gradient(180deg, #e3edf3 0%, #e8eff5 38%, #edf1f6 100%);
+  background-attachment: fixed;
+  position: relative;
+}
+html[data-theme="light"] body::before {
+  content: "";
+  position: absolute; top: calc(min(8vw, 120px) * -1); left: 0; right: 0; z-index: 0; pointer-events: none;
+  height: max(37.5vw, 340px);
+  background: url("/static/dashboard-mountains-light.webp") center bottom / cover no-repeat;
+  opacity: .42;
+}
+html[data-theme="light"] body.db-page::before { opacity: .85; }
+html[data-theme="light"] .t58-shell { position: relative; z-index: 1; }
+html[data-theme="light"] .t58-sidebar {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(244, 248, 251, 0.88));
+  border-right: 1px solid rgba(60, 100, 125, 0.16);
+  -webkit-backdrop-filter: blur(10px) saturate(1.1); backdrop-filter: blur(10px) saturate(1.1);
+}
+html[data-theme="light"] * { scrollbar-color: rgba(60, 100, 125, 0.30) transparent; scrollbar-width: thin; }
+html[data-theme="light"] ::-webkit-scrollbar { width: 9px; height: 9px; }
+html[data-theme="light"] ::-webkit-scrollbar-track { background: transparent; }
+html[data-theme="light"] ::-webkit-scrollbar-thumb { background: rgba(60, 100, 125, 0.28); border-radius: 99px; border: 2px solid transparent; background-clip: padding-box; }
+html[data-theme="light"] ::-webkit-scrollbar-thumb:hover { background: rgba(60, 100, 125, 0.45); background-clip: padding-box; border: 2px solid transparent; }
+
+/* frosted-white glass cards: one surface on every page */
+html[data-theme="light"] :is(.t58-card, .t58-champion, .lc-card, .lc-toolcard, .t58-metric-box, .news-card, .t58-method-card, .t58-hero-stat,
+    .card, .runs-card, .j-card, .inst-card, .g-card, .elab-card, .diag-card, .dc-card, .cc-card, .oai-panel, .gx-card) {
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.92) 0%, rgba(255, 255, 255, 0.78) 100%);
+  border: 1px solid rgba(60, 100, 125, 0.18);
+  border-radius: 14px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 10px 28px -10px rgba(36, 68, 90, 0.22);
+  -webkit-backdrop-filter: blur(8px) saturate(1.15); backdrop-filter: blur(8px) saturate(1.15);
+  transition: border-color var(--dur-base, 200ms) var(--ease, ease), box-shadow var(--dur-base, 200ms) var(--ease, ease);
+}
+html[data-theme="light"] :is(.t58-card.interactive, .lc-toolcard, .t58-method-card):hover {
+  border-color: rgba(10, 111, 84, 0.45);
+  box-shadow: inset 0 1px 0 #ffffff, 0 14px 34px -10px rgba(36, 68, 90, 0.32), 0 0 0 3px rgba(10, 111, 84, 0.08);
+}
+html[data-theme="light"] :is(.card, .oai-panel, .runs-card) > h2,
+html[data-theme="light"] .oai-panel h2 { font-size: 13px; font-weight: 650; letter-spacing: .01em; text-transform: none; color: var(--text); }
+html[data-theme="light"] .oai-panel table.rank-table th { background: rgba(244, 248, 251, 0.96); }
+html[data-theme="light"] .oai-panel .refresh { font-weight: 500; text-transform: none; letter-spacing: 0; }
+
+/* dashboard cards */
+html[data-theme="light"] .db-card, html[data-theme="light"] .db-kpi {
+  background: linear-gradient(155deg, rgba(255, 255, 255, 0.90) 0%, rgba(255, 255, 255, 0.72) 100%);
+  border-color: rgba(60, 100, 125, 0.16);
+  box-shadow: inset 0 1px 0 #ffffff, 0 18px 40px -18px rgba(36, 68, 90, 0.35);
+  -webkit-backdrop-filter: blur(8px) saturate(1.15); backdrop-filter: blur(8px) saturate(1.15);
+}
+html[data-theme="light"] .db-head h1 { text-shadow: 0 1px 14px rgba(255, 255, 255, 0.85); }
+html[data-theme="light"] .db-head p { text-shadow: 0 1px 8px rgba(255, 255, 255, 0.9); }
+html[data-theme="light"] .db-head .t58-btn.ghost { color: var(--text); background: rgba(255, 255, 255, 0.66); border-color: rgba(60, 100, 125, 0.24); }
+html[data-theme="light"] .db-head .t58-btn.ghost:hover { background: rgba(255, 255, 255, 0.92); border-color: rgba(10, 111, 84, 0.45); }
+
+/* controls */
+html[data-theme="light"] .t58-btn.primary, html[data-theme="light"] .lc-btn {
+  background: linear-gradient(135deg, #0d8264 0%, #0a6f54 100%);
+  border-color: rgba(10, 111, 84, 0.65);
+  box-shadow: 0 6px 16px -6px rgba(10, 111, 84, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+html[data-theme="light"] .t58-btn.secondary { background: rgba(255, 255, 255, 0.70); }
+html[data-theme="light"] input, html[data-theme="light"] select, html[data-theme="light"] textarea { border-color: rgba(60, 100, 125, 0.30); background-color: rgba(255, 255, 255, 0.92); }
+html[data-theme="light"] input:focus, html[data-theme="light"] select:focus, html[data-theme="light"] textarea:focus {
+  outline: none; border-color: rgba(10, 111, 84, 0.65); box-shadow: 0 0 0 3px rgba(10, 111, 84, 0.14);
+}
+html[data-theme="light"] .t58-nav-item.active {
+  background: linear-gradient(90deg, rgba(var(--item-accent-rgb), 0.14), rgba(var(--item-accent-rgb), 0.04));
+  border-color: rgba(var(--item-accent-rgb), 0.32);
+}
+html[data-theme="light"] .t58-nav-item:hover { background: rgba(60, 100, 125, 0.07); }
+html[data-theme="light"] .t58-stepper { border-bottom-color: rgba(60, 100, 125, 0.16); }
+html[data-theme="light"] .t58-stepper a:hover { color: var(--text); background: rgba(60, 100, 125, 0.07); }
+html[data-theme="light"] .t58-stepper a.current { color: var(--teal); background: rgba(var(--teal-rgb), 0.10); box-shadow: inset 0 0 0 1px rgba(var(--teal-rgb), 0.30); }
+html[data-theme="light"] .t58-avatar { background: rgba(255, 255, 255, 0.85); border-color: rgba(10, 111, 84, 0.45); box-shadow: 0 4px 12px -4px rgba(36, 68, 90, 0.35); }
