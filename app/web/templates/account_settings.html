@@ -39,7 +39,11 @@
   .status-pill.active { background: rgba(var(--teal-rgb), 0.15); color: var(--teal); }
   .status-pill.trial { background: rgba(var(--amber-rgb), 0.15); color: var(--amber); }
   .status-pill.expired, .status-pill.cancelled { background: rgba(var(--coral-rgb, 240, 90, 90), 0.15); color: var(--danger); }
+  .status-pill.revoked, .status-pill.suspended { background: rgba(var(--coral-rgb, 240, 90, 90), 0.15); color: var(--danger); }
   .status-pill.unset { background: var(--panel-3); color: var(--text-muted); }
+  .lock-tag { float: right; font-size: 11px; color: var(--text-muted); font-weight: 600; letter-spacing: .02em; }
+  select:disabled, input[readonly] { cursor: not-allowed; opacity: .92; }
+  input[readonly]:focus { border-color: var(--border-light); box-shadow: none; }
   h1 { font-size: 18px; margin: 0 0 4px; }
   p.lede { color: var(--text-muted); font-size: 13px; margin: 0 0 16px; max-width: 560px; }
   .divider { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
@@ -56,12 +60,12 @@
     Everything below is local to this computer -- this app has no cloud account or login of
     its own. Profile fields personalize exported reports; the Security section's password
     is an OPTIONAL local lock for this app (useful mainly if you use Mobile Access on a
-    shared Wi-Fi); Subscription is a place to record your own plan/license info.
+    shared Wi-Fi); Subscription shows your plan and license, which come from your license key.
   </p>
 
   {% if saved == 'profile' %}<div class="card saved-banner">Profile saved.</div>{% endif %}
   {% if saved == 'password' %}<div class="card saved-banner">{{ password_message }}</div>{% endif %}
-  {% if saved == 'subscription' %}<div class="card saved-banner">Subscription info saved.</div>{% endif %}
+  {% if saved == 'subscription' %}<div class="card saved-banner">Subscription refreshed from your license.</div>{% endif %}
   {% if saved == 'deleted' %}<div class="card saved-banner">Local account data deleted.</div>{% endif %}
   {% if saved == 'logout' %}<div class="card saved-banner">No lock password is set, so there's nothing to log out of.</div>{% endif %}
   {% if password_error %}<div class="card error-banner">{{ password_error }}</div>{% endif %}
@@ -115,26 +119,27 @@
 
 
   <!-- ================= SUBSCRIPTION ================= -->
-  <form method="POST" action="/settings/account/subscription/save">
+  <!-- Read-only: every value comes from the license saved on this device (the PLAN column of the license sheet for
+       this key). The plan <select> is disabled for the look of a dropdown but is never read by the server. -->
+  <form method="POST" action="/settings/account/subscription/refresh">
     <div class="card">
       <h2>Subscription</h2>
       <p class="help">
-        Recorded locally for your own reference -- this app doesn't have a licensing
-        server yet, so nothing here is verified automatically. "Check key" below only
-        confirms your key LOOKS correctly formatted.
+        Your plan is set by your license key and can't be changed here. It updates automatically
+        when your license changes.
       </p>
 
       <label for="plan">Plan
         {% if subscription.license_status == 'active' %}<span class="status-pill active" id="plan-active-pill">Active</span>{% endif %}
+        <span class="lock-tag" title="Set by your license key">&#128274; Set by license</span>
       </label>
-      <select id="plan" name="plan" data-testid="subscription-plan">
-        {% for choice in plan_choices %}
-        <option value="{{ choice }}" {{ 'selected' if subscription.plan == choice else '' }}>{{ choice }}</option>
-        {% endfor %}
+      <select id="plan" name="plan" data-testid="subscription-plan" disabled aria-readonly="true">
+        <option value="{{ subscription.plan }}" selected>{{ subscription.plan or 'No license activated' }}</option>
       </select>
 
       <label for="license_key">License key</label>
-      <input type="text" id="license_key" name="license_key" value="{{ subscription.license_key }}" placeholder="XXXX-XXXX-XXXX-XXXX">
+      <input type="text" id="license_key" value="{{ subscription.license_key }}" readonly
+             placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false">
 
       <div class="row">
         <div>
@@ -143,25 +148,16 @@
             <span class="status-pill {{ subscription.license_status }}">{{ subscription.license_status }}</span>
             {% endif %}
           </label>
-          <select id="license_status" name="license_status">
-            {% for choice in license_status_choices %}
-            <option value="{{ choice }}" {{ 'selected' if subscription.license_status == choice else '' }}>{{ choice|capitalize }}</option>
-            {% endfor %}
-          </select>
+          <input type="text" id="license_status" value="{{ subscription.license_status|capitalize }}" readonly>
         </div>
         <div>
           <label for="renewal_date">Renewal / expiration date</label>
-          <input type="text" id="renewal_date" name="renewal_date" value="{{ subscription.renewal_date }}" placeholder="YYYY-MM-DD">
+          <input type="text" id="renewal_date" value="{{ subscription.renewal_date }}" readonly placeholder="No expiry">
         </div>
       </div>
-
-      {% if license_check_message %}
-      <p class="field-note" style="color: {{ 'var(--teal)' if license_check_ok else 'var(--danger)' }};">{{ license_check_message }}</p>
-      {% endif %}
     </div>
     <div class="btn-row">
-      <button class="submit-btn" type="submit">Save subscription info</button>
-      <button class="secondary-btn" type="submit" formaction="/settings/account/subscription/check_key">Check key format</button>
+      <button class="secondary-btn" type="submit">Refresh from license</button>
     </div>
   </form>
 

@@ -45,7 +45,24 @@
   .bar-fill { position: absolute; top: 0; bottom: 0; border-radius: 4px; }
   .modal-back { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 9000; display: none; align-items: flex-start; justify-content: center; padding: 20px 12px; overflow: auto; }
   .modal-back.show { display: flex; }
-  .modal { width: min(760px, 100%); background: var(--panel-2); border: 1px solid var(--border-light); border-radius: 14px; padding: 18px; }
+  /* solid surface: the themed panel tokens are translucent glass, which let the page show through the form */
+  .modal { width: min(760px, 100%); background: var(--modal-bg, #0b1a20); border: 1px solid var(--border-light); border-radius: 14px; padding: 18px; box-shadow: 0 24px 60px rgba(0,0,0,.55); }
+  html[data-theme="light"] .modal-back { background: rgba(16, 24, 32, .45); }
+  html[data-theme="light"] .modal { --modal-bg: #ffffff; box-shadow: 0 24px 60px rgba(16, 24, 32, .25); }
+
+  /* trade screenshot: drop zone / preview in the trade form, thumbnail in the log, full-size viewer */
+  .shot-drop { border: 1.5px dashed var(--border-light); border-radius: 12px; padding: 22px 14px; text-align: center; color: var(--text-muted); font-size: 13px; line-height: 1.5; cursor: pointer; background: var(--panel-3); transition: border-color .15s, background .15s, color .15s; }
+  .shot-drop:hover, .shot-drop:focus-visible, .shot-drop.over { border-color: var(--teal); color: var(--text); background: rgba(var(--teal-rgb), .08); outline: none; }
+  .shot-drop b { color: var(--text); font-weight: 650; }
+  .shot-drop small { display: block; margin-top: 4px; font-size: 11.5px; color: var(--text-dim); }
+  .shot-prev-wrap { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+  .shot-prev { display: block; max-width: 100%; max-height: 280px; border-radius: 10px; border: 1px solid var(--border-light); cursor: zoom-in; background: var(--panel-3); }
+  .shot-err { color: var(--coral); font-size: 12px; margin-top: 6px; }
+  .shot-thumb { display: block; width: 64px; height: 40px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border-light); cursor: zoom-in; background: var(--panel-3); }
+  .lightbox { position: fixed; inset: 0; z-index: 9500; display: none; align-items: center; justify-content: center; padding: 24px; background: rgba(2, 8, 10, .88); cursor: zoom-out; }
+  .lightbox.show { display: flex; }
+  .lightbox img { max-width: 100%; max-height: 100%; border-radius: 10px; box-shadow: 0 20px 60px rgba(0, 0, 0, .6); background: #fff; }
+  .lightbox .lb-x { position: absolute; top: 14px; right: 18px; width: 38px; height: 38px; border-radius: 50%; border: 1px solid rgba(255,255,255,.35); background: rgba(0,0,0,.45); color: #fff; font-size: 22px; line-height: 1; cursor: pointer; }
   .row-actions { white-space: nowrap; }
   .preload-note { font-size: 12px; color: var(--text-muted); margin-bottom: 10px; }
 </style>
@@ -64,6 +81,7 @@
 <div id="view"></div>
 
 <div class="modal-back" id="modal-back"><div class="modal" id="modal"></div></div>
+<div class="lightbox" id="lightbox" role="dialog" aria-label="Trade screenshot"><img alt="Trade screenshot"><button class="lb-x" type="button" aria-label="Close">&times;</button></div>
 </div></div>
 
 <script>
@@ -83,6 +101,27 @@
   function load() {
     return fetch('/api/journal').then(function (r) { return r.json(); }).then(function (d) { S.settings = d.settings; S.trades = d.trades; S.stats = d.stats; render(); });
   }
+  /* ---------- trade screenshots ---------- */
+  var SHOT_URL = '/api/journal/screenshots/';
+  function openLightbox(src) { var lb = document.getElementById('lightbox'); lb.querySelector('img').src = src; lb.classList.add('show'); }
+  function closeLightbox() { var lb = document.getElementById('lightbox'); lb.classList.remove('show'); lb.querySelector('img').removeAttribute('src'); }
+  document.getElementById('lightbox').addEventListener('click', closeLightbox);
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeLightbox(); });
+  function readAsDataURL(file) { return new Promise(function (res, rej) { var r = new FileReader(); r.onload = function () { res(r.result); }; r.onerror = function () { rej(new Error('Could not read that file.')); }; r.readAsDataURL(file); }); }
+  function shrinkImage(dataUrl, maxSide, quality) {
+    return new Promise(function (res, rej) {
+      var im = new Image();
+      im.onload = function () { var sc = Math.min(1, maxSide / Math.max(im.width, im.height)), c = document.createElement('canvas'); c.width = Math.round(im.width * sc); c.height = Math.round(im.height * sc); c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); res(c.toDataURL('image/jpeg', quality)); };
+      im.onerror = function () { rej(new Error('That file is not a readable image.')); };
+      im.src = dataUrl;
+    });
+  }
+  /* PNG/JPEG/GIF/WebP only; very large files (over 6 MB) are scaled down to a 2600px JPEG before upload */
+  function prepareImage(file) {
+    if (!file || !/^image\/(png|jpeg|gif|webp)$/.test(file.type)) return Promise.reject(new Error('Please choose a PNG, JPEG, GIF or WebP image.'));
+    return readAsDataURL(file).then(function (url) { return file.size > 6 * 1024 * 1024 ? shrinkImage(url, 2600, 0.88) : url; });
+  }
+
   var saveTimer = null;
   function saveSettings() { clearTimeout(saveTimer); saveTimer = setTimeout(function () { api('PUT', '/api/journal/settings', S.settings); }, 450); }
   function tagMap() { var m = {}; S.settings.tagGroups.forEach(function (g) { g.items.forEach(function (i) { m[i.id] = { name: i.name, color: i.color, group: g.name }; }); }); return m; }
@@ -167,7 +206,7 @@
     var card = el('div', 'j-card');
     if (!S.trades.length) { card.appendChild(el('div', 'empty', 'No trades yet. Click "New trade" to log your first one against the playbook.')); view.appendChild(card); return; }
     var tm = tagMap(), t = el('table', 'tl'), hd = el('tr');
-    ['Date', 'Instrument', 'Dir', 'Playbook / tags', 'Risk', 'P&L', 'R', 'Check', ''].forEach(function (h) { hd.appendChild(el('th', null, h)); }); t.appendChild(hd);
+    ['Date', 'Instrument', 'Dir', 'Playbook / tags', 'Risk', 'P&L', 'R', 'Check', 'Chart', ''].forEach(function (h) { hd.appendChild(el('th', null, h)); }); t.appendChild(hd);
     S.trades.slice().reverse().forEach(function (tr) {
       var row = el('tr'); row.appendChild(el('td', null, tr.date)); row.appendChild(el('td', null, tr.instrument || '--')); row.appendChild(el('td', null, tr.direction));
       var td = el('td'); var pb = playbookById(tr.playbookId); if (pb) td.appendChild(el('div', null, pb.title));
@@ -175,6 +214,10 @@
       row.appendChild(td); row.appendChild(el('td', null, tr.riskAmount ? money(tr.riskAmount) : '--'));
       row.appendChild(el('td', tr.pnl >= 0 ? 'pos' : 'neg', money(tr.pnl, true))); row.appendChild(el('td', null, tr.riskAmount > 0 ? (tr.pnl / tr.riskAmount).toFixed(2) + 'R' : '--'));
       row.appendChild(el('td', null, tr.compliancePct == null ? '--' : tr.compliancePct + '%'));
+      var shotCell = el('td');
+      if (tr.screenshot) { var th = el('img', 'shot-thumb'); th.src = SHOT_URL + tr.screenshot; th.alt = 'Trade screenshot'; th.loading = 'lazy'; th.title = 'View screenshot'; th.addEventListener('click', function () { openLightbox(SHOT_URL + tr.screenshot); }); shotCell.appendChild(th); }
+      else shotCell.textContent = '--';
+      row.appendChild(shotCell);
       var act = el('td', 'row-actions'); var e = el('button', 'j-btn sm', 'Edit'); e.type = 'button'; e.addEventListener('click', function () { openTrade(tr); });
       var d = el('button', 'j-btn sm danger', 'Delete'); d.type = 'button'; d.addEventListener('click', function () { if (confirm('Delete this trade?')) api('DELETE', '/api/journal/trades/' + tr.id).then(load); });
       act.appendChild(e); act.appendChild(document.createTextNode(' ')); act.appendChild(d); row.appendChild(act); t.appendChild(row);
@@ -229,8 +272,9 @@
 
   /* ---------- trade modal ---------- */
   function openTrade(trade) {
-    var t = trade ? JSON.parse(JSON.stringify(trade)) : { id: null, date: new Date().toISOString().slice(0, 10), instrument: '', direction: 'long', playbookId: (S.settings.playbooks[0] || {}).id || null, checklist: {}, tags: [], entry: 0, stop: 0, tp: 0, riskAmount: 0, pnl: 0, notes: '' };
+    var t = trade ? JSON.parse(JSON.stringify(trade)) : { id: null, date: new Date().toISOString().slice(0, 10), instrument: '', direction: 'long', playbookId: (S.settings.playbooks[0] || {}).id || null, checklist: {}, tags: [], entry: 0, stop: 0, tp: 0, riskAmount: 0, pnl: 0, notes: '', screenshot: '' };
     var back = document.getElementById('modal-back'), m = document.getElementById('modal'); m.textContent = ''; back.classList.add('show');
+    if (modalPaste) document.removeEventListener('paste', modalPaste);
     m.appendChild(el('h2', null, trade ? 'Edit trade' : 'New trade')).style.marginTop = '0';
     function field(label, key, type, opts) {
       var w = el('div'); w.appendChild(el('label', null, label)); var i;
@@ -258,13 +302,57 @@
         c.addEventListener('click', function () { var ix = t.tags.indexOf(it.id); if (ix >= 0) t.tags.splice(ix, 1); else t.tags.push(it.id); c.classList.toggle('on'); }); row.appendChild(c); });
       m.appendChild(row);
     });
+    m.appendChild(el('h3', null, 'Trade screenshot'));
+    m.appendChild(el('div', 'preload-note', 'Optional -- a screenshot of the actual trade.'));
+    var shotBox = el('div'), shotErr = el('div', 'shot-err'), shotInput = el('input');
+    shotInput.type = 'file'; shotInput.accept = 'image/png,image/jpeg,image/gif,image/webp'; shotInput.style.display = 'none';
+    m.appendChild(shotBox); m.appendChild(shotErr); m.appendChild(shotInput);
+    function shotSrc() { return t.screenshotData || (t.screenshot ? SHOT_URL + t.screenshot : ''); }
+    function setShot(file) {
+      shotErr.textContent = '';
+      prepareImage(file).then(function (url) { t.screenshotData = url; renderShot(); }, function (err) { shotErr.textContent = err.message; });
+    }
+    function renderShot() {
+      shotBox.textContent = ''; var src = shotSrc();
+      if (src) {
+        var wrap = el('div', 'shot-prev-wrap'), img = el('img', 'shot-prev'); img.src = src; img.alt = 'Trade screenshot'; img.title = 'Click to view full size';
+        img.addEventListener('click', function () { openLightbox(src); });
+        var acts = el('div'), rp = el('button', 'j-btn sm', 'Replace'), rm = el('button', 'j-btn sm danger', 'Remove');
+        rp.type = 'button'; rp.addEventListener('click', function () { shotInput.click(); });
+        rm.type = 'button'; rm.style.marginLeft = '8px'; rm.addEventListener('click', function () { t.screenshot = ''; delete t.screenshotData; shotErr.textContent = ''; renderShot(); });
+        acts.appendChild(rp); acts.appendChild(rm); wrap.appendChild(img); wrap.appendChild(acts); shotBox.appendChild(wrap);
+        return;
+      }
+      var dz = el('div', 'shot-drop'); dz.tabIndex = 0; dz.setAttribute('role', 'button');
+      var lead = el('b', null, 'Add a screenshot'); dz.appendChild(lead);
+      dz.appendChild(document.createTextNode(' -- click to choose a file, drag one here, or paste it with Ctrl+V'));
+      dz.appendChild(el('small', null, 'PNG, JPEG, GIF or WebP'));
+      dz.addEventListener('click', function () { shotInput.click(); });
+      dz.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); shotInput.click(); } });
+      dz.addEventListener('dragover', function (e) { e.preventDefault(); dz.classList.add('over'); });
+      dz.addEventListener('dragleave', function () { dz.classList.remove('over'); });
+      dz.addEventListener('drop', function (e) { e.preventDefault(); dz.classList.remove('over'); var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]; if (f) setShot(f); });
+      shotBox.appendChild(dz);
+    }
+    shotInput.addEventListener('change', function () { if (shotInput.files && shotInput.files[0]) setShot(shotInput.files[0]); shotInput.value = ''; });
+    modalPaste = function (e) {
+      var items = (e.clipboardData && e.clipboardData.items) || [];
+      for (var i = 0; i < items.length; i++) { if (items[i].kind === 'file' && items[i].type.indexOf('image/') === 0) { e.preventDefault(); setShot(items[i].getAsFile()); return; } }
+    };
+    document.addEventListener('paste', modalPaste);
+    renderShot();
     m.appendChild(el('h3', null, 'Notes')); var na = el('textarea', 'j-area'); na.value = t.notes || ''; na.addEventListener('input', function () { t.notes = na.value; }); m.appendChild(na);
     var bar = el('div'); bar.style.marginTop = '14px';
-    var sv = el('button', 'j-btn primary', 'Save trade'); sv.type = 'button'; sv.addEventListener('click', function () { api('POST', '/api/journal/trades', t).then(function (d) { if (d.ok) { back.classList.remove('show'); load(); } else alert(d.error || 'Could not save'); }); });
-    var cx = el('button', 'j-btn', 'Cancel'); cx.type = 'button'; cx.style.marginLeft = '8px'; cx.addEventListener('click', function () { back.classList.remove('show'); });
+    var sv = el('button', 'j-btn primary', 'Save trade'); sv.type = 'button'; sv.addEventListener('click', function () { api('POST', '/api/journal/trades', t).then(function (d) { if (d.ok) { closeModal(); load(); } else alert(d.error || 'Could not save'); }); });
+    var cx = el('button', 'j-btn', 'Cancel'); cx.type = 'button'; cx.style.marginLeft = '8px'; cx.addEventListener('click', closeModal);
     bar.appendChild(sv); bar.appendChild(cx); m.appendChild(bar);
   }
-  document.getElementById('modal-back').addEventListener('click', function (e) { if (e.target.id === 'modal-back') e.target.classList.remove('show'); });
+  var modalPaste = null;
+  function closeModal() {
+    document.getElementById('modal-back').classList.remove('show');
+    if (modalPaste) { document.removeEventListener('paste', modalPaste); modalPaste = null; }
+  }
+  document.getElementById('modal-back').addEventListener('click', function (e) { if (e.target.id === 'modal-back') closeModal(); });
 
   function render() {
     renderTabs(); view.textContent = '';
