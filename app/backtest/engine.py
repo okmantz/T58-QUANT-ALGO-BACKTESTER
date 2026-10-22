@@ -356,46 +356,33 @@ def run_holdout_comparison(
     }
 
 
-def run_backtest(
+@dataclass
+class PreparedRun:
+    """Everything run_backtest computes BEFORE the bar loop: the risk/adaptive config after strategy-declared
+    overlays, the (possibly resampled) frame, the strategy's filtered signals, and the diagnostics gathered on
+    the way. ``run_backtest`` and the portfolio engine both prepare a strategy through ``prepare_run`` so a leg
+    in a portfolio is set up by exactly the code a standalone backtest uses."""
+    df: pd.DataFrame
+    strat_result: StrategyResult
+    risk: RiskConfig
+    adaptive_risk: AdaptiveRiskConfig | None
+    intrabar_df: pd.DataFrame | None
+    timeframe_warnings: list
+    condition_warnings: list
+    lookahead_result: object | None = None
+    lookahead_error: str | None = None
+
+
+def prepare_run(
     df: pd.DataFrame,
     strategy: Strategy,
     risk: RiskConfig,
     adaptive_risk: AdaptiveRiskConfig | None = None,
     intrabar_df: pd.DataFrame | None = None,
     lookahead_check: str = "auto",
-    compute_stats: bool = True,
-) -> BacktestResult:
-    """
-    compute_stats: False skips compute_statistics and returns
-        ``statistics=None`` (trades, equity curve and warnings are
-        unchanged). Only for inner search loops that read nothing but the
-        trade list / equity-curve attrs (the walk-forward GA scores every
-        candidate that way); every caller that reads ``.statistics`` keeps
-        the default True.
-    intrabar_df: finer-timeframe (e.g. 1-minute) frame for fill-order replay
-        (used only when risk.intrabar_replay is True).
-    lookahead_check: "auto" (default) runs the behavioural lookahead check once
-        per strategy STRUCTURE (numeric parameters ignored) and data window and
-        reuses the verdict; "always" re-runs it every call (old behaviour);
-        "skip" omits it (GA / Stage-1 / grid inner loops).
-
-    df: standardized OHLCV DataFrame (see app.data.importer)
-    strategy: any Strategy subclass instance (manual/python/pinescript/mql5)
-    risk: RiskConfig describing sizing, costs, and execution assumptions
-    adaptive_risk: optional declarative money-management overlay (see
-        app.backtest.adaptive_risk) -- None/omitted runs exactly as before
-        this parameter existed.
-    """
-    # FIX (MTF-STRATEGY-001): resample `df` to whatever timeframe(s)
-    # `strategy` itself declares it needs (see app.data.timeframe_resample
-    # for exactly how each source type declares this) BEFORE the strategy
-    # ever sees the data -- this is the one chokepoint every tool in the
-    # app funnels through (Run & Report, Full Pipeline, Quick Optimize,
-    # Search Lab, Evolution Lab, Forge, Speed Run, CPCV, WFO/WFGA, Multi-
-    # Objective, Ensemble, Portfolio, ...), so fixing it here fixes it
-    # everywhere with no other caller needing to change. A strategy that
-    # declares nothing gets `df` back completely unchanged -- byte-
-    # identical to every run before this existed.
+) -> PreparedRun:
+    """Strategy -> signals: every step of run_backtest up to (not including) execution. See run_backtest for the
+    meaning of each argument."""
     from app.strategy.base import apply_strategy_trade_cap
     risk = apply_strategy_trade_cap(risk, strategy)   # MAX_TRADES_PER_DAY declared by the strategy (one-shot-per-day systems)
     # 2026-10 audit: behaviour rules the strategy declares (BEHAVIOR_* constants) -> engine-level overlays (see app.backtest.behavior_rules)
@@ -509,6 +496,60 @@ def run_backtest(
         # explanation.
         from app.strategy.manual import validate_bounded_conditions
         condition_warnings = validate_bounded_conditions(strategy.config)
+
+    return PreparedRun(
+        df=df, strat_result=strat_result, risk=risk, adaptive_risk=adaptive_risk, intrabar_df=intrabar_df,
+        timeframe_warnings=list(timeframe_warnings), condition_warnings=list(condition_warnings),
+        lookahead_result=_lookahead_result, lookahead_error=_lookahead_error,
+    )
+
+
+def run_backtest(
+    df: pd.DataFrame,
+    strategy: Strategy,
+    risk: RiskConfig,
+    adaptive_risk: AdaptiveRiskConfig | None = None,
+    intrabar_df: pd.DataFrame | None = None,
+    lookahead_check: str = "auto",
+    compute_stats: bool = True,
+) -> BacktestResult:
+    """
+    compute_stats: False skips compute_statistics and returns
+        ``statistics=None`` (trades, equity curve and warnings are
+        unchanged). Only for inner search loops that read nothing but the
+        trade list / equity-curve attrs (the walk-forward GA scores every
+        candidate that way); every caller that reads ``.statistics`` keeps
+        the default True.
+    intrabar_df: finer-timeframe (e.g. 1-minute) frame for fill-order replay
+        (used only when risk.intrabar_replay is True).
+    lookahead_check: "auto" (default) runs the behavioural lookahead check once
+        per strategy STRUCTURE (numeric parameters ignored) and data window and
+        reuses the verdict; "always" re-runs it every call (old behaviour);
+        "skip" omits it (GA / Stage-1 / grid inner loops).
+
+    df: standardized OHLCV DataFrame (see app.data.importer)
+    strategy: any Strategy subclass instance (manual/python/pinescript/mql5)
+    risk: RiskConfig describing sizing, costs, and execution assumptions
+    adaptive_risk: optional declarative money-management overlay (see
+        app.backtest.adaptive_risk) -- None/omitted runs exactly as before
+        this parameter existed.
+    """
+    # FIX (MTF-STRATEGY-001): resample `df` to whatever timeframe(s)
+    # `strategy` itself declares it needs (see app.data.timeframe_resample
+    # for exactly how each source type declares this) BEFORE the strategy
+    # ever sees the data -- this is the one chokepoint every tool in the
+    # app funnels through (Run & Report, Full Pipeline, Quick Optimize,
+    # Search Lab, Evolution Lab, Forge, Speed Run, CPCV, WFO/WFGA, Multi-
+    # Objective, Ensemble, Portfolio, ...), so fixing it here fixes it
+    # everywhere with no other caller needing to change. A strategy that
+    # declares nothing gets `df` back completely unchanged -- byte-
+    # identical to every run before this existed.
+    prep = prepare_run(df, strategy, risk, adaptive_risk, intrabar_df, lookahead_check)
+    df, risk, adaptive_risk, intrabar_df = prep.df, prep.risk, prep.adaptive_risk, prep.intrabar_df
+    strat_result = prep.strat_result
+    timeframe_warnings, condition_warnings = prep.timeframe_warnings, prep.condition_warnings
+    _lookahead_result, _lookahead_error = prep.lookahead_result, prep.lookahead_error
+
 
     with _warnings_module.catch_warnings(record=True) as caught:
         _warnings_module.simplefilter("always", RuntimeWarning)

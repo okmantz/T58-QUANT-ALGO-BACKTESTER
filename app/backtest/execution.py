@@ -125,6 +125,7 @@ class Trade:
     contracts: float | None = None     # whole contracts of the contract actually traded
     attempt_id: int = 0                # which purchased evaluation/funded account this trade belongs to
     fill_resolution: str = "bar"       # "bar" (stop/target from the bar's high/low) or "intrabar" (finer-bar replay)
+    instrument: str | None = None      # which instrument/leg traded it (set by the portfolio engine; None for single-instrument runs)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -133,34 +134,13 @@ class Trade:
         return d
 
 
-from app.backtest.risk import (  # noqa: E402  (grouped with the sizing constants on purpose)
-    SKIP_COSTS_EXCEED_BUDGET, SKIP_NO_MICRO, SKIP_PLANNED_RISK, SKIP_STOP_CAP_TOO_TIGHT,
-    SKIP_STOP_TOO_WIDE, SKIP_TOO_WIDE_FOR_MICRO,
+# Fill / cost / entry-planning logic is shared with the portfolio engine and lives in app.backtest.fills. The
+# constants and helper are re-exported here because other modules import them from this one.
+from app.backtest import fills as _fills  # noqa: E402
+from app.backtest.fills import (  # noqa: E402,F401
+    DEFAULT_STOP_PCT_OF_PRICE, MAX_CONTRACTS_BEFORE_IMPACT_WARN, SIZING_SKIP_REASONS as _SIZING_SKIP_REASONS,
+    sizing_mode_is_contract_skip,
 )
-
-# Sizing skip reasons that mean "the budget cannot afford this signal" (as
-# opposed to a degenerate stop / no money) -- they feed the sizing-halt
-# diagnostic and the preflight's skip-rate gate.
-_SIZING_SKIP_REASONS = frozenset({
-    SKIP_STOP_TOO_WIDE, SKIP_COSTS_EXCEED_BUDGET, SKIP_STOP_CAP_TOO_TIGHT,
-    SKIP_TOO_WIDE_FOR_MICRO, SKIP_NO_MICRO, SKIP_PLANNED_RISK,
-})
-
-DEFAULT_STOP_PCT_OF_PRICE = 0.01  # 1% of entry price, used only when a strategy defines no stop at all
-
-# C6 (market-impact guardrail): entries above this many whole contracts
-# fill at the quoted price with zero market impact assumed -- the engine
-# warns (RuntimeWarning) instead of silently pretending a 30+ lot sweep
-# doesn't move the book. Deliberately a module constant, not a
-# RiskConfig field: the threshold is visible at the warning site and
-# there is no impact model to configure.
-MAX_CONTRACTS_BEFORE_IMPACT_WARN = 30
-
-
-def sizing_mode_is_contract_skip(risk) -> bool:
-    """The bounded dead-lock guard applies only to the plain 'skip' mode;
-    fit_stop / micro_fallback already keep a small account trading."""
-    return getattr(risk, "sizing_mode", "skip") == "skip"
 
 
 def run_execution(
@@ -379,17 +359,12 @@ def run_execution(
     last_close_bar_idx = -10 ** 9
 
     def _clamp_loss(pnl_value: float, equity_at_entry: float) -> float:
-        """A single trade's loss can never realistically exceed what the
-        account actually has to lose (negative-balance protection) or a
-        configured hard per-trade ceiling -- see RiskConfig.max_trade_loss.
-        Wins are never touched."""
+        """A single trade's loss can never exceed what the account has to lose or RiskConfig.max_trade_loss.
+        Wins are never touched (shared rule: app.backtest.fills.clamp_trade_loss)."""
         nonlocal clamped_loss_count
-        if pnl_value >= 0 or not math.isfinite(pnl_value):
-            return pnl_value
-        cap = risk.max_trade_loss(equity_at_entry)
-        if cap and -pnl_value > cap:
+        pnl_value, was_clamped = _fills.clamp_trade_loss(risk, pnl_value, equity_at_entry)
+        if was_clamped:
             clamped_loss_count += 1
-            return -cap
         return pnl_value
 
     sig = signals.values
@@ -656,49 +631,8 @@ def run_execution(
     # used to be silently zeroed without the "_invalid_pnl_skipped"
     # suffix the normal exit path already applied -- now every path
     # gets the same treatment.
-    def _exit_cause_for(reason: str, open_pos: dict) -> str:
-        """Maps the engine-internal exit `reason` to the machine-verified
-        exit_cause taxonomy stored on Trade.exit_cause (Part A port #1).
-        The interesting refinement is "stop_loss": a stop resting AT the
-        entry price (moved there by breakeven_trigger_r or a partial
-        exit's move_stop_to_breakeven) is an exit-quality "breakeven", not
-        a loss, and a stop the trailing ratchet moved away from its
-        original level is a "trailing_stop" -- lumping those in with plain
-        stop losses is exactly the "entries fine, exits broken" blindness
-        this taxonomy closes. account_blown_forced_close has no closer
-        taxonomy value than "session_close" (that account's trading
-        session ended via termination); partial_take_profit is a
-        take-profit mechanism, so it maps to "take_profit"."""
-        reason = reason.removesuffix("_invalid_pnl_skipped")
-        if reason == "stop_loss":
-            stop_now = open_pos.get("stop_price")
-            entry = open_pos.get("entry_price")
-            direction_ = open_pos.get("direction")
-            init_risk = open_pos.get("initial_risk")
-            if (
-                stop_now is not None and entry is not None
-                and math.isclose(stop_now, entry, rel_tol=1e-9, abs_tol=1e-12)
-            ):
-                return "breakeven"
-            if init_risk and direction_ and stop_now is not None and entry is not None:
-                orig_stop = entry - direction_ * init_risk
-                if (
-                    open_pos.get("trailing_distance")
-                    and not math.isclose(stop_now, orig_stop, rel_tol=1e-9, abs_tol=1e-12)
-                ):
-                    return "trailing_stop"
-            return "stop_loss"
-        return {
-            "take_profit": "take_profit",
-            "signal": "signal_exit",
-            "time_stop": "time_stop",
-            "daily_loss_limit_forced_close": "daily_loss_close",
-            "weekend_hold_forced_close": "session_close",
-            "session_flatten_forced_close": "session_close",
-            "account_blown_forced_close": "session_close",
-            "partial_take_profit": "take_profit",
-            "end_of_data": "end_of_data",
-        }.get(reason, reason)
+    # The exit taxonomy is shared with the portfolio engine: app.backtest.fills.exit_cause_for.
+    _exit_cause_for = _fills.exit_cause_for
 
     def _prop_day(bar_date_: int) -> int:
         """Active-day index (days the account actually traded or held a
@@ -764,34 +698,10 @@ def run_execution(
     def _settle_exit(open_pos: dict, raw_exit_price: float, reason: str, direction_: int, i: int) -> float:
         nonlocal equity, gap_loss_count, last_close_bar_idx
         last_close_bar_idx = i  # EXEC-002: this is a FULL close -- see reentry_cooldown_bars above
-        filled_exit_price = raw_exit_price - (spread_price + slip_price) * direction_
-        pnl = (filled_exit_price - open_pos["entry_price"]) * open_pos["size"] * direction_
-        # B2-4: commission = flat per-trade + per-contract x contracts
-        # actually closed (open_pos["size"] is post-partial, in sizing
-        # units; contract_size converts to whole contracts). 0.0 defaults
-        # keep this byte-identical to the old flat-only charge.
-        _pos_cs = open_pos.get("contract_size", risk.contract_size)
-        _pos_cpc = open_pos.get("commission_per_contract", risk.commission_per_contract)
-        _contracts_closed = open_pos["size"] / _pos_cs if _pos_cs else 0.0
-        _commission_charged = risk.commission_per_trade + _pos_cpc * _contracts_closed
-        pnl -= _commission_charged
-        if not math.isfinite(pnl):
-            # Guard against a runaway/degenerate trade (e.g. an entry
-            # sized off a near-zero ATR-based stop distance) ever
-            # corrupting the equity curve with NaN/inf.
-            pnl = 0.0
-            reason = f"{reason}_invalid_pnl_skipped"
-        if (
-            reason == "stop_loss"
-            and open_pos["initial_risk"]
-            and abs(pnl) > 3 * open_pos["initial_risk"] * open_pos["size"]
-        ):
-            # The stop fired, but the fill was still several times worse
-            # than the risk this trade was sized for -- almost always a
-            # genuine price gap jumping straight past the resting stop
-            # in one bar, not a bug. Surfaced as a warning below so a
-            # handful of outsized losses in an otherwise-sane backtest
-            # don't get mistaken for a broken engine.
+        _sm = _fills.settle_math(risk, open_pos, raw_exit_price, reason, direction_)
+        filled_exit_price, pnl, _commission_charged, reason = (
+            _sm.filled_exit_price, _sm.pnl, _sm.commission, _sm.reason)
+        if _sm.gap_loss:
             gap_loss_count += 1
         pnl = _clamp_loss(pnl, open_pos["equity_at_entry"])
         equity += pnl
@@ -847,21 +757,9 @@ def run_execution(
         a full extra round-turn, since only a fraction of the position is
         actually being closed out."""
         nonlocal equity
-        partial_size = open_pos["initial_size"] * partial_fraction
-        filled_exit_price = fill_price - (spread_price + slip_price) * direction_
-        pnl = (filled_exit_price - open_pos["entry_price"]) * partial_size * direction_
-        # B2-4: same per-trade + per-contract charge as a full settle, scaled
-        # pro-rata to the fraction actually closed (contracts of the
-        # ORIGINAL size x the fraction closed).
-        _pos_cs = open_pos.get("contract_size", risk.contract_size)
-        _pos_cpc = open_pos.get("commission_per_contract", risk.commission_per_contract)
-        _contracts_total = open_pos["initial_size"] / _pos_cs if _pos_cs else 0.0
-        _commission_charged = (
-            risk.commission_per_trade + _pos_cpc * _contracts_total
-        ) * partial_fraction
-        pnl -= _commission_charged
-        if not math.isfinite(pnl):
-            pnl = 0.0
+        _pm = _fills.partial_settle_math(risk, open_pos, fill_price, direction_, partial_fraction)
+        partial_size, filled_exit_price, pnl, _commission_charged = (
+            _pm.partial_size, _pm.filled_exit_price, _pm.pnl, _pm.commission)
         pnl = _clamp_loss(pnl, open_pos["equity_at_entry"])
         equity += pnl
         trades.append(Trade(
@@ -905,28 +803,8 @@ def run_execution(
         # settled P&L event within one).
         return pnl
 
-    def _resolve_intrabar_exit(
-        direction_: int, stop: float | None, take: float | None,
-        low: float, high: float, open_: float,
-    ) -> tuple[float | None, str | None]:
-        """Pure fill-resolution logic, extracted so it's independently
-        testable: does this bar's high/low trigger the resting stop or
-        target, and if so, at what honest price? A resting stop that the
-        bar gapped straight through does NOT fill at the stop level --
-        it fills at the open, which is worse. Filling every stop at its
-        exact level is one of the most common sources of a fake
-        backtest edge."""
-        if direction_ == 1:
-            if stop is not None and low <= stop:
-                return min(stop, open_), "stop_loss"
-            if take is not None and high >= take:
-                return take, "take_profit"
-        else:
-            if stop is not None and high >= stop:
-                return max(stop, open_), "stop_loss"
-            if take is not None and low <= take:
-                return take, "take_profit"
-        return None, None
+    # Pure fill resolution (stop beats target; gapped stops fill at the open) is shared: app.backtest.fills.
+    _resolve_intrabar_exit = _fills.resolve_intrabar_exit
 
     # UPGRADE (speed): equity_curve used to be a plain Python list that
     # every one of n bars appended a (timestamp, equity) tuple to, then fed
@@ -1522,245 +1400,59 @@ def run_execution(
             if n_today < risk.max_trades_per_day:
                 direction = int(sig[i])
                 raw_price = opens[fill_idx]
-                entry_price = raw_price + (spread_price + slip_price) * direction
 
-                # UPGRADE (speed): pd.isna() on a single numpy float64 scalar
-                # dispatches through pandas' general-purpose type checking,
-                # which is materially slower than a direct NaN check for a
-                # value already known to be a plain float. math.isnan() does
-                # the identical check for these purely-numeric arrays.
+                # UPGRADE (speed): math.isnan() on a plain float64 is cheaper than pd.isna() for these arrays.
                 bar_sl_distance = float(sl_dist_vals[i]) if sl_dist_vals is not None and not math.isnan(sl_dist_vals[i]) else None
                 bar_tp_distance = float(tp_dist_vals[i]) if tp_dist_vals is not None and not math.isnan(tp_dist_vals[i]) else None
                 bar_trail_distance = float(trail_dist_vals[i]) if trail_dist_vals is not None and not math.isnan(trail_dist_vals[i]) else None
 
-                used_fallback_stop = False
-                if not bar_sl_distance and not stop_loss_pips:
-                    # The strategy defined no stop loss at all (no ATR-based
-                    # distance and no fixed pips). Sizing off a hardcoded
-                    # small pip count here would be wrong for any
-                    # non-FX-scaled instrument (e.g. gold, indices, crypto)
-                    # and would also leave the position completely
-                    # unprotected. Fall back to a stop sized as a percentage
-                    # of the entry price instead — this scales correctly
-                    # regardless of instrument or pip size.
-                    bar_sl_distance = abs(raw_price) * DEFAULT_STOP_PCT_OF_PRICE
-                    used_fallback_stop = True
-
-                if bar_sl_distance:
-                    sl_price_dist = bar_sl_distance
-                else:
-                    sl_price_dist = (stop_loss_pips or 0) * risk.pip_size
-                sizing_pips = (sl_price_dist / risk.pip_size) if risk.pip_size else 0
-                intended_risk_dollars = risk.risk_amount(equity)
-                # ACCURACY OVERHAUL (2026-10-07): ONE sizing routine for every
-                # mode (see risk.SIZING_MODES / RiskConfig.size_for_stop). The
-                # decision carries the contracts, the (possibly fit-to-budget)
-                # stop, whether the micro contract was swapped in, and -- when
-                # the entry is skipped -- WHY. Costs are inside the budget.
-                # The old dead-lock "1-contract rescue" that opened one
-                # contract ABOVE the risk budget is gone: the only way to
-                # exceed the budget now is the explicit, tagged
-                # allow_single_contract_minimum opt-in below.
-                decision = risk.size_for_stop(equity, sl_price_dist, tp_distance=bar_tp_distance)
-                size = decision.units
-                pos_contract_size = decision.contract_size if decision.contract_size else risk.contract_size
-                pos_commission_pc = decision.commission_per_contract
+                _vol_pct = None
+                if adaptive_risk is not None and adaptive_risk.enabled and _vol_percentile_arr is not None:
+                    _v = _vol_percentile_arr[i]
+                    _vol_pct = float(_v) if not math.isnan(_v) else None
+                # Sizing, stop/target construction, the dead-lock guard, adaptive throttling and the scale-mismatch
+                # checks are ONE shared routine (app.backtest.fills.plan_entry) -- the portfolio engine calls the same one.
+                plan = _fills.plan_entry(
+                    risk=risk, equity=equity, direction=direction, raw_price=raw_price,
+                    bar_sl_distance=bar_sl_distance, bar_tp_distance=bar_tp_distance,
+                    bar_trail_distance=bar_trail_distance, stop_loss_pips=stop_loss_pips,
+                    take_profit_pips=take_profit_pips, adaptive_risk=adaptive_risk,
+                    adaptive_state=adaptive_state, vol_pct=_vol_pct, atr_now=_atr_for_mismatch_check[i],
+                )
                 sizing_considered_count += 1
-                rescue_above_risk_target = bool(decision.above_budget)
-                # Dead-lock guard (bounded): a config that a FRESH account can
-                # afford (>= 1 whole contract at initial_balance) must not stall
-                # forever just because a small loss pulled equity a hair under
-                # the one-contract threshold -- with no trades there is no way
-                # to climb back. One contract is allowed only while its
-                # worst-case loss stays within 1.5x the current budget; the
-                # trade is tagged sized_above_risk_target and counted as a
-                # rescue. allow_single_contract_minimum keeps its older,
-                # unbounded meaning.
-                _deadlock_guard = False
-                if size <= 0 and risk.contract_size and equity > 0 and decision.skip_reason is not None \
-                        and sizing_mode_is_contract_skip(risk):
-                    _fresh = risk.size_for_stop(risk.initial_balance, sl_price_dist, tp_distance=bar_tp_distance)
-                    if _fresh.units > 0 and _fresh.contracts >= 1:
-                        _one = risk.worst_case_loss(
-                            float(risk.contract_size), sl_price_dist, risk.contract_size, risk.commission_per_contract,
-                        )
-                        _deadlock_guard = _one <= 1.5 * max(intended_risk_dollars, 1e-9)
-                if (
-                    size <= 0 and (risk.allow_single_contract_minimum or _deadlock_guard) and risk.contract_size and equity > 0
-                ):
-                    size = float(risk.contract_size)
-                    pos_contract_size = risk.contract_size
-                    pos_commission_pc = risk.commission_per_contract
+                if plan.min_contract_rescue:
                     min_contract_rescue_count += 1
-                    rescue_above_risk_target = True
-
-                adaptive_multiplier = 1.0
-                adaptive_rules_active: list[str] = []
-                if adaptive_risk is not None and adaptive_risk.enabled:
-                    current_vol_pct = None
-                    if _vol_percentile_arr is not None:
-                        _v = _vol_percentile_arr[i]
-                        current_vol_pct = float(_v) if not math.isnan(_v) else None
-                    adaptive_multiplier = adaptive_state.active_multiplier(adaptive_risk, current_vol_pct)
-                    adaptive_rules_active = adaptive_state.active_rule_labels(adaptive_risk, current_vol_pct)
-                    _size_before_adaptive = size
-                    size *= adaptive_multiplier
-                    # STALL FIX (2026-10-06): position_size() floored to whole
-                    # contracts BEFORE this multiplier, so multiplying after
-                    # the fact produced fractional contracts (e.g. 0.39 of an
-                    # ES contract -- not a real, placeable size) and, whenever
-                    # the stacked limit-aware multipliers got small enough
-                    # (0.25 daily-loss x 0.25 drawdown x 0.125 volatility =
-                    # 0.008x), shrunk size to effectively nothing for as long
-                    # as conditions stayed rough -- months or years of a
-                    # flat trade chart. Adaptive throttling may shrink size
-                    # TOWARD the 1-contract minimum, never past it: re-floor
-                    # to whole contracts, and if flooring would erase a trade
-                    # the UNTHROTTLED sizing could afford (>= 1 contract),
-                    # open at the 1-contract minimum instead. A multiplier of
-                    # exactly 0.0 (a deliberate hard lock, e.g. the daily
-                    # profit lock) still blocks outright -- that is the rule
-                    # doing its job for the rest of THAT day, and the new
-                    # clock-driven day rollover above releases it tomorrow.
-                    if pos_contract_size and size > 0 and adaptive_multiplier > 0:
-                        _lots = math.floor(size / pos_contract_size + 1e-9)
-                        if _lots <= 0 and _size_before_adaptive >= pos_contract_size:
-                            _lots = 1
-                            adaptive_probe_count += 1
-                        size = _lots * pos_contract_size
-
-                if not math.isfinite(size) or size <= 0:
-                    # Degenerate sizing (e.g. an ATR-based stop distance
-                    # that rounds to ~0 for this bar) — skip this entry
-                    # rather than opening a trade with an invalid size.
-                    if adaptive_multiplier <= 0:
+                if plan.adaptive_probe:
+                    adaptive_probe_count += 1
+                if plan.skipped:
+                    if plan.adaptive_blocked:
                         blocked_adaptive_zero_count += 1
-                    if risk.contract_size and decision.skip_reason in _SIZING_SKIP_REASONS:
+                    if plan.skip_is_floor:
                         zero_size_contract_floor_count += 1
-                        sizing_skip_reasons[decision.skip_reason] = sizing_skip_reasons.get(decision.skip_reason, 0) + 1
-                    elif decision.skip_reason is not None:
-                        sizing_skip_reasons[decision.skip_reason] = sizing_skip_reasons.get(decision.skip_reason, 0) + 1
-                    pass  # n_today unchanged; no-op, kept for readability
+                        sizing_skip_reasons[plan.skip_reason] = sizing_skip_reasons.get(plan.skip_reason, 0) + 1
+                    elif plan.skip_reason is not None:
+                        sizing_skip_reasons[plan.skip_reason] = sizing_skip_reasons.get(plan.skip_reason, 0) + 1
                 else:
-                    if used_fallback_stop:
+                    if plan.used_fallback_stop:
                         fallback_stop_count += 1
-                    stop_price = None
-                    take_price = None
-                    if bar_sl_distance:
-                        stop_price = entry_price - direction * bar_sl_distance
-                    elif stop_loss_pips:
-                        fixed_stop_distance = stop_loss_pips * risk.pip_size
-                        stop_price = entry_price - direction * fixed_stop_distance
-                        # Sanity-check the fixed pip stop against this bar's
-                        # actual price level. A strategy's STOP_LOSS_PIPS is
-                        # only meaningful if risk.pip_size matches the
-                        # instrument it's being tested against (e.g. 0.0001
-                        # for 4-decimal FX pairs) -- testing an FX-calibrated
-                        # strategy against gold, an index, crypto, or a
-                        # differently-quoted instrument while pip_size stays
-                        # at its FX default silently turns a "25 pip" stop
-                        # into a wildly wrong fraction of price, producing
-                        # position sizes (and eventual losses) that bear no
-                        # relation to the intended risk. This never changes
-                        # behavior -- it only counts how often it happens so
-                        # a clear warning can be raised below.
-                        if raw_price:
-                            distance_ratio = abs(fixed_stop_distance) / abs(raw_price)
-                            if distance_ratio < 0.0002 or distance_ratio > 0.25:
-                                pip_scale_mismatch_count += 1
-                                if pip_scale_mismatch_worst_ratio is None or distance_ratio < pip_scale_mismatch_worst_ratio:
-                                    pip_scale_mismatch_worst_ratio = distance_ratio
-                        # Second, independent check: the same fixed-pips
-                        # stop compared to this instrument's own recent ATR
-                        # rather than to its raw price level. A stop can be
-                        # a perfectly ordinary-looking fraction of price
-                        # (comfortably inside the 0.02%-25% band above) and
-                        # still be tiny next to how much this instrument
-                        # actually moves bar to bar -- that's still a real
-                        # pip_size/instrument mismatch, just one the
-                        # price-ratio check alone can miss.
-                        bar_atr = _atr_for_mismatch_check[i]
-                        if bar_atr and bar_atr > 0:
-                            atr_ratio = abs(fixed_stop_distance) / bar_atr
-                            if atr_ratio < 0.15:
-                                atr_scale_mismatch_count += 1
-                                if atr_scale_mismatch_worst_ratio is None or atr_ratio < atr_scale_mismatch_worst_ratio:
-                                    atr_scale_mismatch_worst_ratio = atr_ratio
-                    if decision.stop_capped:
-                        # fit_stop: 1 contract, stop shrunk to the distance
-                        # whose worst case equals the budget. The target
-                        # follows per risk.fit_stop_target (scale / keep /
-                        # fixed_r); a trailing distance shrinks with the
-                        # stop so the strategy's shape is preserved.
-                        stop_price = entry_price - direction * decision.stop_distance
+                    if plan.pip_mismatch_ratio is not None:
+                        pip_scale_mismatch_count += 1
+                        if pip_scale_mismatch_worst_ratio is None or plan.pip_mismatch_ratio < pip_scale_mismatch_worst_ratio:
+                            pip_scale_mismatch_worst_ratio = plan.pip_mismatch_ratio
+                    if plan.atr_mismatch_ratio is not None:
+                        atr_scale_mismatch_count += 1
+                        if atr_scale_mismatch_worst_ratio is None or plan.atr_mismatch_ratio < atr_scale_mismatch_worst_ratio:
+                            atr_scale_mismatch_worst_ratio = plan.atr_mismatch_ratio
+                    if plan.stop_capped:
                         stop_capped_count += 1
-                        _base_tp = bar_tp_distance if bar_tp_distance else (
-                            take_profit_pips * risk.pip_size if take_profit_pips else None
-                        )
-                        if risk.fit_stop_target == "fixed_r":
-                            bar_tp_distance = risk.fit_stop_target_r * decision.stop_distance
-                        elif _base_tp and risk.fit_stop_target == "scale":
-                            bar_tp_distance = _base_tp * decision.stop_scale
-                        elif _base_tp:
-                            bar_tp_distance = _base_tp
-                        if bar_trail_distance:
-                            bar_trail_distance = bar_trail_distance * decision.stop_scale
-                    if decision.used_micro:
+                    if plan.used_micro:
                         micro_fallback_count += 1
-                    if bar_tp_distance:
-                        take_price = entry_price + direction * bar_tp_distance
-                    elif take_profit_pips:
-                        take_price = entry_price + direction * take_profit_pips * risk.pip_size
-
-                    initial_risk = abs(entry_price - stop_price) if stop_price is not None else None
-
-                    # C6 (market-impact guardrail): a fill of this many
-                    # whole contracts is assumed to land at the quoted
-                    # price with zero market impact -- on real books a
-                    # 30+ lot sweep walks the order book. Docs-only +
-                    # warning: there is deliberately NO impact model here,
-                    # because any particular impact curve would be a
-                    # guess; the warning tells the user the fill assumed
-                    # infinite liquidity. MAX_CONTRACTS_BEFORE_IMPACT_WARN
-                    # is a module constant (not a RiskConfig field) so the
-                    # threshold is visible at the warning site.
-                    if pos_contract_size:
-                        _whole_contracts = size / pos_contract_size
-                        if _whole_contracts > MAX_CONTRACTS_BEFORE_IMPACT_WARN:
-                            impact_events.append((_whole_contracts, ts[fill_idx]))
-
+                    if plan.impact_contracts is not None:
+                        impact_events.append((plan.impact_contracts, ts[fill_idx]))
                     open_trade = {
                         "entry_time": _restore_tz(ts[fill_idx]),
                         "entry_bar_idx": fill_idx,
-                        "direction": direction,
-                        "entry_price": entry_price,
-                        "size": size,
-                        "initial_size": size,
-                        "stop_price": stop_price,
-                        "take_price": take_price,
-                        "equity_at_entry": equity,
-                        "best_price": entry_price,
-                        "worst_price": entry_price,
-                        "mfe_price": entry_price,
-                        "initial_risk": initial_risk,
-                        "intended_risk_dollars": intended_risk_dollars,
-                        "breakeven_done": False,
-                        "partial_taken": False,
-                        "trailing_distance": bar_trail_distance,
-                        "adaptive_multiplier": adaptive_multiplier,
-                        "adaptive_rules_active": adaptive_rules_active,
-                        "sized_above_risk_target": rescue_above_risk_target,
-                        "contract_size": pos_contract_size,
-                        "commission_per_contract": pos_commission_pc,
-                        "risk_at_stop_dollars": risk.worst_case_loss(
-                            size, abs(entry_price - stop_price) if stop_price is not None else sl_price_dist,
-                            pos_contract_size, pos_commission_pc,
-                        ),
-                        "stop_capped": bool(decision.stop_capped),
-                        "sizing_mode": risk.sizing_mode,
-                        "used_micro": bool(decision.used_micro),
-                        "contracts": (size / pos_contract_size) if pos_contract_size else None,
-                        "fill_resolution": "bar",
+                        **plan.position,
                     }
                     trades_today_count[fill_bar_date] = n_today + 1
                     last_entry_bar_idx = fill_idx
