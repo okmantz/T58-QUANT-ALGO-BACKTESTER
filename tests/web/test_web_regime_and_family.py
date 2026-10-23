@@ -14,6 +14,17 @@ from app.web.server import SEARCH_DIR, app
 _SAMPLE_CSV = Path(__file__).resolve().parent.parent.parent / "data" / "raw" / "EURUSD" / "EURUSD_5M_sample.csv"
 
 
+def _frictionless_risk(**kw) -> _RiskConfig:
+    """These fixtures plant a tiny synthetic edge to exercise Search Lab's plumbing (stages, DB, loop mode, saving).
+    RiskConfig() now defaults to REAL friction (1-pip spread, 0.3 slippage, $3 commission per trade); on this data its
+    round-trip cost is bigger than the edge, so Stage 1's cost pre-screen rejects every candidate and there is nothing
+    left to exercise. Friction is pinned to zero here -- cost handling has its own dedicated tests."""
+    kw.setdefault("spread_pips", 0.0)
+    kw.setdefault("slippage_pips", 0.0)
+    kw.setdefault("commission_per_trade", 0.0)
+    return _RiskConfig(**kw)
+
+
 def test_regime_matrix_form_loads():
     client = app.test_client()
     r = client.get("/regime-matrix")
@@ -157,7 +168,7 @@ def test_family_diversity_shows_a_real_run(tmp_path):
     )
     db_path = SEARCH_DIR / "search_test_family_diversity.db"
     summary = run_search(
-        df, _RiskConfig(), _PropRules(), space, cfg,
+        df, _frictionless_risk(), _PropRules(), space, cfg,
         db_path=str(db_path), instrument="TEST", timeframe="5m",
     )
     assert summary.stage1_survivors > 0  # this data/family combo must produce real survivors

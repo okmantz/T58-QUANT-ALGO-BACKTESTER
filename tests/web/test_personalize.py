@@ -12,6 +12,29 @@ def test_all_eight_season_images_exist_and_are_webp():
             assert p.exists() and p.read_bytes()[:4] == b"RIFF", p
 
 
+def test_season_images_are_artwork_box_sized_and_fade_at_the_edges():
+    """Every backdrop is the 2048x768 artwork box, solid in the middle and transparent at the edges (so it melts in)."""
+    from PIL import Image
+    for season in ("spring", "summer", "autumn", "winter"):
+        for mode in ("dark", "light"):
+            p = STATIC / "backgrounds" / f"{season}-{mode}.webp"
+            with Image.open(p) as im:
+                assert im.size == (2048, 768) and im.mode == "RGBA", (p, im.size, im.mode)
+                a = im.getchannel("A")
+                assert a.getpixel((1024, 300)) == 255, p      # solid in the middle of the picture
+                assert a.getpixel((1024, 767)) == 0, p        # dissolved at the bottom
+                assert a.getpixel((1024, 0)) == 0, p          # ...and at the top
+                assert a.getpixel((0, 300)) == 0 and a.getpixel((2047, 300)) == 0, p  # ...and at both sides
+
+
+def test_backdrop_swap_fade_is_wired_in_css_and_js():
+    css = (STATIC / "theme.css").read_text(encoding="utf-8")
+    js = (STATIC / "t58-personalize.js").read_text(encoding="utf-8")
+    assert "html.t58-bg-swap body::before" in css and "@keyframes t58-bg-swap" in css
+    assert "prefers-reduced-motion" in css
+    assert "t58-bg-swap" in js and "MutationObserver" in js
+
+
 def test_css_has_rule_for_every_season_and_theme():
     css = (STATIC / "theme.css").read_text(encoding="utf-8")
     for season in ("spring", "summer", "autumn", "winter"):

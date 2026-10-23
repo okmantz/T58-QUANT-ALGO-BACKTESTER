@@ -187,6 +187,20 @@ def test_multi_instrument_search_loop_mode_save_to_library(_isolated_raw_data_di
     store) actually saves the champion."""
     monkeypatch.setattr("app.strategy.library.get_app_base_dir", lambda: tmp_path / "app_base")
 
+    # RiskConfig() now defaults to REAL friction (1-pip spread, 0.3 slippage, $3/trade) and this route reads no
+    # spread/slippage form fields, so on the tiny synthetic edge below Stage 1's cost pre-screen would reject every
+    # candidate and no champion would ever exist to save. This test is about the save-to-library plumbing, so build
+    # the route's RiskConfig with friction pinned to zero.
+    from app.backtest.risk import RiskConfig as _RealRiskConfig
+
+    def _frictionless_risk(**kw):
+        kw.setdefault("spread_pips", 0.0)
+        kw.setdefault("slippage_pips", 0.0)
+        kw.setdefault("commission_per_trade", 0.0)
+        return _RealRiskConfig(**kw)
+
+    monkeypatch.setattr("app.web.server.RiskConfig", _frictionless_risk)
+
     _trending_csv(_isolated_raw_data_dir / "eurusd.csv", seed=1)
     _trending_csv(_isolated_raw_data_dir / "gbpusd.csv", seed=2)
 
