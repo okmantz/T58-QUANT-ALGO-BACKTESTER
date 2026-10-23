@@ -25,6 +25,17 @@ from app.strategy.pinescript import PineScriptStrategy
 from app.strategy.python import PythonStrategy
 
 
+def _frictionless_risk(**kw) -> RiskConfig:
+    """These fixtures plant a tiny synthetic edge to exercise Search Lab's plumbing (stages, DB, loop mode, saving).
+    RiskConfig() now defaults to REAL friction (1-pip spread, 0.3 slippage, $3 commission per trade); on this data its
+    round-trip cost is bigger than the edge, so Stage 1's cost pre-screen rejects every candidate and there is nothing
+    left to exercise. Friction is pinned to zero here -- cost handling has its own dedicated tests."""
+    kw.setdefault("spread_pips", 0.0)
+    kw.setdefault("slippage_pips", 0.0)
+    kw.setdefault("commission_per_trade", 0.0)
+    return RiskConfig(**kw)
+
+
 def _trending_df(n=2500, seed=3, drift=0.00015):
     """Strong, near-deterministic uptrend -- deliberately easy for a
     trend-following family to find real signal on, so Stage 1-3 have
@@ -101,7 +112,7 @@ def single_space():
 def test_run_search_family_mode_end_to_end_no_crash(tmp_path, small_family_space):
     df = _trending_df()
     summary = run_search(
-        df, RiskConfig(), PropRules(), small_family_space, _fast_stage_cfg(),
+        df, _frictionless_risk(), PropRules(), small_family_space, _fast_stage_cfg(),
         db_path=str(tmp_path / "search.db"), instrument="TEST", timeframe="5m",
     )
     assert summary.total_candidates == 8
@@ -113,7 +124,7 @@ def test_run_search_family_mode_end_to_end_no_crash(tmp_path, small_family_space
 def test_run_search_single_mode_wraps_one_strategy(tmp_path, single_space):
     df = _trending_df()
     summary = run_search(
-        df, RiskConfig(), PropRules(), single_space, _fast_stage_cfg(stage1_top_n=1, stage2_top_n=1),
+        df, _frictionless_risk(), PropRules(), single_space, _fast_stage_cfg(stage1_top_n=1, stage2_top_n=1),
         db_path=str(tmp_path / "search.db"), instrument="TEST", timeframe="5m",
     )
     assert summary.total_candidates == 1
@@ -124,7 +135,7 @@ def test_run_search_persists_every_stage_to_db(tmp_path, small_family_space):
     df = _trending_df()
     db_path = tmp_path / "search.db"
     summary = run_search(
-        df, RiskConfig(), PropRules(), small_family_space, _fast_stage_cfg(),
+        df, _frictionless_risk(), PropRules(), small_family_space, _fast_stage_cfg(),
         db_path=str(db_path), instrument="TEST", timeframe="5m",
     )
     with ResultsDB(db_path) as db:
@@ -138,7 +149,7 @@ def test_run_search_empty_stage1_survivors_is_handled_gracefully(tmp_path, small
     # Impossible filter -- nothing can pass Stage 1, even after auto-relax.
     cfg = _fast_stage_cfg(min_trades=10**9)
     summary = run_search(
-        df, RiskConfig(), PropRules(), small_family_space, cfg,
+        df, _frictionless_risk(), PropRules(), small_family_space, cfg,
         db_path=str(tmp_path / "search.db"), instrument="TEST", timeframe="5m",
     )
     assert summary.stage1_survivors == 0
@@ -163,7 +174,7 @@ def test_run_search_family_diversity_cap_limits_stage2_to_one_per_family(tmp_pat
     )
     db_path = tmp_path / "search.db"
     summary = run_search(
-        df, RiskConfig(), PropRules(), space, cfg,
+        df, _frictionless_risk(), PropRules(), space, cfg,
         db_path=str(db_path), instrument="TEST", timeframe="5m",
     )
     with ResultsDB(db_path) as db:
@@ -181,7 +192,7 @@ def test_run_search_auto_relaxes_stage1_filters_instead_of_giving_up(tmp_path, s
     logs = []
     cfg = _fast_stage_cfg(min_trades=50, min_profit_factor=50.0)
     summary = run_search(
-        df, RiskConfig(), PropRules(), small_family_space, cfg,
+        df, _frictionless_risk(), PropRules(), small_family_space, cfg,
         db_path=str(tmp_path / "search.db"), instrument="TEST", timeframe="5m",
         progress_cb=logs.append,
     )
@@ -197,7 +208,7 @@ def test_run_search_records_stage3_results_onto_the_dashboard(tmp_path, small_fa
     df = _trending_df()
     before = len(run_history.load_runs())
     summary = run_search(
-        df, RiskConfig(), PropRules(), small_family_space, _fast_stage_cfg(),
+        df, _frictionless_risk(), PropRules(), small_family_space, _fast_stage_cfg(),
         db_path=str(tmp_path / "search.db"), instrument="TEST", timeframe="5m",
     )
     after = run_history.load_runs()
@@ -209,7 +220,7 @@ def test_run_search_records_stage3_results_onto_the_dashboard(tmp_path, small_fa
 def test_run_search_leaderboard_candidates_all_reached_stage3(tmp_path, small_family_space):
     df = _trending_df()
     summary = run_search(
-        df, RiskConfig(), PropRules(), small_family_space, _fast_stage_cfg(),
+        df, _frictionless_risk(), PropRules(), small_family_space, _fast_stage_cfg(),
         db_path=str(tmp_path / "search.db"), instrument="TEST", timeframe="5m",
     )
     for row in summary.leaderboard:
@@ -221,7 +232,7 @@ def test_run_search_progress_callback_is_invoked(tmp_path, small_family_space):
     df = _trending_df()
     messages = []
     run_search(
-        df, RiskConfig(), PropRules(), small_family_space, _fast_stage_cfg(),
+        df, _frictionless_risk(), PropRules(), small_family_space, _fast_stage_cfg(),
         db_path=str(tmp_path / "search.db"), instrument="TEST", timeframe="5m",
         progress_cb=messages.append,
     )
@@ -276,7 +287,7 @@ def test_run_search_surfaces_pip_scale_mismatch_as_the_likely_root_cause(tmp_pat
     logs = []
     stage_cfg = _fast_stage_cfg(min_trades=1, min_profit_factor=0.0, max_drawdown_buffer_mult=10.0)
     run_search(
-        df, RiskConfig(), PropRules(), space, stage_cfg,
+        df, _frictionless_risk(), PropRules(), space, stage_cfg,
         db_path=str(tmp_path / "search.db"), instrument="AAPL_TEST", timeframe="15m",
         progress_cb=logs.append,
     )
@@ -330,7 +341,7 @@ def test_promote_champion_raises_for_unknown_candidate(tmp_path):
     with pytest.raises(ValueError):
         promote_champion(
             str(tmp_path / "search.db"), "run1", "does-not-exist", df,
-            RiskConfig(), PropRules(), output_dir=str(tmp_path / "out"),
+            _frictionless_risk(), PropRules(), output_dir=str(tmp_path / "out"),
         )
 
 
@@ -340,7 +351,7 @@ def test_promote_champion_produces_a_full_report(tmp_path, small_family_space):
     cfg = _fast_stage_cfg(min_trades=1, min_profit_factor=0.0, max_drawdown_buffer_mult=100.0)
     db_path = tmp_path / "search.db"
     summary = run_search(
-        df, RiskConfig(), PropRules(), small_family_space, cfg,
+        df, _frictionless_risk(), PropRules(), small_family_space, cfg,
         db_path=str(db_path), instrument="TEST", timeframe="5m",
     )
     assert summary.stage3_survivors > 0, "expected at least one candidate to reach Stage 3 with loose gates"
@@ -351,7 +362,7 @@ def test_promote_champion_produces_a_full_report(tmp_path, small_family_space):
     candidate_id = summary.leaderboard[0]["candidate_id"]
     result = promote_champion(
         str(db_path), summary.run_id, candidate_id, df,
-        RiskConfig(), PropRules(), output_dir=str(tmp_path / "champion"), mc_sims=50,
+        _frictionless_risk(), PropRules(), output_dir=str(tmp_path / "champion"), mc_sims=50,
     )
     assert result["candidate_id"] == candidate_id
     assert result["report_paths"]["html"].exists()
@@ -418,7 +429,7 @@ def test_run_search_single_mode_works_for_every_code_source_type(tmp_path, sourc
 
     space = generate_search_space(mode="single", strategy=strategy)
     summary = run_search(
-        df, RiskConfig(), PropRules(), space, _fast_stage_cfg(stage1_top_n=1, stage2_top_n=1),
+        df, _frictionless_risk(), PropRules(), space, _fast_stage_cfg(stage1_top_n=1, stage2_top_n=1),
         db_path=str(tmp_path / "search.db"), instrument="TEST", timeframe="5m",
     )
     assert summary.mode == "single"
@@ -445,7 +456,7 @@ def test_run_search_family_grid_mode_works_for_every_code_source_type(tmp_path, 
     assert len(space.candidates) > 1
 
     summary = run_search(
-        df, RiskConfig(), PropRules(), space, _fast_stage_cfg(),
+        df, _frictionless_risk(), PropRules(), space, _fast_stage_cfg(),
         db_path=str(tmp_path / "search.db"), instrument="TEST", timeframe="5m",
     )
     assert summary.mode == "family"
@@ -467,7 +478,7 @@ def test_promote_champion_works_for_a_python_candidate(tmp_path):
     cfg = _fast_stage_cfg(min_trades=1, min_profit_factor=0.0, max_drawdown_buffer_mult=100.0)
     db_path = tmp_path / "search.db"
     summary = run_search(
-        df, RiskConfig(), PropRules(), space, cfg,
+        df, _frictionless_risk(), PropRules(), space, cfg,
         db_path=str(db_path), instrument="TEST", timeframe="5m",
     )
     assert summary.stage3_survivors > 0
@@ -476,7 +487,7 @@ def test_promote_champion_works_for_a_python_candidate(tmp_path):
     assert summary.leaderboard[0]["source_type"] == "python"
     result = promote_champion(
         str(db_path), summary.run_id, candidate_id, df,
-        RiskConfig(), PropRules(), output_dir=str(tmp_path / "champion"), mc_sims=50,
+        _frictionless_risk(), PropRules(), output_dir=str(tmp_path / "champion"), mc_sims=50,
     )
     assert result["candidate_id"] == candidate_id
     assert result["spec"]["source_type"] == "python"
@@ -655,7 +666,7 @@ def test_run_search_stops_promptly_when_cancel_event_set_mid_run(tmp_path, small
     t0 = time.time()
     with pytest.raises(SearchCancelled):
         run_search(
-            df, RiskConfig(), PropRules(), small_family_space, _fast_stage_cfg(),
+            df, _frictionless_risk(), PropRules(), small_family_space, _fast_stage_cfg(),
             db_path=str(tmp_path / "search.db"), instrument="TEST", timeframe="5m",
             progress_cb=_progress_cb, cancel_event=cancel_event,
         )

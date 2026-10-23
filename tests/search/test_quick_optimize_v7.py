@@ -83,8 +83,11 @@ def make_bad_fade_strategy(bb_period=15):
 
 
 def _risk_and_rules():
+    # Friction pinned to zero: RiskConfig() now defaults to REAL costs (1-pip spread, 0.3 slippage, $3/trade), which on
+    # this planted-edge fixture swamp the edge -- every candidate then scores 0% eval-pass and the GA has no gradient.
     risk = RiskConfig(initial_balance=100_000, pip_size=1.0,
-                      risk_mode="percent", risk_value=1.0)
+                      risk_mode="percent", risk_value=1.0,
+                      spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0)
     rules = PropRules(account_size=100_000)
     return risk, rules
 

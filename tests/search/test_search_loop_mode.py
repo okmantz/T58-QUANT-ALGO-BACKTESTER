@@ -16,6 +16,17 @@ from app.prop.simulator import PropRules
 from app.search.batch_runner import SearchStageConfig
 
 
+def _frictionless_risk(**kw) -> RiskConfig:
+    """These fixtures plant a tiny synthetic edge to exercise Search Lab's plumbing (stages, DB, loop mode, saving).
+    RiskConfig() now defaults to REAL friction (1-pip spread, 0.3 slippage, $3 commission per trade); on this data its
+    round-trip cost is bigger than the edge, so Stage 1's cost pre-screen rejects every candidate and there is nothing
+    left to exercise. Friction is pinned to zero here -- cost handling has its own dedicated tests."""
+    kw.setdefault("spread_pips", 0.0)
+    kw.setdefault("slippage_pips", 0.0)
+    kw.setdefault("commission_per_trade", 0.0)
+    return RiskConfig(**kw)
+
+
 def _trending_df(n=2500, seed=3, drift=0.00015):
     rng = np.random.default_rng(seed)
     ts = pd.date_range("2024-01-01", periods=n, freq="5min")
@@ -80,7 +91,7 @@ def test_loop_stops_with_target_reached_on_an_easy_trending_market(tmp_path):
         starting_family="trend_breakout", starting_max_candidates=8,
     )
     result = run_search_loop(
-        df, RiskConfig(), PropRules(), _fast_stage_cfg(), db_dir=tmp_path / "loop_dbs",
+        df, _frictionless_risk(), PropRules(), _fast_stage_cfg(), db_dir=tmp_path / "loop_dbs",
         loop_cfg=loop_cfg, instrument="EURUSD", timeframe="5m",
         family_health_search_dir=tmp_path / "fh_search", family_health_evolution_dir=tmp_path / "fh_evo",
     )
@@ -126,7 +137,7 @@ def test_loop_widens_after_stalling_then_hits_max_rounds_on_flat_data(tmp_path, 
         widened_max_candidates=10,
     )
     result = run_search_loop(
-        df, RiskConfig(), PropRules(), _fast_stage_cfg(), db_dir=tmp_path / "loop_dbs",
+        df, _frictionless_risk(), PropRules(), _fast_stage_cfg(), db_dir=tmp_path / "loop_dbs",
         loop_cfg=loop_cfg, instrument="XAUUSD", timeframe="5m",
         family_health_search_dir=tmp_path / "fh_search", family_health_evolution_dir=tmp_path / "fh_evo",
     )
@@ -148,7 +159,7 @@ def test_loop_respects_a_tiny_time_budget(tmp_path):
         starting_family="trend_breakout", starting_max_candidates=4,
     )
     result = run_search_loop(
-        df, RiskConfig(), PropRules(), _fast_stage_cfg(), db_dir=tmp_path / "loop_dbs",
+        df, _frictionless_risk(), PropRules(), _fast_stage_cfg(), db_dir=tmp_path / "loop_dbs",
         loop_cfg=loop_cfg, instrument="EURUSD", timeframe="5m",
         family_health_search_dir=tmp_path / "fh_search", family_health_evolution_dir=tmp_path / "fh_evo",
     )
@@ -163,7 +174,7 @@ def test_loop_stops_cleanly_when_cancelled_before_first_round(tmp_path):
     cancel_event.set()
     loop_cfg = SearchLoopConfig(max_rounds=5, starting_family="trend_breakout", starting_max_candidates=4)
     result = run_search_loop(
-        df, RiskConfig(), PropRules(), _fast_stage_cfg(), db_dir=tmp_path / "loop_dbs",
+        df, _frictionless_risk(), PropRules(), _fast_stage_cfg(), db_dir=tmp_path / "loop_dbs",
         loop_cfg=loop_cfg, instrument="EURUSD", timeframe="5m", cancel_event=cancel_event,
         family_health_search_dir=tmp_path / "fh_search", family_health_evolution_dir=tmp_path / "fh_evo",
     )
@@ -189,7 +200,7 @@ def test_loop_result_carries_the_graveyard_path_search_lab_wrote_to(tmp_path):
     # Stage 3, and a strict Stage-3 gate here reliably rejects it there
     # instead -- this test is about the graveyard-path plumbing, not
     # about exactly which stage catches a bad candidate.
-    risk = RiskConfig(risk_value=0.1)
+    risk = _frictionless_risk(risk_value=0.1)
     stage_cfg = _fast_stage_cfg(
         stage3_min_trades=1, stage3_min_profit_factor=1.5, stage3_max_drawdown_buffer_mult=0.05,
     )
@@ -214,7 +225,7 @@ def test_loop_calls_on_round_after_every_round(tmp_path):
         starting_family="trend_breakout", starting_max_candidates=4,
     )
     run_search_loop(
-        df, RiskConfig(), PropRules(), _fast_stage_cfg(), db_dir=tmp_path / "loop_dbs",
+        df, _frictionless_risk(), PropRules(), _fast_stage_cfg(), db_dir=tmp_path / "loop_dbs",
         loop_cfg=loop_cfg, instrument="EURUSD", timeframe="5m", on_round=seen.append,
         family_health_search_dir=tmp_path / "fh_search", family_health_evolution_dir=tmp_path / "fh_evo",
     )
@@ -238,7 +249,7 @@ def test_loop_reports_cancelled_not_error_when_a_round_raises_search_cancelled(t
     df = _flat_df()
     loop_cfg = SearchLoopConfig(max_rounds=3, starting_family="trend_breakout", starting_max_candidates=4)
     result = run_search_loop(
-        df, RiskConfig(), PropRules(), _fast_stage_cfg(), db_dir=tmp_path / "loop_dbs",
+        df, _frictionless_risk(), PropRules(), _fast_stage_cfg(), db_dir=tmp_path / "loop_dbs",
         loop_cfg=loop_cfg, instrument="EURUSD", timeframe="5m",
         family_health_search_dir=tmp_path / "fh_search", family_health_evolution_dir=tmp_path / "fh_evo",
     )
@@ -254,7 +265,7 @@ def test_loop_never_raises_and_reports_error_reason_when_a_round_blows_up(tmp_pa
     df = _flat_df()
     loop_cfg = SearchLoopConfig(max_rounds=3, starting_family="trend_breakout", starting_max_candidates=4)
     result = run_search_loop(
-        df, RiskConfig(), PropRules(), _fast_stage_cfg(), db_dir=tmp_path / "loop_dbs",
+        df, _frictionless_risk(), PropRules(), _fast_stage_cfg(), db_dir=tmp_path / "loop_dbs",
         loop_cfg=loop_cfg, instrument="EURUSD", timeframe="5m",
         family_health_search_dir=tmp_path / "fh_search", family_health_evolution_dir=tmp_path / "fh_evo",
     )

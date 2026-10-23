@@ -20,6 +20,17 @@ from app.strategy.library import StrategyAlreadyExists
 from app.strategy.python import PythonStrategy
 
 
+def _frictionless_risk(**kw) -> RiskConfig:
+    """These fixtures plant a tiny synthetic edge to exercise Search Lab's plumbing (stages, DB, loop mode, saving).
+    RiskConfig() now defaults to REAL friction (1-pip spread, 0.3 slippage, $3 commission per trade); on this data its
+    round-trip cost is bigger than the edge, so Stage 1's cost pre-screen rejects every candidate and there is nothing
+    left to exercise. Friction is pinned to zero here -- cost handling has its own dedicated tests."""
+    kw.setdefault("spread_pips", 0.0)
+    kw.setdefault("slippage_pips", 0.0)
+    kw.setdefault("commission_per_trade", 0.0)
+    return RiskConfig(**kw)
+
+
 def _trending_df(n=2500, seed=3, drift=0.00015):
     rng = np.random.default_rng(seed)
     ts = pd.date_range("2024-01-01", periods=n, freq="5min")
@@ -63,7 +74,7 @@ def test_saves_a_manual_family_candidate(tmp_path, small_family_space):
     df = _trending_df()
     db_path = tmp_path / "search.db"
     summary = run_search(
-        df, RiskConfig(), PropRules(), small_family_space, _fast_stage_cfg(),
+        df, _frictionless_risk(), PropRules(), small_family_space, _fast_stage_cfg(),
         db_path=str(db_path), instrument="TEST", timeframe="5m",
     )
     assert summary.stage3_survivors > 0, "expected at least one candidate to reach Stage 3 with this fixture"
@@ -93,7 +104,7 @@ def test_saves_a_python_candidate(tmp_path):
     space = generate_search_space(mode="family", strategy=strategy, grid_points_per_gene=2, max_candidates=8, seed=1)
     db_path = tmp_path / "search.db"
     summary = run_search(
-        df, RiskConfig(), PropRules(), space, _fast_stage_cfg(),
+        df, _frictionless_risk(), PropRules(), space, _fast_stage_cfg(),
         db_path=str(db_path), instrument="TEST", timeframe="5m",
     )
     assert summary.stage3_survivors > 0
@@ -110,7 +121,7 @@ def test_saving_the_same_candidate_twice_raises_already_exists(tmp_path, small_f
     df = _trending_df()
     db_path = tmp_path / "search.db"
     summary = run_search(
-        df, RiskConfig(), PropRules(), small_family_space, _fast_stage_cfg(),
+        df, _frictionless_risk(), PropRules(), small_family_space, _fast_stage_cfg(),
         db_path=str(db_path), instrument="TEST", timeframe="5m",
     )
     assert summary.stage3_survivors > 0
@@ -125,7 +136,7 @@ def test_saved_strategy_is_tagged_search_lab(tmp_path, small_family_space):
     df = _trending_df()
     db_path = tmp_path / "search.db"
     summary = run_search(
-        df, RiskConfig(), PropRules(), small_family_space, _fast_stage_cfg(),
+        df, _frictionless_risk(), PropRules(), small_family_space, _fast_stage_cfg(),
         db_path=str(db_path), instrument="TEST", timeframe="5m",
     )
     assert summary.stage3_survivors > 0
