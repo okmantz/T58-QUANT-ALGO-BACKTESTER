@@ -27,8 +27,10 @@ def test_engine_matches_independent_reference():
         df=mk(); k=int(rng.integers(1,20)); d=int(rng.choice([1,-1]))
         SL=float(rng.uniform(5,25)); TP=float(rng.uniform(5,40))
         sig=pd.Series(0,index=df.index); sig.iloc[k:]=d
+        # RiskConfig now defaults to REAL friction (a 1-pip spread and a flat $3 commission per trade). This reference
+        # models only slippage + per-contract commission, so those two defaults are pinned to zero here.
         risk=RiskConfig(initial_balance=50000.0,risk_mode="fixed",risk_value=1500.0,pip_size=1.0,contract_size=CS,
-            commission_per_contract=COMM,slippage_pips=SLIP,sizing_mode="fit_stop",max_trades_per_day=50)
+            commission_per_trade=0.0,commission_per_contract=COMM,slippage_pips=SLIP,spread_pips=0.0,sizing_mode="fit_stop",max_trades_per_day=50)
         tr,_=run_execution(df=df,signals=sig,risk=risk,stop_loss_pips=SL,take_profit_pips=TP,stop_loss_distance=None,
             take_profit_distance=None,trailing_stop_distance=None,breakeven_trigger_r=None,partial_exit_config=None,adaptive_risk=None)
         if not tr: continue

@@ -30,7 +30,12 @@ def _reset_replay_cache():
     live_market._replay_cache.clear()
 
 
-def test_mt5_status_reports_unavailable_in_this_sandbox():
+def test_mt5_status_reports_unavailable_in_this_sandbox(monkeypatch):
+    # Simulate "no MT5 backend": neither the native package nor the mt5linux bridge client is importable. Explicit
+    # (instead of assuming the environment) because config/requirements.txt installs mt5linux on Linux/macOS.
+    from app.forward_test import mt5_connector
+    monkeypatch.setattr(mt5_connector, "mt5", None)
+    monkeypatch.setattr(mt5_connector, "_bridge_package_available", lambda: False)
     status = live_market.mt5_status()
     assert status["available"] is False
     assert status["connected"] is False
