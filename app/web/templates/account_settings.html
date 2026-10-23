@@ -52,6 +52,9 @@
   html[data-theme="light"] .pz-tile { background-color: #e6edf3; }
   .pz-tile span { position: absolute; left: 0; right: 0; bottom: 0; padding: 5px 8px; font-size: 12px; font-weight: 700; text-align: left;
     color: #fff; background: linear-gradient(180deg, transparent, rgba(0,0,0,.62)); }
+  .pz-tile { transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease; }
+  @media (hover: hover) { .pz-tile:hover { transform: translateY(-1px); border-color: rgba(var(--teal-rgb), 0.55); } }
+  @media (prefers-reduced-motion: reduce) { .pz-tile { transition: none; } .pz-tile:hover { transform: none; } }
   .pz-tile.on { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), 0.2); }
   .pz-tile:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
   .pz-tile[data-bg="mountains"] { background-image: url("/static/dashboard-mountains.webp"); }
