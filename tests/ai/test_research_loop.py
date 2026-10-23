@@ -311,6 +311,13 @@ def test_runner_status_reports_progress(monkeypatch):
     cfg = rl.ResearchLoopConfig(n_iterations=1, mc_sims=20, survival_sims=50, keep_score_threshold=999.0)
     runner = rl.ResearchLoopRunner(_df(500), _risk(), _rules(), _settings(), cfg)
     runner.start()
+    # Let the one-iteration run finish ON ITS OWN. (This used to call stop_and_wait() straight after start(), which
+    # races the worker thread: on a loaded machine the stop landed before iteration 1 completed and the status read
+    # n_iterations_run == 0.)
+    import time
+    deadline = time.time() + 30.0
+    while runner.is_running and time.time() < deadline:
+        time.sleep(0.05)
     runner.stop_and_wait(timeout=15.0)
     status = runner.status()
     assert status["running"] is False
