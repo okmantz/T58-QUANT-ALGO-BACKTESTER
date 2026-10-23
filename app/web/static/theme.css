@@ -1039,17 +1039,27 @@ html[data-theme="light"] .t58-stepper a.current { color: var(--teal); background
 html[data-theme="light"] .t58-avatar { background: rgba(255, 255, 255, 0.85); border-color: rgba(10, 111, 84, 0.45); box-shadow: 0 4px 12px -4px rgba(36, 68, 90, 0.35); }
 
 /* ---- Personalize: seasonal backdrops (Account settings -> Personalize). Default = the mountains above. Each season
-   has a night scene for the dark theme and a day scene for the light theme (scripts/generate_season_backdrops.py). ---- */
-html[data-bg="spring"]:not([data-theme="light"]) body::before { background-image: url("/static/backgrounds/spring-dark.webp"); opacity: .42; }
-html[data-bg="summer"]:not([data-theme="light"]) body::before { background-image: url("/static/backgrounds/summer-dark.webp"); opacity: .42; }
-html[data-bg="autumn"]:not([data-theme="light"]) body::before { background-image: url("/static/backgrounds/autumn-dark.webp"); opacity: .42; }
-html[data-bg="winter"]:not([data-theme="light"]) body::before { background-image: url("/static/backgrounds/winter-dark.webp"); opacity: .42; }
+   has a night scene for the dark theme and a day scene for the light theme (scripts/generate_season_backdrops.py).
+   Every image is the same 2048x768 artwork box as the mountains and already dissolves to transparent at its top, side
+   and bottom edges, so it melts into the page. The night scenes differ a lot in brightness (summer is the darkest,
+   winter the brightest), so each gets its own quiet-page opacity to give all four the same presence; the day scenes
+   are evenly lit and share one value. The dashboard (body.db-page) shows them at full strength. ---- */
+html[data-bg="spring"]:not([data-theme="light"]) body::before { background-image: url("/static/backgrounds/spring-dark.webp"); opacity: .48; }
+html[data-bg="summer"]:not([data-theme="light"]) body::before { background-image: url("/static/backgrounds/summer-dark.webp"); opacity: .64; }
+html[data-bg="autumn"]:not([data-theme="light"]) body::before { background-image: url("/static/backgrounds/autumn-dark.webp"); opacity: .54; }
+html[data-bg="winter"]:not([data-theme="light"]) body::before { background-image: url("/static/backgrounds/winter-dark.webp"); opacity: .40; }
 html[data-bg="spring"][data-theme="light"] body::before { background-image: url("/static/backgrounds/spring-light.webp"); opacity: .45; }
 html[data-bg="summer"][data-theme="light"] body::before { background-image: url("/static/backgrounds/summer-light.webp"); opacity: .45; }
 html[data-bg="autumn"][data-theme="light"] body::before { background-image: url("/static/backgrounds/autumn-light.webp"); opacity: .45; }
 html[data-bg="winter"][data-theme="light"] body::before { background-image: url("/static/backgrounds/winter-light.webp"); opacity: .45; }
 html[data-bg]:not([data-bg="mountains"]):not([data-theme="light"]) body.db-page::before { opacity: 1; }
 html[data-bg]:not([data-bg="mountains"])[data-theme="light"] body.db-page::before { opacity: .9; }
+
+/* Smooth hand-off: when the backdrop or the theme changes, t58-personalize.js flags <html class="t58-bg-swap"> for about a
+   second and the new scene eases in instead of snapping. Normal page loads never carry the class, so navigation is calm. */
+html.t58-bg-swap body::before { animation: t58-bg-swap .9s cubic-bezier(.22, .61, .36, 1) both; }
+@keyframes t58-bg-swap { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { html.t58-bg-swap body::before { animation: none; } }
 
 /* ---- Personalize: Bible verse bar (static line at the top of the page; text rotates every 30 minutes) ---- */
 .t58-verse {

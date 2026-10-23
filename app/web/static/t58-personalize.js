@@ -12,6 +12,16 @@
   function bg() { var v = get('t58-bg'); return BGS.indexOf(v) >= 0 ? v : 'mountains'; }
   function verseOn() { return get('t58-verse') === '1'; }
   function applyBg() { document.documentElement.setAttribute('data-bg', bg()); }
+  // Ease the new scene in (theme.css: html.t58-bg-swap) when the backdrop or the theme changes -- never on a plain page load.
+  var swapTimer = 0;
+  function swap() {
+    var el = document.documentElement;
+    el.classList.remove('t58-bg-swap');
+    void el.offsetWidth; // restart the animation if it is already running
+    el.classList.add('t58-bg-swap');
+    clearTimeout(swapTimer);
+    swapTimer = setTimeout(function () { el.classList.remove('t58-bg-swap'); }, 1000);
+  }
   function slotVerse() { return VERSES[Math.floor(Date.now() / SLOT_MS) % VERSES.length]; }
 
   function renderVerse() {
@@ -35,12 +45,18 @@
 
   window.T58Personalize = {
     backgrounds: BGS, bg: bg, verse: verseOn,
-    setBg: function (name) { if (BGS.indexOf(name) < 0) name = 'mountains'; set('t58-bg', name); applyBg(); },
+    setBg: function (name) { if (BGS.indexOf(name) < 0) name = 'mountains'; set('t58-bg', name); applyBg(); swap(); },
     setVerse: function (on) { set('t58-verse', on ? '1' : '0'); renderVerse(); },
     verses: VERSES.length
   };
 
   applyBg();
+  // The theme toggle (t58-chrome.js) flips data-theme, which swaps night <-> day scenes: fade that too.
+  if (window.MutationObserver) {
+    new MutationObserver(swap).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  }
+  // Another tab changed the backdrop: follow it.
+  window.addEventListener('storage', function (e) { if (e.key === 't58-bg') { applyBg(); swap(); } });
   function boot() { renderVerse(); setInterval(renderVerse, 60 * 1000); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();
