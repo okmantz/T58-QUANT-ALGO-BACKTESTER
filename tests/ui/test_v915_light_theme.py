@@ -34,7 +34,10 @@ DARK_HASH = {
     # raw-text diff is only the added comment blocks).
     # Re-pinned (dashboard redesign): the dark palette was deliberately retuned ("Deep Teal Glass": violet/cyan/gold
     # accents, glass panels, mountain backdrop). Light-scoped rules are untouched.
-    "theme.css": "7183780c5a6638f3eb5d0ad6c94967a8549f67a3314307e7340f059a7c3c18f8",
+    # Re-pinned 2026-10-23: the new seasonal artwork (scripts/generate_season_backdrops.py) needed per-scene night
+    # opacities (the four night scenes differ a lot in brightness) plus the t58-bg-swap fade-in keyframes. Only the
+    # seasonal-backdrop rules in theme.css changed; no dark token or any other rule did.
+    "theme.css": "9f860d020d0b1dcdd255bfb585f75ab5376261609024e024232c7eab61201f33",
     "job-theme.css": "e2d34ce668ee4d455a26d41c40cc3a6396290e82135e41201f477b5c972181c2",
     # Re-pinned 2026-10-13: the lifecycle (Champion board) dark rules were extended after the
     # WS-E pin was taken; token values (DARK_TOKENS below) are still checked separately.
