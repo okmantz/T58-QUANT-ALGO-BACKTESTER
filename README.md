@@ -519,10 +519,11 @@ Details, env vars and troubleshooting: [docs/LICENSING.md](docs/LICENSING.md).
 - **Prop presets carry a "verified" date.** Each prop-firm preset shows when its rules were last checked against the firm's
   public page (`app/prop/presets.py` `_VERIFIED_STAMPS`). Presets with no stamp are labelled unverified and cannot reach READY.
   Firms change rules often — re-check before trading real money.
-- **Strategy Graveyard starter seed.** New installs ship with 500+ real, measured failed strategy variants (bundled data, real
+- **Strategy Graveyard starter seed.** New installs ship with 1,100+ real, measured failed strategy variants (bundled data, real
   costs, in-sample + held-out) so Search/Forge skip known-dead neighbourhoods from day one. They are scoped to the dataset they were
-  measured on. Rebuild with `scripts/build_graveyard_seed.py`; fold in your own graveyard with
-  `scripts/export_graveyard_seed.py`.
+  measured on. Rebuild with `scripts/build_graveyard_seed.py`; add more near-miss failures (covers every strategy family, keeps only
+  rows that were close -- overfit collapses, drawdown breaches, noise-band edges, and edges that costs ate) with
+  `scripts/expand_graveyard_seed.py`; fold in your own graveyard with `scripts/export_graveyard_seed.py`.
 
 ## Strategy format support
 
