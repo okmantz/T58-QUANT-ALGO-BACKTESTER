@@ -269,6 +269,7 @@ def _locked_oos_check(rec: dict, locked_df, risk: "RiskConfig", prop_rules: "Pro
             strength=diag.strength, weakness=diag.weakness,
             suggested_mutation=diag.suggested_mutation,
             related_successful_family=diag.related_successful_family,
+            **_holdout_diag_kwargs(holdout_bt, locked_df, risk),
         )], path=graveyard_path)
         return "NOT TESTED"
     try:
@@ -299,8 +300,20 @@ def _locked_oos_check(rec: dict, locked_df, risk: "RiskConfig", prop_rules: "Pro
         strength=diag.strength, weakness=diag.weakness,
         suggested_mutation=diag.suggested_mutation,
         related_successful_family=diag.related_successful_family,
+        **_holdout_diag_kwargs(holdout_bt, locked_df, risk),
     )], path=graveyard_path)
     return "FAILED"
+
+
+def _holdout_diag_kwargs(holdout_bt, locked_df, risk) -> dict:
+    """Graveyard edge/cost/data-window fields measured on the locked holdout slice (best-effort)."""
+    try:
+        from app.search.batch_runner import _graveyard_diag_kwargs as _kw
+        from app.search.graveyard import edge_diagnostics
+        d = edge_diagnostics(holdout_bt.trades if holdout_bt is not None else [], risk=risk, df=locked_df)
+        return _kw(d, None, None)
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def run_forge(
@@ -499,6 +512,7 @@ def run_forge(
             strength=diag.strength, weakness=diag.weakness,
             suggested_mutation=diag.suggested_mutation,
             related_successful_family=diag.related_successful_family,
+            **_graveyard_diag_kwargs(rec.get("graveyard_diag"), instrument, timeframe),
         ))
     if grave_entries:
         record_rejections(grave_entries, path=graveyard_path)

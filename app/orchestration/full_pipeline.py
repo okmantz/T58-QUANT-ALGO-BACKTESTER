@@ -147,6 +147,33 @@ def _ledger_prior_trials(strategy) -> int:
         return 0
 
 
+def _ledger_family_name(cfg, strategy=None) -> str | None:
+    """The Search/Evolution family this strategy was drawn from: ``cfg.ledger_family`` if set, else the
+    ``search_family`` stamped in its library sidecar by Search Lab / Evolution Lab promotions."""
+    fam = (getattr(cfg, "ledger_family", "") or "").strip()
+    if fam:
+        return fam
+    ref = getattr(cfg, "library_ref", None)
+    if ref:
+        try:
+            from app.strategy.library import load_strategy_metadata
+            return (load_strategy_metadata(ref[0], ref[1]) or {}).get("search_family") or None
+        except Exception:
+            return None
+    return None
+
+
+def _ledger_family_prior(cfg, strategy=None) -> int:
+    """Aged number of candidates Search Lab / Evolution Lab ever evaluated in this strategy's family (Stage-1 kills
+    included); 0 when the family is unknown or never booked."""
+    try:
+        from app.validation import trial_ledger
+        fam = _ledger_family_name(cfg, strategy)
+        return trial_ledger.family_prior(fam) if fam else 0
+    except Exception:
+        return 0
+
+
 def _ledger_record_trials(strategy, n) -> None:
     try:
         from app.validation import trial_ledger
@@ -444,6 +471,16 @@ class FullPipelineConfig:
     # run before these fields existed.
     library_ref: tuple[str, str] | None = None
     replace_existing: bool = False
+    # Persistent-ledger family (2026-10-24): Search Lab / Evolution Lab book every candidate they evaluate under
+    # ``family:<name>``. Empty = read ``search_family`` from the library entry's sidecar. The family's booked count is
+    # added to the Deflated-Sharpe trial count and (after effective-trial clustering) to the Bonferroni n_tests.
+    ledger_family: str = ""
+    # Cross-instrument transfer (2026-10-24, app.validation.cross_instrument_transfer): the frozen final strategy is run on a
+    # sibling instrument (ES -> NQ, GC -> MGC, ...) over the same window. "off" = skip; "advisory" = annotate the verdict
+    # reasons only; "cap" = a FAIL (no sign of the edge on the sibling) demotes READY to MARGINAL. No sibling data on disk
+    # or too few sibling trades is NOT_TESTED and never demotes.
+    transfer_mode: str = "cap"
+    transfer_min_trades: int = 30
     # ONE STRATEGY, ONE RECORD (Oct 2026): when library_ref is set the
     # run now ALWAYS updates that same library entry in place (previous
     # version archived, every report/progress field stays on it) -- the
@@ -1277,6 +1314,7 @@ _VERDICT_TO_LIBRARY_STATUS = {
 }
 
 def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 25.0, replay_min_gap_pts: float = 10.0, null_result=None, null_p_max: float = 0.10, cost_stress=None, cost_stress_min_retained: float = 0.25, mc_dispersion_pts=None, payout30=None, payout30_min_pct: float = 25.0, payout30_mode: str = 'soft', payout30_max_score_penalty: float = 5.0, payout30_hard_floor_pct: float = 0.0, payout30_min_windows: float = 3.0, paid_min_pct: float = 35.0,
+                  transfer=None, transfer_mode: str = "cap",
                   evidence_required: bool = False, min_expectancy_lb_r: float = 0.0, min_trades_for_expectancy_gate: int = 30,
                   funded_breach_cap_pct: float = 50.0, **kwargs):
     """Accuracy-overhaul wrapper around the original verdict logic.
@@ -1450,6 +1488,17 @@ def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 2
             reasons.append(f"30-DAY PAYOUT (advisory, -{_pen:.1f} score pts): {_detail}. Slower payouts are not a failed edge.")
             if verdict == "READY" and getattr(scorecard, "tier", "") not in ("Elite", "Strong"):
                 verdict = "MARGINAL"
+    if transfer and transfer.get("status") in ("PASS", "FAIL") and str(transfer_mode).lower() != "off":
+        _tmsg = (f"{transfer.get('sibling') or 'sibling instrument'}: {transfer.get('reason', '')}")
+        if transfer["status"] == "PASS":
+            reasons.append(f"Evidence (cross-instrument transfer): the frozen strategy shows the edge at least weakly on {_tmsg}.")
+        elif str(transfer_mode).lower() == "cap":
+            reasons.append(
+                f"NO CROSS-INSTRUMENT TRANSFER: on {_tmsg}. A real edge in one index future should appear at least weakly "
+                "in its sibling; this one does not -- capped at MARGINAL.")
+            return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
+        else:
+            reasons.append(f"Cross-instrument transfer (advisory): no sign of the edge on {_tmsg}.")
     if mc_dispersion_pts is not None and float(mc_dispersion_pts) > 10.0:
         reasons.append(
             f"SEED INSTABILITY: per-attempt pass probability swings with a standard deviation of "
@@ -1458,6 +1507,29 @@ def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 2
         )
         return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
     return verdict, reasons, scorecard, ruin_fail, look_fail
+
+
+def _transfer_evidence(final_strategy, dev_df, risk, final_bt, cfg, instrument, log):
+    """Cross-instrument transfer result dict (or None when off/unavailable). Never raises."""
+    mode = str(getattr(cfg, "transfer_mode", "cap") or "off").lower()
+    if mode == "off":
+        return None
+    try:
+        import numpy as _np
+        from app.validation.cross_instrument_transfer import run_transfer_check
+        tf_s = None
+        try:
+            ts = dev_df["timestamp"]
+            tf_s = int(round(float(_np.median(_np.diff(ts.iloc[: min(len(ts), 5000)].astype("int64").to_numpy())) / 1e9)))
+        except Exception:  # noqa: BLE001
+            tf_s = None
+        res = run_transfer_check(final_strategy, dev_df, final_bt.trades, risk, instrument, timeframe_seconds=tf_s,
+                                 min_trades=int(getattr(cfg, "transfer_min_trades", 30)))
+        log(f"  Cross-instrument transfer ({res.sibling or 'no sibling'}): {res.status} -- {res.reason}")
+        return res.to_dict()
+    except Exception as exc:  # noqa: BLE001
+        log(f"  Cross-instrument transfer skipped: {exc}")
+        return None
 
 
 def _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt, cfg, log,
@@ -2717,6 +2789,7 @@ def run_full_pipeline(
         if cfg.dsr_gate_enabled:
             log("Step 6c/7: Deflated Sharpe gate (multiple-testing correction)...")
             try:
+                _family_prior = _ledger_family_prior(cfg, strategy)
                 n_trials = count_all_trials(
                     baseline_count=1,
                     ga_total_evaluations=(ga_result.total_evaluations
@@ -2724,8 +2797,11 @@ def run_full_pipeline(
                     # D4(b): hand-tuned / externally-evaluated configs
                     # count too -- otherwise a hand-tuned strategy gets
                     # n_trials=1 and an optimistic deflated Sharpe.
-                    extra_trial_counts=(cfg.external_trial_count, _ledger_prior_trials(strategy)),
+                    extra_trial_counts=(cfg.external_trial_count, _ledger_prior_trials(strategy), _family_prior),
                 )
+                if _family_prior:
+                    log(f"  Trial ledger: {_family_prior:,} earlier Search/Evolution candidate(s) booked under "
+                        f"family:{_ledger_family_name(cfg, strategy)} are added to the raw trial count.")
                 _ledger_record_trials(strategy, (ga_result.total_evaluations if (refinement_ran and ga_result is not None) else 1))
                 trial_sharpes: list[float] = []
                 if refinement_ran and ga_result is not None and ga_result.leaderboard:
@@ -2775,8 +2851,23 @@ def run_full_pipeline(
                         log(f"  Effective trials: {_eff['n_clusters']} distinct return stream(s) among {_eff['n_streams']} leaderboard "
                             f"candidates -> deflating for {_eff['effective_trials']} instead of {n_trials} raw evaluations.")
                         n_trials = _eff["effective_trials"]
+                        # The same effective count corrects the ICIR gate's Bonferroni n_tests (it only saw this run's own GA
+                        # evaluations). Never loosens; can only turn an ICIR pass into a fail.
+                        if icir_gate is not None and _family_prior:
+                            try:
+                                from app.validation.icir import rescale_gate_for_n_tests
+                                _before = icir_gate.ok
+                                icir_gate = rescale_gate_for_n_tests(icir_gate, int(n_trials))
+                                log(f"  Bonferroni re-scaled to {int(n_trials):,} effective trial(s) (ledger + this run): "
+                                    f"ICIR gate {'still passes' if icir_gate.ok else 'does not pass'}"
+                                    f"{'' if icir_gate.ok == _before else ' -- changed by the ledger'}.")
+                            except Exception as exc:  # noqa: BLE001
+                                log(f"  Bonferroni re-scale skipped ({exc}).")
                     except Exception as exc:  # noqa: BLE001 -- keep the raw count
                         log(f"  Effective-trial clustering skipped ({exc}); using the raw count.")
+                elif _family_prior:
+                    log("  Ledger family trials counted raw for DSR (too few leaderboard streams to cluster); the ICIR "
+                        "Bonferroni keeps this run's own evaluation count rather than an unclustered ledger total.")
                 dsr_gate_result = deflated_sharpe_gate(
                     float(final_bt.statistics.sharpe_per_trade),
                     trial_sharpes,
@@ -2982,6 +3073,7 @@ def run_full_pipeline(
             final_strategy, df, dev_df, risk, prop_rules, cfg, log,
             workers=_mc_workers, progress_hook=_progress,
         )
+        _transfer_ev = _transfer_evidence(final_strategy, dev_df, risk, final_bt, cfg, instrument, log) if _can_be_ready else None
         _progress(7, 0.6, "Seed-stability Monte Carlo")
         # v9.5 seed stability: re-score the winner's trade list under a
         # few different Monte Carlo seeds. The Oct 2026 audit measured
@@ -3022,6 +3114,7 @@ def run_full_pipeline(
             payout30=_payout_ev.get("gate"), payout30_min_pct=cfg.payout30_min_pct,
             payout30_mode=getattr(cfg, 'payout30_mode', 'soft'), payout30_max_score_penalty=getattr(cfg, 'payout30_max_score_penalty', 5.0), payout30_hard_floor_pct=getattr(cfg, 'payout30_hard_floor_pct', 0.0),
             payout30_min_windows=cfg.payout30_min_effective_windows,
+            transfer=_transfer_ev, transfer_mode=str(getattr(cfg, "transfer_mode", "cap")),
             evidence_required=bool(getattr(cfg, "extra_gates_enabled", True)),
             min_expectancy_lb_r=float(getattr(cfg, "min_expectancy_lb_r", 0.0)),
             funded_breach_cap_pct=float(getattr(cfg, "funded_breach_cap_pct", 50.0)),
