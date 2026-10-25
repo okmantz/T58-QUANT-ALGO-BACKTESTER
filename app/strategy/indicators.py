@@ -32,6 +32,12 @@ BOUNDED_OSCILLATOR_RANGES.update({
     "session_phase": (0.0, 3.0), "daily_trend_state": (-1.0, 1.0), "overnight_position": (0.0, 1.0),
     "vix_percentile": (0.0, 100.0), "weekday_number": (0.0, 6.0),
 })
+# v12 (2026-10-24): exact bounds of the new bounded series (single source: indicators_v12.V12_BOUNDED_RANGES; literal here
+# because indicators_v12 imports from the v11 module which imports this one).
+BOUNDED_OSCILLATOR_RANGES.update({
+    "autocorr_lag1": (-1.0, 1.0),
+    "round_dist_es": (-0.5, 0.5), "round_dist_nq": (-0.5, 0.5), "round_dist_gc": (-0.5, 0.5), "round_dist_auto": (-0.5, 0.5),
+})
 
 
 def _period(period: int) -> int:
@@ -1345,6 +1351,11 @@ def _build_indicator_series_uncached(frame: pd.DataFrame, kind: str, period: int
     _v11_builder = _indicators_v11.V11_INDICATOR_BUILDERS.get(kind)
     if _v11_builder is not None:
         return _v11_builder(frame, p, column, lookback)
+    # --- v12 (2026-10-24): time-of-day range, Parkinson/Garman-Klass, variance ratio / autocorrelation, round numbers, NR4/NR7. ---
+    from app.strategy import indicators_v12 as _indicators_v12
+    _v12_builder = _indicators_v12.V12_INDICATOR_BUILDERS.get(kind)
+    if _v12_builder is not None:
+        return _v12_builder(frame, p, column, lookback)
     raise KeyError(kind)
 
 

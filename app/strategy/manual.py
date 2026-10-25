@@ -66,13 +66,15 @@ IMPOSSIBLE_CONDITION_MARKER = "can never be true"
 # undetected, so those candidates silently traded zero bars while still burning GA budget.
 BOOLEAN_OPERAND_KINDS = frozenset({"time_of_day", "rth_flag", "month_end_window", "turn_of_month", "first_trading_day", "opex_week",
                                    "triple_witching", "quarter_end_week", "pre_holiday", "event_day_any", "event_day_fomc",
-                                   "event_day_nfp", "event_day_cpi", "event_day_pce"})
+                                   "event_day_nfp", "event_day_cpi", "event_day_pce",
+                                   "nr4", "nr7", "daily_nr4", "daily_nr7"})
 
 
 def _v11_kinds():
-    """v11 session/calendar/event/regime kinds (lazy so importing manual stays light)."""
+    """v11 session/calendar/event/regime kinds plus the v12 kinds (lazy so importing manual stays light)."""
     from app.strategy.indicators_v11 import V11_INDICATOR_KINDS
-    return V11_INDICATOR_KINDS
+    from app.strategy.indicators_v12 import V12_INDICATOR_KINDS
+    return V11_INDICATOR_KINDS + V12_INDICATOR_KINDS
 
 
 def validate_bounded_conditions(config: dict) -> list[str]:
