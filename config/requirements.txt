@@ -95,3 +95,7 @@ psutil>=5.9.0
 # Pine Indicator Creator (app/strategy/pine_indicator.py): a real Pine v5 grammar used as an extra syntax check on generated
 # scripts. Optional in spirit: without it only the built-in linter runs (and the result says so).
 pynescript>=0.3.0
+
+# Search Lab Stage-1 numba screener (app/search/numba_screener.py): a pre-cull only, never a verdict. Optional: without numba the
+# screener is a no-op and Stage 1 runs on the exact vectorized path as before.
+numba>=0.59.0
