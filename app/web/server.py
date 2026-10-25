@@ -838,13 +838,24 @@ def activate_submit():
 # Paths the account lock gate below never blocks, even when a password is
 # set and the browser hasn't unlocked yet: the lock page itself (else
 # nobody could ever unlock), static assets/PWA files (so the lock screen
-# itself can render with its icon/manifest/theme), and the Account
-# Settings page + its POST endpoints (so a password can be SET or CLEARED
-# even from a not-yet-unlocked browser on first run -- see
-# _account_lock_gate's own comment for why this one exemption is safe).
+# itself can render with its icon/manifest/theme), and the rest of the
+# Account Settings family.
+# EXCEPT the two routes in _LOCK_GATE_ALWAYS_GATED_PATHS below: those can
+# change or wipe the lock itself, so they are NEVER exempt. (When no
+# password is set the gate is a no-op anyway, so a first-time "set a
+# password" is still open -- nothing is locked yet.)
 _LOCK_GATE_EXEMPT_PREFIXES = (
     "/lock", "/static/", "/manifest.json", "/sw.js", "/favicon.ico",
     "/settings/account", "/webhook/tradingview/",
+)
+
+# Routes that alter/clear the lock password or the local account. Carved
+# out of the "/settings/account" exemption above so an unlocked-session is
+# required whenever a password exists. Handlers ALSO re-verify the current
+# password themselves (defense in depth).
+_LOCK_GATE_ALWAYS_GATED_PATHS = (
+    "/settings/account/change_password",
+    "/settings/account/delete",
 )
 
 
@@ -858,9 +869,13 @@ def _account_lock_gate():
     password can be set/changed/cleared, so it must stay reachable even
     pre-unlock, and it reveals nothing itself (no strategy/account data,
     just the profile form) -- everything else on the site stays gated.
+    The exception is change_password and delete (_LOCK_GATE_ALWAYS_GATED_PATHS):
+    once a password exists they need an unlocked session like any other page.
     """
     path = request.path
-    if any(path == p or path.startswith(p) for p in _LOCK_GATE_EXEMPT_PREFIXES):
+    normalized = path.rstrip("/") or "/"
+    always_gated = normalized in _LOCK_GATE_ALWAYS_GATED_PATHS
+    if not always_gated and any(path == p or path.startswith(p) for p in _LOCK_GATE_EXEMPT_PREFIXES):
         return None
     try:
         from app.accounts.settings import load_account_settings
@@ -4877,15 +4892,34 @@ def account_settings_profile_picture_file():
 
 @app.route("/settings/account/change_password", methods=["POST"])
 def account_settings_change_password():
-    from app.accounts.settings import hash_password, load_account_settings, save_account_settings
+    """Set / change / clear the local lock password.
+
+    * A password already exists -> the CURRENT password must be supplied and
+      verified (403 otherwise), whatever the session says. The lock gate
+      (_account_lock_gate) additionally refuses this route from a browser
+      that hasn't unlocked. An empty new password then means "remove the lock".
+    * No password yet (first-time set) -> open, but an empty new password is
+      rejected (400): there is nothing to clear, and an empty value must never
+      be a way to drop a lock without proving the current password.
+    """
+    from app.accounts.settings import hash_password, load_account_settings, save_account_settings, verify_password
     new_password = request.form.get("new_password", "")
     confirm_password = request.form.get("confirm_password", "")
+    settings = load_account_settings()
+    current_verified = settings.has_password and verify_password(request.form.get("current_password", ""), settings.password_hash)
+    if settings.has_password and not current_verified:
+        return render_template("account_settings.html", **_account_settings_page_context(
+            password_error="Current password is missing or incorrect -- nothing was changed.",
+        )), 403
     if new_password != confirm_password:
         return render_template("account_settings.html", **_account_settings_page_context(
             password_error="New password and confirmation didn't match -- nothing was changed.",
         )), 400
-    settings = load_account_settings()
-    settings.password_hash = hash_password(new_password)  # empty new_password -> hash_password("") -> "" -> lock removed
+    if not new_password and not current_verified:
+        return render_template("account_settings.html", **_account_settings_page_context(
+            password_error="Enter a password to set -- nothing was changed.",
+        )), 400
+    settings.password_hash = hash_password(new_password)  # empty new_password (current verified) -> "" -> lock removed
     save_account_settings(settings)
     session["t58_unlocked"] = True  # whoever just set/changed it is, by definition, already "in"
     message = "Local app lock password set." if new_password else "Local app lock password cleared -- this app no longer asks for one."
@@ -4909,7 +4943,12 @@ def account_settings_delete():
     account\" here means \"forget my local profile + lock\", the only
     thing this app actually has an \"account\" for (see this module's own
     docstring on the app having no server-side account system)."""
-    from app.accounts.settings import AccountSettings, save_account_settings
+    from app.accounts.settings import AccountSettings, load_account_settings, save_account_settings, verify_password
+    existing = load_account_settings()
+    if existing.has_password and not verify_password(request.form.get("current_password", ""), existing.password_hash):
+        return render_template("account_settings.html", **_account_settings_page_context(
+            password_error="Enter your current password to delete the account -- nothing was deleted.",
+        )), 403
     save_account_settings(AccountSettings())
     session.pop("t58_unlocked", None)
     return render_template("account_settings.html", **_account_settings_page_context(saved="deleted"))
