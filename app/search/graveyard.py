@@ -96,6 +96,24 @@ class GraveyardEntry:
     suggested_mutation: str | None = None          # e.g. "add a volatility filter"
     related_successful_family: str | None = None   # the best-performing family in this same run, if different
 
+    # -- "Map of dead strategy space" fields (2026-10-24) ------------------
+    # Optional, same additive pattern as the failure-diagnosis block above:
+    # older rows and callers that cannot fill them simply leave them None.
+    n_trades: int | None = None                    # trades behind the numbers below
+    net_profit: float | None = None                # $ net at modelled costs
+    avg_r_net: float | None = None                 # mean net R-multiple per trade (pnl / initial risk $)
+    profit_factor: float | None = None             # net PF at modelled costs (None when undefined/inf)
+    null_gate_p: float | None = None               # random-entry null-gate p-value, ONLY when that gate really ran
+    bootstrap_p: float | None = None               # cheap day-block bootstrap p(mean pnl > 0); a screen, not the null gate
+    doubled_cost_net_profit: float | None = None   # $ net with round-trip friction charged twice
+    doubled_cost_profit_factor: float | None = None
+    doubled_cost_avg_r: float | None = None
+    instrument: str | None = None                  # also recorded in the row, not only in the filename
+    timeframe: str | None = None
+    data_start: str | None = None                  # ISO date of the first bar the candidate was evaluated on
+    data_end: str | None = None
+    data_bars: int | None = None
+
     def to_dict(self) -> dict:
         return dict(self.__dict__)
 
@@ -121,6 +139,23 @@ class GraveyardEntry:
             lines += [f"Monte Carlo:\nFailure probability {self.monte_carlo_failure_pct:.0f}%", ""]
         if self.prop_sim_pass_pct is not None:
             lines += [f"Prop simulation:\nPASS probability {self.prop_sim_pass_pct:.0f}%", ""]
+        if self.n_trades is not None:
+            bits = [f"{self.n_trades} trades"]
+            if self.avg_r_net is not None:
+                bits.append(f"net {self.avg_r_net:+.2f}R/trade")
+            if self.profit_factor is not None:
+                bits.append(f"PF {self.profit_factor:.2f}")
+            lines += ["Edge:\n" + ", ".join(bits), ""]
+        if self.null_gate_p is not None:
+            lines += [f"Null gate:\np = {self.null_gate_p:.3f}", ""]
+        elif self.bootstrap_p is not None:
+            lines += [f"Bootstrap (not the null gate):\np = {self.bootstrap_p:.3f}", ""]
+        if self.doubled_cost_net_profit is not None:
+            pf = f", PF {self.doubled_cost_profit_factor:.2f}" if self.doubled_cost_profit_factor is not None else ""
+            lines += [f"At doubled costs:\nnet ${self.doubled_cost_net_profit:,.0f}{pf}", ""]
+        if self.data_start or self.data_end:
+            where = " ".join(x for x in (self.instrument, self.timeframe) if x)
+            lines += [f"Data window:\n{where + ' ' if where else ''}{self.data_start or '?'} to {self.data_end or '?'}", ""]
         return "\n".join(lines).rstrip()
 
 
@@ -367,3 +402,111 @@ def is_known_dead_neighborhood(
     rows = rows if rows is not None else load_graveyard(path)
     matches = [r for r in rows if (r.get("param_signature") or r.get("family")) == sig]
     return (len(matches) >= min_attempts, len(matches))
+
+
+# ---------------------------------------------------------------------------
+# Edge / cost / data-window diagnostics shared by Search Lab, Evolution Lab and Forge
+# ---------------------------------------------------------------------------
+def _finite_or_none(v):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f == f and f not in (float("inf"), float("-inf")) else None
+
+
+def _pf(pnls) -> float | None:
+    gp = sum(p for p in pnls if p > 0)
+    gl = -sum(p for p in pnls if p <= 0)
+    return _finite_or_none(gp / gl) if gl > 0 else None
+
+
+def edge_diagnostics(trades, risk=None, df=None, instrument: str | None = None,
+                     timeframe: str | None = None, null_gate_p: float | None = None,
+                     bootstrap: bool = True) -> dict:
+    """Optional graveyard fields (trade count, net R / PF, doubled-cost result, bootstrap p, data window) from a
+    finished trade list. Best-effort: every field degrades to None, and it never raises.
+
+    * ``avg_r_net``: mean of pnl / (initial_risk * size) over trades that recorded an initial risk.
+    * doubled costs: the round-turn friction the engine already charged (``size * 2 * side_cost_price`` + the
+      trade's commission) is charged a second time. Analytic re-costing of the same trades -- it does not re-run
+      the engine, so fills that only exist at the original costs are not re-simulated.
+    * ``null_gate_p`` is passed through ONLY when the caller really ran the random-entry null gate; the cheap
+      day-block bootstrap goes to ``bootstrap_p`` so the two are never confused.
+    """
+    out: dict = {}
+    try:
+        out["instrument"] = instrument
+        out["timeframe"] = timeframe
+        if df is not None and len(df):
+            idx = df["timestamp"] if "timestamp" in getattr(df, "columns", ()) else df.index
+            idx = list(idx[[0, -1]]) if hasattr(idx, "iloc") is False else [idx.iloc[0], idx.iloc[-1]]
+            out["data_start"] = str(idx[0])[:19]
+            out["data_end"] = str(idx[-1])[:19]
+            out["data_bars"] = int(len(df))
+        out["null_gate_p"] = _finite_or_none(null_gate_p)
+        trades = list(trades or [])
+        out["n_trades"] = len(trades)
+        if not trades:
+            return out
+        pnls = [float(t.pnl) for t in trades]
+        out["net_profit"] = _finite_or_none(sum(pnls))
+        out["profit_factor"] = _pf(pnls)
+        rs = []
+        for t in trades:
+            ir = getattr(t, "initial_risk", None)
+            sz = getattr(t, "size", None)
+            if ir and sz and ir * sz > 0:
+                rs.append(float(t.pnl) / (float(ir) * float(sz)))
+        out["avg_r_net"] = _finite_or_none(sum(rs) / len(rs)) if rs else None
+        if risk is not None:
+            side = float(risk.side_cost_price())
+            extra = [abs(float(t.size)) * 2.0 * side + float(getattr(t, "commission", 0.0) or 0.0) for t in trades]
+            dpnl = [p - e for p, e in zip(pnls, extra)]
+            out["doubled_cost_net_profit"] = _finite_or_none(sum(dpnl))
+            out["doubled_cost_profit_factor"] = _pf(dpnl)
+            drs = []
+            for t, e in zip(trades, extra):
+                ir = getattr(t, "initial_risk", None)
+                sz = getattr(t, "size", None)
+                if ir and sz and ir * sz > 0:
+                    drs.append((float(t.pnl) - e) / (float(ir) * float(sz)))
+            out["doubled_cost_avg_r"] = _finite_or_none(sum(drs) / len(drs)) if drs else None
+        if bootstrap and len(trades) >= 10:
+            try:
+                from app.research.preregistered_tests import bootstrap_pvalue_positive
+                days = [str(getattr(t, "entry_time", ""))[:10] for t in trades]
+                out["bootstrap_p"] = _finite_or_none(bootstrap_pvalue_positive(pnls, days, n_boot=500))
+            except Exception:  # noqa: BLE001
+                pass
+    except Exception:  # noqa: BLE001 -- diagnostics must never affect a run
+        pass
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Read-back index (Search Lab / Evolution Lab skip signatures that already died repeatedly)
+# ---------------------------------------------------------------------------
+def readback_enabled() -> bool:
+    """False when ``T58_DISABLE_GRAVEYARD_READBACK=1`` (the test suite sets it so repeated runs that append to the shared
+    graveyard file cannot start skipping their own candidates)."""
+    import os
+    return os.environ.get("T58_DISABLE_GRAVEYARD_READBACK", "") not in ("1", "true", "True")
+
+
+def dead_signature_counts(rows: list[dict]) -> dict:
+    """{param_signature-or-family: n_rows}, built once per run so per-candidate lookups are O(1)
+    (``is_known_dead_neighborhood`` rescans every row on every call)."""
+    counts: dict = {}
+    for r in rows or []:
+        k = r.get("param_signature") or r.get("family")
+        if k:
+            counts[k] = counts.get(k, 0) + 1
+    return counts
+
+
+def is_dead_indexed(family: str, config: dict | None, counts: dict, min_attempts: int = 8,
+                    keys: tuple = ()) -> tuple[bool, int]:
+    """Same answer as ``is_known_dead_neighborhood`` using a precomputed ``dead_signature_counts`` index."""
+    n = counts.get(param_signature(family, config, keys=keys), 0)
+    return (n >= min_attempts, n)

@@ -125,6 +125,76 @@ def _record_search_candidates_to_dashboard(
             continue
 
 
+def _family_eval_counts(stage1_records: list, stage2_records: list, stage3_records: list) -> dict:
+    """{family: evaluated configurations} for the trial ledger: every Stage-1 scored candidate (kills included), the
+    Stage-2 GA inner-loop evaluations that actually ran, and every Stage-3 validation backtest."""
+    out: dict = {}
+    for recs, weight in ((stage1_records, None), (stage2_records, "ga"), (stage3_records, None)):
+        for r in recs:
+            fam = r.get("family") or "single"
+            n = int(r.get("ga_total_evaluations", 0) or 0) if weight == "ga" else 1
+            if n > 0:
+                out[fam] = out.get(fam, 0) + n
+    return out
+
+
+def _apply_graveyard_readback(space, instrument: str, timeframe: str, min_attempts: int, log) -> int:
+    """Drop candidates whose param_signature already died ``min_attempts``+ times in this instrument+timeframe's
+    graveyard. Rows are loaded ONCE and indexed (O(1) per candidate). Mutates ``space`` and returns the number
+    skipped; never raises (a graveyard problem must not break a run) and never removes every candidate."""
+    try:
+        from app.search.graveyard import dead_signature_counts, is_dead_indexed, load_graveyard, readback_enabled
+        if not readback_enabled():
+            return 0
+        rows = load_graveyard(graveyard_path_for(instrument, timeframe))
+        if not rows:
+            return 0
+        counts = dead_signature_counts(rows)
+        kept, kept_meta, skipped = {}, {}, {}
+        for cid, spec in space.candidates.items():
+            meta = space.meta.get(cid, {})
+            family = meta.get("family", space.family or "single")
+            cfg_dict = spec.get("config") if isinstance(spec, dict) else None
+            dead, n = is_dead_indexed(family, cfg_dict, counts, min_attempts=min_attempts)
+            if dead:
+                sig = param_signature(family, cfg_dict)
+                skipped[sig] = max(skipped.get(sig, 0), n)
+                continue
+            kept[cid] = spec
+            kept_meta[cid] = meta
+        n_skipped = len(space.candidates) - len(kept)
+        if n_skipped <= 0:
+            return 0
+        if not kept:
+            log(f"Strategy Graveyard: every candidate ({n_skipped:,}) matches a known-dead neighborhood; "
+                "keeping the space unfiltered so the run still produces a result.")
+            return 0
+        space.candidates, space.meta = kept, kept_meta
+        worst = sorted(skipped.items(), key=lambda kv: kv[1], reverse=True)[:3]
+        log(f"Strategy Graveyard: skipped {n_skipped:,} candidate(s) whose parameter neighborhood already died "
+            f"{min_attempts}+ times on {instrument}/{timeframe} (worst: "
+            + "; ".join(f"{sig} (tried {n}x)" for sig, n in worst) + ").")
+        return n_skipped
+    except Exception as exc:  # noqa: BLE001
+        log(f"Strategy Graveyard read-back skipped: {exc}")
+        return 0
+
+
+_GRAVEYARD_DIAG_FIELDS = (
+    "n_trades", "net_profit", "avg_r_net", "profit_factor", "null_gate_p", "bootstrap_p",
+    "doubled_cost_net_profit", "doubled_cost_profit_factor", "doubled_cost_avg_r",
+    "instrument", "timeframe", "data_start", "data_end", "data_bars",
+)
+
+
+def _graveyard_diag_kwargs(diag: dict | None, instrument: str | None, timeframe: str | None) -> dict:
+    """GraveyardEntry kwargs from a ``graveyard.edge_diagnostics`` dict (unknown/missing keys dropped)."""
+    out = {k: (diag or {}).get(k) for k in _GRAVEYARD_DIAG_FIELDS}
+    out["instrument"] = out.get("instrument") or instrument
+    out["timeframe"] = out.get("timeframe") or timeframe
+    return out
+
+
 def _write_search_graveyard_entries(
     stage3_records: list[dict], instrument: str, timeframe: str,
 ) -> Path | None:
@@ -178,6 +248,7 @@ def _write_search_graveyard_entries(
             fitness_score=rec.get("fitness"),
             param_signature=param_signature(fam, config),
             notes=[reason] if reason else [],
+            **_graveyard_diag_kwargs(rec.get("graveyard_diag"), instrument, timeframe),
         ))
     if not entries:
         return None
@@ -232,6 +303,20 @@ class SearchStageConfig:
     stage1_max_cost_in_r: float = 0.15
     max_drawdown_buffer_mult: float = 1.5     # candidate's own DD must be <= prop max_drawdown_pct * this
     stage1_top_n: int = 40                    # survivors that advance to Stage 2
+
+    # Strategy Graveyard read-back (2026-10-24). The graveyard used to be write-only for Search Lab: Stage-3 deaths
+    # were recorded and never consulted. Before Stage 1, signatures that already died ``graveyard_min_attempts``+ times on
+    # this instrument+timeframe are skipped (logged, never silent). Mirrors Forge's graveyard_skip_known_dead.
+    graveyard_skip_known_dead: bool = True
+    graveyard_min_attempts: int = 8
+    # Numba screener (2026-10-24, app.search.numba_screener): a compiled R-multiple bar loop that culls candidates whose
+    # unconstrained statistics are far below the Stage-1 bar BEFORE the exact engine runs. It never passes anything and
+    # ignores prop path-dependence, so culls use wide margins and, if the exact path finds no Stage-1 survivor at all,
+    # every culled candidate is re-run exactly (rescue). No-op when numba is not installed.
+    numba_screen: bool = True
+    # Persistent trial ledger (2026-10-24): book this run's evaluated count (Stage-1 kills included) under
+    # ``family:<name>`` so later Deflated-Sharpe / Bonferroni verdicts are deflated by it. Idempotent per run.
+    book_trial_ledger: bool = True
 
     # Stage 2 -- GA refinement (delegates to the existing RefinementConfig)
     # v7 (2026-10-05, worker B, fix #9): raised defaults 10x4 -> 40x15.
@@ -720,7 +805,7 @@ def _stage1_task(candidate_id: str, spec: dict, filters: dict) -> dict:
     return _stage1_score(base, stats, bool(bt.trades), filters, prop_rules, scale_mismatch)
 
 
-def _stage1_task_batch(items: list[tuple[str, dict]], filters: dict) -> list[dict]:
+def _stage1_task_batch(items: list[tuple[str, dict]], filters: dict, screen: dict | None = None) -> list[dict]:
     """Stage 1 for a CHUNK of candidates at once (the vectorized fast
     path -- see app.backtest.vectorized_fastpath for why this exists and
     exactly what it does and doesn't simulate). Builds every candidate's
@@ -737,6 +822,7 @@ def _stage1_task_batch(items: list[tuple[str, dict]], filters: dict) -> list[dic
     vec_batch: list[VectorizedCandidate] = []
     vec_bases: dict[str, dict] = {}
     spec_by_id: dict[str, dict] = {}
+    screenable: set[str] = set()
 
     for candidate_id, spec in items:
         spec_by_id[candidate_id] = spec
@@ -776,12 +862,42 @@ def _stage1_task_batch(items: list[tuple[str, dict]], filters: dict) -> list[dic
                 trail_distances=np.asarray(tr_dist, dtype=float) if tr_dist is not None else None,
             ))
             vec_bases[candidate_id] = base
+            if screen:
+                try:
+                    from app.search.numba_screener import screen_supported
+                    if screen_supported(risk, strat_result):
+                        screenable.add(candidate_id)
+                except Exception:  # noqa: BLE001 -- screening is optional
+                    pass
         else:
             # Dynamic stop/target, trailing, or breakeven -- not
             # something the fast path can honestly approximate. Exact
             # same treatment this candidate would have gotten before
             # this function existed.
             results.append(_stage1_task(candidate_id, spec, filters))
+
+    if vec_batch and screen and screenable:
+        # Numba screener: cull only candidates that are FAR below the Stage-1 bar. It never passes anything; survivors
+        # (and anything it cannot model) go through the exact path below.
+        try:
+            from app.search.numba_screener import ScreenThresholds, screen_candidates
+            th = ScreenThresholds(min_trades=int(screen.get("min_trades", 100)))
+            verdicts = screen_candidates(df, [c for c in vec_batch if c.candidate_id in screenable], risk, th)
+        except Exception:  # noqa: BLE001
+            verdicts = None
+        if verdicts:
+            keep_batch = []
+            for cand in vec_batch:
+                v = verdicts.get(cand.candidate_id)
+                if v is not None and v.killed:
+                    results.append({
+                        **vec_bases[cand.candidate_id], "passed_stage1": False, "screened_out": True,
+                        "error": v.reason, "statistics": {},
+                        "screen_stats": {"n_trades": v.n_trades, "mean_r": v.mean_r, "profit_factor_r": v.profit_factor_r},
+                    })
+                else:
+                    keep_batch.append(cand)
+            vec_batch = keep_batch
 
     if vec_batch:
         try:
@@ -894,6 +1010,14 @@ def _stage3_task(candidate_id: str, spec: dict, cfg: dict) -> dict:
         return {**base, "error": str(exc), "passed_stage3_gate": False}
 
     stats = bt.statistics.to_dict()
+    # Graveyard "map of dead space" fields (trade count, net R/PF, doubled costs, data window); best-effort.
+    try:
+        from app.search.graveyard import edge_diagnostics as _edge_diag
+        diag = _edge_diag(bt.trades, risk=risk, df=df, instrument=_WORKER.get("instrument"),
+                          timeframe=_WORKER.get("timeframe"))
+    except Exception:  # noqa: BLE001
+        diag = {}
+    base = {**base, "graveyard_diag": diag}
     if not bt.trades:
         return {
             **base, "statistics": stats,
@@ -1335,6 +1459,11 @@ def run_search(
         f"locked out-of-sample holdout -- Stages 0-3 below run on the first {len(dev_df):,} bars only."
     )
 
+    n_graveyard_skipped = 0
+    if getattr(stage_cfg, "graveyard_skip_known_dead", False):
+        n_graveyard_skipped = _apply_graveyard_readback(
+            space, instrument, timeframe, int(stage_cfg.graveyard_min_attempts), log)
+
     run_id = uuid.uuid4().hex[:12]
     t0 = time.time()
     workers = stage_cfg.workers or max(os.cpu_count() or 2, 1)
@@ -1435,7 +1564,15 @@ def run_search(
                 f"Stage 1/5: cheap filter across {len(items)} candidate(s) "
                 f"({len(chunks)} batch(es) of up to {chunk_size}) on {workers} worker(s)..."
             )
-            futures = {pool_box[0].submit(_stage1_task_batch, chunk, filters): i for i, chunk in enumerate(chunks)}
+            _screen_cfg = None
+            if getattr(stage_cfg, "numba_screen", False):
+                try:
+                    from app.search.numba_screener import numba_available as _nb_ok
+                    if _nb_ok():
+                        _screen_cfg = {"min_trades": stage_cfg.min_trades}
+                except Exception:  # noqa: BLE001
+                    _screen_cfg = None
+            futures = {pool_box[0].submit(_stage1_task_batch, chunk, filters, _screen_cfg): i for i, chunk in enumerate(chunks)}
             done_batches = 0
             log_every = max(1, len(futures) // 10)
 
@@ -1462,6 +1599,32 @@ def run_search(
 
             drain_futures(pool_box, futures, _on_stage1_done, pool_factory=_make_pool)
             check_cancelled(pool_box[0])
+
+            _screened = [r for r in stage1_records if r.get("screened_out")]
+            if _screened:
+                log(f"  Stage 1: the numba screener culled {len(_screened):,}/{len(stage1_records):,} candidate(s) that were "
+                    f"far below the Stage-1 bar (screen only -- it passes nothing; survivors ran on the exact engine).")
+                if not any(r.get("passed_stage1") for r in stage1_records):
+                    # Safety net: with no exact survivor at all, the screener's margins are untested -> re-run the
+                    # culled candidates on the exact path so the result equals a run without the screener.
+                    log("  Stage 1: no exact survivor -- re-running the screened-out candidates exactly (rescue).")
+                    _r_items = [(r["candidate_id"], space.candidates[r["candidate_id"]]) for r in _screened]
+                    _r_chunks = [_r_items[i:i + chunk_size] for i in range(0, len(_r_items), chunk_size)]
+                    _rescued: dict = {}
+
+                    def _on_rescue(_label, fut):
+                        if fut is None:
+                            return
+                        for rec in fut.result():
+                            rec["family"] = space.meta.get(rec["candidate_id"], {}).get("family", space.family or "single")
+                            _rescued[rec["candidate_id"]] = rec
+                            db.insert_candidate(run_id, rec["candidate_id"], "stage1", rec)
+
+                    drain_futures(pool_box, {pool_box[0].submit(_stage1_task_batch, ch, filters, None): i
+                                             for i, ch in enumerate(_r_chunks)}, _on_rescue, pool_factory=_make_pool)
+                    check_cancelled(pool_box[0])
+                    stage1_records[:] = [(_rescued.get(r["candidate_id"], r) if r.get("screened_out") else r)
+                                         for r in stage1_records]
 
             passed_stage1 = [r for r in stage1_records if r.get("passed_stage1")]
             diversity_dropped = 0
@@ -1787,6 +1950,17 @@ def run_search(
         except Exception:
             pass
         shutil.rmtree(tmp_dir, ignore_errors=True)
+        # Book what this run evaluated -- on every exit path (no-survivor and cancelled runs tested candidates too).
+        if getattr(stage_cfg, "book_trial_ledger", True):
+            try:
+                from app.validation import trial_ledger as _tl
+                _booked = _tl.book_run(f"search:{run_id}", _family_eval_counts(
+                    stage1_records, stage2_records, stage3_records))
+                if _booked:
+                    log("Trial ledger: booked " + ", ".join(f"{k}={v:,}" for k, v in sorted(_booked.items()))
+                        + " evaluated configuration(s) (Stage-1 kills included).")
+            except Exception as _exc:  # noqa: BLE001
+                log(f"Trial ledger booking skipped: {_exc}")
 
     # ---------------- Stage 4: deflate, rank, persist ----------------
     log("Stage 4/5: computing deflated Sharpe ratios and ranking the leaderboard...")
@@ -2081,6 +2255,7 @@ def save_search_candidate_to_library(
         strategy_type, filename,
         {
             "tags": ["search-lab"],
+            "search_family": family,
             "description": f"Search Lab run {run_id}, family '{family}', candidate {candidate_id}",
         },
         merge=True,
