@@ -208,8 +208,9 @@
       <p class="help">
         {% if settings.has_password %}
         A local lock password is currently set -- this app will ask for it before showing
-        any page in a browser that hasn't unlocked yet. Leave both fields below blank and
-        save to remove the lock.
+        any page in a browser that hasn't unlocked yet. Enter your current password, leave
+        both new-password fields blank, and save to remove the lock. Deleting the account
+        also needs your current password.
         {% else %}
         No local lock is set -- anyone who can reach this app's URL (e.g. on the same
         Wi-Fi via Mobile Access) can open it. Set a password below to require it once per
@@ -217,8 +218,13 @@
         {% endif %}
       </p>
 
+      {% if settings.has_password %}
+      <label for="current_password">Current password</label>
+      <input type="password" id="current_password" name="current_password" autocomplete="current-password">
+      {% endif %}
+
       <label for="new_password">{{ 'New password' if settings.has_password else 'Set a password' }}</label>
-      <input type="password" id="new_password" name="new_password" autocomplete="new-password" placeholder="Leave blank for no lock">
+      <input type="password" id="new_password" name="new_password" autocomplete="new-password" placeholder="{{ 'Leave blank to remove the lock' if settings.has_password else 'Choose a password' }}">
 
       <label for="confirm_password">Confirm password</label>
       <input type="password" id="confirm_password" name="confirm_password" autocomplete="new-password">
