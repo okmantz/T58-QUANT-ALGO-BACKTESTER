@@ -574,3 +574,36 @@ def edge_ic_gate(trades: list, alpha: float = DEFAULT_ALPHA, n_tests: int = 1) -
     return EdgeICResult(ic, n, t_stat, p, ok, (
         f"IC {ic:+.3f} over {n} trades (one-sided p {p:.4f} vs Bonferroni alpha {adj:.4f}); "
         + ("direction predicts the raw forward return." if ok else "not significantly positive.")))
+
+
+def rescale_gate_for_n_tests(gate: ICIRGateResult, n_tests: int, alpha: float = DEFAULT_ALPHA) -> ICIRGateResult:
+    """Re-apply the Bonferroni correction of an already-computed ICIR gate with a (larger) ``n_tests``.
+
+    Used once the persistent trial ledger / effective-trial clustering has told the pipeline how many DISTINCT
+    ideas were really tried (more than this run's own GA evaluations). The IC series is not recomputed: the stored
+    p-value is re-compared against ``alpha / n_tests``. A larger ``n_tests`` can only turn a pass into a fail, never
+    the reverse; a smaller one is ignored (the correction never loosens)."""
+    sig = gate.significance
+    n_new = max(1, int(n_tests))
+    if sig is None or sig.p_value is None or n_new <= int(sig.n_tests):
+        return gate
+    adj = bonferroni_adjusted_alpha(alpha, n_new)
+    significant = sig.p_value < adj
+    new_sig = SignificanceResult(
+        mean_ic=sig.mean_ic, t_stat=sig.t_stat, p_value=sig.p_value, adjusted_alpha=adj, n_tests=n_new,
+        significant=significant,
+        note=f"p={sig.p_value:.5f} vs Bonferroni-adjusted alpha={adj:.5f} (n_tests={n_new}).",
+    )
+    reasons = [r for r in gate.reasons if "statistically significant" not in r and "not statistically significant" not in r]
+    if significant:
+        reasons.append(f"Out-of-sample IC is statistically significant after correcting for {n_new} candidate(s) "
+                       f"tried ({new_sig.note})")
+    else:
+        reasons.append(f"Out-of-sample IC is NOT statistically significant after correcting for {n_new} "
+                       f"candidate(s) tried ({new_sig.note}) -- consistent with luck from a large search.")
+    ok = bool(gate.ok and significant)
+    return ICIRGateResult(
+        in_sample_icir=gate.in_sample_icir, out_sample_icir=gate.out_sample_icir,
+        icir_retention_pct=gate.icir_retention_pct, in_sample_half_life=gate.in_sample_half_life,
+        out_sample_half_life=gate.out_sample_half_life, significance=new_sig, ok=ok, reasons=reasons,
+    )
