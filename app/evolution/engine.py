@@ -379,6 +379,14 @@ class EvolutionConfig:
     # these explicitly.
     instrument: str = "unknown"
     timeframe: str = "unknown"
+    # 2026-10-24: the graveyard used to be write-only for Evolution Lab. When on, children whose param_signature has
+    # already died ``graveyard_min_attempts``+ times on this instrument+timeframe are dropped before they cost a
+    # backtest (random-entry controls are never skipped; a generation is never emptied by it).
+    graveyard_skip_known_dead: bool = True
+    graveyard_min_attempts: int = 8
+    # Book each generation's evaluated count (prefilter kills included) under ``family:<name>`` in the persistent trial
+    # ledger so later Deflated-Sharpe / Bonferroni verdicts are deflated by it. Idempotent per (run, generation).
+    book_trial_ledger: bool = True
     families: list[str] | None = None          # None = every family in list_families()
     # When `families` is None (the caller wants "every family," not a
     # specific list), auto-excludes any family app.search.family_health
@@ -1657,11 +1665,13 @@ class EvolutionRunner:
             self._log(f"  (no true survivor yet -- breeding from the {len(self._near_miss_seeds)} "
                       f"closest near-misses found so far instead of pure random search)")
         population = self._generate_population(gen, breeding_pool)
+        population = self._graveyard_filter_population(population)
         self._log(f"GENERATE: {len(population)} candidates.")
         if self._stop_flag.is_set():
             return gen
 
         stage1_survivors, rejection_counts, near_miss_top = self._prefilter(population, gen)
+        self._book_generation_trials(population, gen)
         prefilter_elapsed = time.time() - t0
         self._log(f"PRE-FILTER + BACKTEST: {len(stage1_survivors)}/{len(population)} survived "
                   f"(took {prefilter_elapsed:.1f}s).")
@@ -2962,6 +2972,7 @@ class EvolutionRunner:
                     "manual", filename,
                     {
                         "tags": ["evolution-lab"],
+                        "search_family": r.meta.get("family", "?"),
                         "description": (
                             f"Evolution Lab, generation {self.generation}, family "
                             f"'{r.meta.get('family', '?')}' -- PROP FITNESS "
@@ -3069,6 +3080,84 @@ class EvolutionRunner:
         self._family_budget.record_generation(pending)
         self._pending_family_counts = None
 
+    # -- graveyard read-back + trial ledger (2026-10-24) -------------------------
+    def _graveyard_diag_kwargs(self, r) -> dict:
+        """Optional graveyard fields (trade count, net R/PF, doubled costs, data window) for one record."""
+        try:
+            from app.search.graveyard import edge_diagnostics
+            d = edge_diagnostics(getattr(r, "trades", None), risk=self.risk, df=self.df,
+                                 instrument=self.cfg.instrument, timeframe=self.cfg.timeframe)
+            keys = ("n_trades", "net_profit", "avg_r_net", "profit_factor", "null_gate_p", "bootstrap_p",
+                    "doubled_cost_net_profit", "doubled_cost_profit_factor", "doubled_cost_avg_r",
+                    "instrument", "timeframe", "data_start", "data_end", "data_bars")
+            return {k: d.get(k) for k in keys}
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def _graveyard_filter_population(self, population: list) -> list:
+        """Drop children whose param_signature already died ``graveyard_min_attempts``+ times. Rows are loaded and
+        indexed once per run. Never raises, never skips controls, never returns an empty generation."""
+        if not getattr(self.cfg, "graveyard_skip_known_dead", False) or not population:
+            return population
+        try:
+            from app.search.graveyard import dead_signature_counts, is_dead_indexed, load_graveyard, readback_enabled
+            if not readback_enabled():
+                return population
+            counts = getattr(self, "_grave_counts", None)
+            if counts is None:
+                counts = dead_signature_counts(load_graveyard(graveyard_path_for(self.cfg.instrument, self.cfg.timeframe)))
+                self._grave_counts = counts
+            if not counts:
+                return population
+            kept, skipped = [], {}
+            for item in population:
+                _cid, spec, meta = item
+                meta = meta or {}
+                if meta.get("control"):
+                    kept.append(item)
+                    continue
+                fam = meta.get("family", "?")
+                cfg_dict = (spec or {}).get("config") if isinstance(spec, dict) else None
+                dead, n = is_dead_indexed(fam, cfg_dict, counts, min_attempts=int(self.cfg.graveyard_min_attempts))
+                if dead:
+                    skipped[param_signature(fam, cfg_dict)] = n
+                else:
+                    kept.append(item)
+            n_skipped = len(population) - len(kept)
+            if n_skipped <= 0:
+                return population
+            if not any(not (m or {}).get("control") for _c, _s, m in kept):
+                return population  # never empty a generation of real candidates
+            self._graveyard_skipped_total = getattr(self, "_graveyard_skipped_total", 0) + n_skipped
+            worst = sorted(skipped.items(), key=lambda kv: kv[1], reverse=True)[:2]
+            self._log(f"  GRAVEYARD: skipped {n_skipped} child(ren) in already-dead neighborhoods "
+                      f"(worst: {'; '.join(f'{sg} tried {n}x' for sg, n in worst)}).")
+            return kept
+        except Exception as exc:  # noqa: BLE001 -- the graveyard is advisory; never break a generation
+            self._log(f"  GRAVEYARD read-back skipped: {exc}")
+            return population
+
+    def _book_generation_trials(self, population: list, gen: int) -> None:
+        """Book this generation's evaluated candidates (random controls excluded) under family:<name>."""
+        if not getattr(self.cfg, "book_trial_ledger", False):
+            return
+        try:
+            from app.validation import trial_ledger as _tl
+            counts: dict = {}
+            for _cid, _spec, meta in population:
+                meta = meta or {}
+                if meta.get("control"):
+                    continue
+                fam = meta.get("family", "?")
+                counts[fam] = counts.get(fam, 0) + 1
+            rid = getattr(self, "_ledger_run_id", None)
+            if rid is None:
+                import uuid
+                rid = self._ledger_run_id = uuid.uuid4().hex[:12]
+            _tl.book_run(f"evolution:{rid}:{gen}", counts)
+        except Exception:  # noqa: BLE001 -- bookkeeping must never stop a run
+            pass
+
     # -- strategy graveyard ----------------------------------------------------
     def _write_graveyard_entries(self, records: list, gen: int, stage_died: str) -> None:
         """Builds and persists one GraveyardEntry per record that reached
@@ -3106,6 +3195,7 @@ class EvolutionRunner:
                 fitness_score=r.fitness.final_score if r.fitness else None,
                 param_signature=param_signature(fam, config),
                 notes=list(r.fitness.notes) if r.fitness else [],
+                **self._graveyard_diag_kwargs(r),
             ))
         try:
             record_rejections(entries, graveyard_path_for(self.cfg.instrument, self.cfg.timeframe))
