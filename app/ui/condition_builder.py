@@ -62,7 +62,11 @@ CONDITION_SOURCES = [
 # v11 (2026-10-20): session / calendar / event / regime primitives (app.strategy.indicators_v11)
 from app.strategy.indicators_v11 import V11_INDICATOR_KINDS as _V11_KINDS
 _V11_LABELS = {k: k.replace("_", " ").title().replace("Vix", "VIX").replace("Fomc", "FOMC").replace("Nfp", "NFP").replace("Cpi", "CPI").replace("Pce", "PCE") for k in _V11_KINDS}
+# v12 (2026-10-24): time-of-day range, Parkinson/GK vol, variance ratio / autocorrelation, round numbers, NR4/NR7
+from app.strategy.indicators_v12 import V12_INDICATOR_KINDS as _V12_KINDS
+_V12_LABELS = {k: k.replace("_", " ").title().replace("Tod", "ToD").replace("Nr", "NR").replace("Es", "ES").replace("Nq", "NQ").replace("Gc", "GC").replace("Garman Klass", "Garman-Klass") for k in _V12_KINDS}
 CONDITION_SOURCES = CONDITION_SOURCES + [lbl for lbl in _V11_LABELS.values() if lbl not in CONDITION_SOURCES]
+CONDITION_SOURCES = CONDITION_SOURCES + [lbl for lbl in _V12_LABELS.values() if lbl not in CONDITION_SOURCES]
 RIGHT_SOURCES = ["Value"] + CONDITION_SOURCES
 
 SOURCE_KIND = {
@@ -88,6 +92,7 @@ SOURCE_KIND = {
     "Spread Z-Score": "spread_zscore", "Leader Return": "leader_return", "Event Window": "event_window",
 }
 SOURCE_KIND.update({lbl: k for k, lbl in _V11_LABELS.items()})
+SOURCE_KIND.update({lbl: k for k, lbl in _V12_LABELS.items()})
 
 OPERATORS = [
     "Greater Than", "Greater Than or Equal", "Less Than", "Less Than or Equal",
