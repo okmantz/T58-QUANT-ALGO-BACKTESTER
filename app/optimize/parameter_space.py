@@ -27,6 +27,9 @@ import copy
 from dataclasses import dataclass
 
 from app.strategy.indicators import BOUNDED_OSCILLATOR_RANGES
+from app.strategy.indicators_v12 import (
+    V12_BOUNDED_RANGES, V12_FLAGS, V12_NO_PERIOD, V12_PERIOD_RANGES, V12_VALUE_RANGES,
+)
 
 # A period of 1 or 2 on a bounded oscillator (see BOUNDED_OSCILLATOR_RANGES)
 # is degenerate, not just aggressive: e.g. a 1-period RSI collapses to
@@ -64,6 +67,15 @@ MIN_OSCILLATOR_PERIOD = 3
 ZERO_SENSITIVE_MIN_ABS_THRESHOLD: dict[str, float] = {
     "roc": 0.5,   # percent -- half of roc_momentum_continuation's smallest shipped threshold (1.0%)
 }
+
+
+# v12 (2026-10-24): registered valid ranges for the new indicators. A comparison threshold paired with one of these is
+# clamped into INDICATOR_VALUE_RANGES (soft, practical range of the series) or, for exactly bounded series, into
+# BOUNDED_OSCILLATOR_RANGES (autocorr_lag1 -1..1, round_dist_* -0.5..0.5); a period gene is clamped into
+# INDICATOR_PERIOD_RANGES. Single source of truth: app.strategy.indicators_v12.
+INDICATOR_VALUE_RANGES: dict[str, tuple[float, float]] = dict(V12_VALUE_RANGES)
+INDICATOR_PERIOD_RANGES: dict[str, tuple[int, int]] = dict(V12_PERIOD_RANGES)
+assert all(k in BOUNDED_OSCILLATOR_RANGES for k in V12_BOUNDED_RANGES), "v12 bounded range missing from indicators.py"
 
 
 class RefinementError(Exception):
@@ -123,6 +135,7 @@ FLAG_OPERAND_KINDS = frozenset({
     "vwap_above", "vwap_below", "vwap_outside_value_area",
     "supertrend_direction", "psar_direction", "ttm_squeeze_on",
     "swing_bos", "swing_choch",
+    *V12_FLAGS,                     # nr4 / nr7 / daily_nr4 / daily_nr7
 })
 
 # Operand kinds that ignore `period`/`lookback` entirely (app.strategy.manual returns
@@ -133,6 +146,7 @@ NO_PERIOD_OPERAND_KINDS = frozenset({
     "price", "open", "high", "low", "close", "volume",
     "value", "constant", "number",
     "time_of_day", "day_of_week", "candle_direction",
+    *V12_NO_PERIOD,                 # round_dist_* and the NR flags ignore period/lookback
 })
 
 
@@ -205,7 +219,7 @@ def _oscillator_bound(node) -> tuple[float, float] | None:
     if not isinstance(node, dict):
         return None
     kind = str(node.get("type", "")).lower().strip()
-    return BOUNDED_OSCILLATOR_RANGES.get(kind)
+    return BOUNDED_OSCILLATOR_RANGES.get(kind) or INDICATOR_VALUE_RANGES.get(kind)
 
 
 def _zero_sensitive_min_abs(node) -> float | None:
@@ -260,6 +274,10 @@ def extract_genome(config: dict) -> list[GeneMeta]:
         elif k in ("period", "lookback") and osc_kind in BOUNDED_OSCILLATOR_RANGES:
             lo = max(lo, float(MIN_OSCILLATOR_PERIOD))
             hi = max(hi, lo + 1)
+        if k == "period" and osc_kind in INDICATOR_PERIOD_RANGES:
+            p_lo, p_hi = INDICATOR_PERIOD_RANGES[osc_kind]
+            c_lo, c_hi = max(lo, float(p_lo)), min(hi, float(p_hi))
+            lo, hi = (c_lo, c_hi) if c_hi > c_lo else (float(p_lo), float(p_hi))
         if k == "value" and zero_min is not None and v != 0:
             # Keep the same sign as the strategy's own base threshold --
             # only push the range AWAY from zero, never flip which side
