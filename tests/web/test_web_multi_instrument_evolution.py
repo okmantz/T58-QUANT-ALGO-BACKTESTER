@@ -60,8 +60,13 @@ def _isolated_evolution_base_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(server_module, "_EVOLUTION_RUNNER", None, raising=False)
 
 
-def _poll_until_stopped(client, group_id: str, timeout: float = 150.0) -> dict:
-    """timeout was 60.0 -- raised (FIX, audit) after this test was
+def _poll_until_stopped(client, group_id: str, timeout: float = 600.0) -> dict:
+    """timeout was 150.0 (and 60.0 before that) -- raised again after the
+    full suite on a 2-core box under `-n auto` took >150s here while the
+    same test passes alone in ~20s of poll time; still a CPU-contention
+    ceiling, never a hang.
+
+    Earlier history: timeout was 60.0 -- raised (FIX, audit) after this test was
     confirmed to pass reliably in isolation (41s) but occasionally time
     out only when run as part of the full ~1650-test suite in one
     process. This is a real background thread doing real backtest/GA
