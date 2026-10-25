@@ -13,7 +13,7 @@ from pathlib import Path
 
 _CODE_MODULES = (
     "app/backtest/engine.py", "app/backtest/execution.py", "app/strategy/manual.py", "app/strategy/indicators.py",
-    "app/strategy/indicators_v11.py", "app/data/cost_model.py",
+    "app/strategy/indicators_v11.py", "app/strategy/indicators_v12.py", "app/data/cost_model.py",
 )
 
 
