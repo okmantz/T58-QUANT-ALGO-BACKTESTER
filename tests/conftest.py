@@ -60,6 +60,7 @@ os.environ.setdefault("T58_SKIP_CLOCK_EPOCH", "1")   # the one-time clock-epoch 
 # The idle memory watchdog (app.orchestration.memory_hygiene) closes worker pools and trims the heap while the app is idle --
 # right for a running app, never wanted mid-test-suite. Must be set BEFORE app.web.server is imported.
 os.environ.setdefault("T58_DISABLE_MEMORY_WATCHDOG", "1")
+os.environ.setdefault("T58_DISABLE_GRAVEYARD_READBACK", "1")   # Search/Evolution graveyard read-back: tests append to a shared file, so opt in per test
 
 import pytest
 
