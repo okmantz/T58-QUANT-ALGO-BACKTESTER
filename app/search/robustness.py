@@ -708,7 +708,9 @@ def parameter_neighborhood_robustness(
         single_run = simulate_account(pnls, dates, prop_rules)
         mc = run_monte_carlo(bt.trades, prop_rules, mc_config)
         prop_summary = summarize_single_run(single_run)
-        fitness = compute_fitness(bt.statistics.to_dict(), prop_summary, mc, fitness_metric)
+        # trades are passed so edge-based metrics (edge_lb_r / mean_r) can be scored; before 2026-10-25 they were not, and an edge
+        # metric scored -inf for every neighbour, which made every robustness check read 'unstable'.
+        fitness = compute_fitness(bt.statistics.to_dict(), prop_summary, mc, fitness_metric, trades=bt.trades)
         return fitness if math.isfinite(fitness) else float("-inf")
 
     baseline_fitness = _fitness_for(build_strategy_from_spec(candidate_spec, tmp_dir))

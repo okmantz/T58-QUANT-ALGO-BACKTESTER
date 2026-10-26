@@ -4917,9 +4917,25 @@ RETIRED_FAMILIES: dict[str, str] = {
 }
 
 
+def _v13_enabled_batches() -> set:
+    """Rollout batches of the v13 families that "all families" searches may run. EMPTY until the lab-level false-discovery gate
+    (app.discovery_engine.surrogate) has passed: the report says not to turn the new batches on before the lab's FDR is < 5%."""
+    try:
+        from app.discovery_engine.surrogate import enabled_batches
+        return set(enabled_batches())
+    except Exception:  # noqa: BLE001 -- no gate result on disk (or module unavailable) means closed
+        return set()
+
+
 def active_family_names() -> list[str]:
-    """Families an "all" search runs: everything except RETIRED_FAMILIES."""
-    return [n for n in FAMILIES if n not in RETIRED_FAMILIES]
+    """Families an "all" search runs: everything except RETIRED_FAMILIES, and except v13 families whose rollout batch has not been
+    opened by the surrogate false-discovery gate (an explicit single-family request still runs them) or that need data not supplied."""
+    v13 = globals().get("_V13_META")
+    if not v13:
+        return [n for n in FAMILIES if n not in RETIRED_FAMILIES]
+    opened = _v13_enabled_batches()
+    return [n for n in FAMILIES if n not in RETIRED_FAMILIES
+            and (n not in v13 or (v13[n].batch in opened and v13[n].status == "ready"))]
 
 
 def generate_search_space(
@@ -4933,6 +4949,7 @@ def generate_search_space(
     has_pair_data: bool = False,
     has_calendar_data: bool = False,
     exclude_families: "set[str] | None" = None,
+    only_families: "list[str] | None" = None,
     # v8 (2026-10-05): live search-space tunables. All four are
     # default-neutral (None / 1.0 / None / None) -- existing callers see
     # byte-identical spaces. Each one genuinely changes candidate
@@ -5033,6 +5050,9 @@ def generate_search_space(
         return _grid_space_around_strategy(strategy, grid_points_per_gene, max_candidates, seed)
 
     families_to_run = active_family_names() if family in (None, "all") else [family]
+    if only_families and family in (None, "all"):
+        # Strategy Discovery Engine: an explicit, already-vetted list (pre-registered, batch-gated) overrides the 'all' default.
+        families_to_run = [f for f in only_families if f in FAMILIES]
     for fam in families_to_run:
         if fam not in FAMILIES:
             raise StrategySpaceError(f"Unknown strategy family '{fam}'. Known families: {list(FAMILIES)}")
@@ -5266,5 +5286,16 @@ try:
     from app.search.families_v11 import V11_FAMILIES, V11_HYPOTHESIS_QUESTIONS
     FAMILIES.update(V11_FAMILIES)
     HYPOTHESIS_QUESTIONS.update(V11_HYPOTHESIS_QUESTIONS)
+except ImportError:
+    pass
+
+# v13 (2026-10-25): the report's 100 strategy families (app.search.families_v13). Registered so an explicit single-family request
+# (and the pre-registration / tests) can run them; kept OUT of "all families" searches until the surrogate FDR gate opens a batch.
+try:
+    from app.search.families_v13 import RETIRED_V13, V13_FAMILIES, V13_HYPOTHESIS_QUESTIONS, V13_META as _V13_META
+    FAMILIES.update(V13_FAMILIES)
+    HYPOTHESIS_QUESTIONS.update(V13_HYPOTHESIS_QUESTIONS)
+    RETIRED_FAMILIES.update(RETIRED_V13)
+    FAMILIES_REQUIRING_CALENDAR_DATA.update(n for n, sp in V13_FAMILIES.items() if sp.requires_calendar_data)
 except ImportError:
     pass

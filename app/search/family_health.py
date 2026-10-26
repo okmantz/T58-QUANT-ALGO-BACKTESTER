@@ -40,7 +40,7 @@ from pathlib import Path
 from app.data.storage import get_app_base_dir
 from app.evolution import checkpoint as evo_checkpoint
 from app.search.results_db import ResultsDB
-from app.search.strategy_space import list_families
+from app.search.strategy_space import active_family_names, list_families
 
 
 def default_search_dir() -> Path:
@@ -268,7 +268,8 @@ def apply_family_exclusions(
     dead = dead_end_families(search_dir, evolution_base_dir, min_samples=min_samples)
     if not dead:
         return None, []
-    survivors = [f for f in list_families() if f not in dead]
-    if len(survivors) < min(min_active_families, len(list_families())):
+    pool = active_family_names()          # families still closed behind the surrogate gate are not part of "every family"
+    survivors = [f for f in pool if f not in dead]
+    if len(survivors) < min(min_active_families, len(pool)):
         return None, sorted(dead)
     return survivors, sorted(dead)

@@ -716,7 +716,9 @@ def _v11_kind_names() -> frozenset:
         from app.strategy import indicators_v10 as _v10
         extra = frozenset(getattr(_v10, "V10_INDICATOR_BUILDERS", {}) or {}) if hasattr(_v10, "V10_INDICATOR_BUILDERS") else frozenset()
         from app.strategy.indicators_v12 import V12_INDICATOR_BUILDERS
-        return frozenset(V11_INDICATOR_BUILDERS) | frozenset(V11_SELF_CONTAINED) | frozenset(V12_INDICATOR_BUILDERS) | extra
+        from app.strategy.indicators_v13 import V13_INDICATOR_BUILDERS
+        return (frozenset(V11_INDICATOR_BUILDERS) | frozenset(V11_SELF_CONTAINED) | frozenset(V12_INDICATOR_BUILDERS)
+                | frozenset(V13_INDICATOR_BUILDERS) | extra)
     except Exception:
         return frozenset()
 

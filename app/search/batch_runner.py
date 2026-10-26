@@ -318,6 +318,28 @@ class SearchStageConfig:
     # ``family:<name>`` so later Deflated-Sharpe / Bonferroni verdicts are deflated by it. Idempotent per run.
     book_trial_ledger: bool = True
 
+    # ---- Strategy Discovery Engine controls (2026-10-25) ----
+    # One entry floor: when True the Stage-1 auto-relax rounds (which loosened the floor to as few as 3 trades / PF 0.7) are NOT
+    # applied -- the 100-trade / t>=1 / cost<0.15R floor is the floor. Set False to restore the old behaviour.
+    strict_entry_floor: bool = True
+    # Persist the daily R of every floor-passing candidate (and every Stage-3 finalist) to a compressed per-run file and run the
+    # pool-wide tests on it: White's Reality Check / Hansen SPA over the full pool and PBO on a stratified sample of it.
+    capture_pool_pnl: bool = True
+    pool_pnl_dir: str | None = None           # default: next to the results DB
+    pool_max_candidates: int = 50_000
+    pool_pbo_sample: int = 200
+    pool_alpha: float = 0.05
+    # Chronological tail carved OUT OF the locked holdout and sealed: read once (by the promotion sequence), never by
+    # promote_champion's gate holdout. 0 disables (old behaviour).
+    sealed_final_frac: float = 0.10
+    holdout_max_looks: int = 200
+    # Deflated Sharpe uses the lifetime ledger (no decay on an unchanged data window) clustered to effective trials.
+    lifetime_deflation: bool = True
+    dsr_cluster_corr: float = 0.85
+    # Graveyard guidance: graduated neighbourhood penalty on Stage-1 ranking + family-prior ordering (in addition to the hard skip).
+    use_graveyard_guidance: bool = True
+    graveyard_guidance_max_discount: float = 0.30
+
     # Stage 2 -- GA refinement (delegates to the existing RefinementConfig)
     # v7 (2026-10-05, worker B, fix #9): raised defaults 10x4 -> 40x15.
     # The old budget was a weekend of random sampling for the space being
@@ -401,7 +423,9 @@ class SearchStageConfig:
 
     full_mc_sims: int = 3000
     walk_forward_folds: int = 4
-    walk_forward_metric: str = "eval_pass_probability"
+    # 2026-10-25: walk-forward folds are scored on mean R per trade (the same quantity the search ranks on), not on a Monte-Carlo
+    # prop-pass probability. Prop pass probability is computed for the finalists and used last, for sizing.
+    walk_forward_metric: str = "mean_r"
     walk_forward_min_efficiency: float = 0.4
     robustness_neighbors: int = 6
     robustness_perturbation_frac: float = 0.15
@@ -536,6 +560,13 @@ class SearchSummary:
     locked_holdout_frac: float = 0.2
     dev_bars: int = 0
     locked_bars: int = 0
+    # 2026-10-25 (Strategy Discovery Engine)
+    sealed_bars: int = 0
+    sealed_final_frac: float = 0.0
+    data_fp: str = ""
+    pool_pnl_path: str | None = None
+    pool: dict | None = None           # Reality Check / SPA over the whole pool + PBO on a stratified sample of it
+    trial_info: dict | None = None     # raw / ledger / effective trials behind this run's Deflated Sharpe
 
 
 # ---------------------------------------------------------------------------
@@ -588,16 +619,10 @@ def _passes_stage1_filters(stats: dict, min_trades: int, min_profit_factor: floa
 
 
 def _mean_r_t_stat(stats: dict) -> float:
-    """Approximate t-stat of mean R from summary statistics: average_r * sqrt(n) / sd_r (sd assumed = the report's 1.3R)."""
-    try:
-        from app.validation.edge_stats import DEFAULT_TRADE_SD_R
-        n = float(stats.get("total_trades", 0) or 0)
-        ar = float(stats.get("average_r", 0.0) or 0.0)
-        if n < 2 or not math.isfinite(ar):
-            return float("-inf")
-        return ar * math.sqrt(n) / DEFAULT_TRADE_SD_R
-    except Exception:  # noqa: BLE001
-        return float("inf")   # never reject on a stats-shape surprise
+    """Approximate t-stat of mean R from summary statistics (average_r * sqrt(n) / sd_r, sd = the report's 1.3R).
+    One definition for every lab: app.discovery_engine.objective.mean_r_t_stat."""
+    from app.discovery_engine.objective import mean_r_t_stat
+    return mean_r_t_stat(stats)
 
 
 def _prescreen_cost_in_r(base: dict, spec: dict, risk: RiskConfig, df, max_cost_r: float) -> dict | None:
@@ -621,7 +646,7 @@ def _prescreen_cost_in_r(base: dict, spec: dict, risk: RiskConfig, df, max_cost_
 
 def _stage1_score(
     base: dict, stats: dict, has_trades: bool, filters: dict, prop_rules: PropRules,
-    scale_mismatch: bool = False,
+    scale_mismatch: bool = False, trades=None,
 ) -> dict:
     """The Stage 1 pass/fail + quick_score definition, factored out so
     the scalar path (_stage1_task) and the vectorized fast path
@@ -653,13 +678,22 @@ def _stage1_score(
     # strategy that's actually been tested by the data.
     quick_score = pf_val * math.log(n_trades + 1)
 
-    return {
+    out = {
         **base, "statistics": stats,
         "quick_score": quick_score, "sharpe": sharpe,
         "sharpe_per_trade": float(stats.get("sharpe_per_trade", 0.0) or 0.0),   # 2026-10-12: DSR needs per-trade units
         "passed_stage1": bool(passed),
         "scale_mismatch_warning": scale_mismatch,
     }
+    # 2026-10-25: every candidate that clears the floor leaves its daily R behind for the pool-wide tests (Reality Check / SPA /
+    # PBO). The parent pops this key and streams it to the per-run P&L file; it never reaches the results DB.
+    if passed and trades and (filters or {}).get("capture_daily"):
+        try:
+            from app.discovery_engine.pnl_store import pack_trades
+            out["daily_r"] = pack_trades(trades, "r")
+        except Exception:  # noqa: BLE001 -- capture is best-effort
+            pass
+    return out
 
 
 # ===========================================================================
@@ -802,7 +836,7 @@ def _stage1_task(candidate_id: str, spec: dict, filters: dict) -> dict:
         or ("instrument" in w.lower() and "scale" in w.lower())
         for w in (bt.warnings or [])
     )
-    return _stage1_score(base, stats, bool(bt.trades), filters, prop_rules, scale_mismatch)
+    return _stage1_score(base, stats, bool(bt.trades), filters, prop_rules, scale_mismatch, trades=bt.trades)
 
 
 def _stage1_task_batch(items: list[tuple[str, dict]], filters: dict, screen: dict | None = None) -> list[dict]:
@@ -915,7 +949,7 @@ def _stage1_task_batch(items: list[tuple[str, dict]], filters: dict, screen: dic
                     if trades else {}
                 )
                 mismatch = bool(outcome.scale_mismatch) if outcome else False
-                results.append(_stage1_score(base, stats, bool(trades), filters, prop_rules, scale_mismatch=mismatch))
+                results.append(_stage1_score(base, stats, bool(trades), filters, prop_rules, scale_mismatch=mismatch, trades=trades))
 
     return results
 
@@ -1168,8 +1202,15 @@ def _stage3_task(candidate_id: str, spec: dict, cfg: dict) -> dict:
         and per_attempt_payout >= min_payout_floor
     )
 
+    _daily = None
+    if cfg.get("capture_daily"):
+        try:
+            from app.discovery_engine.pnl_store import pack_trades
+            _daily = pack_trades(bt.trades, "r")
+        except Exception:  # noqa: BLE001
+            _daily = None
     return {
-        **base, "statistics": stats,
+        **base, "statistics": stats, "daily_r": _daily,
         "prop_summary": prop_summary, "mc_summary": mc_summary, "fitness": fitness,
         "sharpe": stats.get("sharpe_ratio", 0.0), "cost_ladder": cost_ladder,
         "lookahead": lookahead_dict, "walk_forward": wf_dict, "robustness": robustness_dict,
@@ -1453,16 +1494,44 @@ def run_search(
     n_bars = len(df)
     split_idx = max(1, min(int(n_bars * (1 - stage_cfg.locked_holdout_frac)), n_bars - 1)) if n_bars > 1 else n_bars
     dev_df = df.iloc[:split_idx].reset_index(drop=True)
-    locked_df = df.iloc[split_idx:].reset_index(drop=True)
+    # 2026-10-25: the last ``sealed_final_frac`` of ALL bars is carved out of the locked tail and SEALED: promote_champion's gate
+    # holdout never reads it; only the promotion sequence does, once. The rest of the tail is the (look-counted) gate holdout.
+    _sealed_n = int(n_bars * max(0.0, float(getattr(stage_cfg, "sealed_final_frac", 0.0) or 0.0)))
+    _sealed_n = max(0, min(_sealed_n, max(0, (n_bars - split_idx) - 1)))
+    locked_df = df.iloc[split_idx:n_bars - _sealed_n].reset_index(drop=True)
+    sealed_df = df.iloc[n_bars - _sealed_n:].reset_index(drop=True)
     log(
-        f"Reserved the final {stage_cfg.locked_holdout_frac:.0%} of the dataset ({len(locked_df):,} bars) as a "
+        f"Reserved the final {stage_cfg.locked_holdout_frac:.0%} of the dataset ({len(locked_df) + len(sealed_df):,} bars) as a "
         f"locked out-of-sample holdout -- Stages 0-3 below run on the first {len(dev_df):,} bars only."
+        + (f" The last {len(sealed_df):,} of those bars are SEALED for the one-shot promotion read." if len(sealed_df) else "")
     )
+    from app.discovery_engine.provenance import data_fingerprint as _data_fp
+    run_data_fp = _data_fp(df)
 
     n_graveyard_skipped = 0
     if getattr(stage_cfg, "graveyard_skip_known_dead", False):
         n_graveyard_skipped = _apply_graveyard_readback(
             space, instrument, timeframe, int(stage_cfg.graveyard_min_attempts), log)
+
+    # Graveyard guidance (graduated neighbourhood prior; the hard skip above only bans a signature after N deaths).
+    guidance = None
+    if getattr(stage_cfg, "use_graveyard_guidance", False):
+        try:
+            from app.discovery_engine.graveyard_guidance import GraveyardGuidance
+            guidance = GraveyardGuidance.load(instrument, timeframe)
+            log(guidance.summary())
+        except Exception as _exc:  # noqa: BLE001
+            log(f"Graveyard guidance skipped: {_exc}")
+
+    # Lifetime trials already booked for the families in this space, on THIS data window (read BEFORE this run books itself).
+    _prior_trials = 0
+    if getattr(stage_cfg, "lifetime_deflation", False):
+        try:
+            from app.discovery_engine.trial_accounting import lifetime_trials
+            _fams = sorted({m.get("family") for m in space.meta.values() if m.get("family")} | ({space.family} if space.family else set()))
+            _prior_trials = lifetime_trials(["family:" + f for f in _fams], data_fp=run_data_fp)
+        except Exception as _exc:  # noqa: BLE001
+            log(f"Lifetime trial lookup skipped: {_exc}")
 
     run_id = uuid.uuid4().hex[:12]
     t0 = time.time()
@@ -1501,7 +1570,27 @@ def run_search(
         "max_drawdown_buffer_mult": stage_cfg.max_drawdown_buffer_mult,
         "min_t_stat": stage_cfg.stage1_min_t_stat,
         "max_cost_in_r": stage_cfg.stage1_max_cost_in_r,
+        "capture_daily": bool(getattr(stage_cfg, "capture_pool_pnl", False)),
     }
+
+    # (e) per-run daily-P&L file for the pool-wide tests
+    pool_store = None
+    if getattr(stage_cfg, "capture_pool_pnl", False):
+        try:
+            from app.discovery_engine.pnl_store import PnlStore
+            _pdir = Path(stage_cfg.pool_pnl_dir) if stage_cfg.pool_pnl_dir else Path(db_path).resolve().parent
+            pool_store = PnlStore(_pdir / f"pool_pnl_{run_id}", max_candidates=int(stage_cfg.pool_max_candidates))
+        except Exception as _exc:  # noqa: BLE001
+            log(f"Pool P&L capture unavailable: {_exc}")
+
+    def _stash_daily(rec: dict, suffix: str = "") -> None:
+        packed = rec.pop("daily_r", None)
+        if pool_store is not None and packed:
+            try:
+                from app.discovery_engine.pnl_store import unpack_series
+                pool_store.add(f"{rec['candidate_id']}{suffix}", rec.get("family") or "single", unpack_series(packed))
+            except Exception:  # noqa: BLE001
+                pass
 
     log(
         f"Search space ready: {len(space.candidates)} candidate(s) "
@@ -1591,8 +1680,11 @@ def run_search(
                 recs = fut.result()
                 for rec in recs:
                     rec["family"] = space.meta.get(rec["candidate_id"], {}).get("family", space.family or "single")
+                    _stash_daily(rec)
                     stage1_records.append(rec)
                     db.insert_candidate(run_id, rec["candidate_id"], "stage1", rec)
+                if pool_store is not None:
+                    pool_store.flush()
                 done_batches += 1
                 if done_batches % log_every == 0 or done_batches == len(futures):
                     log(f"  Stage 1: {done_batches}/{len(futures)} batch(es) evaluated ({len(stage1_records)}/{len(items)} candidates)...")
@@ -1617,6 +1709,7 @@ def run_search(
                             return
                         for rec in fut.result():
                             rec["family"] = space.meta.get(rec["candidate_id"], {}).get("family", space.family or "single")
+                            _stash_daily(rec)
                             _rescued[rec["candidate_id"]] = rec
                             db.insert_candidate(run_id, rec["candidate_id"], "stage1", rec)
 
@@ -1633,6 +1726,20 @@ def run_search(
                     passed_stage1, stage_cfg.max_per_family_stage1, score_key="quick_score",
                 )
                 diversity_dropped = len(_dropped)
+            if guidance is not None and guidance.n_rows:
+                _max_disc = float(stage_cfg.graveyard_guidance_max_discount)
+                _n_disc = 0
+                for _r in passed_stage1:
+                    _cfgd = (_spec_from_record(_r) or {}).get("config")
+                    _pen = guidance.penalty_r(_r.get("family") or "single", _cfgd)
+                    _disc = _max_disc * (_pen / guidance.max_penalty_r) if guidance.max_penalty_r > 0 else 0.0
+                    if _disc > 0:
+                        _r["graveyard_discount"] = round(_disc, 4)
+                        _r["quick_score_raw"] = _r.get("quick_score", 0.0)
+                        _r["quick_score"] = _r.get("quick_score", 0.0) * (1.0 - _disc)
+                        _n_disc += 1
+                if _n_disc:
+                    log(f"  Graveyard guidance: {_n_disc} Stage-1 survivor(s) ranked down (up to {_max_disc:.0%}) for sitting in neighbourhoods that keep dying.")
             survivors1 = sorted(
                 passed_stage1,
                 key=lambda r: r.get("quick_score", 0.0), reverse=True,
@@ -1670,7 +1777,10 @@ def run_search(
                     "for most other FX pairs) and run Speed Run again before trusting a 'no winner' "
                     "result on this instrument."
                 )
-            if not survivors1:
+            if not survivors1 and getattr(stage_cfg, "strict_entry_floor", False):
+                log("  Stage 1: nothing cleared the entry floor and strict_entry_floor is on -- the floor is NOT loosened "
+                    f"(>= {stage_cfg.min_trades} trades, mean-R t >= {stage_cfg.stage1_min_t_stat:g}, cost < {stage_cfg.stage1_max_cost_in_r:g}R).")
+            if not survivors1 and not getattr(stage_cfg, "strict_entry_floor", False):
                 # Auto-relax: the original filters found nothing to work
                 # with at all, which throws away the whole search rather
                 # than giving Stage 2's GA a weaker starting point to try
@@ -1910,6 +2020,7 @@ def run_search(
                 "robustness_perturbation_frac": stage_cfg.robustness_perturbation_frac,
                 "robustness_min_stability": stage_cfg.robustness_min_stability,
                 "reset_on_breach": stage_cfg.reset_on_breach,
+                "capture_daily": bool(getattr(stage_cfg, "capture_pool_pnl", False)),
             }
             futures = {
                 pool_box[0].submit(_stage3_task, r["candidate_id"], _spec_from_record(r), stage3_cfg): r["candidate_id"]
@@ -1928,6 +2039,7 @@ def run_search(
                     return
                 rec = fut.result()
                 rec["family"] = space.meta.get(rec["candidate_id"], {}).get("family", space.family or "single")
+                _stash_daily(rec, "#s3")
                 stage3_records.append(rec)
                 done += 1
                 log(f"  Stage 3: {done}/{len(survivors2)} candidate(s) validated...")
@@ -1950,12 +2062,20 @@ def run_search(
         except Exception:
             pass
         shutil.rmtree(tmp_dir, ignore_errors=True)
+        if pool_store is not None:
+            try:
+                pool_store.flush()
+            except Exception:  # noqa: BLE001
+                pass
         # Book what this run evaluated -- on every exit path (no-survivor and cancelled runs tested candidates too).
         if getattr(stage_cfg, "book_trial_ledger", True):
             try:
                 from app.validation import trial_ledger as _tl
+                _ga_n = sum(int(r.get("ga_total_evaluations", 0) or 0) for r in stage2_records)
                 _booked = _tl.book_run(f"search:{run_id}", _family_eval_counts(
-                    stage1_records, stage2_records, stage3_records))
+                    stage1_records, stage2_records, stage3_records), data_fp=run_data_fp,
+                    kinds={"stage1": len(stage1_records), "prefilter_kills": sum(1 for r in stage1_records if not r.get("passed_stage1")),
+                           "ga_inner_loop": _ga_n, "walk_forward": len(stage3_records)})
                 if _booked:
                     log("Trial ledger: booked " + ", ".join(f"{k}={v:,}" for k, v in sorted(_booked.items()))
                         + " evaluated configuration(s) (Stage-1 kills included).")
@@ -1968,6 +2088,50 @@ def run_search(
     # annualized bar-level "sharpe" kept in the records for display/ranking.
     trial_sharpes = [r.get("sharpe_per_trade", 0.0) for r in stage1_records if isinstance(r.get("sharpe_per_trade"), (int, float))]
     n_trials = len(stage1_records)
+    _trial_info = None
+    _pool = None
+    _pool_series: dict = {}
+    if pool_store is not None:
+        try:
+            from app.discovery_engine.pnl_store import PnlStore
+            _pool_series, _pool_fams = PnlStore.load_series(pool_store.path)
+        except Exception as _exc:  # noqa: BLE001
+            log(f"Pool P&L could not be re-read: {_exc}")
+            _pool_fams = {}
+    # 2026-10-25: Deflated Sharpe counts EVERYTHING this run evaluated (Stage-1 kills, GA inner loop, Stage-3 backtests) plus the
+    # lifetime ledger for these families on this data window, clustered into effective trials (|corr| >= dsr_cluster_corr).
+    if getattr(stage_cfg, "lifetime_deflation", False):
+        try:
+            from app.discovery_engine.trial_accounting import effective_trials as _eff_trials
+            _run_evals = sum(_family_eval_counts(stage1_records, stage2_records, stage3_records).values())
+            _raw = max(1, int(_run_evals) + int(_prior_trials))
+            _sample = list(_pool_series.values())
+            if len(_sample) > 120:
+                import random as _rnd
+                _sample = _rnd.Random(7).sample(_sample, 120)
+            _eff = _eff_trials(_raw, _sample, stage_cfg.dsr_cluster_corr)
+            n_trials = max(n_trials, int(_eff["effective_trials"]))
+            _trial_info = {"run_evaluations": int(_run_evals), "ledger_prior": int(_prior_trials), "raw_trials": _raw,
+                           "effective_trials": int(_eff["effective_trials"]), "clusters": _eff["n_clusters"],
+                           "streams_sampled": _eff["n_streams"], "corr_threshold": stage_cfg.dsr_cluster_corr}
+            log(f"  Trial accounting: {_run_evals:,} evaluation(s) this run + {_prior_trials:,} from the lifetime ledger = {_raw:,} raw -> "
+                f"{_eff['effective_trials']:,} effective (|corr| >= {stage_cfg.dsr_cluster_corr:g}"
+                f"{'' if _eff.get('clustered') else '; too few return streams to cluster, raw count used'}). Deflating for {n_trials:,}.")
+        except Exception as _exc:  # noqa: BLE001
+            log(f"Lifetime/effective trial accounting skipped: {_exc}")
+    if _pool_series:
+        try:
+            from app.discovery_engine.pool_stats import pool_report as _pool_report
+            _pool = _pool_report(_pool_series, strata=_pool_fams, alpha=stage_cfg.pool_alpha, pbo_sample=stage_cfg.pool_pbo_sample,
+                                 seed=stage_cfg.random_seed)
+            _fw, _pb = _pool["family_wise"], _pool["pbo"]
+            log(f"  Pool tests over {_pool['n_candidates']:,} evaluated candidate(s): Reality Check p="
+                f"{'n/a' if _fw.get('rc_p') is None else format(_fw['rc_p'], '.3f')}, SPA p="
+                f"{'n/a' if _fw.get('spa_p') is None else format(_fw['spa_p'], '.3f')} -> "
+                f"{'the best edge survives the whole-pool correction' if _fw.get('passed') else 'NOT distinguishable from the best of the pool by luck'}; "
+                f"PBO={'n/a' if _pb.get('pbo') is None else format(_pb['pbo'], '.2f')} ({_pb.get('note', '')}).")
+        except Exception as _exc:  # noqa: BLE001
+            log(f"Pool tests skipped: {_exc}")
 
     # D4(c): honest per-stage trial counts on every validated (Stage 3)
     # record, so a downstream pipeline DSR can deflate against the
@@ -1993,6 +2157,12 @@ def run_search(
             "probabilistic_sharpe": dsr.probabilistic_sharpe, "is_significant": dsr.is_significant,
             "n_trials": dsr.n_trials, "note": dsr.note,
         }
+        if _trial_info:
+            rec["deflated_sharpe"]["trial_accounting"] = _trial_info
+        if _pool:
+            rec["pool_tests"] = {"family_wise_passed": bool(_pool["family_wise"].get("passed")), "rc_p": _pool["family_wise"].get("rc_p"),
+                                 "spa_p": _pool["family_wise"].get("spa_p"), "pbo": _pool["pbo"].get("pbo"),
+                                 "n_pool": _pool["n_candidates"]}
         mc = rec.get("mc_summary") or {}
         if rec.get("passed_stage3_gate"):
             # P0-1: rank on per-attempt (single-account) odds, not the
@@ -2056,6 +2226,8 @@ def run_search(
         locked_holdout_frac=stage_cfg.locked_holdout_frac,
         dev_bars=len(dev_df), locked_bars=len(locked_df),
         stage2_stalled_skipped=stage2_stalled, stage3_stalled_skipped=stage3_stalled, controls=_controls,
+        sealed_bars=len(sealed_df), sealed_final_frac=float(getattr(stage_cfg, "sealed_final_frac", 0.0) or 0.0), data_fp=run_data_fp,
+        pool_pnl_path=str(pool_store.path) if pool_store is not None else None, pool=_pool, trial_info=_trial_info,
     )
 
 
@@ -2069,6 +2241,7 @@ def promote_champion(
     reset_on_breach: bool = False,
     locked_df: pd.DataFrame | None = None,
     locked_holdout_frac: float = 0.2,
+    sealed_final_frac: float = 0.0,
 ) -> dict:
     """
     Re-runs one chosen Stage 3 survivor through the app's EXISTING,
@@ -2119,9 +2292,20 @@ def promote_champion(
         if locked_df is None:
             _n = len(df)
             _split = max(1, min(int(_n * (1 - locked_holdout_frac)), _n - 1)) if _n > 1 else _n
-            locked_df = df.iloc[_split:].reset_index(drop=True)
+            # the sealed tail (run_search's ``sealed_final_frac``) is NEVER read here -- only the promotion sequence reads it, once
+            _sealed_n = max(0, min(int(_n * max(0.0, float(sealed_final_frac or 0.0))), max(0, _n - _split - 1)))
+            locked_df = df.iloc[_split:_n - _sealed_n].reset_index(drop=True)
         locked_holdout: dict | None = None
+        holdout_looks = None
         if len(locked_df):
+            try:
+                # 2026-10-25: lifetime look counter for this slice -- every read makes the next one less of a holdout.
+                from app.discovery_engine.holdout import LookRegistry, bonferroni_looks_alpha, holdout_note
+                from app.discovery_engine.provenance import data_fingerprint as _fp
+                _looks = LookRegistry().record(_fp(locked_df), "gate")
+                holdout_looks = {"looks": _looks, "alpha_5pct_after_looks": bonferroni_looks_alpha(0.05, _looks), "note": holdout_note(_looks, 200)}
+            except Exception:  # noqa: BLE001
+                holdout_looks = None
             try:
                 locked_bt = run_backtest(
                     locked_df, build_strategy_from_spec(spec, promote_tmp_dir), risk)
@@ -2186,7 +2370,7 @@ def promote_champion(
         )
         return {
             "candidate_id": candidate_id, "spec": spec, "config": spec.get("config"),
-            "report_paths": paths, "locked_holdout": locked_holdout,
+            "report_paths": paths, "locked_holdout": locked_holdout, "holdout_looks": holdout_looks,
         }
     finally:
         shutil.rmtree(promote_tmp_dir, ignore_errors=True)
