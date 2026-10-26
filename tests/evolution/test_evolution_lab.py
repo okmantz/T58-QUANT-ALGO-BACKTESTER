@@ -295,7 +295,7 @@ def test_generate_population_stratifies_immigrants_across_all_families():
     skipped when that extra data isn't merged in -- that's correct
     behavior, not a diversity failure, so they're excluded from the
     expected set here."""
-    from app.search.strategy_space import FAMILIES_REQUIRING_CALENDAR_DATA, FAMILIES_REQUIRING_PAIR_DATA, list_families
+    from app.search.strategy_space import FAMILIES_REQUIRING_CALENDAR_DATA, FAMILIES_REQUIRING_PAIR_DATA, active_family_names
 
     cfg = EvolutionConfig(population_size=30, elite_keep=8, random_seed=1,
                            knowledge_graph_path="/tmp/t58_test_kg_gen0.json")
@@ -305,7 +305,7 @@ def test_generate_population_stratifies_immigrants_across_all_families():
     # 2026-10-17: random-entry controls ride along in every pool as their own pseudo-family; they are not part of the
     # strategy search, so they are excluded from the diversity check.
     families_seen = {meta.get("family") for _, _, meta in population if not meta.get("control")}
-    expected = set(list_families().keys()) - set(FAMILIES_REQUIRING_PAIR_DATA) - set(FAMILIES_REQUIRING_CALENDAR_DATA)
+    expected = set(active_family_names()) - set(FAMILIES_REQUIRING_PAIR_DATA) - set(FAMILIES_REQUIRING_CALENDAR_DATA)
     # v5 B1-1: the "grammar" pseudo-family joins the stratified draw when
     # use_structural_operators is on (the default).
     expected = expected | {"grammar"}
@@ -538,8 +538,8 @@ def test_family_exclusions_never_collapse_active_families_below_the_floor(tmp_pa
     searching every family instead of locking in on just the 3."""
     monkeypatch.setattr("app.search.family_health.get_app_base_dir", lambda: tmp_path / "base")
     from app.search.results_db import ResultsDB
-    from app.search.strategy_space import list_families
-    all_families = list(list_families())
+    from app.search.strategy_space import active_family_names
+    all_families = list(active_family_names())
     assert len(all_families) > 6
     survivors_to_keep = set(all_families[:3])
     search_dir = tmp_path / "base" / "reports" / "search"

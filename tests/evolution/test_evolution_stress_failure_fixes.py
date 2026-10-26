@@ -69,6 +69,7 @@ def _cfg(tmp_path, **overrides) -> EvolutionConfig:
         knowledge_graph_path=str(tmp_path / "kg.jsonl"),
         checkpoint_path=str(tmp_path / "checkpoint.json"),
         tested_log_path=str(tmp_path / "tested_candidates.jsonl"),
+        strict_entry_floor=False,     # these tests exercise the legacy auto-relax path; the strict default has its own test below
     )
     base.update(overrides)
     return EvolutionConfig(**base)
@@ -264,3 +265,14 @@ def test_generate_population_normal_path_still_mutates_elites(tmp_path):
     assert any(meta.get("mutated_from") for _cid, _spec, meta in population), (
         "the normal path should still produce elite-mutated children"
     )
+
+
+def test_strict_entry_floor_never_loosens_and_forces_immigrants(tmp_path):
+    cfg = _cfg(tmp_path, strict_entry_floor=True, auto_relax_after_empty_generations=2)
+    runner = EvolutionRunner(pd.DataFrame(), RiskConfig(), PropRules(), cfg, progress_cb=None)
+    floor = (cfg.min_trades, cfg.min_profit_factor, cfg.max_drawdown_buffer_mult, cfg.min_t_stat, cfg.max_cost_in_r)
+    for gen in range(10):
+        runner._handle_empty_prefilter(gen, {"min_trades": 10})
+    assert (cfg.min_trades, cfg.min_profit_factor, cfg.max_drawdown_buffer_mult, cfg.min_t_stat, cfg.max_cost_in_r) == floor
+    assert floor[0] == 100 and floor[3] == 1.0 and floor[4] == 0.15
+    assert runner._force_full_immigrant_next is True
