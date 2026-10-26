@@ -1,6 +1,9 @@
 """Register and run the report's pre-registered family tests on YOUR data.
 
-    python -m scripts.run_preregistered_families NQ=data/nq_15m.csv ES=data/es_15m.csv [GC=data/gc_15m.csv ...]
+    python -m scripts.run_preregistered_families NQ=data/nq_15m.csv ES=data/es_15m.csv [GC=data/gc_15m.csv ...] [--v13-batch=1]
+
+``--v13-batch=N`` runs rollout batch N of the report's 100 families instead of the v11 batch. Only open a batch once the surrogate
+gate (scripts/run_surrogate_study.py) reports a false-discovery rate under 5%.
 
 The first instrument is each family's PRIMARY, the second its REPLICATION instrument. Every family is registered (fingerprinted,
 timestamped, one trial booked) BEFORE anything runs, then the batch is run once at 2x costs with Benjamini-Hochberg correction.
@@ -16,10 +19,15 @@ from app.data.instrument_specs import apply_any_instrument_spec, micro_equivalen
 from app.research.preregistered_tests import preregister, run_preregistered
 from app.search import strategy_space as sps  # noqa: F401  (registers the v11 families)
 from app.search.families_v11 import V11_FAMILY_NAMES, V11_REQUIRES_AUX
+from app.search import families_v13 as f13
 
 
 def main(argv: list[str]) -> int:
-    pairs = [a.split("=", 1) for a in argv if "=" in a]
+    batch = None
+    for a in argv:
+        if a.startswith("--v13-batch="):
+            batch = int(a.split("=", 1)[1])
+    pairs = [a.split("=", 1) for a in argv if "=" in a and not a.startswith("--")]
     if len(pairs) < 2:
         print(__doc__)
         return 2
@@ -34,7 +42,14 @@ def main(argv: list[str]) -> int:
         _m = micro_equivalent(sym.upper())
         risks[sym.upper()] = apply_any_instrument_spec(RiskConfig(initial_balance=100000, risk_mode="percent", risk_value=0.5), (_m.symbol if _m else sym.upper()))
     primary, replication = pairs[0][0].upper(), pairs[1][0].upper()
-    regs = [preregister(f, primary, replication, note="v11 batch") for f in V11_FAMILY_NAMES if f not in V11_REQUIRES_AUX]
+    if batch is not None:
+        # the report's 100 families: kill conditions go on record first, then ONLY that rollout batch's ready families run
+        from app.discovery.hypothesis import preregister_v13_families
+        print("v13 pre-registration:", preregister_v13_families())
+        names = [n for n in f13.families_in_batch(batch) if f13.V13_META[n].status == "ready" and n not in f13.RETIRED_V13]
+        regs = [preregister(f, primary, replication, note=f"v13 batch {batch}") for f in names]
+    else:
+        regs = [preregister(f, primary, replication, note="v11 batch") for f in V11_FAMILY_NAMES if f not in V11_REQUIRES_AUX]
     print(f"Registered {len(regs)} test(s) on {primary} (replication {replication}); running once at 2x costs...")
     results = run_preregistered(regs, frames, risks, log=print)
     for r in results:
