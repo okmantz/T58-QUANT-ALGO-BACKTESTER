@@ -73,6 +73,7 @@ from app.web.risk_sweep_routes import risk_sweep_bp
 from app.web.project_routes import project_bp
 from app.web.telemetry_routes import telemetry_bp, set_evolution_source
 from app.web.evolution_lab_routes import evolution_lab_bp, set_runner_source as set_lab_runner_source
+from app.web.discovery_engine_routes import discovery_engine_bp
 from app.ai.ollama_settings import load_settings as load_ollama_settings
 from app.ai.ollama_settings import save_settings as save_ollama_settings
 from app.ai.research_agent import ResearchAgentContext, ResearchAgent
@@ -948,6 +949,8 @@ app.register_blueprint(risk_sweep_bp)
 app.register_blueprint(project_bp)
 app.register_blueprint(telemetry_bp)
 app.register_blueprint(evolution_lab_bp)
+# Strategy Discovery Engine (2026-10-25): the five labs as presets of one engine -- see app/web/discovery_engine_routes.py.
+app.register_blueprint(discovery_engine_bp)
 # TradingView webhook relay (Pine strategy alert -> T58 paper forward test,
 # optionally mirrored to a demo broker) -- see app/web/webhook_relay_routes.py.
 app.register_blueprint(webhook_relay_bp)
