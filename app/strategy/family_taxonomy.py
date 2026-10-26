@@ -221,6 +221,26 @@ try:
 except ImportError:
     pass
 
+# -- v13 (2026-10-25) families from app/search/families_v13.py: the report's display groups map to the canonical ones above --
+_V13_DISPLAY_TO_CANON = {
+    "Breakout and structure": "breakout", "Cross-asset and macro": "macro_regime", "Mean reversion": "mean_reversion",
+    "Microstructure and order flow": "order_flow", "Position management": "uncategorized", "Session and calendar": "calendar_seasonality",
+    "Statistical and model-based": "statistical_arbitrage", "Trend and momentum": "trend_following", "Volatility regime and premium": "macro_regime",
+}
+try:
+    from app.search.families_v13 import V13_FAMILY_GROUPS as _V13_GROUPS
+    for _n, _g in _V13_GROUPS.items():
+        _c = _V13_DISPLAY_TO_CANON.get(_g, "uncategorized")
+        if _c == "trend_following" and any(k in _n for k in ("momentum", "tsmom", "roc", "accel")):
+            _c = "momentum"
+        if _c == "calendar_seasonality" and any(k in _n for k in ("fomc", "event", "nfp", "cpi", "news")):
+            _c = "event_driven"
+        if _c == "calendar_seasonality" and any(k in _n for k in ("opening_range", "or_", "gap", "morning")):
+            _c = "opening_range"
+        _SKELETON_TO_GROUP[_n] = _c
+except ImportError:
+    pass
+
 # Path 2a: app.strategy.dna active_tags() -> canonical group. Checked in
 # THIS priority order (first match wins) when more than one gene is on --
 # liquidity and structure are the most specific/rare signals, so they

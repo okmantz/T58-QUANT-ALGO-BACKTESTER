@@ -39,6 +39,15 @@ BOUNDED_OSCILLATOR_RANGES.update({
     "round_dist_es": (-0.5, 0.5), "round_dist_nq": (-0.5, 0.5), "round_dist_gc": (-0.5, 0.5), "round_dist_auto": (-0.5, 0.5),
 })
 
+# v13 (2026-10-25): exact bounds of the new bounded series (single source: indicators_v13.V13_BOUNDED_RANGES -- merged here at the end of
+# the module import so indicators_v13, which imports nothing from this module at import time, can own them).
+def _merge_v13_bounds() -> None:
+    from app.strategy.indicators_v13 import V13_BOUNDED_RANGES
+    BOUNDED_OSCILLATOR_RANGES.update(V13_BOUNDED_RANGES)
+
+
+_merge_v13_bounds()
+
 
 def _period(period: int) -> int:
     return max(int(period), 1)
@@ -1356,6 +1365,11 @@ def _build_indicator_series_uncached(frame: pd.DataFrame, kind: str, period: int
     _v12_builder = _indicators_v12.V12_INDICATOR_BUILDERS.get(kind)
     if _v12_builder is not None:
         return _v12_builder(frame, p, column, lookback)
+    # --- v13 (2026-10-25): the report's 100 indicators (volatility estimators, filters, cycles, entropy, microstructure, structure, Ext/macro, regime). ---
+    from app.strategy import indicators_v13 as _indicators_v13
+    _v13_builder = _indicators_v13.V13_INDICATOR_BUILDERS.get(kind)
+    if _v13_builder is not None:
+        return _v13_builder(frame, p, column, lookback)
     raise KeyError(kind)
 
 
