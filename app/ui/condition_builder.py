@@ -67,6 +67,10 @@ from app.strategy.indicators_v12 import V12_INDICATOR_KINDS as _V12_KINDS
 _V12_LABELS = {k: k.replace("_", " ").title().replace("Tod", "ToD").replace("Nr", "NR").replace("Es", "ES").replace("Nq", "NQ").replace("Gc", "GC").replace("Garman Klass", "Garman-Klass") for k in _V12_KINDS}
 CONDITION_SOURCES = CONDITION_SOURCES + [lbl for lbl in _V11_LABELS.values() if lbl not in CONDITION_SOURCES]
 CONDITION_SOURCES = CONDITION_SOURCES + [lbl for lbl in _V12_LABELS.values() if lbl not in CONDITION_SOURCES]
+# v13 (2026-10-25): the report's 100 indicators (labels are "<Title Case> (v13)" so none can collide with an older label)
+from app.strategy.indicators_v13 import V13_INDICATOR_KINDS as _V13_KINDS
+_V13_LABELS = {k: k.replace("_", " ").title() + " (v13)" for k in _V13_KINDS}
+CONDITION_SOURCES = CONDITION_SOURCES + [lbl for lbl in _V13_LABELS.values() if lbl not in CONDITION_SOURCES]
 RIGHT_SOURCES = ["Value"] + CONDITION_SOURCES
 
 SOURCE_KIND = {
@@ -93,6 +97,7 @@ SOURCE_KIND = {
 }
 SOURCE_KIND.update({lbl: k for k, lbl in _V11_LABELS.items()})
 SOURCE_KIND.update({lbl: k for k, lbl in _V12_LABELS.items()})
+SOURCE_KIND.update({lbl: k for k, lbl in _V13_LABELS.items()})
 
 OPERATORS = [
     "Greater Than", "Greater Than or Equal", "Less Than", "Less Than or Equal",
