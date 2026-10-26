@@ -8,6 +8,12 @@ next run for the same strategy name automatically adds them to external_trial_co
 on different data is weak evidence that today's idea was overfit to it, while counting it forever makes a long-lived idea
 undeployable. ``total(label)`` weights each entry by 0.5 ** (age / half_life_days); legacy integer entries (no timestamp) keep full
 weight. ``raw_total`` ignores aging. Family-level ledgers use the same functions with a label such as ``family:event_day``.
+
+2026-10-25 (Strategy Discovery Engine, report "Tier 2"): aging is only honest when the DATA changed. A search run on the same
+historical window two years ago carries exactly the same selection bias today, so it must not fade. Entries may now carry a
+data fingerprint (``fp``, see ``app.discovery_engine.provenance.data_fingerprint``). When the caller passes ``current_fp`` to
+``total`` / ``family_prior``, entries whose fingerprint EQUALS it keep full weight; entries with a different (or no) fingerprint
+age as before. Callers that pass no ``current_fp`` get the old behaviour byte for byte.
 """
 from __future__ import annotations
 
@@ -65,12 +71,31 @@ def _entries(value) -> list[dict]:
     return [{"t": None, "n": n}] if n else []
 
 
+def _compact(ents: list[dict]) -> list[dict]:
+    """Merge entries within the same UTC day AND the same data fingerprint so the file does not grow with every run."""
+    merged: dict = {}
+    for e in ents:
+        day = None if e.get("t") is None else int(float(e["t"]) // 86400)
+        key = (day, e.get("fp"))
+        m = merged.setdefault(key, {"t": e.get("t"), "n": 0})
+        if e.get("fp"):
+            m["fp"] = e["fp"]
+        m["n"] += int(e["n"])
+        if e.get("t") is not None:
+            m["t"] = max(float(m["t"] or 0), float(e["t"]))
+    return list(merged.values())
+
+
 def raw_total(label) -> int:
     return int(sum(int(e.get("n", 0)) for e in _entries(_load().get(_key(label), 0))))
 
 
-def total(label, half_life_days: float | None = DEFAULT_HALF_LIFE_DAYS, now: float | None = None) -> int:
-    """Aged trial count (rounded up so one real trial never rounds to zero). ``half_life_days=None`` disables aging."""
+def total(label, half_life_days: float | None = DEFAULT_HALF_LIFE_DAYS, now: float | None = None,
+          current_fp: str | None = None) -> int:
+    """Aged trial count (rounded up so one real trial never rounds to zero). ``half_life_days=None`` disables aging.
+
+    ``current_fp``: fingerprint of the data window being judged today. Entries recorded on that SAME window do not decay
+    (the selection bias they created is still fully present); entries on any other window age with the half-life."""
     ents = _entries(_load().get(_key(label), 0))
     if half_life_days is None:
         return int(sum(int(e["n"]) for e in ents))
@@ -79,7 +104,8 @@ def total(label, half_life_days: float | None = DEFAULT_HALF_LIFE_DAYS, now: flo
     for e in ents:
         n = int(e.get("n", 0))
         t = e.get("t")
-        w = 1.0 if t is None else 0.5 ** (max(0.0, now - float(t)) / 86400.0 / float(half_life_days))
+        same_window = bool(current_fp) and e.get("fp") == current_fp
+        w = 1.0 if (t is None or same_window) else 0.5 ** (max(0.0, now - float(t)) / 86400.0 / float(half_life_days))
         acc += n * w
     return int(-(-acc // 1)) if acc > 0 else 0
 
@@ -107,22 +133,18 @@ def clock_epochs() -> list[dict]:
     return [e for e in v if isinstance(e, dict)] if isinstance(v, list) else []
 
 
-def record(label, n: int, now: float | None = None) -> int:
+def record(label, n: int, now: float | None = None, data_fp: str | None = None) -> int:
     n = max(0, int(n))
     with _LOCK:
         data = _load()
         k = _key(label)
         ents = _entries(data.get(k, 0))
-        ents.append({"t": time.time() if now is None else float(now), "n": n})
-        # compact: merge entries within the same UTC day so the file does not grow with every run
-        merged: dict = {}
-        for e in ents:
-            day = None if e.get("t") is None else int(float(e["t"]) // 86400)
-            m = merged.setdefault(day, {"t": e.get("t"), "n": 0})
-            m["n"] += int(e["n"])
-            if e.get("t") is not None:
-                m["t"] = max(float(m["t"] or 0), float(e["t"]))
-        data[k] = list(merged.values())
+        ent = {"t": time.time() if now is None else float(now), "n": n}
+        if data_fp:
+            ent["fp"] = str(data_fp)
+        ents.append(ent)
+        # compact: merge entries within the same UTC day (and data window) so the file does not grow with every run
+        data[k] = _compact(ents)
         _write(data)
         return int(sum(int(e["n"]) for e in data[k]))
 
@@ -139,6 +161,7 @@ def record(label, n: int, now: float | None = None) -> int:
 # / ``raw_total`` never read.
 # ---------------------------------------------------------------------------
 BOOKED_KEY = "_booked"
+KINDS_KEY = "_kinds"      # per-run audit of WHAT was booked (prefilter kills, GA inner loop, grammar mutations, ...)
 
 
 def family_label(name) -> str:
@@ -147,8 +170,12 @@ def family_label(name) -> str:
     return s if s.lower().startswith("family:") else f"family:{s}"
 
 
-def book_run(run_key: str, counts: dict, now: float | None = None) -> dict:
-    """Book ``{family_name: n_evaluated}`` for one run, once. Returns the counts actually booked ({} if already booked)."""
+def book_run(run_key: str, counts: dict, now: float | None = None, data_fp: str | None = None,
+             kinds: dict | None = None) -> dict:
+    """Book ``{family_name: n_evaluated}`` for one run, once. Returns the counts actually booked ({} if already booked).
+
+    ``data_fp`` stamps the entries with the data window they were evaluated on (see ``total(current_fp=...)``); ``kinds`` is an
+    optional ``{kind: n}`` audit trail (``prefilter_kills``, ``ga_inner_loop``, ``grammar_mutations`` ...) kept under a reserved key."""
     run_key = str(run_key or "")
     clean = {family_label(k): max(0, int(v)) for k, v in (counts or {}).items() if v and int(v) > 0}
     if not clean:
@@ -162,15 +189,18 @@ def book_run(run_key: str, counts: dict, now: float | None = None) -> dict:
         for label, n in clean.items():
             k = _key(label)
             ents = _entries(data.get(k, 0))
-            ents.append({"t": t, "n": n})
-            merged: dict = {}
-            for e in ents:
-                day = None if e.get("t") is None else int(float(e["t"]) // 86400)
-                m = merged.setdefault(day, {"t": e.get("t"), "n": 0})
-                m["n"] += int(e["n"])
-                if e.get("t") is not None:
-                    m["t"] = max(float(m["t"] or 0), float(e["t"]))
-            data[k] = list(merged.values())
+            ent = {"t": t, "n": n}
+            if data_fp:
+                ent["fp"] = str(data_fp)
+            ents.append(ent)
+            data[k] = _compact(ents)
+        if run_key and kinds:
+            kd = data.get(KINDS_KEY) if isinstance(data.get(KINDS_KEY), dict) else {}
+            kd[run_key] = {str(a): int(b) for a, b in kinds.items() if b}
+            if len(kd) > 2000:
+                for old in sorted(kd)[: len(kd) - 2000]:
+                    kd.pop(old, None)
+            data[KINDS_KEY] = kd
         if run_key:
             booked[run_key] = t
             if len(booked) > 2000:  # bounded
@@ -181,8 +211,21 @@ def book_run(run_key: str, counts: dict, now: float | None = None) -> dict:
     return clean
 
 
-def family_prior(name, half_life_days: float | None = DEFAULT_HALF_LIFE_DAYS, now: float | None = None) -> int:
-    """Aged trial count previously booked for a family (0 when none)."""
+def family_prior(name, half_life_days: float | None = DEFAULT_HALF_LIFE_DAYS, now: float | None = None,
+                 current_fp: str | None = None) -> int:
+    """Aged trial count previously booked for a family (0 when none). ``current_fp``: see ``total``."""
     if not name:
         return 0
-    return total(family_label(name), half_life_days=half_life_days, now=now)
+    return total(family_label(name), half_life_days=half_life_days, now=now, current_fp=current_fp)
+
+
+def run_kinds(run_key: str) -> dict:
+    """The ``{kind: n}`` audit trail booked for one run (empty when none)."""
+    kd = _load().get(KINDS_KEY)
+    v = kd.get(run_key) if isinstance(kd, dict) else None
+    return dict(v) if isinstance(v, dict) else {}
+
+
+def all_family_labels() -> list[str]:
+    """Every ``family:<name>`` label that has at least one booking."""
+    return sorted(k for k in _load() if k.startswith("family_") or k.startswith("family:"))
