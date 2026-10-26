@@ -191,6 +191,7 @@ def test_run_search_auto_relaxes_stage1_filters_instead_of_giving_up(tmp_path, s
     df = _trending_df()
     logs = []
     cfg = _fast_stage_cfg(min_trades=50, min_profit_factor=50.0)
+    cfg.strict_entry_floor = False      # 2026-10-25: the one-floor default refuses to loosen; this test covers the legacy opt-out
     summary = run_search(
         df, _frictionless_risk(), PropRules(), small_family_space, cfg,
         db_path=str(tmp_path / "search.db"), instrument="TEST", timeframe="5m",
@@ -198,6 +199,21 @@ def test_run_search_auto_relaxes_stage1_filters_instead_of_giving_up(tmp_path, s
     )
     assert summary.stage1_survivors > 0
     assert any("auto-relax" in line.lower() for line in logs)
+
+
+def test_run_search_strict_entry_floor_does_not_loosen(tmp_path, small_family_space):
+    """Default (strict_entry_floor=True): the same impossible floor is reported, never silently loosened to 3-5 trades."""
+    df = _trending_df()
+    logs = []
+    cfg = _fast_stage_cfg(min_trades=50, min_profit_factor=50.0)
+    summary = run_search(
+        df, _frictionless_risk(), PropRules(), small_family_space, cfg,
+        db_path=str(tmp_path / "search.db"), instrument="TEST", timeframe="5m",
+        progress_cb=logs.append,
+    )
+    assert summary.stage1_survivors == 0
+    assert not any("auto-relax round" in line.lower() for line in logs)
+    assert any("floor is not loosened" in line.lower() for line in logs)
 
 
 def test_run_search_records_stage3_results_onto_the_dashboard(tmp_path, small_family_space, monkeypatch):

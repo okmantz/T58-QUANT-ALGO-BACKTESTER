@@ -195,9 +195,9 @@ def test_evolution_n_children_positive_at_defaults():
     future default/budget regression fails here, not silently in prod.
     """
     from app.evolution.engine import EvolutionConfig
-    from app.search.strategy_space import list_families
+    from app.search.strategy_space import active_family_names
     cfg = EvolutionConfig()
-    n_fam = len(list_families()) + 1  # +1: the grammar pseudo-family
+    n_fam = len(active_family_names()) + 1  # +1: the grammar pseudo-family
     n_immigrants = max(1, int(cfg.population_size * cfg.random_immigrant_frac))
     base_per_family = max(cfg.min_immigrants_per_family, n_immigrants // n_fam)
     immigrant_floor = base_per_family * n_fam

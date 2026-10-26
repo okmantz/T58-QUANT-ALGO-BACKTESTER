@@ -68,6 +68,8 @@ def _fast_stage_cfg(**overrides) -> SearchStageConfig:
         # acceptance floor existed -- the floor itself is covered by the
         # batch_runner/search tests, not here.
         min_eval_pass_probability=0.0, min_first_payout_probability=0.0,
+        # the unified entry floor (t>=1, cost<0.15R) is covered by tests/discovery_engine; these tests exercise loop plumbing on noise data
+        strict_entry_floor=False, stage1_min_t_stat=0.0, stage1_max_cost_in_r=0.0,
     )
     base.update(overrides)
     return SearchStageConfig(**base)
