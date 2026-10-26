@@ -163,10 +163,12 @@ def test_building_block_pool_decomposes_templates():
         v9_names = set()
     from app.search.families_v11 import V11_FAMILIES
     v11_names = set(V11_FAMILIES)
-    assert len(FAMILIES) == 84 + len(v7_names) + len(v8_names) + len(v9_names) + len(v11_names), (
-        f"expected 84 frozen templates + {len(v7_names)} v7 + {len(v8_names)} v8 + {len(v9_names)} v9 + {len(v11_names)} v11 families"
+    from app.search.families_v13 import V13_FAMILIES
+    v13_names = set(V13_FAMILIES)
+    assert len(FAMILIES) == 84 + len(v7_names) + len(v8_names) + len(v9_names) + len(v11_names) + len(v13_names), (
+        f"expected 84 frozen templates + {len(v7_names)} v7 + {len(v8_names)} v8 + {len(v9_names)} v9 + {len(v11_names)} v11 + {len(v13_names)} v13 families"
     )
-    original = set(FAMILIES) - v7_names - v8_names - v9_names - v11_names
+    original = set(FAMILIES) - v7_names - v8_names - v9_names - v11_names - v13_names
     assert len(original) == 84, "the 84 frozen templates must still exist, untouched"
     pool = building_block_pool()
     assert pool["families_used"], "no families decomposed"
@@ -184,7 +186,7 @@ def test_building_block_pool_decomposes_templates():
         assert not validate(cfg), f"pool block invalid: {validate(cfg)[:2]}"
     # Templates untouched: FAMILIES registry still has all 84 originals
     # after pooling (v7: plus the 10 new families; v8: plus 8 more).
-    assert len(FAMILIES) - len(v7_names) - len(v8_names) - len(v9_names) - len(v11_names) == 84
+    assert len(FAMILIES) - len(v7_names) - len(v8_names) - len(v9_names) - len(v11_names) - len(v13_names) == 84
 
 
 # ---------------------------------------------------------------------------
@@ -480,7 +482,7 @@ def test_full_generation_serial_with_real_holdout_gate(tmp_path):
         tested_log_path=str(tmp_path / "tested.jsonl"),
         target_eval_pass_pct=0.0,  # trivially passing bar -- exercises the gate, not the bar
     )
-    runner = EvolutionRunner(_trending_df(n=300), RiskConfig(), PropRules(), cfg, progress_cb=None)
+    runner = EvolutionRunner(_trending_df(n=600), RiskConfig(), PropRules(), cfg, progress_cb=None)  # 600 bars: the sealed slice is carved first, so the locked holdout needs room for trades
     runner._run_one_generation(0)
     assert len(runner.journal) == 1
     if runner.leaderboard:

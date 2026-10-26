@@ -242,6 +242,10 @@ def _session_df(days=420, seed=3) -> pd.DataFrame:
 V11_NEEDS_EXTERNAL_DATA = {"vix_backwardation_dip", "leader_follow"}
 
 
+# v13 families whose trigger is a rare event or a named calendar the synthetic frame does not contain (they still must build and run)
+_V13_NO_SYNTH_TRADES = {"gap_and_hold_acceptance", "post_event_vol_crush"}
+
+
 @pytest.mark.parametrize("family_name", list(FAMILIES))
 def test_every_family_produces_valid_runnable_configs(family_name):
     """
@@ -253,7 +257,8 @@ def test_every_family_produces_valid_runnable_configs(family_name):
     """
     from app.search.families_v11 import V11_FAMILIES as _V11
     df = _vol_regime_df() if family_name in FAMILIES_NEEDING_VOL_REGIMES else _synthetic_df()
-    if family_name in _V11:
+    from app.search.families_v13 import V13_FAMILIES as _V13, V13_NEEDS_DATA as _V13_DATA
+    if family_name in _V11 or family_name in _V13:
         df = _session_df()
     risk = RiskConfig()
     has_pair_data = family_name in FAMILIES_REQUIRING_PAIR_DATA
@@ -282,8 +287,8 @@ def test_every_family_produces_valid_runnable_configs(family_name):
         assert result.statistics is not None
         if result.trades:
             any_trades = True
-    if family_name in V11_NEEDS_EXTERNAL_DATA:
-        return
+    if family_name in V11_NEEDS_EXTERNAL_DATA or family_name in _V13_DATA or family_name in _V13_NO_SYNTH_TRADES:
+        return          # needs an outside feed / companion / calendar this synthetic frame does not carry: must build and run, may not trade
     assert any_trades, f"family '{family_name}' produced zero trades across every sampled candidate"
 
 
