@@ -973,6 +973,22 @@ def run_quick_optimize(
         # see app.orchestration.full_pipeline's identical fix for why
         # these two can now differ (auto-shrink-on-low-trades, AI-assist).
         n_candidates_tested = max(1, ga_result.total_evaluations) if mutated_by_ga else 1
+        # 2026-10-25: the Bonferroni count is now the LIFETIME ledger count (earlier runs of this strategy / family on the same
+        # data window do not decay), clustered to effective trials -- the same N every other deflation in the app uses.
+        try:
+            from app.discovery_engine.provenance import data_fingerprint
+            from app.discovery_engine.trial_accounting import quick_optimize_n_tests
+            from app.validation import trial_ledger as _tl
+            _qo_name = getattr(final_strategy, "name", None) or type(final_strategy).__name__
+            _qo_fp = data_fingerprint(dev_df)
+            _qo_inputs = quick_optimize_n_tests(
+                ga_result.total_evaluations if mutated_by_ga else 0, mutated_by_ga, [_qo_name], data_fp=_qo_fp)
+            n_candidates_tested = max(n_candidates_tested, _qo_inputs.n_tests)
+            for _note in _qo_inputs.notes:
+                log(f"  Trial ledger: {_note}.")
+            _tl.record(_qo_name, int(max(1, ga_result.total_evaluations)) if mutated_by_ga else 1, data_fp=_qo_fp)
+        except Exception as exc:  # noqa: BLE001 -- ledger is best-effort; the run's own count still applies
+            log(f"  Trial ledger unavailable for Quick Optimize ({exc}); using this run's evaluations only.")
         icir_gate = run_icir_gate_from_backtest(
             dev_df, final_strategy, risk, n_tests=n_candidates_tested, holdout_frac=cfg.holdout_frac,
         )

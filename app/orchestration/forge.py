@@ -2,8 +2,10 @@
 Forge Strategy -- the literal one-button "generate, screen, validate" tab.
 
 Owen's ask: generate hundreds/thousands of strategy HYPOTHESES (not random
-parameter mutations -- see app.search.strategy_space's ~47 named families,
-each testing an explicit, falsifiable market question), screen them hard
+parameter mutations -- see app.search.strategy_space.active_family_names(): every
+registered, non-retired family, each testing an explicit, falsifiable market question;
+the count changes as families are added or retired, so it is deliberately not
+written here), screen them hard
 and cheaply, and only spend expensive validation compute on the survivors,
 ranked the whole way through by PROP SURVIVAL (pass the eval, get paid,
 keep the drawdown safe, stay consistent) rather than raw net profit or
@@ -86,7 +88,9 @@ class ForgeConfig:
     seed: int = 42
 
     # Stage 1 -- fast screen
-    min_trades: int = 20
+    # 2026-10-25 (Strategy Discovery Engine): the ONE entry floor shared with Search Lab and Evolution Lab (100+ trades; the t-stat and
+    # cost gates come from SearchStageConfig's defaults, which Forge's Stage 1-3 delegate inherits). Was 20.
+    min_trades: int = 100
     min_profit_factor: float = 1.05
     stage1_top_n: int = 1_000
 
