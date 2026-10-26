@@ -100,6 +100,7 @@ FITNESS_METRICS: dict[str, str] = {
     # 2026-10-20 (report section 4, two-stage optimizer): Stage A ranks on EDGE, not on prop outcomes. Fitness = lower confidence
     # bound of mean R per trade (day-block bootstrap), scaled by the share of calendar years with a positive mean R. Run it on a
     # risk config whose costs are already stressed (spread/slippage x2) to get "after 2x costs"; sizing is chosen later in Stage B.
+    "mean_r": "Mean R per trade (walk-forward / CPCV / robustness fold metric of the Strategy Discovery Engine)",
     "edge_lb_r": "Edge lower bound (mean R per trade, day-block bootstrap, year-stability weighted) -- Stage A of the two-stage optimizer",
     "net_profit": "Long-Term Net Profit ($) -- for long-term trading, no prop firm",
     "profit_factor": "Profit Factor",
@@ -668,6 +669,11 @@ def compute_fitness(
     if metric == "edge_lb_r":
         from app.optimize.two_stage import edge_fitness_from_trades
         fitness = edge_fitness_from_trades(trades)
+    elif metric == "mean_r":
+        # 2026-10-25: mean R per trade (the quantity the edge objective is a lower bound of). -inf with no measurable trades.
+        from app.optimize.two_stage import trade_r_and_days
+        _rs, _ = trade_r_and_days(trades) if trades else ([], [])
+        fitness = float(sum(_rs) / len(_rs)) if _rs else float("-inf")
     elif metric == "net_profit":
         fitness = float(stats.get("net_profit", 0.0))
     elif metric == "profit_factor":

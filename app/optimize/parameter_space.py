@@ -30,6 +30,9 @@ from app.strategy.indicators import BOUNDED_OSCILLATOR_RANGES
 from app.strategy.indicators_v12 import (
     V12_BOUNDED_RANGES, V12_FLAGS, V12_NO_PERIOD, V12_PERIOD_RANGES, V12_VALUE_RANGES,
 )
+from app.strategy.indicators_v13 import (
+    V13_BOUNDED_RANGES, V13_FLAGS, V13_NO_PERIOD, V13_PERIOD_RANGES, V13_VALUE_RANGES,
+)
 
 # A period of 1 or 2 on a bounded oscillator (see BOUNDED_OSCILLATOR_RANGES)
 # is degenerate, not just aggressive: e.g. a 1-period RSI collapses to
@@ -76,6 +79,10 @@ ZERO_SENSITIVE_MIN_ABS_THRESHOLD: dict[str, float] = {
 INDICATOR_VALUE_RANGES: dict[str, tuple[float, float]] = dict(V12_VALUE_RANGES)
 INDICATOR_PERIOD_RANGES: dict[str, tuple[int, int]] = dict(V12_PERIOD_RANGES)
 assert all(k in BOUNDED_OSCILLATOR_RANGES for k in V12_BOUNDED_RANGES), "v12 bounded range missing from indicators.py"
+# v13 (2026-10-25): same registration for the 100-indicator batch (single source: app.strategy.indicators_v13).
+INDICATOR_VALUE_RANGES.update(V13_VALUE_RANGES)
+INDICATOR_PERIOD_RANGES.update(V13_PERIOD_RANGES)
+assert all(k in BOUNDED_OSCILLATOR_RANGES for k in V13_BOUNDED_RANGES), "v13 bounded range missing from indicators.py"
 
 
 class RefinementError(Exception):
@@ -136,6 +143,7 @@ FLAG_OPERAND_KINDS = frozenset({
     "supertrend_direction", "psar_direction", "ttm_squeeze_on",
     "swing_bos", "swing_choch",
     *V12_FLAGS,                     # nr4 / nr7 / daily_nr4 / daily_nr7
+    *V13_FLAGS,                     # tpo_poor_high / tpo_poor_low
 })
 
 # Operand kinds that ignore `period`/`lookback` entirely (app.strategy.manual returns
@@ -147,6 +155,7 @@ NO_PERIOD_OPERAND_KINDS = frozenset({
     "value", "constant", "number",
     "time_of_day", "day_of_week", "candle_direction",
     *V12_NO_PERIOD,                 # round_dist_* and the NR flags ignore period/lookback
+    *V13_NO_PERIOD,                 # v13 kinds whose builder ignores period/lookback
 })
 
 
