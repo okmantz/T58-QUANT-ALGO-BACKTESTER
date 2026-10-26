@@ -82,6 +82,8 @@ class EvolutionCheckpoint:
     journal: list[str] = field(default_factory=list)
     data_fingerprint: dict = field(default_factory=dict)
     saved_at: str = ""
+    # 2026-10-25 (Strategy Discovery Engine): objective the scores were computed under, holdout look budget, provenance of the run.
+    extra: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -91,6 +93,7 @@ class EvolutionCheckpoint:
             "journal": self.journal,
             "data_fingerprint": self.data_fingerprint,
             "saved_at": self.saved_at,
+            "extra": self.extra,
         }
 
     @classmethod
@@ -102,6 +105,7 @@ class EvolutionCheckpoint:
             journal=list(d.get("journal", [])),
             data_fingerprint=dict(d.get("data_fingerprint", {})),
             saved_at=str(d.get("saved_at", "")),
+            extra=dict(d.get("extra") or {}),
         )
 
 

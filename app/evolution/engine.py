@@ -91,12 +91,15 @@ from app.orchestration.resource_guard import safe_worker_count
 from app.prop.simulator import PropRules, simulate_account, summarize_single_run
 from app.reports.crash_log import log_crash
 from app.search.graveyard import GraveyardEntry, graveyard_path_for, param_signature, record_rejections
+from app.evolution.engine_discovery import DiscoveryMixin
+from app.discovery_engine.holdout import HoldoutExhausted
 from app.search.robustness import parameter_neighborhood_robustness, run_walk_forward
 from app.search.strategy_space import (
     StrategySpaceError,
     build_strategy_from_spec,
     generate_search_space,
     list_families,
+    active_family_names,
 )
 from app.strategy.library import (
     StrategyAlreadyExists, save_strategy_metadata, save_strategy_text, set_strategy_status,
@@ -193,7 +196,7 @@ def _spec_tmp_dir() -> Path:
 def _evo_prefilter_task(
     cid: str, spec: dict, meta: dict,
     min_trades: int, min_profit_factor: float, max_drawdown_pct: float, max_drawdown_buffer_mult: float,
-    prefilter_max_bars: int | None = None,
+    prefilter_max_bars: int | None = None, min_t_stat: float = 0.0, max_cost_in_r: float = 0.0,
 ):
     """One candidate's PRE-FILTER: build + backtest + the cheap pass/fail
     test, run in a worker process. Mirrors
@@ -224,6 +227,13 @@ def _evo_prefilter_task(
     _ps = _evo_prescreen({"candidate_id": cid}, spec, risk, df)
     if _ps is not None:
         return (cid, spec, meta, None, ["unfundable"], _ps.get("error"), None)
+    # 2026-10-25: the SAME round-trip-cost pre-screen Search Lab's Stage 1 applies (a strategy whose cost eats > max_cost_in_r of
+    # its stop cannot be rescued by any signal). Disabled with max_cost_in_r=0 (legacy behaviour).
+    if max_cost_in_r and max_cost_in_r > 0:
+        from app.search.batch_runner import _prescreen_cost_in_r as _evo_cost_prescreen
+        _pc = _evo_cost_prescreen({"candidate_id": cid}, spec, risk, df, float(max_cost_in_r))
+        if _pc is not None:
+            return (cid, spec, meta, None, ["cost_in_r"], _pc.get("error"), None)
     if prefilter_max_bars and len(df) > prefilter_max_bars:
         df = df.tail(prefilter_max_bars)
     try:
@@ -249,6 +259,11 @@ def _evo_prefilter_task(
         reasons.append("max_drawdown")
     if stats.get("net_profit", 0.0) <= 0:
         reasons.append("unprofitable")
+    # 2026-10-25: mean-R t-stat gate -- the same one Search Lab's Stage 1 uses (app.discovery_engine.objective.mean_r_t_stat).
+    if min_t_stat and min_t_stat > 0:
+        from app.discovery_engine.objective import mean_r_t_stat as _evo_t
+        if _evo_t(stats) < float(min_t_stat):
+            reasons.append("t_stat")
 
     if reasons:
         return (cid, spec, meta, None, reasons, None, stats)
@@ -260,7 +275,7 @@ def _evo_full_eval_task(
     mc_sims: int, robustness_perturbation_frac: float, robustness_neighbors: int,
     robustness_min_stability: float, walk_forward_folds: int, walk_forward_metric: str,
     min_trades_target_for_fitness: int, random_seed: int, fitness_goal: "dict | str | None" = "balanced",
-    reset_on_breach: bool = False,
+    reset_on_breach: bool = False, objective: str = "eval_pass_probability", complexity_weight: float = 0.002,
 ):
     """One PRE-FILTER survivor's ROBUSTNESS / OOS / MONTE CARLO / PROP
     SIMULATION scoring, run in a worker process. Mirrors
@@ -306,7 +321,8 @@ def _evo_full_eval_task(
     try:
         robustness = parameter_neighborhood_robustness(
             spec, df, risk, prop_rules, mc_cfg,
-            fitness_metric="eval_pass_probability",
+            # 2026-10-25: under the edge objective neighbours are compared on mean R per trade (not on a Monte-Carlo pass probability).
+            fitness_metric=("mean_r" if objective == "edge_lb_r" else "eval_pass_probability"),
             perturbation_frac=robustness_perturbation_frac,
             n_neighbors=robustness_neighbors,
             seed=random_seed,
@@ -329,11 +345,19 @@ def _evo_full_eval_task(
     except Exception:
         pass
 
-    fitness = compute_prop_fitness(
-        stats, mc_summary, robustness_dict, wf_dict, trade_pnls,
-        min_trades_target=min_trades_target_for_fitness,
-        weights=fitness_goal,
-    )
+    if objective == "edge_lb_r":
+        from app.evolution.edge_fitness import compute_edge_fitness
+        fitness = compute_edge_fitness(
+            stats, bt.trades, mc_summary, robustness_dict, wf_dict, trade_pnls, spec=spec,
+            min_trades_target=min_trades_target_for_fitness, complexity_weight=complexity_weight,
+            graveyard_penalty_r=float((meta or {}).get("graveyard_penalty_r", 0.0) or 0.0),
+        )
+    else:
+        fitness = compute_prop_fitness(
+            stats, mc_summary, robustness_dict, wf_dict, trade_pnls,
+            min_trades_target=min_trades_target_for_fitness,
+            weights=fitness_goal,
+        )
     return EvolutionCandidateRecord(
         candidate_id=cid, spec=spec, meta=meta, stats=stats, mc_summary=mc_summary,
         robustness=robustness_dict, walk_forward=wf_dict, fitness=fitness, trade_pnls=trade_pnls,
@@ -411,8 +435,21 @@ class EvolutionConfig:
     grid_points_per_gene: int = 3
 
     # Pre-filter (Stage 1, cheap)
-    min_trades: int = 20
+    # 2026-10-25 (Strategy Discovery Engine): ONE entry floor shared with Search Lab (app.discovery_engine.objective.DEFAULT_FLOOR):
+    # >= 100 trades, mean-R t-stat >= 1, round-trip cost < 0.15R. The old 20-trade / PF 1.05 prefilter admitted noise.
+    min_trades: int = 100
     min_profit_factor: float = 1.05
+    min_t_stat: float = 1.0
+    max_cost_in_r: float = 0.15
+    # True: empty generations never loosen the floor (they force a random-immigrant generation instead).
+    strict_entry_floor: bool = True
+    # The ONE objective: "edge_lb_r" (day-block-bootstrap lower bound of mean R after costs, complexity-charged). Prop pass
+    # probability is carried for last-stage sizing only. "eval_pass_probability" restores the legacy prop-fitness objective.
+    objective: str = "edge_lb_r"
+    complexity_weight: float = 0.002
+    max_entry_conditions_per_side: int = 4
+    max_exit_conditions_per_side: int = 2
+    prune_champions: bool = True
     max_drawdown_buffer_mult: float = 1.5
     # FIX (2026-09-11): _handle_empty_prefilter used to multiply this by
     # 1.25 every auto-relax cycle with NO ceiling -- on a long run stuck
@@ -448,7 +485,7 @@ class EvolutionConfig:
     # behavior).
     sealed_final_frac: float = 0.10
     walk_forward_folds: int = 4
-    walk_forward_metric: str = "eval_pass_probability"
+    walk_forward_metric: str = "mean_r"
 
     # Monte Carlo
     mc_sims: int = 1000
@@ -459,7 +496,7 @@ class EvolutionConfig:
     cpcv_n_groups: int = 6
     cpcv_n_test_groups: int = 2
     cpcv_max_paths: int = 10
-    cpcv_metric: str = "eval_pass_probability"
+    cpcv_metric: str = "mean_r"
 
     # Stress test
     stress_cost_multiplier: float = 2.0
@@ -696,7 +733,22 @@ class EvolutionConfig:
     curves_enabled: bool = True
     curve_points: int = 90
 
+    # ---- Strategy Discovery Engine controls (2026-10-25) ----
+    capture_pool_pnl: bool = True            # daily R of EVERY full-evaluated candidate -> compressed per-run file
+    pool_pnl_path: str | None = None
+    pool_max_candidates: int = 50_000
+    pool_tests_every_generations: int = 10   # Reality Check / SPA over the whole pool + PBO on a stratified sample
+    pool_pbo_sample: int = 200
+    pool_alpha: float = 0.05
+    lifetime_deflation: bool = True          # Deflated Sharpe on every new elite: lifetime ledger, clustered to effective trials
+    dsr_cluster_corr: float = 0.85
+    use_graveyard_guidance: bool = True
+    holdout_max_looks: int = 200             # gate-holdout look budget (the usable slice also shrinks with every look)
+    mandatory_promotion_on_stop: bool = True # loop-mode stop => deflated test -> null gate -> pooled test -> sealed slice, or the run fails
+
     def __post_init__(self):
+        if self.objective not in ("edge_lb_r", "eval_pass_probability"):
+            raise ValueError(f"Unknown objective '{self.objective}'. Supported: edge_lb_r, eval_pass_probability.")
         # FIX (2026-09-22): fail fast, at config construction, on an
         # unknown optimizer_mode -- matching RefinementConfig's own
         # __post_init__ check for the exact same OPTIMIZER_MODES dict, so
@@ -767,6 +819,10 @@ class EvolutionCandidateRecord:
     # The ONE-SHOT sealed final test verdict (see
     # EvolutionRunner.evaluate_champion_on_sealed_final). None = never run.
     sealed_check: dict | None = None
+    cpcv_oos_mean_r: float | None = None
+    provenance: dict | None = None             # seed, data fingerprint, git hash, full config (app.discovery_engine.provenance)
+    dsr: dict | None = None                    # lifetime / effective-trial Deflated Sharpe verdict at crowning time
+    promotion: dict | None = None              # mandatory promotion-sequence result, once run
     fitness: object = None                     # PropFitnessBreakdown
     trade_pnls: list = field(default_factory=list)
     trades: list = field(default_factory=list)  # raw Trade objects, for date-aligned cluster correlation
@@ -795,6 +851,10 @@ class EvolutionCandidateRecord:
             "stressed_ok": self.stressed_ok,
             "holdout_check": self.holdout_check,
             "sealed_check": self.sealed_check,
+            "cpcv_oos_mean_r": self.cpcv_oos_mean_r,
+            "provenance": self.provenance,
+            "dsr": self.dsr,
+            "promotion": self.promotion,
             "fitness": self.fitness.to_dict() if self.fitness is not None else None,
             "trade_pnls": self.trade_pnls[:500],
         }
@@ -818,6 +878,10 @@ def _record_from_dict(d: dict) -> EvolutionCandidateRecord:
         stressed_ok=d.get("stressed_ok"),
         holdout_check=d.get("holdout_check"),
         sealed_check=d.get("sealed_check"),
+        cpcv_oos_mean_r=d.get("cpcv_oos_mean_r"),
+        provenance=d.get("provenance"),
+        dsr=d.get("dsr"),
+        promotion=d.get("promotion"),
         fitness=fitness,
         trade_pnls=d.get("trade_pnls") or [],
         trades=[],
@@ -832,7 +896,7 @@ def _daily_pnl_series(trades) -> pd.Series:
     return s.groupby(level=0).sum()
 
 
-class EvolutionRunner:
+class EvolutionRunner(DiscoveryMixin):
     """Owns one Evolution Lab run: a background thread cycling through
     generations until stop() is called or max_generations is reached.
     Not thread-safe against being start()ed twice concurrently -- callers
@@ -1009,6 +1073,7 @@ class EvolutionRunner:
         self.parity: dict[str, dict] = {}
         self._how_model = None
 
+        self._init_discovery()
         self._load_checkpoint_if_compatible()
         self._apply_family_health_exclusions()
 
@@ -1055,7 +1120,7 @@ class EvolutionRunner:
                     f" ({len(survivors)} famil{'y' if len(survivors) == 1 else 'ies'} still active.)"
                     if survivors is not None else
                     f" Would have left fewer than {self.cfg.family_health_min_active_families} families "
-                    f"active -- searching all {len(list_families())} registered families anyway rather "
+                    f"active -- searching all {len(active_family_names())} active families anyway rather "
                     f"than collapsing the search space down to a stagnant handful."
                 )
             )
@@ -1063,7 +1128,7 @@ class EvolutionRunner:
             self.cfg.families = survivors
             self.family_health_status["active_family_count"] = len(survivors)
         else:
-            self.family_health_status["active_family_count"] = len(list_families())
+            self.family_health_status["active_family_count"] = len(active_family_names())
 
     # -- worker pool (PRE-FILTER + full-eval parallelism) ------------------
     def _ensure_pool(self) -> ProcessPoolExecutor | None:
@@ -1202,7 +1267,15 @@ class EvolutionRunner:
                 f"against mismatched data. (Use the same data file to resume that run.)"
             )
             return
+        saved_objective = (saved.extra or {}).get("objective", "eval_pass_probability")
+        if saved_objective != self.cfg.objective:
+            self._log(
+                f"Found a saved Evolution Lab checkpoint scored under the '{saved_objective}' objective but this run uses "
+                f"'{self.cfg.objective}' -- fitness scores are on different scales, so starting a fresh run instead of resuming."
+            )
+            return
         try:
+            self._restore_discovery_extra(saved.extra)
             self.generation = saved.generation
             self._elites = [(e["spec"], e["meta"]) for e in saved.elites]
             self.leaderboard = [_record_from_dict(r) for r in saved.leaderboard]
@@ -1231,6 +1304,7 @@ class EvolutionRunner:
                 journal=list(self.journal),
                 data_fingerprint=evo_checkpoint.data_fingerprint(self.df),
                 saved_at=pd.Timestamp.now("UTC").isoformat(),
+                extra=self.discovery_checkpoint_extra(),
             )
             evo_checkpoint.save_checkpoint(ckpt, Path(self.cfg.checkpoint_path))
         except Exception:
@@ -1248,6 +1322,15 @@ class EvolutionRunner:
         self.journal = []
         self.resumed = False
         self._target_reached_by = None
+        self.run_failed, self.run_failed_reason, self.promotion_result = False, "", None
+        try:
+            from app.discovery_engine.holdout import HoldoutBudget
+            from app.discovery_engine.pnl_store import PnlStore
+            PnlStore.delete(self._pool_store_path())
+            self._pool_store, self._pool_report = None, None
+            self._holdout_budget = HoldoutBudget(max_looks=int(self.cfg.holdout_max_looks))
+        except Exception:  # noqa: BLE001
+            pass
 
     # -- public controls ------------------------------------------------
     def start(self) -> None:
@@ -1296,6 +1379,15 @@ class EvolutionRunner:
             "target_reached_candidate_id": (
                 self._target_reached_by.candidate_id if self._target_reached_by else None
             ),
+            # Strategy Discovery Engine
+            "objective": self.cfg.objective,
+            "run_failed": self.run_failed,
+            "run_failed_reason": self.run_failed_reason,
+            "promotion": self.promotion_result.to_dict() if self.promotion_result is not None else None,
+            "holdout_budget": self._holdout_budget.to_dict(),
+            "pool": ({"n_candidates": self._pool_report.get("n_candidates"), "family_wise_passed": self._pool_report["family_wise"].get("passed"),
+                      "rc_p": self._pool_report["family_wise"].get("rc_p"), "spa_p": self._pool_report["family_wise"].get("spa_p"),
+                      "pbo": self._pool_report["pbo"].get("pbo")} if self._pool_report else None),
         }
 
     def graveyard_summary(self, top_n: int = 25) -> list[dict]:
@@ -1396,7 +1488,17 @@ class EvolutionRunner:
             raise ValueError("No champion to evaluate: the leaderboard is empty.")
         if self.locked_holdout_df is None or not len(self.locked_holdout_df):
             raise ValueError("No locked holdout available: this runner was constructed without data (df=None).")
-        return self._evaluate_spec_on_slice(self.locked_holdout_df, rec, "locked holdout", mc_sims)
+        # 2026-10-25: every read is a counted look (HoldoutExhausted when the budget is spent) and the usable part of the slice
+        # shrinks with each look; the lifetime registry also counts reads across runs on the same slice.
+        self._holdout_budget.look(getattr(rec, "candidate_id", ""))
+        usable = self._holdout_budget.usable_slice(self.locked_holdout_df)
+        try:
+            from app.discovery_engine.holdout import LookRegistry
+            from app.discovery_engine.provenance import data_fingerprint as _dfp
+            self._holdout_lifetime_looks = LookRegistry().record(_dfp(self.locked_holdout_df), "gate")
+        except Exception:  # noqa: BLE001
+            self._holdout_lifetime_looks = None
+        return self._evaluate_spec_on_slice(usable, rec, "locked holdout", mc_sims)
 
     def evaluate_champion_on_sealed_final(
         self, candidate=None, mc_sims: int | None = None,
@@ -1618,6 +1720,7 @@ class EvolutionRunner:
                         f"{self.cfg.target_eval_pass_pct:.0f}% on {self.cfg.target_metric} "
                         f"at generation {gen - 1} -- stopping automatically."
                     )
+                    self._finalize_target_hit(target_hit)      # 2026-10-25: stopping early is only allowed with the mandatory sequence
                     break
                 # Recycle the pool periodically regardless of errors --
                 # cheap insurance against the same slow fragmentation
@@ -1665,7 +1768,9 @@ class EvolutionRunner:
             self._log(f"  (no true survivor yet -- breeding from the {len(self._near_miss_seeds)} "
                       f"closest near-misses found so far instead of pure random search)")
         population = self._generate_population(gen, breeding_pool)
+        population = self._cap_population_structure(population)
         population = self._graveyard_filter_population(population)
+        population = self._apply_graveyard_guidance(population)
         self._log(f"GENERATE: {len(population)} candidates.")
         if self._stop_flag.is_set():
             return gen
@@ -1689,6 +1794,9 @@ class EvolutionRunner:
 
         evaluated = self._full_eval(stage1_survivors)
         self._log(f"ROBUSTNESS / OOS / MONTE CARLO / PROP SIMULATION: {len(evaluated)} candidates scored.")
+        self._capture_pool(evaluated, gen)
+        if self.cfg.pool_tests_every_generations and gen > 0 and gen % int(self.cfg.pool_tests_every_generations) == 0:
+            self.pool_tests()
         if self._surrogate is not None:
             self._record_surrogate_observations(evaluated)
         if self._stop_flag.is_set() or not evaluated:
@@ -1763,6 +1871,8 @@ class EvolutionRunner:
         self._append_tested_log_full_eval(evaluated, gen)
         self._publish_evaluated(evaluated, {r.candidate_id for r in new_elites}, gen)
         if new_elites:
+            self._attach_provenance(new_elites)
+            self._attach_dsr(new_elites)
             self._update_leaderboard(new_elites)
             self._maybe_save_to_library(new_elites)
         self._write_journal_entry(gen, population, stage1_survivors, evaluated, cpcv_pool, stress_survivors, new_elites)
@@ -1802,6 +1912,16 @@ class EvolutionRunner:
         breakdown = ", ".join(f"{k}: {v}" for k, v in rejection_counts.items() if v) or "no candidates built successfully"
         self._log(f"  Rejection breakdown -- {breakdown}.")
         self._consecutive_empty_generations += 1
+        if getattr(self.cfg, "strict_entry_floor", False):
+            if self._consecutive_empty_generations >= self.cfg.auto_relax_after_empty_generations:
+                self._log(
+                    f"  {self._consecutive_empty_generations} generations in a row produced zero pre-filter survivors. The entry floor "
+                    f"(>= {self.cfg.min_trades} trades, mean-R t >= {self.cfg.min_t_stat:g}, cost < {self.cfg.max_cost_in_r:g}R) is NOT loosened "
+                    f"(strict_entry_floor); forcing a full random-immigrant generation instead."
+                )
+                self._force_full_immigrant_next = True
+                self._consecutive_empty_generations = 0
+            return
         if self._consecutive_empty_generations >= self.cfg.auto_relax_after_empty_generations:
             old_trades, old_pf, old_dd = self.cfg.min_trades, self.cfg.min_profit_factor, self.cfg.max_drawdown_buffer_mult
             self.cfg.min_trades = max(5, int(self.cfg.min_trades * 0.6))
@@ -1971,7 +2091,7 @@ class EvolutionRunner:
 
         n_immigrants = self.cfg.population_size if not elites else max(1, int(self.cfg.population_size * self.cfg.random_immigrant_frac))
 
-        active_families = list(self.cfg.families) if self.cfg.families else list(list_families().keys())
+        active_families = list(self.cfg.families) if self.cfg.families else list(active_family_names())
         # v5 B1-1: the grammar joins the stratified immigrant draw as a
         # pseudo-family. It gets the same per-family floor
         # (min_immigrants_per_family), the same reproducible per-family
@@ -2293,7 +2413,7 @@ class EvolutionRunner:
             "profit_factor": 0, "max_drawdown": 0, "unprofitable": 0,
             # A4 (v6 W1): candidates skipped by the unfundable pre-screen
             # (see _evo_prefilter_task) -- deliberate skips, not crashes.
-            "unfundable": 0,
+            "unfundable": 0, "t_stat": 0, "cost_in_r": 0,
         }
         tested_rows = []
 
@@ -2318,6 +2438,8 @@ class EvolutionRunner:
                     # candidate could afford 1 contract" apart from "the
                     # builder/backtest kept failing".
                     rejection_counts["unfundable"] += 1
+                elif (reasons or []) == ["cost_in_r"]:
+                    rejection_counts["cost_in_r"] += 1
                 else:
                     rejection_counts["build_or_backtest_error"] += 1
                 tested_rows.append(self._tested_row(cid, meta, gen, passed=False, reasons=reasons, error=error))
@@ -2363,7 +2485,7 @@ class EvolutionRunner:
                 cid_out, spec_out, meta_out, bt, reasons, error, stats = _evo_prefilter_task(
                     cid, spec, meta, self.cfg.min_trades, self.cfg.min_profit_factor,
                     self.prop_rules.max_drawdown_pct, self.cfg.max_drawdown_buffer_mult,
-                    prefilter_max_bars,
+                    prefilter_max_bars, self.cfg.min_t_stat, self.cfg.max_cost_in_r,
                 )
                 _consume(cid_out, spec_out, meta_out, bt, reasons, error, stats)
         else:
@@ -2371,7 +2493,7 @@ class EvolutionRunner:
                 pool.submit(
                     _evo_prefilter_task, cid, spec, meta, self.cfg.min_trades, self.cfg.min_profit_factor,
                     self.prop_rules.max_drawdown_pct, self.cfg.max_drawdown_buffer_mult,
-                    prefilter_max_bars,
+                    prefilter_max_bars, self.cfg.min_t_stat, self.cfg.max_cost_in_r,
                 ): (cid, spec, meta)
                 for cid, spec, meta in population
             }
@@ -2587,7 +2709,7 @@ class EvolutionRunner:
             self.cfg.mc_sims, self.cfg.robustness_perturbation_frac, self.cfg.robustness_neighbors,
             self.cfg.robustness_min_stability, self.cfg.walk_forward_folds, self.cfg.walk_forward_metric,
             self.cfg.min_trades_target_for_fitness, self.cfg.random_seed, self.cfg.fitness_goal,
-            self.cfg.reset_on_breach,
+            self.cfg.reset_on_breach, self.cfg.objective, self.cfg.complexity_weight,
         )
         records: list[EvolutionCandidateRecord] = []
         eval_pool = self._ensure_pool()
@@ -2703,6 +2825,10 @@ class EvolutionRunner:
                 cpcv_degradation = cpcv_result.degradation
                 if self.cfg.cpcv_metric == "eval_pass_probability":
                     oos_metric = cpcv_result.mean_oos_metric
+                elif self.cfg.cpcv_metric == "mean_r":
+                    r.cpcv_oos_mean_r = float(cpcv_result.mean_oos_metric)
+                    self._log(f"  CPCV [{r.candidate_id}]: out-of-sample mean R {r.cpcv_oos_mean_r:+.3f} "
+                              f"(in-sample {cpcv_result.mean_is_metric:+.3f}, degradation {cpcv_degradation:+.3f}R)")
             except CPCVError:
                 pass
             except Exception:
@@ -2718,12 +2844,21 @@ class EvolutionRunner:
                     f"  CPCV [{r.candidate_id}]: raw in-sample eval pass {raw_pct:.1f}% -> "
                     f"out-of-sample estimate {oos_metric:.1f}%{flag}"
                 )
-            r.fitness = compute_prop_fitness(
-                r.stats, r.mc_summary, r.robustness, r.walk_forward, r.trade_pnls,
-                pbo=pbo_value, cpcv_degradation=cpcv_degradation,
-                min_trades_target=self.cfg.min_trades_target_for_fitness,
-                weights=self.cfg.fitness_goal,
-            )
+            if self.cfg.objective == "edge_lb_r":
+                from app.evolution.edge_fitness import compute_edge_fitness
+                r.fitness = compute_edge_fitness(
+                    r.stats, r.trades, r.mc_summary, r.robustness, r.walk_forward, r.trade_pnls, spec=r.spec,
+                    pbo=pbo_value, cpcv_degradation=cpcv_degradation, min_trades_target=self.cfg.min_trades_target_for_fitness,
+                    complexity_weight=self.cfg.complexity_weight,
+                    graveyard_penalty_r=float((r.meta or {}).get("graveyard_penalty_r", 0.0) or 0.0),
+                )
+            else:
+                r.fitness = compute_prop_fitness(
+                    r.stats, r.mc_summary, r.robustness, r.walk_forward, r.trade_pnls,
+                    pbo=pbo_value, cpcv_degradation=cpcv_degradation,
+                    min_trades_target=self.cfg.min_trades_target_for_fitness,
+                    weights=self.cfg.fitness_goal,
+                )
         return pool
 
     def _exclude_lookahead_bugs(self, pool: list[EvolutionCandidateRecord]) -> list[EvolutionCandidateRecord]:
@@ -2902,6 +3037,11 @@ class EvolutionRunner:
             if check is None and not champion_found:
                 try:
                     holdout = self.evaluate_champion_on_locked_holdout(record)
+                except HoldoutExhausted as exc:
+                    # fail CLOSED: a spent look budget crowns nobody (an inconclusive read is not the same as no reads left)
+                    self._log(f"  Holdout gate: {exc} -- {record.candidate_id} cannot be crowned.")
+                    record.holdout_check = {"passed": False, "error": str(exc), "budget_exhausted": True}
+                    continue
                 except Exception as exc:  # noqa: BLE001 -- inconclusive, not a failure
                     self._log(
                         f"  Holdout gate: {record.candidate_id} could not be evaluated on the "
@@ -2911,12 +3051,20 @@ class EvolutionRunner:
                     gated.append(record)
                     continue
                 passed = bool(holdout["per_attempt_pass_probability"] >= target)
+                if self.cfg.objective == "edge_lb_r":
+                    # the edge objective also needs the held-out slice to show a positive mean R (when it has enough trades to say)
+                    _ho_n = int(holdout["n_trades"])
+                    _ho_avg_r = (holdout.get("statistics") or {}).get("average_r")
+                    if _ho_n >= 10 and isinstance(_ho_avg_r, (int, float)) and _ho_avg_r <= 0:
+                        passed = False
                 # AUDIT 2026-10-12: every candidate scored here is a "look" at the holdout and the
                 # first one to clear the bar wins, so the winner's holdout number is optimistically
                 # biased by selection (winner's curse). Count the looks so the result is read honestly.
                 self._holdout_looks = int(getattr(self, "_holdout_looks", 0)) + 1
                 record.holdout_check = {
                     "holdout_looks": self._holdout_looks,
+                    "lifetime_looks": getattr(self, "_holdout_lifetime_looks", None),
+                    "usable_fraction": self._holdout_budget.usable_fraction(),
                     "passed": passed,
                     "per_attempt_pass_probability": holdout["per_attempt_pass_probability"],
                     "per_attempt_payout_probability": holdout["per_attempt_payout_probability"],
@@ -3139,22 +3287,27 @@ class EvolutionRunner:
 
     def _book_generation_trials(self, population: list, gen: int) -> None:
         """Book this generation's evaluated candidates (random controls excluded) under family:<name>."""
+        counts: dict = {}
+        for _cid, _spec, meta in population:
+            meta = meta or {}
+            if meta.get("control"):
+                continue
+            fam = meta.get("family", "?")
+            counts[fam] = counts.get(fam, 0) + 1
         if not getattr(self.cfg, "book_trial_ledger", False):
+            for _fam, _n in counts.items():          # the in-run tally feeds the Deflated Sharpe even when the ledger is off
+                self._run_trials.add(_fam, _n, "ga_inner_loop")
             return
         try:
             from app.validation import trial_ledger as _tl
-            counts: dict = {}
-            for _cid, _spec, meta in population:
-                meta = meta or {}
-                if meta.get("control"):
-                    continue
-                fam = meta.get("family", "?")
-                counts[fam] = counts.get(fam, 0) + 1
             rid = getattr(self, "_ledger_run_id", None)
             if rid is None:
                 import uuid
                 rid = self._ledger_run_id = uuid.uuid4().hex[:12]
-            _tl.book_run(f"evolution:{rid}:{gen}", counts)
+            _tl.book_run(f"evolution:{rid}:{gen}", counts, data_fp=getattr(self, "_data_fp", None),
+                         kinds={"ga_inner_loop": sum(counts.values())})
+            for _fam, _n in counts.items():
+                self._run_trials.add(_fam, _n, "ga_inner_loop")
         except Exception:  # noqa: BLE001 -- bookkeeping must never stop a run
             pass
 
