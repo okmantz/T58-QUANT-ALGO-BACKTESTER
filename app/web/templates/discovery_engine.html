@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Strategy Discovery Engine — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+{% include '_lifecycle_css.html' %}
+</head>
+<body>
+{% set active_page = active_page|default('discovery_engine') %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="lc-scope"><div class="lc-wrap">
+
+<h1 class="lc-title">Strategy Discovery Engine</h1>
+<p class="lc-sub">One engine, one objective (<b>{{ st.objective }}</b>), one entry floor ({{ st.floor.min_trades }}+ trades, mean-R t &ge; {{ st.floor.min_t_stat }}, cost &lt; {{ st.floor.max_cost_in_r }} R),
+one lifetime trial ledger and one promotion sequence (reproduction &rarr; sequence-deflated Sharpe &rarr; random-timing null &rarr; pooled cross-market edge &rarr; sealed slice).
+The old labs are presets of it. Every champion still needs a forward test.</p>
+
+<h2>Presets</h2>
+<table class="lc-table"><thead><tr><th>Preset</th><th>Generator</th><th>What it does</th><th></th></tr></thead><tbody>
+{% for p in st.presets %}
+<tr><td><b>{{ p.label }}</b></td><td>{{ p.backend }}</td><td>{{ p.description }}</td><td>{% if p.page %}<a href="{{ p.page }}">open</a>{% endif %}</td></tr>
+{% endfor %}
+</tbody></table>
+
+<h2>New family batches</h2>
+<p>{% if st.gate.open %}<b style="color:#2a9d5c">OPEN</b> &mdash; the surrogate study passed on the current code (false-discovery rate {{ '%.1f'|format((st.gate.null_rate or 0) * 100) }}% over {{ st.gate.n_null }} null runs).
+{% else %}<b style="color:#c0392b">CLOSED</b> &mdash; the report asks that the new batches stay off until the lab-level false-discovery rate is under 5%.
+{% for r in st.gate.reasons %}<br>&bull; {{ r }}{% endfor %}{% endif %}</p>
+<p>Registered v13 families: {% for k, v in st.v13.counts.items() %}{{ v }} {{ k }}{% if not loop.last %}, {% endif %}{% endfor %}; {{ st.v13.blocked }} cannot be modelled honestly by the bar engine.
+Total families {{ st.families_total }} ({{ st.families_retired }} retired).</p>
+<button onclick="fetch('/api/discovery-engine/preregister',{method:'POST'}).then(r=>r.json()).then(j=>alert('Pre-registered: '+j.registered+' new, '+j.existing+' already on record.'))">Pre-register all 100 kill conditions</button>
+
+<table class="lc-table"><thead><tr><th>#</th><th>Family</th><th>Group</th><th>Needs</th><th>Status</th><th>Batch</th><th>Kill condition</th></tr></thead><tbody>
+{% for r in st.v13.rows %}
+<tr><td>{{ r.number }}</td><td>{{ r.name }}{% if r.tied %} <small>(instrument-tied)</small>{% endif %}</td><td>{{ r.group }}</td><td>{{ r.needs }}</td><td>{{ r.status }}</td><td>{{ r.batch }}</td><td><small>{{ r.kill }}</small></td></tr>
+{% endfor %}
+</tbody></table>
+
+<h2>Out-of-sample record</h2>
+{% if st.retest_ranking %}
+<table class="lc-table"><thead><tr><th>Family</th><th>Retests</th><th>Hits</th><th>Shrunk hit rate</th><th>Mean OOS R</th></tr></thead><tbody>
+{% for r in st.retest_ranking %}<tr><td>{{ r.name }}</td><td>{{ r.retests }}</td><td>{{ r.hits }}</td><td>{{ '%.0f'|format(r.shrunk_hit_rate * 100) }}%</td><td>{{ '%+.3f'|format(r.mean_oos_r) }}</td></tr>{% endfor %}
+</tbody></table>
+{% else %}<p>No conclusive retests yet. Champions and near-misses are re-run on newer data automatically once at least ~19 sessions of unseen bars exist.</p>{% endif %}
+
+</div></div>
+</div></div>
+</body>
+</html>
