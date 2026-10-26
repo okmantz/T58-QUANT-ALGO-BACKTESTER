@@ -69,6 +69,16 @@ from app.web import server as web_server_module
 
 
 @pytest.fixture(autouse=True)
+def _hermetic_discovery_state(monkeypatch, tmp_path_factory):
+    """The lifetime trial ledger, the holdout look registry, the retest log, the pipeline controls and the surrogate-gate report all live
+    beside ``trial_ledger._PATH``. A test must never read (or write) the developer's real ones: a stale look count exhausts the holdout
+    budget, a stale gate report opens closed batches. Tests that want a ledger of their own monkeypatch ``_PATH`` on top of this."""
+    from app.validation import trial_ledger
+    monkeypatch.setattr(trial_ledger, "_PATH", tmp_path_factory.mktemp("t58-discovery-state") / "reports" / "trial_ledger.json")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _license_activated_by_default(monkeypatch, tmp_path_factory):
     """v9.14: the suite reaches the web app through a REAL activation,
     not a cache poke. app.web.server._license_gate blocks every route
