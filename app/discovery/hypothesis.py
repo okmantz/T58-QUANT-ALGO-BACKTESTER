@@ -93,3 +93,52 @@ class HypothesisStore:
     def find_by_spec(self, spec: dict) -> list[Hypothesis]:
         key = json.dumps(spec, sort_keys=True)
         return [h for h in self.all() if json.dumps(h.spec, sort_keys=True) == key]
+
+
+# ------------------------------------------------------------------------------------------------ v13 pre-registration
+V13_PREREG_PREFIX = "v13-"
+
+
+def _v13_id(number: int) -> str:
+    return f"{V13_PREREG_PREFIX}{int(number):03d}"
+
+
+def preregister_v13_families(store: "HypothesisStore | None" = None) -> dict:
+    """Write the kill condition of each of the report's 100 families into the hypothesis store BEFORE any of them has run
+    (report item 16). Idempotent: an existing record keeps its original ``created_at`` and its experiments. Returns
+    {"registered": n_new, "existing": n_existing, "total": 100}. Blocked families are recorded too (status ``proposed``, with the
+    reason they cannot be run) so the register is complete and a blocked idea is not silently forgotten."""
+    from app.search import families_v13 as f13
+    store = store or HypothesisStore()
+    new = old = 0
+
+    def put(number: int, name: str, meta, spec_extra: dict) -> None:
+        nonlocal new, old
+        hid = _v13_id(number)
+        if store.get(hid) is not None:
+            old += 1
+            return
+        h = Hypothesis(
+            idea=f"[{number}] {meta.hypothesis}",
+            spec={"family": name, "number": number, "group": meta.group, "needs": meta.needs, "status": meta.status,
+                  "instrument_tied": bool(meta.tied), "rollout_batch": meta.batch, **spec_extra},
+            mechanism=meta.hypothesis, expected_edge="unknown -- the graveyard holds 1,100+ measured failures; treat as a hypothesis, not a winner",
+            falsifiers=[meta.kill], id=hid, source="preregistered")
+        store.save(h)
+        new += 1
+
+    for name, meta in f13.V13_META.items():
+        put(meta.number, name, meta, {"retired_into": f13.RETIRED_V13.get(name, ""), "aux": meta.aux})
+    for number, meta in f13.V13_BLOCKED.items():
+        put(number, meta.name, meta, {"blocked_reason": meta.reason})
+    return {"registered": new, "existing": old, "total": new + old}
+
+
+def is_preregistered(family: str, store: "HypothesisStore | None" = None) -> bool:
+    """True when ``family`` (a v13 family name) has its kill condition on record. Non-v13 families are not subject to the rule."""
+    from app.search import families_v13 as f13
+    if family not in f13.V13_NUMBER:
+        return True
+    store = store or HypothesisStore()
+    h = store.get(_v13_id(f13.V13_NUMBER[family]))
+    return bool(h and h.falsifiers)
