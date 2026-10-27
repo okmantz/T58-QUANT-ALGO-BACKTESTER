@@ -69,6 +69,7 @@ from app.web.ai_assistant_routes import ai_assistant_bp
 from app.global_events.routes import global_events_bp
 from app.web.options_outlook_routes import options_outlook_bp
 from app.web.hedge_fund_routes import hedge_fund_bp
+from app.web.pages_routes import pages_bp
 from app.web.risk_sweep_routes import risk_sweep_bp
 from app.web.project_routes import project_bp
 from app.web.telemetry_routes import telemetry_bp, set_evolution_source
@@ -934,6 +935,7 @@ app.register_blueprint(options_outlook_bp)
 # Hedge Fund Manager (Research -> Black-Litterman portfolio -> execution ->
 # read-only Ollama oversight journal) -- see app/web/hedge_fund_routes.py.
 app.register_blueprint(hedge_fund_bp)
+app.register_blueprint(pages_bp)
 # Strategy Compare, native PDF export, and the Dukascopy forex/CFD fetch button --
 # see app/web/extra_routes.py's module docstring (Deploy Live's live-money
 # routes are deliberately NOT here; see that file for why).
@@ -1762,6 +1764,66 @@ def _find_library_match_for_current_strategy(strategy_name: str):
     return best_by_display_name
 
 
+def _dashboard_cards_and_flow(stats: dict, board_rows: list) -> tuple[list, dict]:
+    """Friendly strategy cards (one per strategy, newest first) + real per-stage counts for the living pipeline diagram.
+    Everything comes from saved runs / the Champion Board; nothing is invented."""
+    from app.guidance import next_step as _ns
+
+    def _spark(vals, n=36):
+        vals = [float(v) for v in (vals or []) if isinstance(v, (int, float))]
+        if len(vals) < 2:
+            return []
+        step = max(1, len(vals) // n)
+        pts = vals[::step][-n:]
+        if pts[-1] != vals[-1]:
+            pts.append(vals[-1])
+        lo, hi = min(pts), max(pts)
+        span = (hi - lo) or 1.0
+        return [round(100 - (v - lo) / span * 100, 1) for v in pts]  # y in 0..100, 0 = top
+
+    cards, used = [], set()
+    for s in (stats.get("strategies") or [])[:12]:
+        row = _ns.match_run_to_row(s, board_rows)
+        if row:
+            used.add(row["filename"])
+        plan = _ns.resolve(row, s)
+        cards.append({
+            "name": s.get("strategy_name"), "instrument": s.get("instrument"), "timeframe": s.get("timeframe"),
+            "stage": (row or {}).get("promotion", {}).get("stage_title") or "Tested",
+            "stage_idx": (champion_board.PROMOTION_STAGES.index(row["promotion"]["stage"]) if row else 0),
+            "spark": _spark(s.get("equity_curve")),
+            "up": (s.get("net_profit") or 0) >= 0,
+            "net": s.get("net_profit") or 0, "sharpe": s.get("sharpe_ratio"), "win": s.get("win_rate"),
+            "dd": s.get("max_drawdown_pct"), "trades": s.get("trades"), "passed": bool(s.get("single_run_passed")),
+            "verdict": (row or {}).get("verdict"), "plan": plan, "report": s.get("report_html"),
+        })
+    for r in board_rows:  # saved but never run: still a card, so nothing hides
+        if r["filename"] in used or len(cards) >= 16:
+            continue
+        cards.append({
+            "name": r["display_name"], "instrument": "", "timeframe": "", "stage": r["promotion"]["stage_title"],
+            "stage_idx": champion_board.PROMOTION_STAGES.index(r["promotion"]["stage"]), "spark": [], "up": True,
+            "net": None, "sharpe": None, "win": None, "dd": None, "trades": None, "passed": False,
+            "verdict": r.get("verdict"), "plan": _ns.resolve(r, None), "report": None,
+        })
+    counts = [0] * len(champion_board.PROMOTION_STAGES)
+    for r in board_rows:
+        counts[champion_board.PROMOTION_STAGES.index(r["promotion"]["stage"])] += 1
+    try:
+        from app.achievements import compute_counters as _cc
+        grave = int((_cc() or {}).get("graveyard", 0))
+    except Exception:  # noqa: BLE001
+        grave = 0
+    flow = {
+        "tested": int(stats.get("total_strategies") or 0),
+        "stages": [{"title": champion_board.PROMOTION_STAGE_TITLES[k], "n": counts[i]}
+                   for i, k in enumerate(champion_board.PROMOTION_STAGES)],
+        "graveyard": grave,
+        "running": int(stats.get("total_runs") or 0),
+    }
+    return cards, flow
+
+
 @app.route("/dashboard")
 def dashboard():
     current = strategy_state.get_current_strategy()
@@ -1817,8 +1879,11 @@ def dashboard():
         _controls = load_controls()
     except Exception:  # noqa: BLE001 - the card is informational; never break the dashboard
         _controls = None
+    strategy_cards, pipeline_flow = _dashboard_cards_and_flow(dashboard_stats, board_rows)
     return render_template(
         "dashboard.html",
+        strategy_cards=strategy_cards,
+        pipeline_flow=pipeline_flow,
         pipeline_controls=_controls,
         user_name=_first or "Trader",
         data=dashboard_stats,
@@ -2589,16 +2654,44 @@ def _run_optimize_simple_job(job_id: str, df, strategy, risk, rules, engines, fo
 
 @app.route("/optimize-simple")
 def optimize_simple_form():
-    return render_template("optimize_simple.html", active_page="optimize_simple",
-                           error=request.args.get("error"), **_simple_pickers())
+    return render_template("optimize_simple.html", active_page="optimize_simple", goals=OPTIMIZE_GOALS,
+                           want_goal=(request.args.get("goal") or "eval"), error=request.args.get("error"), **_simple_pickers())
+
+
+# Optimize v2 (2026-10): two engines that tune DIFFERENT things, chosen through a plain-language goal.
+#   "Settings"  = Quick Optimize's GA over the strategy's own parameters (entries, filters, stops, targets)
+#   "Risk size" = Risk Sweep over risk-per-trade against the prop rules
+# The goal decides which engine(s) run and what the settings GA is scored on. The older engines keep their own pages.
+OPTIMIZE_GOALS = {
+    "eval":   {"title": "Pass the evaluation", "engines": ["quick_optimize", "risk_sweep"], "metric": "eval_pass_probability",
+               "desc": "Tunes settings for the highest chance of hitting the profit target before a loss limit, then right-sizes risk."},
+    "payout": {"title": "Get to a payout faster", "engines": ["quick_optimize", "risk_sweep"], "metric": "payout_30d",
+               "desc": "Scores settings on reaching a first payout inside 30 days from a fresh account."},
+    "robust": {"title": "Make the edge more reliable", "engines": ["quick_optimize"], "metric": "edge_lb_r",
+               "desc": "Scores on a conservative lower bound of average R per trade, so lucky settings lose to steady ones. Best for strategies that fail out-of-sample."},
+    "exits":  {"title": "Fix the exits", "engines": ["quick_optimize"], "metric": "avg_give_back_r",
+               "desc": "Targets stops and targets: minimises profit given back before exit. Best when winners turn into losers."},
+    "risk":   {"title": "Just right-size my risk", "engines": ["risk_sweep"], "metric": "eval_pass_probability",
+               "desc": "Leaves the strategy alone and finds the risk per trade that fits the firm's drawdown rules. Best for strategies with a good edge but a rough ride."},
+    "profit": {"title": "Maximise profit (no prop firm)", "engines": ["quick_optimize"], "metric": "net_profit",
+               "desc": "For long-term accounts with no evaluation: the settings that earned the most."},
+}
 
 
 @app.route("/optimize-simple/start", methods=["POST"])
 def optimize_simple_start():
-    form = request.form
+    form = request.form.copy()
+    _goal = OPTIMIZE_GOALS.get((form.get("goal") or "").strip())
+    if _goal:
+        for _k in list(form.keys()):
+            if _k.startswith("engine_"):
+                form.pop(_k)
+        for _e in _goal["engines"]:
+            form[f"engine_{_e}"] = "on"
+        form["fitness_metric"] = _goal["metric"]
     engines = [e for e in ("quick_optimize", "refine", "risk_sweep", "search", "evolution", "multi_objective", "deep_search")
                if form.get(f"engine_{e}") == "on"]
-    ctx = lambda **kw: dict(active_page="optimize_simple", **_simple_pickers(), **kw)
+    ctx = lambda **kw: dict(active_page="optimize_simple", goals=OPTIMIZE_GOALS, want_goal=(form.get("goal") or "eval"), **_simple_pickers(), **kw)
     if not engines:
         return render_template("optimize_simple.html", **ctx(error="Tick at least one engine.")), 400
     try:
@@ -2619,6 +2712,9 @@ def optimize_simple_start():
         job_id = JOB_MANAGER.create(tool="Optimize (pick engines)", page_template="/optimize-simple/job/{job_id}",
                                     log=[f"Loaded {len(df)} bars from {active_label}."] + ([tf_note] if tf_note else []) + [f"Engines: {', '.join(engines)}."],
                                     instrument=active_label, cancel_event=cancel_event, cancelled=False,
+                                    opt_ctx={"pick": (form.get("strategy_pick") or "").strip(), "dataset": (form.get("existing_dataset") or "").strip(),
+                                             "timeframe": (form.get("timeframe") or "").strip(), "prop": (form.get("prop_preset") or "").strip(),
+                                             "goal": (form.get("goal") or "").strip()},
                                     progress={"percent": 0.0, "step": None, "step_total": len(engines), "step_label": "",
                                               "label": "Starting", "elapsed_seconds": 0.0, "done": False})
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)
@@ -2653,6 +2749,47 @@ def optimize_simple_deep_search_results(job_id):
                            not_found=False, ds=ds)
 
 
+def _optimize_next_step(job: dict) -> dict:
+    """Plain-language 'what now?' for a finished Optimize job, from what the engines actually reported."""
+    from urllib.parse import urlencode
+    ctx = job.get("opt_ctx") or {}
+    summ = job.get("summary") or {}
+    q = {k: v for k, v in (("strategy_pick", ctx.get("pick")), ("existing_dataset", ctx.get("dataset")), ("timeframe", ctx.get("timeframe")),
+                           ("prop_preset", ctx.get("prop"))) if v}
+    val = "/validate-simple" + ("?" + urlencode(q) if q else "")
+    opt = lambda goal: "/optimize-simple?" + urlencode({**q, "goal": goal})
+    qo, rs = summ.get("quick_optimize") or {}, summ.get("risk_sweep") or {}
+    out = {"headline": "", "why": "", "primary": {"label": "Open Validate", "href": val}, "secondary": [], "bullets": []}
+    errs = [k for k, v in summ.items() if isinstance(v, dict) and v.get("error")]
+    if errs and not any(isinstance(v, dict) and v.get("ran") for v in summ.values()):
+        out.update(headline="The run hit an error", why=str(summ[errs[0]].get("error"))[:200], primary={"label": "Try again", "href": opt(ctx.get("goal") or "eval")})
+        return out
+    if rs.get("ran") and rs.get("best_risk_value") is not None:
+        out["bullets"].append(f"Best risk per trade found: {rs['best_risk_value']} -- use it when you run Full Pipeline or Deploy.")
+    if qo.get("ran"):
+        b, a = qo.get("baseline_eval_pass_probability"), qo.get("optimized_eval_pass_probability")
+        pct = lambda v: f"{float(v) * 100:.0f}%" if isinstance(v, (int, float)) and float(v) <= 1.0 else (f"{float(v):.0f}%" if isinstance(v, (int, float)) else "n/a")
+        if qo.get("improved"):
+            gate = qo.get("ready_gate_passed")
+            out["headline"] = "Better settings found -- now prove they are not a fluke"
+            out["why"] = f"Eval pass chance {pct(b)} -> {pct(a)}." + (" It clears the READY bar on this data." if gate else (" It does not clear the READY bar yet: " + str(qo.get("ready_gate_reasons") or "see details") + "."))
+            out["bullets"] += ["The strategy was updated in your library (the old version is archived).",
+                               "Optimizing and validating on the same data is how curve-fits happen -- run Validate next, on all five checks."]
+            out["secondary"] = [{"label": "Run again: make the edge more reliable", "href": opt("robust")}]
+        else:
+            out["headline"] = "No better settings found -- the strategy was left untouched"
+            out["why"] = f"Eval pass chance stayed at about {pct(b)}. Either the settings were already near their best or the idea has no edge to tune."
+            out["bullets"] += ["If it failed on out-of-sample data: try the 'reliable edge' goal.", "If winners turn into losers: try 'Fix the exits'.",
+                               "If neither helps, scrap it and let Discovery find a replacement."]
+            out["primary"] = {"label": "Try 'Fix the exits'", "href": opt("exits")}
+            out["secondary"] = [{"label": "Make the edge more reliable", "href": opt("robust")}, {"label": "Find a replacement", "href": "/discovery-engine"}]
+    elif rs.get("ran"):
+        out["headline"] = "Risk size tuned"
+        out["why"] = "Strategy settings were left alone; only risk per trade was swept."
+        out["bullets"].append("Validate next -- a good risk setting cannot rescue a strategy with no edge.")
+    return out
+
+
 @app.route("/optimize-simple/job/<job_id>/status.json")
 def optimize_simple_job_status(job_id):
     job = JOB_MANAGER.get(job_id)
@@ -2660,6 +2797,7 @@ def optimize_simple_job_status(job_id):
         return jsonify({"found": False}), 404
     _ce = job.get("cancel_event")
     return jsonify({"found": True, "done": job["done"], "error": job["error"], "log": job["log"],
+                    "next": (_optimize_next_step(job) if job["done"] and not job.get("cancelled") else None),
                     "instrument": job.get("instrument"), "summary": job.get("summary"),
                     "progress": job.get("progress"), "cancelled": job.get("cancelled", False),
                     "stopping": bool(_ce is not None and _ce.is_set() and not job["done"])})
@@ -4337,6 +4475,7 @@ def _account_settings_page_context(**extra):
         subscription=effective_subscription(),
         app_version=APP_VERSION,
         active_page="account_settings",
+        notif=load_notification_settings(),
     )
     ctx.update(extra)
     return ctx
@@ -4978,7 +5117,8 @@ def account_settings_check_updates():
 
 @app.route("/settings/notifications")
 def notification_settings_form():
-    return render_template("notification_settings.html", settings=load_notification_settings(), active_page="notification_settings")
+    # Notification settings now live inside Account settings (above the app version).
+    return redirect("/settings/account#notifications")
 
 
 @app.route("/settings/notifications/save", methods=["POST"])
@@ -5005,10 +5145,7 @@ def notification_settings_save():
         telegram_chat_id=(form.get("telegram_chat_id") or "").strip(),
     )
     save_notification_settings(settings)
-    return render_template(
-        "notification_settings.html", settings=settings, active_page="notification_settings",
-        saved=True,
-    )
+    return redirect("/settings/account?notif_saved=1#notifications")
 
 
 @app.route("/settings/notifications/test", methods=["POST"])
@@ -11942,7 +12079,7 @@ def graveyard_detail_json():
     row, err = _graveyard_row_from_request()
     if err:
         return err
-    return jsonify(gd.summary(row))
+    return jsonify(gd.summary(row, request.args.get("path")))
 
 
 @app.route("/graveyard/curve")
@@ -11953,7 +12090,52 @@ def graveyard_curve_json():
     row, err = _graveyard_row_from_request()
     if err:
         return err
-    return jsonify(gd.rebuild_curve(row))
+    return jsonify(gd.rebuild_curve(row, request.args.get("path")))
+
+
+@app.route("/graveyard/auto-optimize", methods=["POST"])
+def graveyard_auto_optimize():
+    """Puts a rejected strategy back into the library (a fresh candidate, clearly named) and returns the Optimize URL with the goal that
+    targets the metrics it failed already picked. Nothing runs here -- the person presses OPTIMIZE on the next page."""
+    from urllib.parse import urlencode
+    from app.search import graveyard_detail as gd
+    row, err = _graveyard_row_from_request()
+    if err:
+        return err
+    path = (request.args.get("path") or "").strip()
+    plan = gd.optimize_plan(row)
+    ctx = gd.context_for(row, path)
+    lab = gd._lab_context(row)
+    try:
+        if lab:
+            from app.discovery_lab.codegen import render
+            base = safe_filename_stem(f"Revived {gd.family_title(row.get('family'))} {str(lab['dataset']).split('/')[-1].replace('.csv', '')}", "revived")
+            text = render({"family": lab["family"], "params": lab["params"], "stop_atr": lab["stop_atr"], "target_r": lab["target_r"],
+                           "label": row.get("param_signature") or "", "train": {}, "val": {}, "test": {}}, str(lab["dataset"]),
+                          int(lab.get("bar_minutes") or 0), base)
+            stype, ext, dataset = "python", ".py", lab["dataset"]
+        else:
+            from app.search.strategy_space import FAMILIES
+            fam = FAMILIES.get(row.get("family"))
+            if fam is None or not ctx:
+                return jsonify({"ok": False, "error": "This rejection doesn't have enough saved detail to rebuild the strategy."}), 400
+            cfg = dict(fam.build(ctx["params"]))
+            base = safe_filename_stem(f"Revived {gd.family_title(row.get('family'))} {str(ctx['dataset']).split('/')[-1].replace('.csv', '')}", "revived")
+            cfg["name"] = base
+            text, stype, ext, dataset = json.dumps(cfg, indent=2, default=str), "manual", ".json", ctx["dataset"]
+        for k in range(0, 50):
+            fn = f"{base}{'' if k == 0 else '_' + str(k + 1)}{ext}"
+            try:
+                saved = save_strategy_text(text, fn, stype)
+                break
+            except StrategyAlreadyExists:
+                continue
+        else:
+            return jsonify({"ok": False, "error": "Couldn't find a free file name."}), 409
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": f"Couldn't rebuild it: {exc}"}), 500
+    q = {"strategy_pick": f"{stype}::{saved.name}", "existing_dataset": dataset, "goal": plan["goal"], "why": plan["why"]}
+    return jsonify({"ok": True, "name": saved.name, "url": "/optimize-simple?" + urlencode(q), "goal": plan["title"]})
 
 
 # ---------------------------------------------------------------------------

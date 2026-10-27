@@ -27,12 +27,15 @@ JOB_DISCOVERY_ENGINE = "Strategy Discovery Engine"
 
 # How thoroughly to look -> (engine preset, headline). Plain words on the page; the preset names stay internal.
 EFFORT = {
-    "quick": ("speed_run", "Quick look", "A fast, narrow scan. Good for a first pass or a small machine."),
-    "standard": ("search_lab", "Standard search", "Every strategy type is tried across its settings grid, then the best are checked hard."),
-    "deep": ("forge", "Deep search", "The widest search: thousands of ideas, screened and validated for prop-firm survival. Takes the longest."),
+    "quick": ("lab", "Quick look", "About 400 ideas in under a minute. Good for a first pass."),
+    "standard": ("lab", "Standard search", "About 2,500 ideas across 18 strategy types, each checked on data it never trained on."),
+    "deep": ("lab", "Deep search", "Up to 9,000 ideas with every stop/target variant. Takes a few minutes."),
 }
+# "Deep statistical gauntlet": the original multi-lab engine (slow, very strict). Reachable from Advanced options.
+GAUNTLET = {"quick": "speed_run", "standard": "search_lab", "deep": "forge"}
 METHODS = {  # advanced override
-    "": "Let the engine choose",
+    "": "Fast Lab (recommended): finds, verifies and shows live equity curves",
+    "gauntlet": "Deep statistical gauntlet (slow, very strict)",
     "search_lab": "Grid sweep (Search Lab method)",
     "evolution_lab": "Evolve a population (Evolution Lab method)",
     "forge": "Wide generate-and-screen (Forge method)",
@@ -215,14 +218,17 @@ def start():
     if not res.is_valid:
         return back("That dataset couldn't be read: " + "; ".join(res.errors)[:200])
     df = res.dataframe
+    is_lab = (form.get("method") or "").strip() in ("", "lab")
     try:
-        max_bars = int(form.get("max_bars") or 60000)
+        max_bars = int(form.get("max_bars") or (400000 if is_lab else 60000))
     except ValueError:
-        max_bars = 60000
+        max_bars = 400000 if is_lab else 60000
     if max_bars > 0 and len(df) > max_bars:
         df = df.tail(max_bars).reset_index(drop=True)
     if len(df) < 500:
         return back("That dataset has too few bars to search on (needs at least 500).")
+    if is_lab:
+        return _start_lab(df, label, (form.get("effort") if form.get("effort") in EFFORT else "standard"), form, back)
 
     try:
         preset_row = get_prop_preset(form.get("prop_preset") or "ftmo_100k")
@@ -238,9 +244,11 @@ def start():
     risk = _risk_for(label, balance, risk_pct)
 
     effort = form.get("effort") if form.get("effort") in EFFORT else "standard"
-    preset_name = (form.get("method") or "").strip() or EFFORT[effort][0]
+    preset_name = (form.get("method") or "").strip() or "lab"
     if preset_name not in METHODS:
-        preset_name = EFFORT[effort][0]
+        preset_name = "lab"
+    if preset_name == "gauntlet":
+        preset_name = GAUNTLET[effort]
     families = {"": None, "ready": "ready", "all": "all"}.get((form.get("families") or "").strip(), None)
     try:
         seed = int(form.get("seed") or 42)
@@ -273,6 +281,137 @@ def start():
         from app.reports.crash_log import log_crash
         log_crash("Strategy Discovery Engine (web, start)", exc=exc)
         return back(f"Couldn't start the engine: {exc}", 500)
+
+
+def _start_lab(df, label, effort, form, back):
+    from app.data.timeframe_resample import infer_timeframe_label
+    from app.orchestration.resource_guard import HEAVY_JOB_GUARD
+    from app.prop.presets import get_preset as get_prop_preset
+    from app.prop.simulator import PropRules
+    from app.web.job_manager import JOB_MANAGER
+
+    try:
+        preset_row = get_prop_preset(form.get("prop_preset") or "ftmo_100k")
+        rules, balance, prop_label = preset_row.to_prop_rules(), float(preset_row.account_size), preset_row.label
+    except Exception:  # noqa: BLE001
+        rules, balance, prop_label = PropRules(), 100000.0, "standard $100k rules"
+    try:
+        risk_pct = max(0.05, min(5.0, float(form.get("risk_pct") or 0.5)))
+    except ValueError:
+        risk_pct = 0.5
+    try:
+        seed = int(form.get("seed") or 7)
+    except ValueError:
+        seed = 7
+    risk = _risk_for(label, balance, risk_pct)
+    if not HEAVY_JOB_GUARD.try_acquire(JOB_DISCOVERY_ENGINE):
+        return back(f"{HEAVY_JOB_GUARD.active_name} is already running. Wait for it to finish, then start a search.", 409)
+    try:
+        tf = infer_timeframe_label(df)
+        cancel = threading.Event()
+        job_id = JOB_MANAGER.create(
+            page_template="/discovery-engine/job/{job_id}", tool="Strategy Discovery Engine", instrument=label, cancel_event=cancel,
+            log=[f"Loaded {len(df):,} bars of {label} ({tf})."], engine_result=None, lab_result=None, live=None, cancelled=False,
+            settings={"dataset": label, "timeframe": tf, "effort": effort, "prop": prop_label, "risk_pct": risk_pct, "mode": "lab"})
+        JOB_MANAGER.prune(max_age_seconds=6 * 3600)
+        threading.Thread(target=_run_lab_job, daemon=True, args=(job_id, df, risk, rules, label, effort, risk_pct, balance, seed, cancel,
+                                                                 (form.get("bar_size") or "auto"))).start()
+        return redirect(f"/discovery-engine/job/{job_id}")
+    except Exception as exc:  # noqa: BLE001
+        HEAVY_JOB_GUARD.release(JOB_DISCOVERY_ENGINE)
+        return back(f"Couldn't start the search: {exc}", 500)
+
+
+def _bury_near_misses(res, label, minutes, risk_pct):
+    """Near-misses go to the Strategy Graveyard WITH the context to redraw their curve and to auto-optimize them later."""
+    from app.search.graveyard import GraveyardEntry, graveyard_path_for, record_rejections
+    ds = str(label).replace("\\", "/")
+    inst_key = ds.split("/")[-1].replace(".csv", "").replace(".parquet", "")
+    tf = {1: "1m", 5: "5m", 15: "15m", 30: "30m", 60: "1h", 240: "4h", 1440: "1d"}.get(int(minutes or 0), "native")
+    ents = []
+    for c in res.near_misses:
+        te, a = c.get("test") or {}, c.get("all") or {}
+        pf = (c.get("fails") or [""])[0]
+        ents.append(GraveyardEntry(
+            candidate_id=c["id"], family="lab_" + c["family"], generation=None, stage_died="not_ranked",
+            reason="Discovery Lab near-miss: " + "; ".join(c.get("fails") or ["did not clear every check"]) + ".",
+            oos_result="negative" if (te.get("mean") or 0) <= 0 else "positive", neighbor_robustness_pct=round((c.get("robust") or 0) * 100, 0),
+            fitness_score=round((c.get("train") or {}).get("t", 0) / 10.0, 3),
+            param_signature="lab_" + c["family"] + "|" + ",".join(f"{k}={float(v)}" for k, v in sorted(c["params"].items()) if isinstance(v, (int, float)))
+                            + f",stop_atr={c['stop_atr']},target_r={c['target_r']}",
+            notes=["lab: " + json.dumps({"dataset": ds, "bar_minutes": minutes, "family": c["family"], "params": c["params"], "stop_atr": c["stop_atr"],
+                                         "target_r": c["target_r"], "risk_pct": risk_pct}),
+                   f"Found by the Discovery Lab; sealed test {te.get('mean')}R over {te.get('n')} trades."],
+            primary_failure=("out-of-sample collapse" if "lost money" in pf else ("too few trades" if "too few" in pf else
+                             ("marginal edge" if "fragile" in pf or "double" in pf else None))),
+            strength=f"train t {(c.get('train') or {}).get('t')}, validate t {(c.get('val') or {}).get('t')}",
+            weakness="; ".join(c.get("fails") or []), n_trades=a.get("n"), avg_r_net=a.get("mean"), profit_factor=a.get("pf"),
+            instrument=inst_key, timeframe=tf))
+    if ents:
+        record_rejections(ents, graveyard_path_for(inst_key.lower(), tf))
+
+
+def _run_lab_job(job_id, df, risk, rules, label, effort, risk_pct, balance, seed, cancel, bar_size):
+    from app.orchestration.resource_guard import HEAVY_JOB_GUARD
+    from app.reports.crash_log import log_crash
+    from app.web.job_manager import JOB_MANAGER
+
+    def cost_for(d):
+        import numpy as np
+
+        from app.discovery_lab import families as LF
+        from app.validation.pooled_edge import estimated_cost_in_r
+        a = float(np.nanmedian(LF.Indicators(d).atr(14)[250:]))
+        return float(estimated_cost_in_r(risk, a) * a)
+
+    try:
+        from app.discovery_lab import LabConfig, run_lab
+        from app.discovery_lab.engine import pick_bar_size
+        JOB_MANAGER.log(job_id, "Measuring trading costs against typical price movement...")
+        cost = cost_for(df)
+        minutes = None
+        if bar_size == "native":
+            d, note = df, None
+        else:
+            d, minutes, note = pick_bar_size(df, cost)
+            cost = cost_for(d)
+        if note:
+            JOB_MANAGER.log(job_id, note)
+        JOB_MANAGER.update(job_id, bar_minutes=minutes)
+        JOB_MANAGER.log(job_id, f"Searching 18 strategy types on {len(d):,} bars: train on the first 55%, validate on the next 25%, keep the last 20% sealed.")
+        last = {"phase": None}
+
+        def on_event(ev):
+            JOB_MANAGER.update(job_id, live=ev)
+            if ev["phase"] != last["phase"]:
+                last["phase"] = ev["phase"]
+                JOB_MANAGER.log(job_id, {"validate": f"{ev.get('train_pass', 0):,} ideas looked good on training data -- checking them on fresh data...",
+                                         "verify": f"{ev.get('val_pass', 0)} held up -- now stress-testing neighbours, the sealed slice and double costs...",
+                                         }.get(ev["phase"], "") or "")
+
+        cfg = LabConfig(effort=effort, seed=seed, risk_pct=risk_pct, balance=balance,
+                        max_dd_limit_pct=float(getattr(rules, "max_drawdown_pct", 10.0) or 10.0))
+        res = run_lab(d, cost, cfg, progress=on_event, cancel=cancel)
+        out = res.to_dict()
+        out["bar_note"] = note
+        out["bar_minutes"] = minutes
+        out["prop_dd_limit"] = cfg.max_dd_limit_pct
+        try:
+            _bury_near_misses(res, label, minutes, risk_pct)
+        except Exception:  # noqa: BLE001 -- the graveyard is a record, never a reason to fail a run
+            pass
+        JOB_MANAGER.log(job_id, f"Done: {res.tested:,} ideas tried, {len(res.winners)} passed every check, {len(res.near_misses)} near-misses.")
+        try:
+            from app.achievements import bump
+            bump("discoveries")
+        except Exception:  # noqa: BLE001
+            pass
+        JOB_MANAGER.finish(job_id, lab_result=out, lab_df_minutes=minutes, cancelled=bool(cancel.is_set()))
+    except Exception as exc:  # noqa: BLE001
+        log_crash("Strategy Discovery Lab (web)", exc=exc)
+        JOB_MANAGER.fail(job_id, f"The search stopped with an error: {exc}")
+    finally:
+        HEAVY_JOB_GUARD.release(JOB_DISCOVERY_ENGINE)
 
 
 @discovery_engine_bp.route("/discovery-engine/job/<job_id>")
@@ -311,6 +450,9 @@ def job_status(job_id):
     out = {"found": True, "done": bool(job.get("done")), "error": job.get("error"), "cancelled": bool(job.get("cancelled")),
            "log": [str(x) for x in (job.get("log") or [])][-200:], "elapsed": round((job.get("finished_at") or time.time()) - job.get("started_at", time.time())),
            "settings": job.get("settings") or {}}
+    out["live"] = job.get("live")
+    if job.get("lab_result") is not None and job.get("done"):
+        out["lab"] = job["lab_result"]
     res = job.get("engine_result")
     if job.get("done") and res is not None:
         champs = [_champion_view(i, c, p) for i, (c, p) in enumerate(zip(res.champions, res.promotions))]
@@ -335,11 +477,34 @@ def job_stop(job_id):
     return jsonify({"ok": True})
 
 
+def _save_lab(job, lab, n):
+    from app.discovery_lab.codegen import render
+    from app.strategy.library import StrategyAlreadyExists, safe_filename_stem, save_strategy_text
+    rows = list(lab.get("winners") or []) + list(lab.get("near_misses") or [])
+    if n < 0 or n >= len(rows):
+        return jsonify({"ok": False, "error": "That result is no longer available."}), 404
+    c = rows[n]
+    inst = str(job.get("instrument", "")).split("/")[-1].replace(".csv", "")
+    base = safe_filename_stem(f"{_family_title(c['family'])} {inst} lab {c['id'][-4:]}", "lab_strategy")
+    text = render(c, inst, int(lab.get("bar_minutes") or 0) or 0, base)
+    for k in range(0, 50):
+        fn = f"{base}{'' if k == 0 else '_' + str(k + 1)}.py"
+        try:
+            path = save_strategy_text(text, fn, "python")
+            return jsonify({"ok": True, "name": path.name, "test_url": f"/full-pipeline?load_strategy_type=python&load_strategy_name={path.name}"})
+        except StrategyAlreadyExists:
+            continue
+    return jsonify({"ok": False, "error": "Couldn't find a free file name."}), 409
+
+
 @discovery_engine_bp.route("/discovery-engine/job/<job_id>/save/<int:n>", methods=["POST"])
 def job_save(job_id, n):
     from app.strategy.library import StrategyAlreadyExists, safe_filename_stem, save_strategy_text
     from app.web.job_manager import JOB_MANAGER
     job = JOB_MANAGER.get(job_id)
+    lab = (job or {}).get("lab_result")
+    if lab is not None:
+        return _save_lab(job, lab, n)
     res = (job or {}).get("engine_result")
     if res is None or n < 0 or n >= len(res.champions):
         return jsonify({"ok": False, "error": "That result is no longer available (the server may have restarted)."}), 404
