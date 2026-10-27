@@ -108,6 +108,64 @@ def seed_context(row: dict) -> dict[str, Any] | None:
     }
 
 
+DEFAULT_COSTS = {"spread": 0.8, "slippage": 0.2, "commission": 3.0, "risk_pct": 0.5, "account": 100000.0}
+
+
+def _signature_params(sig: str | None) -> dict | None:
+    if not sig or "|" not in sig:
+        return None
+    out: dict = {}
+    for part in sig.split("|", 1)[1].split(","):
+        if "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        try:
+            f = float(v)
+            out[k] = int(f) if f == int(f) else f
+        except ValueError:
+            out[k] = v
+    return out or None
+
+
+def _lab_context(row: dict) -> dict | None:
+    for n in row.get("notes") or []:
+        if str(n).startswith("lab:"):
+            try:
+                return json.loads(str(n)[4:].strip())
+            except json.JSONDecodeError:
+                return None
+    return None
+
+
+def _dataset_from_file_key(instrument_key: str) -> str | None:
+    """'eurusd-eurusd240-csv' (the graveyard file's instrument key) -> 'EURUSD/EURUSD240.csv' under data/raw, if present."""
+    toks = [t for t in str(instrument_key or "").split("-") if t and t != "csv"]
+    if not toks or not RAW_DIR.exists():
+        return None
+    want = toks[-1].lower()
+    for p in RAW_DIR.rglob("*.csv"):
+        if p.stem.lower() == want:
+            return str(p.relative_to(RAW_DIR)).replace("\\", "/")
+    return None
+
+
+def context_for(row: dict, path: str | None = None) -> dict | None:
+    """The recorded context if the row has one; otherwise a best-effort one rebuilt from the file it lives in + its saved parameter
+    signature, with the app's standard cost assumptions (``assumed`` is True so the panel can say so)."""
+    ctx = seed_context(row)
+    if ctx:
+        return ctx
+    params = _signature_params(row.get("param_signature"))
+    if not params or not path:
+        return None
+    parts = Path(path).stem.split("__")
+    ds = _dataset_from_file_key(parts[1] if len(parts) > 1 else "")
+    if not ds:
+        return None
+    return {"dataset": ds, "timeframe": parts[2] if len(parts) > 2 else "", "start": None, "end": None, "split": None, "params": params,
+            "assumed": True, **DEFAULT_COSTS}
+
+
 def _num(v: Any, nd: int = 2) -> float | None:
     try:
         f = float(v)
@@ -118,9 +176,10 @@ def _num(v: Any, nd: int = 2) -> float | None:
     return round(f, nd)
 
 
-def summary(row: dict) -> dict[str, Any]:
+def summary(row: dict, path: str | None = None) -> dict[str, Any]:
     """Plain-language facts that come straight from the stored row (no recomputation)."""
-    ctx = seed_context(row)
+    ctx = context_for(row, path)
+    lab = _lab_context(row)
     facts = [
         ("Eval pass chance", _num(row.get("prop_sim_pass_pct"), 0), "%", "Chance of passing a prop-firm evaluation, from the Monte Carlo run when this strategy was tested."),
         ("Held-out pass chance", _num(row.get("cpcv_oos_pass_pct"), 0), "%", "The honest estimate: pass chance on data the strategy was never tuned on."),
@@ -137,10 +196,54 @@ def summary(row: dict) -> dict[str, Any]:
         "strength": row.get("strength"), "weakness": row.get("weakness"), "suggestion": row.get("suggested_mutation"),
         "oos": row.get("oos_result"), "signature": row.get("param_signature"),
         "facts": [{"label": a, "value": b, "unit": c, "hint": d} for a, b, c, d in facts if b is not None],
-        "can_rebuild": bool(ctx) and bool(_dataset_path(ctx)),
-        "context": ({k: ctx[k] for k in ("dataset", "timeframe", "start", "end", "spread", "slippage", "commission", "risk_pct", "account")} if ctx else None),
+        "can_rebuild": bool(lab) or (bool(ctx) and bool(_dataset_path(ctx))),
+        "optimize": optimize_plan(row),
+        "context": ({k: ctx.get(k) for k in ("dataset", "timeframe", "start", "end", "spread", "slippage", "commission", "risk_pct", "account", "assumed")} if ctx else None),
         "params": (ctx or {}).get("params"),
     }
+
+
+def failed_metrics(row: dict) -> list[dict]:
+    """The metrics this row actually failed (read from what was saved), each with the optimizer goal that targets it."""
+    out = []
+    pf = row.get("primary_failure") or ""
+    if row.get("prop_sim_pass_pct") is not None and float(row["prop_sim_pass_pct"]) < 40:
+        out.append({"metric": "Eval pass chance", "value": f"{float(row['prop_sim_pass_pct']):.0f}%", "goal": "eval"})
+    if row.get("cpcv_oos_pass_pct") is not None and float(row["cpcv_oos_pass_pct"]) < 40:
+        out.append({"metric": "Held-out pass chance", "value": f"{float(row['cpcv_oos_pass_pct']):.0f}%", "goal": "robust"})
+    if row.get("neighbor_robustness_pct") is not None and float(row["neighbor_robustness_pct"]) < 50:
+        out.append({"metric": "Neighbour robustness", "value": f"{float(row['neighbor_robustness_pct']):.0f}%", "goal": "robust"})
+    if row.get("oos_result") == "negative" or pf == "out-of-sample collapse":
+        out.append({"metric": "Out-of-sample result", "value": "negative", "goal": "robust"})
+    if pf == "drawdown breach" or "max drawdown" in str(row.get("weakness") or "") and _dd_value(row) > 12:
+        out.append({"metric": "Max drawdown", "value": f"{_dd_value(row):.1f}%" if _dd_value(row) else "too deep", "goal": "risk"})
+    if pf == "too few trades":
+        out.append({"metric": "Trade count", "value": str(row.get("n_trades") or "low"), "goal": "eval"})
+    if pf in ("no edge after costs", "marginal edge"):
+        out.append({"metric": "Edge after costs", "value": "none" if pf.startswith("no") else "thin", "goal": "exits"})
+    return out
+
+
+def _dd_value(row: dict) -> float:
+    m = re.search(r"max drawdown ([\d.]+)%", str(row.get("weakness") or ""))
+    return float(m.group(1)) if m else 0.0
+
+
+GOAL_TITLES = {"eval": "Pass the evaluation", "payout": "Get to a payout faster", "robust": "Make the edge more reliable",
+               "exits": "Fix the exits", "risk": "Right-size my risk"}
+
+
+def optimize_plan(row: dict) -> dict:
+    """Which Optimize goal fits this rejection, and why -- keyed to the metrics it failed, never generic."""
+    fm = failed_metrics(row)
+    if not fm:
+        return {"goal": "eval", "title": GOAL_TITLES["eval"], "why": "No single metric stood out, so start with the evaluation pass chance.", "failed": [], "hopeless": False}
+    first = fm[0]
+    hopeless = (row.get("primary_failure") == "no edge after costs") and row.get("oos_result") == "negative"
+    why = "; ".join(f"{m['metric']} {m['value']}" for m in fm[:3])
+    if hopeless:
+        why += ". Lost money in both halves, so tuning is a long shot: try once, then move on."
+    return {"goal": first["goal"], "title": GOAL_TITLES[first["goal"]], "why": why, "failed": fm, "hopeless": hopeless}
 
 
 def _dataset_path(ctx: dict) -> Path | None:
@@ -159,9 +262,51 @@ def _downsample(xs: list, n: int = _MAX_POINTS) -> list:
     return [xs[round(i * step)] for i in range(n)]
 
 
-def rebuild_curve(row: dict) -> dict[str, Any]:
+def _rebuild_lab_curve(row: dict, lab: dict) -> dict[str, Any]:
+    """Lab rejections: re-run the Discovery Lab's own simulator on the dataset it was found on (same costs, same bar size)."""
+    try:
+        import warnings
+
+        import numpy as np
+
+        from app.data.importer import import_csv
+        from app.data.storage import resolve_stored_dataset
+        from app.discovery_lab import families as LF
+        from app.discovery_lab.engine import resample, simulate, stats
+        from app.validation.pooled_edge import estimated_cost_in_r
+        warnings.filterwarnings("ignore")
+        path = resolve_stored_dataset(lab["dataset"])
+        if path is None:
+            return {"ok": False, "message": f"The dataset it was found on ({lab['dataset']}) isn't on this computer, so the curve can't be redrawn."}
+        df = import_csv(path).dataframe
+        if lab.get("bar_minutes"):
+            df = resample(df.tail(int(lab.get("max_bars") or 400000)).reset_index(drop=True), int(lab["bar_minutes"]))
+        I = LF.Indicators(df)
+        from app.backtest.risk import RiskConfig
+        risk = RiskConfig(initial_balance=100000.0, risk_mode="percent", risk_value=float(lab.get("risk_pct") or 0.5))
+        a = float(np.nanmedian(I.atr(14)[250:]))
+        cost = float(estimated_cost_in_r(risk, a) * a)
+        lg, sh, _ = LF.signals(lab["family"], df, lab["params"], I)
+        ent, ex, r = simulate(lg, sh, I, float(lab["stop_atr"]), float(lab["target_r"]), cost)
+        eq = 100000.0 + np.cumsum(r) * 100000.0 * float(lab.get("risk_pct") or 0.5) / 100.0
+        ts = df["timestamp"].astype(str).str[:10].to_numpy()
+        pts = _downsample([[ts[min(int(e), len(ts) - 1)], round(float(v), 2)] for e, v in zip(ex, eq)])
+        st = stats(r)
+        return {"ok": True, "points": pts, "account": 100000.0, "split": None,
+                "stats": {"return_pct": round(float(eq[-1] - 100000.0) / 1000.0, 1) if len(eq) else 0.0, "net_profit": round(float(eq[-1] - 100000.0), 0) if len(eq) else 0,
+                          "sharpe": None, "profit_factor": st["pf"], "win_rate": st["win"], "max_drawdown_pct": round(st["dd"] * float(lab.get("risk_pct") or 0.5), 1),
+                          "trades": st["n"], "expectancy": None, "avg_r": st["mean"], "max_losing_streak": 0},
+                "note": "Redrawn just now with the Discovery Lab's simulator on the data it was found on (same costs and bar size)."}
+    except Exception as exc:   # noqa: BLE001
+        return {"ok": False, "message": f"Couldn't redraw the curve ({type(exc).__name__}). The saved reason and scores above are still correct."}
+
+
+def rebuild_curve(row: dict, path: str | None = None) -> dict[str, Any]:
     """Re-run the engine for this row and return {ok, points, stats, split} -- or {ok: False, message} when it can't."""
-    ctx = seed_context(row)
+    lab = _lab_context(row)
+    if lab:
+        return _rebuild_lab_curve(row, lab)
+    ctx = context_for(row, path)
     if not ctx:
         return {"ok": False, "message": "This rejection didn't record its exact settings, so its equity curve can't be rebuilt. The reason and scores above are what was saved."}
     path = _dataset_path(ctx)
@@ -183,8 +328,11 @@ def rebuild_curve(row: dict) -> dict[str, Any]:
             return {"ok": False, "message": "That strategy family isn't available in this version of the app."}
         df = import_csv(str(path)).dataframe
         ts = pd.to_datetime(df["timestamp"])
-        keep = (ts >= pd.Timestamp(ctx["start"])) & (ts <= pd.Timestamp(ctx["end"]) + pd.Timedelta(days=1))
-        df = df.loc[keep].reset_index(drop=True)
+        if ctx.get("start") and ctx.get("end"):
+            keep = (ts >= pd.Timestamp(ctx["start"])) & (ts <= pd.Timestamp(ctx["end"]) + pd.Timedelta(days=1))
+            df = df.loc[keep].reset_index(drop=True)
+        else:
+            df = df.tail(60000).reset_index(drop=True)
         if len(df) < 100:
             return {"ok": False, "message": "Not enough data in the recorded window to redraw the curve."}
         pip = 0.01 if "JPY" in ctx["dataset"].upper() else (0.1 if "XAU" in ctx["dataset"].upper() else 0.0001)
@@ -217,6 +365,8 @@ def rebuild_curve(row: dict) -> dict[str, Any]:
         except Exception:   # noqa: BLE001 -- the curve and stats are still useful without the Monte Carlo extras
             extra = {}
         return {"ok": True, "points": pts, "stats": stats, "split": ctx.get("split"), "account": ctx["account"], **extra,
-                "note": f"Redrawn just now from {ctx['dataset']} ({ctx['start']} to {ctx['end']}) with the saved settings and costs over the whole window. (Totals can differ slightly from the in-sample / held-out split run that rejected it.)"}
+                "note": (f"Redrawn just now from {ctx['dataset']} ({ctx['start']} to {ctx['end']}) with the saved settings and costs over the whole window. (Totals can differ slightly from the in-sample / held-out split run that rejected it.)"
+                         if not ctx.get("assumed") else
+                         f"Redrawn just now from {ctx['dataset']} (most recent bars) with the saved settings and the app's standard costs -- this rejection didn't record its own costs, so totals are approximate.")}
     except Exception as exc:   # noqa: BLE001 -- a detail panel must degrade to a message, never a 500
         return {"ok": False, "message": f"Couldn't redraw the curve ({type(exc).__name__}). The saved reason and scores above are still correct."}
