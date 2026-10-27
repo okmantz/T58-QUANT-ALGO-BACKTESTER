@@ -338,3 +338,78 @@ def test_preregister_endpoint_is_idempotent(tmp_path, monkeypatch):
     r2 = c.post("/api/discovery-engine/preregister")
     assert r1.status_code == 200 and r2.status_code == 200
     assert r2.get_json()["registered"] == 0 and r2.get_json()["total"] == 100
+
+
+# ------------------------------------------------------------------------------------- the integrated start page + job flow
+def test_engine_is_inside_create_not_its_own_sidebar_entry():
+    from app.web.server import app
+    c = app.test_client()
+    create = c.get("/start-here/create").get_data(as_text=True)
+    assert 'href="/discovery-engine"' in create and "I don&rsquo;t have one yet" in create and "I have a strategy" in create
+    # the old standalone sidebar entry (it sat right before "(1) Create") is gone; Create is the way in
+    sidebar = create.split('class="t58-main"')[0]
+    assert 'href="/discovery-engine"' not in sidebar
+
+
+def test_engine_page_is_the_tool_not_a_hub_of_links():
+    from app.web.server import app
+    html = app.test_client().get("/discovery-engine").get_data(as_text=True)
+    assert 'action="/discovery-engine/start"' in html and "Start searching" in html
+    assert 'name="dataset"' in html and 'id="de_prop_preset_select"' in html and 'name="effort"' in html
+
+
+def test_engine_start_validates_input():
+    from app.web.server import app
+    c = app.test_client()
+    r = c.post("/discovery-engine/start", data={})
+    assert r.status_code == 400 and b"Pick the market data" in r.data
+    r = c.post("/discovery-engine/start", data={"dataset": "../../etc/passwd"})
+    assert r.status_code == 400
+
+
+def test_engine_job_flow_with_a_stub_engine(monkeypatch):
+    """Start -> background job -> status.json carries plain-language steps -> save champion to the library."""
+    import time
+    from pathlib import Path
+
+    import pandas as pd
+
+    from app.discovery_engine import engine as eng
+    from app.web.server import app
+
+    root = Path(__file__).resolve().parents[2] / "data" / "raw" / "EURUSD" / "EURUSD240.csv"
+    if not root.exists():
+        import pytest
+        pytest.skip("bundled sample data not present")
+
+    class Stub:
+        def run(self, req):
+            req.progress_cb("stub engine ran")
+            spec = {"source_type": "manual", "config": {"name": "x", "entry_conditions": [], "exit_conditions": [], "risk_management": {}}}
+            champs = [{"spec": spec, "family": "rsi_extreme_reversion", "candidate_id": "c1", "edge_lb_r": 0.12, "edge": {"n_trades": 150}, "floor_reasons": []}]
+            promos = [{"passed": False, "failed_step": "null_gate", "failed_reason": "no better than random timing",
+                       "steps": [{"name": "reproduction", "passed": True, "detail": "same"}, {"name": "null_gate", "passed": False, "detail": "p=0.4"},
+                                 {"name": "sealed_slice", "passed": False, "skipped": True, "detail": ""}]}]
+            return eng.EngineResult(run_id="r", preset=req.preset, backend="x", objective="edge_lb_r", families_run=["rsi_extreme_reversion"], gated_out={},
+                                    n_evaluations=10, trial_inputs={"n_tests": 3}, champions=champs, promotions=promos, provenance={}, notes=[], elapsed_seconds=1.0)
+
+    monkeypatch.setattr("app.discovery_engine.engine.DiscoveryEngine", Stub)
+    c = app.test_client()
+    r = c.post("/discovery-engine/start", data={"dataset": "EURUSD/EURUSD240.csv", "effort": "quick", "max_bars": "3000"})
+    assert r.status_code == 302, r.get_data(as_text=True)[:400]
+    job_id = r.headers["Location"].rsplit("/", 1)[-1]
+    data = {}
+    for _ in range(100):
+        data = c.get(f"/discovery-engine/job/{job_id}/status.json").get_json()
+        if data.get("done"):
+            break
+        time.sleep(0.1)
+    assert data["done"] and not data["error"], data
+    ch = data["result"]["champions"][0]
+    assert ch["passed"] is False and ch["failed_step"] == "Beats random entry timing"
+    assert [s["state"] for s in ch["steps"]] == ["pass", "fail", "skipped"]
+    assert c.get(f"/discovery-engine/job/{job_id}").status_code == 200
+    save = c.post(f"/discovery-engine/job/{job_id}/save/0")
+    assert save.status_code == 200 and save.get_json()["ok"] and "load_strategy_type=manual" in save.get_json()["test_url"]
+    from app.strategy.library import get_strategy_library_dir
+    (get_strategy_library_dir("manual") / save.get_json()["name"]).unlink()

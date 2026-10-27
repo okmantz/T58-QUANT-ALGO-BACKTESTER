@@ -12,25 +12,24 @@ def test_all_eight_season_images_exist_and_are_webp():
             assert p.exists() and p.read_bytes()[:4] == b"RIFF", p
 
 
-def test_season_images_are_artwork_box_sized_and_fade_at_the_edges():
-    """Every backdrop is the 2048x768 artwork box, solid in the middle and transparent at the edges (so it melts in)."""
+def test_season_images_are_sharp_full_frames_with_thumbs():
+    """Backdrops are full-frame photos (not the old 2048x768 faded strips) and each has a small thumb for the picker."""
     from PIL import Image
     for season in ("spring", "summer", "autumn", "winter"):
         for mode in ("dark", "light"):
             p = STATIC / "backgrounds" / f"{season}-{mode}.webp"
             with Image.open(p) as im:
-                assert im.size == (2048, 768) and im.mode == "RGBA", (p, im.size, im.mode)
-                a = im.getchannel("A")
-                assert a.getpixel((1024, 300)) == 255, p      # solid in the middle of the picture
-                assert a.getpixel((1024, 767)) == 0, p        # dissolved at the bottom
-                assert a.getpixel((1024, 0)) == 0, p          # ...and at the top
-                assert a.getpixel((0, 300)) == 0 and a.getpixel((2047, 300)) == 0, p  # ...and at both sides
+                assert im.width >= 1400 and im.width / im.height > 1.4, (p, im.size)
+            assert p.stat().st_size < 700_000, p
+            t = STATIC / "backgrounds" / f"{season}-{mode}-thumb.webp"
+            assert t.exists() and t.stat().st_size < 60_000, t
 
 
 def test_backdrop_swap_fade_is_wired_in_css_and_js():
     css = (STATIC / "theme.css").read_text(encoding="utf-8")
     js = (STATIC / "t58-personalize.js").read_text(encoding="utf-8")
     assert "html.t58-bg-swap body::before" in css and "@keyframes t58-bg-swap" in css
+    assert "position: fixed" in css.split("seasonal scenes")[1][:1800]  # the scene stays put while the page scrolls
     assert "prefers-reduced-motion" in css
     assert "t58-bg-swap" in js and "MutationObserver" in js
 
@@ -55,3 +54,36 @@ def test_pages_load_personalize_and_settings_card_present(client=None):
     assert r.status_code == 200
     html = r.get_data(as_text=True)
     assert "t58-personalize.js" in html and 'id="pz-grid"' in html and 'id="pz-verse"' in html
+    assert 'id="ac-row"' in html and 'id="ac-hex"' in html and 'id="pz-fx"' in html
+    # requested order: picture, profile, security, personalize, subscription, app
+    pos = [html.index(m) for m in ("<h2>Profile picture</h2>", "<h2>Profile</h2>", "<h2>Security</h2>",
+                                   "<h2>Personalize</h2>", "<h2>Subscription</h2>", "<h2>App</h2>")]
+    assert pos == sorted(pos)
+
+
+def test_ambient_motion_is_compositor_only_and_respects_user_settings():
+    css = (STATIC / "theme.css").read_text(encoding="utf-8")
+    js = (STATIC / "t58-personalize.js").read_text(encoding="utf-8")
+    block = css[css.index(".t58-ambient {"):]
+    assert "pointer-events: none" in block and "prefers-reduced-motion" in block
+    assert "@keyframes t58-fall" in block and "top:" not in block.split("@keyframes t58-fall")[1].split("}")[0]
+    for kind in ("snow", "leaf", "petal", "firefly"):
+        assert kind in js
+    assert "saveData" in js and "visibilitychange" in js and "t58-fx" in js
+
+
+def test_accent_presets_and_custom_hex_api():
+    js = (STATIC / "t58-personalize.js").read_text(encoding="utf-8")
+    for hexv in ("#35e0b0", "#4d90ff", "#9b8cff", "#35d878", "#f5b83d", "#ff5d73"):
+        assert hexv in js
+    assert "setAccent" in js and "data-ui-accent" in js
+    head = (ROOT / "app" / "web" / "templates" / "_head_common.html").read_text(encoding="utf-8")
+    assert "t58-accent-vars" in head  # accent painted before first paint -> no teal flash
+
+
+def test_floating_panels_are_opaque():
+    """The verdict popup (and other floating panels) must not let page text show through."""
+    chrome = (STATIC / "t58-chrome.js").read_text(encoding="utf-8")
+    assert ".t58-ve{" in chrome and "var(--pop-bg" in chrome.split(".t58-ve{")[1][:300]
+    css = (STATIC / "theme.css").read_text(encoding="utf-8")
+    assert "--pop-bg:" in css
