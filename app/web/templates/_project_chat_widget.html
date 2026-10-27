@@ -29,6 +29,7 @@
   <div class="t58-pc-tabs">
     <button type="button" class="t58-pc-tab active" data-tab="chat">Chat</button>
     <button type="button" class="t58-pc-tab" data-tab="activity">Activity</button>
+    <button type="button" class="t58-pc-tab" data-tab="brief" id="t58-pc-brief-tab">Brief<span class="t58-pc-dot" id="t58-pc-brief-dot" hidden></span></button>
   </div>
 
   <div id="t58-pc-empty" class="t58-pc-empty" hidden>
@@ -48,6 +49,10 @@
   <div id="t58-pc-tab-activity" class="t58-pc-tab-panel" hidden>
     <div id="t58-pc-activity-list" class="t58-pc-activity-list"></div>
   </div>
+
+  <div id="t58-pc-tab-brief" class="t58-pc-tab-panel" hidden>
+    <div id="t58-pc-brief" class="t58-pc-brief"></div>
+  </div>
 </div>
 
 <style>
@@ -64,7 +69,7 @@
 
   /* An explicit `display:` in the rules below beats the browser's built-in [hidden] rule, which is
      why the panel used to stay expanded no matter what. Restore [hidden] for every widget element. */
-  #t58-pc-panel[hidden], .t58-pc-tab-panel[hidden], .t58-pc-empty[hidden], .t58-pc-typing[hidden] {
+  #t58-pc-panel[hidden], .t58-pc-dot[hidden], .t58-pc-tab-panel[hidden], .t58-pc-empty[hidden], .t58-pc-typing[hidden] {
     display: none !important;
   }
 
@@ -138,4 +143,17 @@
   .t58-pc-job-meta { color: var(--text-muted); margin-top: 3px; }
   .t58-pc-job-log { margin-top: 4px; color: var(--text-dim); font-family: ui-monospace, Menlo, monospace; font-size: 11px; white-space: pre-wrap; }
   .t58-pc-activity-empty { color: var(--text-muted); font-size: 13px; text-align: center; padding: 20px 10px; }
+  .t58-pc-dot { display:inline-block; width:7px; height:7px; margin-left:5px; border-radius:50%; background:var(--teal); vertical-align:middle; }
+  .t58-pc-brief { flex:1; overflow-y:auto; padding:10px; display:flex; flex-direction:column; gap:8px; }
+  .t58-pc-bh { display:flex; justify-content:space-between; align-items:baseline; gap:8px; font-size:12px; color:var(--text-muted); }
+  .t58-pc-bh b { color:var(--text); font-size:14px; }
+  .t58-pc-bs { border:1px solid var(--border); background:var(--panel-3); border-radius:10px; overflow:hidden; }
+  .t58-pc-bs > button { all:unset; box-sizing:border-box; width:100%; display:flex; justify-content:space-between; gap:8px; padding:8px 10px; cursor:pointer; font-size:12.5px; color:var(--text); font-weight:600; }
+  .t58-pc-bs > button small { display:block; font-weight:500; color:var(--text-muted); font-size:11px; text-transform:uppercase; letter-spacing:.05em; margin-bottom:2px; }
+  .t58-pc-bs > button:focus-visible { outline:2px solid var(--teal); outline-offset:-2px; }
+  .t58-pc-bb { padding:0 10px 9px; font-size:12px; color:var(--text-muted); display:grid; gap:4px; }
+  .t58-pc-bb[hidden] { display:none; }
+  .t58-pc-bb .ev { font-size:10.5px; color:var(--text-dim); font-style:italic; }
+  .t58-pc-bb a { color:var(--on-teal); background:var(--teal); text-decoration:none; font-weight:650; font-size:12px; padding:6px 10px; border-radius:8px; justify-self:start; margin-top:2px; }
+  .t58-pc-bempty { text-align:center; color:var(--text-muted); font-size:13px; padding:20px 8px; }
 </style>

@@ -32,6 +32,34 @@
   .dj-facts { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--text-muted); margin: 4px 0 0; }
   .dj-actions { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .dj-err { border-left: 3px solid var(--danger); color: var(--danger); }
+
+  /* ---- live lab ---- */
+  .lv-phase { display: flex; gap: 6px; flex-wrap: wrap; margin: 2px 0 14px; }
+  .lv-phase span { font-size: 12px; font-weight: 650; padding: 5px 12px; border-radius: 99px; border: 1px solid var(--border-light); color: var(--text-muted); }
+  .lv-phase span.on { color: var(--on-teal); background: var(--teal); border-color: var(--teal); box-shadow: 0 0 16px rgba(var(--teal-rgb), .4); }
+  .lv-phase span.done { color: var(--teal); border-color: rgba(var(--teal-rgb), .5); }
+  .lv-bar { height: 8px; border-radius: 99px; background: var(--panel-3); overflow: hidden; margin: 6px 0 12px; }
+  .lv-bar i { display: block; height: 100%; width: 0; border-radius: inherit; background: linear-gradient(90deg, var(--teal), var(--neon-cyan, var(--teal))); transition: width .5s ease; }
+  .lv-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .lv-stat { background: var(--panel-3); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; }
+  .lv-stat b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+  .lv-stat span { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--text-muted); }
+  .lv-chart { width: 100%; height: 250px; display: block; border-radius: 12px; background: var(--panel-3); border: 1px solid var(--border); }
+  .lv-chart.sm { height: 120px; }
+  .lv-chart path.ln { fill: none; stroke-width: 2.2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; transition: d .6s ease; }
+  .lv-chart path.glow { fill: none; stroke-width: 7; opacity: .16; filter: blur(3px); vector-effect: non-scaling-stroke; transition: d .6s ease; }
+  .lv-chart text { fill: var(--text-muted); font-size: 11px; font-weight: 600; }
+  .lv-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-muted); margin-top: 8px; }
+  .lv-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+  .lv-pulse { animation: lvp 1.6s ease-in-out infinite; } @keyframes lvp { 50% { opacity: .55; } }
+  @media (prefers-reduced-motion: reduce) { .lv-pulse { animation: none; } .lv-chart path.ln, .lv-chart path.glow, .lv-bar i { transition: none; } }
+  .lab-card { border: 1px solid var(--border); border-radius: 14px; padding: 14px; margin-top: 12px; background: var(--panel-3); display: grid; gap: 10px; }
+  .lab-card.win { border-color: rgba(var(--ok-rgb), .6); }
+  .lab-card h3 { margin: 0; font-size: 14.5px; line-height: 1.35; }
+  .lab-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+  .lab-grid div { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); }
+  .lab-grid b { display: block; font-size: 15px; color: var(--text); text-transform: none; letter-spacing: 0; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .lab-fails { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--coral, #ff6f6f); }
 </style>
 </head>
 <body>
@@ -52,7 +80,18 @@
 <div class="dj-card" id="dj-running">
   <h2><span class="dj-spin" id="dj-spin"></span><span id="dj-title">Searching&hellip;</span></h2>
   <p class="dj-meta" id="dj-meta"></p>
-  <div id="dj-log" aria-live="polite">Starting&hellip;</div>
+  <div id="lv" style="display:none;">
+    <div class="lv-phase" id="lv-phase"><span data-p="search">1 &middot; Search</span><span data-p="validate">2 &middot; Fresh data</span><span data-p="verify">3 &middot; Stress test</span><span data-p="done">4 &middot; Done</span></div>
+    <div class="lv-bar"><i id="lv-fill"></i></div>
+    <div class="lv-stats">
+      <div class="lv-stat"><b id="lv-tested">0</b><span>ideas tried</span></div>
+      <div class="lv-stat"><b id="lv-train">0</b><span>look good in training</span></div>
+      <div class="lv-stat"><b id="lv-val">&ndash;</b><span>hold up on fresh data</span></div>
+    </div>
+    <svg class="lv-chart" id="lv-chart" viewBox="0 0 800 250" preserveAspectRatio="none" aria-label="Live equity curves of the best ideas so far"></svg>
+    <div class="lv-legend" id="lv-legend"></div>
+  </div>
+  <div id="dj-log" aria-live="polite" style="margin-top:12px;">Starting&hellip;</div>
   <div class="dj-actions"><button type="button" class="dj-btn" id="dj-stop">Stop</button></div>
 </div>
 
@@ -74,6 +113,108 @@
     this.disabled = true; this.textContent = 'Stopping…';
     fetch('/discovery-engine/job/' + jobId + '/stop', {method: 'POST', headers: {'X-CSRF-Token': csrf}, body: new URLSearchParams({_csrf_token: csrf})}).catch(function () {});
   });
+
+  var COLORS = ['#35e0c2', '#8b7cff', '#f5b83d', '#4cc9f0'];
+  function bandsSvg(w, h, b, full) {
+    if (!b || !b[2]) return '';
+    var a1 = b[0] / b[2] * w, a2 = b[1] / b[2] * w, o = '';
+    o += '<rect x="0" y="0" width="' + a1 + '" height="' + h + '" fill="rgba(127,127,127,.05)"/>';
+    if (full) {
+      o += '<rect x="' + a1 + '" y="0" width="' + (a2 - a1) + '" height="' + h + '" fill="rgba(76,201,240,.08)"/>';
+      o += '<rect x="' + a2 + '" y="0" width="' + (w - a2) + '" height="' + h + '" fill="rgba(245,184,61,.10)"/>';
+      o += '<text x="8" y="14">Train</text><text x="' + (a1 + 8) + '" y="14">Fresh data</text><text x="' + (a2 + 8) + '" y="14">Sealed test</text>';
+    } else {
+      o += '<text x="8" y="14">Training data (the later 45% is kept hidden until the checks)</text>';
+    }
+    return o;
+  }
+  function pathFor(vals, w, h, lo, hi, xmax) {
+    var n = vals.length, span = (hi - lo) || 1, d = '';
+    for (var i = 0; i < n; i++) {
+      var x = (i / (n - 1)) * xmax, y = h - 10 - ((vals[i] - lo) / span) * (h - 30);
+      d += (i ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1);
+    }
+    return d;
+  }
+  function chartSvg(series, w, h, bounds, full, xfrac) {
+    var lo = 0, hi = 1;
+    series.forEach(function (s) { s.v.forEach(function (v) { if (v < lo) lo = v; if (v > hi) hi = v; }); });
+    var o = bandsSvg(w, h, bounds, full);
+    o += '<line x1="0" x2="' + w + '" y1="' + (h - 10 - ((0 - lo) / ((hi - lo) || 1)) * (h - 30)) + '" y2="' + (h - 10 - ((0 - lo) / ((hi - lo) || 1)) * (h - 30)) + '" stroke="rgba(127,127,127,.35)" stroke-dasharray="3 4"/>';
+    series.forEach(function (s, i) {
+      var d = pathFor(s.v, w, h, lo, hi, w * (xfrac || 1)), c = COLORS[i % COLORS.length];
+      o += '<path class="glow" d="' + d + '" stroke="' + c + '"/><path class="ln" d="' + d + '" stroke="' + c + '"/>';
+    });
+    return o;
+  }
+  function renderLive(ev) {
+    $('lv').style.display = '';
+    var order = ['search', 'validate', 'verify', 'done'], at = order.indexOf(ev.phase);
+    [].forEach.call($('lv-phase').children, function (el) {
+      var i = order.indexOf(el.getAttribute('data-p'));
+      el.className = i < at ? 'done' : (i === at ? 'on' + (ev.phase !== 'done' ? ' lv-pulse' : '') : '');
+    });
+    var pct = ev.phase === 'search' ? Math.min(100, ev.tested / Math.max(1, ev.total) * 100) : (ev.phase === 'done' ? 100 : 100);
+    $('lv-fill').style.width = pct + '%';
+    $('lv-tested').textContent = Number(ev.tested || 0).toLocaleString();
+    $('lv-train').textContent = Number(ev.train_pass || 0).toLocaleString();
+    $('lv-val').textContent = ev.val_pass != null ? ev.val_pass : '–';
+    var best = (ev.best || []);
+    var b = ev.bounds || [0, 0, 1];
+    var full = ev.phase === 'done';
+    var xfrac = full ? 1 : (b[0] / b[2]);
+    $('lv-chart').innerHTML = chartSvg(best.map(function (x) { return {v: x.curve}; }), 800, 250, b, true, xfrac);
+    $('lv-legend').innerHTML = best.map(function (x, i) { return '<span><i style="background:' + COLORS[i % COLORS.length] + '"></i>' + esc(x.label) + '</span>'; }).join('');
+  }
+  function labCard(c, idx, win) {
+    var t = c.test || {}, tr = c.train || {}, v = c.val || {}, a = c.all || {};
+    var series = [{v: c.curve_pct || c.curve}];
+    var h = '<div class="lab-card ' + (win ? 'win' : '') + '"><h3>' + esc(c.label) + ' ' +
+      (win ? '<span class="tag ok">Passed every check</span>' : '<span class="tag bad">Near miss</span>') + '</h3>';
+    h += '<svg class="lv-chart sm" viewBox="0 0 800 120" preserveAspectRatio="none">' + chartSvg(series, 800, 120, LAB_BOUNDS, true, 1) + '</svg>';
+    h += '<div class="lab-grid">' +
+      '<div>Training<b>t ' + tr.t + ' &middot; ' + tr.n + ' trades</b></div>' +
+      '<div>Fresh data<b>t ' + v.t + ' &middot; ' + v.n + ' trades</b></div>' +
+      '<div>Sealed test<b>' + (t.mean >= 0 ? '+' : '') + t.mean + 'R &middot; PF ' + t.pf + '</b></div>' +
+      '<div>Win rate<b>' + a.win + '%</b></div>' +
+      '<div>Net (all data)<b>' + (c.net_pct >= 0 ? '+' : '') + c.net_pct + '%</b></div>' +
+      '<div>Worst drawdown<b>' + c.dd_pct + '% ' + (c.fits_firm_dd ? '<span class="tag ok">fits firm</span>' : '<span class="tag bad">over firm limit</span>') + '</b></div>' +
+      '<div>Neighbours profitable<b>' + Math.round((c.robust || 0) * 100) + '%</b></div>' +
+      '<div>Cost per trade<b>' + (c.cost_r * 100).toFixed(0) + '% of R</b></div></div>';
+    if (c.fails && c.fails.length) h += '<ul class="lab-fails">' + c.fails.map(function (f) { return '<li>' + esc(f) + '</li>'; }).join('') + '</ul>';
+    h += '<div class="dj-actions"><button type="button" class="dj-btn ' + (win ? 'pri' : '') + '" data-save="' + idx + '">Save &amp; test it</button><span class="dj-meta" style="margin:0" data-msg="' + idx + '"></span></div></div>';
+    return h;
+  }
+  var LAB_BOUNDS = null;
+  function renderLab(lab) {
+    LAB_BOUNDS = lab.bounds;
+    var box = $('dj-result'), h = '', w = lab.winners || [], nm = lab.near_misses || [];
+    if (w.length) h += '<div class="dj-banner ok"><b>' + w.length + ' strateg' + (w.length > 1 ? 'ies' : 'y') + ' passed every check.</b><br>Each one made money in training, held up on fresh data, stayed profitable when its settings were nudged, and survived a sealed test slice with double costs. They are strong leads &mdash; save one and run it through Full Pipeline and Validate before you trust it.</div>';
+    else h += '<div class="dj-banner none"><b>Nothing cleared every check on this market.</b><br>That is an honest answer, not a bug &mdash; the checks are strict on purpose. The closest ideas are below with the exact check each one failed. Another market, a bigger bar size or a deeper search often changes the result.</div>';
+    h += '<div class="dj-card"><h2>Results</h2><p class="dj-meta">' + Number(lab.tested).toLocaleString() + ' ideas tried across ' + lab.families_tried + ' strategy types in ' + mins(lab.elapsed) +
+      '. ' + Number(lab.train_pass).toLocaleString() + ' looked good in training (luck alone would give about ' + Number(lab.expected_by_luck).toLocaleString() + '), ' + lab.val_pass + ' held up on fresh data, ' + lab.robust_pass + ' were robust.' +
+      (lab.bar_note ? '<br>' + esc(lab.bar_note) : '') + '</p>';
+    var i = 0;
+    w.forEach(function (c) { h += labCard(c, i++, true); });
+    if (nm.length) h += '<h3 style="margin:18px 0 0;font-size:14px;">Closest misses</h3>';
+    nm.forEach(function (c) { h += labCard(c, i++, false); });
+    if (lab.notes && lab.notes.length) h += '<p class="dj-meta" style="margin-top:12px;">' + lab.notes.map(esc).join('<br>') + '</p>';
+    h += '<div class="dj-actions" style="margin-top:14px;"><a class="dj-btn pri" href="/discovery-engine">Run another search</a><a class="dj-btn" href="/graveyard">See rejected strategies</a></div></div>';
+    box.innerHTML = h; box.style.display = '';
+    bindSave(box);
+  }
+  function bindSave(box) {
+    [].forEach.call(box.querySelectorAll('[data-save]'), function (b) {
+      b.addEventListener('click', function () {
+        var i = b.getAttribute('data-save'), msg = box.querySelector('[data-msg="' + i + '"]'); b.disabled = true;
+        fetch('/discovery-engine/job/' + jobId + '/save/' + i, {method: 'POST', headers: {'X-CSRF-Token': csrf}, body: new URLSearchParams({_csrf_token: csrf})})
+          .then(function (r) { return r.json(); }).then(function (d) {
+            if (d.ok) { msg.innerHTML = 'Saved as ' + esc(d.name) + '. <a href="' + d.test_url + '" style="color:var(--teal);font-weight:700;">Run it through the pipeline &rarr;</a>'; b.textContent = 'Saved'; }
+            else { msg.textContent = d.error || 'Could not save.'; b.disabled = false; }
+          }).catch(function () { msg.textContent = 'Could not save.'; b.disabled = false; });
+      });
+    });
+  }
   function champ(c) {
     var h = '<div class="dj-champ ' + (c.passed ? 'pass' : '') + '"><h3>' + esc(c.family_title) +
       (c.passed ? ' <span class="tag ok">Passed every check</span>' : ' <span class="tag bad">Rejected' + (c.failed_step ? ': ' + esc(c.failed_step) : '') + '</span>') + '</h3>';
@@ -120,16 +261,18 @@
       if (!d.found) return;
       var s = d.settings || {};
       $('dj-meta').textContent = [s.dataset, s.timeframe, s.prop, 'running ' + mins(d.elapsed)].filter(Boolean).join(' · ');
+      if (d.live) renderLive(d.live);
       var log = $('dj-log'), atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
       log.textContent = d.log.filter(Boolean).join('\n'); if (atEnd) log.scrollTop = log.scrollHeight;
       if (d.error) { $('dj-spin').style.display = 'none'; $('dj-title').textContent = 'The engine stopped'; $('dj-stop').style.display = 'none'; var e = $('dj-error'); e.style.display = ''; e.textContent = d.error; return; }
       if (d.done) {
         $('dj-spin').style.display = 'none'; $('dj-stop').style.display = 'none';
         $('dj-title').textContent = d.cancelled ? 'Stopped — here is what was found so far' : 'Finished';
-        if (d.result) render(d.result);
+        if (d.live) renderLive(d.live);
+        if (d.lab) renderLab(d.lab); else if (d.result) render(d.result);
         return;
       }
-      setTimeout(poll, 2000);
+      setTimeout(poll, 1200);
     }).catch(function () { setTimeout(poll, 3500); });
   }
   poll();

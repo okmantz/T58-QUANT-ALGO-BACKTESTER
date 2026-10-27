@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Achievements — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<style>
+  .ach { --tier-easy: var(--teal); --tier-medium: #4d90ff; --tier-hard: #9b8cff; --tier-elite: #f5b83d; max-width: 1100px; }
+  .ach-hero { display: grid; grid-template-columns: auto 1fr; gap: 18px; align-items: center; padding: 16px 18px; }
+  .ach-ring { --p: 0; width: 92px; height: 92px; border-radius: 50%; display: grid; place-items: center; position: relative;
+    background: conic-gradient(var(--teal) calc(var(--p) * 1%), rgba(var(--teal-rgb), .14) 0); }
+  .ach-ring::before { content: ""; position: absolute; inset: 7px; border-radius: 50%; background: var(--panel-2); }
+  .ach-ring b { position: relative; font-size: 28px; line-height: 1; }
+  .ach-ring small { position: absolute; bottom: 17px; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-muted); }
+  .ach-hero h2 { margin: 0; font-size: 20px; text-transform: none; letter-spacing: 0; color: var(--text); }
+  .ach-hero p { margin: 3px 0 10px; font-size: 13px; color: var(--text-muted); }
+  .ach-bar { height: 10px; border-radius: 99px; background: rgba(var(--teal-rgb), .14); overflow: hidden; }
+  .ach-bar > i { display: block; height: 100%; width: calc(var(--p) * 1%); border-radius: inherit; background: var(--c, var(--teal)); transition: width .8s cubic-bezier(.22,.61,.36,1); }
+  .ach-hero .meta { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted); margin-top: 5px; gap: 10px; flex-wrap: wrap; }
+  .ach-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 12px 0; }
+  .ach-stat { padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); }
+  .ach-stat b { display: block; font-size: 20px; } .ach-stat span { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; }
+  .ach h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); margin: 20px 0 8px; }
+  .ach-tasks { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+  .ach-task { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel-2); text-decoration: none; color: inherit; }
+  .ach-task:hover { border-color: rgba(var(--teal-rgb), .6); transform: translateY(-1px); }
+  .ach-task .t { font-weight: 700; font-size: 14px; } .ach-task .d { font-size: 12px; color: var(--text-muted); }
+  .ach-task .row { display: flex; justify-content: space-between; align-items: center; font-size: 11.5px; color: var(--text-muted); }
+  .ach-go { font-weight: 700; color: var(--teal); }
+  .ach-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 10px; }
+  .ach-chip { padding: 5px 12px; border-radius: 99px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 12.5px; font-weight: 600; cursor: pointer; }
+  .ach-chip.on { background: var(--teal); color: var(--on-teal); border-color: var(--teal); }
+  .ach-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+  .ach-badge { --c: var(--tier-easy); position: relative; display: flex; flex-direction: column; gap: 6px; padding: 12px 14px 13px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel-2); }
+  .ach-badge[data-tier="medium"] { --c: var(--tier-medium); } .ach-badge[data-tier="hard"] { --c: var(--tier-hard); } .ach-badge[data-tier="elite"] { --c: var(--tier-elite); }
+  .ach-badge .top { display: flex; align-items: center; gap: 10px; }
+  .ach-medal { flex: none; width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; font-size: 18px; border: 2px solid var(--c); color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); }
+  .ach-badge.locked .ach-medal { filter: grayscale(1); opacity: .55; }
+  .ach-badge.done { border-color: color-mix(in srgb, var(--c) 60%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--c) 25%, transparent) inset; }
+  .ach-badge.done .ach-medal { background: var(--c); color: #04120e; }
+  .ach-badge .t { font-weight: 700; font-size: 13.5px; line-height: 1.2; } .ach-badge .d { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+  .ach-badge .foot { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); }
+  .ach-tier { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--c); }
+  .ach-badge.new::after { content: "NEW"; position: absolute; top: 8px; right: 10px; font-size: 9.5px; font-weight: 800; letter-spacing: .08em; color: #04120e; background: var(--c); padding: 2px 7px; border-radius: 99px; }
+  .ach-note { font-size: 12px; color: var(--text-muted); max-width: 720px; margin-top: 18px; line-height: 1.5; }
+  @media (max-width: 520px) { .ach-hero { grid-template-columns: 1fr; justify-items: start; } }
+  @media (prefers-reduced-motion: reduce) { .ach-bar > i { transition: none; } }
+</style>
+</head>
+<body>
+{% set active_page = 'achievements' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main"><div class="ach">
+
+<div class="t58-page-header">
+  <h1>Achievements</h1>
+  <p>Milestones for the work you actually do in the lab. Nothing here is about whether a strategy made money; it only counts tests run, markets explored and checks completed.</p>
+</div>
+
+{% set L = model.level %}
+<div class="t58-card ach-hero">
+  <div class="ach-ring" style="--p: {{ L.pct }}"><b>{{ L.level }}</b><small>level</small></div>
+  <div>
+    <h2>{{ L.title }}</h2>
+    <p>{{ model.unlocked }} of {{ model.total }} achievements unlocked &middot; {{ model.xp }} XP</p>
+    <div class="ach-bar" style="--p: {{ L.pct }}"><i></i></div>
+    <div class="meta"><span>{{ L.into }} / {{ L.span }} XP to level {{ L.level + 1 }}</span><span>Easy 10 &middot; Medium 25 &middot; Hard 60 &middot; Elite 150 XP</span></div>
+  </div>
+</div>
+
+{% set C = model.counters %}
+<div class="ach-stats">
+  <div class="ach-stat"><b>{{ C.runs }}</b><span>Backtests run</span></div>
+  <div class="ach-stat"><b>{{ C.strategies }}</b><span>Strategies tested</span></div>
+  <div class="ach-stat"><b>{{ C.instruments }}</b><span>Instruments analysed</span></div>
+  <div class="ach-stat"><b>{{ C.validations }}</b><span>Robustness checks</span></div>
+  <div class="ach-stat"><b>{{ C.library }}</b><span>In your library</span></div>
+  <div class="ach-stat"><b>{{ C.graveyard }}</b><span>Lessons in the graveyard</span></div>
+</div>
+
+{% if model.next_up %}
+<h3>Next up &mdash; small steps, quick wins</h3>
+<div class="ach-tasks">
+  {% for t in model.next_up %}
+  <a class="ach-task" href="{{ t.link }}">
+    <div class="row"><span class="ach-tier" style="color: var(--tier-{{ t.tier }})">{{ t.tier_label }} &middot; +{{ t.xp }} XP</span><span class="ach-go">Go &rarr;</span></div>
+    <div class="t">{{ t.title }}</div>
+    <div class="d">{{ t.description }}</div>
+    <div class="ach-bar" style="--p: {{ t.pct }}; --c: var(--tier-{{ t.tier }})"><i></i></div>
+    <div class="row"><span>{{ t.raw if t.raw < t.target else t.target }} / {{ t.target }}</span><span>{{ t.pct|round|int }}%</span></div>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+
+<h3>All achievements</h3>
+<div class="ach-chips" id="ach-chips" role="tablist" aria-label="Filter achievements">
+  <button class="ach-chip on" data-f="all" type="button">All</button>
+  <button class="ach-chip" data-f="todo" type="button">In progress</button>
+  <button class="ach-chip" data-f="done" type="button">Unlocked</button>
+  {% for cat, v in model.categories.items() %}<button class="ach-chip" data-f="cat:{{ cat }}" type="button">{{ cat }} {{ v.done }}/{{ v.total }}</button>{% endfor %}
+  <span style="flex:1"></span>
+  <button class="ach-chip" data-f="tier:easy" type="button">Easy</button>
+  <button class="ach-chip" data-f="tier:medium" type="button">Medium</button>
+  <button class="ach-chip" data-f="tier:hard" type="button">Hard</button>
+  <button class="ach-chip" data-f="tier:elite" type="button">Elite</button>
+</div>
+<div class="ach-grid" id="ach-grid">
+  {% for a in model['items'] %}
+  <div class="ach-badge {{ 'done' if a.unlocked else 'locked' }}{{ ' new' if a.new else '' }}" data-tier="{{ a.tier }}" data-cat="{{ a.category }}" data-done="{{ 1 if a.unlocked else 0 }}">
+    <div class="top">
+      <div class="ach-medal" aria-hidden="true">{{ ('&#10003;' if a.unlocked else ('&#9675;' if a.pct == 0 else '&#9680;'))|safe }}</div>
+      <div><div class="ach-tier">{{ a.tier_label }} &middot; {{ a.category }}</div><div class="t">{{ a.title }}</div></div>
+    </div>
+    <div class="d">{{ a.description }}</div>
+    <div class="ach-bar" style="--p: {{ a.pct }}"><i></i></div>
+    <div class="foot"><span>{{ a.have }} / {{ a.target }}</span><span>{% if a.unlocked %}+{{ a.xp }} XP earned{% else %}+{{ a.xp }} XP{% endif %}</span></div>
+  </div>
+  {% endfor %}
+</div>
+<p class="ach-note">Counts come from your own saved activity (run history, strategy library, per-strategy reports, graveyard, journal, Data Center) and update the next time you open this page. Unlocked badges stay unlocked even if you later clear history.</p>
+
+</div></div></div>
+<script>
+(function () {
+  var chips = [].slice.call(document.querySelectorAll('#ach-chips .ach-chip')), cards = [].slice.call(document.querySelectorAll('#ach-grid .ach-badge'));
+  chips.forEach(function (c) { c.addEventListener('click', function () {
+    chips.forEach(function (x) { x.classList.toggle('on', x === c); });
+    var f = c.dataset.f;
+    cards.forEach(function (card) {
+      var show = f === 'all' || (f === 'todo' && card.dataset.done === '0') || (f === 'done' && card.dataset.done === '1') ||
+        (f.indexOf('cat:') === 0 && card.dataset.cat === f.slice(4)) || (f.indexOf('tier:') === 0 && card.dataset.tier === f.slice(5));
+      card.hidden = !show;
+    });
+  }); });
+})();
+</script>
+</body>
+</html>

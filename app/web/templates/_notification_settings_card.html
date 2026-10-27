@@ -1,0 +1,101 @@
+<div class="as-notif">
+{# Notification settings, rendered inside Account settings (between Subscription and App). Posts to /settings/notifications/save,
+   which redirects back to /settings/account#notifications. #}
+<div id="notifications-anchor"></div>
+<h2 class="ac-section-h" style="margin:18px 0 8px;font-size:15px;">Notifications</h2>
+<p class="field-note" style="margin:0 0 10px;max-width:560px;">Get an email, Discord or Telegram message the moment a long-running job (Evolution Lab, Discovery Engine, Full Pipeline) finishes. Separate from the per-run webhook field on each job's start page.</p>
+{% if request.args.get('notif_saved') %}<div class="card saved-banner">Notification settings saved.</div>{% endif %}
+  <form method="POST" action="/settings/notifications/save" id="notifications">
+    <div class="card">
+      <h2>Where to send it</h2>
+      <label for="notify_email">Notification email</label>
+      <input type="email" id="notify_email" name="notify_email" value="{{ notif.notify_email }}" placeholder="you@example.com">
+      <p class="field-note">This is the address that receives the "job finished" email -- it doesn't need to match the SMTP account below.</p>
+
+      <div class="checkbox-row">
+        <input type="checkbox" id="email_enabled" name="email_enabled" {% if notif.email_enabled %}checked{% endif %}>
+        <label for="email_enabled" style="margin:0;">Email notifications enabled</label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Outgoing mail server (SMTP)</h2>
+      <p class="help">
+        Any SMTP-capable mail account works, including a free Gmail/Outlook account --
+        for Gmail specifically, use an
+        <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener" style="color:var(--teal);">app password</a>,
+        not your normal login password. Nothing here is sent anywhere except directly to
+        the SMTP host you enter -- it's stored locally on this computer only.
+      </p>
+      <div class="row">
+        <div>
+          <label for="smtp_host">SMTP host</label>
+          <input type="text" id="smtp_host" name="smtp_host" value="{{ notif.smtp_host }}" placeholder="smtp.gmail.com">
+        </div>
+        <div style="max-width:120px;">
+          <label for="smtp_port">Port</label>
+          <input type="number" id="smtp_port" name="smtp_port" value="{{ notif.smtp_port }}" placeholder="587">
+        </div>
+      </div>
+      <label for="smtp_username">SMTP username</label>
+      <input type="text" id="smtp_username" name="smtp_username" value="{{ notif.smtp_username }}" placeholder="you@example.com">
+
+      <label for="smtp_password">SMTP password</label>
+      <input type="password" id="smtp_password" name="smtp_password" value="" placeholder="{% if notif.smtp_password %}(unchanged -- leave blank to keep it){% else %}app password{% endif %}">
+      <p class="field-note">Leave this blank when re-saving other fields to keep the password you already have on file.</p>
+
+      <label for="smtp_from">"From" address</label>
+      <input type="text" id="smtp_from" name="smtp_from" value="{{ notif.smtp_from }}" placeholder="usually the same as SMTP username">
+    </div>
+
+    <div class="card">
+      <h2>Discord</h2>
+      <p class="help">Fires the same message a job's own "notify me" webhook field already sends, but automatically on every job completion once saved here -- no need to re-paste the URL into each job's form.</p>
+      <label for="discord_webhook_url">Discord webhook URL</label>
+      <input type="text" id="discord_webhook_url" name="discord_webhook_url" value="{{ notif.discord_webhook_url }}" placeholder="https://discord.com/api/webhooks/...">
+      <p style="font-size:12.5px;margin-top:8px;">
+        Status: {% if notif.discord_is_usable %}&#128994; Connected{% else %}&#9898; Not configured{% endif %}
+      </p>
+      <button type="button" class="test-btn" onclick="testChannel('discord', this)">Test Connection</button>
+      <p class="test-result" id="test-result-discord"></p>
+    </div>
+
+    <div class="card">
+      <h2>Telegram</h2>
+      <p class="help">Create a bot via <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a> to get a bot token, then message your bot once and check <code>https://api.telegram.org/bot&lt;token&gt;/getUpdates</code> to find your chat ID.</p>
+      <label for="telegram_bot_token">Bot token</label>
+      <input type="password" id="telegram_bot_token" name="telegram_bot_token" value="" placeholder="{% if notif.telegram_bot_token %}(unchanged -- leave blank to keep it){% else %}123456:ABC-DEF...{% endif %}">
+      <label for="telegram_chat_id">Chat ID</label>
+      <input type="text" id="telegram_chat_id" name="telegram_chat_id" value="{{ notif.telegram_chat_id }}" placeholder="e.g. 123456789">
+      <p style="font-size:12.5px;margin-top:8px;">
+        Status: {% if notif.telegram_is_usable %}&#128994; Connected{% else %}&#9898; Not configured{% endif %}
+      </p>
+      <button type="button" class="test-btn" onclick="testChannel('telegram', this)">Test Connection</button>
+      <p class="test-result" id="test-result-telegram"></p>
+    </div>
+
+    <button class="submit-btn" type="submit">Save notification settings</button>
+  </form>
+<script>
+  function testChannel(channel, btn) {
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = 'Testing…';
+    const resultEl = document.getElementById('test-result-' + channel);
+    fetch('/settings/notifications/test', {method: 'POST', body: new URLSearchParams({channel})})
+      .then(r => r.json())
+      .then(data => {
+        btn.disabled = false;
+        btn.textContent = original;
+        resultEl.textContent = data.ok ? data.message : ('Failed: ' + data.error);
+        resultEl.style.color = data.ok ? 'var(--teal)' : '#ff8a8a';
+      })
+      .catch(err => {
+        btn.disabled = false;
+        btn.textContent = original;
+        resultEl.textContent = 'Request failed: ' + err;
+        resultEl.style.color = '#ff8a8a';
+      });
+  }
+</script>
+</div>

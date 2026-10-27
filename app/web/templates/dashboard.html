@@ -78,6 +78,48 @@
     .db-kpi:hover { transform: translateY(-2px); }
   }
 
+  /* ---- Pipeline in motion (compositor-only animation; paused for reduced motion) ---- */
+  .flow-wrap { overflow-x: auto; }
+  .flow-svg { width: 100%; min-width: 760px; height: auto; display: block; }
+  .fl-link { stroke: rgba(var(--teal-rgb), .35); stroke-width: 2; stroke-dasharray: 3 5; fill: none; }
+  .fl-node { fill: rgba(var(--teal-rgb), .06); stroke: var(--border-strong, rgba(127,127,127,.35)); stroke-width: 1.5; }
+  .fl-node.on { fill: rgba(var(--teal-rgb), .14); stroke: var(--teal); }
+  .fl-pulse { fill: none; stroke: var(--teal); stroke-width: 1.5; opacity: 0; transform-box: fill-box; transform-origin: center; animation: flPulse 3.2s ease-out infinite; }
+  .fl-n { fill: var(--text); font-size: 22px; font-weight: 650; }
+  .fl-t { fill: var(--text-muted); font-size: 12px; font-weight: 600; }
+  .fl-dot { fill: var(--neon-cyan, var(--teal)); offset-rotate: 0deg; animation: flDot 2.7s linear infinite; opacity: 0; }
+  @keyframes flDot { 0% { offset-distance: 0%; opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; } 100% { offset-distance: 100%; opacity: 0; } }
+  @keyframes flPulse { 0% { transform: scale(1); opacity: .55; } 100% { transform: scale(1.5); opacity: 0; } }
+  .flow-foot { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+  .flow-foot a { color: var(--teal); text-decoration: none; }
+  @media (prefers-reduced-motion: reduce) { .fl-dot, .fl-pulse { animation: none; opacity: 0; } }
+
+  /* ---- strategy cards ---- */
+  .sc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+  .sc { display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: 16px; min-width: 0;
+        background: rgba(var(--teal-rgb), .04); border: 1px solid var(--border); --tone: var(--teal-rgb); }
+  .sc.bad { --tone: var(--coral-rgb, 255, 107, 107); } .sc.warn { --tone: var(--amber-rgb); } .sc.info { --tone: var(--neon-cyan-rgb); }
+  @media (hover: hover) and (prefers-reduced-motion: no-preference) { .sc { transition: transform .18s var(--ease), border-color .18s; } .sc:hover { transform: translateY(-2px); border-color: rgba(var(--tone), .5); } }
+  .sc-top { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+  .sc-id { min-width: 0; } .sc-id h3 { margin: 0; font-size: 15px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sc-meta { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+  .sc-stage { flex: none; font-size: 10.5px; font-weight: 650; padding: 3px 9px; border-radius: 99px; color: rgb(var(--tone)); background: rgba(var(--tone), .12); border: 1px solid rgba(var(--tone), .3); }
+  .sc-mid { position: relative; height: 64px; }
+  .sc-spark { width: 100%; height: 100%; } .sc-spark.up polyline { stroke: var(--teal); } .sc-spark.down polyline { stroke: var(--coral); }
+  .sc-nospark { height: 100%; display: grid; place-items: center; font-size: 11.5px; color: var(--text-dim); border: 1px dashed var(--border); border-radius: 10px; }
+  .sc-net { position: absolute; right: 0; top: 0; font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .sc-net.pos { color: var(--teal); } .sc-net.neg { color: var(--coral); }
+  .sc-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 0; }
+  .sc-stats div { text-align: left; } .sc-stats dt { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-dim); }
+  .sc-stats dd { margin: 2px 0 0; font-size: 13.5px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .sc-next { border-top: 1px solid var(--border); padding-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .sc-head { width: 100%; font-size: 13px; font-weight: 650; display: flex; gap: 8px; align-items: center; }
+  .sc-dot { width: 8px; height: 8px; border-radius: 50%; background: rgb(var(--tone)); box-shadow: 0 0 10px rgba(var(--tone), .7); flex: none; }
+  .sc-next p { width: 100%; margin: 0; font-size: 12px; color: var(--text-muted); line-height: 1.45; }
+  .db-runs-d > summary { cursor: pointer; display: flex; justify-content: space-between; gap: 10px; font-size: 13px; list-style: none; }
+  .db-runs-d > summary a { font-size: 12px; color: var(--teal); text-decoration: none; }
+  .db-runs-d[open] > summary { margin-bottom: 14px; }
+
   .db-row { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); gap: var(--gap); align-items: stretch; }
   .db-market { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); }
   #equity-chart { min-height: 236px; }
@@ -302,6 +344,77 @@
   </div>
 </div>
 
+<!-- ---- Pipeline in motion: real counts, animated ---- -->
+<div class="db-card db-flow">
+  <h2>Pipeline in motion <a href="/full-pipeline">Run a strategy &rarr;</a></h2>
+  <p class="db-sub">Where your strategies are right now. Dots flow where work is happening; counts are your real saved results.</p>
+  {% set fl = pipeline_flow %}
+  {% set nodes = [{'t':'Tested','n':fl.tested,'href':'/runs'}] %}
+  {% for s in fl.stages %}{% set _ = nodes.append({'t': s.title, 'n': s.n, 'href': '/champion-simple'}) %}{% endfor %}
+  <div class="flow-wrap">
+    <svg class="flow-svg" viewBox="0 0 {{ 150 * nodes|length }} 150" preserveAspectRatio="xMidYMid meet" role="img"
+         aria-label="Strategy pipeline: {% for n in nodes %}{{ n.t }} {{ n.n }}{{ ', ' if not loop.last }}{% endfor %}">
+      <defs><linearGradient id="fl-g" x1="0" x2="1"><stop offset="0" stop-color="var(--teal)"/><stop offset="1" stop-color="var(--neon-cyan)"/></linearGradient></defs>
+      {% for n in nodes %}
+        {% set cx = 75 + 150 * loop.index0 %}
+        {% if not loop.last %}
+        <path id="fl-p{{ loop.index0 }}" class="fl-link" d="M{{ cx + 30 }} 62 L{{ cx + 120 }} 62"/>
+        {% if n.n > 0 %}{% for k in range([n.n, 3]|min) %}
+        <circle class="fl-dot" r="3.4" style="offset-path:path('M{{ cx + 30 }} 62 L{{ cx + 120 }} 62'); animation-delay:{{ k * 0.9 }}s"/>
+        {% endfor %}{% endif %}
+        {% endif %}
+        <a href="{{ n.href }}">
+          <circle class="fl-node {{ 'on' if n.n > 0 }}" cx="{{ cx }}" cy="62" r="30"/>
+          {% if n.n > 0 %}<circle class="fl-pulse" cx="{{ cx }}" cy="62" r="30"/>{% endif %}
+          <text class="fl-n" x="{{ cx }}" y="69" text-anchor="middle">{{ n.n }}</text>
+          <text class="fl-t" x="{{ cx }}" y="116" text-anchor="middle">{{ n.t }}</text>
+        </a>
+      {% endfor %}
+    </svg>
+  </div>
+  <div class="flow-foot"><span>&#9760; {{ fl.graveyard }} in the <a href="/graveyard">Graveyard</a></span><span>{{ fl.running }} total runs</span></div>
+</div>
+
+<!-- ---- Your strategies: friendly cards ---- -->
+<div class="db-card">
+  <h2>Your strategies <a href="/library">Strategy Library &rarr;</a></h2>
+  {% if strategy_cards %}
+  <div class="sc-grid">
+    {% for c in strategy_cards %}
+    <article class="sc {{ c.plan.tone }}">
+      <header class="sc-top">
+        <div class="sc-id"><h3 title="{{ c.name }}">{{ c.name }}</h3>
+          <div class="sc-meta">{% if c.instrument %}{{ c.instrument }}{% endif %}{% if c.timeframe %} &middot; {{ c.timeframe }}{% endif %}</div></div>
+        <span class="sc-stage">{{ c.stage }}</span>
+      </header>
+      <div class="sc-mid">
+        {% if c.spark %}
+        <svg class="sc-spark {{ 'up' if c.up else 'down' }}" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+          <polyline points="{% for y in c.spark %}{{ (loop.index0 * 100 / (c.spark|length - 1))|round(1) }},{{ y }} {% endfor %}" fill="none" stroke-width="2.2" vector-effect="non-scaling-stroke"/>
+        </svg>
+        {% else %}<div class="sc-nospark">no equity curve yet</div>{% endif %}
+        <div class="sc-net {{ 'pos' if c.up else 'neg' }}">{% if c.net is not none %}{{ '+' if c.net >= 0 }}${{ "{:,.0f}".format(c.net) }}{% else %}&ndash;{% endif %}</div>
+      </div>
+      <dl class="sc-stats">
+        <div><dt>Sharpe</dt><dd>{{ "%.2f"|format(c.sharpe) if c.sharpe is not none else '–' }}</dd></div>
+        <div><dt>Win</dt><dd>{{ "%.0f%%"|format(c.win) if c.win is not none else '–' }}</dd></div>
+        <div><dt>Max DD</dt><dd>{{ "%.1f%%"|format(c.dd) if c.dd is not none else '–' }}</dd></div>
+        <div><dt>Trades</dt><dd>{{ c.trades if c.trades is not none else '–' }}</dd></div>
+      </dl>
+      <div class="sc-next">
+        <div class="sc-head"><span class="sc-dot"></span>{{ c.plan.headline }}</div>
+        <p>{{ c.plan.why }}</p>
+        <a class="t58-btn primary sm" href="{{ c.plan.primary.href }}">{{ c.plan.primary.label }} &rarr;</a>
+        {% for s in c.plan.secondary[:1] %}<a class="t58-btn ghost sm" href="{{ s.href }}">{{ s.label }}</a>{% endfor %}
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="db-empty">No strategies yet &mdash; <a href="/start-here/create">create one</a> or run <a href="/search">Discovery</a> to find some.</div>
+  {% endif %}
+</div>
+
 <!-- ---- Market data + news (also lives in AI Assistant) ---- -->
 <div class="db-row db-market">
   <div class="db-card">
@@ -358,9 +471,9 @@
   {% endif %}
 </div>
 
-<!-- ---- Recent runs ---- -->
-<div class="db-card">
-  <h2>Recent runs <a href="/runs">Open Runs &rarr;</a></h2>
+<!-- ---- Recent runs (table view; the cards above are the friendly version) ---- -->
+<details class="db-card db-runs-d">
+  <summary><b>Recent runs table</b> <a href="/runs">Open Runs &rarr;</a></summary>
   {% if data.strategies %}
   <div class="tbl-wrap">
   <table>
@@ -404,7 +517,7 @@
   {% else %}
   <div class="db-empty">No backtests run yet &mdash; head to Run &amp; report and run your first strategy to populate this table.</div>
   {% endif %}
-</div>
+</details>
 
 <!-- ---- Champion Board ---- -->
 <div class="db-card">

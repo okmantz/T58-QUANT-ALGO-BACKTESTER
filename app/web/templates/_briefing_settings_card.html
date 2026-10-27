@@ -1,0 +1,23 @@
+<div class="card" id="briefing-settings">
+  <h2>T58 Morning Briefing</h2>
+  <p class="help" style="max-width:560px;">A short digest in the assistant's <strong>Brief</strong> tab: experiments finished since your last session, a recurring weakness, data-quality warnings and a suggested next step. It only shows what your saved results support, so a quiet day gives a quiet briefing.</p>
+  <label for="briefing-freq">Pop it open</label>
+  <select id="briefing-freq" style="max-width:260px;">
+    <option value="daily">Daily (first visit of the day)</option>
+    <option value="weekly">Weekly</option>
+    <option value="startup">Every time I start a new session</option>
+    <option value="off">Disabled</option>
+  </select>
+  <p class="field-note" id="briefing-msg">The Brief tab stays available while enabled; this only controls when it opens by itself.</p>
+  <script>
+  (function () {
+    var s = document.getElementById('briefing-freq'), m = document.getElementById('briefing-msg');
+    fetch('/api/briefing').then(function (r) { return r.json(); }).then(function (d) { if (d.frequency) s.value = d.frequency; }).catch(function () {});
+    s.addEventListener('change', function () {
+      fetch('/api/briefing/settings', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({frequency: s.value})})
+        .then(function (r) { return r.json(); }).then(function (d) { m.textContent = d.ok ? 'Saved.' : (d.error || 'Could not save.'); })
+        .catch(function () { m.textContent = 'Could not save.'; });
+    });
+  })();
+  </script>
+</div>

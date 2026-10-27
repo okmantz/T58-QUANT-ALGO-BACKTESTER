@@ -6,6 +6,7 @@
    (or the older PROP_PRESETS global on full_pipeline.html) must hold the
    preset array. Verified = the preset carries rules_checked_on (only
    Lucid 50k today); everything else is flagged not re-verified. #}
+<script src="/static/prop-presets.js"></script>
 <script>
 (function () {
   var PRESETS = window.LC_PROP_PRESETS || window.PROP_PRESETS || [];
@@ -81,6 +82,64 @@
     return byKey(v);
   };
 
+  /* Oct 2026: the Optimize / Validate / Champion pages used a bare <select> for the prop firm and had no instrument picker,
+     while Full Pipeline showed the organized version. lcBindPropPreset now upgrades #lc-prop-preset into that same picker:
+     firms grouped under their name, the "Only firms that allow algo trading" switch, a chip strip with the picked firm's key
+     rules, plus a grouped "known instrument" picker that auto-fills pip size, $/point and commission. Option VALUES stay the
+     firm key, so every existing server route and guided hand-off keeps working unchanged. */
+  function lcUpgradePropSelect(select, update) {
+    if (!select || select.id !== 'lc-prop-preset' || select._lcUpgraded) return;
+    if (typeof window.addAlgoTradingFilter !== 'function' || !PRESETS.length) return;
+    select._lcUpgraded = true;
+    var wanted = select.value || '';
+    window.addAlgoTradingFilter(select.id, PRESETS, function (p) { return p.key; });
+    // A hand-off may carry a firm that bans algos; keep the pick instead of silently hiding it.
+    if (wanted) {
+      var have = false, i;
+      for (i = 0; i < select.options.length; i++) if (select.options[i].value === wanted) { have = true; break; }
+      if (!have) {
+        var cb = document.getElementById(select.id + '_algo_only');
+        if (cb) { cb.checked = false; cb.dispatchEvent(new Event('change')); }
+      }
+      select.value = wanted;
+    }
+    update();
+  }
+
+  function lcAddInstrumentPicker(select) {
+    if (!select || select._lcInstr || typeof window.t58PopulateInstrumentPicker !== 'function') return;
+    var form = select.form || select.closest('form');
+    if (!form) return;
+    var pip = form.querySelector('[name="pip_size"]');
+    if (!pip) return;                       // nothing to auto-fill on this page
+    select._lcInstr = true;
+    var contract = form.querySelector('[name="contract_size"]');
+    var comm = form.querySelector('[name="commission"]');
+    if (!pip.id) pip.id = 'lc_pip_size_field';
+    if (contract && !contract.id) contract.id = 'lc_contract_size_field';
+    if (comm && !comm.id) comm.id = 'lc_commission_field';
+    var anchor = select._ppSummary || select;   // sits under the firm's chip strip and its one-line hint
+    var nx = anchor.nextElementSibling;
+    if (nx && nx.classList && nx.classList.contains('lc-hint')) anchor = nx;
+    var lab = document.createElement('label');
+    lab.className = 'flabel'; lab.style.marginTop = '12px'; lab.setAttribute('for', 'lc-instrument-select');
+    lab.textContent = 'Or pick a known instrument (auto-fills pip size + $/point)';
+    var sel = document.createElement('select');
+    sel.id = 'lc-instrument-select'; sel.className = 'inp';
+    var none = document.createElement('option'); none.value = ''; none.textContent = '(none -- set manually)';
+    sel.appendChild(none);
+    var status = document.createElement('p');
+    status.id = 'lc_pip_detect_status'; status.className = 'lc-hint'; status.style.marginTop = '6px';
+    anchor.parentNode.insertBefore(lab, anchor.nextSibling);
+    lab.parentNode.insertBefore(sel, lab.nextSibling);
+    sel.parentNode.insertBefore(status, sel.nextSibling);
+    sel.addEventListener('change', function () {
+      window.t58ApplyInstrumentSpec({ selectEl: sel, pipFieldId: pip.id, contractFieldId: contract ? contract.id : null,
+        commissionFieldId: comm ? comm.id : null, statusId: status.id });
+    });
+    window.t58PopulateInstrumentPicker(sel.id);
+  }
+
   window.lcBindPropPreset = function (select) {
     if (!select) return;
     function update() {
@@ -91,6 +150,9 @@
     }
     select.addEventListener('change', update);
     update();
+    function upgrade() { lcUpgradePropSelect(select, update); lcAddInstrumentPicker(select); }
+    // t58-chrome.js (instrument helpers) is deferred, so wait for the document to finish parsing first.
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', upgrade); else upgrade();
   };
 
   // Checkbox cards: clicking the card toggles the real checkbox inside

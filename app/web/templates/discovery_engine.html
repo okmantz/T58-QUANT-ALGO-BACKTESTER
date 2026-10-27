@@ -56,7 +56,7 @@
 <div class="t58-page-header" style="padding-left:0;">
   <p style="margin:0 0 4px;font-size:12px;"><a href="/start-here/create" style="color:var(--teal);text-decoration:none;">&larr; Create</a></p>
   <h1>Strategy Discovery Engine</h1>
-  <p>Don&rsquo;t have a strategy yet? Let the engine find candidates for you. Choose your market and your prop firm, pick how hard to look, and press Start &mdash; it searches, tests and rejects on its own and shows what is left.</p>
+  <p>Don&rsquo;t have a strategy yet? Pick a market and a prop firm, press Start, and watch the engine try thousands of ideas &mdash; trend, breakout, reversion, momentum and session strategies &mdash; with every candidate&rsquo;s equity curve drawn live. Only ideas that survive fresh data, a robustness check and a sealed test make the winners list.</p>
 </div>
 
 {% if error %}<div class="de-err" role="alert">{{ error }}</div>{% endif %}
@@ -135,10 +135,13 @@
           <input type="number" name="risk_pct" min="0.05" max="5" step="0.05" value="{{ form.get('risk_pct') or '0.5' }}">
         </label>
         <label>Most recent bars to use
-          <input type="number" name="max_bars" min="1000" step="1000" value="{{ form.get('max_bars') or '60000' }}">
+          <input type="number" name="max_bars" min="1000" step="1000" placeholder="Fast Lab: up to 400,000" value="{{ form.get('max_bars') or '' }}">
+        </label>
+        <label>Bar size
+          <select name="bar_size"><option value="auto">Auto (bigger bars when costs are heavy)</option><option value="native" {{ 'selected' if form.get('bar_size') == 'native' else '' }}>Use the file as it is</option></select>
         </label>
         <label>Random seed
-          <input type="number" name="seed" value="{{ form.get('seed') or '42' }}">
+          <input type="number" name="seed" value="{{ form.get('seed') or '7' }}">
         </label>
       </div>
     </details>
@@ -147,21 +150,21 @@
 
 <div class="de-card">
   <h2 style="margin:0 0 4px;font-size:15px;">What happens after you press Start</h2>
-  <p class="de-note">The engine tries many ideas, drops the weak ones early, then puts the few best through a series of checks. Each check can reject a strategy for good.</p>
+  <p class="de-note">Fast, and strict about luck. A winner has to survive every step; near-misses are shown with the exact step they failed.</p>
   <div class="de-how">
-    <div><b>1 &middot; Search</b>Tries strategy types across their settings and ranks them by a cost-adjusted edge estimate.</div>
-    <div><b>2 &middot; Re-run</b>Runs the leader again from scratch to confirm it gives the same answer.</div>
-    <div><b>3 &middot; Count the tries</b>Discounts the result for every strategy ever tried, so luck isn&rsquo;t mistaken for skill.</div>
-    <div><b>4 &middot; Beat random</b>Checks it beats random entry timing.</div>
-    <div><b>5 &middot; Other markets</b>Checks the same settings still work on other markets.</div>
-    <div><b>6 &middot; Unseen data</b>Reads a slice of data it never searched &mdash; once.</div>
+    <div><b>1 &middot; Pick bar size</b>If trading costs would eat a small-bar strategy alive, it moves up to bigger bars automatically.</div>
+    <div><b>2 &middot; Search</b>18 strategy types, thousands of settings, stops sized in ATR so costs stay small compared with the risk taken.</div>
+    <div><b>3 &middot; Fresh data</b>The best ideas must also work on bars they never trained on.</div>
+    <div><b>4 &middot; Nudge test</b>Neighbouring settings must be profitable too. A real edge is a plateau, not a spike.</div>
+    <div><b>5 &middot; Sealed test</b>The last 20% of data is read once, with double costs. This is the lie detector.</div>
+    <div><b>6 &middot; Save &amp; test</b>Save a winner, then run it through Full Pipeline and Validate. A find is a lead, not a verdict.</div>
   </div>
 </div>
 
 <details class="de-card de-more">
-  <summary>Engine details &amp; classic tools</summary>
+  <summary>Deep statistical gauntlet &amp; classic tools</summary>
   <p class="de-note" style="margin-top:10px;">One engine, one objective (<b>{{ st.objective }}</b>), one entry floor ({{ st.floor.min_trades }}+ trades, mean-R t &ge; {{ st.floor.min_t_stat }}, cost &lt; {{ st.floor.max_cost_in_r }} R) and one lifetime trial ledger.
-  The old Search Lab, Evolution Lab, Forge and Speed Run are methods of this engine now (see &ldquo;Search method&rdquo; under Advanced options). Their original pages still work:</p>
+  The old Search Lab, Evolution Lab, Forge and Speed Run are methods of this engine now (choose &ldquo;Deep statistical gauntlet&rdquo; under Search method in Advanced options; it is slow and very strict). Their original pages still work:</p>
   <p class="de-links" style="margin-top:8px;">
     {% for p in st.presets if p.page %}<a href="{{ p.page }}">{{ p.label }}</a>{% endfor %}
   </p>

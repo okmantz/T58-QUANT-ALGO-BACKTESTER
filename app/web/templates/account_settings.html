@@ -67,6 +67,15 @@
   html[data-theme="light"] .pz-tile[data-bg="summer"] { background-image: url("/static/backgrounds/summer-light.webp"); }
   html[data-theme="light"] .pz-tile[data-bg="autumn"] { background-image: url("/static/backgrounds/autumn-light.webp"); }
   html[data-theme="light"] .pz-tile[data-bg="winter"] { background-image: url("/static/backgrounds/winter-light.webp"); }
+  .pz-tile[data-bg="cosmic-drift"] { background-image: url("/static/backgrounds/cosmic-drift-thumb.webp"); }
+  .pz-tile[data-bg="obsidian"] { background-image: url("/static/backgrounds/obsidian-thumb.webp"); }
+  .pz-tile[data-bg="midnight-ocean"] { background-image: url("/static/backgrounds/midnight-ocean-thumb.webp"); }
+  .pz-tile[data-bg="rainfall-district"] { background-image: url("/static/backgrounds/rainfall-district-thumb.webp"); }
+  .pz-tile[data-bg="silent-sanctuary"] { background-image: url("/static/backgrounds/silent-sanctuary-thumb.webp"); }
+  .pz-tile[data-bg="misty-forest"] { background-image: url("/static/backgrounds/misty-forest-thumb.webp"); }
+  .pz-group { margin: 12px 0 2px; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--text-muted, #8a99a8); }
+  .pz-group:first-of-type { margin-top: 4px; }
+  .pz-tile span { text-shadow: 0 1px 3px rgba(0,0,0,.75); color: #fff; }
   .pz-switch { display: flex; align-items: center; gap: 10px; margin-top: 4px; font-size: 14px; cursor: pointer; }
   .pz-switch input { width: auto; }
   /* two-column layout: DOM order is picture, profile, security, personalize, subscription, app (the mobile order);
@@ -238,15 +247,30 @@
 
     <hr class="divider">
     <label>Background</label>
-    <div class="pz-grid" id="pz-grid" role="radiogroup" aria-label="Background">
-      <button type="button" class="pz-tile" data-bg="mountains" role="radio"><span>Mountains (default)</span></button>
-      <button type="button" class="pz-tile" data-bg="spring" role="radio"><span>Spring</span></button>
-      <button type="button" class="pz-tile" data-bg="summer" role="radio"><span>Summer</span></button>
-      <button type="button" class="pz-tile" data-bg="autumn" role="radio"><span>Autumn</span></button>
-      <button type="button" class="pz-tile" data-bg="winter" role="radio"><span>Winter</span></button>
+    <div id="pz-grid" role="radiogroup" aria-label="Background">
+      <div class="pz-group">Classic</div>
+      <div class="pz-grid">
+        <button type="button" class="pz-tile" data-bg="mountains" role="radio"><span>Mountains (default)</span></button>
+      </div>
+      <div class="pz-group">Seasons</div>
+      <div class="pz-grid">
+        <button type="button" class="pz-tile" data-bg="spring" role="radio"><span>Spring</span></button>
+        <button type="button" class="pz-tile" data-bg="summer" role="radio"><span>Summer</span></button>
+        <button type="button" class="pz-tile" data-bg="autumn" role="radio"><span>Autumn</span></button>
+        <button type="button" class="pz-tile" data-bg="winter" role="radio"><span>Winter</span></button>
+      </div>
+      <div class="pz-group">Animated scenes</div>
+      <div class="pz-grid">
+        <button type="button" class="pz-tile" data-bg="cosmic-drift" role="radio"><span>Cosmic Drift</span></button>
+        <button type="button" class="pz-tile" data-bg="obsidian" role="radio"><span>Obsidian</span></button>
+        <button type="button" class="pz-tile" data-bg="midnight-ocean" role="radio"><span>Midnight Ocean</span></button>
+        <button type="button" class="pz-tile" data-bg="rainfall-district" role="radio"><span>Rainfall District</span></button>
+        <button type="button" class="pz-tile" data-bg="silent-sanctuary" role="radio"><span>Silent Sanctuary</span></button>
+        <button type="button" class="pz-tile" data-bg="misty-forest" role="radio"><span>Misty Forest</span></button>
+      </div>
     </div>
-    <label class="pz-switch"><input type="checkbox" id="pz-fx"> Gentle seasonal motion (snow, leaves, petals, fireflies)</label>
-    <p class="field-note">A handful of slow particles over the seasonal backgrounds. Switches itself off if your device asks for reduced motion or data saving.</p>
+    <label class="pz-switch"><input type="checkbox" id="pz-fx"> Gentle background motion (scenes, snow, leaves, petals, fireflies)</label>
+    <p class="field-note">Slow, subtle movement behind the app: drifting nebula, rolling waves, rain, fog, fireflies and more. It never moves your content, pauses when the tab is hidden, and switches itself off if your device asks for reduced motion or data saving.</p>
 
     <hr class="divider">
     <label class="pz-switch"><input type="checkbox" id="pz-verse"> Show a Bible verse at the top of every page</label>
@@ -347,6 +371,11 @@
     refresh();
   })();
   </script>
+
+  <!-- ================= NOTIFICATIONS (sandwiched between Subscription and the app version) ================= -->
+  {% include '_notification_settings_card.html' %}
+
+  {% include '_briefing_settings_card.html' %}
 
   <!-- ================= APP ================= -->
   <form method="POST" action="/settings/account/check_updates">

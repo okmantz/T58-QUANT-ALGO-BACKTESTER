@@ -273,8 +273,23 @@ least once and rejections that reach CPCV/stress-testing will start accumulating
     if (d.strength || d.weakness) h += '<div class="gy-sec"><h4>What it did right / wrong</h4><p class="gy-why">' + (d.strength ? '\u2713 ' + esc(d.strength) + '<br>' : '') + (d.weakness ? '\u2717 ' + esc(d.weakness) : '') + '</p></div>';
     if (d.suggestion) h += '<div class="gy-sec"><h4>What to try next</h4><p class="gy-why">' + esc(d.suggestion) + '</p></div>';
     if (d.params) h += '<div class="gy-sec"><h4>Exact settings</h4><p class="gy-note">' + Object.keys(d.params).filter(function (k) { return d.params[k] != null; }).map(function (k) { return esc(k.replace(/_/g, ' ')) + ' <b>' + esc(d.params[k]) + '</b>'; }).join(' \u00b7 ') + '</p></div>';
-    if (d.context) h += '<p class="gy-note">Tested on ' + esc(d.context.dataset) + ' (' + esc(d.context.start) + ' to ' + esc(d.context.end) + ') with ' + esc(d.context.spread) + ' pip spread, ' + esc(d.context.slippage) + ' pip slippage and $' + esc(d.context.commission) + ' per trade, risking ' + esc(d.context.risk_pct) + '% of $' + fmt(d.context.account, 0) + '. This only shows it failed on this data and these costs \u2014 not that the idea can never work elsewhere.</p>';
+    if (d.optimize) {
+      var o = d.optimize;
+      h += '<div class="gy-sec"><h4>Auto-optimize</h4><p class="gy-why"><b>Suggested goal: ' + esc(o.title) + '.</b> ' + esc(o.why) + '</p>' +
+        (o.failed && o.failed.length ? '<p class="gy-note">' + o.failed.map(function (f) { return '\u2717 ' + esc(f.metric) + ' ' + esc(f.value); }).join(' \u00b7 ') + '</p>' : '') +
+        '<button type="button" class="t58-btn primary sm" id="gy-opt">Auto-optimize this strategy &rarr;</button> <span class="gy-note" id="gy-opt-msg"></span></div>';
+    }
+    if (d.context && !d.context.assumed) h += '<p class="gy-note">Tested on ' + esc(d.context.dataset) + ' (' + esc(d.context.start) + ' to ' + esc(d.context.end) + ') with ' + esc(d.context.spread) + ' pip spread, ' + esc(d.context.slippage) + ' pip slippage and $' + esc(d.context.commission) + ' per trade, risking ' + esc(d.context.risk_pct) + '% of $' + fmt(d.context.account, 0) + '. This only shows it failed on this data and these costs \u2014 not that the idea can never work elsewhere.</p>';
     body.innerHTML = h;
+    var ob = document.getElementById('gy-opt');
+    if (ob) ob.addEventListener('click', function () {
+      ob.disabled = true; var m = document.getElementById('gy-opt-msg'); m.textContent = 'Rebuilding it in your library\u2026';
+      fetch('/graveyard/auto-optimize?path=' + encodeURIComponent(PATH) + '&id=' + encodeURIComponent(d.candidate_id), {method: 'POST'})
+        .then(function (r) { return r.json(); }).then(function (x) {
+          if (x.ok) { m.textContent = 'Saved as ' + x.name + '. Opening Optimize\u2026'; window.location = x.url; }
+          else { m.textContent = x.error || 'Could not rebuild it.'; ob.disabled = false; }
+        }).catch(function () { m.textContent = 'Could not rebuild it.'; ob.disabled = false; });
+    });
   }
   function open(row) {
     if (lastRow) lastRow.classList.remove('sel');

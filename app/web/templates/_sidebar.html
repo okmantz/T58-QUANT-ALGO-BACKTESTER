@@ -81,7 +81,7 @@
   <div class="t58-nav-divider"></div>
   <div class="t58-nav-section-label">Strategy Lab</div>
 
-  {% set create_pages   = ['forge', 'strategy_library', 'speed_run', 'speed_run_multi_instrument', 'generate_strategies', 'research_agent', 'research', 'research_loop', 'discover', 'overnight_autopilot', 'discovery_engine', 'start_here_create'] %}
+  {% set create_pages   = ['forge', 'speed_run', 'speed_run_multi_instrument', 'generate_strategies', 'research_agent', 'research', 'research_loop', 'discover', 'overnight_autopilot', 'discovery_engine', 'start_here_create'] %}
   {% set test_pages     = ['run', 'payout_probability', 'full_pipeline'] %}
   {% set optimize_pages = ['optimize_hub', 'optimize_simple', 'search', 'search_multi_instrument', 'multi_market', 'refine', 'full_pipeline', 'quick_optimize', 'multi_objective', 'evolution', 'evolution_multi_instrument', 'risk_sweep', 'cross_instrument'] %}
   {% set validate_pages = ['validate_hub', 'validate_simple', 'wfo', 'wfga', 'cpcv', 'pbo', 'sensitivity', 'parameter_robustness', 'regime_matrix'] %}
@@ -188,14 +188,17 @@
       <a href="/settings/account" class="t58-nav-item {{ 'active' if active_page == 'account_settings' else '' }}">
         <span class="t58-nav-icon">&#9881;</span><span class="label">Account Settings</span>
       </a>
-      <a href="/settings/notifications" class="t58-nav-item {{ 'active' if active_page == 'notification_settings' else '' }}">
-        <span class="t58-nav-icon">&#128276;</span><span class="label">Notification Settings</span>
-      </a>
       <a href="/settings/api-keys" class="t58-nav-item {{ 'active' if active_page == 'api_keys_settings' else '' }}">
         <span class="t58-nav-icon">&#128273;</span><span class="label">API Keys</span>
       </a>
       <a href="/data-center" class="t58-nav-item {{ 'active' if active_page == 'data_center' else '' }}">
         <span class="t58-nav-icon">&#128202;</span><span class="label">Data Center</span>
+      </a>
+      <a href="/library" class="t58-nav-item {{ 'active' if active_page == 'strategy_library' else '' }}">
+        <span class="t58-nav-icon">&#128218;</span><span class="label">Strategy Library</span>
+      </a>
+      <a href="/achievements" class="t58-nav-item {{ 'active' if active_page == 'achievements' else '' }}">
+        <span class="t58-nav-icon">&#127942;</span><span class="label">Achievements</span>
       </a>
       <a href="/support" class="t58-nav-item {{ 'active' if active_page == 'support' else '' }}">
         <span class="t58-nav-icon">&#128172;</span><span class="label">Support</span>
@@ -217,6 +220,12 @@
       <a href="/user-manual" class="t58-nav-item {{ 'active' if active_page == 'user_manual' else '' }}">
         <span class="t58-nav-icon">&#128214;</span><span class="label">User Manual</span>
       </a>
+      <a href="/playground" class="t58-nav-item {{ 'active' if (active_page or '').startswith('playground') else '' }}">
+        <span class="t58-nav-icon">&#127918;</span><span class="label">Playground</span>
+      </a>
+      <a href="/playground/library" class="t58-nav-item t58-nav-sub {{ 'active' if active_page == 'books_library' else '' }}" style="padding-left:34px;">
+        <span class="t58-nav-icon">&#128218;</span><span class="label">Library</span>
+      </a>
     </div>
   </details>
 
@@ -236,6 +245,8 @@
 <script src="/static/csv-export.js" defer></script>
 <script src="/static/api-source.js" defer></script>
 <script src="/static/t58-livepnl.js" defer></script>
+<script src="/static/t58-achievements.js" defer></script>
+<script src="/static/t58-nextstep.js" defer></script>
 
 {% include '_project_chat_widget.html' %}
 <script src="/static/project_chat.js" defer></script>

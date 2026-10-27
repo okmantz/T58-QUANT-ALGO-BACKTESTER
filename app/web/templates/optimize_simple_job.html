@@ -122,6 +122,16 @@ function renderSummary(summary){
   body.innerHTML = html;
   if (checklist) checklist.innerHTML = rows;
 }
+function renderNext(n){
+  if (!n || !n.headline) return;
+  const body = document.getElementById('summary-body');
+  let html = '<div class="lc-verdict pass" style="margin-bottom:14px;"><h3>What to do next</h3><p style="font-size:15px;font-weight:700;margin:4px 0;">' + esc(n.headline) + '</p><p class="lc-hint" style="font-size:13px;">' + esc(n.why) + '</p>';
+  if (n.bullets && n.bullets.length) html += '<ul style="margin:8px 0 10px 18px;font-size:13px;line-height:1.5;">' + n.bullets.map(function(b){return '<li>' + esc(b) + '</li>';}).join('') + '</ul>';
+  html += '<a class="lc-btn" href="' + esc(n.primary.href) + '">' + esc(n.primary.label) + ' →</a>';
+  (n.secondary || []).forEach(function(s){ html += ' <a class="lc-btn ghost" href="' + esc(s.href) + '">' + esc(s.label) + '</a>'; });
+  html += '</div>';
+  body.insertAdjacentHTML('afterbegin', html);
+}
 async function poll(){
   if (stopped) return;
   try {
@@ -145,6 +155,7 @@ async function poll(){
       if (line) line.textContent = data.error ? 'Finished with errors' : 'All ticked engines finished';
       if (prog) { prog.classList.remove('indet'); prog.querySelector('div').style.width = '100%'; }
       renderSummary(data.summary);
+      renderNext(data.next);
       return;
     }
   } catch (e) { /* keep polling through transient errors */ }
