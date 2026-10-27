@@ -851,7 +851,7 @@ html:not([data-theme="light"]) body {
    pages, full strength on the dashboard (body.db-page). Static image: no filters, no animation. */
 html:not([data-theme="light"]) body::before {
   content: "";
-  position: absolute; top: calc(min(8vw, 120px) * -1); left: 0; right: 0; z-index: 0; pointer-events: none;
+  position: fixed; top: calc(min(8vw, 120px) * -1); left: 0; right: 0; z-index: 0; pointer-events: none;   /* fixed: stays put while the page scrolls */
   height: max(37.5vw, 340px);                       /* the artwork's own 2048:768 ratio, so the range is never cropped */
   background: url("/static/dashboard-mountains.webp") center bottom / cover no-repeat;
   opacity: .34;
@@ -982,7 +982,7 @@ html[data-theme="light"] body {
 }
 html[data-theme="light"] body::before {
   content: "";
-  position: absolute; top: calc(min(8vw, 120px) * -1); left: 0; right: 0; z-index: 0; pointer-events: none;
+  position: fixed; top: calc(min(8vw, 120px) * -1); left: 0; right: 0; z-index: 0; pointer-events: none;   /* fixed: stays put while the page scrolls */
   height: max(37.5vw, 340px);
   background: url("/static/dashboard-mountains-light.webp") center bottom / cover no-repeat;
   opacity: .42;

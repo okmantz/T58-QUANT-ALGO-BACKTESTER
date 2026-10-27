@@ -296,6 +296,58 @@
     </div>
   </form>
 
+  <!-- ================= SAVED RUNS (vault) ================= -->
+  <div class="card" id="saved-runs" style="margin-top:14px;">
+    <h2>Saved runs</h2>
+    <p class="help">Your reports, strategy graveyard, journal and saved strategies are copied to a folder that an uninstall doesn't touch, and are put back automatically the next time the app starts. Sign in with the same email and license key after a reinstall and you pick up where you left off &mdash; no need to re-run the pipeline. API keys, passwords and your license key are never copied.</p>
+    <p class="field-note" id="vault-line">Checking&hellip;</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 4px;">
+      <button type="button" class="submit-btn" id="vault-backup">Save now</button>
+      <button type="button" class="secondary-btn" id="vault-restore">Restore missing runs</button>
+      <a class="secondary-btn" href="/api/vault/export" style="text-decoration:none;display:inline-block;">Download all as zip</a>
+      <label class="secondary-btn" style="cursor:pointer;margin:0;">Import zip<input type="file" id="vault-import" accept=".zip" hidden></label>
+    </div>
+    <hr class="divider">
+    <label class="pz-switch"><input type="checkbox" id="vault-cloud"> Also keep a copy on my account (email + license key)</label>
+    <p class="field-note" id="vault-cloud-note">Uploads a snapshot to your license server about every 15 minutes, so your runs also survive a new computer or a wiped disk. Switching it on uploads right away.</p>
+    <p class="field-note" id="vault-msg" role="status" aria-live="polite"></p>
+  </div>
+  <script>
+  (function () {
+    var tok = {{ csrf_token()|tojson }};
+    var $ = function (id) { return document.getElementById(id); };
+    function api(path, opt) {
+      opt = opt || {}; opt.headers = Object.assign({'X-CSRF-Token': tok}, opt.headers || {});
+      return fetch(path, opt).then(function (r) { return r.json().catch(function () { return {ok: false, error: 'Unexpected reply'}; }); });
+    }
+    function say(t, bad) { var m = $('vault-msg'); m.textContent = t || ''; m.style.color = bad ? 'var(--danger, #ff5d73)' : ''; }
+    function mb(n) { return n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; }
+    function refresh() {
+      api('/api/vault/status').then(function (s) {
+        if (!s.ok) { $('vault-line').textContent = 'Saved-runs status unavailable.'; return; }
+        var st = s.settings || {};
+        $('vault-line').textContent = s.app_files + ' files in the app (' + mb(s.app_bytes) + '). Local copy: ' + s.local.files +
+          ' files' + (st.last_local_backup ? ', last saved ' + st.last_local_backup.replace('T', ' ').slice(0, 16) : ', not saved yet') + '.';
+        var c = $('vault-cloud'); c.checked = !!st.cloud_auto; c.disabled = !s.cloud_available && !st.cloud_auto;
+        $('vault-cloud-note').textContent = s.cloud_available
+          ? 'Uploads a snapshot to your license server about every 15 minutes, so your runs also survive a new computer or a wiped disk. Switching it on uploads right away.' + (st.last_cloud_push ? ' Last upload ' + st.last_cloud_push.replace('T', ' ').slice(0, 16) + '.' : '')
+          : 'Account copy unavailable: ' + s.cloud_reason;
+      });
+    }
+    $('vault-backup').onclick = function () { say('Saving…'); api('/api/vault/backup', {method: 'POST'}).then(function (r) {
+      var bad = r.cloud && !r.cloud.ok; say(bad ? 'Saved locally, but the account copy failed: ' + r.cloud.error : 'Saved (' + r.local.copied + ' new or changed files).', bad); refresh(); }); };
+    $('vault-restore').onclick = function () { say('Restoring…'); api('/api/vault/restore', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'}).then(function (r) {
+      var n = (r.local ? r.local.restored : 0) + (r.cloud && r.cloud.ok ? r.cloud.restored : 0);
+      var bad = r.cloud && !r.cloud.ok; say((n ? 'Restored ' + n + ' file(s). Reload pages to see them.' : 'Nothing was missing.') + (bad ? ' Account copy: ' + r.cloud.error : ''), bad); refresh(); }); };
+    $('vault-cloud').onchange = function () { var on = this.checked, box = this; say(on ? 'Uploading…' : '');
+      api('/api/vault/cloud/settings', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({cloud_auto: on})}).then(function (r) {
+        if (!r.ok) { box.checked = !on; say(r.error || 'Failed.', true); } else { say(on ? 'Account copy is on and uploaded.' : 'Account copy is off (your existing online copy is kept).'); } refresh(); }); };
+    $('vault-import').onchange = function () { var f = this.files[0]; if (!f) return; var fd = new FormData(); fd.append('file', f); say('Importing…');
+      api('/api/vault/import', {method: 'POST', body: fd}).then(function (r) { say(r.ok ? 'Imported ' + r.restored + ' file(s); ' + r.skipped + ' already up to date.' : (r.error || 'Import failed.'), !r.ok); refresh(); }); this.value = ''; };
+    refresh();
+  })();
+  </script>
+
   <!-- ================= APP ================= -->
   <form method="POST" action="/settings/account/check_updates">
     <div class="card">

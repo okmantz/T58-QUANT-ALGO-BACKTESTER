@@ -951,6 +951,8 @@ app.register_blueprint(telemetry_bp)
 app.register_blueprint(evolution_lab_bp)
 # Strategy Discovery Engine (2026-10-25): the five labs as presets of one engine -- see app/web/discovery_engine_routes.py.
 app.register_blueprint(discovery_engine_bp)
+from app.web.vault_routes import vault_bp  # noqa: E402
+app.register_blueprint(vault_bp)
 # TradingView webhook relay (Pine strategy alert -> T58 paper forward test,
 # optionally mirrored to a demo broker) -- see app/web/webhook_relay_routes.py.
 app.register_blueprint(webhook_relay_bp)
@@ -13297,6 +13299,11 @@ def main():
     print_startup_banner(url, qr_path)
     if host == "0.0.0.0":
         print("WARNING: bound to 0.0.0.0 -- the app is reachable from your local network.", flush=True)
+    try:
+        from app.persistence import vault
+        vault.start_background()
+    except Exception:  # noqa: BLE001
+        pass
     app.run(host=host, port=5000, debug=False, threaded=True)
 
 

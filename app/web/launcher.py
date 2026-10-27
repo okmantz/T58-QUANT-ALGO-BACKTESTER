@@ -147,6 +147,13 @@ def main() -> None:
 
     threading.Thread(target=_open_things_once_server_is_up, daemon=True).start()
 
+    # Saved-runs vault: restore anything a reinstall removed, then keep a copy outside the install folder.
+    try:
+        from app.persistence import vault  # noqa: WPS433
+        vault.start_background()
+    except Exception:  # noqa: BLE001
+        pass
+
     print_startup_banner(url, qr_path)
     try:
         app.run(host="0.0.0.0", port=port, debug=False)

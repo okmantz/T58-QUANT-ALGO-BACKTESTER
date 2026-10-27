@@ -692,6 +692,12 @@ def activate(email: str, license_key: str, remember: bool = True) -> tuple[bool,
         expires_at=body.get("expires_at"), last_validated_at=datetime.now(timezone.utc).isoformat(),
         plan=normalize_plan(body.get("plan")),
     ))
+    # Fresh install? Bring this account's saved runs back (best effort; never blocks or fails activation).
+    try:
+        from app.persistence import vault
+        vault.on_activated()
+    except Exception:  # noqa: BLE001
+        pass
     return True, "Activated."
 
 
