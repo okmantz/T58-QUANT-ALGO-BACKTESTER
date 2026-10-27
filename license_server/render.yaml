@@ -50,6 +50,9 @@ services:
       # SQLite lives on the persistent disk (see the IMPORTANT note above).
       - key: T58_LICENSE_DB_PATH
         value: /opt/render/project/src/license_server/data/licenses.db
+      # Saved-runs snapshots (account run vault). Same persistent disk as the database.
+      - key: T58_VAULT_DIR
+        value: /opt/render/project/src/license_server/data/vault
       # License-delivery email (stdlib SMTP -- no extra dependency).
       - key: SMTP_HOST
         sync: false

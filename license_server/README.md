@@ -180,3 +180,12 @@ python admin_cli.py create you@example.com --plan test --days 7
 and point the desktop app at `http://localhost:5055` via
 `T58_LICENSE_SERVER_URL` to activate against your local server before
 you've deployed anything.
+
+
+## Account run vault (saved runs follow the account)
+
+`POST /v1/vault/put | get | info` store one zip snapshot per email (the person's reports, graveyard, journal, strategies --
+never keys or passwords), so a reinstall or new machine can pick up where they left off. Auth is the same email + license key
++ device check as `/validate`. Snapshots are files under `T58_VAULT_DIR` (default: a `vault/` folder next to the database, so
+it lives on the same persistent disk) with a small `vaults` table in the SQLite DB. Cap per account: `T58_VAULT_MAX_BYTES`
+(default 90 MB). **After pulling this update, redeploy the server** -- older servers answer 404 and the app says so.

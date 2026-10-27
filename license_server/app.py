@@ -16,6 +16,13 @@ Client-facing (called by the desktop app -- app/licensing/client.py):
     POST /deactivate   {email, license_key, device_id} -> frees the
                        device binding so the license can move to a new
                        machine ("logout" / "deactivate this device").
+    POST /v1/vault/put   {email, license_key, device_id, sha256, files, data_b64}
+    POST /v1/vault/get   {email, license_key, device_id}
+    POST /v1/vault/info  {email, license_key, device_id}
+                       -> the account run vault: ONE zip snapshot of a person's
+                       saved runs per email, so a reinstall/new machine can pick
+                       up where they left off. Same auth as /validate (email +
+                       key + this device). Needs a persistent disk (T58_VAULT_DIR).
 
 Admin-only (require header X-Admin-Token: <ADMIN_TOKEN env var>):
     POST /admin/licenses                    create a new license
@@ -62,6 +69,7 @@ from flask import Flask, jsonify, request
 import db
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = int(db.MAX_VAULT_BYTES * 1.5) + 4096   # base64 of the biggest allowed snapshot
 db.init_db()
 
 ADMIN_TOKEN = os.environ.get("T58_LICENSE_ADMIN_TOKEN", "")
@@ -203,6 +211,63 @@ def deactivate():
         return jsonify({"ok": False, "error": "device_mismatch"}), 403
     db.clear_device(license_key)
     return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Account run vault (2026-10-26). Auth = the exact /validate check, never binding a new device here.
+# ---------------------------------------------------------------------------
+def _vault_auth(data):
+    status, body = _check_license(
+        data.get("email", ""), data.get("license_key", ""), data.get("device_id", ""), allow_bind=False,
+    )
+    return (status, body) if status != 200 else (None, None)
+
+
+@app.route("/v1/vault/info", methods=["POST"])
+def vault_info():
+    data = request.get_json(silent=True) or {}
+    status, body = _vault_auth(data)
+    if status:
+        return jsonify(body), status
+    v = db.get_vault(data["email"])
+    if not v:
+        return jsonify({"ok": True, "exists": False})
+    return jsonify({"ok": True, "exists": True, "updated_at": v["updated_at"], "size": v["size"], "files": v["files"]})
+
+
+@app.route("/v1/vault/put", methods=["POST"])
+def vault_put():
+    data = request.get_json(silent=True) or {}
+    status, body = _vault_auth(data)
+    if status:
+        return jsonify(body), status
+    try:
+        raw = base64.b64decode(data.get("data_b64", ""), validate=True)
+    except Exception:  # noqa: BLE001
+        return jsonify({"ok": False, "error": "bad_payload"}), 400
+    if not raw or len(raw) > db.MAX_VAULT_BYTES:
+        return jsonify({"ok": False, "error": "too_large" if raw else "bad_payload"}), 413 if raw else 400
+    digest = hashlib.sha256(raw).hexdigest()
+    if data.get("sha256") and data["sha256"] != digest:
+        return jsonify({"ok": False, "error": "bad_payload", "message": "Integrity check failed."}), 400
+    if raw[:2] != b"PK":
+        return jsonify({"ok": False, "error": "bad_payload", "message": "Not a zip."}), 400
+    v = db.put_vault(data["email"], raw, digest, data.get("files") or 0, data.get("device_id", ""))
+    return jsonify({"ok": True, "updated_at": v["updated_at"], "size": v["size"]})
+
+
+@app.route("/v1/vault/get", methods=["POST"])
+def vault_get():
+    data = request.get_json(silent=True) or {}
+    status, body = _vault_auth(data)
+    if status:
+        return jsonify(body), status
+    v = db.get_vault(data["email"])
+    path = db.vault_blob_path(data["email"])
+    if not v or not path.exists():
+        return jsonify({"ok": False, "error": "no_backup"}), 404
+    return jsonify({"ok": True, "sha256": v["sha256"], "updated_at": v["updated_at"],
+                    "data_b64": base64.b64encode(path.read_bytes()).decode("ascii")})
 
 
 # ---------------------------------------------------------------------------

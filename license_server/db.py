@@ -70,6 +70,19 @@ CREATE TABLE IF NOT EXISTS trial_redemptions (
     expires_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_trial_redemptions_email ON trial_redemptions(email);
+
+-- ACCOUNT RUN VAULT (2026-10-26): one saved snapshot (a zip of the person's runs/graveyard/journal) per EMAIL, so a
+-- reinstall -- or a new machine -- can pick up exactly where they left off. The zip itself lives on disk under
+-- T58_VAULT_DIR (see vault_blob_path); this row is just its label. Keyed by email, not licence key, so a renewal
+-- or replacement key for the same person finds the same runs.
+CREATE TABLE IF NOT EXISTS vaults (
+    email TEXT PRIMARY KEY,
+    sha256 TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    files INTEGER NOT NULL DEFAULT 0,
+    device_id TEXT,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -342,3 +355,39 @@ def redeem_trial(trial_key: str, email: str, device_id: str, ip_address: str | N
             return winner
         raise
     return get_trial_redemption(device_id=device_id)
+
+
+# ---------------------------------------------------------------------------
+# Account run vault (see SCHEMA). The blob is a zip written atomically to disk; keep T58_VAULT_DIR on a PERSISTENT disk
+# (on Render/Fly a free instance's filesystem is wiped on every deploy -- attach a disk or volume).
+# ---------------------------------------------------------------------------
+VAULT_DIR = Path(os.environ.get("T58_VAULT_DIR", str(DB_PATH.parent / "vault")))   # next to the DB => on the same persistent disk
+MAX_VAULT_BYTES = int(os.environ.get("T58_VAULT_MAX_BYTES", str(90 * 1024 * 1024)))
+
+
+def vault_blob_path(email: str) -> Path:
+    import hashlib
+    return VAULT_DIR / (hashlib.sha256(email.strip().lower().encode("utf-8")).hexdigest() + ".zip")
+
+
+def get_vault(email: str) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM vaults WHERE email = ?", (email.strip().lower(),)).fetchone()
+        return dict(row) if row else None
+
+
+def put_vault(email: str, raw: bytes, sha256: str, files: int, device_id: str) -> dict:
+    email = email.strip().lower()
+    VAULT_DIR.mkdir(parents=True, exist_ok=True)
+    path = vault_blob_path(email)
+    tmp = path.with_suffix(".zip.tmp")
+    tmp.write_bytes(raw)
+    os.replace(tmp, path)
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO vaults (email, sha256, size, files, device_id, updated_at) VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(email) DO UPDATE SET sha256=excluded.sha256, size=excluded.size, files=excluded.files, "
+            "device_id=excluded.device_id, updated_at=excluded.updated_at",
+            (email, sha256, len(raw), int(files), device_id, _now_iso()),
+        )
+    return get_vault(email)
