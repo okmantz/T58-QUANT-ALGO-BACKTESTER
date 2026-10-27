@@ -87,3 +87,14 @@ def test_floating_panels_are_opaque():
     assert ".t58-ve{" in chrome and "var(--pop-bg" in chrome.split(".t58-ve{")[1][:300]
     css = (STATIC / "theme.css").read_text(encoding="utf-8")
     assert "--pop-bg:" in css
+
+
+def test_default_mountains_are_fixed_behind_the_page():
+    """Both the night and day mountain backdrops stay put while the page scrolls (position: fixed, not absolute)."""
+    import re
+    css = (STATIC / "theme.css").read_text(encoding="utf-8")
+    for img in ("dashboard-mountains.webp", "dashboard-mountains-light.webp"):
+        i = css.index(f'url("/static/{img}")')
+        block = css[css.rfind("body::before {", 0, i):i]
+        assert re.search(r"position:\s*fixed", block), img
+        assert "position: absolute" not in block, img
