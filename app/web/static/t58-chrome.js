@@ -142,15 +142,17 @@
      (the app has no persisted "current strategy" to make that claim about
      honestly). */
   var STAGES = [
-    { name: "Create", href: "/speed-run", paths: ["/speed-run", "/generate-strategies", "/research-agent"] },
-    { name: "Test", href: "/", paths: ["/", "/payout-probability"] },
-    { name: "Optimize", href: "/optimize", paths: ["/search", "/refine", "/full-pipeline", "/quick-optimize", "/multi-objective", "/evolution", "/optimize"] },
-    { name: "Validate", href: "/validate", paths: ["/walk-forward-opt", "/walk-forward-ga", "/cpcv", "/pbo", "/sensitivity", "/parameter-robustness", "/regime-matrix", "/validate"] },
-    { name: "Champion", href: "/family-diversity", paths: ["/portfolio", "/ensemble", "/family-diversity"] },
-    { name: "Forward Test", href: "/forward-test", paths: ["/forward-test"] },
-    { name: "Deploy", href: "/deploy-live", paths: ["/deploy-live"] },
+    // Every stage links to the SAME page its sidebar entry opens (Create -> the Create page, not Speed Run).
+    { name: "Create", href: "/start-here/create", paths: ["/start-here/create", "/speed-run", "/speed-run-multi", "/generate-strategies", "/research-agent", "/research", "/research-loop", "/forge", "/discovery-engine", "/discover", "/overnight-autopilot"] },
+    { name: "Test", href: "/full-pipeline", paths: ["/full-pipeline", "/", "/run", "/payout-probability"] },
+    { name: "Optimize", href: "/optimize-simple", paths: ["/optimize-simple", "/optimize", "/search", "/refine", "/quick-optimize", "/multi-objective", "/evolution", "/multi-market", "/risk-sweep", "/cross-instrument"] },
+    { name: "Validate", href: "/validate-simple", paths: ["/validate-simple", "/validate", "/walk-forward-opt", "/walk-forward-ga", "/cpcv", "/pbo", "/sensitivity", "/parameter-robustness", "/regime-matrix"] },
+    { name: "Champion", href: "/champion-simple", paths: ["/champion-simple", "/portfolio", "/ensemble", "/family-diversity", "/universe", "/compare"] },
+    { name: "Forward Test", href: "/forward-test", paths: ["/forward-test", "/replay"] },
+    { name: "Deploy", href: "/deploy-live", paths: ["/deploy-live", "/webhook-relay"] },
     { name: "Monitor", href: "/live-market", paths: ["/live-market"] }
   ];
+
 
   function currentStageIndex() {
     var path = window.location.pathname.replace(/\/+$/, "") || "/";

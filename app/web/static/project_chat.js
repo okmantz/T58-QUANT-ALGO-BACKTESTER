@@ -66,7 +66,8 @@
     setLauncherState(true);
     rememberOpen(true);
     refreshProjectList().then(function () {
-      if (state.project) {
+      var onBrief = els.tabBrief && !els.tabBrief.hidden;
+      if (state.project && !onBrief) {
         showTab("chat");
       }
     });
@@ -91,6 +92,9 @@
     }
     els.tabChat.hidden = name !== "chat";
     els.tabActivity.hidden = name !== "activity";
+    if (els.tabBrief) els.tabBrief.hidden = name !== "brief";
+    els.empty.hidden = name === "brief" || !!state.project || (state.projectList || []).length > 0;
+    if (name === "brief") { loadBrief(); startBriefPolling(); } else { stopBriefPolling(); }
     if (name === "activity" && state.project) {
       refreshActivity();
       startActivityPolling();
@@ -98,6 +102,53 @@
       stopActivityPolling();
     }
   }
+
+  // -------------------------------------------------------------------
+  // Morning Briefing (/api/briefing) -- built only from saved results; collapsible sections, refreshed through the day
+  // -------------------------------------------------------------------
+  var briefTimer = null, briefEnabled = true;
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]; }); }
+  function renderBrief(d) {
+    var box = document.getElementById("t58-pc-brief"); if (!box) return;
+    var open = {};
+    box.querySelectorAll(".t58-pc-bs").forEach(function (s) { open[s.getAttribute("data-id")] = !s.querySelector(".t58-pc-bb").hidden; });
+    var html = '<div class="t58-pc-bh"><b>T58 Morning Briefing</b><span>' + new Date(d.generated_at * 1000).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"}) + '</span></div>';
+    if (d.empty) html += '<div class="t58-pc-bempty">' + esc(d.empty_line) + '</div>';
+    (d.sections || []).forEach(function (s, i) {
+      var isOpen = (s.id in open) ? open[s.id] : i < 2;
+      html += '<div class="t58-pc-bs" data-id="' + esc(s.id) + '"><button type="button" aria-expanded="' + isOpen + '"><span><small>' + esc(s.title) + '</small>' + esc(s.headline) + '</span><span aria-hidden="true">' + (isOpen ? "&#9662;" : "&#9656;") + '</span></button>' +
+        '<div class="t58-pc-bb"' + (isOpen ? "" : " hidden") + '>' + (s.lines || []).map(function (l) { return "<div>" + esc(l) + "</div>"; }).join("") +
+        (s.action ? '<a href="' + esc(s.action.href) + '">' + esc(s.action.label) + " &rarr;</a>" : "") +
+        (s.evidence ? '<div class="ev">Based on: ' + esc(s.evidence) + "</div>" : "") + "</div></div>";
+    });
+    box.innerHTML = html;
+    box.querySelectorAll(".t58-pc-bs > button").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var body = b.parentNode.querySelector(".t58-pc-bb"); body.hidden = !body.hidden;
+        b.setAttribute("aria-expanded", String(!body.hidden)); b.lastChild.innerHTML = body.hidden ? "&#9656;" : "&#9662;";
+      });
+    });
+  }
+  function applyBriefEnabled(on) {
+    briefEnabled = on;
+    var tab = document.getElementById("t58-pc-brief-tab"); if (tab) tab.hidden = !on;
+  }
+  function loadBrief(auto) {
+    return fetch("/api/briefing").then(function (r) { return r.json(); }).then(function (d) {
+      applyBriefEnabled(d.enabled !== false);
+      if (!briefEnabled) { if (els.tabBrief && !els.tabBrief.hidden) showTab("chat"); return d; }
+      renderBrief(d);
+      var dot = document.getElementById("t58-pc-brief-dot");
+      if (dot) dot.hidden = !(d.due && els.panel.hidden);
+      if (auto && d.due) {                       // first access of the period: pop it open once, collapsible via the header button
+        openPanel(); showTab("brief");
+        fetch("/api/briefing/seen", {method: "POST"}).catch(function () {});
+      }
+      return d;
+    }).catch(function () {});
+  }
+  function startBriefPolling() { stopBriefPolling(); briefTimer = setInterval(function () { if (!document.hidden) loadBrief(); }, 10 * 60 * 1000); }
+  function stopBriefPolling() { if (briefTimer) { clearInterval(briefTimer); briefTimer = null; } }
 
   // -------------------------------------------------------------------
   // Projects: list / create / rename / delete / activate
@@ -137,7 +188,7 @@
 
   function renderEmptyState() {
     var hasProjects = state.projectList.length > 0;
-    els.empty.hidden = hasProjects;
+    els.empty.hidden = hasProjects || (els.tabBrief && !els.tabBrief.hidden);
     els.tabChat.hidden = !hasProjects;
     els.tabActivity.hidden = true;
   }
@@ -333,6 +384,7 @@
     els.empty = $("t58-pc-empty");
     els.tabChat = $("t58-pc-tab-chat");
     els.tabActivity = $("t58-pc-tab-activity");
+    els.tabBrief = $("t58-pc-tab-brief");
     els.messages = $("t58-pc-messages");
     els.typing = $("t58-pc-typing");
     els.form = $("t58-pc-form");
@@ -371,6 +423,8 @@
 
     // Start collapsed (out of the way) unless it was left open on the last page.
     if (wasOpen()) { openPanel(); } else { closePanel(); }
+    // Morning Briefing: pops up on first access when due, otherwise just keeps the tab's dot current.
+    setTimeout(function () { loadBrief(true); }, 1200);
   }
 
   if (document.readyState === "loading") {

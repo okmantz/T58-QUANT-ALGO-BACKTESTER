@@ -846,12 +846,19 @@ html:not([data-theme="light"]) body {
   position: relative;
 }
 
+/* Backdrop stacking fix (Oct 2026): the fixed scene layer (body::before) used to sit at z-index 0, which paints ABOVE any
+   non-positioned page content. Pages built on .t58-shell were safe (it is positioned), but job / results pages (Full
+   Pipeline, Optimize, Validate runs...) have no shell, so on a seasonal or photo scene their headings, bar labels and
+   numbers were painted over and vanished. The scene now sits at z-index -1 inside a stacking context created by <body>
+   itself, so it is always behind all content, on every page, in both themes. */
+body { isolation: isolate; }
+
 /* Mountain backdrop: the teal night range (scripts/generate_dashboard_mountains.py) -- starfield, dark peaks, teal
    rim-glow on the ridgeline -- spanning the top of the page and dissolving into the background. Quiet on ordinary
    pages, full strength on the dashboard (body.db-page). Static image: no filters, no animation. */
 html:not([data-theme="light"]) body::before {
   content: "";
-  position: fixed; top: calc(min(8vw, 120px) * -1); left: 0; right: 0; z-index: 0; pointer-events: none;   /* fixed: stays put while the page scrolls */
+  position: fixed; top: calc(min(8vw, 120px) * -1); left: 0; right: 0; z-index: -1; pointer-events: none;   /* fixed: stays put while the page scrolls; z-index -1 = BEHIND every page's text (see body isolation below) */
   height: max(37.5vw, 340px);                       /* the artwork's own 2048:768 ratio, so the range is never cropped */
   background: url("/static/dashboard-mountains.webp") center bottom / cover no-repeat;
   opacity: .34;
@@ -982,7 +989,7 @@ html[data-theme="light"] body {
 }
 html[data-theme="light"] body::before {
   content: "";
-  position: fixed; top: calc(min(8vw, 120px) * -1); left: 0; right: 0; z-index: 0; pointer-events: none;   /* fixed: stays put while the page scrolls */
+  position: fixed; top: calc(min(8vw, 120px) * -1); left: 0; right: 0; z-index: -1; pointer-events: none;   /* fixed: stays put while the page scrolls; z-index -1 = BEHIND every page's text (see body isolation below) */
   height: max(37.5vw, 340px);
   background: url("/static/dashboard-mountains-light.webp") center bottom / cover no-repeat;
   opacity: .42;
@@ -1071,6 +1078,23 @@ html[data-bg="spring"][data-theme="light"] { --scene: url("/static/backgrounds/s
 html[data-bg="summer"][data-theme="light"] { --scene: url("/static/backgrounds/summer-light.webp"); --sc1: .22; --sc2: .42; --sc3: .62; }
 html[data-bg="autumn"][data-theme="light"] { --scene: url("/static/backgrounds/autumn-light.webp"); --sc1: .22; --sc2: .42; --sc3: .62; }
 html[data-bg="winter"][data-theme="light"] { --scene: url("/static/backgrounds/winter-light.webp"); --sc1: .22; --sc2: .42; --sc3: .62; }
+/* ---- Animated scenes (Personalize -> Scenes): cosmic-drift, obsidian, midnight-ocean, rainfall-district, silent-sanctuary,
+   misty-forest. Same machinery as the seasons (one fixed picture + a scrim for readable text), but the picture is a
+   full-frame photograph and a sibling layer (#t58-scene-fx, built by t58-personalize.js) adds the motion. --scene-pos
+   keeps each picture's focal point (the moon, the torii gate...) on screen when a narrow phone crops the sides. ---- */
+html[data-bg="cosmic-drift"]:not([data-theme="light"])       { --scene: url("/static/backgrounds/cosmic-drift-dark.webp");       --sc1: .44; --sc2: .46; --sc3: .68; --scene-pos: 50% 42%; }
+html[data-bg="obsidian"]:not([data-theme="light"])           { --scene: url("/static/backgrounds/obsidian-dark.webp");           --sc1: .42; --sc2: .40; --sc3: .64; --scene-pos: 42% 50%; }
+html[data-bg="midnight-ocean"]:not([data-theme="light"])     { --scene: url("/static/backgrounds/midnight-ocean-dark.webp");     --sc1: .50; --sc2: .46; --sc3: .68; --scene-pos: 69% 50%; }
+html[data-bg="rainfall-district"]:not([data-theme="light"])  { --scene: url("/static/backgrounds/rainfall-district-dark.webp");  --sc1: .54; --sc2: .62; --sc3: .80; --scene-pos: 52% 50%; }
+html[data-bg="silent-sanctuary"]:not([data-theme="light"])   { --scene: url("/static/backgrounds/silent-sanctuary-dark.webp");   --sc1: .50; --sc2: .58; --sc3: .78; --scene-pos: 46% 55%; }
+html[data-bg="misty-forest"]:not([data-theme="light"])       { --scene: url("/static/backgrounds/misty-forest-dark.webp");       --sc1: .56; --sc2: .62; --sc3: .80; --scene-pos: 55% 50%; }
+html[data-bg="cosmic-drift"][data-theme="light"]       { --scene: url("/static/backgrounds/cosmic-drift-light.webp");       --sc1: .38; --sc2: .44; --sc3: .64; --scene-pos: 50% 42%; }
+html[data-bg="obsidian"][data-theme="light"]           { --scene: url("/static/backgrounds/obsidian-light.webp");           --sc1: .34; --sc2: .36; --sc3: .58; --scene-pos: 42% 50%; }
+html[data-bg="midnight-ocean"][data-theme="light"]     { --scene: url("/static/backgrounds/midnight-ocean-light.webp");     --sc1: .42; --sc2: .44; --sc3: .64; --scene-pos: 69% 50%; }
+html[data-bg="rainfall-district"][data-theme="light"]  { --scene: url("/static/backgrounds/rainfall-district-light.webp");  --sc1: .42; --sc2: .48; --sc3: .66; --scene-pos: 52% 50%; }
+html[data-bg="silent-sanctuary"][data-theme="light"]   { --scene: url("/static/backgrounds/silent-sanctuary-light.webp");   --sc1: .40; --sc2: .46; --sc3: .64; --scene-pos: 46% 55%; }
+html[data-bg="misty-forest"][data-theme="light"]       { --scene: url("/static/backgrounds/misty-forest-light.webp");       --sc1: .42; --sc2: .46; --sc3: .64; --scene-pos: 55% 50%; }
+html[data-bg]:not([data-bg="mountains"]) body::before { background-position: var(--scene-pos, center); }
 html[data-bg]:not([data-bg="mountains"]):not([data-theme="light"]) body::before {
   background-image:
     linear-gradient(180deg, rgba(2, 8, 10, var(--sc1)) 0%, rgba(2, 8, 10, var(--sc2)) 50%, rgba(2, 8, 10, var(--sc3)) 100%),
@@ -1145,6 +1169,104 @@ html[data-theme="light"] .t58-ambient-firefly i { background: #ffc531; box-shado
 @keyframes t58-glow { 0%, 100% { opacity: .06; } 50% { opacity: .9; } }
 .t58-ambient.paused i, .t58-ambient.paused i > b { animation-play-state: paused; }
 @media (prefers-reduced-motion: reduce) { .t58-ambient { display: none; } }
+
+/* ---- Scene motion (cosmic-drift, obsidian, midnight-ocean, rainfall-district, silent-sanctuary, misty-forest) ----
+   ONE fixed, click-through layer (#t58-scene-fx) sitting just above the scene picture and BEHIND all page content
+   (z-index -1 inside <body>'s own stacking context -- see "Backdrop stacking fix" above), so it can never cover text.
+   Only transform and opacity animate -> compositor-only: no layout, no paint, no per-frame JavaScript. t58-personalize.js
+   builds the elements (fewer on phones / low-core devices), pauses them while the tab is hidden, and skips them for
+   prefers-reduced-motion and data-saver. The Personalize "gentle motion" switch turns the whole layer off. */
+.t58-scene-fx { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: -1; pointer-events: none; overflow: hidden; contain: layout paint style;
+  --fx-ink: 255, 255, 255; --fx-cool: 150, 190, 255; --fx-warm: 255, 196, 110; }
+html[data-theme="light"] .t58-scene-fx { --fx-ink: 70, 96, 130; --fx-cool: 70, 110, 170; --fx-warm: 214, 140, 40; }
+.t58-scene-fx.paused * { animation-play-state: paused !important; }
+html.t58-bg-swap .t58-scene-fx { animation: t58-bg-swap .9s cubic-bezier(.22, .61, .36, 1) both; }
+@media (prefers-reduced-motion: reduce) { .t58-scene-fx { display: none; } }
+.t58-scene-fx i { position: absolute; display: block; }
+
+/* cosmic drift: two slow nebula layers + sparse twinkling stars */
+.t58-fx-cosmic .neb { left: -20%; top: -20%; width: 140%; height: 140%; will-change: transform; }
+.t58-fx-cosmic .neb.a { background:
+    radial-gradient(38% 34% at 26% 36%, rgba(139, 92, 246, .26), transparent 72%),
+    radial-gradient(32% 30% at 74% 60%, rgba(20, 184, 166, .20), transparent 72%),
+    radial-gradient(28% 24% at 52% 86%, rgba(79, 70, 229, .20), transparent 72%);
+  animation: t58-neb-a 96s ease-in-out infinite alternate; }
+.t58-fx-cosmic .neb.b { background:
+    radial-gradient(30% 28% at 70% 28%, rgba(99, 102, 241, .20), transparent 72%),
+    radial-gradient(34% 30% at 30% 70%, rgba(45, 212, 191, .14), transparent 72%);
+  animation: t58-neb-b 128s ease-in-out infinite alternate; }
+html[data-theme="light"] .t58-fx-cosmic .neb { opacity: .55; }
+@keyframes t58-neb-a { from { transform: translate3d(-3.5%, 2%, 0) scale(1.04); } to { transform: translate3d(3.5%, -3%, 0) scale(1); } }
+@keyframes t58-neb-b { from { transform: translate3d(3%, -2.5%, 0) scale(1); } to { transform: translate3d(-4%, 3%, 0) scale(1.06); } }
+.t58-fx-cosmic .star { left: var(--x); top: var(--y); width: var(--sz); height: var(--sz); border-radius: 50%; background: rgb(var(--c, 255, 255, 255));
+  box-shadow: 0 0 calc(var(--sz) * 2.2) rgba(var(--c, 255, 255, 255), .55); opacity: .1; animation: t58-twinkle var(--dur) ease-in-out var(--delay) infinite; }
+html[data-theme="light"] .t58-fx-cosmic .star { --c: 90, 100, 170; }
+@keyframes t58-twinkle { 0%, 100% { opacity: .08; } 50% { opacity: var(--o); } }
+
+/* obsidian: slow ambient light sliding across the black surfaces */
+.t58-fx-obsidian .sheen { top: -10%; left: 0; width: 55vw; height: 120%; will-change: transform, opacity; opacity: 0; transform: translate3d(-70vw, 0, 0) skewX(-14deg);
+  background: linear-gradient(90deg, transparent 0%, rgba(70, 215, 245, .00) 22%, rgba(70, 215, 245, .11) 48%, rgba(255, 255, 255, .05) 56%, transparent 82%);
+  animation: t58-sheen 34s ease-in-out infinite; }
+.t58-fx-obsidian .sheen.b { width: 36vw; animation-duration: 52s; animation-delay: -21s; animation-direction: reverse;
+  background: linear-gradient(90deg, transparent 0%, rgba(120, 200, 255, .08) 50%, transparent 100%); }
+html[data-theme="light"] .t58-fx-obsidian .sheen { background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, .0) 22%, rgba(255, 255, 255, .42) 50%, transparent 82%); }
+@keyframes t58-sheen { 0% { transform: translate3d(-70vw, 0, 0) skewX(-14deg); opacity: 0; } 14% { opacity: 1; } 86% { opacity: 1; } 100% { transform: translate3d(120vw, 0, 0) skewX(-14deg); opacity: 0; } }
+
+/* midnight ocean: rolling swell lines + a breathing moon path */
+.t58-fx-ocean .swell { left: 0; width: 100%; height: 46px; overflow: hidden; opacity: var(--o); animation: t58-bob var(--bob) ease-in-out infinite alternate; }
+.t58-fx-ocean .swell::before { content: ""; position: absolute; top: 0; left: 0; width: calc(100% + 520px); height: 100%; will-change: transform;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='520' height='46' viewBox='0 0 520 46'%3E%3Cpath d='M0 23 C65 5 130 5 195 23 S325 41 390 23 S455 5 520 23' fill='none' stroke='white' stroke-width='1.6'/%3E%3Cpath d='M0 33 C86 19 172 19 260 33 S433 47 520 33' fill='none' stroke='white' stroke-width='1' opacity='.55'/%3E%3C/svg%3E") repeat-x 0 0 / 520px 46px;
+  animation: t58-swell var(--dur) linear infinite; }
+html[data-theme="light"] .t58-fx-ocean .swell::before { filter: none; opacity: .8; }
+@keyframes t58-swell { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-520px, 0, 0); } }
+@keyframes t58-bob { from { transform: translate3d(0, -4px, 0); } to { transform: translate3d(0, 5px, 0); } }
+.t58-fx-ocean .moonpath { left: 69%; top: 51%; width: 11vw; min-width: 90px; height: 40%; margin-left: -5.5vw; will-change: transform, opacity; transform-origin: 50% 0;
+  background: radial-gradient(50% 50% at 50% 0%, rgba(214, 228, 255, .34), rgba(190, 210, 255, .10) 55%, transparent 76%);
+  animation: t58-moonpath 7s ease-in-out infinite alternate; }
+html[data-theme="light"] .t58-fx-ocean .moonpath { background: radial-gradient(50% 50% at 50% 0%, rgba(255, 255, 255, .55), rgba(255, 255, 255, .16) 55%, transparent 76%); }
+@keyframes t58-moonpath { from { opacity: .55; transform: scaleX(.9); } to { opacity: 1; transform: scaleX(1.08); } }
+.t58-fx-ocean .glint { left: var(--x); top: var(--y); width: var(--sz); height: 1.5px; border-radius: 2px; background: rgba(228, 238, 255, .9); opacity: 0; animation: t58-glint var(--dur) ease-in-out var(--delay) infinite; }
+html[data-theme="light"] .t58-fx-ocean .glint { background: rgba(255, 255, 255, .95); }
+@keyframes t58-glint { 0%, 100% { opacity: 0; } 45% { opacity: var(--o); } 55% { opacity: var(--o); } }
+
+/* rainfall district: soft rain, drifting street reflections, distant signal lights and traffic */
+.t58-fx-rain .drop { left: var(--x); top: 0; width: 1px; height: var(--len); opacity: 0; will-change: transform, opacity;
+  background: linear-gradient(180deg, rgba(var(--fx-cool), 0), rgba(var(--fx-cool), .7));
+  animation: t58-rain var(--dur) linear var(--delay) infinite; }
+@keyframes t58-rain { 0% { transform: translate3d(0, -14vh, 0) rotate(9deg); opacity: 0; } 10% { opacity: var(--o); } 90% { opacity: var(--o); } 100% { transform: translate3d(-9vh, 112vh, 0) rotate(9deg); opacity: 0; } }
+.t58-fx-rain .refl { bottom: 0; left: var(--x); width: var(--w); height: 38%; will-change: transform, opacity;
+  background: linear-gradient(180deg, transparent 0%, rgba(var(--rc), .30) 26%, rgba(var(--rc), .10) 70%, transparent 100%);
+  animation: t58-refl var(--dur) ease-in-out var(--delay) infinite alternate; }
+@keyframes t58-refl { from { transform: translate3d(-16px, 0, 0); opacity: .35; } to { transform: translate3d(16px, 0, 0); opacity: 1; } }
+.t58-fx-rain .light { left: var(--x); top: var(--y); width: var(--sz); height: var(--sz); border-radius: 50%; background: rgb(var(--rc)); box-shadow: 0 0 calc(var(--sz) * 3) rgba(var(--rc), .8);
+  opacity: .3; animation: t58-signal var(--dur) ease-in-out var(--delay) infinite; }
+@keyframes t58-signal { 0%, 100% { opacity: .15; } 50% { opacity: .85; } }
+.t58-fx-rain .car { left: 0; top: var(--y); width: 5px; height: 5px; border-radius: 50%; background: rgb(var(--rc)); box-shadow: 0 0 9px 3px rgba(var(--rc), .65);
+  opacity: 0; animation: t58-car var(--dur) linear var(--delay) infinite; }
+@keyframes t58-car { 0% { transform: translate3d(36vw, 0, 0); opacity: 0; } 8% { opacity: .85; } 92% { opacity: .85; } 100% { transform: translate3d(70vw, 0, 0); opacity: 0; } }
+html[data-theme="light"] .t58-fx-rain .drop { background: linear-gradient(180deg, rgba(70, 100, 150, 0), rgba(70, 100, 150, .55)); }
+
+/* silent sanctuary: drifting mist, floating lantern-gold motes, a few swaying leaves */
+.t58-fx-sanctuary .mist { left: -25%; width: 150%; height: 34%; will-change: transform; top: var(--y);
+  background: radial-gradient(48% 50% at 32% 50%, rgba(214, 228, 226, .16), transparent 72%), radial-gradient(40% 46% at 74% 56%, rgba(214, 228, 226, .12), transparent 72%);
+  animation: t58-mist var(--dur) ease-in-out infinite alternate; }
+html[data-theme="light"] .t58-fx-sanctuary .mist { background: radial-gradient(48% 50% at 32% 50%, rgba(255, 255, 255, .5), transparent 72%), radial-gradient(40% 46% at 74% 56%, rgba(255, 255, 255, .4), transparent 72%); }
+@keyframes t58-mist { from { transform: translate3d(-7%, 0, 0); } to { transform: translate3d(7%, -2%, 0); } }
+.t58-fx-sanctuary .mote { left: var(--x); top: var(--y); width: var(--sz); height: var(--sz); border-radius: 50%; background: rgb(var(--fx-warm)); box-shadow: 0 0 8px 2px rgba(var(--fx-warm), .6);
+  opacity: 0; animation: t58-fly var(--dur) ease-in-out var(--delay) infinite, t58-glow var(--glow) ease-in-out var(--delay) infinite; }
+.t58-fx-sanctuary .leaf { left: var(--x); top: 0; width: var(--sz); height: var(--sz); opacity: 0; will-change: transform, opacity; animation: t58-fall var(--dur) linear var(--delay) infinite; }
+.t58-fx-sanctuary .leaf > b { display: block; width: 100%; height: 72%; border-radius: 0 100% 0 100%; background: linear-gradient(135deg, #5f8a4e, #2f5a3a); animation: t58-sway var(--swaydur) ease-in-out infinite alternate; }
+.t58-fx-sanctuary .leaf > b.l1 { background: linear-gradient(135deg, #8aa14d, #46662f); }
+
+/* misty forest: fog drifting between the trunks, ripples spreading on the lake */
+.t58-fx-forest .fog { left: -40%; width: 180%; height: var(--h); top: var(--y); opacity: var(--o); will-change: transform;
+  background: radial-gradient(46% 50% at 28% 50%, rgba(224, 238, 238, .34), transparent 72%), radial-gradient(40% 46% at 72% 46%, rgba(224, 238, 238, .26), transparent 72%);
+  animation: t58-fog var(--dur) ease-in-out infinite alternate; }
+html[data-theme="light"] .t58-fx-forest .fog { background: radial-gradient(46% 50% at 28% 50%, rgba(255, 255, 255, .55), transparent 72%), radial-gradient(40% 46% at 72% 46%, rgba(255, 255, 255, .45), transparent 72%); }
+@keyframes t58-fog { from { transform: translate3d(-9%, 0, 0); } to { transform: translate3d(9%, 1.5%, 0); } }
+.t58-fx-forest .ripple { left: var(--x); top: var(--y); width: var(--w); height: calc(var(--w) * .24); margin: calc(var(--w) * -.12) 0 0 calc(var(--w) * -.5); border: 1px solid rgba(var(--fx-ink), .32); border-radius: 50%;
+  opacity: 0; will-change: transform, opacity; animation: t58-ripple var(--dur) ease-out var(--delay) infinite; }
+@keyframes t58-ripple { 0% { transform: scale(.15); opacity: 0; } 12% { opacity: .5; } 100% { transform: scale(1.7); opacity: 0; } }
 
 /* ---- Personalize: Bible verse bar (static line at the top of the page; text rotates every 30 minutes) ---- */
 .t58-verse {
