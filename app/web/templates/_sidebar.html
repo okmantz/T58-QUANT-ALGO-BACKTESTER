@@ -50,7 +50,7 @@
       style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border-light);
              background:var(--panel-3);color:var(--text);font-size:12.5px;" autocomplete="off">
     <div id="t58-global-search-results" style="display:none;position:absolute;top:100%;left:0;right:0;
-         z-index:50;margin-top:4px;background:var(--panel-2);border:1px solid var(--border-light);
+         z-index:50;margin-top:4px;background:var(--pop-bg);border:1px solid var(--pop-bd);
          border-radius:8px;max-height:360px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,0.35);"></div>
   </div>
 
@@ -81,7 +81,7 @@
   <div class="t58-nav-divider"></div>
   <div class="t58-nav-section-label">Strategy Lab</div>
 
-  {% set create_pages   = ['forge', 'strategy_library', 'speed_run', 'speed_run_multi_instrument', 'generate_strategies', 'research_agent', 'research', 'research_loop', 'discover', 'overnight_autopilot'] %}
+  {% set create_pages   = ['forge', 'strategy_library', 'speed_run', 'speed_run_multi_instrument', 'generate_strategies', 'research_agent', 'research', 'research_loop', 'discover', 'overnight_autopilot', 'discovery_engine', 'start_here_create'] %}
   {% set test_pages     = ['run', 'payout_probability', 'full_pipeline'] %}
   {% set optimize_pages = ['optimize_hub', 'optimize_simple', 'search', 'search_multi_instrument', 'multi_market', 'refine', 'full_pipeline', 'quick_optimize', 'multi_objective', 'evolution', 'evolution_multi_instrument', 'risk_sweep', 'cross_instrument'] %}
   {% set validate_pages = ['validate_hub', 'validate_simple', 'wfo', 'wfga', 'cpcv', 'pbo', 'sensitivity', 'parameter_robustness', 'regime_matrix'] %}
@@ -96,11 +96,6 @@
        Lab / Options / Hedge Fund Manager / Account / Education groups
        below still collapse/expand, condensed by default -- t58-chrome.js
        only re-opens one the person has explicitly opened before. -->
-
-  <!-- Strategy Discovery Engine (2026-10-25): Search Lab, Evolution Lab, Forge, Speed Run and Discover are presets of ONE engine. -->
-  <a href="/discovery-engine" data-accent="teal" class="t58-nav-item top-level {{ 'active' if active_page == 'discovery_engine' else '' }}">
-    Strategy Discovery Engine
-  </a>
 
   <!-- (1) Create -- v9.8: single link to the consolidated section page;
        its individual tools live on that page (tools grid), not in the sidebar. -->

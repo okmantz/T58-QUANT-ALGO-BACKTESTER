@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Discovery run — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<style>
+  * { box-sizing: border-box; }
+  .dj-wrap { max-width: 860px; }
+  .dj-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 14px; padding: 18px; margin-bottom: 16px; }
+  .dj-card h2 { margin: 0 0 8px; font-size: 16px; }
+  .dj-spin { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border-light); border-top-color: var(--teal); border-radius: 50%; animation: dj-r .9s linear infinite; margin-right: 8px; vertical-align: -2px; }
+  @keyframes dj-r { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .dj-spin { animation: none; } }
+  #dj-log { background: var(--panel-3); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; max-height: 220px; overflow: auto; white-space: pre-wrap; color: var(--text-muted); }
+  .dj-meta { font-size: 12.5px; color: var(--text-muted); margin: 0 0 10px; }
+  .dj-btn { padding: 9px 16px; border-radius: 9px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-weight: 600; cursor: pointer; font-size: 13px; text-decoration: none; display: inline-block; }
+  .dj-btn.pri { background: var(--teal); border-color: var(--teal); color: var(--on-teal); font-weight: 700; }
+  .dj-banner { padding: 14px 16px; border-radius: 12px; margin-bottom: 16px; font-size: 15px; line-height: 1.5; border: 1px solid var(--border-light); background: var(--panel-2); }
+  .dj-banner.ok { border-color: rgba(var(--ok-rgb), .6); }
+  .dj-banner.none { border-color: rgba(245, 184, 61, .6); }
+  .dj-banner b { font-size: 16px; }
+  .dj-champ { border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-top: 12px; background: var(--panel-3); }
+  .dj-champ.pass { border-color: rgba(var(--ok-rgb), .6); }
+  .dj-champ h3 { margin: 0 0 4px; font-size: 15px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .tag { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; border: 1px solid var(--border-light); }
+  .tag.ok { color: var(--ok); border-color: rgba(var(--ok-rgb), .55); } .tag.bad { color: var(--coral, #ff6f6f); border-color: rgba(255,111,111,.45); }
+  .dj-steps { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 5px; }
+  .dj-steps li { font-size: 13px; display: flex; gap: 8px; align-items: baseline; }
+  .dj-steps .i { flex: none; width: 18px; text-align: center; font-weight: 800; }
+  .dj-steps .pass .i { color: var(--ok); } .dj-steps .fail .i { color: var(--coral, #ff6f6f); } .dj-steps .skipped { color: var(--text-muted); }
+  .dj-steps small { color: var(--text-muted); }
+  .dj-facts { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--text-muted); margin: 4px 0 0; }
+  .dj-actions { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .dj-err { border-left: 3px solid var(--danger); color: var(--danger); }
+</style>
+</head>
+<body>
+{% set active_page = 'discovery_engine' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="dj-wrap">
+<div class="t58-page-header" style="padding-left:0;">
+  <p style="margin:0 0 4px;font-size:12px;"><a href="/discovery-engine" style="color:var(--teal);text-decoration:none;">&larr; Strategy Discovery Engine</a></p>
+  <h1>Discovery run</h1>
+</div>
+
+{% if not_found %}
+<div class="dj-card dj-err">This run wasn&rsquo;t found &mdash; the app may have restarted since it ran. <a href="/discovery-engine" style="color:var(--teal);">Start a new one</a>.</div>
+{% else %}
+
+<div class="dj-card" id="dj-running">
+  <h2><span class="dj-spin" id="dj-spin"></span><span id="dj-title">Searching&hellip;</span></h2>
+  <p class="dj-meta" id="dj-meta"></p>
+  <div id="dj-log" aria-live="polite">Starting&hellip;</div>
+  <div class="dj-actions"><button type="button" class="dj-btn" id="dj-stop">Stop</button></div>
+</div>
+
+<div id="dj-result" style="display:none;"></div>
+<div class="dj-card dj-err" id="dj-error" style="display:none;"></div>
+
+{% endif %}
+</div>
+</div>
+</div>
+{% if not not_found %}
+<script>
+(function () {
+  var jobId = {{ job_id|tojson }}, csrf = {{ csrf|tojson }};
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function mins(s) { return s < 90 ? s + 's' : Math.round(s / 60) + ' min'; }
+  $('dj-stop').addEventListener('click', function () {
+    this.disabled = true; this.textContent = 'Stopping…';
+    fetch('/discovery-engine/job/' + jobId + '/stop', {method: 'POST', headers: {'X-CSRF-Token': csrf}, body: new URLSearchParams({_csrf_token: csrf})}).catch(function () {});
+  });
+  function champ(c) {
+    var h = '<div class="dj-champ ' + (c.passed ? 'pass' : '') + '"><h3>' + esc(c.family_title) +
+      (c.passed ? ' <span class="tag ok">Passed every check</span>' : ' <span class="tag bad">Rejected' + (c.failed_step ? ': ' + esc(c.failed_step) : '') + '</span>') + '</h3>';
+    var facts = [];
+    if (c.edge_lb_r != null) facts.push('Cost-adjusted edge (conservative): <b>' + (c.edge_lb_r >= 0 ? '+' : '') + Number(c.edge_lb_r).toFixed(3) + ' R</b> per trade');
+    if (c.trades != null) facts.push('<b>' + c.trades + '</b> trades');
+    if (facts.length) h += '<p class="dj-facts">' + facts.map(function (f) { return '<span>' + f + '</span>'; }).join('') + '</p>';
+    if (c.failed_reason && !c.passed) h += '<p class="dj-meta" style="margin:8px 0 0;">' + esc(c.failed_reason) + '</p>';
+    if (c.steps && c.steps.length) {
+      h += '<ul class="dj-steps">' + c.steps.map(function (s) {
+        return '<li class="' + s.state + '"><span class="i">' + (s.state === 'pass' ? '✓' : (s.state === 'fail' ? '✗' : '–')) + '</span><span>' + esc(s.label) + (s.detail ? ' <small>— ' + esc(s.detail) + '</small>' : '') + '</span></li>';
+      }).join('') + '</ul>';
+    }
+    if (c.can_save) h += '<div class="dj-actions"><button type="button" class="dj-btn ' + (c.passed ? 'pri' : '') + '" data-save="' + c.index + '">Save to my library</button><span class="dj-meta" style="margin:0" data-msg="' + c.index + '"></span></div>';
+    return h + '</div>';
+  }
+  function render(r) {
+    var box = $('dj-result'), h = '';
+    if (r.n_forward > 0) {
+      h += '<div class="dj-banner ok"><b>' + r.n_forward + ' candidate' + (r.n_forward > 1 ? 's' : '') + ' passed every check.</b><br>They are candidates for a forward test, not proven winners. Save one, then run it through Test.</div>';
+    } else {
+      h += '<div class="dj-banner none"><b>No strategy passed every check this time.</b><br>That is a normal and honest outcome &mdash; the checks are strict on purpose. Below are the closest candidates and exactly where each one failed. Try another market, another bar size, or a deeper search.</div>';
+    }
+    h += '<div class="dj-card"><h2>Results</h2><p class="dj-meta">Tried ' + Number(r.n_evaluations).toLocaleString() + ' ideas across ' + r.families_run + ' strategy types in ' + mins(r.elapsed_seconds) + '.' +
+      (r.effective_trials ? ' Counted as about ' + Math.round(r.effective_trials) + ' independent tries for the luck discount.' : '') + '</p>';
+    if (!r.champions.length) h += '<p class="dj-meta">Nothing cleared the minimum bar to be ranked.</p>';
+    h += r.champions.map(champ).join('');
+    if (r.notes && r.notes.length) h += '<p class="dj-meta" style="margin-top:12px;">' + r.notes.map(esc).join('<br>') + '</p>';
+    h += '<div class="dj-actions" style="margin-top:14px;"><a class="dj-btn pri" href="/discovery-engine">Run another search</a><a class="dj-btn" href="/graveyard">See rejected strategies</a></div></div>';
+    box.innerHTML = h.replace(/&mdash;/g, '—'); box.style.display = '';
+    [].forEach.call(box.querySelectorAll('[data-save]'), function (b) {
+      b.addEventListener('click', function () {
+        var i = b.getAttribute('data-save'), msg = box.querySelector('[data-msg="' + i + '"]'); b.disabled = true;
+        fetch('/discovery-engine/job/' + jobId + '/save/' + i, {method: 'POST', headers: {'X-CSRF-Token': csrf}, body: new URLSearchParams({_csrf_token: csrf})})
+          .then(function (r) { return r.json(); }).then(function (d) {
+            if (d.ok) { msg.innerHTML = 'Saved as ' + esc(d.name) + '. <a href="' + d.test_url + '" style="color:var(--teal);font-weight:700;">Test it &rarr;</a>'; b.textContent = 'Saved'; }
+            else { msg.textContent = d.error || 'Could not save.'; b.disabled = false; }
+          }).catch(function () { msg.textContent = 'Could not save.'; b.disabled = false; });
+      });
+    });
+  }
+  function poll() {
+    fetch('/discovery-engine/job/' + jobId + '/status.json').then(function (r) { return r.json(); }).then(function (d) {
+      if (!d.found) return;
+      var s = d.settings || {};
+      $('dj-meta').textContent = [s.dataset, s.timeframe, s.prop, 'running ' + mins(d.elapsed)].filter(Boolean).join(' · ');
+      var log = $('dj-log'), atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
+      log.textContent = d.log.filter(Boolean).join('\n'); if (atEnd) log.scrollTop = log.scrollHeight;
+      if (d.error) { $('dj-spin').style.display = 'none'; $('dj-title').textContent = 'The engine stopped'; $('dj-stop').style.display = 'none'; var e = $('dj-error'); e.style.display = ''; e.textContent = d.error; return; }
+      if (d.done) {
+        $('dj-spin').style.display = 'none'; $('dj-stop').style.display = 'none';
+        $('dj-title').textContent = d.cancelled ? 'Stopped — here is what was found so far' : 'Finished';
+        if (d.result) render(d.result);
+        return;
+      }
+      setTimeout(poll, 2000);
+    }).catch(function () { setTimeout(poll, 3500); });
+  }
+  poll();
+})();
+</script>
+{% endif %}
+<script src="/static/t58-chrome.js" defer></script>
+</body>
+</html>

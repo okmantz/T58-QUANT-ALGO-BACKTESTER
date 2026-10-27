@@ -3,49 +3,208 @@
 <head>
 <title>Strategy Discovery Engine — T58 Quant Algo Backtester</title>
 {% include '_head_common.html' %}
-{% include '_lifecycle_css.html' %}
+<style>
+  * { box-sizing: border-box; }
+  .de-wrap { max-width: 860px; }
+  .de-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 14px; padding: 18px; margin-bottom: 16px; }
+  .de-step { display: flex; gap: 12px; align-items: flex-start; }
+  .de-num { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 13px;
+    background: var(--teal); color: var(--on-teal); }
+  .de-step h2 { margin: 2px 0 2px; font-size: 16px; }
+  .de-step p.sub { margin: 0 0 12px; font-size: 13px; color: var(--text-muted); line-height: 1.5; }
+  .de-body { flex: 1; min-width: 0; }
+  .de-card select, .de-card input[type=number], .de-card input[type=text] { width: 100%; max-width: 100%; padding: 11px 12px; border-radius: 9px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font-size: 14px; }
+  .de-card select:focus, .de-card input:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), .15); }
+  .de-effort { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  .de-eff { position: relative; display: block; cursor: pointer; }
+  .de-eff input { position: absolute; opacity: 0; inset: 0; cursor: pointer; }
+  .de-eff .box { display: block; height: 100%; padding: 12px 14px; border-radius: 11px; border: 2px solid var(--border-light); background: var(--panel-3); transition: border-color .15s, box-shadow .15s; }
+  .de-eff .box b { display: block; font-size: 14.5px; margin-bottom: 4px; }
+  .de-eff .box span { font-size: 12.5px; color: var(--text-muted); line-height: 1.45; display: block; }
+  .de-eff input:checked + .box { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), .18); }
+  .de-eff input:focus-visible + .box { outline: 2px solid var(--teal); outline-offset: 2px; }
+  .de-go { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .de-btn { padding: 14px 26px; border-radius: 11px; border: 1px solid var(--teal); background: var(--teal); color: var(--on-teal); font-size: 16px; font-weight: 800; cursor: pointer; }
+  .de-btn:hover { filter: brightness(1.06); }
+  .de-note { font-size: 12.5px; color: var(--text-muted); line-height: 1.5; margin: 0; }
+  .de-err { border-left: 3px solid var(--danger); color: var(--danger); padding: 12px 14px; background: var(--panel-2); border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .de-adv summary, .de-more summary { cursor: pointer; font-weight: 700; font-size: 13.5px; list-style: none; color: var(--text); }
+  .de-adv summary::-webkit-details-marker, .de-more summary::-webkit-details-marker { display: none; }
+  .de-adv summary::after, .de-more summary::after { content: " \25BE"; color: var(--teal); }
+  .de-adv[open] summary::after, .de-more[open] summary::after { content: " \25B4"; }
+  .de-grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-top: 12px; }
+  .de-grid2 label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
+  .de-how { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 10px; }
+  .de-how div { background: var(--panel-3); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: 12.5px; color: var(--text-muted); line-height: 1.45; }
+  .de-how b { display: block; color: var(--text); font-size: 13px; margin-bottom: 3px; }
+  table.de-t { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+  table.de-t th, table.de-t td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table.de-t th { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
+  .de-scroll { overflow-x: auto; }
+  .de-links a { color: var(--teal); font-weight: 600; text-decoration: none; margin-right: 14px; font-size: 13px; }
+  @media (max-width: 640px) { .de-effort { grid-template-columns: 1fr; } .de-btn { width: 100%; } .de-card { padding: 14px; } }
+</style>
 </head>
 <body>
 {% set active_page = active_page|default('discovery_engine') %}
 <div class="t58-shell">
 {% include '_sidebar.html' %}
 <div class="t58-main">
-<div class="lc-scope"><div class="lc-wrap">
+<div class="de-wrap">
 
-<h1 class="lc-title">Strategy Discovery Engine</h1>
-<p class="lc-sub">One engine, one objective (<b>{{ st.objective }}</b>), one entry floor ({{ st.floor.min_trades }}+ trades, mean-R t &ge; {{ st.floor.min_t_stat }}, cost &lt; {{ st.floor.max_cost_in_r }} R),
-one lifetime trial ledger and one promotion sequence (reproduction &rarr; sequence-deflated Sharpe &rarr; random-timing null &rarr; pooled cross-market edge &rarr; sealed slice).
-The old labs are presets of it. Every champion still needs a forward test.</p>
+<div class="t58-page-header" style="padding-left:0;">
+  <p style="margin:0 0 4px;font-size:12px;"><a href="/start-here/create" style="color:var(--teal);text-decoration:none;">&larr; Create</a></p>
+  <h1>Strategy Discovery Engine</h1>
+  <p>Don&rsquo;t have a strategy yet? Let the engine find candidates for you. Choose your market and your prop firm, pick how hard to look, and press Start &mdash; it searches, tests and rejects on its own and shows what is left.</p>
+</div>
 
-<h2>Presets</h2>
-<table class="lc-table"><thead><tr><th>Preset</th><th>Generator</th><th>What it does</th><th></th></tr></thead><tbody>
-{% for p in st.presets %}
-<tr><td><b>{{ p.label }}</b></td><td>{{ p.backend }}</td><td>{{ p.description }}</td><td>{% if p.page %}<a href="{{ p.page }}">open</a>{% endif %}</td></tr>
-{% endfor %}
-</tbody></table>
+{% if error %}<div class="de-err" role="alert">{{ error }}</div>{% endif %}
 
-<h2>New family batches</h2>
-<p>{% if st.gate.open %}<b style="color:#2a9d5c">OPEN</b> &mdash; the surrogate study passed on the current code (false-discovery rate {{ '%.1f'|format((st.gate.null_rate or 0) * 100) }}% over {{ st.gate.n_null }} null runs).
-{% else %}<b style="color:#c0392b">CLOSED</b> &mdash; the report asks that the new batches stay off until the lab-level false-discovery rate is under 5%.
-{% for r in st.gate.reasons %}<br>&bull; {{ r }}{% endfor %}{% endif %}</p>
-<p>Registered v13 families: {% for k, v in st.v13.counts.items() %}{{ v }} {{ k }}{% if not loop.last %}, {% endif %}{% endfor %}; {{ st.v13.blocked }} cannot be modelled honestly by the bar engine.
-Total families {{ st.families_total }} ({{ st.families_retired }} retired).</p>
-<button onclick="fetch('/api/discovery-engine/preregister',{method:'POST'}).then(r=>r.json()).then(j=>alert('Pre-registered: '+j.registered+' new, '+j.existing+' already on record.'))">Pre-register all 100 kill conditions</button>
+<form method="post" action="/discovery-engine/start" id="de-form">
+  <input type="hidden" name="_csrf_token" value="{{ csrf }}">
 
-<table class="lc-table"><thead><tr><th>#</th><th>Family</th><th>Group</th><th>Needs</th><th>Status</th><th>Batch</th><th>Kill condition</th></tr></thead><tbody>
-{% for r in st.v13.rows %}
-<tr><td>{{ r.number }}</td><td>{{ r.name }}{% if r.tied %} <small>(instrument-tied)</small>{% endif %}</td><td>{{ r.group }}</td><td>{{ r.needs }}</td><td>{{ r.status }}</td><td>{{ r.batch }}</td><td><small>{{ r.kill }}</small></td></tr>
-{% endfor %}
-</tbody></table>
+  <div class="de-card de-step">
+    <div class="de-num">1</div>
+    <div class="de-body">
+      <h2>Which market should it search?</h2>
+      <p class="sub">The price history the engine will learn from. Grouped by market; the most recent bars are used.</p>
+      {% if dataset_groups %}
+      <select name="dataset" id="de-dataset" required aria-label="Market data">
+        <option value="">Choose market data&hellip;</option>
+        {% for g in dataset_groups %}
+        <optgroup label="{{ g.instrument }}">
+          {% for f in g.files %}
+          <option value="{{ f.full_name }}" {{ 'selected' if form.get('dataset') == f.full_name else '' }}>{{ f.name }}</option>
+          {% endfor %}
+        </optgroup>
+        {% endfor %}
+      </select>
+      {% else %}
+      <p class="de-note">No market data is stored yet. <a href="/data" style="color:var(--teal);">Import a CSV in the Data section</a>, then come back.</p>
+      {% endif %}
+    </div>
+  </div>
 
-<h2>Out-of-sample record</h2>
-{% if st.retest_ranking %}
-<table class="lc-table"><thead><tr><th>Family</th><th>Retests</th><th>Hits</th><th>Shrunk hit rate</th><th>Mean OOS R</th></tr></thead><tbody>
-{% for r in st.retest_ranking %}<tr><td>{{ r.name }}</td><td>{{ r.retests }}</td><td>{{ r.hits }}</td><td>{{ '%.0f'|format(r.shrunk_hit_rate * 100) }}%</td><td>{{ '%+.3f'|format(r.mean_oos_r) }}</td></tr>{% endfor %}
-</tbody></table>
-{% else %}<p>No conclusive retests yet. Champions and near-misses are re-run on newer data automatically once at least ~19 sessions of unseen bars exist.</p>{% endif %}
+  <div class="de-card de-step">
+    <div class="de-num">2</div>
+    <div class="de-body">
+      <h2>Which prop firm are you aiming at?</h2>
+      <p class="sub">Sets the account size and rules a strategy has to survive. Only firms that allow algorithmic trading are shown by default.</p>
+      <select name="prop_preset" id="de_prop_preset_select" aria-label="Prop firm">
+        <option value="">Standard $100k evaluation (no specific firm)</option>
+      </select>
+    </div>
+  </div>
 
-</div></div>
-</div></div>
+  <div class="de-card de-step">
+    <div class="de-num">3</div>
+    <div class="de-body">
+      <h2>How thoroughly should it look?</h2>
+      <p class="sub">More thorough finds more but takes longer. You can stop a run at any time.</p>
+      <div class="de-effort" role="radiogroup" aria-label="Search depth">
+        {% for key, v in effort.items() %}
+        <label class="de-eff">
+          <input type="radio" name="effort" value="{{ key }}" {{ 'checked' if (form.get('effort') or 'standard') == key else '' }}>
+          <span class="box"><b>{{ v[1] }}</b><span>{{ v[2] }}</span></span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="de-card">
+    <div class="de-go">
+      <button type="submit" class="de-btn" id="de-start">Start searching &rarr;</button>
+      <p class="de-note" style="flex:1;min-width:220px;">Runs in the background. The engine only keeps a strategy that survives every check below, and anything it keeps still needs a forward test before you trade it.</p>
+    </div>
+    <details class="de-adv" style="margin-top:16px;">
+      <summary>Advanced options</summary>
+      <div class="de-grid2">
+        <label>Search method
+          <select name="method">{% for k, v in methods.items() %}<option value="{{ k }}" {{ 'selected' if form.get('method') == k else '' }}>{{ v }}</option>{% endfor %}</select>
+        </label>
+        <label>Which strategy types
+          <select name="families">
+            <option value="">Engine&rsquo;s choice</option>
+            <option value="ready" {{ 'selected' if form.get('families') == 'ready' else '' }}>Only fully tested types</option>
+            <option value="all" {{ 'selected' if form.get('families') == 'all' else '' }}>Every available type</option>
+          </select>
+        </label>
+        <label>Risk per trade (%)
+          <input type="number" name="risk_pct" min="0.05" max="5" step="0.05" value="{{ form.get('risk_pct') or '0.5' }}">
+        </label>
+        <label>Most recent bars to use
+          <input type="number" name="max_bars" min="1000" step="1000" value="{{ form.get('max_bars') or '60000' }}">
+        </label>
+        <label>Random seed
+          <input type="number" name="seed" value="{{ form.get('seed') or '42' }}">
+        </label>
+      </div>
+    </details>
+  </div>
+</form>
+
+<div class="de-card">
+  <h2 style="margin:0 0 4px;font-size:15px;">What happens after you press Start</h2>
+  <p class="de-note">The engine tries many ideas, drops the weak ones early, then puts the few best through a series of checks. Each check can reject a strategy for good.</p>
+  <div class="de-how">
+    <div><b>1 &middot; Search</b>Tries strategy types across their settings and ranks them by a cost-adjusted edge estimate.</div>
+    <div><b>2 &middot; Re-run</b>Runs the leader again from scratch to confirm it gives the same answer.</div>
+    <div><b>3 &middot; Count the tries</b>Discounts the result for every strategy ever tried, so luck isn&rsquo;t mistaken for skill.</div>
+    <div><b>4 &middot; Beat random</b>Checks it beats random entry timing.</div>
+    <div><b>5 &middot; Other markets</b>Checks the same settings still work on other markets.</div>
+    <div><b>6 &middot; Unseen data</b>Reads a slice of data it never searched &mdash; once.</div>
+  </div>
+</div>
+
+<details class="de-card de-more">
+  <summary>Engine details &amp; classic tools</summary>
+  <p class="de-note" style="margin-top:10px;">One engine, one objective (<b>{{ st.objective }}</b>), one entry floor ({{ st.floor.min_trades }}+ trades, mean-R t &ge; {{ st.floor.min_t_stat }}, cost &lt; {{ st.floor.max_cost_in_r }} R) and one lifetime trial ledger.
+  The old Search Lab, Evolution Lab, Forge and Speed Run are methods of this engine now (see &ldquo;Search method&rdquo; under Advanced options). Their original pages still work:</p>
+  <p class="de-links" style="margin-top:8px;">
+    {% for p in st.presets if p.page %}<a href="{{ p.page }}">{{ p.label }}</a>{% endfor %}
+  </p>
+  <p class="de-note" style="margin-top:12px;"><b>Newer strategy families:</b>
+  {% if st.gate.open %}<b style="color:var(--ok)">open</b> &mdash; the false-discovery study passed ({{ '%.1f'|format((st.gate.null_rate or 0) * 100) }}% over {{ st.gate.n_null }} null runs).
+  {% else %}<b style="color:var(--danger)">held back</b> &mdash; they stay off until the lab&rsquo;s false-discovery rate is under 5%.
+  {% for r in st.gate.reasons %}<br>&bull; {{ r }}{% endfor %}{% endif %}
+  {{ st.families_total }} families in total ({{ st.families_retired }} retired).</p>
+  <div class="de-scroll">
+  <table class="de-t"><thead><tr><th>#</th><th>Family</th><th>Group</th><th>Status</th><th>Batch</th><th>Kill condition</th></tr></thead><tbody>
+  {% for r in st.v13.rows %}
+  <tr><td>{{ r.number }}</td><td>{{ r.name }}{% if r.tied %} <small>(instrument-tied)</small>{% endif %}</td><td>{{ r.group }}</td><td>{{ r.status }}</td><td>{{ r.batch }}</td><td><small>{{ r.kill }}</small></td></tr>
+  {% endfor %}
+  </tbody></table>
+  </div>
+  <h3 style="font-size:14px;margin:16px 0 0;">Out-of-sample record</h3>
+  {% if st.retest_ranking %}
+  <div class="de-scroll"><table class="de-t"><thead><tr><th>Family</th><th>Retests</th><th>Hits</th><th>Shrunk hit rate</th><th>Mean OOS R</th></tr></thead><tbody>
+  {% for r in st.retest_ranking %}<tr><td>{{ r.name }}</td><td>{{ r.retests }}</td><td>{{ r.hits }}</td><td>{{ '%.0f'|format(r.shrunk_hit_rate * 100) }}%</td><td>{{ '%+.3f'|format(r.mean_oos_r) }}</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% else %}<p class="de-note">No conclusive retests yet. Champions and near-misses are re-run on newer data automatically once at least ~19 sessions of unseen bars exist.</p>{% endif %}
+</details>
+
+</div>
+</div>
+</div>
+<script src="/static/prop-presets.js"></script>
+<script>
+(function () {
+  var sel = document.getElementById('de_prop_preset_select');
+  var wanted = {{ (form.get('prop_preset') or '')|tojson }};
+  if (typeof _fetchPropFirmPresets === 'function') {
+    _fetchPropFirmPresets().then(function (presets) {
+      addAlgoTradingFilter('de_prop_preset_select', presets, function (p) { return p.key; });
+      if (wanted) sel.value = wanted;
+    });
+  }
+  var form = document.getElementById('de-form');
+  form.addEventListener('submit', function () {
+    var b = document.getElementById('de-start'); b.disabled = true; b.textContent = 'Starting…';
+  });
+})();
+</script>
+<script src="/static/t58-chrome.js" defer></script>
 </body>
 </html>

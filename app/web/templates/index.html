@@ -16,7 +16,7 @@
     background: var(--panel-3); color: var(--text); font-size: 15px;
   }
   input:focus, select:focus, textarea:focus {
-    outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(53,224,176,0.15);
+    outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), 0.15);
   }
   textarea { min-height: 140px; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
   .row { display: flex; gap: 10px; }
@@ -31,7 +31,7 @@
   .submit-btn {
     width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: var(--on-teal);
     font-size: 16px; font-weight: 700; margin-top: 6px;
-    box-shadow: 0 0 22px rgba(53,224,176,0.35);
+    box-shadow: 0 0 22px rgba(var(--teal-rgb), 0.35);
   }
   .error { background: var(--err-bg); border: 1px solid var(--err-bd); color: var(--err-fg); padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
   .notice { background: var(--ok-bg); border: 1px solid var(--ok-bd); color: var(--ok-fg); padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
@@ -39,7 +39,7 @@
   .headline { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .stat { background: var(--panel-3); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
   .stat .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; }
-  .stat .value { font-size: 22px; font-weight: 700; margin-top: 2px; color: var(--teal); text-shadow: 0 0 12px rgba(53,224,176,.4); }
+  .stat .value { font-size: 22px; font-weight: 700; margin-top: 2px; color: var(--teal); text-shadow: 0 0 12px rgba(var(--teal-rgb), .4); }
   .links a { display: block; color: var(--teal); font-size: 14px; margin-top: 8px; text-decoration: none; }
   details summary { font-size: 13px; color: var(--t-faint2); cursor: pointer; }
 </style>

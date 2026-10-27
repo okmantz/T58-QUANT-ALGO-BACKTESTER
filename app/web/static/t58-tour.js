@@ -152,7 +152,7 @@
       "  transition:top .28s ease,left .28s ease,width .28s ease,height .28s ease,opacity .2s ease;}",
       ".t58-tour-spot.t58-tour-nospot{box-shadow:0 0 0 9999px rgba(3,6,10,.74);width:0;height:0;top:50%;left:50%;}",
       ".t58-tour-card{position:fixed;z-index:" + Z + ";width:min(380px,calc(100vw - 24px));box-sizing:border-box;",
-      "  background:var(--panel-2,#10141c);color:var(--text,#e7ebf2);border:1px solid var(--teal,#35e0b0);",
+      "  background:var(--pop-bg,#10141c);color:var(--text,#e7ebf2);border:1px solid var(--teal,#35e0b0);",
       "  border-radius:14px;padding:16px 18px 14px;box-shadow:0 18px 50px rgba(0,0,0,.55);",
       "  font-size:13.5px;line-height:1.55;transition:top .28s ease,left .28s ease;}",
       ".t58-tour-card *{box-sizing:border-box;}",

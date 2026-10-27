@@ -238,6 +238,20 @@ def micro_equivalent(symbol: str | None) -> "InstrumentSpec | None":
     return CROSS_MARKET_INSTRUMENTS.get(micro) if micro else None
 
 
+_CATEGORY_BY_SYMBOL = {
+    "ES": "Stock index futures", "NQ": "Stock index futures", "YM": "Stock index futures", "RTY": "Stock index futures",
+    "MES": "Micro stock index futures", "MNQ": "Micro stock index futures", "MYM": "Micro stock index futures",
+    "M2K": "Micro stock index futures",
+    "GC": "Metals & energy", "MGC": "Metals & energy", "CL": "Metals & energy", "MCL": "Metals & energy",
+    "6E": "Currencies", "ZB": "Interest rates", "ZN": "Interest rates",
+}
+
+
+def instrument_category(symbol: str) -> str:
+    """Friendly group name for the known-instrument picker (web UI); unknown symbols fall under 'Other'."""
+    return _CATEGORY_BY_SYMBOL.get(str(symbol).upper(), "Other")
+
+
 def known_instrument_symbols() -> list[str]:
     """Sorted symbols this module has a spec for -- e.g. for populating a
     UI dropdown or a helpful error message (see apply_instrument_spec)."""

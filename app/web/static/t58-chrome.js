@@ -511,18 +511,57 @@ function _t58FetchInstrumentSpecs(cb) {
     .catch(function () { cb([]); });
 }
 
-/* Populates a <select> (by id) with the known instrument symbols, once,
-   on page load. Leaves a first "(none -- set manually)" option in place
-   if the select already has one. */
+/* Populates a <select> (by id) with the known instruments, once, on page load. Instruments are grouped (stock index,
+   micro stock index, metals & energy, currencies, rates), each row reads "ES  E-mini S&P 500", and a small strip under
+   the dropdown shows the picked contract's exchange, $ per point, pip size and tick. Keeps the first "(none -- set
+   manually)" option in place if the select already has one. */
+function _t58InstCss() {
+  if (document.getElementById('t58-inst-css')) return;
+  var st = document.createElement('style');
+  st.id = 't58-inst-css';
+  st.textContent =
+    'select.t58-inst-select optgroup{font-weight:700;font-style:normal;color:var(--teal,#35e0b0)}' +
+    'select.t58-inst-select option{font-weight:400;color:var(--text,#e8ecf3);background:var(--pop-bg,#0c1c22)}' +
+    '.t58-inst-sum{display:none;flex-wrap:wrap;gap:6px;margin:8px 0 2px;font-size:12px}.t58-inst-sum.on{display:flex}' +
+    '.t58-inst-chip{display:inline-flex;gap:5px;align-items:baseline;padding:3px 9px;border-radius:999px;border:1px solid var(--border-light,#2a3142);background:var(--panel-3,#151a24);color:var(--text,#e8ecf3);white-space:nowrap}' +
+    '.t58-inst-chip b{font-weight:700}.t58-inst-chip span{color:var(--text-muted,#8a93a6);font-size:11px}';
+  document.head.appendChild(st);
+}
+
 function t58PopulateInstrumentPicker(selectId) {
   var select = document.getElementById(selectId);
   if (!select) return;
+  _t58InstCss();
   _t58FetchInstrumentSpecs(function (instruments) {
+    if (select.querySelector('optgroup')) return;
+    select.classList.add('t58-inst-select');
+    var order = ['Stock index futures', 'Micro stock index futures', 'Metals & energy', 'Currencies', 'Interest rates', 'Other'];
+    var groups = {};
     instruments.forEach(function (inst) {
+      var cat = inst.category || 'Other';
+      if (!groups[cat]) { groups[cat] = document.createElement('optgroup'); groups[cat].label = cat; }
       var opt = document.createElement('option');
       opt.value = inst.symbol;
-      opt.textContent = inst.symbol + ' -- ' + inst.description + ' (' + inst.exchange + ')';
-      select.appendChild(opt);
+      opt.textContent = inst.symbol + '  \u2014  ' + inst.description.replace(/ futures$/i, '');
+      opt.title = inst.description + ' (' + inst.exchange + ')';
+      groups[cat].appendChild(opt);
+    });
+    order.concat(Object.keys(groups)).forEach(function (cat) {
+      if (groups[cat] && !groups[cat].parentNode) select.appendChild(groups[cat]);
+    });
+    var box = document.createElement('div');
+    box.className = 't58-inst-sum';
+    box.setAttribute('aria-live', 'polite');
+    select.parentNode.insertBefore(box, select.nextSibling);
+    function chip(label, val) { return '<span class="t58-inst-chip"><span>' + label + '</span><b>' + val + '</b></span>'; }
+    select.addEventListener('change', function () {
+      var spec = null;
+      for (var i = 0; i < instruments.length; i++) if (instruments[i].symbol === select.value) { spec = instruments[i]; break; }
+      if (!spec) { box.className = 't58-inst-sum'; box.innerHTML = ''; return; }
+      box.innerHTML = chip('Exchange', spec.exchange) + chip('Per point', '$' + spec.contract_size) +
+        chip('Pip size', spec.pip_size) + chip('Tick', spec.tick_size + ' = $' + spec.tick_value) +
+        chip('Commission', '$' + spec.default_commission_round_turn + ' round-turn');
+      box.className = 't58-inst-sum on';
     });
   });
 }
@@ -596,12 +635,12 @@ function t58SetCheckboxes(containerId, checked) {
       "[data-ve]{cursor:pointer}[data-ve]:hover{filter:brightness(1.2)}" +
       "[data-ve]:focus-visible{outline:2px solid var(--teal,#35e0b0);outline-offset:2px}" +
       ".t58-ve{position:absolute;z-index:9999;width:min(320px,calc(100vw - 24px));padding:14px 16px;" +
-      "background:var(--panel-2,#12161f);color:var(--text,#e8ecf3);border:1px solid var(--border,#2a3142);" +
-      "border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.45);font-size:13px;line-height:1.45}" +
+      "background:var(--pop-bg,#0c1c22);color:var(--text,#e8ecf3);border:1px solid var(--pop-bd,#2a3142);" +
+      "border-radius:10px;box-shadow:0 14px 36px rgba(0,0,0,.6);font-size:13px;line-height:1.45}" +
       ".t58-ve h4{margin:0 22px 6px 0;font-size:14px}.t58-ve p{margin:0 0 8px;color:var(--text-dim,#9aa4b8)}" +
       ".t58-ve ul{margin:0;padding-left:18px}.t58-ve li{margin:0 0 5px}" +
       ".t58-ve .x{position:absolute;top:6px;right:8px;background:none;border:0;color:inherit;font-size:18px;cursor:pointer}" +
-      ".t58-ve.READY h4{color:var(--teal,#35e0b0)}.t58-ve.MARGINAL h4{color:var(--amber,#f5b83d)}" +
+      ".t58-ve.READY h4{color:var(--ok,#35e0b0)}.t58-ve.MARGINAL h4{color:var(--amber,#f5b83d)}" +
       ".t58-ve.NOT h4{color:var(--coral,#ff6f6f)}";
     document.head.appendChild(s);
   }

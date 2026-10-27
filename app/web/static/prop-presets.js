@@ -74,63 +74,142 @@ function _resolveFieldEl(form, nameOrId) {
   return el;
 }
 
-/**
- * v8: renders preset <option>s with an algo-trading badge appended to
- * each label. `valueFn(p, i)` builds the option value (default:
- * JSON.stringify(p), matching the original inline populators). The
- * select's existing placeholder option (value="") is preserved.
- */
-function renderPropPresetOptions(select, presets, valueFn) {
-  if (!select) return;
-  const valueOf = valueFn || ((p) => JSON.stringify(p));
-  const placeholder = select.querySelector('option[value=""]');
-  select.innerHTML = "";
-  if (placeholder) select.appendChild(placeholder);
-  (presets || []).forEach((p, i) => {
-    const opt = document.createElement("option");
-    opt.value = valueOf(p, i);
-    const badge = p.algo_trading_allowed ? "\u2705 algo trading allowed" : "\u26a0\ufe0f algo trading NOT allowed";
-    // Verification status straight from the preset record: the date its rules were last checked against the firm's own page,
-    // or an explicit "unverified" so nobody treats an unchecked row as current.
-    const ver = (p.verified_on && p.verification_tier === "primary")
-      ? ` \u00b7 \u2713 rules verified ${p.verified_on}`
-      : (p.verified_on ? ` \u00b7 rules checked ${p.verified_on} (${p.verification_tier || "secondary"})` : " \u00b7 rules unverified");
-    opt.textContent = `${p.label} \u2014 ${badge}${ver}`;
-    opt.title = p.verified_on ? `Rules last checked ${p.verified_on}${p.source_url ? " against " + p.source_url : ""}. Always confirm at the firm's site before paying for a challenge.` : "These rules have not been confirmed against the firm's own page recently -- check the firm's site before relying on them.";
-    opt.dataset.algoAllowed = p.algo_trading_allowed ? "1" : "0";
-    select.appendChild(opt);
-  });
+/* v9: tidy picker. Presets are grouped by firm (<optgroup>), each row reads "$100k Challenge -- algo OK" instead of a
+   long sentence, and a small summary strip under the dropdown shows the selected preset's key rules as chips. */
+function _ppInjectCss() {
+  if (document.getElementById("t58-pp-css")) return;
+  const st = document.createElement("style");
+  st.id = "t58-pp-css";
+  st.textContent =
+    ".t58-pp-filter{display:flex;align-items:center;gap:8px;font-size:12.5px;margin:2px 0 7px;cursor:pointer;color:var(--text-muted,#8a93a6);user-select:none}" +
+    ".t58-pp-filter input{width:auto;margin:0}" +
+    "select.t58-pp-select optgroup{font-weight:700;font-style:normal;color:var(--teal,#35e0b0)}" +
+    "select.t58-pp-select option{font-weight:400;color:var(--text,#e8ecf3);background:var(--pop-bg,#0c1c22)}" +
+    ".t58-pp-sum{display:none;flex-wrap:wrap;gap:6px;margin:8px 0 2px;font-size:12px}" +
+    ".t58-pp-sum.on{display:flex}" +
+    ".t58-pp-chip{display:inline-flex;gap:5px;align-items:baseline;padding:3px 9px;border-radius:999px;border:1px solid var(--border-light,#2a3142);background:var(--panel-3,#151a24);color:var(--text,#e8ecf3);white-space:nowrap}" +
+    ".t58-pp-chip b{font-weight:700}.t58-pp-chip span{color:var(--text-muted,#8a93a6);font-size:11px}" +
+    ".t58-pp-chip.ok{border-color:rgba(var(--ok-rgb,53,224,176),.5);color:var(--ok,#35e0b0)}" +
+    ".t58-pp-chip.warn{border-color:rgba(245,184,61,.55);color:var(--amber,#f5b83d)}" +
+    ".t58-pp-note{flex-basis:100%;font-size:11.5px;color:var(--text-muted,#8a93a6);line-height:1.4}";
+  document.head.appendChild(st);
+}
+
+function _ppMoney(n) {
+  n = Number(n);
+  if (!isFinite(n)) return "";
+  return n >= 1000 ? "$" + (n / 1000) + "k" : "$" + n;
+}
+
+/* "FTMO - $100k Challenge" -> "$100k Challenge" (the firm name is already the group heading). */
+function _ppShortLabel(p) {
+  let l = String(p.label || "");
+  const firm = String(p.firm || "");
+  if (firm && l.toLowerCase().indexOf(firm.toLowerCase()) === 0) l = l.slice(firm.length).replace(/^\s*[-–—:]\s*/, "");
+  return l || String(p.label || "");
+}
+
+function _ppSummary(select) {
+  let box = select._ppSummary;
+  if (!box) {
+    box = document.createElement("div");
+    box.className = "t58-pp-sum";
+    box.setAttribute("aria-live", "polite");
+    select.parentNode.insertBefore(box, select.nextSibling);
+    select._ppSummary = box;
+  }
+  return box;
+}
+
+function _ppUpdateSummary(select) {
+  const box = _ppSummary(select);
+  const opt = select.options[select.selectedIndex];
+  const p = opt && opt._preset;
+  if (!p) { box.className = "t58-pp-sum"; box.innerHTML = ""; return; }
+  const chip = (cls, label, val) => {
+    if (val === undefined || val === null || val === "") return "";
+    return '<span class="t58-pp-chip ' + cls + '"><span>' + label + "</span><b>" + val + "</b></span>";
+  };
+  const pct = (v) => (v === undefined || v === null ? "" : v + "%");
+  const verified = p.verified_on && p.verification_tier === "primary";
+  let html = "";
+  html += chip("", "Account", _ppMoney(p.account_size));
+  html += chip("", "Profit target", pct(p.evaluation_profit_target_pct));
+  html += chip("", "Daily loss", pct(p.daily_loss_limit_pct));
+  html += chip("", "Max drawdown", pct(p.max_drawdown_pct));
+  html += chip("", "Drawdown", p.drawdown_type ? String(p.drawdown_type).replace(/_/g, " ") : "");
+  html += chip(p.algo_trading_allowed ? "ok" : "warn", "Algo trading", p.algo_trading_allowed ? "allowed" : "not allowed");
+  html += chip(verified ? "ok" : "warn", "Rules", verified ? "verified " + p.verified_on : (p.verified_on ? "checked " + p.verified_on : "unverified"));
+  if (!p.algo_trading_allowed && p.algo_policy_note) html += '<span class="t58-pp-note">' + String(p.algo_policy_note).replace(/</g, "&lt;") + "</span>";
+  box.innerHTML = html;
+  box.className = "t58-pp-sum on";
 }
 
 /**
- * v8: inserts an "Only show firms that allow algo trading" checkbox just
- * before the preset <select> and re-renders its options through
- * renderPropPresetOptions whenever the toggle changes. Default ON: the
- * person must not accidentally optimize for (or quick-fill rules from) a
- * firm that bans automation; the toggle stays visible so every preset
- * remains one click away. `presets` is the full preset array (from
- * prop_presets_json or /api/prop-firm-presets); `valueFn` is passed
- * through to renderPropPresetOptions.
+ * Renders preset <option>s grouped by firm. `valueFn(p, i)` builds the option value (default: JSON.stringify(p), matching
+ * the original inline populators). The select's existing placeholder option (value="") is preserved. Each option keeps its
+ * preset on `option._preset` so the summary strip can describe whichever one is selected.
+ */
+function renderPropPresetOptions(select, presets, valueFn) {
+  if (!select) return;
+  _ppInjectCss();
+  select.classList.add("t58-pp-select");
+  const valueOf = valueFn || ((p) => JSON.stringify(p));
+  const prevValue = select.value;
+  const placeholder = select.querySelector('option[value=""]');
+  select.innerHTML = "";
+  if (placeholder) select.appendChild(placeholder);
+  const groups = new Map();
+  (presets || []).forEach((p, i) => {
+    const key = p.firm || "Other";
+    if (!groups.has(key)) {
+      const g = document.createElement("optgroup");
+      g.label = key;
+      groups.set(key, g);
+      select.appendChild(g);
+    }
+    const opt = document.createElement("option");
+    opt.value = valueOf(p, i);
+    // Verification detail lives in the tooltip + summary strip: the dropdown row stays short enough to scan.
+    opt.textContent = `${_ppShortLabel(p)}${p.algo_trading_allowed ? "" : "  —  no algo trading"}`;
+    opt.title = p.verified_on
+      ? `Rules last checked ${p.verified_on}${p.source_url ? " against " + p.source_url : ""}. Always confirm at the firm's site before paying for a challenge.`
+      : "These rules have not been confirmed against the firm's own page recently -- check the firm's site before relying on them.";
+    opt.dataset.algoAllowed = p.algo_trading_allowed ? "1" : "0";
+    opt._preset = p;
+    groups.get(key).appendChild(opt);
+  });
+  if (prevValue && [].some.call(select.options, (o) => o.value === prevValue)) select.value = prevValue;
+  if (!select._ppBound) {
+    select._ppBound = true;
+    select.addEventListener("change", () => _ppUpdateSummary(select));
+  }
+  _ppUpdateSummary(select);
+}
+
+/**
+ * Inserts an "Only show firms that allow algo trading" switch just before the preset <select> and re-renders its options
+ * whenever it changes. Default ON: nobody should optimise for (or quick-fill rules from) a firm that bans automation; the
+ * switch stays visible so every preset is one click away. `valueFn` is passed through to renderPropPresetOptions.
  */
 function addAlgoTradingFilter(selectId, presets, valueFn) {
   const select = document.getElementById(selectId);
   if (!select || !presets) return;
+  _ppInjectCss();
+  if (document.getElementById(selectId + "_algo_only")) return;
   const wrap = document.createElement("label");
-  wrap.style.cssText = "display:block;font-size:12px;margin:2px 0 6px;cursor:pointer;";
-  wrap.title = "Uncheck to also list firms whose rules prohibit algorithmic/automated trading.";
+  wrap.className = "t58-pp-filter";
+  wrap.title = "Untick to also list firms whose rules prohibit algorithmic/automated trading.";
   const cb = document.createElement("input");
   cb.type = "checkbox";
   cb.checked = true;
   cb.id = selectId + "_algo_only";
   wrap.appendChild(cb);
-  wrap.appendChild(document.createTextNode(" Only show firms that allow algo trading"));
+  wrap.appendChild(document.createTextNode("Only firms that allow algo trading"));
   select.parentNode.insertBefore(wrap, select);
   const render = () => {
-    // Preserve each preset's ORIGINAL index when the toggle hides some
-    // firms: pages like payout_probability.html build option values from
-    // the index (PROP_PRESETS[parseInt(value)]), so a filtered list must
-    // not renumber them -- selecting "E8" must not silently apply Apex's
-    // rules just because the hidden firms shifted the indices.
+    // Preserve each preset's ORIGINAL index when the toggle hides some firms: pages like payout_probability.html build
+    // option values from the index (PROP_PRESETS[parseInt(value)]), so a filtered list must not renumber them.
     const kept = [];
     const keptIdx = [];
     presets.forEach((p, i) => {
@@ -214,3 +293,65 @@ function syncAccountAndBalanceFields(idA, idB) {
   a.addEventListener('input', () => { b.value = a.value; });
   b.addEventListener('input', () => { a.value = b.value; });
 }
+
+/*
+ * v9 auto-tidy: many pages build (or server-render) their own preset <option>s from the preset's full label. Rather than
+ * touch ~35 templates, this regroups any such dropdown by firm and shortens the rows -- same <option> elements (values,
+ * selected state and page handlers are untouched), only moved into <optgroup>s with the firm prefix trimmed.
+ */
+var _PP_SELECTOR = 'select[id$="prop_preset_select"], select[name="prop_preset"], select#lc-prop-preset, select#search_multi_preset_select';
+
+function _ppRegroup(select, presets) {
+  if (!select || select.querySelector("optgroup") || !presets || !presets.length) return;
+  const byLabel = new Map();
+  presets.forEach((p) => byLabel.set(String(p.label), p));
+  const items = [];
+  [].forEach.call(select.options, (o) => {
+    if (!o.value) return;
+    const text = (o.textContent || "").trim();
+    let hit = byLabel.get(text);
+    if (!hit) { for (const p of presets) { if (text.indexOf(String(p.label)) === 0) { hit = p; break; } } }
+    if (hit) items.push([o, hit]);
+  });
+  if (!items.length) return;
+  _ppInjectCss();
+  select.classList.add("t58-pp-select");
+  const groups = new Map();
+  items.forEach(([o, p]) => {
+    const key = p.firm || "Other";
+    if (!groups.has(key)) {
+      const g = document.createElement("optgroup");
+      g.label = key;
+      groups.set(key, g);
+      select.appendChild(g);
+    }
+    o.textContent = _ppShortLabel(p) + (p.algo_trading_allowed ? "" : "  —  no algo trading");
+    o._preset = p;
+    groups.get(key).appendChild(o);
+  });
+  if (!select._ppBound) {
+    select._ppBound = true;
+    select.addEventListener("change", () => _ppUpdateSummary(select));
+  }
+  if (!select.multiple) _ppUpdateSummary(select);
+}
+
+function _ppScan() {
+  _fetchPropFirmPresets().then((presets) => {
+    document.querySelectorAll(_PP_SELECTOR).forEach((s) => _ppRegroup(s, presets));
+  });
+}
+
+(function () {
+  if (typeof document === "undefined" || window._ppAutoTidy) return;
+  window._ppAutoTidy = true;
+  let t = null;
+  const kick = () => { clearTimeout(t); t = setTimeout(_ppScan, 60); };
+  const start = () => {
+    kick();
+    try {
+      new MutationObserver(kick).observe(document.body, { childList: true, subtree: true });
+    } catch (e) { /* older browser: the initial scan still runs */ }
+  };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start); else start();
+})();

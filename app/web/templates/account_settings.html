@@ -69,6 +69,30 @@
   html[data-theme="light"] .pz-tile[data-bg="winter"] { background-image: url("/static/backgrounds/winter-light.webp"); }
   .pz-switch { display: flex; align-items: center; gap: 10px; margin-top: 4px; font-size: 14px; cursor: pointer; }
   .pz-switch input { width: auto; }
+  /* two-column layout: DOM order is picture, profile, security, personalize, subscription, app (the mobile order);
+     on wide screens Personalize moves into the right-hand column and stays in view while the left column scrolls */
+  .as-grid { display: grid; grid-template-columns: minmax(0, 560px) minmax(0, 520px); gap: 0 28px; align-items: start; }
+  .as-grid > * { grid-column: 1; min-width: 0; }
+  .as-grid .card { max-width: none; }
+  .as-grid .pz-card { grid-column: 2; grid-row: 1 / span 6; position: sticky; top: 16px; }
+  @media (max-width: 1060px) { .as-grid { grid-template-columns: minmax(0, 1fr); } .as-grid > *, .as-grid .pz-card { grid-column: 1; grid-row: auto; position: static; } }
+  .as-grid form > .btn-row, .as-grid form > .submit-btn { margin-bottom: 14px; }
+  @media (max-width: 520px) { .btn-row > button, .submit-btn { width: 100%; } .row > div { min-width: 100%; } }
+  .ac-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+  .ac-sw { display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px 6px 7px; border-radius: 999px; cursor: pointer;
+    border: 2px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 12.5px; font-weight: 600; }
+  .ac-sw::before { content: ""; width: 16px; height: 16px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 1px rgba(255,255,255,.25) inset; }
+  .ac-sw.on { border-color: var(--c); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 28%, transparent); }
+  .ac-sw:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+  .ac-hex { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+  .ac-hex input[type=color] { width: 44px; height: 38px; padding: 2px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); }
+  .ac-hex input[type=text] { max-width: 140px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .ac-hex input.bad { border-color: var(--danger); }
+  .ac-preview { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: var(--panel-3); border: 1px solid var(--border); }
+  .ac-p-btn { padding: 6px 12px; border-radius: 8px; background: var(--teal); color: var(--on-teal); font-weight: 700; font-size: 12.5px; }
+  .ac-p-nav { padding: 5px 10px; border-radius: 8px; border-left: 3px solid var(--teal); color: var(--teal); background: rgba(var(--teal-rgb), .12); font-size: 12.5px; font-weight: 600; }
+  .ac-p-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 8px rgba(var(--teal-rgb), .7); }
+  .ac-preview input[type=range] { width: 110px; }
   .divider { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 </style>
 </head>
@@ -94,23 +118,7 @@
   {% if password_error %}<div class="card error-banner">{{ password_error }}</div>{% endif %}
   {% if error %}<div class="card error-banner">{{ error }}</div>{% endif %}
 
-  <!-- ================= PERSONALIZE ================= -->
-  <div class="card" id="personalize">
-    <h2>Personalize</h2>
-    <p class="help">Backdrop and verse are saved in this browser. Each season has a night scene (dark theme) and a day scene (light theme) -- switch the theme in the sidebar to see both.</p>
-    <label>Background</label>
-    <div class="pz-grid" id="pz-grid" role="radiogroup" aria-label="Background">
-      <button type="button" class="pz-tile" data-bg="mountains" role="radio"><span>Mountains (default)</span></button>
-      <button type="button" class="pz-tile" data-bg="spring" role="radio"><span>Spring</span></button>
-      <button type="button" class="pz-tile" data-bg="summer" role="radio"><span>Summer</span></button>
-      <button type="button" class="pz-tile" data-bg="autumn" role="radio"><span>Autumn</span></button>
-      <button type="button" class="pz-tile" data-bg="winter" role="radio"><span>Winter</span></button>
-    </div>
-    <hr class="divider">
-    <label class="pz-switch"><input type="checkbox" id="pz-verse"> Show a Bible verse at the top of every page</label>
-    <p class="field-note">A quiet single line (King James Version) that changes every 30 minutes. Off by default.</p>
-  </div>
-
+  <div class="as-grid">
   <!-- ================= PROFILE PICTURE ================= -->
   <div class="card">
     <h2>Profile picture</h2>
@@ -158,49 +166,6 @@
   </form>
 
 
-  <!-- ================= SUBSCRIPTION ================= -->
-  <!-- Read-only: every value comes from the license saved on this device (the PLAN column of the license sheet for
-       this key). The plan <select> is disabled for the look of a dropdown but is never read by the server. -->
-  <form method="POST" action="/settings/account/subscription/refresh">
-    <div class="card">
-      <h2>Subscription</h2>
-      <p class="help">
-        Your plan is set by your license key and can't be changed here. It updates automatically
-        when your license changes.
-      </p>
-
-      <label for="plan">Plan
-        {% if subscription.license_status == 'active' %}<span class="status-pill active" id="plan-active-pill">Active</span>{% endif %}
-        <span class="lock-tag" title="Set by your license key">&#128274; Set by license</span>
-      </label>
-      <select id="plan" name="plan" data-testid="subscription-plan" disabled aria-readonly="true">
-        <option value="{{ subscription.plan }}" selected>{{ subscription.plan or 'No license activated' }}</option>
-      </select>
-
-      <label for="license_key">License key</label>
-      <input type="text" id="license_key" value="{{ subscription.license_key }}" readonly
-             placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false">
-
-      <div class="row">
-        <div>
-          <label for="license_status">License status
-            {% if subscription.license_status and subscription.license_status != 'unset' %}
-            <span class="status-pill {{ subscription.license_status }}">{{ subscription.license_status }}</span>
-            {% endif %}
-          </label>
-          <input type="text" id="license_status" value="{{ subscription.license_status|capitalize }}" readonly>
-        </div>
-        <div>
-          <label for="renewal_date">Renewal / expiration date</label>
-          <input type="text" id="renewal_date" value="{{ subscription.renewal_date }}" readonly placeholder="No expiry">
-        </div>
-      </div>
-    </div>
-    <div class="btn-row">
-      <button class="secondary-btn" type="submit">Refresh from license</button>
-    </div>
-  </form>
-
   <!-- ================= SECURITY ================= -->
   <form method="POST" action="/settings/account/change_password">
     <div class="card">
@@ -246,6 +211,91 @@
     </div>
   </form>
 
+  <!-- ================= PERSONALIZE ================= -->
+  <div class="card pz-card" id="personalize">
+    <h2>Personalize</h2>
+    <p class="help">Saved in this browser. Switch the theme in the sidebar to preview the night and day version of every scene.</p>
+
+    <label>Accent colour</label>
+    <div class="ac-row" id="ac-row" role="radiogroup" aria-label="Accent colour">
+      <button type="button" class="ac-sw" data-accent="teal" style="--c:#35e0b0" role="radio" title="Teal (default)"><span>Teal</span></button>
+      <button type="button" class="ac-sw" data-accent="blue" style="--c:#4d90ff" role="radio" title="Electric blue"><span>Blue</span></button>
+      <button type="button" class="ac-sw" data-accent="violet" style="--c:#9b8cff" role="radio" title="Violet"><span>Violet</span></button>
+      <button type="button" class="ac-sw" data-accent="emerald" style="--c:#35d878" role="radio" title="Emerald"><span>Emerald</span></button>
+      <button type="button" class="ac-sw" data-accent="amber" style="--c:#f5b83d" role="radio" title="Amber"><span>Amber</span></button>
+      <button type="button" class="ac-sw" data-accent="crimson" style="--c:#ff5d73" role="radio" title="Crimson"><span>Crimson</span></button>
+      <button type="button" class="ac-sw" data-accent="custom" style="--c:#888" role="radio" id="ac-custom-sw" title="Custom hex"><span>Custom</span></button>
+    </div>
+    <div class="ac-hex" id="ac-hex-wrap" hidden>
+      <input type="color" id="ac-color" aria-label="Pick a colour" value="#35e0b0">
+      <input type="text" id="ac-hex" maxlength="7" placeholder="#35e0b0" spellcheck="false" autocomplete="off" aria-label="Custom hex colour">
+    </div>
+    <p class="field-note">Applies to buttons, the active navigation item, chart highlights, sliders and status indicators. Pass / fail results keep their own green and red so they always mean the same thing.</p>
+    <div class="ac-preview" aria-hidden="true">
+      <span class="ac-p-btn">Button</span><span class="ac-p-nav">Active item</span>
+      <input type="range" value="60" tabindex="-1"><span class="ac-p-dot"></span>
+    </div>
+
+    <hr class="divider">
+    <label>Background</label>
+    <div class="pz-grid" id="pz-grid" role="radiogroup" aria-label="Background">
+      <button type="button" class="pz-tile" data-bg="mountains" role="radio"><span>Mountains (default)</span></button>
+      <button type="button" class="pz-tile" data-bg="spring" role="radio"><span>Spring</span></button>
+      <button type="button" class="pz-tile" data-bg="summer" role="radio"><span>Summer</span></button>
+      <button type="button" class="pz-tile" data-bg="autumn" role="radio"><span>Autumn</span></button>
+      <button type="button" class="pz-tile" data-bg="winter" role="radio"><span>Winter</span></button>
+    </div>
+    <label class="pz-switch"><input type="checkbox" id="pz-fx"> Gentle seasonal motion (snow, leaves, petals, fireflies)</label>
+    <p class="field-note">A handful of slow particles over the seasonal backgrounds. Switches itself off if your device asks for reduced motion or data saving.</p>
+
+    <hr class="divider">
+    <label class="pz-switch"><input type="checkbox" id="pz-verse"> Show a Bible verse at the top of every page</label>
+    <p class="field-note">A quiet single line (English Standard Version) that changes every 30 minutes. Off by default. Scripture quotations are from the ESV&reg; Bible, copyright &copy; 2001 by Crossway, a publishing ministry of Good News Publishers. If the ESV text file hasn't been generated on this install yet, the King James Version is shown instead and labelled as such.</p>
+  </div>
+
+  <!-- ================= SUBSCRIPTION ================= -->
+  <!-- Read-only: every value comes from the license saved on this device (the PLAN column of the license sheet for
+       this key). The plan <select> is disabled for the look of a dropdown but is never read by the server. -->
+  <form method="POST" action="/settings/account/subscription/refresh">
+    <div class="card">
+      <h2>Subscription</h2>
+      <p class="help">
+        Your plan is set by your license key and can't be changed here. It updates automatically
+        when your license changes.
+      </p>
+
+      <label for="plan">Plan
+        {% if subscription.license_status == 'active' %}<span class="status-pill active" id="plan-active-pill">Active</span>{% endif %}
+        <span class="lock-tag" title="Set by your license key">&#128274; Set by license</span>
+      </label>
+      <select id="plan" name="plan" data-testid="subscription-plan" disabled aria-readonly="true">
+        <option value="{{ subscription.plan }}" selected>{{ subscription.plan or 'No license activated' }}</option>
+      </select>
+
+      <label for="license_key">License key</label>
+      <input type="text" id="license_key" value="{{ subscription.license_key }}" readonly
+             placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false">
+
+      <div class="row">
+        <div>
+          <label for="license_status">License status
+            {% if subscription.license_status and subscription.license_status != 'unset' %}
+            <span class="status-pill {{ subscription.license_status }}">{{ subscription.license_status }}</span>
+            {% endif %}
+          </label>
+          <input type="text" id="license_status" value="{{ subscription.license_status|capitalize }}" readonly>
+        </div>
+        <div>
+          <label for="renewal_date">Renewal / expiration date</label>
+          <input type="text" id="renewal_date" value="{{ subscription.renewal_date }}" readonly placeholder="No expiry">
+        </div>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="secondary-btn" type="submit">Refresh from license</button>
+    </div>
+  </form>
+
   <!-- ================= APP ================= -->
   <form method="POST" action="/settings/account/check_updates">
     <div class="card">
@@ -271,6 +321,7 @@
       <button class="secondary-btn" type="submit">Check for updates</button>
     </div>
   </form>
+  </div>
 </div>
 </div>
 </div>
@@ -284,6 +335,25 @@
     tiles.forEach(function (t) { t.addEventListener('click', function () { P.setBg(t.dataset.bg); mark(); }); });
     var cb = document.getElementById('pz-verse'); cb.checked = P.verse();
     cb.addEventListener('change', function () { P.setVerse(cb.checked); });
+    var fx = document.getElementById('pz-fx'); fx.checked = P.fx();
+    fx.addEventListener('change', function () { P.setFx(fx.checked); });
+    var sws = [].slice.call(document.querySelectorAll('#ac-row .ac-sw'));
+    var wrap = document.getElementById('ac-hex-wrap'), hx = document.getElementById('ac-hex'), cp = document.getElementById('ac-color'), cs = document.getElementById('ac-custom-sw');
+    function rawHex() { try { return P.normHex(localStorage.getItem('t58-accent-hex')) || '#35e0b0'; } catch (e) { return '#35e0b0'; } }
+    function markAc() {
+      var n = P.accentName(); wrap.hidden = n !== 'custom';
+      sws.forEach(function (b) { var on = b.dataset.accent === n; b.classList.toggle('on', on); b.setAttribute('aria-checked', on ? 'true' : 'false'); });
+      if (n === 'custom') { var h = rawHex(); cs.style.setProperty('--c', h); hx.value = h; cp.value = h; }
+    }
+    sws.forEach(function (b) { b.addEventListener('click', function () {
+      var n = b.dataset.accent;
+      if (n === 'custom') { P.setAccent('custom', rawHex()); } else { P.setAccent(n); }
+      markAc(); }); });
+    function fromHex(v) { var h = P.normHex(v); hx.classList.toggle('bad', !h && v.length > 0); if (h) { P.setAccent('custom', h); cs.style.setProperty('--c', h); cp.value = h; sws.forEach(function (b) { b.classList.toggle('on', b === cs); }); } }
+    hx.addEventListener('input', function () { fromHex(hx.value.trim()); });
+    cp.addEventListener('input', function () { hx.value = cp.value; fromHex(cp.value); });
+    window.addEventListener('t58-accent-change', markAc);
+    markAc();
     mark();
   }
   if (window.T58Personalize) init(); else window.addEventListener('load', init);

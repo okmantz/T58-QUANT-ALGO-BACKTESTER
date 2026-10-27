@@ -25,7 +25,7 @@
       "[data-metric]{cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;text-decoration-color:var(--text-dim,#5b6478)}" +
       "[data-metric]:hover{text-decoration-color:var(--teal,#35e0b0)}[data-metric]:focus-visible{outline:2px solid var(--teal,#35e0b0);outline-offset:2px}" +
       ".t58-mx-back{position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px}" +
-      ".t58-mx{position:relative;width:min(460px,100%);max-height:88vh;overflow:auto;background:var(--panel-2,#12161f);color:var(--text,#e8ecf3);border:1px solid var(--border-light,#2a3142);border-radius:14px;padding:18px 18px 16px;box-shadow:0 18px 50px rgba(0,0,0,.55);font-size:13.5px;line-height:1.5}" +
+      ".t58-mx{position:relative;width:min(460px,100%);max-height:88vh;overflow:auto;background:var(--pop-bg,#12161f);color:var(--text,#e8ecf3);border:1px solid var(--border-light,#2a3142);border-radius:14px;padding:18px 18px 16px;box-shadow:0 18px 50px rgba(0,0,0,.55);font-size:13.5px;line-height:1.5}" +
       ".t58-mx h3{margin:0 28px 2px 0;font-size:17px}.t58-mx .val{font-size:26px;font-weight:700;color:var(--teal,#35e0b0);margin:4px 0 8px}" +
       ".t58-mx h5{margin:14px 0 5px;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-muted,#8a93a6)}" +
       ".t58-mx p{margin:0 0 4px}.t58-mx ul{margin:0;padding-left:18px}.t58-mx li{margin:0 0 4px}" +
@@ -61,7 +61,7 @@
     var pts = vals.map(function (v, i) { return (i / (vals.length - 1) * w).toFixed(1) + "," + (h - 4 - (v - mn) / rg * (h - 8)).toFixed(1); }).join(" ");
     var ns = "http://www.w3.org/2000/svg", svg = document.createElementNS(ns, "svg");
     svg.setAttribute("viewBox", "0 0 " + w + " " + h); svg.setAttribute("width", "100%"); svg.setAttribute("height", "56"); svg.setAttribute("preserveAspectRatio", "none");
-    var pl = document.createElementNS(ns, "polyline"); pl.setAttribute("points", pts); pl.setAttribute("fill", "none"); pl.setAttribute("stroke", "#35e0b0"); pl.setAttribute("stroke-width", "2");
+    var pl = document.createElementNS(ns, "polyline"); pl.setAttribute("points", pts); pl.setAttribute("fill", "none"); pl.setAttribute("stroke", "var(--teal, #35e0b0)"); pl.setAttribute("stroke-width", "2");
     svg.appendChild(pl); return svg;
   }
 

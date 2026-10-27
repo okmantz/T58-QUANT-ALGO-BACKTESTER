@@ -152,7 +152,7 @@ main { padding: 18px 16px 40px; max-width: 760px; margin: 0 auto; }
   font-size: 10px; padding: 2px 8px; border-radius: 999px; font-weight: 700; letter-spacing: .02em;
   background: var(--panel-3); color: var(--text-muted); border: 1px solid var(--border);
 }
-.badge.pass { background: rgba(var(--teal-rgb), 0.12); color: var(--teal); border-color: rgba(var(--teal-rgb), 0.35); }
+.badge.pass { background: rgba(var(--ok-rgb), 0.12); color: var(--ok); border-color: rgba(var(--ok-rgb), 0.35); }
 .badge.fail, .badge.infeasible { background: rgba(var(--coral-rgb), 0.12); color: var(--coral); border-color: rgba(var(--coral-rgb), 0.35); }
 
 /* ---- Links list ---- */

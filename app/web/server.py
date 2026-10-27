@@ -102,7 +102,7 @@ from app.data.london_strategic_edge_source import (
 )
 from app.data.importer import import_csv, import_csv_bytes
 from app.data.folder_import import import_uploaded_files
-from app.data.instrument_specs import KNOWN_INSTRUMENTS, get_instrument_spec, guess_instrument_symbol
+from app.data.instrument_specs import KNOWN_INSTRUMENTS, get_instrument_spec, guess_instrument_symbol, instrument_category
 from app.data.timeframe_resample import TimeframeError, infer_timeframe_label, normalize_timeframe_label
 from app.web.alpaca_shared import alpaca_template_context
 from app.web.lse_shared import lse_template_context
@@ -1641,6 +1641,7 @@ def data_instrument_specs():
     return jsonify({
         "instruments": [
             {"symbol": s, "description": spec.description, "exchange": spec.exchange,
+             "category": instrument_category(s),
              "pip_size": spec.pip_size, "contract_size": spec.contract_size,
              "tick_size": spec.tick_size, "tick_value": spec.tick_value,
              "default_commission_round_turn": spec.default_commission_round_turn}
@@ -11856,26 +11857,101 @@ def graveyard_view():
     being able to SEE it. Every Forge run against a given instrument+
     timeframe writes to the same persistent file (app.search.graveyard.
     graveyard_path_for), so this accumulates across runs instead of
-    resetting every time."""
+    resetting every time.
+
+    The page lists each rejected strategy in plain language; clicking one opens a side panel that loads
+    /graveyard/detail (saved facts) and /graveyard/curve (equity curve rebuilt on demand)."""
+    from app.search import graveyard_detail as gd
+
     files = list_graveyard_files()
+    for f in files:
+        f["label"] = gd.file_label(f)
     selected_path = (request.args.get("path") or "").strip()
-    if not selected_path and files:
-        selected_path = files[0]["path"]
+    if selected_path not in {f["path"] for f in files}:
+        selected_path = files[0]["path"] if files else ""
     rows: list[dict] = []
     clusters = []
     if selected_path:
         rows = load_graveyard(selected_path)
         clusters = [c.to_dict() for c in summarize_graveyard(rows, top_n=100)]
     family_filter = (request.args.get("family") or "").strip()
+    why_filter = (request.args.get("why") or "").strip()
+    sort = (request.args.get("sort") or "strongest").strip()
     if family_filter:
         clusters = [c for c in clusters if c["family"] == family_filter]
-    all_families = sorted({r.get("family", "?") for r in rows}) if rows else []
+    for c in clusters:
+        c["family_title"] = gd.family_title(c["family"])
+        c["stage_label"] = gd.stage_label(c["worst_stage_reached"])
+    fam_counts: dict[str, int] = {}
+    why_counts: dict[str, int] = {}
+    for r in rows:
+        fam_counts[r.get("family", "?")] = fam_counts.get(r.get("family", "?"), 0) + 1
+        w = gd.failure_label(r.get("primary_failure")) or "Other"
+        why_counts[w] = why_counts.get(w, 0) + 1
+    all_families = [{"id": k, "title": gd.family_title(k), "n": v} for k, v in sorted(fam_counts.items())]
+    why_options = [{"title": k, "n": v} for k, v in sorted(why_counts.items(), key=lambda kv: -kv[1])]
+    shown = [r for r in rows
+             if (not family_filter or r.get("family") == family_filter)
+             and (not why_filter or (gd.failure_label(r.get("primary_failure")) or "Other") == why_filter)]
+    if sort == "recent":
+        shown = list(reversed(shown))
+    else:
+        shown.sort(key=lambda r: -(r.get("fitness_score") if isinstance(r.get("fitness_score"), (int, float)) else float("-inf")))
+    limit = 150
+    try:
+        limit = max(25, min(2000, int(request.args.get("limit", "150"))))
+    except ValueError:
+        pass
+    items = [{
+        "id": r.get("candidate_id"), "family_title": gd.family_title(r.get("family")), "family": r.get("family"),
+        "why": gd.failure_label(r.get("primary_failure")) or "Rejected",
+        "stage": gd.stage_label(r.get("stage_died")),
+        "settings": gd.friendly_settings(r.get("param_signature")),
+        "oos": r.get("oos_result"),
+        "trades": r.get("n_trades"),
+        "score": r.get("fitness_score"),
+    } for r in shown[:limit]]
     return render_template(
         "graveyard.html",
         files=files, selected_path=selected_path, clusters=clusters,
-        total_rows=len(rows), family_filter=family_filter, all_families=all_families,
+        total_rows=len(rows), family_filter=family_filter, why_filter=why_filter, sort=sort,
+        all_families=all_families, why_options=why_options, items=items, n_shown=len(shown), limit=limit,
         active_page="graveyard",
     )
+
+
+def _graveyard_row_from_request():
+    """(row, error_response) for the detail endpoints. Only files the Graveyard itself lists may be read."""
+    path = (request.args.get("path") or "").strip()
+    cid = (request.args.get("id") or "").strip()
+    if path not in {f["path"] for f in list_graveyard_files()}:
+        return None, (jsonify({"error": "Unknown graveyard file."}), 404)
+    from app.search import graveyard_detail as gd
+    row = gd.find_row(load_graveyard(path), cid)
+    if row is None:
+        return None, (jsonify({"error": "That rejected strategy is no longer in this file."}), 404)
+    return row, None
+
+
+@app.route("/graveyard/detail")
+def graveyard_detail_json():
+    """Saved facts for one rejected strategy (instant -- reads the stored row, runs nothing)."""
+    from app.search import graveyard_detail as gd
+    row, err = _graveyard_row_from_request()
+    if err:
+        return err
+    return jsonify(gd.summary(row))
+
+
+@app.route("/graveyard/curve")
+def graveyard_curve_json():
+    """Equity curve + measured stats for one rejected strategy, rebuilt on demand with the real engine (about a
+    second). Separate from /graveyard/detail so the panel opens instantly and the curve fills in after."""
+    from app.search import graveyard_detail as gd
+    row, err = _graveyard_row_from_request()
+    if err:
+        return err
+    return jsonify(gd.rebuild_curve(row))
 
 
 # ---------------------------------------------------------------------------

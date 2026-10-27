@@ -67,9 +67,9 @@
   .lm-btn#lm-tradingview {
     background: var(--lm-accent, var(--teal)) !important; color: var(--on-teal) !important;
     border-color: var(--lm-accent, var(--teal)) !important; font-weight: 700 !important;
-    box-shadow: 0 0 12px rgba(53,224,176,0.35);
+    box-shadow: 0 0 12px rgba(var(--teal-rgb), 0.35);
   }
-  .lm-btn#lm-tradingview:hover { opacity: .88; box-shadow: 0 0 18px rgba(53,224,176,0.5); }
+  .lm-btn#lm-tradingview:hover { opacity: .88; box-shadow: 0 0 18px rgba(var(--teal-rgb), 0.5); }
   .lm-spacer { flex: 1; }
 
   .lm-status-badge {
@@ -305,7 +305,7 @@
     T58ChartDrawingTools.attach(chart, candleSeries, chartEl, document.getElementById('lm-draw-toolbar'));
   }
 
-  const ema20Series = chart.addLineSeries({ color: '#35e0b0', lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+  const ema20Series = chart.addLineSeries({ color: (getComputedStyle(document.documentElement).getPropertyValue('--teal').trim() || '#35e0b0'), lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
   const ema50Series = chart.addLineSeries({ color: '#8b7cff', lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
   const vwapSeries  = chart.addLineSeries({ color: '#f0b429', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false });
 

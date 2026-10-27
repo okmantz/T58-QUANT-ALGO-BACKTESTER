@@ -10,21 +10,70 @@
   * { box-sizing: border-box; }
   .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
   .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
-  .card p.help { font-size: 12px; color: var(--t-faint); margin: 0 0 10px; line-height: 1.5; }
-  select { padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 14px; }
-  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .card p.help { font-size: 12.5px; color: var(--t-faint); margin: 0 0 10px; line-height: 1.5; }
+  select { padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 14px; max-width: 100%; }
+  .gy-filters { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+  .gy-filters label { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
+  .gy-count { font-size: 13px; color: var(--t-faint2); margin-left: auto; align-self: center; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06); vertical-align: top; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid rgba(255,255,255,0.06); vertical-align: top; }
   th { color: var(--t-faint2); text-transform: uppercase; font-size: 11px; letter-spacing: .03em; }
-  tr:hover td { background: rgba(255,255,255,0.02); }
+  .gy-list tbody tr { cursor: pointer; }
+  .gy-list tbody tr:hover td, .gy-list tbody tr:focus-visible td { background: rgba(var(--teal-rgb), 0.07); }
+  .gy-list tbody tr.sel td { background: rgba(var(--teal-rgb), 0.13); }
+  .gy-list tbody tr:focus-visible { outline: 2px solid var(--teal); outline-offset: -2px; }
+  .gy-name { font-weight: 600; }
+  .gy-sub { font-size: 12px; color: var(--t-faint2); margin-top: 2px; }
+  .gy-open { color: var(--teal); font-size: 12px; white-space: nowrap; }
+  .tag { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; background: var(--panel-3); border: 1px solid var(--border-light); }
+  .tag.bad { color: var(--coral, #ff6f6f); border-color: rgba(255,111,111,.4); }
   .n-tested { font-weight: 700; color: #ffb454; }
-  .stage-cpcv { color: var(--err-fg2); }
-  .stage-stress { color: #ffcf5c; }
-  .stage-not_ranked { color: var(--t-faint); }
   .best-pct { color: var(--teal); font-weight: 600; }
   .empty { color: var(--t-faint); font-size: 14px; padding: 20px 0; }
   .sig { font-family: monospace; font-size: 11px; color: #7dd3fc; word-break: break-all; }
-  .filesel { font-size: 12px; color: var(--t-faint2); }
+  details.gy-adv > summary { cursor: pointer; list-style: none; }
+  details.gy-adv > summary::-webkit-details-marker { display: none; }
+  details.gy-adv > summary h2 { display: inline; }
+  details.gy-adv > summary::after { content: " \25BE show"; font-size: 12px; color: var(--teal); }
+  details.gy-adv[open] > summary::after { content: " \25B4 hide"; }
+  .more-link { display: inline-block; margin-top: 10px; color: var(--teal); font-size: 13px; }
+
+  /* side panel */
+  .gy-scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 900; opacity: 0; pointer-events: none; transition: opacity .18s ease; }
+  .gy-scrim.on { opacity: 1; pointer-events: auto; }
+  .gy-panel { position: fixed; top: 0; right: 0; bottom: 0; width: min(520px, 100vw); z-index: 901; background: var(--pop-bg); border-left: 1px solid var(--pop-bd);
+    box-shadow: -18px 0 50px rgba(0,0,0,.45); transform: translateX(105%); transition: transform .22s ease; display: flex; flex-direction: column; }
+  .gy-panel.on { transform: none; }
+  .gy-ph { padding: 16px 18px 12px; border-bottom: 1px solid var(--border); position: relative; }
+  .gy-ph h3 { margin: 0 34px 4px 0; font-size: 17px; }
+  .gy-ph .gy-sub { margin: 0; }
+  .gy-x { position: absolute; top: 12px; right: 12px; width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 18px; cursor: pointer; line-height: 1; }
+  .gy-pb { padding: 14px 18px 24px; overflow: auto; flex: 1; -webkit-overflow-scrolling: touch; }
+  .gy-sec { margin: 0 0 16px; }
+  .gy-sec h4 { margin: 0 0 6px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); }
+  .gy-why { font-size: 14px; line-height: 1.5; margin: 0; }
+  .gy-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .gy-stat { background: var(--panel-3); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
+  .gy-stat b { display: block; font-size: 17px; font-variant-numeric: tabular-nums; }
+  .gy-stat span { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .03em; }
+  .gy-stat.neg b { color: var(--coral, #ff6f6f); } .gy-stat.pos b { color: var(--ok, #35e0b0); }
+  .gy-chart { background: var(--panel-3); border: 1px solid var(--border); border-radius: 10px; padding: 8px; }
+  .gy-chart svg { width: 100%; height: 170px; display: block; }
+  .gy-chart .base { stroke: var(--text-muted); stroke-dasharray: 3 4; opacity: .55; }
+  .gy-chart .line { fill: none; stroke: var(--teal); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .gy-chart .area { fill: rgba(var(--teal-rgb), .10); stroke: none; }
+  .gy-chart .split { stroke: var(--amber, #f5b83d); stroke-dasharray: 2 3; opacity: .85; }
+  .gy-chart text { fill: var(--text-muted); font-size: 10px; }
+  .gy-legend { display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px; color: var(--t-faint2); margin-top: 6px; flex-wrap: wrap; }
+  .gy-note { font-size: 12px; color: var(--t-faint2); line-height: 1.5; }
+  .gy-spin { font-size: 13px; color: var(--text-muted); padding: 40px 0; text-align: center; }
+  @media (max-width: 760px) {
+    .gy-panel { top: auto; width: 100vw; height: 88vh; border-left: 0; border-top: 1px solid var(--pop-bd); border-radius: 16px 16px 0 0; transform: translateY(105%); }
+    .gy-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .gy-hide-sm { display: none; }
+    .gy-count { margin-left: 0; width: 100%; }
+  }
+  @media (prefers-reduced-motion: reduce) { .gy-panel, .gy-scrim { transition: none; } }
 </style>
 </head>
 <body>
@@ -34,11 +83,8 @@
 <div class="t58-main">
 <div class="t58-page-header">
   <h1>Strategy Graveyard</h1>
-  <p>Every rejected strategy that got far enough to be expensive (robustness / Monte Carlo / CPCV / rolling
-     evaluation / locked OOS) before dying, grouped into "dead neighborhoods" -- the biggest, most-tested
-     dead end first. Forge Strategy reads this same file before spending compute on a new run: a parameter
-     neighborhood proven dead here {{ ' ' }}gets skipped automatically instead of re-tested from scratch
-     (see the "Graveyard pre-filter" line in a Forge run's log).</p>
+  <p>Every strategy that was tested hard and then rejected, with the reason. Click any row to see its scores and an equity curve.
+     Forge Strategy reads this same file before a new run, so settings already proven dead here are skipped instead of re-tested.</p>
 </div>
 
 {% if not files %}
@@ -47,52 +93,89 @@ least once and rejections that reach CPCV/stress-testing will start accumulating
 {% else %}
 
 <div class="card">
-  <h2>Instrument / timeframe</h2>
-  <p class="help">Each instrument+timeframe gets its own persistent graveyard file that every future run
-     against the same data reads from and writes to -- a dead neighborhood on ES futures says nothing about
-     whether the same parameters are dead on EURUSD, so these are kept separate rather than merged into one
-     global file.</p>
-  <form method="get" action="/graveyard" class="row">
-    <select name="path" onchange="this.form.submit()">
-      {% for f in files %}
-      <option value="{{ f.path }}" {{ 'selected' if f.path == selected_path else '' }}>
-        {{ f.instrument }} / {{ f.timeframe }} -- {{ f.n_rows }} rejection(s)
-      </option>
-      {% endfor %}
-    </select>
-    {% if all_families %}
-    <select name="family" onchange="this.form.submit()">
-      <option value="">All families</option>
-      {% for fam in all_families %}
-      <option value="{{ fam }}" {{ 'selected' if fam == family_filter else '' }}>{{ fam }}</option>
-      {% endfor %}
-    </select>
-    {% endif %}
-    <span class="filesel">{{ total_rows }} total rejection(s) in this file</span>
+  <form method="get" action="/graveyard" class="gy-filters" id="gy-form">
+    <label>Market &amp; timeframe
+      <select name="path" onchange="this.form.family.value='';this.form.why.value='';this.form.submit()">
+        {% for f in files %}
+        <option value="{{ f.path }}" {{ 'selected' if f.path == selected_path else '' }}>{{ f.label }} &mdash; {{ f.n_rows }} rejected</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Strategy type
+      <select name="family" onchange="this.form.submit()">
+        <option value="">All types</option>
+        {% for fam in all_families %}
+        <option value="{{ fam.id }}" {{ 'selected' if fam.id == family_filter else '' }}>{{ fam.title }} ({{ fam.n }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Why it failed
+      <select name="why" onchange="this.form.submit()">
+        <option value="">Any reason</option>
+        {% for w in why_options %}
+        <option value="{{ w.title }}" {{ 'selected' if w.title == why_filter else '' }}>{{ w.title }} ({{ w.n }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Sort
+      <select name="sort" onchange="this.form.submit()">
+        <option value="strongest" {{ 'selected' if sort == 'strongest' else '' }}>Strongest score first</option>
+        <option value="recent" {{ 'selected' if sort == 'recent' else '' }}>Most recent first</option>
+      </select>
+    </label>
+    <span class="gy-count">{{ n_shown }} of {{ total_rows }} rejected strateg{{ 'y' if total_rows == 1 else 'ies' }}</span>
   </form>
+  <p class="help" style="margin-top:10px;">Each market + timeframe keeps its own graveyard: a setup that is dead on EURUSD says nothing about gold. <b>Click any row</b> to see why it failed, its scores and an equity curve.</p>
 </div>
 
 <div class="card">
-  <h2>Dead neighborhoods ({{ clusters|length }})</h2>
+  <h2>Rejected strategies</h2>
+  {% if not items %}
+  <p class="empty">Nothing matches these filters.</p>
+  {% else %}
+  <table class="gy-list" id="gy-list">
+    <thead><tr><th>Strategy</th><th>Why it failed</th><th class="gy-hide-sm">Stopped at</th><th class="gy-hide-sm">Trades</th><th></th></tr></thead>
+    <tbody>
+      {% for it in items %}
+      <tr tabindex="0" role="button" data-id="{{ it.id }}" aria-label="Open details for {{ it.family_title }}">
+        <td><div class="gy-name">{{ it.family_title }}</div>{% if it.settings %}<div class="gy-sub">{{ it.settings }}</div>{% endif %}</td>
+        <td><span class="tag bad">{{ it.why }}</span></td>
+        <td class="gy-hide-sm">{{ it.stage }}</td>
+        <td class="gy-hide-sm">{{ it.trades if it.trades is not none else '--' }}</td>
+        <td class="gy-open">Details &rsaquo;</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if n_shown > items|length %}
+  <a class="more-link" href="?path={{ selected_path|urlencode }}&family={{ family_filter|urlencode }}&why={{ why_filter|urlencode }}&sort={{ sort }}&limit={{ limit + 150 }}">Show 150 more ({{ n_shown - items|length }} hidden)</a>
+  {% endif %}
+  {% endif %}
+</div>
+
+<details class="card gy-adv">
+  <summary><h2>Dead neighborhoods ({{ clusters|length }})</h2></summary>
+  <p class="help" style="margin-top:8px;">Strategies with nearly identical settings are grouped into one &ldquo;neighborhood&rdquo;. Forge Strategy skips a neighborhood that is already proven dead instead of re-testing it.</p>
   {% if not clusters %}
   <p class="empty">
-    {% if family_filter %}No rejections for family "{{ family_filter }}" in this file.
+    {% if family_filter %}No rejections for this strategy type in this file.
     {% else %}This file has entries, but no cluster matched -- nothing has failed here yet, or the file is empty.{% endif %}
   </p>
   {% else %}
+  <div style="overflow-x:auto;">
   <table>
     <thead>
       <tr>
-        <th>Family</th><th>Tested</th><th>Worst stage reached</th><th>Best pass %</th>
-        <th>Most common reason</th><th>Signature</th>
+        <th>Strategy type</th><th>Tested</th><th>Stopped at</th><th>Best pass %</th>
+        <th>Most common reason</th><th>Settings fingerprint</th>
       </tr>
     </thead>
     <tbody>
       {% for c in clusters %}
       <tr>
-        <td>{{ c.family }}</td>
+        <td>{{ c.family_title }}</td>
         <td class="n-tested">{{ c.n_tested }}x</td>
-        <td class="stage-{{ c.worst_stage_reached }}">{{ c.worst_stage_reached }}</td>
+        <td>{{ c.stage_label }}</td>
         <td>{% if c.best_prop_sim_pass_pct is not none %}<span class="best-pct">{{ '%.0f'|format(c.best_prop_sim_pass_pct) }}%</span>{% else %}--{% endif %}</td>
         <td>{{ c.most_common_reason }}</td>
         <td class="sig">{{ c.signature }}</td>
@@ -100,11 +183,135 @@ least once and rejections that reach CPCV/stress-testing will start accumulating
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% endif %}
-</div>
+</details>
 {% endif %}
 
 </div>
 </div>
+
+<div class="gy-scrim" id="gy-scrim"></div>
+<aside class="gy-panel" id="gy-panel" role="dialog" aria-modal="true" aria-labelledby="gy-title" aria-hidden="true">
+  <div class="gy-ph">
+    <h3 id="gy-title">Rejected strategy</h3>
+    <p class="gy-sub" id="gy-subtitle"></p>
+    <button type="button" class="gy-x" id="gy-close" aria-label="Close details">&times;</button>
+  </div>
+  <div class="gy-pb" id="gy-body"></div>
+</aside>
+
+<script>
+(function () {
+  var PATH = {{ selected_path|tojson }};
+  var list = document.getElementById('gy-list');
+  if (!list) return;
+  var panel = document.getElementById('gy-panel'), scrim = document.getElementById('gy-scrim'), body = document.getElementById('gy-body');
+  var titleEl = document.getElementById('gy-title'), subEl = document.getElementById('gy-subtitle');
+  var lastRow = null, token = 0;
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function fmt(n, d) { return (n == null || isNaN(n)) ? '--' : Number(n).toLocaleString(undefined, {maximumFractionDigits: d == null ? 2 : d}); }
+  function close() {
+    panel.classList.remove('on'); scrim.classList.remove('on'); panel.setAttribute('aria-hidden', 'true');
+    if (lastRow) { lastRow.classList.remove('sel'); lastRow.focus(); }
+    token++;
+  }
+  function stat(label, val, cls, hint) {
+    return '<div class="gy-stat ' + (cls || '') + '" title="' + esc(hint || '') + '"><b>' + val + '</b><span>' + esc(label) + '</span></div>';
+  }
+  function sign(v) { return v == null ? '' : (v < 0 ? 'neg' : (v > 0 ? 'pos' : '')); }
+  function chart(d) {
+    var pts = d.points; if (!pts || pts.length < 2) return '';
+    var W = 480, H = 170, L = 8, R = 8, T = 10, B = 18;
+    var ys = pts.map(function (p) { return p[1]; }), base = d.account || ys[0];
+    var lo = Math.min.apply(null, ys.concat([base])), hi = Math.max.apply(null, ys.concat([base]));
+    var pad = (hi - lo) * 0.08 || 1; lo -= pad; hi += pad;
+    function X(i) { return L + (W - L - R) * i / (pts.length - 1); }
+    function Y(v) { return T + (H - T - B) * (1 - (v - lo) / (hi - lo)); }
+    var line = pts.map(function (p, i) { return (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(p[1]).toFixed(1); }).join(' ');
+    var area = line + ' L' + X(pts.length - 1).toFixed(1) + ' ' + (H - B) + ' L' + L + ' ' + (H - B) + ' Z';
+    var out = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" role="img" aria-label="Equity curve">';
+    out += '<path class="area" d="' + area + '"/>';
+    out += '<line class="base" x1="' + L + '" x2="' + (W - R) + '" y1="' + Y(base).toFixed(1) + '" y2="' + Y(base).toFixed(1) + '"/>';
+    if (d.split) {
+      for (var i = 0; i < pts.length; i++) if (pts[i][0] >= d.split) {
+        out += '<line class="split" x1="' + X(i).toFixed(1) + '" x2="' + X(i).toFixed(1) + '" y1="' + T + '" y2="' + (H - B) + '"/>';
+        out += '<text x="' + (X(i) + 4).toFixed(1) + '" y="' + (T + 9) + '">new data \u2192</text>'; break;
+      }
+    }
+    out += '<path class="line" d="' + line + '"/>';
+    out += '<text x="' + L + '" y="' + (H - 4) + '">' + esc(pts[0][0]) + '</text>';
+    out += '<text x="' + (W - R) + '" y="' + (H - 4) + '" text-anchor="end">' + esc(pts[pts.length - 1][0]) + '</text></svg>';
+    return '<div class="gy-chart">' + out + '</div><div class="gy-legend"><span>Dashed grey = starting balance $' + fmt(base, 0) + '</span><span>Ends at $' + fmt(ys[ys.length - 1], 0) + '</span></div>';
+  }
+  function renderCurve(c) {
+    var box = document.getElementById('gy-curve'); if (!box) return;
+    if (!c.ok) { box.innerHTML = '<p class="gy-note">' + esc(c.message || 'No curve available.') + '</p>'; return; }
+    var s = c.stats || {}, h = chart(c);
+    h += '<div class="gy-sec" style="margin-top:14px"><h4>Measured results</h4><div class="gy-stats">' +
+      stat('Eval pass chance', c.eval_pass_pct == null ? '--' : fmt(c.eval_pass_pct, 0) + '%', '', 'Monte Carlo chance of passing a ' + (c.rules_name || 'standard') + ' evaluation with these trades') +
+      stat('Payout chance', c.payout_pct == null ? '--' : fmt(c.payout_pct, 0) + '%', '', 'Monte Carlo chance of reaching a first payout') +
+      stat('Sharpe', fmt(s.sharpe), sign(s.sharpe), 'Return per unit of volatility. Below 0 loses money.') +
+      stat('Expected value / trade', s.expectancy == null ? '--' : '$' + fmt(s.expectancy, 2), sign(s.expectancy), 'Average profit per trade after costs (EV). ' + (s.avg_r == null ? '' : fmt(s.avg_r, 3) + 'R')) +
+      stat('Profit factor', fmt(s.profit_factor), s.profit_factor == null ? '' : (s.profit_factor < 1 ? 'neg' : 'pos'), 'Gross profit divided by gross loss. Below 1.0 loses money.') +
+      stat('Return', s.return_pct == null ? '--' : fmt(s.return_pct, 1) + '%', sign(s.return_pct), '') +
+      stat('Max drawdown', s.max_drawdown_pct == null ? '--' : fmt(s.max_drawdown_pct, 1) + '%', 'neg', 'Deepest peak-to-trough fall') +
+      stat('Win rate', s.win_rate == null ? '--' : fmt(s.win_rate, 0) + '%', '', '') +
+      stat('Trades', s.trades == null ? '--' : fmt(s.trades, 0), '', 'Longest losing streak: ' + (s.max_losing_streak == null ? '--' : s.max_losing_streak)) +
+      '</div></div><p class="gy-note">' + esc(c.note || '') + (c.eval_pass_pct == null ? '' : ' Pass / payout chances use a ' + esc(c.rules_name) + ' rule set so every row is comparable.') + '</p>';
+    box.innerHTML = h;
+  }
+  function renderDetail(d) {
+    titleEl.textContent = d.family_title; subEl.textContent = d.stage + (d.context ? ' \u00b7 ' + d.context.dataset.replace(/\.csv$/i, '') + ' ' + d.context.timeframe : '');
+    var h = '<div class="gy-sec"><h4>Why it failed</h4><p class="gy-why">' + esc(d.reason || 'No reason recorded.') + '</p>';
+    if (d.primary_failure) h += '<p style="margin:8px 0 0"><span class="tag bad">' + esc(d.primary_failure) + '</span></p>';
+    h += '</div>';
+    h += '<div class="gy-sec"><h4>Equity curve</h4><div id="gy-curve"><div class="gy-spin">Redrawing the equity curve\u2026</div></div></div>';
+    if (d.facts && d.facts.length) {
+      h += '<div class="gy-sec"><h4>Saved scores</h4><div class="gy-stats">' + d.facts.map(function (f) { return stat(f.label, fmt(f.value, 2) + (f.unit === '%' ? '%' : (f.unit ? ' ' + f.unit : '')), '', f.hint); }).join('') + '</div></div>';
+    }
+    if (d.strength || d.weakness) h += '<div class="gy-sec"><h4>What it did right / wrong</h4><p class="gy-why">' + (d.strength ? '\u2713 ' + esc(d.strength) + '<br>' : '') + (d.weakness ? '\u2717 ' + esc(d.weakness) : '') + '</p></div>';
+    if (d.suggestion) h += '<div class="gy-sec"><h4>What to try next</h4><p class="gy-why">' + esc(d.suggestion) + '</p></div>';
+    if (d.params) h += '<div class="gy-sec"><h4>Exact settings</h4><p class="gy-note">' + Object.keys(d.params).filter(function (k) { return d.params[k] != null; }).map(function (k) { return esc(k.replace(/_/g, ' ')) + ' <b>' + esc(d.params[k]) + '</b>'; }).join(' \u00b7 ') + '</p></div>';
+    if (d.context) h += '<p class="gy-note">Tested on ' + esc(d.context.dataset) + ' (' + esc(d.context.start) + ' to ' + esc(d.context.end) + ') with ' + esc(d.context.spread) + ' pip spread, ' + esc(d.context.slippage) + ' pip slippage and $' + esc(d.context.commission) + ' per trade, risking ' + esc(d.context.risk_pct) + '% of $' + fmt(d.context.account, 0) + '. This only shows it failed on this data and these costs \u2014 not that the idea can never work elsewhere.</p>';
+    body.innerHTML = h;
+  }
+  function open(row) {
+    if (lastRow) lastRow.classList.remove('sel');
+    lastRow = row; row.classList.add('sel');
+    var id = row.getAttribute('data-id'), my = ++token;
+    titleEl.textContent = row.querySelector('.gy-name').textContent; subEl.textContent = '';
+    body.innerHTML = '<div class="gy-spin">Loading\u2026</div>';
+    panel.classList.add('on'); scrim.classList.add('on'); panel.setAttribute('aria-hidden', 'false');
+    document.getElementById('gy-close').focus();
+    var q = '?path=' + encodeURIComponent(PATH) + '&id=' + encodeURIComponent(id);
+    fetch('/graveyard/detail' + q).then(function (r) { return r.json(); }).then(function (d) {
+      if (my !== token) return;
+      if (d.error) { body.innerHTML = '<p class="gy-note">' + esc(d.error) + '</p>'; return; }
+      renderDetail(d);
+      if (d.can_rebuild) {
+        fetch('/graveyard/curve' + q).then(function (r) { return r.json(); }).then(function (c) { if (my === token) renderCurve(c); })
+          .catch(function () { if (my === token) renderCurve({ok: false, message: 'Couldn\u2019t redraw the curve.'}); });
+      } else {
+        renderCurve({ok: false, message: 'This rejection didn\u2019t record its exact settings, so its equity curve can\u2019t be rebuilt. The reason and scores above are what was saved.'});
+      }
+    }).catch(function () { if (my === token) body.innerHTML = '<p class="gy-note">Couldn\u2019t load the details.</p>'; });
+  }
+  list.addEventListener('click', function (e) { var tr = e.target.closest('tr[data-id]'); if (tr) open(tr); });
+  list.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    var tr = e.target.closest('tr[data-id]'); if (tr) { e.preventDefault(); open(tr); }
+  });
+  document.getElementById('gy-close').addEventListener('click', close);
+  scrim.addEventListener('click', close);
+  document.addEventListener('keydown', function (e) {
+    if (!panel.classList.contains('on')) return;
+    if (e.key === 'Escape') { close(); return; }
+    var rows = [].slice.call(list.querySelectorAll('tr[data-id]')), i = rows.indexOf(lastRow);
+    if (e.key === 'ArrowDown' && i < rows.length - 1) { e.preventDefault(); rows[i + 1].scrollIntoView({block: 'nearest'}); open(rows[i + 1]); }
+    if (e.key === 'ArrowUp' && i > 0) { e.preventDefault(); rows[i - 1].scrollIntoView({block: 'nearest'}); open(rows[i - 1]); }
+  });
+})();
+</script>
 </body>
 </html>

@@ -32,6 +32,15 @@
   --teal: #35e0b0;
   --teal-dim: #0f6e56;
   --teal-rgb: 53, 224, 176;
+  /* Semantic "good" green: pass / validated / profit. Unlike --teal (which follows the accent colour picked in
+     Account settings -> Personalize) this never changes, so a pass badge can't turn red under a crimson accent. */
+  --ok: #35e0b0;
+  --ok-rgb: 53, 224, 176;
+  /* Opaque surfaces for anything that floats over page text (popovers, menus, dropdown panels). The regular
+     --panel-* tokens are translucent glass in the dark theme, which let the text behind a popup show through. */
+  --pop-bg: #0c1c22;
+  --pop-bg-2: #12262d;
+  --pop-bd: rgba(130, 235, 220, 0.24);
   --violet: #8b7cff;
   --violet-dim: #3a3290;
   --violet-rgb: 139, 124, 255;
@@ -122,6 +131,11 @@ html[data-theme="light"] {
   --teal: #0a6f54;
   --teal-dim: #0a5c46;
   --teal-rgb: 10, 111, 84;
+  --ok: #0a6f54;
+  --ok-rgb: 10, 111, 84;
+  --pop-bg: #ffffff;
+  --pop-bg-2: #f1f5f9;
+  --pop-bd: #93a5ba;
   --violet: #5a4bd1;
   --violet-dim: #4437ad;
   --violet-rgb: 90, 75, 209;
@@ -473,7 +487,7 @@ a { color: var(--teal); }
 .t58-glow-amber  { color: var(--amber);  text-shadow: 0 0 12px rgba(var(--amber-rgb),.4); }
 
 .t58-pill { display: inline-block; padding: 2px 9px; border-radius: 6px; font-size: 11px; font-weight: 600; }
-.t58-pill.pass { background: rgba(var(--teal-rgb),0.12); color: var(--teal); border: 1px solid rgba(var(--teal-rgb),0.35); }
+.t58-pill.pass { background: rgba(var(--ok-rgb),0.12); color: var(--ok); border: 1px solid rgba(var(--ok-rgb),0.35); }
 .t58-pill.fail { background: rgba(var(--coral-rgb),0.12); color: var(--coral); border: 1px solid rgba(var(--coral-rgb),0.35); }
 
 /* ---- Status language -- a shared vocabulary for strategy lifecycle ---- */
@@ -811,7 +825,7 @@ html:not([data-theme="light"]) {
   --glass-bg: rgba(9, 22, 26, 0.72);
   --glass-border: rgba(130, 235, 220, 0.10);
   --glass-hi: rgba(255, 255, 255, 0.07);
-  --glow-teal: 0 0 0 1px rgba(53, 224, 176, 0.14), 0 0 26px rgba(53, 224, 176, 0.08);
+  --glow-teal: 0 0 0 1px rgba(var(--teal-rgb), 0.14), 0 0 26px rgba(var(--teal-rgb), 0.08);
   scrollbar-color: rgba(130, 235, 220, 0.22) transparent;
   scrollbar-width: thin;
 }
@@ -860,8 +874,8 @@ html:not([data-theme="light"]) :is(.t58-card, .t58-champion, .lc-card, .lc-toolc
 }
 @media (hover: hover) {
   html:not([data-theme="light"]) :is(.t58-card.interactive, .lc-toolcard, .t58-method-card):hover {
-    border-color: rgba(53, 224, 176, 0.34);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09), 0 14px 34px rgba(0, 0, 0, 0.40), 0 0 26px rgba(53, 224, 176, 0.10);
+    border-color: rgba(var(--teal-rgb), 0.34);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09), 0 14px 34px rgba(0, 0, 0, 0.40), 0 0 26px rgba(var(--teal-rgb), 0.10);
   }
 }
 
@@ -888,7 +902,7 @@ html:not([data-theme="light"]) .lc-btn {
   background: linear-gradient(135deg, #46e8bd 0%, #35d4c6 100%);
   border-color: rgba(120, 245, 220, 0.55);
   color: #03130f;
-  box-shadow: 0 0 20px rgba(53, 224, 176, 0.20), inset 0 1px 0 rgba(255, 255, 255, 0.30);
+  box-shadow: 0 0 20px rgba(var(--teal-rgb), 0.20), inset 0 1px 0 rgba(255, 255, 255, 0.30);
 }
 html:not([data-theme="light"]) .t58-btn.secondary { background: rgba(255, 255, 255, 0.03); }
 html:not([data-theme="light"]) .t58-btn.live { background: linear-gradient(135deg, #9a8cff, #7f74f0); border-color: rgba(170, 160, 255, 0.5); color: #0b0820; }
@@ -897,7 +911,7 @@ html:not([data-theme="light"]) input, html:not([data-theme="light"]) select, htm
   border-color: rgba(130, 235, 220, 0.16);
 }
 html:not([data-theme="light"]) input:focus, html:not([data-theme="light"]) select:focus, html:not([data-theme="light"]) textarea:focus {
-  outline: none; border-color: rgba(53, 224, 176, 0.55); box-shadow: 0 0 0 3px rgba(53, 224, 176, 0.12);
+  outline: none; border-color: rgba(var(--teal-rgb), 0.55); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), 0.12);
 }
 
 /* ---- Sidebar: active item is a soft glass pill; section ramp colours come from --item-accent ---- */
@@ -933,7 +947,7 @@ html:not([data-theme="light"]) .t58-stepper a.current {
 .t58-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .t58-profile-menu {
   position: absolute; top: 44px; right: 0; min-width: 190px; padding: 6px; border-radius: 12px;
-  background: rgba(8, 20, 24, 0.94); border: 1px solid rgba(130, 235, 220, 0.18);
+  background: var(--pop-bg); border: 1px solid var(--pop-bd);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
 }
@@ -1038,28 +1052,99 @@ html[data-theme="light"] .t58-stepper a:hover { color: var(--text); background: 
 html[data-theme="light"] .t58-stepper a.current { color: var(--teal); background: rgba(var(--teal-rgb), 0.10); box-shadow: inset 0 0 0 1px rgba(var(--teal-rgb), 0.30); }
 html[data-theme="light"] .t58-avatar { background: rgba(255, 255, 255, 0.85); border-color: rgba(10, 111, 84, 0.45); box-shadow: 0 4px 12px -4px rgba(36, 68, 90, 0.35); }
 
-/* ---- Personalize: seasonal backdrops (Account settings -> Personalize). Default = the mountains above. Each season
-   has a night scene for the dark theme and a day scene for the light theme (scripts/generate_season_backdrops.py).
-   Every image is the same 2048x768 artwork box as the mountains and already dissolves to transparent at its top, side
-   and bottom edges, so it melts into the page. The night scenes differ a lot in brightness (summer is the darkest,
-   winter the brightest), so each gets its own quiet-page opacity to give all four the same presence; the day scenes
-   are evenly lit and share one value. The dashboard (body.db-page) shows them at full strength. ---- */
-html[data-bg="spring"]:not([data-theme="light"]) body::before { background-image: url("/static/backgrounds/spring-dark.webp"); opacity: .48; }
-html[data-bg="summer"]:not([data-theme="light"]) body::before { background-image: url("/static/backgrounds/summer-dark.webp"); opacity: .64; }
-html[data-bg="autumn"]:not([data-theme="light"]) body::before { background-image: url("/static/backgrounds/autumn-dark.webp"); opacity: .54; }
-html[data-bg="winter"]:not([data-theme="light"]) body::before { background-image: url("/static/backgrounds/winter-dark.webp"); opacity: .40; }
-html[data-bg="spring"][data-theme="light"] body::before { background-image: url("/static/backgrounds/spring-light.webp"); opacity: .45; }
-html[data-bg="summer"][data-theme="light"] body::before { background-image: url("/static/backgrounds/summer-light.webp"); opacity: .45; }
-html[data-bg="autumn"][data-theme="light"] body::before { background-image: url("/static/backgrounds/autumn-light.webp"); opacity: .45; }
-html[data-bg="winter"][data-theme="light"] body::before { background-image: url("/static/backgrounds/winter-light.webp"); opacity: .45; }
-html[data-bg]:not([data-bg="mountains"]):not([data-theme="light"]) body.db-page::before { opacity: 1; }
-html[data-bg]:not([data-bg="mountains"])[data-theme="light"] body.db-page::before { opacity: .9; }
+/* ---- Personalize: seasonal scenes (Account settings -> Personalize). Default = the mountains above.
+   Each season is ONE full-frame photograph held in a fixed layer behind the whole app, so the scene stays put while the
+   page scrolls over it (it no longer sits at the top and fades to black). A dark (or, in the light theme, pale) scrim is
+   baked into the same background so text stays readable; the dashboard gets a lighter scrim to show more of the picture.
+   Night/day: the dark theme shows the photo as shot; the light theme shows a washed-out daylight version of it.
+   Cost: one static image in one fixed layer. Nothing here animates except the one-second cross-fade on a change. ---- */
+html[data-bg]:not([data-bg="mountains"]) body::before {
+  position: fixed; top: 0; right: 0; bottom: 0; left: 0; height: auto;
+  background-repeat: no-repeat; background-position: center; background-size: cover;
+  opacity: 1; transform: translateZ(0);
+}
+html[data-bg="spring"]:not([data-theme="light"]) { --scene: url("/static/backgrounds/spring-dark.webp");  --sc1: .44; --sc2: .58; --sc3: .76; }
+html[data-bg="summer"]:not([data-theme="light"]) { --scene: url("/static/backgrounds/summer-dark.webp");  --sc1: .26; --sc2: .44; --sc3: .66; }
+html[data-bg="autumn"]:not([data-theme="light"]) { --scene: url("/static/backgrounds/autumn-dark.webp");  --sc1: .44; --sc2: .58; --sc3: .76; }
+html[data-bg="winter"]:not([data-theme="light"]) { --scene: url("/static/backgrounds/winter-dark.webp");  --sc1: .28; --sc2: .46; --sc3: .68; }
+html[data-bg="spring"][data-theme="light"] { --scene: url("/static/backgrounds/spring-light.webp"); --sc1: .22; --sc2: .42; --sc3: .62; }
+html[data-bg="summer"][data-theme="light"] { --scene: url("/static/backgrounds/summer-light.webp"); --sc1: .22; --sc2: .42; --sc3: .62; }
+html[data-bg="autumn"][data-theme="light"] { --scene: url("/static/backgrounds/autumn-light.webp"); --sc1: .22; --sc2: .42; --sc3: .62; }
+html[data-bg="winter"][data-theme="light"] { --scene: url("/static/backgrounds/winter-light.webp"); --sc1: .22; --sc2: .42; --sc3: .62; }
+html[data-bg]:not([data-bg="mountains"]):not([data-theme="light"]) body::before {
+  background-image:
+    linear-gradient(180deg, rgba(2, 8, 10, var(--sc1)) 0%, rgba(2, 8, 10, var(--sc2)) 50%, rgba(2, 8, 10, var(--sc3)) 100%),
+    var(--scene);
+}
+html[data-bg]:not([data-bg="mountains"])[data-theme="light"] body::before {
+  background-image:
+    linear-gradient(180deg, rgba(236, 242, 248, var(--sc1)) 0%, rgba(236, 242, 248, var(--sc2)) 50%, rgba(236, 242, 248, var(--sc3)) 100%),
+    var(--scene);
+}
+/* dashboard: show more of the scene through the top of the page */
+html[data-bg]:not([data-bg="mountains"]) body.db-page { --sc1: .12; --sc2: .36; --sc3: .62; }
+html[data-bg]:not([data-bg="mountains"])[data-theme="light"] body.db-page { --sc1: .06; --sc2: .26; --sc3: .50; }
+/* The dashboard's glass cards blur whatever is behind them. Over a fixed scene that would re-blur on every scroll frame,
+   so on seasonal scenes the blur is dropped and the card tint carries the glass look instead (cheaper, same readability). */
+html[data-bg]:not([data-bg="mountains"]):not([data-theme="light"]) :is(.db-card, .db-kpi, .db-head .t58-btn.ghost) {
+  -webkit-backdrop-filter: none; backdrop-filter: none;
+}
+html[data-bg]:not([data-bg="mountains"]):not([data-theme="light"]) :is(.db-card, .db-kpi) {
+  background:
+    linear-gradient(155deg, rgba(255, 255, 255, .06) 0%, rgba(255, 255, 255, .015) 34%, rgba(5, 14, 18, .32) 100%),
+    rgba(6, 17, 22, .66);
+}
 
 /* Smooth hand-off: when the backdrop or the theme changes, t58-personalize.js flags <html class="t58-bg-swap"> for about a
    second and the new scene eases in instead of snapping. Normal page loads never carry the class, so navigation is calm. */
 html.t58-bg-swap body::before { animation: t58-bg-swap .9s cubic-bezier(.22, .61, .36, 1) both; }
 @keyframes t58-bg-swap { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { html.t58-bg-swap body::before { animation: none; } }
+
+/* ---- Seasonal motion: snow (winter), leaves (autumn), petals (spring), fireflies (summer) ----
+   ~10-16 tiny elements in ONE fixed, click-through layer above the page (so it never forces the glass cards underneath
+   to re-render). Only transform and opacity animate -> compositor-only, no layout, no paint, no JavaScript per frame.
+   t58-personalize.js builds the layer; it is skipped for reduced-motion / data-saver, thinned on small or low-core
+   devices, paused while the tab is hidden, and can be switched off in Account settings. */
+.t58-ambient { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 2; pointer-events: none; overflow: hidden; contain: layout paint style; }
+@media (min-width: 761px) { .t58-ambient { left: var(--sidebar-w, 240px); } }
+.t58-ambient i { position: absolute; top: 0; left: var(--x); width: var(--sz); height: var(--sz); opacity: 0; will-change: transform, opacity;
+  animation: t58-fall var(--dur) linear var(--delay) infinite; }
+.t58-ambient i > b { display: block; width: 100%; height: 100%; animation: t58-sway var(--swaydur) ease-in-out infinite alternate; }
+@keyframes t58-fall {
+  0%   { transform: translate3d(0, -8vh, 0); opacity: 0; }
+  7%   { opacity: var(--o); }
+  90%  { opacity: var(--o); }
+  100% { transform: translate3d(0, 108vh, 0); opacity: 0; }
+}
+@keyframes t58-sway {
+  from { transform: translate3d(calc(var(--sway) * -1), 0, 0) rotate(0deg); }
+  to   { transform: translate3d(var(--sway), 0, 0) rotate(var(--spin)); }
+}
+.t58-ambient-snow i > b { border-radius: 50%; background: radial-gradient(circle, rgba(255, 255, 255, .98) 0 38%, rgba(255, 255, 255, 0) 72%); }
+html[data-theme="light"] .t58-ambient-snow i > b { background: radial-gradient(circle, #fff 0 42%, rgba(235, 245, 255, 0) 74%); }
+.t58-ambient-leaf i > b { height: 72%; border-radius: 0 100% 0 100%; }
+.t58-ambient-leaf i > b.lf0 { background: linear-gradient(135deg, #f08a24, #c2410c); }
+.t58-ambient-leaf i > b.lf1 { background: linear-gradient(135deg, #f5b83d, #d97706); }
+.t58-ambient-leaf i > b.lf2 { background: linear-gradient(135deg, #e5533d, #9b1c1c); }
+.t58-ambient-leaf i > b.lf3 { background: linear-gradient(135deg, #d9822b, #7c2d12); }
+.t58-ambient-petal i > b { height: 68%; border-radius: 70% 0 70% 0; }
+.t58-ambient-petal i > b.pt0 { background: linear-gradient(135deg, #ffe3ec, #f7a9c4); }
+.t58-ambient-petal i > b.pt1 { background: linear-gradient(135deg, #ffd3e1, #f28fb3); }
+.t58-ambient-petal i > b.pt2 { background: linear-gradient(135deg, #fff1f5, #f9b9cf); }
+.t58-ambient-firefly i { top: var(--y); border-radius: 50%; background: #ffe98a; box-shadow: 0 0 7px 2px rgba(255, 226, 110, .6);
+  animation: t58-fly var(--dur) ease-in-out var(--delay) infinite, t58-glow var(--glow) ease-in-out var(--delay) infinite; }
+.t58-ambient-firefly i > b { display: none; }
+html[data-theme="light"] .t58-ambient-firefly i { background: #ffc531; box-shadow: 0 0 6px 2px rgba(255, 170, 30, .55); }
+@keyframes t58-fly {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  25% { transform: translate3d(var(--dx), calc(var(--dy) * .5), 0); }
+  50% { transform: translate3d(calc(var(--dx) * .4), var(--dy), 0); }
+  75% { transform: translate3d(calc(var(--dx) * -.6), calc(var(--dy) * .3), 0); }
+}
+@keyframes t58-glow { 0%, 100% { opacity: .06; } 50% { opacity: .9; } }
+.t58-ambient.paused i, .t58-ambient.paused i > b { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) { .t58-ambient { display: none; } }
 
 /* ---- Personalize: Bible verse bar (static line at the top of the page; text rotates every 30 minutes) ---- */
 .t58-verse {
@@ -1102,3 +1187,17 @@ html.t58-bg-swap body::before { animation: t58-bg-swap .9s cubic-bezier(.22, .61
 html[data-theme="light"] .pnl-pill, html[data-theme="light"] .pnl-panel { background: rgba(255, 255, 255, 0.95); border-color: rgba(60, 100, 125, 0.25); box-shadow: 0 8px 24px rgba(36, 68, 90, 0.2); }
 html[data-theme="light"] .up { color: #0e9b5e; } html[data-theme="light"] .down { color: #d23b52; }
 @media (max-width: 700px) { .t58-pnl { right: 76px; bottom: 16px; } .pnl-panel { width: min(290px, calc(100vw - 40px)); } }
+
+
+/* ---- Personalize: accent colour (Account settings). Teal is the default and adds no overrides. For any other colour,
+   t58-personalize.js sets --teal / --teal-rgb / --on-teal* on <html> and flags data-ui-accent, and the rules below carry
+   it into the places that don't read --teal directly (navigation sections, lifecycle pages, native controls). Semantic
+   colours (pass / fail / profit) stay on their own fixed tokens so a crimson accent never makes a pass badge look failed. ---- */
+html[data-ui-accent] .t58-nav-item { --item-accent: var(--teal); --item-accent-rgb: var(--teal-rgb); }
+html[data-ui-accent] .lc-scope { --lc-acc: var(--teal); --lc-acc-ink: var(--on-teal, #03231a);
+  --lc-acc-dim: color-mix(in srgb, var(--teal) 16%, #0a0d12); }
+html[data-ui-accent][data-theme="light"] .lc-scope { --lc-acc-dim: color-mix(in srgb, var(--teal) 14%, #ffffff); }
+html[data-ui-accent] body { --accent: var(--teal) !important; }
+html[data-ui-accent] { accent-color: var(--teal); }
+input[type="range"], input[type="checkbox"], input[type="radio"], progress { accent-color: var(--teal); }
+::selection { background: rgba(var(--teal-rgb), .30); }

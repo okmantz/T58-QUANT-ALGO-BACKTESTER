@@ -36,13 +36,13 @@
   .stage-labels span:last-child { text-align: right; }
   .badge { display: inline-block; padding: 2px 7px; border-radius: 5px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; margin-right: 4px; }
   .badge.type { background: var(--panel-3); color: #aaa; }
-  .badge.status { background: rgba(53,224,176,0.15); color: var(--teal); }
+  .badge.status { background: rgba(var(--teal-rgb), 0.15); color: var(--teal); }
   .tag { display: inline-block; background: var(--panel-3); color: var(--t-soft); padding: 1px 6px; border-radius: 4px; font-size: 10.5px; margin: 4px 4px 0 0; }
   /* ---- Control Center cards (2026-10-17) ---- */
   .lanes { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
   .lane { padding: 8px 13px; border-radius: 9px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text-muted); font-size: 13px; font-weight: 700; cursor: pointer; }
   .lane b { color: var(--text); margin-left: 6px; }
-  .lane.active { border-color: var(--teal); background: rgba(53,224,176,.12); color: var(--teal); }
+  .lane.active { border-color: var(--teal); background: rgba(var(--teal-rgb), .12); color: var(--teal); }
   .cc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
   .cc-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 11px 12px; cursor: pointer; transition: border-color .15s; }
   .cc-card:hover { border-color: var(--teal); }
@@ -51,7 +51,7 @@
   .cc-status { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 5px; }
   .cc-status.Research { background: rgba(138,147,166,.18); color: var(--text-muted); }
   .cc-status.Developing { background: rgba(111,168,255,.16); color: var(--blue, #6fa8ff); }
-  .cc-status.Ready { background: rgba(53,224,176,.16); color: var(--teal); }
+  .cc-status.Ready { background: rgba(var(--teal-rgb), .16); color: var(--teal); }
   .cc-status.Forward { background: rgba(240,180,41,.16); color: var(--amber); }
   .cc-name { font-weight: 700; font-size: 13.5px; margin: 7px 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cc-sub { font-size: 11px; color: var(--text-dim); margin-bottom: 6px; }
@@ -87,7 +87,7 @@
   }
   .delete-btn { border: 1px solid var(--err-bd); background: transparent; color: var(--err-fg2); padding: 10px 16px; border-radius: 8px; font-size: 13px; cursor: pointer; }
   input[type=text], select, textarea { width: 100%; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 13px; margin-bottom: 8px; }
-  .notice { background: rgba(53,224,176,0.1); border: 1px solid var(--teal); color: var(--teal); padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; font-size: 13px; }
+  .notice { background: rgba(var(--teal-rgb), 0.1); border: 1px solid var(--teal); color: var(--teal); padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; font-size: 13px; }
   .result-block { background: var(--panel-3); border-radius: 8px; padding: 10px; font-family: ui-monospace, monospace; font-size: 11.5px; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
 </style>
 </head>

@@ -18,41 +18,39 @@ SECTION_GUIDES = {
         "tagline": "Everything that produces a new strategy, from a blank page to a candidate worth testing.",
         "description": (
             "Create is where a strategy comes from in the first place -- either generated broadly by the "
-            "system (Forge, Speed Run, Research Agent/Director/Loop, Generate Strategies) when you don't yet "
+            "system (the Strategy Discovery Engine, Research Agent/Director/Loop, Generate Strategies) when you don't yet "
             "have a specific idea, or built directly (Strategy Library) when you do. Nothing here is validated "
             "yet -- a strategy that comes out of Create still needs to go through Test and Optimize before "
             "it's trustworthy."
         ),
         "roadmap": [
-            "No idea yet? Start with Forge Strategy -- one button, generates and screens thousands of "
-            "hypotheses, and validates survivors for prop-firm survival.",
-            "Want it faster and narrower? Speed Run does a quicker single-pass version of the same idea.",
-            "Have a specific idea already? Build or edit it directly in the Strategy Library.",
+            "No idea yet? Open the Strategy Discovery Engine -- pick a market and a prop firm, press Start, and it "
+            "searches, tests and rejects on its own. One tool instead of separate Search / Evolution / Forge / Speed Run labs.",
+            "Have a specific idea already? Paste its code (Python, PineScript, MQL5), describe it in plain English, or "
+            "build it directly in the Strategy Library.",
             "Want an LLM to reason about market structure and propose ideas? Try Research Agent, Research "
             "Director, or the background Research Loop.",
-            "Want to breed new parameter sets instead of sampling a grid? Evolution Lab is under More tools "
-            "below (it is also under Optimize). Once you have a survivor you like, send it to Search Lab or Evolution Lab to "
-            "sharpen its parameters, or straight to Full Pipeline for a validated verdict.",
+            "The classic labs (Forge, Speed Run, Evolution Lab) are still under More tools below -- they are now methods of the "
+            "Discovery Engine. Once you have a survivor you like, send it to Full Pipeline for a validated verdict.",
         ],
-        "primary_buttons": [{"label": "Forge Strategy", "href": "/forge"}, {"label": "Strategy Library", "href": "/library"}],
+        "primary_buttons": [{"label": "Strategy Discovery Engine", "href": "/discovery-engine"}, {"label": "Strategy Library", "href": "/library"}],
         "tools": [
-            {"name": "Forge Strategy", "href": "/forge", "desc": "One-button broad generate + screen + prop-survival check."},
+            {"name": "Strategy Discovery Engine", "href": "/discovery-engine",
+             "desc": "No strategy yet? Pick a market + prop firm and let the engine find candidates for you."},
             {"name": "Generate Strategies (AI)", "href": "/generate-strategies", "desc": "LLM-assisted strategy code generation."},
             {"name": "Research Agent", "href": "/research-agent", "desc": "LLM reasons over market structure for ideas."},
             {"name": "Research Director", "href": "/research", "desc": "Directs a deeper, multi-step research pass."},
             {"name": "Research Loop (background)", "href": "/research-loop", "desc": "Keeps researching unattended, on a schedule."},
-            {"name": "Speed Run", "href": "/speed-run", "desc": "Faster, narrower single-pass version of Forge."},
-            {"name": "Multi-Instrument Speed Run", "href": "/speed-run/multi-instrument", "desc": "Speed Run across several datasets at once."},
             {"name": "Strategy Library", "href": "/library", "desc": "Build, edit, or browse strategies directly."},
             {"name": "Pine Indicator Creator", "href": "/pine-indicator",
              "desc": "TradingView (Pine v5) indicators from an idea or pasted code, checked before you copy them."},
         ],
-        # "More tools" (Oct 2026): power tools that also create strategies -- shown in a collapsible
-        # "More tools" block on the Create page (web) and Start Here card (desktop). Evolution Lab
-        # breeds brand-new parameter sets, so it belongs at the point where strategies are made as
-        # well as under Optimize, where it can sharpen an existing one. Kept OUT of "tools" on purpose
-        # so the main grid stays the eight everyday tools.
+        # "More tools": the classic labs. Search Lab / Evolution Lab / Forge / Speed Run are methods of the Strategy Discovery
+        # Engine now; their own pages still work for people who want every knob.
         "more_tools": [
+            {"name": "Forge Strategy", "href": "/forge", "desc": "Classic one-button broad generate + screen + prop-survival check."},
+            {"name": "Speed Run", "href": "/speed-run", "desc": "Classic faster, narrower single-pass version of Forge."},
+            {"name": "Multi-Instrument Speed Run", "href": "/speed-run/multi-instrument", "desc": "Speed Run across several datasets at once."},
             {"name": "Evolution Lab (GA)", "href": "/evolution",
              "desc": "Genetic algorithm that evolves strategy parameter sets across generations."},
             {"name": "Multi-Instrument Evolution Lab", "href": "/evolution/multi-instrument",
@@ -212,7 +210,7 @@ DESKTOP_NAV_FOR_HREF = {
 }
 
 # Tools that exist only in the web app (no desktop tab); the desktop Start Here page skips them.
-WEB_ONLY_HREFS = frozenset({"/pine-indicator"})
+WEB_ONLY_HREFS = frozenset({"/pine-indicator", "/discovery-engine"})
 
 # Sections that get a desktop Start Here page. (Optimize and Validate already
 # have their own overview pages on both builds.)
