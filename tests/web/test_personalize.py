@@ -98,3 +98,31 @@ def test_default_mountains_are_fixed_behind_the_page():
         block = css[css.rfind("body::before {", 0, i):i]
         assert re.search(r"position:\s*fixed", block), img
         assert "position: absolute" not in block, img
+
+
+SCENES = ("cosmic-drift", "obsidian", "midnight-ocean", "rainfall-district", "silent-sanctuary", "misty-forest")
+
+
+def test_animated_scene_assets_css_js_and_picker():
+    from PIL import Image
+    css = (STATIC / "theme.css").read_text(encoding="utf-8")
+    js = (STATIC / "t58-personalize.js").read_text(encoding="utf-8")
+    html = (ROOT / "app" / "web" / "templates" / "account_settings.html").read_text(encoding="utf-8")
+    for s in SCENES:
+        for mode in ("dark", "light"):
+            p = STATIC / "backgrounds" / f"{s}-{mode}.webp"
+            with Image.open(p) as im:
+                assert im.width >= 1400, (p, im.size)
+            assert f"backgrounds/{s}-{mode}.webp" in css
+        assert (STATIC / "backgrounds" / f"{s}-thumb.webp").exists()
+        assert f"'{s}'" in js and f'data-bg="{s}"' in html
+
+
+def test_scene_motion_layer_sits_behind_content_and_is_compositor_only():
+    css = (STATIC / "theme.css").read_text(encoding="utf-8")
+    block = css[css.index(".t58-scene-fx {"):css.index("Personalize: Bible verse bar")]
+    assert "z-index: -1" in block and "pointer-events: none" in block and "prefers-reduced-motion" in block
+    assert "isolation: isolate" in css
+    for bad in ("@keyframes t58-neb-a", "@keyframes t58-rain", "@keyframes t58-fog"):
+        body = block.split(bad)[1].split("}\n")[0]
+        assert "top:" not in body and "left:" not in body and "width:" not in body

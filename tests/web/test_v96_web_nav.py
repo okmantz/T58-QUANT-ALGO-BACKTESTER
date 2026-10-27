@@ -21,13 +21,13 @@ def client():
 
 # ---------------------------------------------------------------- (a) pages
 
-def test_optimize_simple_page_has_engine_checkboxes(client):
+def test_optimize_simple_page_has_goal_picker(client):
     r = client.get("/optimize-simple")
     assert r.status_code == 200
     body = r.get_data(as_text=True)
-    for name in ("engine_quick_optimize", "engine_refine", "engine_risk_sweep",
-                 "engine_search", "engine_evolution", "engine_multi_objective"):
-        assert f'name="{name}"' in body, name
+    assert 'name="goal"' in body
+    for goal in ("eval", "payout", "robust"):
+        assert f'value="{goal}"' in body, goal
 
 
 def test_validate_simple_page_has_check_checkboxes(client):
@@ -61,8 +61,9 @@ def test_sidebar_lifecycle_order_and_account_order(client):
               "&#9318;</span> Strategy Graveyard"]
     positions = [body.index(lbl) for lbl in labels]
     assert positions == sorted(positions), list(zip(labels, positions))
-    # ACCOUNT group: notifications BEFORE api keys (v9.6 swap)
-    assert body.index("/settings/notifications") < body.index("/settings/api-keys")
+    # Notification settings now live inside Account settings (no separate sidebar entry)
+    assert "/settings/notifications" not in body
+    assert "/settings/api-keys" in body
     # New simplified pages are linked from the lifecycle groups
     for href in ("/optimize-simple", "/validate-simple", "/champion-simple"):
         assert href in body, href
