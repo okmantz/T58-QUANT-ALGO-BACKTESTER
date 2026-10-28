@@ -689,3 +689,39 @@ function t58SetCheckboxes(containerId, checked) {
   });
   window.addEventListener("resize", close);
 })();
+
+
+/* One instrument picker per form (2026-10-28).
+ * A page can end up with up to three ways to choose an instrument and auto-fill pip size: its own
+ * "*_instrument_select" (next to the Detect pip size button), the shared Accuracy-settings "Instrument (pick first)"
+ * box, and the prop-firm block's injected "#lc-instrument-select". They did the same job, so users saw it twice.
+ * Keep exactly one per form, in this order of preference: page picker > prop-firm picker > accuracy box.
+ * Hidden controls stay in the DOM (the server still reads acc_instrument when it is filled in). */
+function t58DedupeInstrumentPickers() {
+  document.querySelectorAll('form').forEach(function (form) {
+    var page = form.querySelector('select[id$="instrument_select"]:not(#lc-instrument-select)');
+    var lc = form.querySelector('#lc-instrument-select');
+    var acc = form.querySelector('#acc_instrument');
+    function hideAcc() {
+      if (!acc) return;
+      var box = acc.closest('div');
+      if (box && !box.getAttribute('data-t58-dedup')) { box.setAttribute('data-t58-dedup', '1'); box.style.display = 'none'; }
+    }
+    function hideLc() {
+      form.querySelectorAll('.lc-instr-part, #lc-instrument-select, label[for="lc-instrument-select"]').forEach(function (e) { e.style.display = 'none'; });
+    }
+    if (page) { hideAcc(); if (lc) hideLc(); }
+    else if (lc) { hideAcc(); }
+    /* keep the hidden accuracy box in step with whichever picker is visible, so the server's mismatch check still works */
+    var keep = page || lc;
+    if (keep && acc && !keep._t58AccSync) {
+      keep._t58AccSync = true;
+      keep.addEventListener('change', function () {
+        var opt = keep.options && keep.options[keep.selectedIndex];
+        var sym = opt ? (opt.value || '').split(/[\s(]/)[0] : '';
+        if (sym && /^[A-Za-z0-9_.!-]{1,12}$/.test(sym)) acc.value = sym;
+      });
+    }
+  });
+}
+window.addEventListener('load', function () { t58DedupeInstrumentPickers(); setTimeout(t58DedupeInstrumentPickers, 600); });
